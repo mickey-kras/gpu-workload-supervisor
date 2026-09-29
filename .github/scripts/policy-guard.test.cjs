@@ -13,7 +13,8 @@ function files() {
   for (const path of [
     '.github/dependabot.yml', '.github/scripts/policy-guard.cjs',
     '.github/scripts/dependabot-auto-merge.cjs', '.github/scripts/pr-branch-updater.cjs',
-    '.github/scripts/release-settings.cjs',
+    '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
+    'release-version.json',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
     '.github/aislop/package.json', '.github/aislop/package-lock.json',
     '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
@@ -78,12 +79,31 @@ test('reviewed release settings cannot be skipped', () => {
   assert.ok(inspect(candidate).some(error => error.includes('reviewed release settings verification')));
 });
 
+test('version bump cannot run before publication succeeds', () => {
+  const candidate = files();
+  candidate['.github/workflows/release.yml'] = candidate['.github/workflows/release.yml']
+    .replace('    needs: [entry, publish]', '    needs: entry');
+  assert.ok(inspect(candidate).some(error => error.includes('post-publication version bump ordering')));
+});
+
+test('version bump cannot be skipped or use an arbitrary version', () => {
+  const path = '.github/workflows/release.yml';
+  const candidate = files();
+  candidate[path] = candidate[path].replace('      - name: Queue narrowly validated next patch bump\n',
+    '      - name: Queue narrowly validated next patch bump\n        if: false\n');
+  assert.ok(inspect(candidate).some(error => error.includes('Queue narrowly validated')));
+  candidate[path] = files()[path].replaceAll('          VERSION: ${{ needs.entry.outputs.version }}',
+    '          VERSION: 1.0.0');
+  assert.ok(inspect(candidate).some(error => error.includes('published bump version')));
+});
+
 test('reviewed release settings cannot be conditional or hidden in a comment', () => {
   const candidate = files();
   const path = '.github/workflows/release.yml';
   candidate[path] = candidate[path].replace('        id: state\n', '        id: state\n        if: false\n');
   assert.ok(inspect(candidate).some(error => error.includes('reviewed release settings verification')));
-  candidate[path] = files()[path].replace('            await require(', '            // await require(');
+  candidate[path] = files()[path].replace("            await require('./.github/scripts/release-settings.cjs')",
+    "            // await require('./.github/scripts/release-settings.cjs')");
   assert.ok(inspect(candidate).some(error => error.includes('reviewed release settings verification')));
 });
 
