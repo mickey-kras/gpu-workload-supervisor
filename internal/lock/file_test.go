@@ -98,3 +98,20 @@ func TestAcquireCreatesPrivateFilesAndRejectsSymlink(t *testing.T) {
 		t.Fatal("expected symlink rejection")
 	}
 }
+
+func TestAcquireRejectsInvalidLockPath(t *testing.T) {
+	if _, err := Acquire(""); err == nil {
+		t.Fatal("empty lock path accepted")
+	}
+	parent := filepath.Join(t.TempDir(), "regular-file")
+	if err := os.WriteFile(parent, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Acquire(filepath.Join(parent, "lock")); err == nil {
+		t.Fatal("regular file accepted as lock parent")
+	}
+	var missing *File
+	if err := missing.Close(); err != nil {
+		t.Fatalf("nil lock close failed: %v", err)
+	}
+}

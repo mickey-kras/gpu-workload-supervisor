@@ -128,7 +128,7 @@ function inspectCi(checks) {
   exactRun(ci, 'checks', 'Tests, race detector, and coverage', [
     'go test -race -coverprofile=coverage.out ./...',
     'go tool cover -func=coverage.out | tee coverage-summary.txt',
-    'awk \'$1 == "total:" { coverage=$3+0; found=1 } END { if (!found || coverage < 75) exit 1 }\' coverage-summary.txt',
+    'awk \'$1 == "total:" { coverage=$3+0; found=1 } END { if (!found || coverage < 90) exit 1 }\' coverage-summary.txt',
   ]);
   exactRun(ci, 'checks', 'Go vet', ['go vet ./...']);
   exactRun(ci, 'checks', 'Audit Aislop toolchain', [

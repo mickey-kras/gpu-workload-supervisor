@@ -86,3 +86,53 @@ func TestDefaultStatePathUsesXDGDirectory(t *testing.T) {
 		t.Fatalf("home default path = %q", got)
 	}
 }
+
+func TestCLICommandsFailClosedWhenSystemdCannotBeObserved(t *testing.T) {
+	previousArgs, previousStdout := os.Args, os.Stdout
+	t.Cleanup(func() { os.Args, os.Stdout = previousArgs, previousStdout })
+	for _, command := range []string{"reconcile", "recover", "text", "media", "idle"} {
+		t.Run(command, func(t *testing.T) {
+			args := []string{"gpu-mode", "-state", filepath.Join(t.TempDir(), "state.db"),
+				"-text-unit", "text.service", "-media-unit", "media.service",
+				"-text-health-url", "http://127.0.0.1:1/health",
+				"-media-health-url", "http://127.0.0.1:1/",
+				"-media-release-url", "http://127.0.0.1:1/free",
+				"-release-max-used-mib", "1", "-nvidia-smi", "/usr/bin/true",
+				"-systemctl", "/usr/bin/true", command}
+			output, err := os.CreateTemp(t.TempDir(), "output")
+			if err != nil {
+				t.Fatal(err)
+			}
+			os.Args, os.Stdout = args, output
+			if err := run(); err == nil {
+				t.Fatal("unobserved runtime accepted")
+			}
+			if _, err := output.Seek(0, io.SeekStart); err != nil {
+				t.Fatal(err)
+			}
+			var state control.State
+			if err := json.NewDecoder(output).Decode(&state); err != nil {
+				t.Fatal(err)
+			}
+			if state.Admission != control.AdmissionClosed {
+				t.Fatalf("command opened admission: %#v", state)
+			}
+			output.Close()
+		})
+	}
+}
+
+func TestCLIRejectsInvalidControllerTimeout(t *testing.T) {
+	previousArgs := os.Args
+	t.Cleanup(func() { os.Args = previousArgs })
+	os.Args = []string{"gpu-mode", "-state", filepath.Join(t.TempDir(), "state.db"),
+		"-text-unit", "text.service", "-media-unit", "media.service",
+		"-text-health-url", "http://127.0.0.1:1/health",
+		"-media-health-url", "http://127.0.0.1:1/",
+		"-media-release-url", "http://127.0.0.1:1/free",
+		"-release-max-used-mib", "1", "-nvidia-smi", "/usr/bin/true",
+		"-systemctl", "/usr/bin/true", "-action-timeout", "0s", "status"}
+	if err := run(); err == nil || !strings.Contains(err.Error(), "timeouts") {
+		t.Fatalf("invalid controller timeout = %v", err)
+	}
+}

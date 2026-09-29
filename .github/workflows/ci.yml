@@ -34,7 +34,7 @@ jobs:
         run: |
           go test -race -coverprofile=coverage.out ./...
           go tool cover -func=coverage.out | tee coverage-summary.txt
-          awk '$1 == "total:" { coverage=$3+0; found=1 } END { if (!found || coverage < 75) exit 1 }' coverage-summary.txt
+          awk '$1 == "total:" { coverage=$3+0; found=1 } END { if (!found || coverage < 90) exit 1 }' coverage-summary.txt
       - name: Go vet
         run: go vet ./...
       - name: Go vulnerability audit
