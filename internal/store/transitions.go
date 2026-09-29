@@ -160,18 +160,18 @@ func (s *Store) FinishTransition(ctx context.Context, transitionID, status strin
 }
 
 func (s *Store) PendingTransitionWork(ctx context.Context, transitionID string) (int, error) {
-	var count int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*)
+	var pending int
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1
 		FROM transition_work AS snapshot
 		JOIN registered_work AS work ON work.request_id = snapshot.request_id
-		WHERE snapshot.transition_id = ? AND work.completed_at IS NULL`, transitionID).Scan(&count)
-	return count, err
+		WHERE snapshot.transition_id = ? AND work.completed_at IS NULL)`, transitionID).Scan(&pending)
+	return pending, err
 }
 
 func (s *Store) InProgressTransition(ctx context.Context) (string, error) {
 	var id string
 	err := s.db.QueryRowContext(ctx, `SELECT transition_id FROM transitions
-		WHERE status = 'in_progress' ORDER BY created_at LIMIT 1`).Scan(&id)
+		WHERE status = 'in_progress' ORDER BY created_at, transition_id LIMIT 1`).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -200,7 +200,7 @@ func (s *Store) Recover(ctx context.Context, expected uint64, final control.Stat
 	}
 	var transitionID string
 	err = tx.QueryRowContext(ctx, `SELECT transition_id FROM transitions
-		WHERE status = 'in_progress' ORDER BY created_at LIMIT 1`).Scan(&transitionID)
+		WHERE status = 'in_progress' ORDER BY created_at, transition_id LIMIT 1`).Scan(&transitionID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return control.State{}, err
 	}
