@@ -111,6 +111,8 @@ Control headers are removed before forwarding. Work is registered before forward
 
 The default completion path is `/_gpu-workload-supervisor/v1/work/finish`. A successful terminal update returns HTTP 204. Proxy, upstream, client, and process failures leave work incomplete for explicit reconciliation.
 
+The proxy prunes completed work and its transition snapshot links after 30 days by default. Set `-completed-work-retention` to a positive duration to change this period. Pruning runs at startup and hourly. Records carrying the current lease fence remain reserved for exact request ID deduplication, even after the period expires; they become eligible only after the fence rotates. Active work and transition events remain available for recovery and audit.
+
 Safe methods are forwarded by default. Unclassified mutating routes fail closed. Required non-execution mutations must be explicitly configured as passthrough routes.
 
 The listener is restricted to loopback because explicit user ownership bypasses supervisor lease registration. External exposure and requester authentication belong to the deployment boundary.

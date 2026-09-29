@@ -92,7 +92,14 @@ CREATE TABLE state_restorations (
 );
 `
 
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5}
+const schemaV6 = `
+CREATE INDEX idx_registered_work_completed_at
+ON registered_work(completed_at) WHERE completed_at IS NOT NULL;
+CREATE INDEX idx_transition_work_request_id
+ON transition_work(request_id);
+`
+
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6}
 
 func (s *Store) initialize(ctx context.Context) error {
 	for _, pragma := range []string{
