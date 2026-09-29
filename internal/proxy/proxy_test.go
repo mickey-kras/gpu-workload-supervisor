@@ -51,7 +51,7 @@ func (f *fakeStore) AdmitWork(_ context.Context, requestID, _ string, workload c
 	return nil
 }
 
-func (f *fakeStore) FinishWorkFenced(_ context.Context, requestID string, _ control.Fence, outcome store.WorkOutcome) error {
+func (f *fakeStore) FinishWorkFenced(_ context.Context, requestID string, _ control.Workload, _ control.Fence, outcome store.WorkOutcome) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.finishErr != nil {
@@ -278,4 +278,46 @@ func addLeaseHeaders(request *http.Request, fence control.Fence) {
 	request.Header.Set(DefaultRequestIDHeader, "request-1")
 	request.Header.Set(DefaultFenceIDHeader, fence.Incarnation)
 	request.Header.Set(DefaultFenceEpochHeader, "7")
+}
+
+func TestFinishRejectsTrailingJSON(t *testing.T) {
+	stateStore := &fakeStore{state: admittedState(control.OwnerSupervisor)}
+	handler := testHandler(t, stateStore, "http://127.0.0.1:1")
+	request := httptest.NewRequest(http.MethodPost, "http://proxy.test"+DefaultCompletionPath,
+		strings.NewReader(`{"requestId":"request-1","fence":{"incarnation":"11111111-1111-4111-8111-111111111111","epoch":7},"outcome":"completed"} {}`))
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d", response.Code)
+	}
+}
+
+func TestRouteCollisionsAreRejected(t *testing.T) {
+	target, err := url.Parse("http://127.0.0.1:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []Config{
+		{
+			Upstream: target, Workload: control.WorkloadMedia,
+			ExecutionRoutes: []Route{{Method: http.MethodPost, Path: DefaultCompletionPath}},
+		},
+		{
+			Upstream: target, Workload: control.WorkloadMedia,
+			ExecutionRoutes: []Route{{Method: http.MethodPost, Path: "/execute"}},
+			PassthroughRoutes: []Route{{Method: http.MethodPost, Path: DefaultCompletionPath}},
+		},
+		{
+			Upstream: target, Workload: control.WorkloadMedia,
+			ExecutionRoutes: []Route{{Method: http.MethodPost, Path: "/execute"}},
+			PassthroughRoutes: []Route{{Method: http.MethodPost, Path: "/execute"}},
+		},
+	}
+	for index, config := range tests {
+		if _, err := New(&fakeStore{}, config); err == nil {
+			t.Fatalf("case %d accepted route collision", index)
+		}
+	}
 }
