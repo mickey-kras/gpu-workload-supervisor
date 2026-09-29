@@ -119,6 +119,43 @@ func TestSupervisorExecutionStaysRegisteredUntilExplicitFinish(t *testing.T) {
 	}
 }
 
+func TestExecutionForwardsRegistrationTokenDespiteConnectionNomination(t *testing.T) {
+	var receivedToken, receivedHopHeader string
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		receivedToken = request.Header.Get(DefaultRegistrationTokenHeader)
+		receivedHopHeader = request.Header.Get("X-Hop-Test")
+		response.WriteHeader(http.StatusAccepted)
+	}))
+	defer upstream.Close()
+
+	stateStore := &fakeStore{state: admittedState(control.OwnerSupervisor)}
+	handler := testHandler(t, stateStore, upstream.URL)
+	request := httptest.NewRequest(http.MethodPost, "http://proxy.test/execute", nil)
+	addLeaseHeaders(request, stateStore.state.LeaseFence)
+	request.Header.Set(DefaultRegistrationTokenHeader, "caller-spoof")
+	request.Header.Set("X-Hop-Test", "drop-me")
+	request.Header.Set("Connection", "keep-alive, x-workload-registration-token, X-Hop-Test")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+	}
+	if receivedToken != "test-registration-token" {
+		t.Fatalf("upstream registration token = %q", receivedToken)
+	}
+	if receivedHopHeader != "" {
+		t.Fatalf("upstream hop-by-hop header = %q", receivedHopHeader)
+	}
+	if tokens := response.Header().Values(DefaultRegistrationTokenHeader); len(tokens) != 1 || tokens[0] != "test-registration-token" {
+		t.Fatalf("response registration tokens = %#v", tokens)
+	}
+	if len(stateStore.admitted) != 1 {
+		t.Fatalf("admitted = %#v", stateStore.admitted)
+	}
+}
+
 func TestUserOwnershipBypassesLeaseRegistration(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.WriteHeader(http.StatusNoContent)
