@@ -2,24 +2,25 @@ package store
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	_ "modernc.org/sqlite"
 )
 
 var (
-	ErrStaleFence      = errors.New("stale lease fence")
-	ErrVersionConflict = errors.New("control state version conflict")
-	ErrAdmissionClosed = errors.New("admission is closed")
+	ErrStaleFence       = errors.New("stale lease fence")
+	ErrVersionConflict  = errors.New("control state version conflict")
+	ErrAdmissionClosed  = errors.New("admission is closed")
+	ErrWorkloadMismatch = errors.New("workload does not match active allocation")
 )
 
 type Clock func() time.Time
@@ -66,6 +67,14 @@ func open(ctx context.Context, path string, now Clock, uuid func() (string, erro
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("connect sqlite: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("secure sqlite file: %w", err)
+	}
 	s := &Store{db: db, now: now, uuid: uuid}
 	if err := s.initialize(ctx); err != nil {
 		db.Close()
@@ -162,9 +171,12 @@ func (s *Store) RotateIncarnation(ctx context.Context) (control.State, error) {
 	return state, nil
 }
 
-func (s *Store) RegisterWork(ctx context.Context, requestID, jobID string, fence control.Fence) error {
+func (s *Store) RegisterWork(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence) error {
 	if requestID == "" {
 		return errors.New("request id is empty")
+	}
+	if workload != control.WorkloadText && workload != control.WorkloadMedia {
+		return errors.New("workload must be text or media")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -178,12 +190,15 @@ func (s *Store) RegisterWork(ctx context.Context, requestID, jobID string, fence
 	if state.LeaseFence != fence {
 		return ErrStaleFence
 	}
-	if state.Admission != control.AdmissionOpen {
+	if state.Admission != control.AdmissionOpen || state.Phase != control.PhaseStable || state.Health != control.HealthHealthy {
 		return ErrAdmissionClosed
 	}
+	if state.ActiveWorkload != workload || state.DesiredWorkload != workload {
+		return ErrWorkloadMismatch
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO registered_work
-		(request_id, job_id, lease_incarnation, lease_epoch, registered_at)
-		VALUES (?, ?, ?, ?, ?)`, requestID, nullable(jobID), fence.Incarnation, fence.Epoch, formatTime(s.now()))
+		(request_id, job_id, workload, lease_incarnation, lease_epoch, registered_at)
+		VALUES (?, ?, ?, ?, ?, ?)`, requestID, nullable(jobID), workload, fence.Incarnation, fence.Epoch, formatTime(s.now()))
 	if err != nil {
 		return fmt.Errorf("register work: %w", err)
 	}
@@ -323,8 +338,23 @@ func preparePath(path string) error {
 	if path == "" {
 		return errors.New("database path is empty")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	parent := filepath.Dir(path)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return err
+	}
+	parentInfo, err := os.Lstat(parent)
+	if err != nil {
+		return err
+	}
+	if parentInfo.Mode()&os.ModeSymlink != 0 || !parentInfo.IsDir() {
+		return errors.New("database parent must be a directory, not a symlink")
+	}
+	if parentInfo.Mode().Perm()&0o022 != 0 {
+		return errors.New("database parent must not be group or world writable")
+	}
+	stat, ok := parentInfo.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Geteuid() {
+		return errors.New("database parent must be owned by the current user")
 	}
 	if info, err := os.Lstat(path); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
@@ -340,23 +370,8 @@ func preparePath(path string) error {
 }
 
 func newUUID() (string, error) {
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", err
-	}
-	raw[6] = (raw[6] & 0x0f) | 0x40
-	raw[8] = (raw[8] & 0x3f) | 0x80
-	buf := make([]byte, 36)
-	hex.Encode(buf[0:8], raw[0:4])
-	buf[8] = '-'
-	hex.Encode(buf[9:13], raw[4:6])
-	buf[13] = '-'
-	hex.Encode(buf[14:18], raw[6:8])
-	buf[18] = '-'
-	hex.Encode(buf[19:23], raw[8:10])
-	buf[23] = '-'
-	hex.Encode(buf[24:36], raw[10:16])
-	return string(buf), nil
+	value, err := uuid.NewRandom()
+	return value.String(), err
 }
 
 func formatTime(t time.Time) string         { return t.UTC().Format(time.RFC3339Nano) }

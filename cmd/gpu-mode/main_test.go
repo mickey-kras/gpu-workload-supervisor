@@ -1,0 +1,88 @@
+package main
+
+import (
+	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+)
+
+func TestCLIRejectsMissingConfigurationAndUnknownCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"invalid flag", []string{"gpu-mode", "-unknown"}, "flag provided but not defined"},
+		{"missing command", []string{"gpu-mode"}, "usage:"},
+		{"missing runtime config", []string{"gpu-mode", "status"}, "runtime units"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previous := os.Args
+			os.Args = tc.args
+			t.Cleanup(func() { os.Args = previous })
+			if err := run(); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("run error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestCLIStatusFailsClosedWhenTrustedProbeCannotObserveRuntime(t *testing.T) {
+	dir := t.TempDir()
+	probe := "/usr/bin/true"
+	previousArgs, previousStdout := os.Args, os.Stdout
+	t.Cleanup(func() { os.Args, os.Stdout = previousArgs, previousStdout })
+	statePath := filepath.Join(dir, "state.db")
+	args := []string{"gpu-mode", "-state", statePath, "-text-unit", "text.service",
+		"-media-unit", "media.service", "-text-health-url", "http://127.0.0.1:1/health",
+		"-media-health-url", "http://127.0.0.1:1/", "-media-release-url", "http://127.0.0.1:1/free",
+		"-release-max-used-mib", "1", "-nvidia-smi", probe, "-systemctl", probe}
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = write
+	os.Args = append(append([]string{}, args...), "status")
+	if err := run(); err == nil || !strings.Contains(err.Error(), "load state") {
+		t.Fatalf("observation failure = %v", err)
+	}
+	if err := write.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := read.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var state control.State
+	if err := json.Unmarshal(output, &state); err != nil {
+		t.Fatalf("status is not JSON: %s: %v", output, err)
+	}
+	if state.Admission != control.AdmissionClosed || state.Health != control.HealthError {
+		t.Fatalf("unsafe status: %#v", state)
+	}
+	os.Stdout = previousStdout
+	os.Args = append(append([]string{}, args...), "unknown")
+	if err := run(); err == nil || !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("unknown command error = %v", err)
+	}
+}
+
+func TestDefaultStatePathUsesXDGDirectory(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	if got, want := defaultStatePath(), filepath.Join(root, "gpu-workload-supervisor", "state.db"); got != want {
+		t.Fatalf("default path = %q, want %q", got, want)
+	}
+	t.Setenv("XDG_STATE_HOME", "")
+	if got := defaultStatePath(); !strings.HasSuffix(got, filepath.Join(".local", "state", "gpu-workload-supervisor", "state.db")) {
+		t.Fatalf("home default path = %q", got)
+	}
+}

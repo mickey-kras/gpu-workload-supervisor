@@ -32,9 +32,10 @@ not become active by being committed.
    Dependabot PR before relying on auto-merge. A source release can be dispatched
    after the `main` run succeeds.
 
-The state-engine and persistence invariant tests cover 90.1% of statements.
-CI enforces the same 90% floor as the router. Recheck the total when the
-controller code from PR #2 is merged; it adds executable paths to this module.
+State validation, persistence, transition, and CLI tests raise the merged Go
+tree to 76.1% statement coverage. CI enforces a 75% floor. PR #2 added the
+controller, runtime, lock, and executable packages during onboarding; reaching
+the router's 90% target needs additional tests for those paths.
 
 The release process freezes the tested `main` commit in `release/X.Y.Z`,
 publishes an immutable release from that commit, and deletes the branch after

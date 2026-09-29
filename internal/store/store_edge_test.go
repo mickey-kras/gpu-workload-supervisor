@@ -20,22 +20,24 @@ func TestRegisterWorkRequiresOpenAdmissionAndCompletesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RegisterWork(ctx, "", "job", state.LeaseFence); err == nil {
+	if err := s.RegisterWork(ctx, "", "job", control.WorkloadText, state.LeaseFence); err == nil {
 		t.Fatal("empty request id accepted")
 	}
-	if err := s.RegisterWork(ctx, "request", "job", state.LeaseFence); !errors.Is(err, ErrAdmissionClosed) {
+	if err := s.RegisterWork(ctx, "request", "job", control.WorkloadText, state.LeaseFence); !errors.Is(err, ErrAdmissionClosed) {
 		t.Fatalf("closed admission error = %v", err)
 	}
 	state.Phase = control.PhaseStable
 	state.Admission = control.AdmissionOpen
+	state.DesiredWorkload = control.WorkloadText
+	state.ActiveWorkload = control.WorkloadText
 	opened, err := s.UpdateState(ctx, state.Version, state)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RegisterWork(ctx, "request", "", opened.LeaseFence); err != nil {
+	if err := s.RegisterWork(ctx, "request", "", control.WorkloadText, opened.LeaseFence); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RegisterWork(ctx, "request", "job", opened.LeaseFence); err == nil {
+	if err := s.RegisterWork(ctx, "request", "job", control.WorkloadText, opened.LeaseFence); err == nil {
 		t.Fatal("duplicate request id accepted")
 	}
 	if err := s.CompleteWork(ctx, "request"); err != nil {
@@ -51,10 +53,10 @@ func TestRegisterWorkRequiresOpenAdmissionAndCompletesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RegisterWork(ctx, "late", "job", opened.LeaseFence); !errors.Is(err, ErrStaleFence) {
+	if err := s.RegisterWork(ctx, "late", "job", control.WorkloadText, opened.LeaseFence); !errors.Is(err, ErrStaleFence) {
 		t.Fatalf("old fence error = %v", err)
 	}
-	if err := s.RegisterWork(ctx, "late", "job", rotated.LeaseFence); !errors.Is(err, ErrAdmissionClosed) {
+	if err := s.RegisterWork(ctx, "late", "job", control.WorkloadText, rotated.LeaseFence); !errors.Is(err, ErrAdmissionClosed) {
 		t.Fatalf("rotated admission error = %v", err)
 	}
 }
@@ -184,7 +186,7 @@ func TestCanceledContextCannotMutateStateOrJournal(t *testing.T) {
 		"update":      func() error { _, err := s.UpdateState(ctx, state.Version, state); return err },
 		"fence":       func() error { _, err := s.RotateFenceAndCloseAdmission(ctx, state.Version); return err },
 		"incarnation": func() error { _, err := s.RotateIncarnation(ctx); return err },
-		"register":    func() error { return s.RegisterWork(ctx, "request", "job", state.LeaseFence) },
+		"register":    func() error { return s.RegisterWork(ctx, "request", "job", control.WorkloadText, state.LeaseFence) },
 		"complete":    func() error { return s.CompleteWork(ctx, "request") },
 		"transition":  func() error { return s.BeginTransition(ctx, Transition{ID: "transition", Fence: state.LeaseFence}) },
 		"events":      func() error { _, err := s.TransitionEvents(ctx, "transition"); return err },
