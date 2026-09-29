@@ -139,8 +139,6 @@ func (m *SystemdManager) Stop(ctx context.Context, workload control.Workload) er
 			return err
 		}
 		if state.active == "inactive" {
-			// The release endpoint need not exist before the media service starts.
-			// Callers still verify GPU memory with Released before opening admission.
 			return nil
 		}
 		return m.releaseMedia(ctx)
