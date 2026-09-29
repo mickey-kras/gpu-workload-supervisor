@@ -69,8 +69,14 @@ Defaults:
 
 The state directory must be private and owned by the current user. Commands use an exclusive file lock. Opening the store applies pending migrations. `status` persists a closed error state if runtime observation violates the single-GPU invariant.
 
-ComfyUI process availability is separate from media GPU ownership. Entering media mode stops text inference and keeps ComfyUI available. Leaving media mode calls the configured model-release endpoint, then polls the NVML-backed `nvidia-smi` memory reading below the deployment threshold before text inference starts.
+ComfyUI process availability is separate from media GPU ownership. Entering media mode stops text inference and keeps ComfyUI available. Before starting text inference, the supervisor calls the media-release endpoint, then polls `nvidia-smi` until reported GPU memory is at or below the deployment threshold.
 
 Boot reconciliation never resumes media work. Interrupted transitions and latched errors require explicit `recover`.
+
+The initial adapter uses trusted `systemctl` and `nvidia-smi` executables. Typed D-Bus and NVML adapters may replace subprocess polling after deployment benchmarks.
+
+## Trust boundary
+
+Processes sharing the supervisor Unix identity are trusted. A compromised same-UID runtime can bypass advisory locks, state files, and user-service control. Remote control requires separate supervisor and runtime service identities with OS-enforced permissions.
 
 Remote control, authorization, UI, Job Broker implementation, and host-specific deployment remain outside this repository slice.
