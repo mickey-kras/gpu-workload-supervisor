@@ -2,11 +2,14 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -332,5 +335,82 @@ func TestRouteCollisionsAreRejected(t *testing.T) {
 		if _, err := New(&fakeStore{}, config); err == nil {
 			t.Fatalf("case %d accepted route collision", index)
 		}
+	}
+}
+
+func TestRegistrationTokenProtectsReusedIDThroughHTTPAndStore(t *testing.T) {
+	ctx := context.Background()
+	stateStore, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stateStore.Close()
+	state, err := stateStore.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.DesiredWorkload = control.WorkloadMedia
+	state.ActiveWorkload = control.WorkloadMedia
+	state.Phase = control.PhaseStable
+	state.Health = control.HealthHealthy
+	state.Admission = control.AdmissionOpen
+	state, err = stateStore.UpdateState(ctx, state.Version, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusAccepted)
+	}))
+	defer upstream.Close()
+	handler := testHandler(t, stateStore, upstream.URL)
+	admit := func() string {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPost, "/execute", nil)
+		request.Header.Set(DefaultRequestIDHeader, "reused-id")
+		request.Header.Set(DefaultFenceIDHeader, state.LeaseFence.Incarnation)
+		request.Header.Set(DefaultFenceEpochHeader, strconv.FormatUint(state.LeaseFence.Epoch, 10))
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("admission status = %d: %s", response.Code, response.Body.String())
+		}
+		token := response.Header().Get(DefaultRegistrationTokenHeader)
+		if token == "" {
+			t.Fatal("admission response missing registration token")
+		}
+		return token
+	}
+	finish := func(token string) int {
+		t.Helper()
+		body, err := json.Marshal(struct {
+			RequestID         string            `json:"requestId"`
+			RegistrationToken string            `json:"registrationToken"`
+			Fence             control.Fence     `json:"fence"`
+			Outcome           store.WorkOutcome `json:"outcome"`
+		}{"reused-id", token, state.LeaseFence, store.WorkCompleted})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodPost, DefaultCompletionPath, strings.NewReader(string(body)))
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response.Code
+	}
+	oldToken := admit()
+	if status := finish(oldToken); status != http.StatusNoContent {
+		t.Fatalf("first completion status = %d", status)
+	}
+	if count, err := stateStore.PruneCompletedWork(ctx, time.Now().Add(time.Hour), 256); err != nil || count != 1 {
+		t.Fatalf("same-fence prune = %d, %v", count, err)
+	}
+	newToken := admit()
+	if newToken == oldToken {
+		t.Fatal("reused request ID received old registration token")
+	}
+	if status := finish(oldToken); status != http.StatusConflict {
+		t.Fatalf("late old-token completion status = %d", status)
+	}
+	if status := finish(newToken); status != http.StatusNoContent {
+		t.Fatalf("new-token completion status = %d", status)
 	}
 }
