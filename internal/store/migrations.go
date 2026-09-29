@@ -8,11 +8,7 @@ import (
 )
 
 const schemaV1 = `
-CREATE TABLE IF NOT EXISTS schema_migrations (
-    version INTEGER PRIMARY KEY,
-    applied_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS control_state (
+CREATE TABLE control_state (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     owner TEXT NOT NULL CHECK (owner IN ('supervisor', 'user')),
     desired_workload TEXT NOT NULL CHECK (desired_workload IN ('text', 'media', 'idle')),
@@ -25,7 +21,7 @@ CREATE TABLE IF NOT EXISTS control_state (
     version INTEGER NOT NULL CHECK (version > 0),
     updated_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS transitions (
+CREATE TABLE transitions (
     transition_id TEXT PRIMARY KEY,
     lease_incarnation TEXT NOT NULL,
     lease_epoch INTEGER NOT NULL CHECK (lease_epoch > 0),
@@ -40,7 +36,7 @@ CREATE TABLE IF NOT EXISTS transitions (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS transition_events (
+CREATE TABLE transition_events (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
     transition_id TEXT NOT NULL REFERENCES transitions(transition_id),
     phase TEXT NOT NULL,
@@ -49,7 +45,7 @@ CREATE TABLE IF NOT EXISTS transition_events (
     outcome TEXT,
     created_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS registered_work (
+CREATE TABLE registered_work (
     request_id TEXT PRIMARY KEY,
     job_id TEXT,
     lease_incarnation TEXT NOT NULL,
@@ -57,9 +53,24 @@ CREATE TABLE IF NOT EXISTS registered_work (
     registered_at TEXT NOT NULL,
     completed_at TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_registered_work_active
+CREATE INDEX idx_registered_work_active
 ON registered_work(completed_at) WHERE completed_at IS NULL;
 `
+
+const schemaV2 = `
+CREATE TABLE transition_work (
+    transition_id TEXT NOT NULL REFERENCES transitions(transition_id),
+    request_id TEXT NOT NULL REFERENCES registered_work(request_id),
+    PRIMARY KEY (transition_id, request_id)
+);
+`
+
+const schemaV3 = `
+ALTER TABLE registered_work
+ADD COLUMN workload TEXT CHECK (workload IN ('text', 'media'));
+`
+
+var migrations = []string{schemaV1, schemaV2, schemaV3}
 
 func (s *Store) initialize(ctx context.Context) error {
 	for _, pragma := range []string{
@@ -77,12 +88,28 @@ func (s *Store) initialize(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, schemaV1); err != nil {
-		return fmt.Errorf("apply schema v1: %w", err)
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+		version INTEGER PRIMARY KEY,
+		applied_at TEXT NOT NULL
+	)`); err != nil {
+		return fmt.Errorf("create migration table: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at)
-		VALUES (1, ?)`, formatTime(s.now())); err != nil {
+	var current int
+	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&current); err != nil {
 		return err
+	}
+	if current > len(migrations) {
+		return fmt.Errorf("database schema version %d is newer than supported version %d", current, len(migrations))
+	}
+	for index := current; index < len(migrations); index++ {
+		version := index + 1
+		if _, err := tx.ExecContext(ctx, migrations[index]); err != nil {
+			return fmt.Errorf("apply schema v%d: %w", version, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version, applied_at)
+			VALUES (?, ?)`, version, formatTime(s.now())); err != nil {
+			return err
+		}
 	}
 	var count int
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM control_state").Scan(&count); err != nil {
