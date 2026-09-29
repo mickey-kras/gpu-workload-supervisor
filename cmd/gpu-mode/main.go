@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -109,8 +110,12 @@ func acquireResolutionLock(statePath, command, reason string) (*lock.File, error
 	if command != "resolve-work" {
 		return nil, nil
 	}
+	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		return nil, errors.New("resolve-work requires -resolve-reason")
+	}
+	if len(reason) > 512 {
+		return nil, errors.New("resolution reason must contain 1 to 512 bytes")
 	}
 	// Proxies hold shared locks until their in-flight handlers finish. Refuse
 	// to abandon work while any proxy can still forward an admitted request.
