@@ -39,6 +39,7 @@ type StateStore interface {
 type Config struct {
 	DrainTimeout    time.Duration
 	VerifyTimeout   time.Duration
+	ActionTimeout   time.Duration
 	CleanupTimeout  time.Duration
 	FinalizeTimeout time.Duration
 	PollInterval    time.Duration
@@ -63,7 +64,7 @@ func newController(stateStore StateStore, runtime gpuruntime.Manager, config Con
 	if stateStore == nil || runtime == nil {
 		return nil, errors.New("store and runtime are required")
 	}
-	if config.DrainTimeout <= 0 || config.VerifyTimeout <= 0 || config.CleanupTimeout <= 0 || config.FinalizeTimeout <= 0 || config.PollInterval <= 0 {
+	if config.DrainTimeout <= 0 || config.VerifyTimeout <= 0 || config.ActionTimeout <= 0 || config.CleanupTimeout <= 0 || config.FinalizeTimeout <= 0 || config.PollInterval <= 0 {
 		return nil, errors.New("timeouts and poll interval must be greater than zero")
 	}
 	return &Controller{store: stateStore, runtime: runtime, config: config, now: now, id: id}, nil
@@ -136,8 +137,8 @@ func (c *Controller) Switch(ctx context.Context, target control.Workload, initia
 		return c.fail(transitionID, state, current, err)
 	}
 	if active != control.WorkloadIdle && active != target {
-		if err := c.effect(ctx, transitionID, state.Phase, "stop "+string(active), func() error {
-			return c.runtime.Stop(ctx, active)
+		if err := c.effect(ctx, transitionID, state.Phase, "stop "+string(active), func(actionCtx context.Context) error {
+			return c.runtime.Stop(actionCtx, active)
 		}); err != nil {
 			return c.fail(transitionID, state, current, err)
 		}
@@ -152,8 +153,8 @@ func (c *Controller) Switch(ctx context.Context, target control.Workload, initia
 		return c.fail(transitionID, state, current, err)
 	}
 	if target != control.WorkloadIdle && active != target {
-		if err := c.effect(ctx, transitionID, state.Phase, "start "+string(target), func() error {
-			return c.runtime.Start(ctx, target)
+		if err := c.effect(ctx, transitionID, state.Phase, "start "+string(target), func(actionCtx context.Context) error {
+			return c.runtime.Start(actionCtx, target)
 		}); err != nil {
 			return c.fail(transitionID, state, current, err)
 		}
@@ -360,13 +361,15 @@ func (c *Controller) setPhase(ctx context.Context, transitionID string, state co
 	return c.store.SetTransitionPhase(ctx, transitionID, state.Version, phase)
 }
 
-func (c *Controller) effect(ctx context.Context, transitionID string, phase control.Phase, action string, fn func() error) error {
+func (c *Controller) effect(ctx context.Context, transitionID string, phase control.Phase, action string, fn func(context.Context) error) error {
 	if err := c.store.AppendTransitionEvent(ctx, store.TransitionEvent{
 		TransitionID: transitionID, Phase: phase, Kind: "intent", Action: action,
 	}); err != nil {
 		return err
 	}
-	err := fn()
+	actionCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
+	err := fn(actionCtx)
+	cancel()
 	outcome := "ok"
 	if err != nil {
 		outcome = failureCode(err)
@@ -430,8 +433,8 @@ func (c *Controller) rollback(ctx context.Context, transitionID string, previous
 	switch previous.ActiveWorkload {
 	case control.WorkloadText:
 		if !snapshot.TextActive {
-			if err := c.effect(ctx, transitionID, control.PhaseReconciling, "rollback start text", func() error {
-				return c.runtime.Start(ctx, control.WorkloadText)
+			if err := c.effect(ctx, transitionID, control.PhaseReconciling, "rollback start text", func(actionCtx context.Context) error {
+				return c.runtime.Start(actionCtx, control.WorkloadText)
 			}); err != nil {
 				return err
 			}
@@ -439,15 +442,15 @@ func (c *Controller) rollback(ctx context.Context, transitionID string, previous
 		return c.waitReady(ctx, control.WorkloadText, c.now().Add(c.config.CleanupTimeout))
 	case control.WorkloadMedia:
 		if snapshot.TextActive {
-			if err := c.effect(ctx, transitionID, control.PhaseReconciling, "rollback stop text", func() error {
-				return c.runtime.Stop(ctx, control.WorkloadText)
+			if err := c.effect(ctx, transitionID, control.PhaseReconciling, "rollback stop text", func(actionCtx context.Context) error {
+				return c.runtime.Stop(actionCtx, control.WorkloadText)
 			}); err != nil {
 				return err
 			}
 		}
 		if !snapshot.MediaReady {
-			if err := c.effect(ctx, transitionID, control.PhaseReconciling, "rollback start media", func() error {
-				return c.runtime.Start(ctx, control.WorkloadMedia)
+			if err := c.effect(ctx, transitionID, control.PhaseReconciling, "rollback start media", func(actionCtx context.Context) error {
+				return c.runtime.Start(actionCtx, control.WorkloadMedia)
 			}); err != nil {
 				return err
 			}
@@ -455,8 +458,8 @@ func (c *Controller) rollback(ctx context.Context, transitionID string, previous
 		return c.waitReady(ctx, control.WorkloadMedia, c.now().Add(c.config.CleanupTimeout))
 	default:
 		if snapshot.TextActive {
-			return c.effect(ctx, transitionID, control.PhaseReconciling, "rollback stop text", func() error {
-				return c.runtime.Stop(ctx, control.WorkloadText)
+			return c.effect(ctx, transitionID, control.PhaseReconciling, "rollback stop text", func(actionCtx context.Context) error {
+				return c.runtime.Stop(actionCtx, control.WorkloadText)
 			})
 		}
 		return nil
