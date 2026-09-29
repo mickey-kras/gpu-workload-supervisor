@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -60,16 +61,34 @@ func run() error {
 	idleTimeout := flags.Duration("idle-timeout", 2*time.Minute, "HTTP idle timeout")
 	shutdownTimeout := flags.Duration("shutdown-timeout", 30*time.Second, "graceful shutdown timeout")
 	var routes routesFlag
+	var passthroughRoutes routesFlag
 	flags.Var(&routes, "execute-route", "gated execution route as METHOD:/absolute/path; repeatable")
+	flags.Var(&passthroughRoutes, "passthrough-route", "explicit ungated mutating route as METHOD:/absolute/path; repeatable")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
+	if err := validateLoopbackAddress(*listen); err != nil {
+		return err
+	}
+	if *upstreamValue == "" {
+		return errors.New("upstream is required")
+	}
 	upstream, err := url.Parse(*upstreamValue)
 	if err != nil {
 		return fmt.Errorf("parse upstream: %w", err)
+	}
+	if upstream.Scheme != "http" && upstream.Scheme != "https" || upstream.Host == "" {
+		return errors.New("upstream must be an absolute http or https URL")
+	}
+	workload := control.Workload(*workloadValue)
+	if workload != control.WorkloadText && workload != control.WorkloadMedia {
+		return errors.New("workload must be text or media")
+	}
+	if len(routes) == 0 {
+		return errors.New("at least one execution route is required")
 	}
 	stateStore, err := store.Open(context.Background(), *statePath)
 	if err != nil {
@@ -77,8 +96,9 @@ func run() error {
 	}
 	defer stateStore.Close()
 	handler, err := workloadproxy.New(stateStore, workloadproxy.Config{
-		Upstream: upstream, Workload: control.Workload(*workloadValue),
-		ExecutionRoutes: routes, RequestIDHeader: *requestIDHeader,
+		Upstream: upstream, Workload: workload,
+		ExecutionRoutes: routes, PassthroughRoutes: passthroughRoutes,
+		RequestIDHeader: *requestIDHeader,
 		JobIDHeader: *jobIDHeader, FenceIDHeader: *fenceIDHeader,
 		FenceEpochHeader: *fenceEpochHeader,
 		ErrorLog: func(err error) { log.Print(err) },
@@ -119,4 +139,19 @@ func defaultStatePath() string {
 		return "state.db"
 	}
 	return filepath.Join(home, ".local", "state", "gpu-workload-supervisor", "state.db")
+}
+
+func validateLoopbackAddress(address string) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("invalid listen address: %w", err)
+	}
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return errors.New("listen address must be loopback")
+	}
+	return nil
 }
