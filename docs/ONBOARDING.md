@@ -32,9 +32,9 @@ not become active by being committed.
    Dependabot PR before relying on auto-merge. A source release can be dispatched
    after the `main` run succeeds.
 
-The initial state-engine tests cover 53.4% of statements. CI enforces a 53%
-floor to prevent a regression while the controller tests are being added. The
-router's 90% floor should be adopted after coverage reaches it.
+The state-engine and persistence invariant tests cover 90.1% of statements.
+CI enforces the same 90% floor as the router. Recheck the total when the
+controller code from PR #2 is merged; it adds executable paths to this module.
 
 The release process freezes the tested `main` commit in `release/X.Y.Z`,
 publishes an immutable release from that commit, and deletes the branch after
