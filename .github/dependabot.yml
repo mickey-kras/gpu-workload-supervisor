@@ -9,10 +9,6 @@ updates:
       default-days: 7
     rebase-strategy: auto
     open-pull-requests-limit: 3
-    groups:
-      gomod-minor-patch:
-        patterns: ["*"]
-        update-types: [minor, patch]
 
   - package-ecosystem: npm
     directory: /.github/aislop
@@ -23,10 +19,16 @@ updates:
       default-days: 7
     rebase-strategy: auto
     open-pull-requests-limit: 3
-    groups:
-      npm-minor-patch:
-        patterns: ["*"]
-        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /.github/scripts
+    schedule:
+      interval: cron
+      cronjob: "3 5 * * *"
+    cooldown:
+      default-days: 7
+    rebase-strategy: auto
+    open-pull-requests-limit: 3
 
   - package-ecosystem: github-actions
     directory: /
@@ -37,7 +39,3 @@ updates:
       default-days: 7
     rebase-strategy: auto
     open-pull-requests-limit: 3
-    groups:
-      github-actions-minor-patch:
-        patterns: ["*"]
-        update-types: [minor, patch]

@@ -55,7 +55,7 @@ function fetchMetadata(pull, repository, metadataPath) {
         GITHUB_EVENT_NAME: 'pull_request_target',
         GITHUB_EVENT_PATH: event,
         GITHUB_OUTPUT: output,
-        'INPUT_GITHUB-TOKEN': process.env.GH_TOKEN,
+        'INPUT_GITHUB-TOKEN': process.env.METADATA_TOKEN,
         'INPUT_COMPAT-LOOKUP': 'true',
         'INPUT_ALERT-LOOKUP': '',
         'INPUT_SKIP-VERIFICATION': 'false',

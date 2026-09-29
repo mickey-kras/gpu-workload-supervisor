@@ -208,7 +208,7 @@ def _clean(value: object, fallback: str) -> str:
 
 def _title(prefix: str, path: str, line: object, message: str) -> str:
     location = f"{path}:{line}" if line is not None else path
-    return f"[sonar] {prefix}: {location} — {message}"[:240]
+    return f"[sonar] {prefix}: {location} - {message}"[:240]
 
 
 def _run_context() -> tuple[str, str, str]:

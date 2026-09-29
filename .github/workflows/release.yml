@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.repository }}
+  group: dependabot-auto-merge-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
@@ -61,19 +61,18 @@ jobs:
               throw new Error('Release requires main and a plain SemVer version');
             }
             const { data: tip } = await github.rest.repos.getBranch({ ...context.repo, branch: 'main' });
-            if (tip.commit.sha !== context.sha) throw new Error('Main moved; dispatch again at its current tip');
+            if (tip.commit.sha !== context.sha) {
+              const ref = `heads/release/${version}`;
+              const { data: candidate } = await github.rest.git.getRef({ ...context.repo, ref });
+              if (candidate.object.sha !== context.sha) throw new Error('Main moved and the prepared branch has another SHA');
+              core.info('Retrying the prepared commit after main advanced');
+            }
             const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
               ...context.repo, workflow_id: 'main.yml', branch: 'main', head_sha: context.sha,
               status: 'completed', per_page: 100,
             });
-            if (!runs.some(run => run.event === 'push' && run.head_sha === context.sha &&
+            if (!runs.some(run => ['push', 'workflow_dispatch'].includes(run.event) && run.head_sha === context.sha &&
                 run.conclusion === 'success')) throw new Error('A successful main push validation is required');
-            try {
-              await github.rest.git.getRef({ ...context.repo, ref: `tags/v${version}` });
-              throw new Error(`Tag v${version} already exists`);
-            } catch (error) {
-              if (error.status !== 404) throw error;
-            }
       - name: Release App token
         id: app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v2
@@ -83,7 +82,53 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
+          permission-administration: read
+      - name: Verify immutable setting and publication state
+        id: state
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          VERSION: ${{ inputs.version }}
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+          script: |
+            const { data: policy } = await github.request('GET /repos/{owner}/{repo}/immutable-releases', {
+              ...context.repo, headers: { 'X-GitHub-Api-Version': '2026-03-10' },
+            });
+            if (policy.enabled !== true) throw new Error('Enable immutable releases before publishing');
+            const tag = `v${process.env.VERSION}`;
+            let ref;
+            try {
+              ({ data: ref } = await github.rest.git.getRef({ ...context.repo, ref: `tags/${tag}` }));
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              core.setOutput('published', 'false');
+              return;
+            }
+            if (ref.object.type !== 'commit' || ref.object.sha !== context.sha) {
+              throw new Error('Existing release tag points at another commit');
+            }
+            const { data: release } = await github.rest.repos.getReleaseByTag({ ...context.repo, tag });
+            const expected = [`gpu-workload-supervisor-${tag}.tar.gz`, 'SHA256SUMS', 'sbom.cdx.json'];
+            if (!release.immutable || release.draft || release.assets.length !== expected.length ||
+                !expected.every(name => release.assets.some(asset => asset.name === name &&
+                  asset.state === 'uploaded' && /^sha256:[a-f0-9]{64}$/.test(asset.digest || '')))) {
+              throw new Error('Existing release is incomplete or mutable; manual recovery required');
+            }
+            core.setOutput('published', 'true');
+      - name: Verify existing release checksum
+        if: steps.state.outputs.published == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir existing-release
+          gh release download "v${VERSION}" --repo "$GITHUB_REPOSITORY" --dir existing-release
+          cd existing-release
+          sha256sum --check SHA256SUMS
       - name: Freeze main in a release branch
+        if: steps.state.outputs.published != 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           VERSION: ${{ inputs.version }}
@@ -92,16 +137,17 @@ jobs:
           script: |
             const ref = `heads/release/${process.env.VERSION}`;
             const { data: main } = await github.rest.repos.getBranch({ ...context.repo, branch: 'main' });
-            if (main.commit.sha !== context.sha) throw new Error('Main moved before preparation');
             try {
               const { data: existing } = await github.rest.git.getRef({ ...context.repo, ref });
               if (existing.object.sha !== context.sha) throw new Error('Release branch belongs to another commit');
               core.info('Reusing the prepared release branch');
             } catch (error) {
               if (error.status !== 404) throw error;
+              if (main.commit.sha !== context.sha) throw new Error('Main moved before preparation');
               await github.rest.git.createRef({ ...context.repo, ref: `refs/${ref}`, sha: context.sha });
             }
       - name: Build source archive and checksum
+        if: steps.state.outputs.published != 'true'
         env:
           VERSION: ${{ inputs.version }}
         shell: bash
@@ -111,11 +157,14 @@ jobs:
           git archive --format=tar --prefix="gpu-workload-supervisor-v${VERSION}/" HEAD | gzip -n > "$archive"
           sha256sum "$archive" > SHA256SUMS
       - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        if: steps.state.outputs.published != 'true'
         with:
           version: v0.71.2
       - name: Generate CycloneDX SBOM
+        if: steps.state.outputs.published != 'true'
         run: trivy fs --format cyclonedx --output sbom.cdx.json .
       - name: Attest release assets
+        if: steps.state.outputs.published != 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
@@ -123,6 +172,7 @@ jobs:
             SHA256SUMS
             sbom.cdx.json
       - name: Publish immutable GitHub release
+        if: steps.state.outputs.published != 'true'
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           VERSION: ${{ inputs.version }}
@@ -132,6 +182,20 @@ jobs:
           set -euo pipefail
           gh release create "v${VERSION}" "gpu-workload-supervisor-v${VERSION}.tar.gz" SHA256SUMS sbom.cdx.json \
             --repo "$GITHUB_REPOSITORY" --target "$RELEASE_SHA" --title "v${VERSION}" --generate-notes
+      - name: Verify published release
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          VERSION: ${{ inputs.version }}
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+          script: |
+            const tag = `v${process.env.VERSION}`;
+            const { data: ref } = await github.rest.git.getRef({ ...context.repo, ref: `tags/${tag}` });
+            const { data: release } = await github.rest.repos.getReleaseByTag({ ...context.repo, tag });
+            if (ref.object.type !== 'commit' || ref.object.sha !== context.sha ||
+                !release.immutable || release.draft || release.assets.length !== 3) {
+              throw new Error('Published release does not match the immutable candidate');
+            }
       - name: Delete published release branch
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
@@ -139,6 +203,12 @@ jobs:
         with:
           github-token: ${{ steps.app.outputs.token }}
           script: |
-            await github.rest.git.deleteRef({
-              ...context.repo, ref: `heads/release/${process.env.VERSION}`,
-            });
+            const ref = `heads/release/${process.env.VERSION}`;
+            try {
+              const { data: branch } = await github.rest.git.getRef({ ...context.repo, ref });
+              if (branch.object.sha !== context.sha) throw new Error('Release branch SHA changed');
+              await github.rest.git.deleteRef({ ...context.repo, ref });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              core.info('Release branch already removed');
+            }

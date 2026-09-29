@@ -4,6 +4,7 @@
 [![CodeQL](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/codeql.yml/badge.svg)](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/codeql.yml)
 [![Aislop](https://badges.scanaislop.com/score/mickey-kras/gpu-workload-supervisor.svg)](https://scanaislop.com/mickey-kras/gpu-workload-supervisor)
 [![main validation and SonarQube](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/main.yml/badge.svg?branch=main)](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/main.yml?query=branch%3Amain)
+[![Go coverage gate](https://img.shields.io/badge/Go%20coverage-at%20least%2053%25-yellow)](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/pr-validation.yml)
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Crash-safe GPU workload supervision for local AI runtimes.
@@ -44,6 +45,6 @@ go test ./...
 go vet ./...
 ```
 
-Runtime adapters and service control are intentionally outside the initial state-engine slice.
+Runtime integration and service control are developed separately from the initial state engine. The release workflow currently packages the source tree.
 
 Repository checks and setup: [onboarding](docs/ONBOARDING.md). Dependabot: [policy](docs/DEPENDABOT.md). Source releases: [releasing](docs/RELEASING.md).

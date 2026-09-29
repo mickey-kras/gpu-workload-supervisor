@@ -52,6 +52,11 @@ jobs:
         run: |
           npm ci --prefix .github/aislop --ignore-scripts --no-audit --no-fund
           npm audit --prefix .github/aislop --audit-level=moderate
+      - name: Test policy automation
+        run: |
+          npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund
+          npm audit --prefix .github/scripts --audit-level=moderate
+          node --test .github/scripts/*.test.cjs
       - name: Gitleaks
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
         env:
