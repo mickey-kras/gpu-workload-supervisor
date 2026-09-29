@@ -107,4 +107,3 @@ func (s *Store) FinishWorkFenced(ctx context.Context, requestID string, workload
 	}
 	return sql.ErrNoRows
 }
-

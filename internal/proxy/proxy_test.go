@@ -306,12 +306,12 @@ func TestRouteCollisionsAreRejected(t *testing.T) {
 		},
 		{
 			Upstream: target, Workload: control.WorkloadMedia,
-			ExecutionRoutes: []Route{{Method: http.MethodPost, Path: "/execute"}},
+			ExecutionRoutes:   []Route{{Method: http.MethodPost, Path: "/execute"}},
 			PassthroughRoutes: []Route{{Method: http.MethodPost, Path: DefaultCompletionPath}},
 		},
 		{
 			Upstream: target, Workload: control.WorkloadMedia,
-			ExecutionRoutes: []Route{{Method: http.MethodPost, Path: "/execute"}},
+			ExecutionRoutes:   []Route{{Method: http.MethodPost, Path: "/execute"}},
 			PassthroughRoutes: []Route{{Method: http.MethodPost, Path: "/execute"}},
 		},
 	}

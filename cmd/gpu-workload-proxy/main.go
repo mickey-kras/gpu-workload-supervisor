@@ -104,7 +104,7 @@ func run() error {
 		Upstream: upstream, Workload: workload,
 		ExecutionRoutes: routes, PassthroughRoutes: passthroughRoutes,
 		CompletionPath: *completionPath, RequestIDHeader: *requestIDHeader,
-		JobIDHeader:     *jobIDHeader, FenceIDHeader: *fenceIDHeader,
+		JobIDHeader: *jobIDHeader, FenceIDHeader: *fenceIDHeader,
 		FenceEpochHeader: *fenceEpochHeader,
 	})
 	if err != nil {
