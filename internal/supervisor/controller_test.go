@@ -369,3 +369,59 @@ func TestReleaseProbeTimeoutClosesTransition(t *testing.T) {
 		t.Fatalf("transition remains in progress: %s", running)
 	}
 }
+
+func TestSwitchFromIdleReleasesOutOfBandMediaBeforeText(t *testing.T) {
+	stateStore := openStore(t)
+	runtime := &fakeRuntime{active: control.WorkloadIdle, mediaReady: true}
+	controller := testController(t, stateStore, runtime)
+	state, err := stateStore.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.DesiredWorkload = control.WorkloadIdle
+	state.ActiveWorkload = control.WorkloadIdle
+	state.Phase = control.PhaseStable
+	state.Health = control.HealthHealthy
+	state.Admission = control.AdmissionClosed
+	if _, err := stateStore.UpdateState(context.Background(), state.Version, state); err != nil {
+		t.Fatal(err)
+	}
+	result, err := controller.Switch(context.Background(), control.WorkloadText, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ActiveWorkload != control.WorkloadText {
+		t.Fatalf("active workload = %q", result.ActiveWorkload)
+	}
+	assertCalls(t, runtime.calls, "stop media", "start text")
+}
+
+func TestStatusDoesNotMutateUserOwnedState(t *testing.T) {
+	stateStore := openStore(t)
+	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true}
+	controller := testController(t, stateStore, runtime)
+	state, err := stateStore.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Owner = control.OwnerUser
+	state.ActiveWorkload = control.WorkloadMedia
+	state.DesiredWorkload = control.WorkloadMedia
+	state.Phase = control.PhaseStable
+	state.Health = control.HealthHealthy
+	state.Admission = control.AdmissionOpen
+	state, err = stateStore.UpdateState(context.Background(), state.Version, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Status(context.Background()); err == nil {
+		t.Fatal("expected invariant error")
+	}
+	after, err := stateStore.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != state {
+		t.Fatalf("user-owned state changed: %#v != %#v", after, state)
+	}
+}
