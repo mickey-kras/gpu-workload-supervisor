@@ -56,6 +56,7 @@ Defaults:
 
 - state: `$XDG_STATE_HOME/gpu-workload-supervisor/state.db` or `~/.local/state/gpu-workload-supervisor/state.db`
 - health request timeout: 10 seconds
+- runtime action timeout: 2 minutes
 - drain timeout: 5 minutes
 - readiness timeout: 5 minutes
 - rollback timeout: 2 minutes
