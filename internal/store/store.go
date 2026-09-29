@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -65,6 +66,14 @@ func open(ctx context.Context, path string, now Clock, uuid func() (string, erro
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("connect sqlite: %w", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("secure sqlite file: %w", err)
+	}
 	s := &Store{db: db, now: now, uuid: uuid}
 	if err := s.initialize(ctx); err != nil {
 		db.Close()
@@ -322,8 +331,23 @@ func preparePath(path string) error {
 	if path == "" {
 		return errors.New("database path is empty")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	parent := filepath.Dir(path)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return err
+	}
+	parentInfo, err := os.Lstat(parent)
+	if err != nil {
+		return err
+	}
+	if parentInfo.Mode()&os.ModeSymlink != 0 || !parentInfo.IsDir() {
+		return errors.New("database parent must be a directory, not a symlink")
+	}
+	if parentInfo.Mode().Perm()&0o022 != 0 {
+		return errors.New("database parent must not be group or world writable")
+	}
+	stat, ok := parentInfo.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Geteuid() {
+		return errors.New("database parent must be owned by the current user")
 	}
 	if info, err := os.Lstat(path); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
