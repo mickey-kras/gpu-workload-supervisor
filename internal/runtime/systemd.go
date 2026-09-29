@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
@@ -42,6 +43,7 @@ type SystemdConfig struct {
 	GPUIndex        int
 	ReleaseMaxMiB   uint64
 	NvidiaSMIPath   string
+	SystemctlPath   string
 }
 
 type SystemdManager struct {
@@ -73,9 +75,16 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 	if config.GPUIndex < 0 || config.ReleaseMaxMiB == 0 {
 		return nil, errors.New("GPU index and release memory threshold are required")
 	}
-	if err := validateExecutable(config.NvidiaSMIPath); err != nil {
+	resolvedNvidiaSMI, err := validateExecutable(config.NvidiaSMIPath)
+	if err != nil {
 		return nil, fmt.Errorf("nvidia-smi: %w", err)
 	}
+	resolvedSystemctl, err := validateExecutable(config.SystemctlPath)
+	if err != nil {
+		return nil, fmt.Errorf("systemctl: %w", err)
+	}
+	config.NvidiaSMIPath = resolvedNvidiaSMI
+	config.SystemctlPath = resolvedSystemctl
 	if config.HealthTimeout <= 0 {
 		return nil, errors.New("health timeout must be greater than zero")
 	}
@@ -157,7 +166,7 @@ func (m *SystemdManager) Released(ctx context.Context) error {
 }
 
 func (m *SystemdManager) active(ctx context.Context, unit string) (bool, error) {
-	output, err := m.runner.Run(ctx, "systemctl", "--user", "show",
+	output, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show",
 		"--property=LoadState", "--property=ActiveState", "--property=SubState", "--", unit)
 	if err != nil {
 		return false, fmt.Errorf("inspect %s: %w: %s", unit, err, strings.TrimSpace(string(output)))
@@ -186,7 +195,7 @@ func (m *SystemdManager) active(ctx context.Context, unit string) (bool, error) 
 }
 
 func (m *SystemdManager) runSystemctl(ctx context.Context, action, unit string) error {
-	output, err := m.runner.Run(ctx, "systemctl", "--user", action, "--", unit)
+	output, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", action, "--", unit)
 	if err != nil {
 		return fmt.Errorf("systemctl %s %s: %w: %s", action, unit, err, strings.TrimSpace(string(output)))
 	}
@@ -249,23 +258,40 @@ func validateLoopbackURL(value string) error {
 	return nil
 }
 
-func validateExecutable(path string) error {
+func validateExecutable(path string) (string, error) {
 	if !filepath.IsAbs(path) {
-		return errors.New("path must be absolute")
+		return "", errors.New("path must be absolute")
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return err
+		return "", err
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		return errors.New("target must be a regular executable")
+		return "", errors.New("target must be a regular executable")
 	}
 	if info.Mode().Perm()&0o022 != 0 {
-		return errors.New("target must not be group or world writable")
+		return "", errors.New("target must not be group or world writable")
 	}
-	return nil
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != 0 {
+		return "", errors.New("target must be owned by root")
+	}
+	for directory := filepath.Dir(resolved); ; directory = filepath.Dir(directory) {
+		info, err := os.Stat(directory)
+		if err != nil {
+			return "", err
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Uid != 0 || info.Mode().Perm()&0o022 != 0 {
+			return "", errors.New("executable path must be rooted in trusted directories")
+		}
+		if directory == string(filepath.Separator) {
+			break
+		}
+	}
+	return resolved, nil
 }
