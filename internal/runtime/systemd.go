@@ -9,7 +9,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -39,6 +41,7 @@ type SystemdConfig struct {
 	HealthTimeout   time.Duration
 	GPUIndex        int
 	ReleaseMaxMiB   uint64
+	NvidiaSMIPath   string
 }
 
 type SystemdManager struct {
@@ -69,6 +72,9 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 	}
 	if config.GPUIndex < 0 || config.ReleaseMaxMiB == 0 {
 		return nil, errors.New("GPU index and release memory threshold are required")
+	}
+	if err := validateExecutable(config.NvidiaSMIPath); err != nil {
+		return nil, fmt.Errorf("nvidia-smi: %w", err)
 	}
 	if config.HealthTimeout <= 0 {
 		return nil, errors.New("health timeout must be greater than zero")
@@ -136,7 +142,7 @@ func (m *SystemdManager) Healthy(ctx context.Context, workload control.Workload)
 }
 
 func (m *SystemdManager) Released(ctx context.Context) error {
-	output, err := m.runner.Run(ctx, "nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits", "-i", strconv.Itoa(m.config.GPUIndex))
+	output, err := m.runner.Run(ctx, m.config.NvidiaSMIPath, "--query-gpu=memory.used", "--format=csv,noheader,nounits", "-i", strconv.Itoa(m.config.GPUIndex))
 	if err != nil {
 		return fmt.Errorf("query GPU memory: %w: %s", err, strings.TrimSpace(string(output)))
 	}
@@ -239,6 +245,27 @@ func validateLoopbackURL(value string) error {
 	ip := net.ParseIP(host)
 	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
 		return errors.New("host must be loopback")
+	}
+	return nil
+}
+
+func validateExecutable(path string) error {
+	if !filepath.IsAbs(path) {
+		return errors.New("path must be absolute")
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return errors.New("target must be a regular executable")
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return errors.New("target must not be group or world writable")
 	}
 	return nil
 }
