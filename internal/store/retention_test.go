@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -82,6 +83,9 @@ func TestPruneCompletedWorkPreservesActiveAndRunningSnapshot(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if _, err := s.RotateFenceAndCloseAdmission(ctx, state.Version); err != nil {
+		t.Fatal(err)
+	}
 	count, err := s.PruneCompletedWork(ctx, fixedClock()().Add(-24*time.Hour), 256)
 	if err != nil || count != 2 {
 		t.Fatalf("prune = %d, %v; want 2", count, err)
@@ -129,6 +133,48 @@ func TestPruneCompletedWorkPreservesActiveAndRunningSnapshot(t *testing.T) {
 	}
 }
 
+
+func TestPruneKeepsCurrentFenceRequestIDsUntilRotation(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	state := admitRetentionWork(t, s, "same-id")
+	finishRetentionWork(t, s, state, "same-id", fixedClock()().Add(-48*time.Hour))
+	count, err := s.PruneCompletedWork(ctx, fixedClock()().Add(-24*time.Hour), 256)
+	if err != nil || count != 0 || !retentionWorkExists(t, s, "same-id") {
+		t.Fatalf("current fence prune = %d, %v", count, err)
+	}
+	if err := s.AdmitWork(ctx, "same-id", "", control.WorkloadText, state.LeaseFence); !errors.Is(err, ErrRequestConflict) {
+		t.Fatalf("current fence duplicate accepted: %v", err)
+	}
+	rotated, err := s.RotateFenceAndCloseAdmission(ctx, state.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err = s.PruneCompletedWork(ctx, fixedClock()().Add(-24*time.Hour), 256)
+	if err != nil || count != 1 || retentionWorkExists(t, s, "same-id") {
+		t.Fatalf("retired fence prune = %d, %v", count, err)
+	}
+	rotated.Admission = control.AdmissionOpen
+	rotated, err = s.UpdateState(ctx, rotated.Version, rotated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AdmitWork(ctx, "same-id", "", control.WorkloadText, rotated.LeaseFence); err != nil {
+		t.Fatalf("new fence admission = %v", err)
+	}
+	if err := s.FinishWorkFenced(ctx, "same-id", control.WorkloadText, state.LeaseFence, WorkCompleted); !errors.Is(err, ErrStaleFence) {
+		t.Fatalf("old completion affected new work: %v", err)
+	}
+	var active int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM registered_work
+		WHERE request_id = 'same-id' AND completed_at IS NULL`).Scan(&active); err != nil {
+		t.Fatal(err)
+	}
+	if active != 1 {
+		t.Fatalf("new work active count = %d", active)
+	}
+}
+
 func TestPruneCompletedWorkIsBoundedAndHonorsCutoff(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -137,6 +183,9 @@ func TestPruneCompletedWorkIsBoundedAndHonorsCutoff(t *testing.T) {
 		finishRetentionWork(t, s, state, id, fixedClock()().Add(-2*time.Second))
 	}
 	finishRetentionWork(t, s, state, "later-in-cutoff-second", fixedClock()().Add(600*time.Millisecond))
+	if _, err := s.RotateFenceAndCloseAdmission(ctx, state.Version); err != nil {
+		t.Fatal(err)
+	}
 	if count, err := s.PruneCompletedWork(ctx, fixedClock()(), 2); err != nil || count != 2 {
 		t.Fatalf("first batch = %d, %v", count, err)
 	}
