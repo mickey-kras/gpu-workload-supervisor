@@ -25,8 +25,8 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 
 func TestObserveKeepsMediaAvailabilitySeparateFromTextOwnership(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"systemctl --user show -- text.service --property=LoadState --property=ActiveState --property=SubState":  []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
-		"systemctl --user show -- media.service --property=LoadState --property=ActiveState --property=SubState": []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
+		"systemctl --user show --property=LoadState --property=ActiveState --property=SubState -- text.service":  []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
+		"systemctl --user show --property=LoadState --property=ActiveState --property=SubState -- media.service": []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
 	}, errs: map[string]error{}}
 	manager, err := newSystemdManager(testConfig(), runner, http.DefaultClient)
 	if err != nil {
