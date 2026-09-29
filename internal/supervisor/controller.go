@@ -12,9 +12,9 @@ import (
 )
 
 var (
-	ErrUserOwned          = errors.New("GPU is in user control mode")
-	ErrTransitionRunning  = errors.New("another transition is running")
-	ErrDrainTimeout       = errors.New("timed out waiting for admitted work")
+	ErrUserOwned         = errors.New("GPU is in user control mode")
+	ErrTransitionRunning = errors.New("another transition is running")
+	ErrDrainTimeout      = errors.New("timed out waiting for admitted work")
 )
 
 type StateStore interface {
