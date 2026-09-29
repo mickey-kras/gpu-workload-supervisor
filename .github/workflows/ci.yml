@@ -19,6 +19,9 @@ jobs:
           cache: true
       - run: |
           go mod tidy
+          echo '--- GO_MOD_BEGIN ---'
+          cat go.mod
+          echo '--- GO_MOD_END ---'
           echo '--- GO_SUM_BEGIN ---'
           cat go.sum
           echo '--- GO_SUM_END ---'
