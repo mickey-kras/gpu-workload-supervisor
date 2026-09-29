@@ -25,8 +25,8 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 
 func TestObserveKeepsMediaAvailabilitySeparateFromTextOwnership(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"systemctl --user show --property=LoadState --property=ActiveState --property=SubState -- text.service":  []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
-		"systemctl --user show --property=LoadState --property=ActiveState --property=SubState -- media.service": []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
+		"/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState -- text.service":  []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
+		"/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState -- media.service": []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
 	}, errs: map[string]error{}}
 	manager, err := newSystemdManager(testConfig(), runner, http.DefaultClient)
 	if err != nil {
@@ -50,7 +50,7 @@ func TestStartUsesUserSystemdWithoutShell(t *testing.T) {
 	if err := manager.Start(context.Background(), control.WorkloadText); err != nil {
 		t.Fatal(err)
 	}
-	if got := runner.calls[len(runner.calls)-1]; got != "systemctl --user start -- text.service" {
+	if got := runner.calls[len(runner.calls)-1]; got != "/usr/bin/true --user start -- text.service" {
 		t.Fatalf("call = %q", got)
 	}
 }
@@ -129,7 +129,8 @@ func testConfig() SystemdConfig {
 		HealthTimeout:   time.Second,
 		GPUIndex:        0,
 		ReleaseMaxMiB:   1024,
-		NvidiaSMIPath:   "/bin/true",
+		NvidiaSMIPath:   "/usr/bin/true",
+		SystemctlPath:   "/usr/bin/true",
 	}
 }
 
@@ -144,7 +145,7 @@ func TestConfigurationRejectsOptionLikeUnit(t *testing.T) {
 func TestReleasedUsesNVMLBackedMemoryProbe(t *testing.T) {
 	runner := &fakeRunner{
 		outputs: map[string][]byte{
-			"/bin/true --query-gpu=memory.used --format=csv,noheader,nounits -i 0": []byte("900\n"),
+			"/usr/bin/true --query-gpu=memory.used --format=csv,noheader,nounits -i 0": []byte("900\n"),
 		},
 		errs: map[string]error{},
 	}
@@ -155,7 +156,7 @@ func TestReleasedUsesNVMLBackedMemoryProbe(t *testing.T) {
 	if err := manager.Released(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	runner.outputs["/bin/true --query-gpu=memory.used --format=csv,noheader,nounits -i 0"] = []byte("2048\n")
+	runner.outputs["/usr/bin/true --query-gpu=memory.used --format=csv,noheader,nounits -i 0"] = []byte("2048\n")
 	if err := manager.Released(context.Background()); err == nil {
 		t.Fatal("expected unreleased GPU memory")
 	}
