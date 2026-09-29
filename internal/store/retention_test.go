@@ -213,3 +213,47 @@ func TestPruneCompletedWorkIsBoundedAndHonorsCutoff(t *testing.T) {
 		t.Fatalf("completed rows remain: %d", remaining)
 	}
 }
+
+func TestTokenedWorkPrunesUnderCurrentFenceWithoutLateCompletionCollision(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	state := admitRetentionWork(t, s)
+	firstToken, err := s.AdmitWorkToken(ctx, "same-id", "", control.WorkloadText, state.LeaseFence)
+	if err != nil || firstToken == "" {
+		t.Fatalf("first admission token = %q, %v", firstToken, err)
+	}
+	if err := s.FinishWorkToken(ctx, "same-id", control.WorkloadText, state.LeaseFence, "", WorkCompleted); !errors.Is(err, ErrRegistrationTokenMismatch) {
+		t.Fatalf("tokenless completion = %v", err)
+	}
+	if err := s.FinishWorkToken(ctx, "same-id", control.WorkloadText, state.LeaseFence, "incorrect", WorkCompleted); !errors.Is(err, ErrRegistrationTokenMismatch) {
+		t.Fatalf("wrong token completion = %v", err)
+	}
+	if err := s.FinishWorkToken(ctx, "same-id", control.WorkloadText, state.LeaseFence, firstToken, WorkCompleted); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE registered_work SET completed_at = ? WHERE request_id = ?`,
+		formatTime(fixedClock()().Add(-48*time.Hour)), "same-id"); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := s.PruneCompletedWork(ctx, fixedClock()().Add(-24*time.Hour), 256); err != nil || count != 1 {
+		t.Fatalf("current fence tokened prune = %d, %v", count, err)
+	}
+	secondToken, err := s.AdmitWorkToken(ctx, "same-id", "", control.WorkloadText, state.LeaseFence)
+	if err != nil || secondToken == firstToken {
+		t.Fatalf("second admission token = %q, %v", secondToken, err)
+	}
+	if err := s.FinishWorkToken(ctx, "same-id", control.WorkloadText, state.LeaseFence, firstToken, WorkCompleted); !errors.Is(err, ErrRegistrationTokenMismatch) {
+		t.Fatalf("old token completion = %v", err)
+	}
+	var active int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM registered_work
+		WHERE request_id = 'same-id' AND completed_at IS NULL`).Scan(&active); err != nil {
+		t.Fatal(err)
+	}
+	if active != 1 {
+		t.Fatalf("new work active count = %d", active)
+	}
+	if err := s.FinishWorkToken(ctx, "same-id", control.WorkloadText, state.LeaseFence, secondToken, WorkCompleted); err != nil {
+		t.Fatalf("second completion = %v", err)
+	}
+}
