@@ -12,8 +12,6 @@ type completedWorkPruner interface {
 	PruneCompletedWork(context.Context, time.Time, int) (int64, error)
 }
 
-// pruneExpiredWork uses short transactions so cleanup does not hold the store
-// while the proxy handles requests. It drains a backlog in bounded batches.
 func pruneExpiredWork(ctx context.Context, pruner completedWorkPruner, cutoff time.Time) error {
 	for {
 		if err := ctx.Err(); err != nil {
