@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 var ErrRequestConflict = errors.New("request id already exists")
+var ErrRegistrationTokenMismatch = errors.New("registration token does not match work")
 
 type WorkOutcome string
 
@@ -53,15 +55,30 @@ func (s *Store) beginAdmittedWork(ctx context.Context, requestID string, workloa
 }
 
 func (s *Store) AdmitWork(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence) error {
+	return s.admitWork(ctx, requestID, jobID, workload, fence, "")
+}
+
+func (s *Store) AdmitWorkToken(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence) (string, error) {
+	token, err := newUUID()
+	if err != nil {
+		return "", err
+	}
+	if err := s.admitWork(ctx, requestID, jobID, workload, fence, token); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+func (s *Store) admitWork(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence, token string) error {
 	tx, err := s.beginAdmittedWork(ctx, requestID, workload, fence)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO registered_work
-		(request_id, job_id, workload, lease_incarnation, lease_epoch, registered_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		requestID, nullable(jobID), workload, fence.Incarnation, fence.Epoch, formatTime(s.now()))
+		(request_id, job_id, workload, lease_incarnation, lease_epoch, registered_at, registration_token)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		requestID, nullable(jobID), workload, fence.Incarnation, fence.Epoch, formatTime(s.now()), nullable(token))
 	if err != nil {
 		return fmt.Errorf("admit work: %w", err)
 	}
@@ -76,6 +93,10 @@ func (s *Store) AdmitWork(ctx context.Context, requestID, jobID string, workload
 }
 
 func (s *Store) FinishWorkFenced(ctx context.Context, requestID string, workload control.Workload, fence control.Fence, outcome WorkOutcome) error {
+	return s.FinishWorkToken(ctx, requestID, workload, fence, "", outcome)
+}
+
+func (s *Store) FinishWorkToken(ctx context.Context, requestID string, workload control.Workload, fence control.Fence, token string, outcome WorkOutcome) error {
 	if requestID == "" {
 		return errors.New("request id is empty")
 	}
@@ -91,8 +112,9 @@ func (s *Store) FinishWorkFenced(ctx context.Context, requestID string, workload
 	result, err := s.db.ExecContext(ctx, `UPDATE registered_work
 		SET completed_at = ?, completion_outcome = ?
 		WHERE request_id = ? AND completed_at IS NULL
-		  AND workload = ? AND lease_incarnation = ? AND lease_epoch = ?`,
-		formatTime(s.now()), outcome, requestID, workload, fence.Incarnation, fence.Epoch)
+		  AND workload = ? AND lease_incarnation = ? AND lease_epoch = ?
+		  AND ((registration_token IS NULL AND ? = '') OR registration_token = ?)`,
+		formatTime(s.now()), outcome, requestID, workload, fence.Incarnation, fence.Epoch, token, token)
 	if err != nil {
 		return fmt.Errorf("finish work: %w", err)
 	}
@@ -106,8 +128,9 @@ func (s *Store) FinishWorkFenced(ctx context.Context, requestID string, workload
 	var registeredWorkload control.Workload
 	var incarnation string
 	var epoch uint64
-	err = s.db.QueryRowContext(ctx, `SELECT workload, lease_incarnation, lease_epoch
-		FROM registered_work WHERE request_id = ?`, requestID).Scan(&registeredWorkload, &incarnation, &epoch)
+	var registeredToken sql.NullString
+	err = s.db.QueryRowContext(ctx, `SELECT workload, lease_incarnation, lease_epoch, registration_token
+		FROM registered_work WHERE request_id = ?`, requestID).Scan(&registeredWorkload, &incarnation, &epoch, &registeredToken)
 	if errors.Is(err, sql.ErrNoRows) {
 		return sql.ErrNoRows
 	}
@@ -120,5 +143,53 @@ func (s *Store) FinishWorkFenced(ctx context.Context, requestID string, workload
 	if incarnation != fence.Incarnation || epoch != fence.Epoch {
 		return ErrStaleFence
 	}
+	if registeredToken.Valid && registeredToken.String != token || !registeredToken.Valid && token != "" {
+		return ErrRegistrationTokenMismatch
+	}
 	return sql.ErrNoRows
+}
+
+const prunableWorkIDs = `SELECT work.request_id FROM registered_work AS work
+	JOIN control_state AS state ON state.singleton = 1
+	WHERE work.completed_at IS NOT NULL
+	  AND (work.registration_token IS NOT NULL OR work.lease_incarnation <> state.lease_incarnation OR work.lease_epoch <> state.lease_epoch)
+	  AND work.completed_at < ?
+	  AND unixepoch(work.completed_at) < unixepoch(?)
+	  AND NOT EXISTS (
+		SELECT 1 FROM transition_work AS snapshot
+		JOIN transitions AS tr ON tr.transition_id = snapshot.transition_id
+		WHERE snapshot.request_id = work.request_id AND tr.status = 'in_progress'
+	  )
+	ORDER BY work.completed_at, work.request_id LIMIT ?`
+
+func (s *Store) PruneCompletedWork(ctx context.Context, before time.Time, limit int) (int64, error) {
+	if before.IsZero() {
+		return 0, errors.New("retention cutoff is required")
+	}
+	if limit < 1 || limit > 1024 {
+		return 0, errors.New("prune limit must be between 1 and 1024")
+	}
+	cutoff := formatTime(before)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM transition_work
+		WHERE request_id IN (`+prunableWorkIDs+`)`, cutoff, cutoff, limit); err != nil {
+		return 0, fmt.Errorf("prune terminal transition snapshots: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM registered_work
+		WHERE request_id IN (`+prunableWorkIDs+`)`, cutoff, cutoff, limit)
+	if err != nil {
+		return 0, fmt.Errorf("prune completed work: %w", err)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return deleted, nil
 }

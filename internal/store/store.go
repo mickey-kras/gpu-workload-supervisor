@@ -57,9 +57,26 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	return open(ctx, path, time.Now, newUUID)
 }
 
+func OpenRestored(ctx context.Context, path string) (*Store, error) {
+	return openWithMode(ctx, path, time.Now, newUUID, true)
+}
+
 func open(ctx context.Context, path string, now Clock, uuid func() (string, error)) (*Store, error) {
+	return openWithMode(ctx, path, now, uuid, false)
+}
+
+func openWithMode(ctx context.Context, path string, now Clock, uuid func() (string, error), restored bool) (*Store, error) {
 	if err := preparePath(path); err != nil {
 		return nil, err
+	}
+	if restored {
+		info, err := os.Lstat(path)
+		if err != nil {
+			return nil, fmt.Errorf("restored state database must already exist: %w", err)
+		}
+		if info.Size() == 0 {
+			return nil, errors.New("restored state database is empty")
+		}
 	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -70,6 +87,21 @@ func open(ctx context.Context, path string, now Clock, uuid func() (string, erro
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("connect sqlite: %w", err)
+	}
+	if restored {
+		var migrations int
+		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations").Scan(&migrations); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("restored state database is not initialized: %w", err)
+		}
+		if migrations == 0 {
+			db.Close()
+			return nil, errors.New("restored state database is not initialized")
+		}
+		if _, err := readState(ctx, db); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("restored control state is invalid: %w", err)
+		}
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		db.Close()
@@ -156,14 +188,60 @@ func (s *Store) RotateIncarnation(ctx context.Context) (control.State, error) {
 	if err != nil {
 		return control.State{}, err
 	}
+	if incarnation == state.LeaseFence.Incarnation {
+		return control.State{}, errors.New("new lease incarnation matches restored incarnation")
+	}
+	previous := state.LeaseFence
+	now := formatTime(s.now())
+	if _, err := tx.ExecContext(ctx, `INSERT INTO transition_events
+		(transition_id, phase, kind, action, outcome, created_at)
+		SELECT transition_id, ?, 'observation', 'state restore', 'invalidated', ?
+		FROM transitions WHERE status = 'in_progress'`,
+		control.PhaseReconciling, now); err != nil {
+		return control.State{}, fmt.Errorf("record interrupted transitions: %w", err)
+	}
+	transitions, err := tx.ExecContext(ctx, `UPDATE transitions
+		SET phase = ?, status = 'failed', updated_at = ?
+		WHERE status = 'in_progress'`, control.PhaseReconciling, now)
+	if err != nil {
+		return control.State{}, fmt.Errorf("invalidate interrupted transitions: %w", err)
+	}
+	invalidated, err := transitions.RowsAffected()
+	if err != nil {
+		return control.State{}, err
+	}
+	work, err := tx.ExecContext(ctx, `UPDATE registered_work
+		SET completed_at = ?, completion_outcome = 'abandoned'
+		WHERE completed_at IS NULL`, now)
+	if err != nil {
+		return control.State{}, fmt.Errorf("abandon restored work: %w", err)
+	}
+	abandoned, err := work.RowsAffected()
+	if err != nil {
+		return control.State{}, err
+	}
+	state.Owner = control.OwnerSupervisor
+	state.DesiredWorkload = control.WorkloadIdle
 	state.LeaseFence = control.Fence{Incarnation: incarnation, Epoch: 1}
 	state.Admission = control.AdmissionClosed
 	state.Phase = control.PhaseReconciling
+	state.Health = control.HealthHealthy
 	state.ActiveWorkload = control.WorkloadUnknown
 	state.Version++
 	state.UpdatedAt = s.now().UTC()
+	if err := state.Validate(); err != nil {
+		return control.State{}, err
+	}
 	if err := writeState(ctx, tx, state); err != nil {
 		return control.State{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO state_restorations
+		(previous_incarnation, previous_epoch, new_incarnation, new_epoch,
+		 abandoned_work, invalidated_transitions, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		previous.Incarnation, previous.Epoch, state.LeaseFence.Incarnation,
+		state.LeaseFence.Epoch, abandoned, invalidated, now); err != nil {
+		return control.State{}, fmt.Errorf("record state restoration: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return control.State{}, err

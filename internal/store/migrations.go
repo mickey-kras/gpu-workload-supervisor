@@ -79,7 +79,32 @@ SET completed_at = registered_at,
 WHERE workload IS NULL AND completed_at IS NULL;
 `
 
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4}
+const schemaV5 = `
+CREATE TABLE state_restorations (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    previous_incarnation TEXT NOT NULL,
+    previous_epoch INTEGER NOT NULL CHECK (previous_epoch > 0),
+    new_incarnation TEXT NOT NULL,
+    new_epoch INTEGER NOT NULL CHECK (new_epoch > 0),
+    abandoned_work INTEGER NOT NULL CHECK (abandoned_work >= 0),
+    invalidated_transitions INTEGER NOT NULL CHECK (invalidated_transitions >= 0),
+    created_at TEXT NOT NULL
+);
+`
+
+const schemaV6 = `
+CREATE INDEX idx_registered_work_completed_at
+ON registered_work(completed_at) WHERE completed_at IS NOT NULL;
+CREATE INDEX idx_transition_work_request_id
+ON transition_work(request_id);
+`
+
+const schemaV7 = `
+ALTER TABLE registered_work
+ADD COLUMN registration_token TEXT CHECK (registration_token IS NULL OR length(registration_token) > 0);
+`
+
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7}
 
 func (s *Store) initialize(ctx context.Context) error {
 	for _, pragma := range []string{

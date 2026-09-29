@@ -18,16 +18,17 @@ import (
 )
 
 const (
-	DefaultRequestIDHeader  = "X-Request-ID"
-	DefaultFenceIDHeader    = "X-Workload-Lease-Incarnation"
-	DefaultFenceEpochHeader = "X-Workload-Lease-Epoch"
-	DefaultCompletionPath   = "/_gpu-workload-supervisor/v1/work/finish"
+	DefaultRequestIDHeader         = "X-Request-ID"
+	DefaultFenceIDHeader           = "X-Workload-Lease-Incarnation"
+	DefaultFenceEpochHeader        = "X-Workload-Lease-Epoch"
+	DefaultRegistrationTokenHeader = "X-Workload-Registration-Token"
+	DefaultCompletionPath          = "/_gpu-workload-supervisor/v1/work/finish"
 )
 
 type StateStore interface {
 	State(context.Context) (control.State, error)
-	AdmitWork(context.Context, string, string, control.Workload, control.Fence) error
-	FinishWorkFenced(context.Context, string, control.Workload, control.Fence, store.WorkOutcome) error
+	AdmitWorkToken(context.Context, string, string, control.Workload, control.Fence) (string, error)
+	FinishWorkToken(context.Context, string, control.Workload, control.Fence, string, store.WorkOutcome) error
 }
 
 type Route struct {
@@ -62,9 +63,10 @@ type Handler struct {
 }
 
 type finishRequest struct {
-	RequestID string            `json:"requestId"`
-	Fence     control.Fence     `json:"fence"`
-	Outcome   store.WorkOutcome `json:"outcome"`
+	RequestID         string            `json:"requestId"`
+	RegistrationToken string            `json:"registrationToken"`
+	Fence             control.Fence     `json:"fence"`
+	Outcome           store.WorkOutcome `json:"outcome"`
 }
 
 func ValidateConfig(config Config) error {
@@ -91,6 +93,10 @@ func New(stateStore StateStore, config Config) (*Handler, error) {
 	}
 	reverseProxy := httputil.NewSingleHostReverseProxy(config.Upstream)
 	reverseProxy.Transport = config.Transport
+	reverseProxy.ModifyResponse = func(response *http.Response) error {
+		response.Header.Del(DefaultRegistrationTokenHeader)
+		return nil
+	}
 	return &Handler{
 		store: stateStore, proxy: reverseProxy, workload: config.Workload,
 		executionRoutes: executionRoutes, passthroughRoutes: passthroughRoutes,
@@ -193,11 +199,19 @@ func (h *Handler) execute(response http.ResponseWriter, request *http.Request) {
 	if h.jobIDHeader != "" {
 		jobID = strings.TrimSpace(request.Header.Get(h.jobIDHeader))
 	}
-	if err := h.store.AdmitWork(request.Context(), requestID, jobID, h.workload, fence); err != nil {
+	token, err := h.store.AdmitWorkToken(request.Context(), requestID, jobID, h.workload, fence)
+	if err != nil {
 		h.writeWorkError(response, err)
 		return
 	}
-	h.proxy.ServeHTTP(response, h.withoutControlHeaders(request))
+	forwarded := h.withoutControlHeaders(request)
+	forwarded.Header.Set(DefaultRegistrationTokenHeader, token)
+	proxy := *h.proxy
+	proxy.ModifyResponse = func(upstreamResponse *http.Response) error {
+		upstreamResponse.Header.Set(DefaultRegistrationTokenHeader, token)
+		return nil
+	}
+	proxy.ServeHTTP(response, forwarded)
 }
 
 func (h *Handler) finish(response http.ResponseWriter, request *http.Request) {
@@ -221,7 +235,7 @@ func (h *Handler) finish(response http.ResponseWriter, request *http.Request) {
 		writeError(response, http.StatusBadRequest, "outcome_invalid")
 		return
 	}
-	if err := h.store.FinishWorkFenced(request.Context(), finish.RequestID, h.workload, finish.Fence, finish.Outcome); err != nil {
+	if err := h.store.FinishWorkToken(request.Context(), finish.RequestID, h.workload, finish.Fence, finish.RegistrationToken, finish.Outcome); err != nil {
 		h.writeWorkError(response, err)
 		return
 	}
@@ -241,6 +255,7 @@ func (h *Handler) readFence(request *http.Request) (control.Fence, error) {
 func (h *Handler) withoutControlHeaders(request *http.Request) *http.Request {
 	clone := request.Clone(request.Context())
 	clone.Header = request.Header.Clone()
+	clone.Header.Del(DefaultRegistrationTokenHeader)
 	clone.Header.Del(h.requestIDHeader)
 	clone.Header.Del(h.fenceIDHeader)
 	clone.Header.Del(h.fenceEpochHeader)
@@ -254,6 +269,8 @@ func (h *Handler) writeWorkError(response http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrStaleFence), errors.Is(err, store.ErrWorkloadMismatch):
 		writeError(response, http.StatusConflict, "lease_rejected")
+	case errors.Is(err, store.ErrRegistrationTokenMismatch):
+		writeError(response, http.StatusConflict, "registration_token_rejected")
 	case errors.Is(err, store.ErrRequestConflict):
 		writeError(response, http.StatusConflict, "request_conflict")
 	case errors.Is(err, store.ErrAdmissionClosed):

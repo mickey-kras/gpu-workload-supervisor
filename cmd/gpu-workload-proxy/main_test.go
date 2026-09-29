@@ -32,6 +32,7 @@ func TestProxyFlagValidation(t *testing.T) {
 		args       []string
 	}{
 		{"positional", "unexpected positional", []string{"extra"}},
+		{"invalid retention", "completed-work-retention must be positive", []string{"-completed-work-retention", "0s"}},
 		{"public listener", "listen address must be loopback", []string{"-listen", "0.0.0.0:8090"}},
 		{"malformed listener", "invalid listen address", []string{"-listen", "not-an-address"}},
 		{"missing upstream", "upstream is required", nil},
