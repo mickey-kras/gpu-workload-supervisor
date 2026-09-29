@@ -14,6 +14,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,6 +25,63 @@ import (
 )
 
 type routesFlag []workloadproxy.Route
+
+// activeHandler prevents new proxy work after shutdown begins and reports when
+// every admitted request has left its handler, even if Shutdown times out.
+type activeHandler struct {
+	handler  http.Handler
+	mu       sync.Mutex
+	active   int
+	stopping bool
+	drained  chan struct{}
+}
+
+func (h *activeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.mu.Lock()
+	if h.stopping {
+		h.mu.Unlock()
+		http.Error(w, "proxy is shutting down", http.StatusServiceUnavailable)
+		return
+	}
+	h.active++
+	h.mu.Unlock()
+	defer func() {
+		h.mu.Lock()
+		h.active--
+		if h.stopping && h.active == 0 {
+			close(h.drained)
+		}
+		h.mu.Unlock()
+	}()
+	h.handler.ServeHTTP(w, r)
+}
+
+func (h *activeHandler) stop() <-chan struct{} {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.stopping {
+		h.stopping = true
+		h.drained = make(chan struct{})
+		if h.active == 0 {
+			close(h.drained)
+		}
+	}
+	return h.drained
+}
+
+func shutdownAndDrain(server *http.Server, handler *activeHandler, timeout time.Duration) error {
+	drained := handler.stop()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	err := server.Shutdown(ctx)
+	if err != nil {
+		// Shutdown leaves active connections open when its deadline expires.
+		// Close cancels them; a handler may still need time to return.
+		err = errors.Join(err, server.Close())
+	}
+	<-drained
+	return err
+}
 
 func (value *routesFlag) String() string {
 	items := make([]string, 0, len(*value))
@@ -126,8 +184,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	tracked := &activeHandler{handler: handler}
 	server := &http.Server{
-		Addr: *listen, Handler: handler, ReadHeaderTimeout: *readHeaderTimeout,
+		Addr: *listen, Handler: tracked, ReadHeaderTimeout: *readHeaderTimeout,
 		IdleTimeout: *idleTimeout,
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -154,11 +213,12 @@ func run() error {
 	}()
 	select {
 	case err := <-result:
-		return err
+		drained := tracked.stop()
+		closeErr := server.Close()
+		<-drained
+		return errors.Join(err, closeErr)
 	case <-ctx.Done():
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), *shutdownTimeout)
-		defer shutdownCancel()
-		return server.Shutdown(shutdownCtx)
+		return shutdownAndDrain(server, tracked, *shutdownTimeout)
 	}
 }
 
