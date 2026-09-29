@@ -34,10 +34,10 @@ type StateStore interface {
 }
 
 type Config struct {
-	DrainTimeout  time.Duration
-	VerifyTimeout time.Duration
+	DrainTimeout   time.Duration
+	VerifyTimeout  time.Duration
 	CleanupTimeout time.Duration
-	PollInterval  time.Duration
+	PollInterval   time.Duration
 }
 
 type Controller struct {
