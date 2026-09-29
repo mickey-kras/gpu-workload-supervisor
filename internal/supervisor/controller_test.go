@@ -19,7 +19,7 @@ type fakeRuntime struct {
 	startErr       error
 	stopErr        error
 	releaseFailures int
-	cancelOnStop   func()
+	cancelOnStop    func()
 	calls          []string
 }
 
