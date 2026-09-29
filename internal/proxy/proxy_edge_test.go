@@ -40,6 +40,8 @@ func TestConfigRejectsInvalidOriginsAndRoutes(t *testing.T) {
 		{"invalid execution route", func(config *Config) { config.ExecutionRoutes = []Route{{Method: "POST", Path: "/x/../execute"}} }},
 		{"invalid passthrough route", func(config *Config) { config.PassthroughRoutes = []Route{{Method: "", Path: "/passthrough"}} }},
 		{"invalid completion path", func(config *Config) { config.CompletionPath = "finish" }},
+		{"request ID overlaps token", func(config *Config) { config.RequestIDHeader = DefaultRegistrationTokenHeader }},
+		{"fence headers overlap", func(config *Config) { config.FenceEpochHeader = DefaultFenceIDHeader }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
