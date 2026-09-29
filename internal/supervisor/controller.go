@@ -18,6 +18,7 @@ var (
 	ErrDrainTimeout       = errors.New("timed out waiting for admitted work")
 	ErrVerifyTimeout      = errors.New("timed out verifying workload")
 	ErrRecoveryRequired   = errors.New("explicit recovery is required")
+	ErrReconcileRequired  = errors.New("reconciliation required before switching")
 	ErrInvariant          = errors.New("observed runtime violates control state")
 	ErrRuntimeObservation = errors.New("runtime observation failed")
 	ErrStateVerification  = errors.New("runtime state verification failed")
@@ -112,6 +113,9 @@ func (c *Controller) Switch(ctx context.Context, target control.Workload, initia
 		return current, err
 	} else if running != "" {
 		return current, fmt.Errorf("%w: %s", ErrTransitionRunning, running)
+	}
+	if current.Phase != control.PhaseStable {
+		return current, ErrReconcileRequired
 	}
 	transitionID, err := c.id()
 	if err != nil {
