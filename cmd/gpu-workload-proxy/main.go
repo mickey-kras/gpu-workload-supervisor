@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -33,7 +34,7 @@ func (value *routesFlag) String() string {
 
 func (value *routesFlag) Set(input string) error {
 	method, path, ok := strings.Cut(input, ":")
-	if !ok || strings.TrimSpace(method) == "" || !strings.HasPrefix(path, "/") {
+	if !ok || strings.TrimSpace(method) == "" || !canonicalPath(path) {
 		return errors.New("route must use METHOD:/absolute/path")
 	}
 	*value = append(*value, workloadproxy.Route{Method: strings.ToUpper(strings.TrimSpace(method)), Path: path})
@@ -57,6 +58,7 @@ func run() error {
 	jobIDHeader := flags.String("job-id-header", "", "optional job ID header")
 	fenceIDHeader := flags.String("fence-id-header", workloadproxy.DefaultFenceIDHeader, "lease incarnation header")
 	fenceEpochHeader := flags.String("fence-epoch-header", workloadproxy.DefaultFenceEpochHeader, "lease epoch header")
+	completionPath := flags.String("completion-path", workloadproxy.DefaultCompletionPath, "local terminal work endpoint path")
 	readHeaderTimeout := flags.Duration("read-header-timeout", 10*time.Second, "HTTP header read timeout")
 	idleTimeout := flags.Duration("idle-timeout", 2*time.Minute, "HTTP idle timeout")
 	shutdownTimeout := flags.Duration("shutdown-timeout", 30*time.Second, "graceful shutdown timeout")
@@ -90,6 +92,9 @@ func run() error {
 	if len(routes) == 0 {
 		return errors.New("at least one execution route is required")
 	}
+	if !canonicalPath(*completionPath) {
+		return errors.New("completion path must be canonical and absolute")
+	}
 	stateStore, err := store.Open(context.Background(), *statePath)
 	if err != nil {
 		return fmt.Errorf("open state store: %w", err)
@@ -98,7 +103,7 @@ func run() error {
 	handler, err := workloadproxy.New(stateStore, workloadproxy.Config{
 		Upstream: upstream, Workload: workload,
 		ExecutionRoutes: routes, PassthroughRoutes: passthroughRoutes,
-		RequestIDHeader: *requestIDHeader,
+		CompletionPath: *completionPath, RequestIDHeader: *requestIDHeader,
 		JobIDHeader:     *jobIDHeader, FenceIDHeader: *fenceIDHeader,
 		FenceEpochHeader: *fenceEpochHeader,
 	})
@@ -153,4 +158,8 @@ func validateLoopbackAddress(address string) error {
 		return errors.New("listen address must be loopback")
 	}
 	return nil
+}
+
+func canonicalPath(value string) bool {
+	return value != "" && strings.HasPrefix(value, "/") && path.Clean(value) == value
 }
