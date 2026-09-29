@@ -62,13 +62,21 @@ type Handler struct {
 	fenceEpochHeader  string
 }
 
-type registrationTokenTransport struct {
-	base  http.RoundTripper
-	token string
+type registrationTransport struct {
+	base             http.RoundTripper
+	token            string
+	requestID        string
+	fence            control.Fence
+	requestIDHeader  string
+	fenceIDHeader    string
+	fenceEpochHeader string
 }
 
-func (t registrationTokenTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+func (t registrationTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	forwarded := request.Clone(request.Context())
+	forwarded.Header.Set(t.requestIDHeader, t.requestID)
+	forwarded.Header.Set(t.fenceIDHeader, t.fence.Incarnation)
+	forwarded.Header.Set(t.fenceEpochHeader, strconv.FormatUint(t.fence.Epoch, 10))
 	forwarded.Header.Set(DefaultRegistrationTokenHeader, t.token)
 	return t.base.RoundTrip(forwarded)
 }
@@ -127,6 +135,9 @@ func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, st
 	if config.Workload != control.WorkloadText && config.Workload != control.WorkloadMedia {
 		return nil, nil, "", errors.New("workload must be text or media")
 	}
+	if err := validateDistinctControlHeaders(config); err != nil {
+		return nil, nil, "", err
+	}
 	executionRoutes, err := routeSet(config.ExecutionRoutes, true)
 	if err != nil {
 		return nil, nil, "", err
@@ -155,6 +166,41 @@ func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, st
 		}
 	}
 	return executionRoutes, passthroughRoutes, completionPath, nil
+}
+
+func validateDistinctControlHeaders(config Config) error {
+	requestIDHeader, fenceIDHeader, fenceEpochHeader := config.RequestIDHeader, config.FenceIDHeader, config.FenceEpochHeader
+	if requestIDHeader == "" {
+		requestIDHeader = DefaultRequestIDHeader
+	}
+	if fenceIDHeader == "" {
+		fenceIDHeader = DefaultFenceIDHeader
+	}
+	if fenceEpochHeader == "" {
+		fenceEpochHeader = DefaultFenceEpochHeader
+	}
+	headers := []string{requestIDHeader, fenceIDHeader, fenceEpochHeader, DefaultRegistrationTokenHeader}
+	for i, header := range headers {
+		if i < 3 && reservedTransportHeader(header) {
+			return errors.New("control header cannot be a hop-by-hop or transport header")
+		}
+		for _, previous := range headers[:i] {
+			if strings.EqualFold(header, previous) {
+				return errors.New("request ID, fence, and registration token headers must be distinct")
+			}
+		}
+	}
+	return nil
+}
+
+func reservedTransportHeader(header string) bool {
+	switch http.CanonicalHeaderKey(header) {
+	case "Connection", "Keep-Alive", "Proxy-Connection", "Proxy-Authenticate",
+		"Proxy-Authorization", "Te", "Trailer", "Transfer-Encoding", "Upgrade",
+		"Host", "Content-Length":
+		return true
+	}
+	return false
 }
 
 func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -221,9 +267,14 @@ func (h *Handler) execute(response http.ResponseWriter, request *http.Request) {
 	if baseTransport == nil {
 		baseTransport = http.DefaultTransport
 	}
-	// ReverseProxy strips hop-by-hop headers before calling Transport. Add the
-	// trusted token afterwards so a client cannot nominate it in Connection.
-	proxy.Transport = registrationTokenTransport{base: baseTransport, token: token}
+	// ReverseProxy strips hop-by-hop headers before calling Transport. Add
+	// admitted correlation metadata afterwards so a client cannot nominate
+	// those headers in Connection to remove them.
+	proxy.Transport = registrationTransport{
+		base: baseTransport, token: token, requestID: requestID, fence: fence,
+		requestIDHeader: h.requestIDHeader, fenceIDHeader: h.fenceIDHeader,
+		fenceEpochHeader: h.fenceEpochHeader,
+	}
 	proxy.ModifyResponse = func(upstreamResponse *http.Response) error {
 		upstreamResponse.Header.Set(DefaultRegistrationTokenHeader, token)
 		return nil
