@@ -18,6 +18,7 @@ type fakeRuntime struct {
 	healthFailures int
 	startErr       error
 	stopErr        error
+	releaseFailures int
 	calls          []string
 }
 
@@ -49,6 +50,14 @@ func (r *fakeRuntime) Stop(_ context.Context, workload control.Workload) error {
 	}
 	if r.active == workload {
 		r.active = control.WorkloadIdle
+	}
+	return nil
+}
+
+func (r *fakeRuntime) Released(context.Context) error {
+	if r.releaseFailures > 0 {
+		r.releaseFailures--
+		return errors.New("GPU memory not released")
 	}
 	return nil
 }
@@ -239,4 +248,52 @@ func TestSwitchToIdleReleasesMediaWithoutStoppingUI(t *testing.T) {
 		t.Fatalf("state = %#v", result)
 	}
 	assertCalls(t, runtime.calls, "stop media")
+}
+
+func TestSwitchWaitsForGPUReleaseBeforeStartingText(t *testing.T) {
+	stateStore := openStore(t)
+	runtime := &fakeRuntime{active: control.WorkloadMedia, mediaReady: true, releaseFailures: 2}
+	controller := testController(t, stateStore, runtime)
+	state, err := stateStore.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.ActiveWorkload = control.WorkloadMedia
+	state.DesiredWorkload = control.WorkloadMedia
+	state.Phase = control.PhaseStable
+	state.Health = control.HealthHealthy
+	state.Admission = control.AdmissionOpen
+	if _, err := stateStore.UpdateState(context.Background(), state.Version, state); err != nil {
+		t.Fatal(err)
+	}
+	result, err := controller.Switch(context.Background(), control.WorkloadText, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ActiveWorkload != control.WorkloadText {
+		t.Fatalf("active workload = %q", result.ActiveWorkload)
+	}
+	assertCalls(t, runtime.calls, "stop media", "start text")
+}
+
+func TestCanceledSwitchClosesTransitionAfterRollbackTimeout(t *testing.T) {
+	stateStore := openStore(t)
+	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true, startErr: errors.New("start failed")}
+	controller := testController(t, stateStore, runtime)
+	controller.config.CleanupTimeout = time.Nanosecond
+	if _, err := controller.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := controller.Switch(ctx, control.WorkloadMedia, "test"); err == nil {
+		t.Fatal("expected canceled switch")
+	}
+	running, err := stateStore.InProgressTransition(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if running != "" {
+		t.Fatalf("transition remains in progress: %s", running)
+	}
 }
