@@ -101,7 +101,6 @@ func run() error {
 		RequestIDHeader: *requestIDHeader,
 		JobIDHeader:     *jobIDHeader, FenceIDHeader: *fenceIDHeader,
 		FenceEpochHeader: *fenceEpochHeader,
-		ErrorLog:         func(err error) { log.Print(err) },
 	})
 	if err != nil {
 		return err
