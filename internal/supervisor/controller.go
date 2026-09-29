@@ -237,6 +237,9 @@ func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
 	if err != nil {
 		return c.latchObservationFailure(ctx, state, err)
 	}
+	if err := validateExclusiveRuntime(snapshot); err != nil {
+		return c.latchObservationFailure(ctx, state, err)
+	}
 	if !snapshot.TextActive {
 		if err := c.runAction(ctx, func(actionCtx context.Context) error {
 			return c.runtime.Stop(actionCtx, control.WorkloadMedia)
@@ -276,6 +279,9 @@ func (c *Controller) Recover(ctx context.Context) (control.State, error) {
 	snapshot, err := c.observe(ctx)
 	if err != nil {
 		return state, err
+	}
+	if err := validateExclusiveRuntime(snapshot); err != nil {
+		return c.latchObservationFailure(ctx, state, err)
 	}
 	if !snapshot.TextActive {
 		if err := c.runAction(ctx, func(actionCtx context.Context) error {
@@ -360,6 +366,9 @@ func (c *Controller) waitReady(ctx context.Context, target control.Workload, dea
 }
 
 func verifySnapshot(target control.Workload, snapshot gpuruntime.Snapshot) error {
+	if err := validateExclusiveRuntime(snapshot); err != nil {
+		return err
+	}
 	switch target {
 	case control.WorkloadText:
 		if !snapshot.TextActive {
@@ -378,6 +387,9 @@ func verifySnapshot(target control.Workload, snapshot gpuruntime.Snapshot) error
 }
 
 func observedWorkload(state control.State, snapshot gpuruntime.Snapshot) (control.Workload, error) {
+	if err := validateExclusiveRuntime(snapshot); err != nil {
+		return control.WorkloadUnknown, err
+	}
 	if snapshot.TextActive {
 		if state.ActiveWorkload == control.WorkloadMedia {
 			return control.WorkloadUnknown, ErrInvariant
@@ -388,6 +400,13 @@ func observedWorkload(state control.State, snapshot gpuruntime.Snapshot) (contro
 		return control.WorkloadMedia, nil
 	}
 	return control.WorkloadIdle, nil
+}
+
+func validateExclusiveRuntime(snapshot gpuruntime.Snapshot) error {
+	if snapshot.TextActive && snapshot.MediaReady {
+		return fmt.Errorf("%w: text and media runtimes are both active", ErrInvariant)
+	}
+	return nil
 }
 
 func (c *Controller) setPhase(ctx context.Context, transitionID string, state control.State, phase control.Phase) (control.State, error) {
