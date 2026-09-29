@@ -67,44 +67,18 @@ type finishRequest struct {
 	Outcome   store.WorkOutcome `json:"outcome"`
 }
 
+func ValidateConfig(config Config) error {
+	_, _, _, err := validateConfig(config)
+	return err
+}
+
 func New(stateStore StateStore, config Config) (*Handler, error) {
 	if stateStore == nil {
 		return nil, errors.New("state store is required")
 	}
-	if config.Upstream == nil || config.Upstream.Scheme == "" || config.Upstream.Host == "" {
-		return nil, errors.New("absolute upstream URL is required")
-	}
-	if config.Upstream.Scheme != "http" && config.Upstream.Scheme != "https" {
-		return nil, errors.New("upstream scheme must be http or https")
-	}
-	if config.Workload != control.WorkloadText && config.Workload != control.WorkloadMedia {
-		return nil, errors.New("workload must be text or media")
-	}
-	executionRoutes, err := routeSet(config.ExecutionRoutes, true)
+	executionRoutes, passthroughRoutes, completionPath, err := validateConfig(config)
 	if err != nil {
 		return nil, err
-	}
-	passthroughRoutes, err := routeSet(config.PassthroughRoutes, false)
-	if err != nil {
-		return nil, err
-	}
-	if config.CompletionPath == "" {
-		config.CompletionPath = DefaultCompletionPath
-	}
-	if !canonicalPath(config.CompletionPath) {
-		return nil, errors.New("completion path must be canonical and absolute")
-	}
-	completionKey := http.MethodPost + " " + config.CompletionPath
-	if _, exists := executionRoutes[completionKey]; exists {
-		return nil, errors.New("completion path collides with an execution route")
-	}
-	if _, exists := passthroughRoutes[completionKey]; exists {
-		return nil, errors.New("completion path collides with a passthrough route")
-	}
-	for key := range executionRoutes {
-		if _, exists := passthroughRoutes[key]; exists {
-			return nil, errors.New("execution and passthrough routes overlap")
-		}
 	}
 	if config.RequestIDHeader == "" {
 		config.RequestIDHeader = DefaultRequestIDHeader
@@ -120,10 +94,50 @@ func New(stateStore StateStore, config Config) (*Handler, error) {
 	return &Handler{
 		store: stateStore, proxy: reverseProxy, workload: config.Workload,
 		executionRoutes: executionRoutes, passthroughRoutes: passthroughRoutes,
-		completionPath: config.CompletionPath, requestIDHeader: config.RequestIDHeader,
+		completionPath: completionPath, requestIDHeader: config.RequestIDHeader,
 		jobIDHeader: config.JobIDHeader, fenceIDHeader: config.FenceIDHeader,
 		fenceEpochHeader: config.FenceEpochHeader,
 	}, nil
+}
+
+func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, string, error) {
+	if config.Upstream == nil || config.Upstream.Scheme == "" || config.Upstream.Host == "" {
+		return nil, nil, "", errors.New("absolute upstream URL is required")
+	}
+	if config.Upstream.Scheme != "http" && config.Upstream.Scheme != "https" {
+		return nil, nil, "", errors.New("upstream scheme must be http or https")
+	}
+	if config.Workload != control.WorkloadText && config.Workload != control.WorkloadMedia {
+		return nil, nil, "", errors.New("workload must be text or media")
+	}
+	executionRoutes, err := routeSet(config.ExecutionRoutes, true)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	passthroughRoutes, err := routeSet(config.PassthroughRoutes, false)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	completionPath := config.CompletionPath
+	if completionPath == "" {
+		completionPath = DefaultCompletionPath
+	}
+	if !canonicalPath(completionPath) {
+		return nil, nil, "", errors.New("completion path must be canonical and absolute")
+	}
+	completionKey := http.MethodPost + " " + completionPath
+	if _, exists := executionRoutes[completionKey]; exists {
+		return nil, nil, "", errors.New("completion path collides with an execution route")
+	}
+	if _, exists := passthroughRoutes[completionKey]; exists {
+		return nil, nil, "", errors.New("completion path collides with a passthrough route")
+	}
+	for key := range executionRoutes {
+		if _, exists := passthroughRoutes[key]; exists {
+			return nil, nil, "", errors.New("execution and passthrough routes overlap")
+		}
+	}
+	return executionRoutes, passthroughRoutes, completionPath, nil
 }
 
 func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
