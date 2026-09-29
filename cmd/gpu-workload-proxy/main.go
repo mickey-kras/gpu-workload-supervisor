@@ -99,9 +99,9 @@ func run() error {
 		Upstream: upstream, Workload: workload,
 		ExecutionRoutes: routes, PassthroughRoutes: passthroughRoutes,
 		RequestIDHeader: *requestIDHeader,
-		JobIDHeader: *jobIDHeader, FenceIDHeader: *fenceIDHeader,
+		JobIDHeader:     *jobIDHeader, FenceIDHeader: *fenceIDHeader,
 		FenceEpochHeader: *fenceEpochHeader,
-		ErrorLog: func(err error) { log.Print(err) },
+		ErrorLog:         func(err error) { log.Print(err) },
 	})
 	if err != nil {
 		return err

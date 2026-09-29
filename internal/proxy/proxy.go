@@ -35,16 +35,16 @@ type Route struct {
 }
 
 type Config struct {
-	Upstream		  *url.URL
-	Workload		  control.Workload
-	ExecutionRoutes	  []Route
+	Upstream          *url.URL
+	Workload          control.Workload
+	ExecutionRoutes   []Route
 	PassthroughRoutes []Route
-	CompletionPath	  string
-	RequestIDHeader	  string
-	JobIDHeader		  string
-	FenceIDHeader	  string
+	CompletionPath    string
+	RequestIDHeader   string
+	JobIDHeader       string
+	FenceIDHeader     string
 	FenceEpochHeader  string
-	Transport		  http.RoundTripper
+	Transport         http.RoundTripper
 }
 
 type Handler struct {
@@ -61,9 +61,9 @@ type Handler struct {
 }
 
 type finishRequest struct {
-	RequestID string			`json:"requestId"`
-	Fence	  control.Fence		`json:"fence"`
-	Outcome	  store.WorkOutcome `json:"outcome"`
+	RequestID string            `json:"requestId"`
+	Fence     control.Fence     `json:"fence"`
+	Outcome   store.WorkOutcome `json:"outcome"`
 }
 
 func New(stateStore StateStore, config Config) (*Handler, error) {

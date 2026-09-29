@@ -17,13 +17,13 @@ import (
 )
 
 type fakeStore struct {
-	mu		sync.Mutex
-	state		control.State
-	admitErr	error
-	finishErr	error
-	admitted	[]string
-	finished	[]string
-	outcomes	[]store.WorkOutcome
+	mu        sync.Mutex
+	state     control.State
+	admitErr  error
+	finishErr error
+	admitted  []string
+	finished  []string
+	outcomes  []store.WorkOutcome
 }
 
 func (f *fakeStore) State(context.Context) (control.State, error) {
@@ -270,7 +270,7 @@ func admittedState(owner control.Owner) control.State {
 		ActiveWorkload: control.WorkloadMedia, Phase: control.PhaseStable,
 		Health: control.HealthHealthy, Admission: control.AdmissionOpen,
 		LeaseFence: control.Fence{Incarnation: "11111111-1111-4111-8111-111111111111", Epoch: 7},
-		Version: 4, UpdatedAt: time.Date(2026, 9, 29, 7, 0, 0, 0, time.UTC),
+		Version:    4, UpdatedAt: time.Date(2026, 9, 29, 7, 0, 0, 0, time.UTC),
 	}
 }
 
