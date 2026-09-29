@@ -63,18 +63,11 @@ func run() error {
 		return err
 	}
 	defer processLock.Close()
-	if command == "resolve-work" {
-		if *resolveReason == "" {
-			return errors.New("resolve-work requires -resolve-reason")
-		}
-		// Proxies hold shared locks until their in-flight handlers finish. Refuse
-		// to abandon work while any proxy can still forward an admitted request.
-		proxyLock, err := lock.TryAcquire(*statePath + ".proxy.lock")
-		if err != nil {
-			return fmt.Errorf("stop all workload proxies and wait for shutdown before resolve-work: %w", err)
-		}
-		defer proxyLock.Close()
+	proxyLock, err := acquireResolutionLock(*statePath, command, *resolveReason)
+	if err != nil {
+		return err
 	}
+	defer proxyLock.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	var stateStore *store.Store
@@ -109,7 +102,28 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	return executeCommand(ctx, controller, command, *resolveReason)
+}
+
+func acquireResolutionLock(statePath, command, reason string) (*lock.File, error) {
+	if command != "resolve-work" {
+		return nil, nil
+	}
+	if reason == "" {
+		return nil, errors.New("resolve-work requires -resolve-reason")
+	}
+	// Proxies hold shared locks until their in-flight handlers finish. Refuse
+	// to abandon work while any proxy can still forward an admitted request.
+	proxyLock, err := lock.TryAcquire(statePath + ".proxy.lock")
+	if err != nil {
+		return nil, fmt.Errorf("stop all workload proxies and wait for shutdown before resolve-work: %w", err)
+	}
+	return proxyLock, nil
+}
+
+func executeCommand(ctx context.Context, controller *supervisor.Controller, command, resolveReason string) error {
 	var state control.State
+	var err error
 	switch command {
 	case "status":
 		state, err = controller.Status(ctx)
@@ -119,7 +133,7 @@ func run() error {
 		state, err = controller.Recover(ctx)
 	case "resolve-work":
 		var abandoned int64
-		state, abandoned, err = controller.ResolveUnfinishedWork(ctx, *resolveReason)
+		state, abandoned, err = controller.ResolveUnfinishedWork(ctx, resolveReason)
 		if err == nil {
 			return json.NewEncoder(os.Stdout).Encode(struct {
 				State         control.State `json:"state"`
