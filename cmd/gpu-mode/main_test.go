@@ -154,6 +154,21 @@ func TestCLIWorkResolutionRequiresReasonAndStoppedProxies(t *testing.T) {
 	if err := run(); err == nil || !strings.Contains(err.Error(), "requires -resolve-reason") {
 		t.Fatalf("missing reason error = %v", err)
 	}
+	for _, tc := range []struct {
+		reason string
+		want   string
+	}{
+		{" \t\n ", "requires -resolve-reason"},
+		{strings.Repeat("x", 513), "resolution reason must contain 1 to 512 bytes"},
+	} {
+		os.Args = append(append([]string{}, args...), "-resolve-reason", tc.reason, "resolve-work")
+		if err := run(); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("reason %q: error = %v, want %q", tc.reason, err, tc.want)
+		}
+		if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+			t.Fatalf("invalid reason opened state store: %v", err)
+		}
+	}
 	proxyLock, err := lock.AcquireShared(statePath + ".proxy.lock")
 	if err != nil {
 		t.Fatal(err)
