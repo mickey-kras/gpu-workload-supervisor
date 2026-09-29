@@ -108,6 +108,3 @@ func (s *Store) FinishWorkFenced(ctx context.Context, requestID string, workload
 	return sql.ErrNoRows
 }
 
-func (s *Store) CompleteWorkFenced(ctx context.Context, requestID string, fence control.Fence) error {
-	return s.FinishWorkFenced(ctx, requestID, control.WorkloadMedia, fence, WorkCompleted)
-}
