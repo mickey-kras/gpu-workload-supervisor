@@ -62,12 +62,12 @@ func run() error {
 	defer processLock.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	var stateStore *store.Store
 	if command == "restore-state" {
-		if _, err := os.Lstat(*statePath); err != nil {
-			return fmt.Errorf("restored state database must already exist: %w", err)
-		}
+		stateStore, err = store.OpenRestored(ctx, *statePath)
+	} else {
+		stateStore, err = store.Open(ctx, *statePath)
 	}
-	stateStore, err := store.Open(ctx, *statePath)
 	if err != nil {
 		return fmt.Errorf("open state store: %w", err)
 	}
