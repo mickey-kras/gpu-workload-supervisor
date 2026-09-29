@@ -95,18 +95,22 @@ func run() error {
 	if !canonicalPath(*completionPath) {
 		return errors.New("completion path must be canonical and absolute")
 	}
-	stateStore, err := store.Open(context.Background(), *statePath)
-	if err != nil {
-		return fmt.Errorf("open state store: %w", err)
-	}
-	defer stateStore.Close()
-	handler, err := workloadproxy.New(stateStore, workloadproxy.Config{
+	proxyConfig := workloadproxy.Config{
 		Upstream: upstream, Workload: workload,
 		ExecutionRoutes: routes, PassthroughRoutes: passthroughRoutes,
 		CompletionPath: *completionPath, RequestIDHeader: *requestIDHeader,
 		JobIDHeader: *jobIDHeader, FenceIDHeader: *fenceIDHeader,
 		FenceEpochHeader: *fenceEpochHeader,
-	})
+	}
+	if err := workloadproxy.ValidateConfig(proxyConfig); err != nil {
+		return err
+	}
+	stateStore, err := store.Open(context.Background(), *statePath)
+	if err != nil {
+		return fmt.Errorf("open state store: %w", err)
+	}
+	defer stateStore.Close()
+	handler, err := workloadproxy.New(stateStore, proxyConfig)
 	if err != nil {
 		return err
 	}
