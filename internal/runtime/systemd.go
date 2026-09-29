@@ -131,6 +131,18 @@ func (m *SystemdManager) Stop(ctx context.Context, workload control.Workload) er
 	case control.WorkloadText:
 		return m.runSystemctl(ctx, "stop", m.config.TextUnit)
 	case control.WorkloadMedia:
+		state, err := m.unitState(ctx, m.config.MediaUnit)
+		if err != nil {
+			return err
+		}
+		if _, err := state.isActive(m.config.MediaUnit); err != nil {
+			return err
+		}
+		if state.active == "inactive" {
+			// The release endpoint need not exist before the media service starts.
+			// Callers still verify GPU memory with Released before opening admission.
+			return nil
+		}
 		return m.releaseMedia(ctx)
 	default:
 		return fmt.Errorf("workload %q cannot be stopped", workload)
@@ -166,10 +178,37 @@ func (m *SystemdManager) Released(ctx context.Context) error {
 }
 
 func (m *SystemdManager) active(ctx context.Context, unit string) (bool, error) {
+	state, err := m.unitState(ctx, unit)
+	if err != nil {
+		return false, err
+	}
+	return state.isActive(unit)
+}
+
+func (state systemdUnitState) isActive(unit string) (bool, error) {
+	switch state.active {
+	case "active":
+		if state.sub != "running" && state.sub != "exited" {
+			return false, fmt.Errorf("%s substate is %q", unit, state.sub)
+		}
+		return true, nil
+	case "inactive", "failed", "deactivating", "activating":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s active state is %q", unit, state.active)
+	}
+}
+
+type systemdUnitState struct {
+	active string
+	sub    string
+}
+
+func (m *SystemdManager) unitState(ctx context.Context, unit string) (systemdUnitState, error) {
 	output, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show",
 		"--property=LoadState", "--property=ActiveState", "--property=SubState", "--", unit)
 	if err != nil {
-		return false, fmt.Errorf("inspect %s: %w: %s", unit, err, strings.TrimSpace(string(output)))
+		return systemdUnitState{}, fmt.Errorf("inspect %s: %w: %s", unit, err, strings.TrimSpace(string(output)))
 	}
 	values := map[string]string{}
 	for _, line := range strings.Split(string(output), "\n") {
@@ -179,19 +218,9 @@ func (m *SystemdManager) active(ctx context.Context, unit string) (bool, error) 
 		}
 	}
 	if values["LoadState"] != "loaded" {
-		return false, fmt.Errorf("%s load state is %q", unit, values["LoadState"])
+		return systemdUnitState{}, fmt.Errorf("%s load state is %q", unit, values["LoadState"])
 	}
-	switch values["ActiveState"] {
-	case "active":
-		if values["SubState"] != "running" && values["SubState"] != "exited" {
-			return false, fmt.Errorf("%s substate is %q", unit, values["SubState"])
-		}
-		return true, nil
-	case "inactive", "failed", "deactivating", "activating":
-		return false, nil
-	default:
-		return false, fmt.Errorf("%s active state is %q", unit, values["ActiveState"])
-	}
+	return systemdUnitState{active: values["ActiveState"], sub: values["SubState"]}, nil
 }
 
 func (m *SystemdManager) runSystemctl(ctx context.Context, action, unit string) error {

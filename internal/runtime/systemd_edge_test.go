@@ -157,7 +157,10 @@ func (r responseTransport) RoundTrip(*http.Request) (*http.Response, error) {
 }
 
 func TestHealthAndReleaseFailClosedOnTransportAndBodyErrors(t *testing.T) {
-	manager, err := newSystemdManager(testConfig(), &fakeRunner{}, &http.Client{
+	runner := &fakeRunner{outputs: map[string][]byte{
+		mediaShowCommand: []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
+	}}
+	manager, err := newSystemdManager(testConfig(), runner, &http.Client{
 		Timeout:   time.Second,
 		Transport: responseTransport{err: errors.New("offline")},
 	})
@@ -185,6 +188,38 @@ func TestHealthAndReleaseFailClosedOnTransportAndBodyErrors(t *testing.T) {
 	}}
 	if err := manager.Stop(context.Background(), control.WorkloadMedia); err == nil {
 		t.Fatal("release status failure accepted")
+	}
+}
+
+func TestMediaStopRejectsSystemdInspectionFailure(t *testing.T) {
+	runner := &fakeRunner{errs: map[string]error{
+		mediaShowCommand: errors.New("systemd unavailable"),
+	}}
+	manager, err := newSystemdManager(testConfig(), runner, http.DefaultClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Stop(context.Background(), control.WorkloadMedia); err == nil || !strings.Contains(err.Error(), "systemd unavailable") {
+		t.Fatalf("expected systemd failure, got %v", err)
+	}
+}
+
+func TestMediaStopRequiresReleaseEndpointUnlessUnitIsInactive(t *testing.T) {
+	for _, state := range []string{"failed", "deactivating", "activating"} {
+		t.Run(state, func(t *testing.T) {
+			runner := &fakeRunner{outputs: map[string][]byte{
+				mediaShowCommand: []byte("LoadState=loaded\nActiveState=" + state + "\n"),
+			}}
+			manager, err := newSystemdManager(testConfig(), runner, &http.Client{
+				Transport: responseTransport{err: errors.New("release unavailable")},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.Stop(context.Background(), control.WorkloadMedia); err == nil || !strings.Contains(err.Error(), "release unavailable") {
+				t.Fatalf("expected release failure for %s unit, got %v", state, err)
+			}
+		})
 	}
 }
 
