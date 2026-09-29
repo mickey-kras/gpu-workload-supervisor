@@ -61,6 +61,14 @@ CREATE INDEX IF NOT EXISTS idx_registered_work_active
 ON registered_work(completed_at) WHERE completed_at IS NULL;
 `
 
+const schemaV2 = `
+CREATE TABLE IF NOT EXISTS transition_work (
+    transition_id TEXT NOT NULL REFERENCES transitions(transition_id),
+    request_id TEXT NOT NULL REFERENCES registered_work(request_id),
+    PRIMARY KEY (transition_id, request_id)
+);
+`
+
 func (s *Store) initialize(ctx context.Context) error {
 	for _, pragma := range []string{
 		"PRAGMA foreign_keys = ON",
@@ -77,12 +85,14 @@ func (s *Store) initialize(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, schemaV1); err != nil {
-		return fmt.Errorf("apply schema v1: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at)
-		VALUES (1, ?)`, formatTime(s.now())); err != nil {
-		return err
+	for version, migration := range []string{schemaV1, schemaV2} {
+		if _, err := tx.ExecContext(ctx, migration); err != nil {
+			return fmt.Errorf("apply schema v%d: %w", version+1, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+			VALUES (?, ?)`, version+1, formatTime(s.now())); err != nil {
+			return err
+		}
 	}
 	var count int
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM control_state").Scan(&count); err != nil {
