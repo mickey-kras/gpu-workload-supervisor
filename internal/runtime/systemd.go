@@ -151,8 +151,8 @@ func (m *SystemdManager) Released(ctx context.Context) error {
 }
 
 func (m *SystemdManager) active(ctx context.Context, unit string) (bool, error) {
-	output, err := m.runner.Run(ctx, "systemctl", "--user", "show", "--", unit,
-		"--property=LoadState", "--property=ActiveState", "--property=SubState")
+	output, err := m.runner.Run(ctx, "systemctl", "--user", "show",
+		"--property=LoadState", "--property=ActiveState", "--property=SubState", "--", unit)
 	if err != nil {
 		return false, fmt.Errorf("inspect %s: %w: %s", unit, err, strings.TrimSpace(string(output)))
 	}
