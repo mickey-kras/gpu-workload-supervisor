@@ -172,30 +172,11 @@ func (s *Store) RotateIncarnation(ctx context.Context) (control.State, error) {
 }
 
 func (s *Store) RegisterWork(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence) error {
-	if requestID == "" {
-		return errors.New("request id is empty")
-	}
-	if workload != control.WorkloadText && workload != control.WorkloadMedia {
-		return errors.New("workload must be text or media")
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginAdmittedWork(ctx, requestID, workload, fence)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	state, err := readState(ctx, tx)
-	if err != nil {
-		return err
-	}
-	if state.LeaseFence != fence {
-		return ErrStaleFence
-	}
-	if state.Admission != control.AdmissionOpen || state.Phase != control.PhaseStable || state.Health != control.HealthHealthy {
-		return ErrAdmissionClosed
-	}
-	if state.ActiveWorkload != workload || state.DesiredWorkload != workload {
-		return ErrWorkloadMismatch
-	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO registered_work
 		(request_id, job_id, workload, lease_incarnation, lease_epoch, registered_at)
 		VALUES (?, ?, ?, ?, ?, ?)`, requestID, nullable(jobID), workload, fence.Incarnation, fence.Epoch, formatTime(s.now()))

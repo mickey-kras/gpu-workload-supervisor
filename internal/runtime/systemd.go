@@ -207,18 +207,7 @@ func (m *SystemdManager) getHealthy(ctx context.Context, endpoint string) error 
 	if err != nil {
 		return fmt.Errorf("create health request: %w", err)
 	}
-	response, err := m.client.Do(request)
-	if err != nil {
-		return fmt.Errorf("health request: %w", err)
-	}
-	defer response.Body.Close()
-	if _, err := io.Copy(io.Discard, io.LimitReader(response.Body, 4096)); err != nil {
-		return fmt.Errorf("read health response: %w", err)
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("health status %d", response.StatusCode)
-	}
-	return nil
+	return m.checkHTTPResponse(request, "health")
 }
 
 func (m *SystemdManager) releaseMedia(ctx context.Context) error {
@@ -228,16 +217,20 @@ func (m *SystemdManager) releaseMedia(ctx context.Context) error {
 		return fmt.Errorf("create media release request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
+	return m.checkHTTPResponse(request, "media release")
+}
+
+func (m *SystemdManager) checkHTTPResponse(request *http.Request, action string) error {
 	response, err := m.client.Do(request)
 	if err != nil {
-		return fmt.Errorf("media release request: %w", err)
+		return fmt.Errorf("%s request: %w", action, err)
 	}
 	defer response.Body.Close()
 	if _, err := io.Copy(io.Discard, io.LimitReader(response.Body, 4096)); err != nil {
-		return fmt.Errorf("read media release response: %w", err)
+		return fmt.Errorf("read %s response: %w", action, err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("media release status %d", response.StatusCode)
+		return fmt.Errorf("%s status %d", action, response.StatusCode)
 	}
 	return nil
 }
