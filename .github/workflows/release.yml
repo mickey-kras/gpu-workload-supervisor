@@ -92,13 +92,13 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           VERSION: ${{ inputs.version }}
+          RELEASE_SETTINGS_REVIEW: ${{ vars.RELEASE_SETTINGS_REVIEW }}
         with:
           github-token: ${{ steps.app.outputs.token }}
           script: |
-            const { data: policy } = await github.request('GET /repos/{owner}/{repo}/immutable-releases', {
-              ...context.repo, headers: { 'X-GitHub-Api-Version': '2026-03-10' },
+            await require('./.github/scripts/release-settings.cjs').verify({
+              github, context, review: process.env.RELEASE_SETTINGS_REVIEW,
             });
-            if (policy.enabled !== true) throw new Error('Enable immutable releases before publishing');
             const tag = `v${process.env.VERSION}`;
             let ref;
             try {
