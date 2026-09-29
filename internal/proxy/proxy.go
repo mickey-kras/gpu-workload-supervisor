@@ -154,18 +154,25 @@ func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, st
 		return nil, nil, "", errors.New("completion path must be canonical and absolute")
 	}
 	completionKey := http.MethodPost + " " + completionPath
+	if err := validateRouteCollisions(executionRoutes, passthroughRoutes, completionKey); err != nil {
+		return nil, nil, "", err
+	}
+	return executionRoutes, passthroughRoutes, completionPath, nil
+}
+
+func validateRouteCollisions(executionRoutes, passthroughRoutes map[string]struct{}, completionKey string) error {
 	if _, exists := executionRoutes[completionKey]; exists {
-		return nil, nil, "", errors.New("completion path collides with an execution route")
+		return errors.New("completion path collides with an execution route")
 	}
 	if _, exists := passthroughRoutes[completionKey]; exists {
-		return nil, nil, "", errors.New("completion path collides with a passthrough route")
+		return errors.New("completion path collides with a passthrough route")
 	}
 	for key := range executionRoutes {
 		if _, exists := passthroughRoutes[key]; exists {
-			return nil, nil, "", errors.New("execution and passthrough routes overlap")
+			return errors.New("execution and passthrough routes overlap")
 		}
 	}
-	return executionRoutes, passthroughRoutes, completionPath, nil
+	return nil
 }
 
 func validateDistinctControlHeaders(config Config) error {
