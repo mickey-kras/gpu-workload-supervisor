@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -130,5 +129,3 @@ func testConfig() SystemdConfig {
 		HealthTimeout:   time.Second,
 	}
 }
-
-var _ = errors.Is
