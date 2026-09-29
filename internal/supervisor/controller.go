@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -313,6 +314,7 @@ func (c *Controller) Recover(ctx context.Context) (control.State, error) {
 // admitted request can be forwarded after runtime shutdown. Recovery remains
 // separate: this operation never reopens admission.
 func (c *Controller) ResolveUnfinishedWork(ctx context.Context, reason string) (control.State, int64, error) {
+	reason = strings.TrimSpace(reason)
 	if len(reason) == 0 || len(reason) > 512 {
 		return control.State{}, 0, errors.New("resolution reason must contain 1 to 512 bytes")
 	}
