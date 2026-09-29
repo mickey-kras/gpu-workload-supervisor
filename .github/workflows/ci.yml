@@ -17,14 +17,7 @@ jobs:
         with:
           go-version: '1.26.x'
           cache: true
-      - run: |
-          gofmt -w internal
-          for file in internal/control/state.go internal/store/store.go internal/store/migrations.go internal/store/store_test.go; do
-            echo "--- FILE_BEGIN $file ---"
-            base64 -w0 "$file"
-            echo
-            echo "--- FILE_END $file ---"
-          done
+      - run: test -z "$(gofmt -l .)"
       - run: go mod tidy
       - run: git diff --exit-code -- go.mod go.sum
       - run: go test ./...
