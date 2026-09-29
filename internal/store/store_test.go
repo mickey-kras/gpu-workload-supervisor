@@ -179,7 +179,7 @@ func TestMigratesV1WithoutChangingPersistedState(t *testing.T) {
 	if err := stateStore.db.QueryRow("SELECT COUNT(*) FROM transition_events").Scan(&events); err != nil {
 		t.Fatal(err)
 	}
-	if version != 6 || work != 1 || transitions != 1 || events != 1 {
+	if version != 7 || work != 1 || transitions != 1 || events != 1 {
 		t.Fatalf("migration result version=%d work=%d transitions=%d events=%d", version, work, transitions, events)
 	}
 	var completedAt, outcome string

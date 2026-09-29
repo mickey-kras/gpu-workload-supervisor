@@ -98,6 +98,7 @@ func TestFinishRejectsMalformedAndUnknownWork(t *testing.T) {
 		{"invalid JSON", "{", nil, http.StatusBadRequest},
 		{"missing request", `{"fence":{"incarnation":"11111111-1111-4111-8111-111111111111","epoch":7},"outcome":"completed"}`, nil, http.StatusBadRequest},
 		{"invalid outcome", `{"requestId":"request","fence":{"incarnation":"11111111-1111-4111-8111-111111111111","epoch":7},"outcome":"other"}`, nil, http.StatusBadRequest},
+		{"missing token", `{"requestId":"request","fence":{"incarnation":"11111111-1111-4111-8111-111111111111","epoch":7},"outcome":"completed"}`, nil, http.StatusConflict},
 		{"unknown request", `{"requestId":"request","fence":{"incarnation":"11111111-1111-4111-8111-111111111111","epoch":7},"outcome":"completed"}`, sql.ErrNoRows, http.StatusNotFound},
 	}
 	for _, test := range tests {
@@ -119,6 +120,9 @@ func TestPassthroughMutationsRemoveControlHeaders(t *testing.T) {
 		if request.Header.Get(DefaultFenceIDHeader) != "" {
 			t.Error("lease header reached upstream")
 		}
+		if request.Header.Get(DefaultRegistrationTokenHeader) != "" {
+			t.Error("registration token reached passthrough upstream")
+		}
 		response.WriteHeader(http.StatusAccepted)
 	}))
 	defer upstream.Close()
@@ -136,6 +140,7 @@ func TestPassthroughMutationsRemoveControlHeaders(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodPost, "/control", nil)
 	addLeaseHeaders(request, admittedState(control.OwnerSupervisor).LeaseFence)
+	request.Header.Set(DefaultRegistrationTokenHeader, "caller-supplied")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusAccepted {

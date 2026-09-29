@@ -99,7 +99,12 @@ CREATE INDEX idx_transition_work_request_id
 ON transition_work(request_id);
 `
 
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6}
+const schemaV7 = `
+ALTER TABLE registered_work
+ADD COLUMN registration_token TEXT CHECK (registration_token IS NULL OR length(registration_token) > 0);
+`
+
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7}
 
 func (s *Store) initialize(ctx context.Context) error {
 	for _, pragma := range []string{
