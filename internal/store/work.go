@@ -110,7 +110,9 @@ func (s *Store) FinishWorkFenced(ctx context.Context, requestID string, workload
 }
 
 const prunableWorkIDs = `SELECT work.request_id FROM registered_work AS work
+	JOIN control_state AS state ON state.singleton = 1
 	WHERE work.completed_at IS NOT NULL
+	  AND (work.lease_incarnation <> state.lease_incarnation OR work.lease_epoch <> state.lease_epoch)
 	  AND work.completed_at < ?
 	  AND unixepoch(work.completed_at) < unixepoch(?)
 	  AND NOT EXISTS (
@@ -120,11 +122,6 @@ const prunableWorkIDs = `SELECT work.request_id FROM registered_work AS work
 	  )
 	ORDER BY work.completed_at, work.request_id LIMIT ?`
 
-// PruneCompletedWork removes at most limit old terminal work records. It also
-// removes their terminal transition_work links, but keeps transition events and
-// transition records. Active work and snapshots of running transitions remain.
-// The text comparison uses the completed_at index; unixepoch prevents a
-// fractional timestamp later in the cutoff second from sorting before a "Z".
 func (s *Store) PruneCompletedWork(ctx context.Context, before time.Time, limit int) (int64, error) {
 	if before.IsZero() {
 		return 0, errors.New("retention cutoff is required")
