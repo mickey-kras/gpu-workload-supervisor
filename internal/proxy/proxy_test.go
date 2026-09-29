@@ -69,10 +69,11 @@ func (f *fakeStore) FinishWorkToken(_ context.Context, requestID string, _ contr
 }
 
 func TestSupervisorExecutionStaysRegisteredUntilExplicitFinish(t *testing.T) {
-	var receivedControlHeader bool
-	var receivedToken string
+	var receivedRequestID, receivedFenceID, receivedFenceEpoch, receivedToken string
 	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		receivedControlHeader = request.Header.Get(DefaultFenceIDHeader) != ""
+		receivedRequestID = request.Header.Get(DefaultRequestIDHeader)
+		receivedFenceID = request.Header.Get(DefaultFenceIDHeader)
+		receivedFenceEpoch = request.Header.Get(DefaultFenceEpochHeader)
 		receivedToken = request.Header.Get(DefaultRegistrationTokenHeader)
 		response.Header().Set(DefaultRegistrationTokenHeader, "upstream-spoof")
 		response.WriteHeader(http.StatusAccepted)
@@ -83,6 +84,9 @@ func TestSupervisorExecutionStaysRegisteredUntilExplicitFinish(t *testing.T) {
 	handler := testHandler(t, stateStore, upstream.URL)
 	request := httptest.NewRequest(http.MethodPost, "http://proxy.test/execute", strings.NewReader("{}"))
 	addLeaseHeaders(request, stateStore.state.LeaseFence)
+	request.Header.Set(DefaultRequestIDHeader, " request-1 ")
+	request.Header.Set(DefaultFenceIDHeader, " 11111111-1111-4111-8111-111111111111 ")
+	request.Header.Set(DefaultFenceEpochHeader, "0007")
 	request.Header.Set(DefaultRegistrationTokenHeader, "caller-spoof")
 	response := httptest.NewRecorder()
 
@@ -97,8 +101,8 @@ func TestSupervisorExecutionStaysRegisteredUntilExplicitFinish(t *testing.T) {
 	if receivedToken != "test-registration-token" {
 		t.Fatalf("upstream registration token = %q", receivedToken)
 	}
-	if receivedControlHeader {
-		t.Fatal("control headers reached upstream")
+	if receivedRequestID != "request-1" || receivedFenceID != stateStore.state.LeaseFence.Incarnation || receivedFenceEpoch != "7" {
+		t.Fatalf("upstream correlation = %q, %q, %q", receivedRequestID, receivedFenceID, receivedFenceEpoch)
 	}
 	if len(stateStore.admitted) != 1 || stateStore.admitted[0] != "request-1" {
 		t.Fatalf("admitted = %#v", stateStore.admitted)
@@ -120,9 +124,12 @@ func TestSupervisorExecutionStaysRegisteredUntilExplicitFinish(t *testing.T) {
 }
 
 func TestExecutionForwardsRegistrationTokenDespiteConnectionNomination(t *testing.T) {
-	var receivedToken, receivedHopHeader string
+	var receivedToken, receivedHopHeader, receivedRequestID, receivedFenceID, receivedFenceEpoch string
 	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		receivedToken = request.Header.Get(DefaultRegistrationTokenHeader)
+		receivedRequestID = request.Header.Get(DefaultRequestIDHeader)
+		receivedFenceID = request.Header.Get(DefaultFenceIDHeader)
+		receivedFenceEpoch = request.Header.Get(DefaultFenceEpochHeader)
 		receivedHopHeader = request.Header.Get("X-Hop-Test")
 		response.WriteHeader(http.StatusAccepted)
 	}))
@@ -134,7 +141,9 @@ func TestExecutionForwardsRegistrationTokenDespiteConnectionNomination(t *testin
 	addLeaseHeaders(request, stateStore.state.LeaseFence)
 	request.Header.Set(DefaultRegistrationTokenHeader, "caller-spoof")
 	request.Header.Set("X-Hop-Test", "drop-me")
-	request.Header.Set("Connection", "keep-alive, x-workload-registration-token, X-Hop-Test")
+	request.Header.Set(DefaultRequestIDHeader, " request-1 ")
+	request.Header.Set(DefaultFenceEpochHeader, "007")
+	request.Header.Set("Connection", "keep-alive, x-workload-registration-token, x-request-id, x-workload-lease-incarnation, x-workload-lease-epoch, X-Hop-Test")
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -144,6 +153,9 @@ func TestExecutionForwardsRegistrationTokenDespiteConnectionNomination(t *testin
 	}
 	if receivedToken != "test-registration-token" {
 		t.Fatalf("upstream registration token = %q", receivedToken)
+	}
+	if receivedRequestID != "request-1" || receivedFenceID != stateStore.state.LeaseFence.Incarnation || receivedFenceEpoch != "7" {
+		t.Fatalf("upstream correlation = %q, %q, %q", receivedRequestID, receivedFenceID, receivedFenceEpoch)
 	}
 	if receivedHopHeader != "" {
 		t.Fatalf("upstream hop-by-hop header = %q", receivedHopHeader)
