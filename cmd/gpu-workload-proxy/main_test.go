@@ -93,6 +93,63 @@ func TestShutdownTimeoutKeepsLifetimeLockUntilHandlerExits(t *testing.T) {
 	exclusive.Close()
 }
 
+func TestShutdownWaitsForHijackedHandler(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	tracked := &activeHandler{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		close(started)
+		<-release
+	})}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: tracked}
+	defer server.Close()
+	go server.Serve(listener)
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: test\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request was not hijacked")
+	}
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- shutdownAndDrain(server, tracked, 10*time.Millisecond) }()
+	select {
+	case err := <-shutdownDone:
+		t.Fatalf("shutdown returned while hijacked handler was active: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("shutdown error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown did not finish after upgraded handler exited")
+	}
+}
+
 func TestRoutesFlagRequiresCanonicalMethodAndPath(t *testing.T) {
 	var routes routesFlag
 	for _, value := range []string{"POST", ":/execute", "POST:execute", "POST:/a/../execute"} {
