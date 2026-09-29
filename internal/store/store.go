@@ -17,9 +17,9 @@ import (
 )
 
 var (
-	ErrStaleFence      = errors.New("stale lease fence")
-	ErrVersionConflict = errors.New("control state version conflict")
-	ErrAdmissionClosed = errors.New("admission is closed")
+	ErrStaleFence       = errors.New("stale lease fence")
+	ErrVersionConflict  = errors.New("control state version conflict")
+	ErrAdmissionClosed  = errors.New("admission is closed")
 	ErrWorkloadMismatch = errors.New("workload does not match active allocation")
 )
 
