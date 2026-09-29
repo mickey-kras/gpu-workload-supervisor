@@ -8,19 +8,12 @@ const REQUIRED_FILES = [
   '.github/workflows/branch-policy.yml', '.github/workflows/dependabot-auto-merge.yml',
   '.github/workflows/dependabot-auto-merge-refresh.yml', '.github/dependabot.yml',
   '.github/scripts/policy-guard.cjs', '.github/scripts/dependabot-auto-merge.cjs',
+  '.github/scripts/release-settings.cjs',
   '.github/scripts/pr-branch-updater.cjs', 'sonar-project.properties',
   '.github/scripts/package.json', '.github/scripts/package-lock.json',
   '.github/aislop/package.json', '.github/aislop/package-lock.json',
   '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
   '.goreleaser.yaml',
-  '.github/rulesets/enforce-release-tag-names.json',
-  '.github/rulesets/enforce-work-branch-names.json',
-  '.github/rulesets/protect-default-branch.json',
-  '.github/rulesets/protect-release-branches.json',
-  '.github/rulesets/protect-release-tags.json',
-  '.github/rulesets/release-branch-creation.json',
-  '.github/rulesets/release-branch-deletion.json',
-  '.github/rulesets/release-tag-creation.json',
 ];
 
 function scanWorkflows(files, failures) {
@@ -180,6 +173,18 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
   const release = '.github/workflows/release.yml';
   event(release, 'workflow_dispatch');
   step(release, 'publish', 'Release App token', { uses: 'actions/create-github-app-token' });
+  const state = workflows[release]?.jobs?.publish?.steps?.find(s => s.name === 'Verify immutable setting and publication state');
+  const verification = [
+    "await require('./.github/scripts/release-settings.cjs').verify({",
+    '  github, context, review: process.env.RELEASE_SETTINGS_REVIEW,',
+    '});',
+  ].join('\n');
+  if (state?.env?.RELEASE_SETTINGS_REVIEW !== '${{ vars.RELEASE_SETTINGS_REVIEW }}' ||
+      !state.with?.script?.startsWith(verification) ||
+      state.with?.['github-token'] !== '${{ steps.app.outputs.token }}' ||
+      Object.hasOwn(state, 'if') || Object.hasOwn(workflows[release]?.jobs?.publish || {}, 'if')) {
+    failures.push(`${release} lost reviewed release settings verification`);
+  }
   step(release, 'publish', 'Build deployable binaries', {
     uses: 'goreleaser/goreleaser-action', expectedIf: "steps.state.outputs.published != 'true'",
     withValues: { version: 'v2.18.2', args: 'release --clean --skip=publish' },
@@ -234,41 +239,6 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
   }
 }
 
-function inspectRulesets(files, failures) {
-  const rulesets = {};
-  for (const path of REQUIRED_FILES.filter(name => name.startsWith('.github/rulesets/'))) {
-    try {
-      rulesets[path.split('/').pop()] = JSON.parse(files[path]);
-      if (rulesets[path.split('/').pop()].enforcement !== 'active') {
-        failures.push(`${path} lost active enforcement`);
-      }
-    } catch (error) {
-      if (files[path]) failures.push(`${path} has invalid JSON: ${error.message}`);
-    }
-  }
-  const defaultRules = rulesets['protect-default-branch.json']?.rules || [];
-  const statusRule = defaultRules.find(rule => rule.type === 'required_status_checks');
-  const checks = statusRule?.parameters?.required_status_checks || [];
-  for (const context of ['quality / checks', 'aislop / aislop status', 'codeql / analyze',
-    'branch-policy / branch name', 'dependency-review / dependency review', 'guard']) {
-    if (!checks.some(check => check.context === context && check.integration_id === 15368)) {
-      failures.push(`Default branch lost required check: ${context}`);
-    }
-  }
-  if (statusRule?.parameters?.strict_required_status_checks_policy !== true ||
-      defaultRules.find(rule => rule.type === 'pull_request')?.parameters
-        ?.required_review_thread_resolution !== true) {
-    failures.push('Default branch lost strict checks or review-thread resolution');
-  }
-  for (const type of ['pull_request', 'code_scanning', 'code_quality', 'deletion', 'non_fast_forward']) {
-    if (!defaultRules.some(rule => rule.type === type)) failures.push(`Default branch lost rule: ${type}`);
-  }
-  const tagRules = rulesets['protect-release-tags.json']?.rules || [];
-  for (const type of ['update', 'deletion', 'non_fast_forward']) {
-    if (!tagRules.some(rule => rule.type === type)) failures.push(`Release tags lost rule: ${type}`);
-  }
-}
-
 function inspectScannerConfigs(files, failures) {
   try {
     const config = YAML.parse(files['.github/dependency-review-config.yml']);
@@ -313,7 +283,6 @@ function inspect(files) {
   const checks = createChecks(workflows, failures);
   inspectCi(checks);
   inspectAdditionalWorkflows(files, workflows, failures, checks);
-  inspectRulesets(files, failures);
   inspectScannerConfigs(files, failures);
   return failures;
 }

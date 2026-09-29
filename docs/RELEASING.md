@@ -20,6 +20,9 @@ checked with `gh attestation verify` on a downloaded asset.
 The `release-automation` environment, `RELEASE_APP_ID` repository variable, App
 installation with Contents write and Administration read, release-branch/tag
 creation and deletion bypasses, and GitHub release immutability must be configured
-before dispatch. Failed runs do not rewrite existing tags or releases.
+before dispatch. Set `RELEASE_SETTINGS_REVIEW` on that environment to the five
+reviewed release ruleset revisions. The workflow checks the live rulesets and
+immutability before preparing a release. Failed runs do not rewrite existing
+tags or releases.
 There is no version-bump PR because
 the Go module version is the Git tag; no in-tree version constant exists.
