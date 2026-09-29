@@ -20,6 +20,40 @@ const (
 	WorkAbandoned WorkOutcome = "abandoned"
 )
 
+func (s *Store) beginAdmittedWork(ctx context.Context, requestID string, workload control.Workload, fence control.Fence) (*sql.Tx, error) {
+	if requestID == "" {
+		return nil, errors.New("request id is empty")
+	}
+	if workload != control.WorkloadText && workload != control.WorkloadMedia {
+		return nil, errors.New("workload must be text or media")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	admitted := false
+	defer func() {
+		if !admitted {
+			_ = tx.Rollback()
+		}
+	}()
+	state, err := readState(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	if state.LeaseFence != fence {
+		return nil, ErrStaleFence
+	}
+	if state.Admission != control.AdmissionOpen || state.Phase != control.PhaseStable || state.Health != control.HealthHealthy {
+		return nil, ErrAdmissionClosed
+	}
+	if state.ActiveWorkload != workload || state.DesiredWorkload != workload {
+		return nil, ErrWorkloadMismatch
+	}
+	admitted = true
+	return tx, nil
+}
+
 func (s *Store) AdmitWork(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence) error {
 	return s.admitWork(ctx, requestID, jobID, workload, fence, "")
 }
@@ -36,30 +70,11 @@ func (s *Store) AdmitWorkToken(ctx context.Context, requestID, jobID string, wor
 }
 
 func (s *Store) admitWork(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence, token string) error {
-	if requestID == "" {
-		return errors.New("request id is empty")
-	}
-	if workload != control.WorkloadText && workload != control.WorkloadMedia {
-		return errors.New("workload must be text or media")
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginAdmittedWork(ctx, requestID, workload, fence)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	state, err := readState(ctx, tx)
-	if err != nil {
-		return err
-	}
-	if state.LeaseFence != fence {
-		return ErrStaleFence
-	}
-	if state.Admission != control.AdmissionOpen || state.Phase != control.PhaseStable || state.Health != control.HealthHealthy {
-		return ErrAdmissionClosed
-	}
-	if state.ActiveWorkload != workload || state.DesiredWorkload != workload {
-		return ErrWorkloadMismatch
-	}
 	result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO registered_work
 		(request_id, job_id, workload, lease_incarnation, lease_epoch, registered_at, registration_token)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,

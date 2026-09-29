@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -232,5 +233,51 @@ func TestRestoreRejectsReusedIncarnation(t *testing.T) {
 	after, err := s.State(ctx)
 	if err != nil || after != before {
 		t.Fatalf("failed restore changed state: %#v, %v", after, err)
+	}
+}
+
+func TestOpenRestoredRejectsUninitializedDatabaseWithoutMigration(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "placeholder.db")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if opened, err := OpenRestored(ctx, path); err == nil {
+		opened.Close()
+		t.Fatal("empty placeholder was accepted as a restored backup")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() != 0 {
+		t.Fatalf("empty placeholder was initialized: %d bytes", info.Size())
+	}
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, "CREATE TABLE unrelated (id INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if opened, err := OpenRestored(ctx, path); err == nil {
+		opened.Close()
+		t.Fatal("uninitialized SQLite database was accepted as a restored backup")
+	}
+	db, err = sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var migrations int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE name = 'schema_migrations'").Scan(&migrations); err != nil {
+		t.Fatal(err)
+	}
+	if migrations != 0 {
+		t.Fatal("restore preflight initialized the database")
 	}
 }

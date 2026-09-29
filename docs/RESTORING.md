@@ -10,7 +10,7 @@ The lease incarnation in a SQLite backup may be older than the live database. A 
    gpu-mode -state /PRIVATE/PATH/state.db restore-state
    ```
 
-   The database must already exist. The command needs no runtime flags and does not copy a backup. On success it prints the closed state with a new incarnation. It atomically takes supervisor ownership, sets the active workload to unknown, closes admission, marks restored active work abandoned, invalidates in-progress transitions, and records counts and old/new fences in `state_restorations`. Failed work and transitions remain in the audit tables. If it fails, keep all components stopped and resolve the error before retrying.
+   The database must be an initialized supervisor database; an empty placeholder is rejected. The command needs no runtime flags and does not copy a backup. On success it prints the closed state with a new incarnation. It atomically takes supervisor ownership, sets the active workload to unknown, closes admission, marks restored active work abandoned, invalidates in-progress transitions, and records counts and old/new fences in `state_restorations`. Failed work and transitions remain in the audit tables. If it fails, keep all components stopped and resolve the error before retrying.
 
 4. With the proxies still stopped, run `gpu-mode` with the normal runtime flags and the `reconcile` command. It must finish with a stable, healthy state. If it reports a failure, leave the proxies stopped and use `recover` only after checking the runtime state. Start a workload through the controller if needed.
 5. Start the proxies only after successful reconciliation. Clients must obtain the new fence; requests carrying a fence from the backup are rejected.

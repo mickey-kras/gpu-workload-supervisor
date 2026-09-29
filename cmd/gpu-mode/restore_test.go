@@ -84,3 +84,23 @@ func TestRestoreStateRejectsMissingDatabase(t *testing.T) {
 		t.Fatalf("missing database was created: %v", err)
 	}
 }
+
+func TestRestoreStateRejectsEmptyExistingDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "placeholder.db")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousArgs := os.Args
+	t.Cleanup(func() { os.Args = previousArgs })
+	os.Args = []string{"gpu-mode", "-state", path, "restore-state"}
+	if err := run(); err == nil || !strings.Contains(err.Error(), "database is empty") {
+		t.Fatalf("empty backup error = %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() != 0 {
+		t.Fatalf("placeholder was initialized: %d bytes", info.Size())
+	}
+}
