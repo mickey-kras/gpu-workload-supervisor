@@ -1,6 +1,6 @@
 # Repository settings
 
-Apply these settings after this PR is merged and the new PR checks have appeared.
+Apply these settings after the PR checks have appeared.
 The files under `.github/rulesets/` are importable ruleset definitions. They do
 not become active by being committed.
 
