@@ -19,6 +19,9 @@ var (
 	ErrVerifyTimeout     = errors.New("timed out verifying workload")
 	ErrRecoveryRequired  = errors.New("explicit recovery is required")
 	ErrInvariant         = errors.New("observed runtime violates control state")
+	ErrRuntimeObservation = errors.New("runtime observation failed")
+	ErrStateVerification  = errors.New("runtime state verification failed")
+	ErrHealthCheck        = errors.New("runtime health check failed")
 )
 
 type StateStore interface {
@@ -36,7 +39,8 @@ type StateStore interface {
 type Config struct {
 	DrainTimeout   time.Duration
 	VerifyTimeout  time.Duration
-	CleanupTimeout time.Duration
+	CleanupTimeout  time.Duration
+	FinalizeTimeout time.Duration
 	PollInterval   time.Duration
 }
 
@@ -59,7 +63,7 @@ func newController(stateStore StateStore, runtime gpuruntime.Manager, config Con
 	if stateStore == nil || runtime == nil {
 		return nil, errors.New("store and runtime are required")
 	}
-	if config.DrainTimeout <= 0 || config.VerifyTimeout <= 0 || config.CleanupTimeout <= 0 || config.PollInterval <= 0 {
+	if config.DrainTimeout <= 0 || config.VerifyTimeout <= 0 || config.CleanupTimeout <= 0 || config.FinalizeTimeout <= 0 || config.PollInterval <= 0 {
 		return nil, errors.New("timeouts and poll interval must be greater than zero")
 	}
 	return &Controller{store: stateStore, runtime: runtime, config: config, now: now, id: id}, nil
@@ -125,7 +129,7 @@ func (c *Controller) Switch(ctx context.Context, target control.Workload, initia
 	}
 	snapshot, err := c.runtime.Observe(ctx)
 	if err != nil {
-		return c.fail(transitionID, state, current, fmt.Errorf("observe before unload: %w", err))
+		return c.fail(transitionID, state, current, fmt.Errorf("%w: observe before unload: %v", ErrRuntimeObservation, err))
 	}
 	active, err := observedWorkload(current, snapshot)
 	if err != nil {
@@ -135,6 +139,11 @@ func (c *Controller) Switch(ctx context.Context, target control.Workload, initia
 		if err := c.effect(ctx, transitionID, state.Phase, "stop "+string(active), func() error {
 			return c.runtime.Stop(ctx, active)
 		}); err != nil {
+			return c.fail(transitionID, state, current, err)
+		}
+	}
+	if active == control.WorkloadMedia && active != target {
+		if err := c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout)); err != nil {
 			return c.fail(transitionID, state, current, err)
 		}
 	}
@@ -202,6 +211,9 @@ func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
 		if err := c.runtime.Stop(ctx, control.WorkloadMedia); err != nil {
 			return c.latchObservationFailure(ctx, state, err)
 		}
+		if err := c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout)); err != nil {
+			return c.latchObservationFailure(ctx, state, err)
+		}
 	}
 	state.Owner = control.OwnerSupervisor
 	state.Phase = control.PhaseStable
@@ -235,6 +247,9 @@ func (c *Controller) Recover(ctx context.Context) (control.State, error) {
 	}
 	if !snapshot.TextActive {
 		if err := c.runtime.Stop(ctx, control.WorkloadMedia); err != nil {
+			return state, err
+		}
+		if err := c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout)); err != nil {
 			return state, err
 		}
 	}
@@ -285,11 +300,15 @@ func (c *Controller) waitReady(ctx context.Context, target control.Workload, dea
 	var lastErr error
 	for {
 		snapshot, err := c.runtime.Observe(ctx)
-		if err == nil {
+		if err != nil {
+			err = fmt.Errorf("%w: %v", ErrRuntimeObservation, err)
+		} else {
 			err = verifySnapshot(target, snapshot)
 		}
 		if err == nil {
-			err = c.runtime.Healthy(ctx, target)
+			if healthErr := c.runtime.Healthy(ctx, target); healthErr != nil {
+				err = fmt.Errorf("%w: %v", ErrHealthCheck, healthErr)
+			}
 		}
 		if err == nil {
 			return nil
@@ -310,15 +329,15 @@ func verifySnapshot(target control.Workload, snapshot gpuruntime.Snapshot) error
 	switch target {
 	case control.WorkloadText:
 		if !snapshot.TextActive {
-			return errors.New("text runtime is not active")
+			return fmt.Errorf("%w: text runtime is not active", ErrStateVerification)
 		}
 	case control.WorkloadMedia:
 		if snapshot.TextActive || !snapshot.MediaReady {
-			return errors.New("media runtime is not exclusively ready")
+			return fmt.Errorf("%w: media runtime is not exclusively ready", ErrStateVerification)
 		}
 	case control.WorkloadIdle:
 		if snapshot.TextActive {
-			return errors.New("text runtime remains active")
+			return fmt.Errorf("%w: text runtime remains active", ErrStateVerification)
 		}
 	}
 	return nil
@@ -358,10 +377,32 @@ func (c *Controller) effect(ctx context.Context, transitionID string, phase cont
 	return errors.Join(err, journalErr)
 }
 
+func (c *Controller) waitReleased(ctx context.Context, deadline time.Time) error {
+	ticker := time.NewTicker(c.config.PollInterval)
+	defer ticker.Stop()
+	var lastErr error
+	for {
+		if err := c.runtime.Released(ctx); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		if !c.now().Before(deadline) {
+			return errors.Join(ErrVerifyTimeout, lastErr)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
 func (c *Controller) fail(transitionID string, state, previous control.State, cause error) (control.State, error) {
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), c.config.CleanupTimeout)
-	defer cancel()
-	rollbackErr := c.rollback(cleanupCtx, transitionID, previous)
+	rollbackCtx, cancelRollback := context.WithTimeout(context.Background(), c.config.CleanupTimeout)
+	rollbackErr := c.rollback(rollbackCtx, transitionID, previous)
+	cancelRollback()
+
 	final := state
 	final.Phase = control.PhaseReconciling
 	final.Health = control.HealthError
@@ -370,12 +411,15 @@ func (c *Controller) fail(transitionID string, state, previous control.State, ca
 	if rollbackErr == nil {
 		final.ActiveWorkload = previous.ActiveWorkload
 	}
-	_ = c.store.AppendTransitionEvent(cleanupCtx, store.TransitionEvent{
+
+	finalizeCtx, cancelFinalize := context.WithTimeout(context.Background(), c.config.FinalizeTimeout)
+	defer cancelFinalize()
+	journalErr := c.store.AppendTransitionEvent(finalizeCtx, store.TransitionEvent{
 		TransitionID: transitionID, Phase: final.Phase, Kind: "observation",
 		Action: "transition failed", Outcome: failureCode(cause),
 	})
-	updated, finishErr := c.store.FinishTransition(cleanupCtx, transitionID, "failed", state.Version, final)
-	return updated, errors.Join(cause, rollbackErr, finishErr)
+	updated, finishErr := c.store.FinishTransition(finalizeCtx, transitionID, "failed", state.Version, final)
+	return updated, errors.Join(cause, rollbackErr, journalErr, finishErr)
 }
 
 func (c *Controller) rollback(ctx context.Context, transitionID string, previous control.State) error {
@@ -434,6 +478,12 @@ func failureCode(err error) string {
 		return "canceled"
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, ErrDrainTimeout), errors.Is(err, ErrVerifyTimeout):
 		return "timeout"
+	case errors.Is(err, ErrRuntimeObservation):
+		return "runtime-observation"
+	case errors.Is(err, ErrStateVerification), errors.Is(err, ErrInvariant):
+		return "state-mismatch"
+	case errors.Is(err, ErrHealthCheck):
+		return "health-check"
 	default:
 		return "failed"
 	}
