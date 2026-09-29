@@ -130,8 +130,7 @@ func (m *SystemdManager) active(ctx context.Context, unit string) (bool, error) 
 		return false, fmt.Errorf("inspect %s: %w: %s", unit, err, strings.TrimSpace(string(output)))
 	}
 	values := map[string]string{}
-	for _, line := range strings.Split(string(output), "
-") {
+	for _, line := range strings.Split(string(output), "\n") {
 		key, value, ok := strings.Cut(line, "=")
 		if ok {
 			values[key] = value
