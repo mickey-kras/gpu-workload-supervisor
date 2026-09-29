@@ -20,6 +20,7 @@ var (
 	ErrStaleFence      = errors.New("stale lease fence")
 	ErrVersionConflict = errors.New("control state version conflict")
 	ErrAdmissionClosed = errors.New("admission is closed")
+	ErrWorkloadMismatch = errors.New("workload does not match active allocation")
 )
 
 type Clock func() time.Time
@@ -170,9 +171,12 @@ func (s *Store) RotateIncarnation(ctx context.Context) (control.State, error) {
 	return state, nil
 }
 
-func (s *Store) RegisterWork(ctx context.Context, requestID, jobID string, fence control.Fence) error {
+func (s *Store) RegisterWork(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence) error {
 	if requestID == "" {
 		return errors.New("request id is empty")
+	}
+	if workload != control.WorkloadText && workload != control.WorkloadMedia {
+		return errors.New("workload must be text or media")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -186,12 +190,15 @@ func (s *Store) RegisterWork(ctx context.Context, requestID, jobID string, fence
 	if state.LeaseFence != fence {
 		return ErrStaleFence
 	}
-	if state.Admission != control.AdmissionOpen {
+	if state.Admission != control.AdmissionOpen || state.Phase != control.PhaseStable || state.Health != control.HealthHealthy {
 		return ErrAdmissionClosed
 	}
+	if state.ActiveWorkload != workload || state.DesiredWorkload != workload {
+		return ErrWorkloadMismatch
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO registered_work
-		(request_id, job_id, lease_incarnation, lease_epoch, registered_at)
-		VALUES (?, ?, ?, ?, ?)`, requestID, nullable(jobID), fence.Incarnation, fence.Epoch, formatTime(s.now()))
+		(request_id, job_id, workload, lease_incarnation, lease_epoch, registered_at)
+		VALUES (?, ?, ?, ?, ?, ?)`, requestID, nullable(jobID), workload, fence.Incarnation, fence.Epoch, formatTime(s.now()))
 	if err != nil {
 		return fmt.Errorf("register work: %w", err)
 	}
