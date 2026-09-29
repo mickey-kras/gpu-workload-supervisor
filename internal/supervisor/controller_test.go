@@ -13,14 +13,14 @@ import (
 )
 
 type fakeRuntime struct {
-	active         control.Workload
-	mediaReady     bool
-	healthFailures int
-	startErr       error
-	stopErr        error
+	active          control.Workload
+	mediaReady      bool
+	healthFailures  int
+	startErr        error
+	stopErr         error
 	releaseFailures int
 	cancelOnStop    func()
-	calls          []string
+	calls           []string
 }
 
 func (r *fakeRuntime) Observe(context.Context) (gpuruntime.Snapshot, error) {
