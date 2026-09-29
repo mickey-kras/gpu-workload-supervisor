@@ -195,10 +195,12 @@ func TestFailedMediaStartRollsBackToIdleOnlyAfterRelease(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		blockRelease bool
+		stopErr      error
 		wantActive   control.Workload
 	}{
-		{"released", false, control.WorkloadIdle},
-		{"release failed", true, control.WorkloadUnknown},
+		{"released", false, nil, control.WorkloadIdle},
+		{"release failed", true, nil, control.WorkloadUnknown},
+		{"media stop failed", false, errors.New("release endpoint failed"), control.WorkloadUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stateStore := openStore(t)
@@ -211,6 +213,7 @@ func TestFailedMediaStartRollsBackToIdleOnlyAfterRelease(t *testing.T) {
 			runtime.startErr = errors.New("partially started media")
 			runtime.partialStart = true
 			runtime.blockRelease = tc.blockRelease
+			runtime.stopErr = tc.stopErr
 			controller.config.ActionTimeout = time.Millisecond
 			controller.config.CleanupTimeout = 5 * time.Millisecond
 			state, err := controller.Switch(context.Background(), control.WorkloadMedia, "test")
@@ -219,6 +222,9 @@ func TestFailedMediaStartRollsBackToIdleOnlyAfterRelease(t *testing.T) {
 				t.Fatalf("failed media start state = %#v, error = %v", state, err)
 			}
 			assertCalls(t, runtime.calls, "start media", "stop media")
+			if tc.stopErr != nil && !errors.Is(err, tc.stopErr) {
+				t.Fatalf("missing failed media stop: %v", err)
+			}
 		})
 	}
 }

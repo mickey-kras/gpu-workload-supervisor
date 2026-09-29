@@ -281,3 +281,49 @@ func TestOpenRestoredRejectsUninitializedDatabaseWithoutMigration(t *testing.T) 
 		t.Fatal("restore preflight initialized the database")
 	}
 }
+
+func TestOpenRestoredMigratesV8WithoutLosingResolutionAudit(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "restored-v8.db")
+	s, err := open(ctx, path, fixedClock(), fixedUUID("11111111-1111-4111-8111-111111111111"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO work_resolutions
+		(lease_incarnation, lease_epoch, state_version, reason, abandoned_work, created_at)
+		VALUES (?, ?, ?, 'incident-123', 1, ?)`, before.LeaseFence.Incarnation,
+		before.LeaseFence.Epoch, before.Version, formatTime(fixedClock()())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DROP INDEX idx_transitions_in_progress_order`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 9`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := OpenRestored(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	after, err := restored.State(ctx)
+	if err != nil || after != before {
+		t.Fatalf("migration changed restored state: %#v, %v", after, err)
+	}
+	var reason string
+	if err := restored.db.QueryRowContext(ctx, `SELECT reason FROM work_resolutions`).Scan(&reason); err != nil || reason != "incident-123" {
+		t.Fatalf("resolution audit after migration = %q, %v", reason, err)
+	}
+	var indexCount int
+	if err := restored.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master
+		WHERE type = 'index' AND name = 'idx_transitions_in_progress_order'`).Scan(&indexCount); err != nil || indexCount != 1 {
+		t.Fatalf("transition index after migration = %d, %v", indexCount, err)
+	}
+}

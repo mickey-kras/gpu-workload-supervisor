@@ -251,6 +251,33 @@ func TestRollbackFailureDoesNotClaimRestoredOwner(t *testing.T) {
 	assertCalls(t, runtime.calls, "stop text", "start media")
 }
 
+func TestIdleRollbackDoesNotProceedPastFailedTextStop(t *testing.T) {
+	stateStore := openStore(t)
+	stopErr := errors.New("text stop failed")
+	runtime := &fakeRuntime{active: control.WorkloadText, stopErr: stopErr}
+	controller := testController(t, stateStore, runtime)
+	state, err := stateStore.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stateStore.StartTransition(context.Background(), state.Version, store.Transition{
+		ID: "failed-idle-rollback", Source: state, Target: state, Previous: state,
+		Deadline: time.Now().Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previous := state
+	previous.ActiveWorkload = control.WorkloadIdle
+	if err := controller.rollback(context.Background(), "failed-idle-rollback", previous); !errors.Is(err, stopErr) {
+		t.Fatalf("text stop failure was not reported: %v", err)
+	}
+	assertCalls(t, runtime.calls, "stop text")
+	events, err := stateStore.TransitionEvents(context.Background(), "failed-idle-rollback")
+	if err != nil || len(events) != 2 || events[0].Action != "rollback stop text" || events[1].Outcome != "failed" {
+		t.Fatalf("rollback journal = %#v, %v", events, err)
+	}
+}
+
 func TestSwitchRejectsInvalidTargetAndTransitionIdentity(t *testing.T) {
 	stateStore := openStore(t)
 	runtime := &fakeRuntime{active: control.WorkloadText}
