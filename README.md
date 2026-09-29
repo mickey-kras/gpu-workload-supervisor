@@ -40,14 +40,31 @@ go vet ./...
 
 ## Local CLI
 
+Runtime identity is deployment configuration. Unit names and endpoints are required:
+
 ```sh
-go run ./cmd/gpu-mode status
-go run ./cmd/gpu-mode reconcile
-go run ./cmd/gpu-mode text
-go run ./cmd/gpu-mode media
-go run ./cmd/gpu-mode idle
+gpu-mode \
+  -text-unit TEXT.service \
+  -media-unit MEDIA.service \
+  -text-health-url http://127.0.0.1:PORT/health \
+  -media-health-url http://127.0.0.1:PORT/ \
+  -media-release-url http://127.0.0.1:PORT/free \
+  status|reconcile|recover|text|media|idle
 ```
 
-The controller operates on systemd user units. Workload transitions close admission, snapshot active work, wait for the snapshot to drain, journal runtime actions, and verify observed state plus health before reopening admission.
+Defaults:
+
+- state: `$XDG_STATE_HOME/gpu-workload-supervisor/state.db` or `~/.local/state/gpu-workload-supervisor/state.db`
+- health request timeout: 10 seconds
+- drain timeout: 5 minutes
+- readiness timeout: 5 minutes
+- cleanup timeout: 2 minutes
+- poll interval: 250 milliseconds
+
+The state directory must be private and owned by the current user. Commands use an exclusive file lock. Opening the store applies pending migrations. `status` persists a closed error state if runtime observation violates the single-GPU invariant.
+
+ComfyUI process availability is separate from media GPU ownership. Entering media mode stops text inference and keeps ComfyUI available. Leaving media mode calls the configured model-release endpoint before text inference starts.
+
+Boot reconciliation never resumes media work. Interrupted transitions and latched errors require explicit `recover`.
 
 Remote control, authorization, UI, Job Broker implementation, and host-specific deployment remain outside this repository slice.
