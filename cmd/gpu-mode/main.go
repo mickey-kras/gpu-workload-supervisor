@@ -19,6 +19,8 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
+const restoreStateCommand = "restore-state"
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -53,7 +55,7 @@ func run() error {
 		return errors.New("usage: gpu-mode [flags] restore-state|status|reconcile|recover|resolve-work|text|media|idle")
 	}
 	command := flags.Arg(0)
-	if command != "restore-state" && (*textUnit == "" || *mediaUnit == "" || *textHealth == "" || *mediaHealth == "" || *mediaRelease == "" || *releaseMaxMiB == 0 || *nvidiaSMIPath == "" || *systemctlPath == "") {
+	if command != restoreStateCommand && (*textUnit == "" || *mediaUnit == "" || *textHealth == "" || *mediaHealth == "" || *mediaRelease == "" || *releaseMaxMiB == 0 || *nvidiaSMIPath == "" || *systemctlPath == "") {
 		return errors.New("runtime units, endpoints, release threshold, and trusted executable paths are required")
 	}
 	processLock, err := lock.Acquire(*statePath + ".lock")
@@ -76,7 +78,7 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	var stateStore *store.Store
-	if command == "restore-state" {
+	if command == restoreStateCommand {
 		stateStore, err = store.OpenRestored(ctx, *statePath)
 	} else {
 		stateStore, err = store.Open(ctx, *statePath)
@@ -85,12 +87,8 @@ func run() error {
 		return fmt.Errorf("open state store: %w", err)
 	}
 	defer stateStore.Close()
-	if command == "restore-state" {
-		restored, err := stateStore.RotateIncarnation(ctx)
-		if err != nil {
-			return fmt.Errorf("prepare restored state: %w", err)
-		}
-		return json.NewEncoder(os.Stdout).Encode(restored)
+	if command == restoreStateCommand {
+		return restoreState(ctx, stateStore)
 	}
 	runtimeManager, err := gpuruntime.NewSystemdManager(gpuruntime.SystemdConfig{
 		TextUnit: *textUnit, MediaUnit: *mediaUnit,
@@ -141,6 +139,14 @@ func run() error {
 		return errors.Join(err, encodeErr)
 	}
 	return err
+}
+
+func restoreState(ctx context.Context, stateStore *store.Store) error {
+	restored, err := stateStore.RotateIncarnation(ctx)
+	if err != nil {
+		return fmt.Errorf("prepare restored state: %w", err)
+	}
+	return json.NewEncoder(os.Stdout).Encode(restored)
 }
 
 func defaultStatePath() string {
