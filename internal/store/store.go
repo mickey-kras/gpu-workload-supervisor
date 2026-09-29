@@ -142,6 +142,9 @@ func (s *Store) RotateFenceAndCloseAdmission(ctx context.Context, expected uint6
 	return state, nil
 }
 
+// RotateIncarnation prepares a restored database for reconciliation. Callers must
+// stop all workloads and proxies before restoring the database and keep them
+// stopped until this transaction commits and runtime reconciliation succeeds.
 func (s *Store) RotateIncarnation(ctx context.Context) (control.State, error) {
 	incarnation, err := s.uuid()
 	if err != nil {
@@ -156,14 +159,60 @@ func (s *Store) RotateIncarnation(ctx context.Context) (control.State, error) {
 	if err != nil {
 		return control.State{}, err
 	}
+	if incarnation == state.LeaseFence.Incarnation {
+		return control.State{}, errors.New("new lease incarnation matches restored incarnation")
+	}
+	previous := state.LeaseFence
+	now := formatTime(s.now())
+	if _, err := tx.ExecContext(ctx, `INSERT INTO transition_events
+		(transition_id, phase, kind, action, outcome, created_at)
+		SELECT transition_id, ?, 'observation', 'state restore', 'invalidated', ?
+		FROM transitions WHERE status = 'in_progress'`,
+		control.PhaseReconciling, now); err != nil {
+		return control.State{}, fmt.Errorf("record interrupted transitions: %w", err)
+	}
+	transitions, err := tx.ExecContext(ctx, `UPDATE transitions
+		SET phase = ?, status = 'failed', updated_at = ?
+		WHERE status = 'in_progress'`, control.PhaseReconciling, now)
+	if err != nil {
+		return control.State{}, fmt.Errorf("invalidate interrupted transitions: %w", err)
+	}
+	invalidated, err := transitions.RowsAffected()
+	if err != nil {
+		return control.State{}, err
+	}
+	work, err := tx.ExecContext(ctx, `UPDATE registered_work
+		SET completed_at = ?, completion_outcome = 'abandoned'
+		WHERE completed_at IS NULL`, now)
+	if err != nil {
+		return control.State{}, fmt.Errorf("abandon restored work: %w", err)
+	}
+	abandoned, err := work.RowsAffected()
+	if err != nil {
+		return control.State{}, err
+	}
+	state.Owner = control.OwnerSupervisor
+	state.DesiredWorkload = control.WorkloadIdle
 	state.LeaseFence = control.Fence{Incarnation: incarnation, Epoch: 1}
 	state.Admission = control.AdmissionClosed
 	state.Phase = control.PhaseReconciling
+	state.Health = control.HealthHealthy
 	state.ActiveWorkload = control.WorkloadUnknown
 	state.Version++
 	state.UpdatedAt = s.now().UTC()
+	if err := state.Validate(); err != nil {
+		return control.State{}, err
+	}
 	if err := writeState(ctx, tx, state); err != nil {
 		return control.State{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO state_restorations
+		(previous_incarnation, previous_epoch, new_incarnation, new_epoch,
+		 abandoned_work, invalidated_transitions, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		previous.Incarnation, previous.Epoch, state.LeaseFence.Incarnation,
+		state.LeaseFence.Epoch, abandoned, invalidated, now); err != nil {
+		return control.State{}, fmt.Errorf("record state restoration: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return control.State{}, err
