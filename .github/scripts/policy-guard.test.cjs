@@ -60,11 +60,32 @@ test('early exit before retained test commands fails policy', () => {
   assert.ok(inspect(candidate).some(error => error.includes('changed gate commands: Tests')));
 });
 
+test('a custom shell cannot ignore a protected run script', () => {
+  const candidate = files();
+  candidate['.github/workflows/ci.yml'] = candidate['.github/workflows/ci.yml']
+    .replace('      - name: Tests, race detector, and coverage\n',
+      "      - name: Tests, race detector, and coverage\n        shell: bash -c 'exit 0' {0}\n");
+  assert.ok(inspect(candidate).some(error => error.includes('Tests, race detector, and coverage')));
+});
+
+test('a boolean false condition cannot skip a required scanner', () => {
+  const candidate = files();
+  candidate['.github/workflows/ci.yml'] = candidate['.github/workflows/ci.yml']
+    .replace('      - name: Gitleaks\n', '      - name: Gitleaks\n        if: false\n');
+  assert.ok(inspect(candidate).some(error => error.includes('Gitleaks')));
+});
+
 test('required status checks cannot be removed from importable ruleset', () => {
   const candidate = files();
   const path = '.github/rulesets/protect-default-branch.json';
   candidate[path] = candidate[path].replace('dependency-review / dependency review', 'disabled review');
   assert.ok(inspect(candidate).some(error => error.includes('Default branch lost required check')));
+});
+
+test('scanner policy cannot become empty while workflow remains active', () => {
+  const candidate = files();
+  candidate['.semgrep.yml'] = 'rules: []\n';
+  assert.ok(inspect(candidate).some(error => error.includes('Semgrep policy was weakened')));
 });
 
 test('removed policy files and unpinned actions fail closed', () => {
