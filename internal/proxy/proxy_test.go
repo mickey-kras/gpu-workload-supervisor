@@ -17,12 +17,13 @@ import (
 )
 
 type fakeStore struct {
-	mu          sync.Mutex
-	state       control.State
-	registerErr error
-	completeErr error
-	registered  []string
-	completed   []string
+	mu         sync.Mutex
+	state      control.State
+	admitErr   error
+	finishErr  error
+	admitted   []string
+	finished   []string
+	outcomes   []store.WorkOutcome
 }
 
 func (f *fakeStore) State(context.Context) (control.State, error) {
@@ -31,11 +32,11 @@ func (f *fakeStore) State(context.Context) (control.State, error) {
 	return f.state, nil
 }
 
-func (f *fakeStore) RegisterWork(_ context.Context, requestID, _ string, workload control.Workload, fence control.Fence) error {
+func (f *fakeStore) AdmitWork(_ context.Context, requestID, _ string, workload control.Workload, fence control.Fence) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.registerErr != nil {
-		return f.registerErr
+	if f.admitErr != nil {
+		return f.admitErr
 	}
 	if fence != f.state.LeaseFence {
 		return store.ErrStaleFence
@@ -46,21 +47,22 @@ func (f *fakeStore) RegisterWork(_ context.Context, requestID, _ string, workloa
 	if f.state.ActiveWorkload != workload || f.state.DesiredWorkload != workload {
 		return store.ErrWorkloadMismatch
 	}
-	f.registered = append(f.registered, requestID)
+	f.admitted = append(f.admitted, requestID)
 	return nil
 }
 
-func (f *fakeStore) CompleteWorkFenced(_ context.Context, requestID string, _ control.Fence) error {
+func (f *fakeStore) FinishWorkFenced(_ context.Context, requestID string, _ control.Fence, outcome store.WorkOutcome) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.completeErr != nil {
-		return f.completeErr
+	if f.finishErr != nil {
+		return f.finishErr
 	}
-	f.completed = append(f.completed, requestID)
+	f.finished = append(f.finished, requestID)
+	f.outcomes = append(f.outcomes, outcome)
 	return nil
 }
 
-func TestSupervisorExecutionIsRegisteredAndCompleted(t *testing.T) {
+func TestSupervisorExecutionStaysRegisteredUntilExplicitFinish(t *testing.T) {
 	var receivedControlHeader bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		receivedControlHeader = request.Header.Get(DefaultFenceIDHeader) != ""
@@ -82,11 +84,22 @@ func TestSupervisorExecutionIsRegisteredAndCompleted(t *testing.T) {
 	if receivedControlHeader {
 		t.Fatal("control headers reached upstream")
 	}
-	if len(stateStore.registered) != 1 || stateStore.registered[0] != "request-1" {
-		t.Fatalf("registered = %#v", stateStore.registered)
+	if len(stateStore.admitted) != 1 || stateStore.admitted[0] != "request-1" {
+		t.Fatalf("admitted = %#v", stateStore.admitted)
 	}
-	if len(stateStore.completed) != 1 || stateStore.completed[0] != "request-1" {
-		t.Fatalf("completed = %#v", stateStore.completed)
+	if len(stateStore.finished) != 0 {
+		t.Fatalf("finished before terminal signal = %#v", stateStore.finished)
+	}
+
+	finish := httptest.NewRequest(http.MethodPost, "http://proxy.test"+DefaultCompletionPath,
+		strings.NewReader(`{"requestId":"request-1","fence":{"incarnation":"11111111-1111-4111-8111-111111111111","epoch":7},"outcome":"completed"}`))
+	finishResponse := httptest.NewRecorder()
+	handler.ServeHTTP(finishResponse, finish)
+	if finishResponse.Code != http.StatusNoContent {
+		t.Fatalf("finish status = %d", finishResponse.Code)
+	}
+	if len(stateStore.finished) != 1 || stateStore.outcomes[0] != store.WorkCompleted {
+		t.Fatalf("terminal lifecycle = %#v %#v", stateStore.finished, stateStore.outcomes)
 	}
 }
 
@@ -105,26 +118,44 @@ func TestUserOwnershipBypassesLeaseRegistration(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("status = %d", response.Code)
 	}
-	if len(stateStore.registered) != 0 || len(stateStore.completed) != 0 {
-		t.Fatalf("unexpected work lifecycle: %#v %#v", stateStore.registered, stateStore.completed)
+	if len(stateStore.admitted) != 0 || len(stateStore.finished) != 0 {
+		t.Fatalf("unexpected lifecycle: %#v %#v", stateStore.admitted, stateStore.finished)
 	}
 }
 
-func TestNonExecutionRouteIsNotGated(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+func TestReadOnlyRouteStripsControlHeaders(t *testing.T) {
+	var receivedControlHeader bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		receivedControlHeader = request.Header.Get(DefaultFenceIDHeader) != ""
 		response.WriteHeader(http.StatusOK)
 	}))
 	defer upstream.Close()
 	stateStore := &fakeStore{state: admittedState(control.OwnerSupervisor)}
-	stateStore.state.Admission = control.AdmissionClosed
 	handler := testHandler(t, stateStore, upstream.URL)
 	request := httptest.NewRequest(http.MethodGet, "http://proxy.test/assets/item", nil)
+	addLeaseHeaders(request, stateStore.state.LeaseFence)
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d", response.Code)
+	}
+	if receivedControlHeader {
+		t.Fatal("control headers reached upstream")
+	}
+}
+
+func TestUnclassifiedMutatingRoutesFailClosed(t *testing.T) {
+	stateStore := &fakeStore{state: admittedState(control.OwnerSupervisor)}
+	handler := testHandler(t, stateStore, "http://127.0.0.1:1")
+	for _, target := range []string{"/execute/", "/other", "/a/../execute"} {
+		request := httptest.NewRequest(http.MethodPost, "http://proxy.test"+target, nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusMethodNotAllowed && response.Code != http.StatusBadRequest {
+			t.Fatalf("%s status = %d", target, response.Code)
+		}
 	}
 }
 
@@ -150,6 +181,10 @@ func TestExecutionFailsClosed(t *testing.T) {
 		{name: "wrong workload", mutate: func(stateStore *fakeStore, request *http.Request) {
 			stateStore.state.ActiveWorkload = control.WorkloadText
 			stateStore.state.DesiredWorkload = control.WorkloadText
+			addLeaseHeaders(request, stateStore.state.LeaseFence)
+		}, wantStatus: http.StatusConflict},
+		{name: "duplicate request", mutate: func(stateStore *fakeStore, request *http.Request) {
+			stateStore.admitErr = store.ErrRequestConflict
 			addLeaseHeaders(request, stateStore.state.LeaseFence)
 		}, wantStatus: http.StatusConflict},
 	}
@@ -180,7 +215,7 @@ func TestExecutionFailsClosed(t *testing.T) {
 	}
 }
 
-func TestUpstreamFailureCompletesRegisteredWork(t *testing.T) {
+func TestUpstreamFailureLeavesWorkIncomplete(t *testing.T) {
 	stateStore := &fakeStore{state: admittedState(control.OwnerSupervisor)}
 	handler := testHandler(t, stateStore, "http://127.0.0.1:1")
 	request := httptest.NewRequest(http.MethodPost, "http://proxy.test/execute", nil)
@@ -192,43 +227,28 @@ func TestUpstreamFailureCompletesRegisteredWork(t *testing.T) {
 	if response.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d", response.Code)
 	}
-	if len(stateStore.registered) != 1 || len(stateStore.completed) != 1 {
-		t.Fatalf("work lifecycle = %#v %#v", stateStore.registered, stateStore.completed)
+	if len(stateStore.admitted) != 1 || len(stateStore.finished) != 0 {
+		t.Fatalf("lifecycle = %#v %#v", stateStore.admitted, stateStore.finished)
 	}
 }
 
-func TestCompletionFailureRemainsObservable(t *testing.T) {
-	logged := make(chan error, 1)
-	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		response.WriteHeader(http.StatusNoContent)
-	}))
-	defer upstream.Close()
+func TestFinishFailureIsFailClosed(t *testing.T) {
 	stateStore := &fakeStore{
-		state: admittedState(control.OwnerSupervisor), completeErr: errors.New("database unavailable"),
+		state: admittedState(control.OwnerSupervisor), finishErr: errors.New("database unavailable"),
 	}
-	handler := testHandlerWithLog(t, stateStore, upstream.URL, func(err error) { logged <- err })
-	request := httptest.NewRequest(http.MethodPost, "http://proxy.test/execute", nil)
-	addLeaseHeaders(request, stateStore.state.LeaseFence)
+	handler := testHandler(t, stateStore, "http://127.0.0.1:1")
+	request := httptest.NewRequest(http.MethodPost, "http://proxy.test"+DefaultCompletionPath,
+		strings.NewReader(`{"requestId":"request-1","fence":{"incarnation":"11111111-1111-4111-8111-111111111111","epoch":7},"outcome":"abandoned"}`))
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
 
-	select {
-	case err := <-logged:
-		if !strings.Contains(err.Error(), "database unavailable") {
-			t.Fatalf("log = %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("completion failure was not reported")
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d", response.Code)
 	}
 }
 
 func testHandler(t *testing.T, stateStore StateStore, upstream string) *Handler {
-	t.Helper()
-	return testHandlerWithLog(t, stateStore, upstream, func(error) {})
-}
-
-func testHandlerWithLog(t *testing.T, stateStore StateStore, upstream string, errorLog func(error)) *Handler {
 	t.Helper()
 	target, err := url.Parse(upstream)
 	if err != nil {
@@ -237,7 +257,6 @@ func testHandlerWithLog(t *testing.T, stateStore StateStore, upstream string, er
 	handler, err := New(stateStore, Config{
 		Upstream: target, Workload: control.WorkloadMedia,
 		ExecutionRoutes: []Route{{Method: http.MethodPost, Path: "/execute"}},
-		ErrorLog: errorLog,
 	})
 	if err != nil {
 		t.Fatal(err)
