@@ -22,8 +22,7 @@ const REQUIRED_FILES = [
   '.github/rulesets/release-tag-creation.json',
 ];
 
-function inspect(files) {
-  const failures = [];
+function scanWorkflows(files, failures) {
   const workflows = {};
   for (const path of REQUIRED_FILES) {
     if (typeof files[path] !== 'string') failures.push(`Missing required file: ${path}`);
@@ -60,6 +59,10 @@ function inspect(files) {
     }
   }
 
+  return workflows;
+}
+
+function createChecks(workflows, failures) {
   function event(path, name) {
     if (!Object.hasOwn(workflows[path]?.on || {}, name)) failures.push(`${path} lost event ${name}`);
   }
@@ -90,6 +93,11 @@ function inspect(files) {
       failures.push(`${path}/${jobId} changed gate commands: ${name}`);
     }
   }
+  return { event, job, step, exactRun };
+}
+
+function inspectCi(checks) {
+  const { event, job, step, exactRun } = checks;
   const pr = '.github/workflows/pr-validation.yml';
   event(pr, 'pull_request');
   for (const [id, target] of Object.entries({
@@ -139,6 +147,10 @@ function inspect(files) {
     'semgrep scan --config .semgrep.yml --exclude .semgrep.yml --error',
   ]);
 
+}
+
+function inspectAdditionalWorkflows(files, workflows, failures, checks) {
+  const { event, job, step } = checks;
   const main = '.github/workflows/main.yml';
   event(main, 'push');
   for (const id of ['quality', 'aislop', 'codeql']) job(main, id, `./.github/workflows/${id === 'quality' ? 'ci' : id}.yml`);
@@ -188,6 +200,9 @@ function inspect(files) {
   if (!files['sonar-project.properties']?.includes('sonar.go.coverage.reportPaths=coverage.out')) {
     failures.push('SonarQube lost Go coverage path');
   }
+}
+
+function inspectRulesets(files, failures) {
   const rulesets = {};
   for (const path of REQUIRED_FILES.filter(name => name.startsWith('.github/rulesets/'))) {
     try {
@@ -220,6 +235,9 @@ function inspect(files) {
   for (const type of ['update', 'deletion', 'non_fast_forward']) {
     if (!tagRules.some(rule => rule.type === type)) failures.push(`Release tags lost rule: ${type}`);
   }
+}
+
+function inspectScannerConfigs(files, failures) {
   try {
     const config = YAML.parse(files['.github/dependency-review-config.yml']);
     if (config['fail-on-severity'] !== 'high' ||
@@ -255,6 +273,16 @@ function inspect(files) {
   } catch (error) {
     if (files['.semgrep.yml']) failures.push(`Semgrep config is invalid: ${error.message}`);
   }
+}
+
+function inspect(files) {
+  const failures = [];
+  const workflows = scanWorkflows(files, failures);
+  const checks = createChecks(workflows, failures);
+  inspectCi(checks);
+  inspectAdditionalWorkflows(files, workflows, failures, checks);
+  inspectRulesets(files, failures);
+  inspectScannerConfigs(files, failures);
   return failures;
 }
 

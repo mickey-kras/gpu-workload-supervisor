@@ -135,35 +135,9 @@ func (c *Controller) Switch(ctx context.Context, target control.Workload, initia
 	if err != nil {
 		return c.fail(transitionID, state, current, err)
 	}
-	snapshot, err := c.observe(ctx)
-	if err != nil {
-		return c.fail(transitionID, state, current, fmt.Errorf("%w: observe before unload: %v", ErrRuntimeObservation, err))
-	}
-	active, err := observedWorkload(current, snapshot)
+	active, err := c.unloadForSwitch(ctx, transitionID, state.Phase, current, target)
 	if err != nil {
 		return c.fail(transitionID, state, current, err)
-	}
-	if active != control.WorkloadIdle && active != target {
-		if err := c.effect(ctx, transitionID, state.Phase, "stop "+string(active), func(actionCtx context.Context) error {
-			return c.runtime.Stop(actionCtx, active)
-		}); err != nil {
-			return c.fail(transitionID, state, current, err)
-		}
-	}
-	if active == control.WorkloadMedia && active != target {
-		if err := c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout)); err != nil {
-			return c.fail(transitionID, state, current, err)
-		}
-	}
-	if target == control.WorkloadText && active == control.WorkloadIdle {
-		if err := c.effect(ctx, transitionID, state.Phase, "release media", func(actionCtx context.Context) error {
-			return c.runtime.Stop(actionCtx, control.WorkloadMedia)
-		}); err != nil {
-			return c.fail(transitionID, state, current, err)
-		}
-		if err := c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout)); err != nil {
-			return c.fail(transitionID, state, current, err)
-		}
 	}
 	state, err = c.setPhase(ctx, transitionID, state, control.PhaseLoading)
 	if err != nil {
@@ -194,6 +168,40 @@ func (c *Controller) Switch(ctx context.Context, target control.Workload, initia
 		final.Admission = control.AdmissionOpen
 	}
 	return c.store.FinishTransition(ctx, transitionID, "committed", state.Version, final)
+}
+
+func (c *Controller) unloadForSwitch(ctx context.Context, transitionID string, phase control.Phase, current control.State, target control.Workload) (control.Workload, error) {
+	snapshot, err := c.observe(ctx)
+	if err != nil {
+		return control.WorkloadUnknown, fmt.Errorf("%w: observe before unload: %v", ErrRuntimeObservation, err)
+	}
+	active, err := observedWorkload(current, snapshot)
+	if err != nil {
+		return control.WorkloadUnknown, err
+	}
+	if active != control.WorkloadIdle && active != target {
+		if err := c.effect(ctx, transitionID, phase, "stop "+string(active), func(actionCtx context.Context) error {
+			return c.runtime.Stop(actionCtx, active)
+		}); err != nil {
+			return active, err
+		}
+	}
+	if active == control.WorkloadMedia && active != target {
+		if err := c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout)); err != nil {
+			return active, err
+		}
+	}
+	if target == control.WorkloadText && active == control.WorkloadIdle {
+		if err := c.effect(ctx, transitionID, phase, "release media", func(actionCtx context.Context) error {
+			return c.runtime.Stop(actionCtx, control.WorkloadMedia)
+		}); err != nil {
+			return active, err
+		}
+		if err := c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout)); err != nil {
+			return active, err
+		}
+	}
+	return active, nil
 }
 
 func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
