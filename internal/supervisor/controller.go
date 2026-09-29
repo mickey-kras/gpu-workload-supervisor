@@ -77,10 +77,17 @@ func (c *Controller) Status(ctx context.Context) (control.State, error) {
 	}
 	snapshot, err := c.observe(ctx)
 	if err != nil {
-		return c.latchObservationFailure(ctx, state, fmt.Errorf("observe runtime: %w", err))
+		cause := fmt.Errorf("observe runtime: %w", err)
+		if state.Owner == control.OwnerUser {
+			return state, cause
+		}
+		return c.latchObservationFailure(ctx, state, cause)
 	}
 	active, err := observedWorkload(state, snapshot)
 	if err != nil {
+		if state.Owner == control.OwnerUser {
+			return state, err
+		}
 		return c.latchObservationFailure(ctx, state, err)
 	}
 	state.ActiveWorkload = active
@@ -148,6 +155,16 @@ func (c *Controller) Switch(ctx context.Context, target control.Workload, initia
 			return c.fail(transitionID, state, current, err)
 		}
 	}
+	if target == control.WorkloadText && active != control.WorkloadMedia {
+		if err := c.effect(ctx, transitionID, state.Phase, "release media", func(actionCtx context.Context) error {
+			return c.runtime.Stop(actionCtx, control.WorkloadMedia)
+		}); err != nil {
+			return c.fail(transitionID, state, current, err)
+		}
+		if err := c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout)); err != nil {
+			return c.fail(transitionID, state, current, err)
+		}
+	}
 	state, err = c.setPhase(ctx, transitionID, state, control.PhaseLoading)
 	if err != nil {
 		return c.fail(transitionID, state, current, err)
@@ -208,7 +225,7 @@ func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
 	if err != nil {
 		return c.latchObservationFailure(ctx, state, err)
 	}
-	if state.ActiveWorkload == control.WorkloadMedia {
+	if !snapshot.TextActive {
 		if err := c.runAction(ctx, func(actionCtx context.Context) error {
 			return c.runtime.Stop(actionCtx, control.WorkloadMedia)
 		}); err != nil {
