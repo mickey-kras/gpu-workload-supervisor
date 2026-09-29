@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
@@ -106,4 +107,52 @@ func (s *Store) FinishWorkFenced(ctx context.Context, requestID string, workload
 		return ErrStaleFence
 	}
 	return sql.ErrNoRows
+}
+
+const prunableWorkIDs = `SELECT work.request_id FROM registered_work AS work
+	WHERE work.completed_at IS NOT NULL
+	  AND work.completed_at < ?
+	  AND unixepoch(work.completed_at) < unixepoch(?)
+	  AND NOT EXISTS (
+		SELECT 1 FROM transition_work AS snapshot
+		JOIN transitions AS tr ON tr.transition_id = snapshot.transition_id
+		WHERE snapshot.request_id = work.request_id AND tr.status = 'in_progress'
+	  )
+	ORDER BY work.completed_at, work.request_id LIMIT ?`
+
+// PruneCompletedWork removes at most limit old terminal work records. It also
+// removes their terminal transition_work links, but keeps transition events and
+// transition records. Active work and snapshots of running transitions remain.
+// The text comparison uses the completed_at index; unixepoch prevents a
+// fractional timestamp later in the cutoff second from sorting before a "Z".
+func (s *Store) PruneCompletedWork(ctx context.Context, before time.Time, limit int) (int64, error) {
+	if before.IsZero() {
+		return 0, errors.New("retention cutoff is required")
+	}
+	if limit < 1 || limit > 1024 {
+		return 0, errors.New("prune limit must be between 1 and 1024")
+	}
+	cutoff := formatTime(before)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM transition_work
+		WHERE request_id IN (`+prunableWorkIDs+`)`, cutoff, cutoff, limit); err != nil {
+		return 0, fmt.Errorf("prune terminal transition snapshots: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM registered_work
+		WHERE request_id IN (`+prunableWorkIDs+`)`, cutoff, cutoff, limit)
+	if err != nil {
+		return 0, fmt.Errorf("prune completed work: %w", err)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return deleted, nil
 }
