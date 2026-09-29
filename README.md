@@ -40,7 +40,7 @@ go vet ./...
 
 ## Local CLI
 
-Runtime identity is deployment configuration. Unit names and endpoints are required:
+Runtime identity is deployment configuration. Unit names, endpoints, and a measured post-release GPU-memory threshold are required:
 
 ```sh
 gpu-mode \
