@@ -13,12 +13,12 @@ import (
 )
 
 var (
-	ErrUserOwned         = errors.New("GPU is in user control mode")
-	ErrTransitionRunning = errors.New("another transition is running")
-	ErrDrainTimeout      = errors.New("timed out waiting for admitted work")
-	ErrVerifyTimeout     = errors.New("timed out verifying workload")
-	ErrRecoveryRequired  = errors.New("explicit recovery is required")
-	ErrInvariant         = errors.New("observed runtime violates control state")
+	ErrUserOwned          = errors.New("GPU is in user control mode")
+	ErrTransitionRunning  = errors.New("another transition is running")
+	ErrDrainTimeout       = errors.New("timed out waiting for admitted work")
+	ErrVerifyTimeout      = errors.New("timed out verifying workload")
+	ErrRecoveryRequired   = errors.New("explicit recovery is required")
+	ErrInvariant          = errors.New("observed runtime violates control state")
 	ErrRuntimeObservation = errors.New("runtime observation failed")
 	ErrStateVerification  = errors.New("runtime state verification failed")
 	ErrHealthCheck        = errors.New("runtime health check failed")
