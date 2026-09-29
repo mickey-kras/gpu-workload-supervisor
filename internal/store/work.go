@@ -9,19 +9,74 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
-func (s *Store) CompleteWorkFenced(ctx context.Context, requestID string, fence control.Fence) error {
+var ErrRequestConflict = errors.New("request id already exists")
+
+type WorkOutcome string
+
+const (
+	WorkCompleted WorkOutcome = "completed"
+	WorkAbandoned WorkOutcome = "abandoned"
+)
+
+func (s *Store) AdmitWork(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence) error {
+	if requestID == "" {
+		return errors.New("request id is empty")
+	}
+	if workload != control.WorkloadText && workload != control.WorkloadMedia {
+		return errors.New("workload must be text or media")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	state, err := readState(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if state.LeaseFence != fence {
+		return ErrStaleFence
+	}
+	if state.Admission != control.AdmissionOpen || state.Phase != control.PhaseStable || state.Health != control.HealthHealthy {
+		return ErrAdmissionClosed
+	}
+	if state.ActiveWorkload != workload || state.DesiredWorkload != workload {
+		return ErrWorkloadMismatch
+	}
+	result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO registered_work
+		(request_id, job_id, workload, lease_incarnation, lease_epoch, registered_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		requestID, nullable(jobID), workload, fence.Incarnation, fence.Epoch, formatTime(s.now()))
+	if err != nil {
+		return fmt.Errorf("admit work: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed != 1 {
+		return ErrRequestConflict
+	}
+	return tx.Commit()
+}
+
+func (s *Store) FinishWorkFenced(ctx context.Context, requestID string, fence control.Fence, outcome WorkOutcome) error {
 	if requestID == "" {
 		return errors.New("request id is empty")
 	}
 	if err := fence.Validate(); err != nil {
 		return fmt.Errorf("invalid fence: %w", err)
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE registered_work SET completed_at = ?
+	if outcome != WorkCompleted && outcome != WorkAbandoned {
+		return errors.New("invalid work outcome")
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE registered_work
+		SET completed_at = ?, completion_outcome = ?
 		WHERE request_id = ? AND completed_at IS NULL
 		  AND lease_incarnation = ? AND lease_epoch = ?`,
-		formatTime(s.now()), requestID, fence.Incarnation, fence.Epoch)
+		formatTime(s.now()), outcome, requestID, fence.Incarnation, fence.Epoch)
 	if err != nil {
-		return fmt.Errorf("complete work: %w", err)
+		return fmt.Errorf("finish work: %w", err)
 	}
 	changed, err := result.RowsAffected()
 	if err != nil {
@@ -44,4 +99,8 @@ func (s *Store) CompleteWorkFenced(ctx context.Context, requestID string, fence 
 		return ErrStaleFence
 	}
 	return sql.ErrNoRows
+}
+
+func (s *Store) CompleteWorkFenced(ctx context.Context, requestID string, fence control.Fence) error {
+	return s.FinishWorkFenced(ctx, requestID, fence, WorkCompleted)
 }
