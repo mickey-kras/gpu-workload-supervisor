@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
@@ -28,19 +29,30 @@ func main() {
 func run() error {
 	flags := flag.NewFlagSet("gpu-mode", flag.ContinueOnError)
 	statePath := flags.String("state", defaultStatePath(), "SQLite state path")
-	textUnit := flags.String("text-unit", "llm-server.service", "systemd user unit for text inference")
-	mediaUnit := flags.String("media-unit", "comfyui.service", "systemd user unit for media inference")
-	textHealth := flags.String("text-health-url", "http://127.0.0.1:8080/health", "text runtime health URL")
-	mediaHealth := flags.String("media-health-url", "http://127.0.0.1:8188/", "media runtime health URL")
-	healthTimeout := flags.Duration("health-timeout", 10*time.Second, "runtime health timeout")
+	textUnit := flags.String("text-unit", "", "systemd user unit for text inference")
+	mediaUnit := flags.String("media-unit", "", "systemd user unit for the media UI")
+	textHealth := flags.String("text-health-url", "", "loopback text runtime health URL")
+	mediaHealth := flags.String("media-health-url", "", "loopback media runtime health URL")
+	mediaRelease := flags.String("media-release-url", "", "loopback media model release URL")
+	healthTimeout := flags.Duration("health-timeout", 10*time.Second, "individual health request timeout")
 	drainTimeout := flags.Duration("drain-timeout", 5*time.Minute, "admitted-work drain timeout")
-	pollInterval := flags.Duration("poll-interval", 250*time.Millisecond, "drain polling interval")
+	verifyTimeout := flags.Duration("verify-timeout", 5*time.Minute, "runtime readiness timeout")
+	cleanupTimeout := flags.Duration("cleanup-timeout", 2*time.Minute, "failure cleanup timeout")
+	pollInterval := flags.Duration("poll-interval", 250*time.Millisecond, "drain and readiness polling interval")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 1 {
-		return errors.New("usage: gpu-mode [flags] status|reconcile|text|media|idle")
+		return errors.New("usage: gpu-mode [flags] status|reconcile|recover|text|media|idle")
 	}
+	if *textUnit == "" || *mediaUnit == "" || *textHealth == "" || *mediaHealth == "" || *mediaRelease == "" {
+		return errors.New("runtime unit and endpoint flags are required")
+	}
+	processLock, err := lock.Acquire(*statePath + ".lock")
+	if err != nil {
+		return err
+	}
+	defer processLock.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	stateStore, err := store.Open(ctx, *statePath)
@@ -51,14 +63,14 @@ func run() error {
 	runtimeManager, err := gpuruntime.NewSystemdManager(gpuruntime.SystemdConfig{
 		TextUnit: *textUnit, MediaUnit: *mediaUnit,
 		TextHealthURL: *textHealth, MediaHealthURL: *mediaHealth,
-		HealthTimeout: *healthTimeout,
+		MediaReleaseURL: *mediaRelease, HealthTimeout: *healthTimeout,
 	})
 	if err != nil {
 		return err
 	}
 	controller, err := supervisor.New(stateStore, runtimeManager, supervisor.Config{
-		DrainTimeout: *drainTimeout,
-		PollInterval: *pollInterval,
+		DrainTimeout: *drainTimeout, VerifyTimeout: *verifyTimeout,
+		CleanupTimeout: *cleanupTimeout, PollInterval: *pollInterval,
 	})
 	if err != nil {
 		return err
@@ -69,6 +81,8 @@ func run() error {
 		state, err = controller.Status(ctx)
 	case "reconcile":
 		state, err = controller.Reconcile(ctx)
+	case "recover":
+		state, err = controller.Recover(ctx)
 	case "text":
 		state, err = controller.Switch(ctx, control.WorkloadText, "local-cli")
 	case "media":
