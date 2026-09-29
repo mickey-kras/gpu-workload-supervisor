@@ -17,13 +17,13 @@ import (
 )
 
 type fakeStore struct {
-	mu         sync.Mutex
-	state      control.State
-	admitErr   error
-	finishErr  error
-	admitted   []string
-	finished   []string
-	outcomes   []store.WorkOutcome
+	mu		sync.Mutex
+	state		control.State
+	admitErr	error
+	finishErr	error
+	admitted	[]string
+	finished	[]string
+	outcomes	[]store.WorkOutcome
 }
 
 func (f *fakeStore) State(context.Context) (control.State, error) {
