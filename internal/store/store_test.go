@@ -182,6 +182,14 @@ func TestMigratesV1WithoutChangingPersistedState(t *testing.T) {
 	if version != 4 || work != 1 || transitions != 1 || events != 1 {
 		t.Fatalf("migration result version=%d work=%d transitions=%d events=%d", version, work, transitions, events)
 	}
+	var completedAt, outcome string
+	if err := stateStore.db.QueryRow(`SELECT COALESCE(completed_at, ''), COALESCE(completion_outcome, '')
+		FROM registered_work WHERE request_id = 'request-1'`).Scan(&completedAt, &outcome); err != nil {
+		t.Fatal(err)
+	}
+	if completedAt == "" || outcome != string(WorkAbandoned) {
+		t.Fatalf("legacy work was not reconciled: completed=%q outcome=%q", completedAt, outcome)
+	}
 }
 
 func TestFailedV2MigrationRollsBack(t *testing.T) {
