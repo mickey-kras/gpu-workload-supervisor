@@ -49,6 +49,10 @@ gpu-mode \
   -text-health-url http://127.0.0.1:PORT/health \
   -media-health-url http://127.0.0.1:PORT/ \
   -media-release-url http://127.0.0.1:PORT/free \
+  -gpu-index 0 \
+  -release-max-used-mib LIMIT \
+  -nvidia-smi /ABSOLUTE/PATH/nvidia-smi \
+  -systemctl /ABSOLUTE/PATH/systemctl \
   status|reconcile|recover|text|media|idle
 ```
 
