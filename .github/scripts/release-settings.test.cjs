@@ -55,6 +55,12 @@ test('rejects a ruleset revision newer than the owner review', async () => {
   await assert.rejects(verify(input), /update RELEASE_SETTINGS_REVIEW/);
 });
 
+test('accepts equivalent timestamp offsets from the API', async () => {
+  const input = fixture();
+  input.rules[0].updated_at = '2026-09-29T19:47:50.000Z';
+  await verify(input);
+});
+
 test('rejects missing required release branch checks', async () => {
   const input = fixture();
   input.rules[1].rules.find(rule => rule.type === 'required_status_checks')

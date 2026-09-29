@@ -31,8 +31,10 @@ function verifyRule(rule, spec, review) {
     `${name}: missing active protection`);
   assert.deepEqual(rule.conditions?.ref_name, { exclude: [], include: [include] },
     `${name}: changed ref targets`);
-  requireValue(typeof rule.updated_at === 'string' &&
-    review.rulesets[rule.id] === rule.updated_at, `${name}: update RELEASE_SETTINGS_REVIEW after reviewing this revision`);
+  const reviewedAt = review.rulesets[rule.id];
+  requireValue(typeof rule.updated_at === 'string' && typeof reviewedAt === 'string' &&
+    Date.parse(reviewedAt) === Date.parse(rule.updated_at),
+  `${name}: update RELEASE_SETTINGS_REVIEW after reviewing this revision`);
   const expectedActor = bypass ? [{ actor_id: RELEASE_APP_ACTOR_ID,
     actor_type: 'Integration', bypass_mode: 'always' }] : [];
   if (Object.hasOwn(rule, 'bypass_actors')) {
