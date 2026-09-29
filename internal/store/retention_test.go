@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"testing"
 	"time"
 
@@ -159,7 +158,7 @@ func TestPruneCompletedWorkIsBoundedAndHonorsCutoff(t *testing.T) {
 		t.Fatal("accepted zero cutoff")
 	}
 	var remaining int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM registered_work WHERE completed_at IS NOT NULL`).Scan(&remaining); err != nil && err != sql.ErrNoRows {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM registered_work WHERE completed_at IS NOT NULL`).Scan(&remaining); err != nil {
 		t.Fatal(err)
 	}
 	if remaining != 0 {
