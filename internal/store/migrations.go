@@ -70,7 +70,12 @@ ALTER TABLE registered_work
 ADD COLUMN workload TEXT CHECK (workload IN ('text', 'media'));
 `
 
-var migrations = []string{schemaV1, schemaV2, schemaV3}
+const schemaV4 = `
+ALTER TABLE registered_work
+ADD COLUMN completion_outcome TEXT CHECK (completion_outcome IN ('completed', 'abandoned'));
+`
+
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4}
 
 func (s *Store) initialize(ctx context.Context) error {
 	for _, pragma := range []string{
