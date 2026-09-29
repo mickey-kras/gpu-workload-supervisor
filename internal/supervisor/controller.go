@@ -72,14 +72,11 @@ func (c *Controller) Status(ctx context.Context) (control.State, error) {
 	}
 	snapshot, err := c.runtime.Observe(ctx)
 	if err != nil {
-		return state, fmt.Errorf("observe runtime: %w", err)
+		return c.latchObservationFailure(ctx, state, fmt.Errorf("observe runtime: %w", err))
 	}
 	active, err := observedWorkload(state, snapshot)
 	if err != nil {
-		state.ActiveWorkload = control.WorkloadUnknown
-		state.Health = control.HealthError
-		state.Admission = control.AdmissionClosed
-		return state, err
+		return c.latchObservationFailure(ctx, state, err)
 	}
 	state.ActiveWorkload = active
 	return state, nil
@@ -201,6 +198,11 @@ func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
 	if err != nil {
 		return c.latchObservationFailure(ctx, state, err)
 	}
+	if state.ActiveWorkload == control.WorkloadMedia {
+		if err := c.runtime.Stop(ctx, control.WorkloadMedia); err != nil {
+			return c.latchObservationFailure(ctx, state, err)
+		}
+	}
 	state.Owner = control.OwnerSupervisor
 	state.Phase = control.PhaseStable
 	state.Health = control.HealthHealthy
@@ -230,6 +232,11 @@ func (c *Controller) Recover(ctx context.Context) (control.State, error) {
 	snapshot, err := c.runtime.Observe(ctx)
 	if err != nil {
 		return state, err
+	}
+	if !snapshot.TextActive {
+		if err := c.runtime.Stop(ctx, control.WorkloadMedia); err != nil {
+			return state, err
+		}
 	}
 	final := state
 	final.Owner = control.OwnerSupervisor
@@ -385,7 +392,7 @@ func (c *Controller) rollback(ctx context.Context, transitionID string, previous
 				return err
 			}
 		}
-		return c.waitReady(ctx, control.WorkloadText, time.Now().Add(c.config.CleanupTimeout))
+		return c.waitReady(ctx, control.WorkloadText, c.now().Add(c.config.CleanupTimeout))
 	case control.WorkloadMedia:
 		if snapshot.TextActive {
 			if err := c.effect(ctx, transitionID, control.PhaseReconciling, "rollback stop text", func() error {
@@ -401,7 +408,7 @@ func (c *Controller) rollback(ctx context.Context, transitionID string, previous
 				return err
 			}
 		}
-		return c.waitReady(ctx, control.WorkloadMedia, time.Now().Add(c.config.CleanupTimeout))
+		return c.waitReady(ctx, control.WorkloadMedia, c.now().Add(c.config.CleanupTimeout))
 	default:
 		if snapshot.TextActive {
 			return c.effect(ctx, transitionID, control.PhaseReconciling, "rollback stop text", func() error {
