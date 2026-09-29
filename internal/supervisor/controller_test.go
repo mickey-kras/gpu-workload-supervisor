@@ -20,6 +20,7 @@ type fakeRuntime struct {
 	stopErr         error
 	releaseFailures int
 	cancelOnStop    func()
+	blockStop       bool
 	calls           []string
 }
 
@@ -44,8 +45,12 @@ func (r *fakeRuntime) Start(_ context.Context, workload control.Workload) error 
 	return nil
 }
 
-func (r *fakeRuntime) Stop(_ context.Context, workload control.Workload) error {
+func (r *fakeRuntime) Stop(ctx context.Context, workload control.Workload) error {
 	r.calls = append(r.calls, "stop "+string(workload))
+	if r.blockStop {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	if r.cancelOnStop != nil {
 		r.cancelOnStop()
 	}
@@ -205,6 +210,7 @@ func testController(t *testing.T, stateStore StateStore, runtime gpuruntime.Mana
 	t.Helper()
 	controller, err := newController(stateStore, runtime, Config{
 		DrainTimeout: time.Second, VerifyTimeout: time.Second,
+		ActionTimeout: time.Second,
 		CleanupTimeout: time.Second, FinalizeTimeout: time.Second,
 		PollInterval: time.Millisecond,
 	}, time.Now, func() (string, error) {
@@ -292,6 +298,30 @@ func TestCanceledSwitchClosesTransitionAfterRollbackTimeout(t *testing.T) {
 	runtime.cancelOnStop = cancel
 	if _, err := controller.Switch(ctx, control.WorkloadMedia, "test"); err == nil {
 		t.Fatal("expected canceled switch")
+	}
+	running, err := stateStore.InProgressTransition(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if running != "" {
+		t.Fatalf("transition remains in progress: %s", running)
+	}
+}
+
+func TestRuntimeActionTimeoutClosesTransition(t *testing.T) {
+	stateStore := openStore(t)
+	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true, blockStop: true}
+	controller := testController(t, stateStore, runtime)
+	controller.config.ActionTimeout = time.Millisecond
+	if _, err := controller.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state, err := controller.Switch(context.Background(), control.WorkloadMedia, "test")
+	if err == nil {
+		t.Fatal("expected action timeout")
+	}
+	if state.Health != control.HealthError || state.Admission != control.AdmissionClosed {
+		t.Fatalf("unsafe failed state = %#v", state)
 	}
 	running, err := stateStore.InProgressTransition(context.Background())
 	if err != nil {
