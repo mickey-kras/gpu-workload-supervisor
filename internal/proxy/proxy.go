@@ -135,23 +135,8 @@ func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, st
 	if config.Workload != control.WorkloadText && config.Workload != control.WorkloadMedia {
 		return nil, nil, "", errors.New("workload must be text or media")
 	}
-	requestIDHeader, fenceIDHeader, fenceEpochHeader := config.RequestIDHeader, config.FenceIDHeader, config.FenceEpochHeader
-	if requestIDHeader == "" {
-		requestIDHeader = DefaultRequestIDHeader
-	}
-	if fenceIDHeader == "" {
-		fenceIDHeader = DefaultFenceIDHeader
-	}
-	if fenceEpochHeader == "" {
-		fenceEpochHeader = DefaultFenceEpochHeader
-	}
-	headers := []string{requestIDHeader, fenceIDHeader, fenceEpochHeader, DefaultRegistrationTokenHeader}
-	for i, header := range headers {
-		for _, previous := range headers[:i] {
-			if strings.EqualFold(header, previous) {
-				return nil, nil, "", errors.New("request ID, fence, and registration token headers must be distinct")
-			}
-		}
+	if err := validateDistinctControlHeaders(config); err != nil {
+		return nil, nil, "", err
 	}
 	executionRoutes, err := routeSet(config.ExecutionRoutes, true)
 	if err != nil {
@@ -181,6 +166,28 @@ func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, st
 		}
 	}
 	return executionRoutes, passthroughRoutes, completionPath, nil
+}
+
+func validateDistinctControlHeaders(config Config) error {
+	requestIDHeader, fenceIDHeader, fenceEpochHeader := config.RequestIDHeader, config.FenceIDHeader, config.FenceEpochHeader
+	if requestIDHeader == "" {
+		requestIDHeader = DefaultRequestIDHeader
+	}
+	if fenceIDHeader == "" {
+		fenceIDHeader = DefaultFenceIDHeader
+	}
+	if fenceEpochHeader == "" {
+		fenceEpochHeader = DefaultFenceEpochHeader
+	}
+	headers := []string{requestIDHeader, fenceIDHeader, fenceEpochHeader, DefaultRegistrationTokenHeader}
+	for i, header := range headers {
+		for _, previous := range headers[:i] {
+			if strings.EqualFold(header, previous) {
+				return errors.New("request ID, fence, and registration token headers must be distinct")
+			}
+		}
+	}
+	return nil
 }
 
 func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
