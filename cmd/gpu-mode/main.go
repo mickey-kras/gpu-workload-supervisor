@@ -38,6 +38,7 @@ func run() error {
 	releaseMaxMiB := flags.Uint64("release-max-used-mib", 0, "maximum used GPU memory after media release")
 	nvidiaSMIPath := flags.String("nvidia-smi", "", "absolute path to the trusted nvidia-smi executable")
 	healthTimeout := flags.Duration("health-timeout", 10*time.Second, "individual health request timeout")
+	actionTimeout := flags.Duration("action-timeout", 2*time.Minute, "runtime start or stop timeout")
 	drainTimeout := flags.Duration("drain-timeout", 5*time.Minute, "admitted-work drain timeout")
 	verifyTimeout := flags.Duration("verify-timeout", 5*time.Minute, "runtime readiness timeout")
 	cleanupTimeout := flags.Duration("cleanup-timeout", 2*time.Minute, "failure rollback timeout")
@@ -76,6 +77,7 @@ func run() error {
 	}
 	controller, err := supervisor.New(stateStore, runtimeManager, supervisor.Config{
 		DrainTimeout: *drainTimeout, VerifyTimeout: *verifyTimeout,
+		ActionTimeout: *actionTimeout,
 		CleanupTimeout: *cleanupTimeout, FinalizeTimeout: *finalizeTimeout,
 		PollInterval: *pollInterval,
 	})
