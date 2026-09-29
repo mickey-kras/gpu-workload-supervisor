@@ -76,6 +76,17 @@ func TestSwitchStopsTextBeforeStartingMedia(t *testing.T) {
 		t.Fatalf("state = %#v", state)
 	}
 	assertCalls(t, runtime.calls, "stop text", "start media")
+	events, err := stateStore.TransitionEvents(context.Background(), "11111111-1111-4111-8111-111111111111")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 4 ||
+		events[0].Kind != "intent" || events[0].Action != "stop text" ||
+		events[1].Kind != "observation" || events[1].Outcome != "ok" ||
+		events[2].Kind != "intent" || events[2].Action != "start media" ||
+		events[3].Kind != "observation" || events[3].Outcome != "ok" {
+		t.Fatalf("events = %#v", events)
+	}
 }
 
 func TestSwitchFailureRollsBackAndLatchesError(t *testing.T) {
@@ -201,4 +212,31 @@ func assertCalls(t *testing.T, actual []string, expected ...string) {
 			t.Fatalf("calls = %#v", actual)
 		}
 	}
+}
+
+func TestSwitchToIdleReleasesMediaWithoutStoppingUI(t *testing.T) {
+	stateStore := openStore(t)
+	runtime := &fakeRuntime{active: control.WorkloadMedia, mediaReady: true}
+	controller := testController(t, stateStore, runtime)
+	state, err := stateStore.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Owner = control.OwnerSupervisor
+	state.DesiredWorkload = control.WorkloadMedia
+	state.ActiveWorkload = control.WorkloadMedia
+	state.Phase = control.PhaseStable
+	state.Admission = control.AdmissionOpen
+	state, err = stateStore.UpdateState(context.Background(), state.Version, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := controller.Switch(context.Background(), control.WorkloadIdle, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ActiveWorkload != control.WorkloadIdle || result.Admission != control.AdmissionClosed {
+		t.Fatalf("state = %#v", result)
+	}
+	assertCalls(t, runtime.calls, "stop media")
 }
