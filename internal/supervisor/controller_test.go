@@ -210,7 +210,7 @@ func testController(t *testing.T, stateStore StateStore, runtime gpuruntime.Mana
 	t.Helper()
 	controller, err := newController(stateStore, runtime, Config{
 		DrainTimeout: time.Second, VerifyTimeout: time.Second,
-		ActionTimeout: time.Second,
+		ActionTimeout:  time.Second,
 		CleanupTimeout: time.Second, FinalizeTimeout: time.Second,
 		PollInterval: time.Millisecond,
 	}, time.Now, func() (string, error) {
