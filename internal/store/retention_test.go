@@ -133,7 +133,6 @@ func TestPruneCompletedWorkPreservesActiveAndRunningSnapshot(t *testing.T) {
 	}
 }
 
-
 func TestPruneKeepsCurrentFenceRequestIDsUntilRotation(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
