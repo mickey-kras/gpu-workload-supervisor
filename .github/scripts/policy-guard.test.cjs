@@ -10,14 +10,10 @@ function files() {
       result[`.github/workflows/${name}`] = readFileSync(`.github/workflows/${name}`, 'utf8');
     }
   }
-  for (const name of readdirSync('.github/rulesets')) {
-    if (name.endsWith('.json')) {
-      result[`.github/rulesets/${name}`] = readFileSync(`.github/rulesets/${name}`, 'utf8');
-    }
-  }
   for (const path of [
     '.github/dependabot.yml', '.github/scripts/policy-guard.cjs',
     '.github/scripts/dependabot-auto-merge.cjs', '.github/scripts/pr-branch-updater.cjs',
+    '.github/scripts/release-settings.cjs',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
     '.github/aislop/package.json', '.github/aislop/package-lock.json',
     '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
@@ -75,11 +71,11 @@ test('a boolean false condition cannot skip a required scanner', () => {
   assert.ok(inspect(candidate).some(error => error.includes('Gitleaks')));
 });
 
-test('required status checks cannot be removed from importable ruleset', () => {
+test('reviewed release settings cannot be skipped', () => {
   const candidate = files();
-  const path = '.github/rulesets/protect-default-branch.json';
-  candidate[path] = candidate[path].replace('dependency-review / dependency review', 'disabled review');
-  assert.ok(inspect(candidate).some(error => error.includes('Default branch lost required check')));
+  const path = '.github/workflows/release.yml';
+  candidate[path] = candidate[path].replace('await require(\'./.github/scripts/release-settings.cjs\').verify({', 'await Promise.resolve({');
+  assert.ok(inspect(candidate).some(error => error.includes('reviewed release settings verification')));
 });
 
 test('scanner policy cannot become empty while workflow remains active', () => {
