@@ -61,6 +61,9 @@ func (r *fakeRuntime) Stop(ctx context.Context, workload control.Workload) error
 	if r.active == workload {
 		r.active = control.WorkloadIdle
 	}
+	if workload == control.WorkloadMedia {
+		r.mediaReady = false
+	}
 	return nil
 }
 
@@ -86,7 +89,7 @@ func (r *fakeRuntime) Healthy(context.Context, control.Workload) error {
 
 func TestSwitchStopsTextBeforeStartingMedia(t *testing.T) {
 	stateStore := openStore(t)
-	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true}
+	runtime := &fakeRuntime{active: control.WorkloadText}
 	controller := testController(t, stateStore, runtime)
 	if _, err := controller.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
@@ -161,7 +164,7 @@ func TestSwitchRequiresReconciliationBeforeAnyTarget(t *testing.T) {
 
 func TestSwitchFailureRollsBackAndLatchesError(t *testing.T) {
 	stateStore := openStore(t)
-	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true, startErr: errors.New("start failed")}
+	runtime := &fakeRuntime{active: control.WorkloadText, startErr: errors.New("start failed")}
 	controller := testController(t, stateStore, runtime)
 	if _, err := controller.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
@@ -178,7 +181,7 @@ func TestSwitchFailureRollsBackAndLatchesError(t *testing.T) {
 
 func TestReadinessPollingAllowsDelayedHealth(t *testing.T) {
 	stateStore := openStore(t)
-	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true}
+	runtime := &fakeRuntime{active: control.WorkloadText}
 	controller := testController(t, stateStore, runtime)
 	if _, err := controller.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
@@ -195,7 +198,7 @@ func TestReadinessPollingAllowsDelayedHealth(t *testing.T) {
 
 func TestInterruptedTransitionRequiresExplicitRecovery(t *testing.T) {
 	stateStore := openStore(t)
-	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true}
+	runtime := &fakeRuntime{active: control.WorkloadText}
 	controller := testController(t, stateStore, runtime)
 	current, err := controller.Reconcile(context.Background())
 	if err != nil {
@@ -341,7 +344,7 @@ func TestSwitchWaitsForGPUReleaseBeforeStartingText(t *testing.T) {
 
 func TestCanceledSwitchClosesTransitionAfterRollbackTimeout(t *testing.T) {
 	stateStore := openStore(t)
-	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true}
+	runtime := &fakeRuntime{active: control.WorkloadText}
 	controller := testController(t, stateStore, runtime)
 	if _, err := controller.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
@@ -362,7 +365,7 @@ func TestCanceledSwitchClosesTransitionAfterRollbackTimeout(t *testing.T) {
 
 func TestRuntimeActionTimeoutClosesTransition(t *testing.T) {
 	stateStore := openStore(t)
-	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true, blockStop: true}
+	runtime := &fakeRuntime{active: control.WorkloadText, blockStop: true}
 	controller := testController(t, stateStore, runtime)
 	controller.config.ActionTimeout = time.Millisecond
 	if _, err := controller.Reconcile(context.Background()); err != nil {
@@ -486,7 +489,7 @@ func TestSwitchIsIdempotent(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			stateStore := openStore(t)
-			runtime := &fakeRuntime{active: test.workload, mediaReady: true, blockRelease: true}
+			runtime := &fakeRuntime{active: test.workload, mediaReady: test.workload == control.WorkloadMedia, blockRelease: true}
 			controller := testController(t, stateStore, runtime)
 			state, err := stateStore.State(context.Background())
 			if err != nil {
