@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,6 +59,19 @@ func TestStateSurvivesReopen(t *testing.T) {
 	}
 	if reopened.LeaseFence != original.LeaseFence {
 		t.Fatalf("fence changed: %#v != %#v", reopened.LeaseFence, original.LeaseFence)
+	}
+}
+
+func TestInProgressTransitionLookupUsesPartialIndex(t *testing.T) {
+	s := testStore(t)
+	var id, parent, unused string
+	var detail string
+	if err := s.db.QueryRow(`EXPLAIN QUERY PLAN SELECT transition_id FROM transitions
+		WHERE status = 'in_progress' ORDER BY created_at, transition_id LIMIT 1`).Scan(&id, &parent, &unused, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(detail, "idx_transitions_in_progress_order") {
+		t.Fatalf("transition lookup plan = %q", detail)
 	}
 }
 

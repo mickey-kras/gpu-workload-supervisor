@@ -89,6 +89,15 @@ func openWithMode(ctx context.Context, path string, now Clock, uuid func() (stri
 		return nil, fmt.Errorf("connect sqlite: %w", err)
 	}
 	if restored {
+		var result string
+		if err := db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&result); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("check restored sqlite: %w", err)
+		}
+		if result != "ok" {
+			db.Close()
+			return nil, fmt.Errorf("sqlite quick_check: %s", result)
+		}
 		if err := validateRestoredDatabase(ctx, db); err != nil {
 			db.Close()
 			return nil, err

@@ -116,7 +116,12 @@ CREATE TABLE work_resolutions (
 );
 `
 
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8}
+const schemaV9 = `
+CREATE INDEX idx_transitions_in_progress_order
+ON transitions(created_at, transition_id) WHERE status = 'in_progress';
+`
+
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9}
 
 func (s *Store) initialize(ctx context.Context) error {
 	for _, pragma := range []string{
@@ -182,13 +187,6 @@ func (s *Store) initialize(ctx context.Context) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return err
-	}
-	var result string
-	if err := s.db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&result); err != nil {
-		return err
-	}
-	if result != "ok" {
-		return fmt.Errorf("sqlite quick_check: %s", result)
 	}
 	state, err := readState(ctx, s.db)
 	if err != nil {
