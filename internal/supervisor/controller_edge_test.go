@@ -135,6 +135,88 @@ func TestRecoveryVerifiesRuntimeBeforeOpeningAdmission(t *testing.T) {
 	}
 }
 
+func TestBothActiveRuntimesLatchAdmissionClosed(t *testing.T) {
+	for _, operation := range []struct {
+		name string
+		run  func(*Controller) (control.State, error)
+	}{
+		{"reconcile", func(c *Controller) (control.State, error) { return c.Reconcile(context.Background()) }},
+		{"recover", func(c *Controller) (control.State, error) { return c.Recover(context.Background()) }},
+	} {
+		t.Run(operation.name, func(t *testing.T) {
+			stateStore := openStore(t)
+			runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true, blockRelease: true}
+			controller := testController(t, stateStore, runtime)
+			state, err := operation.run(controller)
+			if !errors.Is(err, ErrInvariant) || state.ActiveWorkload != control.WorkloadUnknown ||
+				state.Health != control.HealthError || state.Admission != control.AdmissionClosed {
+				t.Fatalf("unsafe runtime conflict = %#v, error = %v", state, err)
+			}
+			persisted, err := stateStore.State(context.Background())
+			if err != nil || persisted != state {
+				t.Fatalf("runtime conflict was not latched = %#v, error = %v", persisted, err)
+			}
+			if len(runtime.calls) != 0 {
+				t.Fatalf("conflicting runtime was modified: %#v", runtime.calls)
+			}
+			if _, err := controller.Switch(context.Background(), control.WorkloadMedia, "test"); !errors.Is(err, ErrRecoveryRequired) {
+				t.Fatalf("switch after conflict = %v", err)
+			}
+			runtime.mediaReady = false // Operator resolves the conflicting media unit.
+			recovered, err := controller.Recover(context.Background())
+			if err != nil || recovered.ActiveWorkload != control.WorkloadText ||
+				recovered.Health != control.HealthHealthy || recovered.Admission != control.AdmissionOpen {
+				t.Fatalf("resolved conflict could not recover = %#v, error = %v", recovered, err)
+			}
+		})
+	}
+}
+
+func TestGPUReleaseFailureKeepsAdmissionClosed(t *testing.T) {
+	for _, operation := range []struct {
+		name string
+		run  func(*Controller) (control.State, error)
+	}{
+		{"reconcile", func(c *Controller) (control.State, error) { return c.Reconcile(context.Background()) }},
+		{"recover", func(c *Controller) (control.State, error) { return c.Recover(context.Background()) }},
+	} {
+		t.Run(operation.name, func(t *testing.T) {
+			stateStore := openStore(t)
+			runtime := &fakeRuntime{active: control.WorkloadIdle, blockRelease: true}
+			controller := testController(t, stateStore, runtime)
+			controller.config.ActionTimeout = time.Millisecond
+			controller.config.VerifyTimeout = time.Millisecond
+			state, err := operation.run(controller)
+			if !errors.Is(err, ErrVerifyTimeout) || state.Admission != control.AdmissionClosed {
+				t.Fatalf("unreleased GPU recovery = %#v, error = %v", state, err)
+			}
+			persisted, err := stateStore.State(context.Background())
+			if err != nil || persisted.Admission != control.AdmissionClosed {
+				t.Fatalf("GPU release failure opened admission = %#v, error = %v", persisted, err)
+			}
+			assertCalls(t, runtime.calls, "stop media")
+		})
+	}
+}
+
+func TestStatusAndReadinessRejectConflictingRuntime(t *testing.T) {
+	stateStore := openStore(t)
+	runtime := &fakeRuntime{active: control.WorkloadText}
+	controller := testController(t, stateStore, runtime)
+	if _, err := controller.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	runtime.mediaReady = true
+	state, err := controller.Status(context.Background())
+	if !errors.Is(err, ErrInvariant) || state.Health != control.HealthError ||
+		state.Admission != control.AdmissionClosed || state.ActiveWorkload != control.WorkloadUnknown {
+		t.Fatalf("status accepted conflicting runtime = %#v, error = %v", state, err)
+	}
+	if err := verifySnapshot(control.WorkloadText, gpuruntime.Snapshot{TextActive: true, MediaReady: true}); !errors.Is(err, ErrInvariant) {
+		t.Fatalf("text verification accepted conflicting runtime: %v", err)
+	}
+}
+
 func TestDrainDeadlineAndCancellationKeepWorkClosed(t *testing.T) {
 	stateStore := openStore(t)
 	runtime := &fakeRuntime{active: control.WorkloadText}
@@ -170,7 +252,7 @@ func TestReadinessRequiresObservedExclusiveOwner(t *testing.T) {
 	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true}
 	controller := testController(t, stateStore, runtime)
 	if err := controller.waitReady(context.Background(), control.WorkloadMedia, time.Now().Add(-time.Second)); !errors.Is(err, ErrVerifyTimeout) ||
-		!errors.Is(err, ErrStateVerification) {
+		!errors.Is(err, ErrInvariant) {
 		t.Fatalf("text owner accepted as media ready: %v", err)
 	}
 	runtime.active = control.WorkloadIdle
