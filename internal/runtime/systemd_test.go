@@ -17,6 +17,9 @@ type fakeRunner struct {
 	calls   []string
 }
 
+const mediaShowCommand = "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState -- media.service"
+const gpuMemoryCommand = "/usr/bin/true --query-gpu=memory.used --format=csv,noheader,nounits -i 0"
+
 func (r *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	call := strings.Join(append([]string{name}, args...), " ")
 	r.calls = append(r.calls, call)
@@ -90,12 +93,48 @@ func TestMediaStopUsesReleaseEndpoint(t *testing.T) {
 	config := testConfig()
 	config.MediaHealthURL = server.URL
 	config.MediaReleaseURL = server.URL + "/free"
-	manager, err := newSystemdManager(config, &fakeRunner{}, server.Client())
+	runner := &fakeRunner{outputs: map[string][]byte{
+		mediaShowCommand: []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
+	}}
+	manager, err := newSystemdManager(config, runner, server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.Stop(context.Background(), control.WorkloadMedia); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestInactiveMediaCanStopWithoutReleaseEndpointButStillRequiresGPUMemoryRelease(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	endpoint := server.URL + "/free"
+	server.Close()
+	config := testConfig()
+	config.MediaReleaseURL = endpoint
+	for _, test := range []struct {
+		name     string
+		usedMiB  string
+		released bool
+	}{
+		{name: "released", usedMiB: "900\n", released: true},
+		{name: "still allocated", usedMiB: "2048\n", released: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner := &fakeRunner{outputs: map[string][]byte{
+				mediaShowCommand: []byte("LoadState=loaded\nActiveState=inactive\nSubState=dead\n"),
+				gpuMemoryCommand:  []byte(test.usedMiB),
+			}}
+			manager, err := newSystemdManager(config, runner, http.DefaultClient)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.Stop(context.Background(), control.WorkloadMedia); err != nil {
+				t.Fatalf("stop inactive media: %v", err)
+			}
+			if got := manager.Released(context.Background()) == nil; got != test.released {
+				t.Fatalf("GPU release verification = %v, want %v", got, test.released)
+			}
+		})
 	}
 }
 

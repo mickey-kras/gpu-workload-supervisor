@@ -112,6 +112,53 @@ func TestSwitchStopsTextBeforeStartingMedia(t *testing.T) {
 	}
 }
 
+func TestSwitchRequiresReconciliationBeforeAnyTarget(t *testing.T) {
+	for _, target := range []control.Workload{control.WorkloadText, control.WorkloadMedia, control.WorkloadIdle} {
+		t.Run(string(target), func(t *testing.T) {
+			stateStore := openStore(t)
+			runtime := &fakeRuntime{mediaReady: true}
+			controller := testController(t, stateStore, runtime)
+			before, err := stateStore.State(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if before.Phase != control.PhaseReconciling || before.Health != control.HealthHealthy {
+				t.Fatalf("unexpected initial state = %#v", before)
+			}
+			state, err := controller.Switch(context.Background(), target, "test")
+			if !errors.Is(err, ErrReconcileRequired) || state != before {
+				t.Fatalf("unreconciled switch = %#v, error = %v", state, err)
+			}
+			after, err := stateStore.State(context.Background())
+			if err != nil || after != before {
+				t.Fatalf("unreconciled switch mutated state = %#v, error = %v", after, err)
+			}
+			if running, err := stateStore.InProgressTransition(context.Background()); err != nil || running != "" {
+				t.Fatalf("unreconciled switch created transition = %q, error = %v", running, err)
+			}
+			if len(runtime.calls) != 0 {
+				t.Fatalf("unreconciled switch changed runtime: %#v", runtime.calls)
+			}
+
+			reconciled, err := controller.Reconcile(context.Background())
+			if err != nil || reconciled.Phase != control.PhaseStable {
+				t.Fatalf("reconcile = %#v, error = %v", reconciled, err)
+			}
+			switched, err := controller.Switch(context.Background(), target, "test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			admission := control.AdmissionOpen
+			if target == control.WorkloadIdle {
+				admission = control.AdmissionClosed
+			}
+			if switched.ActiveWorkload != target || switched.Phase != control.PhaseStable || switched.Admission != admission {
+				t.Fatalf("reconciled switch = %#v", switched)
+			}
+		})
+	}
+}
+
 func TestSwitchFailureRollsBackAndLatchesError(t *testing.T) {
 	stateStore := openStore(t)
 	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true, startErr: errors.New("start failed")}
