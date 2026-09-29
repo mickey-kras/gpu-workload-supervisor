@@ -19,6 +19,7 @@ type fakeRuntime struct {
 	startErr        error
 	stopErr         error
 	releaseFailures int
+	blockRelease    bool
 	cancelOnStop    func()
 	blockStop       bool
 	calls           []string
@@ -63,7 +64,11 @@ func (r *fakeRuntime) Stop(ctx context.Context, workload control.Workload) error
 	return nil
 }
 
-func (r *fakeRuntime) Released(context.Context) error {
+func (r *fakeRuntime) Released(ctx context.Context) error {
+	if r.blockRelease {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	if r.releaseFailures > 0 {
 		r.releaseFailures--
 		return errors.New("GPU memory not released")
@@ -322,6 +327,39 @@ func TestRuntimeActionTimeoutClosesTransition(t *testing.T) {
 	}
 	if state.Health != control.HealthError || state.Admission != control.AdmissionClosed {
 		t.Fatalf("unsafe failed state = %#v", state)
+	}
+	running, err := stateStore.InProgressTransition(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if running != "" {
+		t.Fatalf("transition remains in progress: %s", running)
+	}
+}
+
+func TestReleaseProbeTimeoutClosesTransition(t *testing.T) {
+	stateStore := openStore(t)
+	runtime := &fakeRuntime{active: control.WorkloadMedia, mediaReady: true, blockRelease: true}
+	controller := testController(t, stateStore, runtime)
+	controller.config.ActionTimeout = time.Millisecond
+	state, err := stateStore.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.ActiveWorkload = control.WorkloadMedia
+	state.DesiredWorkload = control.WorkloadMedia
+	state.Phase = control.PhaseStable
+	state.Health = control.HealthHealthy
+	state.Admission = control.AdmissionOpen
+	if _, err := stateStore.UpdateState(context.Background(), state.Version, state); err != nil {
+		t.Fatal(err)
+	}
+	result, err := controller.Switch(context.Background(), control.WorkloadText, "test")
+	if err == nil {
+		t.Fatal("expected release probe timeout")
+	}
+	if result.Health != control.HealthError || result.Admission != control.AdmissionClosed {
+		t.Fatalf("unsafe failed state = %#v", result)
 	}
 	running, err := stateStore.InProgressTransition(context.Background())
 	if err != nil {
