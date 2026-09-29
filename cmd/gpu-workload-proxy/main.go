@@ -62,6 +62,7 @@ func run() error {
 	readHeaderTimeout := flags.Duration("read-header-timeout", 10*time.Second, "HTTP header read timeout")
 	idleTimeout := flags.Duration("idle-timeout", 2*time.Minute, "HTTP idle timeout")
 	shutdownTimeout := flags.Duration("shutdown-timeout", 30*time.Second, "graceful shutdown timeout")
+	completedWorkRetention := flags.Duration("completed-work-retention", 30*24*time.Hour, "time to keep completed work records")
 	var routes routesFlag
 	var passthroughRoutes routesFlag
 	flags.Var(&routes, "execute-route", "gated execution route as METHOD:/absolute/path; repeatable")
@@ -71,6 +72,9 @@ func run() error {
 	}
 	if flags.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
+	}
+	if *completedWorkRetention <= 0 {
+		return errors.New("completed-work-retention must be positive")
 	}
 	if err := validateLoopbackAddress(*listen); err != nil {
 		return err
@@ -120,6 +124,18 @@ func run() error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	maintenanceCtx, stopMaintenance := context.WithCancel(ctx)
+	maintenanceDone := make(chan struct{})
+	go func() {
+		defer close(maintenanceDone)
+		maintainCompletedWork(maintenanceCtx, stateStore, *completedWorkRetention, time.Hour, func(err error) {
+			log.Printf("completed work retention failed: %v", err)
+		})
+	}()
+	defer func() {
+		stopMaintenance()
+		<-maintenanceDone
+	}()
 	result := make(chan error, 1)
 	go func() {
 		err := server.ListenAndServe()

@@ -49,9 +49,10 @@ func run() error {
 		return err
 	}
 	if flags.NArg() != 1 {
-		return errors.New("usage: gpu-mode [flags] status|reconcile|recover|text|media|idle")
+		return errors.New("usage: gpu-mode [flags] restore-state|status|reconcile|recover|text|media|idle")
 	}
-	if *textUnit == "" || *mediaUnit == "" || *textHealth == "" || *mediaHealth == "" || *mediaRelease == "" || *releaseMaxMiB == 0 || *nvidiaSMIPath == "" || *systemctlPath == "" {
+	command := flags.Arg(0)
+	if command != "restore-state" && (*textUnit == "" || *mediaUnit == "" || *textHealth == "" || *mediaHealth == "" || *mediaRelease == "" || *releaseMaxMiB == 0 || *nvidiaSMIPath == "" || *systemctlPath == "") {
 		return errors.New("runtime units, endpoints, release threshold, and trusted executable paths are required")
 	}
 	processLock, err := lock.Acquire(*statePath + ".lock")
@@ -61,11 +62,23 @@ func run() error {
 	defer processLock.Close()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	if command == "restore-state" {
+		if _, err := os.Lstat(*statePath); err != nil {
+			return fmt.Errorf("restored state database must already exist: %w", err)
+		}
+	}
 	stateStore, err := store.Open(ctx, *statePath)
 	if err != nil {
 		return fmt.Errorf("open state store: %w", err)
 	}
 	defer stateStore.Close()
+	if command == "restore-state" {
+		restored, err := stateStore.RotateIncarnation(ctx)
+		if err != nil {
+			return fmt.Errorf("prepare restored state: %w", err)
+		}
+		return json.NewEncoder(os.Stdout).Encode(restored)
+	}
 	runtimeManager, err := gpuruntime.NewSystemdManager(gpuruntime.SystemdConfig{
 		TextUnit: *textUnit, MediaUnit: *mediaUnit,
 		TextHealthURL: *textHealth, MediaHealthURL: *mediaHealth,
@@ -86,7 +99,7 @@ func run() error {
 		return err
 	}
 	var state control.State
-	switch flags.Arg(0) {
+	switch command {
 	case "status":
 		state, err = controller.Status(ctx)
 	case "reconcile":
@@ -100,7 +113,7 @@ func run() error {
 	case "idle":
 		state, err = controller.Switch(ctx, control.WorkloadIdle, "local-cli")
 	default:
-		return fmt.Errorf("unknown command %q", flags.Arg(0))
+		return fmt.Errorf("unknown command %q", command)
 	}
 	if encodeErr := json.NewEncoder(os.Stdout).Encode(state); encodeErr != nil {
 		return errors.Join(err, encodeErr)
