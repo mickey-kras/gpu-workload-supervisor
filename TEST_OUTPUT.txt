@@ -1,0 +1,11 @@
+# github.com/mickey-kras/gpu-workload-supervisor/cmd/gpu-workload-proxy
+cmd/gpu-workload-proxy/main.go:104:3: unknown field ErrorLog in struct literal of type proxy.Config
+?   	github.com/mickey-kras/gpu-workload-supervisor/cmd/gpu-mode	[no test files]
+FAIL	github.com/mickey-kras/gpu-workload-supervisor/cmd/gpu-workload-proxy [build failed]
+?   	github.com/mickey-kras/gpu-workload-supervisor/internal/control	[no test files]
+ok  	github.com/mickey-kras/gpu-workload-supervisor/internal/lock	(cached)
+ok  	github.com/mickey-kras/gpu-workload-supervisor/internal/proxy	0.018s
+ok  	github.com/mickey-kras/gpu-workload-supervisor/internal/runtime	(cached)
+ok  	github.com/mickey-kras/gpu-workload-supervisor/internal/store	0.126s
+ok  	github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor	1.170s
+FAIL
