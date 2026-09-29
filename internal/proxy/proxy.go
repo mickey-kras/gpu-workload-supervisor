@@ -181,6 +181,9 @@ func validateDistinctControlHeaders(config Config) error {
 	}
 	headers := []string{requestIDHeader, fenceIDHeader, fenceEpochHeader, DefaultRegistrationTokenHeader}
 	for i, header := range headers {
+		if i < 3 && reservedTransportHeader(header) {
+			return errors.New("control header cannot be a hop-by-hop or transport header")
+		}
 		for _, previous := range headers[:i] {
 			if strings.EqualFold(header, previous) {
 				return errors.New("request ID, fence, and registration token headers must be distinct")
@@ -188,6 +191,16 @@ func validateDistinctControlHeaders(config Config) error {
 		}
 	}
 	return nil
+}
+
+func reservedTransportHeader(header string) bool {
+	switch http.CanonicalHeaderKey(header) {
+	case "Connection", "Keep-Alive", "Proxy-Connection", "Proxy-Authenticate",
+		"Proxy-Authorization", "Te", "Trailer", "Transfer-Encoding", "Upgrade",
+		"Host", "Content-Length":
+		return true
+	}
+	return false
 }
 
 func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
