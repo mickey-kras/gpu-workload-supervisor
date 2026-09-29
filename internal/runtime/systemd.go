@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +28,38 @@ func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte,
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
+var systemdUnitPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_.@-]*\.servicepackage runtime
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os/exec"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+)
+
+type CommandRunner interface {
+	Run(context.Context, string, ...string) ([]byte, error)
+}
+
+type ExecRunner struct{}
+
+func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+)
+
 type SystemdConfig struct {
 	TextUnit        string
 	MediaUnit       string
@@ -33,6 +67,8 @@ type SystemdConfig struct {
 	MediaHealthURL  string
 	MediaReleaseURL string
 	HealthTimeout   time.Duration
+	GPUIndex        int
+	ReleaseMaxMiB   uint64
 }
 
 type SystemdManager struct {
@@ -57,6 +93,12 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 	}
 	if config.TextUnit == config.MediaUnit {
 		return nil, errors.New("text and media units must differ")
+	}
+	if !systemdUnitPattern.MatchString(config.TextUnit) || !systemdUnitPattern.MatchString(config.MediaUnit) {
+		return nil, errors.New("invalid systemd unit name")
+	}
+	if config.GPUIndex < 0 || config.ReleaseMaxMiB == 0 {
+		return nil, errors.New("GPU index and release memory threshold are required")
 	}
 	if config.HealthTimeout <= 0 {
 		return nil, errors.New("health timeout must be greater than zero")
@@ -123,8 +165,23 @@ func (m *SystemdManager) Healthy(ctx context.Context, workload control.Workload)
 	}
 }
 
+func (m *SystemdManager) Released(ctx context.Context) error {
+	output, err := m.runner.Run(ctx, "nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits", "-i", strconv.Itoa(m.config.GPUIndex))
+	if err != nil {
+		return fmt.Errorf("query GPU memory: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	used, err := strconv.ParseUint(strings.TrimSpace(string(output)), 10, 64)
+	if err != nil {
+		return fmt.Errorf("parse GPU memory: %w", err)
+	}
+	if used > m.config.ReleaseMaxMiB {
+		return fmt.Errorf("GPU memory remains above release threshold: %d MiB", used)
+	}
+	return nil
+}
+
 func (m *SystemdManager) active(ctx context.Context, unit string) (bool, error) {
-	output, err := m.runner.Run(ctx, "systemctl", "--user", "show", unit,
+	output, err := m.runner.Run(ctx, "systemctl", "--user", "show", "--", unit,
 		"--property=LoadState", "--property=ActiveState", "--property=SubState")
 	if err != nil {
 		return false, fmt.Errorf("inspect %s: %w: %s", unit, err, strings.TrimSpace(string(output)))
@@ -153,7 +210,7 @@ func (m *SystemdManager) active(ctx context.Context, unit string) (bool, error) 
 }
 
 func (m *SystemdManager) runSystemctl(ctx context.Context, action, unit string) error {
-	output, err := m.runner.Run(ctx, "systemctl", "--user", action, unit)
+	output, err := m.runner.Run(ctx, "systemctl", "--user", action, "--", unit)
 	if err != nil {
 		return fmt.Errorf("systemctl %s %s: %w: %s", action, unit, err, strings.TrimSpace(string(output)))
 	}
