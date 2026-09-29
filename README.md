@@ -38,4 +38,16 @@ go test ./...
 go vet ./...
 ```
 
-Runtime adapters and service control are intentionally outside the initial state-engine slice.
+## Local CLI
+
+```sh
+go run ./cmd/gpu-mode status
+go run ./cmd/gpu-mode reconcile
+go run ./cmd/gpu-mode text
+go run ./cmd/gpu-mode media
+go run ./cmd/gpu-mode idle
+```
+
+The controller operates on systemd user units. Workload transitions close admission, snapshot active work, wait for the snapshot to drain, journal runtime actions, and verify observed state plus health before reopening admission.
+
+Remote control, authorization, UI, Job Broker implementation, and host-specific deployment remain outside this repository slice.
