@@ -209,7 +209,9 @@ func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
 		return c.latchObservationFailure(ctx, state, err)
 	}
 	if state.ActiveWorkload == control.WorkloadMedia {
-		if err := c.runtime.Stop(ctx, control.WorkloadMedia); err != nil {
+		if err := c.runAction(ctx, func(actionCtx context.Context) error {
+			return c.runtime.Stop(actionCtx, control.WorkloadMedia)
+		}); err != nil {
 			return c.latchObservationFailure(ctx, state, err)
 		}
 		if err := c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout)); err != nil {
@@ -247,7 +249,9 @@ func (c *Controller) Recover(ctx context.Context) (control.State, error) {
 		return state, err
 	}
 	if !snapshot.TextActive {
-		if err := c.runtime.Stop(ctx, control.WorkloadMedia); err != nil {
+		if err := c.runAction(ctx, func(actionCtx context.Context) error {
+			return c.runtime.Stop(actionCtx, control.WorkloadMedia)
+		}); err != nil {
 			return state, err
 		}
 		if err := c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout)); err != nil {
@@ -359,6 +363,12 @@ func observedWorkload(state control.State, snapshot gpuruntime.Snapshot) (contro
 
 func (c *Controller) setPhase(ctx context.Context, transitionID string, state control.State, phase control.Phase) (control.State, error) {
 	return c.store.SetTransitionPhase(ctx, transitionID, state.Version, phase)
+}
+
+func (c *Controller) runAction(ctx context.Context, fn func(context.Context) error) error {
+	actionCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
+	defer cancel()
+	return fn(actionCtx)
 }
 
 func (c *Controller) effect(ctx context.Context, transitionID string, phase control.Phase, action string, fn func(context.Context) error) error {
