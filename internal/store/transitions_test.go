@@ -27,6 +27,9 @@ func TestTransitionSnapshotsOutstandingWorkAndCommits(t *testing.T) {
 	if err := s.RegisterWork(ctx, "work", "job", control.WorkloadText, state.LeaseFence); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.RegisterWork(ctx, "other-work", "other-job", control.WorkloadText, state.LeaseFence); err != nil {
+		t.Fatal(err)
+	}
 	target := state
 	target.DesiredWorkload = control.WorkloadMedia
 	tr := Transition{ID: "transition", Fence: state.LeaseFence, Source: state, Target: target,
@@ -46,6 +49,12 @@ func TestTransitionSnapshotsOutstandingWorkAndCommits(t *testing.T) {
 		t.Fatalf("snapshot pending work = %d, %v", count, err)
 	}
 	if err := s.FinishWorkFenced(ctx, "work", control.WorkloadText, state.LeaseFence, WorkCompleted); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := s.PendingTransitionWork(ctx, tr.ID); err != nil || pending != 1 {
+		t.Fatalf("other unfinished work was not retained: %d, %v", pending, err)
+	}
+	if err := s.FinishWorkFenced(ctx, "other-work", control.WorkloadText, state.LeaseFence, WorkCompleted); err != nil {
 		t.Fatal(err)
 	}
 	if count, err := s.PendingTransitionWork(ctx, tr.ID); err != nil || count != 0 {

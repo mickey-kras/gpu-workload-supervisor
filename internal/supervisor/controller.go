@@ -547,11 +547,19 @@ func (c *Controller) rollback(ctx context.Context, transitionID string, previous
 		return c.waitReady(ctx, control.WorkloadMedia, c.now().Add(c.config.CleanupTimeout))
 	default:
 		if snapshot.TextActive {
-			return c.effect(ctx, transitionID, control.PhaseReconciling, "rollback stop text", func(actionCtx context.Context) error {
+			if err := c.effect(ctx, transitionID, control.PhaseReconciling, "rollback stop text", func(actionCtx context.Context) error {
 				return c.runtime.Stop(actionCtx, control.WorkloadText)
-			})
+			}); err != nil {
+				return err
+			}
 		}
-		return nil
+		// A failed media start may have allocated memory without reaching readiness.
+		if err := c.effect(ctx, transitionID, control.PhaseReconciling, "rollback stop media", func(actionCtx context.Context) error {
+			return c.runtime.Stop(actionCtx, control.WorkloadMedia)
+		}); err != nil {
+			return err
+		}
+		return c.waitReleased(ctx, c.now().Add(c.config.CleanupTimeout))
 	}
 }
 

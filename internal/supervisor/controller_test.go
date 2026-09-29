@@ -17,6 +17,7 @@ type fakeRuntime struct {
 	mediaReady      bool
 	healthFailures  int
 	startErr        error
+	partialStart    bool
 	stopErr         error
 	releaseFailures int
 	blockRelease    bool
@@ -35,6 +36,10 @@ func (r *fakeRuntime) Observe(context.Context) (gpuruntime.Snapshot, error) {
 func (r *fakeRuntime) Start(_ context.Context, workload control.Workload) error {
 	r.calls = append(r.calls, "start "+string(workload))
 	if r.startErr != nil && workload == control.WorkloadMedia {
+		if r.partialStart {
+			r.active = control.WorkloadMedia
+			r.mediaReady = true
+		}
 		return r.startErr
 	}
 	if workload == control.WorkloadText {
@@ -184,6 +189,38 @@ func TestSwitchFailureRollsBackAndLatchesError(t *testing.T) {
 		t.Fatalf("unsafe failed state = %#v", state)
 	}
 	assertCalls(t, runtime.calls, "stop text", "start media", "start text")
+}
+
+func TestFailedMediaStartRollsBackToIdleOnlyAfterRelease(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		blockRelease bool
+		wantActive   control.Workload
+	}{
+		{"released", false, control.WorkloadIdle},
+		{"release failed", true, control.WorkloadUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stateStore := openStore(t)
+			runtime := &fakeRuntime{}
+			controller := testController(t, stateStore, runtime)
+			if _, err := controller.Reconcile(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			runtime.calls = nil
+			runtime.startErr = errors.New("partially started media")
+			runtime.partialStart = true
+			runtime.blockRelease = tc.blockRelease
+			controller.config.ActionTimeout = time.Millisecond
+			controller.config.CleanupTimeout = 5 * time.Millisecond
+			state, err := controller.Switch(context.Background(), control.WorkloadMedia, "test")
+			if err == nil || state.ActiveWorkload != tc.wantActive ||
+				state.Health != control.HealthError || state.Admission != control.AdmissionClosed {
+				t.Fatalf("failed media start state = %#v, error = %v", state, err)
+			}
+			assertCalls(t, runtime.calls, "start media", "stop media")
+		})
+	}
 }
 
 func TestReadinessPollingAllowsDelayedHealth(t *testing.T) {

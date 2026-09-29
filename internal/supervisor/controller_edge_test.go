@@ -199,7 +199,8 @@ func TestRollbackRestoresPreviousOwnerOrStopsUnexpectedText(t *testing.T) {
 	}{
 		{"media from text", control.WorkloadMedia, control.WorkloadText, false, []string{"stop text", "start media"}},
 		{"text from idle", control.WorkloadText, control.WorkloadIdle, false, []string{"start text"}},
-		{"idle from text", control.WorkloadIdle, control.WorkloadText, false, []string{"stop text"}},
+		{"idle from text", control.WorkloadIdle, control.WorkloadText, false, []string{"stop text", "stop media"}},
+		{"idle from media", control.WorkloadIdle, control.WorkloadMedia, true, []string{"stop media"}},
 		{"media already ready", control.WorkloadMedia, control.WorkloadMedia, true, nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
