@@ -122,7 +122,7 @@ func TestInactiveMediaCanStopWithoutReleaseEndpointButStillRequiresGPUMemoryRele
 		t.Run(test.name, func(t *testing.T) {
 			runner := &fakeRunner{outputs: map[string][]byte{
 				mediaShowCommand: []byte("LoadState=loaded\nActiveState=inactive\nSubState=dead\n"),
-				gpuMemoryCommand:  []byte(test.usedMiB),
+				gpuMemoryCommand: []byte(test.usedMiB),
 			}}
 			manager, err := newSystemdManager(config, runner, http.DefaultClient)
 			if err != nil {
