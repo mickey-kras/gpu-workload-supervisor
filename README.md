@@ -58,12 +58,13 @@ Defaults:
 - health request timeout: 10 seconds
 - drain timeout: 5 minutes
 - readiness timeout: 5 minutes
-- cleanup timeout: 2 minutes
+- rollback timeout: 2 minutes
+- failure finalization timeout: 10 seconds
 - poll interval: 250 milliseconds
 
 The state directory must be private and owned by the current user. Commands use an exclusive file lock. Opening the store applies pending migrations. `status` persists a closed error state if runtime observation violates the single-GPU invariant.
 
-ComfyUI process availability is separate from media GPU ownership. Entering media mode stops text inference and keeps ComfyUI available. Leaving media mode calls the configured model-release endpoint before text inference starts.
+ComfyUI process availability is separate from media GPU ownership. Entering media mode stops text inference and keeps ComfyUI available. Leaving media mode calls the configured model-release endpoint, then polls the NVML-backed `nvidia-smi` memory reading below the deployment threshold before text inference starts.
 
 Boot reconciliation never resumes media work. Interrupted transitions and latched errors require explicit `recover`.
 
