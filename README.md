@@ -77,6 +77,6 @@ The initial adapter uses trusted `systemctl` and `nvidia-smi` executables. Typed
 
 ## Trust boundary
 
-Processes sharing the supervisor Unix identity are trusted. A compromised same-UID runtime can bypass advisory locks, state files, and user-service control. Remote control requires separate supervisor and runtime service identities with OS-enforced permissions.
+Processes sharing the supervisor Unix identity are trusted. ComfyUI execution must pass through a lease-enforcing gate; direct `/prompt` access must remain blocked in supervisor mode. A compromised same-UID runtime can bypass advisory locks, state files, and user-service control. Remote control requires separate supervisor and runtime service identities with OS-enforced permissions.
 
 Remote control, authorization, UI, Job Broker implementation, and host-specific deployment remain outside this repository slice.
