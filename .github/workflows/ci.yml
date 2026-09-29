@@ -38,7 +38,7 @@ jobs:
       - name: Go vet
         run: go vet ./...
       - name: Go vulnerability audit
-        uses: golang/govulncheck-action@dd0578b371c987f96d1185abb54344b44352bd58 # v1.0.3
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
         with:
           go-version-file: go.mod
           go-package: ./...
