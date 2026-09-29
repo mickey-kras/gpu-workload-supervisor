@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 )
 
 func TestCLIRejectsMissingConfigurationAndUnknownCommand(t *testing.T) {
@@ -134,5 +135,56 @@ func TestCLIRejectsInvalidControllerTimeout(t *testing.T) {
 		"-systemctl", "/usr/bin/true", "-action-timeout", "0s", "status"}
 	if err := run(); err == nil || !strings.Contains(err.Error(), "timeouts") {
 		t.Fatalf("invalid controller timeout = %v", err)
+	}
+}
+
+func TestCLIWorkResolutionRequiresReasonAndStoppedProxies(t *testing.T) {
+	previousArgs := os.Args
+	previousStdout := os.Stdout
+	t.Cleanup(func() { os.Args, os.Stdout = previousArgs, previousStdout })
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	args := []string{"gpu-mode", "-state", statePath,
+		"-text-unit", "text.service", "-media-unit", "media.service",
+		"-text-health-url", "http://127.0.0.1:1/health",
+		"-media-health-url", "http://127.0.0.1:1/",
+		"-media-release-url", "http://127.0.0.1:1/free",
+		"-release-max-used-mib", "1", "-nvidia-smi", "/usr/bin/true",
+		"-systemctl", "/usr/bin/true"}
+	os.Args = append(append([]string{}, args...), "resolve-work")
+	if err := run(); err == nil || !strings.Contains(err.Error(), "requires -resolve-reason") {
+		t.Fatalf("missing reason error = %v", err)
+	}
+	proxyLock, err := lock.AcquireShared(statePath + ".proxy.lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxyLock.Close()
+	os.Args = append(append([]string{}, args...), "-resolve-reason", "incident-123", "resolve-work")
+	if err := run(); err == nil || !strings.Contains(err.Error(), "stop all workload proxies") {
+		t.Fatalf("active proxy error = %v", err)
+	}
+	if err := proxyLock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output, err := os.CreateTemp(t.TempDir(), "result")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	os.Stdout = output
+	os.Args = append(append([]string{}, args...), "-resolve-reason", "incident-123",
+		"-verify-timeout", "5ms", "-poll-interval", "1ms", "resolve-work")
+	if err := run(); err == nil || !strings.Contains(err.Error(), "verify release") {
+		t.Fatalf("unverified resolution error = %v", err)
+	}
+	if _, err := output.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	var state control.State
+	if err := json.NewDecoder(output).Decode(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Admission != control.AdmissionClosed || state.LeaseFence.Epoch != 2 {
+		t.Fatalf("failed verification state = %#v", state)
 	}
 }

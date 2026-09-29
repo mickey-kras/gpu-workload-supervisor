@@ -64,6 +64,16 @@ func (r *fakeRuntime) Stop(ctx context.Context, workload control.Workload) error
 	return nil
 }
 
+func (r *fakeRuntime) StopForRecovery(ctx context.Context) error {
+	for _, workload := range []control.Workload{control.WorkloadText, control.WorkloadMedia} {
+		if err := r.Stop(ctx, workload); err != nil {
+			return err
+		}
+	}
+	r.mediaReady = false
+	return nil
+}
+
 func (r *fakeRuntime) Released(ctx context.Context) error {
 	if r.blockRelease {
 		<-ctx.Done()

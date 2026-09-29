@@ -65,6 +65,37 @@ func TestAcquireSerializesProcesses(t *testing.T) {
 	}
 }
 
+func TestSharedProxyLocksBlockExclusiveResolution(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.proxy.lock")
+	first, err := AcquireShared(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := AcquireShared(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exclusive, err := TryAcquire(path); err == nil {
+		exclusive.Close()
+		t.Fatal("exclusive recovery lock succeeded with active proxies")
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if exclusive, err := TryAcquire(path); err == nil {
+		exclusive.Close()
+		t.Fatal("exclusive recovery lock succeeded while second proxy is active")
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	exclusive, err := TryAcquire(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer exclusive.Close()
+}
+
 func TestAcquireCreatesPrivateFilesAndRejectsSymlink(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "private")
 	path := filepath.Join(directory, "state.lock")

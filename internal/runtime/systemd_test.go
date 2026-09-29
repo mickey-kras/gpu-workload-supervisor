@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,7 +19,64 @@ type fakeRunner struct {
 }
 
 const mediaShowCommand = "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState -- media.service"
+const textShowCommand = "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState -- text.service"
 const gpuMemoryCommand = "/usr/bin/true --query-gpu=memory.used --format=csv,noheader,nounits -i 0"
+
+type recoveryRunner struct{ fakeRunner }
+
+func (r *recoveryRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	command := strings.Join(append([]string{name}, args...), " ")
+	if command == "/usr/bin/true --user stop -- text.service" {
+		r.outputs[textShowCommand] = []byte("LoadState=loaded\nActiveState=inactive\nSubState=dead\n")
+	}
+	if command == "/usr/bin/true --user stop -- media.service" {
+		r.outputs[mediaShowCommand] = []byte("LoadState=loaded\nActiveState=inactive\nSubState=dead\n")
+	}
+	return r.fakeRunner.Run(ctx, name, args...)
+}
+
+func TestRecoveryStopsBothSystemdUnitsRatherThanOnlyReleasingMediaModels(t *testing.T) {
+	runner := &recoveryRunner{fakeRunner: fakeRunner{outputs: map[string][]byte{
+		textShowCommand:  []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
+		mediaShowCommand: []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
+		gpuMemoryCommand: []byte("0\n"),
+	}}}
+	manager, err := newSystemdManager(testConfig(), runner, http.DefaultClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.StopForRecovery(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 2 ||
+		runner.calls[0] != "/usr/bin/true --user stop -- text.service" ||
+		runner.calls[1] != "/usr/bin/true --user stop -- media.service" {
+		t.Fatalf("recovery stop calls = %#v", runner.calls)
+	}
+	snapshot, err := manager.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.TextActive || snapshot.MediaReady {
+		t.Fatalf("runtime remained active: %#v", snapshot)
+	}
+	if err := manager.Released(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecoveryReportsMediaUnitStopFailure(t *testing.T) {
+	runner := &fakeRunner{errs: map[string]error{
+		"/usr/bin/true --user stop -- media.service": errors.New("unit failed to stop"),
+	}}
+	manager, err := newSystemdManager(testConfig(), runner, http.DefaultClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.StopForRecovery(context.Background()); err == nil || !strings.Contains(err.Error(), "unit failed to stop") {
+		t.Fatalf("media stop failure = %v", err)
+	}
+}
 
 func (r *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	call := strings.Join(append([]string{name}, args...), " ")

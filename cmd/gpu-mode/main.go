@@ -47,11 +47,12 @@ func run() error {
 	cleanupTimeout := flags.Duration("cleanup-timeout", 2*time.Minute, "failure rollback timeout")
 	finalizeTimeout := flags.Duration("finalize-timeout", 10*time.Second, "failure finalization timeout")
 	pollInterval := flags.Duration("poll-interval", 250*time.Millisecond, "drain and readiness polling interval")
+	resolveReason := flags.String("resolve-reason", "", "required audit reason for resolve-work")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 1 {
-		return errors.New("usage: gpu-mode [flags] restore-state|status|reconcile|recover|text|media|idle")
+		return errors.New("usage: gpu-mode [flags] restore-state|status|reconcile|recover|resolve-work|text|media|idle")
 	}
 	command := flags.Arg(0)
 	if command != restoreStateCommand && (*textUnit == "" || *mediaUnit == "" || *textHealth == "" || *mediaHealth == "" || *mediaRelease == "" || *releaseMaxMiB == 0 || *nvidiaSMIPath == "" || *systemctlPath == "") {
@@ -62,6 +63,18 @@ func run() error {
 		return err
 	}
 	defer processLock.Close()
+	if command == "resolve-work" {
+		if *resolveReason == "" {
+			return errors.New("resolve-work requires -resolve-reason")
+		}
+		// Proxies hold shared locks until their in-flight handlers finish. Refuse
+		// to abandon work while any proxy can still forward an admitted request.
+		proxyLock, err := lock.TryAcquire(*statePath + ".proxy.lock")
+		if err != nil {
+			return fmt.Errorf("stop all workload proxies and wait for shutdown before resolve-work: %w", err)
+		}
+		defer proxyLock.Close()
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	var stateStore *store.Store
@@ -104,6 +117,15 @@ func run() error {
 		state, err = controller.Reconcile(ctx)
 	case "recover":
 		state, err = controller.Recover(ctx)
+	case "resolve-work":
+		var abandoned int64
+		state, abandoned, err = controller.ResolveUnfinishedWork(ctx, *resolveReason)
+		if err == nil {
+			return json.NewEncoder(os.Stdout).Encode(struct {
+				State         control.State `json:"state"`
+				AbandonedWork int64         `json:"abandonedWork"`
+			}{state, abandoned})
+		}
 	case "text":
 		state, err = controller.Switch(ctx, control.WorkloadText, "local-cli")
 	case "media":

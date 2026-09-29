@@ -35,6 +35,8 @@ type StateStore interface {
 	PendingTransitionWork(context.Context, string) (int, error)
 	InProgressTransition(context.Context) (string, error)
 	Recover(context.Context, uint64, control.State, string) (control.State, error)
+	RotateFenceAndCloseAdmission(context.Context, uint64) (control.State, error)
+	ResolveUnfinishedWork(context.Context, uint64, string) (int64, error)
 }
 
 type Config struct {
@@ -304,6 +306,42 @@ func (c *Controller) Recover(ctx context.Context) (control.State, error) {
 		final.Admission = control.AdmissionClosed
 	}
 	return c.store.Recover(ctx, state.Version, final, "operator-recovery")
+}
+
+// ResolveUnfinishedWork is an explicit, disruptive operator action. The caller
+// must hold the exclusive proxy lifetime lock until this method returns, so no
+// admitted request can be forwarded after runtime shutdown. Recovery remains
+// separate: this operation never reopens admission.
+func (c *Controller) ResolveUnfinishedWork(ctx context.Context, reason string) (control.State, int64, error) {
+	if len(reason) == 0 || len(reason) > 512 {
+		return control.State{}, 0, errors.New("resolution reason must contain 1 to 512 bytes")
+	}
+	state, err := c.store.State(ctx)
+	if err != nil {
+		return control.State{}, 0, err
+	}
+	if state.Owner == control.OwnerUser {
+		return state, 0, ErrUserOwned
+	}
+	state, err = c.store.RotateFenceAndCloseAdmission(ctx, state.Version)
+	if err != nil {
+		return state, 0, err
+	}
+	if err := c.runAction(ctx, c.runtime.StopForRecovery); err != nil {
+		return state, 0, fmt.Errorf("stop runtimes before work resolution: %w", err)
+	}
+	if err := c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout)); err != nil {
+		return state, 0, fmt.Errorf("verify release before work resolution: %w", err)
+	}
+	snapshot, err := c.observe(ctx)
+	if err != nil {
+		return state, 0, fmt.Errorf("observe stopped runtimes: %w", err)
+	}
+	if snapshot.TextActive || snapshot.MediaReady {
+		return state, 0, fmt.Errorf("%w: runtime remains active after stop", ErrStateVerification)
+	}
+	count, err := c.store.ResolveUnfinishedWork(ctx, state.Version, reason)
+	return state, count, err
 }
 
 func (c *Controller) waitForDrain(ctx context.Context, transitionID string, deadline time.Time) error {

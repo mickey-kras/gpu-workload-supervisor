@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
@@ -19,6 +20,70 @@ const (
 	WorkCompleted WorkOutcome = "completed"
 	WorkAbandoned WorkOutcome = "abandoned"
 )
+
+var ErrNoUnfinishedWork = errors.New("no unfinished work to resolve")
+
+// ResolveUnfinishedWork is reserved for verified operator recovery. The caller
+// must quiesce all proxy processes and stop/verify both runtimes first. This
+// transaction requires the closed, rotated state version and records the
+// resolution together with the terminal updates.
+func (s *Store) ResolveUnfinishedWork(ctx context.Context, expected uint64, reason string) (int64, error) {
+	reason = strings.TrimSpace(reason)
+	if len(reason) == 0 || len(reason) > 512 {
+		return 0, errors.New("resolution reason must contain 1 to 512 bytes")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	state, err := readState(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	if state.Version != expected {
+		return 0, ErrVersionConflict
+	}
+	if state.Admission != control.AdmissionClosed {
+		return 0, ErrAdmissionClosed
+	}
+	if state.Owner != control.OwnerSupervisor {
+		return 0, errors.New("supervisor ownership required for work resolution")
+	}
+	var unfenced int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM registered_work
+		WHERE completed_at IS NULL AND lease_incarnation = ? AND lease_epoch >= ?`,
+		state.LeaseFence.Incarnation, state.LeaseFence.Epoch).Scan(&unfenced); err != nil {
+		return 0, err
+	}
+	if unfenced != 0 {
+		return 0, ErrStaleFence
+	}
+	now := formatTime(s.now())
+	result, err := tx.ExecContext(ctx, `UPDATE registered_work
+		SET completed_at = ?, completion_outcome = 'abandoned'
+		WHERE completed_at IS NULL`, now)
+	if err != nil {
+		return 0, fmt.Errorf("resolve unfinished work: %w", err)
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if count == 0 {
+		return 0, ErrNoUnfinishedWork
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO work_resolutions
+		(lease_incarnation, lease_epoch, state_version, reason, abandoned_work, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)`, state.LeaseFence.Incarnation,
+		state.LeaseFence.Epoch, state.Version, reason, count, now); err != nil {
+		return 0, fmt.Errorf("audit unfinished work resolution: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
 
 func (s *Store) beginAdmittedWork(ctx context.Context, requestID string, workload control.Workload, fence control.Fence) (*sql.Tx, error) {
 	if requestID == "" {
