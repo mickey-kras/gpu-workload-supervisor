@@ -37,6 +37,7 @@ func run() error {
 	gpuIndex := flags.Int("gpu-index", 0, "NVIDIA GPU index")
 	releaseMaxMiB := flags.Uint64("release-max-used-mib", 0, "maximum used GPU memory after media release")
 	nvidiaSMIPath := flags.String("nvidia-smi", "", "absolute path to the trusted nvidia-smi executable")
+	systemctlPath := flags.String("systemctl", "", "absolute path to the trusted systemctl executable")
 	healthTimeout := flags.Duration("health-timeout", 10*time.Second, "individual health request timeout")
 	actionTimeout := flags.Duration("action-timeout", 2*time.Minute, "runtime start or stop timeout")
 	drainTimeout := flags.Duration("drain-timeout", 5*time.Minute, "admitted-work drain timeout")
@@ -50,8 +51,8 @@ func run() error {
 	if flags.NArg() != 1 {
 		return errors.New("usage: gpu-mode [flags] status|reconcile|recover|text|media|idle")
 	}
-	if *textUnit == "" || *mediaUnit == "" || *textHealth == "" || *mediaHealth == "" || *mediaRelease == "" || *releaseMaxMiB == 0 || *nvidiaSMIPath == "" {
-		return errors.New("runtime units, endpoints, and a nonzero release memory threshold are required")
+	if *textUnit == "" || *mediaUnit == "" || *textHealth == "" || *mediaHealth == "" || *mediaRelease == "" || *releaseMaxMiB == 0 || *nvidiaSMIPath == "" || *systemctlPath == "" {
+		return errors.New("runtime units, endpoints, release threshold, and trusted executable paths are required")
 	}
 	processLock, err := lock.Acquire(*statePath + ".lock")
 	if err != nil {
@@ -70,7 +71,7 @@ func run() error {
 		TextHealthURL: *textHealth, MediaHealthURL: *mediaHealth,
 		MediaReleaseURL: *mediaRelease, HealthTimeout: *healthTimeout,
 		GPUIndex: *gpuIndex, ReleaseMaxMiB: *releaseMaxMiB,
-		NvidiaSMIPath: *nvidiaSMIPath,
+		NvidiaSMIPath: *nvidiaSMIPath, SystemctlPath: *systemctlPath,
 	})
 	if err != nil {
 		return err
