@@ -177,3 +177,59 @@ func (s *Store) InProgressTransition(ctx context.Context) (string, error) {
 	}
 	return id, err
 }
+
+func (s *Store) Recover(ctx context.Context, expected uint64, final control.State, reason string) (control.State, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return control.State{}, err
+	}
+	defer tx.Rollback()
+	current, err := readState(ctx, tx)
+	if err != nil {
+		return control.State{}, err
+	}
+	if current.Version != expected {
+		return control.State{}, ErrVersionConflict
+	}
+	final.LeaseFence = current.LeaseFence
+	final.LeaseFence.Epoch++
+	final.Version = current.Version + 1
+	final.UpdatedAt = s.now().UTC()
+	if err := final.Validate(); err != nil {
+		return control.State{}, err
+	}
+	var transitionID string
+	err = tx.QueryRowContext(ctx, `SELECT transition_id FROM transitions
+		WHERE status = 'in_progress' ORDER BY created_at LIMIT 1`).Scan(&transitionID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return control.State{}, err
+	}
+	if err == nil {
+		result, updateErr := tx.ExecContext(ctx, `UPDATE transitions
+			SET phase = ?, status = 'failed', updated_at = ?
+			WHERE transition_id = ? AND status = 'in_progress'`,
+			final.Phase, formatTime(s.now()), transitionID)
+		if updateErr != nil {
+			return control.State{}, updateErr
+		}
+		if changed, rowsErr := result.RowsAffected(); rowsErr != nil || changed != 1 {
+			if rowsErr != nil {
+				return control.State{}, rowsErr
+			}
+			return control.State{}, ErrTransitionNotRunning
+		}
+		if _, eventErr := tx.ExecContext(ctx, `INSERT INTO transition_events
+			(transition_id, phase, kind, action, outcome, created_at)
+			VALUES (?, ?, 'observation', 'recovery', ?, ?)`,
+			transitionID, final.Phase, reason, formatTime(s.now())); eventErr != nil {
+			return control.State{}, eventErr
+		}
+	}
+	if err := writeState(ctx, tx, final); err != nil {
+		return control.State{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return control.State{}, err
+	}
+	return final, nil
+}
