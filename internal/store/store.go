@@ -89,18 +89,9 @@ func openWithMode(ctx context.Context, path string, now Clock, uuid func() (stri
 		return nil, fmt.Errorf("connect sqlite: %w", err)
 	}
 	if restored {
-		var migrations int
-		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations").Scan(&migrations); err != nil {
+		if err := validateRestoredDatabase(ctx, db); err != nil {
 			db.Close()
-			return nil, fmt.Errorf("restored state database is not initialized: %w", err)
-		}
-		if migrations == 0 {
-			db.Close()
-			return nil, errors.New("restored state database is not initialized")
-		}
-		if _, err := readState(ctx, db); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("restored control state is invalid: %w", err)
+			return nil, err
 		}
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
@@ -113,6 +104,20 @@ func openWithMode(ctx context.Context, path string, now Clock, uuid func() (stri
 		return nil, err
 	}
 	return s, nil
+}
+
+func validateRestoredDatabase(ctx context.Context, db *sql.DB) error {
+	var migrations int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations").Scan(&migrations); err != nil {
+		return fmt.Errorf("restored state database is not initialized: %w", err)
+	}
+	if migrations == 0 {
+		return errors.New("restored state database is not initialized")
+	}
+	if _, err := readState(ctx, db); err != nil {
+		return fmt.Errorf("restored control state is invalid: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Close() error                                     { return s.db.Close() }
