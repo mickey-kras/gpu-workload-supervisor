@@ -5,30 +5,28 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
 const (
-	DefaultRequestIDHeader   = "X-Request-ID"
-	DefaultFenceIDHeader     = "X-Workload-Lease-Incarnation"
-	DefaultFenceEpochHeader  = "X-Workload-Lease-Epoch"
-	defaultCompletionTimeout = 10 * time.Second
+	DefaultRequestIDHeader  = "X-Request-ID"
+	DefaultFenceIDHeader    = "X-Workload-Lease-Incarnation"
+	DefaultFenceEpochHeader = "X-Workload-Lease-Epoch"
+	DefaultCompletionPath   = "/_gpu-workload-supervisor/v1/work/finish"
 )
 
 type StateStore interface {
 	State(context.Context) (control.State, error)
-	RegisterWork(context.Context, string, string, control.Workload, control.Fence) error
-	CompleteWorkFenced(context.Context, string, control.Fence) error
+	AdmitWork(context.Context, string, string, control.Workload, control.Fence) error
+	FinishWorkFenced(context.Context, string, control.Fence, store.WorkOutcome) error
 }
 
 type Route struct {
@@ -37,29 +35,35 @@ type Route struct {
 }
 
 type Config struct {
-	Upstream          *url.URL
-	Workload          control.Workload
-	ExecutionRoutes   []Route
-	RequestIDHeader   string
-	JobIDHeader       string
-	FenceIDHeader     string
-	FenceEpochHeader  string
-	CompletionTimeout time.Duration
-	Transport         http.RoundTripper
-	ErrorLog          func(error)
+	Upstream         *url.URL
+	Workload         control.Workload
+	ExecutionRoutes  []Route
+	PassthroughRoutes []Route
+	CompletionPath   string
+	RequestIDHeader  string
+	JobIDHeader      string
+	FenceIDHeader    string
+	FenceEpochHeader string
+	Transport        http.RoundTripper
 }
 
 type Handler struct {
 	store             StateStore
 	proxy             *httputil.ReverseProxy
 	workload          control.Workload
-	routes            map[string]struct{}
+	executionRoutes   map[string]struct{}
+	passthroughRoutes map[string]struct{}
+	completionPath    string
 	requestIDHeader   string
 	jobIDHeader       string
 	fenceIDHeader     string
 	fenceEpochHeader  string
-	completionTimeout time.Duration
-	errorLog          func(error)
+}
+
+type finishRequest struct {
+	RequestID string            `json:"requestId"`
+	Fence     control.Fence     `json:"fence"`
+	Outcome   store.WorkOutcome `json:"outcome"`
 }
 
 func New(stateStore StateStore, config Config) (*Handler, error) {
@@ -75,16 +79,19 @@ func New(stateStore StateStore, config Config) (*Handler, error) {
 	if config.Workload != control.WorkloadText && config.Workload != control.WorkloadMedia {
 		return nil, errors.New("workload must be text or media")
 	}
-	if len(config.ExecutionRoutes) == 0 {
-		return nil, errors.New("at least one execution route is required")
+	executionRoutes, err := routeSet(config.ExecutionRoutes, true)
+	if err != nil {
+		return nil, err
 	}
-	routes := make(map[string]struct{}, len(config.ExecutionRoutes))
-	for _, route := range config.ExecutionRoutes {
-		method := strings.ToUpper(strings.TrimSpace(route.Method))
-		if method == "" || route.Path == "" || !strings.HasPrefix(route.Path, "/") {
-			return nil, errors.New("execution routes require a method and absolute path")
-		}
-		routes[method+" "+route.Path] = struct{}{}
+	passthroughRoutes, err := routeSet(config.PassthroughRoutes, false)
+	if err != nil {
+		return nil, err
+	}
+	if config.CompletionPath == "" {
+		config.CompletionPath = DefaultCompletionPath
+	}
+	if !canonicalPath(config.CompletionPath) {
+		return nil, errors.New("completion path must be canonical and absolute")
 	}
 	if config.RequestIDHeader == "" {
 		config.RequestIDHeader = DefaultRequestIDHeader
@@ -95,25 +102,43 @@ func New(stateStore StateStore, config Config) (*Handler, error) {
 	if config.FenceEpochHeader == "" {
 		config.FenceEpochHeader = DefaultFenceEpochHeader
 	}
-	if config.CompletionTimeout <= 0 {
-		config.CompletionTimeout = defaultCompletionTimeout
-	}
 	reverseProxy := httputil.NewSingleHostReverseProxy(config.Upstream)
 	reverseProxy.Transport = config.Transport
 	return &Handler{
 		store: stateStore, proxy: reverseProxy, workload: config.Workload,
-		routes: routes, requestIDHeader: config.RequestIDHeader,
+		executionRoutes: executionRoutes, passthroughRoutes: passthroughRoutes,
+		completionPath: config.CompletionPath, requestIDHeader: config.RequestIDHeader,
 		jobIDHeader: config.JobIDHeader, fenceIDHeader: config.FenceIDHeader,
 		fenceEpochHeader: config.FenceEpochHeader,
-		completionTimeout: config.CompletionTimeout, errorLog: config.ErrorLog,
 	}, nil
 }
 
 func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
-	if _, gated := h.routes[request.Method+" "+request.URL.Path]; !gated {
-		h.proxy.ServeHTTP(response, request)
+	if request.Method == http.MethodPost && request.URL.Path == h.completionPath {
+		h.finish(response, request)
 		return
 	}
+	if !canonicalPath(request.URL.Path) {
+		writeError(response, http.StatusBadRequest, "path_not_canonical")
+		return
+	}
+	key := request.Method + " " + request.URL.Path
+	if _, gated := h.executionRoutes[key]; gated {
+		h.execute(response, request)
+		return
+	}
+	if isSafeMethod(request.Method) {
+		h.proxy.ServeHTTP(response, h.withoutControlHeaders(request))
+		return
+	}
+	if _, allowed := h.passthroughRoutes[key]; allowed {
+		h.proxy.ServeHTTP(response, h.withoutControlHeaders(request))
+		return
+	}
+	writeError(response, http.StatusMethodNotAllowed, "route_not_allowed")
+}
+
+func (h *Handler) execute(response http.ResponseWriter, request *http.Request) {
 	state, err := h.store.State(request.Context())
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "state_unavailable")
@@ -141,22 +166,31 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 	if h.jobIDHeader != "" {
 		jobID = strings.TrimSpace(request.Header.Get(h.jobIDHeader))
 	}
-	if err := h.store.RegisterWork(request.Context(), requestID, jobID, h.workload, fence); err != nil {
-		h.writeAdmissionError(response, err)
+	if err := h.store.AdmitWork(request.Context(), requestID, jobID, h.workload, fence); err != nil {
+		h.writeWorkError(response, err)
 		return
 	}
-	var once sync.Once
-	complete := func() {
-		once.Do(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), h.completionTimeout)
-			defer cancel()
-			if err := h.store.CompleteWorkFenced(ctx, requestID, fence); err != nil && h.errorLog != nil {
-				h.errorLog(fmt.Errorf("complete request %q: %w", requestID, err))
-			}
-		})
-	}
-	defer complete()
 	h.proxy.ServeHTTP(response, h.withoutControlHeaders(request))
+}
+
+func (h *Handler) finish(response http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(response, request.Body, 64<<10)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	var finish finishRequest
+	if err := decoder.Decode(&finish); err != nil {
+		writeError(response, http.StatusBadRequest, "finish_request_invalid")
+		return
+	}
+	if finish.Outcome != store.WorkCompleted && finish.Outcome != store.WorkAbandoned {
+		writeError(response, http.StatusBadRequest, "outcome_invalid")
+		return
+	}
+	if err := h.store.FinishWorkFenced(request.Context(), finish.RequestID, finish.Fence, finish.Outcome); err != nil {
+		h.writeWorkError(response, err)
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) readFence(request *http.Request) (control.Fence, error) {
@@ -181,17 +215,42 @@ func (h *Handler) withoutControlHeaders(request *http.Request) *http.Request {
 	return clone
 }
 
-func (h *Handler) writeAdmissionError(response http.ResponseWriter, err error) {
+func (h *Handler) writeWorkError(response http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrStaleFence), errors.Is(err, store.ErrWorkloadMismatch):
 		writeError(response, http.StatusConflict, "lease_rejected")
+	case errors.Is(err, store.ErrRequestConflict):
+		writeError(response, http.StatusConflict, "request_conflict")
 	case errors.Is(err, store.ErrAdmissionClosed):
 		writeError(response, http.StatusServiceUnavailable, "admission_closed")
 	case errors.Is(err, sql.ErrNoRows):
-		writeError(response, http.StatusConflict, "request_conflict")
+		writeError(response, http.StatusNotFound, "request_not_found")
 	default:
-		writeError(response, http.StatusServiceUnavailable, "registration_failed")
+		writeError(response, http.StatusServiceUnavailable, "work_state_failed")
 	}
+}
+
+func routeSet(routes []Route, required bool) (map[string]struct{}, error) {
+	if required && len(routes) == 0 {
+		return nil, errors.New("at least one execution route is required")
+	}
+	result := make(map[string]struct{}, len(routes))
+	for _, route := range routes {
+		method := strings.ToUpper(strings.TrimSpace(route.Method))
+		if method == "" || !canonicalPath(route.Path) {
+			return nil, errors.New("routes require a method and canonical absolute path")
+		}
+		result[method+" "+route.Path] = struct{}{}
+	}
+	return result, nil
+}
+
+func canonicalPath(value string) bool {
+	return value != "" && strings.HasPrefix(value, "/") && path.Clean(value) == value
+}
+
+func isSafeMethod(method string) bool {
+	return method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions
 }
 
 func writeError(response http.ResponseWriter, status int, code string) {
