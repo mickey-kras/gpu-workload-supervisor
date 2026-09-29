@@ -27,12 +27,12 @@ func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte,
 }
 
 type SystemdConfig struct {
-	TextUnit       string
-	MediaUnit      string
-	TextHealthURL  string
-	MediaHealthURL string
+	TextUnit        string
+	MediaUnit       string
+	TextHealthURL   string
+	MediaHealthURL  string
 	MediaReleaseURL string
-	HealthTimeout  time.Duration
+	HealthTimeout   time.Duration
 }
 
 type SystemdManager struct {
@@ -62,8 +62,8 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 		return nil, errors.New("health timeout must be greater than zero")
 	}
 	for name, value := range map[string]string{
-		"text health": config.TextHealthURL,
-		"media health": config.MediaHealthURL,
+		"text health":   config.TextHealthURL,
+		"media health":  config.MediaHealthURL,
 		"media release": config.MediaReleaseURL,
 	} {
 		if err := validateLoopbackURL(value); err != nil {
