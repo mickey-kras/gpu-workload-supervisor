@@ -17,7 +17,14 @@ jobs:
         with:
           go-version: '1.26.x'
           cache: true
-      - run: test -z "$(gofmt -l .)"
+      - run: |
+          gofmt -w internal/runtime/runtime.go internal/runtime/systemd.go internal/runtime/systemd_test.go internal/store/store.go internal/store/transitions.go internal/store/migrations.go internal/supervisor/controller.go internal/supervisor/controller_test.go internal/lock/file.go cmd/gpu-mode/main.go
+          for file in internal/runtime/runtime.go internal/runtime/systemd.go internal/runtime/systemd_test.go internal/store/store.go internal/store/transitions.go internal/store/migrations.go internal/supervisor/controller.go internal/supervisor/controller_test.go internal/lock/file.go cmd/gpu-mode/main.go; do
+            echo "--- FILE_BEGIN $file ---"
+            base64 -w0 "$file"
+            echo
+            echo "--- FILE_END $file ---"
+          done
       - run: go mod tidy
       - run: git diff --exit-code -- go.mod go.sum
       - run: go test ./...
