@@ -26,12 +26,8 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 
 func TestObserveRejectsAmbiguousRuntime(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"systemctl --user show text.service --property=LoadState --property=ActiveState":  []byte("LoadState=loaded
-ActiveState=active
-"),
-		"systemctl --user show media.service --property=LoadState --property=ActiveState": []byte("LoadState=loaded
-ActiveState=active
-"),
+		"systemctl --user show text.service --property=LoadState --property=ActiveState":  []byte("LoadState=loaded\\nActiveState=active\\n"),
+		"systemctl --user show media.service --property=LoadState --property=ActiveState": []byte("LoadState=loaded\\nActiveState=active\\n"),
 	}, errs: map[string]error{}}
 	manager, err := newSystemdManager(testConfig(), runner, http.DefaultClient)
 	if err != nil {
