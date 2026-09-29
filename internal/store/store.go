@@ -89,15 +89,6 @@ func openWithMode(ctx context.Context, path string, now Clock, uuid func() (stri
 		return nil, fmt.Errorf("connect sqlite: %w", err)
 	}
 	if restored {
-		var result string
-		if err := db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&result); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("check restored sqlite: %w", err)
-		}
-		if result != "ok" {
-			db.Close()
-			return nil, fmt.Errorf("sqlite quick_check: %s", result)
-		}
 		if err := validateRestoredDatabase(ctx, db); err != nil {
 			db.Close()
 			return nil, err
@@ -116,6 +107,13 @@ func openWithMode(ctx context.Context, path string, now Clock, uuid func() (stri
 }
 
 func validateRestoredDatabase(ctx context.Context, db *sql.DB) error {
+	var result string
+	if err := db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&result); err != nil {
+		return fmt.Errorf("check restored sqlite: %w", err)
+	}
+	if result != "ok" {
+		return fmt.Errorf("sqlite quick_check: %s", result)
+	}
 	var migrations int
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations").Scan(&migrations); err != nil {
 		return fmt.Errorf("restored state database is not initialized: %w", err)
