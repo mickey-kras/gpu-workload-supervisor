@@ -1,0 +1,63 @@
+name: aislop
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  status:
+    name: aislop status
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: .github/aislop/package-lock.json
+      - run: npm ci --prefix .github/aislop --ignore-scripts
+      - name: Aislop automation quality gate
+        run: .github/aislop/node_modules/.bin/aislop ci --human .
+      - name: Aislop Go quality gate
+        run: .github/aislop/node_modules/.bin/aislop ci --human internal
+      - name: Aislop Go SARIF
+        if: always()
+        run: .github/aislop/node_modules/.bin/aislop ci --sarif internal > aislop.sarif
+      - name: Aislop findings gate
+        if: always()
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const runs = JSON.parse(fs.readFileSync('aislop.sarif', 'utf8')).runs;
+          const findings = runs.flatMap(run => run.results || [])
+            .filter(result => result.ruleId !== 'security/dependency-audit-skipped');
+          if (findings.length) {
+            console.error('Aislop findings:', [...new Set(findings.map(result => result.ruleId))].join(', '));
+            process.exitCode = 1;
+          }
+          NODE
+      - name: Upload Aislop SARIF
+        if: >-
+          ${{
+            !cancelled() &&
+            (github.event_name != 'pull_request' ||
+              github.event.pull_request.head.repo.full_name == github.repository)
+          }}
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+        with:
+          sarif_file: aislop.sarif
+          category: .github/workflows/aislop.yml:status

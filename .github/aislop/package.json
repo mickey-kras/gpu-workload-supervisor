@@ -1,0 +1,16 @@
+{
+  "name": "gpu-workload-supervisor-ci",
+  "version": "0.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "aislop:ci": "aislop ci",
+    "aislop:ci:human": "aislop ci --human",
+    "aislop:ci:sarif": "aislop ci --sarif"
+  },
+  "devDependencies": {
+    "aislop": "0.16.1"
+  }
+}

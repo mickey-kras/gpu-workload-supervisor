@@ -1,5 +1,11 @@
 # GPU Workload Supervisor
 
+[![PR validation](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/pr-validation.yml/badge.svg)](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/pr-validation.yml)
+[![CodeQL](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/codeql.yml/badge.svg)](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/codeql.yml)
+[![Aislop](https://badges.scanaislop.com/score/mickey-kras/gpu-workload-supervisor.svg)](https://scanaislop.com/mickey-kras/gpu-workload-supervisor)
+[![main validation and SonarQube](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/main.yml/badge.svg?branch=main)](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/main.yml?query=branch%3Amain)
+[![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Crash-safe GPU workload supervision for local AI runtimes.
 
 ## Scope
@@ -39,3 +45,5 @@ go vet ./...
 ```
 
 Runtime adapters and service control are intentionally outside the initial state-engine slice.
+
+Repository checks and setup: [onboarding](docs/ONBOARDING.md). Dependabot: [policy](docs/DEPENDABOT.md). Source releases: [releasing](docs/RELEASING.md).

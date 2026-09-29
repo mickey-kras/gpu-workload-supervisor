@@ -1,0 +1,14 @@
+ci:
+  failBelow: 95
+
+telemetry:
+  enabled: false
+
+exclude:
+  - node_modules
+  - coverage.out
+  - package-lock.json
+
+rules:
+  security/hardcoded-secret: error
+  security/vulnerable-dependency: off
