@@ -16,4 +16,5 @@ type Manager interface {
 	Start(context.Context, control.Workload) error
 	Stop(context.Context, control.Workload) error
 	Healthy(context.Context, control.Workload) error
+	Released(context.Context) error
 }
