@@ -79,7 +79,7 @@ func TestFenceRotationRejectsStaleWork(t *testing.T) {
 	if rotated.LeaseFence.Epoch != oldFence.Epoch+1 {
 		t.Fatalf("epoch = %d", rotated.LeaseFence.Epoch)
 	}
-	if err := store.RegisterWork(ctx, "request-1", "job-1", oldFence); !errors.Is(err, ErrStaleFence) {
+	if err := store.RegisterWork(ctx, "request-1", "job-1", control.WorkloadText, oldFence); !errors.Is(err, ErrStaleFence) {
 		t.Fatalf("register stale work: %v", err)
 	}
 }
@@ -179,7 +179,7 @@ func TestMigratesV1WithoutChangingPersistedState(t *testing.T) {
 	if err := stateStore.db.QueryRow("SELECT COUNT(*) FROM transition_events").Scan(&events); err != nil {
 		t.Fatal(err)
 	}
-	if version != 2 || work != 1 || transitions != 1 || events != 1 {
+	if version != 3 || work != 1 || transitions != 1 || events != 1 {
 		t.Fatalf("migration result version=%d work=%d transitions=%d events=%d", version, work, transitions, events)
 	}
 }
@@ -254,5 +254,29 @@ func createV1Database(t *testing.T, path string, conflict bool) {
 		if _, err := db.Exec("CREATE TABLE transition_work (unexpected INTEGER)"); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestRegisterWorkRequiresMatchingStableWorkload(t *testing.T) {
+	stateStore := testStore(t)
+	ctx := context.Background()
+	state, err := stateStore.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.DesiredWorkload = control.WorkloadText
+	state.ActiveWorkload = control.WorkloadText
+	state.Phase = control.PhaseStable
+	state.Health = control.HealthHealthy
+	state.Admission = control.AdmissionOpen
+	state, err = stateStore.UpdateState(ctx, state.Version, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stateStore.RegisterWork(ctx, "media-request", "job-1", control.WorkloadMedia, state.LeaseFence); !errors.Is(err, ErrWorkloadMismatch) {
+		t.Fatalf("register mismatched work: %v", err)
+	}
+	if err := stateStore.RegisterWork(ctx, "text-request", "job-1", control.WorkloadText, state.LeaseFence); err != nil {
+		t.Fatal(err)
 	}
 }
