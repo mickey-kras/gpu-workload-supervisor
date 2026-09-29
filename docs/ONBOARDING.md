@@ -19,8 +19,9 @@ not become active by being committed.
 4. Confirm that the SonarQube project key `gpu-workload-supervisor` exists with
    the intended quality profile and gate. Its main-only workflow connects as
    `tag:github-sonar` and uses the existing Tailscale and Sonar secrets.
-5. Set the repository variable `RELEASE_APP_ID` for the GitHub App whose private
-   key is stored as `RELEASE_APP_PRIVATE_KEY`. Install that App on this repo with
+5. Set the repository variable `RELEASE_APP_ID` to the GitHub App's **Client ID**
+   (the variable name is retained for parity with the router), whose private key
+   is stored as `RELEASE_APP_PRIVATE_KEY`. Install that App on this repo with
    Contents and Pull requests write plus Administration read permissions. Create the
    `release-automation` environment. Confirm the App actor in the tag-creation
    ruleset before importing it.

@@ -9,6 +9,17 @@ const REQUIRED_FILES = [
   '.github/workflows/dependabot-auto-merge-refresh.yml', '.github/dependabot.yml',
   '.github/scripts/policy-guard.cjs', '.github/scripts/dependabot-auto-merge.cjs',
   '.github/scripts/pr-branch-updater.cjs', 'sonar-project.properties',
+  '.github/scripts/package.json', '.github/scripts/package-lock.json',
+  '.github/aislop/package.json', '.github/aislop/package-lock.json',
+  '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
+  '.github/rulesets/enforce-release-tag-names.json',
+  '.github/rulesets/enforce-work-branch-names.json',
+  '.github/rulesets/protect-default-branch.json',
+  '.github/rulesets/protect-release-branches.json',
+  '.github/rulesets/protect-release-tags.json',
+  '.github/rulesets/release-branch-creation.json',
+  '.github/rulesets/release-branch-deletion.json',
+  '.github/rulesets/release-tag-creation.json',
 ];
 
 function inspect(files) {
@@ -25,7 +36,13 @@ function inspect(files) {
       workflows[path] = doc.toJS();
       const jobs = workflows[path]?.jobs || {};
       for (const [jobId, job] of Object.entries(jobs)) {
+        if (Object.hasOwn(job, 'continue-on-error')) {
+          failures.push(`${path}/${jobId} may ignore gate failures`);
+        }
         for (const step of [job, ...(job.steps || [])]) {
+          if (Object.hasOwn(step, 'continue-on-error')) {
+            failures.push(`${path}/${jobId} may ignore step failures`);
+          }
           if (!step.uses || step.uses.startsWith('./')) continue;
           if (!/^[\w.-]+(?:\/[\w.-]+)+@[a-f0-9]{40}$/.test(step.uses)) {
             failures.push(`${path}/${jobId} has an unpinned action: ${step.uses}`);
@@ -57,6 +74,14 @@ function inspect(files) {
       failures.push(`${path}/${jobId} lost unconditional control: ${name}`);
     }
   }
+  function exactRun(path, jobId, name, lines) {
+    const actual = workflows[path]?.jobs?.[jobId]?.steps?.find(s => s.name === name)?.run;
+    const normalized = value => typeof value === 'string' ? value.trim().split('\n')
+      .map(line => line.trim()).join('\n') : null;
+    if (normalized(actual) !== normalized(lines.join('\n'))) {
+      failures.push(`${path}/${jobId} changed gate commands: ${name}`);
+    }
+  }
   const pr = '.github/workflows/pr-validation.yml';
   event(pr, 'pull_request');
   for (const [id, target] of Object.entries({
@@ -77,6 +102,31 @@ function inspect(files) {
   step(ci, 'checks', 'Semgrep', { run: ['docker pull "$SEMGREP_IMAGE"', 'semgrep scan --config .semgrep.yml --exclude .semgrep.yml --error'] });
   step(ci, 'checks', 'Trivy high and critical gate', { uses: 'aquasecurity/trivy-action', withValues: { 'exit-code': '1', severity: 'HIGH,CRITICAL' } });
   step(ci, 'checks', 'Upload Trivy SARIF', { uses: 'github/codeql-action/upload-sarif', allowIf: true });
+  exactRun(ci, 'checks', 'Go formatting', ['test -z "$(gofmt -l .)"']);
+  exactRun(ci, 'checks', 'Go module lock is current', [
+    'go mod tidy', 'git diff --exit-code -- go.mod go.sum',
+  ]);
+  exactRun(ci, 'checks', 'Tests, race detector, and coverage', [
+    'go test -race -coverprofile=coverage.out ./...',
+    'go tool cover -func=coverage.out | tee coverage-summary.txt',
+    'awk \'$1 == "total:" { coverage=$3+0; found=1 } END { if (!found || coverage < 53) exit 1 }\' coverage-summary.txt',
+  ]);
+  exactRun(ci, 'checks', 'Go vet', ['go vet ./...']);
+  exactRun(ci, 'checks', 'Audit Aislop toolchain', [
+    'npm ci --prefix .github/aislop --ignore-scripts --no-audit --no-fund',
+    'npm audit --prefix .github/aislop --audit-level=moderate',
+  ]);
+  exactRun(ci, 'checks', 'Test policy automation', [
+    'npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund',
+    'npm audit --prefix .github/scripts --audit-level=moderate',
+    'node --test .github/scripts/*.test.cjs',
+  ]);
+  exactRun(ci, 'checks', 'Semgrep', [
+    'SEMGREP_IMAGE="semgrep/semgrep:1.172.0@sha256:65dcd4408adda7c183a6b4550cb1e9b19f7f627a6fbb7e0559bd466bedc44d7b"',
+    'docker pull "$SEMGREP_IMAGE"',
+    'docker run --rm -v "${PWD}:/src" -w /src "$SEMGREP_IMAGE" \\',
+    'semgrep scan --config .semgrep.yml --exclude .semgrep.yml --error',
+  ]);
 
   const main = '.github/workflows/main.yml';
   event(main, 'push');
@@ -124,6 +174,31 @@ function inspect(files) {
   }
   if (!files['sonar-project.properties']?.includes('sonar.go.coverage.reportPaths=coverage.out')) {
     failures.push('SonarQube lost Go coverage path');
+  }
+  const rulesets = {};
+  for (const path of REQUIRED_FILES.filter(name => name.startsWith('.github/rulesets/'))) {
+    try {
+      rulesets[path.split('/').pop()] = JSON.parse(files[path]);
+      if (rulesets[path.split('/').pop()].enforcement !== 'active') {
+        failures.push(`${path} lost active enforcement`);
+      }
+    } catch (error) {
+      if (files[path]) failures.push(`${path} has invalid JSON: ${error.message}`);
+    }
+  }
+  const defaultRules = rulesets['protect-default-branch.json']?.rules || [];
+  const checks = defaultRules.find(rule => rule.type === 'required_status_checks')
+    ?.parameters?.required_status_checks?.map(check => check.context) || [];
+  for (const context of ['quality / checks', 'aislop / aislop status', 'codeql / analyze',
+    'branch-policy / branch name', 'dependency-review / dependency review', 'guard']) {
+    if (!checks.includes(context)) failures.push(`Default branch lost required check: ${context}`);
+  }
+  for (const type of ['pull_request', 'code_scanning', 'code_quality', 'deletion', 'non_fast_forward']) {
+    if (!defaultRules.some(rule => rule.type === type)) failures.push(`Default branch lost rule: ${type}`);
+  }
+  const tagRules = rulesets['protect-release-tags.json']?.rules || [];
+  for (const type of ['update', 'deletion', 'non_fast_forward']) {
+    if (!tagRules.some(rule => rule.type === type)) failures.push(`Release tags lost rule: ${type}`);
   }
   return failures;
 }
