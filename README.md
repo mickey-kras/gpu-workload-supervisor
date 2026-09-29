@@ -86,7 +86,11 @@ Default headers:
 - `X-Workload-Lease-Incarnation`
 - `X-Workload-Lease-Epoch`
 
-Control headers are removed before forwarding. Work is registered before forwarding and completed only with its registered fence. A process restart leaves incomplete work durable for recovery. During explicit user ownership, execution routes pass through without lease registration.
+Control headers are removed before forwarding. Work is registered before forwarding and remains active after submission. The caller must send a terminal `completed` or `abandoned` outcome to the configurable completion path with the request ID and registered fence. Proxy, upstream, client, and process failures leave work incomplete for explicit reconciliation.
+
+Safe methods are forwarded by default. Unclassified mutating routes fail closed. Required non-execution mutations must be explicitly configured as passthrough routes.
+
+The listener is restricted to loopback because explicit user ownership bypasses supervisor lease registration. External exposure and requester authentication belong to the deployment boundary.
 
 The proxy is content-blind. Content inspection and domain policy belong to the caller.
 
