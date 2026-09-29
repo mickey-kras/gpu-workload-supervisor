@@ -78,6 +78,15 @@ test('reviewed release settings cannot be skipped', () => {
   assert.ok(inspect(candidate).some(error => error.includes('reviewed release settings verification')));
 });
 
+test('reviewed release settings cannot be conditional or hidden in a comment', () => {
+  const candidate = files();
+  const path = '.github/workflows/release.yml';
+  candidate[path] = candidate[path].replace('        id: state\n', '        id: state\n        if: false\n');
+  assert.ok(inspect(candidate).some(error => error.includes('reviewed release settings verification')));
+  candidate[path] = files()[path].replace('            await require(', '            // await require(');
+  assert.ok(inspect(candidate).some(error => error.includes('reviewed release settings verification')));
+});
+
 test('scanner policy cannot become empty while workflow remains active', () => {
   const candidate = files();
   candidate['.semgrep.yml'] = 'rules: []\n';

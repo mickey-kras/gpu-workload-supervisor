@@ -174,9 +174,15 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
   event(release, 'workflow_dispatch');
   step(release, 'publish', 'Release App token', { uses: 'actions/create-github-app-token' });
   const state = workflows[release]?.jobs?.publish?.steps?.find(s => s.name === 'Verify immutable setting and publication state');
+  const verification = [
+    "await require('./.github/scripts/release-settings.cjs').verify({",
+    '  github, context, review: process.env.RELEASE_SETTINGS_REVIEW,',
+    '});',
+  ].join('\n');
   if (state?.env?.RELEASE_SETTINGS_REVIEW !== '${{ vars.RELEASE_SETTINGS_REVIEW }}' ||
-      !state.with?.script?.includes("await require('./.github/scripts/release-settings.cjs').verify({") ||
-      state.with?.['github-token'] !== '${{ steps.app.outputs.token }}') {
+      !state.with?.script?.startsWith(verification) ||
+      state.with?.['github-token'] !== '${{ steps.app.outputs.token }}' ||
+      Object.hasOwn(state, 'if') || Object.hasOwn(workflows[release]?.jobs?.publish || {}, 'if')) {
     failures.push(`${release} lost reviewed release settings verification`);
   }
   step(release, 'publish', 'Build deployable binaries', {
