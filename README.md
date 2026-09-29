@@ -69,7 +69,8 @@ gpu-workload-proxy \
   -listen 127.0.0.1:8090 \
   -upstream http://127.0.0.1:PORT \
   -workload media \
-  -execute-route POST:/execute
+  -execute-route POST:/execute \
+  -completion-path /_gpu-workload-supervisor/v1/work/finish
 ```
 
 During supervisor ownership, gated requests require:
@@ -86,7 +87,20 @@ Default headers:
 - `X-Workload-Lease-Incarnation`
 - `X-Workload-Lease-Epoch`
 
-Control headers are removed before forwarding. Work is registered before forwarding and remains active after submission. The caller must send a terminal `completed` or `abandoned` outcome to the configurable completion path with the request ID and registered fence. Proxy, upstream, client, and process failures leave work incomplete for explicit reconciliation.
+Control headers are removed before forwarding. Work is registered before forwarding and remains active after submission. The caller must send a terminal `completed` or `abandoned` outcome to the configurable completion path with the request ID and registered fence:
+
+```json
+{
+  "requestId": "REQUEST_ID",
+  "fence": {
+    "incarnation": "LEASE_INCARNATION",
+    "epoch": 1
+  },
+  "outcome": "completed"
+}
+```
+
+The default completion path is `/_gpu-workload-supervisor/v1/work/finish`. A successful terminal update returns HTTP 204. Proxy, upstream, client, and process failures leave work incomplete for explicit reconciliation.
 
 Safe methods are forwarded by default. Unclassified mutating routes fail closed. Required non-execution mutations must be explicitly configured as passthrough routes.
 
