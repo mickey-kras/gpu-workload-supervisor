@@ -97,17 +97,8 @@ func (s *Store) FinishWorkFenced(ctx context.Context, requestID string, workload
 }
 
 func (s *Store) FinishWorkToken(ctx context.Context, requestID string, workload control.Workload, fence control.Fence, token string, outcome WorkOutcome) error {
-	if requestID == "" {
-		return errors.New("request id is empty")
-	}
-	if err := fence.Validate(); err != nil {
-		return fmt.Errorf("invalid fence: %w", err)
-	}
-	if workload != control.WorkloadText && workload != control.WorkloadMedia {
-		return errors.New("workload must be text or media")
-	}
-	if outcome != WorkCompleted && outcome != WorkAbandoned {
-		return errors.New("invalid work outcome")
+	if err := validateFinishedWork(requestID, workload, fence, outcome); err != nil {
+		return err
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE registered_work
 		SET completed_at = ?, completion_outcome = ?
@@ -147,6 +138,22 @@ func (s *Store) FinishWorkToken(ctx context.Context, requestID string, workload 
 		return ErrRegistrationTokenMismatch
 	}
 	return sql.ErrNoRows
+}
+
+func validateFinishedWork(requestID string, workload control.Workload, fence control.Fence, outcome WorkOutcome) error {
+	if requestID == "" {
+		return errors.New("request id is empty")
+	}
+	if err := fence.Validate(); err != nil {
+		return fmt.Errorf("invalid fence: %w", err)
+	}
+	if workload != control.WorkloadText && workload != control.WorkloadMedia {
+		return errors.New("workload must be text or media")
+	}
+	if outcome != WorkCompleted && outcome != WorkAbandoned {
+		return errors.New("invalid work outcome")
+	}
+	return nil
 }
 
 const prunableWorkIDs = `SELECT work.request_id FROM registered_work AS work
