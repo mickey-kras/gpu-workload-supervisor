@@ -68,19 +68,31 @@ func (s *Store) initialize(ctx context.Context) error {
 		"PRAGMA synchronous = FULL",
 		"PRAGMA busy_timeout = 5000",
 	} {
-		if _, err := s.db.ExecContext(ctx, pragma); err != nil { return fmt.Errorf("configure sqlite: %w", err) }
+		if _, err := s.db.ExecContext(ctx, pragma); err != nil {
+			return fmt.Errorf("configure sqlite: %w", err)
+		}
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, schemaV1); err != nil { return fmt.Errorf("apply schema v1: %w", err) }
+	if _, err := tx.ExecContext(ctx, schemaV1); err != nil {
+		return fmt.Errorf("apply schema v1: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at)
-		VALUES (1, ?)`, formatTime(s.now())); err != nil { return err }
+		VALUES (1, ?)`, formatTime(s.now())); err != nil {
+		return err
+	}
 	var count int
-	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM control_state").Scan(&count); err != nil { return err }
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM control_state").Scan(&count); err != nil {
+		return err
+	}
 	if count == 0 {
 		incarnation, err := s.uuid()
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		state := control.InitialState(incarnation, s.now())
 		if _, err := tx.ExecContext(ctx, `INSERT INTO control_state
 			(singleton, owner, desired_workload, active_workload, phase, health, admission,
@@ -88,14 +100,26 @@ func (s *Store) initialize(ctx context.Context) error {
 			VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			state.Owner, state.DesiredWorkload, state.ActiveWorkload, state.Phase,
 			state.Health, state.Admission, state.LeaseFence.Incarnation,
-			state.LeaseFence.Epoch, state.Version, formatTime(state.UpdatedAt)); err != nil { return err }
+			state.LeaseFence.Epoch, state.Version, formatTime(state.UpdatedAt)); err != nil {
+			return err
+		}
 	}
-	if count > 1 { return fmt.Errorf("control_state contains %d rows", count) }
-	if err := tx.Commit(); err != nil { return err }
+	if count > 1 {
+		return fmt.Errorf("control_state contains %d rows", count)
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
 	var result string
-	if err := s.db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&result); err != nil { return err }
-	if result != "ok" { return fmt.Errorf("sqlite quick_check: %s", result) }
+	if err := s.db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&result); err != nil {
+		return err
+	}
+	if result != "ok" {
+		return fmt.Errorf("sqlite quick_check: %s", result)
+	}
 	state, err := readState(ctx, s.db)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	return state.Validate()
 }
