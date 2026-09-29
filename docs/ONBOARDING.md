@@ -6,7 +6,11 @@ not become active by being committed.
 
 1. Repository merge settings: enable squash only and auto-merge; disable merge
    commits and rebase merges; enable automatic deletion of merged branches.
-2. Enable the dependency graph now so `dependency-review` can pass on this PR.
+2. Verify Dependency graph in repository Advanced Security settings. GitHub
+   normally enables it for public repositories. If an Enable control appears,
+   use it and rerun the failed `dependency-review` job. If the graph is already
+   enabled, investigate the action's 403 response using its workflow run; its
+   generic error message does not establish that the graph is disabled.
    Enable Dependabot alerts, code scanning, code quality, and secret scanning as
    available. Run `main` once after merge to register CodeQL, Trivy,
    Aislop, and SonarQube analyses.
