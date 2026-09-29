@@ -65,7 +65,12 @@ CREATE TABLE transition_work (
 );
 `
 
-var migrations = []string{schemaV1, schemaV2}
+const schemaV3 = `
+ALTER TABLE registered_work
+ADD COLUMN workload TEXT CHECK (workload IN ('text', 'media'));
+`
+
+var migrations = []string{schemaV1, schemaV2, schemaV3}
 
 func (s *Store) initialize(ctx context.Context) error {
 	for _, pragma := range []string{
