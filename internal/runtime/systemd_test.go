@@ -25,8 +25,8 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 
 func TestObserveKeepsMediaAvailabilitySeparateFromTextOwnership(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"systemctl --user show text.service --property=LoadState --property=ActiveState --property=SubState":  []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
-		"systemctl --user show media.service --property=LoadState --property=ActiveState --property=SubState": []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
+		"systemctl --user show -- text.service --property=LoadState --property=ActiveState --property=SubState":  []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
+		"systemctl --user show -- media.service --property=LoadState --property=ActiveState --property=SubState": []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
 	}, errs: map[string]error{}}
 	manager, err := newSystemdManager(testConfig(), runner, http.DefaultClient)
 	if err != nil {
@@ -50,7 +50,7 @@ func TestStartUsesUserSystemdWithoutShell(t *testing.T) {
 	if err := manager.Start(context.Background(), control.WorkloadText); err != nil {
 		t.Fatal(err)
 	}
-	if got := runner.calls[len(runner.calls)-1]; got != "systemctl --user start text.service" {
+	if got := runner.calls[len(runner.calls)-1]; got != "systemctl --user start -- text.service" {
 		t.Fatalf("call = %q", got)
 	}
 }
@@ -127,5 +127,35 @@ func testConfig() SystemdConfig {
 		MediaHealthURL:  "http://127.0.0.1:8188/",
 		MediaReleaseURL: "http://127.0.0.1:8188/free",
 		HealthTimeout:   time.Second,
+		GPUIndex:        0,
+		ReleaseMaxMiB:   1024,
+	}
+}
+
+func TestConfigurationRejectsOptionLikeUnit(t *testing.T) {
+	config := testConfig()
+	config.TextUnit = "--system.service"
+	if _, err := newSystemdManager(config, &fakeRunner{}, http.DefaultClient); err == nil {
+		t.Fatal("expected unit validation failure")
+	}
+}
+
+func TestReleasedUsesNVMLBackedMemoryProbe(t *testing.T) {
+	runner := &fakeRunner{
+		outputs: map[string][]byte{
+			"nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i 0": []byte("900\n"),
+		},
+		errs: map[string]error{},
+	}
+	manager, err := newSystemdManager(testConfig(), runner, http.DefaultClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Released(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	runner.outputs["nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i 0"] = []byte("2048\n")
+	if err := manager.Released(context.Background()); err == nil {
+		t.Fatal("expected unreleased GPU memory")
 	}
 }
