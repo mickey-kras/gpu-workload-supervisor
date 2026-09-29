@@ -60,12 +60,15 @@ func (s *Store) AdmitWork(ctx context.Context, requestID, jobID string, workload
 	return tx.Commit()
 }
 
-func (s *Store) FinishWorkFenced(ctx context.Context, requestID string, fence control.Fence, outcome WorkOutcome) error {
+func (s *Store) FinishWorkFenced(ctx context.Context, requestID string, workload control.Workload, fence control.Fence, outcome WorkOutcome) error {
 	if requestID == "" {
 		return errors.New("request id is empty")
 	}
 	if err := fence.Validate(); err != nil {
 		return fmt.Errorf("invalid fence: %w", err)
+	}
+	if workload != control.WorkloadText && workload != control.WorkloadMedia {
+		return errors.New("workload must be text or media")
 	}
 	if outcome != WorkCompleted && outcome != WorkAbandoned {
 		return errors.New("invalid work outcome")
@@ -73,8 +76,8 @@ func (s *Store) FinishWorkFenced(ctx context.Context, requestID string, fence co
 	result, err := s.db.ExecContext(ctx, `UPDATE registered_work
 		SET completed_at = ?, completion_outcome = ?
 		WHERE request_id = ? AND completed_at IS NULL
-		  AND lease_incarnation = ? AND lease_epoch = ?`,
-		formatTime(s.now()), outcome, requestID, fence.Incarnation, fence.Epoch)
+		  AND workload = ? AND lease_incarnation = ? AND lease_epoch = ?`,
+		formatTime(s.now()), outcome, requestID, workload, fence.Incarnation, fence.Epoch)
 	if err != nil {
 		return fmt.Errorf("finish work: %w", err)
 	}
@@ -85,15 +88,19 @@ func (s *Store) FinishWorkFenced(ctx context.Context, requestID string, fence co
 	if changed == 1 {
 		return nil
 	}
+	var registeredWorkload control.Workload
 	var incarnation string
 	var epoch uint64
-	err = s.db.QueryRowContext(ctx, `SELECT lease_incarnation, lease_epoch
-		FROM registered_work WHERE request_id = ?`, requestID).Scan(&incarnation, &epoch)
+	err = s.db.QueryRowContext(ctx, `SELECT workload, lease_incarnation, lease_epoch
+		FROM registered_work WHERE request_id = ?`, requestID).Scan(&registeredWorkload, &incarnation, &epoch)
 	if errors.Is(err, sql.ErrNoRows) {
 		return sql.ErrNoRows
 	}
 	if err != nil {
 		return err
+	}
+	if registeredWorkload != workload {
+		return ErrWorkloadMismatch
 	}
 	if incarnation != fence.Incarnation || epoch != fence.Epoch {
 		return ErrStaleFence
@@ -102,5 +109,5 @@ func (s *Store) FinishWorkFenced(ctx context.Context, requestID string, fence co
 }
 
 func (s *Store) CompleteWorkFenced(ctx context.Context, requestID string, fence control.Fence) error {
-	return s.FinishWorkFenced(ctx, requestID, fence, WorkCompleted)
+	return s.FinishWorkFenced(ctx, requestID, control.WorkloadMedia, fence, WorkCompleted)
 }
