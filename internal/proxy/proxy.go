@@ -62,6 +62,17 @@ type Handler struct {
 	fenceEpochHeader  string
 }
 
+type registrationTokenTransport struct {
+	base  http.RoundTripper
+	token string
+}
+
+func (t registrationTokenTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	forwarded := request.Clone(request.Context())
+	forwarded.Header.Set(DefaultRegistrationTokenHeader, t.token)
+	return t.base.RoundTrip(forwarded)
+}
+
 type finishRequest struct {
 	RequestID         string            `json:"requestId"`
 	RegistrationToken string            `json:"registrationToken"`
@@ -205,8 +216,14 @@ func (h *Handler) execute(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	forwarded := h.withoutControlHeaders(request)
-	forwarded.Header.Set(DefaultRegistrationTokenHeader, token)
 	proxy := *h.proxy
+	baseTransport := proxy.Transport
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	// ReverseProxy strips hop-by-hop headers before calling Transport. Add the
+	// trusted token afterwards so a client cannot nominate it in Connection.
+	proxy.Transport = registrationTokenTransport{base: baseTransport, token: token}
 	proxy.ModifyResponse = func(upstreamResponse *http.Response) error {
 		upstreamResponse.Header.Set(DefaultRegistrationTokenHeader, token)
 		return nil
