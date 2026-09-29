@@ -123,7 +123,7 @@ func TestSupervisorExecutionStaysRegisteredUntilExplicitFinish(t *testing.T) {
 	}
 }
 
-func TestExecutionForwardsRegistrationTokenDespiteConnectionNomination(t *testing.T) {
+func TestExecutionForwardsTrustedCorrelationDespiteConnectionNomination(t *testing.T) {
 	var receivedToken, receivedHopHeader, receivedRequestID, receivedFenceID, receivedFenceEpoch string
 	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		receivedToken = request.Header.Get(DefaultRegistrationTokenHeader)
@@ -169,13 +169,20 @@ func TestExecutionForwardsRegistrationTokenDespiteConnectionNomination(t *testin
 }
 
 func TestUserOwnershipBypassesLeaseRegistration(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		for _, name := range []string{DefaultRequestIDHeader, DefaultFenceIDHeader, DefaultFenceEpochHeader, DefaultRegistrationTokenHeader} {
+			if got := request.Header.Get(name); got != "" {
+				t.Errorf("user-owned upstream received %s = %q", name, got)
+			}
+		}
 		response.WriteHeader(http.StatusNoContent)
 	}))
 	defer upstream.Close()
 	stateStore := &fakeStore{state: admittedState(control.OwnerUser)}
 	handler := testHandler(t, stateStore, upstream.URL)
 	request := httptest.NewRequest(http.MethodPost, "http://proxy.test/execute", nil)
+	addLeaseHeaders(request, stateStore.state.LeaseFence)
+	request.Header.Set(DefaultRegistrationTokenHeader, "caller-spoof")
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
