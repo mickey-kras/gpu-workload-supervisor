@@ -19,6 +19,7 @@ type fakeRuntime struct {
 	startErr       error
 	stopErr        error
 	releaseFailures int
+	cancelOnStop   func()
 	calls          []string
 }
 
@@ -45,6 +46,9 @@ func (r *fakeRuntime) Start(_ context.Context, workload control.Workload) error 
 
 func (r *fakeRuntime) Stop(_ context.Context, workload control.Workload) error {
 	r.calls = append(r.calls, "stop "+string(workload))
+	if r.cancelOnStop != nil {
+		r.cancelOnStop()
+	}
 	if r.stopErr != nil {
 		return r.stopErr
 	}
@@ -278,14 +282,13 @@ func TestSwitchWaitsForGPUReleaseBeforeStartingText(t *testing.T) {
 
 func TestCanceledSwitchClosesTransitionAfterRollbackTimeout(t *testing.T) {
 	stateStore := openStore(t)
-	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true, startErr: errors.New("start failed")}
+	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true}
 	controller := testController(t, stateStore, runtime)
-	controller.config.CleanupTimeout = time.Nanosecond
 	if _, err := controller.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	runtime.cancelOnStop = cancel
 	if _, err := controller.Switch(ctx, control.WorkloadMedia, "test"); err == nil {
 		t.Fatal("expected canceled switch")
 	}
