@@ -426,21 +426,43 @@ func TestStatusDoesNotMutateUserOwnedState(t *testing.T) {
 	}
 }
 
-func TestTextSwitchIsIdempotent(t *testing.T) {
-	stateStore := openStore(t)
-	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true, blockRelease: true}
-	controller := testController(t, stateStore, runtime)
-	if _, err := controller.Reconcile(context.Background()); err != nil {
-		t.Fatal(err)
+func TestSwitchIsIdempotent(t *testing.T) {
+	tests := []struct {
+		name      string
+		workload  control.Workload
+		admission control.Admission
+	}{
+		{name: "text", workload: control.WorkloadText, admission: control.AdmissionOpen},
+		{name: "media", workload: control.WorkloadMedia, admission: control.AdmissionOpen},
+		{name: "idle", workload: control.WorkloadIdle, admission: control.AdmissionClosed},
 	}
-	result, err := controller.Switch(context.Background(), control.WorkloadText, "test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.ActiveWorkload != control.WorkloadText || result.Health != control.HealthHealthy || result.Admission != control.AdmissionOpen {
-		t.Fatalf("state = %#v", result)
-	}
-	if len(runtime.calls) != 0 {
-		t.Fatalf("unexpected runtime calls: %#v", runtime.calls)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stateStore := openStore(t)
+			runtime := &fakeRuntime{active: test.workload, mediaReady: true, blockRelease: true}
+			controller := testController(t, stateStore, runtime)
+			state, err := stateStore.State(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.DesiredWorkload = test.workload
+			state.ActiveWorkload = test.workload
+			state.Phase = control.PhaseStable
+			state.Health = control.HealthHealthy
+			state.Admission = test.admission
+			if _, err := stateStore.UpdateState(context.Background(), state.Version, state); err != nil {
+				t.Fatal(err)
+			}
+			result, err := controller.Switch(context.Background(), test.workload, "test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.ActiveWorkload != test.workload || result.Health != control.HealthHealthy || result.Admission != test.admission {
+				t.Fatalf("state = %#v", result)
+			}
+			if len(runtime.calls) != 0 {
+				t.Fatalf("unexpected runtime calls: %#v", runtime.calls)
+			}
+		})
 	}
 }
