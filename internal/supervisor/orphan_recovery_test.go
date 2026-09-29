@@ -165,3 +165,27 @@ func TestResolutionVerificationFailureKeepsWorkIncomplete(t *testing.T) {
 		t.Fatalf("unresolved work no longer blocks switch: %v", err)
 	}
 }
+
+func TestResolutionRejectsUserOwnershipWithoutStoppingRuntime(t *testing.T) {
+	ctx := context.Background()
+	stateStore := openStore(t)
+	runtime := &fakeRuntime{active: control.WorkloadText}
+	controller := testController(t, stateStore, runtime)
+	state, err := stateStore.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Owner = control.OwnerUser
+	if _, err := stateStore.UpdateState(ctx, state.Version, state); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := controller.ResolveUnfinishedWork(ctx, ""); err == nil {
+		t.Fatal("blank audit reason accepted")
+	}
+	if _, _, err := controller.ResolveUnfinishedWork(ctx, "incident-123"); !errors.Is(err, ErrUserOwned) {
+		t.Fatalf("user-owned recovery error = %v", err)
+	}
+	if len(runtime.calls) != 0 {
+		t.Fatalf("user runtime was stopped: %#v", runtime.calls)
+	}
+}

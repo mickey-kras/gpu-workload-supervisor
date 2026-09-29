@@ -147,6 +147,15 @@ func (m *SystemdManager) Stop(ctx context.Context, workload control.Workload) er
 	}
 }
 
+// StopForRecovery is deliberately stronger than Stop(media): the latter
+// unloads models while keeping the media UI available for normal switching.
+func (m *SystemdManager) StopForRecovery(ctx context.Context) error {
+	if err := m.runSystemctl(ctx, "stop", m.config.TextUnit); err != nil {
+		return err
+	}
+	return m.runSystemctl(ctx, "stop", m.config.MediaUnit)
+}
+
 func (m *SystemdManager) Healthy(ctx context.Context, workload control.Workload) error {
 	switch workload {
 	case control.WorkloadIdle:

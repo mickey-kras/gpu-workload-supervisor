@@ -327,12 +327,8 @@ func (c *Controller) ResolveUnfinishedWork(ctx context.Context, reason string) (
 	if err != nil {
 		return state, 0, err
 	}
-	for _, workload := range []control.Workload{control.WorkloadText, control.WorkloadMedia} {
-		if err := c.runAction(ctx, func(actionCtx context.Context) error {
-			return c.runtime.Stop(actionCtx, workload)
-		}); err != nil {
-			return state, 0, fmt.Errorf("stop %s before work resolution: %w", workload, err)
-		}
+	if err := c.runAction(ctx, c.runtime.StopForRecovery); err != nil {
+		return state, 0, fmt.Errorf("stop runtimes before work resolution: %w", err)
 	}
 	if err := c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout)); err != nil {
 		return state, 0, fmt.Errorf("verify release before work resolution: %w", err)
