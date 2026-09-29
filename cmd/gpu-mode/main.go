@@ -77,7 +77,7 @@ func run() error {
 	}
 	controller, err := supervisor.New(stateStore, runtimeManager, supervisor.Config{
 		DrainTimeout: *drainTimeout, VerifyTimeout: *verifyTimeout,
-		ActionTimeout: *actionTimeout,
+		ActionTimeout:  *actionTimeout,
 		CleanupTimeout: *cleanupTimeout, FinalizeTimeout: *finalizeTimeout,
 		PollInterval: *pollInterval,
 	})
