@@ -75,7 +75,7 @@ func (c *Controller) Status(ctx context.Context) (control.State, error) {
 	if err != nil {
 		return control.State{}, err
 	}
-	snapshot, err := c.runtime.Observe(ctx)
+	snapshot, err := c.observe(ctx)
 	if err != nil {
 		return c.latchObservationFailure(ctx, state, fmt.Errorf("observe runtime: %w", err))
 	}
@@ -128,7 +128,7 @@ func (c *Controller) Switch(ctx context.Context, target control.Workload, initia
 	if err != nil {
 		return c.fail(transitionID, state, current, err)
 	}
-	snapshot, err := c.runtime.Observe(ctx)
+	snapshot, err := c.observe(ctx)
 	if err != nil {
 		return c.fail(transitionID, state, current, fmt.Errorf("%w: observe before unload: %v", ErrRuntimeObservation, err))
 	}
@@ -204,7 +204,7 @@ func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
 		recovered, recoverErr := c.store.Recover(ctx, state.Version, final, reason)
 		return recovered, errors.Join(ErrRecoveryRequired, recoverErr)
 	}
-	snapshot, err := c.runtime.Observe(ctx)
+	snapshot, err := c.observe(ctx)
 	if err != nil {
 		return c.latchObservationFailure(ctx, state, err)
 	}
@@ -244,7 +244,7 @@ func (c *Controller) Recover(ctx context.Context) (control.State, error) {
 	if state.Owner == control.OwnerUser {
 		return state, ErrUserOwned
 	}
-	snapshot, err := c.runtime.Observe(ctx)
+	snapshot, err := c.observe(ctx)
 	if err != nil {
 		return state, err
 	}
@@ -304,7 +304,7 @@ func (c *Controller) waitReady(ctx context.Context, target control.Workload, dea
 	defer ticker.Stop()
 	var lastErr error
 	for {
-		snapshot, err := c.runtime.Observe(ctx)
+		snapshot, err := c.observe(ctx)
 		if err != nil {
 			err = fmt.Errorf("%w: %v", ErrRuntimeObservation, err)
 		} else {
@@ -365,6 +365,18 @@ func (c *Controller) setPhase(ctx context.Context, transitionID string, state co
 	return c.store.SetTransitionPhase(ctx, transitionID, state.Version, phase)
 }
 
+func (c *Controller) observe(ctx context.Context) (gpuruntime.Snapshot, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
+	defer cancel()
+	return c.runtime.Observe(probeCtx)
+}
+
+func (c *Controller) released(ctx context.Context) error {
+	probeCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
+	defer cancel()
+	return c.runtime.Released(probeCtx)
+}
+
 func (c *Controller) runAction(ctx context.Context, fn func(context.Context) error) error {
 	actionCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
 	defer cancel()
@@ -395,7 +407,7 @@ func (c *Controller) waitReleased(ctx context.Context, deadline time.Time) error
 	defer ticker.Stop()
 	var lastErr error
 	for {
-		if err := c.runtime.Released(ctx); err == nil {
+		if err := c.released(ctx); err == nil {
 			return nil
 		} else {
 			lastErr = err
@@ -436,7 +448,7 @@ func (c *Controller) fail(transitionID string, state, previous control.State, ca
 }
 
 func (c *Controller) rollback(ctx context.Context, transitionID string, previous control.State) error {
-	snapshot, err := c.runtime.Observe(ctx)
+	snapshot, err := c.observe(ctx)
 	if err != nil {
 		return err
 	}
