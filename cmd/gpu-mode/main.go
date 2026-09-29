@@ -34,10 +34,13 @@ func run() error {
 	textHealth := flags.String("text-health-url", "", "loopback text runtime health URL")
 	mediaHealth := flags.String("media-health-url", "", "loopback media runtime health URL")
 	mediaRelease := flags.String("media-release-url", "", "loopback media model release URL")
+	gpuIndex := flags.Int("gpu-index", 0, "NVIDIA GPU index")
+	releaseMaxMiB := flags.Uint64("release-max-used-mib", 0, "maximum used GPU memory after media release")
 	healthTimeout := flags.Duration("health-timeout", 10*time.Second, "individual health request timeout")
 	drainTimeout := flags.Duration("drain-timeout", 5*time.Minute, "admitted-work drain timeout")
 	verifyTimeout := flags.Duration("verify-timeout", 5*time.Minute, "runtime readiness timeout")
-	cleanupTimeout := flags.Duration("cleanup-timeout", 2*time.Minute, "failure cleanup timeout")
+	cleanupTimeout := flags.Duration("cleanup-timeout", 2*time.Minute, "failure rollback timeout")
+	finalizeTimeout := flags.Duration("finalize-timeout", 10*time.Second, "failure finalization timeout")
 	pollInterval := flags.Duration("poll-interval", 250*time.Millisecond, "drain and readiness polling interval")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
@@ -45,7 +48,7 @@ func run() error {
 	if flags.NArg() != 1 {
 		return errors.New("usage: gpu-mode [flags] status|reconcile|recover|text|media|idle")
 	}
-	if *textUnit == "" || *mediaUnit == "" || *textHealth == "" || *mediaHealth == "" || *mediaRelease == "" {
+	if *textUnit == "" || *mediaUnit == "" || *textHealth == "" || *mediaHealth == "" || *mediaRelease == "" || *releaseMaxMiB == 0 {
 		return errors.New("runtime unit and endpoint flags are required")
 	}
 	processLock, err := lock.Acquire(*statePath + ".lock")
@@ -64,13 +67,15 @@ func run() error {
 		TextUnit: *textUnit, MediaUnit: *mediaUnit,
 		TextHealthURL: *textHealth, MediaHealthURL: *mediaHealth,
 		MediaReleaseURL: *mediaRelease, HealthTimeout: *healthTimeout,
+		GPUIndex: *gpuIndex, ReleaseMaxMiB: *releaseMaxMiB,
 	})
 	if err != nil {
 		return err
 	}
 	controller, err := supervisor.New(stateStore, runtimeManager, supervisor.Config{
 		DrainTimeout: *drainTimeout, VerifyTimeout: *verifyTimeout,
-		CleanupTimeout: *cleanupTimeout, PollInterval: *pollInterval,
+		CleanupTimeout: *cleanupTimeout, FinalizeTimeout: *finalizeTimeout,
+		PollInterval: *pollInterval,
 	})
 	if err != nil {
 		return err
