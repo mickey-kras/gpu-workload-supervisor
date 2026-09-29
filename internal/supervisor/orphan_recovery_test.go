@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,7 +92,7 @@ func TestForwardingFailureNeedsVerifiedAuditedResolution(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer recoveryLock.Close()
-	closed, count, err := controller.ResolveUnfinishedWork(ctx, "incident: upstream submission unknown")
+	closed, count, err := controller.ResolveUnfinishedWork(ctx, " \tincident: upstream submission unknown\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,5 +188,29 @@ func TestResolutionRejectsUserOwnershipWithoutStoppingRuntime(t *testing.T) {
 	}
 	if len(runtime.calls) != 0 {
 		t.Fatalf("user runtime was stopped: %#v", runtime.calls)
+	}
+}
+
+func TestResolutionRejectsInvalidReasonWithoutDisruptingWorkload(t *testing.T) {
+	ctx := context.Background()
+	stateStore := openStore(t)
+	runtime := &fakeRuntime{active: control.WorkloadText}
+	controller := testController(t, stateStore, runtime)
+	before, err := controller.Reconcile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reason := range []string{" \t\n ", strings.Repeat("x", 513)} {
+		_, count, err := controller.ResolveUnfinishedWork(ctx, reason)
+		if err == nil || count != 0 {
+			t.Fatalf("invalid reason %q: count=%d err=%v", reason, count, err)
+		}
+		after, err := stateStore.State(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after != before || runtime.active != control.WorkloadText || len(runtime.calls) != 0 {
+			t.Fatalf("invalid reason changed workload: before=%#v after=%#v calls=%v", before, after, runtime.calls)
+		}
 	}
 }
