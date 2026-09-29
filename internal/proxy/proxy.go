@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -26,7 +27,7 @@ const (
 type StateStore interface {
 	State(context.Context) (control.State, error)
 	AdmitWork(context.Context, string, string, control.Workload, control.Fence) error
-	FinishWorkFenced(context.Context, string, control.Fence, store.WorkOutcome) error
+	FinishWorkFenced(context.Context, string, control.Workload, control.Fence, store.WorkOutcome) error
 }
 
 type Route struct {
@@ -92,6 +93,18 @@ func New(stateStore StateStore, config Config) (*Handler, error) {
 	}
 	if !canonicalPath(config.CompletionPath) {
 		return nil, errors.New("completion path must be canonical and absolute")
+	}
+	completionKey := http.MethodPost + " " + config.CompletionPath
+	if _, exists := executionRoutes[completionKey]; exists {
+		return nil, errors.New("completion path collides with an execution route")
+	}
+	if _, exists := passthroughRoutes[completionKey]; exists {
+		return nil, errors.New("completion path collides with a passthrough route")
+	}
+	for key := range executionRoutes {
+		if _, exists := passthroughRoutes[key]; exists {
+			return nil, errors.New("execution and passthrough routes overlap")
+		}
 	}
 	if config.RequestIDHeader == "" {
 		config.RequestIDHeader = DefaultRequestIDHeader
@@ -182,11 +195,19 @@ func (h *Handler) finish(response http.ResponseWriter, request *http.Request) {
 		writeError(response, http.StatusBadRequest, "finish_request_invalid")
 		return
 	}
+	if err := requireJSONEOF(decoder); err != nil {
+		writeError(response, http.StatusBadRequest, "finish_request_invalid")
+		return
+	}
+	if strings.TrimSpace(finish.RequestID) == "" || finish.Fence.Validate() != nil {
+		writeError(response, http.StatusBadRequest, "finish_request_invalid")
+		return
+	}
 	if finish.Outcome != store.WorkCompleted && finish.Outcome != store.WorkAbandoned {
 		writeError(response, http.StatusBadRequest, "outcome_invalid")
 		return
 	}
-	if err := h.store.FinishWorkFenced(request.Context(), finish.RequestID, finish.Fence, finish.Outcome); err != nil {
+	if err := h.store.FinishWorkFenced(request.Context(), finish.RequestID, h.workload, finish.Fence, finish.Outcome); err != nil {
 		h.writeWorkError(response, err)
 		return
 	}
@@ -228,6 +249,17 @@ func (h *Handler) writeWorkError(response http.ResponseWriter, err error) {
 	default:
 		writeError(response, http.StatusServiceUnavailable, "work_state_failed")
 	}
+}
+
+func requireJSONEOF(decoder *json.Decoder) error {
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("trailing JSON value")
+		}
+		return err
+	}
+	return nil
 }
 
 func routeSet(routes []Route, required bool) (map[string]struct{}, error) {
