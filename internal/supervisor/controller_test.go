@@ -425,3 +425,22 @@ func TestStatusDoesNotMutateUserOwnedState(t *testing.T) {
 		t.Fatalf("user-owned state changed: %#v != %#v", after, state)
 	}
 }
+
+func TestTextSwitchIsIdempotent(t *testing.T) {
+	stateStore := openStore(t)
+	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true, blockRelease: true}
+	controller := testController(t, stateStore, runtime)
+	if _, err := controller.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	result, err := controller.Switch(context.Background(), control.WorkloadText, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ActiveWorkload != control.WorkloadText || result.Health != control.HealthHealthy || result.Admission != control.AdmissionOpen {
+		t.Fatalf("state = %#v", result)
+	}
+	if len(runtime.calls) != 0 {
+		t.Fatalf("unexpected runtime calls: %#v", runtime.calls)
+	}
+}
