@@ -3,7 +3,7 @@
 The lease incarnation in a SQLite backup may be older than the live database. A restored fence is unsafe until `restore-state` rotates it. This procedure is for an operator restoring a consistent backup, not for an ordinary process restart.
 
 1. Stop every execution proxy, controller automation, and workload runtime using this state database. Wait for admitted jobs to finish or stop them. Prevent another process from starting these components during the restore. The file lock coordinates controller commands, but it does not stop a running proxy or runtime.
-2. Install a consistent SQLite backup at the configured state path while all processes using it are stopped. Use a backup made with SQLite's backup mechanism or another consistent snapshot. Do not copy only the main `.db` file from a live WAL database. Keep the state file in a private directory owned by the service identity.
+2. Install a consistent SQLite backup at the configured state path while all processes using it are stopped. Use a backup made with SQLite's backup mechanism or another consistent snapshot. Do not copy only the main `.db` file from a live WAL database or leave WAL/SHM files from another database alongside the replacement. Keep the state file in a private directory owned by the service identity.
 3. Prepare the restored state, before starting any proxy:
 
    ```sh
