@@ -142,9 +142,6 @@ func (s *Store) RotateFenceAndCloseAdmission(ctx context.Context, expected uint6
 	return state, nil
 }
 
-// RotateIncarnation prepares a restored database for reconciliation. Callers must
-// stop all workloads and proxies before restoring the database and keep them
-// stopped until this transaction commits and runtime reconciliation succeeds.
 func (s *Store) RotateIncarnation(ctx context.Context) (control.State, error) {
 	incarnation, err := s.uuid()
 	if err != nil {
