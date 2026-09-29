@@ -1,29 +1,254 @@
-name: Release
+name: release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Plain SemVer version without the v prefix
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
 
 jobs:
-  release:
+  quality:
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/ci.yml
+  aislop:
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/aislop.yml
+  codeql:
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/codeql.yml
+  publish:
+    name: publish source and binaries v${{ inputs.version }}
+    needs: [quality, aislop, codeql]
     runs-on: ubuntu-latest
+    environment: release-automation
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      actions: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v6
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: "1.26.x"
+          go-version-file: go.mod
           cache: true
-      - run: go test ./...
-      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
-        with:
-          distribution: goreleaser
-          version: v2.18.2
-          args: release --clean
+      - name: Verify main and successful validation at this commit
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        with:
+          script: |
+            const version = process.env.VERSION;
+            if (context.ref !== 'refs/heads/main' ||
+                !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
+              throw new Error('Release requires main and a plain SemVer version');
+            }
+            const { data: tip } = await github.rest.repos.getBranch({ ...context.repo, branch: 'main' });
+            if (tip.commit.sha !== context.sha) {
+              const ref = `heads/release/${version}`;
+              const { data: candidate } = await github.rest.git.getRef({ ...context.repo, ref });
+              if (candidate.object.sha !== context.sha) throw new Error('Main moved and the prepared branch has another SHA');
+              core.info('Retrying the prepared commit after main advanced');
+            }
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              ...context.repo, workflow_id: 'main.yml', branch: 'main', head_sha: context.sha,
+              status: 'completed', per_page: 100,
+            });
+            if (!runs.some(run => ['push', 'workflow_dispatch'].includes(run.event) && run.head_sha === context.sha &&
+                run.conclusion === 'success')) throw new Error('A successful main push validation is required');
+      - name: Release App token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-administration: read
+      - name: Verify immutable setting and publication state
+        id: state
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          VERSION: ${{ inputs.version }}
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+          script: |
+            const { data: policy } = await github.request('GET /repos/{owner}/{repo}/immutable-releases', {
+              ...context.repo, headers: { 'X-GitHub-Api-Version': '2026-03-10' },
+            });
+            if (policy.enabled !== true) throw new Error('Enable immutable releases before publishing');
+            const tag = `v${process.env.VERSION}`;
+            let ref;
+            try {
+              ({ data: ref } = await github.rest.git.getRef({ ...context.repo, ref: `tags/${tag}` }));
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              core.setOutput('published', 'false');
+              return;
+            }
+            if (ref.object.type !== 'commit' || ref.object.sha !== context.sha) {
+              throw new Error('Existing release tag points at another commit');
+            }
+            const { data: release } = await github.rest.repos.getReleaseByTag({ ...context.repo, tag });
+            const expected = [`gpu-workload-supervisor-${tag}.tar.gz`,
+              `gpu-workload-supervisor_${process.env.VERSION}_linux_amd64.tar.gz`,
+              `gpu-workload-supervisor_${process.env.VERSION}_linux_arm64.tar.gz`,
+              'SHA256SUMS', 'sbom.cdx.json'];
+            if (!release.immutable || release.draft || release.assets.length !== expected.length ||
+                !expected.every(name => release.assets.some(asset => asset.name === name &&
+                  asset.state === 'uploaded' && /^sha256:[a-f0-9]{64}$/.test(asset.digest || '')))) {
+              throw new Error('Existing release is incomplete or mutable; manual recovery required');
+            }
+            core.setOutput('published', 'true');
+      - name: Verify existing release checksum
+        if: steps.state.outputs.published == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir existing-release
+          gh release download "v${VERSION}" --repo "$GITHUB_REPOSITORY" --dir existing-release
+          cd existing-release
+          sha256sum --check SHA256SUMS
+      - name: Freeze main in a release branch
+        if: steps.state.outputs.published != 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          VERSION: ${{ inputs.version }}
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+          script: |
+            const ref = `heads/release/${process.env.VERSION}`;
+            const { data: main } = await github.rest.repos.getBranch({ ...context.repo, branch: 'main' });
+            try {
+              const { data: existing } = await github.rest.git.getRef({ ...context.repo, ref });
+              if (existing.object.sha !== context.sha) throw new Error('Release branch belongs to another commit');
+              core.info('Reusing the prepared release branch');
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              if (main.commit.sha !== context.sha) throw new Error('Main moved before preparation');
+              await github.rest.git.createRef({ ...context.repo, ref: `refs/${ref}`, sha: context.sha });
+            }
+      - name: Prepare local release tag
+        if: steps.state.outputs.published != 'true'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: git tag "v${VERSION}" "$GITHUB_SHA"
+      - name: Build deployable binaries
+        if: steps.state.outputs.published != 'true'
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+        with:
+          version: v2.18.2
+          args: release --clean --skip=publish
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Build source archive and stage binaries
+        if: steps.state.outputs.published != 'true'
+        env:
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir release-assets
+          archive="gpu-workload-supervisor-v${VERSION}.tar.gz"
+          git archive --format=tar --prefix="gpu-workload-supervisor-v${VERSION}/" HEAD | gzip -n > "release-assets/$archive"
+          for arch in amd64 arm64; do
+            artifact="gpu-workload-supervisor_${VERSION}_linux_${arch}.tar.gz"
+            test -s "dist/$artifact"
+            tar -tzf "dist/$artifact" | grep -E '(^|/)gpu-mode$' > /dev/null
+            tar -tzf "dist/$artifact" | grep -E '(^|/)gpu-workload-proxy$' > /dev/null
+            cp "dist/$artifact" "release-assets/$artifact"
+          done
+          (cd dist && sha256sum --check checksums.txt)
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        if: steps.state.outputs.published != 'true'
+        with:
+          version: v0.71.2
+      - name: Generate CycloneDX SBOM
+        if: steps.state.outputs.published != 'true'
+        run: trivy fs --skip-dirs dist --skip-dirs release-assets --format cyclonedx --output release-assets/sbom.cdx.json .
+      - name: Checksum all release assets
+        if: steps.state.outputs.published != 'true'
+        run: |
+          cd release-assets
+          sha256sum gpu-workload-supervisor*.tar.gz sbom.cdx.json > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Attest release assets
+        if: steps.state.outputs.published != 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            release-assets/*.tar.gz
+            release-assets/SHA256SUMS
+            release-assets/sbom.cdx.json
+      - name: Publish immutable GitHub release
+        if: steps.state.outputs.published != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          VERSION: ${{ inputs.version }}
+          RELEASE_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "v${VERSION}" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" --target "$RELEASE_SHA" --title "v${VERSION}" --generate-notes
+      - name: Verify published release
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          VERSION: ${{ inputs.version }}
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+          script: |
+            const tag = `v${process.env.VERSION}`;
+            const { data: ref } = await github.rest.git.getRef({ ...context.repo, ref: `tags/${tag}` });
+            const { data: release } = await github.rest.repos.getReleaseByTag({ ...context.repo, tag });
+            const expected = [`gpu-workload-supervisor-${tag}.tar.gz`,
+              `gpu-workload-supervisor_${process.env.VERSION}_linux_amd64.tar.gz`,
+              `gpu-workload-supervisor_${process.env.VERSION}_linux_arm64.tar.gz`,
+              'SHA256SUMS', 'sbom.cdx.json'];
+            if (ref.object.type !== 'commit' || ref.object.sha !== context.sha ||
+                !release.immutable || release.draft || release.assets.length !== expected.length ||
+                !expected.every(name => release.assets.some(asset => asset.name === name &&
+                  asset.state === 'uploaded' && /^sha256:[a-f0-9]{64}$/.test(asset.digest || '')))) {
+              throw new Error('Published release does not match the immutable candidate');
+            }
+      - name: Delete published release branch
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          VERSION: ${{ inputs.version }}
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+          script: |
+            const ref = `heads/release/${process.env.VERSION}`;
+            try {
+              const { data: branch } = await github.rest.git.getRef({ ...context.repo, ref });
+              if (branch.object.sha !== context.sha) throw new Error('Release branch SHA changed');
+              await github.rest.git.deleteRef({ ...context.repo, ref });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              core.info('Release branch already removed');
+            }

@@ -1,5 +1,12 @@
 # GPU Workload Supervisor
 
+[![PR validation](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/pr-validation.yml/badge.svg)](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/pr-validation.yml)
+[![CodeQL](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/codeql.yml/badge.svg)](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/codeql.yml)
+[![Aislop](https://badges.scanaislop.com/score/mickey-kras/gpu-workload-supervisor.svg)](https://scanaislop.com/mickey-kras/gpu-workload-supervisor)
+[![main validation and SonarQube](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/main.yml/badge.svg?branch=main)](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/main.yml?query=branch%3Amain)
+[![Go coverage gate](https://img.shields.io/badge/Go%20coverage-at%20least%2090%25%20(CI--gated)-brightgreen)](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/pr-validation.yml)
+[![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Crash-safe ownership, admission, and switching for mutually exclusive GPU workloads.
 
 ## Scope
@@ -122,3 +129,5 @@ Configuration is supplied at deployment time. This repository does not contain e
 Processes sharing the supervisor identity are trusted. A compromised process with the same operating-system permissions can bypass advisory locks, state files, and service control. Strong isolation requires separate service identities and operating-system enforced permissions.
 
 Execution requests must not have a route that bypasses the gate while supervisor ownership is active.
+
+Repository checks and setup: [onboarding](docs/ONBOARDING.md). Dependabot: [policy](docs/DEPENDABOT.md). Releases: [releasing](docs/RELEASING.md).

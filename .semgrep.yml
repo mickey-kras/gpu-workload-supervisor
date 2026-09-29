@@ -1,0 +1,24 @@
+rules:
+  - id: go.exec-shell
+    message: Do not execute shell commands with untrusted input.
+    languages: [go]
+    severity: ERROR
+    pattern: exec.Command("sh", "-c", ...)
+  - id: go.tls-insecure
+    message: TLS verification must remain enabled.
+    languages: [go]
+    severity: ERROR
+    pattern: 'tls.Config{..., InsecureSkipVerify: true, ...}'
+  - id: github-actions.shell-injection
+    message: Do not interpolate GitHub event data directly into run steps.
+    languages: [yaml]
+    severity: ERROR
+    patterns:
+      - pattern-inside: |
+          steps:
+            ...
+      - pattern: |
+          run: $RUN
+      - metavariable-regex:
+          metavariable: $RUN
+          regex: '.*\$\{\{.*github\.event\..*\}\}.*'

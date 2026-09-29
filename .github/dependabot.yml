@@ -1,0 +1,41 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: cron
+      cronjob: "3 1 * * *"
+    cooldown:
+      default-days: 7
+    rebase-strategy: auto
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: npm
+    directory: /.github/aislop
+    schedule:
+      interval: cron
+      cronjob: "3 3 * * *"
+    cooldown:
+      default-days: 7
+    rebase-strategy: auto
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: npm
+    directory: /.github/scripts
+    schedule:
+      interval: cron
+      cronjob: "3 5 * * *"
+    cooldown:
+      default-days: 7
+    rebase-strategy: auto
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: cron
+      cronjob: "3 7 * * *"
+    cooldown:
+      default-days: 7
+    rebase-strategy: auto
+    open-pull-requests-limit: 3

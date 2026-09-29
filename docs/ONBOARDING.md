@@ -1,0 +1,47 @@
+# Repository settings
+
+Apply these settings after this PR is merged and the new PR checks have appeared.
+The files under `.github/rulesets/` are importable ruleset definitions. They do
+not become active by being committed.
+
+1. Repository merge settings: enable squash only and auto-merge; disable merge
+   commits and rebase merges; enable automatic deletion of merged branches.
+2. Verify Dependency graph in repository Advanced Security settings. GitHub
+   normally enables it for public repositories. If an Enable control appears,
+   use it and rerun the failed `dependency-review` job. If the graph is already
+   enabled, investigate the action's 403 response using its workflow run; its
+   generic error message does not establish that the graph is disabled.
+   Enable Dependabot alerts, code scanning, code quality, and secret scanning as
+   available. Run `main` once after merge to register CodeQL, Trivy,
+   Aislop, and SonarQube analyses.
+3. Import all eight rulesets under `.github/rulesets/`. Confirm the required check
+   names and GitHub Actions integration against the actual PR checks before
+   activating `Protect default branch`. Keep zero approving reviews for a
+   single-maintainer repo; require resolution of review threads. The three
+   release branch rulesets use the existing release App as their creation
+   and deletion bypass actor.
+4. Confirm that the SonarQube project key `gpu-workload-supervisor` exists with
+   the intended quality profile and gate. Its main-only workflow connects as
+   `tag:github-sonar` and uses the existing Tailscale and Sonar secrets.
+5. Set the repository variable `RELEASE_APP_ID` to the GitHub App's **Client ID**
+   (the variable name is retained for parity with the router), whose private key
+   is stored as `RELEASE_APP_PRIVATE_KEY`. Install that App on this repo with
+   Contents and Pull requests write plus Administration read permissions. Create the
+   `release-automation` environment. Confirm the App actor in the tag-creation
+   ruleset before importing it.
+6. Enable release immutability in repository Settings > General > Releases. The
+   release workflow verifies this setting before publishing. It affects future
+   releases only.
+7. Verify the `main` run and SonarQube, including the GoReleaser snapshot build.
+   Check the PR updater and a Dependabot PR before relying on auto-merge. A
+   source and binary release can be dispatched after the `main` run succeeds.
+
+State validation, persistence, transition, controller, runtime, proxy, lock,
+and CLI tests are measured together. CI enforces the same 90% statement
+coverage floor as the router.
+
+The release process freezes the tested `main` commit in `release/X.Y.Z`,
+publishes an immutable release from that commit, and deletes the branch after
+success. Re-run a failed job from the original workflow run to retry the same
+commit. A complete release is verified before a cleanup retry; an incomplete
+publication requires manual recovery.

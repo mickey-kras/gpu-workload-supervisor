@@ -1,35 +1,117 @@
-name: CI
+name: ci
 
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_call:
 
 permissions:
   contents: read
+  security-events: write
 
 jobs:
-  test:
+  checks:
+    name: checks
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
-          go-version: '1.26.x'
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
           cache: true
-      - run: gofmt -d . && test -z "$(gofmt -l .)"
-      - run: go mod tidy
-      - run: git diff --exit-code -- go.mod go.sum
-      - run: go test ./...
-      - run: go test -race ./...
-      - run: go vet ./...
-      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+      - name: Go formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Go module lock is current
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+      - name: Tests, race detector, and coverage
+        run: |
+          go test -race -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | tee coverage-summary.txt
+          awk '$1 == "total:" { coverage=$3+0; found=1 } END { if (!found || coverage < 90) exit 1 }' coverage-summary.txt
+      - name: Go vet
+        run: go vet ./...
+      - name: Go vulnerability audit
+        uses: golang/govulncheck-action@dd0578b371c987f96d1185abb54344b44352bd58 # v1.0.3
         with:
-          distribution: goreleaser
+          go-version-file: go.mod
+          go-package: ./...
+          repo-checkout: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: .github/aislop/package-lock.json
+      - name: Audit Aislop toolchain
+        run: |
+          npm ci --prefix .github/aislop --ignore-scripts --no-audit --no-fund
+          npm audit --prefix .github/aislop --audit-level=moderate
+      - name: Test policy automation
+        run: |
+          npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund
+          npm audit --prefix .github/scripts --audit-level=moderate
+          node --test .github/scripts/*.test.cjs
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
+      - name: Semgrep
+        run: |
+          SEMGREP_IMAGE="semgrep/semgrep:1.172.0@sha256:65dcd4408adda7c183a6b4550cb1e9b19f7f627a6fbb7e0559bd466bedc44d7b"
+          docker pull "$SEMGREP_IMAGE"
+          docker run --rm -v "${PWD}:/src" -w /src "$SEMGREP_IMAGE" \
+            semgrep scan --config .semgrep.yml --exclude .semgrep.yml --error
+      - name: Trivy filesystem report
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '0'
+      - name: Upload Trivy SARIF
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+        with:
+          sarif_file: trivy-results.sarif
+          category: .github/workflows/ci.yml:fs
+      - name: Trivy high and critical gate
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+      - name: Validate GoReleaser configuration
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+        with:
           version: v2.18.2
           args: check
-      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+      - name: Build snapshot artifacts
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
         with:
-          distribution: goreleaser
           version: v2.18.2
           args: release --snapshot --clean
+      - name: Verify snapshot archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            archives=(dist/gpu-workload-supervisor_*_linux_${arch}.tar.gz)
+            test "${#archives[@]}" -eq 1
+            test -s "${archives[0]}"
+            tar -tzf "${archives[0]}" | grep -E '(^|/)gpu-mode$' > /dev/null
+            tar -tzf "${archives[0]}" | grep -E '(^|/)gpu-workload-proxy$' > /dev/null
+          done
+          (cd dist && sha256sum --check checksums.txt)
