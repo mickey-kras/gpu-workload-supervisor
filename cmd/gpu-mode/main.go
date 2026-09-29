@@ -49,7 +49,7 @@ func run() error {
 		return errors.New("usage: gpu-mode [flags] status|reconcile|recover|text|media|idle")
 	}
 	if *textUnit == "" || *mediaUnit == "" || *textHealth == "" || *mediaHealth == "" || *mediaRelease == "" || *releaseMaxMiB == 0 {
-		return errors.New("runtime unit and endpoint flags are required")
+		return errors.New("runtime units, endpoints, and a nonzero release memory threshold are required")
 	}
 	processLock, err := lock.Acquire(*statePath + ".lock")
 	if err != nil {
