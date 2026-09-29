@@ -155,7 +155,7 @@ func (c *Controller) Switch(ctx context.Context, target control.Workload, initia
 			return c.fail(transitionID, state, current, err)
 		}
 	}
-	if target == control.WorkloadText && active != control.WorkloadMedia {
+	if target == control.WorkloadText && active == control.WorkloadIdle {
 		if err := c.effect(ctx, transitionID, state.Phase, "release media", func(actionCtx context.Context) error {
 			return c.runtime.Stop(actionCtx, control.WorkloadMedia)
 		}); err != nil {
