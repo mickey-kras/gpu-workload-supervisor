@@ -205,7 +205,8 @@ func testController(t *testing.T, stateStore StateStore, runtime gpuruntime.Mana
 	t.Helper()
 	controller, err := newController(stateStore, runtime, Config{
 		DrainTimeout: time.Second, VerifyTimeout: time.Second,
-		CleanupTimeout: time.Second, PollInterval: time.Millisecond,
+		CleanupTimeout: time.Second, FinalizeTimeout: time.Second,
+		PollInterval: time.Millisecond,
 	}, time.Now, func() (string, error) {
 		return "11111111-1111-4111-8111-111111111111", nil
 	})
