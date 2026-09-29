@@ -1,14 +1,97 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	workloadproxy "github.com/mickey-kras/gpu-workload-supervisor/internal/proxy"
 )
+
+func TestShutdownTimeoutKeepsLifetimeLockUntilHandlerExits(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "state.db.proxy.lock")
+	shared, err := lock.AcquireShared(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	tracked := &activeHandler{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release // Model an upstream call that has not yet returned after cancellation.
+		w.WriteHeader(http.StatusNoContent)
+	})}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: tracked}
+	defer server.Close()
+	go server.Serve(listener)
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		resp, err := http.Get("http://" + listener.Addr().String())
+		if err == nil {
+			resp.Body.Close()
+		}
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request never reached the handler")
+	}
+	shutdownDone := make(chan error, 1)
+	go func() {
+		err := shutdownAndDrain(server, tracked, 10*time.Millisecond)
+		shutdownDone <- errors.Join(err, shared.Close())
+	}()
+	select {
+	case err := <-shutdownDone:
+		t.Fatalf("shutdown returned while handler was active: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if exclusive, err := lock.TryAcquire(lockPath); err == nil {
+		exclusive.Close()
+		t.Fatal("recovery could acquire lock while handler was active")
+	} else if !errors.Is(err, syscall.EWOULDBLOCK) {
+		t.Fatalf("try acquire: %v", err)
+	}
+	close(release)
+	select {
+	case err := <-shutdownDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("shutdown error = %v, want deadline exceeded", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown did not finish after handler exited")
+	}
+	select {
+	case <-requestDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request client did not finish")
+	}
+	exclusive, err := lock.TryAcquire(lockPath)
+	if err != nil {
+		t.Fatalf("recovery could not acquire lock after handler exited: %v", err)
+	}
+	exclusive.Close()
+}
 
 func TestRoutesFlagRequiresCanonicalMethodAndPath(t *testing.T) {
 	var routes routesFlag
