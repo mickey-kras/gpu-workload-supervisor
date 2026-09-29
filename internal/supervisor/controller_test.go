@@ -30,7 +30,7 @@ func (r *fakeRuntime) Observe(context.Context) (gpuruntime.Snapshot, error) {
 
 func (r *fakeRuntime) Start(_ context.Context, workload control.Workload) error {
 	r.calls = append(r.calls, "start "+string(workload))
-	if r.startErr != nil {
+	if r.startErr != nil && workload == control.WorkloadMedia {
 		return r.startErr
 	}
 	if workload == control.WorkloadText {
