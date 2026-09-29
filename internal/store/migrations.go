@@ -104,7 +104,19 @@ ALTER TABLE registered_work
 ADD COLUMN registration_token TEXT CHECK (registration_token IS NULL OR length(registration_token) > 0);
 `
 
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7}
+const schemaV8 = `
+CREATE TABLE work_resolutions (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    lease_incarnation TEXT NOT NULL,
+    lease_epoch INTEGER NOT NULL CHECK (lease_epoch > 0),
+    state_version INTEGER NOT NULL CHECK (state_version > 0),
+    reason TEXT NOT NULL CHECK (length(reason) BETWEEN 1 AND 512),
+    abandoned_work INTEGER NOT NULL CHECK (abandoned_work > 0),
+    created_at TEXT NOT NULL
+);
+`
+
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8}
 
 func (s *Store) initialize(ctx context.Context) error {
 	for _, pragma := range []string{

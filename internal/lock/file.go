@@ -14,6 +14,20 @@ type File struct {
 }
 
 func Acquire(path string) (*File, error) {
+	return acquire(path, unix.LOCK_EX)
+}
+
+// AcquireShared holds a lifetime lock used by every proxy for a state store.
+func AcquireShared(path string) (*File, error) {
+	return acquire(path, unix.LOCK_SH)
+}
+
+// TryAcquire takes an exclusive lock without waiting for active proxies.
+func TryAcquire(path string) (*File, error) {
+	return acquire(path, unix.LOCK_EX|unix.LOCK_NB)
+}
+
+func acquire(path string, operation int) (*File, error) {
 	if path == "" {
 		return nil, errors.New("lock path is empty")
 	}
@@ -25,7 +39,7 @@ func Acquire(path string) (*File, error) {
 		return nil, fmt.Errorf("open lock: %w", err)
 	}
 	file := os.NewFile(uintptr(fd), path)
-	if err := unix.Flock(fd, unix.LOCK_EX); err != nil {
+	if err := unix.Flock(fd, operation); err != nil {
 		file.Close()
 		return nil, fmt.Errorf("acquire lock: %w", err)
 	}

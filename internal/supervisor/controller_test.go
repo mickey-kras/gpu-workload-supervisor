@@ -61,6 +61,9 @@ func (r *fakeRuntime) Stop(ctx context.Context, workload control.Workload) error
 	if r.active == workload {
 		r.active = control.WorkloadIdle
 	}
+	if workload == control.WorkloadMedia {
+		r.mediaReady = false
+	}
 	return nil
 }
 

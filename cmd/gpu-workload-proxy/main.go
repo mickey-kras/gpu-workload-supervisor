@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	workloadproxy "github.com/mickey-kras/gpu-workload-supervisor/internal/proxy"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
@@ -109,6 +110,13 @@ func run() error {
 	if err := workloadproxy.ValidateConfig(proxyConfig); err != nil {
 		return err
 	}
+	// Hold the shared lock until every in-flight handler has finished. Recovery
+	// takes its exclusive counterpart before it can abandon unresolved work.
+	proxyLock, err := lock.AcquireShared(*statePath + ".proxy.lock")
+	if err != nil {
+		return fmt.Errorf("acquire proxy lifetime lock: %w", err)
+	}
+	defer proxyLock.Close()
 	stateStore, err := store.Open(context.Background(), *statePath)
 	if err != nil {
 		return fmt.Errorf("open state store: %w", err)
