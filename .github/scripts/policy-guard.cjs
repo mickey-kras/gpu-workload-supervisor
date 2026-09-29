@@ -12,6 +12,7 @@ const REQUIRED_FILES = [
   '.github/scripts/package.json', '.github/scripts/package-lock.json',
   '.github/aislop/package.json', '.github/aislop/package-lock.json',
   '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
+  '.goreleaser.yaml',
   '.github/rulesets/enforce-release-tag-names.json',
   '.github/rulesets/enforce-work-branch-names.json',
   '.github/rulesets/protect-default-branch.json',
@@ -111,6 +112,9 @@ function inspectCi(checks) {
   step(ci, 'checks', 'Go module lock is current', { run: ['go mod tidy', 'git diff --exit-code -- go.mod go.sum'] });
   step(ci, 'checks', 'Tests, race detector, and coverage', { run: ['go test -race -coverprofile=coverage.out ./...', 'awk'] });
   step(ci, 'checks', 'Go vet', { run: ['go vet ./...'] });
+  step(ci, 'checks', 'Validate GoReleaser configuration', { uses: 'goreleaser/goreleaser-action', withValues: { version: 'v2.18.2', args: 'check' } });
+  step(ci, 'checks', 'Build snapshot artifacts', { uses: 'goreleaser/goreleaser-action', withValues: { version: 'v2.18.2', args: 'release --snapshot --clean' } });
+  step(ci, 'checks', 'Verify snapshot archives', { run: ['tar -tzf', '(cd dist && sha256sum --check checksums.txt)'] });
   step(ci, 'checks', 'Go vulnerability audit', { uses: 'golang/govulncheck-action' });
   step(ci, 'checks', 'Audit Aislop toolchain', { run: ['npm audit --prefix .github/aislop --audit-level=moderate'] });
   step(ci, 'checks', 'Test policy automation', { run: ['node --test .github/scripts/*.test.cjs'] });
@@ -176,6 +180,21 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
   const release = '.github/workflows/release.yml';
   event(release, 'workflow_dispatch');
   step(release, 'publish', 'Release App token', { uses: 'actions/create-github-app-token' });
+  step(release, 'publish', 'Build deployable binaries', {
+    uses: 'goreleaser/goreleaser-action', expectedIf: "steps.state.outputs.published != 'true'",
+    withValues: { version: 'v2.18.2', args: 'release --clean --skip=publish' },
+  });
+  step(release, 'publish', 'Build source archive and stage binaries', {
+    run: ['git archive', 'test -s "dist/$artifact"', 'cp "dist/$artifact"'],
+    expectedIf: "steps.state.outputs.published != 'true'",
+  });
+  step(release, 'publish', 'Checksum all release assets', {
+    run: ['sha256sum gpu-workload-supervisor*.tar.gz sbom.cdx.json > SHA256SUMS', 'sha256sum --check SHA256SUMS'],
+    expectedIf: "steps.state.outputs.published != 'true'",
+  });
+  step(release, 'publish', 'Attest release assets', {
+    uses: 'actions/attest-build-provenance', expectedIf: "steps.state.outputs.published != 'true'",
+  });
   step(release, 'publish', 'Publish immutable GitHub release', {
     run: ['gh release create'], expectedIf: "steps.state.outputs.published != 'true'",
   });
@@ -199,6 +218,19 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
   }
   if (!files['sonar-project.properties']?.includes('sonar.go.coverage.reportPaths=coverage.out')) {
     failures.push('SonarQube lost Go coverage path');
+  }
+  try {
+    const releaseConfig = YAML.parse(files['.goreleaser.yaml']);
+    const targets = releaseConfig.builds || [];
+    if (!['./cmd/gpu-mode', './cmd/gpu-workload-proxy'].every(target => targets.some(build =>
+      build.main === target && build.goos?.includes('linux') &&
+      build.goarch?.includes('amd64') && build.goarch?.includes('arm64'))) ||
+      releaseConfig.archives?.[0]?.name_template !== '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}' ||
+      releaseConfig.checksum?.name_template !== 'checksums.txt') {
+      failures.push('GoReleaser lost deployable Linux binaries');
+    }
+  } catch (error) {
+    if (files['.goreleaser.yaml']) failures.push(`GoReleaser config is invalid: ${error.message}`);
   }
 }
 

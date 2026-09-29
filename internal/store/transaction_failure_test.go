@@ -84,7 +84,9 @@ func TestStorageFailureRejectsAllStateMutations(t *testing.T) {
 		"fence rotation":       func() error { _, err := s.RotateFenceAndCloseAdmission(ctx, state.Version); return err },
 		"incarnation rotation": func() error { _, err := s.RotateIncarnation(ctx); return err },
 		"work registration":    func() error { return s.RegisterWork(ctx, "request", "job", control.WorkloadText, state.LeaseFence) },
-		"work completion":      func() error { return s.CompleteWork(ctx, "request") },
+		"work completion": func() error {
+			return s.FinishWorkFenced(ctx, "request", control.WorkloadText, state.LeaseFence, WorkCompleted)
+		},
 		"transition start": func() error {
 			_, err := s.StartTransition(ctx, state.Version, Transition{ID: "closed", Target: state})
 			return err

@@ -7,19 +7,20 @@
 [![Go coverage gate](https://img.shields.io/badge/Go%20coverage-at%20least%2090%25%20(CI--gated)-brightgreen)](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/pr-validation.yml)
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Crash-safe GPU workload supervision for local AI runtimes.
+Crash-safe ownership, admission, and switching for mutually exclusive GPU workloads.
 
 ## Scope
 
 The supervisor owns:
 
-- GPU owner and workload state
+- workload ownership and desired state
 - admission control
 - lease fencing
 - transition journaling
-- boot recovery state
+- recovery state
+- execution-route gating
 
-It does not own job execution, prompt policy, model APIs, or runtime data.
+It does not own job orchestration, content policy, workload APIs, or runtime data.
 
 ## State model
 
@@ -45,17 +46,17 @@ go test ./...
 go vet ./...
 ```
 
-## Local CLI
+## Controller
 
-Runtime identity is deployment configuration. Unit names, endpoints, and a measured post-release GPU-memory threshold are required:
+Runtime identities, health endpoints, release behavior, and resource thresholds are deployment configuration:
 
 ```sh
 gpu-mode \
   -text-unit TEXT.service \
   -media-unit MEDIA.service \
   -text-health-url http://127.0.0.1:PORT/health \
-  -media-health-url http://127.0.0.1:PORT/ \
-  -media-release-url http://127.0.0.1:PORT/free \
+  -media-health-url http://127.0.0.1:PORT/health \
+  -media-release-url http://127.0.0.1:PORT/release \
   -gpu-index 0 \
   -release-max-used-mib LIMIT \
   -nvidia-smi /ABSOLUTE/PATH/nvidia-smi \
@@ -63,29 +64,70 @@ gpu-mode \
   status|reconcile|recover|text|media|idle
 ```
 
-Defaults:
+The state directory must be private and owned by the current user. Commands use an exclusive file lock. Opening the store applies pending migrations. Boot reconciliation does not resume incomplete work. Interrupted transitions and latched errors require explicit recovery.
 
-- state: `$XDG_STATE_HOME/gpu-workload-supervisor/state.db` or `~/.local/state/gpu-workload-supervisor/state.db`
-- health request timeout: 10 seconds
-- runtime action timeout: 2 minutes
-- drain timeout: 5 minutes
-- readiness timeout: 5 minutes
-- rollback timeout: 2 minutes
-- failure finalization timeout: 10 seconds
-- poll interval: 250 milliseconds
+## Execution proxy
 
-The state directory must be private and owned by the current user. Commands use an exclusive file lock. Opening the store applies pending migrations. `status` persists a closed error state if runtime observation violates the single-GPU invariant.
+The proxy forwards non-mutating routes and gates configured execution routes:
 
-ComfyUI process availability is separate from media GPU ownership. Entering media mode stops text inference and keeps ComfyUI available. Before starting text inference, the supervisor calls the media-release endpoint, then polls `nvidia-smi` until reported GPU memory is at or below the deployment threshold.
+```sh
+gpu-workload-proxy \
+  -state /PRIVATE/PATH/state.db \
+  -listen 127.0.0.1:8090 \
+  -upstream http://127.0.0.1:PORT \
+  -workload media \
+  -execute-route POST:/execute \
+  -completion-path /_gpu-workload-supervisor/v1/work/finish
+```
 
-Boot reconciliation never resumes media work. Interrupted transitions and latched errors require explicit `recover`.
+During supervisor ownership, gated requests require:
 
-The initial adapter uses trusted `systemctl` and `nvidia-smi` executables. Typed D-Bus and NVML adapters may replace subprocess polling after deployment benchmarks.
+- a unique request ID
+- the current lease incarnation and epoch
+- stable compatible workload state
+- healthy state
+- open admission
+
+Default headers:
+
+- `X-Request-ID`
+- `X-Workload-Lease-Incarnation`
+- `X-Workload-Lease-Epoch`
+
+Control headers are removed before forwarding. Work is registered before forwarding and remains active after submission. The caller must send a terminal `completed` or `abandoned` outcome to the configurable completion path with the request ID and registered fence:
+
+```json
+{
+  "requestId": "REQUEST_ID",
+  "fence": {
+    "incarnation": "LEASE_INCARNATION",
+    "epoch": 1
+  },
+  "outcome": "completed"
+}
+```
+
+The default completion path is `/_gpu-workload-supervisor/v1/work/finish`. A successful terminal update returns HTTP 204. Proxy, upstream, client, and process failures leave work incomplete for explicit reconciliation.
+
+Safe methods are forwarded by default. Unclassified mutating routes fail closed. Required non-execution mutations must be explicitly configured as passthrough routes.
+
+The listener is restricted to loopback because explicit user ownership bypasses supervisor lease registration. External exposure and requester authentication belong to the deployment boundary.
+
+The proxy is content-blind. Content inspection and domain policy belong to the caller.
+
+## Distribution
+
+Tagged releases contain checksummed Linux artifacts for amd64 and arm64. Artifacts include:
+
+- `gpu-mode`
+- `gpu-workload-proxy`
+
+Configuration is supplied at deployment time. This repository does not contain environment-specific service names, paths, identities, ports, network names, or deployment automation.
 
 ## Trust boundary
 
-Processes sharing the supervisor Unix identity are trusted. ComfyUI execution must pass through a lease-enforcing gate; direct `/prompt` access must remain blocked in supervisor mode. A compromised same-UID runtime can bypass advisory locks, state files, and user-service control. Remote control requires separate supervisor and runtime service identities with OS-enforced permissions.
+Processes sharing the supervisor identity are trusted. A compromised process with the same operating-system permissions can bypass advisory locks, state files, and service control. Strong isolation requires separate service identities and operating-system enforced permissions.
 
-Remote control, authorization, UI, Job Broker implementation, and host-specific deployment remain outside this repository slice.
+Execution requests must not have a route that bypasses the gate while supervisor ownership is active.
 
-Repository checks and setup: [onboarding](docs/ONBOARDING.md). Dependabot: [policy](docs/DEPENDABOT.md). Source releases: [releasing](docs/RELEASING.md).
+Repository checks and setup: [onboarding](docs/ONBOARDING.md). Dependabot: [policy](docs/DEPENDABOT.md). Releases: [releasing](docs/RELEASING.md).

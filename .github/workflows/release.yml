@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: dependabot-auto-merge-${{ github.repository }}
+  group: release-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
@@ -32,7 +32,7 @@ jobs:
       security-events: write
     uses: ./.github/workflows/codeql.yml
   publish:
-    name: publish source module v${{ inputs.version }}
+    name: publish source and binaries v${{ inputs.version }}
     needs: [quality, aislop, codeql]
     runs-on: ubuntu-latest
     environment: release-automation
@@ -49,6 +49,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
       - name: Verify main and successful validation at this commit
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
@@ -108,7 +112,10 @@ jobs:
               throw new Error('Existing release tag points at another commit');
             }
             const { data: release } = await github.rest.repos.getReleaseByTag({ ...context.repo, tag });
-            const expected = [`gpu-workload-supervisor-${tag}.tar.gz`, 'SHA256SUMS', 'sbom.cdx.json'];
+            const expected = [`gpu-workload-supervisor-${tag}.tar.gz`,
+              `gpu-workload-supervisor_${process.env.VERSION}_linux_amd64.tar.gz`,
+              `gpu-workload-supervisor_${process.env.VERSION}_linux_arm64.tar.gz`,
+              'SHA256SUMS', 'sbom.cdx.json'];
             if (!release.immutable || release.draft || release.assets.length !== expected.length ||
                 !expected.every(name => release.assets.some(asset => asset.name === name &&
                   asset.state === 'uploaded' && /^sha256:[a-f0-9]{64}$/.test(asset.digest || '')))) {
@@ -146,31 +153,58 @@ jobs:
               if (main.commit.sha !== context.sha) throw new Error('Main moved before preparation');
               await github.rest.git.createRef({ ...context.repo, ref: `refs/${ref}`, sha: context.sha });
             }
-      - name: Build source archive and checksum
+      - name: Prepare local release tag
+        if: steps.state.outputs.published != 'true'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: git tag "v${VERSION}" "$GITHUB_SHA"
+      - name: Build deployable binaries
+        if: steps.state.outputs.published != 'true'
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+        with:
+          version: v2.18.2
+          args: release --clean --skip=publish
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Build source archive and stage binaries
         if: steps.state.outputs.published != 'true'
         env:
           VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           set -euo pipefail
+          mkdir release-assets
           archive="gpu-workload-supervisor-v${VERSION}.tar.gz"
-          git archive --format=tar --prefix="gpu-workload-supervisor-v${VERSION}/" HEAD | gzip -n > "$archive"
-          sha256sum "$archive" > SHA256SUMS
+          git archive --format=tar --prefix="gpu-workload-supervisor-v${VERSION}/" HEAD | gzip -n > "release-assets/$archive"
+          for arch in amd64 arm64; do
+            artifact="gpu-workload-supervisor_${VERSION}_linux_${arch}.tar.gz"
+            test -s "dist/$artifact"
+            tar -tzf "dist/$artifact" | grep -E '(^|/)gpu-mode$' > /dev/null
+            tar -tzf "dist/$artifact" | grep -E '(^|/)gpu-workload-proxy$' > /dev/null
+            cp "dist/$artifact" "release-assets/$artifact"
+          done
+          (cd dist && sha256sum --check checksums.txt)
       - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         if: steps.state.outputs.published != 'true'
         with:
           version: v0.71.2
       - name: Generate CycloneDX SBOM
         if: steps.state.outputs.published != 'true'
-        run: trivy fs --format cyclonedx --output sbom.cdx.json .
+        run: trivy fs --skip-dirs dist --skip-dirs release-assets --format cyclonedx --output release-assets/sbom.cdx.json .
+      - name: Checksum all release assets
+        if: steps.state.outputs.published != 'true'
+        run: |
+          cd release-assets
+          sha256sum gpu-workload-supervisor*.tar.gz sbom.cdx.json > SHA256SUMS
+          sha256sum --check SHA256SUMS
       - name: Attest release assets
         if: steps.state.outputs.published != 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            gpu-workload-supervisor-v*.tar.gz
-            SHA256SUMS
-            sbom.cdx.json
+            release-assets/*.tar.gz
+            release-assets/SHA256SUMS
+            release-assets/sbom.cdx.json
       - name: Publish immutable GitHub release
         if: steps.state.outputs.published != 'true'
         env:
@@ -180,7 +214,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "v${VERSION}" "gpu-workload-supervisor-v${VERSION}.tar.gz" SHA256SUMS sbom.cdx.json \
+          gh release create "v${VERSION}" release-assets/* \
             --repo "$GITHUB_REPOSITORY" --target "$RELEASE_SHA" --title "v${VERSION}" --generate-notes
       - name: Verify published release
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
@@ -192,8 +226,14 @@ jobs:
             const tag = `v${process.env.VERSION}`;
             const { data: ref } = await github.rest.git.getRef({ ...context.repo, ref: `tags/${tag}` });
             const { data: release } = await github.rest.repos.getReleaseByTag({ ...context.repo, tag });
+            const expected = [`gpu-workload-supervisor-${tag}.tar.gz`,
+              `gpu-workload-supervisor_${process.env.VERSION}_linux_amd64.tar.gz`,
+              `gpu-workload-supervisor_${process.env.VERSION}_linux_arm64.tar.gz`,
+              'SHA256SUMS', 'sbom.cdx.json'];
             if (ref.object.type !== 'commit' || ref.object.sha !== context.sha ||
-                !release.immutable || release.draft || release.assets.length !== 3) {
+                !release.immutable || release.draft || release.assets.length !== expected.length ||
+                !expected.every(name => release.assets.some(asset => asset.name === name &&
+                  asset.state === 'uploaded' && /^sha256:[a-f0-9]{64}$/.test(asset.digest || '')))) {
               throw new Error('Published release does not match the immutable candidate');
             }
       - name: Delete published release branch

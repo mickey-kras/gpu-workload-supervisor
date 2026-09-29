@@ -45,7 +45,7 @@ func TestTransitionSnapshotsOutstandingWorkAndCommits(t *testing.T) {
 	if count, err := s.PendingTransitionWork(ctx, tr.ID); err != nil || count != 1 {
 		t.Fatalf("snapshot pending work = %d, %v", count, err)
 	}
-	if err := s.CompleteWork(ctx, "work"); err != nil {
+	if err := s.FinishWorkFenced(ctx, "work", control.WorkloadText, state.LeaseFence, WorkCompleted); err != nil {
 		t.Fatal(err)
 	}
 	if count, err := s.PendingTransitionWork(ctx, tr.ID); err != nil || count != 0 {

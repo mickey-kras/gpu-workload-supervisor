@@ -21,7 +21,7 @@ function files() {
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
     '.github/aislop/package.json', '.github/aislop/package-lock.json',
     '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
-    'sonar-project.properties',
+    'sonar-project.properties', '.goreleaser.yaml',
   ]) result[path] = readFileSync(path, 'utf8');
   return result;
 }
@@ -86,6 +86,12 @@ test('scanner policy cannot become empty while workflow remains active', () => {
   const candidate = files();
   candidate['.semgrep.yml'] = 'rules: []\n';
   assert.ok(inspect(candidate).some(error => error.includes('Semgrep policy was weakened')));
+});
+
+test('deployable binaries cannot be removed from the release', () => {
+  const candidate = files();
+  candidate['.goreleaser.yaml'] = candidate['.goreleaser.yaml'].replace('main: ./cmd/gpu-workload-proxy', 'main: ./cmd/gpu-mode');
+  assert.ok(inspect(candidate).some(error => error.includes('GoReleaser lost deployable')));
 });
 
 test('removed policy files and unpinned actions fail closed', () => {

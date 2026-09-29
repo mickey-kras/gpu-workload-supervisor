@@ -1,0 +1,36 @@
+version: 2
+
+project_name: gpu-workload-supervisor
+
+builds:
+  - id: gpu-mode
+    main: ./cmd/gpu-mode
+    binary: gpu-mode
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+  - id: gpu-workload-proxy
+    main: ./cmd/gpu-workload-proxy
+    binary: gpu-workload-proxy
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true

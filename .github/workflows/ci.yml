@@ -93,3 +93,25 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: '1'
+      - name: Validate GoReleaser configuration
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+        with:
+          version: v2.18.2
+          args: check
+      - name: Build snapshot artifacts
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+        with:
+          version: v2.18.2
+          args: release --snapshot --clean
+      - name: Verify snapshot archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            archives=(dist/gpu-workload-supervisor_*_linux_${arch}.tar.gz)
+            test "${#archives[@]}" -eq 1
+            test -s "${archives[0]}"
+            tar -tzf "${archives[0]}" | grep -E '(^|/)gpu-mode$' > /dev/null
+            tar -tzf "${archives[0]}" | grep -E '(^|/)gpu-workload-proxy$' > /dev/null
+          done
+          (cd dist && sha256sum --check checksums.txt)

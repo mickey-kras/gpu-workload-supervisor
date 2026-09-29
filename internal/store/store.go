@@ -205,22 +205,6 @@ func (s *Store) RegisterWork(ctx context.Context, requestID, jobID string, workl
 	return tx.Commit()
 }
 
-func (s *Store) CompleteWork(ctx context.Context, requestID string) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE registered_work SET completed_at = ?
-		WHERE request_id = ? AND completed_at IS NULL`, formatTime(s.now()), requestID)
-	if err != nil {
-		return err
-	}
-	changed, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if changed != 1 {
-		return sql.ErrNoRows
-	}
-	return nil
-}
-
 func (s *Store) BeginTransition(ctx context.Context, tr Transition) error {
 	if tr.ID == "" {
 		return errors.New("transition id is empty")

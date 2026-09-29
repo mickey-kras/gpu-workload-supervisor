@@ -28,13 +28,13 @@ not become active by being committed.
 6. Enable release immutability in repository Settings > General > Releases. The
    release workflow verifies this setting before publishing. It affects future
    releases only.
-7. Verify the `main` run and SonarQube, then check the PR updater and a
-   Dependabot PR before relying on auto-merge. A source release can be dispatched
-   after the `main` run succeeds.
+7. Verify the `main` run and SonarQube, including the GoReleaser snapshot build.
+   Check the PR updater and a Dependabot PR before relying on auto-merge. A
+   source and binary release can be dispatched after the `main` run succeeds.
 
-State validation, persistence, transition, controller, runtime, lock, and CLI
-tests raise the merged Go tree to 90.4% statement coverage. CI enforces the
-same 90% floor as the router.
+State validation, persistence, transition, controller, runtime, proxy, lock,
+and CLI tests are measured together. CI enforces the same 90% statement
+coverage floor as the router.
 
 The release process freezes the tested `main` commit in `release/X.Y.Z`,
 publishes an immutable release from that commit, and deletes the branch after

@@ -40,13 +40,13 @@ func TestRegisterWorkRequiresOpenAdmissionAndCompletesOnce(t *testing.T) {
 	if err := s.RegisterWork(ctx, "request", "job", control.WorkloadText, opened.LeaseFence); err == nil {
 		t.Fatal("duplicate request id accepted")
 	}
-	if err := s.CompleteWork(ctx, "request"); err != nil {
+	if err := s.FinishWorkFenced(ctx, "request", control.WorkloadText, opened.LeaseFence, WorkCompleted); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CompleteWork(ctx, "request"); !errors.Is(err, sql.ErrNoRows) {
+	if err := s.FinishWorkFenced(ctx, "request", control.WorkloadText, opened.LeaseFence, WorkCompleted); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("duplicate completion error = %v", err)
 	}
-	if err := s.CompleteWork(ctx, "missing"); !errors.Is(err, sql.ErrNoRows) {
+	if err := s.FinishWorkFenced(ctx, "missing", control.WorkloadText, opened.LeaseFence, WorkCompleted); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("unknown completion error = %v", err)
 	}
 	rotated, err := s.RotateFenceAndCloseAdmission(ctx, opened.Version)
@@ -187,10 +187,12 @@ func TestCanceledContextCannotMutateStateOrJournal(t *testing.T) {
 		"fence":       func() error { _, err := s.RotateFenceAndCloseAdmission(ctx, state.Version); return err },
 		"incarnation": func() error { _, err := s.RotateIncarnation(ctx); return err },
 		"register":    func() error { return s.RegisterWork(ctx, "request", "job", control.WorkloadText, state.LeaseFence) },
-		"complete":    func() error { return s.CompleteWork(ctx, "request") },
-		"transition":  func() error { return s.BeginTransition(ctx, Transition{ID: "transition", Fence: state.LeaseFence}) },
-		"events":      func() error { _, err := s.TransitionEvents(ctx, "transition"); return err },
-		"state":       func() error { _, err := s.State(ctx); return err },
+		"complete": func() error {
+			return s.FinishWorkFenced(ctx, "request", control.WorkloadText, state.LeaseFence, WorkCompleted)
+		},
+		"transition": func() error { return s.BeginTransition(ctx, Transition{ID: "transition", Fence: state.LeaseFence}) },
+		"events":     func() error { _, err := s.TransitionEvents(ctx, "transition"); return err },
+		"state":      func() error { _, err := s.State(ctx); return err },
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := operation(); !errors.Is(err, context.Canceled) {
