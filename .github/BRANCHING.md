@@ -9,4 +9,4 @@
 - Releases are manually dispatched from the current `main` tip with a plain SemVer version. The workflow verifies successful main validation, retests the commit, freezes a `release/X.Y.Z` branch, and publishes attested source and Linux amd64/arm64 binary archives under an immutable `vX.Y.Z` tag.
 - CI checks the GoReleaser configuration and builds snapshot archives before publication.
 
-See [onboarding](../docs/ONBOARDING.md) for the settings that activate these files.
+See [repository controls](../docs/REPOSITORY-CONTROLS.md) for the active settings.

@@ -136,4 +136,4 @@ Processes sharing the supervisor identity are trusted. A compromised process wit
 
 Execution requests must not have a route that bypasses the gate while supervisor ownership is active.
 
-Repository checks and setup: [onboarding](docs/ONBOARDING.md). Dependabot: [policy](docs/DEPENDABOT.md). Restores: [procedure](docs/RESTORING.md). Releases: [releasing](docs/RELEASING.md).
+Repository checks and settings: [repository controls](docs/REPOSITORY-CONTROLS.md). Dependabot: [policy](docs/DEPENDABOT.md). Restores: [procedure](docs/RESTORING.md). Releases: [releasing](docs/RELEASING.md).

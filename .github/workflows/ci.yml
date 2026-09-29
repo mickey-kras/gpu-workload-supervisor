@@ -20,7 +20,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -38,7 +38,7 @@ jobs:
       - name: Go vet
         run: go vet ./...
       - name: Go vulnerability audit
-        uses: golang/govulncheck-action@dd0578b371c987f96d1185abb54344b44352bd58 # v1.0.3
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
         with:
           go-version-file: go.mod
           go-package: ./...
