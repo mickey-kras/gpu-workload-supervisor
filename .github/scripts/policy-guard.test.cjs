@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync, readdirSync } = require('node:fs');
 const { inspect } = require('./policy-guard.cjs');
+const YAML = require('yaml');
 
 function files() {
   const result = {};
@@ -19,12 +20,74 @@ function files() {
     '.github/aislop/package.json', '.github/aislop/package-lock.json',
     '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
     'sonar-project.properties', '.goreleaser.yaml',
+    '.github/actions/setup-goreleaser/action.yml', '.github/scripts/install-goreleaser.sh',
   ]) result[path] = readFileSync(path, 'utf8');
   return result;
 }
 
 test('current governance workflows satisfy the trusted guard', () => {
   assert.deepEqual(inspect(files()), []);
+});
+
+function verifiedGoReleaserFiles() {
+  const candidate = files();
+  for (const [path, jobId] of [
+    ['.github/workflows/ci.yml', 'checks'], ['.github/workflows/release.yml', 'publish'],
+  ]) {
+    const workflow = YAML.parse(candidate[path]);
+    const steps = workflow.jobs[jobId].steps;
+    const first = steps.findIndex(s => s.uses?.startsWith('goreleaser/goreleaser-action@'));
+    const setup = { name: 'Install verified GoReleaser', uses: './.github/actions/setup-goreleaser' };
+    if (steps[first].if) setup.if = steps[first].if;
+    for (const step of steps.filter(s => s.uses?.startsWith('goreleaser/goreleaser-action@'))) {
+      step.run = `goreleaser ${step.with.args}`;
+      delete step.uses;
+      delete step.with;
+    }
+    steps.splice(first, 0, setup);
+    candidate[path] = YAML.stringify(workflow);
+  }
+  return candidate;
+}
+
+test('verified installer and unchanged CLI gates are accepted during migration', () => {
+  assert.deepEqual(inspect(verifiedGoReleaserFiles()), []);
+});
+
+test('verified GoReleaser route rejects changed installer or action bytes', () => {
+  for (const path of ['.github/actions/setup-goreleaser/action.yml', '.github/scripts/install-goreleaser.sh']) {
+    const candidate = verifiedGoReleaserFiles();
+    candidate[path] += '\n# changed\n';
+    assert.ok(inspect(candidate).some(error => error.includes('changed verified GoReleaser installer')));
+  }
+});
+
+test('verified GoReleaser setup cannot be missing, conditional, or after the build', () => {
+  for (const mutation of ['missing', 'conditional', 'late']) {
+    const candidate = verifiedGoReleaserFiles();
+    const path = '.github/workflows/ci.yml';
+    const workflow = YAML.parse(candidate[path]);
+    const steps = workflow.jobs.checks.steps;
+    const index = steps.findIndex(s => s.name === 'Install verified GoReleaser');
+    if (mutation === 'conditional') steps[index].if = false;
+    else {
+      const [setup] = steps.splice(index, 1);
+      if (mutation === 'late') steps.push(setup);
+    }
+    candidate[path] = YAML.stringify(workflow);
+    assert.ok(inspect(candidate).some(error => error.includes('GoReleaser')));
+  }
+});
+
+test('verified GoReleaser commands and release condition cannot be weakened', () => {
+  const candidate = verifiedGoReleaserFiles();
+  candidate['.github/workflows/ci.yml'] = candidate['.github/workflows/ci.yml']
+    .replace('run: goreleaser check', 'run: echo skipped');
+  assert.ok(inspect(candidate).some(error => error.includes('changed gate commands')));
+  const release = verifiedGoReleaserFiles();
+  release['.github/workflows/release.yml'] = release['.github/workflows/release.yml']
+    .replaceAll("steps.state.outputs.published != 'true'", 'false');
+  assert.ok(inspect(release).some(error => error.includes('Install verified GoReleaser')));
 });
 
 test('disabled scanner with the original text retained in comments fails', () => {
