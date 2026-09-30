@@ -95,12 +95,6 @@ function createChecks(workflows, failures) {
 
 function inspectGoReleaser(files, workflows, failures, checks, path, jobId, builds, expectedIf) {
   const steps = workflows[path]?.jobs?.[jobId]?.steps || [];
-  if (builds.every(([name]) => steps.find(s => s.name === name)?.uses?.startsWith('goreleaser/goreleaser-action@'))) {
-    for (const [name, args] of builds) checks.step(path, jobId, name, {
-      uses: 'goreleaser/goreleaser-action', expectedIf, withValues: { version: 'v2.18.2', args },
-    });
-    return;
-  }
   const setupName = 'Install verified GoReleaser';
   checks.step(path, jobId, setupName, { expectedIf });
   const setupIndex = steps.findIndex(s => s.name === setupName);
@@ -141,7 +135,7 @@ function inspectCi(files, workflows, failures, checks) {
     ['Validate GoReleaser configuration', 'check'], ['Build snapshot artifacts', 'release --snapshot --clean'],
   ]);
   step(ci, 'checks', 'Verify snapshot archives', { run: ['tar -tzf', '(cd dist && sha256sum --check checksums.txt)'] });
-  step(ci, 'checks', 'Go vulnerability audit', { uses: 'golang/govulncheck-action' });
+  step(ci, 'checks', 'Go vulnerability audit', { uses: 'golang/govulncheck-action', withValues: { cache: false } });
   step(ci, 'checks', 'Audit Aislop toolchain', { run: ['npm audit --prefix .github/aislop --audit-level=moderate'] });
   step(ci, 'checks', 'Test policy automation', { run: ['node --test .github/scripts/*.test.cjs'] });
   step(ci, 'checks', 'Gitleaks', { uses: 'gitleaks/gitleaks-action' });

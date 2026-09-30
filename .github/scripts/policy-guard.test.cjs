@@ -29,34 +29,34 @@ test('current governance workflows satisfy the trusted guard', () => {
   assert.deepEqual(inspect(files()), []);
 });
 
-function verifiedGoReleaserFiles() {
-  const candidate = files();
+test('GoReleaser cannot revert to optional signature verification', () => {
   for (const [path, jobId] of [
     ['.github/workflows/ci.yml', 'checks'], ['.github/workflows/release.yml', 'publish'],
   ]) {
+    const candidate = files();
     const workflow = YAML.parse(candidate[path]);
     const steps = workflow.jobs[jobId].steps;
-    const first = steps.findIndex(s => s.uses?.startsWith('goreleaser/goreleaser-action@'));
-    const setup = { name: 'Install verified GoReleaser', uses: './.github/actions/setup-goreleaser' };
-    if (steps[first].if) setup.if = steps[first].if;
-    for (const step of steps.filter(s => s.uses?.startsWith('goreleaser/goreleaser-action@'))) {
-      step.run = `goreleaser ${step.with.args}`;
-      delete step.uses;
-      delete step.with;
+    workflow.jobs[jobId].steps = steps.filter(s => s.name !== 'Install verified GoReleaser');
+    for (const step of steps.filter(s => s.run?.startsWith('goreleaser '))) {
+      step.uses = 'goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94';
+      step.with = { version: 'v2.18.2', args: step.run.trim().slice('goreleaser '.length) };
+      delete step.run;
     }
-    steps.splice(first, 0, setup);
     candidate[path] = YAML.stringify(workflow);
+    assert.ok(inspect(candidate).some(error => error.includes('GoReleaser')));
   }
-  return candidate;
-}
+});
 
-test('verified installer and unchanged CLI gates are accepted during migration', () => {
-  assert.deepEqual(inspect(verifiedGoReleaserFiles()), []);
+test('vulnerability audit cannot restore the Go cache a second time', () => {
+  const candidate = files();
+  candidate['.github/workflows/ci.yml'] = candidate['.github/workflows/ci.yml']
+    .replace('          repo-checkout: false\n          cache: false', '          repo-checkout: false\n          cache: true');
+  assert.ok(inspect(candidate).some(error => error.includes('Go vulnerability audit')));
 });
 
 test('verified GoReleaser route rejects changed installer or action bytes', () => {
   for (const path of ['.github/actions/setup-goreleaser/action.yml', '.github/scripts/install-goreleaser.sh']) {
-    const candidate = verifiedGoReleaserFiles();
+    const candidate = files();
     candidate[path] += '\n# changed\n';
     assert.ok(inspect(candidate).some(error => error.includes('changed verified GoReleaser installer')));
   }
@@ -64,7 +64,7 @@ test('verified GoReleaser route rejects changed installer or action bytes', () =
 
 test('verified GoReleaser setup cannot be missing, conditional, or after the build', () => {
   for (const mutation of ['missing', 'conditional', 'late']) {
-    const candidate = verifiedGoReleaserFiles();
+    const candidate = files();
     const path = '.github/workflows/ci.yml';
     const workflow = YAML.parse(candidate[path]);
     const steps = workflow.jobs.checks.steps;
@@ -80,11 +80,11 @@ test('verified GoReleaser setup cannot be missing, conditional, or after the bui
 });
 
 test('verified GoReleaser commands and release condition cannot be weakened', () => {
-  const candidate = verifiedGoReleaserFiles();
+  const candidate = files();
   candidate['.github/workflows/ci.yml'] = candidate['.github/workflows/ci.yml']
     .replace('run: goreleaser check', 'run: echo skipped');
   assert.ok(inspect(candidate).some(error => error.includes('changed gate commands')));
-  const release = verifiedGoReleaserFiles();
+  const release = files();
   release['.github/workflows/release.yml'] = release['.github/workflows/release.yml']
     .replaceAll("steps.state.outputs.published != 'true'", 'false');
   assert.ok(inspect(release).some(error => error.includes('Install verified GoReleaser')));
