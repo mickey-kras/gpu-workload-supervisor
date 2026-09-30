@@ -263,20 +263,7 @@ func (c *Controller) waitReady(ctx context.Context, target control.Workload, dea
 	defer ticker.Stop()
 	var lastErr error
 	for {
-		snapshot, err := c.observe(ctx)
-		if err != nil {
-			err = fmt.Errorf("%w: %v", ErrRuntimeObservation, err)
-		} else {
-			err = verifySnapshot(target, snapshot)
-		}
-		if err == nil && target == control.WorkloadIdle {
-			err = c.released(ctx)
-		}
-		if err == nil {
-			if healthErr := c.runtime.Healthy(ctx, target); healthErr != nil {
-				err = fmt.Errorf("%w: %v", ErrHealthCheck, healthErr)
-			}
-		}
+		err := c.checkReady(ctx, target)
 		if err == nil {
 			return nil
 		}
@@ -290,6 +277,25 @@ func (c *Controller) waitReady(ctx context.Context, target control.Workload, dea
 		case <-ticker.C:
 		}
 	}
+}
+
+func (c *Controller) checkReady(ctx context.Context, target control.Workload) error {
+	snapshot, err := c.observe(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrRuntimeObservation, err)
+	}
+	if err := verifySnapshot(target, snapshot); err != nil {
+		return err
+	}
+	if target == control.WorkloadIdle {
+		if err := c.released(ctx); err != nil {
+			return err
+		}
+	}
+	if err := c.runtime.Healthy(ctx, target); err != nil {
+		return fmt.Errorf("%w: %v", ErrHealthCheck, err)
+	}
+	return nil
 }
 
 func verifySnapshot(target control.Workload, snapshot gpuruntime.Snapshot) error {
