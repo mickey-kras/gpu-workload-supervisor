@@ -1,4 +1,5 @@
 const YAML = require('yaml');
+const { createHash } = require('node:crypto');
 
 const REQUIRED_FILES = [
   '.github/workflows/pr-validation.yml', '.github/workflows/ci.yml',
@@ -15,6 +16,7 @@ const REQUIRED_FILES = [
   '.github/aislop/package.json', '.github/aislop/package-lock.json',
   '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
   '.goreleaser.yaml',
+  '.github/actions/setup-goreleaser/action.yml', '.github/scripts/install-goreleaser.sh',
 ];
 
 function scanWorkflows(files, failures) {
@@ -91,7 +93,36 @@ function createChecks(workflows, failures) {
   return { event, job, step, exactRun };
 }
 
-function inspectCi(checks) {
+function inspectGoReleaser(files, workflows, failures, checks, path, jobId, builds, expectedIf) {
+  const steps = workflows[path]?.jobs?.[jobId]?.steps || [];
+  if (builds.every(([name]) => steps.find(s => s.name === name)?.uses?.startsWith('goreleaser/goreleaser-action@'))) {
+    for (const [name, args] of builds) checks.step(path, jobId, name, {
+      uses: 'goreleaser/goreleaser-action', expectedIf, withValues: { version: 'v2.18.2', args },
+    });
+    return;
+  }
+  const setupName = 'Install verified GoReleaser';
+  checks.step(path, jobId, setupName, { expectedIf });
+  const setupIndex = steps.findIndex(s => s.name === setupName);
+  if (steps[setupIndex]?.uses !== './.github/actions/setup-goreleaser' ||
+      builds.some(([name]) => steps.findIndex(s => s.name === name) <= setupIndex)) {
+    failures.push(`${path}/${jobId} lost verified GoReleaser setup ordering`);
+  }
+  for (const [name, args] of builds) {
+    checks.step(path, jobId, name, { expectedIf });
+    checks.exactRun(path, jobId, name, [`goreleaser ${args}`]);
+  }
+  for (const [file, digest] of [
+    ['.github/actions/setup-goreleaser/action.yml', '5265ee0469a1f52be3905b173e81ba6e70aa15c13d57f1986b1aec7cfdd11b9a'],
+    ['.github/scripts/install-goreleaser.sh', '28fb7cc9989532fabfb3fa8e093cdf61f84ddd3400bd111dacb58d922cb2bd3a'],
+  ]) {
+    if (createHash('sha256').update(files[file] || '').digest('hex') !== digest) {
+      failures.push(`${file} changed verified GoReleaser installer`);
+    }
+  }
+}
+
+function inspectCi(files, workflows, failures, checks) {
   const { event, job, step, exactRun } = checks;
   const pr = '.github/workflows/pr-validation.yml';
   event(pr, 'pull_request');
@@ -106,8 +137,9 @@ function inspectCi(checks) {
   step(ci, 'checks', 'Go module lock is current', { run: ['go mod tidy', 'git diff --exit-code -- go.mod go.sum'] });
   step(ci, 'checks', 'Tests, race detector, and coverage', { run: ['go test -race -coverprofile=coverage.out ./...', 'awk'] });
   step(ci, 'checks', 'Go vet', { run: ['go vet ./...'] });
-  step(ci, 'checks', 'Validate GoReleaser configuration', { uses: 'goreleaser/goreleaser-action', withValues: { version: 'v2.18.2', args: 'check' } });
-  step(ci, 'checks', 'Build snapshot artifacts', { uses: 'goreleaser/goreleaser-action', withValues: { version: 'v2.18.2', args: 'release --snapshot --clean' } });
+  inspectGoReleaser(files, workflows, failures, checks, ci, 'checks', [
+    ['Validate GoReleaser configuration', 'check'], ['Build snapshot artifacts', 'release --snapshot --clean'],
+  ]);
   step(ci, 'checks', 'Verify snapshot archives', { run: ['tar -tzf', '(cd dist && sha256sum --check checksums.txt)'] });
   step(ci, 'checks', 'Go vulnerability audit', { uses: 'golang/govulncheck-action' });
   step(ci, 'checks', 'Audit Aislop toolchain', { run: ['npm audit --prefix .github/aislop --audit-level=moderate'] });
@@ -235,10 +267,9 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
       Object.hasOwn(state, 'if') || Object.hasOwn(workflows[release]?.jobs?.publish || {}, 'if')) {
     failures.push(`${release} lost reviewed release settings verification`);
   }
-  step(release, 'publish', 'Build deployable binaries', {
-    uses: 'goreleaser/goreleaser-action', expectedIf: "steps.state.outputs.published != 'true'",
-    withValues: { version: 'v2.18.2', args: 'release --clean --skip=publish' },
-  });
+  inspectGoReleaser(files, workflows, failures, checks, release, 'publish', [
+    ['Build deployable binaries', 'release --clean --skip=publish'],
+  ], "steps.state.outputs.published != 'true'");
   step(release, 'publish', 'Build source archive and stage binaries', {
     run: ['git archive', 'test -s "dist/$artifact"', 'cp "dist/$artifact"'],
     expectedIf: "steps.state.outputs.published != 'true'",
@@ -331,7 +362,7 @@ function inspect(files) {
   const failures = [];
   const workflows = scanWorkflows(files, failures);
   const checks = createChecks(workflows, failures);
-  inspectCi(checks);
+  inspectCi(files, workflows, failures, checks);
   inspectAdditionalWorkflows(files, workflows, failures, checks);
   inspectScannerConfigs(files, failures);
   return failures;
