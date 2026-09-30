@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
@@ -468,5 +469,59 @@ func TestRegistrationTokenProtectsReusedIDThroughHTTPAndStore(t *testing.T) {
 	}
 	if status := finish(newToken); status != http.StatusNoContent {
 		t.Fatalf("new-token completion status = %d", status)
+	}
+}
+
+func (f *fakeStore) AcquireUserExecution(context.Context, bool) (*lock.File, error) {
+	return &lock.File{}, nil
+}
+
+func TestUserExecutionRejectsTransitionErrorAndWrongWorkload(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		phase    control.Phase
+		health   control.Health
+		workload control.Workload
+		want     int
+	}{
+		{"draining", control.PhaseDraining, control.HealthHealthy, control.WorkloadMedia, http.StatusServiceUnavailable},
+		{"failed", control.PhaseReconciling, control.HealthError, control.WorkloadMedia, http.StatusServiceUnavailable},
+		{"degraded", control.PhaseStable, control.HealthDegraded, control.WorkloadMedia, http.StatusServiceUnavailable},
+		{"idle", control.PhaseStable, control.HealthHealthy, control.WorkloadIdle, http.StatusConflict},
+		{"text", control.PhaseStable, control.HealthHealthy, control.WorkloadText, http.StatusConflict},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := admittedState(control.OwnerUser)
+			state.Phase, state.Health, state.DesiredWorkload, state.ActiveWorkload, state.Admission = test.phase, test.health, test.workload, test.workload, control.AdmissionClosed
+			handler := testHandler(t, &fakeStore{state: state}, "http://127.0.0.1:1")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "http://proxy.test/execute", nil))
+			if response.Code != test.want {
+				t.Fatalf("request was not rejected: %d %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+type ownershipChangedStore struct {
+	*fakeStore
+	reads int
+}
+
+func (s *ownershipChangedStore) State(ctx context.Context) (control.State, error) {
+	s.reads++
+	state, err := s.fakeStore.State(ctx)
+	if s.reads > 1 {
+		state.Owner = control.OwnerSupervisor
+	}
+	return state, err
+}
+func TestUserExecutionRechecksOwnershipUnderGate(t *testing.T) {
+	stateStore := &ownershipChangedStore{fakeStore: &fakeStore{state: admittedState(control.OwnerUser)}}
+	handler := testHandler(t, stateStore, "http://127.0.0.1:1")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "http://proxy.test/execute", nil))
+	if response.Code != http.StatusServiceUnavailable || stateStore.reads != 2 {
+		t.Fatalf("stale user bypass: %d reads=%d", response.Code, stateStore.reads)
 	}
 }

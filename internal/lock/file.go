@@ -1,10 +1,12 @@
 package lock
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -53,4 +55,33 @@ func (f *File) Close() error {
 	unlockErr := unix.Flock(int(f.file.Fd()), unix.LOCK_UN)
 	closeErr := f.file.Close()
 	return errors.Join(unlockErr, closeErr)
+}
+
+// AcquireContext waits for a cross-process request gate until ctx is canceled.
+// Each acquisition has its own descriptor so concurrent readers release only
+// their own shared lock.
+func AcquireContext(ctx context.Context, path string, shared bool) (*File, error) {
+	operation := unix.LOCK_EX | unix.LOCK_NB
+	if shared {
+		operation = unix.LOCK_SH | unix.LOCK_NB
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		gate, err := acquire(path, operation)
+		if err == nil {
+			return gate, nil
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+			return nil, err
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }

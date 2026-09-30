@@ -9,11 +9,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
 var (
+	ErrSupervisorOwned    = errors.New("GPU is in supervisor control mode")
 	ErrUserOwned          = errors.New("GPU is in user control mode")
 	ErrTransitionRunning  = errors.New("another transition is running")
 	ErrDrainTimeout       = errors.New("timed out waiting for admitted work")
@@ -27,6 +29,7 @@ var (
 )
 
 type StateStore interface {
+	AcquireUserExecution(context.Context, bool) (*lock.File, error)
 	State(context.Context) (control.State, error)
 	UpdateState(context.Context, uint64, control.State) (control.State, error)
 	StartTransition(context.Context, uint64, store.Transition) (control.State, error)
@@ -98,7 +101,33 @@ func (c *Controller) Status(ctx context.Context) (control.State, error) {
 	return state, nil
 }
 
+// Switch changes the supervisor workload; it never claims user-owned hardware.
 func (c *Controller) Switch(ctx context.Context, target control.Workload, initiator string) (control.State, error) {
+	return c.transition(ctx, target, control.OwnerSupervisor, control.OwnerSupervisor, initiator, false)
+}
+
+// TransferToUser drains supervisor work before committing user ownership.
+func (c *Controller) TransferToUser(ctx context.Context, target control.Workload, initiator string) (control.State, error) {
+	return c.transition(ctx, target, control.OwnerSupervisor, control.OwnerUser, initiator, false)
+}
+
+// SwitchUser explicitly authorizes stopping the current user workload.
+func (c *Controller) SwitchUser(ctx context.Context, target control.Workload, initiator string) (control.State, error) {
+	return c.transition(ctx, target, control.OwnerUser, control.OwnerUser, initiator, false)
+}
+
+// TransferToSupervisor explicitly authorizes stopping the current user workload.
+func (c *Controller) TransferToSupervisor(ctx context.Context, target control.Workload, initiator string) (control.State, error) {
+	return c.transition(ctx, target, control.OwnerUser, control.OwnerSupervisor, initiator, false)
+}
+
+// RecoverUser verifies an operator-selected workload without starting or stopping
+// user work. Interrupted transitions remain failed; ownership stays with the user.
+func (c *Controller) RecoverUser(ctx context.Context, target control.Workload, initiator string) (control.State, error) {
+	return c.transition(ctx, target, control.OwnerUser, control.OwnerUser, initiator, true)
+}
+
+func (c *Controller) transition(ctx context.Context, target control.Workload, sourceOwner, targetOwner control.Owner, initiator string, verifyOnly bool) (control.State, error) {
 	if target != control.WorkloadText && target != control.WorkloadMedia && target != control.WorkloadIdle {
 		return control.State{}, fmt.Errorf("invalid target workload %q", target)
 	}
@@ -106,10 +135,23 @@ func (c *Controller) Switch(ctx context.Context, target control.Workload, initia
 	if err != nil {
 		return control.State{}, err
 	}
-	if current.Owner == control.OwnerUser {
-		return current, ErrUserOwned
+	if current.Owner != sourceOwner {
+		if current.Owner == control.OwnerUser {
+			return current, ErrUserOwned
+		}
+		return current, ErrSupervisorOwned
 	}
-	if current.Health == control.HealthError {
+	if verifyOnly {
+		closed := current
+		closed.Phase = control.PhaseReconciling
+		closed.Health = control.HealthError
+		closed.Admission = control.AdmissionClosed
+		current, err = c.store.Recover(ctx, current.Version, closed, "operator-user-recovery")
+		if err != nil {
+			return current, err
+		}
+	}
+	if current.Health == control.HealthError && !verifyOnly {
 		return current, ErrRecoveryRequired
 	}
 	if running, err := c.store.InProgressTransition(ctx); err != nil {
@@ -117,7 +159,7 @@ func (c *Controller) Switch(ctx context.Context, target control.Workload, initia
 	} else if running != "" {
 		return current, fmt.Errorf("%w: %s", ErrTransitionRunning, running)
 	}
-	if current.Phase != control.PhaseStable {
+	if current.Phase != control.PhaseStable && !verifyOnly {
 		return current, ErrReconcileRequired
 	}
 	transitionID, err := c.id()
@@ -125,7 +167,15 @@ func (c *Controller) Switch(ctx context.Context, target control.Workload, initia
 		return current, err
 	}
 	targetState := current
+	targetState.Owner = targetOwner
 	targetState.DesiredWorkload = target
+	targetState.ActiveWorkload = target
+	targetState.Phase = control.PhaseStable
+	targetState.Health = control.HealthHealthy
+	targetState.Admission = control.AdmissionClosed
+	if targetOwner == control.OwnerSupervisor && target != control.WorkloadIdle {
+		targetState.Admission = control.AdmissionOpen
+	}
 	transition := store.Transition{
 		ID: transitionID, Source: current, Target: targetState, Previous: current,
 		Initiator: initiator, Phase: control.PhaseDraining,
@@ -138,23 +188,57 @@ func (c *Controller) Switch(ctx context.Context, target control.Workload, initia
 	if err := c.waitForDrain(ctx, transitionID, transition.Deadline); err != nil {
 		return c.fail(transitionID, state, current, err)
 	}
-	state, err = c.setPhase(ctx, transitionID, state, control.PhaseUnloading)
-	if err != nil {
-		return c.fail(transitionID, state, current, err)
-	}
-	active, err := c.unloadForSwitch(ctx, transitionID, state.Phase, current, target)
-	if err != nil {
-		return c.fail(transitionID, state, current, err)
-	}
-	state, err = c.setPhase(ctx, transitionID, state, control.PhaseLoading)
-	if err != nil {
-		return c.fail(transitionID, state, current, err)
-	}
-	if target != control.WorkloadIdle && active != target {
-		if err := c.effect(ctx, transitionID, state.Phase, "start "+string(target), func(actionCtx context.Context) error {
-			return c.runtime.Start(actionCtx, target)
-		}); err != nil {
+	var userGate *lock.File
+	defer func() { _ = userGate.Close() }()
+	active := current.ActiveWorkload
+	if !verifyOnly {
+		state, err = c.setPhase(ctx, transitionID, state, control.PhaseUnloading)
+		if err != nil {
 			return c.fail(transitionID, state, current, err)
+		}
+		if sourceOwner == control.OwnerUser {
+			// User submissions are not registered work. Terminate both runtimes,
+			// including queued media jobs, before waiting for HTTP handoffs.
+			err = c.effect(ctx, transitionID, state.Phase, "stop user runtimes", c.runtime.StopForRecovery)
+			if err == nil {
+				err = c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout))
+			}
+			active = control.WorkloadIdle
+		} else {
+			active, err = c.unloadForSwitch(ctx, transitionID, state.Phase, current, target)
+		}
+		if err != nil {
+			return c.fail(transitionID, state, current, err)
+		}
+	}
+	if sourceOwner == control.OwnerUser {
+		gateCtx, cancel := context.WithTimeout(ctx, c.config.DrainTimeout)
+		userGate, err = c.store.AcquireUserExecution(gateCtx, false)
+		cancel()
+		if err != nil {
+			return c.fail(transitionID, state, current, fmt.Errorf("drain user request handoffs: %w", err))
+		}
+		if !verifyOnly {
+			snapshot, observeErr := c.observe(ctx)
+			if observeErr != nil {
+				return c.fail(transitionID, state, current, observeErr)
+			}
+			if snapshot.TextActive || snapshot.MediaReady {
+				return c.fail(transitionID, state, current, ErrStateVerification)
+			}
+		}
+	}
+	if !verifyOnly {
+		state, err = c.setPhase(ctx, transitionID, state, control.PhaseLoading)
+		if err != nil {
+			return c.fail(transitionID, state, current, err)
+		}
+		if target != control.WorkloadIdle && active != target {
+			if err := c.effect(ctx, transitionID, state.Phase, "start "+string(target), func(actionCtx context.Context) error {
+				return c.runtime.Start(actionCtx, target)
+			}); err != nil {
+				return c.fail(transitionID, state, current, err)
+			}
 		}
 	}
 	state, err = c.setPhase(ctx, transitionID, state, control.PhaseVerifying)
@@ -165,11 +249,12 @@ func (c *Controller) Switch(ctx context.Context, target control.Workload, initia
 		return c.fail(transitionID, state, current, err)
 	}
 	final := state
+	final.Owner = targetOwner
 	final.DesiredWorkload = target
 	final.ActiveWorkload = target
 	final.Phase = control.PhaseStable
 	final.Health = control.HealthHealthy
-	if target == control.WorkloadIdle {
+	if targetOwner == control.OwnerUser || target == control.WorkloadIdle {
 		final.Admission = control.AdmissionClosed
 	} else {
 		final.Admission = control.AdmissionOpen
@@ -216,9 +301,6 @@ func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
 	if err != nil {
 		return control.State{}, err
 	}
-	if state.Owner == control.OwnerUser {
-		return state, ErrUserOwned
-	}
 	running, err := c.store.InProgressTransition(ctx)
 	if err != nil {
 		return state, err
@@ -235,6 +317,9 @@ func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
 		}
 		recovered, recoverErr := c.store.Recover(ctx, state.Version, final, reason)
 		return recovered, errors.Join(ErrRecoveryRequired, recoverErr)
+	}
+	if state.Owner == control.OwnerUser {
+		return state, ErrUserOwned
 	}
 	snapshot, err := c.observe(ctx)
 	if err != nil {
@@ -379,6 +464,9 @@ func (c *Controller) waitReady(ctx context.Context, target control.Workload, dea
 		} else {
 			err = verifySnapshot(target, snapshot)
 		}
+		if err == nil && target == control.WorkloadIdle {
+			err = c.released(ctx)
+		}
 		if err == nil {
 			if healthErr := c.runtime.Healthy(ctx, target); healthErr != nil {
 				err = fmt.Errorf("%w: %v", ErrHealthCheck, healthErr)
@@ -431,7 +519,11 @@ func observedWorkload(state control.State, snapshot gpuruntime.Snapshot) (contro
 }
 
 func (c *Controller) setPhase(ctx context.Context, transitionID string, state control.State, phase control.Phase) (control.State, error) {
-	return c.store.SetTransitionPhase(ctx, transitionID, state.Version, phase)
+	next, err := c.store.SetTransitionPhase(ctx, transitionID, state.Version, phase)
+	if err != nil {
+		return state, err
+	}
+	return next, nil
 }
 
 func (c *Controller) observe(ctx context.Context) (gpuruntime.Snapshot, error) {
@@ -493,16 +585,19 @@ func (c *Controller) waitReleased(ctx context.Context, deadline time.Time) error
 }
 
 func (c *Controller) fail(transitionID string, state, previous control.State, cause error) (control.State, error) {
-	rollbackCtx, cancelRollback := context.WithTimeout(context.Background(), c.config.CleanupTimeout)
-	rollbackErr := c.rollback(rollbackCtx, transitionID, previous)
-	cancelRollback()
+	var rollbackErr error
+	if previous.Owner == control.OwnerSupervisor {
+		rollbackCtx, cancelRollback := context.WithTimeout(context.Background(), c.config.CleanupTimeout)
+		rollbackErr = c.rollback(rollbackCtx, transitionID, previous)
+		cancelRollback()
+	}
 
 	final := state
 	final.Phase = control.PhaseReconciling
 	final.Health = control.HealthError
 	final.Admission = control.AdmissionClosed
 	final.ActiveWorkload = control.WorkloadUnknown
-	if rollbackErr == nil {
+	if rollbackErr == nil && previous.Owner == control.OwnerSupervisor {
 		final.ActiveWorkload = previous.ActiveWorkload
 	}
 

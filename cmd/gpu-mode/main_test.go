@@ -91,7 +91,7 @@ func TestDefaultStatePathUsesXDGDirectory(t *testing.T) {
 func TestCLICommandsFailClosedWhenSystemdCannotBeObserved(t *testing.T) {
 	previousArgs, previousStdout := os.Args, os.Stdout
 	t.Cleanup(func() { os.Args, os.Stdout = previousArgs, previousStdout })
-	for _, command := range []string{"reconcile", "recover", "text", "media", "idle"} {
+	for _, command := range []string{"reconcile", "recover", "text", "media", "idle", "take-control", "user-switch", "return-control", "recover-user"} {
 		t.Run(command, func(t *testing.T) {
 			args := []string{"gpu-mode", "-state", filepath.Join(t.TempDir(), "state.db"),
 				"-text-unit", "text.service", "-media-unit", "media.service",
@@ -99,7 +99,11 @@ func TestCLICommandsFailClosedWhenSystemdCannotBeObserved(t *testing.T) {
 				"-media-health-url", "http://127.0.0.1:1/",
 				"-media-release-url", "http://127.0.0.1:1/free",
 				"-release-max-used-mib", "1", "-nvidia-smi", "/usr/bin/true",
-				"-systemctl", "/usr/bin/true", command}
+				"-systemctl", "/usr/bin/true"}
+			if command == "take-control" || command == "user-switch" || command == "return-control" || command == "recover-user" {
+				args = append(args, "-target", "text")
+			}
+			args = append(args, command)
 			output, err := os.CreateTemp(t.TempDir(), "output")
 			if err != nil {
 				t.Fatal(err)
@@ -201,5 +205,33 @@ func TestCLIWorkResolutionRequiresReasonAndStoppedProxies(t *testing.T) {
 	}
 	if state.Admission != control.AdmissionClosed || state.LeaseFence.Epoch != 2 {
 		t.Fatalf("failed verification state = %#v", state)
+	}
+}
+
+func TestOwnershipCLIRequiresExplicitValidTargetBeforeOpeningStore(t *testing.T) {
+	previousArgs := os.Args
+	t.Cleanup(func() { os.Args = previousArgs })
+	for _, command := range []string{"take-control", "user-switch", "return-control", "recover-user"} {
+		for _, target := range []string{"", "unknown", "auto"} {
+			statePath := filepath.Join(t.TempDir(), "state.db")
+			os.Args = []string{"gpu-mode", "-state", statePath, "-target", target, command}
+			if err := run(); err == nil || !strings.Contains(err.Error(), "requires -target") {
+				t.Fatalf("%s %q: %v", command, target, err)
+			}
+			if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+				t.Fatalf("invalid command opened state: %v", err)
+			}
+		}
+	}
+	os.Args = []string{"gpu-mode", "-target", "text", "status"}
+	if err := run(); err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("unused target accepted: %v", err)
+	}
+	for _, command := range []string{"take-control", "user-switch", "return-control", "recover-user"} {
+		for _, target := range []string{"text", "media", "idle"} {
+			if err := validateTarget(command, target); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 }

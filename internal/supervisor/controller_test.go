@@ -528,7 +528,7 @@ func TestStatusDoesNotMutateUserOwnedState(t *testing.T) {
 	state.DesiredWorkload = control.WorkloadMedia
 	state.Phase = control.PhaseStable
 	state.Health = control.HealthHealthy
-	state.Admission = control.AdmissionOpen
+	state.Admission = control.AdmissionClosed
 	state, err = stateStore.UpdateState(context.Background(), state.Version, state)
 	if err != nil {
 		t.Fatal(err)
@@ -558,7 +558,7 @@ func TestSwitchIsIdempotent(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			stateStore := openStore(t)
-			runtime := &fakeRuntime{active: test.workload, mediaReady: true, blockRelease: true}
+			runtime := &fakeRuntime{active: test.workload, mediaReady: true, blockRelease: test.workload != control.WorkloadIdle}
 			controller := testController(t, stateStore, runtime)
 			state, err := stateStore.State(context.Background())
 			if err != nil {
