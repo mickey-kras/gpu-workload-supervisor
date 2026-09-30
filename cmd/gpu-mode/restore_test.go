@@ -27,7 +27,7 @@ func TestRestoreStateCommandNeedsNoRuntimeConfiguration(t *testing.T) {
 	before.DesiredWorkload = control.WorkloadText
 	before.ActiveWorkload = control.WorkloadText
 	before.Phase = control.PhaseStable
-	before.Admission = control.AdmissionOpen
+	before.Admission = control.AdmissionClosed
 	before, err = stateStore.UpdateState(ctx, before.Version, before)
 	if err != nil {
 		t.Fatal(err)

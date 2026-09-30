@@ -48,14 +48,18 @@ func run() error {
 	cleanupTimeout := flags.Duration("cleanup-timeout", 2*time.Minute, "failure rollback timeout")
 	finalizeTimeout := flags.Duration("finalize-timeout", 10*time.Second, "failure finalization timeout")
 	pollInterval := flags.Duration("poll-interval", 250*time.Millisecond, "drain and readiness polling interval")
+	target := flags.String("target", "", "required workload for ownership commands: text, media, idle")
 	resolveReason := flags.String("resolve-reason", "", "required audit reason for resolve-work")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 1 {
-		return errors.New("usage: gpu-mode [flags] restore-state|status|reconcile|recover|resolve-work|text|media|idle")
+		return errors.New("usage: gpu-mode [flags] restore-state|status|reconcile|recover|resolve-work|text|media|idle|take-control|user-switch|return-control|recover-user")
 	}
 	command := flags.Arg(0)
+	if err := validateTarget(command, *target); err != nil {
+		return err
+	}
 	if command != restoreStateCommand && (*textUnit == "" || *mediaUnit == "" || *textHealth == "" || *mediaHealth == "" || *mediaRelease == "" || *releaseMaxMiB == 0 || *nvidiaSMIPath == "" || *systemctlPath == "") {
 		return errors.New("runtime units, endpoints, release threshold, and trusted executable paths are required")
 	}
@@ -103,7 +107,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	return executeCommand(ctx, controller, command, *resolveReason)
+	return executeCommand(ctx, controller, command, *resolveReason, control.Workload(*target))
 }
 
 func acquireResolutionLock(statePath, command, reason string) (*lock.File, error) {
@@ -126,7 +130,7 @@ func acquireResolutionLock(statePath, command, reason string) (*lock.File, error
 	return proxyLock, nil
 }
 
-func executeCommand(ctx context.Context, controller *supervisor.Controller, command, resolveReason string) error {
+func executeCommand(ctx context.Context, controller *supervisor.Controller, command, resolveReason string, target control.Workload) error {
 	var state control.State
 	var err error
 	switch command {
@@ -145,6 +149,14 @@ func executeCommand(ctx context.Context, controller *supervisor.Controller, comm
 				AbandonedWork int64         `json:"abandonedWork"`
 			}{state, abandoned})
 		}
+	case "take-control":
+		state, err = controller.TransferToUser(ctx, target, "local-cli")
+	case "user-switch":
+		state, err = controller.SwitchUser(ctx, target, "local-cli")
+	case "return-control":
+		state, err = controller.TransferToSupervisor(ctx, target, "local-cli")
+	case "recover-user":
+		state, err = controller.RecoverUser(ctx, target, "local-cli")
 	case "text":
 		state, err = controller.Switch(ctx, control.WorkloadText, "local-cli")
 	case "media":
@@ -177,4 +189,18 @@ func defaultStatePath() string {
 		return "state.db"
 	}
 	return filepath.Join(home, ".local", "state", "gpu-workload-supervisor", "state.db")
+}
+
+func validateTarget(command, target string) error {
+	switch command {
+	case "take-control", "user-switch", "return-control", "recover-user":
+		if target != "text" && target != "media" && target != "idle" {
+			return fmt.Errorf("%s requires -target text|media|idle", command)
+		}
+	default:
+		if target != "" {
+			return fmt.Errorf("-target is not supported for %s", command)
+		}
+	}
+	return nil
 }

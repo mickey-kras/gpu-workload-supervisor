@@ -2,6 +2,7 @@ package lock
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -144,5 +145,43 @@ func TestAcquireRejectsInvalidLockPath(t *testing.T) {
 	var missing *File
 	if err := missing.Close(); err != nil {
 		t.Fatalf("nil lock close failed: %v", err)
+	}
+}
+
+func TestContextLockTimesOutAndReleasesReadersIndependently(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "request.lock")
+	first, err := AcquireContext(context.Background(), path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := AcquireContext(context.Background(), path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := AcquireContext(ctx, path, false); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("second reader lost its lock: %v", err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := AcquireContext(context.Background(), path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.Close()
+	canceled, cancelNow := context.WithCancel(context.Background())
+	cancelNow()
+	if _, err := AcquireContext(canceled, path, true); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled lock: %v", err)
+	}
+	if _, err := AcquireContext(context.Background(), "", false); err == nil {
+		t.Fatal("empty lock accepted")
 	}
 }

@@ -119,6 +119,9 @@ func (s State) Validate() error {
 	if s.UpdatedAt.IsZero() {
 		return errors.New("updated timestamp is empty")
 	}
+	if s.Owner == OwnerUser && s.Admission != AdmissionClosed {
+		return errors.New("supervisor admission must be closed during user ownership")
+	}
 	if s.Phase != PhaseStable && s.Admission != AdmissionClosed {
 		return errors.New("admission must be closed outside stable phase")
 	}

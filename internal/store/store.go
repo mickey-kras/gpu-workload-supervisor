@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	_ "modernc.org/sqlite"
 )
 
@@ -26,9 +27,10 @@ var (
 type Clock func() time.Time
 
 type Store struct {
-	db   *sql.DB
-	now  Clock
-	uuid func() (string, error)
+	userExecutionLock string
+	db                *sql.DB
+	now               Clock
+	uuid              func() (string, error)
 }
 
 type Transition struct {
@@ -98,7 +100,7 @@ func openWithMode(ctx context.Context, path string, now Clock, uuid func() (stri
 		db.Close()
 		return nil, fmt.Errorf("secure sqlite file: %w", err)
 	}
-	s := &Store{db: db, now: now, uuid: uuid}
+	s := &Store{db: db, now: now, uuid: uuid, userExecutionLock: path + ".user-execution.lock"}
 	if err := s.initialize(ctx); err != nil {
 		db.Close()
 		return nil, err
@@ -436,4 +438,10 @@ func nullable(v string) any {
 		return nil
 	}
 	return v
+}
+
+// AcquireUserExecution coordinates unregistered user requests with explicit
+// ownership commands. The gate is held until forwarding or the command ends.
+func (s *Store) AcquireUserExecution(ctx context.Context, shared bool) (*lock.File, error) {
+	return lock.AcquireContext(ctx, s.userExecutionLock, shared)
 }

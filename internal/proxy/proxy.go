@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
@@ -26,6 +27,7 @@ const (
 )
 
 type StateStore interface {
+	AcquireUserExecution(context.Context, bool) (*lock.File, error)
 	State(context.Context) (control.State, error)
 	AdmitWorkToken(context.Context, string, string, control.Workload, control.Fence) (string, error)
 	FinishWorkToken(context.Context, string, control.Workload, control.Fence, string, store.WorkOutcome) error
@@ -242,6 +244,26 @@ func (h *Handler) execute(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if state.Owner == control.OwnerUser {
+		gate, err := h.store.AcquireUserExecution(request.Context(), true)
+		if err != nil {
+			writeError(response, http.StatusServiceUnavailable, "state_unavailable")
+			return
+		}
+		defer gate.Close()
+		// Re-read under the gate: the earlier observation may precede a transfer.
+		state, err = h.store.State(request.Context())
+		if err != nil || state.Owner != control.OwnerUser {
+			writeError(response, http.StatusServiceUnavailable, "ownership_changed")
+			return
+		}
+		if state.Phase != control.PhaseStable || state.Health != control.HealthHealthy {
+			writeError(response, http.StatusServiceUnavailable, "admission_closed")
+			return
+		}
+		if state.ActiveWorkload != h.workload || state.DesiredWorkload != h.workload {
+			writeError(response, http.StatusConflict, "workload_mismatch")
+			return
+		}
 		h.proxy.ServeHTTP(response, h.withoutControlHeaders(request))
 		return
 	}
