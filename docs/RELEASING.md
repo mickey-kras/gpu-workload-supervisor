@@ -25,11 +25,14 @@ checked with `gh attestation verify` on a downloaded asset.
    version on main is preserved; a lower version or unrelated PR changes fail closed.
 
 The `release-automation` environment, `RELEASE_APP_ID` repository variable, App
-installation with Contents write, Pull requests write, and Administration read, release-branch/tag
+installation with Contents write and Pull requests write, release-branch/tag
 creation and deletion bypasses, and GitHub release immutability must be configured
 before dispatch. Set `RELEASE_SETTINGS_REVIEW` on that environment to the five
-reviewed release ruleset revisions. The workflow checks the live rulesets and
-immutability before preparing a release. Failed runs do not rewrite existing
+reviewed release ruleset revisions. The workflow validates the owner-reviewed immutable-release setting and checks
+the accessible live rulesets before preparing a release. When GitHub redacts
+bypass actors, the matching reviewed ruleset revision supplies that assurance.
+Administration permission is not required. After publication, the workflow
+verifies that the release is immutable before cleanup or the next-patch bump. Failed runs do not rewrite existing
 tags or releases.
 `release-version.json` starts at `0.1.0` and tracks the next planned release.
 For a minor or major release, change it through a normal PR before dispatch.
