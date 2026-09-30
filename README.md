@@ -68,7 +68,7 @@ The default `-media-stop-mode unload` releases media models and keeps its UI
 running; it requires `-media-release-url` and a separately enforced execution gate.
 Use `-media-stop-mode stop-service` to stop the media unit instead. In this mode,
 the release URL is optional, text and idle require media to be stopped, and starting
-either runtime requires both units stopped and GPU memory below the configured
+either runtime requires both units stopped and GPU memory at or below the configured
 release threshold. Transitional, failed, or concurrent units fail closed; repair
 the units explicitly before recovery. The UI is unavailable outside media mode.
 
@@ -172,4 +172,3 @@ Processes sharing the supervisor identity are trusted. A compromised process wit
 Execution requests must not have a route that bypasses the gate while supervisor ownership is active.
 
 Repository checks and settings: [repository controls](docs/REPOSITORY-CONTROLS.md). Dependabot: [policy](docs/DEPENDABOT.md). Restores: [procedure](docs/RESTORING.md). Releases: [releasing](docs/RELEASING.md).
-

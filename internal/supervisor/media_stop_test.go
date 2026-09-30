@@ -3,10 +3,11 @@ package supervisor
 import (
 	"context"
 	"errors"
-	"github.com/google/uuid"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 )
@@ -156,5 +157,42 @@ func TestExclusiveConcurrentBootFailsClosed(t *testing.T) {
 	state, err := controller.Reconcile(context.Background())
 	if err == nil || state.Admission != control.AdmissionClosed || state.Health != control.HealthError {
 		t.Fatalf("state=%#v err=%v", state, err)
+	}
+}
+
+type delayedExclusiveRuntime struct{ exclusiveRuntime }
+
+func (r *delayedExclusiveRuntime) Start(ctx context.Context, workload control.Workload) error {
+	if err := r.Released(ctx); err != nil {
+		return err
+	}
+	return r.exclusiveRuntime.Start(ctx, workload)
+}
+
+func TestExclusiveTextToMediaWaitsForGPURelease(t *testing.T) {
+	for _, failures := range []int{1, 1000000} {
+		t.Run(fmt.Sprint(failures), func(t *testing.T) {
+			ctx := context.Background()
+			runtime := &delayedExclusiveRuntime{exclusiveRuntime: exclusiveRuntime{fakeRuntime: fakeRuntime{active: control.WorkloadText}}}
+			controller := testController(t, openStore(t), runtime)
+			controller.config.VerifyTimeout = 5 * time.Millisecond
+			controller.config.CleanupTimeout = 5 * time.Millisecond
+			if _, err := controller.Reconcile(ctx); err != nil {
+				t.Fatal(err)
+			}
+			runtime.releaseFailures = failures
+			state, err := controller.Switch(ctx, control.WorkloadMedia, "test")
+			if failures == 1 {
+				if err != nil || state.ActiveWorkload != control.WorkloadMedia {
+					t.Fatalf("state=%#v err=%v", state, err)
+				}
+				assertCalls(t, runtime.calls, "stop text", "start media")
+			} else {
+				if !errors.Is(err, ErrVerifyTimeout) || state.Admission != control.AdmissionClosed || state.Health != control.HealthError {
+					t.Fatalf("state=%#v err=%v", state, err)
+				}
+				assertCalls(t, runtime.calls, "stop text")
+			}
+		})
 	}
 }

@@ -439,6 +439,11 @@ func (c *Controller) rollback(ctx context.Context, transitionID string, previous
 	switch previous.ActiveWorkload {
 	case control.WorkloadText:
 		if !snapshot.TextActive {
+			if snapshot.MediaExclusive {
+				if err := c.waitReleased(ctx, c.now().Add(c.config.CleanupTimeout)); err != nil {
+					return err
+				}
+			}
 			if err := c.effect(ctx, transitionID, control.PhaseReconciling, "rollback start text", func(actionCtx context.Context) error {
 				return c.runtime.Start(actionCtx, control.WorkloadText)
 			}); err != nil {
@@ -455,6 +460,11 @@ func (c *Controller) rollback(ctx context.Context, transitionID string, previous
 			}
 		}
 		if !snapshot.MediaReady {
+			if snapshot.MediaExclusive {
+				if err := c.waitReleased(ctx, c.now().Add(c.config.CleanupTimeout)); err != nil {
+					return err
+				}
+			}
 			if err := c.effect(ctx, transitionID, control.PhaseReconciling, "rollback start media", func(actionCtx context.Context) error {
 				return c.runtime.Start(actionCtx, control.WorkloadMedia)
 			}); err != nil {
