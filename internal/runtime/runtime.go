@@ -7,8 +7,9 @@ import (
 )
 
 type Snapshot struct {
-	TextActive bool
-	MediaReady bool
+	TextActive     bool
+	MediaReady     bool
+	MediaExclusive bool
 }
 
 type Manager interface {
@@ -16,7 +17,7 @@ type Manager interface {
 	Start(context.Context, control.Workload) error
 	Stop(context.Context, control.Workload) error
 	// StopForRecovery shuts down both runtime units, including the media UI.
-	// Normal Stop(media) only releases models and leaves that unit running.
+	// Normal Stop(media) follows the configured media stop policy.
 	StopForRecovery(context.Context) error
 	Healthy(context.Context, control.Workload) error
 	Released(context.Context) error

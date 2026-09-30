@@ -299,6 +299,9 @@ func (c *Controller) checkReady(ctx context.Context, target control.Workload) er
 }
 
 func verifySnapshot(target control.Workload, snapshot gpuruntime.Snapshot) error {
+	if snapshot.MediaExclusive && snapshot.MediaReady && target != control.WorkloadMedia {
+		return fmt.Errorf("%w: media runtime remains active", ErrStateVerification)
+	}
 	switch target {
 	case control.WorkloadText:
 		if !snapshot.TextActive {
@@ -317,6 +320,12 @@ func verifySnapshot(target control.Workload, snapshot gpuruntime.Snapshot) error
 }
 
 func observedWorkload(state control.State, snapshot gpuruntime.Snapshot) (control.Workload, error) {
+	if snapshot.MediaExclusive && snapshot.MediaReady {
+		if snapshot.TextActive {
+			return control.WorkloadUnknown, ErrInvariant
+		}
+		return control.WorkloadMedia, nil
+	}
 	if snapshot.TextActive {
 		if state.ActiveWorkload == control.WorkloadMedia {
 			return control.WorkloadUnknown, ErrInvariant

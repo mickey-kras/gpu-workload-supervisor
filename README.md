@@ -64,6 +64,20 @@ gpu-mode \
   status|reconcile|recover|resolve-work|text|media|idle
 ```
 
+The default `-media-stop-mode unload` releases media models and keeps its UI
+running; it requires `-media-release-url` and a separately enforced execution gate.
+Use `-media-stop-mode stop-service` to stop the media unit instead. In this mode,
+the release URL is optional, text and idle require media to be stopped, and starting
+either runtime requires both units stopped and GPU memory below the configured
+release threshold. Transitional, failed, or concurrent units fail closed; repair
+the units explicitly before recovery. The UI is unavailable outside media mode.
+
+This policy provides service lifecycle exclusion, not request fencing. Disable
+independent runtime startup and updates in deployment configuration. Direct
+runtime requests bypass admission and registered-work draining; execution gates
+are still required for supervised requests. Use the same stop policy for every
+command sharing a state store.
+
 The state directory must be private and owned by the current user. Commands use an exclusive file lock. Opening the store applies pending migrations. Boot reconciliation does not resume incomplete work. Interrupted transitions and latched errors require explicit recovery.
 
 Ownership changes always require a target. Add the normal runtime flags before the command:
@@ -158,3 +172,4 @@ Processes sharing the supervisor identity are trusted. A compromised process wit
 Execution requests must not have a route that bypasses the gate while supervisor ownership is active.
 
 Repository checks and settings: [repository controls](docs/REPOSITORY-CONTROLS.md). Dependabot: [policy](docs/DEPENDABOT.md). Restores: [procedure](docs/RESTORING.md). Releases: [releasing](docs/RELEASING.md).
+

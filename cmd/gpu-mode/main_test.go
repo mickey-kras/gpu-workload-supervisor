@@ -235,3 +235,30 @@ func TestOwnershipCLIRequiresExplicitValidTargetBeforeOpeningStore(t *testing.T)
 		}
 	}
 }
+
+func TestCLIRejectsInvalidMediaStopModeBeforeCreatingState(t *testing.T) {
+	previous := os.Args
+	t.Cleanup(func() { os.Args = previous })
+	for _, mode := range []string{"", "STOP-SERVICE", "stop"} {
+		path := filepath.Join(t.TempDir(), "state.db")
+		os.Args = []string{"gpu-mode", "-state", path, "-media-stop-mode", mode, "status"}
+		if err := run(); err == nil || !strings.Contains(err.Error(), "media stop mode") {
+			t.Fatalf("mode %q: %v", mode, err)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("state created: %v", err)
+		}
+		if _, err := os.Stat(path + ".lock"); !os.IsNotExist(err) {
+			t.Fatalf("lock created: %v", err)
+		}
+	}
+}
+
+func TestCLIStopServiceDoesNotRequireReleaseEndpoint(t *testing.T) {
+	previous := os.Args
+	t.Cleanup(func() { os.Args = previous })
+	os.Args = []string{"gpu-mode", "-state", filepath.Join(t.TempDir(), "state.db"), "-media-stop-mode", "stop-service", "-text-unit", "text.service", "-media-unit", "media.service", "-text-health-url", "http://127.0.0.1:1/health", "-media-health-url", "http://127.0.0.1:1/health", "-release-max-used-mib", "1", "-systemctl", "/usr/bin/true", "-nvidia-smi", "/usr/bin/true", "status"}
+	if err := run(); err == nil || !strings.Contains(err.Error(), "load state") {
+		t.Fatalf("expected observation failure, got %v", err)
+	}
+}
