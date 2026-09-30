@@ -24,7 +24,6 @@ awk -v archive="$archive" '$2 == archive { print; found++ } END { if (found != 1
   checksums.txt > archive.checksum
 sha256sum --check --strict archive.checksum
 
-# Extract only the executable, after authenticating this exact archive.
 tar -xzf "$archive" goreleaser
 install_dir=$(mktemp -d "${RUNNER_TEMP}/goreleaser-bin.XXXXXX")
 install -m 0755 goreleaser "${install_dir}/goreleaser"
