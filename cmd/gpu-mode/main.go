@@ -20,7 +20,10 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
-const restoreStateCommand = "restore-state"
+const (
+	restoreStateCommand = "restore-state"
+	localCLIInitiator   = "local-cli"
+)
 
 func main() {
 	if err := run(); err != nil {
@@ -150,19 +153,19 @@ func executeCommand(ctx context.Context, controller *supervisor.Controller, comm
 			}{state, abandoned})
 		}
 	case "take-control":
-		state, err = controller.TransferToUser(ctx, target, "local-cli")
+		state, err = controller.TransferToUser(ctx, target, localCLIInitiator)
 	case "user-switch":
-		state, err = controller.SwitchUser(ctx, target, "local-cli")
+		state, err = controller.SwitchUser(ctx, target, localCLIInitiator)
 	case "return-control":
-		state, err = controller.TransferToSupervisor(ctx, target, "local-cli")
+		state, err = controller.TransferToSupervisor(ctx, target, localCLIInitiator)
 	case "recover-user":
-		state, err = controller.RecoverUser(ctx, target, "local-cli")
+		state, err = controller.RecoverUser(ctx, target, localCLIInitiator)
 	case "text":
-		state, err = controller.Switch(ctx, control.WorkloadText, "local-cli")
+		state, err = controller.Switch(ctx, control.WorkloadText, localCLIInitiator)
 	case "media":
-		state, err = controller.Switch(ctx, control.WorkloadMedia, "local-cli")
+		state, err = controller.Switch(ctx, control.WorkloadMedia, localCLIInitiator)
 	case "idle":
-		state, err = controller.Switch(ctx, control.WorkloadIdle, "local-cli")
+		state, err = controller.Switch(ctx, control.WorkloadIdle, localCLIInitiator)
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}

@@ -215,14 +215,16 @@ func (c *Controller) unloadForSwitch(ctx context.Context, transitionID string, p
 		}
 	}
 	if target == control.WorkloadText && active == control.WorkloadIdle {
-		if err := c.effect(ctx, transitionID, phase, "release media", func(actionCtx context.Context) error {
-			return c.runtime.Stop(actionCtx, control.WorkloadMedia)
-		}); err != nil {
-			return active, err
-		}
-		if err := c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout)); err != nil {
-			return active, err
-		}
+		return active, c.releaseMediaForText(ctx, transitionID, phase)
 	}
 	return active, nil
+}
+
+func (c *Controller) releaseMediaForText(ctx context.Context, transitionID string, phase control.Phase) error {
+	if err := c.effect(ctx, transitionID, phase, "release media", func(actionCtx context.Context) error {
+		return c.runtime.Stop(actionCtx, control.WorkloadMedia)
+	}); err != nil {
+		return err
+	}
+	return c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout))
 }
