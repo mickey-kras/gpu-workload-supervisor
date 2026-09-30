@@ -45,6 +45,7 @@ jobs:
           check-latest: false
           go-package: ./...
           repo-checkout: false
+          cache: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -95,16 +96,12 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: '1'
+      - name: Install verified GoReleaser
+        uses: ./.github/actions/setup-goreleaser
       - name: Validate GoReleaser configuration
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
-        with:
-          version: v2.18.2
-          args: check
+        run: goreleaser check
       - name: Build snapshot artifacts
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
-        with:
-          version: v2.18.2
-          args: release --snapshot --clean
+        run: goreleaser release --snapshot --clean
       - name: Verify snapshot archives
         shell: bash
         run: |
@@ -117,3 +114,4 @@ jobs:
             tar -tzf "${archives[0]}" | grep -E '(^|/)gpu-workload-proxy$' > /dev/null
           done
           (cd dist && sha256sum --check checksums.txt)
+
