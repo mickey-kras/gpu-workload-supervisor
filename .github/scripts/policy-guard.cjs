@@ -114,7 +114,7 @@ function inspectGoReleaser(files, workflows, failures, checks, path, jobId, buil
   }
   for (const [file, digest] of [
     ['.github/actions/setup-goreleaser/action.yml', '5265ee0469a1f52be3905b173e81ba6e70aa15c13d57f1986b1aec7cfdd11b9a'],
-    ['.github/scripts/install-goreleaser.sh', '28fb7cc9989532fabfb3fa8e093cdf61f84ddd3400bd111dacb58d922cb2bd3a'],
+    ['.github/scripts/install-goreleaser.sh', 'de2e876e51298aec0ec86a42fdb850aaa2f95e3d86cd1fa67a6d5c1febbcc8b0'],
   ]) {
     if (createHash('sha256').update(files[file] || '').digest('hex') !== digest) {
       failures.push(`${file} changed verified GoReleaser installer`);
