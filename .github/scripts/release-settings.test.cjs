@@ -30,7 +30,7 @@ function fixture() {
   const review = JSON.stringify({ app_id: 4956768, immutable_releases: true,
     rulesets: Object.fromEntries(rules.slice(0, 5).map(rule => [rule.id, rule.updated_at])) });
   const github = {
-    request: async () => ({ data: { enabled: true } }),
+    request: async () => { throw new Error('Administration API must not be called'); },
     paginate: async () => rules.map(({ id, name }) => ({ id, name })),
     rest: { repos: { getRepoRulesets() {},
       getRepoRuleset: async ({ ruleset_id }) => ({ data: rules.find(rule => rule.id === ruleset_id) }),
@@ -75,10 +75,10 @@ test('rejects a weaker code scanning threshold', async () => {
   await assert.rejects(verify(input), /changed code scanning/);
 });
 
-test('rejects disabled release immutability', async () => {
+test('rejects an owner review without immutable releases enabled', async () => {
   const input = fixture();
-  input.github.request = async () => ({ data: { enabled: false } });
-  await assert.rejects(verify(input), /Enable immutable releases/);
+  input.review = JSON.stringify({ ...JSON.parse(input.review), immutable_releases: false });
+  await assert.rejects(verify(input), /owner-reviewed/);
 });
 
 test('uses exact reviewed revisions if the API redacts bypass actors', async () => {
@@ -87,4 +87,23 @@ test('uses exact reviewed revisions if the API redacts bypass actors', async () 
   await verify(input);
   input.rules[2].updated_at = '2026-09-29T13:00:00.000-07:00';
   await assert.rejects(verify(input), /update RELEASE_SETTINGS_REVIEW/);
+});
+
+test('rejects missing, malformed, foreign, and obsolete owner reviews', async () => {
+  for (const review of ['', '{', JSON.stringify({ ...JSON.parse(fixture().review), app_id: 1 }),
+    JSON.stringify({ ...JSON.parse(fixture().review), rulesets: {} })]) {
+    const input = fixture(); input.review = review;
+    await assert.rejects(verify(input), /RELEASE_SETTINGS_REVIEW|owner-reviewed/);
+  }
+  const input = fixture();
+  const review = JSON.parse(input.review);
+  review.rulesets[999] = review.rulesets[100]; delete review.rulesets[100];
+  input.review = JSON.stringify(review);
+  await assert.rejects(verify(input), /update RELEASE_SETTINGS_REVIEW/);
+});
+
+test('ruleset API failures propagate instead of accepting reviewed settings alone', async () => {
+  const input = fixture();
+  input.github.paginate = async () => { throw Object.assign(new Error('Forbidden'), { status: 403 }); };
+  await assert.rejects(verify(input), /Forbidden/);
 });

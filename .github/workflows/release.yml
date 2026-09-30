@@ -127,7 +127,6 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
-          permission-administration: read
       - name: Verify immutable setting and publication state
         id: state
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9

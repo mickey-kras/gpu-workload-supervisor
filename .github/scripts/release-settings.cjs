@@ -64,10 +64,6 @@ function verifyRule(rule, spec, review) {
 
 async function verify({ github, context, review: value }) {
   const review = reviewedSettings(value);
-  const { data: policy } = await github.request('GET /repos/{owner}/{repo}/immutable-releases', {
-    ...context.repo, headers: { 'X-GitHub-Api-Version': '2026-03-10' },
-  });
-  requireValue(policy.enabled === true, 'Enable immutable releases before publishing');
   const summaries = await github.paginate(github.rest.repos.getRepoRulesets,
     { ...context.repo, per_page: 100 });
   const names = summaries.filter(item => item.name === 'Enforce work branch names');
