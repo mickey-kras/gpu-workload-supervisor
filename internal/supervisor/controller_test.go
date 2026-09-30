@@ -20,6 +20,7 @@ type fakeRuntime struct {
 	partialStart    bool
 	stopErr         error
 	releaseFailures int
+	releaseCalls    int
 	blockRelease    bool
 	cancelOnStop    func()
 	blockStop       bool
@@ -80,6 +81,7 @@ func (r *fakeRuntime) StopForRecovery(ctx context.Context) error {
 }
 
 func (r *fakeRuntime) Released(ctx context.Context) error {
+	r.releaseCalls++
 	if r.blockRelease {
 		<-ctx.Done()
 		return ctx.Err()
@@ -210,20 +212,37 @@ func TestFailedMediaStartRollsBackToIdleOnlyAfterRelease(t *testing.T) {
 				t.Fatal(err)
 			}
 			runtime.calls = nil
+			runtime.releaseCalls = 0
 			runtime.startErr = errors.New("partially started media")
 			runtime.partialStart = true
 			runtime.blockRelease = tc.blockRelease
 			runtime.stopErr = tc.stopErr
-			controller.config.ActionTimeout = time.Millisecond
-			controller.config.CleanupTimeout = 5 * time.Millisecond
+			// Rollback includes real SQLite journal writes, so keep the normal cleanup
+			// budget. Only the deliberately blocked release probe needs a short timeout.
+			if tc.blockRelease {
+				controller.config.ActionTimeout = time.Millisecond
+			}
 			state, err := controller.Switch(context.Background(), control.WorkloadMedia, "test")
-			if err == nil || state.ActiveWorkload != tc.wantActive ||
+			if !errors.Is(err, runtime.startErr) || state.ActiveWorkload != tc.wantActive ||
 				state.Health != control.HealthError || state.Admission != control.AdmissionClosed {
 				t.Fatalf("failed media start state = %#v, error = %v", state, err)
 			}
 			assertCalls(t, runtime.calls, "start media", "stop media")
 			if tc.stopErr != nil && !errors.Is(err, tc.stopErr) {
 				t.Fatalf("missing failed media stop: %v", err)
+			}
+			if tc.blockRelease && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("missing release probe timeout: %v", err)
+			}
+			if tc.stopErr == nil && runtime.releaseCalls == 0 {
+				t.Fatal("rollback did not verify GPU release")
+			}
+			persisted, err := stateStore.State(context.Background())
+			if err != nil || persisted != state {
+				t.Fatalf("failed state was not persisted: %#v, error = %v", persisted, err)
+			}
+			if running, err := stateStore.InProgressTransition(context.Background()); err != nil || running != "" {
+				t.Fatalf("failed transition remains in progress: %q, error = %v", running, err)
 			}
 		})
 	}
