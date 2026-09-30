@@ -16,7 +16,8 @@ checked with `gh attestation verify` on a downloaded asset.
    after successful publication. Re-run the failed job from the original run to
    retry the same SHA, even if `main` has advanced. If publication already
    completed, the workflow verifies the immutable tag, assets, and checksum,
-   then removes the prepared branch. An incomplete release needs manual recovery.
+   then removes the prepared branch. For an incomplete or mutable publication,
+   follow the recovery procedure below.
 4. After verified publication, the workflow opens or reuses a next-patch bump PR
    for `release-version.json`. It enables squash auto-merge only after validating
    that the complete PR diff is exactly the expected version line. Required PR
@@ -26,14 +27,36 @@ checked with `gh attestation verify` on a downloaded asset.
 
 The `release-automation` environment, `RELEASE_APP_ID` repository variable, App
 installation with Contents write and Pull requests write, release-branch/tag
-creation and deletion bypasses, and GitHub release immutability must be configured
-before dispatch. Set `RELEASE_SETTINGS_REVIEW` on that environment to the five
-reviewed release ruleset revisions. The workflow validates the owner-reviewed immutable-release setting and checks
-the accessible live rulesets before preparing a release. When GitHub redacts
+creation and release-branch deletion bypasses, and GitHub release immutability must be configured
+before dispatch. In Settings > General > Releases, enable release immutability.
+Set `RELEASE_SETTINGS_REVIEW` on that environment to the five reviewed release
+ruleset revisions. Its `immutable_releases: true` value is an owner attestation,
+not a live read of the repository setting. Confirm that setting before dispatch;
+only future releases become immutable when it is enabled. The workflow validates
+the attestation and checks the accessible live rulesets before preparing a release.
+When GitHub redacts
 bypass actors, the matching reviewed ruleset revision supplies that assurance.
 Administration permission is not required. After publication, the workflow
 verifies that the release is immutable before cleanup or the next-patch bump. Failed runs do not rewrite existing
 tags or releases.
-`release-version.json` starts at `0.1.0` and tracks the next planned release.
+`release-version.json` tracks the next planned release.
 For a minor or major release, change it through a normal PR before dispatch.
 Go module versions remain Git tags; the version file is release planning metadata.
+
+## Recover a mutable or incomplete publication
+
+The existing `v0.1.0` release was published mutable and is retained with its
+original tag and assets. The next planned release is `0.1.1`; this reservation
+does not certify `v0.1.0` or bypass the immutable publication check.
+
+1. Preserve the existing release, tag, and assets. Release tags prohibit updates
+   and deletion; the release App has no bypass for those protections.
+2. Confirm release immutability is enabled and the reviewed ruleset revisions
+   remain current. Fix the failing validation before dispatching again.
+3. Reserve an unused higher version in `release-version.json` through a normal PR
+   if the planned tag is already occupied by an invalid publication.
+4. Wait for green main validation, then dispatch a new release from `main`.
+   Retrying the old run still targets its original version and commit.
+5. Check that the new publication is immutable and complete, and that the
+   next-patch PR merges after its required checks. Publishing `0.1.1` normally
+   reserves `0.1.2` automatically.

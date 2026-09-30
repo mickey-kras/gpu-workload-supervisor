@@ -72,7 +72,6 @@ test('reads a plain planned version and rejects invalid release metadata', () =>
 
 test('published release must be immutable, complete, stable, and at the dispatched SHA', async () => {
   for (const mutate of [
-    input => { input.state.release.immutable = false; },
     input => { input.state.release.draft = true; },
     input => { input.state.release.prerelease = true; },
     input => { input.state.release.assets.pop(); },
@@ -85,6 +84,18 @@ test('published release must be immutable, complete, stable, and at the dispatch
     assert.equal(input.state.merged.length, 0);
   }
   await verifyPublished(fixture());
+});
+
+test('unverified immutable releases cannot queue a bump and explain nondestructive recovery', async () => {
+  for (const immutable of [false, undefined, 'true']) {
+    const input = fixture();
+    input.state.release.immutable = immutable;
+    await assert.rejects(bumpReleasedVersion(input),
+      /preserve its tag and assets, confirm repository release immutability, and reserve an unused version through a normal PR/);
+    assert.equal(input.state.created.length, 0);
+    assert.equal(input.state.refs.length, 0);
+    assert.equal(input.state.merged.length, 0);
+  }
 });
 
 test('creates only the next version file and queues squash merge for its exact head', async () => {
