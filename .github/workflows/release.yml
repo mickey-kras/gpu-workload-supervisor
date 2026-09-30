@@ -112,12 +112,29 @@ jobs:
                 core.info('Retrying the published commit after branch cleanup');
               }
             }
-            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
-              ...context.repo, workflow_id: 'main.yml', branch: 'main', head_sha: context.sha,
-              status: 'completed', per_page: 100,
-            });
-            if (!runs.some(run => ['push', 'workflow_dispatch'].includes(run.event) && run.head_sha === context.sha &&
-                run.conclusion === 'success')) throw new Error('A successful main push validation is required');
+            // The release can be dispatched while main's Sonar job is still running.
+            // Wait for the exact dispatch commit, preserving the successful-main gate.
+            let validated = false;
+            for (let attempt = 0; attempt < 20; attempt++) {
+              const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                ...context.repo, workflow_id: 'main.yml', branch: 'main', head_sha: context.sha,
+                status: 'completed', per_page: 100,
+              });
+              const matching = runs.filter(run => ['push', 'workflow_dispatch'].includes(run.event) &&
+                run.head_sha === context.sha);
+              if (matching.some(run => run.conclusion === 'success')) {
+                validated = true;
+                break;
+              }
+              if (matching.some(run => run.conclusion === 'failure')) {
+                throw new Error('Main validation failed for the release commit');
+              }
+              if (attempt < 19) {
+                core.info('Waiting for main validation at the release commit');
+                await new Promise(resolve => setTimeout(resolve, 30000));
+              }
+            }
+            if (!validated) throw new Error('Timed out waiting for successful main validation');
       - name: Release App token
         id: app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
