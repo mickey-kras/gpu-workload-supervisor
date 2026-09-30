@@ -33,7 +33,22 @@ func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte,
 
 var systemdUnitPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_.@-]*\.service$`)
 
+type MediaStopMode string
+
+const (
+	MediaStopUnload  MediaStopMode = "unload"
+	MediaStopService MediaStopMode = "stop-service"
+)
+
+func (mode MediaStopMode) Validate() error {
+	if mode != "" && mode != MediaStopUnload && mode != MediaStopService {
+		return fmt.Errorf("invalid media stop mode %q", mode)
+	}
+	return nil
+}
+
 type SystemdConfig struct {
+	MediaStopMode   MediaStopMode
 	TextUnit        string
 	MediaUnit       string
 	TextHealthURL   string
@@ -63,6 +78,9 @@ func NewSystemdManager(config SystemdConfig) (*SystemdManager, error) {
 }
 
 func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.Client) (*SystemdManager, error) {
+	if err := config.MediaStopMode.Validate(); err != nil {
+		return nil, err
+	}
 	if config.TextUnit == "" || config.MediaUnit == "" {
 		return nil, errors.New("text and media units are required")
 	}
@@ -88,11 +106,11 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 	if config.HealthTimeout <= 0 {
 		return nil, errors.New("health timeout must be greater than zero")
 	}
-	for name, value := range map[string]string{
-		"text health":   config.TextHealthURL,
-		"media health":  config.MediaHealthURL,
-		"media release": config.MediaReleaseURL,
-	} {
+	endpoints := map[string]string{"text health": config.TextHealthURL, "media health": config.MediaHealthURL}
+	if config.MediaStopMode != MediaStopService || config.MediaReleaseURL != "" {
+		endpoints["media release"] = config.MediaReleaseURL
+	}
+	for name, value := range endpoints {
 		if err := validateLoopbackURL(value); err != nil {
 			return nil, fmt.Errorf("%s URL: %w", name, err)
 		}
@@ -112,15 +130,18 @@ func (m *SystemdManager) Observe(ctx context.Context) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return Snapshot{TextActive: text, MediaReady: media}, nil
+	if m.config.MediaStopMode == MediaStopService && text && media {
+		return Snapshot{}, errors.New("text and media units are both active")
+	}
+	return Snapshot{TextActive: text, MediaReady: media, MediaExclusive: m.config.MediaStopMode == MediaStopService}, nil
 }
 
 func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) error {
 	switch workload {
 	case control.WorkloadText:
-		return m.runSystemctl(ctx, "start", m.config.TextUnit)
+		return m.startUnit(ctx, m.config.TextUnit, m.config.MediaUnit)
 	case control.WorkloadMedia:
-		return m.runSystemctl(ctx, "start", m.config.MediaUnit)
+		return m.startUnit(ctx, m.config.MediaUnit, m.config.TextUnit)
 	default:
 		return fmt.Errorf("workload %q cannot be started", workload)
 	}
@@ -129,8 +150,11 @@ func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) e
 func (m *SystemdManager) Stop(ctx context.Context, workload control.Workload) error {
 	switch workload {
 	case control.WorkloadText:
-		return m.runSystemctl(ctx, "stop", m.config.TextUnit)
+		return m.stopUnit(ctx, m.config.TextUnit)
 	case control.WorkloadMedia:
+		if m.config.MediaStopMode == MediaStopService {
+			return m.stopUnit(ctx, m.config.MediaUnit)
+		}
 		state, err := m.unitState(ctx, m.config.MediaUnit)
 		if err != nil {
 			return err
@@ -147,13 +171,12 @@ func (m *SystemdManager) Stop(ctx context.Context, workload control.Workload) er
 	}
 }
 
-// StopForRecovery is deliberately stronger than Stop(media): the latter
-// unloads models while keeping the media UI available for normal switching.
+// StopForRecovery shuts down both units regardless of the media stop policy.
 func (m *SystemdManager) StopForRecovery(ctx context.Context) error {
-	if err := m.runSystemctl(ctx, "stop", m.config.TextUnit); err != nil {
+	if err := m.stopUnit(ctx, m.config.TextUnit); err != nil {
 		return err
 	}
-	return m.runSystemctl(ctx, "stop", m.config.MediaUnit)
+	return m.stopUnit(ctx, m.config.MediaUnit)
 }
 
 func (m *SystemdManager) Healthy(ctx context.Context, workload control.Workload) error {
@@ -170,6 +193,13 @@ func (m *SystemdManager) Healthy(ctx context.Context, workload control.Workload)
 }
 
 func (m *SystemdManager) Released(ctx context.Context) error {
+	if m.config.MediaStopMode == MediaStopService {
+		for _, unit := range []string{m.config.TextUnit, m.config.MediaUnit} {
+			if err := m.requireStopped(ctx, unit); err != nil {
+				return err
+			}
+		}
+	}
 	output, err := m.runner.Run(ctx, m.config.NvidiaSMIPath, "--query-gpu=memory.used", "--format=csv,noheader,nounits", "-i", strconv.Itoa(m.config.GPUIndex))
 	if err != nil {
 		return fmt.Errorf("query GPU memory: %w: %s", err, strings.TrimSpace(string(output)))
@@ -188,6 +218,9 @@ func (m *SystemdManager) active(ctx context.Context, unit string) (bool, error) 
 	state, err := m.unitState(ctx, unit)
 	if err != nil {
 		return false, err
+	}
+	if m.config.MediaStopMode == MediaStopService && !(state.active == "active" && state.sub == "running") && !(state.active == "inactive" && state.sub == "dead") {
+		return false, fmt.Errorf("%s is not running or stopped: %s/%s", unit, state.active, state.sub)
 	}
 	return state.isActive(unit)
 }
@@ -228,6 +261,39 @@ func (m *SystemdManager) unitState(ctx context.Context, unit string) (systemdUni
 		return systemdUnitState{}, fmt.Errorf("%s load state is %q", unit, values["LoadState"])
 	}
 	return systemdUnitState{active: values["ActiveState"], sub: values["SubState"]}, nil
+}
+
+func (m *SystemdManager) requireStopped(ctx context.Context, unit string) error {
+	state, err := m.unitState(ctx, unit)
+	if err != nil {
+		return err
+	}
+	if state.active != "inactive" || state.sub != "dead" {
+		return fmt.Errorf("%s is not stopped: %s/%s", unit, state.active, state.sub)
+	}
+	return nil
+}
+
+func (m *SystemdManager) startUnit(ctx context.Context, unit, opposing string) error {
+	if m.config.MediaStopMode == MediaStopService {
+		if err := m.requireStopped(ctx, opposing); err != nil {
+			return err
+		}
+		if err := m.Released(ctx); err != nil {
+			return err
+		}
+	}
+	return m.runSystemctl(ctx, "start", unit)
+}
+
+func (m *SystemdManager) stopUnit(ctx context.Context, unit string) error {
+	if err := m.runSystemctl(ctx, "stop", unit); err != nil {
+		return err
+	}
+	if m.config.MediaStopMode == MediaStopService {
+		return m.requireStopped(ctx, unit)
+	}
+	return nil
 }
 
 func (m *SystemdManager) runSystemctl(ctx context.Context, action, unit string) error {

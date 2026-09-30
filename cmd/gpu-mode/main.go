@@ -39,6 +39,7 @@ func run() error {
 	mediaUnit := flags.String("media-unit", "", "systemd user unit for the media UI")
 	textHealth := flags.String("text-health-url", "", "loopback text runtime health URL")
 	mediaHealth := flags.String("media-health-url", "", "loopback media runtime health URL")
+	mediaStopMode := flags.String("media-stop-mode", string(gpuruntime.MediaStopUnload), "media stop policy: unload or stop-service")
 	mediaRelease := flags.String("media-release-url", "", "loopback media model release URL")
 	gpuIndex := flags.Int("gpu-index", 0, "NVIDIA GPU index")
 	releaseMaxMiB := flags.Uint64("release-max-used-mib", 0, "maximum used GPU memory after media release")
@@ -59,11 +60,18 @@ func run() error {
 	if flags.NArg() != 1 {
 		return errors.New("usage: gpu-mode [flags] restore-state|status|reconcile|recover|resolve-work|text|media|idle|take-control|user-switch|return-control|recover-user")
 	}
+	stopMode := gpuruntime.MediaStopMode(*mediaStopMode)
+	if *mediaStopMode == "" {
+		return errors.New("media stop mode must not be empty")
+	}
+	if err := stopMode.Validate(); err != nil {
+		return err
+	}
 	command := flags.Arg(0)
 	if err := validateTarget(command, *target); err != nil {
 		return err
 	}
-	if command != restoreStateCommand && (*textUnit == "" || *mediaUnit == "" || *textHealth == "" || *mediaHealth == "" || *mediaRelease == "" || *releaseMaxMiB == 0 || *nvidiaSMIPath == "" || *systemctlPath == "") {
+	if command != restoreStateCommand && (*textUnit == "" || *mediaUnit == "" || *textHealth == "" || *mediaHealth == "" || (stopMode != gpuruntime.MediaStopService && *mediaRelease == "") || *releaseMaxMiB == 0 || *nvidiaSMIPath == "" || *systemctlPath == "") {
 		return errors.New("runtime units, endpoints, release threshold, and trusted executable paths are required")
 	}
 	processLock, err := lock.Acquire(*statePath + ".lock")
@@ -92,7 +100,8 @@ func run() error {
 		return restoreState(ctx, stateStore)
 	}
 	runtimeManager, err := gpuruntime.NewSystemdManager(gpuruntime.SystemdConfig{
-		TextUnit: *textUnit, MediaUnit: *mediaUnit,
+		MediaStopMode: stopMode,
+		TextUnit:      *textUnit, MediaUnit: *mediaUnit,
 		TextHealthURL: *textHealth, MediaHealthURL: *mediaHealth,
 		MediaReleaseURL: *mediaRelease, HealthTimeout: *healthTimeout,
 		GPUIndex: *gpuIndex, ReleaseMaxMiB: *releaseMaxMiB,
