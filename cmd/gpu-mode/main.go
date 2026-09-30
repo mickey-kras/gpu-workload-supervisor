@@ -71,8 +71,16 @@ func run() error {
 	if err := validateTarget(command, *target); err != nil {
 		return err
 	}
-	if command != restoreStateCommand && (*textUnit == "" || *mediaUnit == "" || *textHealth == "" || *mediaHealth == "" || (stopMode != gpuruntime.MediaStopService && *mediaRelease == "") || *releaseMaxMiB == 0 || *nvidiaSMIPath == "" || *systemctlPath == "") {
-		return errors.New("runtime units, endpoints, release threshold, and trusted executable paths are required")
+	runtimeConfig := gpuruntime.SystemdConfig{
+		MediaStopMode: stopMode,
+		TextUnit:      *textUnit, MediaUnit: *mediaUnit,
+		TextHealthURL: *textHealth, MediaHealthURL: *mediaHealth,
+		MediaReleaseURL: *mediaRelease, HealthTimeout: *healthTimeout,
+		GPUIndex: *gpuIndex, ReleaseMaxMiB: *releaseMaxMiB,
+		NvidiaSMIPath: *nvidiaSMIPath, SystemctlPath: *systemctlPath,
+	}
+	if err := validateRuntimeFlags(command, runtimeConfig); err != nil {
+		return err
 	}
 	processLock, err := lock.Acquire(*statePath + ".lock")
 	if err != nil {
@@ -99,14 +107,7 @@ func run() error {
 	if command == restoreStateCommand {
 		return restoreState(ctx, stateStore)
 	}
-	runtimeManager, err := gpuruntime.NewSystemdManager(gpuruntime.SystemdConfig{
-		MediaStopMode: stopMode,
-		TextUnit:      *textUnit, MediaUnit: *mediaUnit,
-		TextHealthURL: *textHealth, MediaHealthURL: *mediaHealth,
-		MediaReleaseURL: *mediaRelease, HealthTimeout: *healthTimeout,
-		GPUIndex: *gpuIndex, ReleaseMaxMiB: *releaseMaxMiB,
-		NvidiaSMIPath: *nvidiaSMIPath, SystemctlPath: *systemctlPath,
-	})
+	runtimeManager, err := gpuruntime.NewSystemdManager(runtimeConfig)
 	if err != nil {
 		return err
 	}
@@ -120,6 +121,16 @@ func run() error {
 		return err
 	}
 	return executeCommand(ctx, controller, command, *resolveReason, control.Workload(*target))
+}
+
+func validateRuntimeFlags(command string, config gpuruntime.SystemdConfig) error {
+	if command == restoreStateCommand {
+		return nil
+	}
+	if config.TextUnit == "" || config.MediaUnit == "" || config.TextHealthURL == "" || config.MediaHealthURL == "" || (config.MediaStopMode != gpuruntime.MediaStopService && config.MediaReleaseURL == "") || config.ReleaseMaxMiB == 0 || config.NvidiaSMIPath == "" || config.SystemctlPath == "" {
+		return errors.New("runtime units, endpoints, release threshold, and trusted executable paths are required")
+	}
+	return nil
 }
 
 func acquireResolutionLock(statePath, command, reason string) (*lock.File, error) {
