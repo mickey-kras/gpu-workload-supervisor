@@ -4,6 +4,18 @@
 
 Use the pinned binaries and complete [deployment configuration](DEPLOYMENT.md) for every command.
 
+## Switch workloads
+
+After successful reconciliation, run one command for the target you want:
+
+```sh
+/PINNED/RELEASE/gpu-mode [runtime flags] text
+/PINNED/RELEASE/gpu-mode [runtime flags] media
+/PINNED/RELEASE/gpu-mode [runtime flags] idle
+```
+
+Replace the binary path and `[runtime flags]` with your deployment configuration. Put flags before the single command. `text` and `media` admit the selected workload after verification; `idle` keeps admission closed. These commands require supervisor ownership. Do not start runtimes independently.
+
 ## Boot and explicit recovery
 
 Configure user-systemd startup declaratively in the deployment repository:
@@ -62,11 +74,34 @@ Ownership changes always require a target. Add the normal runtime flags before t
 
 User execution requests hold a shared cross-process handoff lock. User switches and returns close the gate, stop user runtimes, and wait up to `-drain-timeout` for forwarding handlers to exit before restarting anything. A stalled handler makes the operation fail closed; cancel the client request or stop the proxy before recovery. All proxies sharing a state database must use this version's handoff locking before enabling ownership commands.
 
-Failed and interrupted operations retain the last committed owner and require explicit recovery. Stopped user work is never restarted by rollback. For supervisor ownership, use `recover`. For user ownership, inspect the runtime and run `/PINNED/RELEASE/gpu-mode [runtime flags] -target text|media|idle recover-user` with the workload you intend to keep. This command verifies the target without starting or stopping runtimes, preserves user ownership, and keeps supervisor admission closed. An idle recovery verifies release using the configured policy. If verification fails, repair or stop runtimes explicitly and retry. `reconcile` never automatically takes control from the user. Every transfer, user switch, and recovery rotates the fence and records durable source/target ownership and transition outcomes.
+### Recover after a failed transfer or switch
+
+1. Inspect the recorded owner and runtime evidence. Failed or interrupted operations retain the last committed owner. Rollback never restarts stopped user work.
+2. Repair the cause. For supervisor ownership, run `recover` with the complete runtime flags.
+3. For user ownership, choose the workload to keep and verify it. For example:
+
+   ```sh
+   /PINNED/RELEASE/gpu-mode [runtime flags] -target media recover-user
+   ```
+
+   Use `text` or `idle` instead when appropriate. This verifies without starting or stopping runtimes, preserves user ownership and keeps supervisor admission closed. Idle recovery verifies release under the configured policy. If verification fails, repair or explicitly stop runtimes and retry.
+4. Resume only the path appropriate to the verified owner. Do not repeatedly reconcile user-owned state; `reconcile` never takes it over.
+
+Every transfer, user switch and recovery rotates the fence and durably records source/target ownership and the outcome.
 
 ## Resolve orphaned work
 
-If admitted work cannot report completion (for example, forwarding failed before either party received its registration token), stop every `gpu-workload-proxy` instance for this state file and wait for shutdown. Run `/PINNED/RELEASE/gpu-mode` with the complete runtime flags plus `-resolve-reason 'operator incident reference' resolve-work`. Proxy instances hold a shared lifetime lock; `resolve-work` refuses to run until they are gone, then closes admission, rotates the fence, stops both runtimes, verifies stopped units and empty workload cgroups, and atomically marks unfinished work abandoned with an audit record. Do not use an older proxy binary without the lifetime lock during this operation. If any stop or verification fails, work remains unfinished and admission stays closed. Run `recover` after successful resolution, then restart proxies and switch workload as needed. This operation terminates all running work, so use it only after investigating the orphaned requests.
+Use this only after investigating work that cannot report completion, such as a submission whose registration token was lost. It terminates all running work.
+
+1. Stop every `gpu-workload-proxy` for the state file and wait for shutdown. Do not use older proxies without the lifetime lock.
+2. Record an incident reason and resolve the work:
+
+   ```sh
+   /PINNED/RELEASE/gpu-mode [runtime flags] -resolve-reason 'operator incident reference' resolve-work
+   ```
+
+3. Confirm success. The command requires all proxy lifetime locks to be released, closes admission, rotates the fence, stops both runtimes and verifies stopped units and empty workload cgroups. It then atomically marks unfinished work abandoned and records an audit event. Any stop or verification failure leaves work unfinished and admission closed.
+4. After successful resolution, run `recover`, restart proxies and select the needed workload.
 
 ## Restore state
 
