@@ -48,6 +48,15 @@ and epoch, and fresh registration token. Retain that tuple unchanged through
 submission, streaming, backend tracking and terminal confirmation. Job identifiers
 and backend state interpretation belong to the adapter, not this supervisor.
 
+New supervisor-owned request IDs must be valid UTF-8 and contain at most 8192
+bytes after leading/trailing whitespace is removed. Oversized IDs return HTTP 400
+with `request_id_too_long`; invalid UTF-8 returns `request_id_invalid`, before any
+registration or upstream dispatch. This byte limit allows even worst-case JSON
+escaping (six bytes per input byte) to fit the 64 KiB completion body limit with
+the fence, registration token and outcome. Use the normalized ID unchanged in
+the callback; avoid excessive JSON whitespace. Existing registrations retain
+their completion behavior.
+
 The callback contract uses the configured completion path (default
 `POST /_gpu-workload-supervisor/v1/work/finish`):
 
