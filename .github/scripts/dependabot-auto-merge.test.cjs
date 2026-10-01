@@ -37,3 +37,17 @@ test('metadata parser rejects missing or incomplete action output', () => {
   assert.throws(() => readDependencies(''), /missing/);
   assert.throws(() => readDependencies('updated-dependencies-json<<END\n[]\n'), /Incomplete/);
 });
+
+test('grouped CodeQL metadata preserves per-dependency eligibility checks', () => {
+  const dependencies = ['init', 'analyze'].map(action => ({
+    ...update, dependencyName: `github/codeql-action/${action}`,
+    prevVersion: '4.38.1', newVersion: '4.38.2',
+  }));
+  const parse = entries => readDependencies(
+    `updated-dependencies-json<<END\n${JSON.stringify(entries)}\nEND\n`);
+  assert.equal(eligible(commits, parse(dependencies)), true);
+  for (const invalid of [{ compatScore: 74 }, { compatScore: null },
+    { updateType: 'version-update:semver-major' }]) {
+    assert.equal(eligible(commits, parse([dependencies[0], { ...dependencies[1], ...invalid }])), false);
+  }
+});
