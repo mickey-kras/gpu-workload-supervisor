@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="520" viewBox="0 0 1120 520" role="img" aria-labelledby="title desc">
+<title id="title">GPU Workload Supervisor overview</title>
+<desc id="desc">Clients send requests through the execution proxy to text or media services sharing one GPU. The separate controller stops and verifies workloads before starting the next. Proxy and controller share durable SQLite state for admission, leases, and transition journaling. Blue components belong to this repository.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8b949e"/></marker></defs>
+<rect width="1120" height="520" rx="20" fill="#0d1117"/>
+<g font-family="Arial, Helvetica, sans-serif">
+<text x="32" y="39" fill="#f0f6fc" font-size="20" font-weight="700">How the supervisor fits together</text>
+<text x="32" y="65" fill="#a6b0bd" font-size="14">Requests pass through the proxy. The controller switches workloads separately.</text>
+<rect x="32" y="111" width="222" height="141" rx="12" fill="#161b22" stroke="#6e7681" stroke-width="1.5"/>
+<text x="50" y="152" font-size="20" font-weight="700" fill="#c9d1d9">Clients</text>
+<text x="50" y="188" font-size="15" fill="#c9d1d9">Apps and tools</text>
+<rect x="310" y="111" width="222" height="141" rx="12" fill="#122a4f" stroke="#388bfd" stroke-width="3"/>
+<rect x="328" y="97" width="132" height="25" rx="12" fill="#388bfd"/><text x="394" y="114" text-anchor="middle" font-size="12" font-weight="700" fill="#0d1117">This repository</text>
+<text x="328" y="152" font-size="20" font-weight="700" fill="#cae3ff">Execution proxy</text>
+<text x="328" y="188" font-size="15" fill="#cae3ff">gpu-workload-proxy</text>
+<text x="328" y="211" font-size="15" fill="#cae3ff">Admit and forward</text>
+<rect x="588" y="111" width="222" height="141" rx="12" fill="#161b22" stroke="#6e7681" stroke-width="1.5"/>
+<text x="606" y="152" font-size="18" font-weight="700" fill="#c9d1d9">Text / media services</text>
+<text x="606" y="188" font-size="15" fill="#c9d1d9">One active at a time</text>
+<text x="606" y="211" font-size="15" fill="#c9d1d9">Runtimes you configure</text>
+<rect x="866" y="111" width="222" height="141" rx="12" fill="#161b22" stroke="#6e7681" stroke-width="1.5"/>
+<text x="884" y="152" font-size="20" font-weight="700" fill="#c9d1d9">Shared GPU</text>
+<text x="884" y="188" font-size="15" fill="#c9d1d9">One device</text>
+<text x="884" y="211" font-size="15" fill="#c9d1d9">Selected workload</text>
+<rect x="310" y="332" width="222" height="141" rx="12" fill="#122a4f" stroke="#388bfd" stroke-width="3"/>
+<text x="328" y="373" font-size="20" font-weight="700" fill="#cae3ff">Durable state</text>
+<text x="328" y="409" font-size="15" fill="#cae3ff">SQLite</text>
+<text x="328" y="432" font-size="15" fill="#cae3ff">Leases and journal</text>
+<rect x="588" y="332" width="222" height="141" rx="12" fill="#122a4f" stroke="#388bfd" stroke-width="3"/>
+<rect x="606" y="318" width="132" height="25" rx="12" fill="#388bfd"/><text x="672" y="335" text-anchor="middle" font-size="12" font-weight="700" fill="#0d1117">This repository</text>
+<text x="606" y="373" font-size="20" font-weight="700" fill="#cae3ff">Controller</text>
+<text x="606" y="409" font-size="15" fill="#cae3ff">gpu-mode</text>
+<text x="606" y="432" font-size="15" fill="#cae3ff">Stop · verify · start</text>
+<path d="M 260 180 H 301" fill="none" stroke="#8b949e" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M 538 180 H 579" fill="none" stroke="#8b949e" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M 816 180 H 857" fill="none" stroke="#8b949e" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M 421 258 V 323" fill="none" stroke="#8b949e" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="438" y="292" font-size="12" fill="#a6b0bd">Admit / track</text>
+<path d="M 699 312 V 261" fill="none" stroke="#8b949e" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="716" y="292" font-size="12" fill="#a6b0bd">Switch / verify</text>
+<path d="M 582 403 H 541" fill="none" stroke="#8b949e" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="560" y="386" text-anchor="middle" font-size="11" fill="#a6b0bd">State</text>
+<text x="32" y="504" font-size="14" fill="#a6b0bd">Blue: supervisor components. Gray: clients, runtime services, and hardware supplied by the deployment.</text>
+</g></svg>

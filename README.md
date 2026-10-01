@@ -11,6 +11,18 @@ GPU Workload Supervisor switches between text and media workloads that share one
 
 It provides a controller (`gpu-mode`) and an execution proxy (`gpu-workload-proxy`). You supply the runtime services, health endpoints and deployment configuration.
 
+## How it fits together
+
+<a href="docs/ARCHITECTURE.md">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/generated/overview-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/architecture/generated/overview-light.svg">
+    <img alt="Clients reach text or media runtimes through the execution proxy. A separate controller switches workloads; both share durable state. Supervisor components are highlighted." src="docs/architecture/generated/overview-light.svg">
+  </picture>
+</a>
+
+[Explore state and responsibilities](docs/ARCHITECTURE.md) · [Execution proxy details](docs/EXECUTION-PROXY.md)
+
 ## Install
 
 Download the Linux amd64 or arm64 archive from [Releases](https://github.com/mickey-kras/gpu-workload-supervisor/releases), verify it against the release checksum file, and extract both binaries into a version-specific directory. Use their absolute paths in commands and services. See [release verification](docs/RELEASING.md) and [backup before upgrading](docs/RESTORING.md#back-up-before-an-upgrade).
@@ -31,3 +43,4 @@ Then [reconcile at boot](docs/OPERATIONS.md#boot-and-explicit-recovery), configu
 - [All documentation](docs/README.md), including development, contracts and releases
 
 [MIT license](LICENSE).
+

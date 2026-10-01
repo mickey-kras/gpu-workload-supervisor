@@ -40,3 +40,14 @@ Broker workflows and execution/completion remain subject to the proxy contract.
 The [dashboard and local desktop client plan](CLIENTS.md) records future
 packaging, authority boundaries, and mandatory acceptance gates. It adds no
 running client; both clients remain deferred and outside initial deployment.
+
+
+## Updating the overview
+
+The repository README uses one overview with light/dark variants. Its topology follows `internal/proxy`, `internal/supervisor`, `internal/store`, and `internal/runtime`. Regenerate both maintained SVG assets with:
+
+```sh
+python3 scripts/architecture-overview.py
+```
+
+The controller is separate from the request path; it manages runtime transitions and writes the durable state the proxy uses for admission. Do not hand-edit the generated SVG files.
