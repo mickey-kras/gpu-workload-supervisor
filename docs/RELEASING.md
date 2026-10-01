@@ -46,8 +46,9 @@ Go module versions remain Git tags; the version file is release planning metadat
 ## Recover a mutable or incomplete publication
 
 The existing `v0.1.0` release was published mutable and is retained with its
-original tag and assets. The next planned release is `0.1.1`; this reservation
-does not certify `v0.1.0` or bypass the immutable publication check.
+original tag and assets. Later version reservations do not certify `v0.1.0`
+or bypass the immutable publication check. Read `release-version.json` for the
+current planned version.
 
 1. Preserve the existing release, tag, and assets. Release tags prohibit updates
    and deletion; the release App has no bypass for those protections.
@@ -58,5 +59,5 @@ does not certify `v0.1.0` or bypass the immutable publication check.
 4. Wait for green main validation, then dispatch a new release from `main`.
    Retrying the old run still targets its original version and commit.
 5. Check that the new publication is immutable and complete, and that the
-   next-patch PR merges after its required checks. Publishing `0.1.1` normally
-   reserves `0.1.2` automatically.
+   next-patch PR merges after its required checks and reserves the following patch
+   version automatically.
