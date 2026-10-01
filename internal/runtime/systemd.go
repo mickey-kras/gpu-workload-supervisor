@@ -221,6 +221,9 @@ func (m *SystemdManager) StopForRecovery(ctx context.Context) error {
 }
 
 func (m *SystemdManager) Healthy(ctx context.Context, workload control.Workload) error {
+	// The health budget includes the opposing unit/cgroup probe as well as HTTP.
+	ctx, cancel := context.WithTimeout(ctx, m.config.HealthTimeout)
+	defer cancel()
 	switch workload {
 	case control.WorkloadIdle:
 		return nil

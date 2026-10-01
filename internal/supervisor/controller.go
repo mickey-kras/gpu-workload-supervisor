@@ -148,7 +148,7 @@ func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
 	state.Phase = control.PhaseStable
 	state.Health = control.HealthHealthy
 	if snapshot.TextActive {
-		if err := c.runtime.Healthy(ctx, control.WorkloadText); err != nil {
+		if err := c.healthy(ctx, control.WorkloadText); err != nil {
 			return c.latchObservationFailure(ctx, state, err)
 		}
 		state.DesiredWorkload = control.WorkloadText
@@ -189,7 +189,7 @@ func (c *Controller) Recover(ctx context.Context) (control.State, error) {
 	final.Phase = control.PhaseStable
 	final.Health = control.HealthHealthy
 	if snapshot.TextActive {
-		if err := c.runtime.Healthy(ctx, control.WorkloadText); err != nil {
+		if err := c.healthy(ctx, control.WorkloadText); err != nil {
 			return state, err
 		}
 		final.DesiredWorkload = control.WorkloadText
@@ -263,21 +263,30 @@ func (c *Controller) waitForDrain(ctx context.Context, transitionID string, dead
 }
 
 func (c *Controller) waitReady(ctx context.Context, target control.Workload, deadline time.Time) error {
+	// Bound the entire verification phase, including observations and health
+	// commands, rather than checking the budget only between probes.
+	verifyCtx, cancel := context.WithTimeout(ctx, deadline.Sub(c.now()))
+	defer cancel()
 	ticker := time.NewTicker(c.config.PollInterval)
 	defer ticker.Stop()
 	var lastErr error
 	for {
-		err := c.checkReady(ctx, target)
-		if err == nil {
-			return nil
+		lastErr = c.checkReady(verifyCtx, target)
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		lastErr = err
-		if !c.now().Before(deadline) {
+		if verifyCtx.Err() != nil || !c.now().Before(deadline) {
 			return errors.Join(ErrVerifyTimeout, lastErr)
 		}
+		if lastErr == nil {
+			return nil
+		}
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-verifyCtx.Done():
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return errors.Join(ErrVerifyTimeout, lastErr)
 		case <-ticker.C:
 		}
 	}
@@ -296,7 +305,7 @@ func (c *Controller) checkReady(ctx context.Context, target control.Workload) er
 			return err
 		}
 	}
-	if err := c.runtime.Healthy(ctx, target); err != nil {
+	if err := c.healthy(ctx, target); err != nil {
 		return fmt.Errorf("%w: %v", ErrHealthCheck, err)
 	}
 	return nil
@@ -354,6 +363,12 @@ func (c *Controller) observe(ctx context.Context) (gpuruntime.Snapshot, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
 	defer cancel()
 	return c.runtime.Observe(probeCtx)
+}
+
+func (c *Controller) healthy(ctx context.Context, target control.Workload) error {
+	probeCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
+	defer cancel()
+	return c.runtime.Healthy(probeCtx, target)
 }
 
 func (c *Controller) released(ctx context.Context) error {
