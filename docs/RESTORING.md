@@ -1,5 +1,7 @@
 # Back up, restore, and roll back state
 
+[Documentation](README.md) | [Repository](../README.md)
+
 ## Back up before an upgrade
 
 Record the pinned binary version/checksum and complete runtime/proxy configuration
@@ -18,7 +20,7 @@ upgrade of supervisor-owned state, reconcile with the new pinned binary and
 matching runtime flags before restarting proxies. For user-owned state, inspect
 the runtime and explicitly verify it with `recover-user`; `reconcile` rejects user
 ownership. Use `return-control` only when the operator intends to resume supervisor
-ownership. Follow the [ownership and recovery guidance](../README.md#ownership-and-unfinished-work)
+ownership. Follow the [ownership and recovery guidance](OPERATIONS.md#ownership-and-unfinished-work)
 and validate the deployment before accepting work.
 
 ## Restore a backup

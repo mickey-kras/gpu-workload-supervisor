@@ -1,5 +1,7 @@
 # Execution proxy adapter contract
 
+[Documentation](README.md) | [Repository](../README.md)
+
 The supervisor is content-blind. Its generic tests qualify admission, correlation,
 forwarding and ownership behavior; they do not qualify any runtime deployment.
 Keep execution disabled until the exact deployed runtime version, route inventory,
@@ -77,8 +79,10 @@ The token is a completion capability, not proof that execution ended. The upstre
 receives it and HTTP responses received from upstream return it to the caller. Only trusted
 parties with verified terminal evidence may use it. Protect callback access at the
 deployment boundary; never expose it or its tokens to untrusted clients or logs.
-Legacy tokenless registrations remain subject to the existing compatibility rules
-until their fence rotates; do not treat that compatibility as an adapter contract.
+Legacy tokenless registrations accept completion with the original registered
+request ID and fence, even after the current fence rotates. Rotation only lifts
+the pruning protection for completed legacy rows; it does not revoke unfinished
+work. New adapters must use registration tokens.
 
 ## Failure, restart and ownership
 
@@ -87,7 +91,7 @@ Client disconnects, truncated upstream streams and proxy shutdown preserve durab
 registration state. Normal restart preserves its original correlation. A trusted
 adapter may finish it later using terminal evidence and the original tuple. If the
 token was lost or state remains ambiguous, use the verified `resolve-work` procedure
-in the README: stop all proxy instances, stop runtimes, verify release, then record
+in [operations](OPERATIONS.md#ownership-and-unfinished-work): stop all proxy instances, stop runtimes, verify release, then record
 an audited abandonment. Ordinary recovery is not proof that orphaned work finished.
 
 User mode allows manual execution of the selected healthy workload without lease
