@@ -268,6 +268,10 @@ authenticated, policy-limited automation inspect state and conditionally request
 an approved supervisor workload. It provides no listener or deployment exposure.
 Broker workflows and execution/completion remain subject to the proxy contract.
 
+The [dashboard and local desktop client plan](docs/CLIENTS.md) records future
+packaging, authority boundaries, and mandatory acceptance gates. It adds no
+running client; both clients remain deferred and outside initial deployment.
+
 ## Qualification boundary
 
 The tagged suite (`go test -race -count=1 -timeout=10m -tags=systemd_integration
