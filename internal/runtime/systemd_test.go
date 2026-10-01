@@ -18,8 +18,9 @@ type fakeRunner struct {
 	calls   []string
 }
 
-const mediaShowCommand = "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState -- media.service"
-const textShowCommand = "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState -- text.service"
+const mediaShowCommand = "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- media.service"
+const textShowCommand = "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- text.service"
+const gpuFreeCommand = "/usr/bin/true --query-gpu=memory.free --format=csv,noheader,nounits -i 0"
 const gpuMemoryCommand = "/usr/bin/true --query-gpu=memory.used --format=csv,noheader,nounits -i 0"
 
 type recoveryRunner struct{ fakeRunner }
@@ -27,10 +28,10 @@ type recoveryRunner struct{ fakeRunner }
 func (r *recoveryRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	command := strings.Join(append([]string{name}, args...), " ")
 	if command == "/usr/bin/true --user stop -- text.service" {
-		r.outputs[textShowCommand] = []byte("LoadState=loaded\nActiveState=inactive\nSubState=dead\n")
+		r.outputs[textShowCommand] = []byte("LoadState=loaded\nActiveState=inactive\nSubState=dead\nControlGroup=\n")
 	}
 	if command == "/usr/bin/true --user stop -- media.service" {
-		r.outputs[mediaShowCommand] = []byte("LoadState=loaded\nActiveState=inactive\nSubState=dead\n")
+		r.outputs[mediaShowCommand] = []byte("LoadState=loaded\nActiveState=inactive\nSubState=dead\nControlGroup=\n")
 	}
 	return r.fakeRunner.Run(ctx, name, args...)
 }
@@ -45,6 +46,7 @@ func TestRecoveryStopsBothSystemdUnitsRatherThanOnlyReleasingMediaModels(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureCgroups(t, manager)
 	if err := manager.StopForRecovery(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -86,8 +88,8 @@ func (r *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte
 
 func TestObserveKeepsMediaAvailabilitySeparateFromTextOwnership(t *testing.T) {
 	runner := &fakeRunner{outputs: map[string][]byte{
-		"/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState -- text.service":  []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
-		"/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState -- media.service": []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
+		"/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- text.service":  []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
+		"/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- media.service": []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
 	}, errs: map[string]error{}}
 	manager, err := newSystemdManager(testConfig(), runner, http.DefaultClient)
 	if err != nil {
@@ -103,11 +105,12 @@ func TestObserveKeepsMediaAvailabilitySeparateFromTextOwnership(t *testing.T) {
 }
 
 func TestStartUsesUserSystemdWithoutShell(t *testing.T) {
-	runner := &fakeRunner{outputs: map[string][]byte{}, errs: map[string]error{}}
+	runner := stoppedRunner()
 	manager, err := newSystemdManager(testConfig(), runner, http.DefaultClient)
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureCgroups(t, manager)
 	if err := manager.Start(context.Background(), control.WorkloadText); err != nil {
 		t.Fatal(err)
 	}
@@ -123,10 +126,11 @@ func TestHealthRequiresSuccessStatus(t *testing.T) {
 	defer server.Close()
 	config := testConfig()
 	config.TextHealthURL = server.URL
-	manager, err := newSystemdManager(config, &fakeRunner{}, server.Client())
+	manager, err := newSystemdManager(config, stoppedRunner(), server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureCgroups(t, manager)
 	if err := manager.Healthy(context.Background(), control.WorkloadText); err == nil {
 		t.Fatal("expected health failure")
 	}
@@ -163,36 +167,21 @@ func TestMediaStopUsesReleaseEndpoint(t *testing.T) {
 	}
 }
 
-func TestInactiveMediaCanStopWithoutReleaseEndpointButStillRequiresGPUMemoryRelease(t *testing.T) {
-	server := httptest.NewServer(http.NotFoundHandler())
-	endpoint := server.URL + "/free"
-	server.Close()
-	config := testConfig()
-	config.MediaReleaseURL = endpoint
-	for _, test := range []struct {
-		name     string
-		usedMiB  string
-		released bool
-	}{
-		{name: "released", usedMiB: "900\n", released: true},
-		{name: "still allocated", usedMiB: "2048\n", released: false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			runner := &fakeRunner{outputs: map[string][]byte{
-				mediaShowCommand: []byte("LoadState=loaded\nActiveState=inactive\nSubState=dead\n"),
-				gpuMemoryCommand: []byte(test.usedMiB),
-			}}
-			manager, err := newSystemdManager(config, runner, http.DefaultClient)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := manager.Stop(context.Background(), control.WorkloadMedia); err != nil {
-				t.Fatalf("stop inactive media: %v", err)
-			}
-			if got := manager.Released(context.Background()) == nil; got != test.released {
-				t.Fatalf("GPU release verification = %v, want %v", got, test.released)
-			}
-		})
+func TestInactiveMediaReleaseIgnoresDesktopMemory(t *testing.T) {
+	for _, used := range []string{"286", "287", "999999", "N/A"} {
+		runner := stoppedRunner()
+		runner.outputs[gpuMemoryCommand] = []byte(used)
+		manager, err := newSystemdManager(testConfig(), runner, http.DefaultClient)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixtureCgroups(t, manager)
+		if err := manager.Stop(context.Background(), control.WorkloadMedia); err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.Released(context.Background()); err != nil {
+			t.Fatalf("desktop memory %s: %v", used, err)
+		}
 	}
 }
 
@@ -211,6 +200,8 @@ func TestRedirectIsNotAcceptedAsHealthy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	manager.runner = stoppedRunner()
+	fixtureCgroups(t, manager)
 	if err := manager.Healthy(context.Background(), control.WorkloadText); err == nil {
 		t.Fatal("expected redirect rejection")
 	}
@@ -225,7 +216,8 @@ func testConfig() SystemdConfig {
 		MediaReleaseURL: "http://127.0.0.1:8188/free",
 		HealthTimeout:   time.Second,
 		GPUIndex:        0,
-		ReleaseMaxMiB:   1024,
+		TextCgroup:      "/text.service",
+		MediaCgroup:     "/media.service",
 		NvidiaSMIPath:   "/usr/bin/true",
 		SystemctlPath:   "/usr/bin/true",
 	}
@@ -236,26 +228,6 @@ func TestConfigurationRejectsOptionLikeUnit(t *testing.T) {
 	config.TextUnit = "--system.service"
 	if _, err := newSystemdManager(config, &fakeRunner{}, http.DefaultClient); err == nil {
 		t.Fatal("expected unit validation failure")
-	}
-}
-
-func TestReleasedUsesNVMLBackedMemoryProbe(t *testing.T) {
-	runner := &fakeRunner{
-		outputs: map[string][]byte{
-			"/usr/bin/true --query-gpu=memory.used --format=csv,noheader,nounits -i 0": []byte("900\n"),
-		},
-		errs: map[string]error{},
-	}
-	manager, err := newSystemdManager(testConfig(), runner, http.DefaultClient)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.Released(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	runner.outputs["/usr/bin/true --query-gpu=memory.used --format=csv,noheader,nounits -i 0"] = []byte("2048\n")
-	if err := manager.Released(context.Background()); err == nil {
-		t.Fatal("expected unreleased GPU memory")
 	}
 }
 

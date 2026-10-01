@@ -42,7 +42,12 @@ func run() error {
 	mediaStopMode := flags.String("media-stop-mode", string(gpuruntime.MediaStopUnload), "media stop policy: unload or stop-service")
 	mediaRelease := flags.String("media-release-url", "", "loopback media model release URL")
 	gpuIndex := flags.Int("gpu-index", 0, "NVIDIA GPU index")
-	releaseMaxMiB := flags.Uint64("release-max-used-mib", 0, "maximum used GPU memory after media release")
+	flags.Uint64("release-max-used-mib", 0, "removed: configure workload cgroups and optional target capacity")
+	textCgroup := flags.String("text-cgroup", "", "text unit cgroup path within /sys/fs/cgroup")
+	mediaCgroup := flags.String("media-cgroup", "", "media unit cgroup path within /sys/fs/cgroup")
+	textRequired := flags.Uint64("text-required-mib", 0, "measured text VRAM requirement; zero disables its capacity check")
+	mediaRequired := flags.Uint64("media-required-mib", 0, "measured media VRAM requirement; zero disables its capacity check")
+	headroom := flags.Uint64("capacity-headroom-mib", 0, "additional VRAM headroom for configured target capacity checks")
 	nvidiaSMIPath := flags.String("nvidia-smi", "", "absolute path to the trusted nvidia-smi executable")
 	systemctlPath := flags.String("systemctl", "", "absolute path to the trusted systemctl executable")
 	healthTimeout := flags.Duration("health-timeout", 10*time.Second, "individual health request timeout")
@@ -56,6 +61,15 @@ func run() error {
 	resolveReason := flags.String("resolve-reason", "", "required audit reason for resolve-work")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
+	}
+	legacyRelease := false
+	flags.Visit(func(value *flag.Flag) {
+		if value.Name == "release-max-used-mib" {
+			legacyRelease = true
+		}
+	})
+	if legacyRelease {
+		return errors.New("-release-max-used-mib has been removed: remove it and configure -text-cgroup and -media-cgroup; optional target capacity uses -text-required-mib/-media-required-mib plus -capacity-headroom-mib")
 	}
 	if flags.NArg() != 1 {
 		return errors.New("usage: gpu-mode [flags] restore-state|status|reconcile|recover|resolve-work|text|media|idle|take-control|user-switch|return-control|recover-user")
@@ -76,7 +90,8 @@ func run() error {
 		TextUnit:      *textUnit, MediaUnit: *mediaUnit,
 		TextHealthURL: *textHealth, MediaHealthURL: *mediaHealth,
 		MediaReleaseURL: *mediaRelease, HealthTimeout: *healthTimeout,
-		GPUIndex: *gpuIndex, ReleaseMaxMiB: *releaseMaxMiB,
+		GPUIndex: *gpuIndex, TextCgroup: *textCgroup, MediaCgroup: *mediaCgroup,
+		TextRequiredMiB: *textRequired, MediaRequiredMiB: *mediaRequired, CapacityHeadroomMiB: *headroom,
 		NvidiaSMIPath: *nvidiaSMIPath, SystemctlPath: *systemctlPath,
 	}
 	if err := validateRuntimeFlags(command, runtimeConfig); err != nil {
@@ -127,8 +142,8 @@ func validateRuntimeFlags(command string, config gpuruntime.SystemdConfig) error
 	if command == restoreStateCommand {
 		return nil
 	}
-	if config.TextUnit == "" || config.MediaUnit == "" || config.TextHealthURL == "" || config.MediaHealthURL == "" || (config.MediaStopMode != gpuruntime.MediaStopService && config.MediaReleaseURL == "") || config.ReleaseMaxMiB == 0 || config.NvidiaSMIPath == "" || config.SystemctlPath == "" {
-		return errors.New("runtime units, endpoints, release threshold, and trusted executable paths are required")
+	if config.TextUnit == "" || config.MediaUnit == "" || config.TextHealthURL == "" || config.MediaHealthURL == "" || (config.MediaStopMode != gpuruntime.MediaStopService && config.MediaReleaseURL == "") || config.TextCgroup == "" || config.MediaCgroup == "" || config.SystemctlPath == "" {
+		return errors.New("runtime units, endpoints, cgroup paths, and trusted systemctl path are required")
 	}
 	return nil
 }

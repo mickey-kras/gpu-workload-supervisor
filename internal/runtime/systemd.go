@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -48,23 +47,28 @@ func (mode MediaStopMode) Validate() error {
 }
 
 type SystemdConfig struct {
-	MediaStopMode   MediaStopMode
-	TextUnit        string
-	MediaUnit       string
-	TextHealthURL   string
-	MediaHealthURL  string
-	MediaReleaseURL string
-	HealthTimeout   time.Duration
-	GPUIndex        int
-	ReleaseMaxMiB   uint64
-	NvidiaSMIPath   string
-	SystemctlPath   string
+	MediaStopMode       MediaStopMode
+	TextUnit            string
+	MediaUnit           string
+	TextHealthURL       string
+	MediaHealthURL      string
+	MediaReleaseURL     string
+	HealthTimeout       time.Duration
+	GPUIndex            int
+	TextCgroup          string
+	MediaCgroup         string
+	TextRequiredMiB     uint64
+	MediaRequiredMiB    uint64
+	CapacityHeadroomMiB uint64
+	NvidiaSMIPath       string
+	SystemctlPath       string
 }
 
 type SystemdManager struct {
-	config SystemdConfig
-	runner CommandRunner
-	client *http.Client
+	config  SystemdConfig
+	runner  CommandRunner
+	client  *http.Client
+	cgroups cgroupFS
 }
 
 func NewSystemdManager(config SystemdConfig) (*SystemdManager, error) {
@@ -90,18 +94,34 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 	if !systemdUnitPattern.MatchString(config.TextUnit) || !systemdUnitPattern.MatchString(config.MediaUnit) {
 		return nil, errors.New("invalid systemd unit name")
 	}
-	if config.GPUIndex < 0 || config.ReleaseMaxMiB == 0 {
-		return nil, errors.New("GPU index and release memory threshold are required")
+	if config.GPUIndex < 0 {
+		return nil, errors.New("GPU index must not be negative")
 	}
-	resolvedNvidiaSMI, err := validateExecutable(config.NvidiaSMIPath)
-	if err != nil {
-		return nil, fmt.Errorf("nvidia-smi: %w", err)
+	for _, group := range []string{config.TextCgroup, config.MediaCgroup} {
+		if err := validateCgroup(group); err != nil {
+			return nil, err
+		}
+	}
+	if config.TextCgroup == config.MediaCgroup || strings.HasPrefix(config.TextCgroup, config.MediaCgroup+"/") || strings.HasPrefix(config.MediaCgroup, config.TextCgroup+"/") {
+		return nil, errors.New("text and media cgroups must be distinct and non-overlapping")
+	}
+	if config.TextRequiredMiB > ^uint64(0)-config.CapacityHeadroomMiB || config.MediaRequiredMiB > ^uint64(0)-config.CapacityHeadroomMiB {
+		return nil, errors.New("capacity requirement plus headroom overflows")
+	}
+	if config.CapacityHeadroomMiB != 0 && config.TextRequiredMiB == 0 && config.MediaRequiredMiB == 0 {
+		return nil, errors.New("capacity headroom requires a measured target requirement")
+	}
+	if config.NvidiaSMIPath != "" || config.TextRequiredMiB != 0 || config.MediaRequiredMiB != 0 {
+		resolved, err := validateExecutable(config.NvidiaSMIPath)
+		if err != nil {
+			return nil, fmt.Errorf("nvidia-smi: %w", err)
+		}
+		config.NvidiaSMIPath = resolved
 	}
 	resolvedSystemctl, err := validateExecutable(config.SystemctlPath)
 	if err != nil {
 		return nil, fmt.Errorf("systemctl: %w", err)
 	}
-	config.NvidiaSMIPath = resolvedNvidiaSMI
 	config.SystemctlPath = resolvedSystemctl
 	if err := config.validateEndpoints(); err != nil {
 		return nil, err
@@ -109,7 +129,7 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 	if runner == nil || client == nil {
 		return nil, errors.New("runner and HTTP client are required")
 	}
-	return &SystemdManager{config: config, runner: runner, client: client}, nil
+	return &SystemdManager{config: config, runner: runner, client: client, cgroups: cgroupFS{root: "/sys/fs/cgroup", verify: verifyUnifiedHierarchy}}, nil
 }
 
 func (config SystemdConfig) validateEndpoints() error {
@@ -146,9 +166,9 @@ func (m *SystemdManager) Observe(ctx context.Context) (Snapshot, error) {
 func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) error {
 	switch workload {
 	case control.WorkloadText:
-		return m.startUnit(ctx, m.config.TextUnit, m.config.MediaUnit)
+		return m.startUnit(ctx, m.config.TextUnit, control.WorkloadText)
 	case control.WorkloadMedia:
-		return m.startUnit(ctx, m.config.MediaUnit, m.config.TextUnit)
+		return m.startUnit(ctx, m.config.MediaUnit, control.WorkloadMedia)
 	default:
 		return fmt.Errorf("workload %q cannot be started", workload)
 	}
@@ -191,32 +211,63 @@ func (m *SystemdManager) Healthy(ctx context.Context, workload control.Workload)
 	case control.WorkloadIdle:
 		return nil
 	case control.WorkloadText:
+		if err := m.releasedUnit(ctx, m.config.MediaUnit, m.config.MediaCgroup, m.config.MediaStopMode != MediaStopService); err != nil {
+			return err
+		}
 		return m.getHealthy(ctx, m.config.TextHealthURL)
 	case control.WorkloadMedia:
+		if err := m.releasedUnit(ctx, m.config.TextUnit, m.config.TextCgroup, false); err != nil {
+			return err
+		}
 		return m.getHealthy(ctx, m.config.MediaHealthURL)
 	default:
 		return fmt.Errorf("workload %q has no health check", workload)
 	}
 }
 
+var ErrUnloadUnverified = errors.New("live media unload cannot be verified")
+
 func (m *SystemdManager) Released(ctx context.Context) error {
-	if m.config.MediaStopMode == MediaStopService {
-		for _, unit := range []string{m.config.TextUnit, m.config.MediaUnit} {
-			if err := m.requireStopped(ctx, unit); err != nil {
-				return err
-			}
+	return m.ReleasedFor(ctx, control.WorkloadIdle)
+}
+
+func (m *SystemdManager) ReleasedFor(ctx context.Context, target control.Workload) error {
+	if target != control.WorkloadIdle && target != control.WorkloadText && target != control.WorkloadMedia {
+		return fmt.Errorf("invalid release target %q", target)
+	}
+	if err := m.releasedUnit(ctx, m.config.TextUnit, m.config.TextCgroup, false); err != nil {
+		return err
+	}
+	if target == control.WorkloadMedia && m.config.MediaStopMode != MediaStopService {
+		state, err := m.unitState(ctx, m.config.MediaUnit)
+		if err != nil {
+			return err
+		}
+		// The destination UI may already be running. It need not unload itself
+		// before accepting media work, but the opposing text subtree must be empty.
+		if state.active == "active" && state.sub == "running" {
+			return nil
 		}
 	}
-	output, err := m.runner.Run(ctx, m.config.NvidiaSMIPath, "--query-gpu=memory.used", "--format=csv,noheader,nounits", "-i", strconv.Itoa(m.config.GPUIndex))
+	return m.releasedUnit(ctx, m.config.MediaUnit, m.config.MediaCgroup, m.config.MediaStopMode != MediaStopService)
+}
+
+func (m *SystemdManager) releasedUnit(ctx context.Context, unit, group string, allowUnload bool) error {
+	state, err := m.unitState(ctx, unit)
 	if err != nil {
-		return fmt.Errorf("query GPU memory: %w: %s", err, strings.TrimSpace(string(output)))
+		return err
 	}
-	used, err := strconv.ParseUint(strings.TrimSpace(string(output)), 10, 64)
-	if err != nil {
-		return fmt.Errorf("parse GPU memory: %w", err)
+	if allowUnload && state.active == "active" && state.sub == "running" {
+		return fmt.Errorf("%w: %s requires runtime-specific proof that work is drained and models/resources are released; HTTP success is insufficient; use -media-stop-mode stop-service or stop the unit explicitly", ErrUnloadUnverified, unit)
 	}
-	if used > m.config.ReleaseMaxMiB {
-		return fmt.Errorf("GPU memory remains above release threshold: %d MiB", used)
+	if state.active != "inactive" || state.sub != "dead" {
+		return fmt.Errorf("%s is not stopped: %s/%s", unit, state.active, state.sub)
+	}
+	if !state.hasCgroup || (state.cgroup != "" && state.cgroup != group) {
+		return fmt.Errorf("%s ControlGroup does not match configured cgroup %s or metadata is missing", unit, group)
+	}
+	if err := m.cgroups.empty(group); err != nil {
+		return fmt.Errorf("%s release: %w", unit, err)
 	}
 	return nil
 }
@@ -247,13 +298,15 @@ func (state systemdUnitState) isActive(unit string) (bool, error) {
 }
 
 type systemdUnitState struct {
-	active string
-	sub    string
+	active    string
+	sub       string
+	cgroup    string
+	hasCgroup bool
 }
 
 func (m *SystemdManager) unitState(ctx context.Context, unit string) (systemdUnitState, error) {
 	output, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show",
-		"--property=LoadState", "--property=ActiveState", "--property=SubState", "--", unit)
+		"--property=LoadState", "--property=ActiveState", "--property=SubState", "--property=ControlGroup", "--", unit)
 	if err != nil {
 		return systemdUnitState{}, fmt.Errorf("inspect %s: %w: %s", unit, err, strings.TrimSpace(string(output)))
 	}
@@ -261,13 +314,24 @@ func (m *SystemdManager) unitState(ctx context.Context, unit string) (systemdUni
 	for _, line := range strings.Split(string(output), "\n") {
 		key, value, ok := strings.Cut(line, "=")
 		if ok {
+			if _, duplicate := values[key]; duplicate {
+				return systemdUnitState{}, fmt.Errorf("%s duplicate systemd property %s", unit, key)
+			}
 			values[key] = value
 		}
 	}
 	if values["LoadState"] != "loaded" {
 		return systemdUnitState{}, fmt.Errorf("%s load state is %q", unit, values["LoadState"])
 	}
-	return systemdUnitState{active: values["ActiveState"], sub: values["SubState"]}, nil
+	_, hasCgroup := values["ControlGroup"]
+	expected := m.config.TextCgroup
+	if unit == m.config.MediaUnit {
+		expected = m.config.MediaCgroup
+	}
+	if group := values["ControlGroup"]; group != "" && group != expected {
+		return systemdUnitState{}, fmt.Errorf("%s ControlGroup %q does not match configured cgroup %s", unit, group, expected)
+	}
+	return systemdUnitState{active: values["ActiveState"], sub: values["SubState"], cgroup: values["ControlGroup"], hasCgroup: hasCgroup}, nil
 }
 
 func (m *SystemdManager) requireStopped(ctx context.Context, unit string) error {
@@ -281,14 +345,12 @@ func (m *SystemdManager) requireStopped(ctx context.Context, unit string) error 
 	return nil
 }
 
-func (m *SystemdManager) startUnit(ctx context.Context, unit, opposing string) error {
-	if m.config.MediaStopMode == MediaStopService {
-		if err := m.requireStopped(ctx, opposing); err != nil {
-			return err
-		}
-		if err := m.Released(ctx); err != nil {
-			return err
-		}
+func (m *SystemdManager) startUnit(ctx context.Context, unit string, workload control.Workload) error {
+	if err := m.ReleasedFor(ctx, workload); err != nil {
+		return err
+	}
+	if err := m.capacity(ctx, workload); err != nil {
+		return err
 	}
 	return m.runSystemctl(ctx, "start", unit)
 }

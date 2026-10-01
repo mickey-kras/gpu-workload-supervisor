@@ -48,7 +48,7 @@ go vet ./...
 
 ## Controller
 
-Runtime identities, health endpoints, release behavior, and resource thresholds are deployment configuration:
+Runtime identities, health endpoints, release behavior, and measured capacity requirements are deployment configuration:
 
 ```sh
 gpu-mode \
@@ -56,21 +56,57 @@ gpu-mode \
   -media-unit MEDIA.service \
   -text-health-url http://127.0.0.1:PORT/health \
   -media-health-url http://127.0.0.1:PORT/health \
-  -media-release-url http://127.0.0.1:PORT/release \
-  -gpu-index 0 \
-  -release-max-used-mib LIMIT \
-  -nvidia-smi /ABSOLUTE/PATH/nvidia-smi \
+  -media-stop-mode stop-service \
+  -text-cgroup /DEPLOYMENT/CGROUP/TEXT.service \
+  -media-cgroup /DEPLOYMENT/CGROUP/MEDIA.service \
   -systemctl /ABSOLUTE/PATH/systemctl \
   status|reconcile|recover|resolve-work|text|media|idle
 ```
 
-The default `-media-stop-mode unload` releases media models and keeps its UI
-running; it requires `-media-release-url` and a separately enforced execution gate.
-Use `-media-stop-mode stop-service` to stop the media unit instead. In this mode,
-the release URL is optional, text and idle require media to be stopped, and starting
-either runtime requires both units stopped and GPU memory at or below the configured
-release threshold. Transitional, failed, or concurrent units fail closed; repair
-the units explicitly before recovery. The UI is unavailable outside media mode.
+`stop-service` verifies both units are `inactive/dead` and their configured
+cgroup v2 subtrees have `cgroup.events` `populated 0`, which includes descendants.
+A removed workload cgroup is also released; missing events in an existing group,
+unreadable or malformed evidence, mismatched systemd metadata, and surviving
+children fail closed. The UI is unavailable outside media mode.
+
+The default `-media-stop-mode unload` still sends the configured release request
+and leaves the UI alive. **Live-media unload cannot currently be verified:** HTTP
+2xx does not prove the runtime has drained work and released models/resources, and
+no supported runtime-specific verifier is implemented. Release therefore fails
+closed with an actionable error. Use `stop-service`, or explicitly stop media
+before recovery. Stopped media uses cgroup verification in either policy, including
+ownership changes and work resolution. Stopped text is always verified. Readiness
+and verify-only recovery also verify the opposing workload's release. Switching
+text or idle to media may retain the destination UI after text release is proven;
+it does not require unloading the destination itself.
+
+Configure both cgroup paths from deployment knowledge of the actual systemd units
+(e.g. inspect `systemctl --user show --property=ControlGroup -- UNIT.service` while
+the unit is running). Paths are absolute **within** `/sys/fs/cgroup`, canonical,
+non-root, distinct, and non-overlapping. A nonempty systemd `ControlGroup` must
+match; an empty property after shutdown uses the explicit configuration, never an
+in-memory PID or path cache. Keep configuration consistent across CLI invocations
+and update it if unit placement changes. Blank metadata alone is not evidence.
+All workload workers must remain in their configured subtree. Use the host unified
+cgroup v2 root mounted at `/sys/fs/cgroup`, alongside host user systemd; subtree
+mounts, private cgroup namespaces, and container mappings are unsupported.
+
+**Migration:** remove `-release-max-used-mib` and configure both cgroup paths.
+Every explicit use of the old flag, including `=0`, is rejected before opening
+state. Do not replace it with a larger threshold or a learned idle baseline.
+Release never queries total GPU memory or GPU process accounting: unrelated desktop
+allocations, PID reuse, and unavailable accounting cannot change the result.
+Cgroup evidence proves workload processes are gone, not that asynchronous driver
+cleanup has finished.
+
+Optional pre-start capacity checks use `-text-required-mib` and/or
+`-media-required-mib` (measured target requirements) plus
+`-capacity-headroom-mib`. A zero target requirement disables that target's check.
+Configure `-nvidia-smi /ABSOLUTE/PATH/nvidia-smi` and `-gpu-index` when using these
+checks. Available `memory.free` must meet requirement plus headroom; delayed driver
+cleanup or other users can cause a distinct capacity error after successful
+release. Capacity failures keep admission closed and require explicit recovery;
+repair capacity before retrying. A capacity snapshot cannot reserve GPU memory.
 
 This policy provides service lifecycle exclusion, not request fencing. Disable
 independent runtime startup and updates in deployment configuration. Direct
@@ -95,9 +131,9 @@ gpu-mode [runtime flags] -target idle return-control
 
 User execution requests hold a shared cross-process handoff lock. User switches and returns close the gate, stop user runtimes, and wait up to `-drain-timeout` for forwarding handlers to exit before restarting anything. A stalled handler makes the operation fail closed; cancel the client request or stop the proxy before recovery. All proxies sharing a state database must use this version's handoff locking before enabling ownership commands.
 
-Failed and interrupted operations retain the last committed owner and require explicit recovery. Stopped user work is never restarted by rollback. For supervisor ownership, use `recover`. For user ownership, inspect the runtime and run `gpu-mode [runtime flags] -target text|media|idle recover-user` with the workload you intend to keep. This command verifies the target without starting or stopping runtimes, preserves user ownership, and keeps supervisor admission closed. An idle recovery verifies GPU memory release. If verification fails, repair or stop runtimes explicitly and retry. `reconcile` never automatically takes control from the user. Every transfer, user switch, and recovery rotates the fence and records durable source/target ownership and transition outcomes.
+Failed and interrupted operations retain the last committed owner and require explicit recovery. Stopped user work is never restarted by rollback. For supervisor ownership, use `recover`. For user ownership, inspect the runtime and run `gpu-mode [runtime flags] -target text|media|idle recover-user` with the workload you intend to keep. This command verifies the target without starting or stopping runtimes, preserves user ownership, and keeps supervisor admission closed. An idle recovery verifies release using the configured policy. If verification fails, repair or stop runtimes explicitly and retry. `reconcile` never automatically takes control from the user. Every transfer, user switch, and recovery rotates the fence and records durable source/target ownership and transition outcomes.
 
-If admitted work cannot report completion (for example, forwarding failed before either party received its registration token), stop every `gpu-workload-proxy` instance for this state file and wait for shutdown. Run `gpu-mode` with the normal runtime flags plus `-resolve-reason 'operator incident reference' resolve-work`. Proxy instances hold a shared lifetime lock; `resolve-work` refuses to run until they are gone, then closes admission, rotates the fence, stops both runtimes, verifies they are inactive and GPU memory is released, and atomically marks unfinished work abandoned with an audit record. Do not use an older proxy binary without the lifetime lock during this operation. If any stop or verification fails, work remains unfinished and admission stays closed. Run `recover` after successful resolution, then restart proxies and switch workload as needed. This operation terminates all running work, so use it only after investigating the orphaned requests.
+If admitted work cannot report completion (for example, forwarding failed before either party received its registration token), stop every `gpu-workload-proxy` instance for this state file and wait for shutdown. Run `gpu-mode` with the normal runtime flags plus `-resolve-reason 'operator incident reference' resolve-work`. Proxy instances hold a shared lifetime lock; `resolve-work` refuses to run until they are gone, then closes admission, rotates the fence, stops both runtimes, verifies stopped units and empty workload cgroups, and atomically marks unfinished work abandoned with an audit record. Do not use an older proxy binary without the lifetime lock during this operation. If any stop or verification fails, work remains unfinished and admission stays closed. Run `recover` after successful resolution, then restart proxies and switch workload as needed. This operation terminates all running work, so use it only after investigating the orphaned requests.
 
 Restored databases require an explicit `gpu-mode -state /PRIVATE/PATH/state.db restore-state` before any proxy starts. This command needs no runtime flags. It does not copy a backup; follow the [restore procedure](docs/RESTORING.md) for ordering and validation. Normal restart does not rotate the fence.
 

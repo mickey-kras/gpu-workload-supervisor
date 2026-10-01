@@ -42,7 +42,7 @@ func TestCLIStatusFailsClosedWhenTrustedProbeCannotObserveRuntime(t *testing.T) 
 	args := []string{"gpu-mode", "-state", statePath, "-text-unit", "text.service",
 		"-media-unit", "media.service", "-text-health-url", "http://127.0.0.1:1/health",
 		"-media-health-url", "http://127.0.0.1:1/", "-media-release-url", "http://127.0.0.1:1/free",
-		"-release-max-used-mib", "1", "-nvidia-smi", probe, "-systemctl", probe}
+		"-text-cgroup", "/text.service", "-media-cgroup", "/media.service", "-nvidia-smi", probe, "-systemctl", probe}
 	read, write, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestCLICommandsFailClosedWhenSystemdCannotBeObserved(t *testing.T) {
 				"-text-health-url", "http://127.0.0.1:1/health",
 				"-media-health-url", "http://127.0.0.1:1/",
 				"-media-release-url", "http://127.0.0.1:1/free",
-				"-release-max-used-mib", "1", "-nvidia-smi", "/usr/bin/true",
+				"-text-cgroup", "/text.service", "-media-cgroup", "/media.service", "-nvidia-smi", "/usr/bin/true",
 				"-systemctl", "/usr/bin/true"}
 			if command == "take-control" || command == "user-switch" || command == "return-control" || command == "recover-user" {
 				args = append(args, "-target", "text")
@@ -135,7 +135,7 @@ func TestCLIRejectsInvalidControllerTimeout(t *testing.T) {
 		"-text-health-url", "http://127.0.0.1:1/health",
 		"-media-health-url", "http://127.0.0.1:1/",
 		"-media-release-url", "http://127.0.0.1:1/free",
-		"-release-max-used-mib", "1", "-nvidia-smi", "/usr/bin/true",
+		"-text-cgroup", "/text.service", "-media-cgroup", "/media.service", "-nvidia-smi", "/usr/bin/true",
 		"-systemctl", "/usr/bin/true", "-action-timeout", "0s", "status"}
 	if err := run(); err == nil || !strings.Contains(err.Error(), "timeouts") {
 		t.Fatalf("invalid controller timeout = %v", err)
@@ -152,7 +152,7 @@ func TestCLIWorkResolutionRequiresReasonAndStoppedProxies(t *testing.T) {
 		"-text-health-url", "http://127.0.0.1:1/health",
 		"-media-health-url", "http://127.0.0.1:1/",
 		"-media-release-url", "http://127.0.0.1:1/free",
-		"-release-max-used-mib", "1", "-nvidia-smi", "/usr/bin/true",
+		"-text-cgroup", "/text.service", "-media-cgroup", "/media.service", "-nvidia-smi", "/usr/bin/true",
 		"-systemctl", "/usr/bin/true"}
 	os.Args = append(append([]string{}, args...), "resolve-work")
 	if err := run(); err == nil || !strings.Contains(err.Error(), "requires -resolve-reason") {
@@ -257,8 +257,23 @@ func TestCLIRejectsInvalidMediaStopModeBeforeCreatingState(t *testing.T) {
 func TestCLIStopServiceDoesNotRequireReleaseEndpoint(t *testing.T) {
 	previous := os.Args
 	t.Cleanup(func() { os.Args = previous })
-	os.Args = []string{"gpu-mode", "-state", filepath.Join(t.TempDir(), "state.db"), "-media-stop-mode", "stop-service", "-text-unit", "text.service", "-media-unit", "media.service", "-text-health-url", "http://127.0.0.1:1/health", "-media-health-url", "http://127.0.0.1:1/health", "-release-max-used-mib", "1", "-systemctl", "/usr/bin/true", "-nvidia-smi", "/usr/bin/true", "status"}
+	os.Args = []string{"gpu-mode", "-state", filepath.Join(t.TempDir(), "state.db"), "-media-stop-mode", "stop-service", "-text-unit", "text.service", "-media-unit", "media.service", "-text-health-url", "http://127.0.0.1:1/health", "-media-health-url", "http://127.0.0.1:1/health", "-text-cgroup", "/text.service", "-media-cgroup", "/media.service", "-systemctl", "/usr/bin/true", "-nvidia-smi", "/usr/bin/true", "status"}
 	if err := run(); err == nil || !strings.Contains(err.Error(), "load state") {
 		t.Fatalf("expected observation failure, got %v", err)
+	}
+}
+
+func TestCLILegacyReleaseThresholdRejectedEvenWhenZero(t *testing.T) {
+	previous := os.Args
+	t.Cleanup(func() { os.Args = previous })
+	for _, value := range []string{"0", "286"} {
+		path := filepath.Join(t.TempDir(), "state.db")
+		os.Args = []string{"gpu-mode", "-state", path, "-release-max-used-mib=" + value, "restore-state"}
+		if err := run(); err == nil || !strings.Contains(err.Error(), "removed") {
+			t.Fatalf("legacy flag = %v", err)
+		}
+		if _, err := os.Stat(path + ".lock"); !os.IsNotExist(err) {
+			t.Fatalf("created lock: %v", err)
+		}
 	}
 }
