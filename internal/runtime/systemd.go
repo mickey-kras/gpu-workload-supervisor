@@ -103,8 +103,18 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 	}
 	config.NvidiaSMIPath = resolvedNvidiaSMI
 	config.SystemctlPath = resolvedSystemctl
+	if err := config.validateEndpoints(); err != nil {
+		return nil, err
+	}
+	if runner == nil || client == nil {
+		return nil, errors.New("runner and HTTP client are required")
+	}
+	return &SystemdManager{config: config, runner: runner, client: client}, nil
+}
+
+func (config SystemdConfig) validateEndpoints() error {
 	if config.HealthTimeout <= 0 {
-		return nil, errors.New("health timeout must be greater than zero")
+		return errors.New("health timeout must be greater than zero")
 	}
 	endpoints := map[string]string{"text health": config.TextHealthURL, "media health": config.MediaHealthURL}
 	if config.MediaStopMode != MediaStopService || config.MediaReleaseURL != "" {
@@ -112,13 +122,10 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 	}
 	for name, value := range endpoints {
 		if err := validateLoopbackURL(value); err != nil {
-			return nil, fmt.Errorf("%s URL: %w", name, err)
+			return fmt.Errorf("%s URL: %w", name, err)
 		}
 	}
-	if runner == nil || client == nil {
-		return nil, errors.New("runner and HTTP client are required")
-	}
-	return &SystemdManager{config: config, runner: runner, client: client}, nil
+	return nil
 }
 
 func (m *SystemdManager) Observe(ctx context.Context) (Snapshot, error) {
