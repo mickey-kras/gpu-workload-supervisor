@@ -53,6 +53,13 @@ type Fence struct {
 	Epoch       uint64 `json:"epoch"`
 }
 
+// Precondition identifies the durable state a caller observed. Incarnation
+// prevents a restored or replaced store with the same version from matching.
+type Precondition struct {
+	Incarnation string `json:"incarnation"`
+	Version     uint64 `json:"version"`
+}
+
 func (f Fence) Validate() error {
 	if f.Incarnation == "" {
 		return errors.New("fence incarnation is empty")

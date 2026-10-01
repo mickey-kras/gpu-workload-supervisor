@@ -29,6 +29,7 @@ var (
 )
 
 type StateStore interface {
+	DurableStatePath() string
 	AcquireUserExecution(context.Context, bool) (*lock.File, error)
 	State(context.Context) (control.State, error)
 	UpdateState(context.Context, uint64, control.State) (control.State, error)
@@ -42,6 +43,9 @@ type StateStore interface {
 	RotateFenceAndCloseAdmission(context.Context, uint64) (control.State, error)
 	ResolveUnfinishedWork(context.Context, uint64, string) (int64, error)
 }
+
+// DurableStatePath binds transport-neutral control to the store's CLI gate.
+func (c *Controller) DurableStatePath() string { return c.store.DurableStatePath() }
 
 type Config struct {
 	DrainTimeout    time.Duration
