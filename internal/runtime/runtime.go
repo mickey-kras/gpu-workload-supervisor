@@ -22,3 +22,9 @@ type Manager interface {
 	Healthy(context.Context, control.Workload) error
 	Released(context.Context) error
 }
+
+// TargetReleaseVerifier permits a destination runtime to remain alive when its
+// policy supports that. Other runtimes retain the all-workloads Released check.
+type TargetReleaseVerifier interface {
+	ReleasedFor(context.Context, control.Workload) error
+}

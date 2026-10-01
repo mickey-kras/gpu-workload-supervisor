@@ -13,18 +13,19 @@ import (
 )
 
 type fakeRuntime struct {
-	active          control.Workload
-	mediaReady      bool
-	healthFailures  int
-	startErr        error
-	partialStart    bool
-	stopErr         error
-	releaseFailures int
-	releaseCalls    int
-	blockRelease    bool
-	cancelOnStop    func()
-	blockStop       bool
-	calls           []string
+	active                 control.Workload
+	mediaReady             bool
+	healthFailures         int
+	startErr               error
+	partialStart           bool
+	stopErr                error
+	releaseFailures        int
+	releaseCalls           int
+	blockRelease           bool
+	blockReleaseAfterStart bool
+	cancelOnStop           func()
+	blockStop              bool
+	calls                  []string
 }
 
 func (r *fakeRuntime) Observe(context.Context) (gpuruntime.Snapshot, error) {
@@ -37,6 +38,7 @@ func (r *fakeRuntime) Observe(context.Context) (gpuruntime.Snapshot, error) {
 func (r *fakeRuntime) Start(_ context.Context, workload control.Workload) error {
 	r.calls = append(r.calls, "start "+string(workload))
 	if r.startErr != nil && workload == control.WorkloadMedia {
+		r.blockRelease = r.blockReleaseAfterStart
 		if r.partialStart {
 			r.active = control.WorkloadMedia
 			r.mediaReady = true
@@ -215,7 +217,7 @@ func TestFailedMediaStartRollsBackToIdleOnlyAfterRelease(t *testing.T) {
 			runtime.releaseCalls = 0
 			runtime.startErr = errors.New("partially started media")
 			runtime.partialStart = true
-			runtime.blockRelease = tc.blockRelease
+			runtime.blockReleaseAfterStart = tc.blockRelease
 			runtime.stopErr = tc.stopErr
 			// Rollback includes real SQLite journal writes, so keep the normal cleanup
 			// budget. Only the deliberately blocked release probe needs a short timeout.

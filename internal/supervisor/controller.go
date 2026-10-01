@@ -353,8 +353,15 @@ func (c *Controller) observe(ctx context.Context) (gpuruntime.Snapshot, error) {
 }
 
 func (c *Controller) released(ctx context.Context) error {
+	return c.releasedFor(ctx, control.WorkloadIdle)
+}
+
+func (c *Controller) releasedFor(ctx context.Context, target control.Workload) error {
 	probeCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
 	defer cancel()
+	if verifier, ok := c.runtime.(gpuruntime.TargetReleaseVerifier); ok {
+		return verifier.ReleasedFor(probeCtx, target)
+	}
 	return c.runtime.Released(probeCtx)
 }
 
@@ -384,11 +391,15 @@ func (c *Controller) effect(ctx context.Context, transitionID string, phase cont
 }
 
 func (c *Controller) waitReleased(ctx context.Context, deadline time.Time) error {
+	return c.waitReleasedFor(ctx, control.WorkloadIdle, deadline)
+}
+
+func (c *Controller) waitReleasedFor(ctx context.Context, target control.Workload, deadline time.Time) error {
 	ticker := time.NewTicker(c.config.PollInterval)
 	defer ticker.Stop()
 	var lastErr error
 	for {
-		if err := c.released(ctx); err == nil {
+		if err := c.releasedFor(ctx, target); err == nil {
 			return nil
 		} else {
 			lastErr = err
@@ -505,6 +516,8 @@ func failureCode(err error) string {
 		return "canceled"
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, ErrDrainTimeout), errors.Is(err, ErrVerifyTimeout):
 		return "timeout"
+	case errors.Is(err, gpuruntime.ErrCapacity):
+		return "capacity"
 	case errors.Is(err, ErrRuntimeObservation):
 		return "runtime-observation"
 	case errors.Is(err, ErrStateVerification), errors.Is(err, ErrInvariant):

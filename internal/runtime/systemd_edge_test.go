@@ -32,7 +32,7 @@ func TestManagerRejectsUnsafeConfiguration(t *testing.T) {
 		{"missing unit", func(c *SystemdConfig) { c.TextUnit = "" }},
 		{"same unit", func(c *SystemdConfig) { c.MediaUnit = c.TextUnit }},
 		{"negative GPU", func(c *SystemdConfig) { c.GPUIndex = -1 }},
-		{"zero threshold", func(c *SystemdConfig) { c.ReleaseMaxMiB = 0 }},
+		{"missing cgroup", func(c *SystemdConfig) { c.TextCgroup = "" }},
 		{"missing systemctl", func(c *SystemdConfig) { c.SystemctlPath = "/not/a/command" }},
 		{"zero timeout", func(c *SystemdConfig) { c.HealthTimeout = 0 }},
 		{"non-HTTP endpoint", func(c *SystemdConfig) { c.MediaHealthURL = "file:///tmp/health" }},
@@ -62,8 +62,8 @@ func TestObserveRejectsAmbiguousAndFailedSystemdState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState -- text.service"
-	media := "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState -- media.service"
+	text := "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- text.service"
+	media := "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- media.service"
 	runner.errs[text] = errors.New("systemd unavailable")
 	if _, err := manager.Observe(context.Background()); err == nil {
 		t.Fatal("text observation failure accepted")
@@ -93,11 +93,13 @@ func TestObserveRejectsAmbiguousAndFailedSystemdState(t *testing.T) {
 }
 
 func TestRuntimeCommandsAndHealthRejectInvalidWorkloads(t *testing.T) {
-	runner := &fakeRunner{outputs: map[string][]byte{}, errs: map[string]error{}}
+	runner := stoppedRunner()
+	runner.errs = map[string]error{}
 	manager, err := newSystemdManager(testConfig(), runner, http.DefaultClient)
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureCgroups(t, manager)
 	if err := manager.Start(context.Background(), control.WorkloadMedia); err != nil {
 		t.Fatal(err)
 	}
@@ -124,24 +126,6 @@ func TestRuntimeCommandsAndHealthRejectInvalidWorkloads(t *testing.T) {
 	}
 }
 
-func TestReleaseProbeRejectsErrorsAndMalformedMemory(t *testing.T) {
-	runner := &fakeRunner{outputs: map[string][]byte{}, errs: map[string]error{}}
-	manager, err := newSystemdManager(testConfig(), runner, http.DefaultClient)
-	if err != nil {
-		t.Fatal(err)
-	}
-	query := "/usr/bin/true --query-gpu=memory.used --format=csv,noheader,nounits -i 0"
-	runner.errs[query] = errors.New("GPU unavailable")
-	if err := manager.Released(context.Background()); err == nil {
-		t.Fatal("probe failure accepted")
-	}
-	delete(runner.errs, query)
-	runner.outputs[query] = []byte("not a number")
-	if err := manager.Released(context.Background()); err == nil {
-		t.Fatal("malformed memory accepted")
-	}
-}
-
 type failingBody struct{}
 
 func (failingBody) Read([]byte) (int, error) { return 0, errors.New("body read failed") }
@@ -157,9 +141,8 @@ func (r responseTransport) RoundTrip(*http.Request) (*http.Response, error) {
 }
 
 func TestHealthAndReleaseFailClosedOnTransportAndBodyErrors(t *testing.T) {
-	runner := &fakeRunner{outputs: map[string][]byte{
-		mediaShowCommand: []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
-	}}
+	runner := stoppedRunner()
+	runner.outputs[mediaShowCommand] = []byte("LoadState=loaded\nActiveState=active\nSubState=running\n")
 	manager, err := newSystemdManager(testConfig(), runner, &http.Client{
 		Timeout:   time.Second,
 		Transport: responseTransport{err: errors.New("offline")},
@@ -167,9 +150,14 @@ func TestHealthAndReleaseFailClosedOnTransportAndBodyErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureCgroups(t, manager)
+	// Test the HTTP health transport independently after the opposing unit stops.
+	liveMedia := runner.outputs[mediaShowCommand]
+	runner.outputs[mediaShowCommand] = stoppedOutput()
 	if err := manager.Healthy(context.Background(), control.WorkloadText); err == nil {
 		t.Fatal("network failure was healthy")
 	}
+	runner.outputs[mediaShowCommand] = liveMedia
 	if err := manager.Stop(context.Background(), control.WorkloadMedia); err == nil {
 		t.Fatal("release network failure accepted")
 	}

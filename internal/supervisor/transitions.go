@@ -209,8 +209,8 @@ func (c *Controller) unloadForSwitch(ctx context.Context, transitionID string, p
 			return active, err
 		}
 	}
-	if active != target && (active == control.WorkloadMedia || snapshot.MediaExclusive && target != control.WorkloadText) {
-		if err := c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout)); err != nil {
+	if active != target && (active != control.WorkloadIdle || target == control.WorkloadMedia || snapshot.MediaExclusive && target != control.WorkloadText) {
+		if err := c.waitReleasedFor(ctx, target, c.now().Add(c.config.VerifyTimeout)); err != nil {
 			return active, err
 		}
 	}

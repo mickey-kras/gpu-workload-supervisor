@@ -10,7 +10,9 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
-func stoppedOutput() []byte { return []byte("LoadState=loaded\nActiveState=inactive\nSubState=dead\n") }
+func stoppedOutput() []byte {
+	return []byte("LoadState=loaded\nActiveState=inactive\nSubState=dead\nControlGroup=\n")
+}
 
 func strictManager(t *testing.T, runner CommandRunner) *SystemdManager {
 	t.Helper()
@@ -21,6 +23,7 @@ func strictManager(t *testing.T, runner CommandRunner) *SystemdManager {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureCgroups(t, manager)
 	return manager
 }
 
@@ -62,7 +65,7 @@ func TestStopServiceRejectsUnverifiedShutdownAndObservation(t *testing.T) {
 	}
 }
 
-func TestStopServiceStartsOnlyAfterBothUnitsAndMemoryAreReleased(t *testing.T) {
+func TestStopServiceStartsOnlyAfterBothUnitsAndCgroupsAreReleased(t *testing.T) {
 	for _, workload := range []control.Workload{control.WorkloadText, control.WorkloadMedia} {
 		t.Run(string(workload), func(t *testing.T) {
 			runner := &fakeRunner{outputs: map[string][]byte{textShowCommand: stoppedOutput(), mediaShowCommand: stoppedOutput(), gpuMemoryCommand: []byte("0\n")}}
@@ -73,10 +76,10 @@ func TestStopServiceStartsOnlyAfterBothUnitsAndMemoryAreReleased(t *testing.T) {
 			if got := runner.calls[len(runner.calls)-1]; got != "/usr/bin/true --user start -- "+string(workload)+".service" {
 				t.Fatal(got)
 			}
-			runner.outputs[gpuMemoryCommand] = []byte("999999\n")
+			writeEvents(t, manager.cgroups.root, "workloads/text.service", "populated 1\n")
 			runner.calls = nil
 			if err := manager.Start(context.Background(), workload); err == nil {
-				t.Fatal("ignored unreleased memory")
+				t.Fatal("ignored populated workload cgroup")
 			}
 			for _, call := range runner.calls {
 				if strings.Contains(call, "--user start") {
