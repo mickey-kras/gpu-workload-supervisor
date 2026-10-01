@@ -36,6 +36,17 @@ jobs:
           go test -race -coverprofile=coverage.out ./...
           go tool cover -func=coverage.out | tee coverage-summary.txt
           awk '$1 == "total:" { coverage=$3+0; found=1 } END { if (!found || coverage < 90) exit 1 }' coverage-summary.txt
+      - name: Real systemd lifecycle qualification
+        run: |
+          set -euo pipefail
+          qualification_uid="$(id -u)"
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@${qualification_uid}.service"
+          export XDG_RUNTIME_DIR="/run/user/${qualification_uid}"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+          systemctl --user show --property=ControlGroup --value -- -.slice
+          test "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs
+          go test -race -count=1 -timeout=10m -tags=systemd_integration -run '^TestSystemd' -v ./internal/supervisor
       - name: Go vet
         run: go vet ./...
       - name: Go vulnerability audit
