@@ -17,7 +17,9 @@ func (c *Controller) Switch(ctx context.Context, target control.Workload, initia
 // SwitchConditional preserves a caller's observed state token through the
 // authoritative transition transaction. It cannot transfer ownership.
 func (c *Controller) SwitchConditional(ctx context.Context, target control.Workload, initiator string, expected control.Precondition) (control.State, error) {
-	return c.transitionConditional(ctx, target, control.OwnerSupervisor, control.OwnerSupervisor, initiator, false, &expected)
+	return c.transitionConditional(ctx, target, initiator, transitionOptions{
+		sourceOwner: control.OwnerSupervisor, targetOwner: control.OwnerSupervisor, expected: &expected,
+	})
 }
 
 // TransferToUser drains supervisor work before committing user ownership.
@@ -42,18 +44,27 @@ func (c *Controller) RecoverUser(ctx context.Context, target control.Workload, i
 }
 
 func (c *Controller) transition(ctx context.Context, target control.Workload, sourceOwner, targetOwner control.Owner, initiator string, verifyOnly bool) (control.State, error) {
-	return c.transitionConditional(ctx, target, sourceOwner, targetOwner, initiator, verifyOnly, nil)
+	return c.transitionConditional(ctx, target, initiator, transitionOptions{
+		sourceOwner: sourceOwner, targetOwner: targetOwner, verifyOnly: verifyOnly,
+	})
 }
 
-func (c *Controller) transitionConditional(ctx context.Context, target control.Workload, sourceOwner, targetOwner control.Owner, initiator string, verifyOnly bool, expected *control.Precondition) (control.State, error) {
+type transitionOptions struct {
+	sourceOwner control.Owner
+	targetOwner control.Owner
+	verifyOnly  bool
+	expected    *control.Precondition
+}
+
+func (c *Controller) transitionConditional(ctx context.Context, target control.Workload, initiator string, options transitionOptions) (control.State, error) {
 	if target != control.WorkloadText && target != control.WorkloadMedia && target != control.WorkloadIdle {
 		return control.State{}, fmt.Errorf("invalid target workload %q", target)
 	}
-	current, err := c.transitionSource(ctx, sourceOwner, verifyOnly)
+	current, err := c.transitionSource(ctx, options.sourceOwner, options.verifyOnly)
 	if err != nil {
 		return current, err
 	}
-	if expected != nil && (expected.Incarnation == "" || expected.Incarnation != current.LeaseFence.Incarnation || expected.Version != current.Version) {
+	if options.expected != nil && (options.expected.Incarnation == "" || options.expected.Incarnation != current.LeaseFence.Incarnation || options.expected.Version != current.Version) {
 		return current, store.ErrVersionConflict
 	}
 	transitionID, err := c.id()
@@ -62,27 +73,27 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 	}
 	transition := store.Transition{
 		ID: transitionID, Source: current,
-		Target: stableTarget(current, targetOwner, target), Previous: current,
+		Target: stableTarget(current, options.targetOwner, target), Previous: current,
 		Initiator: initiator, Phase: control.PhaseDraining,
 		Deadline: c.now().Add(c.config.DrainTimeout),
 	}
-	state, err := c.startTransition(ctx, current.Version, expected, transition)
+	state, err := c.startTransition(ctx, current.Version, options.expected, transition)
 	if err != nil {
 		return current, err
 	}
 	if err := c.waitForDrain(ctx, transitionID, transition.Deadline); err != nil {
 		return c.fail(transitionID, state, current, err)
 	}
-	state, active, err := c.unloadTransition(ctx, transitionID, state, current, target, verifyOnly)
+	state, active, err := c.unloadTransition(ctx, transitionID, state, current, target, options.verifyOnly)
 	if err != nil {
 		return c.fail(transitionID, state, current, err)
 	}
-	userGate, err := c.acquireTransitionGate(ctx, sourceOwner, verifyOnly)
+	userGate, err := c.acquireTransitionGate(ctx, options.sourceOwner, options.verifyOnly)
 	defer userGate.Close()
 	if err != nil {
 		return c.fail(transitionID, state, current, err)
 	}
-	state, err = c.loadTransition(ctx, transitionID, state, active, target, verifyOnly)
+	state, err = c.loadTransition(ctx, transitionID, state, active, target, options.verifyOnly)
 	if err != nil {
 		return c.fail(transitionID, state, current, err)
 	}
@@ -93,7 +104,7 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 	if err := c.waitReady(ctx, target, c.now().Add(c.config.VerifyTimeout)); err != nil {
 		return c.fail(transitionID, state, current, err)
 	}
-	final := stableTarget(state, targetOwner, target)
+	final := stableTarget(state, options.targetOwner, target)
 	return c.store.FinishTransition(ctx, transitionID, "committed", state.Version, final)
 }
 
