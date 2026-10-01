@@ -443,7 +443,7 @@ func (m *SystemdManager) releaseMedia(ctx context.Context) error {
 func (m *SystemdManager) checkHTTPResponse(request *http.Request, action string) error {
 	response, err := m.client.Do(request)
 	if err != nil {
-		return fmt.Errorf("%s request: %w", action, err)
+		return fmt.Errorf("%s request: %w", action, &safeHTTPRequestError{cause: err})
 	}
 	defer response.Body.Close()
 	if _, err := io.Copy(io.Discard, io.LimitReader(response.Body, 4096)); err != nil {
@@ -454,6 +454,32 @@ func (m *SystemdManager) checkHTTPResponse(request *http.Request, action string)
 	}
 	return nil
 }
+
+// safeHTTPRequestError keeps error identity without rendering transport messages,
+// which can include credentials or redirect URLs even below a url.Error.
+type safeHTTPRequestError struct {
+	cause error
+}
+
+func (e *safeHTTPRequestError) Error() string {
+	switch {
+	case errors.Is(e.cause, context.Canceled):
+		return "HTTP request canceled"
+	case errors.Is(e.cause, context.DeadlineExceeded):
+		return "HTTP request deadline exceeded"
+	}
+	var networkError net.Error
+	if errors.As(e.cause, &networkError) && networkError.Timeout() {
+		return "HTTP request timed out"
+	}
+	var operationError *net.OpError
+	if errors.As(e.cause, &operationError) {
+		return "HTTP request network failure"
+	}
+	return "HTTP request failed"
+}
+
+func (e *safeHTTPRequestError) Unwrap() error { return e.cause }
 
 func validateLoopbackURL(value string) error {
 	parsed, err := url.Parse(value)
