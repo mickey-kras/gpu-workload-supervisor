@@ -20,7 +20,10 @@ Configure every route the deployment exposes:
 | Read-only | `-read-only-route GET:/path` | Verified non-executing GET, HEAD or OPTIONS; repeat per method/path. |
 | Editing/monitoring mutation | `-passthrough-route METHOD:/path` | Verified not to start work, change ownership, or bypass admission. |
 
-Unknown routes return HTTP 405 without reaching upstream. There are no implicit
+Routes must use canonical absolute paths: no trailing slash except `/`, repeated
+slashes, or dot segments. Noncanonical decoded request paths return HTTP 400 with
+`path_not_canonical`; canonical but unclassified routes return HTTP 405. Neither
+reaches upstream. There are no implicit
 GET, HEAD or OPTIONS routes, wildcard routes, or automatic HEAD classification.
 Overlapping classifications are rejected. Explicit non-execution routes remain
 available while execution admission is closed, if the upstream is reachable.

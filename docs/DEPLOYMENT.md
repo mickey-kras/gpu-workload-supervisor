@@ -2,6 +2,10 @@
 
 [Documentation](README.md) | [Repository](../README.md)
 
+Requires Linux with user-systemd and cgroup v2. Install a [verified release](RELEASING.md) and [back up existing state](RESTORING.md#back-up-before-an-upgrade) before changing binaries.
+
+## Controller configuration
+
 Runtime identities, health endpoints, release behavior, and measured capacity requirements are deployment configuration:
 
 ```sh
@@ -114,8 +118,6 @@ command sharing a state store.
 
 The state directory must be private and owned by the current user. Commands use an exclusive file lock. Opening the store applies pending migrations. Boot reconciliation does not resume incomplete work. Interrupted transitions and latched errors require explicit recovery.
 
-
-
 ## Qualify the host
 
 The tagged suite (`go test -race -count=1 -timeout=10m -tags=systemd_integration
@@ -142,3 +144,7 @@ and does not itself provide request fencing.
 Processes sharing the supervisor identity are trusted. A compromised process with the same operating-system permissions can bypass advisory locks, state files, and service control. Strong isolation requires separate service identities and operating-system enforced permissions.
 
 Execution requests must not have a route that bypasses the gate while supervisor ownership is active.
+
+## Next
+
+[Reconcile at boot](OPERATIONS.md#boot-and-explicit-recovery), configure the [execution proxy](EXECUTION-PROXY.md), and verify its [adapter contract](PROXY-CONTRACT.md). Keep execution closed until both host and adapter qualification are complete.
