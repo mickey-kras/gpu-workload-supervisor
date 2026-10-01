@@ -30,6 +30,13 @@ literal CLI argument. `restore-state` is the exception and needs only `-state`.
 Opening state, including through `status` or a proxy, can apply database migrations;
 back up before changing binaries.
 
+`-health-timeout` bounds each complete health check, including the opposing
+unit/cgroup probe and HTTP request. `-action-timeout` also bounds controller health
+and observation probes. `-verify-timeout` bounds the entire readiness phase,
+including probes and polling; the earliest applicable deadline wins. Failed
+switch verification closes admission and requires recovery, while failed recovery
+keeps the existing error state.
+
 ## Verify workload release
 
 `stop-service` verifies both units are `inactive/dead` and their configured
