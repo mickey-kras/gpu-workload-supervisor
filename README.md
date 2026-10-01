@@ -11,6 +11,8 @@ GPU Workload Supervisor switches between text and media workloads that share one
 
 It provides a controller (`gpu-mode`) and an execution proxy (`gpu-workload-proxy`). You supply the runtime services, health endpoints and deployment configuration.
 
+Use this project independently of the memory stack. It does not require Memory Router, its agent integrations, or Hindsight.
+
 ## How it fits together
 
 <a href="docs/ARCHITECTURE.md">
