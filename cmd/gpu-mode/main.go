@@ -68,29 +68,11 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
-	legacyRelease := false
-	flags.Visit(func(value *flag.Flag) {
-		if value.Name == "release-max-used-mib" {
-			legacyRelease = true
-		}
-	})
-	if legacyRelease {
-		return errors.New("-release-max-used-mib has been removed: remove it and configure -text-cgroup and -media-cgroup; optional target capacity uses -text-required-mib/-media-required-mib plus -capacity-headroom-mib")
-	}
-	if flags.NArg() != 1 {
-		return errors.New("usage: gpu-mode [flags] restore-state|status|reconcile|recover|resolve-work|text|media|idle|take-control|user-switch|return-control|recover-user")
-	}
-	stopMode := gpuruntime.MediaStopMode(*mediaStopMode)
-	if *mediaStopMode == "" {
-		return errors.New("media stop mode must not be empty")
-	}
-	if err := stopMode.Validate(); err != nil {
+	stopMode, err := validateCommandFlags(flags, *mediaStopMode, *target)
+	if err != nil {
 		return err
 	}
 	command := flags.Arg(0)
-	if err := validateTarget(command, *target); err != nil {
-		return err
-	}
 	runtimeConfig := gpuruntime.SystemdConfig{
 		MediaStopMode: stopMode,
 		TextUnit:      *textUnit, MediaUnit: *mediaUnit,
@@ -142,6 +124,33 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 		return err
 	}
 	return executeCommand(ctx, controller, command, *resolveReason, control.Workload(*target))
+}
+
+func validateCommandFlags(flags *flag.FlagSet, mediaStopMode, target string) (gpuruntime.MediaStopMode, error) {
+	legacyRelease := false
+	flags.Visit(func(value *flag.Flag) {
+		if value.Name == "release-max-used-mib" {
+			legacyRelease = true
+		}
+	})
+	if legacyRelease {
+		return "", errors.New("-release-max-used-mib has been removed: remove it and configure -text-cgroup and -media-cgroup; optional target capacity uses -text-required-mib/-media-required-mib plus -capacity-headroom-mib")
+	}
+	if flags.NArg() != 1 {
+		return "", errors.New("usage: gpu-mode [flags] restore-state|status|reconcile|recover|resolve-work|text|media|idle|take-control|user-switch|return-control|recover-user")
+	}
+	stopMode := gpuruntime.MediaStopMode(mediaStopMode)
+	if mediaStopMode == "" {
+		return "", errors.New("media stop mode must not be empty")
+	}
+	if err := stopMode.Validate(); err != nil {
+		return "", err
+	}
+	command := flags.Arg(0)
+	if err := validateTarget(command, target); err != nil {
+		return "", err
+	}
+	return stopMode, nil
 }
 
 func validateRuntimeFlags(command string, config gpuruntime.SystemdConfig) error {

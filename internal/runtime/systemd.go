@@ -82,34 +82,11 @@ func NewSystemdManager(config SystemdConfig) (*SystemdManager, error) {
 }
 
 func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.Client) (*SystemdManager, error) {
-	if err := config.MediaStopMode.Validate(); err != nil {
+	if err := config.validateUnits(); err != nil {
 		return nil, err
 	}
-	if config.TextUnit == "" || config.MediaUnit == "" {
-		return nil, errors.New("text and media units are required")
-	}
-	if config.TextUnit == config.MediaUnit {
-		return nil, errors.New("text and media units must differ")
-	}
-	if !systemdUnitPattern.MatchString(config.TextUnit) || !systemdUnitPattern.MatchString(config.MediaUnit) {
-		return nil, errors.New("invalid systemd unit name")
-	}
-	if config.GPUIndex < 0 {
-		return nil, errors.New("GPU index must not be negative")
-	}
-	for _, group := range []string{config.TextCgroup, config.MediaCgroup} {
-		if err := validateCgroup(group); err != nil {
-			return nil, err
-		}
-	}
-	if config.TextCgroup == config.MediaCgroup || strings.HasPrefix(config.TextCgroup, config.MediaCgroup+"/") || strings.HasPrefix(config.MediaCgroup, config.TextCgroup+"/") {
-		return nil, errors.New("text and media cgroups must be distinct and non-overlapping")
-	}
-	if config.TextRequiredMiB > ^uint64(0)-config.CapacityHeadroomMiB || config.MediaRequiredMiB > ^uint64(0)-config.CapacityHeadroomMiB {
-		return nil, errors.New("capacity requirement plus headroom overflows")
-	}
-	if config.CapacityHeadroomMiB != 0 && config.TextRequiredMiB == 0 && config.MediaRequiredMiB == 0 {
-		return nil, errors.New("capacity headroom requires a measured target requirement")
+	if err := config.validateResources(); err != nil {
+		return nil, err
 	}
 	if config.NvidiaSMIPath != "" || config.TextRequiredMiB != 0 || config.MediaRequiredMiB != 0 {
 		resolved, err := validateExecutable(config.NvidiaSMIPath)
@@ -130,6 +107,43 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 		return nil, errors.New("runner and HTTP client are required")
 	}
 	return &SystemdManager{config: config, runner: runner, client: client, cgroups: cgroupFS{root: "/sys/fs/cgroup", verify: verifyUnifiedHierarchy}}, nil
+}
+
+func (config SystemdConfig) validateUnits() error {
+	if err := config.MediaStopMode.Validate(); err != nil {
+		return err
+	}
+	if config.TextUnit == "" || config.MediaUnit == "" {
+		return errors.New("text and media units are required")
+	}
+	if config.TextUnit == config.MediaUnit {
+		return errors.New("text and media units must differ")
+	}
+	if !systemdUnitPattern.MatchString(config.TextUnit) || !systemdUnitPattern.MatchString(config.MediaUnit) {
+		return errors.New("invalid systemd unit name")
+	}
+	return nil
+}
+
+func (config SystemdConfig) validateResources() error {
+	if config.GPUIndex < 0 {
+		return errors.New("GPU index must not be negative")
+	}
+	for _, group := range []string{config.TextCgroup, config.MediaCgroup} {
+		if err := validateCgroup(group); err != nil {
+			return err
+		}
+	}
+	if config.TextCgroup == config.MediaCgroup || strings.HasPrefix(config.TextCgroup, config.MediaCgroup+"/") || strings.HasPrefix(config.MediaCgroup, config.TextCgroup+"/") {
+		return errors.New("text and media cgroups must be distinct and non-overlapping")
+	}
+	if config.TextRequiredMiB > ^uint64(0)-config.CapacityHeadroomMiB || config.MediaRequiredMiB > ^uint64(0)-config.CapacityHeadroomMiB {
+		return errors.New("capacity requirement plus headroom overflows")
+	}
+	if config.CapacityHeadroomMiB != 0 && config.TextRequiredMiB == 0 && config.MediaRequiredMiB == 0 {
+		return errors.New("capacity headroom requires a measured target requirement")
+	}
+	return nil
 }
 
 func (config SystemdConfig) validateEndpoints() error {
