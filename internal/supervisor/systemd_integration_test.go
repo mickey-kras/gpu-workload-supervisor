@@ -52,6 +52,26 @@ func newSystemdFixture(t *testing.T) *systemdFixture {
 	f := &systemdFixture{t: t, path: filepath.Join(t.TempDir(), "state.db"), unitDir: t.TempDir()}
 	unitDir := f.unitDir
 	prefix := fmt.Sprintf("gws-qualification-%d-%d", os.Getpid(), time.Now().UnixNano())
+	t.Cleanup(func() {
+		for _, unit := range f.units {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = exec.CommandContext(ctx, "systemctl", "--user", "kill", "--kill-whom=all", "--signal=KILL", unit).Run()
+			cancel()
+			for _, action := range []string{"stop", "disable"} {
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				output, err := exec.CommandContext(ctx, "systemctl", "--user", action, unit).CombinedOutput()
+				cancel()
+				if err != nil {
+					t.Errorf("cleanup %s %s: %v: %s", action, unit, err, output)
+				}
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if output, err := exec.CommandContext(ctx, "systemctl", "--user", "daemon-reload").CombinedOutput(); err != nil {
+			t.Errorf("cleanup reload: %v: %s", err, output)
+		}
+	})
 	for _, kind := range []string{"text", "media"} {
 		unit := prefix + "-" + kind + ".service"
 		f.units = append(f.units, unit)
@@ -62,16 +82,7 @@ func newSystemdFixture(t *testing.T) *systemdFixture {
 		}
 		systemdCommand(t, "link", path)
 	}
-	t.Cleanup(func() {
-		for _, unit := range f.units {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = exec.CommandContext(ctx, "systemctl", "--user", "kill", "--kill-whom=all", "--signal=KILL", unit).Run()
-			cancel()
-		}
-		systemdCommand(t, "stop", f.units[0], f.units[1])
-		systemdCommand(t, "disable", f.units[0], f.units[1])
-		systemdCommand(t, "daemon-reload")
-	})
+
 	systemdCommand(t, "daemon-reload")
 	groups := make([]string, 2)
 	for i, unit := range f.units {
@@ -98,8 +109,10 @@ func newSystemdFixture(t *testing.T) *systemdFixture {
 	}
 	f.reopen(false)
 	t.Cleanup(func() {
-		if err := f.store.Close(); err != nil {
-			t.Error(err)
+		if f.store != nil {
+			if err := f.store.Close(); err != nil {
+				t.Error(err)
+			}
 		}
 	})
 	return f
@@ -222,6 +235,16 @@ func TestSystemdRestartPreservesUserAndDoesNotRestartStoppedWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Save a closed SQLite snapshot while the earlier user fence is current.
+	if err := f.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	backup, err := os.ReadFile(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.store = nil
+	f.reopen(false)
 	systemdCommand(t, "stop", f.units[0])
 	f.reopen(false)
 	state, err := f.controller.Reconcile(ctx)
@@ -237,12 +260,21 @@ func TestSystemdRestartPreservesUserAndDoesNotRestartStoppedWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.assertState(state, control.OwnerUser, control.WorkloadIdle)
+	if err := f.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.store = nil
+	f.path = filepath.Join(t.TempDir(), "restored.db")
+	if err := os.WriteFile(f.path, backup, 0600); err != nil {
+		t.Fatal(err)
+	}
 	f.reopen(true)
-	state, err = f.store.State(ctx)
+	// Match restore-state: validating/opening a snapshot never rotates by itself.
+	state, err = f.store.RotateIncarnation(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.LeaseFence.Incarnation == before.LeaseFence.Incarnation || state.Admission != control.AdmissionClosed {
+	if state.LeaseFence.Incarnation == before.LeaseFence.Incarnation || state.LeaseFence.Epoch != 1 || state.Admission != control.AdmissionClosed || state.Owner != control.OwnerSupervisor {
 		t.Fatalf("restored fence/admission: %#v", state)
 	}
 	if err := f.store.AdmitWork(ctx, "restored-stale", "", control.WorkloadText, before.LeaseFence); !errors.Is(err, store.ErrStaleFence) {
