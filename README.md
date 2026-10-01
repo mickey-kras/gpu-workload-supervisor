@@ -261,6 +261,13 @@ The listener is restricted to loopback because explicit user ownership bypasses 
 
 The proxy is content-blind. Content inspection and domain policy belong to the caller.
 
+## External control
+
+The transport-neutral [external control contract](docs/external-control.md) lets
+authenticated, policy-limited automation inspect state and conditionally request
+an approved supervisor workload. It provides no listener or deployment exposure.
+Broker workflows and execution/completion remain subject to the proxy contract.
+
 ## Qualification boundary
 
 The tagged suite (`go test -race -count=1 -timeout=10m -tags=systemd_integration

@@ -12,7 +12,23 @@ import (
 
 var ErrTransitionNotRunning = errors.New("transition is not running")
 
+var (
+	ErrUserOwned         = errors.New("conditional transition requires supervisor ownership")
+	ErrRecoveryRequired  = errors.New("conditional transition requires stable non-error state")
+	ErrTransitionRunning = errors.New("conditional transition already running")
+)
+
 func (s *Store) StartTransition(ctx context.Context, expected uint64, tr Transition) (control.State, error) {
+	return s.startTransition(ctx, expected, nil, tr)
+}
+
+// StartTransitionConditional verifies both token components and the restricted
+// control boundary in the transaction that fences admission and inserts work.
+func (s *Store) StartTransitionConditional(ctx context.Context, expected control.Precondition, tr Transition) (control.State, error) {
+	return s.startTransition(ctx, expected.Version, &expected, tr)
+}
+
+func (s *Store) startTransition(ctx context.Context, expected uint64, condition *control.Precondition, tr Transition) (control.State, error) {
 	if tr.ID == "" {
 		return control.State{}, errors.New("transition id is empty")
 	}
@@ -25,8 +41,8 @@ func (s *Store) StartTransition(ctx context.Context, expected uint64, tr Transit
 	if err != nil {
 		return control.State{}, err
 	}
-	if current.Version != expected {
-		return control.State{}, ErrVersionConflict
+	if err := transitionPrecondition(ctx, tx, current, expected, condition); err != nil {
+		return control.State{}, err
 	}
 	next := current
 	next.DesiredWorkload = tr.Target.DesiredWorkload
@@ -71,6 +87,36 @@ func (s *Store) StartTransition(ctx context.Context, expected uint64, tr Transit
 		return control.State{}, err
 	}
 	return next, nil
+}
+
+func transitionPrecondition(ctx context.Context, tx *sql.Tx, current control.State, version uint64, expected *control.Precondition) error {
+	if current.Version != version {
+		return ErrVersionConflict
+	}
+	if expected == nil {
+		return nil
+	}
+	return conditionalSource(ctx, tx, current, *expected)
+}
+
+func conditionalSource(ctx context.Context, tx *sql.Tx, current control.State, expected control.Precondition) error {
+	if expected.Incarnation == "" || current.LeaseFence.Incarnation != expected.Incarnation {
+		return ErrVersionConflict
+	}
+	if current.Owner != control.OwnerSupervisor {
+		return ErrUserOwned
+	}
+	if current.Phase != control.PhaseStable || current.Health == control.HealthError {
+		return ErrRecoveryRequired
+	}
+	var running bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM transitions WHERE status = 'in_progress')`).Scan(&running); err != nil {
+		return err
+	}
+	if running {
+		return ErrTransitionRunning
+	}
+	return nil
 }
 
 func (s *Store) SetTransitionPhase(ctx context.Context, transitionID string, expected uint64, phase control.Phase) (control.State, error) {

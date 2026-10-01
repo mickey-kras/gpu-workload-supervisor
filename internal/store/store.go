@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -129,7 +130,13 @@ func validateRestoredDatabase(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func (s *Store) Close() error                                     { return s.db.Close() }
+func (s *Store) Close() error { return s.db.Close() }
+
+// DurableStatePath binds embedded control adapters to the same process gate as
+// the CLI. This path must not be replaced while an adapter holds this store.
+func (s *Store) DurableStatePath() string {
+	return strings.TrimSuffix(s.userExecutionLock, ".user-execution.lock")
+}
 func (s *Store) State(ctx context.Context) (control.State, error) { return readState(ctx, s.db) }
 
 func (s *Store) UpdateState(ctx context.Context, expected uint64, next control.State) (control.State, error) {
