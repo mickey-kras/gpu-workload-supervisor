@@ -32,6 +32,11 @@ updates:
 
   - package-ecosystem: github-actions
     directory: /
+    groups:
+      codeql:
+        patterns:
+          - "github/codeql-action"
+          - "github/codeql-action/*"
     schedule:
       interval: cron
       cronjob: "3 7 * * *"

@@ -3,6 +3,8 @@
 Go modules, the pinned Aislop and policy npm toolchains, and GitHub Actions are updated daily.
 Dependabot owns its branch rebases. `go.sum` and the npm lockfile must be updated
 within the same PR.
+CodeQL subactions are grouped so initialization and analysis always update together.
+Grouped updates retain the per-dependency compatibility and update-type checks below.
 
 The trusted `pull_request_target` automation checks the exact Dependabot identity,
 verified bot commits, same-repository origin, a minor or patch update, and a known
