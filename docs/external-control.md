@@ -28,8 +28,8 @@ transport limits before allocating or buffering that slice.
 | `operation` | Required: `"status"` | Required: `"request-workload"` |
 | `target` | Forbidden | Required: `"text"`, `"media"`, or `"idle"`; also subject to the caller's grant |
 | `expected` | Forbidden | Required object containing `incarnation` and `version` |
-| `expected.incarnation` |: | Required 1–128 byte string using ASCII letters, digits, `-`, or `_`, from the returned state token |
-| `expected.version` |: | Required positive unsigned 64-bit integer from the returned state token |
+| `expected.incarnation` | Not allowed | Required 1 to 128 byte string using ASCII letters, digits, `-`, or `_`, from the returned state token |
+| `expected.version` | Not allowed | Required positive unsigned 64-bit integer from the returned state token |
 
 ```json
 {"apiVersion":"v1","operation":"status"}
@@ -120,7 +120,7 @@ For example, a denied request returns only:
 `Handle(context.Context, []byte) Response`. `Config` contains only `Timeout` and
 `Grants`. The durable path must be absolute, clean, and non-root. The timeout must
 be positive and at most five minutes. Grant keys must be nonempty principals;
-each `AuditID` must be 1–64 bytes of ASCII letters, digits, `-`, or `_`, and must
+each `AuditID` must be 1 to 64 bytes of ASCII letters, digits, `-`, or `_`, and must
 not be the reserved value `anonymous`. Workload grants accept only `text`, `media`,
 and `idle`. Invalid configuration is rejected at construction.
 
