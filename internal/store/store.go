@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,7 +82,16 @@ func openWithMode(ctx context.Context, path string, now Clock, uuid func() (stri
 			return nil, errors.New("restored state database is empty")
 		}
 	}
-	db, err := sql.Open("sqlite", path)
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve sqlite path: %w", err)
+	}
+	// Every writable transaction must reserve the writer before reading state.
+	// Otherwise an independent proxy retention commit can invalidate its WAL
+	// snapshot, and the read-to-write upgrade fails with SQLITE_BUSY_SNAPSHOT.
+	// Plain queries (and explicitly read-only transactions) remain readers.
+	dsn := url.URL{Scheme: "file", Path: absolutePath, RawQuery: "_txlock=immediate"}
+	db, err := sql.Open("sqlite", dsn.String())
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
