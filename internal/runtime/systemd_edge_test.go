@@ -198,13 +198,14 @@ func TestMediaStopRequiresReleaseEndpointUnlessUnitIsInactive(t *testing.T) {
 			runner := &fakeRunner{outputs: map[string][]byte{
 				mediaShowCommand: []byte("LoadState=loaded\nActiveState=" + state + "\n"),
 			}}
+			releaseErr := errors.New("release unavailable")
 			manager, err := newSystemdManager(testConfig(), runner, &http.Client{
-				Transport: responseTransport{err: errors.New("release unavailable")},
+				Transport: responseTransport{err: releaseErr},
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := manager.Stop(context.Background(), control.WorkloadMedia); err == nil || !strings.Contains(err.Error(), "release unavailable") {
+			if err := manager.Stop(context.Background(), control.WorkloadMedia); err == nil || (!strings.Contains(err.Error(), "media release request") || !errors.Is(err, releaseErr)) {
 				t.Fatalf("expected release failure for %s unit, got %v", state, err)
 			}
 		})
