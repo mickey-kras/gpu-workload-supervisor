@@ -2,6 +2,8 @@
 
 [Repository](../README.md)
 
+Start with [deployment](DEPLOYMENT.md), [boot reconciliation](OPERATIONS.md#boot-and-explicit-recovery), and [proxy setup](EXECUTION-PROXY.md). Complete [host qualification](DEPLOYMENT.md#qualify-the-host) before enabling execution.
+
 ## Deploy and operate
 
 - [Deployment](DEPLOYMENT.md): runtime flags, cgroups, capacity checks and host qualification

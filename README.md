@@ -21,7 +21,7 @@ It provides a controller (`gpu-mode`) and an execution proxy (`gpu-workload-prox
   </picture>
 </a>
 
-[Explore state and responsibilities](docs/ARCHITECTURE.md) · [Execution proxy details](docs/EXECUTION-PROXY.md)
+[Explore state and responsibilities](docs/ARCHITECTURE.md) | [Execution proxy details](docs/EXECUTION-PROXY.md)
 
 ## Install
 
