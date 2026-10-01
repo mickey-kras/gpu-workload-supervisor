@@ -276,6 +276,14 @@ func (h *Handler) execute(response http.ResponseWriter, request *http.Request) {
 		writeError(response, http.StatusBadRequest, "request_id_required")
 		return
 	}
+	if err := control.ValidateRequestID(requestID); err != nil {
+		code := "request_id_invalid"
+		if errors.Is(err, control.ErrRequestIDTooLong) {
+			code = "request_id_too_long"
+		}
+		writeError(response, http.StatusBadRequest, code)
+		return
+	}
 	fence, err := h.readFence(request)
 	if err != nil {
 		writeError(response, http.StatusBadRequest, "fence_invalid")
