@@ -86,8 +86,8 @@ func (s *Store) ResolveUnfinishedWork(ctx context.Context, expected uint64, reas
 }
 
 func (s *Store) beginAdmittedWork(ctx context.Context, requestID string, workload control.Workload, fence control.Fence) (*sql.Tx, error) {
-	if requestID == "" {
-		return nil, errors.New("request id is empty")
+	if err := control.ValidateRequestID(requestID); err != nil {
+		return nil, err
 	}
 	if workload != control.WorkloadText && workload != control.WorkloadMedia {
 		return nil, errors.New("workload must be text or media")
