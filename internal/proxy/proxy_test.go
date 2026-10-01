@@ -330,6 +330,7 @@ func testHandler(t *testing.T, stateStore StateStore, upstream string) *Handler 
 	handler, err := New(stateStore, Config{
 		Upstream: target, Workload: control.WorkloadMedia,
 		ExecutionRoutes: []Route{{Method: http.MethodPost, Path: "/execute"}},
+		ReadOnlyRoutes:  []Route{{Method: http.MethodGet, Path: "/assets/item"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -523,5 +524,65 @@ func TestUserExecutionRechecksOwnershipUnderGate(t *testing.T) {
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "http://proxy.test/execute", nil))
 	if response.Code != http.StatusServiceUnavailable || stateStore.reads != 2 {
 		t.Fatalf("stale user bypass: %d reads=%d", response.Code, stateStore.reads)
+	}
+}
+
+func TestUnknownReadMethodsFailClosed(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
+		t.Run(method, func(t *testing.T) {
+			calls := 0
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(http.StatusOK) }))
+			defer upstream.Close()
+			handler := testHandler(t, &fakeStore{state: admittedState(control.OwnerSupervisor)}, upstream.URL)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(method, "/unknown", nil))
+			if response.Code != http.StatusMethodNotAllowed || calls != 0 {
+				t.Fatalf("unclassified %s: status %d, upstream calls %d", method, response.Code, calls)
+			}
+		})
+	}
+}
+
+func TestExplicitReadRoutesRemainAvailableWhenAdmissionClosed(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
+		t.Run(method, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get(DefaultRegistrationTokenHeader) != "" || r.Header.Get(DefaultRequestIDHeader) != "" {
+					t.Error("read-only request leaked control headers")
+				}
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer upstream.Close()
+			target, err := url.Parse(upstream.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state := admittedState(control.OwnerSupervisor)
+			state.Admission = control.AdmissionClosed
+			handler, err := New(&fakeStore{state: state}, Config{Upstream: target, Workload: control.WorkloadMedia, ExecutionRoutes: []Route{{Method: "GET", Path: "/execute"}}, ReadOnlyRoutes: []Route{{Method: method, Path: "/monitor"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(method, "/monitor?view=summary", nil)
+			addLeaseHeaders(request, state.LeaseFence)
+			request.Header.Set(DefaultRegistrationTokenHeader, "forged")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusNoContent {
+				t.Fatalf("read-only status %d", response.Code)
+			}
+			response = httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/execute", nil))
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("GET execution bypassed registration: %d", response.Code)
+			}
+			if method == http.MethodGet {
+				response = httptest.NewRecorder()
+				handler.ServeHTTP(response, httptest.NewRequest(http.MethodHead, "/monitor", nil))
+				if response.Code != http.StatusMethodNotAllowed {
+					t.Fatalf("HEAD implicitly classified: %d", response.Code)
+				}
+			}
+		})
 	}
 }

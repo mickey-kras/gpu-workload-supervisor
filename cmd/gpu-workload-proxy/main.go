@@ -123,8 +123,10 @@ func run() error {
 	shutdownTimeout := flags.Duration("shutdown-timeout", 30*time.Second, "graceful shutdown timeout")
 	completedWorkRetention := flags.Duration("completed-work-retention", 30*24*time.Hour, "time to keep completed work records")
 	var routes routesFlag
+	var readOnlyRoutes routesFlag
 	var passthroughRoutes routesFlag
 	flags.Var(&routes, "execute-route", "gated execution route as METHOD:/absolute/path; repeatable")
+	flags.Var(&readOnlyRoutes, "read-only-route", "verified read-only route as GET|HEAD|OPTIONS:/absolute/path; repeatable")
 	flags.Var(&passthroughRoutes, "passthrough-route", "explicit ungated mutating route as METHOD:/absolute/path; repeatable")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
@@ -160,7 +162,7 @@ func run() error {
 	}
 	proxyConfig := workloadproxy.Config{
 		Upstream: upstream, Workload: workload,
-		ExecutionRoutes: routes, PassthroughRoutes: passthroughRoutes,
+		ExecutionRoutes: routes, ReadOnlyRoutes: readOnlyRoutes, PassthroughRoutes: passthroughRoutes,
 		CompletionPath: *completionPath, RequestIDHeader: *requestIDHeader,
 		JobIDHeader: *jobIDHeader, FenceIDHeader: *fenceIDHeader,
 		FenceEpochHeader: *fenceEpochHeader,

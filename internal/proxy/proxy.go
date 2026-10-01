@@ -42,6 +42,7 @@ type Config struct {
 	Upstream          *url.URL
 	Workload          control.Workload
 	ExecutionRoutes   []Route
+	ReadOnlyRoutes    []Route
 	PassthroughRoutes []Route
 	CompletionPath    string
 	RequestIDHeader   string
@@ -56,6 +57,7 @@ type Handler struct {
 	proxy             *httputil.ReverseProxy
 	workload          control.Workload
 	executionRoutes   map[string]struct{}
+	readOnlyRoutes    map[string]struct{}
 	passthroughRoutes map[string]struct{}
 	completionPath    string
 	requestIDHeader   string
@@ -91,7 +93,7 @@ type finishRequest struct {
 }
 
 func ValidateConfig(config Config) error {
-	_, _, _, err := validateConfig(config)
+	_, _, _, _, err := validateConfig(config)
 	return err
 }
 
@@ -99,7 +101,7 @@ func New(stateStore StateStore, config Config) (*Handler, error) {
 	if stateStore == nil {
 		return nil, errors.New("state store is required")
 	}
-	executionRoutes, passthroughRoutes, completionPath, err := validateConfig(config)
+	executionRoutes, readOnlyRoutes, passthroughRoutes, completionPath, err := validateConfig(config)
 	if err != nil {
 		return nil, err
 	}
@@ -120,58 +122,68 @@ func New(stateStore StateStore, config Config) (*Handler, error) {
 	}
 	return &Handler{
 		store: stateStore, proxy: reverseProxy, workload: config.Workload,
-		executionRoutes: executionRoutes, passthroughRoutes: passthroughRoutes,
+		executionRoutes: executionRoutes, readOnlyRoutes: readOnlyRoutes, passthroughRoutes: passthroughRoutes,
 		completionPath: completionPath, requestIDHeader: config.RequestIDHeader,
 		jobIDHeader: config.JobIDHeader, fenceIDHeader: config.FenceIDHeader,
 		fenceEpochHeader: config.FenceEpochHeader,
 	}, nil
 }
 
-func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, string, error) {
+func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, map[string]struct{}, string, error) {
 	if config.Upstream == nil || config.Upstream.Scheme == "" || config.Upstream.Host == "" {
-		return nil, nil, "", errors.New("absolute upstream URL is required")
+		return nil, nil, nil, "", errors.New("absolute upstream URL is required")
 	}
 	if config.Upstream.Scheme != "http" && config.Upstream.Scheme != "https" {
-		return nil, nil, "", errors.New("upstream scheme must be http or https")
+		return nil, nil, nil, "", errors.New("upstream scheme must be http or https")
 	}
 	if config.Workload != control.WorkloadText && config.Workload != control.WorkloadMedia {
-		return nil, nil, "", errors.New("workload must be text or media")
+		return nil, nil, nil, "", errors.New("workload must be text or media")
 	}
 	if err := validateDistinctControlHeaders(config); err != nil {
-		return nil, nil, "", err
+		return nil, nil, nil, "", err
 	}
 	executionRoutes, err := routeSet(config.ExecutionRoutes, true)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, nil, "", err
+	}
+	readOnlyRoutes, err := routeSet(config.ReadOnlyRoutes, false)
+	if err != nil {
+		return nil, nil, nil, "", err
+	}
+	for _, route := range config.ReadOnlyRoutes {
+		if !isSafeMethod(strings.ToUpper(strings.TrimSpace(route.Method))) {
+			return nil, nil, nil, "", errors.New("read-only routes require GET, HEAD or OPTIONS")
+		}
 	}
 	passthroughRoutes, err := routeSet(config.PassthroughRoutes, false)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, nil, "", err
 	}
 	completionPath := config.CompletionPath
 	if completionPath == "" {
 		completionPath = DefaultCompletionPath
 	}
 	if !canonicalPath(completionPath) {
-		return nil, nil, "", errors.New("completion path must be canonical and absolute")
+		return nil, nil, nil, "", errors.New("completion path must be canonical and absolute")
 	}
 	completionKey := http.MethodPost + " " + completionPath
-	if err := validateRouteCollisions(executionRoutes, passthroughRoutes, completionKey); err != nil {
-		return nil, nil, "", err
+	if err := validateRouteCollisions([]map[string]struct{}{executionRoutes, readOnlyRoutes, passthroughRoutes}, completionKey); err != nil {
+		return nil, nil, nil, "", err
 	}
-	return executionRoutes, passthroughRoutes, completionPath, nil
+	return executionRoutes, readOnlyRoutes, passthroughRoutes, completionPath, nil
 }
 
-func validateRouteCollisions(executionRoutes, passthroughRoutes map[string]struct{}, completionKey string) error {
-	if _, exists := executionRoutes[completionKey]; exists {
-		return errors.New("completion path collides with an execution route")
-	}
-	if _, exists := passthroughRoutes[completionKey]; exists {
-		return errors.New("completion path collides with a passthrough route")
-	}
-	for key := range executionRoutes {
-		if _, exists := passthroughRoutes[key]; exists {
-			return errors.New("execution and passthrough routes overlap")
+func validateRouteCollisions(routeSets []map[string]struct{}, completionKey string) error {
+	seen := make(map[string]struct{})
+	for _, routes := range routeSets {
+		for key := range routes {
+			if key == completionKey {
+				return errors.New("completion path collides with a configured route")
+			}
+			if _, exists := seen[key]; exists {
+				return errors.New("configured routes overlap")
+			}
+			seen[key] = struct{}{}
 		}
 	}
 	return nil
@@ -226,7 +238,7 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 		h.execute(response, request)
 		return
 	}
-	if isSafeMethod(request.Method) {
+	if _, allowed := h.readOnlyRoutes[key]; allowed {
 		h.proxy.ServeHTTP(response, h.withoutControlHeaders(request))
 		return
 	}

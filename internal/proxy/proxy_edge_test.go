@@ -39,6 +39,16 @@ func TestConfigRejectsInvalidOriginsAndRoutes(t *testing.T) {
 		{"no execution route", func(config *Config) { config.ExecutionRoutes = nil }},
 		{"invalid execution route", func(config *Config) { config.ExecutionRoutes = []Route{{Method: "POST", Path: "/x/../execute"}} }},
 		{"invalid passthrough route", func(config *Config) { config.PassthroughRoutes = []Route{{Method: "", Path: "/passthrough"}} }},
+		{"mutating read-only route", func(config *Config) { config.ReadOnlyRoutes = []Route{{Method: "POST", Path: "/monitor"}} }},
+		{"malformed read-only route", func(config *Config) { config.ReadOnlyRoutes = []Route{{Method: "GET", Path: "/a/../monitor"}} }},
+		{"read-only execution collision", func(config *Config) {
+			config.ExecutionRoutes = []Route{{Method: "GET", Path: "/execute"}}
+			config.ReadOnlyRoutes = config.ExecutionRoutes
+		}},
+		{"read-only passthrough collision", func(config *Config) {
+			config.ReadOnlyRoutes = []Route{{Method: "GET", Path: "/monitor"}}
+			config.PassthroughRoutes = config.ReadOnlyRoutes
+		}},
 		{"invalid completion path", func(config *Config) { config.CompletionPath = "finish" }},
 		{"request ID overlaps token", func(config *Config) { config.RequestIDHeader = DefaultRegistrationTokenHeader }},
 		{"fence headers overlap", func(config *Config) { config.FenceEpochHeader = DefaultFenceIDHeader }},
