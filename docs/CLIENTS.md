@@ -1,12 +1,13 @@
 # Dashboard and local desktop client plan
 
-This is the architecture and packaging decision for [issue #61](https://github.com/mickey-kras/gpu-workload-supervisor/issues/61).
-It plans future clients of the [restricted external control contract](external-control.md)
-implemented by #60. It adds no client, transport adapter, listener, deployment,
-installation automation, or new repository. Neither client is part of initial
-deployment. Merging this plan does not qualify or enable either client.
+[Documentation](README.md) | [Repository](../README.md)
 
-## Decision: one separate client workspace with a shared typed package
+Plan for [issue #61](https://github.com/mickey-kras/gpu-workload-supervisor/issues/61).
+Future clients use the [restricted external control contract](external-control.md)
+implemented by #60. Neither client is implemented or part of initial deployment.
+Implementation and enablement require the gates below.
+
+## Repository and shared package
 
 Implement both clients in one dedicated client repository, separate from this Go
 supervisor repository. Its future workspace will contain:
@@ -161,7 +162,7 @@ privilege; its host bridge must expose only the approved typed transport, never
 general command execution. Keep credentials out of URLs, runtime UI contexts,
 logs, and client error text; revocation must disable authenticated operations.
 
-## Future mandatory acceptance tests (not executed by this plan)
+## Acceptance tests before enablement
 
 Run these against both clients and the shared package, with the reviewed adapter
 and deployment boundary. Fixtures must cover the exact v1 DTO/enums/result codes,
@@ -189,8 +190,8 @@ implementation/deployment review:
 - #60 is implemented and verified on main, and a pinned backend release containing
   it has passed backend qualification. `v0.1.5` predates #60; the planned version
   in `release-version.json` is not itself a published/qualified release.
-- The deployment has passed the README lifecycle/ownership/recovery/restore
-  acceptance and proxy runtime/route/completion qualification, with direct access
+- The deployment has passed [host qualification](DEPLOYMENT.md#qualify-the-host)
+  and [proxy qualification](PROXY-CONTRACT.md), with direct access
   and independent runtime activation unable to bypass the intended boundary.
 - The authenticated transport adapter and client security boundaries are approved
   and qualified, including authorization, revocation, audit, bounded reads,

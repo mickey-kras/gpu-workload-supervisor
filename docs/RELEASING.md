@@ -1,5 +1,7 @@
 # Source and binary releases
 
+[Documentation](README.md) | [Repository](../README.md)
+
 The release workflow publishes the tested source tree and two Linux archives,
 each containing the `gpu-mode` and `gpu-workload-proxy` executables for amd64 or
 arm64. It also publishes a checksum file covering all archives and the CycloneDX

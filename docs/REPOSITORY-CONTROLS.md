@@ -1,5 +1,7 @@
 # Repository controls
 
+[Documentation](README.md) | [Repository](../README.md)
+
 The repository uses squash merges and auto-merge, with automatic deletion of
 merged branches. Merge commits and rebase merges are disabled. The eight active
 GitHub rulesets are the source of truth; their one-time JSON import files are

@@ -1,5 +1,7 @@
 # Security policy
 
+[Documentation](docs/README.md) | [Repository](README.md)
+
 Report vulnerabilities through a private GitHub security advisory for this
 repository.
 
@@ -18,3 +20,4 @@ Gitleaks, Semgrep, Trivy, CodeQL, Aislop, and main-only SonarQube. Dependabot
 auto-merge requires verified bot commits, patch or minor updates, a known
 compatibility score of at least 75% for every dependency, and passing branch
 checks. Major or unscored updates need manual review.
+

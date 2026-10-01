@@ -1,5 +1,7 @@
 # Dependabot
 
+[Documentation](README.md) | [Repository](../README.md)
+
 Go modules, the pinned Aislop and policy npm toolchains, and GitHub Actions are updated daily.
 Dependabot owns its branch rebases. `go.sum` and the npm lockfile must be updated
 within the same PR.

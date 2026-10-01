@@ -1,5 +1,7 @@
 # External control contract
 
+[Documentation](README.md) | [Repository](../README.md)
+
 `internal/externalcontrol` provides a transport-neutral service for authenticated
 automation to inspect state and request an approved supervisor workload. It does
 not provide a listener, CLI command, browser UI, or deployment configuration.
@@ -26,8 +28,8 @@ transport limits before allocating or buffering that slice.
 | `operation` | Required: `"status"` | Required: `"request-workload"` |
 | `target` | Forbidden | Required: `"text"`, `"media"`, or `"idle"`; also subject to the caller's grant |
 | `expected` | Forbidden | Required object containing `incarnation` and `version` |
-| `expected.incarnation` | — | Required 1–128 byte string using ASCII letters, digits, `-`, or `_`, from the returned state token |
-| `expected.version` | — | Required positive unsigned 64-bit integer from the returned state token |
+| `expected.incarnation` |: | Required 1–128 byte string using ASCII letters, digits, `-`, or `_`, from the returned state token |
+| `expected.version` |: | Required positive unsigned 64-bit integer from the returned state token |
 
 ```json
 {"apiVersion":"v1","operation":"status"}

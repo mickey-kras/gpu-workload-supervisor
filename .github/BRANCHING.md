@@ -1,5 +1,7 @@
 # Repository workflow
 
+[Documentation](../docs/README.md) | [Repository](../README.md)
+
 - `main` is the only permanent branch. Use squash merges through PRs.
 - Work branches match `^(feat|fix|refactor|docs|ci|security)/[a-z0-9]+(-[a-z0-9]+)*$`.
 - Dependabot branches are accepted only for PRs authored by `dependabot[bot]`.
@@ -12,3 +14,4 @@
 See [repository controls](../docs/REPOSITORY-CONTROLS.md) for the active settings.
 
 After publication, a one-line next-patch version bump PR is queued for squash auto-merge after required checks pass.
+
