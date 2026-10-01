@@ -88,8 +88,11 @@ match; an empty property after shutdown uses the explicit configuration, never a
 in-memory PID or path cache. Keep configuration consistent across CLI invocations
 and update it if unit placement changes. Blank metadata alone is not evidence.
 All workload workers must remain in their configured subtree. Use the host unified
-cgroup v2 root mounted at `/sys/fs/cgroup`, alongside host user systemd; subtree
-mounts, private cgroup namespaces, and container mappings are unsupported.
+cgroup v2 root mounted at `/sys/fs/cgroup`, alongside host user systemd. The same
+manager's loaded, active root `-.slice` must report an existing, readable cgroup
+that strictly contains both workload paths. This anchor validates manager-to-mount
+mapping without privileged access to PID 1. Subtree/nested mounts and container
+mappings are unsupported; missing or ambiguous manager anchors fail closed.
 
 **Migration:** remove `-release-max-used-mib` and configure both cgroup paths.
 Every explicit use of the old flag, including `=0`, is rejected before opening

@@ -33,6 +33,12 @@ func main() {
 }
 
 func run() error {
+	return runWithRuntimeFactory(func(config gpuruntime.SystemdConfig) (gpuruntime.Manager, error) {
+		return gpuruntime.NewSystemdManager(config)
+	})
+}
+
+func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error)) error {
 	flags := flag.NewFlagSet("gpu-mode", flag.ContinueOnError)
 	statePath := flags.String("state", defaultStatePath(), "SQLite state path")
 	textUnit := flags.String("text-unit", "", "systemd user unit for text inference")
@@ -122,7 +128,7 @@ func run() error {
 	if command == restoreStateCommand {
 		return restoreState(ctx, stateStore)
 	}
-	runtimeManager, err := gpuruntime.NewSystemdManager(runtimeConfig)
+	runtimeManager, err := newRuntime(runtimeConfig)
 	if err != nil {
 		return err
 	}

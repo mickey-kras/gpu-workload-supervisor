@@ -266,6 +266,9 @@ func (m *SystemdManager) releasedUnit(ctx context.Context, unit, group string, a
 	if !state.hasCgroup || (state.cgroup != "" && state.cgroup != group) {
 		return fmt.Errorf("%s ControlGroup does not match configured cgroup %s or metadata is missing", unit, group)
 	}
+	if err := m.verifyManagerCgroup(ctx); err != nil {
+		return err
+	}
 	if err := m.cgroups.empty(group); err != nil {
 		return fmt.Errorf("%s release: %w", unit, err)
 	}
@@ -305,6 +308,45 @@ type systemdUnitState struct {
 }
 
 func (m *SystemdManager) unitState(ctx context.Context, unit string) (systemdUnitState, error) {
+	state, err := m.readUnitState(ctx, unit)
+	if err != nil {
+		return state, err
+	}
+	expected := m.config.TextCgroup
+	if unit == m.config.MediaUnit {
+		expected = m.config.MediaCgroup
+	}
+	if state.cgroup != "" && state.cgroup != expected {
+		return systemdUnitState{}, fmt.Errorf("%s ControlGroup %q does not match configured cgroup %s", unit, state.cgroup, expected)
+	}
+	return state, nil
+}
+
+// The user's root slice identifies the same manager namespace that reports unit
+// paths. Unlike /proc/1/ns/cgroup, this evidence is available to an ordinary user.
+func (m *SystemdManager) verifyManagerCgroup(ctx context.Context) error {
+	state, err := m.readUnitState(ctx, "-.slice")
+	if err != nil {
+		return fmt.Errorf("inspect systemd manager cgroup anchor: %w", err)
+	}
+	if state.active != "active" || state.sub != "active" || !state.hasCgroup {
+		return errors.New("systemd manager root slice must be loaded/active with ControlGroup metadata")
+	}
+	if err := validateCgroup(state.cgroup); err != nil {
+		return fmt.Errorf("systemd manager cgroup anchor: %w", err)
+	}
+	for _, group := range []string{m.config.TextCgroup, m.config.MediaCgroup} {
+		if !strings.HasPrefix(group, state.cgroup+"/") {
+			return fmt.Errorf("configured cgroup %s is not within systemd manager root %s", group, state.cgroup)
+		}
+	}
+	if err := m.cgroups.check(state.cgroup, false); err != nil {
+		return fmt.Errorf("systemd manager cgroup anchor is unavailable: %w", err)
+	}
+	return nil
+}
+
+func (m *SystemdManager) readUnitState(ctx context.Context, unit string) (systemdUnitState, error) {
 	output, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show",
 		"--property=LoadState", "--property=ActiveState", "--property=SubState", "--property=ControlGroup", "--", unit)
 	if err != nil {
@@ -324,13 +366,6 @@ func (m *SystemdManager) unitState(ctx context.Context, unit string) (systemdUni
 		return systemdUnitState{}, fmt.Errorf("%s load state is %q", unit, values["LoadState"])
 	}
 	_, hasCgroup := values["ControlGroup"]
-	expected := m.config.TextCgroup
-	if unit == m.config.MediaUnit {
-		expected = m.config.MediaCgroup
-	}
-	if group := values["ControlGroup"]; group != "" && group != expected {
-		return systemdUnitState{}, fmt.Errorf("%s ControlGroup %q does not match configured cgroup %s", unit, group, expected)
-	}
 	return systemdUnitState{active: values["ActiveState"], sub: values["SubState"], cgroup: values["ControlGroup"], hasCgroup: hasCgroup}, nil
 }
 

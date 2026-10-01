@@ -76,7 +76,7 @@ func TestStopServiceStartsOnlyAfterBothUnitsAndCgroupsAreReleased(t *testing.T) 
 			if got := runner.calls[len(runner.calls)-1]; got != "/usr/bin/true --user start -- "+string(workload)+".service" {
 				t.Fatal(got)
 			}
-			writeEvents(t, manager.cgroups.root, "text.service", "populated 1\n")
+			writeEvents(t, manager.cgroups.root, "workloads/text.service", "populated 1\n")
 			runner.calls = nil
 			if err := manager.Start(context.Background(), workload); err == nil {
 				t.Fatal("ignored populated workload cgroup")

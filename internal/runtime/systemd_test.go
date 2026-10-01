@@ -18,6 +18,7 @@ type fakeRunner struct {
 	calls   []string
 }
 
+const rootShowCommand = "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- -.slice"
 const mediaShowCommand = "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- media.service"
 const textShowCommand = "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- text.service"
 const gpuFreeCommand = "/usr/bin/true --query-gpu=memory.free --format=csv,noheader,nounits -i 0"
@@ -83,6 +84,11 @@ func TestRecoveryReportsMediaUnitStopFailure(t *testing.T) {
 func (r *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	call := strings.Join(append([]string{name}, args...), " ")
 	r.calls = append(r.calls, call)
+	if call == rootShowCommand {
+		if _, configured := r.outputs[call]; !configured && r.errs[call] == nil {
+			return []byte("LoadState=loaded\nActiveState=active\nSubState=active\nControlGroup=/workloads\n"), nil
+		}
+	}
 	return r.outputs[call], r.errs[call]
 }
 
@@ -216,8 +222,8 @@ func testConfig() SystemdConfig {
 		MediaReleaseURL: "http://127.0.0.1:8188/free",
 		HealthTimeout:   time.Second,
 		GPUIndex:        0,
-		TextCgroup:      "/text.service",
-		MediaCgroup:     "/media.service",
+		TextCgroup:      "/workloads/text.service",
+		MediaCgroup:     "/workloads/media.service",
 		NvidiaSMIPath:   "/usr/bin/true",
 		SystemctlPath:   "/usr/bin/true",
 	}

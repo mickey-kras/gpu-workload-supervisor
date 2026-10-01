@@ -43,17 +43,6 @@ func verifyUnifiedHierarchy(fd int) error {
 	if err := verifyCgroupMount(string(mounts)); err != nil {
 		return err
 	}
-	self, err := os.Stat("/proc/self/ns/cgroup")
-	if err != nil {
-		return err
-	}
-	init, err := os.Stat("/proc/1/ns/cgroup")
-	if err != nil {
-		return err
-	}
-	if !os.SameFile(self, init) {
-		return errors.New("private cgroup namespace is unsupported; run alongside host user systemd")
-	}
 	return nil
 }
 
@@ -87,6 +76,11 @@ func validateCgroup(group string) error {
 }
 
 func (fs cgroupFS) empty(group string) error {
+	return fs.check(group, true)
+}
+
+// A manager anchor must exist, even when an individual workload was removed.
+func (fs cgroupFS) check(group string, requireEmpty bool) error {
 	fd, err := unix.Open(fs.root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return fmt.Errorf("open cgroup hierarchy: %w", err)
@@ -100,7 +94,7 @@ func (fs cgroupFS) empty(group string) error {
 	// ENOENT for cgroup.events in an existing group is NOT proof of release.
 	for _, component := range strings.Split(strings.TrimPrefix(group, "/"), "/") {
 		next, err := unix.Openat(fd, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-		if errors.Is(err, unix.ENOENT) {
+		if errors.Is(err, unix.ENOENT) && requireEmpty {
 			return nil
 		}
 		if err != nil {
@@ -125,8 +119,14 @@ func (fs cgroupFS) empty(group string) error {
 	if len(data) > 4096 {
 		return errors.New("oversized cgroup.events")
 	}
-	return parseCgroupEvents(string(data))
+	err = parseCgroupEvents(string(data))
+	if !requireEmpty && errors.Is(err, errCgroupPopulated) {
+		return nil
+	}
+	return err
 }
+
+var errCgroupPopulated = errors.New("workload cgroup still contains processes (including descendants)")
 
 func parseCgroupEvents(data string) error {
 	populated := ""
@@ -146,7 +146,7 @@ func parseCgroupEvents(data string) error {
 		return errors.New("cgroup.events is missing populated evidence")
 	}
 	if populated == "1" {
-		return errors.New("workload cgroup still contains processes (including descendants)")
+		return errCgroupPopulated
 	}
 	return nil
 }

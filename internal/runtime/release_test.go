@@ -18,7 +18,8 @@ func fixtureCgroups(t *testing.T, m *SystemdManager) string {
 	t.Helper()
 	root := t.TempDir()
 	m.cgroups = cgroupFS{root: root, verify: func(int) error { return nil }}
-	return root
+	writeEvents(t, root, "workloads", "populated 1\n")
+	return filepath.Join(root, "workloads")
 }
 
 func writeEvents(t *testing.T, root, group, value string) {
@@ -142,7 +143,7 @@ func TestReleaseRejectsMissingOrMismatchedCgroupMetadata(t *testing.T) {
 
 func TestUnloadSuccessResponseIsNotReleaseEvidence(t *testing.T) {
 	r := stoppedRunner()
-	r.outputs[mediaShowCommand] = []byte("LoadState=loaded\nActiveState=active\nSubState=running\nControlGroup=/media.service\n")
+	r.outputs[mediaShowCommand] = []byte("LoadState=loaded\nActiveState=active\nSubState=running\nControlGroup=/workloads/media.service\n")
 	requested := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requested <- struct{}{}
@@ -174,31 +175,40 @@ func TestCapacityIsSeparateFromReleaseAndTargetSpecific(t *testing.T) {
 	r.outputs[gpuFreeCommand] = []byte("109\n")
 	m := strictManager(t, r)
 	m.config.TextRequiredMiB = 100
+	m.config.MediaRequiredMiB = 200
 	m.config.CapacityHeadroomMiB = 10
 	if err := m.Released(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Start(context.Background(), control.WorkloadText); !errors.Is(err, ErrCapacity) {
-		t.Fatalf("capacity = %v", err)
+	rejected := func(target control.Workload) {
+		t.Helper()
+		r.calls = nil
+		if err := m.Start(context.Background(), target); !errors.Is(err, ErrCapacity) {
+			t.Fatalf("capacity = %v", err)
+		}
+		for _, call := range r.calls {
+			if strings.Contains(call, "--user start") {
+				t.Fatalf("capacity failure started runtime: %s", call)
+			}
+		}
 	}
-	if err := m.Start(context.Background(), control.WorkloadMedia); err != nil {
-		t.Fatal(err)
-	}
+	rejected(control.WorkloadText)
 	// Delayed driver cleanup changes available capacity, never release evidence.
 	r.outputs[gpuFreeCommand] = []byte("110\n")
 	if err := m.Start(context.Background(), control.WorkloadText); err != nil {
 		t.Fatal(err)
 	}
-	for _, value := range []string{"N/A", "1\n2", ""} {
-		r.outputs[gpuFreeCommand] = []byte(value)
-		if err := m.Start(context.Background(), control.WorkloadText); !errors.Is(err, ErrCapacity) {
-			t.Fatalf("%q: %v", value, err)
-		}
-	}
-	r.errs = map[string]error{gpuFreeCommand: errors.New("GPU unavailable")}
-	if err := m.Start(context.Background(), control.WorkloadText); !errors.Is(err, ErrCapacity) {
+	rejected(control.WorkloadMedia)
+	r.outputs[gpuFreeCommand] = []byte("210\n")
+	if err := m.Start(context.Background(), control.WorkloadMedia); err != nil {
 		t.Fatal(err)
 	}
+	for _, value := range []string{"N/A", "1\n2", ""} {
+		r.outputs[gpuFreeCommand] = []byte(value)
+		rejected(control.WorkloadText)
+	}
+	r.errs = map[string]error{gpuFreeCommand: errors.New("GPU unavailable")}
+	rejected(control.WorkloadText)
 }
 
 func TestCgroupMountMappingAndFilesystemType(t *testing.T) {
@@ -232,7 +242,7 @@ func TestCgroupConfigurationValidation(t *testing.T) {
 			t.Fatalf("accepted %q", group)
 		}
 	}
-	for _, group := range []string{"/text.service", "/text.service/child"} {
+	for _, group := range []string{"/workloads/text.service", "/workloads/text.service/child"} {
 		config := testConfig()
 		config.MediaCgroup = group
 		if _, err := newSystemdManager(config, &fakeRunner{}, http.DefaultClient); err == nil {
@@ -277,7 +287,7 @@ func TestReadinessRejectsOpposingSurvivingChildrenDuringRecovery(t *testing.T) {
 
 func TestUnloadTextToLiveMediaVerifiesOnlyOutgoingText(t *testing.T) {
 	r := stoppedRunner()
-	r.outputs[mediaShowCommand] = []byte("LoadState=loaded\nActiveState=active\nSubState=running\nControlGroup=/media.service\n")
+	r.outputs[mediaShowCommand] = []byte("LoadState=loaded\nActiveState=active\nSubState=running\nControlGroup=/workloads/media.service\n")
 	m, err := newSystemdManager(testConfig(), r, http.DefaultClient)
 	if err != nil {
 		t.Fatal(err)
@@ -303,5 +313,61 @@ func TestUnloadTextToLiveMediaVerifiesOnlyOutgoingText(t *testing.T) {
 	r.errs = map[string]error{mediaShowCommand: errors.New("unverifiable destination")}
 	if err := m.ReleasedFor(context.Background(), control.WorkloadMedia); err == nil {
 		t.Fatal("ambiguous destination accepted")
+	}
+}
+
+func TestManagerCgroupAnchorMustExistAndMatchBothWorkloads(t *testing.T) {
+	for _, metadata := range []string{
+		"LoadState=loaded\nActiveState=active\nSubState=active\n",
+		"LoadState=loaded\nActiveState=active\nSubState=active\nControlGroup=\n",
+		"LoadState=loaded\nActiveState=active\nSubState=active\nControlGroup=/workloads\nControlGroup=/workloads\n",
+		"LoadState=loaded\nActiveState=inactive\nSubState=dead\nControlGroup=/workloads\n",
+		"LoadState=loaded\nActiveState=active\nSubState=running\nControlGroup=/workloads\n",
+		"LoadState=loaded\nActiveState=active\nSubState=active\nControlGroup=/\n",
+		"LoadState=loaded\nActiveState=active\nSubState=active\nControlGroup=/elsewhere\n",
+	} {
+		r := stoppedRunner()
+		r.outputs[rootShowCommand] = []byte(metadata)
+		m := strictManager(t, r)
+		if err := m.Released(context.Background()); err == nil {
+			t.Fatalf("accepted root metadata %q", metadata)
+		}
+	}
+	for _, evidence := range []string{"missing", "missing events", "malformed"} {
+		m := strictManager(t, stoppedRunner())
+		anchor := filepath.Join(m.cgroups.root, "workloads")
+		if err := os.Remove(filepath.Join(anchor, "cgroup.events")); err != nil {
+			t.Fatal(err)
+		}
+		if evidence == "missing" {
+			if err := os.Remove(anchor); err != nil {
+				t.Fatal(err)
+			}
+		} else if evidence == "malformed" {
+			writeEvents(t, m.cgroups.root, "workloads", "populated unknown\n")
+		}
+		if err := m.Released(context.Background()); err == nil {
+			t.Fatalf("accepted %s manager anchor", evidence)
+		}
+	}
+}
+
+// Uses the production hierarchy probe. It must work for the ordinary user who
+// owns the systemd --user session, without ptrace access to root-owned PID 1.
+func TestUnifiedHierarchyProbeNeedsNoPrivilegedProcAccess(t *testing.T) {
+	mounts, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyCgroupMount(string(mounts)); err != nil {
+		t.Skipf("host unified cgroup root unavailable: %v", err)
+	}
+	root, err := os.Open("/sys/fs/cgroup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := verifyUnifiedHierarchy(int(root.Fd())); err != nil {
+		t.Fatal(err)
 	}
 }
