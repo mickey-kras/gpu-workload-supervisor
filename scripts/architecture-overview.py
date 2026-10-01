@@ -12,7 +12,6 @@ def render(theme: str) -> str:
 <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker></defs>
 <rect width="1120" height="520" rx="20" fill="#f8fafc"/>
 <g font-family="Arial, Helvetica, sans-serif">
-<text x="32" y="39" fill="#0f172a" font-size="20" font-weight="700">How the supervisor fits together</text>
 <text x="32" y="65" fill="#475569" font-size="14">Requests pass through the proxy. The controller switches workloads separately.</text>''']
     nodes = [
         (32, 111, "Clients", ["Apps and tools"], False, False),
