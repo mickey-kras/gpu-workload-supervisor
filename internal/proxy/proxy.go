@@ -146,14 +146,9 @@ func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, ma
 	if err != nil {
 		return nil, nil, nil, "", err
 	}
-	readOnlyRoutes, err := routeSet(config.ReadOnlyRoutes, false)
+	readOnlyRoutes, err := readOnlyRouteSet(config.ReadOnlyRoutes)
 	if err != nil {
 		return nil, nil, nil, "", err
-	}
-	for _, route := range config.ReadOnlyRoutes {
-		if !isSafeMethod(strings.ToUpper(strings.TrimSpace(route.Method))) {
-			return nil, nil, nil, "", errors.New("read-only routes require GET, HEAD or OPTIONS")
-		}
 	}
 	passthroughRoutes, err := routeSet(config.PassthroughRoutes, false)
 	if err != nil {
@@ -171,6 +166,19 @@ func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, ma
 		return nil, nil, nil, "", err
 	}
 	return executionRoutes, readOnlyRoutes, passthroughRoutes, completionPath, nil
+}
+
+func readOnlyRouteSet(routes []Route) (map[string]struct{}, error) {
+	result, err := routeSet(routes, false)
+	if err != nil {
+		return nil, err
+	}
+	for _, route := range routes {
+		if !isSafeMethod(strings.ToUpper(strings.TrimSpace(route.Method))) {
+			return nil, errors.New("read-only routes require GET, HEAD or OPTIONS")
+		}
+	}
+	return result, nil
 }
 
 func validateRouteCollisions(routeSets []map[string]struct{}, completionKey string) error {
