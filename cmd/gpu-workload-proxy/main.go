@@ -75,7 +75,12 @@ func (w *trackingWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 
 func (h *activeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	isCompletion := r.Method == http.MethodPost && r.URL.Path == h.completionPath
-	if !h.admit(w, isCompletion) {
+	switch h.admit(isCompletion) {
+	case admissionStopping:
+		http.Error(w, "proxy is shutting down", http.StatusServiceUnavailable)
+		return
+	case admissionFull:
+		capacityUnavailable(w)
 		return
 	}
 	writer := &trackingWriter{ResponseWriter: w, owner: h}
@@ -96,28 +101,33 @@ func (h *activeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.handler.ServeHTTP(writer, r)
 }
 
-func (h *activeHandler) admit(w http.ResponseWriter, isCompletion bool) bool {
+type admissionResult uint8
+
+const (
+	admissionAccepted admissionResult = iota
+	admissionStopping
+	admissionFull
+)
+
+func (h *activeHandler) admit(isCompletion bool) admissionResult {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.stopping {
-		http.Error(w, "proxy is shutting down", http.StatusServiceUnavailable)
-		return false
+		return admissionStopping
 	}
 	if isCompletion {
 		if h.maxCompletion > 0 && h.completion >= h.maxCompletion {
-			capacityUnavailable(w)
-			return false
+			return admissionFull
 		}
 		h.completion++
 	} else {
 		if h.maxOrdinary > 0 && h.ordinary >= h.maxOrdinary {
-			capacityUnavailable(w)
-			return false
+			return admissionFull
 		}
 		h.ordinary++
 	}
 	h.active++
-	return true
+	return admissionAccepted
 }
 
 func capacityUnavailable(w http.ResponseWriter) {
