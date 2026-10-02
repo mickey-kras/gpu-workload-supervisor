@@ -239,12 +239,40 @@ func (s *Store) PruneCompletedWork(ctx context.Context, before time.Time, limit 
 		return 0, err
 	}
 	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, prunableWorkIDs, cutoff, cutoff, limit)
+	if err != nil {
+		return 0, fmt.Errorf("select completed work to prune: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan completed work to prune: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("read completed work to prune: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, fmt.Errorf("close completed work selection: %w", err)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM transition_work
-		WHERE request_id IN (`+prunableWorkIDs+`)`, cutoff, cutoff, limit); err != nil {
+		WHERE request_id IN (`+placeholders+`)`, args...); err != nil {
 		return 0, fmt.Errorf("prune terminal transition snapshots: %w", err)
 	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM registered_work
-		WHERE request_id IN (`+prunableWorkIDs+`)`, cutoff, cutoff, limit)
+		WHERE request_id IN (`+placeholders+`)`, args...)
 	if err != nil {
 		return 0, fmt.Errorf("prune completed work: %w", err)
 	}
