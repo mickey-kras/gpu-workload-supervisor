@@ -26,6 +26,17 @@ func (s *pendingObservedStore) PendingWork(ctx context.Context) (int, error) {
 	return s.Store.PendingWork(ctx)
 }
 
+type cancelAfterPendingStore struct {
+	*store.Store
+	cancel context.CancelFunc
+}
+
+func (s *cancelAfterPendingStore) PendingWork(ctx context.Context) (int, error) {
+	pending, err := s.Store.PendingWork(ctx)
+	s.cancel()
+	return pending, err
+}
+
 func (observationFailure) Observe(context.Context) (gpuruntime.Snapshot, error) {
 	return gpuruntime.Snapshot{}, errors.New("runtime unavailable")
 }
@@ -202,6 +213,18 @@ func TestReconcileDrainTimeoutKeepsMediaRunningAndAdmissionClosed(t *testing.T) 
 	result, err := controller.Reconcile(context.Background())
 	if !errors.Is(err, ErrDrainTimeout) || result.Admission != control.AdmissionClosed || result.Health != control.HealthError || runtime.active != control.WorkloadMedia || len(runtime.calls) != 0 {
 		t.Fatalf("unsafe timeout: state = %#v, runtime = %#v, error = %v", result, runtime, err)
+	}
+}
+
+func TestReconcileCancellationAfterDrainDoesNotStopMedia(t *testing.T) {
+	stateStore := openStore(t)
+	runtime := &fakeRuntime{active: control.WorkloadMedia, mediaReady: true}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	controller := testController(t, &cancelAfterPendingStore{Store: stateStore, cancel: cancel}, runtime)
+	state, err := controller.Reconcile(ctx)
+	if !errors.Is(err, context.Canceled) || state.Admission != control.AdmissionClosed || state.Health != control.HealthError || runtime.active != control.WorkloadMedia || len(runtime.calls) != 0 {
+		t.Fatalf("unsafe cancellation: state = %#v, runtime = %#v, error = %v", state, runtime, err)
 	}
 }
 
