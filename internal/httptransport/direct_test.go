@@ -93,11 +93,15 @@ func TestDirectTransportStreamsBeforeCompletionAndCancels(t *testing.T) {
 
 func TestDirectTransportReusesBurstConnections(t *testing.T) {
 	const parallel = 16
-	release := make(chan struct{})
-	arrived := make(chan struct{}, parallel*2)
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		arrived <- struct{}{}
-		<-release
+	releases := [2]chan struct{}{make(chan struct{}), make(chan struct{})}
+	arrivals := [2]chan struct{}{make(chan struct{}, parallel), make(chan struct{}, parallel)}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wave := 0
+		if r.URL.Path == "/second" {
+			wave = 1
+		}
+		arrivals[wave] <- struct{}{}
+		<-releases[wave]
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer upstream.Close()
@@ -113,16 +117,19 @@ func TestDirectTransportReusesBurstConnections(t *testing.T) {
 		return conn, err
 	}
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
-	runBurst := func() {
+	runBurst := func(wave int) {
 		t.Helper()
-		release = make(chan struct{})
 		var wg sync.WaitGroup
 		errs := make(chan error, parallel)
 		for i := 0; i < parallel; i++ {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				response, err := client.Get(upstream.URL)
+				url := upstream.URL
+				if wave == 1 {
+					url += "/second"
+				}
+				response, err := client.Get(url)
 				if err != nil {
 					errs <- err
 					return
@@ -138,23 +145,24 @@ func TestDirectTransportReusesBurstConnections(t *testing.T) {
 		}
 		for i := 0; i < parallel; i++ {
 			select {
-			case <-arrived:
+			case <-arrivals[wave]:
 			case <-time.After(5 * time.Second):
+				close(releases[wave])
 				t.Fatal("upstream did not receive full burst")
 			}
 		}
-		close(release)
+		close(releases[wave])
 		wg.Wait()
 		close(errs)
 		for err := range errs {
 			t.Fatal(err)
 		}
 	}
-	runBurst()
+	runBurst(0)
 	if got := dials.Load(); got != parallel {
 		t.Fatalf("warm burst dials = %d, want %d", got, parallel)
 	}
-	runBurst()
+	runBurst(1)
 	if got := dials.Load(); got != parallel {
 		t.Fatalf("reused burst dials = %d, want %d", got, parallel)
 	}
