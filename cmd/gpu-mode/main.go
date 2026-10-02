@@ -39,6 +39,12 @@ func run() error {
 	})
 }
 
+type modeExecution struct {
+	statePath, resolveReason, target string
+	auditBatch int
+	actionTimeout, drainTimeout, verifyTimeout, cleanupTimeout, finalizeTimeout, pollInterval time.Duration
+}
+
 func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error)) error {
 	flags := flag.NewFlagSet("gpu-mode", flag.ContinueOnError)
 	statePath := flags.String("state", defaultStatePath(), "SQLite state path")
@@ -95,23 +101,32 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 	if command == "verify-host" {
 		return verifyHost(runtimeConfig, *actionTimeout, newRuntime)
 	}
+	return executeWithState(newRuntime, runtimeConfig, command, auditCutoff, modeExecution{
+		statePath: *statePath, resolveReason: *resolveReason, target: *target,
+		auditBatch: *auditBatch, actionTimeout: *actionTimeout, drainTimeout: *drainTimeout,
+		verifyTimeout: *verifyTimeout, cleanupTimeout: *cleanupTimeout,
+		finalizeTimeout: *finalizeTimeout, pollInterval: *pollInterval,
+	})
+}
+
+func executeWithState(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error), runtimeConfig gpuruntime.SystemdConfig, command string, auditCutoff time.Time, options modeExecution) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	processLock, err := lock.AcquireContext(ctx, *statePath+".lock", false)
+	processLock, err := lock.AcquireContext(ctx, options.statePath+".lock", false)
 	if err != nil {
 		return err
 	}
 	defer processLock.Close()
-	proxyLock, err := acquireProxyLifetimeLock(*statePath, command, *resolveReason)
+	proxyLock, err := acquireProxyLifetimeLock(options.statePath, command, options.resolveReason)
 	if err != nil {
 		return err
 	}
 	defer proxyLock.Close()
 	var stateStore *store.Store
 	if command == restoreStateCommand {
-		stateStore, err = store.OpenRestored(ctx, *statePath)
+		stateStore, err = store.OpenRestored(ctx, options.statePath)
 	} else {
-		stateStore, err = store.Open(ctx, *statePath)
+		stateStore, err = store.Open(ctx, options.statePath)
 	}
 	if err != nil {
 		return fmt.Errorf("open state store: %w", err)
@@ -121,22 +136,22 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 		return restoreState(ctx, stateStore)
 	}
 	if command == pruneAuditCommand {
-		return pruneAudit(ctx, stateStore, auditCutoff, *auditBatch)
+		return pruneAudit(ctx, stateStore, auditCutoff, options.auditBatch)
 	}
 	runtimeManager, err := newRuntime(runtimeConfig)
 	if err != nil {
 		return err
 	}
 	controller, err := supervisor.New(stateStore, runtimeManager, supervisor.Config{
-		DrainTimeout: *drainTimeout, VerifyTimeout: *verifyTimeout,
-		ActionTimeout:  *actionTimeout,
-		CleanupTimeout: *cleanupTimeout, FinalizeTimeout: *finalizeTimeout,
-		PollInterval: *pollInterval,
+		DrainTimeout: options.drainTimeout, VerifyTimeout: options.verifyTimeout,
+		ActionTimeout:  options.actionTimeout,
+		CleanupTimeout: options.cleanupTimeout, FinalizeTimeout: options.finalizeTimeout,
+		PollInterval: options.pollInterval,
 	})
 	if err != nil {
 		return err
 	}
-	return executeCommand(ctx, controller, command, *resolveReason, control.Workload(*target))
+	return executeCommand(ctx, controller, command, options.resolveReason, control.Workload(options.target))
 }
 
 func validateCommandFlags(flags *flag.FlagSet, mediaStopMode, target string) (gpuruntime.MediaStopMode, error) {
