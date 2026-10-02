@@ -18,15 +18,15 @@ import (
 func BenchmarkDirectIdleReuse(b *testing.B) {
 	for _, idleLimit := range []int{2, 8, 16, 32, 64} {
 		b.Run(fmt.Sprintf("idle_%d", idleLimit), func(b *testing.B) {
+			b.StopTimer()
+			b.ReportAllocs()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				time.Sleep(time.Millisecond)
 				w.WriteHeader(http.StatusNoContent)
 			}))
-			defer server.Close()
 			transport := NewDirect()
 			transport.MaxIdleConnsPerHost = idleLimit
 			transport.MaxIdleConns = 64
-			defer transport.CloseIdleConnections()
 			dial := transport.DialContext
 			var dials atomic.Int64
 			transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -37,8 +37,11 @@ func BenchmarkDirectIdleReuse(b *testing.B) {
 				return conn, err
 			}
 			client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for i := -1; i < b.N; i++ {
+				if i == 0 {
+					dials.Store(0)
+					b.StartTimer()
+				}
 				var wg sync.WaitGroup
 				errs := make(chan error, 32)
 				for j := 0; j < 32; j++ {
@@ -65,7 +68,10 @@ func BenchmarkDirectIdleReuse(b *testing.B) {
 					b.Fatal(err)
 				}
 			}
+			b.StopTimer()
 			b.ReportMetric(float64(dials.Load())/float64(b.N), "dials/op")
+			transport.CloseIdleConnections()
+			server.Close()
 		})
 	}
 }
