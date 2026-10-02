@@ -139,13 +139,36 @@ func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
 		return c.latchObservationFailure(ctx, state, err)
 	}
 	if !snapshot.TextActive {
+		// Close admission atomically before polling pending registrations. Recovery
+		// retains completion authority for work admitted under the previous fence.
+		closed := state
+		closed.Admission = control.AdmissionClosed
+		closed.Health = control.HealthError
+		closed.ActiveWorkload = control.WorkloadUnknown
+		closed.Phase = control.PhaseReconciling
+		entryCtx, cancelEntry := context.WithTimeout(context.Background(), c.config.FinalizeTimeout)
+		entered, entryErr := c.store.Recover(entryCtx, state.Version, closed, "reconciliation-entry")
+		cancelEntry()
+		if entryErr != nil {
+			return state, entryErr
+		}
+		state = entered
+		if err := ctx.Err(); err != nil {
+			return state, err
+		}
+		if err := c.waitForWork(ctx, c.now().Add(c.config.DrainTimeout), c.store.PendingWork); err != nil {
+			return state, err
+		}
+		if err := ctx.Err(); err != nil {
+			return state, err
+		}
 		if err := c.runAction(ctx, func(actionCtx context.Context) error {
 			return c.runtime.Stop(actionCtx, control.WorkloadMedia)
 		}); err != nil {
-			return c.latchObservationFailure(ctx, state, err)
+			return state, err
 		}
 		if err := c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout)); err != nil {
-			return c.latchObservationFailure(ctx, state, err)
+			return state, err
 		}
 	}
 	state.Owner = control.OwnerSupervisor
