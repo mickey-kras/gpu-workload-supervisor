@@ -256,26 +256,8 @@ func (c *Controller) Recover(ctx context.Context) (control.State, error) {
 	if err != nil {
 		return state, err
 	}
-	if snapshot.TextActive {
-		if err := c.waitForWork(ctx, c.now().Add(c.config.DrainTimeout), func(ctx context.Context) (int, error) {
-			return c.store.PendingWorkload(ctx, control.WorkloadMedia)
-		}); err != nil {
-			return state, err
-		}
-	} else {
-		// Recovery never abandons existing registrations. They retain their
-		// completion authority under the old fence and must drain before stop.
-		if err := c.waitForWork(ctx, c.now().Add(c.config.DrainTimeout), c.store.PendingWork); err != nil {
-			return state, err
-		}
-		if err := c.runAction(ctx, func(actionCtx context.Context) error {
-			return c.runtime.Stop(actionCtx, control.WorkloadMedia)
-		}); err != nil {
-			return state, err
-		}
-		if err := c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout)); err != nil {
-			return state, err
-		}
+	if err := c.drainRecovery(ctx, snapshot.TextActive); err != nil {
+		return state, err
 	}
 	final := state
 	final.Owner = control.OwnerSupervisor
@@ -294,6 +276,25 @@ func (c *Controller) Recover(ctx context.Context) (control.State, error) {
 		final.Admission = control.AdmissionClosed
 	}
 	return c.store.Recover(ctx, state.Version, final, "operator-recovery")
+}
+
+func (c *Controller) drainRecovery(ctx context.Context, textActive bool) error {
+	if textActive {
+		return c.waitForWork(ctx, c.now().Add(c.config.DrainTimeout), func(ctx context.Context) (int, error) {
+			return c.store.PendingWorkload(ctx, control.WorkloadMedia)
+		})
+	}
+	// Recovery never abandons existing registrations. They retain their
+	// completion authority under the old fence and must drain before stop.
+	if err := c.waitForWork(ctx, c.now().Add(c.config.DrainTimeout), c.store.PendingWork); err != nil {
+		return err
+	}
+	if err := c.runAction(ctx, func(actionCtx context.Context) error {
+		return c.runtime.Stop(actionCtx, control.WorkloadMedia)
+	}); err != nil {
+		return err
+	}
+	return c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout))
 }
 
 // ResolveUnfinishedWork is an explicit, disruptive operator action. The caller
