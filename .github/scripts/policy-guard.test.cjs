@@ -19,7 +19,7 @@ function files() {
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
     '.github/aislop/package.json', '.github/aislop/package-lock.json',
     '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
-    'sonar-project.properties', '.goreleaser.yaml',
+    'sonar-project.properties', '.goreleaser.yaml', '.testcoverage.yml',
     '.github/actions/setup-goreleaser/action.yml', '.github/scripts/install-goreleaser.sh',
   ]) result[path] = readFileSync(path, 'utf8');
   return result;
@@ -188,4 +188,49 @@ test('removed policy files and unpinned actions fail closed', () => {
   });
   assert.ok(errors.some(error => error.includes('Missing required file')));
   assert.ok(errors.some(error => error.includes('unpin')));
+});
+
+
+test('package coverage gate cannot be deleted, skipped or made advisory', () => {
+  for (const mutation of ['deleted', 'skipped', 'advisory', 'command']) {
+    const candidate = files();
+    const path = '.github/workflows/ci.yml';
+    const workflow = YAML.parse(candidate[path]);
+    const steps = workflow.jobs.checks.steps;
+    const index = steps.findIndex(step => step.name === 'Package coverage floors');
+    if (mutation === 'deleted') steps.splice(index, 1);
+    if (mutation === 'skipped') steps[index].if = false;
+    if (mutation === 'advisory') steps[index]['continue-on-error'] = true;
+    if (mutation === 'command') steps[index].run += ' || true';
+    candidate[path] = YAML.stringify(workflow);
+    assert.notDeepEqual(inspect(candidate), [], mutation);
+  }
+});
+
+test('package coverage floors cannot be lowered or bypassed with exclusions', () => {
+  for (const mutate of [
+    config => { config.threshold.total = 89; },
+    config => { config.threshold.package = 89; },
+    config => { config.override[1].threshold = 84; },
+    config => { config.override[1].threshold = '85'; },
+    config => { config.override[1].path = '^internal/'; },
+    config => { config.override.push({ path: '.*', threshold: 0 }); },
+    config => { config.override[1] = config.override[0]; },
+    config => { config.exclude = { paths: ['internal/store'] }; },
+    config => { config.profile = 'other.out'; },
+  ]) {
+    const candidate = files();
+    const config = YAML.parse(candidate['.testcoverage.yml']);
+    mutate(config);
+    candidate['.testcoverage.yml'] = YAML.stringify(config);
+    assert.ok(inspect(candidate).some(error => error.includes('Package coverage')));
+  }
+});
+
+test('package coverage config rejects deletion and duplicate keys', () => {
+  for (const value of [undefined, 'profile: coverage.out\nprofile: other.out']) {
+    const candidate = files();
+    candidate['.testcoverage.yml'] = value;
+    assert.ok(inspect(candidate).some(error => error.includes('coverage')));
+  }
 });

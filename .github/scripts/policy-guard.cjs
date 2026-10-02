@@ -15,7 +15,7 @@ const REQUIRED_FILES = [
   '.github/scripts/package.json', '.github/scripts/package-lock.json',
   '.github/aislop/package.json', '.github/aislop/package-lock.json',
   '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
-  '.goreleaser.yaml',
+  '.goreleaser.yaml', '.testcoverage.yml',
   '.github/actions/setup-goreleaser/action.yml', '.github/scripts/install-goreleaser.sh',
 ];
 
@@ -130,6 +130,10 @@ function inspectCi(files, workflows, failures, checks) {
   step(ci, 'checks', 'Go formatting', { run: ['test -z "$(gofmt -l .)"'] });
   step(ci, 'checks', 'Go module lock is current', { run: ['go mod tidy', 'git diff --exit-code -- go.mod go.sum'] });
   step(ci, 'checks', 'Tests, race detector, and coverage', { run: ['go test -race -coverprofile=coverage.out ./...', 'awk'] });
+  step(ci, 'checks', 'Package coverage floors');
+  exactRun(ci, 'checks', 'Package coverage floors', [
+    'go run github.com/vladopajic/go-test-coverage/v2@v2.19.0 --config=.testcoverage.yml',
+  ]);
   step(ci, 'checks', 'Go vet', { run: ['go vet ./...'] });
   inspectGoReleaser(files, workflows, failures, checks, ci, 'checks', [
     ['Validate GoReleaser configuration', 'check'], ['Build snapshot artifacts', 'release --snapshot --clean'],
@@ -352,6 +356,34 @@ function inspectScannerConfigs(files, failures) {
   }
 }
 
+function inspectCoverageConfig(files, failures) {
+  try {
+    const doc = YAML.parseDocument(files['.testcoverage.yml'], { uniqueKeys: true });
+    if (doc.errors.length) throw doc.errors[0];
+    const config = doc.toJS();
+    const floors = new Map([
+      ['^internal/control$', 78], ['^internal/store$', 85],
+      ['^cmd/gpu-mode$', 93], ['^cmd/gpu-workload-proxy$', 90],
+      ['^internal/externalcontrol$', 95], ['^internal/lock$', 94],
+      ['^internal/proxy$', 97], ['^internal/runtime$', 95],
+      ['^internal/supervisor$', 93],
+    ]);
+    const validFloor = (value, minimum) => typeof value === 'number' &&
+      Number.isInteger(value) && value >= minimum && value <= 100;
+    if (Object.keys(config).some(key => !['profile', 'threshold', 'override'].includes(key)) ||
+        config.profile !== 'coverage.out' ||
+        !validFloor(config.threshold?.total, 90) || !validFloor(config.threshold?.package, 90) ||
+        !Array.isArray(config.override) || config.override.length !== floors.size ||
+        new Set(config.override.map(rule => rule.path)).size !== floors.size ||
+        config.override.some(rule => !floors.has(rule.path) ||
+          !validFloor(rule.threshold, floors.get(rule.path)))) {
+      failures.push('Package coverage policy was weakened');
+    }
+  } catch (error) {
+    failures.push(`Package coverage config is invalid: ${error.message}`);
+  }
+}
+
 function inspect(files) {
   const failures = [];
   const workflows = scanWorkflows(files, failures);
@@ -359,6 +391,7 @@ function inspect(files) {
   inspectCi(files, workflows, failures, checks);
   inspectAdditionalWorkflows(files, workflows, failures, checks);
   inspectScannerConfigs(files, failures);
+  inspectCoverageConfig(files, failures);
   return failures;
 }
 
