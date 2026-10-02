@@ -13,6 +13,30 @@ import (
 
 type observationFailure struct{ *fakeRuntime }
 
+type pendingObservedStore struct {
+	*store.Store
+	polled chan struct{}
+}
+
+func (s *pendingObservedStore) PendingWork(ctx context.Context) (int, error) {
+	select {
+	case s.polled <- struct{}{}:
+	default:
+	}
+	return s.Store.PendingWork(ctx)
+}
+
+type cancelAfterPendingStore struct {
+	*store.Store
+	cancel context.CancelFunc
+}
+
+func (s *cancelAfterPendingStore) PendingWork(ctx context.Context) (int, error) {
+	pending, err := s.Store.PendingWork(ctx)
+	s.cancel()
+	return pending, err
+}
+
 func (observationFailure) Observe(context.Context) (gpuruntime.Snapshot, error) {
 	return gpuruntime.Snapshot{}, errors.New("runtime unavailable")
 }
@@ -101,6 +125,106 @@ func TestReconcileLatchesRuntimeFailures(t *testing.T) {
 				t.Fatalf("unsafe reconciliation = %#v, error = %v", state, err)
 			}
 		})
+	}
+}
+
+func TestReconcileDrainsAdmittedMediaBeforeStop(t *testing.T) {
+	stateStore := openStore(t)
+	runtime := &fakeRuntime{active: control.WorkloadMedia, mediaReady: true}
+	observed := &pendingObservedStore{Store: stateStore, polled: make(chan struct{}, 1)}
+	controller := testController(t, observed, runtime)
+	state, err := stateStore.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Phase = control.PhaseStable
+	state.DesiredWorkload = control.WorkloadMedia
+	state.ActiveWorkload = control.WorkloadMedia
+	state.Admission = control.AdmissionOpen
+	state, err = stateStore.UpdateState(context.Background(), state.Version, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := stateStore.AdmitWorkToken(context.Background(), "pending", "job", control.WorkloadMedia, state.LeaseFence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	type result struct {
+		state control.State
+		err   error
+	}
+	finished := make(chan result, 1)
+	go func() {
+		final, reconcileErr := controller.Reconcile(ctx)
+		finished <- result{final, reconcileErr}
+	}()
+	select {
+	case <-observed.polled:
+	case result := <-finished:
+		t.Fatalf("reconcile stopped without draining: state = %#v, error = %v", result.state, result.err)
+	case <-ctx.Done():
+		t.Fatal("reconcile never checked pending work")
+	}
+	closed, err := stateStore.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.Admission != control.AdmissionClosed || closed.Health != control.HealthError || runtime.active != control.WorkloadMedia {
+		t.Fatalf("unsafe state during drain: %#v, runtime = %q", closed, runtime.active)
+	}
+	if _, err := stateStore.AdmitWorkToken(context.Background(), "late", "job", control.WorkloadMedia, state.LeaseFence); !errors.Is(err, store.ErrStaleFence) && !errors.Is(err, store.ErrAdmissionClosed) {
+		t.Fatalf("new admission was not rejected: %v", err)
+	}
+	if err := stateStore.FinishWorkToken(context.Background(), "pending", control.WorkloadMedia, state.LeaseFence, token, store.WorkCompleted); err != nil {
+		t.Fatalf("old registration could not complete: %v", err)
+	}
+	select {
+	case result := <-finished:
+		if result.err != nil || result.state.ActiveWorkload != control.WorkloadIdle || runtime.active != control.WorkloadIdle {
+			t.Fatalf("reconcile after drain: state = %#v, runtime = %q, error = %v", result.state, runtime.active, result.err)
+		}
+	case <-ctx.Done():
+		t.Fatal("reconcile did not finish after work completed")
+	}
+}
+
+func TestReconcileDrainTimeoutKeepsMediaRunningAndAdmissionClosed(t *testing.T) {
+	stateStore := openStore(t)
+	runtime := &fakeRuntime{active: control.WorkloadMedia, mediaReady: true}
+	controller := testController(t, stateStore, runtime)
+	controller.config.DrainTimeout = 10 * time.Millisecond
+	state, err := stateStore.State(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Phase = control.PhaseStable
+	state.DesiredWorkload = control.WorkloadMedia
+	state.ActiveWorkload = control.WorkloadMedia
+	state.Admission = control.AdmissionOpen
+	state, err = stateStore.UpdateState(context.Background(), state.Version, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stateStore.AdmitWorkToken(context.Background(), "pending", "job", control.WorkloadMedia, state.LeaseFence); err != nil {
+		t.Fatal(err)
+	}
+	result, err := controller.Reconcile(context.Background())
+	if !errors.Is(err, ErrDrainTimeout) || result.Admission != control.AdmissionClosed || result.Health != control.HealthError || runtime.active != control.WorkloadMedia || len(runtime.calls) != 0 {
+		t.Fatalf("unsafe timeout: state = %#v, runtime = %#v, error = %v", result, runtime, err)
+	}
+}
+
+func TestReconcileCancellationAfterDrainDoesNotStopMedia(t *testing.T) {
+	stateStore := openStore(t)
+	runtime := &fakeRuntime{active: control.WorkloadMedia, mediaReady: true}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	controller := testController(t, &cancelAfterPendingStore{Store: stateStore, cancel: cancel}, runtime)
+	state, err := controller.Reconcile(ctx)
+	if !errors.Is(err, context.Canceled) || state.Admission != control.AdmissionClosed || state.Health != control.HealthError || runtime.active != control.WorkloadMedia || len(runtime.calls) != 0 {
+		t.Fatalf("unsafe cancellation: state = %#v, runtime = %#v, error = %v", state, runtime, err)
 	}
 }
 
