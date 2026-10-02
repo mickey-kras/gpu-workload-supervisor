@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -29,11 +30,42 @@ type routesFlag []workloadproxy.Route
 // activeHandler prevents new proxy work after shutdown begins and reports when
 // every admitted request has left its handler, even if Shutdown times out.
 type activeHandler struct {
-	handler  http.Handler
-	mu       sync.Mutex
-	active   int
-	stopping bool
-	drained  chan struct{}
+	handler         http.Handler
+	mu              sync.Mutex
+	active          int
+	stopping        bool
+	drained         chan struct{}
+	hijacked        map[net.Conn]struct{}
+	closingHijacked bool
+}
+
+// trackingWriter records connections that leave net/http's ownership on
+// Hijack. ReverseProxy uses ResponseController.Hijack for upgrades.
+type trackingWriter struct {
+	http.ResponseWriter
+	owner *activeHandler
+	conn  net.Conn
+}
+
+func (w *trackingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *trackingWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, rw, err := http.NewResponseController(w.ResponseWriter).Hijack()
+	if err != nil {
+		return nil, nil, err
+	}
+	w.owner.mu.Lock()
+	if w.owner.hijacked == nil {
+		w.owner.hijacked = make(map[net.Conn]struct{})
+	}
+	w.owner.hijacked[conn] = struct{}{}
+	w.conn = conn
+	closing := w.owner.closingHijacked
+	w.owner.mu.Unlock()
+	if closing {
+		_ = conn.Close()
+	}
+	return conn, rw, nil
 }
 
 func (h *activeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -45,15 +77,32 @@ func (h *activeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h.active++
 	h.mu.Unlock()
+	writer := &trackingWriter{ResponseWriter: w, owner: h}
 	defer func() {
 		h.mu.Lock()
+		delete(h.hijacked, writer.conn)
 		h.active--
 		if h.stopping && h.active == 0 {
 			close(h.drained)
 		}
 		h.mu.Unlock()
 	}()
-	h.handler.ServeHTTP(w, r)
+	h.handler.ServeHTTP(writer, r)
+}
+
+func (h *activeHandler) closeHijacked() error {
+	h.mu.Lock()
+	h.closingHijacked = true
+	conns := make([]net.Conn, 0, len(h.hijacked))
+	for conn := range h.hijacked {
+		conns = append(conns, conn)
+	}
+	h.mu.Unlock()
+	var err error
+	for _, conn := range conns {
+		err = errors.Join(err, conn.Close())
+	}
+	return err
 }
 
 func (h *activeHandler) stop() <-chan struct{} {
@@ -77,7 +126,14 @@ func shutdownAndDrain(server *http.Server, handler *activeHandler, timeout time.
 	if err != nil {
 		// Shutdown leaves active connections open when its deadline expires.
 		// Close cancels them; a handler may still need time to return.
-		err = errors.Join(err, server.Close())
+		err = errors.Join(err, server.Close(), handler.closeHijacked())
+	} else {
+		select {
+		case <-drained:
+			return nil
+		case <-ctx.Done():
+			err = errors.Join(ctx.Err(), server.Close(), handler.closeHijacked())
+		}
 	}
 	<-drained
 	return err
@@ -228,10 +284,7 @@ func serveProxy(proxyConfig workloadproxy.Config, settings proxyServerSettings) 
 	}()
 	select {
 	case err := <-result:
-		drained := tracked.stop()
-		closeErr := server.Close()
-		<-drained
-		return errors.Join(err, closeErr)
+		return errors.Join(err, shutdownAndDrain(server, tracked, settings.shutdownTimeout))
 	case <-ctx.Done():
 		return shutdownAndDrain(server, tracked, settings.shutdownTimeout)
 	}
