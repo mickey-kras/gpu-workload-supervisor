@@ -40,8 +40,8 @@ func run() error {
 }
 
 type modeExecution struct {
-	statePath, resolveReason, target string
-	auditBatch int
+	statePath, resolveReason, target                                                          string
+	auditBatch                                                                                int
 	actionTimeout, drainTimeout, verifyTimeout, cleanupTimeout, finalizeTimeout, pollInterval time.Duration
 }
 
