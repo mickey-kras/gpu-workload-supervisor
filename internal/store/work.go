@@ -265,3 +265,11 @@ func (s *Store) PendingWork(ctx context.Context) (int, error) {
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM registered_work WHERE completed_at IS NULL)`).Scan(&pending)
 	return pending, err
 }
+
+
+// PendingWorkload reports unfinished registrations for a single workload across all fences.
+func (s *Store) PendingWorkload(ctx context.Context, workload control.Workload) (int, error) {
+	var pending int
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM registered_work WHERE completed_at IS NULL AND workload = ?)`, workload).Scan(&pending)
+	return pending, err
+}
