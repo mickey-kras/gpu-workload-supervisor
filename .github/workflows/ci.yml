@@ -36,6 +36,8 @@ jobs:
           go test -race -coverprofile=coverage.out ./...
           go tool cover -func=coverage.out | tee coverage-summary.txt
           awk '$1 == "total:" { coverage=$3+0; found=1 } END { if (!found || coverage < 90) exit 1 }' coverage-summary.txt
+      - name: Package coverage floors
+        run: go run github.com/vladopajic/go-test-coverage/v2@v2.19.0 --config=.testcoverage.yml
       - name: Real systemd lifecycle qualification
         run: |
           set -euo pipefail
