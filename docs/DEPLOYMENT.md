@@ -42,6 +42,18 @@ switch verification closes admission and requires recovery, while failed recover
 keeps the existing error state. Before lifecycle effects, a capability preflight
 checks the host hierarchy, manager anchor, and unit mappings while allowing populated
 workload groups. Release checks still run after stopping to detect changes.
+
+Before opening state or enabling automation, run `gpu-mode [runtime flags]
+verify-host`. It checks those capabilities without creating state, acquiring
+state locks, migrating SQLite, or starting/stopping units. Exit status zero means
+the capability check passed; errors return nonzero. `-action-timeout` bounds the
+probe and Ctrl-C cancels it. This is not GPU release or workload health proof.
+A failed unit may have a removed cgroup: preflight accepts that capability state,
+but release still requires stopped units. For crashed units with unfinished work,
+stop proxies and use the documented `resolve-work` then `recover` sequence.
+After stopping a failed unit, recovery verifies its cgroup is empty before
+clearing systemd's retained failure state and rechecking `inactive/dead`.
+
 After target verification succeeds, durable finalization uses its own bounded
 `-finalize-timeout`, so caller cancellation does not strand a verified transition.
 Database conflicts or commit errors still require inspection and recovery.
@@ -156,7 +168,8 @@ The tagged suite (`go test -race -count=1 -timeout=10m -tags=systemd_integration
 -run '^TestSystemd' -v ./internal/supervisor`) uses isolated real user-systemd
 units, kernel cgroup v2 evidence, and SQLite state. It covers lifecycle and
 ownership transitions, restart/restore, descendant release, admission draining,
-and concurrent commands. Health endpoints are fixtures; health, release, and
+failed-unit preflight and work resolution, and concurrent commands. Health
+endpoints are fixtures; health, release, and
 inspection failures are injected deterministically, and interrupted journal phases
 are seeded before reopening state. Selecting the tag requires real systemd/cgroup
 prerequisites and fails rather than silently skipping when they are unavailable.
