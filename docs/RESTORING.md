@@ -17,8 +17,9 @@ before the new binary or proxy opens state and applies migrations.
 
 Before upgrading, add an explicit `-media-stop-mode unload` or
 `-media-stop-mode stop-service` to every runtime CLI configuration. The previous
-implicit choice is no longer accepted. Select `unload` only with a configured
-media release endpoint; use `stop-service` when the whole service must stop.
+implicit choice is no longer accepted. `stop-service` is the only qualified media release path. Live-media `unload`
+remains unsupported because release cannot currently be verified, even with a
+configured release endpoint. See the [deployment policy](DEPLOYMENT.md).
 `restore-state` and `prune-audit` need no media stop policy.
 
 An ordinary restart against the unchanged database is not a restore. After an
