@@ -185,3 +185,32 @@ func TestContextLockTimesOutAndReleasesReadersIndependently(t *testing.T) {
 		t.Fatal("empty lock accepted")
 	}
 }
+
+func TestCloseIsIdempotentWhileAnotherLockIsHeld(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.lock")
+	first, err := Acquire(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Acquire(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	done := make(chan error, 8)
+	for i := 0; i < cap(done); i++ {
+		go func() { done <- first.Close() }()
+	}
+	for i := 0; i < cap(done); i++ {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if unexpected, err := TryAcquire(path); err == nil {
+		unexpected.Close()
+		t.Fatal("repeated close released another lock")
+	}
+}

@@ -15,6 +15,12 @@ backup contents and the durable state directory with the service identity's priv
 permissions. Verify backup integrity and retain the previous binary/configuration
 before the new binary or proxy opens state and applies migrations.
 
+Before upgrading, add an explicit `-media-stop-mode unload` or
+`-media-stop-mode stop-service` to every runtime CLI configuration. The previous
+implicit choice is no longer accepted. Select `unload` only with a configured
+media release endpoint; use `stop-service` when the whole service must stop.
+`restore-state` and `prune-audit` need no media stop policy.
+
 An ordinary restart against the unchanged database is not a restore. After an
 upgrade of supervisor-owned state, reconcile with the new pinned binary and
 matching runtime flags before restarting proxies. For user-owned state, inspect
@@ -35,7 +41,7 @@ The lease incarnation in a SQLite backup may be older than the live database. A 
    /PINNED/RELEASE/gpu-mode -state /PRIVATE/DURABLE/STATE/state.db restore-state
    ```
 
-   The database must be an initialized supervisor database; an empty placeholder is rejected. The command needs no runtime flags and does not copy a backup. On success it prints the closed state with a new incarnation. It atomically takes supervisor ownership, sets the active workload to unknown, closes admission, marks restored active work abandoned, invalidates in-progress transitions, and records counts and old/new fences in `state_restorations`. Failed work and transitions remain in the audit tables. If it fails, keep all components stopped and resolve the error before retrying.
+   The database must be an initialized supervisor database; an empty placeholder is rejected. The command needs no runtime flags and does not copy a backup. On success it prints the closed state with a new incarnation. It atomically takes supervisor ownership, sets the active workload to unknown, closes admission, marks restored active work abandoned, invalidates in-progress transitions, and records the restore in audit history. Failed work and transition history remain available. If it fails, keep all components stopped and resolve the error before retrying.
 
 4. With the proxies still stopped, run the same pinned `gpu-mode` with the complete runtime flags, including the same `-state` path, and the `reconcile` command. It must finish with a stable, healthy state. If it reports a failure, leave the proxies stopped and use `recover` only after checking the runtime state. Start a workload through the controller if needed.
 5. Start the proxies only after successful reconciliation. Clients must obtain the new fence; requests carrying a fence from the backup are rejected.

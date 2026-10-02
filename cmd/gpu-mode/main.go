@@ -92,7 +92,9 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 	if err := validateRuntimeFlags(command, runtimeConfig); err != nil {
 		return err
 	}
-	processLock, err := lock.Acquire(*statePath + ".lock")
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	processLock, err := lock.AcquireContext(ctx, *statePath+".lock", false)
 	if err != nil {
 		return err
 	}
@@ -102,8 +104,6 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 		return err
 	}
 	defer proxyLock.Close()
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 	var stateStore *store.Store
 	if command == restoreStateCommand {
 		stateStore, err = store.OpenRestored(ctx, *statePath)
@@ -138,7 +138,11 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 
 func validateCommandFlags(flags *flag.FlagSet, mediaStopMode, target string) (gpuruntime.MediaStopMode, error) {
 	legacyRelease := false
+	auditFlag := false
 	flags.Visit(func(value *flag.Flag) {
+		if value.Name == "audit-before" || value.Name == "audit-batch" {
+			auditFlag = true
+		}
 		if value.Name == "release-max-used-mib" {
 			legacyRelease = true
 		}
@@ -148,6 +152,9 @@ func validateCommandFlags(flags *flag.FlagSet, mediaStopMode, target string) (gp
 	}
 	if flags.NArg() != 1 {
 		return "", errors.New("usage: gpu-mode [flags] restore-state|prune-audit|status|reconcile|recover|resolve-work|text|media|idle|take-control|user-switch|return-control|recover-user")
+	}
+	if auditFlag && flags.Arg(0) != pruneAuditCommand {
+		return "", errors.New("-audit-before and -audit-batch require prune-audit")
 	}
 	stopMode := gpuruntime.MediaStopMode(mediaStopMode)
 	if mediaStopMode == "" && flags.Arg(0) != restoreStateCommand && flags.Arg(0) != pruneAuditCommand {

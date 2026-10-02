@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
 
 type File struct {
+	mu   sync.Mutex
 	file *os.File
 }
 
@@ -49,11 +51,17 @@ func acquire(path string, operation int) (*File, error) {
 }
 
 func (f *File) Close() error {
-	if f == nil || f.file == nil {
+	if f == nil {
+		return nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.file == nil {
 		return nil
 	}
 	unlockErr := unix.Flock(int(f.file.Fd()), unix.LOCK_UN)
 	closeErr := f.file.Close()
+	f.file = nil
 	return errors.Join(unlockErr, closeErr)
 }
 
