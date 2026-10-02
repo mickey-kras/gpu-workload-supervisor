@@ -297,7 +297,6 @@ function inspectReleaseEntry(files, workflows, failures, checks) {
 function inspectReleasePublish(files, workflows, failures, checks) {
   const { step } = checks;
   const release = '.github/workflows/release.yml';
-  const releaseJobs = workflows[release]?.jobs;
   step(release, 'publish', 'Release App token', { uses: 'actions/create-github-app-token' });
   const state = workflows[release]?.jobs?.publish?.steps?.find(s => s.name === 'Verify immutable setting and publication state');
   const verification = [
