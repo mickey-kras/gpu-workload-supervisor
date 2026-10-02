@@ -190,7 +190,9 @@ func TestShutdownClosesHijackedConnectionAndReleasesLifetimeLock(t *testing.T) {
 		t.Fatal("upgrade did not start")
 	}
 	shutdownDone := make(chan error, 1)
-	go func() { shutdownDone <- errors.Join(shutdownAndDrain(server, tracked, 20*time.Millisecond), shared.Close()) }()
+	go func() {
+		shutdownDone <- errors.Join(shutdownAndDrain(server, tracked, 20*time.Millisecond), shared.Close())
+	}()
 	select {
 	case err := <-shutdownDone:
 		if !errors.Is(err, context.DeadlineExceeded) {
