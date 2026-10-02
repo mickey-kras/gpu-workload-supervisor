@@ -21,9 +21,11 @@ func (m *SystemdManager) Preflight(ctx context.Context) error {
 		if !state.hasCgroup || (state.active == "active" && state.cgroup == "") {
 			return errors.New("workload ControlGroup metadata unavailable")
 		}
-		// A removed stopped workload is supported; populated groups are
-		// valid capability evidence, never release evidence.
-		allowRemoved := state.active == "inactive" && state.sub == "dead"
+		// systemd can remove an empty cgroup after either a clean stop or a
+		// crash. Neither this nor populated groups prove workload release;
+		// recovery must still stop units and verify release independently.
+		allowRemoved := (state.active == "inactive" && state.sub == "dead") ||
+			(state.active == "failed" && state.sub == "failed")
 		if err := m.cgroups.check(workload.group, allowRemoved); err != nil && !errors.Is(err, errCgroupPopulated) {
 			return err
 		}

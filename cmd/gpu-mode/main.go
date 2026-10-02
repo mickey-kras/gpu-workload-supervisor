@@ -92,6 +92,9 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 	if err := validateRuntimeFlags(command, runtimeConfig); err != nil {
 		return err
 	}
+	if command == "verify-host" {
+		return verifyHost(runtimeConfig, *actionTimeout, newRuntime)
+	}
 	processLock, err := lock.Acquire(*statePath + ".lock")
 	if err != nil {
 		return err
@@ -147,7 +150,7 @@ func validateCommandFlags(flags *flag.FlagSet, mediaStopMode, target string) (gp
 		return "", errors.New("-release-max-used-mib has been removed: remove it and configure -text-cgroup and -media-cgroup; optional target capacity uses -text-required-mib/-media-required-mib plus -capacity-headroom-mib")
 	}
 	if flags.NArg() != 1 {
-		return "", errors.New("usage: gpu-mode [flags] restore-state|prune-audit|status|reconcile|recover|resolve-work|text|media|idle|take-control|user-switch|return-control|recover-user")
+		return "", errors.New("usage: gpu-mode [flags] verify-host|restore-state|prune-audit|status|reconcile|recover|resolve-work|text|media|idle|take-control|user-switch|return-control|recover-user")
 	}
 	stopMode := gpuruntime.MediaStopMode(mediaStopMode)
 	if mediaStopMode == "" && flags.Arg(0) != restoreStateCommand && flags.Arg(0) != pruneAuditCommand {

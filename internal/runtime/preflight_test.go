@@ -59,3 +59,31 @@ func TestPreflightChecksConfiguredStoppedCgroupWithBlankMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestPreflightRemovedCgroupsRespectUnitState(t *testing.T) {
+	for _, tc := range []struct {
+		active, sub string
+		allowed     bool
+	}{
+		{"failed", "failed", true},
+		{"inactive", "dead", true},
+		{"active", "running", false},
+		{"activating", "start", false},
+		{"deactivating", "stop", false},
+		{"unknown", "unknown", false},
+	} {
+		t.Run(tc.active, func(t *testing.T) {
+			r := stoppedRunner()
+			m := strictManager(t, r)
+			fixtureCgroups(t, m)
+			r.outputs[textShowCommand] = []byte("LoadState=loaded\nActiveState=" + tc.active + "\nSubState=" + tc.sub + "\nControlGroup=\n")
+			err := m.Preflight(context.Background())
+			if (err == nil) != tc.allowed {
+				t.Fatalf("preflight %s/%s: %v", tc.active, tc.sub, err)
+			}
+			if tc.active == "failed" && m.Released(context.Background()) == nil {
+				t.Fatal("failed unit treated as release evidence")
+			}
+		})
+	}
+}
