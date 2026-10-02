@@ -63,3 +63,23 @@ All unclassified routes fail closed, including GET, HEAD and OPTIONS. Configure 
 The listener is restricted to loopback because explicit user ownership bypasses supervisor lease registration. External exposure and requester authentication belong to the deployment boundary.
 
 The proxy is content-blind. Content inspection and domain policy belong to the caller.
+
+## Connection limits
+
+Upstream traffic connects directly. The proxy and runtime health probes use private
+HTTP transports and ignore `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`. Keep the
+upstream on a trusted network; registration tokens are completion capabilities.
+Custom transports supplied by Go callers must enforce the same trust boundary.
+
+The listener defaults to a 10-second header timeout and a 2-minute idle keep-alive
+timeout (`-read-header-timeout` and `-idle-timeout`). It deliberately has no total
+request-body read or response-write deadline so uploads and long-running streams
+can complete. Those settings do not bound an active slow upload or reader. Keep
+clients trusted, or enforce workload-appropriate limits at an authenticated front
+proxy before exposing this service.
+
+Upstream dialing is bounded to 30 seconds and TLS handshakes to 10 seconds. Waiting
+for execution response headers or a streaming body has no total deadline; client
+cancellation and proxy shutdown cancel the upstream request. Health probes retain
+their separate `-health-timeout` budget. A timeout or disconnect never proves work
+finished and does not clear its registration.
