@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -255,5 +256,73 @@ func TestTokenedWorkPrunesUnderCurrentFenceWithoutLateCompletionCollision(t *tes
 	}
 	if err := s.FinishWorkToken(ctx, "same-id", control.WorkloadText, state.LeaseFence, secondToken, WorkCompleted); err != nil {
 		t.Fatalf("second completion = %v", err)
+	}
+}
+
+func TestPruneCompletedWorkWithNoEligibleRows(t *testing.T) {
+	s := testStore(t)
+	count, err := s.PruneCompletedWork(context.Background(), fixedClock()().Add(-24*time.Hour), 256)
+	if err != nil || count != 0 {
+		t.Fatalf("empty prune = %d, %v", count, err)
+	}
+}
+
+func TestPruneCompletedWorkReportsSelectionFailure(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.db.ExecContext(ctx, "DROP TABLE registered_work"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.PruneCompletedWork(ctx, fixedClock()().Add(-24*time.Hour), 256)
+	if err == nil || !strings.Contains(err.Error(), "select completed work to prune") {
+		t.Fatalf("selection failure = %v", err)
+	}
+}
+
+func TestPruneCompletedWorkRollsBackOnDeleteFailure(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	state := admitRetentionWork(t, s)
+	token, err := s.AdmitWorkToken(ctx, "delete-failure", "", control.WorkloadText, state.LeaseFence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishWorkToken(ctx, "delete-failure", control.WorkloadText, state.LeaseFence, token, WorkCompleted); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, "UPDATE registered_work SET completed_at = ? WHERE request_id = ?",
+		formatTime(fixedClock()().Add(-48*time.Hour)), "delete-failure"); err != nil {
+		t.Fatal(err)
+	}
+	tr := Transition{ID: "terminal-delete-failure", Fence: state.LeaseFence, Source: state, Target: state,
+		Previous: state, Initiator: "test", Phase: control.PhaseDraining,
+		Deadline: fixedClock()().Add(time.Hour)}
+	if err := s.BeginTransition(ctx, tr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, "UPDATE transitions SET status = 'committed' WHERE transition_id = ?", tr.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, "INSERT INTO transition_work (transition_id, request_id) VALUES (?, ?)",
+		tr.ID, "delete-failure"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE TRIGGER deny_work_delete BEFORE DELETE ON registered_work
+		BEGIN SELECT RAISE(ABORT, 'blocked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.PruneCompletedWork(ctx, fixedClock()().Add(-24*time.Hour), 256)
+	if err == nil || !strings.Contains(err.Error(), "prune completed work") {
+		t.Fatalf("delete failure = %v", err)
+	}
+	if !retentionWorkExists(t, s, "delete-failure") {
+		t.Fatal("work was removed despite failed prune transaction")
+	}
+	var links int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM transition_work WHERE transition_id = ?", tr.ID).Scan(&links); err != nil {
+		t.Fatal(err)
+	}
+	if links != 1 {
+		t.Fatalf("terminal snapshot link was not rolled back: %d", links)
 	}
 }
