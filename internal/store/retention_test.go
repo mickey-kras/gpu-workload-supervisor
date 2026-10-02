@@ -278,3 +278,31 @@ func TestPruneCompletedWorkReportsSelectionFailure(t *testing.T) {
 		t.Fatalf("selection failure = %v", err)
 	}
 }
+
+func TestPruneCompletedWorkRollsBackOnDeleteFailure(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	state := admitRetentionWork(t, s)
+	token, err := s.AdmitWorkToken(ctx, "delete-failure", "", control.WorkloadText, state.LeaseFence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishWorkToken(ctx, "delete-failure", control.WorkloadText, state.LeaseFence, token, WorkCompleted); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, "UPDATE registered_work SET completed_at = ? WHERE request_id = ?",
+		formatTime(fixedClock()().Add(-48*time.Hour)), "delete-failure"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE TRIGGER deny_work_delete BEFORE DELETE ON registered_work
+		BEGIN SELECT RAISE(ABORT, 'blocked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.PruneCompletedWork(ctx, fixedClock()().Add(-24*time.Hour), 256)
+	if err == nil || !strings.Contains(err.Error(), "prune completed work") {
+		t.Fatalf("delete failure = %v", err)
+	}
+	if !retentionWorkExists(t, s, "delete-failure") {
+		t.Fatal("work was removed despite failed prune transaction")
+	}
+}
