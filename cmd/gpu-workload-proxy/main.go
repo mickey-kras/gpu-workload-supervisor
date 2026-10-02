@@ -107,6 +107,11 @@ func main() {
 	}
 }
 
+type proxyServerSettings struct {
+	statePath, listen                                                       string
+	readHeaderTimeout, idleTimeout, shutdownTimeout, completedWorkRetention time.Duration
+}
+
 func run() error {
 	flags := flag.NewFlagSet("gpu-workload-proxy", flag.ContinueOnError)
 	statePath := flags.String("state", defaultStatePath(), "SQLite state path")
@@ -170,14 +175,22 @@ func run() error {
 	if err := workloadproxy.ValidateConfig(proxyConfig); err != nil {
 		return err
 	}
+	return serveProxy(proxyConfig, proxyServerSettings{
+		statePath: *statePath, listen: *listen,
+		readHeaderTimeout: *readHeaderTimeout, idleTimeout: *idleTimeout,
+		shutdownTimeout: *shutdownTimeout, completedWorkRetention: *completedWorkRetention,
+	})
+}
+
+func serveProxy(proxyConfig workloadproxy.Config, settings proxyServerSettings) error {
 	// Hold the shared lock until every in-flight handler has finished. Recovery
 	// takes its exclusive counterpart before it can abandon unresolved work.
-	proxyLock, err := lock.AcquireShared(*statePath + ".proxy.lock")
+	proxyLock, err := lock.AcquireShared(settings.statePath + ".proxy.lock")
 	if err != nil {
 		return fmt.Errorf("acquire proxy lifetime lock: %w", err)
 	}
 	defer proxyLock.Close()
-	stateStore, err := store.Open(context.Background(), *statePath)
+	stateStore, err := store.Open(context.Background(), settings.statePath)
 	if err != nil {
 		return fmt.Errorf("open state store: %w", err)
 	}
@@ -188,8 +201,8 @@ func run() error {
 	}
 	tracked := &activeHandler{handler: handler}
 	server := &http.Server{
-		Addr: *listen, Handler: tracked, ReadHeaderTimeout: *readHeaderTimeout,
-		IdleTimeout: *idleTimeout,
+		Addr: settings.listen, Handler: tracked, ReadHeaderTimeout: settings.readHeaderTimeout,
+		IdleTimeout: settings.idleTimeout,
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -197,7 +210,7 @@ func run() error {
 	maintenanceDone := make(chan struct{})
 	go func() {
 		defer close(maintenanceDone)
-		maintainCompletedWork(maintenanceCtx, stateStore, *completedWorkRetention, time.Hour, func(err error) {
+		maintainCompletedWork(maintenanceCtx, stateStore, settings.completedWorkRetention, time.Hour, func(err error) {
 			log.Printf("completed work retention failed: %v", err)
 		})
 	}()
@@ -220,7 +233,7 @@ func run() error {
 		<-drained
 		return errors.Join(err, closeErr)
 	case <-ctx.Done():
-		return shutdownAndDrain(server, tracked, *shutdownTimeout)
+		return shutdownAndDrain(server, tracked, settings.shutdownTimeout)
 	}
 }
 
