@@ -54,7 +54,12 @@ supervisor-owned state. Check the exit code as well as JSON. A successful idle
 reconciliation is stable and healthy with admission closed. Select `text` or
 `media` through the controller to admit that workload; do not start its runtime
 independently. Use `recover` only after repairing the cause of a supervisor-owned
-failure. User-owned recovery is described below.
+failure. Recovery first closes admission and rotates its fence. Before stopping
+media it waits up to `-drain-timeout` for already admitted work to finish; old
+registrations retain their completion authority. Failed or canceled recovery
+stays closed with error health and unknown runtime state. Unfinished orphan work
+requires the explicit `resolve-work` procedure below before destructive recovery
+can proceed. User-owned recovery is described below.
 
 ## Ownership and unfinished work
 

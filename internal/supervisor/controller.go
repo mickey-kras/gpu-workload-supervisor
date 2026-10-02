@@ -38,6 +38,7 @@ type StateStore interface {
 	FinishTransition(context.Context, string, string, uint64, control.State) (control.State, error)
 	AppendTransitionEvent(context.Context, store.TransitionEvent) error
 	PendingTransitionWork(context.Context, string) (int, error)
+	PendingWork(context.Context) (int, error)
 	InProgressTransition(context.Context) (string, error)
 	Recover(context.Context, uint64, control.State, string) (control.State, error)
 	RotateFenceAndCloseAdmission(context.Context, uint64) (control.State, error)
@@ -170,11 +171,34 @@ func (c *Controller) Recover(ctx context.Context) (control.State, error) {
 	if state.Owner == control.OwnerUser {
 		return state, ErrUserOwned
 	}
+	// Commit the safety state before observing or stopping runtimes. This
+	// bounded entry is independent of caller cancellation, and leaves failures
+	// durably closed without relying on a later cleanup write.
+	closed := state
+	closed.Admission = control.AdmissionClosed
+	closed.Health = control.HealthError
+	closed.ActiveWorkload = control.WorkloadUnknown
+	closed.Phase = control.PhaseReconciling
+	entryCtx, cancelEntry := context.WithTimeout(context.Background(), c.config.FinalizeTimeout)
+	entered, err := c.store.Recover(entryCtx, state.Version, closed, "operator-recovery-entry")
+	cancelEntry()
+	if err != nil {
+		return state, err
+	}
+	state = entered
+	if err := ctx.Err(); err != nil {
+		return state, err
+	}
 	snapshot, err := c.observe(ctx)
 	if err != nil {
 		return state, err
 	}
 	if !snapshot.TextActive {
+		// Recovery never abandons existing registrations. They retain their
+		// completion authority under the old fence and must drain before stop.
+		if err := c.waitForWork(ctx, c.now().Add(c.config.DrainTimeout), c.store.PendingWork); err != nil {
+			return state, err
+		}
 		if err := c.runAction(ctx, func(actionCtx context.Context) error {
 			return c.runtime.Stop(actionCtx, control.WorkloadMedia)
 		}); err != nil {
@@ -241,10 +265,16 @@ func (c *Controller) ResolveUnfinishedWork(ctx context.Context, reason string) (
 }
 
 func (c *Controller) waitForDrain(ctx context.Context, transitionID string, deadline time.Time) error {
+	return c.waitForWork(ctx, deadline, func(ctx context.Context) (int, error) {
+		return c.store.PendingTransitionWork(ctx, transitionID)
+	})
+}
+
+func (c *Controller) waitForWork(ctx context.Context, deadline time.Time, pendingWork func(context.Context) (int, error)) error {
 	ticker := time.NewTicker(c.config.PollInterval)
 	defer ticker.Stop()
 	for {
-		pending, err := c.store.PendingTransitionWork(ctx, transitionID)
+		pending, err := pendingWork(ctx)
 		if err != nil {
 			return err
 		}
