@@ -159,6 +159,9 @@ func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
 		if err := c.waitForWork(ctx, c.now().Add(c.config.DrainTimeout), c.store.PendingWork); err != nil {
 			return state, err
 		}
+		if err := ctx.Err(); err != nil {
+			return state, err
+		}
 		if err := c.runAction(ctx, func(actionCtx context.Context) error {
 			return c.runtime.Stop(actionCtx, control.WorkloadMedia)
 		}); err != nil {
