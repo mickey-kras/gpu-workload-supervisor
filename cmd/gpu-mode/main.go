@@ -22,6 +22,7 @@ import (
 
 const (
 	restoreStateCommand = "restore-state"
+	pruneAuditCommand   = "prune-audit"
 	localCLIInitiator   = "local-cli"
 )
 
@@ -116,7 +117,7 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 	if command == restoreStateCommand {
 		return restoreState(ctx, stateStore)
 	}
-	if command == "prune-audit" {
+	if command == pruneAuditCommand {
 		return pruneAudit(ctx, stateStore, auditCutoff, *auditBatch)
 	}
 	runtimeManager, err := newRuntime(runtimeConfig)
@@ -149,7 +150,7 @@ func validateCommandFlags(flags *flag.FlagSet, mediaStopMode, target string) (gp
 		return "", errors.New("usage: gpu-mode [flags] restore-state|prune-audit|status|reconcile|recover|resolve-work|text|media|idle|take-control|user-switch|return-control|recover-user")
 	}
 	stopMode := gpuruntime.MediaStopMode(mediaStopMode)
-	if mediaStopMode == "" && flags.Arg(0) != restoreStateCommand && flags.Arg(0) != "prune-audit" {
+	if mediaStopMode == "" && flags.Arg(0) != restoreStateCommand && flags.Arg(0) != pruneAuditCommand {
 		return "", errors.New("media stop mode must not be empty: explicitly select -media-stop-mode unload or stop-service")
 	}
 	if err := stopMode.Validate(); err != nil {
@@ -163,7 +164,7 @@ func validateCommandFlags(flags *flag.FlagSet, mediaStopMode, target string) (gp
 }
 
 func validateRuntimeFlags(command string, config gpuruntime.SystemdConfig) error {
-	if command == restoreStateCommand || command == "prune-audit" {
+	if command == restoreStateCommand || command == pruneAuditCommand {
 		return nil
 	}
 	if config.TextUnit == "" || config.MediaUnit == "" || config.TextHealthURL == "" || config.MediaHealthURL == "" || (config.MediaStopMode != gpuruntime.MediaStopService && config.MediaReleaseURL == "") || config.TextCgroup == "" || config.MediaCgroup == "" || config.SystemctlPath == "" {
