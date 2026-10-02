@@ -294,6 +294,19 @@ func TestPruneCompletedWorkRollsBackOnDeleteFailure(t *testing.T) {
 		formatTime(fixedClock()().Add(-48*time.Hour)), "delete-failure"); err != nil {
 		t.Fatal(err)
 	}
+	tr := Transition{ID: "terminal-delete-failure", Fence: state.LeaseFence, Source: state, Target: state,
+		Previous: state, Initiator: "test", Phase: control.PhaseDraining,
+		Deadline: fixedClock()().Add(time.Hour)}
+	if err := s.BeginTransition(ctx, tr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, "UPDATE transitions SET status = 'committed' WHERE transition_id = ?", tr.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, "INSERT INTO transition_work (transition_id, request_id) VALUES (?, ?)",
+		tr.ID, "delete-failure"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.db.ExecContext(ctx, `CREATE TRIGGER deny_work_delete BEFORE DELETE ON registered_work
 		BEGIN SELECT RAISE(ABORT, 'blocked'); END`); err != nil {
 		t.Fatal(err)
@@ -304,5 +317,12 @@ func TestPruneCompletedWorkRollsBackOnDeleteFailure(t *testing.T) {
 	}
 	if !retentionWorkExists(t, s, "delete-failure") {
 		t.Fatal("work was removed despite failed prune transaction")
+	}
+	var links int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM transition_work WHERE transition_id = ?", tr.ID).Scan(&links); err != nil {
+		t.Fatal(err)
+	}
+	if links != 1 {
+		t.Fatalf("terminal snapshot link was not rolled back: %d", links)
 	}
 }
