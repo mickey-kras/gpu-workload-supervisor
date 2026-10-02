@@ -598,7 +598,9 @@ func (c *Controller) latchObservationFailure(ctx context.Context, state control.
 	state.Phase = control.PhaseReconciling
 	state.Health = control.HealthError
 	state.Admission = control.AdmissionClosed
-	updated, err := c.store.UpdateState(ctx, state.Version, state)
+	finalizeCtx, cancel := context.WithTimeout(context.Background(), c.config.FinalizeTimeout)
+	defer cancel()
+	updated, err := c.store.UpdateState(finalizeCtx, state.Version, state)
 	return updated, errors.Join(cause, err)
 }
 
