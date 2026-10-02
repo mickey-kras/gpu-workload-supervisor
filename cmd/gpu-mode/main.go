@@ -90,7 +90,7 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 		return err
 	}
 	defer processLock.Close()
-	proxyLock, err := acquireResolutionLock(*statePath, command, *resolveReason)
+	proxyLock, err := acquireProxyLifetimeLock(*statePath, command, *resolveReason)
 	if err != nil {
 		return err
 	}
@@ -163,22 +163,25 @@ func validateRuntimeFlags(command string, config gpuruntime.SystemdConfig) error
 	return nil
 }
 
-func acquireResolutionLock(statePath, command, reason string) (*lock.File, error) {
-	if command != "resolve-work" {
+func acquireProxyLifetimeLock(statePath, command, reason string) (*lock.File, error) {
+	switch command {
+	case "resolve-work":
+		reason = strings.TrimSpace(reason)
+		if reason == "" {
+			return nil, errors.New("resolve-work requires -resolve-reason")
+		}
+		if len(reason) > 512 {
+			return nil, errors.New("resolution reason must contain 1 to 512 bytes")
+		}
+	case restoreStateCommand:
+	default:
 		return nil, nil
-	}
-	reason = strings.TrimSpace(reason)
-	if reason == "" {
-		return nil, errors.New("resolve-work requires -resolve-reason")
-	}
-	if len(reason) > 512 {
-		return nil, errors.New("resolution reason must contain 1 to 512 bytes")
 	}
 	// Proxies hold shared locks until their in-flight handlers finish. Refuse
 	// to abandon work while any proxy can still forward an admitted request.
 	proxyLock, err := lock.TryAcquire(statePath + ".proxy.lock")
 	if err != nil {
-		return nil, fmt.Errorf("stop all workload proxies and wait for shutdown before resolve-work: %w", err)
+		return nil, fmt.Errorf("stop all workload proxies and wait for shutdown before %s: %w", command, err)
 	}
 	return proxyLock, nil
 }
