@@ -493,3 +493,52 @@ func TestSystemdInterruptedJournalPhases(t *testing.T) {
 		})
 	}
 }
+
+func TestSystemdPreflightAllowsFailedRemovedCgroupRecovery(t *testing.T) {
+	f := newSystemdFixture(t)
+	ctx := context.Background()
+	if _, err := f.controller.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before, err := f.controller.Switch(ctx, control.WorkloadText, "qualification")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.AdmitWorkToken(ctx, "crashed-work", "", control.WorkloadText, before.LeaseFence); err != nil {
+		t.Fatal(err)
+	}
+	group := systemdCommand(t, "show", "--property=ControlGroup", "--value", f.units[0])
+	systemdCommand(t, "kill", "--kill-whom=all", "--signal=KILL", f.units[0])
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		active := systemdCommand(t, "show", "--property=ActiveState", "--value", f.units[0])
+		sub := systemdCommand(t, "show", "--property=SubState", "--value", f.units[0])
+		_, statErr := os.Stat(filepath.Join("/sys/fs/cgroup", group))
+		if active == "failed" && sub == "failed" && errors.Is(statErr, os.ErrNotExist) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("failed unit cgroup not removed: %s/%s %v", active, sub, statErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := f.manager.Preflight(ctx); err != nil {
+		t.Fatalf("failed unit wedged preflight: %v", err)
+	}
+	if err := f.manager.Released(ctx); err == nil {
+		t.Fatal("failed unit qualified as released")
+	}
+	state, err := f.controller.Reconcile(ctx)
+	if err == nil || state.Admission != control.AdmissionClosed || state.Health != control.HealthError {
+		t.Fatalf("crash not latched: %#v %v", state, err)
+	}
+	state, count, err := f.controller.ResolveUnfinishedWork(ctx, "qualification crashed workload")
+	if err != nil || count != 1 || state.Admission != control.AdmissionClosed {
+		t.Fatalf("resolve crashed work: %#v %d %v", state, count, err)
+	}
+	state, err = f.controller.Recover(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.assertState(state, control.OwnerSupervisor, control.WorkloadIdle)
+}

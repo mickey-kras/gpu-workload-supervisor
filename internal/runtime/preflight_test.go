@@ -59,3 +59,99 @@ func TestPreflightChecksConfiguredStoppedCgroupWithBlankMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestPreflightRemovedCgroupsRespectUnitState(t *testing.T) {
+	for _, tc := range []struct {
+		active, sub string
+		allowed     bool
+	}{
+		{"failed", "failed", true},
+		{"inactive", "dead", true},
+		{"active", "running", false},
+		{"activating", "start", false},
+		{"deactivating", "stop", false},
+		{"unknown", "unknown", false},
+	} {
+		t.Run(tc.active, func(t *testing.T) {
+			r := stoppedRunner()
+			m := strictManager(t, r)
+			fixtureCgroups(t, m)
+			r.outputs[textShowCommand] = []byte("LoadState=loaded\nActiveState=" + tc.active + "\nSubState=" + tc.sub + "\nControlGroup=\n")
+			err := m.Preflight(context.Background())
+			if (err == nil) != tc.allowed {
+				t.Fatalf("preflight %s/%s: %v", tc.active, tc.sub, err)
+			}
+			if tc.active == "failed" && m.Released(context.Background()) == nil {
+				t.Fatal("failed unit treated as release evidence")
+			}
+		})
+	}
+}
+
+type failedStopRunner struct {
+	fakeRunner
+	resetError   error
+	remainFailed bool
+}
+
+func (r *failedStopRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if len(args) > 1 && args[1] == "reset-failed" {
+		if r.resetError != nil {
+			return nil, r.resetError
+		}
+		if !r.remainFailed {
+			r.outputs[textShowCommand] = stoppedOutput()
+		}
+	}
+	return r.fakeRunner.Run(ctx, name, args...)
+}
+
+func TestStopFailedUnitResetsOnlyAfterVerifiedEmptyCgroup(t *testing.T) {
+	for _, mode := range []MediaStopMode{MediaStopService, MediaStopUnload} {
+		for _, scenario := range []string{"removed", "empty", "populated", "missing events", "missing metadata", "reset failure", "still failed"} {
+			t.Run(string(mode)+"/"+scenario, func(t *testing.T) {
+				r := &failedStopRunner{fakeRunner: fakeRunner{outputs: map[string][]byte{
+					textShowCommand:  []byte("LoadState=loaded\nActiveState=failed\nSubState=failed\nControlGroup=\n"),
+					mediaShowCommand: stoppedOutput(),
+				}}}
+				m := strictManager(t, r)
+				m.config.MediaStopMode = mode
+				root := fixtureCgroups(t, m)
+				switch scenario {
+				case "empty":
+					writeEvents(t, root, "text.service", "populated 0\n")
+				case "populated":
+					writeEvents(t, root, "text.service", "populated 1\n")
+				case "missing events":
+					writeEvents(t, root, "text.service", "populated 0\n")
+					if err := os.Remove(filepath.Join(root, "text.service", "cgroup.events")); err != nil {
+						t.Fatal(err)
+					}
+				case "missing metadata":
+					r.outputs[textShowCommand] = []byte("LoadState=loaded\nActiveState=failed\nSubState=failed\n")
+				case "reset failure":
+					r.resetError = errors.New("reset rejected")
+				case "still failed":
+					r.remainFailed = true
+				}
+				err := m.StopForRecovery(context.Background())
+				wantSuccess := scenario == "removed" || scenario == "empty"
+				if (err == nil) != wantSuccess {
+					t.Fatalf("stop recovery: %v", err)
+				}
+				reset := false
+				for _, call := range r.calls {
+					if call == "/usr/bin/true --user reset-failed -- text.service" {
+						reset = true
+					}
+				}
+				if (scenario == "populated" || scenario == "missing events" || scenario == "missing metadata") && reset {
+					t.Fatal("reset failure before verifying empty group")
+				}
+				if wantSuccess && m.Released(context.Background()) != nil {
+					t.Fatal("recovered stopped unit failed release")
+				}
+			})
+		}
+	}
+}
