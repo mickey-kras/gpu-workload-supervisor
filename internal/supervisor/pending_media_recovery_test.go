@@ -16,7 +16,7 @@ func TestTextRecoveryWaitsForOldMediaRegistration(t *testing.T) {
 		run         func(*Controller, context.Context) (control.State, error)
 		durableText bool
 	}{
-		{"reconcile", (*Controller).Reconcile},
+		{"reconcile", (*Controller).Reconcile, false},
 		{"recover", (*Controller).Recover, false},
 		{"reconcile with durable text", (*Controller).Reconcile, true},
 	} {
