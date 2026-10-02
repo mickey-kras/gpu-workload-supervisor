@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
@@ -102,5 +104,80 @@ func TestRestoreStateRejectsEmptyExistingDatabase(t *testing.T) {
 	}
 	if info.Size() != 0 {
 		t.Fatalf("placeholder was initialized: %d bytes", info.Size())
+	}
+}
+
+func TestRestoreStateRequiresStoppedProxiesBeforeOpeningDatabase(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.db")
+	stateStore, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := stateStore.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before.DesiredWorkload = control.WorkloadText
+	before.ActiveWorkload = control.WorkloadText
+	before.Phase = control.PhaseStable
+	before.Admission = control.AdmissionOpen
+	before, err = stateStore.UpdateState(ctx, before.Version, before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stateStore.AdmitWork(ctx, "active-request", "active-job", control.WorkloadText, before.LeaseFence); err != nil {
+		t.Fatal(err)
+	}
+	if err := stateStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	backup, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyLock, err := lock.AcquireShared(path + ".proxy.lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxyLock.Close()
+	output, err := os.CreateTemp(t.TempDir(), "restore-output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	previousArgs, previousStdout := os.Args, os.Stdout
+	t.Cleanup(func() { os.Args, os.Stdout = previousArgs, previousStdout })
+	os.Args = []string{"gpu-mode", "-state", path, "restore-state"}
+	os.Stdout = output
+	if err := run(); err == nil || !strings.Contains(err.Error(), "stop all workload proxies and wait for shutdown before restore-state") {
+		t.Fatalf("active proxy error = %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Byte equality covers the incarnation and every registered work row, and
+	// also catches database migration before the lifetime lock is acquired.
+	if !bytes.Equal(after, backup) {
+		t.Fatal("rejected restore mutated the database")
+	}
+	if err := proxyLock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(); err != nil {
+		t.Fatalf("restore after proxy shutdown: %v", err)
+	}
+	reopened, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	restored, err := reopened.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.LeaseFence.Incarnation == before.LeaseFence.Incarnation || restored.Admission != control.AdmissionClosed {
+		t.Fatalf("restore after proxy shutdown did not rotate and close admission: %#v", restored)
 	}
 }

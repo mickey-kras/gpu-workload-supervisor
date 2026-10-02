@@ -27,7 +27,7 @@ and validate the deployment before accepting work.
 
 The lease incarnation in a SQLite backup may be older than the live database. A restored fence is unsafe until `restore-state` rotates it. This procedure is for an operator restoring a consistent backup, not for an ordinary process restart.
 
-1. Stop every execution proxy, controller automation, and workload runtime using this state database. Wait for admitted jobs to finish or stop them. Prevent another process from starting these components during the restore. The file lock coordinates controller commands, but it does not stop a running proxy or runtime.
+1. Stop every execution proxy, controller automation, and workload runtime using this state database. Wait for admitted jobs to finish or stop them. Prevent another process from starting these components during the restore. The controller lock serializes commands, and `restore-state` also refuses to run while a proxy holds its lifetime lock. Neither lock stops proxies or runtimes or protects the earlier backup replacement.
 2. Install a consistent SQLite backup at the configured state path while all processes using it are stopped. Use a backup made with SQLite's backup mechanism or another consistent snapshot. Do not copy only the main `.db` file from a live WAL database or leave WAL/SHM files from another database alongside the replacement. Keep the state file in a private directory owned by the service identity.
 3. Prepare the restored state, before starting any proxy:
 
@@ -39,6 +39,8 @@ The lease incarnation in a SQLite backup may be older than the live database. A 
 
 4. With the proxies still stopped, run the same pinned `gpu-mode` with the complete runtime flags, including the same `-state` path, and the `reconcile` command. It must finish with a stable, healthy state. If it reports a failure, leave the proxies stopped and use `recover` only after checking the runtime state. Start a workload through the controller if needed.
 5. Start the proxies only after successful reconciliation. Clients must obtain the new fence; requests carrying a fence from the backup are rejected.
+
+`restore-state` acquires the exclusive proxy lifetime lock before opening the database and holds it through completion. Proxies retain their shared locks until in-flight handlers finish. This enforces proxy shutdown only; operators must still stop all runtimes before replacing the database.
 
 Repeat `restore-state` after every subsequent installation of a backup. Do not run it on a normal restart: reopening an existing database preserves the current lease fence. A restore cannot stop work that is already executing outside the proxy, so stopping execution before replacing the database is part of the safety boundary.
 
