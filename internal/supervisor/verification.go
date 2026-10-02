@@ -46,4 +46,3 @@ func observedWorkload(state control.State, snapshot gpuruntime.Snapshot) (contro
 	}
 	return control.WorkloadIdle, nil
 }
-
