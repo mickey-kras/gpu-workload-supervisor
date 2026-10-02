@@ -93,7 +93,7 @@ function createChecks(workflows, failures) {
   return { event, job, step, exactRun };
 }
 
-function inspectGoReleaser(files, workflows, failures, checks, path, jobId, builds, expectedIf) {
+function inspectGoReleaser({ files, workflows, failures, checks, path, jobId, builds, expectedIf }) {
   const steps = workflows[path]?.jobs?.[jobId]?.steps || [];
   const setupName = 'Install verified GoReleaser';
   checks.step(path, jobId, setupName, { expectedIf });
@@ -135,9 +135,9 @@ function inspectCi(files, workflows, failures, checks) {
     'go run github.com/vladopajic/go-test-coverage/v2@v2.19.0 --config=.testcoverage.yml',
   ]);
   step(ci, 'checks', 'Go vet', { run: ['go vet ./...'] });
-  inspectGoReleaser(files, workflows, failures, checks, ci, 'checks', [
+  inspectGoReleaser({ files, workflows, failures, checks, path: ci, jobId: 'checks', builds: [
     ['Validate GoReleaser configuration', 'check'], ['Build snapshot artifacts', 'release --snapshot --clean'],
-  ]);
+  ] });
   step(ci, 'checks', 'Verify snapshot archives', { run: ['tar -tzf', '(cd dist && sha256sum --check checksums.txt)'] });
   step(ci, 'checks', 'Go vulnerability audit', { uses: 'golang/govulncheck-action', withValues: { cache: false } });
   step(ci, 'checks', 'Audit Aislop toolchain', { run: ['npm audit --prefix .github/aislop --audit-level=moderate'] });
@@ -201,6 +201,46 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
   const dependency = '.github/workflows/dependency-review.yml';
   event(dependency, 'workflow_call');
   step(dependency, 'review', 'Dependency review', { uses: 'actions/dependency-review-action' });
+  inspectReleaseEntry(files, workflows, failures, checks);
+  inspectReleasePublish(files, workflows, failures, checks);
+  const bot = '.github/workflows/dependabot-auto-merge.yml';
+  event(bot, 'pull_request_target');
+  step(bot, 'enable-auto-merge', 'Queue eligible verified updates', { uses: 'actions/github-script', allowJobIf: true });
+  if (workflows[bot]?.jobs?.['enable-auto-merge']?.if !==
+      "github.event_name != 'pull_request_target' || github.event.pull_request.user.login == 'dependabot[bot]'") {
+    failures.push(`${bot} lost Dependabot-only execution condition`);
+  }
+  const trustedBot = workflows[bot]?.jobs?.['enable-auto-merge']?.steps?.find(s => s.name === 'Read trusted automation');
+  if (trustedBot?.with?.ref !== '${{ github.workflow_sha }}') failures.push(`${bot} lost trusted checkout`);
+  for (const [path, jobId, name, expected] of [
+    ['.github/workflows/codeql.yml', 'analyze', undefined, 'github/codeql-action/analyze'],
+    ['.github/workflows/aislop.yml', 'status', 'Aislop Go quality gate', undefined],
+  ]) {
+    const steps = workflows[path]?.jobs?.[jobId]?.steps || [];
+    if (!steps.some(s => !Object.hasOwn(s, 'if') && (name ? s.name === name && s.run?.includes('aislop ci --human internal') : s.uses?.startsWith(`${expected}@`)))) {
+      failures.push(`${path} lost required ${name || expected}`);
+    }
+  }
+  if (!files['sonar-project.properties']?.includes('sonar.go.coverage.reportPaths=coverage.out')) {
+    failures.push('SonarQube lost Go coverage path');
+  }
+  try {
+    const releaseConfig = YAML.parse(files['.goreleaser.yaml']);
+    const targets = releaseConfig.builds || [];
+    if (!['./cmd/gpu-mode', './cmd/gpu-workload-proxy'].every(target => targets.some(build =>
+      build.main === target && build.goos?.includes('linux') &&
+      build.goarch?.includes('amd64') && build.goarch?.includes('arm64'))) ||
+      releaseConfig.archives?.[0]?.name_template !== '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}' ||
+      releaseConfig.checksum?.name_template !== 'checksums.txt') {
+      failures.push('GoReleaser lost deployable Linux binaries');
+    }
+  } catch (error) {
+    if (files['.goreleaser.yaml']) failures.push(`GoReleaser config is invalid: ${error.message}`);
+  }
+}
+
+function inspectReleaseEntry(files, workflows, failures, checks) {
+  const { event, step } = checks;
   const release = '.github/workflows/release.yml';
   event(release, 'workflow_dispatch');
   const releaseJobs = workflows[release]?.jobs;
@@ -252,6 +292,12 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
   } catch {
     failures.push('Invalid planned release version');
   }
+}
+
+function inspectReleasePublish(files, workflows, failures, checks) {
+  const { step } = checks;
+  const release = '.github/workflows/release.yml';
+  const releaseJobs = workflows[release]?.jobs;
   step(release, 'publish', 'Release App token', { uses: 'actions/create-github-app-token' });
   const state = workflows[release]?.jobs?.publish?.steps?.find(s => s.name === 'Verify immutable setting and publication state');
   const verification = [
@@ -265,9 +311,9 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
       Object.hasOwn(state, 'if') || Object.hasOwn(workflows[release]?.jobs?.publish || {}, 'if')) {
     failures.push(`${release} lost reviewed release settings verification`);
   }
-  inspectGoReleaser(files, workflows, failures, checks, release, 'publish', [
+  inspectGoReleaser({ files, workflows, failures, checks, path: release, jobId: 'publish', builds: [
     ['Build deployable binaries', 'release --clean --skip=publish'],
-  ], "steps.state.outputs.published != 'true'");
+  ], expectedIf: "steps.state.outputs.published != 'true'" });
   step(release, 'publish', 'Build source archive and stage binaries', {
     run: ['git archive', 'test -s "dist/$artifact"', 'cp "dist/$artifact"'],
     expectedIf: "steps.state.outputs.published != 'true'",
@@ -282,40 +328,6 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
   step(release, 'publish', 'Publish immutable GitHub release', {
     run: ['gh release create'], expectedIf: "steps.state.outputs.published != 'true'",
   });
-  const bot = '.github/workflows/dependabot-auto-merge.yml';
-  event(bot, 'pull_request_target');
-  step(bot, 'enable-auto-merge', 'Queue eligible verified updates', { uses: 'actions/github-script', allowJobIf: true });
-  if (workflows[bot]?.jobs?.['enable-auto-merge']?.if !==
-      "github.event_name != 'pull_request_target' || github.event.pull_request.user.login == 'dependabot[bot]'") {
-    failures.push(`${bot} lost Dependabot-only execution condition`);
-  }
-  const trustedBot = workflows[bot]?.jobs?.['enable-auto-merge']?.steps?.find(s => s.name === 'Read trusted automation');
-  if (trustedBot?.with?.ref !== '${{ github.workflow_sha }}') failures.push(`${bot} lost trusted checkout`);
-  for (const [path, jobId, name, expected] of [
-    ['.github/workflows/codeql.yml', 'analyze', undefined, 'github/codeql-action/analyze'],
-    ['.github/workflows/aislop.yml', 'status', 'Aislop Go quality gate', undefined],
-  ]) {
-    const steps = workflows[path]?.jobs?.[jobId]?.steps || [];
-    if (!steps.some(s => !Object.hasOwn(s, 'if') && (name ? s.name === name && s.run?.includes('aislop ci --human internal') : s.uses?.startsWith(`${expected}@`)))) {
-      failures.push(`${path} lost required ${name || expected}`);
-    }
-  }
-  if (!files['sonar-project.properties']?.includes('sonar.go.coverage.reportPaths=coverage.out')) {
-    failures.push('SonarQube lost Go coverage path');
-  }
-  try {
-    const releaseConfig = YAML.parse(files['.goreleaser.yaml']);
-    const targets = releaseConfig.builds || [];
-    if (!['./cmd/gpu-mode', './cmd/gpu-workload-proxy'].every(target => targets.some(build =>
-      build.main === target && build.goos?.includes('linux') &&
-      build.goarch?.includes('amd64') && build.goarch?.includes('arm64'))) ||
-      releaseConfig.archives?.[0]?.name_template !== '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}' ||
-      releaseConfig.checksum?.name_template !== 'checksums.txt') {
-      failures.push('GoReleaser lost deployable Linux binaries');
-    }
-  } catch (error) {
-    if (files['.goreleaser.yaml']) failures.push(`GoReleaser config is invalid: ${error.message}`);
-  }
 }
 
 function inspectScannerConfigs(files, failures) {
@@ -332,7 +344,7 @@ function inspectScannerConfigs(files, failures) {
   }
   try {
     const config = YAML.parse(files['.aislop/config.yml']);
-    if (typeof config.ci?.failBelow !== 'number' || config.ci.failBelow < 95 ||
+    if (typeof config.ci?.failBelow !== 'number' || config.ci.failBelow < 100 ||
         config.rules?.['security/hardcoded-secret'] !== 'error') {
       failures.push('Aislop policy was weakened');
     }
