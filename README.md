@@ -13,7 +13,7 @@ It provides a controller (`gpu-mode`) and an execution proxy (`gpu-workload-prox
 
 Use this project independently of the memory stack. It does not require Memory Router, its agent integrations, or Hindsight.
 
-## How it fits together
+## Architecture
 
 <a href="docs/ARCHITECTURE.md">
   <picture>
