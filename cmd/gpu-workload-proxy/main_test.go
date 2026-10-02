@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -204,6 +208,70 @@ func TestShutdownClosesHijackedConnectionAndReleasesLifetimeLock(t *testing.T) {
 	exclusive, err := lock.TryAcquire(lockPath)
 	if err != nil {
 		t.Fatalf("recovery could not acquire lock after handler exited: %v", err)
+	}
+	exclusive.Close()
+}
+
+func TestShutdownClosesReverseProxyUpgrade(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "state.db.proxy.lock")
+	shared, err := lock.AcquireShared(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shared.Close()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		conn, _, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: test\r\n\r\n"))
+		var buf [1]byte
+		_, _ = conn.Read(buf[:])
+	}))
+	defer upstream.Close()
+	target, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracked := &activeHandler{handler: httputil.NewSingleHostReverseProxy(target)}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: tracked}
+	defer server.Close()
+	go server.Serve(listener)
+	client, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Write([]byte("GET /stream HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: test\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	status, err := bufio.NewReader(client).ReadString('\n')
+	if err != nil || !strings.Contains(status, "101 Switching Protocols") {
+		t.Fatalf("upgrade status = %q, error = %v", status, err)
+	}
+	shutdownDone := make(chan error, 1)
+	go func() {
+		shutdownDone <- errors.Join(shutdownAndDrain(server, tracked, 20*time.Millisecond), shared.Close())
+	}()
+	select {
+	case err := <-shutdownDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("shutdown error = %v, want deadline exceeded", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReverseProxy upgraded stream prevented shutdown")
+	}
+	exclusive, err := lock.TryAcquire(lockPath)
+	if err != nil {
+		t.Fatalf("recovery could not acquire lock after upgraded stream ended: %v", err)
 	}
 	exclusive.Close()
 }
