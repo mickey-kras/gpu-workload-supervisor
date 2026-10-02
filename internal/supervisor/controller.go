@@ -39,6 +39,7 @@ type StateStore interface {
 	AppendTransitionEvent(context.Context, store.TransitionEvent) error
 	PendingTransitionWork(context.Context, string) (int, error)
 	PendingWork(context.Context) (int, error)
+	PendingWorkload(context.Context, control.Workload) (int, error)
 	InProgressTransition(context.Context) (string, error)
 	Recover(context.Context, uint64, control.State, string) (control.State, error)
 	RotateFenceAndCloseAdmission(context.Context, uint64) (control.State, error)
@@ -138,38 +139,25 @@ func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
 	if err != nil {
 		return c.latchObservationFailure(ctx, state, err)
 	}
-	if !snapshot.TextActive {
-		// Close admission atomically before polling pending registrations. Recovery
-		// retains completion authority for work admitted under the previous fence.
-		closed := state
-		closed.Admission = control.AdmissionClosed
-		closed.Health = control.HealthError
-		closed.ActiveWorkload = control.WorkloadUnknown
-		closed.Phase = control.PhaseReconciling
-		entryCtx, cancelEntry := context.WithTimeout(context.Background(), c.config.FinalizeTimeout)
-		entered, entryErr := c.store.Recover(entryCtx, state.Version, closed, "reconciliation-entry")
-		cancelEntry()
-		if entryErr != nil {
-			return state, entryErr
+	pendingMedia := 0
+	if snapshot.TextActive {
+		pendingMedia, err = c.store.PendingWorkload(ctx, control.WorkloadMedia)
+		if err != nil {
+			return c.latchObservationFailure(ctx, state, err)
 		}
-		state = entered
-		if err := ctx.Err(); err != nil {
+	}
+	needsEntry := !snapshot.TextActive || pendingMedia != 0 ||
+		state.ActiveWorkload != control.WorkloadText || state.DesiredWorkload != control.WorkloadText ||
+		state.Phase != control.PhaseStable || state.Health != control.HealthHealthy ||
+		state.Admission != control.AdmissionOpen
+	if needsEntry {
+		state, err = c.enterReconciliation(ctx, state)
+		if err != nil {
 			return state, err
 		}
-		if err := c.waitForWork(ctx, c.now().Add(c.config.DrainTimeout), c.store.PendingWork); err != nil {
-			return state, err
-		}
-		if err := ctx.Err(); err != nil {
-			return state, err
-		}
-		if err := c.runAction(ctx, func(actionCtx context.Context) error {
-			return c.runtime.Stop(actionCtx, control.WorkloadMedia)
-		}); err != nil {
-			return state, err
-		}
-		if err := c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout)); err != nil {
-			return state, err
-		}
+	}
+	if err := c.drainReconciliation(ctx, snapshot.TextActive, needsEntry); err != nil {
+		return state, err
 	}
 	state.Owner = control.OwnerSupervisor
 	state.Phase = control.PhaseStable
@@ -187,6 +175,44 @@ func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
 		state.Admission = control.AdmissionClosed
 	}
 	return c.store.UpdateState(ctx, state.Version, state)
+}
+
+func (c *Controller) enterReconciliation(ctx context.Context, state control.State) (control.State, error) {
+	closed := state
+	closed.Admission = control.AdmissionClosed
+	closed.Health = control.HealthError
+	closed.ActiveWorkload = control.WorkloadUnknown
+	closed.Phase = control.PhaseReconciling
+	entryCtx, cancel := context.WithTimeout(context.Background(), c.config.FinalizeTimeout)
+	entered, err := c.store.Recover(entryCtx, state.Version, closed, "reconciliation-entry")
+	cancel()
+	if err != nil {
+		return state, err
+	}
+	return entered, ctx.Err()
+}
+
+func (c *Controller) drainReconciliation(ctx context.Context, textActive, needsEntry bool) error {
+	if textActive {
+		if !needsEntry {
+			return nil
+		}
+		return c.waitForWork(ctx, c.now().Add(c.config.DrainTimeout), func(ctx context.Context) (int, error) {
+			return c.store.PendingWorkload(ctx, control.WorkloadMedia)
+		})
+	}
+	if err := c.waitForWork(ctx, c.now().Add(c.config.DrainTimeout), c.store.PendingWork); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := c.runAction(ctx, func(actionCtx context.Context) error {
+		return c.runtime.Stop(actionCtx, control.WorkloadMedia)
+	}); err != nil {
+		return err
+	}
+	return c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout))
 }
 
 func (c *Controller) beginRecovery(ctx context.Context) (control.State, error) {
@@ -230,7 +256,13 @@ func (c *Controller) Recover(ctx context.Context) (control.State, error) {
 	if err != nil {
 		return state, err
 	}
-	if !snapshot.TextActive {
+	if snapshot.TextActive {
+		if err := c.waitForWork(ctx, c.now().Add(c.config.DrainTimeout), func(ctx context.Context) (int, error) {
+			return c.store.PendingWorkload(ctx, control.WorkloadMedia)
+		}); err != nil {
+			return state, err
+		}
+	} else {
 		// Recovery never abandons existing registrations. They retain their
 		// completion authority under the old fence and must drain before stop.
 		if err := c.waitForWork(ctx, c.now().Add(c.config.DrainTimeout), c.store.PendingWork); err != nil {
