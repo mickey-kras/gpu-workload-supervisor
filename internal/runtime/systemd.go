@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/httptransport"
 )
 
 type CommandRunner interface {
@@ -77,7 +78,8 @@ type SystemdManager struct {
 
 func NewSystemdManager(config SystemdConfig) (*SystemdManager, error) {
 	client := &http.Client{
-		Timeout: config.HealthTimeout,
+		Timeout:   config.HealthTimeout,
+		Transport: httptransport.NewDirect(),
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

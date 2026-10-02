@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/httptransport"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
@@ -116,6 +117,9 @@ func New(stateStore StateStore, config Config) (*Handler, error) {
 	}
 	reverseProxy := httputil.NewSingleHostReverseProxy(config.Upstream)
 	reverseProxy.Transport = config.Transport
+	if reverseProxy.Transport == nil {
+		reverseProxy.Transport = httptransport.NewDirect()
+	}
 	reverseProxy.ModifyResponse = func(response *http.Response) error {
 		response.Header.Del(DefaultRegistrationTokenHeader)
 		return nil
@@ -300,15 +304,11 @@ func (h *Handler) execute(response http.ResponseWriter, request *http.Request) {
 	}
 	forwarded := h.withoutControlHeaders(request)
 	proxy := *h.proxy
-	baseTransport := proxy.Transport
-	if baseTransport == nil {
-		baseTransport = http.DefaultTransport
-	}
 	// ReverseProxy strips hop-by-hop headers before calling Transport. Add
 	// admitted correlation metadata afterwards so a client cannot nominate
 	// those headers in Connection to remove them.
 	proxy.Transport = registrationTransport{
-		base: baseTransport, token: token, requestID: requestID, fence: fence,
+		base: proxy.Transport, token: token, requestID: requestID, fence: fence,
 		requestIDHeader: h.requestIDHeader, fenceIDHeader: h.fenceIDHeader,
 		fenceEpochHeader: h.fenceEpochHeader,
 	}
