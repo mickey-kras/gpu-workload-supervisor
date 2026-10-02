@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -56,7 +57,7 @@ func TestForwardingFailureNeedsVerifiedAuditedResolution(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/execute", nil)
 	request.Header.Set(proxy.DefaultRequestIDHeader, "failed-forward")
 	request.Header.Set(proxy.DefaultFenceIDHeader, state.LeaseFence.Incarnation)
-	request.Header.Set(proxy.DefaultFenceEpochHeader, "2")
+	request.Header.Set(proxy.DefaultFenceEpochHeader, strconv.FormatUint(state.LeaseFence.Epoch, 10))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadGateway {
