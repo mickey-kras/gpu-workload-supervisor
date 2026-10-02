@@ -103,6 +103,18 @@ func (c *Controller) Status(ctx context.Context) (control.State, error) {
 		}
 		return c.latchObservationFailure(ctx, state, err)
 	}
+	// Persist a closed gate when the runtime drifts or loses health while
+	// admission is open. Status never starts or stops either workload.
+	if state.Owner == control.OwnerSupervisor && state.Phase == control.PhaseStable &&
+		state.Health == control.HealthHealthy && state.Admission == control.AdmissionOpen {
+		if active != state.ActiveWorkload || (active != control.WorkloadText && active != control.WorkloadMedia) {
+			return c.latchObservationFailure(ctx, state, ErrStateVerification)
+		}
+		if err := c.healthy(ctx, active); err != nil {
+			return c.latchObservationFailure(ctx, state,
+				gpuruntime.SafeError(ErrHealthCheck.Error(), ErrHealthCheck, err))
+		}
+	}
 	state.ActiveWorkload = active
 	return state, nil
 }
