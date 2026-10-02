@@ -226,6 +226,30 @@ const prunableWorkIDs = `SELECT work.request_id FROM registered_work AS work
 	  )
 	ORDER BY work.completed_at, work.request_id LIMIT ?`
 
+func selectPrunableWorkIDs(ctx context.Context, tx *sql.Tx, cutoff string, limit int) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, prunableWorkIDs, cutoff, cutoff, limit)
+	if err != nil {
+		return nil, fmt.Errorf("select completed work to prune: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan completed work to prune: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("read completed work to prune: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close completed work selection: %w", err)
+	}
+	return ids, nil
+}
+
 func (s *Store) PruneCompletedWork(ctx context.Context, before time.Time, limit int) (int64, error) {
 	if before.IsZero() {
 		return 0, errors.New("retention cutoff is required")
@@ -239,25 +263,9 @@ func (s *Store) PruneCompletedWork(ctx context.Context, before time.Time, limit 
 		return 0, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, prunableWorkIDs, cutoff, cutoff, limit)
+	ids, err := selectPrunableWorkIDs(ctx, tx, cutoff, limit)
 	if err != nil {
-		return 0, fmt.Errorf("select completed work to prune: %w", err)
-	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return 0, fmt.Errorf("scan completed work to prune: %w", err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, fmt.Errorf("read completed work to prune: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return 0, fmt.Errorf("close completed work selection: %w", err)
+		return 0, err
 	}
 	if len(ids) == 0 {
 		return 0, nil
