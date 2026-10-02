@@ -108,7 +108,7 @@ func main() {
 }
 
 type proxyServerSettings struct {
-	statePath, listen string
+	statePath, listen                                                       string
 	readHeaderTimeout, idleTimeout, shutdownTimeout, completedWorkRetention time.Duration
 }
 
