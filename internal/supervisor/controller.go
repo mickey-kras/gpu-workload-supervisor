@@ -452,30 +452,6 @@ func (c *Controller) waitReleased(ctx context.Context, deadline time.Time) error
 	return c.waitReleasedFor(ctx, control.WorkloadIdle, deadline)
 }
 
-func (c *Controller) waitReleasedFor(ctx context.Context, target control.Workload, deadline time.Time) error {
-	ticker := time.NewTicker(c.config.PollInterval)
-	defer ticker.Stop()
-	var lastErr error
-	for {
-		if err := c.releasedFor(ctx, target); err == nil {
-			return nil
-		} else {
-			if errors.Is(err, gpuruntime.ErrUnloadUnverified) {
-				return err
-			}
-			lastErr = err
-		}
-		if !c.now().Before(deadline) {
-			return errors.Join(ErrVerifyTimeout, lastErr)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
-}
-
 func (c *Controller) fail(transitionID string, state, previous control.State, cause error) (control.State, error) {
 	var rollbackErr error
 	if previous.Owner == control.OwnerSupervisor {
