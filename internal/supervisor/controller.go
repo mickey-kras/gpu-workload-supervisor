@@ -83,30 +83,6 @@ func newController(stateStore StateStore, runtime gpuruntime.Manager, config Con
 	return &Controller{store: stateStore, runtime: runtime, config: config, now: now, id: id}, nil
 }
 
-func (c *Controller) Status(ctx context.Context) (control.State, error) {
-	state, err := c.store.State(ctx)
-	if err != nil {
-		return control.State{}, err
-	}
-	snapshot, err := c.observe(ctx)
-	if err != nil {
-		cause := fmt.Errorf("observe runtime: %w", err)
-		if state.Owner == control.OwnerUser {
-			return state, cause
-		}
-		return c.latchObservationFailure(ctx, state, cause)
-	}
-	active, err := observedWorkload(state, snapshot)
-	if err != nil {
-		if state.Owner == control.OwnerUser {
-			return state, err
-		}
-		return c.latchObservationFailure(ctx, state, err)
-	}
-	state.ActiveWorkload = active
-	return state, nil
-}
-
 func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
 	state, err := c.store.State(ctx)
 	if err != nil {
@@ -412,46 +388,6 @@ func (c *Controller) checkReady(ctx context.Context, target control.Workload) er
 		return gpuruntime.SafeError(ErrHealthCheck.Error(), ErrHealthCheck, err)
 	}
 	return nil
-}
-
-func verifySnapshot(target control.Workload, snapshot gpuruntime.Snapshot) error {
-	if snapshot.MediaExclusive && snapshot.MediaReady && target != control.WorkloadMedia {
-		return fmt.Errorf("%w: media runtime remains active", ErrStateVerification)
-	}
-	switch target {
-	case control.WorkloadText:
-		if !snapshot.TextActive {
-			return fmt.Errorf("%w: text runtime is not active", ErrStateVerification)
-		}
-	case control.WorkloadMedia:
-		if snapshot.TextActive || !snapshot.MediaReady {
-			return fmt.Errorf("%w: media runtime is not exclusively ready", ErrStateVerification)
-		}
-	case control.WorkloadIdle:
-		if snapshot.TextActive {
-			return fmt.Errorf("%w: text runtime remains active", ErrStateVerification)
-		}
-	}
-	return nil
-}
-
-func observedWorkload(state control.State, snapshot gpuruntime.Snapshot) (control.Workload, error) {
-	if snapshot.MediaExclusive && snapshot.MediaReady {
-		if snapshot.TextActive {
-			return control.WorkloadUnknown, ErrInvariant
-		}
-		return control.WorkloadMedia, nil
-	}
-	if snapshot.TextActive {
-		if state.ActiveWorkload == control.WorkloadMedia {
-			return control.WorkloadUnknown, ErrInvariant
-		}
-		return control.WorkloadText, nil
-	}
-	if state.ActiveWorkload == control.WorkloadMedia && snapshot.MediaReady {
-		return control.WorkloadMedia, nil
-	}
-	return control.WorkloadIdle, nil
 }
 
 func (c *Controller) setPhase(ctx context.Context, transitionID string, state control.State, phase control.Phase) (control.State, error) {
