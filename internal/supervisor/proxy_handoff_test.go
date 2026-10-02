@@ -128,8 +128,17 @@ func TestHTTPUserHandoffWaitsForForwardingWithoutRestartingStoppedWork(t *testin
 				t.Fatal("handoff did not finish")
 			}
 			unblock()
-			if err := <-requestDone; err != nil && failure != "client disconnect" {
-				t.Fatal(err)
+			select {
+			case err := <-requestDone:
+				if failure == "client disconnect" {
+					if !errors.Is(err, context.Canceled) {
+						t.Fatalf("client cancellation = %v", err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("client request did not finish")
 			}
 			if failure == "none" || failure == "client disconnect" {
 				if got.err != nil || got.state.Owner != control.OwnerSupervisor || got.state.ActiveWorkload != control.WorkloadMedia {
