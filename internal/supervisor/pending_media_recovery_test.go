@@ -12,11 +12,13 @@ import (
 
 func TestTextRecoveryWaitsForOldMediaRegistration(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		run  func(*Controller, context.Context) (control.State, error)
+		name        string
+		run         func(*Controller, context.Context) (control.State, error)
+		durableText bool
 	}{
 		{"reconcile", (*Controller).Reconcile},
-		{"recover", (*Controller).Recover},
+		{"recover", (*Controller).Recover, false},
+		{"reconcile with durable text", (*Controller).Reconcile, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -40,6 +42,14 @@ func TestTextRecoveryWaitsForOldMediaRegistration(t *testing.T) {
 			token, err := stateStore.AdmitWorkToken(ctx, "media-pending", "", control.WorkloadMedia, state.LeaseFence)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tc.durableText {
+				updated := state
+				updated.ActiveWorkload = control.WorkloadText
+				updated.DesiredWorkload = control.WorkloadText
+				if _, err := stateStore.UpdateState(ctx, state.Version, updated); err != nil {
+					t.Fatal(err)
+				}
 			}
 			result, err := tc.run(controller, ctx)
 			if !errors.Is(err, ErrDrainTimeout) {
