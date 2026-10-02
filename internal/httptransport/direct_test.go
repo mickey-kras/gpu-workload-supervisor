@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -86,5 +88,82 @@ func TestDirectTransportStreamsBeforeCompletionAndCancels(t *testing.T) {
 	case <-canceled:
 	case <-time.After(5 * time.Second):
 		t.Fatal("upstream did not observe stream cancellation")
+	}
+}
+
+func TestDirectTransportReusesBurstConnections(t *testing.T) {
+	const parallel = 16
+	releases := [2]chan struct{}{make(chan struct{}), make(chan struct{})}
+	arrivals := [2]chan struct{}{make(chan struct{}, parallel), make(chan struct{}, parallel)}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wave := 0
+		if r.URL.Path == "/second" {
+			wave = 1
+		}
+		arrivals[wave] <- struct{}{}
+		<-releases[wave]
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	transport := NewDirect()
+	defer transport.CloseIdleConnections()
+	dial := transport.DialContext
+	var dials atomic.Int64
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		conn, err := dial(ctx, network, address)
+		if err == nil {
+			dials.Add(1)
+		}
+		return conn, err
+	}
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+	runBurst := func(wave int) {
+		t.Helper()
+		var wg sync.WaitGroup
+		errs := make(chan error, parallel)
+		for i := 0; i < parallel; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				url := upstream.URL
+				if wave == 1 {
+					url += "/second"
+				}
+				response, err := client.Get(url)
+				if err != nil {
+					errs <- err
+					return
+				}
+				_, err = io.Copy(io.Discard, response.Body)
+				closeErr := response.Body.Close()
+				if err != nil {
+					errs <- err
+				} else if closeErr != nil {
+					errs <- closeErr
+				}
+			}()
+		}
+		for i := 0; i < parallel; i++ {
+			select {
+			case <-arrivals[wave]:
+			case <-time.After(5 * time.Second):
+				close(releases[wave])
+				t.Fatal("upstream did not receive full burst")
+			}
+		}
+		close(releases[wave])
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			t.Fatal(err)
+		}
+	}
+	runBurst(0)
+	if got := dials.Load(); got != parallel {
+		t.Fatalf("warm burst dials = %d, want %d", got, parallel)
+	}
+	runBurst(1)
+	if got := dials.Load(); got != parallel {
+		t.Fatalf("reused burst dials = %d, want %d", got, parallel)
 	}
 }
