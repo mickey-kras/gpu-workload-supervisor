@@ -266,7 +266,6 @@ func (s *Store) PendingWork(ctx context.Context) (int, error) {
 	return pending, err
 }
 
-
 // PendingWorkload reports unfinished registrations for a single workload across all fences.
 func (s *Store) PendingWorkload(ctx context.Context, workload control.Workload) (int, error) {
 	var pending int
