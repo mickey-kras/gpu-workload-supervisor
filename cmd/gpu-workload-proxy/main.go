@@ -74,30 +74,10 @@ func (w *trackingWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 }
 
 func (h *activeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.mu.Lock()
-	if h.stopping {
-		h.mu.Unlock()
-		http.Error(w, "proxy is shutting down", http.StatusServiceUnavailable)
+	isCompletion := r.Method == http.MethodPost && r.URL.Path == h.completionPath
+	if !h.admit(w, isCompletion) {
 		return
 	}
-	isCompletion := r.Method == http.MethodPost && r.URL.Path == h.completionPath
-	if isCompletion {
-		if h.maxCompletion > 0 && h.completion >= h.maxCompletion {
-			h.mu.Unlock()
-			capacityUnavailable(w)
-			return
-		}
-		h.completion++
-	} else {
-		if h.maxOrdinary > 0 && h.ordinary >= h.maxOrdinary {
-			h.mu.Unlock()
-			capacityUnavailable(w)
-			return
-		}
-		h.ordinary++
-	}
-	h.active++
-	h.mu.Unlock()
 	writer := &trackingWriter{ResponseWriter: w, owner: h}
 	defer func() {
 		h.mu.Lock()
@@ -114,6 +94,30 @@ func (h *activeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 	}()
 	h.handler.ServeHTTP(writer, r)
+}
+
+func (h *activeHandler) admit(w http.ResponseWriter, isCompletion bool) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.stopping {
+		http.Error(w, "proxy is shutting down", http.StatusServiceUnavailable)
+		return false
+	}
+	if isCompletion {
+		if h.maxCompletion > 0 && h.completion >= h.maxCompletion {
+			capacityUnavailable(w)
+			return false
+		}
+		h.completion++
+	} else {
+		if h.maxOrdinary > 0 && h.ordinary >= h.maxOrdinary {
+			capacityUnavailable(w)
+			return false
+		}
+		h.ordinary++
+	}
+	h.active++
+	return true
 }
 
 func capacityUnavailable(w http.ResponseWriter) {
@@ -243,12 +247,9 @@ func run() error {
 	if *upstreamValue == "" {
 		return errors.New("upstream is required")
 	}
-	upstream, err := url.Parse(*upstreamValue)
+	upstream, err := parseUpstream(*upstreamValue)
 	if err != nil {
-		return fmt.Errorf("parse upstream: %w", err)
-	}
-	if upstream.Scheme != "http" && upstream.Scheme != "https" || upstream.Host == "" {
-		return errors.New("upstream must be an absolute http or https URL")
+		return err
 	}
 	workload := control.Workload(*workloadValue)
 	if workload != control.WorkloadText && workload != control.WorkloadMedia {
@@ -276,6 +277,17 @@ func run() error {
 		shutdownTimeout: *shutdownTimeout, completedWorkRetention: *completedWorkRetention,
 		maxInflight: *maxInflight, maxCompletionInflight: *maxCompletionInflight,
 	})
+}
+
+func parseUpstream(value string) (*url.URL, error) {
+	upstream, err := url.Parse(value)
+	if err != nil {
+		return nil, fmt.Errorf("parse upstream: %w", err)
+	}
+	if upstream.Scheme != "http" && upstream.Scheme != "https" || upstream.Host == "" {
+		return nil, errors.New("upstream must be an absolute http or https URL")
+	}
+	return upstream, nil
 }
 
 func serveProxy(proxyConfig workloadproxy.Config, settings proxyServerSettings) error {
