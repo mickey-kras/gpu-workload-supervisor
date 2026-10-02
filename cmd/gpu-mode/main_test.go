@@ -318,3 +318,24 @@ func TestPruneAuditCLIRequiresExplicitCutoffAndNoRuntime(t *testing.T) {
 		t.Fatalf("result %v %v", result, err)
 	}
 }
+
+func TestAuditFlagsRejectedOutsidePruneBeforeOpeningState(t *testing.T) {
+	for _, args := range [][]string{
+		{"-audit-before", "2020-01-01T00:00:00Z", "restore-state"},
+		{"-audit-batch", "256", "restore-state"},
+		{"-audit-batch", "1", "status"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			previous := os.Args
+			t.Cleanup(func() { os.Args = previous })
+			path := filepath.Join(t.TempDir(), "state.db")
+			os.Args = append([]string{"gpu-mode", "-state", path}, args...)
+			if err := run(); err == nil || !strings.Contains(err.Error(), "require prune-audit") {
+				t.Fatalf("got %v", err)
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("state created: %v", err)
+			}
+		})
+	}
+}

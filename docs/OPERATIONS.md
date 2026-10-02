@@ -61,6 +61,11 @@ stays closed with error health and unknown runtime state. Unfinished orphan work
 requires the explicit `resolve-work` procedure below before destructive recovery
 can proceed. User-owned recovery is described below.
 
+Runtime error messages omit untrusted command output and may omit the underlying
+probe detail. Inspect the affected unit with `systemctl --user status UNIT` and
+`journalctl --user -u UNIT` for service diagnostics. Suppressed probe output is
+not automatically copied to the journal.
+
 ## Ownership and unfinished work
 
 Ownership changes always require a target. Add the normal runtime flags before the command:
@@ -77,7 +82,7 @@ Ownership changes always require a target. Add the normal runtime flags before t
 - `text`, `media`, and `idle` remain supervisor-only commands. They reject user-owned state.
 - User ownership keeps supervisor admission closed. Healthy, stable user execution bypasses lease registration only for the selected workload. Execution is blocked while switching, idle, or in an error state.
 
-User execution requests hold a shared cross-process handoff lock. User switches and returns close the gate, stop user runtimes, and wait up to `-drain-timeout` for forwarding handlers to exit before restarting anything. A stalled handler makes the operation fail closed; cancel the client request or stop the proxy before recovery. All proxies sharing a state database must use this version's handoff locking before enabling ownership commands.
+User execution requests hold a shared cross-process handoff lock. User switches and returns close admission, stop user runtimes and verify release, then take the exclusive handoff lock. They wait up to `-drain-timeout` for forwarding handlers to exit before restarting anything. A stalled handler makes the operation fail closed; cancel the client request or stop the proxy before recovery. All proxies sharing a state database must use this version's handoff locking before enabling ownership commands.
 
 ### Recover after a failed transfer or switch
 
@@ -132,6 +137,13 @@ history is pruned only with no unfinished work or live transition, always retain
 the latest record of each kind. Resolve safety evidence through normal recovery;
 do not delete protected records manually to meet a storage target. Archive more
 often or provision additional storage if unresolved evidence keeps growing.
+Current-fence transitions stay pinned until a normal switch, ownership change or
+recovery rotates the fence. If the workload runs unchanged for a long time, plan
+archive/storage checks on your retention schedule; do not rotate solely to prune.
+
+Pruning holds the controller lock but does not require proxy shutdown: it changes
+only eligible audit history, preserving unfinished-work evidence in one SQLite
+transaction. Ctrl-C cancels a wait for the controller lock.
 
 Deletion permits SQLite page reuse; it does not shrink the database file. Physical
 reclamation is separate, planned offline maintenance: stop all proxies/controllers,

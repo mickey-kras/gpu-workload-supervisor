@@ -3,7 +3,9 @@ set -euo pipefail
 # Keep the collector separate from the shipped module's dependency graph.
 notice_tools=$(mktemp -d)
 trap 'rm -rf "$notice_tools"' EXIT
-GOBIN="$notice_tools" go install github.com/google/go-licenses/v2@v2.0.1
+# Require the public checksum database for the pinned collector and dependencies.
+# Ignore local private-module/checksum bypass settings for this public tool.
+GOSUMDB=sum.golang.org GOPRIVATE= GONOSUMDB= GONOPROXY= GOPROXY=https://proxy.golang.org GOBIN="$notice_tools" go install github.com/google/go-licenses/v2@v2.0.1
 rm -rf THIRD_PARTY_NOTICES
 for arch in amd64 arm64; do
   GOOS=linux GOARCH="$arch" CGO_ENABLED=0 "$notice_tools/go-licenses" save \
