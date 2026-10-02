@@ -119,10 +119,6 @@ func (s *Store) beginAdmittedWork(ctx context.Context, requestID string, workloa
 	return tx, nil
 }
 
-func (s *Store) AdmitWork(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence) error {
-	return s.admitWork(ctx, requestID, jobID, workload, fence, "")
-}
-
 func (s *Store) AdmitWorkToken(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence) (string, error) {
 	token, err := newUUID()
 	if err != nil {
@@ -155,10 +151,6 @@ func (s *Store) admitWork(ctx context.Context, requestID, jobID string, workload
 		return ErrRequestConflict
 	}
 	return tx.Commit()
-}
-
-func (s *Store) FinishWorkFenced(ctx context.Context, requestID string, workload control.Workload, fence control.Fence, outcome WorkOutcome) error {
-	return s.FinishWorkToken(ctx, requestID, workload, fence, "", outcome)
 }
 
 func (s *Store) FinishWorkToken(ctx context.Context, requestID string, workload control.Workload, fence control.Fence, token string, outcome WorkOutcome) error {

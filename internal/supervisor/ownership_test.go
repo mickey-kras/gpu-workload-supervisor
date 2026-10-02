@@ -56,7 +56,7 @@ func TestOwnershipTransferMatrix(t *testing.T) {
 					if state.Owner != wantOwner || state.ActiveWorkload != target || state.DesiredWorkload != target || state.Phase != control.PhaseStable || state.Health != control.HealthHealthy || state.Admission != admission || state.LeaseFence.Epoch != before.LeaseFence.Epoch+1 {
 						t.Fatalf("bad transfer: %#v", state)
 					}
-					if err := stateStore.RegisterWork(context.Background(), "stale", "", target, before.LeaseFence); !errors.Is(err, store.ErrStaleFence) && target != control.WorkloadIdle {
+					if _, err := stateStore.AdmitWorkToken(context.Background(), "stale", "", target, before.LeaseFence); !errors.Is(err, store.ErrStaleFence) && target != control.WorkloadIdle {
 						t.Fatalf("old fence accepted: %v", err)
 					}
 				})
@@ -81,7 +81,7 @@ func TestUserSwitchesNeverOpenSupervisorAdmission(t *testing.T) {
 					t.Fatalf("supervisor bypass: %v", err)
 				}
 			}
-			if err := stateStore.RegisterWork(context.Background(), "new", "", control.WorkloadText, state.LeaseFence); !errors.Is(err, store.ErrAdmissionClosed) {
+			if _, err := stateStore.AdmitWorkToken(context.Background(), "new", "", control.WorkloadText, state.LeaseFence); !errors.Is(err, store.ErrAdmissionClosed) {
 				t.Fatalf("registered user work: %v", err)
 			}
 		})
@@ -140,7 +140,7 @@ func TestTransferDrainsRegisteredWorkBeforeChangingRuntime(t *testing.T) {
 			if state.Owner != control.OwnerSupervisor || state.Admission != control.AdmissionClosed {
 				t.Fatalf("premature transfer: %#v", state)
 			}
-			if err := stateStore.RegisterWork(context.Background(), "late", "", control.WorkloadText, state.LeaseFence); !errors.Is(err, store.ErrAdmissionClosed) {
+			if _, err := stateStore.AdmitWorkToken(context.Background(), "late", "", control.WorkloadText, state.LeaseFence); !errors.Is(err, store.ErrAdmissionClosed) {
 				t.Fatalf("late work accepted: %v", err)
 			}
 			break

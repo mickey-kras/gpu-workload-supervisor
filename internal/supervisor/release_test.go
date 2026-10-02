@@ -164,3 +164,34 @@ func TestTextAndIdleToMediaUseTargetAwareReleaseWhenUIRemainsAlive(t *testing.T)
 		}
 	}
 }
+
+type unsupportedReleaseRuntime struct {
+	fakeRuntime
+	probes int
+}
+
+func (r *unsupportedReleaseRuntime) Released(context.Context) error {
+	r.probes++
+	return gpuruntime.ErrUnloadUnverified
+}
+func TestUnsupportedUnloadDoesNotRetry(t *testing.T) {
+	r := &unsupportedReleaseRuntime{}
+	c := testController(t, openStore(t), r)
+	err := c.waitReleased(context.Background(), time.Now().Add(20*time.Millisecond))
+	if !errors.Is(err, gpuruntime.ErrUnloadUnverified) || errors.Is(err, ErrVerifyTimeout) || r.probes != 1 {
+		t.Fatalf("unsupported verification retried %d: %v", r.probes, err)
+	}
+}
+
+func (r *unsupportedReleaseRuntime) Healthy(context.Context, control.Workload) error {
+	r.probes++
+	return gpuruntime.ErrUnloadUnverified
+}
+func TestUnsupportedUnloadReadinessDoesNotRetry(t *testing.T) {
+	r := &unsupportedReleaseRuntime{fakeRuntime: fakeRuntime{active: control.WorkloadText}}
+	c := testController(t, openStore(t), r)
+	err := c.waitReady(context.Background(), control.WorkloadText, time.Now().Add(20*time.Millisecond))
+	if !errors.Is(err, gpuruntime.ErrUnloadUnverified) || errors.Is(err, ErrVerifyTimeout) || r.probes != 1 {
+		t.Fatalf("unsupported readiness retried %d: %v", r.probes, err)
+	}
+}

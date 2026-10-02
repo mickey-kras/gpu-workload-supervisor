@@ -30,7 +30,7 @@ and every proxy; do not rely on a mutable `PATH` selection. Keep one explicit
 settings, trusted executables, and timeout flags in manual commands and automation.
 Put flags before the single command. In the examples below, `[runtime flags]`
 means this complete deployment configuration, including `-state`; it is not a
-literal CLI argument. `restore-state` is the exception and needs only `-state`.
+literal CLI argument. `restore-state` needs only `-state`; `prune-audit` uses the [audit maintenance flags](OPERATIONS.md#retain-or-archive-audit-history).
 Opening state, including through `status` or a proxy, can apply database migrations;
 back up before changing binaries.
 
@@ -39,7 +39,31 @@ unit/cgroup probe and HTTP request. `-action-timeout` also bounds controller hea
 and observation probes. `-verify-timeout` bounds the entire readiness phase,
 including probes and polling; the earliest applicable deadline wins. Failed
 switch verification closes admission and requires recovery, while failed recovery
-keeps the existing error state.
+keeps the existing error state. Before lifecycle effects, a capability preflight
+checks the host hierarchy, manager anchor, and unit mappings while allowing populated
+workload groups. Release checks still run after stopping to detect changes.
+After target verification succeeds, durable finalization uses its own bounded
+`-finalize-timeout`, so caller cancellation does not strand a verified transition.
+Database conflicts or commit errors still require inspection and recovery.
+
+## Qualify runtime unit stopping
+
+- Keep every descendant in the workload subtree. Choose a unit `KillMode` that
+  terminates the whole service (`control-group`, or qualified `mixed` behavior);
+  `process` and `none` are unsuitable for descendant cleanup.
+- Select the runtime's documented graceful stop mechanism and `KillSignal`, then
+  verify that forced termination after `TimeoutStopSec` clears all workers. There
+  is no universal GPU stop signal or safe timeout.
+- Measure `TimeoutStopSec=STOP_BUDGET` against actual shutdown. Set controller
+  `-action-timeout ACTION_BUDGET` above the complete systemd stop operation and
+  `-cleanup-timeout CLEANUP_BUDGET` above all required rollback actions and checks.
+  These are placeholders, not fixture-derived production recommendations.
+- Disable independent activation (socket/path/timer/dependency triggers and
+  external supervisors), and qualify `Restart`/`RestartSec` behavior so stopped
+  workloads cannot restart outside the controller's ownership decision.
+
+Test graceful and forced stopping with the real runtime, driver, and workers.
+Unit completion or HTTP success never replaces recursive cgroup release evidence.
 
 ## Verify workload release
 
@@ -49,11 +73,11 @@ A removed workload cgroup is also released; missing events in an existing group,
 unreadable or malformed evidence, mismatched systemd metadata, and surviving
 children fail closed. The UI is unavailable outside media mode.
 
-The default `-media-stop-mode unload` still sends the configured release request
+Explicit `-media-stop-mode unload` sends the configured release request
 and leaves the UI alive. **Live-media unload cannot currently be verified:** HTTP
 2xx does not prove the runtime has drained work and released models/resources, and
 no supported runtime-specific verifier is implemented. Release therefore fails
-closed with an actionable error. Use `stop-service`, or explicitly stop media
+closed promptly with an actionable error. Use `stop-service`, or explicitly stop media
 before recovery. Stopped media uses cgroup verification in either policy, including
 ownership changes and work resolution. Stopped text is always verified. Readiness
 and verify-only recovery also verify the opposing workload's release. Switching
@@ -75,6 +99,14 @@ manager's loaded, active root `-.slice` must report an existing, readable cgroup
 that strictly contains both workload paths. This anchor validates manager-to-mount
 mapping without privileged access to PID 1. Subtree/nested mounts and container
 mappings are unsupported; missing or ambiguous manager anchors fail closed.
+
+## Select an explicit media policy
+
+`-media-stop-mode` is required for runtime commands. Earlier versions defaulted to
+`unload`; add an explicit policy to every invocation before upgrading. Choose
+`stop-service` only after accepting that it stops the media UI and qualifying its
+unit shutdown. No omitted flag silently authorizes a service stop. `restore-state`
+requires no runtime policy.
 
 ## Migrate release checks
 

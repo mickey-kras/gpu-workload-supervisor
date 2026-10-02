@@ -143,7 +143,7 @@ func TestDrainDeadlineAndCancellationKeepWorkClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stateStore.RegisterWork(context.Background(), "request", "job", control.WorkloadText, state.LeaseFence); err != nil {
+	if _, err := stateStore.AdmitWorkToken(context.Background(), "request", "job", control.WorkloadText, state.LeaseFence); err != nil {
 		t.Fatal(err)
 	}
 	target := state
@@ -272,7 +272,7 @@ func TestIdleRollbackDoesNotProceedPastFailedTextStop(t *testing.T) {
 		t.Fatalf("text stop failure was not reported: %v", err)
 	}
 	assertCalls(t, runtime.calls, "stop text")
-	events, err := stateStore.TransitionEvents(context.Background(), "failed-idle-rollback")
+	events, err := transitionEvents(stateStore, context.Background(), "failed-idle-rollback")
 	if err != nil || len(events) != 2 || events[0].Action != "rollback stop text" || events[1].Outcome != "failed" {
 		t.Fatalf("rollback journal = %#v, %v", events, err)
 	}
@@ -329,7 +329,7 @@ func TestTimedOutDrainRollsBackWithoutAdmittingWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stateStore.RegisterWork(context.Background(), "inflight", "job", control.WorkloadText, current.LeaseFence); err != nil {
+	if _, err := stateStore.AdmitWorkToken(context.Background(), "inflight", "job", control.WorkloadText, current.LeaseFence); err != nil {
 		t.Fatal(err)
 	}
 	controller.config.DrainTimeout = time.Nanosecond

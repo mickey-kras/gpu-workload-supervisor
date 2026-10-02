@@ -187,7 +187,7 @@ func TestMediaStopRejectsSystemdInspectionFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Stop(context.Background(), control.WorkloadMedia); err == nil || !strings.Contains(err.Error(), "systemd unavailable") {
+	if err := manager.Stop(context.Background(), control.WorkloadMedia); err == nil || !strings.Contains(err.Error(), "command failed") {
 		t.Fatalf("expected systemd failure, got %v", err)
 	}
 }

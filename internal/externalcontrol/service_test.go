@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 	"os"
@@ -315,5 +316,14 @@ func TestServiceConstructorFailsClosed(t *testing.T) {
 				t.Fatal("accepted invalid configuration")
 			}
 		})
+	}
+}
+
+func TestSafeRuntimeCauseMapsToTimeout(t *testing.T) {
+	for _, category := range []error{supervisor.ErrRuntimeObservation, supervisor.ErrHealthCheck, gpuruntime.ErrCapacity} {
+		err := gpuruntime.SafeError("probe failed", category, context.DeadlineExceeded)
+		if got := errorCode(err); got != CodeTimeout {
+			t.Fatalf("%v mapped to %v", category, got)
+		}
 	}
 }

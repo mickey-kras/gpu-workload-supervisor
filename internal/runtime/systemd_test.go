@@ -76,7 +76,7 @@ func TestRecoveryReportsMediaUnitStopFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.StopForRecovery(context.Background()); err == nil || !strings.Contains(err.Error(), "unit failed to stop") {
+	if err := manager.StopForRecovery(context.Background()); err == nil || !strings.Contains(err.Error(), "command failed") {
 		t.Fatalf("media stop failure = %v", err)
 	}
 }

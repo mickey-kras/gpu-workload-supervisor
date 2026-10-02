@@ -111,3 +111,29 @@ Use this only after investigating work that cannot report completion, such as a 
 ## Restore state
 
 Restored databases require an explicit `/PINNED/RELEASE/gpu-mode -state /PRIVATE/DURABLE/STATE/state.db restore-state` before any proxy starts. This command needs no runtime flags. It does not copy a backup; follow the [restore procedure](RESTORING.md) for ordering and validation. Normal restart does not rotate the fence.
+
+## Retain or archive audit history
+
+Audit deletion is explicit; ordinary proxy work retention does not remove audit
+history. Set your retention period, create a consistent SQLite backup using the
+[backup procedure](RESTORING.md#back-up-before-an-upgrade), and retain that archive
+according to your audit requirements. Then run bounded batches:
+
+```sh
+/PINNED/RELEASE/gpu-mode -state /PRIVATE/DURABLE/STATE/state.db \
+  -audit-before CUTOFF_RFC3339 -audit-batch 256 prune-audit
+```
+
+The cutoff and paths are placeholders. Repeat until `prunedAuditRecords` is zero.
+A batch removes at most 256 audit parents (maximum configurable 1024), together
+with their events and snapshots. In-progress and current-fence transitions and
+transitions referencing unfinished work remain. Restoration and work-resolution
+history is pruned only with no unfinished work or live transition, always retaining
+the latest record of each kind. Resolve safety evidence through normal recovery;
+do not delete protected records manually to meet a storage target. Archive more
+often or provision additional storage if unresolved evidence keeps growing.
+
+Deletion permits SQLite page reuse; it does not shrink the database file. Physical
+reclamation is separate, planned offline maintenance: stop all proxies/controllers,
+back up, then use SQLite `VACUUM` with adequate temporary disk space. Never replace
+or copy a live database file or discard its WAL.

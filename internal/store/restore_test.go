@@ -302,7 +302,7 @@ func TestOpenRestoredMigratesV8WithoutLosingResolutionAudit(t *testing.T) {
 	if _, err := s.db.ExecContext(ctx, `DROP INDEX idx_transitions_in_progress_order`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 9`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `DROP INDEX idx_transition_events_transition_sequence; DELETE FROM schema_migrations WHERE version >= 9`); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {

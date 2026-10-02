@@ -126,7 +126,7 @@ func TestRestoreStateRequiresStoppedProxiesBeforeOpeningDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stateStore.AdmitWork(ctx, "active-request", "active-job", control.WorkloadText, before.LeaseFence); err != nil {
+	if _, err := stateStore.AdmitWorkToken(ctx, "active-request", "active-job", control.WorkloadText, before.LeaseFence); err != nil {
 		t.Fatal(err)
 	}
 	if err := stateStore.Close(); err != nil {

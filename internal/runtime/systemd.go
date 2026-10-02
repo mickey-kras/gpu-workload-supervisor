@@ -27,7 +27,11 @@ type CommandRunner interface {
 type ExecRunner struct{}
 
 func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+	output, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	if err != nil && ctx.Err() != nil {
+		err = errors.Join(err, ctx.Err())
+	}
+	return output, err
 }
 
 var systemdUnitPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_.@-]*\.service$`)
@@ -278,7 +282,7 @@ func (m *SystemdManager) releasedUnit(ctx context.Context, unit, group string, a
 		return fmt.Errorf("%w: %s requires runtime-specific proof that work is drained and models/resources are released; HTTP success is insufficient; use -media-stop-mode stop-service or stop the unit explicitly", ErrUnloadUnverified, unit)
 	}
 	if state.active != "inactive" || state.sub != "dead" {
-		return fmt.Errorf("%s is not stopped: %s/%s", unit, state.active, state.sub)
+		return fmt.Errorf("%s is not stopped", unit)
 	}
 	if !state.hasCgroup || (state.cgroup != "" && state.cgroup != group) {
 		return fmt.Errorf("%s ControlGroup does not match configured cgroup %s or metadata is missing", unit, group)
@@ -298,7 +302,7 @@ func (m *SystemdManager) active(ctx context.Context, unit string) (bool, error) 
 		return false, err
 	}
 	if m.config.MediaStopMode == MediaStopService && !(state.active == "active" && state.sub == "running") && !(state.active == "inactive" && state.sub == "dead") {
-		return false, fmt.Errorf("%s is not running or stopped: %s/%s", unit, state.active, state.sub)
+		return false, fmt.Errorf("%s is not running or stopped", unit)
 	}
 	return state.isActive(unit)
 }
@@ -307,13 +311,13 @@ func (state systemdUnitState) isActive(unit string) (bool, error) {
 	switch state.active {
 	case "active":
 		if state.sub != "running" && state.sub != "exited" {
-			return false, fmt.Errorf("%s substate is %q", unit, state.sub)
+			return false, fmt.Errorf("%s has unsupported substate", unit)
 		}
 		return true, nil
 	case "inactive", "failed", "deactivating", "activating":
 		return false, nil
 	default:
-		return false, fmt.Errorf("%s active state is %q", unit, state.active)
+		return false, fmt.Errorf("%s has unsupported active state", unit)
 	}
 }
 
@@ -334,7 +338,7 @@ func (m *SystemdManager) unitState(ctx context.Context, unit string) (systemdUni
 		expected = m.config.MediaCgroup
 	}
 	if state.cgroup != "" && state.cgroup != expected {
-		return systemdUnitState{}, fmt.Errorf("%s ControlGroup %q does not match configured cgroup %s", unit, state.cgroup, expected)
+		return systemdUnitState{}, fmt.Errorf("%s ControlGroup does not match configured cgroup", unit)
 	}
 	return state, nil
 }
@@ -354,11 +358,11 @@ func (m *SystemdManager) verifyManagerCgroup(ctx context.Context) error {
 	}
 	for _, group := range []string{m.config.TextCgroup, m.config.MediaCgroup} {
 		if !strings.HasPrefix(group, state.cgroup+"/") {
-			return fmt.Errorf("configured cgroup %s is not within systemd manager root %s", group, state.cgroup)
+			return errors.New("configured cgroup is not within systemd manager root")
 		}
 	}
 	if err := m.cgroups.check(state.cgroup, false); err != nil {
-		return fmt.Errorf("systemd manager cgroup anchor is unavailable: %w", err)
+		return SafeError("systemd manager cgroup anchor is unavailable", err)
 	}
 	return nil
 }
@@ -367,20 +371,20 @@ func (m *SystemdManager) readUnitState(ctx context.Context, unit string) (system
 	output, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show",
 		"--property=LoadState", "--property=ActiveState", "--property=SubState", "--property=ControlGroup", "--", unit)
 	if err != nil {
-		return systemdUnitState{}, fmt.Errorf("inspect %s: %w: %s", unit, err, strings.TrimSpace(string(output)))
+		return systemdUnitState{}, fmt.Errorf("inspect %s: %w", unit, SafeError("command failed", err))
 	}
 	values := map[string]string{}
 	for _, line := range strings.Split(string(output), "\n") {
 		key, value, ok := strings.Cut(line, "=")
 		if ok {
 			if _, duplicate := values[key]; duplicate {
-				return systemdUnitState{}, fmt.Errorf("%s duplicate systemd property %s", unit, key)
+				return systemdUnitState{}, fmt.Errorf("%s duplicate systemd property", unit)
 			}
 			values[key] = value
 		}
 	}
 	if values["LoadState"] != "loaded" {
-		return systemdUnitState{}, fmt.Errorf("%s load state is %q", unit, values["LoadState"])
+		return systemdUnitState{}, fmt.Errorf("%s load state is not loaded", unit)
 	}
 	_, hasCgroup := values["ControlGroup"]
 	return systemdUnitState{active: values["ActiveState"], sub: values["SubState"], cgroup: values["ControlGroup"], hasCgroup: hasCgroup}, nil
@@ -392,7 +396,7 @@ func (m *SystemdManager) requireStopped(ctx context.Context, unit string) error 
 		return err
 	}
 	if state.active != "inactive" || state.sub != "dead" {
-		return fmt.Errorf("%s is not stopped: %s/%s", unit, state.active, state.sub)
+		return fmt.Errorf("%s is not stopped", unit)
 	}
 	return nil
 }
@@ -418,9 +422,9 @@ func (m *SystemdManager) stopUnit(ctx context.Context, unit string) error {
 }
 
 func (m *SystemdManager) runSystemctl(ctx context.Context, action, unit string) error {
-	output, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", action, "--", unit)
+	_, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", action, "--", unit)
 	if err != nil {
-		return fmt.Errorf("systemctl %s %s: %w: %s", action, unit, err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("systemctl %s %s: %w", action, unit, SafeError("command failed", err))
 	}
 	return nil
 }

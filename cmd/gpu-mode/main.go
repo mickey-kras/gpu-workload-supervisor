@@ -45,7 +45,7 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 	mediaUnit := flags.String("media-unit", "", "systemd user unit for the media UI")
 	textHealth := flags.String("text-health-url", "", "loopback text runtime health URL")
 	mediaHealth := flags.String("media-health-url", "", "loopback media runtime health URL")
-	mediaStopMode := flags.String("media-stop-mode", string(gpuruntime.MediaStopUnload), "media stop policy: unload or stop-service")
+	mediaStopMode := flags.String("media-stop-mode", "", "media stop policy: unload or stop-service")
 	mediaRelease := flags.String("media-release-url", "", "loopback media model release URL")
 	gpuIndex := flags.Int("gpu-index", 0, "NVIDIA GPU index")
 	flags.Uint64("release-max-used-mib", 0, "removed: configure workload cgroups and optional target capacity")
@@ -61,9 +61,11 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 	drainTimeout := flags.Duration("drain-timeout", 5*time.Minute, "admitted-work drain timeout")
 	verifyTimeout := flags.Duration("verify-timeout", 5*time.Minute, "runtime readiness timeout")
 	cleanupTimeout := flags.Duration("cleanup-timeout", 2*time.Minute, "failure rollback timeout")
-	finalizeTimeout := flags.Duration("finalize-timeout", 10*time.Second, "failure finalization timeout")
+	finalizeTimeout := flags.Duration("finalize-timeout", 10*time.Second, "durable transition finalization timeout")
 	pollInterval := flags.Duration("poll-interval", 250*time.Millisecond, "drain and readiness polling interval")
 	target := flags.String("target", "", "required workload for ownership commands: text, media, idle")
+	auditBefore := flags.String("audit-before", "", "prune-audit cutoff (RFC3339); archive first")
+	auditBatch := flags.Int("audit-batch", 256, "maximum audit parents removed by prune-audit (1..1024)")
 	resolveReason := flags.String("resolve-reason", "", "required audit reason for resolve-work")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
@@ -73,6 +75,10 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 		return err
 	}
 	command := flags.Arg(0)
+	auditCutoff, err := validateAuditFlags(command, *auditBefore, *auditBatch)
+	if err != nil {
+		return err
+	}
 	runtimeConfig := gpuruntime.SystemdConfig{
 		MediaStopMode: stopMode,
 		TextUnit:      *textUnit, MediaUnit: *mediaUnit,
@@ -110,6 +116,9 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 	if command == restoreStateCommand {
 		return restoreState(ctx, stateStore)
 	}
+	if command == "prune-audit" {
+		return pruneAudit(ctx, stateStore, auditCutoff, *auditBatch)
+	}
 	runtimeManager, err := newRuntime(runtimeConfig)
 	if err != nil {
 		return err
@@ -137,11 +146,11 @@ func validateCommandFlags(flags *flag.FlagSet, mediaStopMode, target string) (gp
 		return "", errors.New("-release-max-used-mib has been removed: remove it and configure -text-cgroup and -media-cgroup; optional target capacity uses -text-required-mib/-media-required-mib plus -capacity-headroom-mib")
 	}
 	if flags.NArg() != 1 {
-		return "", errors.New("usage: gpu-mode [flags] restore-state|status|reconcile|recover|resolve-work|text|media|idle|take-control|user-switch|return-control|recover-user")
+		return "", errors.New("usage: gpu-mode [flags] restore-state|prune-audit|status|reconcile|recover|resolve-work|text|media|idle|take-control|user-switch|return-control|recover-user")
 	}
 	stopMode := gpuruntime.MediaStopMode(mediaStopMode)
-	if mediaStopMode == "" {
-		return "", errors.New("media stop mode must not be empty")
+	if mediaStopMode == "" && flags.Arg(0) != restoreStateCommand && flags.Arg(0) != "prune-audit" {
+		return "", errors.New("media stop mode must not be empty: explicitly select -media-stop-mode unload or stop-service")
 	}
 	if err := stopMode.Validate(); err != nil {
 		return "", err
@@ -154,7 +163,7 @@ func validateCommandFlags(flags *flag.FlagSet, mediaStopMode, target string) (gp
 }
 
 func validateRuntimeFlags(command string, config gpuruntime.SystemdConfig) error {
-	if command == restoreStateCommand {
+	if command == restoreStateCommand || command == "prune-audit" {
 		return nil
 	}
 	if config.TextUnit == "" || config.MediaUnit == "" || config.TextHealthURL == "" || config.MediaHealthURL == "" || (config.MediaStopMode != gpuruntime.MediaStopService && config.MediaReleaseURL == "") || config.TextCgroup == "" || config.MediaCgroup == "" || config.SystemctlPath == "" {

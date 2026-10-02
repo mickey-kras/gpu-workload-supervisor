@@ -18,9 +18,9 @@ func TestCLIRejectsMissingConfigurationAndUnknownCommand(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"invalid flag", []string{"gpu-mode", "-unknown"}, "flag provided but not defined"},
+		{"invalid flag", []string{"gpu-mode", "-media-stop-mode", "unload", "-unknown"}, "flag provided but not defined"},
 		{"missing command", []string{"gpu-mode"}, "usage:"},
-		{"missing runtime config", []string{"gpu-mode", "status"}, "runtime units"},
+		{"missing runtime config", []string{"gpu-mode", "-media-stop-mode", "unload", "status"}, "runtime units"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			previous := os.Args
@@ -39,7 +39,7 @@ func TestCLIStatusFailsClosedWhenTrustedProbeCannotObserveRuntime(t *testing.T) 
 	previousArgs, previousStdout := os.Args, os.Stdout
 	t.Cleanup(func() { os.Args, os.Stdout = previousArgs, previousStdout })
 	statePath := filepath.Join(dir, "state.db")
-	args := []string{"gpu-mode", "-state", statePath, "-text-unit", "text.service",
+	args := []string{"gpu-mode", "-media-stop-mode", "unload", "-state", statePath, "-text-unit", "text.service",
 		"-media-unit", "media.service", "-text-health-url", "http://127.0.0.1:1/health",
 		"-media-health-url", "http://127.0.0.1:1/", "-media-release-url", "http://127.0.0.1:1/free",
 		"-text-cgroup", "/text.service", "-media-cgroup", "/media.service", "-nvidia-smi", probe, "-systemctl", probe}
@@ -93,7 +93,7 @@ func TestCLICommandsFailClosedWhenSystemdCannotBeObserved(t *testing.T) {
 	t.Cleanup(func() { os.Args, os.Stdout = previousArgs, previousStdout })
 	for _, command := range []string{"reconcile", "recover", "text", "media", "idle", "take-control", "user-switch", "return-control", "recover-user"} {
 		t.Run(command, func(t *testing.T) {
-			args := []string{"gpu-mode", "-state", filepath.Join(t.TempDir(), "state.db"),
+			args := []string{"gpu-mode", "-media-stop-mode", "unload", "-state", filepath.Join(t.TempDir(), "state.db"),
 				"-text-unit", "text.service", "-media-unit", "media.service",
 				"-text-health-url", "http://127.0.0.1:1/health",
 				"-media-health-url", "http://127.0.0.1:1/",
@@ -130,7 +130,7 @@ func TestCLICommandsFailClosedWhenSystemdCannotBeObserved(t *testing.T) {
 func TestCLIRejectsInvalidControllerTimeout(t *testing.T) {
 	previousArgs := os.Args
 	t.Cleanup(func() { os.Args = previousArgs })
-	os.Args = []string{"gpu-mode", "-state", filepath.Join(t.TempDir(), "state.db"),
+	os.Args = []string{"gpu-mode", "-media-stop-mode", "unload", "-state", filepath.Join(t.TempDir(), "state.db"),
 		"-text-unit", "text.service", "-media-unit", "media.service",
 		"-text-health-url", "http://127.0.0.1:1/health",
 		"-media-health-url", "http://127.0.0.1:1/",
@@ -147,7 +147,7 @@ func TestCLIWorkResolutionRequiresReasonAndStoppedProxies(t *testing.T) {
 	previousStdout := os.Stdout
 	t.Cleanup(func() { os.Args, os.Stdout = previousArgs, previousStdout })
 	statePath := filepath.Join(t.TempDir(), "state.db")
-	args := []string{"gpu-mode", "-state", statePath,
+	args := []string{"gpu-mode", "-media-stop-mode", "unload", "-state", statePath,
 		"-text-unit", "text.service", "-media-unit", "media.service",
 		"-text-health-url", "http://127.0.0.1:1/health",
 		"-media-health-url", "http://127.0.0.1:1/",
@@ -193,7 +193,7 @@ func TestCLIWorkResolutionRequiresReasonAndStoppedProxies(t *testing.T) {
 	os.Stdout = output
 	os.Args = append(append([]string{}, args...), "-resolve-reason", "incident-123",
 		"-verify-timeout", "5ms", "-poll-interval", "1ms", "resolve-work")
-	if err := run(); err == nil || !strings.Contains(err.Error(), "verify release") {
+	if err := run(); err == nil || !strings.Contains(err.Error(), "manager cgroup anchor") {
 		t.Fatalf("unverified resolution error = %v", err)
 	}
 	if _, err := output.Seek(0, io.SeekStart); err != nil {
@@ -214,7 +214,7 @@ func TestOwnershipCLIRequiresExplicitValidTargetBeforeOpeningStore(t *testing.T)
 	for _, command := range []string{"take-control", "user-switch", "return-control", "recover-user"} {
 		for _, target := range []string{"", "unknown", "auto"} {
 			statePath := filepath.Join(t.TempDir(), "state.db")
-			os.Args = []string{"gpu-mode", "-state", statePath, "-target", target, command}
+			os.Args = []string{"gpu-mode", "-media-stop-mode", "unload", "-state", statePath, "-target", target, command}
 			if err := run(); err == nil || !strings.Contains(err.Error(), "requires -target") {
 				t.Fatalf("%s %q: %v", command, target, err)
 			}
@@ -223,7 +223,7 @@ func TestOwnershipCLIRequiresExplicitValidTargetBeforeOpeningStore(t *testing.T)
 			}
 		}
 	}
-	os.Args = []string{"gpu-mode", "-target", "text", "status"}
+	os.Args = []string{"gpu-mode", "-media-stop-mode", "unload", "-target", "text", "status"}
 	if err := run(); err == nil || !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("unused target accepted: %v", err)
 	}
@@ -275,5 +275,46 @@ func TestCLILegacyReleaseThresholdRejectedEvenWhenZero(t *testing.T) {
 		if _, err := os.Stat(path + ".lock"); !os.IsNotExist(err) {
 			t.Fatalf("created lock: %v", err)
 		}
+	}
+}
+
+func TestOmittedMediaStopPolicyIsExplicitError(t *testing.T) {
+	previous := os.Args
+	defer func() { os.Args = previous }()
+	os.Args = []string{"gpu-mode", "status"}
+	if err := run(); err == nil || !strings.Contains(err.Error(), "media-stop-mode") {
+		t.Fatalf("omitted policy: %v", err)
+	}
+}
+
+func TestPruneAuditCLIRequiresExplicitCutoffAndNoRuntime(t *testing.T) {
+	previous, previousOutput := os.Args, os.Stdout
+	defer func() { os.Args, os.Stdout = previous, previousOutput }()
+	path := filepath.Join(t.TempDir(), "state.db")
+	for _, cutoff := range []string{"", "invalid", "2999-01-01T00:00:00Z"} {
+		os.Args = []string{"gpu-mode", "-state", path, "-audit-before", cutoff, "prune-audit"}
+		if err := run(); err == nil {
+			t.Fatal("invalid cutoff accepted")
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatal("invalid cutoff opened database")
+		}
+	}
+	output, err := os.CreateTemp(t.TempDir(), "output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	os.Stdout = output
+	os.Args = []string{"gpu-mode", "-state", path, "-audit-before", "2000-01-01T00:00:00Z", "-audit-batch", "1", "prune-audit"}
+	if err := run(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := output.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]int64
+	if err := json.NewDecoder(output).Decode(&result); err != nil || result["prunedAuditRecords"] != 0 {
+		t.Fatalf("result %v %v", result, err)
 	}
 }
