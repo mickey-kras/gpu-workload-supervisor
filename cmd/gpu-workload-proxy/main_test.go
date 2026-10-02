@@ -97,6 +97,60 @@ func TestShutdownTimeoutKeepsLifetimeLockUntilHandlerExits(t *testing.T) {
 	exclusive.Close()
 }
 
+func TestProxyCapacityReservesCompletionAndRecovers(t *testing.T) {
+	ordinaryStarted := make(chan struct{})
+	completionStarted := make(chan struct{})
+	releaseOrdinary := make(chan struct{})
+	releaseCompletion := make(chan struct{})
+	tracked := &activeHandler{maxOrdinary: 1, maxCompletion: 1, completionPath: "/finish",
+		handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/finish" {
+				close(completionStarted)
+				<-releaseCompletion
+			} else {
+				close(ordinaryStarted)
+				<-releaseOrdinary
+			}
+			w.WriteHeader(http.StatusNoContent)
+		})}
+	request := func(method, path string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		tracked.ServeHTTP(response, httptest.NewRequest(method, path, nil))
+		return response
+	}
+	ordinaryDone := make(chan struct{})
+	go func() { defer close(ordinaryDone); request(http.MethodPost, "/execute") }()
+	<-ordinaryStarted
+	busy := request(http.MethodGet, "/monitor")
+	if busy.Code != http.StatusServiceUnavailable || busy.Header().Get("Retry-After") != "1" ||
+		!strings.Contains(busy.Body.String(), "proxy_capacity_exceeded") {
+		t.Fatalf("ordinary saturation response: %d %q", busy.Code, busy.Body.String())
+	}
+	completionDone := make(chan struct{})
+	go func() { defer close(completionDone); request(http.MethodPost, "/finish") }()
+	<-completionStarted
+	if got := request(http.MethodPost, "/finish"); got.Code != http.StatusServiceUnavailable {
+		t.Fatalf("completion saturation status = %d", got.Code)
+	}
+	if got := request(http.MethodGet, "/finish"); got.Code != http.StatusServiceUnavailable {
+		t.Fatalf("non-completion method bypassed ordinary cap: %d", got.Code)
+	}
+	close(releaseOrdinary)
+	<-ordinaryDone
+	ordinaryStarted = make(chan struct{})
+	// A released ordinary slot can accept a new request while completion is busy.
+	ordinaryAgain := make(chan struct{})
+	go func() { request(http.MethodPost, "/execute"); close(ordinaryAgain) }()
+	<-ordinaryStarted
+	<-ordinaryAgain
+	close(releaseCompletion)
+	<-completionDone
+	completionStarted = make(chan struct{})
+	if got := request(http.MethodPost, "/finish"); got.Code != http.StatusNoContent {
+		t.Fatalf("completion slot was not released: %d", got.Code)
+	}
+}
+
 func TestShutdownWaitsForHijackedHandler(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -299,6 +353,8 @@ func TestProxyFlagValidation(t *testing.T) {
 	}{
 		{"positional", "unexpected positional", []string{"extra"}},
 		{"invalid retention", "completed-work-retention must be positive", []string{"-completed-work-retention", "0s"}},
+		{"invalid ordinary capacity", "max-inflight and max-completion-inflight must be positive", []string{"-max-inflight", "0"}},
+		{"invalid completion capacity", "max-inflight and max-completion-inflight must be positive", []string{"-max-completion-inflight", "0"}},
 		{"public listener", "listen address must be loopback", []string{"-listen", "0.0.0.0:8090"}},
 		{"malformed listener", "invalid listen address", []string{"-listen", "not-an-address"}},
 		{"missing upstream", "upstream is required", nil},

@@ -74,9 +74,16 @@ Custom transports supplied by Go callers must enforce the same trust boundary.
 The listener defaults to a 10-second header timeout and a 2-minute idle keep-alive
 timeout (`-read-header-timeout` and `-idle-timeout`). It deliberately has no total
 request-body read or response-write deadline so uploads and long-running streams
-can complete. Those settings do not bound an active slow upload or reader. Keep
-clients trusted, or enforce workload-appropriate limits at an authenticated front
-proxy before exposing this service.
+can complete. Concurrent requests are capped at 128 by default (`-max-inflight`),
+with 16 separate slots reserved for POST completion reports at the configured
+completion path (`-max-completion-inflight`). Both limits must be positive. Saturation
+returns HTTP 503 with `proxy_capacity_exceeded` and `Retry-After: 1` before work
+registration or forwarding. A non-POST request to the completion path uses the
+ordinary limit. Active streams retain their slots until the handler returns; neither
+limit imposes a total stream deadline. Size the limits for the host and expected
+streams. Keep clients trusted, or enforce workload-appropriate per-client connection,
+request-body, and rate limits at an authenticated front proxy before exposing this
+service. The in-process caps do not bound idle connections or bytes per stream.
 
 Upstream dialing is bounded to 30 seconds and TLS handshakes to 10 seconds. Waiting
 for execution response headers or a streaming body has no total deadline; client
