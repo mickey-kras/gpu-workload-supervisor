@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -263,5 +264,17 @@ func TestPruneCompletedWorkWithNoEligibleRows(t *testing.T) {
 	count, err := s.PruneCompletedWork(context.Background(), fixedClock()().Add(-24*time.Hour), 256)
 	if err != nil || count != 0 {
 		t.Fatalf("empty prune = %d, %v", count, err)
+	}
+}
+
+func TestPruneCompletedWorkReportsSelectionFailure(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if _, err := s.db.ExecContext(ctx, "DROP TABLE registered_work"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.PruneCompletedWork(ctx, fixedClock()().Add(-24*time.Hour), 256)
+	if err == nil || !strings.Contains(err.Error(), "select completed work to prune") {
+		t.Fatalf("selection failure = %v", err)
 	}
 }
