@@ -1,0 +1,25 @@
+# Raise package floors as tests improve; do not lower them to make a PR pass.
+profile: coverage.out
+threshold:
+  total: 90
+  package: 90
+# Existing packages below 90 remain explicit until their test gaps are closed.
+override:
+  - path: ^internal/control$
+    threshold: 78
+  - path: ^internal/store$
+    threshold: 85
+  - path: ^cmd/gpu-mode$
+    threshold: 93
+  - path: ^cmd/gpu-workload-proxy$
+    threshold: 90
+  - path: ^internal/externalcontrol$
+    threshold: 95
+  - path: ^internal/lock$
+    threshold: 94
+  - path: ^internal/proxy$
+    threshold: 97
+  - path: ^internal/runtime$
+    threshold: 95
+  - path: ^internal/supervisor$
+    threshold: 93
