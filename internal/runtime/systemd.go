@@ -218,10 +218,15 @@ func (m *SystemdManager) Stop(ctx context.Context, workload control.Workload) er
 
 // StopForRecovery shuts down both units regardless of the media stop policy.
 func (m *SystemdManager) StopForRecovery(ctx context.Context) error {
-	if err := m.stopUnit(ctx, m.config.TextUnit); err != nil {
-		return err
+	for _, unit := range []string{m.config.TextUnit, m.config.MediaUnit} {
+		if err := m.runSystemctl(ctx, "stop", unit); err != nil {
+			return err
+		}
+		if err := m.requireStopped(ctx, unit); err != nil {
+			return err
+		}
 	}
-	return m.stopUnit(ctx, m.config.MediaUnit)
+	return nil
 }
 
 func (m *SystemdManager) Healthy(ctx context.Context, workload control.Workload) error {
@@ -395,10 +400,38 @@ func (m *SystemdManager) requireStopped(ctx context.Context, unit string) error 
 	if err != nil {
 		return err
 	}
+	if state.active == "failed" && state.sub == "failed" {
+		if err := m.resetStoppedFailure(ctx, unit, state); err != nil {
+			return err
+		}
+		state, err = m.unitState(ctx, unit)
+		if err != nil {
+			return err
+		}
+	}
 	if state.active != "inactive" || state.sub != "dead" {
 		return fmt.Errorf("%s is not stopped", unit)
 	}
 	return nil
+}
+
+// A successful stop does not clear systemd's retained failure state. Reset it
+// only after verifying the configured subtree has no remaining processes.
+func (m *SystemdManager) resetStoppedFailure(ctx context.Context, unit string, state systemdUnitState) error {
+	if !state.hasCgroup {
+		return errors.New("workload ControlGroup metadata unavailable")
+	}
+	if err := m.verifyManagerCgroup(ctx); err != nil {
+		return err
+	}
+	group := m.config.TextCgroup
+	if unit == m.config.MediaUnit {
+		group = m.config.MediaCgroup
+	}
+	if err := m.cgroups.empty(group); err != nil {
+		return err
+	}
+	return m.runSystemctl(ctx, "reset-failed", unit)
 }
 
 func (m *SystemdManager) startUnit(ctx context.Context, unit string, workload control.Workload) error {
