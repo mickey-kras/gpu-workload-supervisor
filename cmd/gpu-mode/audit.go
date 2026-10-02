@@ -10,7 +10,7 @@ import (
 )
 
 func validateAuditFlags(command, before string, batch int) (time.Time, error) {
-	if command != "prune-audit" {
+	if command != pruneAuditCommand {
 		return time.Time{}, nil
 	}
 	cutoff, err := time.Parse(time.RFC3339, before)
