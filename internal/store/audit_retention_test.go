@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -38,13 +39,21 @@ func TestAuditRetentionPreservesLiveRelationshipsAndLatestEvidence(t *testing.T)
 	if err != nil || count != 1 {
 		t.Fatalf("prune %d: %v", count, err)
 	}
-	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM transitions`).Scan(&n); err != nil || n != 3 {
-		t.Fatalf("transitions %d %v", n, err)
+	assertAuditTransitionIDs(t, s, "transitions", []string{"current", "live", "pending"})
+	assertAuditTransitionIDs(t, s, "transition_events", []string{"current", "live", "pending"})
+	assertAuditTransitionIDs(t, s, "transition_work", []string{"pending"})
+	// Exhaust the eligible history: a one-row batch alone can hide a missing pin.
+	if count, err := s.PruneAuditHistory(ctx, s.now().Add(-time.Hour), 1024); err != nil || count != 0 {
+		t.Fatalf("protected history pruned: %d, %v", count, err)
 	}
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM transition_events`).Scan(&n); err != nil || n != 3 {
-		t.Fatalf("events %d %v", n, err)
+	assertAuditTransitionIDs(t, s, "transitions", []string{"current", "live", "pending"})
+	assertAuditTransitionIDs(t, s, "transition_events", []string{"current", "live", "pending"})
+	assertAuditTransitionIDs(t, s, "transition_work", []string{"pending"})
+	var completedAt *string
+	if err := s.db.QueryRow(`SELECT completed_at FROM registered_work WHERE request_id='unfinished'`).Scan(&completedAt); err != nil || completedAt != nil {
+		t.Fatalf("unfinished work changed: %v, %v", completedAt, err)
 	}
+
 }
 
 func TestAuditRetentionKeepsLatestRecoveryRecordsAndUsesEventIndex(t *testing.T) {
@@ -87,5 +96,28 @@ func TestAuditRetentionKeepsLatestRecoveryRecordsAndUsesEventIndex(t *testing.T)
 	}
 	if !strings.Contains(plan, "idx_transition_events_transition_sequence") {
 		t.Fatalf("event plan: %s", plan)
+	}
+}
+
+func assertAuditTransitionIDs(t *testing.T, s *Store, table string, want []string) {
+	t.Helper()
+	rows, err := s.db.Query(`SELECT transition_id FROM ` + table + ` ORDER BY transition_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("%s retained IDs %v, want %v", table, got, want)
 	}
 }
