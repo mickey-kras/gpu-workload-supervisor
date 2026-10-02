@@ -6,10 +6,13 @@ Report vulnerabilities through a private GitHub security advisory for this
 repository.
 
 The module implements a local control-state engine. A lease fence combines a store incarnation and epoch;
-runtime adapters must reject stale fences before admitting work. After
-restart, admission stays closed until reconciliation observes the actual
-workload. A transition must record its intent before causing a runtime
-side effect.
+runtime adapters must reject stale fences before admitting work. After a host or
+runtime restart, deployment startup ordering must keep execution unavailable until
+reconciliation succeeds; this is not automatic proxy startup enforcement. Ordinary
+proxy restarts and CLI database opens preserve admission and fences. Backup
+restoration requires the explicit incarnation-rotation procedure before startup.
+See [startup and recovery](docs/OPERATIONS.md) and [restoration](docs/RESTORING.md).
+A transition must record its intent before causing a runtime side effect.
 
 Do not log credentials, workload payloads, or untrusted runtime output.
 Host service permissions and access to the SQLite state file are deployment

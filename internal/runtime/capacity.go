@@ -24,11 +24,11 @@ func (m *SystemdManager) capacity(ctx context.Context, workload control.Workload
 	}
 	output, err := m.runner.Run(ctx, m.config.NvidiaSMIPath, "--query-gpu=memory.free", "--format=csv,noheader,nounits", "-i", strconv.Itoa(m.config.GPUIndex))
 	if err != nil {
-		return fmt.Errorf("%w: query memory.free: %v: %s", ErrCapacity, err, strings.TrimSpace(string(output)))
+		return SafeError("query memory.free failed", ErrCapacity, err)
 	}
 	free, err := strconv.ParseUint(strings.TrimSpace(string(output)), 10, 64)
 	if err != nil {
-		return fmt.Errorf("%w: parse memory.free: %v", ErrCapacity, err)
+		return SafeError("invalid memory.free response", ErrCapacity, err)
 	}
 	needed := required + m.config.CapacityHeadroomMiB
 	if free < needed {

@@ -131,6 +131,9 @@ func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
 	if state.Owner == control.OwnerUser {
 		return state, ErrUserOwned
 	}
+	if err := c.preflight(ctx); err != nil {
+		return c.latchObservationFailure(ctx, state, err)
+	}
 	snapshot, err := c.observe(ctx)
 	if err != nil {
 		return c.latchObservationFailure(ctx, state, err)
@@ -163,7 +166,7 @@ func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
 	return c.store.UpdateState(ctx, state.Version, state)
 }
 
-func (c *Controller) Recover(ctx context.Context) (control.State, error) {
+func (c *Controller) beginRecovery(ctx context.Context) (control.State, error) {
 	state, err := c.store.State(ctx)
 	if err != nil {
 		return control.State{}, err
@@ -187,6 +190,17 @@ func (c *Controller) Recover(ctx context.Context) (control.State, error) {
 	}
 	state = entered
 	if err := ctx.Err(); err != nil {
+		return state, err
+	}
+	if err := c.preflight(ctx); err != nil {
+		return state, err
+	}
+	return state, nil
+}
+
+func (c *Controller) Recover(ctx context.Context) (control.State, error) {
+	state, err := c.beginRecovery(ctx)
+	if err != nil {
 		return state, err
 	}
 	snapshot, err := c.observe(ctx)
@@ -245,6 +259,9 @@ func (c *Controller) ResolveUnfinishedWork(ctx context.Context, reason string) (
 	}
 	state, err = c.store.RotateFenceAndCloseAdmission(ctx, state.Version)
 	if err != nil {
+		return state, 0, err
+	}
+	if err := c.preflight(ctx); err != nil {
 		return state, 0, err
 	}
 	if err := c.runAction(ctx, c.runtime.StopForRecovery); err != nil {
@@ -308,8 +325,8 @@ func (c *Controller) waitReady(ctx context.Context, target control.Workload, dea
 		if verifyCtx.Err() != nil || !c.now().Before(deadline) {
 			return errors.Join(ErrVerifyTimeout, lastErr)
 		}
-		if lastErr == nil {
-			return nil
+		if lastErr == nil || errors.Is(lastErr, gpuruntime.ErrUnloadUnverified) {
+			return lastErr
 		}
 		select {
 		case <-verifyCtx.Done():
@@ -325,7 +342,7 @@ func (c *Controller) waitReady(ctx context.Context, target control.Workload, dea
 func (c *Controller) checkReady(ctx context.Context, target control.Workload) error {
 	snapshot, err := c.observe(ctx)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrRuntimeObservation, err)
+		return gpuruntime.SafeError(ErrRuntimeObservation.Error(), ErrRuntimeObservation, err)
 	}
 	if err := verifySnapshot(target, snapshot); err != nil {
 		return err
@@ -336,7 +353,7 @@ func (c *Controller) checkReady(ctx context.Context, target control.Workload) er
 		}
 	}
 	if err := c.healthy(ctx, target); err != nil {
-		return fmt.Errorf("%w: %v", ErrHealthCheck, err)
+		return gpuruntime.SafeError(ErrHealthCheck.Error(), ErrHealthCheck, err)
 	}
 	return nil
 }
@@ -451,6 +468,9 @@ func (c *Controller) waitReleasedFor(ctx context.Context, target control.Workloa
 		if err := c.releasedFor(ctx, target); err == nil {
 			return nil
 		} else {
+			if errors.Is(err, gpuruntime.ErrUnloadUnverified) {
+				return err
+			}
 			lastErr = err
 		}
 		if !c.now().Before(deadline) {

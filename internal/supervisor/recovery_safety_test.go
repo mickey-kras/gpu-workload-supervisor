@@ -83,7 +83,7 @@ func TestRecoverInitiallyOpenFailureClosesAdmission(t *testing.T) {
 			if after.LeaseFence == before.LeaseFence {
 				t.Fatal("recovery did not fence old admissions")
 			}
-			if err := s.AdmitWork(context.Background(), "after-failure", "", control.WorkloadText, after.LeaseFence); !errors.Is(err, store.ErrAdmissionClosed) {
+			if _, err := s.AdmitWorkToken(context.Background(), "after-failure", "", control.WorkloadText, after.LeaseFence); !errors.Is(err, store.ErrAdmissionClosed) {
 				t.Fatalf("admission after failure = %v", err)
 			}
 			upstream, _ := url.Parse("http://127.0.0.1:1")
@@ -113,7 +113,8 @@ func TestRecoverDrainsBeforeDestructiveStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AdmitWork(context.Background(), "already-admitted", "", control.WorkloadText, before.LeaseFence); err != nil {
+	token, err := s.AdmitWorkToken(context.Background(), "already-admitted", "", control.WorkloadText, before.LeaseFence)
+	if err != nil {
 		t.Fatal(err)
 	}
 	r.active = control.WorkloadMedia
@@ -124,7 +125,7 @@ func TestRecoverDrainsBeforeDestructiveStop(t *testing.T) {
 	if len(r.calls) != 0 {
 		t.Fatalf("recovery stopped runtime before draining: %v", r.calls)
 	}
-	if err := s.FinishWorkFenced(context.Background(), "already-admitted", control.WorkloadText, before.LeaseFence, store.WorkCompleted); err != nil {
+	if err := s.FinishWorkToken(context.Background(), "already-admitted", control.WorkloadText, before.LeaseFence, token, store.WorkCompleted); err != nil {
 		t.Fatal(err)
 	}
 	after, err := c.Recover(context.Background())

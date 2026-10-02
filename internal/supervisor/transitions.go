@@ -6,6 +6,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
@@ -67,6 +68,9 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 	if options.expected != nil && (options.expected.Incarnation == "" || options.expected.Incarnation != current.LeaseFence.Incarnation || options.expected.Version != current.Version) {
 		return current, store.ErrVersionConflict
 	}
+	if err := c.preflight(ctx); err != nil {
+		return current, err
+	}
 	transitionID, err := c.id()
 	if err != nil {
 		return current, err
@@ -105,7 +109,9 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 		return c.fail(transitionID, state, current, err)
 	}
 	final := stableTarget(state, options.targetOwner, target)
-	return c.store.FinishTransition(ctx, transitionID, "committed", state.Version, final)
+	finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.FinalizeTimeout)
+	defer cancel()
+	return c.store.FinishTransition(finalizeCtx, transitionID, "committed", state.Version, final)
 }
 
 type conditionalStore interface {
@@ -235,7 +241,7 @@ func (c *Controller) loadTransition(ctx context.Context, transitionID string, st
 func (c *Controller) unloadForSwitch(ctx context.Context, transitionID string, phase control.Phase, current control.State, target control.Workload) (control.Workload, error) {
 	snapshot, err := c.observe(ctx)
 	if err != nil {
-		return control.WorkloadUnknown, fmt.Errorf("%w: observe before unload: %v", ErrRuntimeObservation, err)
+		return control.WorkloadUnknown, gpuruntime.SafeError("observe before unload failed", ErrRuntimeObservation, err)
 	}
 	active, err := observedWorkload(current, snapshot)
 	if err != nil {

@@ -208,7 +208,7 @@ func TestSystemdDirectedTransitionsAndOwnership(t *testing.T) {
 						t.Fatal(err)
 					}
 					f.assertState(state, owner, target)
-					if err := f.store.AdmitWork(ctx, "stale", "", control.WorkloadText, before.LeaseFence); !errors.Is(err, store.ErrStaleFence) {
+					if _, err := f.store.AdmitWorkToken(ctx, "stale", "", control.WorkloadText, before.LeaseFence); !errors.Is(err, store.ErrStaleFence) {
 						t.Fatalf("stale fence accepted: %v", err)
 					}
 				})
@@ -277,7 +277,7 @@ func TestSystemdRestartPreservesUserAndDoesNotRestartStoppedWork(t *testing.T) {
 	if state.LeaseFence.Incarnation == before.LeaseFence.Incarnation || state.LeaseFence.Epoch != 1 || state.Admission != control.AdmissionClosed || state.Owner != control.OwnerSupervisor {
 		t.Fatalf("restored fence/admission: %#v", state)
 	}
-	if err := f.store.AdmitWork(ctx, "restored-stale", "", control.WorkloadText, before.LeaseFence); !errors.Is(err, store.ErrStaleFence) {
+	if _, err := f.store.AdmitWorkToken(ctx, "restored-stale", "", control.WorkloadText, before.LeaseFence); !errors.Is(err, store.ErrStaleFence) {
 		t.Fatalf("restored stale fence: %v", err)
 	}
 }
@@ -425,7 +425,7 @@ func TestSystemdAdmissionDrainAndConcurrentCommands(t *testing.T) {
 			t.Fatal(err)
 		}
 		if state.Phase == control.PhaseDraining {
-			if err := f.store.AdmitWork(ctx, "late", "", control.WorkloadText, state.LeaseFence); !errors.Is(err, store.ErrAdmissionClosed) {
+			if _, err := f.store.AdmitWorkToken(ctx, "late", "", control.WorkloadText, state.LeaseFence); !errors.Is(err, store.ErrAdmissionClosed) {
 				t.Fatalf("admission raced drain: %v", err)
 			}
 			break

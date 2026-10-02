@@ -123,6 +123,7 @@ jobs:
             test -s "${archives[0]}"
             tar -tzf "${archives[0]}" | grep -E '(^|/)gpu-mode$' > /dev/null
             tar -tzf "${archives[0]}" | grep -E '(^|/)gpu-workload-proxy$' > /dev/null
+            bash scripts/check-archive-notices.sh "${archives[0]}"
           done
           (cd dist && sha256sum --check checksums.txt)
 

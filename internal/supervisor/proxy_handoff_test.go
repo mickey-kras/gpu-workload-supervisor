@@ -29,12 +29,13 @@ func (s observedHandoffStore) AcquireUserExecution(ctx context.Context, shared b
 }
 
 func TestHTTPUserHandoffWaitsForForwardingWithoutRestartingStoppedWork(t *testing.T) {
-	for _, failure := range []string{"none", "handoff timeout", "target start"} {
+	for _, failure := range []string{"none", "handoff timeout", "target start", "client disconnect"} {
 		t.Run(failure, func(t *testing.T) {
 			ctx := context.Background()
 			stateStore := openStore(t)
 			ownershipState(t, stateStore, control.OwnerUser, control.WorkloadText)
 			entered, release := make(chan struct{}), make(chan struct{})
+			upstreamCanceled, handlerExited := make(chan struct{}), make(chan struct{})
 			var releaseOnce sync.Once
 			unblock := func() { releaseOnce.Do(func() { close(release) }) }
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -45,6 +46,7 @@ func TestHTTPUserHandoffWaitsForForwardingWithoutRestartingStoppedWork(t *testin
 				select {
 				case <-release:
 				case <-r.Context().Done():
+					close(upstreamCanceled)
 				}
 				w.WriteHeader(http.StatusAccepted)
 			}))
@@ -57,12 +59,15 @@ func TestHTTPUserHandoffWaitsForForwardingWithoutRestartingStoppedWork(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			server := httptest.NewServer(handler)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { defer close(handlerExited); handler.ServeHTTP(w, r) }))
 			defer server.Close()
 			defer unblock()
 			requestDone := make(chan error, 1)
+			requestCtx, cancelRequest := context.WithCancel(ctx)
+			defer cancelRequest()
 			go func() {
-				response, err := server.Client().Post(server.URL+"/execute", "application/json", nil)
+				request, _ := http.NewRequestWithContext(requestCtx, http.MethodPost, server.URL+"/execute", nil)
+				response, err := server.Client().Do(request)
 				if err == nil {
 					response.Body.Close()
 				}
@@ -103,7 +108,18 @@ func TestHTTPUserHandoffWaitsForForwardingWithoutRestartingStoppedWork(t *testin
 					t.Fatalf("handoff escaped active forwarding: %#v", got)
 				default:
 				}
-				unblock()
+				if failure == "client disconnect" {
+					cancelRequest()
+					for _, signal := range []chan struct{}{upstreamCanceled, handlerExited} {
+						select {
+						case <-signal:
+						case <-time.After(3 * time.Second):
+							t.Fatal("disconnect did not end forwarding")
+						}
+					}
+				} else {
+					unblock()
+				}
 			}
 			var got result
 			select {
@@ -112,10 +128,19 @@ func TestHTTPUserHandoffWaitsForForwardingWithoutRestartingStoppedWork(t *testin
 				t.Fatal("handoff did not finish")
 			}
 			unblock()
-			if err := <-requestDone; err != nil {
-				t.Fatal(err)
+			select {
+			case err := <-requestDone:
+				if failure == "client disconnect" {
+					if !errors.Is(err, context.Canceled) {
+						t.Fatalf("client cancellation = %v", err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("client request did not finish")
 			}
-			if failure == "none" {
+			if failure == "none" || failure == "client disconnect" {
 				if got.err != nil || got.state.Owner != control.OwnerSupervisor || got.state.ActiveWorkload != control.WorkloadMedia {
 					t.Fatalf("handoff result %#v %v", got.state, got.err)
 				}

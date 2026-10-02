@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -81,6 +80,9 @@ func openWithMode(ctx context.Context, path string, now Clock, uuid func() (stri
 		if info.Size() == 0 {
 			return nil, errors.New("restored state database is empty")
 		}
+	}
+	if err := secureStateFile(path); err != nil {
+		return nil, err
 	}
 	absolutePath, err := filepath.Abs(path)
 	if err != nil {
@@ -280,53 +282,6 @@ func (s *Store) RotateIncarnation(ctx context.Context) (control.State, error) {
 	return state, nil
 }
 
-func (s *Store) RegisterWork(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence) error {
-	tx, err := s.beginAdmittedWork(ctx, requestID, workload, fence)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO registered_work
-		(request_id, job_id, workload, lease_incarnation, lease_epoch, registered_at)
-		VALUES (?, ?, ?, ?, ?, ?)`, requestID, nullable(jobID), workload, fence.Incarnation, fence.Epoch, formatTime(s.now()))
-	if err != nil {
-		return fmt.Errorf("register work: %w", err)
-	}
-	return tx.Commit()
-}
-
-func (s *Store) BeginTransition(ctx context.Context, tr Transition) error {
-	if tr.ID == "" {
-		return errors.New("transition id is empty")
-	}
-	if err := tr.Fence.Validate(); err != nil {
-		return fmt.Errorf("invalid transition fence: %w", err)
-	}
-	source, err := json.Marshal(tr.Source)
-	if err != nil {
-		return err
-	}
-	target, err := json.Marshal(tr.Target)
-	if err != nil {
-		return err
-	}
-	previous, err := json.Marshal(tr.Previous)
-	if err != nil {
-		return err
-	}
-	now := formatTime(s.now())
-	_, err = s.db.ExecContext(ctx, `INSERT INTO transitions
-		(transition_id, lease_incarnation, lease_epoch, source_state, target_state,
-		 previous_state, initiator, job_id, phase, deadline, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_progress', ?, ?)`,
-		tr.ID, tr.Fence.Incarnation, tr.Fence.Epoch, source, target, previous,
-		tr.Initiator, nullable(tr.JobID), tr.Phase, formatTime(tr.Deadline), now, now)
-	if err != nil {
-		return fmt.Errorf("begin transition: %w", err)
-	}
-	return nil
-}
-
 func (s *Store) AppendTransitionEvent(ctx context.Context, event TransitionEvent) error {
 	if event.TransitionID == "" || event.Action == "" {
 		return errors.New("transition id and action are required")
@@ -338,31 +293,6 @@ func (s *Store) AppendTransitionEvent(ctx context.Context, event TransitionEvent
 		(transition_id, phase, kind, action, outcome, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		event.TransitionID, event.Phase, event.Kind, event.Action, nullable(event.Outcome), formatTime(s.now()))
 	return err
-}
-
-func (s *Store) TransitionEvents(ctx context.Context, transitionID string) ([]TransitionEvent, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT sequence, transition_id, phase, kind, action,
-		COALESCE(outcome, ''), created_at FROM transition_events
-		WHERE transition_id = ? ORDER BY sequence`, transitionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var events []TransitionEvent
-	for rows.Next() {
-		var event TransitionEvent
-		var created string
-		if err := rows.Scan(&event.Sequence, &event.TransitionID, &event.Phase, &event.Kind,
-			&event.Action, &event.Outcome, &created); err != nil {
-			return nil, err
-		}
-		event.CreatedAt, err = parseTime(created)
-		if err != nil {
-			return nil, err
-		}
-		events = append(events, event)
-	}
-	return events, rows.Err()
 }
 
 type querier interface {
@@ -461,4 +391,29 @@ func nullable(v string) any {
 // ownership commands. The gate is held until forwarding or the command ends.
 func (s *Store) AcquireUserExecution(ctx context.Context, shared bool) (*lock.File, error) {
 	return lock.AcquireContext(ctx, s.userExecutionLock, shared)
+}
+
+// Create privately before SQLite can open the file. Exclusive creation refuses
+// races; existing files are revalidated and opened without following symlinks.
+func secureStateFile(path string) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		if err := preparePath(path); err != nil {
+			return err
+		}
+		fd, err := syscall.Open(path, syscall.O_WRONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+		if err != nil {
+			return err
+		}
+		file = os.NewFile(uintptr(fd), path)
+		info, err := file.Stat()
+		if err != nil || !info.Mode().IsRegular() {
+			file.Close()
+			return errors.New("database path must be a regular file")
+		}
+	} else if err != nil {
+		return err
+	}
+	defer file.Close()
+	return file.Chmod(0o600)
 }

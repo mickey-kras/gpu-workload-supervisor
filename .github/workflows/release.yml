@@ -227,6 +227,7 @@ jobs:
             test -s "dist/$artifact"
             tar -tzf "dist/$artifact" | grep -E '(^|/)gpu-mode$' > /dev/null
             tar -tzf "dist/$artifact" | grep -E '(^|/)gpu-workload-proxy$' > /dev/null
+            bash scripts/check-archive-notices.sh "dist/$artifact"
             cp "dist/$artifact" "release-assets/$artifact"
           done
           (cd dist && sha256sum --check checksums.txt)

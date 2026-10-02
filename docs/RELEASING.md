@@ -63,3 +63,12 @@ current planned version.
 5. Check that the new publication is immutable and complete, and that the
    next-patch PR merges after its required checks and reserves the following patch
    version automatically.
+
+Binary archives include full dependency licenses and notices in
+`THIRD_PARTY_NOTICES/`, collected for both Linux architectures by pinned
+`google/go-licenses/v2` v2.0.1 using the shipped commands' dependency graphs.
+GoReleaser regenerates the bundle; snapshot and release gates inspect UUID's BSD
+notice and representative transitive notices. Keep collector updates separate from
+runtime dependencies, review warnings about non-Go code when dependencies change,
+and preserve this directory when redistributing binaries. The SBOM supplements
+these full notices; it does not replace them.

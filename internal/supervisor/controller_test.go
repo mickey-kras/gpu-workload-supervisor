@@ -118,7 +118,7 @@ func TestSwitchStopsTextBeforeStartingMedia(t *testing.T) {
 		t.Fatalf("state = %#v", state)
 	}
 	assertCalls(t, runtime.calls, "stop text", "start media")
-	events, err := stateStore.TransitionEvents(context.Background(), "11111111-1111-4111-8111-111111111111")
+	events, err := transitionEvents(stateStore, context.Background(), "11111111-1111-4111-8111-111111111111")
 	if err != nil {
 		t.Fatal(err)
 	}
