@@ -69,10 +69,10 @@ func TestForwardingFailureNeedsVerifiedAuditedResolution(t *testing.T) {
 	if _, err := controller.Switch(ctx, control.WorkloadText, "test"); !errors.Is(err, ErrDrainTimeout) {
 		t.Fatalf("initial switch error = %v", err)
 	}
-	if _, err := controller.Recover(ctx); err != nil {
-		t.Fatal(err)
+	if _, err := controller.Recover(ctx); !errors.Is(err, ErrDrainTimeout) {
+		t.Fatalf("recovery must not stop unresolved work: %v", err)
 	}
-	if _, err := controller.Switch(ctx, control.WorkloadText, "test"); !errors.Is(err, ErrDrainTimeout) {
+	if _, err := controller.Switch(ctx, control.WorkloadText, "test"); !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("switch after ordinary recovery error = %v", err)
 	}
 
@@ -148,22 +148,15 @@ func TestResolutionVerificationFailureKeepsWorkIncomplete(t *testing.T) {
 	if err == nil || count != 0 || closed.Admission != control.AdmissionClosed {
 		t.Fatalf("failed resolution count=%d state=%#v error=%v", count, closed, err)
 	}
-	// The unresolved registration still blocks a later switch even after an
-	// independent recovery clears the runtime failure.
+	// Ordinary recovery cannot stop runtimes while registration completion
+	// remains uncertain; explicit verified resolution is still required.
 	runtime.stopErr = nil
-	if _, err := controller.Recover(ctx); err != nil {
-		t.Fatal(err)
+	controller.config.DrainTimeout = 5 * time.Millisecond
+	if _, err := controller.Recover(ctx); !errors.Is(err, ErrDrainTimeout) {
+		t.Fatalf("unresolved work no longer blocks recovery: %v", err)
 	}
-	short, err := newController(stateStore, runtime, Config{
-		DrainTimeout: 5 * time.Millisecond, VerifyTimeout: time.Second,
-		ActionTimeout: time.Second, CleanupTimeout: time.Second,
-		FinalizeTimeout: time.Second, PollInterval: time.Millisecond,
-	}, time.Now, func() (string, error) { return "22222222-2222-4222-8222-222222222222", nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := short.Switch(ctx, control.WorkloadText, "test"); !errors.Is(err, ErrDrainTimeout) {
-		t.Fatalf("unresolved work no longer blocks switch: %v", err)
+	if _, err := controller.Switch(ctx, control.WorkloadText, "test"); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("failed recovery no longer blocks switch: %v", err)
 	}
 }
 

@@ -265,3 +265,11 @@ func (s *Store) PruneCompletedWork(ctx context.Context, before time.Time, limit 
 	}
 	return deleted, nil
 }
+
+// PendingWork reports whether any registration still has completion authority.
+// Recovery closes admission before polling, so this includes all pre-entry work.
+func (s *Store) PendingWork(ctx context.Context) (int, error) {
+	var pending int
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM registered_work WHERE completed_at IS NULL)`).Scan(&pending)
+	return pending, err
+}
