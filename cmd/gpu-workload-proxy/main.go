@@ -33,6 +33,11 @@ type activeHandler struct {
 	handler         http.Handler
 	mu              sync.Mutex
 	active          int
+	ordinary        int
+	completion      int
+	maxOrdinary     int
+	maxCompletion   int
+	completionPath  string
 	stopping        bool
 	drained         chan struct{}
 	hijacked        map[net.Conn]struct{}
@@ -75,6 +80,22 @@ func (h *activeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "proxy is shutting down", http.StatusServiceUnavailable)
 		return
 	}
+	isCompletion := r.Method == http.MethodPost && r.URL.Path == h.completionPath
+	if isCompletion {
+		if h.maxCompletion > 0 && h.completion >= h.maxCompletion {
+			h.mu.Unlock()
+			capacityUnavailable(w)
+			return
+		}
+		h.completion++
+	} else {
+		if h.maxOrdinary > 0 && h.ordinary >= h.maxOrdinary {
+			h.mu.Unlock()
+			capacityUnavailable(w)
+			return
+		}
+		h.ordinary++
+	}
 	h.active++
 	h.mu.Unlock()
 	writer := &trackingWriter{ResponseWriter: w, owner: h}
@@ -82,12 +103,24 @@ func (h *activeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.mu.Lock()
 		delete(h.hijacked, writer.conn)
 		h.active--
+		if isCompletion {
+			h.completion--
+		} else {
+			h.ordinary--
+		}
 		if h.stopping && h.active == 0 {
 			close(h.drained)
 		}
 		h.mu.Unlock()
 	}()
 	h.handler.ServeHTTP(writer, r)
+}
+
+func capacityUnavailable(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "1")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_, _ = w.Write([]byte("{\"error\":\"proxy_capacity_exceeded\"}\n"))
 }
 
 func (h *activeHandler) closeHijacked() error {
@@ -166,6 +199,7 @@ func main() {
 type proxyServerSettings struct {
 	statePath, listen                                                       string
 	readHeaderTimeout, idleTimeout, shutdownTimeout, completedWorkRetention time.Duration
+	maxInflight, maxCompletionInflight                                      int
 }
 
 func run() error {
@@ -183,6 +217,8 @@ func run() error {
 	idleTimeout := flags.Duration("idle-timeout", 2*time.Minute, "HTTP idle timeout")
 	shutdownTimeout := flags.Duration("shutdown-timeout", 30*time.Second, "graceful shutdown timeout")
 	completedWorkRetention := flags.Duration("completed-work-retention", 30*24*time.Hour, "time to keep completed work records")
+	maxInflight := flags.Int("max-inflight", 128, "maximum concurrent non-completion proxy requests")
+	maxCompletionInflight := flags.Int("max-completion-inflight", 16, "maximum concurrent completion reports, reserved from proxy traffic")
 	var routes routesFlag
 	var readOnlyRoutes routesFlag
 	var passthroughRoutes routesFlag
@@ -197,6 +233,9 @@ func run() error {
 	}
 	if *completedWorkRetention <= 0 {
 		return errors.New("completed-work-retention must be positive")
+	}
+	if *maxInflight <= 0 || *maxCompletionInflight <= 0 {
+		return errors.New("max-inflight and max-completion-inflight must be positive")
 	}
 	if err := validateLoopbackAddress(*listen); err != nil {
 		return err
@@ -235,6 +274,7 @@ func run() error {
 		statePath: *statePath, listen: *listen,
 		readHeaderTimeout: *readHeaderTimeout, idleTimeout: *idleTimeout,
 		shutdownTimeout: *shutdownTimeout, completedWorkRetention: *completedWorkRetention,
+		maxInflight: *maxInflight, maxCompletionInflight: *maxCompletionInflight,
 	})
 }
 
@@ -255,7 +295,11 @@ func serveProxy(proxyConfig workloadproxy.Config, settings proxyServerSettings) 
 	if err != nil {
 		return err
 	}
-	tracked := &activeHandler{handler: handler}
+	tracked := &activeHandler{handler: handler, maxOrdinary: settings.maxInflight,
+		maxCompletion: settings.maxCompletionInflight, completionPath: proxyConfig.CompletionPath}
+	if tracked.completionPath == "" {
+		tracked.completionPath = workloadproxy.DefaultCompletionPath
+	}
 	server := &http.Server{
 		Addr: settings.listen, Handler: tracked, ReadHeaderTimeout: settings.readHeaderTimeout,
 		IdleTimeout: settings.idleTimeout,
