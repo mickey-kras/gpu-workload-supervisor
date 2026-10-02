@@ -26,9 +26,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Go formatting
-        run: |
-          gofmt -d cmd/gpu-mode/main.go cmd/gpu-workload-proxy/main.go
-          test -z "$(gofmt -l .)"
+        run: test -z "$(gofmt -l .)"
       - name: Go module lock is current
         run: |
           go mod tidy
