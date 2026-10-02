@@ -51,6 +51,8 @@ probe and Ctrl-C cancels it. This is not GPU release or workload health proof.
 A failed unit may have a removed cgroup: preflight accepts that capability state,
 but release still requires stopped units. For crashed units with unfinished work,
 stop proxies and use the documented `resolve-work` then `recover` sequence.
+After stopping a failed unit, recovery verifies its cgroup is empty before
+clearing systemd's retained failure state and rechecking `inactive/dead`.
 
 After target verification succeeds, durable finalization uses its own bounded
 `-finalize-timeout`, so caller cancellation does not strand a verified transition.

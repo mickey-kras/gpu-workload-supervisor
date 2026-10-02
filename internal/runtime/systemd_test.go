@@ -51,9 +51,11 @@ func TestRecoveryStopsBothSystemdUnitsRatherThanOnlyReleasingMediaModels(t *test
 	if err := manager.StopForRecovery(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(runner.calls) != 2 ||
+	if len(runner.calls) != 4 ||
 		runner.calls[0] != "/usr/bin/true --user stop -- text.service" ||
-		runner.calls[1] != "/usr/bin/true --user stop -- media.service" {
+		runner.calls[1] != textShowCommand ||
+		runner.calls[2] != "/usr/bin/true --user stop -- media.service" ||
+		runner.calls[3] != mediaShowCommand {
 		t.Fatalf("recovery stop calls = %#v", runner.calls)
 	}
 	snapshot, err := manager.Observe(context.Background())
@@ -69,7 +71,7 @@ func TestRecoveryStopsBothSystemdUnitsRatherThanOnlyReleasingMediaModels(t *test
 }
 
 func TestRecoveryReportsMediaUnitStopFailure(t *testing.T) {
-	runner := &fakeRunner{errs: map[string]error{
+	runner := &fakeRunner{outputs: map[string][]byte{textShowCommand: stoppedOutput()}, errs: map[string]error{
 		"/usr/bin/true --user stop -- media.service": errors.New("unit failed to stop"),
 	}}
 	manager, err := newSystemdManager(testConfig(), runner, http.DefaultClient)
