@@ -257,3 +257,11 @@ func TestTokenedWorkPrunesUnderCurrentFenceWithoutLateCompletionCollision(t *tes
 		t.Fatalf("second completion = %v", err)
 	}
 }
+
+func TestPruneCompletedWorkWithNoEligibleRows(t *testing.T) {
+	s := testStore(t)
+	count, err := s.PruneCompletedWork(context.Background(), fixedClock()().Add(-24*time.Hour), 256)
+	if err != nil || count != 0 {
+		t.Fatalf("empty prune = %d, %v", count, err)
+	}
+}
