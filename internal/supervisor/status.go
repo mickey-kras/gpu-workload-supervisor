@@ -43,4 +43,3 @@ func (c *Controller) Status(ctx context.Context) (control.State, error) {
 	state.ActiveWorkload = active
 	return state, nil
 }
-
