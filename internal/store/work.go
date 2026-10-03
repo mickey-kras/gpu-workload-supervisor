@@ -231,6 +231,10 @@ func selectPrunableWorkIDs(ctx context.Context, tx *sql.Tx, cutoff string, limit
 	if err != nil {
 		return nil, fmt.Errorf("select completed work to prune: %w", err)
 	}
+	return readPrunableWorkIDs(rows)
+}
+
+func readPrunableWorkIDs(rows *sql.Rows) ([]string, error) {
 	var ids []string
 	for rows.Next() {
 		var id string
