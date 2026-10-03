@@ -66,6 +66,7 @@ func TestForwardingFailureNeedsVerifiedAuditedResolution(t *testing.T) {
 	if response.Header().Get(proxy.DefaultRegistrationTokenHeader) != "" {
 		t.Fatal("failed forwarding leaked a registration token to caller")
 	}
+	drainTimeout := controller.config.DrainTimeout
 	controller.config.DrainTimeout = 5 * time.Millisecond
 	if _, err := controller.Switch(ctx, control.WorkloadText, "test"); !errors.Is(err, ErrDrainTimeout) {
 		t.Fatalf("initial switch error = %v", err)
@@ -76,6 +77,7 @@ func TestForwardingFailureNeedsVerifiedAuditedResolution(t *testing.T) {
 	if _, err := controller.Switch(ctx, control.WorkloadText, "test"); !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("switch after ordinary recovery error = %v", err)
 	}
+	controller.config.DrainTimeout = drainTimeout
 
 	proxyLock, err := lock.AcquireShared(dbPath + ".proxy.lock")
 	if err != nil {
