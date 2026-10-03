@@ -69,8 +69,11 @@ jobs:
           cache-dependency-path: .github/aislop/package-lock.json
       - name: Audit Aislop toolchain
         run: |
+          npm ci --prefix .github/audit-tool --ignore-scripts --no-audit --no-fund
+          npm audit --prefix .github/audit-tool --audit-level=moderate
           npm ci --prefix .github/aislop --ignore-scripts --no-audit --no-fund
-          npm audit --prefix .github/aislop --audit-level=moderate
+          node --test .github/audit-tool/audit.test.cjs
+          node .github/audit-tool/audit.cjs .github/aislop
       - name: Test policy automation
         run: |
           npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund

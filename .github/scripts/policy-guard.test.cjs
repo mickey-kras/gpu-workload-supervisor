@@ -22,6 +22,9 @@ function files() {
     'sonar-project.properties', '.goreleaser.yaml', '.testcoverage.yml',
     '.github/actions/setup-goreleaser/action.yml', '.github/scripts/install-goreleaser.sh',
   ]) result[path] = readFileSync(path, 'utf8');
+  for (const name of ['package.json', 'package-lock.json', 'audit-ci.json', 'audit.cjs', 'audit.test.cjs', 'audit-fixture.json']) {
+    try { result[`.github/audit-tool/${name}`] = readFileSync(`.github/audit-tool/${name}`, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
   return result;
 }
 
@@ -235,6 +238,31 @@ test('package coverage config rejects deletion and duplicate keys', () => {
   }
 });
 
+function temporaryAuditFiles() {
+  const candidate = files();
+  candidate['.github/workflows/ci.yml'] = candidate['.github/workflows/ci.yml'].replace(
+    '          npm ci --prefix .github/aislop --ignore-scripts --no-audit --no-fund\n          npm audit --prefix .github/aislop --audit-level=moderate',
+    [
+      'npm ci --prefix .github/audit-tool --ignore-scripts --no-audit --no-fund',
+      'npm audit --prefix .github/audit-tool --audit-level=moderate',
+      'npm ci --prefix .github/aislop --ignore-scripts --no-audit --no-fund',
+      'node --test .github/audit-tool/audit.test.cjs',
+      'node .github/audit-tool/audit.cjs .github/aislop',
+    ].map(line => '          ' + line).join('\n'));
+  return candidate;
+}
+
+test('temporary audit exception rejects changed policy, tooling, and command', () => {
+  for (const path of ['audit-ci.json', 'audit.cjs', 'package.json', 'package-lock.json']) {
+    const candidate = temporaryAuditFiles();
+    candidate[`.github/audit-tool/${path}`] += '\n';
+    assert.ok(inspect(candidate).some(error => error.includes('temporary audit exception')));
+  }
+  const candidate = temporaryAuditFiles();
+  candidate['.github/workflows/ci.yml'] = candidate['.github/workflows/ci.yml'].replace('node .github/audit-tool/audit.cjs .github/aislop', 'node .github/audit-tool/audit.cjs .github/aislop || true');
+  assert.ok(inspect(candidate).some(error => error.includes('changed gate commands')));
+});
+
 function guardTrivyUpload(candidate) {
   const path = '.github/workflows/ci.yml';
   const workflow = YAML.parse(candidate[path]);
@@ -284,3 +312,4 @@ test('guarded Trivy upload requires the exact unconditional report producer', ()
     assert.notDeepEqual(inspect(candidate), []);
   }
 });
+

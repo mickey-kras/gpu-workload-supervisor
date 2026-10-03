@@ -28,7 +28,11 @@ type CommandRunner interface {
 type ExecRunner struct{}
 
 func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	output, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	command := exec.CommandContext(ctx, name, args...)
+	// A descendant can inherit stdout/stderr after the command exits or is
+	// killed. Bound the pipe drain as well as the command itself.
+	command.WaitDelay = 100 * time.Millisecond
+	output, err := command.CombinedOutput()
 	if err != nil && ctx.Err() != nil {
 		err = errors.Join(err, ctx.Err())
 	}
