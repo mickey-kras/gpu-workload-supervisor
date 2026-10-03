@@ -143,6 +143,11 @@ func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, ma
 	if config.Workload != control.WorkloadText && config.Workload != control.WorkloadMedia {
 		return nil, nil, nil, "", errors.New("workload must be text or media")
 	}
+	for _, header := range []string{config.RequestIDHeader, config.JobIDHeader, config.FenceIDHeader, config.FenceEpochHeader} {
+		if header != "" && !validHeaderName(header) {
+			return nil, nil, nil, "", errors.New("configured header name must be an HTTP token")
+		}
+	}
 	if err := validateDistinctControlHeaders(config); err != nil {
 		return nil, nil, nil, "", err
 	}
@@ -199,6 +204,21 @@ func validateRouteCollisions(routeSets []map[string]struct{}, completionKey stri
 		}
 	}
 	return nil
+}
+
+// validHeaderName implements RFC 9110's token grammar. net/http's validator
+// is internal; canonicalization alone does not reject invalid field names.
+func validHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, ch := range name {
+		if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || strings.ContainsRune("!#$%&'*+-.^_`|~", ch) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func validateDistinctControlHeaders(config Config) error {

@@ -92,7 +92,12 @@ func openWithMode(ctx context.Context, path string, now Clock, uuid func() (stri
 	// Otherwise an independent proxy retention commit can invalidate its WAL
 	// snapshot, and the read-to-write upgrade fails with SQLITE_BUSY_SNAPSHOT.
 	// Plain queries (and explicitly read-only transactions) remain readers.
-	dsn := url.URL{Scheme: "file", Path: absolutePath, RawQuery: "_txlock=immediate"}
+	// database/sql may replace an interrupted connection. Apply connection-local
+	// safety settings on every open, not only while initializing the schema.
+	options := url.Values{"_txlock": {"immediate"}, "_pragma": {
+		"busy_timeout(5000)", "foreign_keys(ON)", "journal_mode(WAL)", "synchronous(FULL)",
+	}}
+	dsn := url.URL{Scheme: "file", Path: absolutePath, RawQuery: options.Encode()}
 	db, err := sql.Open("sqlite", dsn.String())
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)

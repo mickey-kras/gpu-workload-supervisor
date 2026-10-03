@@ -320,22 +320,32 @@ func (c *Controller) waitForDrain(ctx context.Context, transitionID string, dead
 }
 
 func (c *Controller) waitForWork(ctx context.Context, deadline time.Time, pendingWork func(context.Context) (int, error)) error {
+	drainCtx, cancel := context.WithTimeout(ctx, deadline.Sub(c.now()))
+	defer cancel()
 	ticker := time.NewTicker(c.config.PollInterval)
 	defer ticker.Stop()
 	for {
-		pending, err := pendingWork(ctx)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if drainCtx.Err() != nil || !c.now().Before(deadline) {
+			return ErrDrainTimeout
+		}
+		pending, err := pendingWork(drainCtx)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if drainCtx.Err() != nil || !c.now().Before(deadline) {
+			return ErrDrainTimeout
+		}
 		if err != nil {
 			return err
 		}
 		if pending == 0 {
 			return nil
 		}
-		if !c.now().Before(deadline) {
-			return ErrDrainTimeout
-		}
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-drainCtx.Done():
 		case <-ticker.C:
 		}
 	}
