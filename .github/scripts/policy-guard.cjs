@@ -118,11 +118,9 @@ function inspectGoReleaser({ files, workflows, failures, checks, path, jobId, bu
 
 function inspectTrivyUpload(steps, failures) {
   const trusted = "(github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)";
-  const legacy = "${{ !cancelled() && " + trusted + " }}";
   const guarded = "${{ !cancelled() && steps.trivy_report.outcome == 'success' && " + trusted + " }}";
   const uploadIndex = steps.findIndex(step => step.name === 'Upload Trivy SARIF');
   const upload = steps[uploadIndex];
-  if (upload?.if !== guarded) return legacy;
   const reportIndex = steps.findIndex(step => step.name === 'Trivy filesystem report');
   const report = steps[reportIndex];
   if (!report || reportIndex >= uploadIndex || report.id !== 'trivy_report' ||
