@@ -116,6 +116,31 @@ function inspectGoReleaser({ files, workflows, failures, checks, path, jobId, bu
   }
 }
 
+function inspectTrivyUpload(steps, failures) {
+  const trusted = "(github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)";
+  const legacy = "${{ !cancelled() && " + trusted + " }}";
+  const guarded = "${{ !cancelled() && steps.trivy_report.outcome == 'success' && " + trusted + " }}";
+  const uploadIndex = steps.findIndex(step => step.name === 'Upload Trivy SARIF');
+  const upload = steps[uploadIndex];
+  if (upload?.if !== guarded) return legacy;
+  const reportIndex = steps.findIndex(step => step.name === 'Trivy filesystem report');
+  const report = steps[reportIndex];
+  if (!report || reportIndex >= uploadIndex || report.id !== 'trivy_report' ||
+      steps.filter(step => step.id === 'trivy_report').length !== 1 ||
+      Object.hasOwn(report, 'if') || Object.hasOwn(report, 'continue-on-error') ||
+      !report.uses?.startsWith('aquasecurity/trivy-action@') ||
+      !Object.entries({
+        'scan-type': 'fs', 'scan-ref': '.', format: 'sarif',
+        output: 'trivy-results.sarif', severity: 'HIGH,CRITICAL',
+        'ignore-unfixed': true, 'exit-code': '0',
+      }).every(([key, value]) => report.with?.[key] === value) ||
+      upload.with?.sarif_file !== 'trivy-results.sarif' ||
+      upload.with?.category !== '.github/workflows/ci.yml:fs') {
+    failures.push('Trivy SARIF upload lost its required report producer');
+  }
+  return guarded;
+}
+
 function inspectCi(files, workflows, failures, checks) {
   const { event, job, step, exactRun } = checks;
   const pr = '.github/workflows/pr-validation.yml';
@@ -140,14 +165,15 @@ function inspectCi(files, workflows, failures, checks) {
   ] });
   step(ci, 'checks', 'Verify snapshot archives', { run: ['tar -tzf', '(cd dist && sha256sum --check checksums.txt)'] });
   step(ci, 'checks', 'Go vulnerability audit', { uses: 'golang/govulncheck-action', withValues: { cache: false } });
-  step(ci, 'checks', 'Audit Aislop toolchain', { run: ['npm audit --prefix .github/aislop --audit-level=moderate'] });
+  step(ci, 'checks', 'Audit Aislop toolchain');
   step(ci, 'checks', 'Test policy automation', { run: ['node --test .github/scripts/*.test.cjs'] });
   step(ci, 'checks', 'Gitleaks', { uses: 'gitleaks/gitleaks-action' });
   step(ci, 'checks', 'Semgrep', { run: ['docker pull "$SEMGREP_IMAGE"', 'semgrep scan --config .semgrep.yml --exclude .semgrep.yml --error'] });
   step(ci, 'checks', 'Trivy high and critical gate', { uses: 'aquasecurity/trivy-action', withValues: { 'exit-code': '1', severity: 'HIGH,CRITICAL' } });
+  const uploadCondition = inspectTrivyUpload(workflows[ci]?.jobs?.checks?.steps || [], failures);
   step(ci, 'checks', 'Upload Trivy SARIF', {
     uses: 'github/codeql-action/upload-sarif',
-    expectedIf: "${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}",
+    expectedIf: uploadCondition,
   });
   exactRun(ci, 'checks', 'Go formatting', ['test -z "$(gofmt -l .)"']);
   exactRun(ci, 'checks', 'Go module lock is current', [
@@ -159,7 +185,22 @@ function inspectCi(files, workflows, failures, checks) {
     'awk \'$1 == "total:" { coverage=$3+0; found=1 } END { if (!found || coverage < 90) exit 1 }\' coverage-summary.txt',
   ]);
   exactRun(ci, 'checks', 'Go vet', ['go vet ./...']);
-  exactRun(ci, 'checks', 'Audit Aislop toolchain', [
+  const auditRun = workflows[ci]?.jobs?.checks?.steps?.find(s => s.name === 'Audit Aislop toolchain')?.run || '';
+  const temporaryAudit = auditRun.includes('.github/audit-tool/');
+  if (temporaryAudit) {
+    for (const [path, digest] of [['.github/audit-tool/audit-ci.json', '5d31c2834a2cd56fa7c8e6a62ea015c8c07d4da5bacd1e4af779950a3842f9ec'], ['.github/audit-tool/audit-fixture.json', 'b338f05c92807ac45b2c7d50eb8f1dbe6c8c29f671ceb2912c051e39c453ecd2'], ['.github/audit-tool/audit.cjs', '3302195e687c5a4940c88d32353f68bcb12b61475affc05af18cba6398cbbc31'], ['.github/audit-tool/audit.test.cjs', '4271a0e0cabfb6e07c779fa6a15b86751ed55ed25322abdd546e56772a58956b'], ['.github/audit-tool/package-lock.json', 'ac23769398329eb7cea03236037626c2197d20695c35c6f8af26ea7706b73660'], ['.github/audit-tool/package.json', '10e831899e68131e3fa58f3c62c18aeba8fceb87199de65f9861f015b63fb709']]) {
+      if (createHash('sha256').update(files[path] || '').digest('hex') !== digest) {
+        failures.push(`${path} changed the approved temporary audit exception`);
+      }
+    }
+  }
+  exactRun(ci, 'checks', 'Audit Aislop toolchain', temporaryAudit ? [
+    'npm ci --prefix .github/audit-tool --ignore-scripts --no-audit --no-fund',
+    'npm audit --prefix .github/audit-tool --audit-level=moderate',
+    'npm ci --prefix .github/aislop --ignore-scripts --no-audit --no-fund',
+    'node --test .github/audit-tool/audit.test.cjs',
+    'node .github/audit-tool/audit.cjs .github/aislop',
+  ] : [
     'npm ci --prefix .github/aislop --ignore-scripts --no-audit --no-fund',
     'npm audit --prefix .github/aislop --audit-level=moderate',
   ]);
@@ -416,6 +457,7 @@ async function run({ github, context }) {
   if (tree.truncated) throw new Error('Cannot verify a truncated PR tree');
   const paths = tree.tree.filter(entry => entry.type === 'blob' &&
     (REQUIRED_FILES.includes(entry.path) ||
+      entry.path.startsWith('.github/audit-tool/') ||
       (entry.path.startsWith('.github/workflows/') && /\.ya?ml$/.test(entry.path))))
     .map(entry => entry.path);
   const files = {};

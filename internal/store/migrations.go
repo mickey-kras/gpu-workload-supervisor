@@ -126,16 +126,6 @@ const schemaV10 = `CREATE INDEX idx_transition_events_transition_sequence ON tra
 var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10}
 
 func (s *Store) initialize(ctx context.Context) error {
-	for _, pragma := range []string{
-		"PRAGMA foreign_keys = ON",
-		"PRAGMA journal_mode = WAL",
-		"PRAGMA synchronous = FULL",
-		"PRAGMA busy_timeout = 5000",
-	} {
-		if _, err := s.db.ExecContext(ctx, pragma); err != nil {
-			return fmt.Errorf("configure sqlite: %w", err)
-		}
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
