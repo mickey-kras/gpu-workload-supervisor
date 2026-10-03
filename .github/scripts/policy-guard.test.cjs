@@ -235,29 +235,16 @@ test('package coverage config rejects deletion and duplicate keys', () => {
   }
 });
 
-test('SARIF guard accepts only the existing and report-success migration conditions', () => {
+test('Trivy report identity and successful report condition protect SARIF upload', () => {
   const path = '.github/workflows/ci.yml';
-  const candidate = files();
-  assert.deepEqual(inspect(candidate), []);
-  const workflow = YAML.parse(candidate[path]);
-  workflow.jobs.checks.steps.find(step => step.name === 'Trivy filesystem report').id = 'trivy-report';
-  workflow.jobs.checks.steps.find(step => step.name === 'Upload Trivy SARIF').if = "${{ !cancelled() && steps.trivy-report.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}";
-  candidate[path] = YAML.stringify(workflow);
-  assert.deepEqual(inspect(candidate), []);
-});
-
-test('report-success SARIF migration requires the report identity, output and fork restriction', () => {
-  const path = '.github/workflows/ci.yml';
-  for (const change of ['report-id', 'report-output', 'arbitrary-condition', 'fork-condition']) {
+  for (const change of ['report-id', 'report-output', 'upload-condition', 'fork-condition']) {
     const candidate = files();
     const workflow = YAML.parse(candidate[path]);
     const report = workflow.jobs.checks.steps.find(step => step.name === 'Trivy filesystem report');
     const upload = workflow.jobs.checks.steps.find(step => step.name === 'Upload Trivy SARIF');
-    report.id = 'trivy-report';
-    upload.if = "${{ !cancelled() && steps.trivy-report.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}";
     if (change === 'report-id') report.id = 'wrong-report';
     if (change === 'report-output') report.with.output = 'wrong.sarif';
-    if (change === 'arbitrary-condition') upload.if = '${{ false }}';
+    if (change === 'upload-condition') upload.if = upload.if.replace("steps.trivy-report.outcome == 'success' && ", '');
     if (change === 'fork-condition') upload.if = "${{ !cancelled() && steps.trivy-report.outcome == 'success' }}";
     candidate[path] = YAML.stringify(workflow);
     assert.ok(inspect(candidate).some(error => error.includes('Trivy')), change);
