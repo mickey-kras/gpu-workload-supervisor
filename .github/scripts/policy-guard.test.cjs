@@ -274,15 +274,14 @@ function guardTrivyUpload(candidate) {
   return { path, workflow, steps, report, upload };
 }
 
-test('Trivy upload accepts legacy and successful-report conditions', () => {
+test('Trivy upload rejects legacy and accepts successful-report conditions', () => {
   const legacy = files();
   const legacyPath = '.github/workflows/ci.yml';
   const legacyWorkflow = YAML.parse(legacy[legacyPath]);
   const legacySteps = legacyWorkflow.jobs.checks.steps;
-  delete legacySteps.find(step => step.name === 'Trivy filesystem report').id;
   legacySteps.find(step => step.name === 'Upload Trivy SARIF').if = "${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}";
   legacy[legacyPath] = YAML.stringify(legacyWorkflow);
-  assert.deepEqual(inspect(legacy), []);
+  assert.ok(inspect(legacy).some(error => error.includes('Upload Trivy SARIF')));
   const candidate = files();
   const { path, workflow } = guardTrivyUpload(candidate);
   candidate[path] = YAML.stringify(workflow);
