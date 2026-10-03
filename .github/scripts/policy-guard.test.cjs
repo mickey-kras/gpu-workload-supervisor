@@ -262,3 +262,54 @@ test('temporary audit exception rejects changed policy, tooling, and command', (
   candidate['.github/workflows/ci.yml'] = candidate['.github/workflows/ci.yml'].replace('node .github/audit-tool/audit.cjs .github/aislop', 'node .github/audit-tool/audit.cjs .github/aislop || true');
   assert.ok(inspect(candidate).some(error => error.includes('changed gate commands')));
 });
+
+function guardTrivyUpload(candidate) {
+  const path = '.github/workflows/ci.yml';
+  const workflow = YAML.parse(candidate[path]);
+  const steps = workflow.jobs.checks.steps;
+  const report = steps.find(step => step.name === 'Trivy filesystem report');
+  const upload = steps.find(step => step.name === 'Upload Trivy SARIF');
+  report.id = 'trivy_report';
+  upload.if = "${{ !cancelled() && steps.trivy_report.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}";
+  return { path, workflow, steps, report, upload };
+}
+
+test('Trivy upload accepts legacy and successful-report conditions', () => {
+  const legacy = files();
+  const legacyPath = '.github/workflows/ci.yml';
+  const legacyWorkflow = YAML.parse(legacy[legacyPath]);
+  const legacySteps = legacyWorkflow.jobs.checks.steps;
+  delete legacySteps.find(step => step.name === 'Trivy filesystem report').id;
+  legacySteps.find(step => step.name === 'Upload Trivy SARIF').if = "${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}";
+  legacy[legacyPath] = YAML.stringify(legacyWorkflow);
+  assert.deepEqual(inspect(legacy), []);
+  const candidate = files();
+  const { path, workflow } = guardTrivyUpload(candidate);
+  candidate[path] = YAML.stringify(workflow);
+  assert.deepEqual(inspect(candidate), []);
+});
+
+test('guarded Trivy upload requires the exact unconditional report producer', () => {
+  for (const mutation of [
+    state => { state.report.id = 'wrong'; },
+    state => { state.report.if = false; },
+    state => { state.report['continue-on-error'] = true; },
+    state => { state.report.uses = 'actions/checkout@' + 'a'.repeat(40); },
+    state => { state.report.with.output = 'other.sarif'; },
+    state => { state.report.with.format = 'table'; },
+    state => { state.report.with['scan-ref'] = 'empty'; },
+    state => { state.report.with['exit-code'] = '1'; },
+    state => { state.upload.with.sarif_file = 'other.sarif'; },
+    state => { state.upload.if = state.upload.if.replace("outcome == 'success'", "outcome != 'skipped'"); },
+    state => { state.steps.push({ id: 'trivy_report', run: 'true' }); },
+    state => { state.steps.splice(state.steps.indexOf(state.report), 1); },
+    state => { state.steps.splice(state.steps.indexOf(state.report), 1); state.steps.push(state.report); },
+  ]) {
+    const candidate = files();
+    const state = guardTrivyUpload(candidate);
+    mutation(state);
+    candidate[state.path] = YAML.stringify(state.workflow);
+    assert.notDeepEqual(inspect(candidate), []);
+  }
+});
+

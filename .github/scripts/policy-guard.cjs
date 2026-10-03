@@ -116,6 +116,31 @@ function inspectGoReleaser({ files, workflows, failures, checks, path, jobId, bu
   }
 }
 
+function inspectTrivyUpload(steps, failures) {
+  const trusted = "(github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)";
+  const legacy = "${{ !cancelled() && " + trusted + " }}";
+  const guarded = "${{ !cancelled() && steps.trivy_report.outcome == 'success' && " + trusted + " }}";
+  const uploadIndex = steps.findIndex(step => step.name === 'Upload Trivy SARIF');
+  const upload = steps[uploadIndex];
+  if (upload?.if !== guarded) return legacy;
+  const reportIndex = steps.findIndex(step => step.name === 'Trivy filesystem report');
+  const report = steps[reportIndex];
+  if (!report || reportIndex >= uploadIndex || report.id !== 'trivy_report' ||
+      steps.filter(step => step.id === 'trivy_report').length !== 1 ||
+      Object.hasOwn(report, 'if') || Object.hasOwn(report, 'continue-on-error') ||
+      !report.uses?.startsWith('aquasecurity/trivy-action@') ||
+      !Object.entries({
+        'scan-type': 'fs', 'scan-ref': '.', format: 'sarif',
+        output: 'trivy-results.sarif', severity: 'HIGH,CRITICAL',
+        'ignore-unfixed': true, 'exit-code': '0',
+      }).every(([key, value]) => report.with?.[key] === value) ||
+      upload.with?.sarif_file !== 'trivy-results.sarif' ||
+      upload.with?.category !== '.github/workflows/ci.yml:fs') {
+    failures.push('Trivy SARIF upload lost its required report producer');
+  }
+  return guarded;
+}
+
 function inspectCi(files, workflows, failures, checks) {
   const { event, job, step, exactRun } = checks;
   const pr = '.github/workflows/pr-validation.yml';
@@ -145,9 +170,10 @@ function inspectCi(files, workflows, failures, checks) {
   step(ci, 'checks', 'Gitleaks', { uses: 'gitleaks/gitleaks-action' });
   step(ci, 'checks', 'Semgrep', { run: ['docker pull "$SEMGREP_IMAGE"', 'semgrep scan --config .semgrep.yml --exclude .semgrep.yml --error'] });
   step(ci, 'checks', 'Trivy high and critical gate', { uses: 'aquasecurity/trivy-action', withValues: { 'exit-code': '1', severity: 'HIGH,CRITICAL' } });
+  const uploadCondition = inspectTrivyUpload(workflows[ci]?.jobs?.checks?.steps || [], failures);
   step(ci, 'checks', 'Upload Trivy SARIF', {
     uses: 'github/codeql-action/upload-sarif',
-    expectedIf: "${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}",
+    expectedIf: uploadCondition,
   });
   exactRun(ci, 'checks', 'Go formatting', ['test -z "$(gofmt -l .)"']);
   exactRun(ci, 'checks', 'Go module lock is current', [
