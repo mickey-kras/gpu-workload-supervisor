@@ -69,13 +69,14 @@ function createChecks(workflows, failures) {
       failures.push(`${path} lost unconditional job ${id}: ${uses}`);
     }
   }
-  function step(path, jobId, name, { uses, run, withValues, expectedIf, allowJobIf = false } = {}) {
+  function step(path, jobId, name, { uses, run, withValues, expectedIf, expectedId, allowJobIf = false } = {}) {
     const job = workflows[path]?.jobs?.[jobId];
     const found = job?.steps?.find(s => s.name === name);
     const commands = typeof found?.run === 'string' ? found.run.split('\n').map(line => line.trim())
       .filter(line => line && !line.startsWith('#')) : [];
     if (!found || (!allowJobIf && Object.hasOwn(job, 'if')) ||
         (expectedIf === undefined ? Object.hasOwn(found, 'if') : found.if !== expectedIf) ||
+        (expectedId !== undefined && found.id !== expectedId) ||
         (found.shell && found.shell !== 'bash') || (uses && !found.uses?.startsWith(`${uses}@`)) ||
         (run && !run.every(part => commands.some(line => line === part || line.startsWith(`${part} `)))) ||
         (withValues && !Object.entries(withValues).every(([key, value]) => found.with?.[key] === value))) {
@@ -145,9 +146,18 @@ function inspectCi(files, workflows, failures, checks) {
   step(ci, 'checks', 'Gitleaks', { uses: 'gitleaks/gitleaks-action' });
   step(ci, 'checks', 'Semgrep', { run: ['docker pull "$SEMGREP_IMAGE"', 'semgrep scan --config .semgrep.yml --exclude .semgrep.yml --error'] });
   step(ci, 'checks', 'Trivy high and critical gate', { uses: 'aquasecurity/trivy-action', withValues: { 'exit-code': '1', severity: 'HIGH,CRITICAL' } });
+  // Stage the exact stricter condition before changing a workflow inspected by
+  // this trusted base-branch guard. Remove legacy acceptance with that change.
+  const legacySarifIf = "${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}";
+  const reportSuccessIf = "${{ !cancelled() && steps.trivy-report.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}";
+  const usesReportSuccess = workflows[ci]?.jobs?.checks?.steps?.find(s => s.name === 'Upload Trivy SARIF')?.if === reportSuccessIf;
+  step(ci, 'checks', 'Trivy filesystem report', {
+    uses: 'aquasecurity/trivy-action', expectedId: usesReportSuccess ? 'trivy-report' : undefined,
+    withValues: { format: 'sarif', output: 'trivy-results.sarif' },
+  });
   step(ci, 'checks', 'Upload Trivy SARIF', {
     uses: 'github/codeql-action/upload-sarif',
-    expectedIf: "${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}",
+    expectedIf: usesReportSuccess ? reportSuccessIf : legacySarifIf,
   });
   exactRun(ci, 'checks', 'Go formatting', ['test -z "$(gofmt -l .)"']);
   exactRun(ci, 'checks', 'Go module lock is current', [
