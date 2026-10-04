@@ -23,6 +23,20 @@ done
 for file in usr/share/gpu-workload-supervisor/setup.js usr/share/gpu-workload-supervisor/review.mjs usr/share/applications/gpu-workload-supervisor-setup.desktop usr/lib/systemd/user/gpu-workload-supervisor-reconcile.service usr/share/doc/gpu-workload-supervisor/copyright; do
   test -s "$root/$file"
 done
+# Preserve architecture and dependency paths: multiple dependencies ship a file
+# named LICENSE, so a flattened notice directory is not a valid payload.
+notices="$root/usr/share/doc/gpu-workload-supervisor/THIRD_PARTY_NOTICES"
+for arch in amd64 arm64; do
+  uuid_notice="$notices/linux_${arch}/github.com/google/uuid/LICENSE"
+  test -s "$uuid_notice"
+  grep -F 'Redistribution and use in source and binary forms' "$uuid_notice" > /dev/null
+  for dependency in modernc.org/libc golang.org/x/sys; do
+    notice="$(find "$notices/linux_${arch}/$dependency" -type f -name '*LICENSE*' -print -quit)"
+    test -n "$notice"
+    test -s "$notice"
+  done
+done
+grep -F 'The Go Authors' "$notices/go/LICENSE" > /dev/null
 # Installation/removal must never run code against logged-in user state.
 for script in preinst postinst prerm postrm; do
   test ! -e "$root/DEBIAN/$script"

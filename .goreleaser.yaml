@@ -80,8 +80,9 @@ nfpms:
         dst: /usr/lib/systemd/user/gpu-workload-supervisor-reconcile.service
       - src: LICENSE
         dst: /usr/share/doc/gpu-workload-supervisor/copyright
-      - src: THIRD_PARTY_NOTICES/**/*
+      - src: THIRD_PARTY_NOTICES/
         dst: /usr/share/doc/gpu-workload-supervisor/THIRD_PARTY_NOTICES/
+        type: tree
 
 archives:
   - formats:
