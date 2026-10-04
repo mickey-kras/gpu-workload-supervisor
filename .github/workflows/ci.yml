@@ -11,7 +11,7 @@ jobs:
   checks:
     name: checks
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
@@ -149,3 +149,21 @@ jobs:
             test "${#packages[@]}" -eq 1
             bash scripts/check-desktop-package.sh "${packages[0]}"
           done
+
+      - name: Native desktop transport integration
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y gjs python3
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT timeout 180s bash scripts/native-desktop-integration.sh --isolated-test-host
+      - name: Packaged setup lifecycle integration
+        run: |
+          set -euo pipefail
+          packages=(dist/gpu-workload-supervisor_*_linux_amd64.deb)
+          test "${#packages[@]}" -eq 1
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT timeout 300s bash scripts/setup-desktop-integration.sh --isolated-test-host "${packages[0]}"
+      - name: Debian payload lifecycle integration
+        run: |
+          set -euo pipefail
+          packages=(dist/gpu-workload-supervisor_*_linux_amd64.deb)
+          test "${#packages[@]}" -eq 1
+          sudo timeout 120s bash scripts/check-desktop-deb-lifecycle.sh "${packages[0]}"

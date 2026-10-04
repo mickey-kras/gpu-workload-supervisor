@@ -107,3 +107,24 @@ unowned links are preserved. Disable the extension through GNOME Extensions.
 Package removal removes package-owned binaries, extension, launcher, and unit;
 profiles, workload units, models, state, audit, and backups remain private user
 data. Reinstall the matching release or activate a newer one through setup.
+
+## Continuous integration coverage
+
+The required `quality / checks` job also runs native GJS/Gio transport tests,
+then extracts the actual amd64 snapshot Debian payload into a disposable runner
+and tests its setup executable as a newly created OS account with real user
+systemd and SQLite. This covers discovery, side-effect-free preview, explicit
+confirmation, an interrupted activation after catalog commit, durable forward
+resume, login reconciliation through the packaged unit, stale preview rejection,
+checksummed backup tuples, and owned integration removal/reapplication. A clearly
+identified NVIDIA command fixture is used; no GPU is claimed by this gate.
+
+A separate dpkg temporary-root test exercises unpack, remove, purge and reinstall
+of the unchanged payload and checks preservation of private data. It does not
+configure the package or bypass its GNOME 50 dependencies. These checks fail when
+prerequisites are absent; they are unconditional parts of the existing gate.
+The scripts require a disposable host and refuse existing installed backend paths.
+
+Real GNOME Shell 50 rendering/session lifecycle, NVIDIA operation, dependency
+resolution and configured package installation, cross-version managed upgrade,
+and complete rollback/fence rotation still require deployment qualification.
