@@ -30,18 +30,24 @@ func fixture(t *testing.T) (string, Request) {
 	t.Helper()
 	home := t.TempDir()
 	r := Request{Version: 1, ConfirmQuiesced: true, Profile: Profile{Version: 1, StatePath: filepath.Join(home, "state/state.db"), SystemctlPath: "/usr/bin/systemctl", NvidiaSMIPath: "/usr/bin/nvidia-smi"}, Catalog: control.Catalog{Version: 1, Profiles: []control.Profile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health", BootPolicy: "stop-to-idle"}}}}
-	priorRuntime, priorRun, priorDir := makeRuntime, runCommand, binaryDirectory
+	priorRuntime, priorRun, priorDir, priorUID := makeRuntime, runCommand, binaryDirectory, packageBinaryUID
 	makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
 	runCommand = func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("text.service disabled\nmedia.service disabled\n"), nil
 	}
 	binaryDirectory = t.TempDir()
+	packageBinaryUID = uint32(os.Geteuid())
 	for _, name := range binaries {
 		if err := os.WriteFile(filepath.Join(binaryDirectory, name), []byte("binary-"+name), 0700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	t.Cleanup(func() { makeRuntime = priorRuntime; runCommand = priorRun; binaryDirectory = priorDir })
+	t.Cleanup(func() {
+		makeRuntime = priorRuntime
+		runCommand = priorRun
+		binaryDirectory = priorDir
+		packageBinaryUID = priorUID
+	})
 	return home, r
 }
 func TestApplyFreshRepeatUpgradeDowngradeAndBackup(t *testing.T) {
@@ -173,5 +179,47 @@ func TestDecodePlanDiscoverAndValidation(t *testing.T) {
 		if newer(pair[0], pair[1]) {
 			t.Fatal(pair)
 		}
+	}
+}
+
+func TestOwnedIntegrationRemovalPreservesUserData(t *testing.T) {
+	home, r := fixture(t)
+	ctx := context.Background()
+	if err := Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, ".config/systemd/user/default.target.wants", reconcileUnit)
+	if err := os.Symlink("/usr/lib/systemd/user/"+reconcileUnit, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveIntegration(home); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(r.Profile.StatePath); err != nil {
+		t.Fatal("state removed", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config/gpu-workload-supervisor/operator.json")); err != nil {
+		t.Fatal("profile removed", err)
+	}
+	if err := RemoveIntegration(home); err != nil {
+		t.Fatal(err)
+	}
+	if err := enableReconciliation(ctx, home, r.Profile.SystemctlPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/some/user.service", link); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveIntegration(home); err == nil {
+		t.Fatal("foreign link removed")
+	}
+	if err := enableReconciliation(ctx, home, r.Profile.SystemctlPath); err == nil {
+		t.Fatal("foreign link overwritten")
+	}
+	os.Remove(link)
+	userUnit := filepath.Join(home, ".config/systemd/user", reconcileUnit)
+	os.WriteFile(userUnit, []byte("user"), 0600)
+	if err := enableReconciliation(ctx, home, r.Profile.SystemctlPath); err == nil {
+		t.Fatal("user unit overwritten")
 	}
 }

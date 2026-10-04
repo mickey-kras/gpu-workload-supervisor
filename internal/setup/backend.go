@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"reflect"
@@ -25,13 +24,15 @@ import (
 )
 
 type Profile struct {
-	Version             int    `json:"version"`
-	StatePath           string `json:"statePath"`
-	ActivatedRelease    string `json:"activatedRelease"`
-	SystemctlPath       string `json:"systemctlPath"`
-	NvidiaSMIPath       string `json:"nvidiaSMIPath"`
-	GPUIndex            int    `json:"gpuIndex"`
-	CapacityHeadroomMiB uint64 `json:"capacityHeadroomMiB"`
+	Version                 int    `json:"version"`
+	StatePath               string `json:"statePath"`
+	ActivatedRelease        string `json:"activatedRelease"`
+	SystemctlPath           string `json:"systemctlPath"`
+	NvidiaSMIPath           string `json:"nvidiaSMIPath"`
+	GPUIndex                int    `json:"gpuIndex"`
+	CapacityHeadroomMiB     uint64 `json:"capacityHeadroomMiB"`
+	StatusTimeoutSeconds    int    `json:"statusTimeoutSeconds,omitempty"`
+	OperationTimeoutSeconds int    `json:"operationTimeoutSeconds,omitempty"`
 }
 type Request struct {
 	Version          int             `json:"version"`
@@ -40,6 +41,11 @@ type Request struct {
 	ExpectedRevision string          `json:"expectedRevision"`
 	ConfirmQuiesced  bool            `json:"confirmQuiesced"`
 }
+type activation struct {
+	Request Request `json:"request"`
+	Fresh   bool    `json:"fresh"`
+}
+
 type Preview struct {
 	Release string          `json:"release"`
 	Profile Profile         `json:"profile"`
@@ -70,7 +76,7 @@ func Validate(request Request) error {
 	if request.Version != 1 || request.Profile.Version != 1 {
 		return errors.New("unsupported setup/profile version")
 	}
-	if request.Profile.GPUIndex < 0 {
+	if request.Profile.GPUIndex < 0 || request.Profile.StatusTimeoutSeconds < 0 || request.Profile.StatusTimeoutSeconds > 60 || request.Profile.OperationTimeoutSeconds < 0 || request.Profile.OperationTimeoutSeconds > 1800 {
 		return errors.New("invalid GPU index")
 	}
 	for _, path := range []string{request.Profile.StatePath, request.Profile.SystemctlPath, request.Profile.NvidiaSMIPath} {
@@ -94,15 +100,16 @@ func Plan(home string, request Request) (Preview, error) {
 	if err := Validate(request); err != nil {
 		return Preview{}, err
 	}
+	if _, err := makeRuntime(request); err != nil {
+		return Preview{}, err
+	}
 	profile := request.Profile
 	profile.ActivatedRelease = deployment.Release
 	return Preview{Release: deployment.Release, Profile: profile, Catalog: request.Catalog, Changes: []string{filepath.Join(home, ".config/gpu-workload-supervisor/operator.json"), "Commit validated workload catalog to " + profile.StatePath, "Enable packaged user reconciliation for future logins (no workload is started now)", "Retain verified binary/configuration/state backups; user units and models are unchanged"}}, nil
 }
 
 var makeRuntime = runtimeFor
-var runCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
-}
+var runCommand = boundedCommand
 
 func runtimeFor(request Request) (gpuruntime.Manager, error) {
 	return gpuruntime.NewSystemdManager(gpuruntime.SystemdConfig{Catalog: &request.Catalog, SystemctlPath: request.Profile.SystemctlPath, NvidiaSMIPath: request.Profile.NvidiaSMIPath, GPUIndex: request.Profile.GPUIndex, CapacityHeadroomMiB: request.Profile.CapacityHeadroomMiB, HealthTimeout: 10 * time.Second})
@@ -116,6 +123,16 @@ func mkdirTrusted(path string) error {
 
 // Apply never stops workloads. A caller must explicitly bring the existing
 // deployment to closed, stable Idle before activation or adoption.
+type activationWork struct {
+	home, root     string
+	request        Request
+	old            Profile
+	oldProfileData []byte
+	marker         deployment.Marker
+	existing       bool
+	accepted       control.CatalogSnapshot
+}
+
 func Apply(ctx context.Context, home string, request Request) error {
 	if err := Validate(request); err != nil {
 		return err
@@ -123,23 +140,11 @@ func Apply(ctx context.Context, home string, request Request) error {
 	if !request.ConfirmQuiesced {
 		return errors.New("review preview and explicitly confirm quiescent activation")
 	}
-	root := filepath.Join(home, ".config/gpu-workload-supervisor")
-	if err := mkdirTrusted(root); err != nil {
+	work := activationWork{home: home, root: filepath.Join(home, ".config/gpu-workload-supervisor"), request: request}
+	if err := mkdirTrusted(work.root); err != nil {
 		return err
 	}
 	if err := mkdirTrusted(filepath.Dir(request.Profile.StatePath)); err != nil {
-		return err
-	}
-	oldProfileData, err := privateRead(filepath.Join(root, "operator.json"))
-	var old Profile
-	if err == nil {
-		if err := json.Unmarshal(oldProfileData, &old); err != nil {
-			return err
-		}
-		if old.StatePath != request.Profile.StatePath {
-			return errors.New("state relocation requires explicit maintenance migration")
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	gate, err := lock.TryAcquire(request.Profile.StatePath + ".lock")
@@ -152,90 +157,150 @@ func Apply(ctx context.Context, home string, request Request) error {
 		return err
 	}
 	defer proxy.Close()
-	marker, err := deployment.Read(request.Profile.StatePath)
+	if err := work.inspect(ctx); err != nil {
+		return err
+	}
+	manager, err := work.verifyRuntimes(ctx)
+	if err != nil {
+		return err
+	}
+	if err := work.backup(ctx); err != nil {
+		return err
+	}
+	progress, err := work.enterMaintenance()
+	if err != nil {
+		return err
+	}
+	return commitConfiguration(ctx, home, work.root, request, manager, progress.Fresh)
+}
+
+func (work *activationWork) inspect(ctx context.Context) error {
+	request := work.request
+	data, err := privateRead(filepath.Join(work.root, "operator.json"))
+	if err == nil {
+		if err := json.Unmarshal(data, &work.old); err != nil {
+			return err
+		}
+		if work.old.StatePath != request.Profile.StatePath {
+			return errors.New("state relocation requires explicit maintenance migration")
+		}
+		work.oldProfileData = data
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	work.marker, err = deployment.Read(request.Profile.StatePath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if old.StatePath != "" && marker.Release != old.ActivatedRelease && !(marker.Maintenance && old.ActivatedRelease == deployment.Release) {
+	marker := work.marker
+	if work.old.StatePath != "" && marker.Release != work.old.ActivatedRelease && !(marker.Maintenance && work.old.ActivatedRelease == deployment.Release) {
 		return errors.New("activated profile and marker disagree")
 	}
 	if marker.Release != "" && marker.Release != deployment.Release && !newer(deployment.Release, marker.Release) {
 		return errors.New("unsafe downgrade refused; use documented compatible backup restoration")
 	}
-	_, stateErr := os.Lstat(request.Profile.StatePath)
-	existing := stateErr == nil
-	if stateErr != nil && !errors.Is(stateErr, os.ErrNotExist) {
-		return stateErr
-	}
-	if existing && !marker.Maintenance {
-		if err := Inspect(ctx, request.Profile.StatePath); err != nil {
-			return err
-		}
-	}
-	manager, err := makeRuntime(request)
-	if err != nil {
+	_, err = os.Lstat(request.Profile.StatePath)
+	work.existing = err == nil
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := manager.Released(ctx); err != nil {
-		return fmt.Errorf("configured workloads have not released the GPU: %w", err)
-	}
-	// Existing committed mappings are also verified; removing a stopped profile
-	// from the new catalog must not hide an old runtime still holding GPU memory.
-	if existing && old.StatePath != "" {
-		previous, err := privateRead(filepath.Join(root, "catalog.json"))
-		if err != nil {
-			return err
-		}
-		var catalog control.Catalog
-		if err := json.Unmarshal(previous, &catalog); err != nil {
-			return err
-		}
-		oldRequest := request
-		oldRequest.Profile = old
-		oldRequest.Catalog = catalog
-		oldManager, err := makeRuntime(oldRequest)
-		if err != nil {
-			return err
-		}
-		if err := oldManager.Released(ctx); err != nil {
-			return err
-		}
-	}
-	if existing && !marker.Maintenance {
-		backupDir := filepath.Join(root, "backups", digest([]byte(marker.Release+request.ExpectedRevision)))
-		if err := mkdirTrusted(backupDir); err != nil {
-			return err
-		}
-		if err := Backup(ctx, request.Profile.StatePath, filepath.Join(backupDir, "state.db")); err != nil {
-			return err
-		}
-		if old.StatePath != "" {
-			if err := copyActivation(root, backupDir, oldProfileData); err != nil {
+	if work.existing {
+		if !marker.Maintenance {
+			if err := Inspect(ctx, request.Profile.StatePath); err != nil {
 				return err
 			}
 		}
-	}
-	activationPath := filepath.Join(root, "activation.json")
-	requestData, _ := json.Marshal(request)
-	if marker.Maintenance {
-		saved, err := privateRead(activationPath)
+		work.accepted, err = ReadCatalog(ctx, request.Profile.StatePath)
 		if err != nil {
 			return err
 		}
-		if digest(saved) != digest(requestData) {
-			return errors.New("interrupted activation must resume its original request")
+	}
+	if !marker.Maintenance && work.accepted.Revision != request.ExpectedRevision {
+		return errors.New("configuration revision changed; refresh setup before activation")
+	}
+	return nil
+}
+
+func (work activationWork) verifyRuntimes(ctx context.Context) (gpuruntime.Manager, error) {
+	manager, err := makeRuntime(work.request)
+	if err != nil {
+		return nil, err
+	}
+	if err := manager.Released(ctx); err != nil {
+		return nil, fmt.Errorf("configured workloads have not released the GPU: %w", err)
+	}
+	if work.existing && work.old.StatePath != "" {
+		previous := work.request
+		previous.Profile = work.old
+		previous.Catalog = work.accepted.Catalog
+		// Before the first commit, only the recorded setup plan has a mapping.
+		if work.accepted.Revision == "" {
+			previous.Catalog = work.request.Catalog
 		}
-	} else if err := deployment.AtomicWrite(activationPath, requestData); err != nil {
+		oldManager, err := makeRuntime(previous)
+		if err != nil {
+			return nil, err
+		}
+		if err := oldManager.Released(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return manager, nil
+}
+
+func (work activationWork) backup(ctx context.Context) error {
+	if !work.existing || work.marker.Maintenance {
+		return nil
+	}
+	root := filepath.Join(work.root, "backups")
+	if err := mkdirTrusted(root); err != nil {
 		return err
 	}
+	directory, err := os.MkdirTemp(root, "activation-")
+	if err != nil {
+		return err
+	}
+	if err := syncDirectory(root); err != nil {
+		return err
+	}
+	if err := Backup(ctx, work.request.Profile.StatePath, filepath.Join(directory, "state.db")); err != nil {
+		return err
+	}
+	if work.old.StatePath != "" {
+		return copyActivation(work.root, directory, work.oldProfileData)
+	}
+	return nil
+}
+
+func (work activationWork) enterMaintenance() (activation, error) {
+	path := filepath.Join(work.root, "activation.json")
+	progress := activation{Request: work.request, Fresh: !work.existing}
+	if work.marker.Maintenance {
+		saved, err := privateRead(path)
+		if err != nil {
+			return progress, err
+		}
+		if err := json.Unmarshal(saved, &progress); err != nil {
+			return progress, err
+		}
+		original, _ := json.Marshal(progress.Request)
+		requested, _ := json.Marshal(work.request)
+		if digest(original) != digest(requested) {
+			return progress, errors.New("interrupted activation must resume its original request")
+		}
+	} else if err := writeJSON(path, progress); err != nil {
+		return progress, err
+	}
+	marker := work.marker
 	marker.Version = 1
 	if marker.Release == "" {
 		marker.Release = deployment.Release
 	}
 	marker.Maintenance = true
-	if err := deployment.Write(request.Profile.StatePath, marker); err != nil {
-		return err
-	}
+	return progress, deployment.Write(work.request.Profile.StatePath, marker)
+}
+
+func commitConfiguration(ctx context.Context, home, root string, request Request, manager gpuruntime.Manager, fresh bool) error {
 	// A crash from this point intentionally leaves the maintenance fence in place.
 	stateStore, err := store.Open(ctx, request.Profile.StatePath)
 	if err != nil {
@@ -265,7 +330,7 @@ func Apply(ctx context.Context, home string, request Request) error {
 	if err != nil {
 		return err
 	}
-	if !existing {
+	if fresh {
 		state, err := stateStore.State(ctx)
 		if err != nil {
 			return err
@@ -288,6 +353,7 @@ func Apply(ctx context.Context, home string, request Request) error {
 	}
 	return deployment.Write(profile.StatePath, deployment.Marker{Version: 1, Release: deployment.Release})
 }
+
 func newer(next, previous string) bool {
 	parse := func(value string) ([3]int, bool) {
 		var out [3]int
@@ -319,29 +385,92 @@ func newer(next, previous string) bool {
 	}
 	return false
 }
+
+type integration struct {
+	Version int    `json:"version"`
+	Unit    string `json:"unit"`
+	Target  string `json:"target"`
+}
+
+const reconcileUnit = "gpu-workload-supervisor-reconcile.service"
+
 func enableReconciliation(ctx context.Context, home, systemctl string) error {
-	unit := "gpu-workload-supervisor-reconcile.service"
-	userUnit := filepath.Join(home, ".config/systemd/user", unit)
+	userDir := filepath.Join(home, ".config/systemd/user")
+	if err := mkdirTrusted(userDir); err != nil {
+		return err
+	}
+	userUnit := filepath.Join(userDir, reconcileUnit)
 	if _, err := os.Lstat(userUnit); err == nil {
 		return errors.New("user reconciliation unit exists; refusing override")
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	link := filepath.Join(home, ".config/systemd/user/default.target.wants", unit)
+	wants := filepath.Join(userDir, "default.target.wants")
+	if err := mkdirTrusted(wants); err != nil {
+		return err
+	}
+	target := "/usr/lib/systemd/user/" + reconcileUnit
+	link := filepath.Join(wants, reconcileUnit)
 	if info, err := os.Lstat(link); err == nil {
-		target, err := os.Readlink(link)
-		if err != nil || info.Mode()&os.ModeSymlink == 0 || target != "/usr/lib/systemd/user/"+unit {
+		destination, err := os.Readlink(link)
+		if err != nil || info.Mode()&os.ModeSymlink == 0 || destination != target {
 			return errors.New("unowned reconciliation enablement exists")
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	output, err := runCommand(ctx, systemctl, "--user", "enable", unit)
+	// Record planned ownership before the standard unit manager creates the link.
+	if err := writeJSON(filepath.Join(home, ".config/gpu-workload-supervisor/integration.json"), integration{1, reconcileUnit, target}); err != nil {
+		return err
+	}
+	output, err := runCommand(ctx, systemctl, "--user", "enable", reconcileUnit)
 	if err != nil {
 		return fmt.Errorf("enable reconciliation: %w: %.4096s", err, output)
 	}
 	return nil
 }
+
+// RemoveIntegration removes only the recorded enablement link. It does not stop
+// any service and preserves profiles, state, audit, models and user workload units.
+func RemoveIntegration(home string) error {
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	if err := TrustedDirectory(root); err != nil {
+		return err
+	}
+	data, err := privateRead(filepath.Join(root, "integration.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var owned integration
+	if err := json.Unmarshal(data, &owned); err != nil {
+		return err
+	}
+	if owned.Version != 1 || owned.Unit != reconcileUnit || owned.Target != "/usr/lib/systemd/user/"+reconcileUnit {
+		return errors.New("invalid integration ownership record")
+	}
+	directory := filepath.Join(home, ".config/systemd/user/default.target.wants")
+	if err := TrustedDirectory(directory); err != nil {
+		return err
+	}
+	link := filepath.Join(directory, reconcileUnit)
+	target, err := os.Readlink(link)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err == nil {
+		if target != owned.Target {
+			return errors.New("modified integration link is preserved")
+		}
+		if err := os.Remove(link); err != nil {
+			return err
+		}
+	}
+	return os.Remove(filepath.Join(root, "integration.json"))
+}
+
 func Reconcile(ctx context.Context, home string) error {
 	data, err := privateRead(filepath.Join(home, ".config/gpu-workload-supervisor/operator.json"))
 	if err != nil {
@@ -351,6 +480,9 @@ func Reconcile(ctx context.Context, home string) error {
 	if err := json.Unmarshal(data, &profile); err != nil {
 		return err
 	}
+	if profile.Version != 1 || profile.ActivatedRelease == "" {
+		return errors.New("reconciliation requires an activated managed profile")
+	}
 	gate, err := lock.TryAcquire(profile.StatePath + ".lock")
 	if err != nil {
 		return err
@@ -359,6 +491,11 @@ func Reconcile(ctx context.Context, home string) error {
 	if err := deployment.Check(profile.StatePath, profile.ActivatedRelease); err != nil {
 		return err
 	}
+	file, err := deployment.OpenPrivate(profile.StatePath)
+	if err != nil {
+		return err
+	}
+	file.Close()
 	stateStore, err := store.Open(ctx, profile.StatePath)
 	if err != nil {
 		return err

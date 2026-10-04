@@ -14,6 +14,9 @@ func TestActivationCheck(t *testing.T) {
 	if err := Check(path, Release); err == nil {
 		t.Fatal("managed profile accepted missing marker")
 	}
+	if err := os.WriteFile(path, []byte("existing state"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	for _, marker := range []Marker{{Version: 1, Release: Release}, {Version: 1, Release: "old"}, {Version: 1, Release: Release, Maintenance: true}} {
 		if err := Write(path, marker); err != nil {
 			t.Fatal(err)
@@ -66,5 +69,55 @@ func TestPrivateMarkerRejectsLinksPermissionsAndBounds(t *testing.T) {
 	}
 	if err := AtomicWrite(root, nil); err == nil {
 		t.Fatal("directory replaced")
+	}
+}
+
+func TestManagedActivationRequiresExistingPrivateState(t *testing.T) {
+	for _, kind := range []string{"missing", "symlink", "public", "directory"} {
+		t.Run(kind, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.db")
+			if err := Write(path, Marker{Version: 1, Release: Release}); err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case "symlink":
+				if err := os.Symlink(path+".target", path); err != nil {
+					t.Fatal(err)
+				}
+			case "public":
+				if err := os.WriteFile(path, []byte("untouched"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			case "directory":
+				if err := os.Mkdir(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, activated := range []string{"", Release} {
+				if err := Check(path, activated); err == nil {
+					t.Fatal("accepted untrusted or missing managed state")
+				}
+			}
+			if kind == "missing" {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Fatal("created missing state", err)
+				}
+			}
+		})
+	}
+}
+
+func TestManagedActivationAcceptsExistingRelativeState(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile("state.db", []byte("existing state"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write("state.db", Marker{Version: 1, Release: Release}); err != nil {
+		t.Fatal(err)
+	}
+	for _, activated := range []string{"", Release} {
+		if err := Check("state.db", activated); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

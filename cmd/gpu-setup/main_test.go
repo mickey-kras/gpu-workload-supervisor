@@ -10,9 +10,13 @@ import (
 	"testing"
 )
 
-const request = `{"version":1,"profile":{"version":1,"statePath":"/tmp/state.db","systemctlPath":"/usr/bin/systemctl","nvidiaSMIPath":"/usr/bin/nvidia-smi","gpuIndex":0,"capacityHeadroomMiB":0},"catalog":{"version":1,"profiles":[{"id":"text","label":"Text","adapter":"systemd","unit":"text.service","cgroup":"/user.slice/text","healthURL":"http://127.0.0.1:8000/health","bootPolicy":"stop-to-idle"}]}}`
+const request = `{"version":1,"profile":{"version":1,"statePath":"/tmp/state.db","systemctlPath":"/usr/bin/systemctl","nvidiaSMIPath":"/usr/bin/true","gpuIndex":0,"capacityHeadroomMiB":0},"catalog":{"version":1,"profiles":[{"id":"text","label":"Text","adapter":"systemd","unit":"text.service","cgroup":"/user.slice/text","healthURL":"http://127.0.0.1:8000/health","bootPolicy":"stop-to-idle"}]}}`
 
 func TestRun(t *testing.T) {
+	priorHome := homeForSetup
+	t.Cleanup(func() { homeForSetup = priorHome })
+	home := t.TempDir()
+	homeForSetup = func() (string, error) { return home, nil }
 	var out bytes.Buffer
 	if err := run([]string{"validate"}, strings.NewReader(request), &out); err != nil {
 		t.Fatal(err)
@@ -20,7 +24,7 @@ func TestRun(t *testing.T) {
 	if !strings.Contains(out.String(), "operator.json") {
 		t.Fatal(out.String())
 	}
-	for _, args := range [][]string{nil, {"wrong"}, {"validate"}, {"apply"}, {"reconcile"}} {
+	for _, args := range [][]string{nil, {"wrong"}, {"validate"}, {"apply"}, {"reconcile"}, {"remove-integration"}} {
 		input := "{}"
 		if len(args) > 0 && args[0] == "apply" {
 			input = request
@@ -30,6 +34,13 @@ func TestRun(t *testing.T) {
 		}
 	}
 }
+func TestPreviewRejectsUnavailableTrustedExecutable(t *testing.T) {
+	bad := strings.ReplaceAll(request, "/usr/bin/true", "/missing/nvidia-smi")
+	if err := run([]string{"validate"}, strings.NewReader(bad), &bytes.Buffer{}); err == nil {
+		t.Fatal("unavailable executable accepted")
+	}
+}
+
 func TestMainValidate(t *testing.T) {
 	priorArgs, priorIn, priorOut := os.Args, os.Stdin, os.Stdout
 	t.Cleanup(func() { os.Args = priorArgs; os.Stdin = priorIn; os.Stdout = priorOut })

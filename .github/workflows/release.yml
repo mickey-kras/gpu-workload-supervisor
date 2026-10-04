@@ -255,7 +255,8 @@ jobs:
         if: steps.state.outputs.published != 'true'
         run: |
           cd release-assets
-          sha256sum gpu-workload-supervisor*.tar.gz gpu-workload-supervisor*.deb sbom.cdx.json > SHA256SUMS
+          sha256sum gpu-workload-supervisor*.tar.gz sbom.cdx.json > SHA256SUMS
+          sha256sum gpu-workload-supervisor*.deb >> SHA256SUMS
           sha256sum --check SHA256SUMS
       - name: Attest release assets
         if: steps.state.outputs.published != 'true'

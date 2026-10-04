@@ -26,13 +26,16 @@ func main() {
 }
 func run(args []string, input io.Reader, output io.Writer) error {
 	if len(args) != 1 {
-		return errors.New("usage: gpu-setup discover|validate|apply|reconcile")
+		return errors.New("usage: gpu-setup discover|validate|apply|reconcile|remove-integration")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	home, err := homeForSetup()
 	if err != nil {
 		return err
+	}
+	if args[0] == "remove-integration" {
+		return setup.RemoveIntegration(home)
 	}
 	if args[0] == "discover" {
 		result, err := discoverSetup(ctx, home)
@@ -51,7 +54,10 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	preview, _ := setup.Plan(home, request) // Decode already validated the request.
+	preview, err := setup.Plan(home, request)
+	if err != nil {
+		return err
+	}
 	if args[0] == "apply" {
 		if effectiveUID() == 0 {
 			return errors.New("run guided setup as the desktop account, not root")

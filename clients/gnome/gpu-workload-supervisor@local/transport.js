@@ -1,4 +1,6 @@
+// aislop-ignore-next-line ai-slop/hallucinated-import -- GNOME 50 GJS runtime supplies this native module, not npm.
 import Gio from 'gi://Gio';
+// aislop-ignore-next-line ai-slop/hallucinated-import -- GNOME 50 GJS runtime supplies this native module, not npm.
 import GLib from 'gi://GLib';
 import { ResponseBuffer } from './framing.js';
 import { parseResponse } from './contract.js';

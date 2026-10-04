@@ -40,6 +40,8 @@ type ownership struct {
 	Files   map[string]string `json:"files"`
 }
 
+var writeIntegration = deployment.AtomicWrite
+
 const manifestName = "ownership.json"
 const journalName = "transaction.json"
 
@@ -107,60 +109,13 @@ func (tx Transaction) Apply(h Hooks) error {
 	if err != nil {
 		return err
 	}
-	owned := ownership{Version: 1, Files: map[string]string{}}
-	if data, err := privateRead(manifestPath); err == nil {
-		if err = json.Unmarshal(data, &owned); err != nil {
-			return err
-		}
-		if owned.Version != 1 {
-			return errors.New("unsupported ownership manifest")
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	owned, err := readOwnership(manifestPath)
+	if err != nil {
 		return err
 	}
-	pending := journal{Version: 1, Files: map[string]entry{}}
-	if data, err := privateRead(journalPath); err == nil {
-		if err = json.Unmarshal(data, &pending); err != nil {
-			return err
-		}
-		if pending.Version != 1 {
-			return errors.New("unsupported setup journal")
-		}
-		// Resume the recorded plan, never a newly submitted replacement.
-		if len(pending.Files) != len(tx.Changes) {
-			return errors.New("pending setup differs; resume original plan")
-		}
-		for name, e := range pending.Files {
-			desired, exists := tx.Changes[name]
-			if !exists || digest(desired) != digest(e.After) {
-				return errors.New("pending setup differs; resume original plan")
-			}
-		}
-		committed, err := h.Committed()
-		if err != nil {
-			return err
-		}
-		if committed {
-			return tx.finalize(manifestPath, journalPath, owned, pending)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	pending, alreadyCommitted, err := tx.prepare(journalPath, owned, h)
+	if err != nil {
 		return err
-	} else {
-		for name, after := range tx.Changes {
-			before, err := privateRead(filepath.Join(tx.Root, name))
-			exists := err == nil
-			if err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
-			expected, isOwned := owned.Files[name]
-			if exists && (!isOwned || digest(before) != expected) {
-				return fmt.Errorf("refusing unowned or modified integration %s", name)
-			}
-			pending.Files[name] = entry{Before: before, Existed: exists, After: after}
-		}
-		if err := writeJSON(journalPath, pending); err != nil {
-			return err
-		}
 	}
 	if err := h.Quiescent(); err != nil {
 		return err
@@ -179,17 +134,22 @@ func (tx Transaction) Apply(h Hooks) error {
 		if err == nil && digest(current) != digest(e.Before) && digest(current) != digest(e.After) {
 			return errors.New("integration changed during setup")
 		}
-		if err := deployment.AtomicWrite(filepath.Join(tx.Root, name), e.After); err != nil {
+		if err := writeIntegration(filepath.Join(tx.Root, name), e.After); err != nil {
+			if alreadyCommitted {
+				return err
+			}
 			return errors.Join(err, tx.rollback(pending))
 		}
 	}
-	if err := h.Commit(); err != nil {
-		committed, inspectErr := h.Committed()
-		if inspectErr != nil {
-			return errors.Join(err, inspectErr)
-		}
-		if !committed {
-			return errors.Join(err, tx.rollback(pending))
+	if !alreadyCommitted {
+		if err := h.Commit(); err != nil {
+			committed, inspectErr := h.Committed()
+			if inspectErr != nil {
+				return errors.Join(err, inspectErr)
+			}
+			if !committed {
+				return errors.Join(err, tx.rollback(pending))
+			}
 		}
 	}
 	return tx.finalize(manifestPath, journalPath, owned, pending)
@@ -232,4 +192,61 @@ func (tx Transaction) finalize(manifestPath, journalPath string, owned ownership
 		return err
 	}
 	return os.Remove(journalPath)
+}
+
+func readOwnership(path string) (ownership, error) {
+	owned := ownership{Version: 1, Files: map[string]string{}}
+	data, err := privateRead(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return owned, nil
+	}
+	if err != nil {
+		return owned, err
+	}
+	if err := json.Unmarshal(data, &owned); err != nil {
+		return owned, err
+	}
+	if owned.Version != 1 || owned.Files == nil {
+		return owned, errors.New("unsupported ownership manifest")
+	}
+	return owned, nil
+}
+func (tx Transaction) prepare(path string, owned ownership, h Hooks) (journal, bool, error) {
+	pending := journal{Version: 1, Files: map[string]entry{}}
+	data, err := privateRead(path)
+	if err == nil {
+		if err := json.Unmarshal(data, &pending); err != nil {
+			return pending, false, err
+		}
+		if pending.Version != 1 {
+			return pending, false, errors.New("unsupported setup journal")
+		}
+		if len(pending.Files) != len(tx.Changes) {
+			return pending, false, errors.New("pending setup differs; resume original plan")
+		}
+		for name, e := range pending.Files {
+			desired, exists := tx.Changes[name]
+			if !exists || digest(desired) != digest(e.After) {
+				return pending, false, errors.New("pending setup differs; resume original plan")
+			}
+		}
+		committed, err := h.Committed()
+		return pending, committed, err
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return pending, false, err
+	}
+	for name, after := range tx.Changes {
+		before, err := privateRead(filepath.Join(tx.Root, name))
+		exists := err == nil
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return pending, false, err
+		}
+		expected, isOwned := owned.Files[name]
+		if exists && (!isOwned || digest(before) != expected) {
+			return pending, false, fmt.Errorf("refusing unowned or modified integration %s", name)
+		}
+		pending.Files[name] = entry{Before: before, Existed: exists, After: after}
+	}
+	return pending, false, writeJSON(path, pending)
 }

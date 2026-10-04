@@ -85,26 +85,9 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
-	if *workload != "" {
-		if *target != "" || flags.Arg(0) != "switch" {
-			return errors.New("-workload requires switch and conflicts with -target")
-		}
-		*target = *workload
-	}
-	legacyConfig := false
-	flags.Visit(func(f *flag.Flag) {
-		if strings.HasPrefix(f.Name, "text-") || strings.HasPrefix(f.Name, "media-") {
-			legacyConfig = true
-		}
-	})
-	if (*configured || *catalogPath != "") && legacyConfig {
-		return errors.New("catalog configuration conflicts with legacy workload flags")
-	}
-	if *catalogPath != "" && flags.Arg(0) != "configure" {
-		return errors.New("-catalog is only accepted by configure; use -configured for runtime commands")
-	}
-	if flags.Arg(0) == "configure" && *catalogPath == "" {
-		return errors.New("configure requires -catalog")
+	legacyConfig, err := validateCatalogFlags(flags, *workload, target, *configured, *catalogPath)
+	if err != nil {
+		return err
 	}
 	stopMode, err := validateCommandFlags(flags, *mediaStopMode, *target)
 	if err != nil {
@@ -139,6 +122,31 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 		verifyTimeout: *verifyTimeout, cleanupTimeout: *cleanupTimeout,
 		finalizeTimeout: *finalizeTimeout, pollInterval: *pollInterval,
 	})
+}
+
+func validateCatalogFlags(flags *flag.FlagSet, workload string, target *string, configured bool, catalogPath string) (bool, error) {
+	if workload != "" {
+		if *target != "" || flags.Arg(0) != "switch" {
+			return false, errors.New("-workload requires switch and conflicts with -target")
+		}
+		*target = workload
+	}
+	legacyConfig := false
+	flags.Visit(func(f *flag.Flag) {
+		if strings.HasPrefix(f.Name, "text-") || strings.HasPrefix(f.Name, "media-") {
+			legacyConfig = true
+		}
+	})
+	if (configured || catalogPath != "") && legacyConfig {
+		return false, errors.New("catalog configuration conflicts with legacy workload flags")
+	}
+	if catalogPath != "" && flags.Arg(0) != "configure" {
+		return false, errors.New("-catalog is only accepted by configure; use -configured for runtime commands")
+	}
+	if flags.Arg(0) == "configure" && catalogPath == "" {
+		return false, errors.New("configure requires -catalog")
+	}
+	return legacyConfig, nil
 }
 
 func executeWithState(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error), runtimeConfig gpuruntime.SystemdConfig, command string, auditCutoff time.Time, options modeExecution) error {

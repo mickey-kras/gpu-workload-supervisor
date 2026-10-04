@@ -39,47 +39,7 @@ export function compareVersions(a, b) {
           ? 1
           : -1;
 }
-export function parseResponse(text, requestId) {
-    if (new TextEncoder().encode(text).length > 65536) fail();
-    const r = JSON.parse(text);
-    if (r.code === 'ok')
-        keys(r, ['protocolVersion', 'requestId', 'code', 'status']);
-    else {
-        keys(r, ['protocolVersion', 'requestId', 'code']);
-        one(r.code, ERROR_CODES);
-    }
-    if (r.protocolVersion !== 1 || r.requestId !== requestId) fail();
-    if (r.code !== 'ok') return r;
-    const s = r.status;
-    keys(s, [
-        'owner',
-        'desiredWorkload',
-        'activeWorkload',
-        'phase',
-        'health',
-        'admission',
-        'observedAt',
-        'expected',
-        'workloads',
-        'capabilities',
-    ]);
-    one(s.owner, ['supervisor', 'user']);
-    one(s.phase, [
-        'stable',
-        'draining',
-        'unloading',
-        'loading',
-        'verifying',
-        'reconciling',
-    ]);
-    one(s.health, ['healthy', 'degraded', 'error']);
-    one(s.admission, ['open', 'closed']);
-    if (
-        typeof s.observedAt !== 'string' ||
-        s.observedAt.length > 64 ||
-        !Number.isFinite(Date.parse(s.observedAt))
-    )
-        fail();
+function validateExpected(s) {
     keys(s.expected, [
         'incarnation',
         'version',
@@ -96,6 +56,9 @@ export function parseResponse(text, requestId) {
         s.expected.owner !== s.owner
     )
         fail();
+}
+
+function validateCatalog(s) {
     if (
         !Array.isArray(s.workloads) ||
         s.workloads.length < 1 ||
@@ -127,8 +90,56 @@ export function parseResponse(text, requestId) {
         (!ids.has(s.activeWorkload) && s.activeWorkload !== 'unknown')
     )
         fail();
+}
+
+function validateStatus(s) {
+    keys(s, [
+        'owner',
+        'desiredWorkload',
+        'activeWorkload',
+        'phase',
+        'health',
+        'admission',
+        'observedAt',
+        'expected',
+        'workloads',
+        'capabilities',
+    ]);
+    one(s.owner, ['supervisor', 'user']);
+    one(s.phase, [
+        'stable',
+        'draining',
+        'unloading',
+        'loading',
+        'verifying',
+        'reconciling',
+    ]);
+    one(s.health, ['healthy', 'degraded', 'error']);
+    one(s.admission, ['open', 'closed']);
+    if (
+        typeof s.observedAt !== 'string' ||
+        s.observedAt.length > 64 ||
+        !Number.isFinite(Date.parse(s.observedAt))
+    )
+        fail();
+    validateExpected(s);
+    validateCatalog(s);
     keys(s.capabilities, ['takeControl', 'userSwitch', 'returnControl']);
     if (Object.values(s.capabilities).some((v) => typeof v !== 'boolean'))
         fail();
+}
+
+export function parseResponse(text, requestId) {
+    if (new TextEncoder().encode(text).length > 65536) fail();
+    const r = JSON.parse(text);
+    if (r.code === 'ok')
+        keys(r, ['protocolVersion', 'requestId', 'code', 'status']);
+    else {
+        keys(r, ['protocolVersion', 'requestId', 'code']);
+        one(r.code, ERROR_CODES);
+    }
+    if (r.protocolVersion !== 1 || r.requestId !== requestId) fail();
+    if (r.code !== 'ok') return r;
+    validateStatus(r.status);
     return r;
 }

@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -11,6 +12,7 @@ import (
 )
 
 var binaryDirectory = "/usr/bin"
+var packageBinaryUID uint32 = 0
 var binaries = []string{"gpu-mode", "gpu-workload-proxy", "gpu-operator", "gpu-setup"}
 
 type binaryManifest struct {
@@ -30,7 +32,7 @@ func retainBinaries(root string) error {
 		if err != nil {
 			return err
 		}
-		if !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 || info.Sys().(*syscall.Stat_t).Uid != 0 {
+		if !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 || info.Sys().(*syscall.Stat_t).Uid != packageBinaryUID {
 			return errors.New("package executable is not trusted")
 		}
 		data, err := os.ReadFile(path)
@@ -61,11 +63,38 @@ func copyActivation(root, destination string, profile []byte) error {
 		return errors.New("prior binary release differs from profile")
 	}
 	files := map[string][]byte{"operator.json": profile, "manifest.json": data}
-	catalog, err := privateRead(filepath.Join(root, "catalog.json"))
+	marker, err := privateRead(old.StatePath + deployment.Suffix)
+	if err != nil {
+		return err
+	}
+	files["state.db"+deployment.Suffix] = marker
+	accepted, err := ReadCatalog(context.Background(), old.StatePath)
+	if err != nil {
+		return err
+	}
+	catalog, err := json.Marshal(accepted.Catalog)
 	if err != nil {
 		return err
 	}
 	files["catalog.json"] = catalog
+	ownershipData, err := privateRead(filepath.Join(root, manifestName))
+	if err != nil {
+		return err
+	}
+	var owned ownership
+	if err := json.Unmarshal(ownershipData, &owned); err != nil {
+		return err
+	}
+	if owned.Version != 1 || owned.Files == nil {
+		return errors.New("invalid prior ownership manifest")
+	}
+	owned.Files["operator.json"] = digest(profile)
+	owned.Files["catalog.json"] = digest(catalog)
+	ownershipData, err = json.Marshal(owned)
+	if err != nil {
+		return err
+	}
+	files[manifestName] = ownershipData
 	for _, name := range binaries {
 		binary, err := privateRead(filepath.Join(root, "activated-binaries", name))
 		if err != nil {

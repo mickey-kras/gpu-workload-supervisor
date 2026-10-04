@@ -54,49 +54,7 @@ func (s *Store) ReplaceCatalog(ctx context.Context, expected string, c control.C
 		return old, err
 	}
 	refs := map[control.Workload]bool{state.ActiveWorkload: true, state.DesiredWorkload: true}
-	rows, err := tx.QueryContext(ctx, "SELECT workload FROM registered_work WHERE completed_at IS NULL AND workload IS NOT NULL")
-	if err != nil {
-		return old, err
-	}
-	for rows.Next() {
-		var id control.Workload
-		if err = rows.Scan(&id); err != nil {
-			rows.Close()
-			return old, err
-		}
-		refs[id] = true
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return old, err
-	}
-	rows, err = tx.QueryContext(ctx, "SELECT source_state,target_state,previous_state FROM transitions WHERE status='in_progress'")
-	if err != nil {
-		return old, err
-	}
-	for rows.Next() {
-		var a, b, d []byte
-		if err = rows.Scan(&a, &b, &d); err != nil {
-			break
-		}
-		for _, raw := range [][]byte{a, b, d} {
-			var st control.State
-			if err = json.Unmarshal(raw, &st); err != nil {
-				break
-			}
-			refs[st.ActiveWorkload] = true
-			refs[st.DesiredWorkload] = true
-		}
-		if err != nil {
-			break
-		}
-	}
-	if err == nil {
-		err = rows.Err()
-	}
-	rows.Close()
-	if err != nil {
+	if err := readCatalogWorkReferences(ctx, tx, refs); err != nil {
 		return old, err
 	}
 	for id := range refs {
@@ -130,4 +88,55 @@ func (s *Store) ReplaceCatalog(ctx context.Context, expected string, c control.C
 		return old, err
 	}
 	return control.CatalogSnapshot{Revision: revision, Catalog: c}, nil
+}
+
+// readCatalogWorkReferences uses the replacement transaction's snapshot so live
+// work and in-progress transitions cannot lose their referenced profiles.
+func readCatalogWorkReferences(ctx context.Context, tx *sql.Tx, refs map[control.Workload]bool) error {
+	rows, err := tx.QueryContext(ctx, "SELECT workload FROM registered_work WHERE completed_at IS NULL AND workload IS NOT NULL")
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id control.Workload
+		if err = rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		refs[id] = true
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	rows, err = tx.QueryContext(ctx, "SELECT source_state,target_state,previous_state FROM transitions WHERE status='in_progress'")
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var a, b, d []byte
+		if err = rows.Scan(&a, &b, &d); err != nil {
+			break
+		}
+		for _, raw := range [][]byte{a, b, d} {
+			var st control.State
+			if err = json.Unmarshal(raw, &st); err != nil {
+				break
+			}
+			refs[st.ActiveWorkload] = true
+			refs[st.DesiredWorkload] = true
+		}
+		if err != nil {
+			break
+		}
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	return nil
 }

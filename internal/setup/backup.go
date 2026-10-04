@@ -1,14 +1,17 @@
 package setup
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"net/url"
 	"os"
 	"path/filepath"
 
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	_ "modernc.org/sqlite"
 )
 
@@ -40,9 +43,11 @@ func Inspect(ctx context.Context, path string) error {
 	return integrity(ctx, db)
 }
 func readOnlyDB(path string) (*sql.DB, error) {
-	if _, err := privateRead(path); err != nil {
+	file, err := deployment.OpenPrivate(path)
+	if err != nil {
 		return nil, err
 	}
+	file.Close()
 	u := url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro"}
 	return sql.Open("sqlite", u.String())
 }
@@ -123,4 +128,41 @@ func Backup(ctx context.Context, path, destination string) error {
 	}
 	defer dir.Close()
 	return dir.Sync()
+}
+
+// ReadCatalog reads the accepted catalog and its revision from one SQLite row.
+// The mirror file is a rollback artifact and never a live configuration source.
+func ReadCatalog(ctx context.Context, path string) (control.CatalogSnapshot, error) {
+	var snapshot control.CatalogSnapshot
+	db, err := readOnlyDB(path)
+	if err != nil {
+		return snapshot, err
+	}
+	defer db.Close()
+	var exists int
+	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='workload_catalog'").Scan(&exists); err != nil {
+		return snapshot, err
+	}
+	if exists == 0 {
+		return snapshot, nil
+	}
+	var data []byte
+	err = db.QueryRowContext(ctx, "SELECT revision,catalog FROM workload_catalog WHERE singleton=1").Scan(&snapshot.Revision, &data)
+	if errors.Is(err, sql.ErrNoRows) {
+		return snapshot, nil
+	}
+	if err != nil {
+		return snapshot, err
+	}
+	snapshot.Catalog, err = control.DecodeCatalog(bytes.NewReader(data))
+	return snapshot, err
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }

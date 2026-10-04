@@ -27,6 +27,9 @@ func TestNativeActivationBeforeStateOpen(t *testing.T) {
 	if r := s.Handle(Request{Action: "status"}); r.Code != IncompatibleConfiguration {
 		t.Fatal(r)
 	}
+	if _, err := os.Stat(p.StatePath); !os.IsNotExist(err) {
+		t.Fatal("managed status created missing database", err)
+	}
 	db, e := store.Open(context.Background(), p.StatePath)
 	if e != nil {
 		t.Fatal(e)

@@ -1,7 +1,12 @@
+// aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Adw from 'gi://Adw?version=1';
+// aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Gtk from 'gi://Gtk?version=4.0';
+// aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Gio from 'gi://Gio';
+// aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import GLib from 'gi://GLib';
+import {ReviewedConfiguration} from './review.mjs';
 
 // The setup application is short-lived. Runtime controls use gpu-operator.
 function command(argv, input = null) {
@@ -31,16 +36,18 @@ app.connect('activate', () => {
     const status = new Gtk.Label({wrap: true, xalign: 0, selectable: true}); box.append(status);
     const rows = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 12}); box.append(rows);
     let request = null; let valid = false; const profiles = [];
+    const reviewed = new ReviewedConfiguration();
     const review = new Gtk.Button({label: 'Validate and preview'});
     const apply = new Gtk.Button({label: 'Apply reviewed configuration', sensitive: false});
     apply.add_css_class('suggested-action');
     const confirm = new Gtk.CheckButton({label: 'I have quiesced existing work and reviewed these changes.'});
-    const invalidate = () => { valid = false; apply.sensitive = false; };
+    const invalidate = () => { reviewed.invalidate(); valid = false; apply.sensitive = false; };
     const field = (parent, title, value, changed) => {
         const row = new Adw.EntryRow({title, text: String(value ?? '')});
         row.connect('changed', () => { changed(row.text); invalidate(); }); parent.append(row); return row;
     };
     function addProfile(profile) {
+        invalidate();
         const group = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL});
         const current = {...profile, adapter: profile.adapter ?? 'systemd', bootPolicy: profile.bootPolicy ?? 'stop-to-idle'};
         profiles.push(current);
@@ -60,22 +67,34 @@ app.connect('activate', () => {
     add.connect('clicked', () => addProfile({})); box.append(add);
     box.append(review); box.append(confirm); box.append(apply);
     confirm.connect('toggled', () => apply.sensitive = valid && confirm.active);
-    const serialize = () => JSON.stringify({...request, catalog: {version: 1, profiles}, confirmQuiesced: confirm.active});
+    const serialize = () => {
+        if (!Number.isSafeInteger(request.profile.gpuIndex) || request.profile.gpuIndex < 0 ||
+            profiles.some(profile => !Number.isSafeInteger(profile.requiredMiB ?? 0) || (profile.requiredMiB ?? 0) < 0))
+            throw new Error('GPU index and VRAM requirements must be nonnegative whole numbers.');
+        return JSON.stringify({...request, catalog: {version: 1, profiles}, confirmQuiesced: confirm.active});
+    };
     review.connect('clicked', async () => {
         if (!request) return;
         review.sensitive = false;
         try {
-            const preview = JSON.parse(await command(['/usr/bin/gpu-setup', 'validate'], serialize()));
+            const candidate = reviewed.begin(serialize());
+            const preview = JSON.parse(await command(['/usr/bin/gpu-setup', 'validate'], candidate.request));
+            if (!reviewed.accept(candidate)) {
+                status.label = 'Configuration changed during validation. Review the updated configuration.';
+                return;
+            }
             status.label = `Review changes:\n${preview.changes.join('\n')}\n\nWorkloads: ${profiles.map(p => p.label).join(', ')}`;
             valid = true; apply.sensitive = confirm.active;
         } catch (error) { status.label = error.message; invalidate(); }
         finally { review.sensitive = true; }
     });
     apply.connect('clicked', async () => {
+        if (!valid || !confirm.active) return;
+        const activationRequest = reviewed.confirmed();
         apply.sensitive = false; review.sensitive = false; add.sensitive = false; rows.sensitive = false;
-        status.label = 'Applying configuration. Closing this window does not cancel an admitted operation.';
+        status.label = 'Applying configuration. Keep this window open; interrupted activation can be resumed.';
         try {
-            await command(['/usr/bin/gpu-setup', 'apply'], serialize());
+            await command(['/usr/bin/gpu-setup', 'apply'], activationRequest);
             status.label = 'Configuration activated. Reconciliation is enabled for future logins. Log out and back in to discover the extension, then enable “GPU Workload Supervisor” in Extensions. No workload was started.';
         } catch (error) { status.label = `Setup needs attention: ${error.message}\nRerun setup to resume the recorded activation. State and backups are preserved.`; }
         finally { review.sensitive = true; }

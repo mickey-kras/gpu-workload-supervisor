@@ -40,7 +40,17 @@ func Check(statePath, activatedRelease string) error {
 	if marker.Release != Release || (activatedRelease != "" && marker.Release != activatedRelease) {
 		return errors.New("installed release is not activated; run setup (downgrade requires compatible restore)")
 	}
-	return nil
+	// Managed state is created only by explicit setup. Never let an ordinary
+	// opener recreate a missing database or repair an untrusted state path.
+	path, err := filepath.Abs(statePath)
+	if err != nil {
+		return fmt.Errorf("managed state path: %w", err)
+	}
+	file, err := OpenPrivate(path)
+	if err != nil {
+		return fmt.Errorf("managed state requires an existing private database: %w", err)
+	}
+	return file.Close()
 }
 
 func Read(statePath string) (Marker, error) {

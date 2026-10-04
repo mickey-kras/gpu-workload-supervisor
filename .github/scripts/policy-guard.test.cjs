@@ -15,7 +15,7 @@ function files() {
     '.github/dependabot.yml', '.github/scripts/policy-guard.cjs',
     '.github/scripts/dependabot-auto-merge.cjs', '.github/scripts/pr-branch-updater.cjs',
     '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
-    'release-version.json',
+    'release-version.json', '.github/scripts/policy-release.cjs',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
     '.github/aislop/package.json', '.github/aislop/package-lock.json',
     '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
@@ -322,7 +322,7 @@ test('desktop packages cannot be omitted from staging, checksums, or provenance'
     if (name === 'Build desktop packages') {
       workflow.jobs.publish.steps = workflow.jobs.publish.steps.filter(item => item.name !== name);
     } else if (name === 'Checksum all release assets') {
-      step.run = step.run.replace(' gpu-workload-supervisor*.deb', '');
+      step.run = step.run.replace('sha256sum gpu-workload-supervisor*.deb >> SHA256SUMS', 'true');
     } else {
       step.with['subject-path'] = step.with['subject-path'].replace(/.*\.deb\n/g, '');
     }
@@ -345,5 +345,26 @@ test('desktop staging cannot omit an architecture, package validation, or the co
     step.run = step.run.replace(before, after);
     candidate[path] = YAML.stringify(workflow);
     assert.ok(inspect(candidate).some(error => error.includes('Build desktop packages')));
+  }
+});
+
+test('release checksums preserve the trusted baseline and append desktop packages', () => {
+  const source = files();
+  const path = '.github/workflows/release.yml';
+  const workflow = YAML.parse(source[path]);
+  const step = workflow.jobs.publish.steps.find(item => item.name === 'Checksum all release assets');
+  const required = [
+    'sha256sum gpu-workload-supervisor*.tar.gz sbom.cdx.json > SHA256SUMS',
+    'sha256sum gpu-workload-supervisor*.deb >> SHA256SUMS',
+    'sha256sum --check SHA256SUMS',
+  ];
+  for (const command of required) assert.ok(step.run.includes(command), command);
+  for (const command of required) {
+    const candidate = { ...source };
+    const altered = structuredClone(workflow);
+    const checksum = altered.jobs.publish.steps.find(item => item.name === step.name);
+    checksum.run = checksum.run.replace(command, 'true');
+    candidate[path] = YAML.stringify(altered);
+    assert.ok(inspect(candidate).some(error => error.includes(step.name)), command);
   }
 });

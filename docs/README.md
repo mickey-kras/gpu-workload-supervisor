@@ -6,6 +6,7 @@ Start with [deployment](DEPLOYMENT.md), [boot reconciliation](OPERATIONS.md#boot
 
 ## Deploy and operate
 
+- [GNOME desktop installation and setup](DESKTOP.md): package activation, maintenance and rollback
 - [Deployment](DEPLOYMENT.md): runtime flags, cgroups, capacity checks and host qualification
 - [Operations](OPERATIONS.md): boot, switching, ownership, unfinished work and recovery
 - [Execution proxy](EXECUTION-PROXY.md): route configuration, admission and completion

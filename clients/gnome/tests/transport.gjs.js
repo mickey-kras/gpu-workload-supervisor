@@ -1,5 +1,7 @@
 // Native Gio smoke test; does not qualify GNOME Shell rendering or survival.
+// aislop-ignore-next-line ai-slop/hallucinated-import -- GNOME 50 GJS runtime supplies this native module, not npm.
 import Gio from 'gi://Gio';
+// aislop-ignore-next-line ai-slop/hallucinated-import -- GNOME 50 GJS runtime supplies this native module, not npm.
 import GLib from 'gi://GLib';
 import { readBounded } from '../gpu-workload-supervisor@local/transport.js';
 const loop = new GLib.MainLoop(null, false);
