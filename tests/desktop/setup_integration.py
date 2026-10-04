@@ -41,13 +41,43 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def prepare_session():
+    # Hosted images may seed user-manager environments with the runner account.
+    # Change only this newly created manager; verify the actual service boundary.
+    os.umask(0o077)
+    session = {
+        "HOME": str(HOME), "USER": pwd.getpwuid(os.geteuid()).pw_name,
+        "LOGNAME": pwd.getpwuid(os.geteuid()).pw_name, "PATH": "/usr/bin:/bin",
+        "XDG_RUNTIME_DIR": f"/run/user/{os.geteuid()}",
+        "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{os.geteuid()}/bus",
+        "XDG_CONFIG_HOME": str(HOME / ".config"),
+        "XDG_DATA_HOME": str(HOME / ".local/share"),
+        "XDG_CACHE_HOME": str(HOME / ".cache"),
+        "XDG_STATE_HOME": str(HOME / ".local/state"),
+        "XDG_DATA_DIRS": "/usr/local/share:/usr/share", "XDG_CONFIG_DIRS": "/etc/xdg",
+    }
+    run("systemctl", "--user", "set-environment", *[f"{key}={value}" for key, value in session.items()])
+    output = run("systemctl", "--user", "show-environment")
+    actual = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
+    probe = "import json,os,sys;print(json.dumps({key:os.environ.get(key) for key in sys.argv[1:]}))"
+    service = json.loads(run("systemd-run", "--user", "--pipe", "--wait", "--collect", "--quiet",
+                             "/usr/bin/python3", "-c", probe, *session))
+    for environment in (actual, service):
+        for key, expected in session.items():
+            assert environment.get(key) == expected, f"disposable session mismatch: {key}"
+
+
+
 def main():
     assert os.geteuid() != 0
     assert HOME.name == "home" and HOME.parent.name.startswith("gws-setup-integration.")
     assert not ROOT.exists(), "requires a fresh disposable account"
+    prepare_session()
     user_units = HOME / ".config/systemd/user"
     workload = user_units / "gws-ci-workload.service"
     write(workload, "[Service]\nType=exec\nExecStart=/usr/bin/sleep infinity\n")
+    for directory in (HOME / ".config", user_units.parent, user_units):
+        assert directory.stat().st_mode & 0o022 == 0, f"untrusted fixture directory: {directory}"
     run("systemctl", "--user", "daemon-reload")
     run("systemctl", "--user", "start", workload.name)
     group = run("systemctl", "--user", "show", "--property=ControlGroup", "--value", workload.name).strip()

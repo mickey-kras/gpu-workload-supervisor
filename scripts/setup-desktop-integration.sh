@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Destructive only to newly created test resources; run on a disposable systemd host.
 set -euo pipefail
+umask 077
 if [[ ${1:-} != --isolated-test-host || $# != 2 || $EUID != 0 ]]; then
   echo 'usage: sudo bash scripts/setup-desktop-integration.sh --isolated-test-host PACKAGE.deb' >&2
   exit 2
@@ -69,14 +70,18 @@ esac
 PROBE
 chmod 755 "$probe"
 installed+=("$probe")
-useradd --create-home --home-dir "$work/home" --shell /bin/bash "$account"
+mkdir "$work/skel"
+useradd --create-home --skel "$work/skel" --home-dir "$work/home" --shell /bin/bash "$account"
 created=true
 chmod 700 "$work/home"
 qualification_uid=$(id -u "$account")
 loginctl enable-linger "$account"
 systemctl start "user@${qualification_uid}.service"
 install -m 644 "$repo/tests/desktop/setup_integration.py" "$work/setup_integration.py"
-runuser -u "$account" -- env \
-  HOME="$work/home" XDG_RUNTIME_DIR="/run/user/$qualification_uid" \
+runuser -u "$account" -- env -i \
+  HOME="$work/home" USER="$account" LOGNAME="$account" PATH=/usr/bin:/bin \
+  XDG_CONFIG_HOME="$work/home/.config" XDG_DATA_HOME="$work/home/.local/share" \
+  XDG_CACHE_HOME="$work/home/.cache" XDG_STATE_HOME="$work/home/.local/state" \
+  XDG_RUNTIME_DIR="/run/user/$qualification_uid" \
   DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$qualification_uid/bus" \
   python3 "$work/setup_integration.py"
