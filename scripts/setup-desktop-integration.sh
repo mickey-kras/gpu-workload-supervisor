@@ -33,6 +33,7 @@ installed=()
 cleanup() {
   result=$?
   trap - EXIT
+  cleanup_failed=false
   if $created; then
     if [[ $result != 0 && -n ${qualification_uid:-} ]]; then
       echo 'Setup integration failure: packaged unit diagnostics' >&2
@@ -43,12 +44,15 @@ cleanup() {
       timeout 10s journalctl --no-pager --output=short-precise \
         --lines=80 "_UID=$qualification_uid" || true
     fi
-    loginctl terminate-user "$account" || true
-    loginctl disable-linger "$account" || true
-    userdel --remove "$account" || true
+    loginctl disable-linger "$account" || cleanup_failed=true
+    if [[ -n ${qualification_uid:-} ]]; then
+      timeout 20s systemctl stop "user@${qualification_uid}.service" || cleanup_failed=true
+    fi
+    userdel --remove "$account" || cleanup_failed=true
   fi
   for path in "${installed[@]}"; do rm -f -- "$path"; done
   rm -rf -- "$work"
+  if $cleanup_failed && [[ $result == 0 ]]; then result=1; fi
   exit "$result"
 }
 trap cleanup EXIT
@@ -75,6 +79,12 @@ useradd --create-home --skel "$work/skel" --home-dir "$work/home" --shell /bin/b
 created=true
 chmod 700 "$work/home"
 qualification_uid=$(id -u "$account")
+qualification_gid=$(id -g "$account")
+# Create every XDG ancestor before the manager/generators can create it using
+# their own umask. These are exclusively the freshly created fixture home.
+for directory in .config .config/systemd .config/systemd/user .config/systemd/user/default.target.wants .local .local/share .local/state .cache; do
+  install -d -o "$qualification_uid" -g "$qualification_gid" -m 700 "$work/home/$directory"
+done
 loginctl enable-linger "$account"
 systemctl start "user@${qualification_uid}.service"
 install -m 644 "$repo/tests/desktop/setup_integration.py" "$work/setup_integration.py"
