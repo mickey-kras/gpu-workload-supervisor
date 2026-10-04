@@ -143,10 +143,8 @@ func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, ma
 	if config.Workload != control.WorkloadText && config.Workload != control.WorkloadMedia {
 		return nil, nil, nil, "", errors.New("workload must be text or media")
 	}
-	for _, header := range []string{config.RequestIDHeader, config.JobIDHeader, config.FenceIDHeader, config.FenceEpochHeader} {
-		if header != "" && !validHeaderName(header) {
-			return nil, nil, nil, "", errors.New("configured header name must be an HTTP token")
-		}
+	if err := validateConfiguredHeaderNames(config); err != nil {
+		return nil, nil, nil, "", err
 	}
 	if err := validateDistinctControlHeaders(config); err != nil {
 		return nil, nil, nil, "", err
@@ -175,6 +173,15 @@ func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, ma
 		return nil, nil, nil, "", err
 	}
 	return executionRoutes, readOnlyRoutes, passthroughRoutes, completionPath, nil
+}
+
+func validateConfiguredHeaderNames(config Config) error {
+	for _, header := range []string{config.RequestIDHeader, config.JobIDHeader, config.FenceIDHeader, config.FenceEpochHeader} {
+		if header != "" && !validHeaderName(header) {
+			return errors.New("configured header name must be an HTTP token")
+		}
+	}
+	return nil
 }
 
 func readOnlyRouteSet(routes []Route) (map[string]struct{}, error) {
