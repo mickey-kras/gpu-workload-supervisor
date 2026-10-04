@@ -92,7 +92,7 @@ def main():
         "protocolVersion": 1, "requestId": "before-update", "action": "status"}))
     assert before["code"] == "ok" and before["requestId"] == "before-update"
     assert before["status"]["activeWorkload"] == "idle"
-    assert before["status"]["workloads"] == [{"id": "ci-workload", "label": "CI workload"}]
+    assert before["status"]["workloads"] == [{"id": "idle", "label": "Idle"}, {"id": "ci-workload", "label": "CI workload"}]
     current = json.loads(setup("discover"))["request"]
     current["confirmQuiesced"] = True
     updated = copy.deepcopy(current)
@@ -106,7 +106,7 @@ def main():
         "protocolVersion": 1, "requestId": "after-update", "action": "status"}))
     assert after["code"] == "ok"
     assert after["status"]["owner"] == before["status"]["owner"]
-    assert after["status"]["workloads"] == [{"id": "ci-workload", "label": "Updated workload"}]
+    assert after["status"]["workloads"] == [{"id": "idle", "label": "Idle"}, {"id": "ci-workload", "label": "Updated workload"}]
     profile_hash = digest(ROOT / "operator.json")
     setup("apply", current, "configuration revision changed")
     assert digest(ROOT / "operator.json") == profile_hash
