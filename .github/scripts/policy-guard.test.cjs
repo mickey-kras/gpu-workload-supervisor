@@ -312,3 +312,38 @@ test('guarded Trivy upload requires the exact unconditional report producer', ()
   }
 });
 
+
+test('desktop packages cannot be omitted from staging, checksums, or provenance', () => {
+  for (const name of ['Build desktop packages', 'Checksum all release assets', 'Attest release assets']) {
+    const candidate = files();
+    const path = '.github/workflows/release.yml';
+    const workflow = YAML.parse(candidate[path]);
+    const step = workflow.jobs.publish.steps.find(item => item.name === name);
+    if (name === 'Build desktop packages') {
+      workflow.jobs.publish.steps = workflow.jobs.publish.steps.filter(item => item.name !== name);
+    } else if (name === 'Checksum all release assets') {
+      step.run = step.run.replace(' gpu-workload-supervisor*.deb', '');
+    } else {
+      step.with['subject-path'] = step.with['subject-path'].replace(/.*\.deb\n/g, '');
+    }
+    candidate[path] = YAML.stringify(workflow);
+    assert.ok(inspect(candidate).some(error => error.includes(name)), name);
+  }
+});
+
+test('desktop staging cannot omit an architecture, package validation, or the copy', () => {
+  for (const [before, after] of [
+    ['amd64 arm64', 'amd64'],
+    ['bash scripts/check-desktop-package.sh "dist/$artifact"', 'true'],
+    ['cp "dist/$artifact" "release-assets/$artifact"', 'true'],
+  ]) {
+    const candidate = files();
+    const path = '.github/workflows/release.yml';
+    const workflow = YAML.parse(candidate[path]);
+    const step = workflow.jobs.publish.steps.find(item => item.name === 'Build desktop packages');
+    assert.ok(step.run.includes(before));
+    step.run = step.run.replace(before, after);
+    candidate[path] = YAML.stringify(workflow);
+    assert.ok(inspect(candidate).some(error => error.includes('Build desktop packages')));
+  }
+});

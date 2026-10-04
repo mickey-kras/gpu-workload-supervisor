@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=GPU Workload Setup
+Comment=Configure local GPU workload controls
+Exec=/usr/bin/gjs -m /usr/share/gpu-workload-supervisor/setup.js
+Icon=preferences-system
+Terminal=false
+Categories=Settings;System;
+StartupNotify=true

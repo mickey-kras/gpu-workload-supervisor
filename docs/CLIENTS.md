@@ -1,15 +1,55 @@
-# Dashboard and local desktop client plan
+# Local desktop controls and deferred browser automation
 
 [Documentation](README.md) | [Repository](../README.md)
 
-Plan for [issue #61](https://github.com/mickey-kras/gpu-workload-supervisor/issues/61).
-Future clients use the [restricted external control contract](external-control.md)
-implemented by #60. Neither client is implemented or part of initial deployment.
-Implementation and enablement require the gates below.
+## Native local controls
 
-## Repository and shared package
+`clients/gnome/gpu-workload-supervisor@local` implements the GNOME Shell 50
+extension shipped with the local operator. It uses native SystemIndicator and
+QuickMenuToggle controls and invokes only `/usr/bin/gpu-operator`, with one bounded
+JSON request per process. No proxy, gateway, Job Broker, listener or persistent UI
+service is required. The local OS account supplies operator authority; ownership
+confirmation expresses intent, not verified human presence.
 
-Implement both clients in one dedicated client repository, separate from this Go
+The committed toggle is OFF under Supervisor ownership and ON under User ownership.
+Take Control confirms preserving the verified current workload. Stop and Return
+confirms stopping work and returning Supervisor ownership in Idle. User workload
+selection is immediate; selecting the active workload does nothing. Normal menus
+show configured labels. Details retains owner, requested and active workloads,
+phase, health, admission and conservative observation freshness.
+
+The client never optimistically changes committed ownership. Pending calls, stale
+observations, errors and recovery requirements disable mutations. One call may be
+outstanding; status polling backs off from five to sixty seconds and never overlaps
+a mutation. Freshness expires thirty seconds after dispatch, using monotonic time.
+Versions remain decimal strings. Retired enable generations, stale decisions and
+lower same-incarnation versions are rejected. Disconnects require fresh status;
+mutations are never replayed. Client read deadlines are 75 seconds for status and
+33 minutes for mutations. These exceed the backend's maximum operation plus
+cleanup/finalization and input/output budgets (74 seconds and 1,934 seconds,
+respectively); a client deadline leaves the outcome uncertain. Disable cancels local reads and removes UI resources,
+without killing the backend. The backend must independently preserve admitted
+operations across Shell restart. There is no recovery control in the extension.
+
+Run pure contract/model tests with `node --test clients/gnome/tests/*.test.js`.
+Run the native bounded-stream smoke test with
+`gjs -m clients/gnome/tests/transport.gjs.js`. The latter needs GJS and is not a
+Shell qualification. Before enablement, qualify a real GNOME 50 session: keyboard
+and visual access to the toggle/menu/Details, cancel and confirm both ownership
+dialogs, third-workload selection, active no-op, pending repeated clicks, stale and
+faulted observations, disable/re-enable and Shell restart during admitted work.
+Confirm backend survival and later fresh status with the actual deployment.
+Headless tests do not provide this evidence. Packaging alone does not enable the
+extension or qualify a distribution.
+
+The native local implementation supersedes the separate-client-repository and
+hypothetical human-presence requirements below **for this local operator only**.
+The remaining design describes deferred restricted browser automation and cannot
+be used to grant browser callers the local operator's authority.
+
+## Deferred browser automation contract
+
+Implement browser clients in one dedicated client repository, separate from this Go
 supervisor repository. Its future workspace will contain:
 
 | Placement | Responsibility |
@@ -21,7 +61,7 @@ supervisor repository. Its future workspace will contain:
 Create that repository and packages only in a separately authorized implementation
 task. Keep this decision and the authoritative control/proxy contracts here.
 Release the shared package and clients independently, pin their versions, and
-record the supported supervisor API version. TypeScript permits both clients to
+record the supported supervisor API version. TypeScript permits browser clients to
 share the same validation and uncertainty handling; separate placement avoids
 coupling frontend/extension tooling to supervisor lifecycle or release artifacts.
 The package consumes the JSON contract, not Go `internal` packages. The server
@@ -144,7 +184,7 @@ verified human authorization to the specific target and effects, explains which
 current work may be stopped, records the decision/outcome, and fails closed when
 authority is absent. Its acceptance must cover latched failures and recovery
 without restarting stopped user work. This plan does not design or grant that
-contract. Until it exists and is qualified, both clients leave these actions
+contract. Until it exists and is qualified, browser clients leave these actions
 unavailable and direct the human to the separately authorized operator procedure.
 
 Keep runtime UI routes and supervisor control routes distinct. Link to a runtime
@@ -164,7 +204,7 @@ logs, and client error text; revocation must disable authenticated operations.
 
 ## Acceptance tests before enablement
 
-Run these against both clients and the shared package, with the reviewed adapter
+Run these against browser clients and the shared package, with the reviewed adapter
 and deployment boundary. Fixtures must cover the exact v1 DTO/enums/result codes,
 invalid responses, lossless uint64 tokens, and the absence of status on errors.
 
@@ -184,7 +224,7 @@ invalid responses, lossless uint64 tokens, and the absence of status on errors.
 
 ## Enablement gates
 
-Before either client is enabled, record evidence for all of the following in the
+Before the browser client is enabled, record evidence for all of the following in the
 implementation/deployment review:
 
 - #60 is implemented and verified on main, and a pinned backend release containing
@@ -196,7 +236,7 @@ implementation/deployment review:
 - The authenticated transport adapter and client security boundaries are approved
   and qualified, including authorization, revocation, audit, bounded reads,
   origin/CSRF/CORS, and runtime UI isolation.
-- The shared package and both clients pass the future matrix above with pinned
+- The shared package and browser clients pass the future matrix above with pinned
   versions, reviewed freshness/polling limits, and no automatic mutation replay.
 - Human-only controls remain unavailable. Enabling any of them additionally
   requires the separately approved human authority contract and its acceptance

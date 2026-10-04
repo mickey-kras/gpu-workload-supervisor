@@ -19,16 +19,16 @@ var (
 )
 
 func (s *Store) StartTransition(ctx context.Context, expected uint64, tr Transition) (control.State, error) {
-	return s.startTransition(ctx, expected, nil, tr)
+	return s.startTransition(ctx, expected, nil, nil, tr)
 }
 
 // StartTransitionConditional verifies both token components and the restricted
 // control boundary in the transaction that fences admission and inserts work.
 func (s *Store) StartTransitionConditional(ctx context.Context, expected control.Precondition, tr Transition) (control.State, error) {
-	return s.startTransition(ctx, expected.Version, &expected, tr)
+	return s.startTransition(ctx, expected.Version, &expected, nil, tr)
 }
 
-func (s *Store) startTransition(ctx context.Context, expected uint64, condition *control.Precondition, tr Transition) (control.State, error) {
+func (s *Store) startTransition(ctx context.Context, expected uint64, condition *control.Precondition, operator *control.OperatorPrecondition, tr Transition) (control.State, error) {
 	if tr.ID == "" {
 		return control.State{}, errors.New("transition id is empty")
 	}
@@ -43,6 +43,26 @@ func (s *Store) startTransition(ctx context.Context, expected uint64, condition 
 	}
 	if err := transitionPrecondition(ctx, tx, current, expected, condition); err != nil {
 		return control.State{}, err
+	}
+	if operator != nil {
+		if err := operatorSource(ctx, tx, current, *operator); err != nil {
+			return control.State{}, err
+		}
+	}
+	catalog, err := readCatalog(ctx, tx)
+	if err != nil {
+		return control.State{}, err
+	}
+	if catalog.Revision != tr.ConfigurationRevision {
+		return control.State{}, ErrVersionConflict
+	}
+	if catalog.Revision != "" && tr.Target.DesiredWorkload != control.WorkloadIdle {
+		if _, ok := catalog.Catalog.Profile(tr.Target.DesiredWorkload); !ok {
+			return control.State{}, ErrWorkloadMismatch
+		}
+	}
+	if catalog.Revision == "" && tr.Target.DesiredWorkload != control.WorkloadIdle && tr.Target.DesiredWorkload != control.WorkloadText && tr.Target.DesiredWorkload != control.WorkloadMedia {
+		return control.State{}, ErrWorkloadMismatch
 	}
 	next := current
 	next.DesiredWorkload = tr.Target.DesiredWorkload

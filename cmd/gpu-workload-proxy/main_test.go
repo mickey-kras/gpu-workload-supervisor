@@ -360,7 +360,7 @@ func TestProxyFlagValidation(t *testing.T) {
 		{"missing upstream", "upstream is required", nil},
 		{"malformed upstream", "parse upstream", []string{"-upstream", "http://%"}},
 		{"relative upstream", "upstream must be an absolute", []string{"-upstream", "/path"}},
-		{"unknown workload", "workload must be text or media", []string{"-upstream", "http://127.0.0.1:1", "-workload", "other"}},
+		{"unknown workload", "workload must be a valid workload ID", []string{"-upstream", "http://127.0.0.1:1", "-workload", "INVALID"}},
 		{"no routes", "at least one execution route", []string{"-upstream", "http://127.0.0.1:1", "-workload", "media"}},
 		{"invalid finish path", "completion path must be canonical", []string{"-upstream", "http://127.0.0.1:1", "-workload", "media", "-execute-route", "POST:/execute", "-completion-path", "/a/../finish"}},
 		{"mutating read-only", "read-only routes require", []string{"-upstream", "http://127.0.0.1:1", "-workload", "media", "-execute-route", "POST:/execute", "-read-only-route", "POST:/monitor"}},

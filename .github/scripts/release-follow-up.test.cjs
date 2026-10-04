@@ -19,7 +19,9 @@ function fixture() {
   const release = { tag_name: `v${VERSION}`, immutable: true, draft: false, prerelease: false,
     assets: [`gpu-workload-supervisor-v${VERSION}.tar.gz`,
       `gpu-workload-supervisor_${VERSION}_linux_amd64.tar.gz`,
-      `gpu-workload-supervisor_${VERSION}_linux_arm64.tar.gz`, 'SHA256SUMS', 'sbom.cdx.json']
+      `gpu-workload-supervisor_${VERSION}_linux_arm64.tar.gz`,
+      `gpu-workload-supervisor_${VERSION}_linux_amd64.deb`,
+      `gpu-workload-supervisor_${VERSION}_linux_arm64.deb`, 'SHA256SUMS', 'sbom.cdx.json']
       .map(name => ({ name, state: 'uploaded', digest: `sha256:${'e'.repeat(64)}` })) };
   const pull = { number: 8, state: 'open', draft: false, auto_merge: null,
     base: { ref: 'main', repo: { full_name: fullName } },
@@ -200,4 +202,22 @@ test('non-main execution and a changed snapshot version cannot perform follow-up
   input.context.ref = 'refs/heads/main'; input.read = () => json(NEXT);
   await assert.rejects(bumpReleasedVersion(input), /dispatch snapshot/);
   assert.equal(input.state.created.length, 0);
+});
+
+test('desktop packages must be uploaded with digests before accepting an immutable retry', async () => {
+  for (const arch of ['amd64', 'arm64']) {
+    for (const mutation of ['missing', 'digest', 'pending', 'duplicate']) {
+      const input = fixture();
+      const name = `gpu-workload-supervisor_${VERSION}_linux_${arch}.deb`;
+      const asset = input.state.release.assets.find(item => item.name === name);
+      if (mutation === 'missing') input.state.release.assets = input.state.release.assets.filter(item => item !== asset);
+      if (mutation === 'digest') asset.digest = null;
+      if (mutation === 'pending') asset.state = 'new';
+      if (mutation === 'duplicate') input.state.release.assets.push({ ...asset });
+      await assert.rejects(bumpReleasedVersion(input), /immutable candidate/);
+      assert.equal(input.state.created.length, 0);
+      assert.equal(input.state.refs.length, 0);
+      assert.equal(input.state.merged.length, 0);
+    }
+  }
 });

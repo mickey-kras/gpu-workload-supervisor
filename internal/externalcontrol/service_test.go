@@ -327,3 +327,21 @@ func TestSafeRuntimeCauseMapsToTimeout(t *testing.T) {
 		}
 	}
 }
+
+func TestNewWorkloadRequiresExplicitAutomationGrant(t *testing.T) {
+	s, b, a, cfg := serviceFixture(t)
+	body := strings.Replace(switchBody, "media", "speech", 1)
+	denied := s.Handle(context.Background(), []byte(body))
+	if denied.Code != CodeForbidden || b.calls != 0 {
+		t.Fatalf("new workload inherited legacy grant: %+v calls %d", denied, b.calls)
+	}
+	cfg.Grants["verified-secret"] = Grant{AuditID: "broker-1", Workloads: []control.Workload{"speech"}}
+	explicit, err := New(b, resolverFunc(func(context.Context) (string, error) { return "verified-secret", nil }), a, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := explicit.Handle(context.Background(), []byte(body))
+	if allowed.Code != CodeOK || b.target != "speech" {
+		t.Fatalf("explicit grant failed: %+v", allowed)
+	}
+}

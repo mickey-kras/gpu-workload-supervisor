@@ -53,8 +53,8 @@ func TestStateRejectsInvalidFieldsAndUnsafeAdmission(t *testing.T) {
 		want   string
 	}{
 		{"owner", func(s *State) { s.Owner = "other" }, "owner"},
-		{"desired", func(s *State) { s.DesiredWorkload = "other" }, "desired"},
-		{"active", func(s *State) { s.ActiveWorkload = "other" }, "active"},
+		{"desired", func(s *State) { s.DesiredWorkload = "INVALID" }, "desired"},
+		{"active", func(s *State) { s.ActiveWorkload = "INVALID" }, "active"},
 		{"phase", func(s *State) { s.Phase = "other" }, "phase"},
 		{"health", func(s *State) { s.Health = "other" }, "health"},
 		{"admission", func(s *State) { s.Admission = "other" }, "admission"},

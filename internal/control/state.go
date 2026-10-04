@@ -100,10 +100,10 @@ func (s State) Validate() error {
 	if s.Owner != OwnerSupervisor && s.Owner != OwnerUser {
 		return fmt.Errorf("invalid owner %q", s.Owner)
 	}
-	if s.DesiredWorkload != WorkloadText && s.DesiredWorkload != WorkloadMedia && s.DesiredWorkload != WorkloadIdle {
+	if !ValidWorkloadID(s.DesiredWorkload) && s.DesiredWorkload != WorkloadIdle {
 		return fmt.Errorf("invalid desired workload %q", s.DesiredWorkload)
 	}
-	if s.ActiveWorkload != WorkloadText && s.ActiveWorkload != WorkloadMedia && s.ActiveWorkload != WorkloadIdle && s.ActiveWorkload != WorkloadUnknown {
+	if !ValidWorkloadID(s.ActiveWorkload) && s.ActiveWorkload != WorkloadIdle && s.ActiveWorkload != WorkloadUnknown {
 		return fmt.Errorf("invalid active workload %q", s.ActiveWorkload)
 	}
 	switch s.Phase {

@@ -140,8 +140,8 @@ func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, ma
 	if config.Upstream.Scheme != "http" && config.Upstream.Scheme != "https" {
 		return nil, nil, nil, "", errors.New("upstream scheme must be http or https")
 	}
-	if config.Workload != control.WorkloadText && config.Workload != control.WorkloadMedia {
-		return nil, nil, nil, "", errors.New("workload must be text or media")
+	if !control.ValidWorkloadID(config.Workload) {
+		return nil, nil, nil, "", errors.New("workload must be a valid workload ID")
 	}
 	if err := validateConfiguredHeaderNames(config); err != nil {
 		return nil, nil, nil, "", err

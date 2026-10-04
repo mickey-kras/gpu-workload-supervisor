@@ -1,0 +1,95 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/setup"
+	"os"
+	"strings"
+	"testing"
+)
+
+const request = `{"version":1,"profile":{"version":1,"statePath":"/tmp/state.db","systemctlPath":"/usr/bin/systemctl","nvidiaSMIPath":"/usr/bin/nvidia-smi","gpuIndex":0,"capacityHeadroomMiB":0},"catalog":{"version":1,"profiles":[{"id":"text","label":"Text","adapter":"systemd","unit":"text.service","cgroup":"/user.slice/text","healthURL":"http://127.0.0.1:8000/health","bootPolicy":"stop-to-idle"}]}}`
+
+func TestRun(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"validate"}, strings.NewReader(request), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "operator.json") {
+		t.Fatal(out.String())
+	}
+	for _, args := range [][]string{nil, {"wrong"}, {"validate"}, {"apply"}, {"reconcile"}} {
+		input := "{}"
+		if len(args) > 0 && args[0] == "apply" {
+			input = request
+		}
+		if err := run(args, strings.NewReader(input), &bytes.Buffer{}); err == nil {
+			t.Fatalf("expected unsupported or unavailable: %v", args)
+		}
+	}
+}
+func TestMainValidate(t *testing.T) {
+	priorArgs, priorIn, priorOut := os.Args, os.Stdin, os.Stdout
+	t.Cleanup(func() { os.Args = priorArgs; os.Stdin = priorIn; os.Stdout = priorOut })
+	input, err := os.CreateTemp(t.TempDir(), "input")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	input.WriteString(request)
+	input.Seek(0, 0)
+	output, err := os.CreateTemp(t.TempDir(), "output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	os.Args = []string{"gpu-setup", "validate"}
+	os.Stdin = input
+	os.Stdout = output
+	main()
+}
+
+func TestInjectedCommandBoundaries(t *testing.T) {
+	oldHome, oldApply, oldUID, oldDiscover, oldReconcile := homeForSetup, applySetup, effectiveUID, discoverSetup, reconcileSetup
+	t.Cleanup(func() {
+		homeForSetup = oldHome
+		applySetup = oldApply
+		effectiveUID = oldUID
+		discoverSetup = oldDiscover
+		reconcileSetup = oldReconcile
+	})
+	homeForSetup = func() (string, error) { return "", errors.New("no account") }
+	if err := run([]string{"validate"}, strings.NewReader(request), &bytes.Buffer{}); err == nil {
+		t.Fatal("missing account")
+	}
+	homeForSetup = func() (string, error) { return "/home/operator", nil }
+	effectiveUID = func() int { return 1000 }
+	for _, failure := range []bool{false, true} {
+		applySetup = func(context.Context, string, setup.Request) error {
+			if failure {
+				return errors.New("failed")
+			}
+			return nil
+		}
+		err := run([]string{"apply"}, strings.NewReader(request), &bytes.Buffer{})
+		if (err != nil) != failure {
+			t.Fatal(err)
+		}
+		discoverSetup = func(context.Context, string) (setup.Discovery, error) {
+			if failure {
+				return setup.Discovery{}, errors.New("failed")
+			}
+			return setup.Discovery{}, nil
+		}
+		err = run([]string{"discover"}, nil, &bytes.Buffer{})
+		if (err != nil) != failure {
+			t.Fatal(err)
+		}
+	}
+	reconcileSetup = func(context.Context, string) error { return nil }
+	if err := run([]string{"reconcile"}, nil, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+}

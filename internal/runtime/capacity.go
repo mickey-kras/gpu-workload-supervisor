@@ -19,6 +19,13 @@ func (m *SystemdManager) capacity(ctx context.Context, workload control.Workload
 	if workload == control.WorkloadMedia {
 		required = m.config.MediaRequiredMiB
 	}
+	if m.config.Catalog != nil {
+		p, ok := m.config.Catalog.Profile(workload)
+		if !ok {
+			return ErrCapacity
+		}
+		required = p.RequiredMiB
+	}
 	if required == 0 {
 		return nil
 	}

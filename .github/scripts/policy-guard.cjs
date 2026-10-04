@@ -356,11 +356,25 @@ function inspectReleasePublish(files, workflows, failures, checks) {
     run: ['git archive', 'test -s "dist/$artifact"', 'cp "dist/$artifact"'],
     expectedIf: "steps.state.outputs.published != 'true'",
   });
+  step(release, 'publish', 'Build desktop packages', {
+    run: ['for arch in amd64 arm64; do',
+      'artifact="gpu-workload-supervisor_${VERSION}_linux_${arch}.deb"',
+      'test -s "dist/$artifact"', 'bash scripts/check-desktop-package.sh "dist/$artifact"',
+      'cp "dist/$artifact" "release-assets/$artifact"'],
+    expectedIf: "steps.state.outputs.published != 'true'",
+  });
+  checks.exactRun(release, 'publish', 'Build desktop packages', [
+    'set -euo pipefail', 'for arch in amd64 arm64; do',
+    'artifact="gpu-workload-supervisor_${VERSION}_linux_${arch}.deb"',
+    'test -s "dist/$artifact"', 'bash scripts/check-desktop-package.sh "dist/$artifact"',
+    'cp "dist/$artifact" "release-assets/$artifact"', 'done',
+  ]);
   step(release, 'publish', 'Checksum all release assets', {
-    run: ['sha256sum gpu-workload-supervisor*.tar.gz sbom.cdx.json > SHA256SUMS', 'sha256sum --check SHA256SUMS'],
+    run: ['sha256sum gpu-workload-supervisor*.tar.gz gpu-workload-supervisor*.deb sbom.cdx.json > SHA256SUMS', 'sha256sum --check SHA256SUMS'],
     expectedIf: "steps.state.outputs.published != 'true'",
   });
   step(release, 'publish', 'Attest release assets', {
+    withValues: { 'subject-path': 'release-assets/*.tar.gz\nrelease-assets/*.deb\nrelease-assets/SHA256SUMS\nrelease-assets/sbom.cdx.json\n' },
     uses: 'actions/attest-build-provenance', expectedIf: "steps.state.outputs.published != 'true'",
   });
   step(release, 'publish', 'Publish immutable GitHub release', {

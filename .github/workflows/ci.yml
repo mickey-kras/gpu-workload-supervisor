@@ -67,6 +67,16 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: .github/aislop/package-lock.json
+      - name: GNOME contract and lifecycle fixtures
+        run: node --test clients/gnome/tests/*.test.js
+      - uses: ./.github/actions/setup-goreleaser
+      - name: Desktop package artifact verification
+        run: |
+          goreleaser check
+          goreleaser release --snapshot --clean --skip=publish
+          for package in dist/*.deb; do
+            bash scripts/check-desktop-package.sh "$package"
+          done
       - name: Audit Aislop toolchain
         run: |
           npm ci --prefix .github/audit-tool --ignore-scripts --no-audit --no-fund

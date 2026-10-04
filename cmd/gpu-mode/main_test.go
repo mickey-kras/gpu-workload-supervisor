@@ -212,7 +212,7 @@ func TestOwnershipCLIRequiresExplicitValidTargetBeforeOpeningStore(t *testing.T)
 	previousArgs := os.Args
 	t.Cleanup(func() { os.Args = previousArgs })
 	for _, command := range []string{"take-control", "user-switch", "return-control", "recover-user"} {
-		for _, target := range []string{"", "unknown", "auto"} {
+		for _, target := range []string{"", "unknown", "INVALID"} {
 			statePath := filepath.Join(t.TempDir(), "state.db")
 			os.Args = []string{"gpu-mode", "-media-stop-mode", "unload", "-state", statePath, "-target", target, command}
 			if err := run(); err == nil || !strings.Contains(err.Error(), "requires -target") {

@@ -231,6 +231,19 @@ jobs:
             cp "dist/$artifact" "release-assets/$artifact"
           done
           (cd dist && sha256sum --check checksums.txt)
+      - name: Build desktop packages
+        if: steps.state.outputs.published != 'true'
+        env:
+          VERSION: ${{ needs.entry.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            artifact="gpu-workload-supervisor_${VERSION}_linux_${arch}.deb"
+            test -s "dist/$artifact"
+            bash scripts/check-desktop-package.sh "dist/$artifact"
+            cp "dist/$artifact" "release-assets/$artifact"
+          done
       - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         if: steps.state.outputs.published != 'true'
         with:
@@ -242,7 +255,7 @@ jobs:
         if: steps.state.outputs.published != 'true'
         run: |
           cd release-assets
-          sha256sum gpu-workload-supervisor*.tar.gz sbom.cdx.json > SHA256SUMS
+          sha256sum gpu-workload-supervisor*.tar.gz gpu-workload-supervisor*.deb sbom.cdx.json > SHA256SUMS
           sha256sum --check SHA256SUMS
       - name: Attest release assets
         if: steps.state.outputs.published != 'true'
@@ -250,6 +263,7 @@ jobs:
         with:
           subject-path: |
             release-assets/*.tar.gz
+            release-assets/*.deb
             release-assets/SHA256SUMS
             release-assets/sbom.cdx.json
       - name: Publish immutable GitHub release

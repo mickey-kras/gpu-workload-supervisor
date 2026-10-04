@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
@@ -115,5 +116,31 @@ func TestRejectedCompletionPreservesPendingWork(t *testing.T) {
 	}
 	if pending, err := s.PendingWork(ctx); err != nil || pending != 0 {
 		t.Fatalf("valid completion did not release recovery barrier: %d, %v", pending, err)
+	}
+}
+
+func TestPendingWorkExceptIncludesOpposingAndUnknownRegistrations(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	state, _ := s.State(ctx)
+	for _, workload := range []any{"text", "media", nil} {
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO registered_work(request_id,lease_incarnation,lease_epoch,registered_at,workload) VALUES(?,?,?,?,?)`, fmt.Sprint(workload), state.LeaseFence.Incarnation, state.LeaseFence.Epoch, formatTime(s.now()), workload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := s.PendingWorkExcept(ctx, control.WorkloadText); err != nil || n != 1 {
+		t.Fatalf("opposing %d %v", n, err)
+	}
+	if _, err := s.db.ExecContext(ctx, "DELETE FROM registered_work WHERE workload='media'"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.PendingWorkExcept(ctx, control.WorkloadText); err != nil || n != 1 {
+		t.Fatalf("unknown %d %v", n, err)
+	}
+	if _, err := s.db.ExecContext(ctx, "DELETE FROM registered_work WHERE workload IS NULL"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.PendingWorkExcept(ctx, control.WorkloadText); err != nil || n != 0 {
+		t.Fatalf("retained %d %v", n, err)
 	}
 }

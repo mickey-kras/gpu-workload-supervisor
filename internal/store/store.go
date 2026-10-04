@@ -35,15 +35,16 @@ type Store struct {
 }
 
 type Transition struct {
-	ID        string
-	Fence     control.Fence
-	Source    control.State
-	Target    control.State
-	Previous  control.State
-	Initiator string
-	JobID     string
-	Phase     control.Phase
-	Deadline  time.Time
+	ConfigurationRevision string
+	ID                    string
+	Fence                 control.Fence
+	Source                control.State
+	Target                control.State
+	Previous              control.State
+	Initiator             string
+	JobID                 string
+	Phase                 control.Phase
+	Deadline              time.Time
 }
 
 type TransitionEvent struct {

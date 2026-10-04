@@ -40,6 +40,7 @@ type StateStore interface {
 	PendingTransitionWork(context.Context, string) (int, error)
 	PendingWork(context.Context) (int, error)
 	PendingWorkload(context.Context, control.Workload) (int, error)
+	PendingWorkExcept(context.Context, control.Workload) (int, error)
 	InProgressTransition(context.Context) (string, error)
 	Recover(context.Context, uint64, control.State, string) (control.State, error)
 	RotateFenceAndCloseAdmission(context.Context, uint64) (control.State, error)
@@ -50,6 +51,7 @@ type StateStore interface {
 func (c *Controller) DurableStatePath() string { return c.store.DurableStatePath() }
 
 type Config struct {
+	Catalog         *control.CatalogSnapshot
 	DrainTimeout    time.Duration
 	VerifyTimeout   time.Duration
 	ActionTimeout   time.Duration
@@ -80,10 +82,24 @@ func newController(stateStore StateStore, runtime gpuruntime.Manager, config Con
 	if config.DrainTimeout <= 0 || config.VerifyTimeout <= 0 || config.ActionTimeout <= 0 || config.CleanupTimeout <= 0 || config.FinalizeTimeout <= 0 || config.PollInterval <= 0 {
 		return nil, errors.New("timeouts and poll interval must be greater than zero")
 	}
+	if config.Catalog != nil {
+		snapshot := *config.Catalog
+		snapshot.Catalog = snapshot.Catalog.Clone()
+		if err := snapshot.Catalog.Validate(); err != nil {
+			return nil, err
+		}
+		config.Catalog = &snapshot
+	}
 	return &Controller{store: stateStore, runtime: runtime, config: config, now: now, id: id}, nil
 }
 
 func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
+	if err := c.checkCatalog(ctx); err != nil {
+		return control.State{}, err
+	}
+	if c.config.Catalog != nil {
+		return c.reconcileCatalog(ctx, false)
+	}
 	state, err := c.store.State(ctx)
 	if err != nil {
 		return control.State{}, err
@@ -192,6 +208,9 @@ func (c *Controller) drainReconciliation(ctx context.Context, textActive, needsE
 }
 
 func (c *Controller) beginRecovery(ctx context.Context) (control.State, error) {
+	if err := c.checkCatalog(ctx); err != nil {
+		return control.State{}, err
+	}
 	state, err := c.store.State(ctx)
 	if err != nil {
 		return control.State{}, err
@@ -224,6 +243,9 @@ func (c *Controller) beginRecovery(ctx context.Context) (control.State, error) {
 }
 
 func (c *Controller) Recover(ctx context.Context) (control.State, error) {
+	if c.config.Catalog != nil {
+		return c.reconcileCatalog(ctx, true)
+	}
 	state, err := c.beginRecovery(ctx)
 	if err != nil {
 		return state, err
@@ -278,6 +300,9 @@ func (c *Controller) drainRecovery(ctx context.Context, textActive bool) error {
 // admitted request can be forwarded after runtime shutdown. Recovery remains
 // separate: this operation never reopens admission.
 func (c *Controller) ResolveUnfinishedWork(ctx context.Context, reason string) (control.State, int64, error) {
+	if err := c.checkCatalog(ctx); err != nil {
+		return control.State{}, 0, err
+	}
 	reason = strings.TrimSpace(reason)
 	if len(reason) == 0 || len(reason) > 512 {
 		return control.State{}, 0, errors.New("resolution reason must contain 1 to 512 bytes")
@@ -306,7 +331,7 @@ func (c *Controller) ResolveUnfinishedWork(ctx context.Context, reason string) (
 	if err != nil {
 		return state, 0, fmt.Errorf("observe stopped runtimes: %w", err)
 	}
-	if snapshot.TextActive || snapshot.MediaReady {
+	if snapshot.AnyActive() {
 		return state, 0, fmt.Errorf("%w: runtime remains active after stop", ErrStateVerification)
 	}
 	count, err := c.store.ResolveUnfinishedWork(ctx, state.Version, reason)
@@ -490,6 +515,9 @@ func (c *Controller) fail(transitionID string, state, previous control.State, ca
 }
 
 func (c *Controller) rollback(ctx context.Context, transitionID string, previous control.State) error {
+	if c.config.Catalog != nil {
+		return c.rollbackCatalog(ctx, transitionID, previous)
+	}
 	snapshot, err := c.observe(ctx)
 	if err != nil {
 		return err
