@@ -182,3 +182,35 @@ test('duplicate and superseded results cannot update status or freshness', () =>
     m.accept(next, fixture('user'), 5);
     assert.equal(m.dispatch, 3);
 });
+
+test('catalog labels reject every control and bidi override without rejecting other Unicode', () => {
+    const rejected = [
+        ...Array.from({ length: 32 }, (_, i) => i),
+        ...Array.from({ length: 33 }, (_, i) => 127 + i),
+        ...Array.from({ length: 5 }, (_, i) => 0x202a + i),
+        ...Array.from({ length: 4 }, (_, i) => 0x2066 + i),
+    ];
+    for (const code of rejected) {
+        const r = fixture();
+        r.status.workloads[1].label = `a${String.fromCodePoint(code)}b`;
+        assert.throws(() => parseResponse(JSON.stringify(r), 'r1'));
+    }
+    for (const label of ['渲染 🎨', 'a\uFEFFb', 'a\u2029b']) {
+        const r = fixture();
+        r.status.workloads[1].label = label;
+        assert.equal(parseResponse(JSON.stringify(r), 'r1').status.workloads[1].label, label);
+    }
+    const r = fixture();
+    r.status.workloads[1].label = '\uFEFF';
+    assert.throws(() => parseResponse(JSON.stringify(r), 'r1'));
+});
+
+test('response keys are compared as exact unordered sets', () => {
+    const r = fixture();
+    const reversed = Object.fromEntries(Object.entries(r).reverse());
+    assert.equal(parseResponse(JSON.stringify(reversed), 'r1').code, 'ok');
+    delete r.protocolVersion;
+    delete r.requestId;
+    r['protocolVersion,requestId'] = 1;
+    assert.throws(() => parseResponse(JSON.stringify(r), 'r1'));
+});

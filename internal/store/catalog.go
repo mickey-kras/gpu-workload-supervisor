@@ -57,15 +57,8 @@ func (s *Store) ReplaceCatalog(ctx context.Context, expected string, c control.C
 	if err := readCatalogWorkReferences(ctx, tx, refs); err != nil {
 		return old, err
 	}
-	for id := range refs {
-		if id == control.WorkloadIdle || id == control.WorkloadUnknown {
-			continue
-		}
-		p, ok := c.Profile(id)
-		prior, had := old.Catalog.Profile(id)
-		if !ok || had && !reflect.DeepEqual(p, prior) || !had && old.Revision == "" {
-			return old, ErrCatalogReferenced
-		}
+	if err := validateCatalogReferences(c, old, refs); err != nil {
+		return old, err
 	}
 	revision, err := s.uuid()
 	if err != nil {
@@ -119,14 +112,7 @@ func readCatalogWorkReferences(ctx context.Context, tx *sql.Tx, refs map[control
 		if err = rows.Scan(&a, &b, &d); err != nil {
 			break
 		}
-		for _, raw := range [][]byte{a, b, d} {
-			var st control.State
-			if err = json.Unmarshal(raw, &st); err != nil {
-				break
-			}
-			refs[st.ActiveWorkload] = true
-			refs[st.DesiredWorkload] = true
-		}
+		err = addTransitionReferences(refs, a, b, d)
 		if err != nil {
 			break
 		}
@@ -137,6 +123,32 @@ func readCatalogWorkReferences(ctx context.Context, tx *sql.Tx, refs map[control
 	rows.Close()
 	if err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateCatalogReferences(c control.Catalog, old control.CatalogSnapshot, refs map[control.Workload]bool) error {
+	for id := range refs {
+		if id == control.WorkloadIdle || id == control.WorkloadUnknown {
+			continue
+		}
+		p, ok := c.Profile(id)
+		prior, had := old.Catalog.Profile(id)
+		if !ok || had && !reflect.DeepEqual(p, prior) || !had && old.Revision == "" {
+			return ErrCatalogReferenced
+		}
+	}
+	return nil
+}
+
+func addTransitionReferences(refs map[control.Workload]bool, states ...[]byte) error {
+	for _, raw := range states {
+		var st control.State
+		if err := json.Unmarshal(raw, &st); err != nil {
+			return err
+		}
+		refs[st.ActiveWorkload] = true
+		refs[st.DesiredWorkload] = true
 	}
 	return nil
 }

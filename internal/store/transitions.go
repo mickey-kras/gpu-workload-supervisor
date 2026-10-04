@@ -44,25 +44,11 @@ func (s *Store) startTransition(ctx context.Context, expected uint64, condition 
 	if err := transitionPrecondition(ctx, tx, current, expected, condition); err != nil {
 		return control.State{}, err
 	}
-	if operator != nil {
-		if err := operatorSource(ctx, tx, current, *operator); err != nil {
-			return control.State{}, err
-		}
-	}
-	catalog, err := readCatalog(ctx, tx)
-	if err != nil {
+	if err := transitionOperatorSource(ctx, tx, current, operator); err != nil {
 		return control.State{}, err
 	}
-	if catalog.Revision != tr.ConfigurationRevision {
-		return control.State{}, ErrVersionConflict
-	}
-	if catalog.Revision != "" && tr.Target.DesiredWorkload != control.WorkloadIdle {
-		if _, ok := catalog.Catalog.Profile(tr.Target.DesiredWorkload); !ok {
-			return control.State{}, ErrWorkloadMismatch
-		}
-	}
-	if catalog.Revision == "" && tr.Target.DesiredWorkload != control.WorkloadIdle && tr.Target.DesiredWorkload != control.WorkloadText && tr.Target.DesiredWorkload != control.WorkloadMedia {
-		return control.State{}, ErrWorkloadMismatch
+	if err := validateTransitionCatalog(ctx, tx, tr); err != nil {
+		return control.State{}, err
 	}
 	next := current
 	next.DesiredWorkload = tr.Target.DesiredWorkload
@@ -298,4 +284,30 @@ func (s *Store) Recover(ctx context.Context, expected uint64, final control.Stat
 		return control.State{}, err
 	}
 	return final, nil
+}
+
+func validateTransitionCatalog(ctx context.Context, tx *sql.Tx, tr Transition) error {
+	catalog, err := readCatalog(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if catalog.Revision != tr.ConfigurationRevision {
+		return ErrVersionConflict
+	}
+	if catalog.Revision != "" && tr.Target.DesiredWorkload != control.WorkloadIdle {
+		if _, ok := catalog.Catalog.Profile(tr.Target.DesiredWorkload); !ok {
+			return ErrWorkloadMismatch
+		}
+	}
+	if catalog.Revision == "" && tr.Target.DesiredWorkload != control.WorkloadIdle && tr.Target.DesiredWorkload != control.WorkloadText && tr.Target.DesiredWorkload != control.WorkloadMedia {
+		return ErrWorkloadMismatch
+	}
+	return nil
+}
+
+func transitionOperatorSource(ctx context.Context, tx *sql.Tx, current control.State, operator *control.OperatorPrecondition) error {
+	if operator == nil {
+		return nil
+	}
+	return operatorSource(ctx, tx, current, *operator)
 }

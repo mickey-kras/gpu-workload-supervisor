@@ -42,7 +42,7 @@ func (m *SystemdManager) observeCatalog(ctx context.Context) (Snapshot, error) {
 		if !(st.active == "active" && st.sub == "running") && !(st.active == "inactive" && st.sub == "dead") {
 			return Snapshot{}, errors.New("workload is neither running nor stopped")
 		}
-		s.Workloads[p.ID] = WorkloadObservation{Active: st.active == "active", Exclusive: p.Adapter != "media-unload"}
+		s.Workloads[p.ID] = WorkloadObservation{Active: st.active == "active", Exclusive: p.Adapter != control.AdapterMediaUnload}
 	}
 	return s, nil
 }
@@ -56,7 +56,7 @@ func (m *SystemdManager) releasedCatalog(ctx context.Context, target control.Wor
 		if p.ID == target {
 			continue
 		}
-		if err := m.releasedUnit(ctx, p.Unit, p.Cgroup, p.Adapter == "media-unload"); err != nil {
+		if err := m.releasedUnit(ctx, p.Unit, p.Cgroup, p.Adapter == control.AdapterMediaUnload); err != nil {
 			return err
 		}
 	}
@@ -79,7 +79,7 @@ func (m *SystemdManager) stopCatalog(ctx context.Context, id control.Workload) e
 	if !ok {
 		return errors.New("unconfigured workload")
 	}
-	if p.Adapter != "media-unload" {
+	if p.Adapter != control.AdapterMediaUnload {
 		return m.stopUnit(ctx, p.Unit)
 	}
 	st, err := m.unitState(ctx, p.Unit)

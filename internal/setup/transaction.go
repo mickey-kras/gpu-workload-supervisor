@@ -120,36 +120,12 @@ func (tx Transaction) Apply(h Hooks) error {
 	if err := h.Quiescent(); err != nil {
 		return err
 	}
-	names := make([]string, 0, len(pending.Files))
-	for name := range pending.Files {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		e := pending.Files[name]
-		current, err := privateRead(filepath.Join(tx.Root, name))
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		if err == nil && digest(current) != digest(e.Before) && digest(current) != digest(e.After) {
-			return errors.New("integration changed during setup")
-		}
-		if err := writeIntegration(filepath.Join(tx.Root, name), e.After); err != nil {
-			if alreadyCommitted {
-				return err
-			}
-			return errors.Join(err, tx.rollback(pending))
-		}
+	if err := tx.applyFiles(pending, alreadyCommitted); err != nil {
+		return err
 	}
 	if !alreadyCommitted {
-		if err := h.Commit(); err != nil {
-			committed, inspectErr := h.Committed()
-			if inspectErr != nil {
-				return errors.Join(err, inspectErr)
-			}
-			if !committed {
-				return errors.Join(err, tx.rollback(pending))
-			}
+		if err := tx.commit(pending, h); err != nil {
+			return err
 		}
 	}
 	return tx.finalize(manifestPath, journalPath, owned, pending)
@@ -215,23 +191,7 @@ func (tx Transaction) prepare(path string, owned ownership, h Hooks) (journal, b
 	pending := journal{Version: 1, Files: map[string]entry{}}
 	data, err := privateRead(path)
 	if err == nil {
-		if err := json.Unmarshal(data, &pending); err != nil {
-			return pending, false, err
-		}
-		if pending.Version != 1 {
-			return pending, false, errors.New("unsupported setup journal")
-		}
-		if len(pending.Files) != len(tx.Changes) {
-			return pending, false, errors.New("pending setup differs; resume original plan")
-		}
-		for name, e := range pending.Files {
-			desired, exists := tx.Changes[name]
-			if !exists || digest(desired) != digest(e.After) {
-				return pending, false, errors.New("pending setup differs; resume original plan")
-			}
-		}
-		committed, err := h.Committed()
-		return pending, committed, err
+		return tx.resume(data, pending, h)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return pending, false, err
@@ -249,4 +209,62 @@ func (tx Transaction) prepare(path string, owned ownership, h Hooks) (journal, b
 		pending.Files[name] = entry{Before: before, Existed: exists, After: after}
 	}
 	return pending, false, writeJSON(path, pending)
+}
+
+func (tx Transaction) applyFiles(pending journal, alreadyCommitted bool) error {
+	names := make([]string, 0, len(pending.Files))
+	for name := range pending.Files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		e := pending.Files[name]
+		current, err := privateRead(filepath.Join(tx.Root, name))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err == nil && digest(current) != digest(e.Before) && digest(current) != digest(e.After) {
+			return errors.New("integration changed during setup")
+		}
+		if err := writeIntegration(filepath.Join(tx.Root, name), e.After); err != nil {
+			if alreadyCommitted {
+				return err
+			}
+			return errors.Join(err, tx.rollback(pending))
+		}
+	}
+	return nil
+}
+
+func (tx Transaction) commit(pending journal, h Hooks) error {
+	if err := h.Commit(); err != nil {
+		committed, inspectErr := h.Committed()
+		if inspectErr != nil {
+			return errors.Join(err, inspectErr)
+		}
+		if !committed {
+			return errors.Join(err, tx.rollback(pending))
+		}
+	}
+	return nil
+}
+
+func (tx Transaction) resume(data []byte, pending journal, h Hooks) (journal, bool, error) {
+	if err := json.Unmarshal(data, &pending); err != nil {
+		return pending, false, err
+	}
+	if pending.Version != 1 {
+		return pending, false, errors.New("unsupported setup journal")
+	}
+	if len(pending.Files) != len(tx.Changes) {
+		return pending, false, errors.New("pending setup differs; resume original plan")
+	}
+	for name, e := range pending.Files {
+		desired, exists := tx.Changes[name]
+		if !exists || digest(desired) != digest(e.After) {
+			return pending, false, errors.New("pending setup differs; resume original plan")
+		}
+	}
+	committed, err := h.Committed()
+	return pending, committed, err
 }

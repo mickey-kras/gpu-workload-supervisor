@@ -44,3 +44,13 @@ updates:
       default-days: 7
     rebase-strategy: auto
     open-pull-requests-limit: 3
+
+  - package-ecosystem: npm
+    directory: /clients/gnome
+    schedule:
+      interval: cron
+      cronjob: "3 9 * * *"
+    cooldown:
+      default-days: 7
+    rebase-strategy: auto
+    open-pull-requests-limit: 3

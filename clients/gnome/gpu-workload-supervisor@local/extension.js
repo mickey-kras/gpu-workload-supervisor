@@ -65,7 +65,7 @@ export default class GPUControl extends Extension {
         this._setup = this._toggle.menu.addAction('Setup…', () => {
             Gio.DesktopAppInfo.new(
                 'gpu-workload-supervisor-setup.desktop',
-            )?.launch([], global.create_app_launch_context(0, -1));
+            )?.launch([], globalThis.global.create_app_launch_context(0, -1));
         });
         this._setup.visible = Main.sessionMode.allowSettings;
         this._sessionSignal = Main.sessionMode.connect('updated', () => {
@@ -146,14 +146,19 @@ export default class GPUControl extends Extension {
         this._toggle.accessible_description = v.mutable
             ? 'GPU ownership control'
             : 'GPU mutations unavailable; open menu for Details';
-        this._toggle.subtitle = v.pending
-            ? 'Request pending…'
-            : v.error
-              ? (messages[v.error] ?? 'Unavailable')
-              : !v.fresh
-                ? 'Status is stale'
-                : `${v.checked ? 'Manual' : 'Supervisor'} · ${this._label(s.activeWorkload)}`;
+        this._toggle.subtitle = this._subtitle(v);
         this._refresh.setSensitive(!v.pending);
+        this._renderWorkloads(m, s);
+        this._renderDetails(v, s);
+    }
+    _subtitle(v) {
+        if (v.pending) return 'Request pending…';
+        if (v.error) return messages[v.error] ?? 'Unavailable';
+        if (!v.fresh) return 'Status is stale';
+        const owner = v.checked ? 'Manual' : 'Supervisor';
+        return `${owner} · ${this._label(v.status.activeWorkload)}`;
+    }
+    _renderWorkloads(m, s) {
         const catalog = JSON.stringify(s?.workloads ?? []);
         if (catalog !== this._catalog) {
             this._catalog = catalog;
@@ -175,6 +180,8 @@ export default class GPUControl extends Extension {
             );
             item.setSensitive(!!m.intent('user-switch', id, now()));
         }
+    }
+    _renderDetails(v, s) {
         const rows = s
             ? [
                   `Owner: ${s.owner === 'user' ? 'User' : 'Supervisor'}`,

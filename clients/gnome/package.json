@@ -1,1 +1,10 @@
-{"type":"module","scripts":{"test":"node --test tests/*.test.js"}}
+{
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-vm-modules --test tests/*.test.js",
+    "coverage": "cd ../.. && clients/gnome/node_modules/.bin/c8 --all --include=\"clients/**/*.js\" --include=\"clients/**/*.mjs\" --include=\"scripts/**/*.cjs\" --exclude=\"**/tests/**\" --exclude=\"**/coverage/**\" --exclude=\"**/*.test.*\" --reports-dir=clients/gnome/coverage --reporter=lcovonly --reporter=text node --experimental-vm-modules --test clients/gnome/tests/*.test.js clients/setup/*.test.mjs scripts/desktop-version.test.cjs"
+  },
+  "devDependencies": {
+    "c8": "12.0.0"
+  }
+}

@@ -18,7 +18,8 @@ function keys(o, names) {
         !o ||
         typeof o !== 'object' ||
         Array.isArray(o) ||
-        Object.keys(o).sort().join() !== [...names].sort().join()
+        Object.keys(o).length !== names.length ||
+        names.some((name) => !Object.hasOwn(o, name))
     )
         fail();
 }
@@ -29,15 +30,9 @@ function token(v) {
     if (typeof v !== 'string' || !/^[!-~]{1,128}$/.test(v)) fail();
 }
 export function compareVersions(a, b) {
-    return a.length === b.length
-        ? a === b
-            ? 0
-            : a > b
-              ? 1
-              : -1
-        : a.length > b.length
-          ? 1
-          : -1;
+    if (a.length !== b.length) return a.length > b.length ? 1 : -1;
+    if (a === b) return 0;
+    return a > b ? 1 : -1;
 }
 function validateExpected(s) {
     keys(s.expected, [
@@ -51,7 +46,7 @@ function validateExpected(s) {
     const v = s.expected.version;
     if (
         typeof v !== 'string' ||
-        !/^[1-9][0-9]{0,19}$/.test(v) ||
+        !/^[1-9]\d{0,19}$/.test(v) ||
         compareVersions(v, '18446744073709551615') > 0 ||
         s.expected.owner !== s.owner
     )
@@ -80,7 +75,7 @@ function validateCatalog(s) {
             typeof w.label !== 'string' ||
             !w.label.trim() ||
             [...w.label].length > 80 ||
-            /[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/.test(w.label)
+            /[\p{Cc}\u202a-\u202e\u2066-\u2069]/u.test(w.label)
         )
             fail();
     }

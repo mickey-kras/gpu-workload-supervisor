@@ -59,12 +59,16 @@ func run(args []string, input io.Reader, output io.Writer) error {
 		return err
 	}
 	if args[0] == "apply" {
-		if effectiveUID() == 0 {
-			return errors.New("run guided setup as the desktop account, not root")
-		}
-		if err := applySetup(ctx, home, request); err != nil {
+		if err := applyAsDesktopAccount(ctx, home, request); err != nil {
 			return err
 		}
 	}
 	return json.NewEncoder(output).Encode(preview)
+}
+
+func applyAsDesktopAccount(ctx context.Context, home string, request setup.Request) error {
+	if effectiveUID() == 0 {
+		return errors.New("run guided setup as the desktop account, not root")
+	}
+	return applySetup(ctx, home, request)
 }

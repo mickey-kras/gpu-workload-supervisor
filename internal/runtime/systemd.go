@@ -93,28 +93,8 @@ func NewSystemdManager(config SystemdConfig) (*SystemdManager, error) {
 }
 
 func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.Client) (*SystemdManager, error) {
-	if config.Catalog != nil {
-		cloned := config.Catalog.Clone()
-		config.Catalog = &cloned
-		if err := cloned.Validate(); err != nil {
-			return nil, err
-		}
-		for _, p := range cloned.Profiles {
-			if p.RequiredMiB > ^uint64(0)-config.CapacityHeadroomMiB {
-				return nil, errors.New("capacity requirement plus headroom overflows")
-			}
-			if p.RequiredMiB != 0 {
-				config.TextRequiredMiB = p.RequiredMiB
-			}
-		}
-	}
-	if config.Catalog == nil {
-		if err := config.validateUnits(); err != nil {
-			return nil, err
-		}
-		if err := config.validateResources(); err != nil {
-			return nil, err
-		}
+	if err := config.prepareWorkloads(); err != nil {
+		return nil, err
 	}
 	if config.NvidiaSMIPath != "" || config.TextRequiredMiB != 0 || config.MediaRequiredMiB != 0 {
 		resolved, err := validateExecutable(config.NvidiaSMIPath)
@@ -635,4 +615,27 @@ func validateExecutable(path string) (string, error) {
 		}
 	}
 	return resolved, nil
+}
+
+func (config *SystemdConfig) prepareWorkloads() error {
+	if config.Catalog == nil {
+		if err := config.validateUnits(); err != nil {
+			return err
+		}
+		return config.validateResources()
+	}
+	cloned := config.Catalog.Clone()
+	config.Catalog = &cloned
+	if err := cloned.Validate(); err != nil {
+		return err
+	}
+	for _, p := range cloned.Profiles {
+		if p.RequiredMiB > ^uint64(0)-config.CapacityHeadroomMiB {
+			return errors.New("capacity requirement plus headroom overflows")
+		}
+		if p.RequiredMiB != 0 {
+			config.TextRequiredMiB = p.RequiredMiB
+		}
+	}
+	return nil
 }

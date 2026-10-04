@@ -68,7 +68,10 @@ jobs:
           cache: npm
           cache-dependency-path: .github/aislop/package-lock.json
       - name: GNOME contract and lifecycle fixtures
-        run: node --test clients/gnome/tests/*.test.js clients/setup/*.test.mjs scripts/desktop-version.test.cjs
+        run: |
+          npm ci --prefix clients/gnome --ignore-scripts --no-audit --no-fund
+          npm audit --prefix clients/gnome --audit-level=moderate
+          npm run coverage --prefix clients/gnome
       - name: Audit Aislop toolchain
         run: |
           npm ci --prefix .github/audit-tool --ignore-scripts --no-audit --no-fund

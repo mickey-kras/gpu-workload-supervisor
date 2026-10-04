@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
@@ -102,15 +103,27 @@ func (c *Controller) reconcileCatalog(ctx context.Context, recovering bool) (con
 	if err != nil {
 		return c.latchObservationFailure(ctx, state, err)
 	}
+	target, err := c.retainedCatalogTarget(snap)
+	if err != nil {
+		return c.latchObservationFailure(ctx, state, err)
+	}
+	return c.reconcileCatalogTarget(ctx, state, target, recovering)
+}
+
+func (c *Controller) retainedCatalogTarget(snap gpuruntime.Snapshot) (control.Workload, error) {
 	target := control.WorkloadIdle
 	for _, p := range c.config.Catalog.Catalog.Profiles {
 		if p.BootPolicy == "retain" && snap.Workloads[p.ID].Active {
 			if target != control.WorkloadIdle {
-				return c.latchObservationFailure(ctx, state, ErrInvariant)
+				return control.WorkloadUnknown, ErrInvariant
 			}
 			target = p.ID
 		}
 	}
+	return target, nil
+}
+
+func (c *Controller) reconcileCatalogTarget(ctx context.Context, state control.State, target control.Workload, recovering bool) (control.State, error) {
 	pendingOpposing := func(ctx context.Context) (int, error) {
 		if target == control.WorkloadIdle {
 			return c.store.PendingWork(ctx)
@@ -122,7 +135,7 @@ func (c *Controller) reconcileCatalog(ctx context.Context, recovering bool) (con
 		return c.latchObservationFailure(ctx, state, err)
 	}
 	if !recovering && target != control.WorkloadIdle && pending == 0 && state.ActiveWorkload == target && state.DesiredWorkload == target && state.Phase == control.PhaseStable && state.Health == control.HealthHealthy && state.Admission == control.AdmissionOpen {
-		if err = c.checkReady(ctx, target); err != nil {
+		if err := c.checkReady(ctx, target); err != nil {
 			return c.latchObservationFailure(ctx, state, err)
 		}
 		return state, nil
@@ -133,22 +146,29 @@ func (c *Controller) reconcileCatalog(ctx context.Context, recovering bool) (con
 			return state, err
 		}
 	}
-	if err = c.waitForWork(ctx, c.now().Add(c.config.DrainTimeout), pendingOpposing); err != nil {
+	if err := c.waitForWork(ctx, c.now().Add(c.config.DrainTimeout), pendingOpposing); err != nil {
 		return state, err
 	}
-	for _, p := range c.config.Catalog.Catalog.Profiles {
-		if p.ID != target {
-			if err = c.runAction(ctx, func(ctx context.Context) error { return c.runtime.Stop(ctx, p.ID) }); err != nil {
-				return state, err
-			}
-		}
-	}
-	if err = c.waitReleasedFor(ctx, target, c.now().Add(c.config.VerifyTimeout)); err != nil {
+	if err := c.stopOpposingCatalog(ctx, target); err != nil {
 		return state, err
 	}
-	if err = c.waitReady(ctx, target, c.now().Add(c.config.VerifyTimeout)); err != nil {
+	if err := c.waitReleasedFor(ctx, target, c.now().Add(c.config.VerifyTimeout)); err != nil {
+		return state, err
+	}
+	if err := c.waitReady(ctx, target, c.now().Add(c.config.VerifyTimeout)); err != nil {
 		return state, err
 	}
 	final := stableTarget(state, control.OwnerSupervisor, target)
 	return c.store.Recover(ctx, state.Version, final, "catalog-reconciliation")
+}
+
+func (c *Controller) stopOpposingCatalog(ctx context.Context, target control.Workload) error {
+	for _, p := range c.config.Catalog.Catalog.Profiles {
+		if p.ID != target {
+			if err := c.runAction(ctx, func(ctx context.Context) error { return c.runtime.Stop(ctx, p.ID) }); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

@@ -186,30 +186,14 @@ func executeWithState(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Mana
 		return err
 	}
 	if command == "configure" {
-		file, err := os.Open(options.catalogPath)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		catalog, err := control.DecodeCatalog(file)
-		if err != nil {
-			return err
-		}
-		accepted, err := stateStore.ReplaceCatalog(ctx, options.catalogRevision, catalog)
-		if err != nil {
-			return err
-		}
-		return json.NewEncoder(os.Stdout).Encode(accepted)
+		return configureCatalog(ctx, stateStore, options)
 	}
-	var pinned *control.CatalogSnapshot
-	if snapshot.Revision != "" {
-		if options.legacyConfig {
-			return errors.New("legacy workload flags conflict with accepted catalog")
-		}
-		pinned = &snapshot
-		runtimeConfig.Catalog = &snapshot.Catalog
-	} else if options.configured {
-		return errors.New("no catalog has been accepted")
+	pinned, err := pinCatalog(snapshot, options)
+	if err != nil {
+		return err
+	}
+	if pinned != nil {
+		runtimeConfig.Catalog = &pinned.Catalog
 	}
 	runtimeManager, err := newRuntime(runtimeConfig)
 	if err != nil {
@@ -372,4 +356,34 @@ func validateTarget(command, target string) error {
 		}
 	}
 	return nil
+}
+
+func configureCatalog(ctx context.Context, stateStore *store.Store, options modeExecution) error {
+	file, err := os.Open(options.catalogPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	catalog, err := control.DecodeCatalog(file)
+	if err != nil {
+		return err
+	}
+	accepted, err := stateStore.ReplaceCatalog(ctx, options.catalogRevision, catalog)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(accepted)
+}
+
+func pinCatalog(snapshot control.CatalogSnapshot, options modeExecution) (*control.CatalogSnapshot, error) {
+	var pinned *control.CatalogSnapshot
+	if snapshot.Revision != "" {
+		if options.legacyConfig {
+			return nil, errors.New("legacy workload flags conflict with accepted catalog")
+		}
+		pinned = &snapshot
+	} else if options.configured {
+		return nil, errors.New("no catalog has been accepted")
+	}
+	return pinned, nil
 }

@@ -149,15 +149,18 @@ func OpenPrivate(path string) (*os.File, error) {
 			unix.Close(fd)
 			return nil, err
 		}
-		private := i == len(parts)-1
-		writable := stat.Mode&0022 != 0
-		if !private && stat.Uid == 0 && stat.Mode&unix.S_ISVTX != 0 {
-			writable = false
-		}
-		if (stat.Uid != uint32(os.Geteuid()) && (private || stat.Uid != 0)) || writable || (private && (stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Mode&0077 != 0)) {
+		if !trustedPrivateStat(stat, i == len(parts)-1) {
 			unix.Close(fd)
 			return nil, errors.New("untrusted private file or directory")
 		}
 	}
 	return os.NewFile(uintptr(fd), path), nil
+}
+
+func trustedPrivateStat(stat unix.Stat_t, private bool) bool {
+	writable := stat.Mode&0022 != 0
+	if !private && stat.Uid == 0 && stat.Mode&unix.S_ISVTX != 0 {
+		writable = false
+	}
+	return !((stat.Uid != uint32(os.Geteuid()) && (private || stat.Uid != 0)) || writable || (private && (stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Mode&0077 != 0)))
 }

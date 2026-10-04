@@ -31,7 +31,7 @@ respectively); a client deadline leaves the outcome uncertain. Disable cancels l
 without killing the backend. The backend must independently preserve admitted
 operations across Shell restart. There is no recovery control in the extension.
 
-Run pure contract/model tests with `node --test clients/gnome/tests/*.test.js`.
+Run contract, model, and mocked lifecycle tests with `npm test --prefix clients/gnome`.
 Run the native bounded-stream smoke test with
 `gjs -m clients/gnome/tests/transport.gjs.js`. The latter needs GJS and is not a
 Shell qualification. Before enablement, qualify a real GNOME 50 session: keyboard

@@ -6,10 +6,10 @@ import vm from 'node:vm';
 // Exercise the actual dialog construction with only the unavailable Shell APIs
 // replaced. This checks lifecycle wiring, not native focus or keyboard behavior.
 function loadDialog(opens) {
-    let instance;
+    const instances = [];
     class Dialog {
         constructor() {
-            instance = this;
+            instances.push(this);
             this.contentLayout = { add_child() {} };
             this.destroyed = false;
         }
@@ -29,17 +29,14 @@ function loadDialog(opens) {
             this.onClosed();
         }
     }
-    class Label {
-        constructor(properties) {
-            Object.assign(this, properties);
-            this.clutter_text = {};
-        }
+    function Label(properties) {
+        return { ...properties, clutter_text: {} };
     }
     const source = readFileSync(
         new URL('../gpu-workload-supervisor@local/dialogs.js', import.meta.url),
         'utf8',
     )
-        .replace(/^import .*;\n/gm, '')
+        .replaceAll(/^import .*;\n/gm, '')
         .replace('export function ownershipDialog', 'function ownershipDialog');
     const context = vm.createContext({
         Clutter: { KEY_Escape: 65307 },
@@ -47,7 +44,7 @@ function loadDialog(opens) {
         ModalDialog: { ModalDialog: Dialog },
     });
     vm.runInContext(source, context);
-    return { create: context.ownershipDialog, instance: () => instance };
+    return { create: context.ownershipDialog, instance: () => instances.at(-1) };
 }
 
 test('failed modal open destroys dialog and does not retain ownership prompt', () => {
