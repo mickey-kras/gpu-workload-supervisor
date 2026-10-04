@@ -368,3 +368,21 @@ test('release checksums preserve the trusted baseline and append desktop package
     assert.ok(inspect(candidate).some(error => error.includes(step.name)), command);
   }
 });
+
+test('desktop integration gates cannot be removed, conditional, or allowed to fail', () => {
+  for (const name of ['Native desktop transport integration', 'Packaged setup lifecycle integration', 'Debian payload lifecycle integration']) {
+    for (const mutation of ['missing', 'conditional', 'allowed-failure', 'command']) {
+      const candidate = files();
+      const path = '.github/workflows/ci.yml';
+      const workflow = YAML.parse(candidate[path]);
+      const steps = workflow.jobs.checks.steps;
+      const index = steps.findIndex(step => step.name === name);
+      if (mutation === 'missing') steps.splice(index, 1);
+      if (mutation === 'conditional') steps[index].if = false;
+      if (mutation === 'allowed-failure') steps[index]['continue-on-error'] = true;
+      if (mutation === 'command') steps[index].run = 'echo skipped';
+      candidate[path] = YAML.stringify(workflow);
+      assert.ok(inspect(candidate).some(error => error.includes(mutation === 'allowed-failure' ? 'may ignore step failures' : name)), `${name}: ${mutation}`);
+    }
+  }
+});

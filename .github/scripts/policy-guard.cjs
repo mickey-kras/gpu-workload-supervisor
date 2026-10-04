@@ -163,6 +163,9 @@ function inspectCi(files, workflows, failures, checks) {
     ['Validate GoReleaser configuration', 'check'], ['Build snapshot artifacts', 'release --snapshot --clean'],
   ] });
   step(ci, 'checks', 'Verify snapshot archives', { run: ['tar -tzf', '(cd dist && sha256sum --check checksums.txt)'] });
+  step(ci, 'checks', 'Native desktop transport integration', { run: ['sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT timeout 180s bash scripts/native-desktop-integration.sh --isolated-test-host'] });
+  step(ci, 'checks', 'Packaged setup lifecycle integration', { run: ['sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT timeout 300s bash scripts/setup-desktop-integration.sh --isolated-test-host "${packages[0]}"'] });
+  step(ci, 'checks', 'Debian payload lifecycle integration', { run: ['sudo timeout 120s bash scripts/check-desktop-deb-lifecycle.sh "${packages[0]}"'] });
   step(ci, 'checks', 'Go vulnerability audit', { uses: 'golang/govulncheck-action', withValues: { cache: false } });
   step(ci, 'checks', 'Audit Aislop toolchain');
   step(ci, 'checks', 'Test policy automation', { run: ['node --test .github/scripts/*.test.cjs'] });
