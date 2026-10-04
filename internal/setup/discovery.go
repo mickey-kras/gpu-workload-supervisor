@@ -39,17 +39,7 @@ func Discover(ctx context.Context, home string) (Discovery, error) {
 		}
 	}
 	if !result.Pending {
-		if data, err := privateRead(filepath.Join(root, "operator.json")); err == nil {
-			if err := json.Unmarshal(data, &result.Request.Profile); err != nil {
-				return result, err
-			}
-			snapshot, err := ReadCatalog(ctx, result.Request.Profile.StatePath)
-			if err != nil {
-				return result, err
-			}
-			result.Request.Catalog = snapshot.Catalog
-			result.Request.ExpectedRevision = snapshot.Revision
-		} else if !errors.Is(err, os.ErrNotExist) {
+		if err := discoverCurrent(ctx, root, &result); err != nil {
 			return result, err
 		}
 	}
@@ -60,11 +50,34 @@ func Discover(ctx context.Context, home string) (Discovery, error) {
 	if len(output) > 1048576 {
 		return result, errors.New("unit discovery output too large")
 	}
+	result.Units = serviceUnits(output)
+	return result, nil
+}
+
+func discoverCurrent(ctx context.Context, root string, result *Discovery) error {
+	if data, err := privateRead(filepath.Join(root, "operator.json")); err == nil {
+		if err := json.Unmarshal(data, &result.Request.Profile); err != nil {
+			return err
+		}
+		snapshot, err := ReadCatalog(ctx, result.Request.Profile.StatePath)
+		if err != nil {
+			return err
+		}
+		result.Request.Catalog = snapshot.Catalog
+		result.Request.ExpectedRevision = snapshot.Revision
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func serviceUnits(output []byte) []string {
+	var units []string
 	for _, line := range strings.Split(string(output), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) > 0 && strings.HasSuffix(fields[0], ".service") {
-			result.Units = append(result.Units, fields[0])
+			units = append(units, fields[0])
 		}
 	}
-	return result, nil
+	return units
 }

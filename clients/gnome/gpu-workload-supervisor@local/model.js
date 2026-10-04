@@ -1,15 +1,13 @@
 import { compareVersions } from './contract.js';
 const FRESH_MS = 30000;
 export class Model {
-    constructor() {
-        this.generation = 1;
-        this.sequence = 0;
-        this.status = null;
-        this.pending = null;
-        this.error = 'unavailable';
-        this.dispatch = 0;
-        this.delay = 5000;
-    }
+    generation = 1;
+    sequence = 0;
+    status = null;
+    pending = null;
+    error = 'unavailable';
+    dispatch = 0;
+    delay = 5000;
     retire() {
         this.generation++;
         this.pending = null;
@@ -36,16 +34,7 @@ export class Model {
         const v = this.view(now);
         if (!v.mutable) return null;
         const s = this.status;
-        const allowed =
-            action === 'take-control'
-                ? s.owner === 'supervisor' && s.capabilities.takeControl
-                : action === 'return-control'
-                  ? s.owner === 'user' && s.capabilities.returnControl
-                  : action === 'user-switch' &&
-                    s.owner === 'user' &&
-                    s.capabilities.userSwitch &&
-                    s.workloads.some((w) => w.id === target) &&
-                    s.activeWorkload !== target;
+        const allowed = this._allowsAction(action, target);
         if (!allowed) return null;
         return {
             action,
@@ -53,6 +42,20 @@ export class Model {
             expected: { ...s.expected },
             confirmation: action !== 'user-switch',
         };
+    }
+    _allowsAction(action, target) {
+        const s = this.status;
+        if (action === 'take-control')
+            return s.owner === 'supervisor' && s.capabilities.takeControl;
+        if (action === 'return-control')
+            return s.owner === 'user' && s.capabilities.returnControl;
+        return (
+            action === 'user-switch' &&
+            s.owner === 'user' &&
+            s.capabilities.userSwitch &&
+            s.workloads.some((w) => w.id === target) &&
+            s.activeWorkload !== target
+        );
     }
     validDecision(d, now) {
         return (

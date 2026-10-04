@@ -1,9 +1,7 @@
 // Bind activation to one validated snapshot and retire late validation replies.
 export class ReviewedConfiguration {
-    constructor() {
-        this.generation = 0;
-        this.request = null;
-    }
+    generation = 0;
+    request = null;
 
     invalidate() {
         this.generation++;

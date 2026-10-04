@@ -34,3 +34,6 @@ go.work.sum
 # .vscode/
 
 THIRD_PARTY_NOTICES/
+
+clients/gnome/node_modules/
+clients/gnome/coverage/

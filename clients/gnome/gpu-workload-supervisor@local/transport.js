@@ -26,9 +26,7 @@ export async function readBounded(stream, cancellable) {
     }
 }
 export class Transport {
-    constructor() {
-        this.cancel = null;
-    }
+    cancel = null;
     detach() {
         this.cancel?.cancel();
         this.cancel = null;

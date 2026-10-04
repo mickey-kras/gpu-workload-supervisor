@@ -9,15 +9,7 @@ import (
 
 func verifySnapshot(target control.Workload, snapshot gpuruntime.Snapshot) error {
 	if snapshot.Workloads != nil {
-		for id, o := range snapshot.Workloads {
-			if id != target && o.Active && o.Exclusive {
-				return ErrStateVerification
-			}
-		}
-		if target != control.WorkloadIdle && !snapshot.Workloads[target].Active {
-			return ErrStateVerification
-		}
-		return nil
+		return verifyCatalogSnapshot(target, snapshot)
 	}
 	if snapshot.MediaExclusive && snapshot.MediaReady && target != control.WorkloadMedia {
 		return fmt.Errorf("%w: media runtime remains active", ErrStateVerification)
@@ -41,16 +33,7 @@ func verifySnapshot(target control.Workload, snapshot gpuruntime.Snapshot) error
 
 func observedWorkload(state control.State, snapshot gpuruntime.Snapshot) (control.Workload, error) {
 	if snapshot.Workloads != nil {
-		active := control.WorkloadIdle
-		for id, o := range snapshot.Workloads {
-			if o.Active && (o.Exclusive || id == state.ActiveWorkload) {
-				if active != control.WorkloadIdle {
-					return control.WorkloadUnknown, ErrInvariant
-				}
-				active = id
-			}
-		}
-		return active, nil
+		return observedCatalogWorkload(state, snapshot)
 	}
 	if snapshot.MediaExclusive && snapshot.MediaReady {
 		if snapshot.TextActive {
@@ -68,4 +51,29 @@ func observedWorkload(state control.State, snapshot gpuruntime.Snapshot) (contro
 		return control.WorkloadMedia, nil
 	}
 	return control.WorkloadIdle, nil
+}
+
+func verifyCatalogSnapshot(target control.Workload, snapshot gpuruntime.Snapshot) error {
+	for id, o := range snapshot.Workloads {
+		if id != target && o.Active && o.Exclusive {
+			return ErrStateVerification
+		}
+	}
+	if target != control.WorkloadIdle && !snapshot.Workloads[target].Active {
+		return ErrStateVerification
+	}
+	return nil
+}
+
+func observedCatalogWorkload(state control.State, snapshot gpuruntime.Snapshot) (control.Workload, error) {
+	active := control.WorkloadIdle
+	for id, o := range snapshot.Workloads {
+		if o.Active && (o.Exclusive || id == state.ActiveWorkload) {
+			if active != control.WorkloadIdle {
+				return control.WorkloadUnknown, ErrInvariant
+			}
+			active = id
+		}
+	}
+	return active, nil
 }

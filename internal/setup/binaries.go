@@ -95,6 +95,13 @@ func copyActivation(root, destination string, profile []byte) error {
 		return err
 	}
 	files[manifestName] = ownershipData
+	if err := collectActivatedBinaries(root, manifest, files); err != nil {
+		return err
+	}
+	return writeActivationBackup(destination, files)
+}
+
+func collectActivatedBinaries(root string, manifest binaryManifest, files map[string][]byte) error {
 	for _, name := range binaries {
 		binary, err := privateRead(filepath.Join(root, "activated-binaries", name))
 		if err != nil {
@@ -105,6 +112,10 @@ func copyActivation(root, destination string, profile []byte) error {
 		}
 		files[name] = binary
 	}
+	return nil
+}
+
+func writeActivationBackup(destination string, files map[string][]byte) error {
 	for name, data := range files {
 		path := filepath.Join(destination, name)
 		if previous, err := privateRead(path); err == nil {

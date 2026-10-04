@@ -15,6 +15,8 @@ import (
 	"unicode/utf8"
 )
 
+const AdapterMediaUnload = "media-unload"
+
 var workloadID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 var unitName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_.@-]*\.service$`)
 
@@ -82,44 +84,11 @@ func (c Catalog) Validate() error {
 		return errors.New("catalog requires 1 to 32 profiles")
 	}
 	for i, p := range c.Profiles {
-		if !ValidWorkloadID(p.ID) {
-			return fmt.Errorf("invalid workload ID %q", p.ID)
+		if err := p.validate(); err != nil {
+			return err
 		}
-		if !ValidWorkloadLabel(p.Label) {
-			return errors.New("invalid workload label")
-		}
-		if p.Adapter != "systemd" && p.Adapter != "media-unload" {
-			return errors.New("unsupported workload adapter")
-		}
-		if !unitName.MatchString(p.Unit) {
-			return errors.New("invalid workload unit")
-		}
-		if p.Cgroup == "/" || !strings.HasPrefix(p.Cgroup, "/") || path.Clean(p.Cgroup) != p.Cgroup || strings.IndexFunc(p.Cgroup, unicode.IsControl) >= 0 {
-			return errors.New("invalid workload cgroup")
-		}
-		if p.BootPolicy != "" && p.BootPolicy != "stop-to-idle" && p.BootPolicy != "retain" {
-			return errors.New("invalid boot policy")
-		}
-		for _, e := range []string{p.HealthURL, p.ReleaseURL} {
-			if e == "" && e == p.ReleaseURL {
-				continue
-			}
-			u, err := url.Parse(e)
-			if err != nil || u.User != nil || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
-				return errors.New("invalid endpoint")
-			}
-			ip := net.ParseIP(u.Hostname())
-			if u.Hostname() != "localhost" && (ip == nil || !ip.IsLoopback()) {
-				return errors.New("endpoint must be loopback")
-			}
-		}
-		if p.HealthURL == "" || p.Adapter == "media-unload" && p.ReleaseURL == "" {
-			return errors.New("required endpoint missing")
-		}
-		for _, q := range c.Profiles[:i] {
-			if p.ID == q.ID || p.Unit == q.Unit || p.Cgroup == q.Cgroup || strings.HasPrefix(p.Cgroup, q.Cgroup+"/") || strings.HasPrefix(q.Cgroup, p.Cgroup+"/") {
-				return errors.New("duplicate or overlapping profiles")
-			}
+		if err := validateProfileOverlap(p, c.Profiles[:i]); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -135,24 +104,12 @@ func uniqueKeys(d *json.Decoder) error {
 		return nil
 	}
 	if delim == '{' {
-		seen := map[string]bool{}
-		for d.More() {
-			key, err := d.Token()
-			if err != nil {
-				return err
-			}
-			name, ok := key.(string)
-			if !ok || seen[name] {
-				return errors.New("duplicate catalog key")
-			}
-			seen[name] = true
-			if err = uniqueKeys(d); err != nil {
-				return err
-			}
+		if err := uniqueObjectKeys(d); err != nil {
+			return err
 		}
 	} else if delim == '[' {
 		for d.More() {
-			if err = uniqueKeys(d); err != nil {
+			if err := uniqueKeys(d); err != nil {
 				return err
 			}
 		}
@@ -168,4 +125,77 @@ func ValidWorkloadLabel(label string) bool {
 	return utf8.ValidString(label) && strings.TrimSpace(label) != "" && len(label) <= 128 && utf8.RuneCountInString(label) <= 80 && strings.IndexFunc(label, func(r rune) bool {
 		return r == 0xfeff || unicode.IsControl(r) || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069)
 	}) < 0
+}
+
+func (p Profile) validate() error {
+	if !ValidWorkloadID(p.ID) {
+		return fmt.Errorf("invalid workload ID %q", p.ID)
+	}
+	if !ValidWorkloadLabel(p.Label) {
+		return errors.New("invalid workload label")
+	}
+	if p.Adapter != "systemd" && p.Adapter != AdapterMediaUnload {
+		return errors.New("unsupported workload adapter")
+	}
+	if !unitName.MatchString(p.Unit) {
+		return errors.New("invalid workload unit")
+	}
+	if p.Cgroup == "/" || !strings.HasPrefix(p.Cgroup, "/") || path.Clean(p.Cgroup) != p.Cgroup || strings.IndexFunc(p.Cgroup, unicode.IsControl) >= 0 {
+		return errors.New("invalid workload cgroup")
+	}
+	if p.BootPolicy != "" && p.BootPolicy != "stop-to-idle" && p.BootPolicy != "retain" {
+		return errors.New("invalid boot policy")
+	}
+	if err := p.validateEndpoints(); err != nil {
+		return err
+	}
+	if p.HealthURL == "" || p.Adapter == AdapterMediaUnload && p.ReleaseURL == "" {
+		return errors.New("required endpoint missing")
+	}
+	return nil
+}
+
+func (p Profile) validateEndpoints() error {
+	for _, e := range []string{p.HealthURL, p.ReleaseURL} {
+		if e == "" && e == p.ReleaseURL {
+			continue
+		}
+		u, err := url.Parse(e)
+		if err != nil || u.User != nil || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return errors.New("invalid endpoint")
+		}
+		ip := net.ParseIP(u.Hostname())
+		if u.Hostname() != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			return errors.New("endpoint must be loopback")
+		}
+	}
+	return nil
+}
+
+func validateProfileOverlap(p Profile, previous []Profile) error {
+	for _, q := range previous {
+		if p.ID == q.ID || p.Unit == q.Unit || p.Cgroup == q.Cgroup || strings.HasPrefix(p.Cgroup, q.Cgroup+"/") || strings.HasPrefix(q.Cgroup, p.Cgroup+"/") {
+			return errors.New("duplicate or overlapping profiles")
+		}
+	}
+	return nil
+}
+
+func uniqueObjectKeys(d *json.Decoder) error {
+	seen := map[string]bool{}
+	for d.More() {
+		key, err := d.Token()
+		if err != nil {
+			return err
+		}
+		name, ok := key.(string)
+		if !ok || seen[name] {
+			return errors.New("duplicate catalog key")
+		}
+		seen[name] = true
+		if err := uniqueKeys(d); err != nil {
+			return err
+		}
+	}
+	return nil
 }

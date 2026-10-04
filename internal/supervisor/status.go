@@ -19,10 +19,7 @@ func (c *Controller) Status(ctx context.Context) (control.State, error) {
 	snapshot, err := c.observe(ctx)
 	if err != nil {
 		cause := fmt.Errorf("observe runtime: %w", err)
-		if state.Owner == control.OwnerUser {
-			return state, cause
-		}
-		return c.latchObservationFailure(ctx, state, cause)
+		return c.statusObservationFailure(ctx, state, cause)
 	}
 	active, err := observedWorkload(state, snapshot)
 	if err != nil {
@@ -45,4 +42,11 @@ func (c *Controller) Status(ctx context.Context) (control.State, error) {
 	}
 	state.ActiveWorkload = active
 	return state, nil
+}
+
+func (c *Controller) statusObservationFailure(ctx context.Context, state control.State, cause error) (control.State, error) {
+	if state.Owner == control.OwnerUser {
+		return state, cause
+	}
+	return c.latchObservationFailure(ctx, state, cause)
 }

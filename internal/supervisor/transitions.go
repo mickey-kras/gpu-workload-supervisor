@@ -93,37 +93,7 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 	if err != nil {
 		return current, err
 	}
-	fail := c.fail
-	if options.preserve {
-		fail = c.failPreserving
-	}
-	if err := c.waitForDrain(ctx, transitionID, transition.Deadline); err != nil {
-		return fail(transitionID, state, current, err)
-	}
-	state, active, err := c.unloadTransition(ctx, transitionID, state, current, target, options.verifyOnly || options.preserve)
-	if err != nil {
-		return fail(transitionID, state, current, err)
-	}
-	userGate, err := c.acquireTransitionGate(ctx, options.sourceOwner, options.verifyOnly)
-	defer userGate.Close()
-	if err != nil {
-		return fail(transitionID, state, current, err)
-	}
-	state, err = c.loadTransition(ctx, transitionID, state, active, target, options.verifyOnly || options.preserve)
-	if err != nil {
-		return fail(transitionID, state, current, err)
-	}
-	state, err = c.setPhase(ctx, transitionID, state, control.PhaseVerifying)
-	if err != nil {
-		return fail(transitionID, state, current, err)
-	}
-	if err := c.waitReady(ctx, target, c.now().Add(c.config.VerifyTimeout)); err != nil {
-		return fail(transitionID, state, current, err)
-	}
-	final := stableTarget(state, options.targetOwner, target)
-	finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.FinalizeTimeout)
-	defer cancel()
-	return c.store.FinishTransition(finalizeCtx, transitionID, "committed", state.Version, final)
+	return c.executeTransition(ctx, transition, state, current, target, options)
 }
 
 type conditionalStore interface {
@@ -287,4 +257,38 @@ func (c *Controller) releaseMediaForText(ctx context.Context, transitionID strin
 		return err
 	}
 	return c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout))
+}
+
+func (c *Controller) executeTransition(ctx context.Context, transition store.Transition, state, current control.State, target control.Workload, options transitionOptions) (control.State, error) {
+	fail := c.fail
+	if options.preserve {
+		fail = c.failPreserving
+	}
+	if err := c.waitForDrain(ctx, transition.ID, transition.Deadline); err != nil {
+		return fail(transition.ID, state, current, err)
+	}
+	state, active, err := c.unloadTransition(ctx, transition.ID, state, current, target, options.verifyOnly || options.preserve)
+	if err != nil {
+		return fail(transition.ID, state, current, err)
+	}
+	userGate, err := c.acquireTransitionGate(ctx, options.sourceOwner, options.verifyOnly)
+	defer userGate.Close()
+	if err != nil {
+		return fail(transition.ID, state, current, err)
+	}
+	state, err = c.loadTransition(ctx, transition.ID, state, active, target, options.verifyOnly || options.preserve)
+	if err != nil {
+		return fail(transition.ID, state, current, err)
+	}
+	state, err = c.setPhase(ctx, transition.ID, state, control.PhaseVerifying)
+	if err != nil {
+		return fail(transition.ID, state, current, err)
+	}
+	if err := c.waitReady(ctx, target, c.now().Add(c.config.VerifyTimeout)); err != nil {
+		return fail(transition.ID, state, current, err)
+	}
+	final := stableTarget(state, options.targetOwner, target)
+	finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.FinalizeTimeout)
+	defer cancel()
+	return c.store.FinishTransition(finalizeCtx, transition.ID, "committed", state.Version, final)
 }

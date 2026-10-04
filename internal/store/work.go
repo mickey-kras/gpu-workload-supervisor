@@ -102,16 +102,8 @@ func (s *Store) beginAdmittedWork(ctx context.Context, requestID string, workloa
 			_ = tx.Rollback()
 		}
 	}()
-	catalog, err := readCatalog(ctx, tx)
-	if err != nil {
+	if err := validateAdmittedCatalog(ctx, tx, workload); err != nil {
 		return nil, err
-	}
-	if catalog.Revision != "" {
-		if _, ok := catalog.Catalog.Profile(workload); !ok {
-			return nil, ErrWorkloadMismatch
-		}
-	} else if workload != control.WorkloadText && workload != control.WorkloadMedia {
-		return nil, ErrWorkloadMismatch
 	}
 	state, err := readState(ctx, tx)
 	if err != nil {
@@ -330,4 +322,19 @@ func (s *Store) PendingWorkExcept(ctx context.Context, retained control.Workload
 	var pending int
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM registered_work WHERE completed_at IS NULL AND (workload IS NULL OR workload <> ?))`, retained).Scan(&pending)
 	return pending, err
+}
+
+func validateAdmittedCatalog(ctx context.Context, tx *sql.Tx, workload control.Workload) error {
+	catalog, err := readCatalog(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if catalog.Revision != "" {
+		if _, ok := catalog.Catalog.Profile(workload); !ok {
+			return ErrWorkloadMismatch
+		}
+	} else if workload != control.WorkloadText && workload != control.WorkloadMedia {
+		return ErrWorkloadMismatch
+	}
+	return nil
 }

@@ -47,7 +47,7 @@ function pendingTransport() {
         ),
         'utf8',
     )
-        .replace(/^import .*;\n/gm, '')
+        .replaceAll(/^import .*;\n/gm, '')
         .replaceAll('export ', '');
     const context = vm.createContext({ Gio, GLib, TextEncoder });
     vm.runInContext(
@@ -78,7 +78,7 @@ for (const [action, backendBound, clientBudget] of [
 ]) {
     test(`${action} read deadline allows backend finalization then cancels once without replay`, () => {
         const clock = pendingTransport();
-        void clock.transport.call({
+        clock.transport.call({
             protocolVersion: 1,
             requestId: 'deadline',
             action,

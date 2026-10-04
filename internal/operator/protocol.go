@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const actionUserSwitch = "user-switch"
+
 const MaxRequestBytes = 16 * 1024
 const MaxResponseBytes = 64 * 1024
 
@@ -88,36 +90,37 @@ func uniqueObject(d *json.Decoder) bool {
 	if e != nil {
 		return false
 	}
-	if delim, ok := tok.(json.Delim); ok {
-		if delim != '{' {
+	delim, ok := tok.(json.Delim)
+	if !ok || delim != '{' {
+		return false
+	}
+	seen := map[string]bool{}
+	for d.More() {
+		if !uniqueMember(d, seen) {
 			return false
 		}
-		seen := map[string]bool{}
-		for d.More() {
-			k, e := d.Token()
-			if e != nil {
-				return false
-			}
-			s, ok := k.(string)
-			if !ok || seen[s] {
-				return false
-			}
-			seen[s] = true
-			var raw json.RawMessage
-			if d.Decode(&raw) != nil {
-				return false
-			}
-			if len(raw) > 0 && raw[0] == '{' {
-				if !uniqueObject(json.NewDecoder(bytes.NewReader(raw))) {
-					return false
-				}
-			}
-		}
-		_, e = d.Token()
-		return e == nil
 	}
-	return false
+	_, e = d.Token()
+	return e == nil
 }
+
+func uniqueMember(d *json.Decoder, seen map[string]bool) bool {
+	k, err := d.Token()
+	if err != nil {
+		return false
+	}
+	s, ok := k.(string)
+	if !ok || seen[s] {
+		return false
+	}
+	seen[s] = true
+	var raw json.RawMessage
+	if d.Decode(&raw) != nil {
+		return false
+	}
+	return len(raw) == 0 || raw[0] != '{' || uniqueObject(json.NewDecoder(bytes.NewReader(raw)))
+}
+
 func Decode(body []byte) (Request, Code) {
 	var r Request
 	if len(body) > MaxRequestBytes || !uniqueObject(json.NewDecoder(bytes.NewReader(body))) {
@@ -134,33 +137,43 @@ func Decode(body []byte) (Request, Code) {
 	if !requestFields(body, r.Action) {
 		return Request{}, InvalidRequest
 	}
+	if code := validateRequest(r); code != OK {
+		return Request{}, code
+	}
+	return r, OK
+}
+
+func validateRequest(r Request) Code {
 	if r.ProtocolVersion != 1 {
-		return Request{}, UnsupportedVersion
+		return UnsupportedVersion
 	}
 	if !token(r.RequestID, 64) {
-		return Request{}, InvalidRequest
+		return InvalidRequest
 	}
 	if r.Action == "status" {
 		if r.Expected != nil || r.Target != "" {
-			return Request{}, InvalidRequest
+			return InvalidRequest
 		}
-		return r, OK
+		return OK
 	}
-	if r.Action != "take-control" && r.Action != "user-switch" && r.Action != "return-control" {
-		return Request{}, InvalidRequest
+	if r.Action != "take-control" && r.Action != actionUserSwitch && r.Action != "return-control" {
+		return InvalidRequest
 	}
-	if (r.Action == "user-switch" && !workloadID(string(r.Target))) || (r.Action != "user-switch" && r.Target != "") {
-		return Request{}, InvalidRequest
+	if (r.Action == actionUserSwitch && !workloadID(string(r.Target))) || (r.Action != actionUserSwitch && r.Target != "") {
+		return InvalidRequest
 	}
-	e := r.Expected
+	return validateExpected(r.Expected)
+}
+
+func validateExpected(e *Expected) Code {
 	if e == nil || !token(e.Incarnation, 128) || !token(e.ConfigurationRevision, 128) || (e.Owner != control.OwnerUser && e.Owner != control.OwnerSupervisor) {
-		return Request{}, InvalidRequest
+		return InvalidRequest
 	}
 	v, err := strconv.ParseUint(e.Version, 10, 64)
 	if err != nil || v == 0 || strconv.FormatUint(v, 10) != e.Version {
-		return Request{}, InvalidRequest
+		return InvalidRequest
 	}
-	return r, OK
+	return OK
 }
 
 func fields(body []byte, allowed ...string) (map[string]json.RawMessage, bool) {
@@ -194,7 +207,7 @@ func requestFields(body []byte, action string) bool {
 		_, t := m["target"]
 		return !e && !t
 	}
-	if action != "user-switch" {
+	if action != actionUserSwitch {
 		if _, ok := m["target"]; ok {
 			return false
 		}

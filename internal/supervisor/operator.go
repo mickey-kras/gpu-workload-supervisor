@@ -7,6 +7,8 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
+const takeControlOperation = "take-control"
+
 // OperatorTransition is the local account's conditional ownership path. The
 // automation SwitchConditional path remains Supervisor-only.
 func (c *Controller) OperatorTransition(ctx context.Context, action string, target control.Workload, e control.OperatorPrecondition) (control.State, error) {
@@ -22,7 +24,7 @@ func (c *Controller) OperatorTransition(ctx context.Context, action string, targ
 	}
 	source, dest := control.OwnerUser, control.OwnerUser
 	switch action {
-	case "take-control":
+	case takeControlOperation:
 		source = control.OwnerSupervisor
 	case "user-switch":
 	case "return-control":
@@ -34,7 +36,7 @@ func (c *Controller) OperatorTransition(ctx context.Context, action string, targ
 	if source != s.Owner {
 		return s, store.ErrWrongOwner
 	}
-	if action == "take-control" {
+	if action == takeControlOperation {
 		verified, err := c.Status(ctx)
 		if err != nil {
 			return verified, err
@@ -47,7 +49,7 @@ func (c *Controller) OperatorTransition(ctx context.Context, action string, targ
 			return verified, err
 		}
 	}
-	return c.transitionConditional(ctx, target, "local-operator", transitionOptions{sourceOwner: source, targetOwner: dest, operator: &e, preserve: action == "take-control"})
+	return c.transitionConditional(ctx, target, "local-operator", transitionOptions{sourceOwner: source, targetOwner: dest, operator: &e, preserve: action == takeControlOperation})
 }
 
 type operatorStore interface {

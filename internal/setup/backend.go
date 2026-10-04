@@ -176,18 +176,10 @@ func Apply(ctx context.Context, home string, request Request) error {
 
 func (work *activationWork) inspect(ctx context.Context) error {
 	request := work.request
-	data, err := privateRead(filepath.Join(work.root, "operator.json"))
-	if err == nil {
-		if err := json.Unmarshal(data, &work.old); err != nil {
-			return err
-		}
-		if work.old.StatePath != request.Profile.StatePath {
-			return errors.New("state relocation requires explicit maintenance migration")
-		}
-		work.oldProfileData = data
-	} else if !errors.Is(err, os.ErrNotExist) {
+	if err := work.readPreviousProfile(); err != nil {
 		return err
 	}
+	var err error
 	work.marker, err = deployment.Read(request.Profile.StatePath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -199,21 +191,8 @@ func (work *activationWork) inspect(ctx context.Context) error {
 	if marker.Release != "" && marker.Release != deployment.Release && !newer(deployment.Release, marker.Release) {
 		return errors.New("unsafe downgrade refused; use documented compatible backup restoration")
 	}
-	_, err = os.Lstat(request.Profile.StatePath)
-	work.existing = err == nil
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := work.inspectExistingCatalog(ctx); err != nil {
 		return err
-	}
-	if work.existing {
-		if !marker.Maintenance {
-			if err := Inspect(ctx, request.Profile.StatePath); err != nil {
-				return err
-			}
-		}
-		work.accepted, err = ReadCatalog(ctx, request.Profile.StatePath)
-		if err != nil {
-			return err
-		}
 	}
 	if !marker.Maintenance && work.accepted.Revision != request.ExpectedRevision {
 		return errors.New("configuration revision changed; refresh setup before activation")
@@ -515,4 +494,41 @@ func Reconcile(ctx context.Context, home string) error {
 	}
 	_, err = controller.Reconcile(ctx)
 	return err
+}
+
+func (work *activationWork) readPreviousProfile() error {
+	request := work.request
+	data, err := privateRead(filepath.Join(work.root, "operator.json"))
+	if err == nil {
+		if err := json.Unmarshal(data, &work.old); err != nil {
+			return err
+		}
+		if work.old.StatePath != request.Profile.StatePath {
+			return errors.New("state relocation requires explicit maintenance migration")
+		}
+		work.oldProfileData = data
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func (work *activationWork) inspectExistingCatalog(ctx context.Context) error {
+	_, err := os.Lstat(work.request.Profile.StatePath)
+	work.existing = err == nil
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if work.existing {
+		if !work.marker.Maintenance {
+			if err := Inspect(ctx, work.request.Profile.StatePath); err != nil {
+				return err
+			}
+		}
+		work.accepted, err = ReadCatalog(ctx, work.request.Profile.StatePath)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

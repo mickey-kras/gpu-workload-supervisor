@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {verifyRelease} = require('./desktop-version.cjs');
-const four = release => Array(4).fill(release);
+const four = release => new Array(4).fill(release);
 
 test('stable and nFPM snapshot package versions match the exact binary build', () => {
   assert.doesNotThrow(() => verifyRelease('1.2.3', four('1.2.3')));
