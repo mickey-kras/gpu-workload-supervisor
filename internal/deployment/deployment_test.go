@@ -121,3 +121,25 @@ func TestManagedActivationAcceptsExistingRelativeState(t *testing.T) {
 		}
 	}
 }
+
+func TestRelativeMarkerFailsWhenWorkingDirectoryDisappears(t *testing.T) {
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previous); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err := os.Remove(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read("state.db"); err == nil {
+		t.Fatal("unresolvable relative marker accepted")
+	}
+}

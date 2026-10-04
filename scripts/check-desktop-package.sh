@@ -10,13 +10,13 @@ trap 'rm -rf "$root"' EXIT
 dpkg-deb --extract "$package" "$root"
 dpkg-deb --control "$package" "$root/DEBIAN"
 version="$(dpkg-deb --field "$package" Version)"
+releases=()
 for binary in gpu-mode gpu-workload-proxy gpu-operator gpu-setup; do
   test -x "$root/usr/bin/$binary"
   embedded_release="$(go version -m "$root/usr/bin/$binary" | sed -n 's/.*deployment.Release=\([^ " ]*\).*/\1/p')"
-  test -n "$embedded_release"
-  test "$embedded_release" != dev
-  test "$embedded_release" = "$version"
+  releases+=("$embedded_release")
 done
+node "$(dirname "${BASH_SOURCE[0]}")/desktop-version.cjs" "$version" "${releases[@]}"
 for file in extension.js metadata.json model.js contract.js transport.js framing.js dialogs.js; do
   test -s "$root/usr/share/gnome-shell/extensions/gpu-workload-supervisor@local/$file"
 done
