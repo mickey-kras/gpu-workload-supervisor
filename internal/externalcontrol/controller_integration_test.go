@@ -190,15 +190,41 @@ func TestServiceRealCancellationWaitsForCleanupAndFailsClosed(t *testing.T) {
 type contextAudit struct{}
 
 func (contextAudit) Record(ctx context.Context, _ AuditEvent) error { return ctx.Err() }
+
+// triggeredDeadline expires only once the backend has started, avoiding a timer
+// race with admission under loaded or race-instrumented test runs.
+type triggeredDeadline struct {
+	context.Context
+	done chan struct{}
+}
+
+func (c triggeredDeadline) Done() <-chan struct{} { return c.done }
+func (c triggeredDeadline) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
 func TestContextAwareAuditFailureOverridesCancellationAfterEffects(t *testing.T) {
 	for _, timeout := range []bool{false, true} {
 		t.Run(map[bool]string{false: "caller-cancel", true: "deadline"}[timeout], func(t *testing.T) {
 			_, b, _, cfg := serviceFixture(t)
+			cfg.Timeout = MaxTimeout
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			if timeout {
-				cfg.Timeout = time.Millisecond
-				b.execute = func(ctx context.Context) { <-ctx.Done() }
+				deadline := triggeredDeadline{Context: context.Background(), done: make(chan struct{})}
+				ctx = deadline
+				b.execute = func(ctx context.Context) {
+					close(deadline.done)
+					<-ctx.Done()
+					if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+						t.Fatalf("backend deadline cause: %v", ctx.Err())
+					}
+				}
 			} else {
 				b.execute = func(context.Context) { cancel() }
 			}

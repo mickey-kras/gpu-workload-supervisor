@@ -1,0 +1,12 @@
+[Unit]
+Description=Reconcile configured GPU workloads at user login
+ConditionPathExists=%h/.config/gpu-workload-supervisor/operator.json
+After=graphical-session-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/gpu-setup reconcile
+TimeoutStartSec=5min
+
+[Install]
+WantedBy=default.target

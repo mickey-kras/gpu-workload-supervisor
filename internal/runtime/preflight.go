@@ -13,7 +13,7 @@ func (m *SystemdManager) Preflight(ctx context.Context) error {
 	if err := m.verifyManagerCgroup(ctx); err != nil {
 		return err
 	}
-	for _, workload := range []struct{ unit, group string }{{m.config.TextUnit, m.config.TextCgroup}, {m.config.MediaUnit, m.config.MediaCgroup}} {
+	for _, workload := range m.unitGroups() {
 		state, err := m.unitState(ctx, workload.unit)
 		if err != nil {
 			return err

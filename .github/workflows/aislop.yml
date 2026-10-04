@@ -30,6 +30,8 @@ jobs:
           cache: npm
           cache-dependency-path: .github/aislop/package-lock.json
       - run: npm ci --prefix .github/aislop --ignore-scripts
+      - name: Test native runtime import annotations
+        run: node --test .github/aislop/native-imports.test.cjs
       - name: Aislop automation quality gate
         run: .github/aislop/node_modules/.bin/aislop ci --human .
       - name: Aislop Go quality gate

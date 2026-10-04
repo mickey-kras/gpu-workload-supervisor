@@ -89,8 +89,8 @@ func (s *Store) beginAdmittedWork(ctx context.Context, requestID string, workloa
 	if err := control.ValidateRequestID(requestID); err != nil {
 		return nil, err
 	}
-	if workload != control.WorkloadText && workload != control.WorkloadMedia {
-		return nil, errors.New("workload must be text or media")
+	if !control.ValidWorkloadID(workload) {
+		return nil, errors.New("invalid workload")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -102,6 +102,17 @@ func (s *Store) beginAdmittedWork(ctx context.Context, requestID string, workloa
 			_ = tx.Rollback()
 		}
 	}()
+	catalog, err := readCatalog(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	if catalog.Revision != "" {
+		if _, ok := catalog.Catalog.Profile(workload); !ok {
+			return nil, ErrWorkloadMismatch
+		}
+	} else if workload != control.WorkloadText && workload != control.WorkloadMedia {
+		return nil, ErrWorkloadMismatch
+	}
 	state, err := readState(ctx, tx)
 	if err != nil {
 		return nil, err
@@ -204,8 +215,8 @@ func validateFinishedWork(requestID string, workload control.Workload, fence con
 	if err := fence.Validate(); err != nil {
 		return fmt.Errorf("invalid fence: %w", err)
 	}
-	if workload != control.WorkloadText && workload != control.WorkloadMedia {
-		return errors.New("workload must be text or media")
+	if !control.ValidWorkloadID(workload) {
+		return errors.New("invalid workload")
 	}
 	if outcome != WorkCompleted && outcome != WorkAbandoned {
 		return errors.New("invalid work outcome")
@@ -310,5 +321,13 @@ func (s *Store) PendingWork(ctx context.Context) (int, error) {
 func (s *Store) PendingWorkload(ctx context.Context, workload control.Workload) (int, error) {
 	var pending int
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM registered_work WHERE completed_at IS NULL AND workload = ?)`, workload).Scan(&pending)
+	return pending, err
+}
+
+// PendingWorkExcept probes all opposing registrations in one SQLite snapshot.
+// NULL legacy workload identities cannot be attributed to the retained target.
+func (s *Store) PendingWorkExcept(ctx context.Context, retained control.Workload) (int, error) {
+	var pending int
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM registered_work WHERE completed_at IS NULL AND (workload IS NULL OR workload <> ?))`, retained).Scan(&pending)
 	return pending, err
 }

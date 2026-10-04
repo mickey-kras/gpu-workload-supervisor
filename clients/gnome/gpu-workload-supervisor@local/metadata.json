@@ -1,0 +1,1 @@
+{"uuid":"gpu-workload-supervisor@local","name":"GPU Workload Supervisor","description":"Local GPU ownership and workload controls","shell-version":["50"],"version":1,"url":"https://github.com/mickey-kras/gpu-workload-supervisor"}

@@ -30,7 +30,9 @@ async function verifyPublished({ github, context, version }) {
     `Release ${tag} is not verified immutable; preserve its tag and assets, confirm repository release immutability, and reserve an unused version through a normal PR`);
   const expected = [`gpu-workload-supervisor-${tag}.tar.gz`,
     `gpu-workload-supervisor_${version}_linux_amd64.tar.gz`,
-    `gpu-workload-supervisor_${version}_linux_arm64.tar.gz`, 'SHA256SUMS', 'sbom.cdx.json'];
+    `gpu-workload-supervisor_${version}_linux_arm64.tar.gz`,
+    `gpu-workload-supervisor_${version}_linux_amd64.deb`,
+    `gpu-workload-supervisor_${version}_linux_arm64.deb`, 'SHA256SUMS', 'sbom.cdx.json'];
   requireValue(ref.object.type === 'commit' && ref.object.sha === context.sha &&
     release.tag_name === tag && !release.draft && !release.prerelease &&
     release.assets.length === expected.length &&

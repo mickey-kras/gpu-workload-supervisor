@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	workloadproxy "github.com/mickey-kras/gpu-workload-supervisor/internal/proxy"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
@@ -221,7 +222,7 @@ func run() error {
 	statePath := flags.String("state", defaultStatePath(), "SQLite state path")
 	listen := flags.String("listen", "127.0.0.1:8090", "HTTP listen address")
 	upstreamValue := flags.String("upstream", "", "absolute upstream URL")
-	workloadValue := flags.String("workload", "", "required workload: text or media")
+	workloadValue := flags.String("workload", "", "required configured workload ID")
 	requestIDHeader := flags.String("request-id-header", workloadproxy.DefaultRequestIDHeader, "request ID header")
 	jobIDHeader := flags.String("job-id-header", "", "optional job ID header")
 	fenceIDHeader := flags.String("fence-id-header", workloadproxy.DefaultFenceIDHeader, "lease incarnation header")
@@ -262,8 +263,8 @@ func run() error {
 		return err
 	}
 	workload := control.Workload(*workloadValue)
-	if workload != control.WorkloadText && workload != control.WorkloadMedia {
-		return errors.New("workload must be text or media")
+	if !control.ValidWorkloadID(workload) {
+		return errors.New("workload must be a valid workload ID")
 	}
 	if len(routes) == 0 {
 		return errors.New("at least one execution route is required")
@@ -308,6 +309,9 @@ func serveProxy(proxyConfig workloadproxy.Config, settings proxyServerSettings) 
 		return fmt.Errorf("acquire proxy lifetime lock: %w", err)
 	}
 	defer proxyLock.Close()
+	if err := deployment.Check(settings.statePath, ""); err != nil {
+		return err
+	}
 	stateStore, err := store.Open(context.Background(), settings.statePath)
 	if err != nil {
 		return fmt.Errorf("open state store: %w", err)

@@ -1,0 +1,225 @@
+package setup
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+)
+
+type idleRuntime struct{ err error }
+
+func (r idleRuntime) Observe(context.Context) (gpuruntime.Snapshot, error) {
+	return gpuruntime.Snapshot{Workloads: map[control.Workload]gpuruntime.WorkloadObservation{}}, r.err
+}
+func (r idleRuntime) Start(context.Context, control.Workload) error   { return r.err }
+func (r idleRuntime) Stop(context.Context, control.Workload) error    { return r.err }
+func (r idleRuntime) StopForRecovery(context.Context) error           { return r.err }
+func (r idleRuntime) Healthy(context.Context, control.Workload) error { return r.err }
+func (r idleRuntime) Released(context.Context) error                  { return r.err }
+func fixture(t *testing.T) (string, Request) {
+	t.Helper()
+	home := t.TempDir()
+	r := Request{Version: 1, ConfirmQuiesced: true, Profile: Profile{Version: 1, StatePath: filepath.Join(home, "state/state.db"), SystemctlPath: "/usr/bin/systemctl", NvidiaSMIPath: "/usr/bin/nvidia-smi"}, Catalog: control.Catalog{Version: 1, Profiles: []control.Profile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health", BootPolicy: "stop-to-idle"}}}}
+	priorRuntime, priorRun, priorDir, priorUID := makeRuntime, runCommand, binaryDirectory, packageBinaryUID
+	makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	runCommand = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("text.service disabled\nmedia.service disabled\n"), nil
+	}
+	binaryDirectory = t.TempDir()
+	packageBinaryUID = uint32(os.Geteuid())
+	for _, name := range binaries {
+		if err := os.WriteFile(filepath.Join(binaryDirectory, name), []byte("binary-"+name), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		makeRuntime = priorRuntime
+		runCommand = priorRun
+		binaryDirectory = priorDir
+		packageBinaryUID = priorUID
+	})
+	return home, r
+}
+func TestApplyFreshRepeatUpgradeDowngradeAndBackup(t *testing.T) {
+	home, r := fixture(t)
+	ctx := context.Background()
+	prior := deployment.Release
+	deployment.Release = "0.9.0"
+	t.Cleanup(func() { deployment.Release = prior })
+	if err := Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	if err := deployment.Check(r.Profile.StatePath, deployment.Release); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(ctx, r.Profile.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, _ := s.Catalog(ctx)
+	state, _ := s.State(ctx)
+	s.Close()
+	if state.ActiveWorkload != control.WorkloadIdle || state.Owner != control.OwnerSupervisor {
+		t.Fatal(state)
+	}
+	r.ExpectedRevision = snapshot.Revision
+	if err := Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	deployment.Release = "1.0.0"
+	if err := Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	deployment.Release = "0.8.0"
+	if err := Apply(ctx, home, r); err == nil {
+		t.Fatal("downgrade accepted")
+	}
+}
+func TestApplyFailuresAndMaintenanceResume(t *testing.T) {
+	home, r := fixture(t)
+	ctx := context.Background()
+	r.ConfirmQuiesced = false
+	if err := Apply(ctx, home, r); err == nil {
+		t.Fatal("implicit activation")
+	}
+	r.ConfirmQuiesced = true
+	gate, err := lock.TryAcquire(r.Profile.StatePath + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(ctx, home, r); err == nil {
+		t.Fatal("gate contention accepted")
+	}
+	gate.Close()
+	makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{err: errors.New("GPU busy")}, nil }
+	if err := Apply(ctx, home, r); err == nil {
+		t.Fatal("live runtime accepted")
+	}
+	makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	runCommand = func(context.Context, string, ...string) ([]byte, error) {
+		return nil, errors.New("unit manager unavailable")
+	}
+	if err := Apply(ctx, home, r); err == nil {
+		t.Fatal("enable failed silently")
+	}
+	if err := deployment.Check(r.Profile.StatePath, ""); err == nil {
+		t.Fatal("maintenance fence absent")
+	}
+	changed := r
+	changed.Catalog.Profiles = append([]control.Profile(nil), r.Catalog.Profiles...)
+	changed.Catalog.Profiles[0].Label = "Changed"
+	if err := Apply(ctx, home, changed); err == nil {
+		t.Fatal("interrupted plan replaced")
+	}
+	runCommand = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	if err := Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	if err := deployment.Check(r.Profile.StatePath, deployment.Release); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestDecodePlanDiscoverAndValidation(t *testing.T) {
+	home, r := fixture(t)
+	data, _ := json.Marshal(r)
+	if _, err := Decode(strings.NewReader(string(data))); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"", string(data) + " {}", strings.Repeat(" ", 262145), `{"unknown":true}`, `{"version":2}`} {
+		if _, err := Decode(strings.NewReader(text)); err == nil {
+			t.Fatal("bad input accepted")
+		}
+	}
+	if _, err := Plan(home, r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Home(); err != nil {
+		t.Fatal(err)
+	}
+	bad := r
+	bad.Profile.StatePath = "relative"
+	if err := Validate(bad); err == nil {
+		t.Fatal("relative path")
+	}
+	bad = r
+	bad.Profile.GPUIndex = -1
+	if err := Validate(bad); err == nil {
+		t.Fatal("negative GPU")
+	}
+	d, err := Discover(context.Background(), home)
+	if err != nil || len(d.Units) != 2 {
+		t.Fatalf("%+v %v", d, err)
+	}
+	if err := Apply(context.Background(), home, r); err != nil {
+		t.Fatal(err)
+	}
+	d, err = Discover(context.Background(), home)
+	if err != nil || d.Request.ExpectedRevision == "" {
+		t.Fatalf("%+v %v", d, err)
+	}
+	if err := Reconcile(context.Background(), home); err != nil {
+		t.Fatal(err)
+	}
+	for _, pair := range [][2]string{{"1.1.0", "1.0.9"}, {"v2.0.0", "1.9.9"}} {
+		if !newer(pair[0], pair[1]) {
+			t.Fatal(pair)
+		}
+	}
+	for _, pair := range [][2]string{{"dev", "1.0.0"}, {"1.0.0", "dev"}, {"1.0.0", "1.0.0"}, {"1.-1.0", "1.0.0"}, {"1.0.0", "2.0.0"}} {
+		if newer(pair[0], pair[1]) {
+			t.Fatal(pair)
+		}
+	}
+}
+
+func TestOwnedIntegrationRemovalPreservesUserData(t *testing.T) {
+	home, r := fixture(t)
+	ctx := context.Background()
+	if err := Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, ".config/systemd/user/default.target.wants", reconcileUnit)
+	if err := os.Symlink("/usr/lib/systemd/user/"+reconcileUnit, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveIntegration(home); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(r.Profile.StatePath); err != nil {
+		t.Fatal("state removed", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config/gpu-workload-supervisor/operator.json")); err != nil {
+		t.Fatal("profile removed", err)
+	}
+	if err := RemoveIntegration(home); err != nil {
+		t.Fatal(err)
+	}
+	if err := enableReconciliation(ctx, home, r.Profile.SystemctlPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/some/user.service", link); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveIntegration(home); err == nil {
+		t.Fatal("foreign link removed")
+	}
+	if err := enableReconciliation(ctx, home, r.Profile.SystemctlPath); err == nil {
+		t.Fatal("foreign link overwritten")
+	}
+	os.Remove(link)
+	userUnit := filepath.Join(home, ".config/systemd/user", reconcileUnit)
+	os.WriteFile(userUnit, []byte("user"), 0600)
+	if err := enableReconciliation(ctx, home, r.Profile.SystemctlPath); err == nil {
+		t.Fatal("user unit overwritten")
+	}
+}

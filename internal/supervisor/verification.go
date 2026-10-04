@@ -8,6 +8,17 @@ import (
 )
 
 func verifySnapshot(target control.Workload, snapshot gpuruntime.Snapshot) error {
+	if snapshot.Workloads != nil {
+		for id, o := range snapshot.Workloads {
+			if id != target && o.Active && o.Exclusive {
+				return ErrStateVerification
+			}
+		}
+		if target != control.WorkloadIdle && !snapshot.Workloads[target].Active {
+			return ErrStateVerification
+		}
+		return nil
+	}
 	if snapshot.MediaExclusive && snapshot.MediaReady && target != control.WorkloadMedia {
 		return fmt.Errorf("%w: media runtime remains active", ErrStateVerification)
 	}
@@ -29,6 +40,18 @@ func verifySnapshot(target control.Workload, snapshot gpuruntime.Snapshot) error
 }
 
 func observedWorkload(state control.State, snapshot gpuruntime.Snapshot) (control.Workload, error) {
+	if snapshot.Workloads != nil {
+		active := control.WorkloadIdle
+		for id, o := range snapshot.Workloads {
+			if o.Active && (o.Exclusive || id == state.ActiveWorkload) {
+				if active != control.WorkloadIdle {
+					return control.WorkloadUnknown, ErrInvariant
+				}
+				active = id
+			}
+		}
+		return active, nil
+	}
 	if snapshot.MediaExclusive && snapshot.MediaReady {
 		if snapshot.TextActive {
 			return control.WorkloadUnknown, ErrInvariant

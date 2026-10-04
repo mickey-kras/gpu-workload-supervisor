@@ -54,12 +54,17 @@ type transitionOptions struct {
 	sourceOwner control.Owner
 	targetOwner control.Owner
 	verifyOnly  bool
+	preserve    bool
 	expected    *control.Precondition
+	operator    *control.OperatorPrecondition
 }
 
 func (c *Controller) transitionConditional(ctx context.Context, target control.Workload, initiator string, options transitionOptions) (control.State, error) {
-	if target != control.WorkloadText && target != control.WorkloadMedia && target != control.WorkloadIdle {
+	if !c.configuredTarget(target) {
 		return control.State{}, fmt.Errorf("invalid target workload %q", target)
+	}
+	if err := c.checkCatalog(ctx); err != nil {
+		return control.State{}, err
 	}
 	current, err := c.transitionSource(ctx, options.sourceOwner, options.verifyOnly)
 	if err != nil {
@@ -81,32 +86,39 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 		Initiator: initiator, Phase: control.PhaseDraining,
 		Deadline: c.now().Add(c.config.DrainTimeout),
 	}
-	state, err := c.startTransition(ctx, current.Version, options.expected, transition)
+	if c.config.Catalog != nil {
+		transition.ConfigurationRevision = c.config.Catalog.Revision
+	}
+	state, err := c.startRequestedTransition(ctx, current.Version, options, transition)
 	if err != nil {
 		return current, err
 	}
-	if err := c.waitForDrain(ctx, transitionID, transition.Deadline); err != nil {
-		return c.fail(transitionID, state, current, err)
+	fail := c.fail
+	if options.preserve {
+		fail = c.failPreserving
 	}
-	state, active, err := c.unloadTransition(ctx, transitionID, state, current, target, options.verifyOnly)
+	if err := c.waitForDrain(ctx, transitionID, transition.Deadline); err != nil {
+		return fail(transitionID, state, current, err)
+	}
+	state, active, err := c.unloadTransition(ctx, transitionID, state, current, target, options.verifyOnly || options.preserve)
 	if err != nil {
-		return c.fail(transitionID, state, current, err)
+		return fail(transitionID, state, current, err)
 	}
 	userGate, err := c.acquireTransitionGate(ctx, options.sourceOwner, options.verifyOnly)
 	defer userGate.Close()
 	if err != nil {
-		return c.fail(transitionID, state, current, err)
+		return fail(transitionID, state, current, err)
 	}
-	state, err = c.loadTransition(ctx, transitionID, state, active, target, options.verifyOnly)
+	state, err = c.loadTransition(ctx, transitionID, state, active, target, options.verifyOnly || options.preserve)
 	if err != nil {
-		return c.fail(transitionID, state, current, err)
+		return fail(transitionID, state, current, err)
 	}
 	state, err = c.setPhase(ctx, transitionID, state, control.PhaseVerifying)
 	if err != nil {
-		return c.fail(transitionID, state, current, err)
+		return fail(transitionID, state, current, err)
 	}
 	if err := c.waitReady(ctx, target, c.now().Add(c.config.VerifyTimeout)); err != nil {
-		return c.fail(transitionID, state, current, err)
+		return fail(transitionID, state, current, err)
 	}
 	final := stableTarget(state, options.targetOwner, target)
 	finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.FinalizeTimeout)
@@ -216,7 +228,7 @@ func (c *Controller) acquireTransitionGate(ctx context.Context, sourceOwner cont
 	if err != nil {
 		return gate, err
 	}
-	if snapshot.TextActive || snapshot.MediaReady {
+	if snapshot.AnyActive() {
 		return gate, ErrStateVerification
 	}
 	return gate, nil
@@ -239,6 +251,9 @@ func (c *Controller) loadTransition(ctx context.Context, transitionID string, st
 }
 
 func (c *Controller) unloadForSwitch(ctx context.Context, transitionID string, phase control.Phase, current control.State, target control.Workload) (control.Workload, error) {
+	if c.config.Catalog != nil {
+		return c.unloadCatalog(ctx, transitionID, phase, current, target)
+	}
 	snapshot, err := c.observe(ctx)
 	if err != nil {
 		return control.WorkloadUnknown, gpuruntime.SafeError("observe before unload failed", ErrRuntimeObservation, err)

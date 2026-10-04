@@ -6,7 +6,13 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
+type WorkloadObservation struct {
+	Active    bool
+	Exclusive bool
+}
+
 type Snapshot struct {
+	Workloads      map[control.Workload]WorkloadObservation
 	TextActive     bool
 	MediaReady     bool
 	MediaExclusive bool
@@ -27,4 +33,16 @@ type Manager interface {
 // policy supports that. Other runtimes retain the all-workloads Released check.
 type TargetReleaseVerifier interface {
 	ReleasedFor(context.Context, control.Workload) error
+}
+
+func (s Snapshot) AnyActive() bool {
+	if s.TextActive || s.MediaReady {
+		return true
+	}
+	for _, o := range s.Workloads {
+		if o.Active {
+			return true
+		}
+	}
+	return false
 }

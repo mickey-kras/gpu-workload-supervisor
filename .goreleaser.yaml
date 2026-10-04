@@ -10,6 +10,8 @@ builds:
   - id: gpu-mode
     main: ./cmd/gpu-mode
     binary: gpu-mode
+    ldflags:
+      - -s -w -X github.com/mickey-kras/gpu-workload-supervisor/internal/deployment.Release={{ .Version }}
     env:
       - CGO_ENABLED=0
     goos:
@@ -20,6 +22,8 @@ builds:
   - id: gpu-workload-proxy
     main: ./cmd/gpu-workload-proxy
     binary: gpu-workload-proxy
+    ldflags:
+      - -s -w -X github.com/mickey-kras/gpu-workload-supervisor/internal/deployment.Release={{ .Version }}
     env:
       - CGO_ENABLED=0
     goos:
@@ -27,6 +31,58 @@ builds:
     goarch:
       - amd64
       - arm64
+
+  - id: gpu-operator
+    main: ./cmd/gpu-operator
+    binary: gpu-operator
+    ldflags:
+      - -s -w -X github.com/mickey-kras/gpu-workload-supervisor/internal/deployment.Release={{ .Version }}
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+  - id: gpu-setup
+    main: ./cmd/gpu-setup
+    binary: gpu-setup
+    ldflags:
+      - -s -w -X github.com/mickey-kras/gpu-workload-supervisor/internal/deployment.Release={{ .Version }}
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+
+nfpms:
+  - id: desktop
+    package_name: gpu-workload-supervisor
+    file_name_template: "{{ .ProjectName }}_{{ .Version }}_linux_{{ .Arch }}"
+    ids: [gpu-mode, gpu-workload-proxy, gpu-operator, gpu-setup]
+    formats: [deb]
+    bindir: /usr/bin
+    maintainer: gpu-workload-supervisor maintainers <noreply@github.com>
+    homepage: https://github.com/mickey-kras/gpu-workload-supervisor
+    description: Local GPU workload controls and guided GNOME Shell 50 setup
+    license: MIT
+    dependencies:
+      - gjs
+      - gir1.2-gtk-4.0
+      - gir1.2-adw-1
+      - gnome-shell (>= 50)
+      - gnome-shell (<< 51)
+      - systemd
+    contents:
+      - src: clients/gnome/gpu-workload-supervisor@local/*
+        dst: /usr/share/gnome-shell/extensions/gpu-workload-supervisor@local/
+      - src: clients/setup/review.mjs
+        dst: /usr/share/gpu-workload-supervisor/review.mjs
+      - src: clients/setup/setup.js
+        dst: /usr/share/gpu-workload-supervisor/setup.js
+      - src: clients/setup/gpu-workload-supervisor-setup.desktop
+        dst: /usr/share/applications/gpu-workload-supervisor-setup.desktop
+      - src: packaging/gpu-workload-supervisor-reconcile.service
+        dst: /usr/lib/systemd/user/gpu-workload-supervisor-reconcile.service
+      - src: LICENSE
+        dst: /usr/share/doc/gpu-workload-supervisor/copyright
+      - src: THIRD_PARTY_NOTICES/
+        dst: /usr/share/doc/gpu-workload-supervisor/THIRD_PARTY_NOTICES/
+        type: tree
 
 archives:
   - formats:

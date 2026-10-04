@@ -9,7 +9,7 @@ GOSUMDB=sum.golang.org GOPRIVATE= GONOSUMDB= GONOPROXY= GOPROXY=https://proxy.go
 rm -rf THIRD_PARTY_NOTICES
 for arch in amd64 arm64; do
   GOOS=linux GOARCH="$arch" CGO_ENABLED=0 "$notice_tools/go-licenses" save \
-    ./cmd/gpu-mode ./cmd/gpu-workload-proxy \
+    ./cmd/gpu-mode ./cmd/gpu-workload-proxy ./cmd/gpu-operator ./cmd/gpu-setup \
     --ignore github.com/mickey-kras/gpu-workload-supervisor \
     --save_path="THIRD_PARTY_NOTICES/linux_$arch"
 done

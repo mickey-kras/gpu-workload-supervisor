@@ -189,7 +189,7 @@ func allowedField(key string, allowed []string) bool {
 	return false
 }
 func validWorkload(target control.Workload) bool {
-	return target == control.WorkloadText || target == control.WorkloadMedia || target == control.WorkloadIdle
+	return control.ValidWorkloadID(target) || target == control.WorkloadIdle
 }
 func opaqueID(value string, limit int) bool {
 	if len(value) == 0 || len(value) > limit {
