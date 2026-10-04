@@ -24,13 +24,24 @@ test "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs
 systemctl is-system-running --wait || test "$(systemctl is-system-running)" = degraded
 account="gws-ci-$$"
 ! getent passwd "$account" >/dev/null
-work=$(mktemp -d /tmp/gws-setup-integration.XXXXXX)
+# Operator profile loading intentionally rejects writable ancestors, including
+# /tmp. Use a normal trusted home ancestry for the genuine desktop account.
+work=$(mktemp -d /home/gws-setup-integration.XXXXXX)
 created=false
 installed=()
 cleanup() {
   result=$?
   trap - EXIT
   if $created; then
+    if [[ $result != 0 && -n ${qualification_uid:-} ]]; then
+      echo 'Setup integration failure: packaged unit diagnostics' >&2
+      timeout 10s runuser -u "$account" -- env \
+        XDG_RUNTIME_DIR="/run/user/$qualification_uid" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$qualification_uid/bus" \
+        systemctl --user --no-pager --full status "$unit" || true
+      timeout 10s journalctl --no-pager --output=short-precise \
+        --lines=80 "_UID=$qualification_uid" || true
+    fi
     loginctl terminate-user "$account" || true
     loginctl disable-linger "$account" || true
     userdel --remove "$account" || true
