@@ -33,8 +33,12 @@ Preserve current Text boot retention and Media stop-to-idle behavior through exp
 policies. New profiles default to stop-to-idle. HTTP unload success alone never
 proves release; preserve the existing fail-closed live Media unload restriction.
 
-Persist the accepted catalog and opaque revision under the controller gate.
-Setup validates and atomically commits configuration with state-version advancement;
+Persist the accepted catalog, opaque revision and state-version advancement in
+one SQLite transaction under the controller gate. Pin that immutable catalog
+snapshot for the entire admitted operation. The private deployment profile selects
+trusted absolute state/install paths and limits; it is not an alternate live catalog.
+Changing the state location is an explicit maintenance migration, not a runtime edit.
+Setup validates and commits configuration through this transaction;
 ordinary status/mutation calls do not silently adopt changed files. Reject stale
 revision requests. Reject removal or incompatible changes to active, desired,
 unfinished-work or unfinished-transition references. Preserve historical records
@@ -57,11 +61,13 @@ and legacy-grant denial for a newly configured workload.
 
 Add an on-demand gpu-operator entrypoint. Native package invocation is
 /usr/bin/gpu-operator with fixed arguments; requests contain no executable,
-configuration, unit or cgroup paths. Resolve the effective account's home through the OS account database and read
+configuration, unit or cgroup paths. Resolve the effective account's home through
+the OS account database and read
 .config/gpu-workload-supervisor/operator.json beneath it. Do not accept a HOME,
 XDG or request override for runtime profile resolution. Validate the regular file,
 owner and directory chain; reject symlinks and group/world-writable paths. Setup
-uses this same convention and never needs root to write the private profile. Setup and runtime control
+uses this same convention and never needs root to write the private profile.
+Setup and runtime control
 are separate command paths; runtime cannot write configuration.
 
 One bounded newline-delimited JSON request per process:
@@ -83,7 +89,8 @@ Status advertises bounded workload labels/IDs, capabilities, revision, committed
 owner/desired/active/phase/health/admission, observation time and state token.
 Typed errors carry no usable status: invalid_request, unsupported_version,
 incompatible_configuration, stale_state, wrong_owner, busy, recovery_required,
-timeout and unavailable. These underscore-separated codes are the shared fixture vocabulary; profile trust
+timeout and unavailable. These underscore-separated codes are the shared fixture
+vocabulary; profile trust
 failures map to incompatible_configuration and unexpected runtime/output failures
 to unavailable.
 
@@ -94,7 +101,8 @@ Existing bounded cleanup/finalization is additional and must be documented.
 
 After admission, transition execution must not depend on UI stdin, output-reader
 lifetime or cancellation. Finish and persist before writing the final response;
-broken pipes cannot cancel effects. Detach the backend session and handle SIGHUP; never bind its operation context to
+broken pipes cannot cancel effects. Detach the backend session and handle SIGHUP;
+never bind its operation context to
 UI read cancellation. Process survival across actual Shell restart is an acceptance
 gate, including process-group behavior. Host shutdown, SIGKILL and logout policy
 still require the existing interrupted-transition recovery. A disconnected client
@@ -162,6 +170,17 @@ Setup runs in the operator account. It discovers supported candidates, lets the
 user select/configure them, submits validation to the backend and previews concrete
 unit/configuration changes. Never auto-adopt discovered services. Install only
 owned integration/drop-ins and reconciliation, with an ownership manifest.
+
+Setup stages and validates files, durably records planned/previous owned files,
+then applies prerequisites while retaining the old effective catalog. Before
+changing any runtime-affecting prerequisite, acquire the controller gate and verify
+a safe maintenance state with no admitted work or transition. Reject changes to
+live referenced profiles. Commit catalog/revision/state version together only
+after prerequisites succeed, then finalize the manifest. Pre-commit failure
+restores only setup-owned changes; post-commit failure keeps the committed catalog
+and resumes finalization. Neither path restarts workloads or silently rolls back
+live mappings. Tests inject failure at every boundary.
+
 Never silently stop workloads, overwrite user units or change current ownership.
 Package maintainer scripts do not enumerate user sessions, open state, start
 workloads or configure arbitrary users.
