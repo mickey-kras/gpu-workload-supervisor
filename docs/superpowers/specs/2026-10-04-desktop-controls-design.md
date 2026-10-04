@@ -189,9 +189,22 @@ No permanent daemon solely for the UI. Setup handles reconciliation configuratio
 without manual service commands and clearly handles unsupported Shell/session
 requirements. Verify whether logout/login is necessary for extension discovery.
 
-Upgrade preserves configuration/state, performs compatibility and maintenance
-preflight and consistent backup before migration. Package replacement does not
-authorize opening state with an incompatible binary. Rollback follows RESTORING.md:
+The setup application owns upgrade activation. Package replacement alone leaves
+the new operator entrypoint incompatible with the deployment's activated release
+marker; it must not open or auto-migrate that state. The same deployment activation
+check applies to CLI, proxy and reconciliation entrypoints. Existing legacy
+deployments enter this managed scheme only through explicit setup adoption.
+
+For activation, setup obtains the controller and proxy maintenance gates, prevents
+new admission and verifies that existing work and runtimes have been safely
+quiesced under an explicit operator decision. It records a durable maintenance
+marker, verifies a consistent backup, performs the migration and validation, then
+updates the activated release marker and clears maintenance. Every managed state
+opener checks maintenance before effects. A crash leaves maintenance in force;
+resume through setup or explicit CLI recovery, never automatic workload restart.
+The migration/activation protocol must test old processes holding gates, newly
+started commands, reconciliation and crashes at each boundary. Preserve the prior
+verified binary/configuration with the backup for supported rollback. Rollback follows RESTORING.md:
 compatible exact binary/config/state pair or controlled backup restoration with
 fence rotation; otherwise repair forward. Interrupted setup resumes from its
 manifest without resetting state. Uninstall preserves user workload units, models,
