@@ -17,7 +17,7 @@ UNIT = "gpu-workload-supervisor-reconcile.service"
 
 
 def run(*args, request=None, error=None):
-    result = subprocess.run(args, input=None if request is None else json.dumps(request),
+    result = subprocess.run(args, input=None if request is None else json.dumps(request) + "\n",
                             text=True, capture_output=True, timeout=40, check=False)
     if error is not None:
         assert result.returncode != 0, f"unexpected success: {args}"
@@ -120,7 +120,7 @@ def main():
     # Another catalog commit invalidates a previously reviewed request.
     before = json.loads(run("/usr/bin/gpu-operator", request={
         "protocolVersion": 1, "requestId": "before-update", "action": "status"}))
-    assert before["code"] == "ok" and before["requestId"] == "before-update"
+    assert before["code"] == "ok" and before["requestId"] == "before-update", before
     assert before["status"]["activeWorkload"] == "idle"
     assert before["status"]["workloads"] == [{"id": "idle", "label": "Idle"}, {"id": "ci-workload", "label": "CI workload"}]
     current = json.loads(setup("discover"))["request"]
@@ -131,10 +131,10 @@ def main():
     rejected = json.loads(run("/usr/bin/gpu-operator", request={
         "protocolVersion": 1, "requestId": "old-preview", "action": "take-control",
         "expected": before["status"]["expected"]}))
-    assert rejected["code"] == "stale_state" and rejected["requestId"] == "old-preview"
+    assert rejected["code"] == "stale_state" and rejected["requestId"] == "old-preview", rejected
     after = json.loads(run("/usr/bin/gpu-operator", request={
         "protocolVersion": 1, "requestId": "after-update", "action": "status"}))
-    assert after["code"] == "ok"
+    assert after["code"] == "ok", after
     assert after["status"]["owner"] == before["status"]["owner"]
     assert after["status"]["workloads"] == [{"id": "idle", "label": "Idle"}, {"id": "ci-workload", "label": "Updated workload"}]
     profile_hash = digest(ROOT / "operator.json")
