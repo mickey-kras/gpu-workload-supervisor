@@ -2,7 +2,7 @@
   "type": "module",
   "scripts": {
     "test": "node --experimental-vm-modules --test tests/*.test.js",
-    "coverage": "cd ../.. && clients/gnome/node_modules/.bin/c8 --all --include=\"clients/**/*.js\" --include=\"clients/**/*.mjs\" --include=\"scripts/**/*.cjs\" --exclude=\"**/tests/**\" --exclude=\"**/coverage/**\" --exclude=\"**/*.test.*\" --reports-dir=clients/gnome/coverage --reporter=lcovonly --reporter=text node --experimental-vm-modules --test clients/gnome/tests/*.test.js clients/setup/*.test.mjs scripts/desktop-version.test.cjs"
+    "coverage": "cd ../.. && clients/gnome/node_modules/.bin/c8 --all --include=\"clients/**/*.js\" --include=\"clients/**/*.mjs\" --include=\"scripts/**/*.cjs\" --exclude=\"**/tests/**\" --exclude=\"**/coverage/**\" --exclude=\"**/*.test.*\" --reports-dir=clients/gnome/coverage --reporter=lcovonly --reporter=text --check-coverage --lines=99 --branches=93 --functions=100 --statements=99 node --experimental-vm-modules --test clients/gnome/tests/*.test.js clients/setup/*.test.mjs scripts/desktop-version.test.cjs"
   },
   "devDependencies": {
     "c8": "12.0.0"
