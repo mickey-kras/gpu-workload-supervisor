@@ -35,8 +35,10 @@ export function addDraftEditor({Adw, Gtk, window, parent, initial, detected, com
     let bindingFields = {};
     model?.connect('notify::selected', () => {
         if (syncing) return;
-        draft.edit({model: models[model.selected]?.id ?? ''});
-        if (bindingFields.model) bindingFields.model.text = models[model.selected]?.id ?? '';
+        const selected = models[model.selected - 1];
+        if (!selected) return;
+        draft.edit({model: selected.id});
+        if (bindingFields.model) bindingFields.model.text = selected.id;
         changed(draft.snapshot());
     });
     function clearModels() {
@@ -54,15 +56,15 @@ export function addDraftEditor({Adw, Gtk, window, parent, initial, detected, com
         if (model) {
             const chosen = draft.snapshot().model;
             models = candidate.models ?? [];
-            const selection = Math.max(0, models.findIndex(item => item.id === chosen));
+            const selection = models.findIndex(item => item.id === chosen) + 1;
+            const prompt = chosen && !selection ? `Saved model unavailable: ${chosen}` :
+                candidate.inventoryStatus === 'available' ? 'Choose a model...' :
+                    `Model inventory: ${candidate.inventoryStatus ?? 'not checked'}`;
             syncing = true;
-            model.model = Gtk.StringList.new(models.length ? models.map(item => item.label || item.id) : [candidate.inventoryStatus === 'available' ? 'No models reported by this application' : `Model inventory: ${candidate.inventoryStatus ?? 'not checked'}`]);
+            model.model = Gtk.StringList.new([prompt, ...models.map(item => item.label || item.id)]);
             model.selected = selection;
             syncing = false;
-            draft.edit({model: models[selection]?.id ?? ''});
-            if (bindingFields.model) bindingFields.model.text = models[selection]?.id ?? '';
         }
-        changed(draft.snapshot());
     }
     instance.connect('notify::selected', () => {
         const selected = instances[instance.selected - 1];
