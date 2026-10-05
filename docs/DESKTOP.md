@@ -54,6 +54,12 @@ installation and setup do not perform it for you.
 
 After package replacement, the new entrypoints reject the previous activated
 release before opening or migrating state. Open setup to activate the new release.
+Changing the activated release requires a valid full semantic version and a
+stable target with a strictly higher major/minor/patch version. For example,
+`0.1.7-SNAPSHOT-<hash>` can activate `0.1.8`, but cannot activate `0.1.7` or another
+snapshot. Snapshot commit hashes do not establish upgrade order. Reapplying the
+exact same release (including the same snapshot) remains supported.
+
 Setup obtains both controller and exclusive proxy gates, verifies the existing
 and proposed committed mappings have released the GPU, checks state read-only,
 and makes an integrity-checked SQLite `VACUUM INTO` snapshot including WAL content.
