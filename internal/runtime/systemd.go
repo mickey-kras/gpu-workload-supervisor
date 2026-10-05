@@ -75,10 +75,11 @@ type SystemdConfig struct {
 }
 
 type SystemdManager struct {
-	config  SystemdConfig
-	runner  CommandRunner
-	client  *http.Client
-	cgroups cgroupFS
+	config                    SystemdConfig
+	runner                    CommandRunner
+	client                    *http.Client
+	cgroups                   cgroupFS
+	nativeExecutableValidator func(string) error
 }
 
 func NewSystemdManager(config SystemdConfig) (*SystemdManager, error) {
@@ -199,7 +200,16 @@ func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) e
 		if !ok {
 			return errors.New("unconfigured workload")
 		}
-		return m.startUnit(ctx, p.Unit, workload)
+		if err := m.verifyNativeBinding(ctx, p); err != nil {
+			return err
+		}
+		if err := m.startUnit(ctx, p.Unit, workload); err != nil {
+			return err
+		}
+		if p.NativeModel != nil {
+			return m.startNative(ctx, p)
+		}
+		return nil
 	}
 	switch workload {
 	case control.WorkloadText:

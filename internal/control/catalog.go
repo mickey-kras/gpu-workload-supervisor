@@ -25,15 +25,16 @@ func ValidWorkloadID(id Workload) bool {
 }
 
 type Profile struct {
-	ID          Workload `json:"id"`
-	Label       string   `json:"label"`
-	Adapter     string   `json:"adapter"`
-	Unit        string   `json:"unit"`
-	Cgroup      string   `json:"cgroup"`
-	HealthURL   string   `json:"healthURL"`
-	ReleaseURL  string   `json:"releaseURL,omitempty"`
-	RequiredMiB uint64   `json:"requiredMiB,omitempty"`
-	BootPolicy  string   `json:"bootPolicy,omitempty"`
+	NativeModel *NativeModel `json:"nativeModel,omitempty"`
+	ID          Workload     `json:"id"`
+	Label       string       `json:"label"`
+	Adapter     string       `json:"adapter"`
+	Unit        string       `json:"unit"`
+	Cgroup      string       `json:"cgroup"`
+	HealthURL   string       `json:"healthURL"`
+	ReleaseURL  string       `json:"releaseURL,omitempty"`
+	RequiredMiB uint64       `json:"requiredMiB,omitempty"`
+	BootPolicy  string       `json:"bootPolicy,omitempty"`
 }
 type Catalog struct {
 	Version  int       `json:"version"`
@@ -75,7 +76,16 @@ func (c Catalog) Profile(id Workload) (Profile, bool) {
 	}
 	return Profile{}, false
 }
-func (c Catalog) Clone() Catalog { c.Profiles = append([]Profile(nil), c.Profiles...); return c }
+func (c Catalog) Clone() Catalog {
+	c.Profiles = append([]Profile(nil), c.Profiles...)
+	for i := range c.Profiles {
+		if c.Profiles[i].NativeModel != nil {
+			n := *c.Profiles[i].NativeModel
+			c.Profiles[i].NativeModel = &n
+		}
+	}
+	return c
+}
 func (c Catalog) Validate() error {
 	if c.Version != 1 {
 		return errors.New("unsupported catalog version")
@@ -128,6 +138,14 @@ func ValidWorkloadLabel(label string) bool {
 }
 
 func (p Profile) validate() error {
+	if p.NativeModel != nil {
+		if p.Adapter != "systemd" {
+			return errors.New("native models require stop-service bindings")
+		}
+		if err := p.NativeModel.validate(); err != nil {
+			return err
+		}
+	}
 	if !ValidWorkloadID(p.ID) {
 		return fmt.Errorf("invalid workload ID %q", p.ID)
 	}
@@ -174,6 +192,18 @@ func (p Profile) validateEndpoints() error {
 
 func validateProfileOverlap(p Profile, previous []Profile) error {
 	for _, q := range previous {
+		if p.NativeModel != nil && q.NativeModel != nil {
+			a, b := p.NativeModel, q.NativeModel
+			if a.Instance == b.Instance && (a.Runtime != b.Runtime || a.Endpoint != b.Endpoint) {
+				return errors.New("inconsistent native runtime instance")
+			}
+			if a.Endpoint == b.Endpoint && a.Instance != b.Instance {
+				return errors.New("native endpoint belongs to another instance")
+			}
+			if a.Instance == b.Instance && a.Model == b.Model {
+				return errors.New("ambiguous native model binding")
+			}
+		}
 		if p.ID == q.ID || p.Unit == q.Unit || p.Cgroup == q.Cgroup || strings.HasPrefix(p.Cgroup, q.Cgroup+"/") || strings.HasPrefix(q.Cgroup, p.Cgroup+"/") {
 			return errors.New("duplicate or overlapping profiles")
 		}

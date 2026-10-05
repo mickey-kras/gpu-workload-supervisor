@@ -70,6 +70,10 @@ nfpms:
     contents:
       - src: clients/gnome/gpu-workload-supervisor@local/*
         dst: /usr/share/gnome-shell/extensions/gpu-workload-supervisor@local/
+      - src: clients/setup/onboarding.mjs
+        dst: /usr/share/gpu-workload-supervisor/onboarding.mjs
+      - src: clients/setup/discovery-ui.mjs
+        dst: /usr/share/gpu-workload-supervisor/discovery-ui.mjs
       - src: clients/setup/review.mjs
         dst: /usr/share/gpu-workload-supervisor/review.mjs
       - src: clients/setup/setup.js

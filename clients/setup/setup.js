@@ -7,6 +7,8 @@ import Gio from 'gi://Gio';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import GLib from 'gi://GLib';
 import {ReviewedConfiguration} from './review.mjs';
+import {applications} from './onboarding.mjs';
+import {addDraftEditor} from './discovery-ui.mjs';
 
 // The setup application is short-lived. Runtime controls use gpu-operator.
 function command(argv, input = null) {
@@ -24,7 +26,7 @@ function command(argv, input = null) {
 }
 const app = new Adw.Application({application_id: 'local.GPUWorkload.Setup'});
 app.connect('activate', () => {
-    const window = new Adw.ApplicationWindow({application: app, title: 'GPU Workload Setup',
+    const window = new Adw.ApplicationWindow({application: app, title: 'Manage workloads',
         default_width: 720, default_height: 760});
     const toolbar = new Adw.ToolbarView();
     toolbar.add_top_bar(new Adw.HeaderBar());
@@ -32,14 +34,16 @@ app.connect('activate', () => {
         margin_start: 24, margin_end: 24, margin_top: 18, margin_bottom: 18});
     const scroll = new Gtk.ScrolledWindow({vexpand: true, hscrollbar_policy: Gtk.PolicyType.NEVER});
     scroll.set_child(box); toolbar.set_content(scroll); window.set_content(toolbar);
-    const heading = new Gtk.Label({label: 'Configure GPU workloads', xalign: 0});
+    const heading = new Gtk.Label({label: 'Manage workloads', xalign: 0});
     heading.add_css_class('title-1'); box.append(heading);
-    box.append(new Gtk.Label({label: 'Choose existing user services to manage. Applications and models must already be installed. Setup never starts or stops your workloads.', wrap: true, xalign: 0}));
+    box.append(new Gtk.Label({label: 'Add ComfyUI, Ollama, llama.cpp or vLLM. Applications and models must already be installed. Discovery never starts applications or loads models.', wrap: true, xalign: 0}));
     const status = new Gtk.Label({label: 'Checking your desktop and available services…', wrap: true, xalign: 0, selectable: true}); box.append(status);
     const rows = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 18}); box.append(rows);
     const settings = new Adw.PreferencesGroup(); box.append(settings);
     const advanced = new Adw.ExpanderRow({title: 'Advanced settings', subtitle: 'State database and NVIDIA GPU'});
     settings.add(advanced);
+    let discovered = []; let draftRevision = ''; let drafts = []; let draftGeneration = 0;
+    const draftEditors = [];
     let request = null; let pending = false; let units = []; let valid = false; const profiles = [];
     const reviewed = new ReviewedConfiguration();
     const review = new Gtk.Button({label: 'Review configuration', sensitive: false});
@@ -73,12 +77,13 @@ app.connect('activate', () => {
             expression: Gtk.PropertyExpression.new(Gtk.StringObject.$gtype, null, 'string'),
             model: Gtk.StringList.new(['Choose a service…', ...choices.slice(1, -1), 'Enter another service…']),
             selected: current.unit ? choices.indexOf(current.unit) : 0});
-        group.add(service);
-        field(group, 'Cgroup path beneath /sys/fs/cgroup (required)', current.cgroup, text => current.cgroup = text);
-        field(group, 'Loopback health URL (required)', current.healthURL, text => current.healthURL = text);
+
         const details = new Adw.ExpanderRow({title: 'Workload details',
             subtitle: 'Stable ID, manual service name, VRAM and login behavior', expanded: !current.id});
         group.add(details);
+        details.add_row(service);
+        field(details, 'Cgroup path beneath /sys/fs/cgroup (required)', current.cgroup, text => current.cgroup = text);
+        field(details, 'Loopback health URL (required)', current.healthURL, text => current.healthURL = text);
         const manualService = field(details, 'Service name (manual entry)', current.unit, text => {
             current.unit = text;
             syncingService = true;
@@ -97,6 +102,11 @@ app.connect('activate', () => {
             manualService.text = current.unit;
             invalidate();
         });
+        if (current.nativeModel) {
+            current.nativeModel = {...current.nativeModel};
+            for (const [key, title] of [['instance', 'Runtime instance ID'], ['model', 'Exact model ID'], ['endpoint', 'Runtime base URL'], ['launchFile', 'Loaded service file path']])
+                field(details, title, current.nativeModel[key], text => current.nativeModel[key] = text);
+        }
         field(details, 'Workload ID (lowercase, stable; required)', current.id, text => current.id = text);
         field(details, 'Measured VRAM requirement (MiB; optional)', current.requiredMiB, text => {
             if (text.trim() === '') delete current.requiredMiB;
@@ -105,13 +115,48 @@ app.connect('activate', () => {
         const retain = new Gtk.CheckButton({label: 'Keep this workload running at login if already active', active: current.bootPolicy === 'retain'});
         retain.connect('toggled', () => { current.bootPolicy = retain.active ? 'retain' : 'stop-to-idle'; invalidate(); });
         details.add_row(retain);
-        const remove = new Gtk.Button({label: 'Remove workload'});
+        const remove = new Gtk.Button({label: 'Remove from supervisor'});
         remove.connect('clicked', () => { profiles.splice(profiles.indexOf(current), 1); rows.remove(group); invalidate(); });
         group.add(remove); rows.append(group);
     }
-    const add = new Gtk.Button({label: 'Add workload', sensitive: false});
+    const add = new Gtk.Button({label: 'Add existing service (Advanced)', sensitive: false});
     add.connect('clicked', () => addProfile({adapter: 'systemd', bootPolicy: 'stop-to-idle'}));
-    box.append(add);
+    advanced.add_row(add);
+    const draftRows = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 18}); box.append(draftRows);
+    const application = new Adw.ComboRow({title: 'Application', use_markup: false,
+        model: Gtk.StringList.new(applications.map(item => item.label)), selected: 0});
+    const applicationGroup = new Adw.PreferencesGroup(); applicationGroup.add(application); box.append(applicationGroup);
+    const addApplication = new Gtk.Button({label: 'Add workload', sensitive: false}); box.append(addApplication);
+    const saveDrafts = new Gtk.Button({label: 'Save drafts', sensitive: false}); box.append(saveDrafts);
+    function appendDraft(initial) {
+        drafts.push(initial);
+        draftEditors.push(addDraftEditor({Adw, Gtk, Gio, window, parent: draftRows, initial, detected: discovered, command,
+            bind: async (profile, current) => {
+                const candidate = JSON.stringify({...request, catalog: {...request.catalog, profiles: [...profiles, profile]}, confirmQuiesced: false});
+                await command(['/usr/bin/gpu-setup', 'verify-bindings'], candidate);
+                if (current()) { addProfile(profile); status.label = 'Launch binding verified. Review and confirm configuration before applying. Model readiness is checked when switching workloads.'; }
+            },
+            changed: value => { drafts = drafts.map(item => item.id === initial.id ? value : item); draftGeneration++; saveDrafts.sensitive = !pending; },
+            removed: () => { drafts = drafts.filter(item => item.id !== initial.id); draftGeneration++; saveDrafts.sensitive = !pending; }}));
+    }
+    addApplication.connect('clicked', () => {
+        const selected = applications[application.selected];
+        appendDraft({id: `draft-${GLib.uuid_string_random()}`, label: selected.label, app: selected.id});
+        draftGeneration++; saveDrafts.sensitive = true;
+    });
+    saveDrafts.connect('clicked', async () => {
+        const generation = draftGeneration;
+        let saved = false;
+        saveDrafts.sensitive = false;
+        try {
+            const result = JSON.parse(await command(['/usr/bin/gpu-setup', 'save-drafts'], JSON.stringify({version: 1, expectedRevision: draftRevision, drafts})));
+            draftRevision = result.revision; saved = true;
+            status.label = 'Drafts saved. Saved launch bindings remain unverified. Drafts are not selectable in GPU Control until safe lifecycle control is configured and verified.';
+        } catch (error) { status.label = `Drafts were not saved. Reopen Manage workloads to refresh before retrying.\n${error.message}`; }
+        finally { saveDrafts.sensitive = !pending && (!saved || generation !== draftGeneration); }
+    });
+    const later = new Gtk.Button({label: 'Set up later'}); box.append(later);
+    later.connect('clicked', () => { draftEditors.forEach(editor => editor.cancel()); window.close(); });
     const footer = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 8,
         margin_start: 24, margin_end: 24, margin_top: 12, margin_bottom: 12});
     const actions = new Gtk.Box({orientation: Gtk.Orientation.HORIZONTAL, spacing: 12, homogeneous: true});
@@ -132,7 +177,17 @@ app.connect('activate', () => {
         invalidate(); review.sensitive = false;
         try {
             const candidate = reviewed.begin(serialize());
+            if (!pending) {
+                const snapshot = JSON.parse(candidate.request);
+                for (const profile of snapshot.catalog.profiles) {
+                    if (!profile.nativeModel) continue;
+                    const result = JSON.parse(await command(['/usr/bin/gpu-setup', 'fingerprint'], JSON.stringify({binding: profile.nativeModel})));
+                    profile.nativeModel.launchSHA256 = result.sha256;
+                }
+                candidate.request = JSON.stringify(snapshot);
+            }
             const preview = JSON.parse(await command(['/usr/bin/gpu-setup', 'validate'], candidate.request));
+            if (!pending) await command(['/usr/bin/gpu-setup', 'verify-bindings'], candidate.request);
             if (!reviewed.accept(candidate)) {
                 status.label = 'Configuration changed during review. Review the updated configuration.';
                 return;
@@ -147,11 +202,12 @@ app.connect('activate', () => {
         const activationRequest = reviewed.confirmed();
         apply.sensitive = false; review.sensitive = false; add.sensitive = false;
         rows.sensitive = false; settings.sensitive = false; confirm.sensitive = false;
+        draftRows.sensitive = false; addApplication.sensitive = false; saveDrafts.sensitive = false; later.sensitive = false;
         status.label = 'Applying configuration. Keep this window open; interrupted activation can be resumed.';
         try {
             await command(['/usr/bin/gpu-setup', 'apply'], activationRequest);
-            status.label = 'Configuration activated. Reconciliation is enabled for future logins. Log out and back in to discover the extension, then enable “GPU Workload Supervisor” in Extensions. No workload was started.';
-        } catch (error) { status.label = `Setup needs attention: ${error.message}\nRerun setup to resume the recorded activation. State and backups are preserved.`; }
+            status.label = 'Configuration activated. Reconciliation is enabled for future logins. Log out and back in to discover the extension, then enable “GPU Workload Supervisor” in Extensions. GPU Control appears in the top-right Quick Settings menu. No workload was started.';
+        } catch (error) { status.label = `Setup needs attention: ${error.message}\nSwitch to Idle and finish active jobs before changing configured workloads. Reopen Manage workloads to refresh or resume an interrupted activation. State and backups are preserved.`; }
         finally { invalidate(); }
     });
     window.present();
@@ -161,9 +217,15 @@ app.connect('activate', () => {
             if (!/\b50(?:\.|\s|$)/.test(version) || !GLib.getenv('XDG_CURRENT_DESKTOP')?.includes('GNOME'))
                 throw new Error('This package requires a GNOME Shell 50 desktop session.');
             const discovery = JSON.parse(await command(['/usr/bin/gpu-setup', 'discover']));
-            request = discovery.request; units = discovery.units; pending = Boolean(discovery.pending);
+            request = discovery.request; units = discovery.units; pending = Boolean(discovery.pending); discovered = discovery.applications ?? [];
+            if (!pending) {
+                const saved = JSON.parse(await command(['/usr/bin/gpu-setup', 'drafts']));
+                draftRevision = saved.revision ?? '';
+                for (const draft of saved.drafts ?? []) appendDraft(draft);
+            }
+            addApplication.sensitive = !pending; applicationGroup.sensitive = !pending;
             status.label = pending ? 'Interrupted setup found. Review and resume its original configuration.' :
-                `${units.length} user services found. Add a workload to choose a service; none are added automatically.`;
+                `Choose an application to add a draft. Existing configured workloads can be edited below; service details are under Advanced.`;
             field(advanced, 'State database path', request.profile.statePath, text => request.profile.statePath = text);
             field(advanced, 'NVIDIA GPU index', request.profile.gpuIndex, text => request.profile.gpuIndex = Number(text));
             for (const profile of request.catalog.profiles ?? []) addProfile(profile);

@@ -104,3 +104,53 @@ func TestInjectedCommandBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDraftCommands(t *testing.T) {
+	oldHome, oldUID := homeForSetup, effectiveUID
+	t.Cleanup(func() { homeForSetup = oldHome; effectiveUID = oldUID })
+	home := t.TempDir()
+	homeForSetup = func() (string, error) { return home, nil }
+	effectiveUID = func() int { return 1000 }
+	var output bytes.Buffer
+	if err := run([]string{"drafts"}, strings.NewReader(""), &output); err != nil {
+		t.Fatal(err)
+	}
+	input := `{"version":1,"expectedRevision":"","drafts":[{"id":"d","label":"D","app":"ollama"}]}`
+	for _, data := range []string{`{`, input + ` {}`, strings.Repeat(" ", 65537), `{"version":2}`, `{"unknown":true}`} {
+		if err := run([]string{"save-drafts"}, strings.NewReader(data), &bytes.Buffer{}); err == nil {
+			t.Fatalf("accepted %s", data)
+		}
+	}
+	if err := run([]string{"save-drafts"}, strings.NewReader(input), &output); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"save-drafts"}, strings.NewReader(input), &output); err == nil {
+		t.Fatal("stale accepted")
+	}
+	effectiveUID = func() int { return 0 }
+	if err := run([]string{"save-drafts"}, strings.NewReader(input), &output); err == nil {
+		t.Fatal("root accepted")
+	}
+	if err := os.WriteFile(home+"/.config/gpu-workload-supervisor/drafts.json", []byte("invalid"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"drafts"}, strings.NewReader(""), &output); err == nil {
+		t.Fatal("invalid file accepted")
+	}
+}
+
+func TestVerifyBindingsCommand(t *testing.T) {
+	old := verifyBindings
+	t.Cleanup(func() { verifyBindings = old })
+	for _, fail := range []bool{false, true} {
+		verifyBindings = func(context.Context, setup.Request) error {
+			if fail {
+				return errors.New("changed")
+			}
+			return nil
+		}
+		if err := run([]string{"verify-bindings"}, strings.NewReader(request), &bytes.Buffer{}); (err != nil) != fail {
+			t.Fatalf("failure=%v %v", fail, err)
+		}
+	}
+}

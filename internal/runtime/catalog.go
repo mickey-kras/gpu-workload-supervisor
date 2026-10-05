@@ -72,7 +72,16 @@ func (m *SystemdManager) healthyCatalog(ctx context.Context, id control.Workload
 		return nil
 	}
 	p, _ := m.config.Catalog.Profile(id)
-	return m.getHealthy(ctx, p.HealthURL)
+	if err := m.verifyNativeBinding(ctx, p); err != nil {
+		return err
+	}
+	if err := m.getHealthy(ctx, p.HealthURL); err != nil {
+		return err
+	}
+	if p.NativeModel != nil {
+		return m.nativeReady(ctx, *p.NativeModel)
+	}
+	return nil
 }
 func (m *SystemdManager) stopCatalog(ctx context.Context, id control.Workload) error {
 	p, ok := m.config.Catalog.Profile(id)

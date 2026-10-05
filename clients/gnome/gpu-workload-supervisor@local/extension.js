@@ -62,7 +62,7 @@ export default class GPUControl extends Extension {
         this._refresh = this._toggle.menu.addAction('Refresh', () =>
             this._call('status'),
         );
-        this._setup = this._toggle.menu.addAction('Setup…', () => {
+        this._setup = this._toggle.menu.addAction('Manage workloads…', () => {
             Gio.DesktopAppInfo.new(
                 'gpu-workload-supervisor-setup.desktop',
             )?.launch([], globalThis.global.create_app_launch_context(0, -1));
