@@ -1,0 +1,99 @@
+package setup
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestDraftsPersistOutsideCatalogAndRejectStaleWrite(t *testing.T) {
+	home := t.TempDir()
+	first, err := ReadDrafts(home)
+	if err != nil || len(first.Drafts) != 0 {
+		t.Fatalf("initial: %+v %v", first, err)
+	}
+	request := DraftRequest{Version: 1, Drafts: []Draft{{ID: "draft-one", Label: "My model", App: "ollama", Model: "model-one"}}}
+	saved, err := SaveDrafts(home, request)
+	if err != nil || saved.Revision == "" {
+		t.Fatalf("save: %+v %v", saved, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config/gpu-workload-supervisor/catalog.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("draft created catalog")
+	}
+	if _, err := SaveDrafts(home, request); err == nil {
+		t.Fatal("accepted stale draft revision")
+	}
+	request.ExpectedRevision = saved.Revision
+	request.Drafts = nil
+	if _, err := SaveDrafts(home, request); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDraftRejectsUnsupportedAppsAndConflictingLocations(t *testing.T) {
+	for _, draft := range []Draft{{ID: "d", Label: "D", App: "other"}, {ID: "d", Label: "D", App: "ollama", Endpoint: "http://localhost:1", Reference: "/file", ReferenceKind: "model-file"}} {
+		if _, err := SaveDrafts(t.TempDir(), DraftRequest{Version: 1, Drafts: []Draft{draft}}); err == nil {
+			t.Fatal("invalid draft accepted")
+		}
+	}
+}
+
+func TestDraftValidationAndCorruptStorage(t *testing.T) {
+	valid := Draft{ID: "d", Label: "D", App: "llama.cpp", Reference: "/models/a.gguf", ReferenceKind: "model-file"}
+	if err := validateDrafts(1, []Draft{valid}); err != nil {
+		t.Fatal(err)
+	}
+	mutations := []func(*Draft){
+		func(d *Draft) { d.ID = "" }, func(d *Draft) { d.Label = "" }, func(d *Draft) { d.App = "bad" },
+		func(d *Draft) { d.Reference = "relative" }, func(d *Draft) { d.ReferenceKind = "bad" },
+		func(d *Draft) { d.Reference = "" }, func(d *Draft) { d.Endpoint = strings.Repeat("x", 2049); d.Reference = ""; d.ReferenceKind = "" },
+		func(d *Draft) { d.App = "comfyui"; d.Model = "model" },
+	}
+	for _, mutate := range mutations {
+		d := valid
+		mutate(&d)
+		if err := validateDrafts(1, []Draft{d}); err == nil {
+			t.Fatalf("accepted %+v", d)
+		}
+	}
+	if err := validateDrafts(1, []Draft{valid, valid}); err == nil {
+		t.Fatal("duplicate accepted")
+	}
+	if err := validateDrafts(2, nil); err == nil {
+		t.Fatal("version accepted")
+	}
+	home := t.TempDir()
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	if err := mkdirTrusted(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, data := range []string{"invalid", `{"version":2}`} {
+		if err := os.WriteFile(filepath.Join(root, "drafts.json"), []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ReadDrafts(home); err == nil {
+			t.Fatal("corrupt accepted")
+		}
+		if _, err := SaveDrafts(home, DraftRequest{Version: 1}); err == nil {
+			t.Fatal("corrupt overwritten")
+		}
+	}
+}
+
+func TestDraftBindingsRemainUntrustedAndRoundTrip(t *testing.T) {
+	binding := &DraftBinding{Unit: "existing.service", Cgroup: "/scope", HealthURL: "http://127.0.0.1:1234", Instance: "runtime", Model: "chosen", LaunchFile: "/trusted/model.service"}
+	draft := Draft{ID: "d", Label: "Draft", App: "ollama", Binding: binding}
+	result, err := SaveDrafts(t.TempDir(), DraftRequest{Version: 1, Drafts: []Draft{draft}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Drafts[0].Binding == nil || *result.Drafts[0].Binding != *binding {
+		t.Fatalf("lost binding: %+v", result)
+	}
+	draft.Binding.LaunchFile = strings.Repeat("x", 4097)
+	if err := validateDrafts(1, []Draft{draft}); err == nil {
+		t.Fatal("oversized binding accepted")
+	}
+}
