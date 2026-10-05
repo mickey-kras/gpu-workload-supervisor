@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 	"golang.org/x/sys/unix"
 	"io"
 	"os"
@@ -89,14 +90,6 @@ func openDirectoryChain(path string, uid int) (int, error) {
 	}
 	return fd, nil
 }
-func loadProfileAt(home string, uid int) (Profile, error) {
-	var p Profile
-	fd, e := unix.Open(home, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-	if e != nil {
-		return p, e
-	}
-	return loadProfileFD(fd, uid)
-}
 func loadProfileFD(fd, uid int) (Profile, error) {
 	var p Profile
 	var e error
@@ -135,7 +128,7 @@ func loadProfileFD(fd, uid int) (Profile, error) {
 	}
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
-	if !uniqueObject(json.NewDecoder(bytes.NewReader(b))) || d.Decode(&p) != nil || d.Decode(new(any)) != io.EOF {
+	if strictjson.Check(json.NewDecoder(bytes.NewReader(b))) != nil || d.Decode(&p) != nil || d.Decode(new(any)) != io.EOF {
 		return p, errors.New("invalid profile JSON")
 	}
 	return p, ValidateProfile(p)

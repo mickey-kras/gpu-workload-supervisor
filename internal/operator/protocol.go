@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 	"io"
 	"strconv"
 	"time"
@@ -84,46 +85,9 @@ func token(s string, max int) bool {
 }
 func workloadID(s string) bool { return s == "idle" || control.ValidWorkloadID(control.Workload(s)) }
 
-// uniqueObject rejects duplicate keys rather than accepting encoding/json's last value.
-func uniqueObject(d *json.Decoder) bool {
-	tok, e := d.Token()
-	if e != nil {
-		return false
-	}
-	delim, ok := tok.(json.Delim)
-	if !ok || delim != '{' {
-		return false
-	}
-	seen := map[string]bool{}
-	for d.More() {
-		if !uniqueMember(d, seen) {
-			return false
-		}
-	}
-	_, e = d.Token()
-	return e == nil
-}
-
-func uniqueMember(d *json.Decoder, seen map[string]bool) bool {
-	k, err := d.Token()
-	if err != nil {
-		return false
-	}
-	s, ok := k.(string)
-	if !ok || seen[s] {
-		return false
-	}
-	seen[s] = true
-	var raw json.RawMessage
-	if d.Decode(&raw) != nil {
-		return false
-	}
-	return len(raw) == 0 || raw[0] != '{' || uniqueObject(json.NewDecoder(bytes.NewReader(raw)))
-}
-
 func Decode(body []byte) (Request, Code) {
 	var r Request
-	if len(body) > MaxRequestBytes || !uniqueObject(json.NewDecoder(bytes.NewReader(body))) {
+	if len(body) > MaxRequestBytes || strictjson.Check(json.NewDecoder(bytes.NewReader(body))) != nil {
 		return r, InvalidRequest
 	}
 	d := json.NewDecoder(bytes.NewReader(body))
