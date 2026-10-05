@@ -30,16 +30,11 @@ A lease fence combines a store-incarnation UUID with a monotonic epoch. A fresh 
 
 SQLite uses WAL mode, full synchronous writes, foreign keys, and one database connection. Transition side effects are recorded as intent and observation events.
 
-## External control and clients
+## Clients
 
-The transport-neutral [external control contract](external-control.md) lets
-authenticated, policy-limited automation inspect state and conditionally request
-an approved supervisor workload. It provides no listener or deployment exposure.
-Broker workflows and execution/completion remain subject to the proxy contract.
-
-The [dashboard and local desktop client plan](CLIENTS.md) records future
-packaging, authority boundaries, and mandatory acceptance gates. It adds no
-running client; both clients remain deferred and outside initial deployment.
+The shipped local client is the GNOME Shell extension in `clients/gnome/`,
+packaged per [desktop installation](DESKTOP.md); its contract is in
+[CLIENTS.md](CLIENTS.md). Browser automation is not implemented.
 
 
 ## Updating the overview
