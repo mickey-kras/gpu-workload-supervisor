@@ -12,15 +12,43 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 )
 
+// seedCatalog durably accepts a two-workload catalog through the configure
+// command, as every runtime command now requires an accepted catalog.
+func seedCatalog(t *testing.T, statePath string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "catalog.json")
+	raw := `{"version":1,"profiles":[` +
+		`{"id":"text","label":"Text","adapter":"systemd","unit":"text.service","cgroup":"/workloads/text.service","healthURL":"http://127.0.0.1:1/health"},` +
+		`{"id":"media","label":"Media","adapter":"systemd","unit":"media.service","cgroup":"/workloads/media.service","healthURL":"http://127.0.0.1:1/"}]}`
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previousArgs, previousStdout := os.Args, os.Stdout
+	defer func() { os.Args, os.Stdout = previousArgs, previousStdout }()
+	out, err := os.CreateTemp(dir, "configure-output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	os.Args, os.Stdout = []string{"gpu-mode", "-state", statePath, "-catalog", path, "configure"}, out
+	if err := run(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCLIRejectsMissingConfigurationAndUnknownCommand(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		args []string
 		want string
 	}{
-		{"invalid flag", []string{"gpu-mode", "-media-stop-mode", "unload", "-unknown"}, "flag provided but not defined"},
+		{"invalid flag", []string{"gpu-mode", "-unknown"}, "flag provided but not defined"},
 		{"missing command", []string{"gpu-mode"}, "usage:"},
-		{"missing runtime config", []string{"gpu-mode", "-media-stop-mode", "unload", "status"}, "runtime units"},
+		{"missing accepted catalog", []string{"gpu-mode", "-state", filepath.Join(t.TempDir(), "state.db"), "status"}, "no catalog has been accepted"},
+		{"configure missing catalog", []string{"gpu-mode", "-state", filepath.Join(t.TempDir(), "state.db"), "configure"}, "configure requires -catalog"},
+		{"verify-host missing catalog", []string{"gpu-mode", "verify-host"}, "verify-host requires -catalog"},
+		{"catalog rejected for runtime command", []string{"gpu-mode", "-state", filepath.Join(t.TempDir(), "state.db"), "-catalog", filepath.Join(t.TempDir(), "catalog.json"), "status"}, "-catalog is only accepted"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			previous := os.Args
@@ -35,14 +63,11 @@ func TestCLIRejectsMissingConfigurationAndUnknownCommand(t *testing.T) {
 
 func TestCLIStatusFailsClosedWhenTrustedProbeCannotObserveRuntime(t *testing.T) {
 	dir := t.TempDir()
-	probe := "/usr/bin/true"
 	previousArgs, previousStdout := os.Args, os.Stdout
 	t.Cleanup(func() { os.Args, os.Stdout = previousArgs, previousStdout })
 	statePath := filepath.Join(dir, "state.db")
-	args := []string{"gpu-mode", "-media-stop-mode", "unload", "-state", statePath, "-text-unit", "text.service",
-		"-media-unit", "media.service", "-text-health-url", "http://127.0.0.1:1/health",
-		"-media-health-url", "http://127.0.0.1:1/", "-media-release-url", "http://127.0.0.1:1/free",
-		"-text-cgroup", "/text.service", "-media-cgroup", "/media.service", "-nvidia-smi", probe, "-systemctl", probe}
+	seedCatalog(t, statePath)
+	args := []string{"gpu-mode", "-state", statePath, "-systemctl", "/usr/bin/true"}
 	read, write, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -76,30 +101,14 @@ func TestCLIStatusFailsClosedWhenTrustedProbeCannotObserveRuntime(t *testing.T) 
 	}
 }
 
-func TestDefaultStatePathUsesXDGDirectory(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("XDG_STATE_HOME", root)
-	if got, want := defaultStatePath(), filepath.Join(root, "gpu-workload-supervisor", "state.db"); got != want {
-		t.Fatalf("default path = %q, want %q", got, want)
-	}
-	t.Setenv("XDG_STATE_HOME", "")
-	if got := defaultStatePath(); !strings.HasSuffix(got, filepath.Join(".local", "state", "gpu-workload-supervisor", "state.db")) {
-		t.Fatalf("home default path = %q", got)
-	}
-}
-
 func TestCLICommandsFailClosedWhenSystemdCannotBeObserved(t *testing.T) {
 	previousArgs, previousStdout := os.Args, os.Stdout
 	t.Cleanup(func() { os.Args, os.Stdout = previousArgs, previousStdout })
 	for _, command := range []string{"reconcile", "recover", "text", "media", "idle", "take-control", "user-switch", "return-control", "recover-user"} {
 		t.Run(command, func(t *testing.T) {
-			args := []string{"gpu-mode", "-media-stop-mode", "unload", "-state", filepath.Join(t.TempDir(), "state.db"),
-				"-text-unit", "text.service", "-media-unit", "media.service",
-				"-text-health-url", "http://127.0.0.1:1/health",
-				"-media-health-url", "http://127.0.0.1:1/",
-				"-media-release-url", "http://127.0.0.1:1/free",
-				"-text-cgroup", "/text.service", "-media-cgroup", "/media.service", "-nvidia-smi", "/usr/bin/true",
-				"-systemctl", "/usr/bin/true"}
+			statePath := filepath.Join(t.TempDir(), "state.db")
+			seedCatalog(t, statePath)
+			args := []string{"gpu-mode", "-state", statePath, "-systemctl", "/usr/bin/true"}
 			if command == "take-control" || command == "user-switch" || command == "return-control" || command == "recover-user" {
 				args = append(args, "-target", "text")
 			}
@@ -130,13 +139,9 @@ func TestCLICommandsFailClosedWhenSystemdCannotBeObserved(t *testing.T) {
 func TestCLIRejectsInvalidControllerTimeout(t *testing.T) {
 	previousArgs := os.Args
 	t.Cleanup(func() { os.Args = previousArgs })
-	os.Args = []string{"gpu-mode", "-media-stop-mode", "unload", "-state", filepath.Join(t.TempDir(), "state.db"),
-		"-text-unit", "text.service", "-media-unit", "media.service",
-		"-text-health-url", "http://127.0.0.1:1/health",
-		"-media-health-url", "http://127.0.0.1:1/",
-		"-media-release-url", "http://127.0.0.1:1/free",
-		"-text-cgroup", "/text.service", "-media-cgroup", "/media.service", "-nvidia-smi", "/usr/bin/true",
-		"-systemctl", "/usr/bin/true", "-action-timeout", "0s", "status"}
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	seedCatalog(t, statePath)
+	os.Args = []string{"gpu-mode", "-state", statePath, "-systemctl", "/usr/bin/true", "-action-timeout", "0s", "status"}
 	if err := run(); err == nil || !strings.Contains(err.Error(), "timeouts") {
 		t.Fatalf("invalid controller timeout = %v", err)
 	}
@@ -147,13 +152,8 @@ func TestCLIWorkResolutionRequiresReasonAndStoppedProxies(t *testing.T) {
 	previousStdout := os.Stdout
 	t.Cleanup(func() { os.Args, os.Stdout = previousArgs, previousStdout })
 	statePath := filepath.Join(t.TempDir(), "state.db")
-	args := []string{"gpu-mode", "-media-stop-mode", "unload", "-state", statePath,
-		"-text-unit", "text.service", "-media-unit", "media.service",
-		"-text-health-url", "http://127.0.0.1:1/health",
-		"-media-health-url", "http://127.0.0.1:1/",
-		"-media-release-url", "http://127.0.0.1:1/free",
-		"-text-cgroup", "/text.service", "-media-cgroup", "/media.service", "-nvidia-smi", "/usr/bin/true",
-		"-systemctl", "/usr/bin/true"}
+	seedCatalog(t, statePath)
+	args := []string{"gpu-mode", "-state", statePath, "-systemctl", "/usr/bin/true"}
 	os.Args = append(append([]string{}, args...), "resolve-work")
 	if err := run(); err == nil || !strings.Contains(err.Error(), "requires -resolve-reason") {
 		t.Fatalf("missing reason error = %v", err)
@@ -168,9 +168,6 @@ func TestCLIWorkResolutionRequiresReasonAndStoppedProxies(t *testing.T) {
 		os.Args = append(append([]string{}, args...), "-resolve-reason", tc.reason, "resolve-work")
 		if err := run(); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("reason %q: error = %v, want %q", tc.reason, err, tc.want)
-		}
-		if _, err := os.Stat(statePath); !os.IsNotExist(err) {
-			t.Fatalf("invalid reason opened state store: %v", err)
 		}
 	}
 	proxyLock, err := lock.AcquireShared(statePath + ".proxy.lock")
@@ -214,7 +211,7 @@ func TestOwnershipCLIRequiresExplicitValidTargetBeforeOpeningStore(t *testing.T)
 	for _, command := range []string{"take-control", "user-switch", "return-control", "recover-user"} {
 		for _, target := range []string{"", "unknown", "INVALID"} {
 			statePath := filepath.Join(t.TempDir(), "state.db")
-			os.Args = []string{"gpu-mode", "-media-stop-mode", "unload", "-state", statePath, "-target", target, command}
+			os.Args = []string{"gpu-mode", "-state", statePath, "-target", target, command}
 			if err := run(); err == nil || !strings.Contains(err.Error(), "requires -target") {
 				t.Fatalf("%s %q: %v", command, target, err)
 			}
@@ -223,7 +220,7 @@ func TestOwnershipCLIRequiresExplicitValidTargetBeforeOpeningStore(t *testing.T)
 			}
 		}
 	}
-	os.Args = []string{"gpu-mode", "-media-stop-mode", "unload", "-target", "text", "status"}
+	os.Args = []string{"gpu-mode", "-target", "text", "status"}
 	if err := run(); err == nil || !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("unused target accepted: %v", err)
 	}
@@ -236,28 +233,12 @@ func TestOwnershipCLIRequiresExplicitValidTargetBeforeOpeningStore(t *testing.T)
 	}
 }
 
-func TestCLIRejectsInvalidMediaStopModeBeforeCreatingState(t *testing.T) {
+func TestCLIServiceStopAdapterDoesNotRequireReleaseEndpoint(t *testing.T) {
 	previous := os.Args
 	t.Cleanup(func() { os.Args = previous })
-	for _, mode := range []string{"", "STOP-SERVICE", "stop"} {
-		path := filepath.Join(t.TempDir(), "state.db")
-		os.Args = []string{"gpu-mode", "-state", path, "-media-stop-mode", mode, "status"}
-		if err := run(); err == nil || !strings.Contains(err.Error(), "media stop mode") {
-			t.Fatalf("mode %q: %v", mode, err)
-		}
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("state created: %v", err)
-		}
-		if _, err := os.Stat(path + ".lock"); !os.IsNotExist(err) {
-			t.Fatalf("lock created: %v", err)
-		}
-	}
-}
-
-func TestCLIStopServiceDoesNotRequireReleaseEndpoint(t *testing.T) {
-	previous := os.Args
-	t.Cleanup(func() { os.Args = previous })
-	os.Args = []string{"gpu-mode", "-state", filepath.Join(t.TempDir(), "state.db"), "-media-stop-mode", "stop-service", "-text-unit", "text.service", "-media-unit", "media.service", "-text-health-url", "http://127.0.0.1:1/health", "-media-health-url", "http://127.0.0.1:1/health", "-text-cgroup", "/text.service", "-media-cgroup", "/media.service", "-systemctl", "/usr/bin/true", "-nvidia-smi", "/usr/bin/true", "status"}
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	seedCatalog(t, statePath)
+	os.Args = []string{"gpu-mode", "-state", statePath, "-systemctl", "/usr/bin/true", "status"}
 	if err := run(); err == nil || !strings.Contains(err.Error(), "load state") {
 		t.Fatalf("expected observation failure, got %v", err)
 	}
@@ -278,12 +259,18 @@ func TestCLILegacyReleaseThresholdRejectedEvenWhenZero(t *testing.T) {
 	}
 }
 
-func TestOmittedMediaStopPolicyIsExplicitError(t *testing.T) {
+func TestRemovedLegacyWorkloadFlagsAreRejectedBeforeOpeningState(t *testing.T) {
 	previous := os.Args
-	defer func() { os.Args = previous }()
-	os.Args = []string{"gpu-mode", "status"}
-	if err := run(); err == nil || !strings.Contains(err.Error(), "media-stop-mode") {
-		t.Fatalf("omitted policy: %v", err)
+	t.Cleanup(func() { os.Args = previous })
+	for _, flag := range []string{"-text-unit", "-media-unit", "-text-health-url", "-media-health-url", "-media-stop-mode", "-media-release-url", "-text-cgroup", "-media-cgroup", "-text-required-mib", "-media-required-mib", "-configured"} {
+		path := filepath.Join(t.TempDir(), "state.db")
+		os.Args = []string{"gpu-mode", "-state", path, flag, "x", "status"}
+		if err := run(); err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+			t.Fatalf("%s: %v", flag, err)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("%s created state: %v", flag, err)
+		}
 	}
 }
 

@@ -24,7 +24,11 @@ func verifyCgroup2(fd int) error {
 	if err := unix.Fstatfs(fd, &stat); err != nil {
 		return err
 	}
-	if stat.Type != unix.CGROUP2_SUPER_MAGIC {
+	return requireCgroup2(stat.Type)
+}
+
+func requireCgroup2(magic int64) error {
+	if magic != unix.CGROUP2_SUPER_MAGIC {
 		return errors.New("release verification requires the unified cgroup v2 hierarchy")
 	}
 	return nil
@@ -33,17 +37,23 @@ func verifyCgroup2(fd int) error {
 // Only the host unified hierarchy is supported. A subtree mount can have the
 // right filesystem type while making a real systemd ControlGroup look absent.
 func verifyUnifiedHierarchy(fd int) error {
-	if err := verifyCgroup2(fd); err != nil {
+	return verifyHierarchy(fd, verifyCgroup2, selfMountinfo)
+}
+
+func selfMountinfo() (string, error) {
+	mounts, err := os.ReadFile("/proc/self/mountinfo")
+	return string(mounts), err
+}
+
+func verifyHierarchy(fd int, verifyFS func(int) error, mountinfo func() (string, error)) error {
+	if err := verifyFS(fd); err != nil {
 		return err
 	}
-	mounts, err := os.ReadFile("/proc/self/mountinfo")
+	mounts, err := mountinfo()
 	if err != nil {
 		return err
 	}
-	if err := verifyCgroupMount(string(mounts)); err != nil {
-		return err
-	}
-	return nil
+	return verifyCgroupMount(mounts)
 }
 
 func verifyCgroupMount(mounts string) error {

@@ -60,9 +60,6 @@ func readNativeLaunch(path string) ([]byte, error) {
 	}
 	return b, nil
 }
-func verifyNativeLaunch(n control.NativeModel) error {
-	return verifyNativeLaunchWithValidator(n, validateNativeExecutable)
-}
 func verifyNativeLaunchWithValidator(n control.NativeModel, validate func(string) error) error {
 	b, err := readNativeLaunch(n.LaunchFile)
 	if err != nil {

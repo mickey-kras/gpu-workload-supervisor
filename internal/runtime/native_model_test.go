@@ -53,7 +53,7 @@ func TestNativeLaunchDrift(t *testing.T) {
 	if err := os.WriteFile(path, []byte("other"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if verifyNativeLaunch(n) == nil {
+	if verifyNativeLaunchWithValidator(n, validateNativeExecutable) == nil {
 		t.Fatal("changed launch file accepted")
 	}
 }
@@ -190,7 +190,7 @@ func TestNativeReadinessMalformedAndCanceled(t *testing.T) {
 }
 func TestNativeLaunchMissingDirectoryAndOversize(t *testing.T) {
 	for _, path := range []string{filepath.Join(t.TempDir(), "missing"), t.TempDir()} {
-		if verifyNativeLaunch(control.NativeModel{LaunchFile: path}) == nil {
+		if verifyNativeLaunchWithValidator(control.NativeModel{LaunchFile: path}, validateNativeExecutable) == nil {
 			t.Fatal("invalid launch file accepted")
 		}
 	}
@@ -198,7 +198,7 @@ func TestNativeLaunchMissingDirectoryAndOversize(t *testing.T) {
 	if err := os.WriteFile(path, make([]byte, 1<<20+1), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if verifyNativeLaunch(control.NativeModel{LaunchFile: path}) == nil {
+	if verifyNativeLaunchWithValidator(control.NativeModel{LaunchFile: path}, validateNativeExecutable) == nil {
 		t.Fatal("oversized launch accepted")
 	}
 }
@@ -208,7 +208,9 @@ func TestNativeLaunchFIFOIsRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- verifyNativeLaunch(control.NativeModel{LaunchFile: path}) }()
+	go func() {
+		done <- verifyNativeLaunchWithValidator(control.NativeModel{LaunchFile: path}, validateNativeExecutable)
+	}()
 	select {
 	case err := <-done:
 		if err == nil {

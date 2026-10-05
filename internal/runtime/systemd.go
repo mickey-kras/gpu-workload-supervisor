@@ -97,7 +97,7 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 	if err := config.prepareWorkloads(); err != nil {
 		return nil, err
 	}
-	if config.NvidiaSMIPath != "" || config.TextRequiredMiB != 0 || config.MediaRequiredMiB != 0 {
+	if config.NvidiaSMIPath != "" || config.measuresCapacity() {
 		resolved, err := validateExecutable(config.NvidiaSMIPath)
 		if err != nil {
 			return nil, fmt.Errorf("nvidia-smi: %w", err)
@@ -322,7 +322,7 @@ func (m *SystemdManager) releasedUnit(ctx context.Context, unit, group string, a
 		return err
 	}
 	if allowUnload && state.active == "active" && state.sub == "running" {
-		return fmt.Errorf("%w: %s requires runtime-specific proof that work is drained and models/resources are released; HTTP success is insufficient; use -media-stop-mode stop-service or stop the unit explicitly", ErrUnloadUnverified, unit)
+		return fmt.Errorf("%w: %s requires runtime-specific proof that work is drained and models/resources are released; HTTP success is insufficient; select the stop-service policy or stop the unit explicitly", ErrUnloadUnverified, unit)
 	}
 	if state.active != "inactive" || state.sub != "dead" {
 		return fmt.Errorf("%s is not stopped", unit)
@@ -643,9 +643,18 @@ func (config *SystemdConfig) prepareWorkloads() error {
 		if p.RequiredMiB > ^uint64(0)-config.CapacityHeadroomMiB {
 			return errors.New("capacity requirement plus headroom overflows")
 		}
-		if p.RequiredMiB != 0 {
-			config.TextRequiredMiB = p.RequiredMiB
-		}
 	}
 	return nil
+}
+
+func (config SystemdConfig) measuresCapacity() bool {
+	if config.Catalog != nil {
+		for _, p := range config.Catalog.Profiles {
+			if p.RequiredMiB != 0 {
+				return true
+			}
+		}
+		return false
+	}
+	return config.TextRequiredMiB != 0 || config.MediaRequiredMiB != 0
 }

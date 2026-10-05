@@ -3,8 +3,21 @@ package deployment
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestDefaultStatePathUsesXDGDirectory(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	if got, want := DefaultStatePath(), filepath.Join(root, "gpu-workload-supervisor", "state.db"); got != want {
+		t.Fatalf("default path = %q, want %q", got, want)
+	}
+	t.Setenv("XDG_STATE_HOME", "")
+	if got := DefaultStatePath(); !strings.HasSuffix(got, filepath.Join(".local", "state", "gpu-workload-supervisor", "state.db")) {
+		t.Fatalf("home default path = %q", got)
+	}
+}
 
 func TestActivationCheck(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")

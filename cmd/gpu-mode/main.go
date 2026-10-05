@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -42,8 +41,6 @@ func run() error {
 
 type modeExecution struct {
 	catalogPath, catalogRevision                                                              string
-	configured                                                                                bool
-	legacyConfig                                                                              bool
 	statePath, resolveReason, target                                                          string
 	auditBatch                                                                                int
 	actionTimeout, drainTimeout, verifyTimeout, cleanupTimeout, finalizeTimeout, pollInterval time.Duration
@@ -51,23 +48,12 @@ type modeExecution struct {
 
 func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error)) error {
 	flags := flag.NewFlagSet("gpu-mode", flag.ContinueOnError)
-	catalogPath := flags.String("catalog", "", "catalog JSON for explicit configure command")
+	catalogPath := flags.String("catalog", "", "catalog JSON for configure and verify-host")
 	catalogRevision := flags.String("configuration-revision", "", "expected accepted catalog revision for configure")
-	configured := flags.Bool("configured", false, "use the durably accepted workload catalog")
 	workload := flags.String("workload", "", "configured workload ID for switch")
-	statePath := flags.String("state", defaultStatePath(), "SQLite state path")
-	textUnit := flags.String("text-unit", "", "systemd user unit for text inference")
-	mediaUnit := flags.String("media-unit", "", "systemd user unit for the media UI")
-	textHealth := flags.String("text-health-url", "", "loopback text runtime health URL")
-	mediaHealth := flags.String("media-health-url", "", "loopback media runtime health URL")
-	mediaStopMode := flags.String("media-stop-mode", "", "media stop policy: unload or stop-service")
-	mediaRelease := flags.String("media-release-url", "", "loopback media model release URL")
+	statePath := flags.String("state", deployment.DefaultStatePath(), "SQLite state path")
 	gpuIndex := flags.Int("gpu-index", 0, "NVIDIA GPU index")
-	flags.Uint64("release-max-used-mib", 0, "removed: configure workload cgroups and optional target capacity")
-	textCgroup := flags.String("text-cgroup", "", "text unit cgroup path within /sys/fs/cgroup")
-	mediaCgroup := flags.String("media-cgroup", "", "media unit cgroup path within /sys/fs/cgroup")
-	textRequired := flags.Uint64("text-required-mib", 0, "measured text VRAM requirement; zero disables its capacity check")
-	mediaRequired := flags.Uint64("media-required-mib", 0, "measured media VRAM requirement; zero disables its capacity check")
+	flags.Uint64("release-max-used-mib", 0, "removed: configure workload cgroups and optional target capacity in the catalog")
 	headroom := flags.Uint64("capacity-headroom-mib", 0, "additional VRAM headroom for configured target capacity checks")
 	nvidiaSMIPath := flags.String("nvidia-smi", "", "absolute path to the trusted nvidia-smi executable")
 	systemctlPath := flags.String("systemctl", "", "absolute path to the trusted systemctl executable")
@@ -85,12 +71,10 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
-	legacyConfig, err := validateCatalogFlags(flags, *workload, target, *configured, *catalogPath)
-	if err != nil {
+	if err := validateCatalogFlags(flags, *workload, target, *catalogPath); err != nil {
 		return err
 	}
-	stopMode, err := validateCommandFlags(flags, *mediaStopMode, *target)
-	if err != nil {
+	if err := validateCommandFlags(flags, *target); err != nil {
 		return err
 	}
 	command := flags.Arg(0)
@@ -99,24 +83,20 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 		return err
 	}
 	runtimeConfig := gpuruntime.SystemdConfig{
-		MediaStopMode: stopMode,
-		TextUnit:      *textUnit, MediaUnit: *mediaUnit,
-		TextHealthURL: *textHealth, MediaHealthURL: *mediaHealth,
-		MediaReleaseURL: *mediaRelease, HealthTimeout: *healthTimeout,
-		GPUIndex: *gpuIndex, TextCgroup: *textCgroup, MediaCgroup: *mediaCgroup,
-		TextRequiredMiB: *textRequired, MediaRequiredMiB: *mediaRequired, CapacityHeadroomMiB: *headroom,
+		HealthTimeout: *healthTimeout,
+		GPUIndex:      *gpuIndex, CapacityHeadroomMiB: *headroom,
 		NvidiaSMIPath: *nvidiaSMIPath, SystemctlPath: *systemctlPath,
 	}
-	if !*configured && command != "configure" {
-		if err := validateRuntimeFlags(command, runtimeConfig); err != nil {
+	if command == "verify-host" {
+		catalog, err := decodeCatalogFile(*catalogPath)
+		if err != nil {
 			return err
 		}
-	}
-	if command == "verify-host" {
+		runtimeConfig.Catalog = &catalog
 		return verifyHost(runtimeConfig, *actionTimeout, newRuntime)
 	}
 	return executeWithState(newRuntime, runtimeConfig, command, auditCutoff, modeExecution{
-		catalogPath: *catalogPath, catalogRevision: *catalogRevision, configured: *configured, legacyConfig: legacyConfig,
+		catalogPath: *catalogPath, catalogRevision: *catalogRevision,
 		statePath: *statePath, resolveReason: *resolveReason, target: *target,
 		auditBatch: *auditBatch, actionTimeout: *actionTimeout, drainTimeout: *drainTimeout,
 		verifyTimeout: *verifyTimeout, cleanupTimeout: *cleanupTimeout,
@@ -124,29 +104,27 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 	})
 }
 
-func validateCatalogFlags(flags *flag.FlagSet, workload string, target *string, configured bool, catalogPath string) (bool, error) {
+// The accepted catalog is the only workload configuration model: configure and
+// verify-host take a candidate file, every other runtime command pins the
+// durably accepted catalog from state.
+func validateCatalogFlags(flags *flag.FlagSet, workload string, target *string, catalogPath string) error {
 	if workload != "" {
 		if *target != "" || flags.Arg(0) != "switch" {
-			return false, errors.New("-workload requires switch and conflicts with -target")
+			return errors.New("-workload requires switch and conflicts with -target")
 		}
 		*target = workload
 	}
-	legacyConfig := false
-	flags.Visit(func(f *flag.Flag) {
-		if strings.HasPrefix(f.Name, "text-") || strings.HasPrefix(f.Name, "media-") {
-			legacyConfig = true
+	switch flags.Arg(0) {
+	case "configure", "verify-host":
+		if catalogPath == "" {
+			return fmt.Errorf("%s requires -catalog", flags.Arg(0))
 		}
-	})
-	if (configured || catalogPath != "") && legacyConfig {
-		return false, errors.New("catalog configuration conflicts with legacy workload flags")
+	default:
+		if catalogPath != "" {
+			return errors.New("-catalog is only accepted by configure and verify-host; runtime commands use the accepted catalog")
+		}
 	}
-	if catalogPath != "" && flags.Arg(0) != "configure" {
-		return false, errors.New("-catalog is only accepted by configure; use -configured for runtime commands")
-	}
-	if flags.Arg(0) == "configure" && catalogPath == "" {
-		return false, errors.New("configure requires -catalog")
-	}
-	return legacyConfig, nil
+	return nil
 }
 
 func executeWithState(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error), runtimeConfig gpuruntime.SystemdConfig, command string, auditCutoff time.Time, options modeExecution) error {
@@ -188,13 +166,11 @@ func executeWithState(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Mana
 	if command == "configure" {
 		return configureCatalog(ctx, stateStore, options)
 	}
-	pinned, err := pinCatalog(snapshot, options)
+	pinned, err := pinCatalog(snapshot)
 	if err != nil {
 		return err
 	}
-	if pinned != nil {
-		runtimeConfig.Catalog = &pinned.Catalog
-	}
+	runtimeConfig.Catalog = &pinned.Catalog
 	runtimeManager, err := newRuntime(runtimeConfig)
 	if err != nil {
 		return err
@@ -212,7 +188,7 @@ func executeWithState(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Mana
 	return executeCommand(ctx, controller, command, options.resolveReason, control.Workload(options.target))
 }
 
-func validateCommandFlags(flags *flag.FlagSet, mediaStopMode, target string) (gpuruntime.MediaStopMode, error) {
+func validateCommandFlags(flags *flag.FlagSet, target string) error {
 	legacyRelease := false
 	auditFlag := false
 	flags.Visit(func(value *flag.Flag) {
@@ -224,38 +200,15 @@ func validateCommandFlags(flags *flag.FlagSet, mediaStopMode, target string) (gp
 		}
 	})
 	if legacyRelease {
-		return "", errors.New("-release-max-used-mib has been removed: remove it and configure -text-cgroup and -media-cgroup; optional target capacity uses -text-required-mib/-media-required-mib plus -capacity-headroom-mib")
+		return errors.New("-release-max-used-mib has been removed: configure workload cgroups in the catalog; optional target capacity uses profile requiredMiB plus -capacity-headroom-mib")
 	}
 	if flags.NArg() != 1 {
-		return "", errors.New("usage: gpu-mode [flags] configure|switch|restore-state|prune-audit|verify-host|status|reconcile|recover|resolve-work|text|media|idle|take-control|user-switch|return-control|recover-user")
+		return errors.New("usage: gpu-mode [flags] configure|switch|restore-state|prune-audit|verify-host|status|reconcile|recover|resolve-work|text|media|idle|take-control|user-switch|return-control|recover-user")
 	}
 	if auditFlag && flags.Arg(0) != pruneAuditCommand {
-		return "", errors.New("-audit-before and -audit-batch require prune-audit")
+		return errors.New("-audit-before and -audit-batch require prune-audit")
 	}
-	stopMode := gpuruntime.MediaStopMode(mediaStopMode)
-	configuredFlag := flags.Lookup("configured")
-	usingCatalog := configuredFlag != nil && configuredFlag.Value.String() == "true"
-	if mediaStopMode == "" && !usingCatalog && flags.Arg(0) != "configure" && flags.Arg(0) != restoreStateCommand && flags.Arg(0) != pruneAuditCommand {
-		return "", errors.New("media stop mode must not be empty: explicitly select -media-stop-mode unload or stop-service")
-	}
-	if err := stopMode.Validate(); err != nil {
-		return "", err
-	}
-	command := flags.Arg(0)
-	if err := validateTarget(command, target); err != nil {
-		return "", err
-	}
-	return stopMode, nil
-}
-
-func validateRuntimeFlags(command string, config gpuruntime.SystemdConfig) error {
-	if command == restoreStateCommand || command == pruneAuditCommand {
-		return nil
-	}
-	if config.TextUnit == "" || config.MediaUnit == "" || config.TextHealthURL == "" || config.MediaHealthURL == "" || (config.MediaStopMode != gpuruntime.MediaStopService && config.MediaReleaseURL == "") || config.TextCgroup == "" || config.MediaCgroup == "" || config.SystemctlPath == "" {
-		return errors.New("runtime units, endpoints, cgroup paths, and trusted systemctl path are required")
-	}
-	return nil
+	return validateTarget(flags.Arg(0), target)
 }
 
 func acquireProxyLifetimeLock(statePath, command, reason string) (*lock.File, error) {
@@ -333,17 +286,6 @@ func restoreState(ctx context.Context, stateStore *store.Store) error {
 	return json.NewEncoder(os.Stdout).Encode(restored)
 }
 
-func defaultStatePath() string {
-	if root := os.Getenv("XDG_STATE_HOME"); root != "" {
-		return filepath.Join(root, "gpu-workload-supervisor", "state.db")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "state.db"
-	}
-	return filepath.Join(home, ".local", "state", "gpu-workload-supervisor", "state.db")
-}
-
 func validateTarget(command, target string) error {
 	switch command {
 	case "switch", "take-control", "user-switch", "return-control", "recover-user":
@@ -358,13 +300,17 @@ func validateTarget(command, target string) error {
 	return nil
 }
 
-func configureCatalog(ctx context.Context, stateStore *store.Store, options modeExecution) error {
-	file, err := os.Open(options.catalogPath)
+func decodeCatalogFile(path string) (control.Catalog, error) {
+	file, err := os.Open(path)
 	if err != nil {
-		return err
+		return control.Catalog{}, err
 	}
 	defer file.Close()
-	catalog, err := control.DecodeCatalog(file)
+	return control.DecodeCatalog(file)
+}
+
+func configureCatalog(ctx context.Context, stateStore *store.Store, options modeExecution) error {
+	catalog, err := decodeCatalogFile(options.catalogPath)
 	if err != nil {
 		return err
 	}
@@ -375,15 +321,9 @@ func configureCatalog(ctx context.Context, stateStore *store.Store, options mode
 	return json.NewEncoder(os.Stdout).Encode(accepted)
 }
 
-func pinCatalog(snapshot control.CatalogSnapshot, options modeExecution) (*control.CatalogSnapshot, error) {
-	var pinned *control.CatalogSnapshot
-	if snapshot.Revision != "" {
-		if options.legacyConfig {
-			return nil, errors.New("legacy workload flags conflict with accepted catalog")
-		}
-		pinned = &snapshot
-	} else if options.configured {
-		return nil, errors.New("no catalog has been accepted")
+func pinCatalog(snapshot control.CatalogSnapshot) (*control.CatalogSnapshot, error) {
+	if snapshot.Revision == "" {
+		return nil, errors.New("no catalog has been accepted; run configure -catalog first")
 	}
-	return pinned, nil
+	return &snapshot, nil
 }
