@@ -136,7 +136,7 @@ func launchModels(app, output string) []ModelCandidate {
 	var aliases []string
 	for i := 1; i < len(fields); i++ {
 		flag := fields[i]
-		if (flag == "-m" || flag == "--model" || (app == "vllm" && flag == "serve")) && i+1 < len(fields) && !strings.HasPrefix(fields[i+1], "-") {
+		if ((app == "llama.cpp" && flag == "-m") || flag == "--model" || (app == "vllm" && flag == "serve")) && i+1 < len(fields) && !strings.HasPrefix(fields[i+1], "-") {
 			model = fields[i+1]
 			i++
 			continue

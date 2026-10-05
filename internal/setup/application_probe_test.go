@@ -143,7 +143,7 @@ func TestProbeOlderAndOptionalAPIs(t *testing.T) {
 	}{
 		{"llama.cpp", map[string]string{"/v1/models": `{"data":[{"id":"old-model","owned_by":"llamacpp"}]}`}, "available", "available", 1},
 		{"llama.cpp", map[string]string{}, "unsupported", "unsupported", 0},
-		{"llama.cpp", map[string]string{"/v1/models": `{"data":[]}`}, "available", "available", 0},
+		{"llama.cpp", map[string]string{"/v1/models": `{"data":[]}`}, "invalid", "candidate", 0},
 		{"llama.cpp", map[string]string{"/v1/models": `{"data":null}`}, "invalid", "candidate", 0},
 		{"llama.cpp", map[string]string{"/v1/models": `{"data":[{"id":"other","owned_by":"unknown"}]}`}, "invalid", "candidate", 0},
 		{"llama.cpp", map[string]string{"/models": `{"data":null}`}, "invalid", "candidate", 0},

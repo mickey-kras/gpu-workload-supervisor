@@ -6,6 +6,18 @@ import (
 	"strings"
 )
 
+const maxDiscoveryModels = 4096
+
+func inventoryBound(ctx context.Context, count int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if count > maxDiscoveryModels {
+		return errors.New("model inventory exceeds 4096 entries")
+	}
+	return nil
+}
+
 func (p applicationHTTP) comfy(ctx context.Context, result *ApplicationCandidate) error {
 	var body struct {
 		System *struct {
@@ -62,10 +74,16 @@ func (p applicationHTTP) ollama(ctx context.Context, result *ApplicationCandidat
 	if err := p.get(ctx, "/api/tags", &tags); err != nil {
 		return err
 	}
+	if err := inventoryBound(ctx, len(tags.Models)); err != nil {
+		return err
+	}
 	if tags.Models == nil {
 		return errors.New("missing available model inventory")
 	}
 	for _, model := range tags.Models {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !validModelID(model.id()) {
 			return errors.New("invalid model identity")
 		}
@@ -74,13 +92,25 @@ func (p applicationHTTP) ollama(ctx context.Context, result *ApplicationCandidat
 		Models []ollamaModel `json:"models"`
 	}
 	loadedKnown := p.get(ctx, "/api/ps", &ps) == nil && ps.Models != nil
+	if err := inventoryBound(ctx, len(ps.Models)); err != nil {
+		return err
+	}
+	loadedIDs := make(map[string]bool, len(ps.Models))
 	for _, model := range ps.Models {
-		if !validModelID(model.id()) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		id := model.id()
+		if !validModelID(id) || loadedIDs[id] {
 			loadedKnown = false
 		}
+		loadedIDs[id] = true
 	}
 	seen := map[string]bool{}
 	for _, model := range tags.Models {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		id := model.id()
 		if seen[id] {
 			return errors.New("duplicate model identity")
@@ -89,10 +119,8 @@ func (p applicationHTTP) ollama(ctx context.Context, result *ApplicationCandidat
 		loaded := "unknown"
 		if loadedKnown {
 			loaded = "no"
-			for _, active := range ps.Models {
-				if active.id() == id {
-					loaded = "yes"
-				}
+			if loadedIDs[id] {
+				loaded = "yes"
 			}
 		}
 		locality := "local"
@@ -134,21 +162,22 @@ func (p applicationHTTP) llama(ctx context.Context, result *ApplicationCandidate
 		if err := p.get(ctx, "/v1/models", &body); err != nil {
 			return err
 		}
-		if body.Data == nil {
-			return errors.New("missing served model identities")
-		}
-		for _, model := range body.Data {
-			if model.OwnedBy != "llamacpp" {
-				return errors.New("unrecognized llama.cpp model response")
-			}
-		}
-		return servedCandidates(body.Data, result)
+		return llamaServedCandidates(ctx, body.Data, result)
 	}
 	if body.Data == nil {
 		return errors.New("missing native model inventory")
 	}
+	if err := inventoryBound(ctx, len(body.Data)); err != nil {
+		return err
+	}
+	if len(body.Data) > 0 && body.Data[0].Status == nil {
+		return llamaServedCandidates(ctx, body.Data, result)
+	}
 	seen := map[string]bool{}
 	for _, model := range body.Data {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !validModelID(model.ID) || model.Status == nil || seen[model.ID] {
 			return errors.New("invalid native model candidate")
 		}
@@ -173,6 +202,24 @@ func (p applicationHTTP) llama(ctx context.Context, result *ApplicationCandidate
 	result.InventoryStatus = "available"
 	return nil
 }
+func llamaServedCandidates(ctx context.Context, models []servedModel, result *ApplicationCandidate) error {
+	if len(models) == 0 {
+		return errors.New("no llama.cpp identity evidence")
+	}
+	if err := inventoryBound(ctx, len(models)); err != nil {
+		return err
+	}
+	for _, model := range models {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if model.OwnedBy != "llamacpp" || model.Status != nil {
+			return errors.New("unrecognized or mixed llama.cpp serving response")
+		}
+	}
+	return servedCandidates(ctx, models, result)
+}
+
 func (p applicationHTTP) vllm(ctx context.Context, result *ApplicationCandidate) error {
 	if err := p.version(ctx, "/version", result); err != nil {
 		return err
@@ -186,20 +233,26 @@ func (p applicationHTTP) vllm(ctx context.Context, result *ApplicationCandidate)
 	if body.Data == nil {
 		return errors.New("missing serving identities")
 	}
-	return servedCandidates(body.Data, result)
+	return servedCandidates(ctx, body.Data, result)
 }
-func servedCandidates(models []servedModel, result *ApplicationCandidate) error {
+func servedCandidates(ctx context.Context, models []servedModel, result *ApplicationCandidate) error {
+	if err := inventoryBound(ctx, len(models)); err != nil {
+		return err
+	}
 	// IDs are serving aliases, not evidence of different model files. Collapse
 	// aliases only when the API explicitly identifies the same root.
 	indices := map[string]int{}
 	seen := map[string]bool{}
 	for _, model := range models {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !validModelID(model.ID) || seen[model.ID] {
 			return errors.New("invalid or duplicate serving identity")
 		}
 		seen[model.ID] = true
-		key := model.Root
-		if key == "" {
+		key := "root:" + model.Root
+		if model.Root == "" {
 			key = "alias:" + model.ID
 		}
 		if index, ok := indices[key]; ok {

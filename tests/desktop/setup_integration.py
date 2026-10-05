@@ -85,7 +85,10 @@ def main():
     run("systemctl", "--user", "stop", workload.name)
     probe = pathlib.Path("/usr/bin/gws-ci-nvidia-fixture")
     discovered = json.loads(setup("discover"))
-    assert workload.name in discovered["units"]
+    # Only supported application units are discovery candidates. Generic units
+    # remain valid when explicitly configured below.
+    assert workload.name not in discovered["units"]
+    assert not any(app.get("unit") == workload.name for app in discovered["applications"])
     request = discovered["request"]
     request["profile"]["nvidiaSMIPath"] = str(probe)
     request["catalog"]["profiles"] = [{"id": "ci-workload", "label": "CI workload",
@@ -123,7 +126,10 @@ def main():
     assert before["code"] == "ok" and before["requestId"] == "before-update", before
     assert before["status"]["activeWorkload"] == "idle"
     assert before["status"]["workloads"] == [{"id": "idle", "label": "Idle"}, {"id": "ci-workload", "label": "CI workload"}]
-    current = json.loads(setup("discover"))["request"]
+    configured = json.loads(setup("discover"))
+    assert configured["request"]["catalog"] == request["catalog"]
+    assert not any(app.get("unit") == workload.name for app in configured["applications"])
+    current = configured["request"]
     current["confirmQuiesced"] = True
     updated = copy.deepcopy(current)
     updated["catalog"]["profiles"][0]["label"] = "Updated workload"

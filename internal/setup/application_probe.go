@@ -74,7 +74,7 @@ func (r ProbeRequest) validate() error {
 	}
 	if r.Endpoint != "" {
 		u, err := url.Parse(r.Endpoint)
-		if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") || (u.Scheme != "http" && u.Scheme != "https") || r.ReferenceKind != "" {
+		if err != nil || u.User != nil || strings.ContainsAny(r.Endpoint, "?#") || (u.Path != "" && u.Path != "/") || (u.Scheme != "http" && u.Scheme != "https") || r.ReferenceKind != "" {
 			return errors.New("endpoint must be a loopback HTTP origin")
 		}
 		ip := net.ParseIP(u.Hostname())
@@ -160,6 +160,7 @@ func Probe(ctx context.Context, r ProbeRequest) (ApplicationCandidate, error) {
 		return result, ctx.Err()
 	}
 	if err != nil {
+		result.Models = []ModelCandidate{}
 		result.InventoryStatus = "invalid"
 		result.NextStep = "The application returned an invalid response; check its endpoint and version."
 		var status *probeHTTPError
@@ -248,5 +249,11 @@ func (p applicationHTTP) get(ctx context.Context, path string, destination inter
 	if len(data) > 1048576 {
 		return errors.New("discovery response exceeds 1 MiB")
 	}
-	return json.Unmarshal(data, destination)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(data, destination); err != nil {
+		return err
+	}
+	return ctx.Err()
 }
