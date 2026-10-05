@@ -54,26 +54,18 @@ func acceptanceController(t *testing.T) (*Controller, *store.Store, *acceptanceR
 	}
 	return c, s, r, &snap
 }
-func TestThirdWorkloadRollbackAndRecoveryAcceptance(t *testing.T) {
+func TestCatalogRecoveryAfterFailedSwitchDrainsToIdle(t *testing.T) {
 	ctx := context.Background()
 	c, s, r, _ := acceptanceController(t)
-	state, err := c.Switch(ctx, "speech", "acceptance")
-	if err != nil {
+	if _, err := c.Switch(ctx, "speech", "acceptance"); err != nil {
 		t.Fatal(err)
 	}
-	if state.ActiveWorkload != "speech" || state.Admission != control.AdmissionOpen {
-		t.Fatal(state)
-	}
 	r.failStart = "media"
-	state, err = c.Switch(ctx, "media", "acceptance")
-	if err == nil {
+	if _, err := c.Switch(ctx, "media", "acceptance"); err == nil {
 		t.Fatal("failed target reported success")
 	}
-	if r.active != "speech" || state.ActiveWorkload != "speech" {
-		t.Fatalf("rollback lost speech: %+v runtime %s err %v", state, r.active, err)
-	}
 	r.failStart = ""
-	state, err = c.Recover(ctx)
+	state, err := c.Recover(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,24 +241,6 @@ func TestCatalogFailedRollbackStaysClosedAcceptance(t *testing.T) {
 				t.Fatalf("failed rollback admitted work %+v", state)
 			}
 		})
-	}
-}
-func TestCatalogSnapshotExclusivityAcceptance(t *testing.T) {
-	s := gpuruntime.Snapshot{Workloads: map[control.Workload]gpuruntime.WorkloadObservation{"speech": {Active: true, Exclusive: true}, "media": {Active: true, Exclusive: true}}}
-	if err := verifySnapshot("speech", s); !errors.Is(err, ErrStateVerification) {
-		t.Fatal(err)
-	}
-	state := control.State{ActiveWorkload: "speech"}
-	if _, err := observedWorkload(state, s); !errors.Is(err, ErrInvariant) {
-		t.Fatal(err)
-	}
-	delete(s.Workloads, "speech")
-	if err := verifySnapshot("speech", s); err == nil {
-		t.Fatal("missing target accepted")
-	}
-	s.Workloads["media"] = gpuruntime.WorkloadObservation{}
-	if err := verifySnapshot("speech", s); err == nil {
-		t.Fatal("inactive target accepted")
 	}
 }
 

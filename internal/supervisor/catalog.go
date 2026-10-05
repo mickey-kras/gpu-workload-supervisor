@@ -18,16 +18,7 @@ func (c *Controller) configuredTarget(id control.Workload) bool {
 	return ok
 }
 func (c *Controller) checkCatalog(ctx context.Context) error {
-	s, ok := c.store.(interface {
-		Catalog(context.Context) (control.CatalogSnapshot, error)
-	})
-	if !ok {
-		if c.config.Catalog == nil {
-			return nil
-		}
-		return store.ErrVersionConflict
-	}
-	snap, err := s.Catalog(ctx)
+	snap, err := c.store.Catalog(ctx)
 	if err != nil {
 		return err
 	}

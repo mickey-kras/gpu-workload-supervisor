@@ -2,12 +2,12 @@ package supervisor
 
 import (
 	"context"
-
 	"errors"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 	"testing"
 	"time"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
 func TestOperatorPreservesTakeoverAndReturnsIdle(t *testing.T) {

@@ -66,6 +66,25 @@ func TestStatusRejectsChangedCatalogBeforeObservation(t *testing.T) {
 	}
 }
 
+func TestCatalogSnapshotExclusivity(t *testing.T) {
+	s := gpuruntime.Snapshot{Workloads: map[control.Workload]gpuruntime.WorkloadObservation{"speech": {Active: true, Exclusive: true}, "media": {Active: true, Exclusive: true}}}
+	if err := verifySnapshot("speech", s); !errors.Is(err, ErrStateVerification) {
+		t.Fatal(err)
+	}
+	state := control.State{ActiveWorkload: "speech"}
+	if _, err := observedWorkload(state, s); !errors.Is(err, ErrInvariant) {
+		t.Fatal(err)
+	}
+	delete(s.Workloads, "speech")
+	if err := verifySnapshot("speech", s); err == nil {
+		t.Fatal("missing target accepted")
+	}
+	s.Workloads["media"] = gpuruntime.WorkloadObservation{}
+	if err := verifySnapshot("speech", s); err == nil {
+		t.Fatal("inactive target accepted")
+	}
+}
+
 type failedCatalogPreflight struct{ catalogRuntime }
 
 func (r *failedCatalogPreflight) Preflight(context.Context) error {

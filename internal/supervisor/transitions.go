@@ -96,19 +96,11 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 	return c.executeTransition(ctx, transition, state, current, target, options)
 }
 
-type conditionalStore interface {
-	StartTransitionConditional(context.Context, control.Precondition, store.Transition) (control.State, error)
-}
-
 func (c *Controller) startTransition(ctx context.Context, version uint64, expected *control.Precondition, transition store.Transition) (control.State, error) {
 	if expected == nil {
 		return c.store.StartTransition(ctx, version, transition)
 	}
-	stateStore, ok := c.store.(conditionalStore)
-	if !ok {
-		return control.State{}, fmt.Errorf("store does not support conditional transitions")
-	}
-	return stateStore.StartTransitionConditional(ctx, *expected, transition)
+	return c.store.StartTransitionConditional(ctx, *expected, transition)
 }
 
 func (c *Controller) transitionSource(ctx context.Context, sourceOwner control.Owner, verifyOnly bool) (control.State, error) {
