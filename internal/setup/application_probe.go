@@ -52,14 +52,16 @@ type ModelCandidate struct {
 	Aliases  []string `json:"aliases,omitempty"`
 }
 
+const appLlamaCPP = "llama.cpp"
+
 func appLabel(app string) string {
 	switch app {
 	case "comfyui":
 		return "ComfyUI"
 	case "ollama":
 		return "Ollama"
-	case "llama.cpp":
-		return "llama.cpp"
+	case appLlamaCPP:
+		return appLlamaCPP
 	case "vllm":
 		return "vLLM"
 	}
@@ -151,7 +153,7 @@ func Probe(ctx context.Context, r ProbeRequest) (ApplicationCandidate, error) {
 		err = probe.comfy(ctx, &result)
 	case "ollama":
 		err = probe.ollama(ctx, &result)
-	case "llama.cpp":
+	case appLlamaCPP:
 		err = probe.llama(ctx, &result)
 	case "vllm":
 		err = probe.vllm(ctx, &result)
@@ -191,13 +193,7 @@ func probeReference(ctx context.Context, r ProbeRequest, result ApplicationCandi
 	}
 	info, err := os.Lstat(r.Reference)
 	if err != nil {
-		result.InstanceStatus = "missing"
-		result.NextStep = "Select an existing file or directory."
-		if !errors.Is(err, os.ErrNotExist) {
-			result.InstanceStatus = "unreachable"
-			result.NextStep = "Check access to the selected reference."
-		}
-		return result, nil
+		return missingReference(err, result), nil
 	}
 	// Do not resolve links or open devices/FIFOs. A selection is only a candidate.
 	directory := r.ReferenceKind == "model-directory"
@@ -211,6 +207,18 @@ func probeReference(ctx context.Context, r ProbeRequest, result ApplicationCandi
 		result.NextStep = "ComfyUI workflows select models. Select its application or configuration."
 		return result, nil
 	}
+	return referencedCandidate(r, directory, result), nil
+}
+func missingReference(err error, result ApplicationCandidate) ApplicationCandidate {
+	result.InstanceStatus = "missing"
+	result.NextStep = "Select an existing file or directory."
+	if !errors.Is(err, os.ErrNotExist) {
+		result.InstanceStatus = "unreachable"
+		result.NextStep = "Check access to the selected reference."
+	}
+	return result
+}
+func referencedCandidate(r ProbeRequest, directory bool, result ApplicationCandidate) ApplicationCandidate {
 	if r.ReferenceKind == "model-file" || directory {
 		source := "file"
 		if directory {
@@ -219,7 +227,7 @@ func probeReference(ctx context.Context, r ProbeRequest, result ApplicationCandi
 		result.Models = []ModelCandidate{{ID: r.Reference, Label: filepath.Base(r.Reference), Source: source, Loaded: "unknown", Locality: "local"}}
 	}
 	result.NextStep = "Reference saved as a candidate only. Verify application compatibility and lifecycle control."
-	return result, nil
+	return result
 }
 
 type applicationHTTP struct {

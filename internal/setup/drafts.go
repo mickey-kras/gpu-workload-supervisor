@@ -94,43 +94,63 @@ func validateDrafts(version int, drafts []Draft) error {
 	}
 	ids := map[string]bool{}
 	for _, d := range drafts {
-		if !control.ValidWorkloadID(control.Workload(d.ID)) || ids[d.ID] || !control.ValidWorkloadLabel(d.Label) {
-			return errors.New("invalid or duplicate draft identity")
-		}
-		ids[d.ID] = true
-		switch d.App {
-		case "comfyui", "ollama", "llama.cpp", "vllm":
-		default:
-			return errors.New("unsupported draft application")
-		}
-		if d.Binding != nil {
-			for _, value := range []string{d.Binding.Unit, d.Binding.Cgroup, d.Binding.HealthURL, d.Binding.Instance, d.Binding.Model, d.Binding.LaunchFile} {
-				if len(value) > 4096 {
-					return errors.New("draft binding value too long")
-				}
-			}
-		}
-		if d.Endpoint != "" && d.Reference != "" {
-			return errors.New("choose an endpoint or file location")
-		}
-		if len(d.Endpoint) > 2048 || len(d.Reference) > 4096 || len(d.Model) > 1024 {
-			return errors.New("draft value too long")
-		}
-		if d.Reference != "" {
-			if !filepath.IsAbs(d.Reference) || filepath.Clean(d.Reference) != d.Reference {
-				return errors.New("draft path must be absolute and clean")
-			}
-			switch d.ReferenceKind {
-			case "application", "configuration", "model-file", "model-directory":
-			default:
-				return errors.New("invalid draft reference kind")
-			}
-		} else if d.ReferenceKind != "" {
-			return errors.New("draft reference kind requires path")
-		}
-		if d.App == "comfyui" && d.Model != "" {
-			return errors.New("ComfyUI workflows select models")
+		if err := validateDraft(d, ids); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+func validateDraft(d Draft, ids map[string]bool) error {
+	if !control.ValidWorkloadID(control.Workload(d.ID)) || ids[d.ID] || !control.ValidWorkloadLabel(d.Label) {
+		return errors.New("invalid or duplicate draft identity")
+	}
+	ids[d.ID] = true
+	switch d.App {
+	case "comfyui", "ollama", appLlamaCPP, "vllm":
+	default:
+		return errors.New("unsupported draft application")
+	}
+	if err := validateDraftBinding(d.Binding); err != nil {
+		return err
+	}
+	if d.Endpoint != "" && d.Reference != "" {
+		return errors.New("choose an endpoint or file location")
+	}
+	if len(d.Endpoint) > 2048 || len(d.Reference) > 4096 || len(d.Model) > 1024 {
+		return errors.New("draft value too long")
+	}
+	if err := validateDraftReference(d); err != nil {
+		return err
+	}
+	if d.App == "comfyui" && d.Model != "" {
+		return errors.New("ComfyUI workflows select models")
+	}
+	return nil
+}
+func validateDraftBinding(binding *DraftBinding) error {
+	if binding == nil {
+		return nil
+	}
+	for _, value := range []string{binding.Unit, binding.Cgroup, binding.HealthURL, binding.Instance, binding.Model, binding.LaunchFile} {
+		if len(value) > 4096 {
+			return errors.New("draft binding value too long")
+		}
+	}
+	return nil
+}
+func validateDraftReference(d Draft) error {
+	if d.Reference == "" {
+		if d.ReferenceKind != "" {
+			return errors.New("draft reference kind requires path")
+		}
+		return nil
+	}
+	if !filepath.IsAbs(d.Reference) || filepath.Clean(d.Reference) != d.Reference {
+		return errors.New("draft path must be absolute and clean")
+	}
+	switch d.ReferenceKind {
+	case "application", "configuration", "model-file", "model-directory":
+		return nil
+	}
+	return errors.New("invalid draft reference kind")
 }

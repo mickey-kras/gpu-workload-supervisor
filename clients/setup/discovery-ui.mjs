@@ -107,26 +107,26 @@ function addRefreshButton({Gtk, group, draft, status, command, show}) {
 
 function addFilePickers({Gtk, window, group, draft, reference, endpoint, status, changed, clearBinding, clearModels, setSync}) {
     if (!draft.needsModel) return;
-        for (const [label, method, kind] of [['Choose model file...', 'open', 'model-file'], ['Choose model folder...', 'select_folder', 'model-directory']]) {
-            const choose = new Gtk.Button({label}); group.add(choose);
-            choose.connect('clicked', () => {
-                const dialog = new Gtk.FileDialog({title: label});
-                dialog[method](window, null, (source, result) => {
-                    try {
-                        const file = source[`${method}_finish`](result);
-                        const path = file?.get_path();
-                        if (!path) return;
-                        clearBinding(); clearModels();
-                        draft.reference(path, kind); reference.label = path;
-                        setSync(true); endpoint.text = ''; setSync(false);
-                        status.label = 'Location selected. Compatibility and safe lifecycle control are not verified.';
-                        changed(draft.snapshot());
-                    } catch (error) {
-                        if (!error.matches?.(Gtk.DialogError, Gtk.DialogError.DISMISSED)) status.label = `File selection failed: ${error.message}`;
-                    }
-                });
+    for (const [label, method, kind] of [['Choose model file...', 'open', 'model-file'], ['Choose model folder...', 'select_folder', 'model-directory']]) {
+        const choose = new Gtk.Button({label}); group.add(choose);
+        choose.connect('clicked', () => {
+            const dialog = new Gtk.FileDialog({title: label});
+            dialog[method](window, null, (source, result) => {
+                try {
+                    const file = source[`${method}_finish`](result);
+                    const path = file?.get_path();
+                    if (!path) return;
+                    clearBinding(); clearModels();
+                    draft.reference(path, kind); reference.label = path;
+                    setSync(true); endpoint.text = ''; setSync(false);
+                    status.label = 'Location selected. Compatibility and safe lifecycle control are not verified.';
+                    changed(draft.snapshot());
+                } catch (error) {
+                    if (!error.matches?.(Gtk.DialogError, Gtk.DialogError.DISMISSED)) status.label = `File selection failed: ${error.message}`;
+                }
             });
-        }
+        });
+    }
 }
 
 function addBindingEditor({Adw, Gtk, group, draft, initial, status, parent, removed, bind, command, changed}) {

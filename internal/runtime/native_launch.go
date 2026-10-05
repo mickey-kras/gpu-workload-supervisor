@@ -12,6 +12,8 @@ import (
 	"strings"
 )
 
+const runtimeLlamaCPP = "llama.cpp"
+
 var ErrLaunchUnsupported = errors.New("native launch requires a supported direct local command")
 
 // qualifyNativeLaunch accepts a deliberately small systemd subset, not general
@@ -21,61 +23,11 @@ func qualifyNativeLaunch(raw []byte, n control.NativeModel) error {
 }
 
 func qualifyNativeLaunchWithValidator(raw []byte, n control.NativeModel, validate func(string) error) error {
-	scanner := bufio.NewScanner(bytes.NewReader(raw))
-	scanner.Buffer(make([]byte, 4096), 1<<20)
-	section := ""
-	execStart := ""
-	seen := map[string]bool{}
-	cloudOff := false
-	host := ""
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
-			continue
-		}
-		if line == "[Unit]" || line == "[Service]" || line == "[Install]" {
-			section = line
-			continue
-		}
-		key, value, ok := strings.Cut(line, "=")
-		if !ok || strings.ContainsAny(value, "\\$%`\"'") {
-			return ErrLaunchUnsupported
-		}
-		if key != "Environment" && seen[section+key] {
-			return ErrLaunchUnsupported
-		}
-		seen[section+key] = true
-		switch section + key {
-		case "[Unit]Description", "[Install]WantedBy":
-		case "[Service]Type":
-			if value != "simple" && value != "exec" {
-				return ErrLaunchUnsupported
-			}
-		case "[Service]Restart":
-			if value != "no" {
-				return ErrLaunchUnsupported
-			}
-		case "[Service]ExecStart":
-			execStart = value
-		case "[Service]Environment":
-			if n.Runtime != "ollama" {
-				return ErrLaunchUnsupported
-			}
-			if value == "OLLAMA_NO_CLOUD=1" && !cloudOff {
-				cloudOff = true
-			} else if strings.HasPrefix(value, "OLLAMA_HOST=") && host == "" {
-				host = strings.TrimPrefix(value, "OLLAMA_HOST=")
-			} else {
-				return ErrLaunchUnsupported
-			}
-		default:
-			return ErrLaunchUnsupported
-		}
+	unit, err := parseLaunchUnit(raw, n.Runtime)
+	if err != nil {
+		return err
 	}
-	if scanner.Err() != nil {
-		return ErrLaunchUnsupported
-	}
-	args := strings.Fields(execStart)
+	args := strings.Fields(unit.execStart)
 	if len(args) < 2 || !filepath.IsAbs(args[0]) {
 		return ErrLaunchUnsupported
 	}
@@ -87,78 +39,179 @@ func qualifyNativeLaunchWithValidator(raw []byte, n control.NativeModel, validat
 		return ErrLaunchUnsupported
 	}
 	if n.Runtime == "ollama" {
-		if filepath.Base(args[0]) != "ollama" || len(args) != 2 || args[1] != "serve" || !cloudOff || host != endpoint.Host {
+		return qualifyOllamaLaunch(args, unit, endpoint)
+	}
+	return qualifyServerLaunch(args, n, endpoint)
+}
+
+type parsedLaunchUnit struct {
+	execStart string
+	cloudOff  bool
+	host      string
+}
+
+func parseLaunchUnit(raw []byte, runtimeName string) (parsedLaunchUnit, error) {
+	var unit parsedLaunchUnit
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	scanner.Buffer(make([]byte, 4096), 1<<20)
+	section := ""
+	seen := map[string]bool{}
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if line == "[Unit]" || line == "[Service]" || line == "[Install]" {
+			section = line
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || strings.ContainsAny(value, "\\$%`\"'") {
+			return unit, ErrLaunchUnsupported
+		}
+		if key != "Environment" && seen[section+key] {
+			return unit, ErrLaunchUnsupported
+		}
+		seen[section+key] = true
+		if err := unit.applyDirective(runtimeName, section, key, value); err != nil {
+			return unit, err
+		}
+	}
+	if scanner.Err() != nil {
+		return unit, ErrLaunchUnsupported
+	}
+	return unit, nil
+}
+
+func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value string) error {
+	switch section + key {
+	case "[Unit]Description", "[Install]WantedBy":
+	case "[Service]Type":
+		if value != "simple" && value != "exec" {
 			return ErrLaunchUnsupported
 		}
-		return nil
-	}
-	model := ""
-	alias := ""
-	bindHost := ""
-	port := ""
-	switch n.Runtime {
-	case "llama.cpp":
-		if filepath.Base(args[0]) != "llama-server" {
+	case "[Service]Restart":
+		if value != "no" {
 			return ErrLaunchUnsupported
+		}
+	case "[Service]ExecStart":
+		u.execStart = value
+	case "[Service]Environment":
+		if runtimeName != "ollama" {
+			return ErrLaunchUnsupported
+		}
+		if value == "OLLAMA_NO_CLOUD=1" && !u.cloudOff {
+			u.cloudOff = true
+		} else if strings.HasPrefix(value, "OLLAMA_HOST=") && u.host == "" {
+			u.host = strings.TrimPrefix(value, "OLLAMA_HOST=")
+		} else {
+			return ErrLaunchUnsupported
+		}
+	default:
+		return ErrLaunchUnsupported
+	}
+	return nil
+}
+
+func qualifyOllamaLaunch(args []string, unit parsedLaunchUnit, endpoint *url.URL) error {
+	if filepath.Base(args[0]) != "ollama" || len(args) != 2 || args[1] != "serve" || !unit.cloudOff || unit.host != endpoint.Host {
+		return ErrLaunchUnsupported
+	}
+	return nil
+}
+
+func qualifyServerLaunch(args []string, n control.NativeModel, endpoint *url.URL) error {
+	flags, err := parseServerCommand(args, n.Runtime)
+	if err != nil {
+		return err
+	}
+	if !filepath.IsAbs(flags.model) || filepath.Clean(flags.model) != flags.model || flags.bindHost != endpoint.Hostname() || flags.port != endpoint.Port() || flags.port == "" {
+		return ErrLaunchUnsupported
+	}
+	info, err := os.Stat(flags.model)
+	if err != nil || (n.Runtime == runtimeLlamaCPP && !info.Mode().IsRegular()) || (n.Runtime == "vllm" && !info.IsDir()) {
+		return ErrLaunchUnsupported
+	}
+	alias := flags.alias
+	if alias == "" {
+		alias = flags.model
+	}
+	if alias != n.Model {
+		return ErrLaunchUnsupported
+	}
+	return nil
+}
+
+type serverFlags struct {
+	model    string
+	alias    string
+	bindHost string
+	port     string
+}
+
+func parseServerCommand(args []string, runtimeName string) (serverFlags, error) {
+	var flags serverFlags
+	switch runtimeName {
+	case runtimeLlamaCPP:
+		if filepath.Base(args[0]) != "llama-server" {
+			return flags, ErrLaunchUnsupported
 		}
 		args = args[1:]
 	case "vllm":
 		if filepath.Base(args[0]) != "vllm" || len(args) < 3 || args[1] != "serve" {
-			return ErrLaunchUnsupported
+			return flags, ErrLaunchUnsupported
 		}
-		model = args[2]
+		flags.model = args[2]
 		args = args[3:]
 	default:
-		return ErrLaunchUnsupported
+		return flags, ErrLaunchUnsupported
 	}
-	seen = map[string]bool{}
+	return flags.parse(args, runtimeName)
+}
+
+func (f *serverFlags) parse(args []string, runtimeName string) (serverFlags, error) {
+	seen := map[string]bool{}
 	for len(args) > 0 {
 		if len(args) < 2 {
-			return ErrLaunchUnsupported
+			return *f, ErrLaunchUnsupported
 		}
 		key, value := args[0], args[1]
 		args = args[2:]
 		if seen[key] {
-			return ErrLaunchUnsupported
+			return *f, ErrLaunchUnsupported
 		}
 		seen[key] = true
-		switch key {
-		case "--host":
-			bindHost = value
-		case "--port":
-			port = value
-		case "--model", "-m":
-			if n.Runtime != "llama.cpp" || model != "" {
-				return ErrLaunchUnsupported
-			}
-			model = value
-		case "--alias", "--served-model-name":
-			if alias != "" || (key == "--alias") != (n.Runtime == "llama.cpp") {
-				return ErrLaunchUnsupported
-			}
-			alias = value
-		case "--ctx-size", "--n-gpu-layers", "--max-model-len":
-			if (n.Runtime == "llama.cpp") != (key != "--max-model-len") {
-				return ErrLaunchUnsupported
-			}
-			if v, err := strconv.ParseUint(value, 10, 32); err != nil || v == 0 {
-				return ErrLaunchUnsupported
-			}
-		default:
-			return ErrLaunchUnsupported
+		if err := f.apply(runtimeName, key, value); err != nil {
+			return *f, err
 		}
 	}
-	if !filepath.IsAbs(model) || filepath.Clean(model) != model || bindHost != endpoint.Hostname() || port != endpoint.Port() || port == "" {
-		return ErrLaunchUnsupported
-	}
-	info, err := os.Stat(model)
-	if err != nil || (n.Runtime == "llama.cpp" && !info.Mode().IsRegular()) || (n.Runtime == "vllm" && !info.IsDir()) {
-		return ErrLaunchUnsupported
-	}
-	if alias == "" {
-		alias = model
-	}
-	if alias != n.Model {
+	return *f, nil
+}
+
+func (f *serverFlags) apply(runtimeName, key, value string) error {
+	switch key {
+	case "--host":
+		f.bindHost = value
+	case "--port":
+		f.port = value
+	case "--model", "-m":
+		if runtimeName != runtimeLlamaCPP || f.model != "" {
+			return ErrLaunchUnsupported
+		}
+		f.model = value
+	case "--alias", "--served-model-name":
+		if f.alias != "" || (key == "--alias") != (runtimeName == runtimeLlamaCPP) {
+			return ErrLaunchUnsupported
+		}
+		f.alias = value
+	case "--ctx-size", "--n-gpu-layers", "--max-model-len":
+		if (runtimeName == runtimeLlamaCPP) != (key != "--max-model-len") {
+			return ErrLaunchUnsupported
+		}
+		if v, err := strconv.ParseUint(value, 10, 32); err != nil || v == 0 {
+			return ErrLaunchUnsupported
+		}
+	default:
 		return ErrLaunchUnsupported
 	}
 	return nil

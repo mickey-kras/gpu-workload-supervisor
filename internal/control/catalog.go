@@ -117,14 +117,35 @@ func ValidWorkloadLabel(label string) bool {
 }
 
 func (p Profile) validate() error {
-	if p.NativeModel != nil {
-		if p.Adapter != "systemd" {
-			return errors.New("native models require stop-service bindings")
-		}
-		if err := p.NativeModel.validate(); err != nil {
-			return err
-		}
+	if err := p.validateNativeBinding(); err != nil {
+		return err
 	}
+	if err := p.validateNaming(); err != nil {
+		return err
+	}
+	if err := p.validatePlacement(); err != nil {
+		return err
+	}
+	if err := p.validateEndpoints(); err != nil {
+		return err
+	}
+	if p.HealthURL == "" || p.Adapter == AdapterMediaUnload && p.ReleaseURL == "" {
+		return errors.New("required endpoint missing")
+	}
+	return nil
+}
+
+func (p Profile) validateNativeBinding() error {
+	if p.NativeModel == nil {
+		return nil
+	}
+	if p.Adapter != "systemd" {
+		return errors.New("native models require stop-service bindings")
+	}
+	return p.NativeModel.validate()
+}
+
+func (p Profile) validateNaming() error {
 	if !ValidWorkloadID(p.ID) {
 		return fmt.Errorf("invalid workload ID %q", p.ID)
 	}
@@ -137,17 +158,15 @@ func (p Profile) validate() error {
 	if !unitName.MatchString(p.Unit) {
 		return errors.New("invalid workload unit")
 	}
+	return nil
+}
+
+func (p Profile) validatePlacement() error {
 	if p.Cgroup == "/" || !strings.HasPrefix(p.Cgroup, "/") || path.Clean(p.Cgroup) != p.Cgroup || strings.IndexFunc(p.Cgroup, unicode.IsControl) >= 0 {
 		return errors.New("invalid workload cgroup")
 	}
 	if p.BootPolicy != "" && p.BootPolicy != "stop-to-idle" && p.BootPolicy != "retain" {
 		return errors.New("invalid boot policy")
-	}
-	if err := p.validateEndpoints(); err != nil {
-		return err
-	}
-	if p.HealthURL == "" || p.Adapter == AdapterMediaUnload && p.ReleaseURL == "" {
-		return errors.New("required endpoint missing")
 	}
 	return nil
 }
@@ -171,21 +190,32 @@ func (p Profile) validateEndpoints() error {
 
 func validateProfileOverlap(p Profile, previous []Profile) error {
 	for _, q := range previous {
-		if p.NativeModel != nil && q.NativeModel != nil {
-			a, b := p.NativeModel, q.NativeModel
-			if a.Instance == b.Instance && (a.Runtime != b.Runtime || a.Endpoint != b.Endpoint) {
-				return errors.New("inconsistent native runtime instance")
-			}
-			if a.Endpoint == b.Endpoint && a.Instance != b.Instance {
-				return errors.New("native endpoint belongs to another instance")
-			}
-			if a.Instance == b.Instance && a.Model == b.Model {
-				return errors.New("ambiguous native model binding")
-			}
+		if err := validateNativeOverlap(p.NativeModel, q.NativeModel); err != nil {
+			return err
 		}
-		if p.ID == q.ID || p.Unit == q.Unit || p.Cgroup == q.Cgroup || strings.HasPrefix(p.Cgroup, q.Cgroup+"/") || strings.HasPrefix(q.Cgroup, p.Cgroup+"/") {
+		if profilesOverlap(p, q) {
 			return errors.New("duplicate or overlapping profiles")
 		}
 	}
 	return nil
+}
+
+func validateNativeOverlap(a, b *NativeModel) error {
+	if a == nil || b == nil {
+		return nil
+	}
+	if a.Instance == b.Instance && (a.Runtime != b.Runtime || a.Endpoint != b.Endpoint) {
+		return errors.New("inconsistent native runtime instance")
+	}
+	if a.Endpoint == b.Endpoint && a.Instance != b.Instance {
+		return errors.New("native endpoint belongs to another instance")
+	}
+	if a.Instance == b.Instance && a.Model == b.Model {
+		return errors.New("ambiguous native model binding")
+	}
+	return nil
+}
+
+func profilesOverlap(p, q Profile) bool {
+	return p.ID == q.ID || p.Unit == q.Unit || p.Cgroup == q.Cgroup || strings.HasPrefix(p.Cgroup, q.Cgroup+"/") || strings.HasPrefix(q.Cgroup, p.Cgroup+"/")
 }

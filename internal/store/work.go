@@ -103,31 +103,38 @@ func (s *Store) beginAdmittedWorkAtCatalog(ctx context.Context, requestID string
 			_ = tx.Rollback()
 		}
 	}()
-	catalog, err := readCatalog(ctx, tx)
-	if err != nil {
+	if err := checkAdmissibleState(ctx, tx, workload, fence, revision); err != nil {
 		return nil, err
-	}
-	if revision != nil && catalog.Revision != *revision {
-		return nil, ErrVersionConflict
-	}
-	if err := validateAdmittedCatalog(catalog, workload); err != nil {
-		return nil, err
-	}
-	state, err := readState(ctx, tx)
-	if err != nil {
-		return nil, err
-	}
-	if state.LeaseFence != fence {
-		return nil, ErrStaleFence
-	}
-	if state.Admission != control.AdmissionOpen || state.Phase != control.PhaseStable || state.Health != control.HealthHealthy {
-		return nil, ErrAdmissionClosed
-	}
-	if state.ActiveWorkload != workload || state.DesiredWorkload != workload {
-		return nil, ErrWorkloadMismatch
 	}
 	admitted = true
 	return tx, nil
+}
+
+func checkAdmissibleState(ctx context.Context, tx *sql.Tx, workload control.Workload, fence control.Fence, revision *string) error {
+	catalog, err := readCatalog(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if revision != nil && catalog.Revision != *revision {
+		return ErrVersionConflict
+	}
+	if err := validateAdmittedCatalog(catalog, workload); err != nil {
+		return err
+	}
+	state, err := readState(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if state.LeaseFence != fence {
+		return ErrStaleFence
+	}
+	if state.Admission != control.AdmissionOpen || state.Phase != control.PhaseStable || state.Health != control.HealthHealthy {
+		return ErrAdmissionClosed
+	}
+	if state.ActiveWorkload != workload || state.DesiredWorkload != workload {
+		return ErrWorkloadMismatch
+	}
+	return nil
 }
 
 func (s *Store) AdmitWorkToken(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence) (string, error) {
