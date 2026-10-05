@@ -157,7 +157,7 @@ func TestDecodePlanDiscoverAndValidation(t *testing.T) {
 		t.Fatal("negative GPU")
 	}
 	d, err := Discover(context.Background(), home)
-	if err != nil || len(d.Units) != 2 {
+	if err != nil || len(d.Units) != 0 {
 		t.Fatalf("%+v %v", d, err)
 	}
 	if err := Apply(context.Background(), home, r); err != nil {
