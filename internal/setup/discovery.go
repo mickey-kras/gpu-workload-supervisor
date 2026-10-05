@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"time"
 
 	"path/filepath"
 	"strings"
@@ -14,12 +15,15 @@ import (
 )
 
 type Discovery struct {
-	Request Request  `json:"request"`
-	Units   []string `json:"units"`
-	Pending bool     `json:"pending"`
+	Request      Request                `json:"request"`
+	Units        []string               `json:"units"`
+	Pending      bool                   `json:"pending"`
+	Applications []ApplicationCandidate `json:"applications"`
 }
 
 func Discover(ctx context.Context, home string) (Discovery, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
 	result := Discovery{Request: Request{Version: 1, Profile: Profile{Version: 1, StatePath: filepath.Join(home, ".local/state/gpu-workload-supervisor/state.db"), SystemctlPath: "/usr/bin/systemctl", NvidiaSMIPath: "/usr/bin/nvidia-smi"}, Catalog: control.Catalog{Version: 1}}}
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
 	if data, err := privateRead(filepath.Join(root, "activation.json")); err == nil {
@@ -50,7 +54,8 @@ func Discover(ctx context.Context, home string) (Discovery, error) {
 	if len(output) > 1048576 {
 		return result, errors.New("unit discovery output too large")
 	}
-	result.Units = serviceUnits(output)
+	result.Units = []string{}
+	discoverApplications(ctx, &result, serviceUnits(output))
 	return result, nil
 }
 

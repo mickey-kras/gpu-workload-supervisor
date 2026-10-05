@@ -16,6 +16,7 @@ var homeForSetup = setup.Home
 var applySetup = setup.Apply
 var reconcileSetup = setup.Reconcile
 var discoverSetup = setup.Discover
+var probeSetup = setup.Probe
 var effectiveUID = os.Geteuid
 
 func main() {
@@ -26,7 +27,7 @@ func main() {
 }
 func run(args []string, input io.Reader, output io.Writer) error {
 	if len(args) != 1 {
-		return errors.New("usage: gpu-setup discover|validate|apply|reconcile|remove-integration")
+		return errors.New("usage: gpu-setup discover|probe|validate|apply|reconcile|remove-integration")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -39,6 +40,17 @@ func run(args []string, input io.Reader, output io.Writer) error {
 	}
 	if args[0] == "discover" {
 		result, err := discoverSetup(ctx, home)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(result)
+	}
+	if args[0] == "probe" {
+		request, err := setup.DecodeProbe(input)
+		if err != nil {
+			return err
+		}
+		result, err := probeSetup(ctx, request)
 		if err != nil {
 			return err
 		}
