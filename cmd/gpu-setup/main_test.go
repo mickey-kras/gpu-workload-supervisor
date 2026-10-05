@@ -13,12 +13,12 @@ import (
 const request = `{"version":1,"profile":{"version":1,"statePath":"/tmp/state.db","systemctlPath":"/usr/bin/systemctl","nvidiaSMIPath":"/usr/bin/true","gpuIndex":0,"capacityHeadroomMiB":0},"catalog":{"version":1,"profiles":[{"id":"text","label":"Text","adapter":"systemd","unit":"text.service","cgroup":"/user.slice/text","healthURL":"http://127.0.0.1:8000/health","bootPolicy":"stop-to-idle"}]}}`
 
 func TestRun(t *testing.T) {
-	priorHome := homeForSetup
-	t.Cleanup(func() { homeForSetup = priorHome })
+	actions := systemActions()
 	home := t.TempDir()
-	homeForSetup = func() (string, error) { return home, nil }
+	actions.home = func() (string, error) { return home, nil }
+	actions.euid = func() int { return 1000 }
 	var out bytes.Buffer
-	if err := run([]string{"validate"}, strings.NewReader(request), &out); err != nil {
+	if err := actions.run([]string{"validate"}, strings.NewReader(request), &out); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "operator.json") {
@@ -29,14 +29,16 @@ func TestRun(t *testing.T) {
 		if len(args) > 0 && args[0] == "apply" {
 			input = request
 		}
-		if err := run(args, strings.NewReader(input), &bytes.Buffer{}); err == nil {
+		if err := actions.run(args, strings.NewReader(input), &bytes.Buffer{}); err == nil {
 			t.Fatalf("expected unsupported or unavailable: %v", args)
 		}
 	}
 }
 func TestPreviewRejectsUnavailableTrustedExecutable(t *testing.T) {
+	actions := systemActions()
+	actions.euid = func() int { return 1000 }
 	bad := strings.ReplaceAll(request, "/usr/bin/true", "/missing/nvidia-smi")
-	if err := run([]string{"validate"}, strings.NewReader(bad), &bytes.Buffer{}); err == nil {
+	if err := actions.run([]string{"validate"}, strings.NewReader(bad), &bytes.Buffer{}); err == nil {
 		t.Fatal("unavailable executable accepted")
 	}
 }
@@ -63,94 +65,97 @@ func TestMainValidate(t *testing.T) {
 }
 
 func TestInjectedCommandBoundaries(t *testing.T) {
-	oldHome, oldApply, oldUID, oldDiscover, oldReconcile := homeForSetup, applySetup, effectiveUID, discoverSetup, reconcileSetup
-	t.Cleanup(func() {
-		homeForSetup = oldHome
-		applySetup = oldApply
-		effectiveUID = oldUID
-		discoverSetup = oldDiscover
-		reconcileSetup = oldReconcile
-	})
-	homeForSetup = func() (string, error) { return "", errors.New("no account") }
-	if err := run([]string{"validate"}, strings.NewReader(request), &bytes.Buffer{}); err == nil {
+	actions := systemActions()
+	actions.home = func() (string, error) { return "", errors.New("no account") }
+	if err := actions.run([]string{"validate"}, strings.NewReader(request), &bytes.Buffer{}); err == nil {
 		t.Fatal("missing account")
 	}
-	homeForSetup = func() (string, error) { return "/home/operator", nil }
-	effectiveUID = func() int { return 1000 }
+	actions.home = func() (string, error) { return "/home/operator", nil }
+	actions.euid = func() int { return 1000 }
 	for _, failure := range []bool{false, true} {
-		applySetup = func(context.Context, string, setup.Request) error {
+		actions.apply = func(context.Context, string, setup.Request) error {
 			if failure {
 				return errors.New("failed")
 			}
 			return nil
 		}
-		err := run([]string{"apply"}, strings.NewReader(request), &bytes.Buffer{})
+		err := actions.run([]string{"apply"}, strings.NewReader(request), &bytes.Buffer{})
 		if (err != nil) != failure {
 			t.Fatal(err)
 		}
-		discoverSetup = func(context.Context, string) (setup.Discovery, error) {
+		actions.discover = func(context.Context, string) (setup.Discovery, error) {
 			if failure {
 				return setup.Discovery{}, errors.New("failed")
 			}
 			return setup.Discovery{}, nil
 		}
-		err = run([]string{"discover"}, nil, &bytes.Buffer{})
+		err = actions.run([]string{"discover"}, nil, &bytes.Buffer{})
 		if (err != nil) != failure {
 			t.Fatal(err)
 		}
 	}
-	reconcileSetup = func(context.Context, string) error { return nil }
-	if err := run([]string{"reconcile"}, nil, &bytes.Buffer{}); err != nil {
+	actions.reconcile = func(context.Context, string) error { return nil }
+	if err := actions.run([]string{"reconcile"}, nil, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestDraftCommands(t *testing.T) {
-	oldHome, oldUID := homeForSetup, effectiveUID
-	t.Cleanup(func() { homeForSetup = oldHome; effectiveUID = oldUID })
+	actions := systemActions()
 	home := t.TempDir()
-	homeForSetup = func() (string, error) { return home, nil }
-	effectiveUID = func() int { return 1000 }
+	actions.home = func() (string, error) { return home, nil }
+	actions.euid = func() int { return 1000 }
 	var output bytes.Buffer
-	if err := run([]string{"drafts"}, strings.NewReader(""), &output); err != nil {
+	if err := actions.run([]string{"drafts"}, strings.NewReader(""), &output); err != nil {
 		t.Fatal(err)
 	}
 	input := `{"version":1,"expectedRevision":"","drafts":[{"id":"d","label":"D","app":"ollama"}]}`
 	for _, data := range []string{`{`, input + ` {}`, strings.Repeat(" ", 65537), `{"version":2}`, `{"unknown":true}`} {
-		if err := run([]string{"save-drafts"}, strings.NewReader(data), &bytes.Buffer{}); err == nil {
+		if err := actions.run([]string{"save-drafts"}, strings.NewReader(data), &bytes.Buffer{}); err == nil {
 			t.Fatalf("accepted %s", data)
 		}
 	}
-	if err := run([]string{"save-drafts"}, strings.NewReader(input), &output); err != nil {
+	if err := actions.run([]string{"save-drafts"}, strings.NewReader(input), &output); err != nil {
 		t.Fatal(err)
 	}
-	if err := run([]string{"save-drafts"}, strings.NewReader(input), &output); err == nil {
+	if err := actions.run([]string{"save-drafts"}, strings.NewReader(input), &output); err == nil {
 		t.Fatal("stale accepted")
 	}
-	effectiveUID = func() int { return 0 }
-	if err := run([]string{"save-drafts"}, strings.NewReader(input), &output); err == nil {
+	actions.euid = func() int { return 0 }
+	if err := actions.run([]string{"save-drafts"}, strings.NewReader(input), &output); err == nil {
 		t.Fatal("root accepted")
 	}
 	if err := os.WriteFile(home+"/.config/gpu-workload-supervisor/drafts.json", []byte("invalid"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := run([]string{"drafts"}, strings.NewReader(""), &output); err == nil {
+	if err := actions.run([]string{"drafts"}, strings.NewReader(""), &output); err == nil {
 		t.Fatal("invalid file accepted")
 	}
 }
 
 func TestVerifyBindingsCommand(t *testing.T) {
-	old := verifyBindings
-	t.Cleanup(func() { verifyBindings = old })
+	actions := systemActions()
+	actions.euid = func() int { return 1000 }
 	for _, fail := range []bool{false, true} {
-		verifyBindings = func(context.Context, setup.Request) error {
+		actions.verify = func(context.Context, setup.Request) error {
 			if fail {
 				return errors.New("changed")
 			}
 			return nil
 		}
-		if err := run([]string{"verify-bindings"}, strings.NewReader(request), &bytes.Buffer{}); (err != nil) != fail {
+		if err := actions.run([]string{"verify-bindings"}, strings.NewReader(request), &bytes.Buffer{}); (err != nil) != fail {
 			t.Fatalf("failure=%v %v", fail, err)
+		}
+	}
+}
+
+func TestRootRejectedForAllSetupActions(t *testing.T) {
+	actions := systemActions()
+	actions.home = func() (string, error) { return t.TempDir(), nil }
+	actions.euid = func() int { return 0 }
+	for _, action := range []string{"discover", "probe", "fingerprint", "save-drafts", "verify-bindings", "validate", "apply", "reconcile"} {
+		if err := actions.run([]string{action}, strings.NewReader(request), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "not root") {
+			t.Fatalf("%s accepted as root: %v", action, err)
 		}
 	}
 }

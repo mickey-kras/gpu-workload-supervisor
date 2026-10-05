@@ -36,7 +36,7 @@ func acceptanceJSON(t *testing.T, path string, value any) {
 func TestAcceptanceActivationRejectsUnsafeInputsBeforeMaintenance(t *testing.T) {
 	for _, kind := range []string{"invalid-request", "blocked-config", "blocked-state", "malformed-profile", "public-profile", "relocated-state", "proxy-held", "malformed-marker", "marker-mismatch", "runtime-construction", "bad-activation-path"} {
 		t.Run(kind, func(t *testing.T) {
-			home, r := fixture(t)
+			backend, home, r := fixture(t)
 			ctx := context.Background()
 			root := filepath.Join(home, ".config/gpu-workload-supervisor")
 			switch kind {
@@ -68,13 +68,13 @@ func TestAcceptanceActivationRejectsUnsafeInputsBeforeMaintenance(t *testing.T) 
 				old.ActivatedRelease = "0.1.0"
 				acceptanceJSON(t, filepath.Join(root, "operator.json"), old)
 			case "runtime-construction":
-				makeRuntime = func(Request) (gpuruntime.Manager, error) { return nil, errors.New("invalid executable") }
+				backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return nil, errors.New("invalid executable") }
 			case "bad-activation-path":
 				if err := os.MkdirAll(filepath.Join(root, "activation.json"), 0700); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if err := Apply(ctx, home, r); err == nil {
+			if err := backend.Apply(ctx, home, r); err == nil {
 				t.Fatal("unsafe activation accepted")
 			}
 			if kind != "malformed-marker" {
@@ -89,9 +89,9 @@ func TestAcceptanceActivationRejectsUnsafeInputsBeforeMaintenance(t *testing.T) 
 func TestAcceptanceExistingActivationRejectsUnsafeUpgrade(t *testing.T) {
 	for _, kind := range []string{"unhealthy-state", "missing-catalog-table-columns", "old-runtime-invalid", "old-runtime-busy", "blocked-backups", "missing-binary-tuple"} {
 		t.Run(kind, func(t *testing.T) {
-			home, r := fixture(t)
+			backend, home, r := fixture(t)
 			ctx := context.Background()
-			if err := Apply(ctx, home, r); err != nil {
+			if err := backend.Apply(ctx, home, r); err != nil {
 				t.Fatal(err)
 			}
 			snapshot, err := ReadCatalog(ctx, r.Profile.StatePath)
@@ -116,7 +116,7 @@ func TestAcceptanceExistingActivationRejectsUnsafeUpgrade(t *testing.T) {
 				db.Close()
 			case "old-runtime-invalid", "old-runtime-busy":
 				calls := 0
-				makeRuntime = func(Request) (gpuruntime.Manager, error) {
+				backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
 					calls++
 					if calls == 2 {
 						if kind == "old-runtime-invalid" {
@@ -133,7 +133,7 @@ func TestAcceptanceExistingActivationRejectsUnsafeUpgrade(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := Apply(ctx, home, r); err == nil {
+			if err := backend.Apply(ctx, home, r); err == nil {
 				t.Fatal("unsafe upgrade accepted")
 			}
 			marker, err := deployment.Read(r.Profile.StatePath)
@@ -147,11 +147,11 @@ func TestAcceptanceExistingActivationRejectsUnsafeUpgrade(t *testing.T) {
 func TestAcceptanceDiscoveryAndReconciliationRejectDamagedProfiles(t *testing.T) {
 	for _, kind := range []string{"missing", "malformed", "public", "missing-state", "missing-managed-state", "corrupt-state", "held-gate", "maintenance", "runtime-invalid"} {
 		t.Run(kind, func(t *testing.T) {
-			home, r := fixture(t)
+			backend, home, r := fixture(t)
 			ctx := context.Background()
 			root := filepath.Join(home, ".config/gpu-workload-supervisor")
 			if kind != "missing" && kind != "malformed" && kind != "public" && kind != "missing-state" {
-				if err := Apply(ctx, home, r); err != nil {
+				if err := backend.Apply(ctx, home, r); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -180,9 +180,9 @@ func TestAcceptanceDiscoveryAndReconciliationRejectDamagedProfiles(t *testing.T)
 					t.Fatal(err)
 				}
 			case "runtime-invalid":
-				makeRuntime = func(Request) (gpuruntime.Manager, error) { return nil, errors.New("invalid runtime") }
+				backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return nil, errors.New("invalid runtime") }
 			}
-			if err := Reconcile(ctx, home); err == nil {
+			if err := backend.Reconcile(ctx, home); err == nil {
 				t.Fatal("unsafe reconciliation accepted")
 			}
 			if kind == "missing-state" || kind == "missing-managed-state" {
@@ -191,7 +191,7 @@ func TestAcceptanceDiscoveryAndReconciliationRejectDamagedProfiles(t *testing.T)
 				}
 			}
 			if kind == "malformed" || kind == "public" || kind == "corrupt-state" {
-				if _, err := Discover(ctx, home); err == nil {
+				if _, err := backend.Discover(ctx, home); err == nil {
 					t.Fatal("damaged configured state discovered successfully")
 				}
 			}
@@ -202,7 +202,7 @@ func TestAcceptanceDiscoveryAndReconciliationRejectDamagedProfiles(t *testing.T)
 func TestAcceptanceDiscoveryFailures(t *testing.T) {
 	for _, kind := range []string{"malformed-activation", "malformed-marker", "command-failure", "oversized-output"} {
 		t.Run(kind, func(t *testing.T) {
-			home, r := fixture(t)
+			backend, home, r := fixture(t)
 			root := filepath.Join(home, ".config/gpu-workload-supervisor")
 			switch kind {
 			case "malformed-activation":
@@ -211,15 +211,15 @@ func TestAcceptanceDiscoveryFailures(t *testing.T) {
 				acceptanceJSON(t, filepath.Join(root, "activation.json"), activation{Request: r})
 				acceptanceWrite(t, r.Profile.StatePath+deployment.Suffix, []byte("{"))
 			case "command-failure":
-				runCommand = func(context.Context, string, ...string) ([]byte, error) {
+				backend.runCommand = func(context.Context, string, ...string) ([]byte, error) {
 					return nil, errors.New("user bus unavailable")
 				}
 			case "oversized-output":
-				runCommand = func(context.Context, string, ...string) ([]byte, error) {
+				backend.runCommand = func(context.Context, string, ...string) ([]byte, error) {
 					return []byte(strings.Repeat("x", 1048577)), nil
 				}
 			}
-			if _, err := Discover(context.Background(), home); err == nil {
+			if _, err := backend.Discover(context.Background(), home); err == nil {
 				t.Fatal("discovery failure ignored")
 			}
 		})

@@ -8,8 +8,8 @@ import (
 )
 
 func TestApplicationDiscoveryFiltersServicesByExecutable(t *testing.T) {
-	home, _ := fixture(t)
-	runCommand = func(ctx context.Context, exe string, args ...string) ([]byte, error) {
+	backend, home, _ := fixture(t)
+	backend.runCommand = func(ctx context.Context, exe string, args ...string) ([]byte, error) {
 		joined := strings.Join(args, " ")
 		if exe != "/usr/bin/systemctl" {
 			t.Fatalf("unexpected executable %s", exe)
@@ -26,10 +26,8 @@ func TestApplicationDiscoveryFiltersServicesByExecutable(t *testing.T) {
 		t.Fatalf("unexpected command %s", joined)
 		return nil, errors.New("unexpected")
 	}
-	old := probeApplication
-	defer func() { probeApplication = old }()
-	probeApplication = func(ctx context.Context, r ProbeRequest) (ApplicationCandidate, error) { return candidate(r), nil }
-	got, err := Discover(context.Background(), home)
+	backend.probeApplication = func(ctx context.Context, r ProbeRequest) (ApplicationCandidate, error) { return candidate(r), nil }
+	got, err := backend.Discover(context.Background(), home)
 	if err != nil {
 		t.Fatal(err)
 	}

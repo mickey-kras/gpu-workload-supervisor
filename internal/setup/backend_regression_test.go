@@ -14,9 +14,9 @@ import (
 )
 
 func TestStalePreviewDoesNotEnterMaintenance(t *testing.T) {
-	home, r := fixture(t)
+	backend, home, r := fixture(t)
 	ctx := context.Background()
-	if err := Apply(ctx, home, r); err != nil {
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, err := ReadCatalog(ctx, r.Profile.StatePath)
@@ -24,7 +24,7 @@ func TestStalePreviewDoesNotEnterMaintenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.Catalog.Profiles[0].Label = "Changed"
-	if err := Apply(ctx, home, r); err == nil {
+	if err := backend.Apply(ctx, home, r); err == nil {
 		t.Fatal("stale revision accepted")
 	}
 	if err := deployment.Check(r.Profile.StatePath, deployment.Release); err != nil {
@@ -35,14 +35,14 @@ func TestStalePreviewDoesNotEnterMaintenance(t *testing.T) {
 		t.Fatal("catalog changed")
 	}
 	r.ExpectedRevision = snapshot.Revision
-	if err := Apply(ctx, home, r); err != nil {
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal("fresh preview cannot apply", err)
 	}
 }
 func TestDiscoveryAndOldRuntimeUseCommittedDatabaseCatalog(t *testing.T) {
-	home, r := fixture(t)
+	backend, home, r := fixture(t)
 	ctx := context.Background()
-	if err := Apply(ctx, home, r); err != nil {
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	s, err := store.Open(ctx, r.Profile.StatePath)
@@ -59,7 +59,7 @@ func TestDiscoveryAndOldRuntimeUseCommittedDatabaseCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	found, err := Discover(ctx, home)
+	found, err := backend.Discover(ctx, home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,12 +67,12 @@ func TestDiscoveryAndOldRuntimeUseCommittedDatabaseCatalog(t *testing.T) {
 		t.Fatalf("stale mirror won: %+v", found)
 	}
 	var checked []string
-	makeRuntime = func(request Request) (gpuruntime.Manager, error) {
+	backend.makeRuntime = func(request Request) (gpuruntime.Manager, error) {
 		checked = append(checked, request.Catalog.Profiles[0].Unit)
 		return idleRuntime{}, nil
 	}
 	r.ExpectedRevision = accepted.Revision
-	if err := Apply(ctx, home, r); err != nil {
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	if len(checked) < 2 || checked[1] != "changed.service" {
@@ -80,7 +80,7 @@ func TestDiscoveryAndOldRuntimeUseCommittedDatabaseCatalog(t *testing.T) {
 	}
 }
 func TestFreshActivationResumesAfterDatabaseCreation(t *testing.T) {
-	home, r := fixture(t)
+	backend, home, r := fixture(t)
 	ctx := context.Background()
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
 	if err := mkdirTrusted(root); err != nil {
@@ -97,11 +97,11 @@ func TestFreshActivationResumesAfterDatabaseCreation(t *testing.T) {
 	if err := deployment.Write(r.Profile.StatePath, deployment.Marker{Version: 1, Release: deployment.Release, Maintenance: true}); err != nil {
 		t.Fatal(err)
 	}
-	found, err := Discover(ctx, home)
+	found, err := backend.Discover(ctx, home)
 	if err != nil || !found.Pending {
 		t.Fatalf("pending setup unavailable: %+v %v", found, err)
 	}
-	if err := Apply(ctx, home, r); err != nil {
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	s, err = store.Open(ctx, r.Profile.StatePath)
@@ -115,9 +115,9 @@ func TestFreshActivationResumesAfterDatabaseCreation(t *testing.T) {
 	}
 }
 func TestSameCatalogProfileChangeResumesBeforeOwnedFiles(t *testing.T) {
-	home, r := fixture(t)
+	backend, home, r := fixture(t)
 	ctx := context.Background()
-	if err := Apply(ctx, home, r); err != nil {
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
@@ -140,7 +140,7 @@ func TestSameCatalogProfileChangeResumesBeforeOwnedFiles(t *testing.T) {
 	if err := deployment.Write(r.Profile.StatePath, deployment.Marker{Version: 1, Release: deployment.Release, Maintenance: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := Apply(ctx, home, r); err != nil {
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := privateRead(filepath.Join(root, "operator.json"))
@@ -151,7 +151,7 @@ func TestSameCatalogProfileChangeResumesBeforeOwnedFiles(t *testing.T) {
 	}
 }
 func TestPendingDiscoveryPrecedesIncompleteProfileAndCatalog(t *testing.T) {
-	home, r := fixture(t)
+	backend, home, r := fixture(t)
 	ctx := context.Background()
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
 	mkdirTrusted(root)
@@ -163,23 +163,23 @@ func TestPendingDiscoveryPrecedesIncompleteProfileAndCatalog(t *testing.T) {
 	writeJSON(filepath.Join(root, "operator.json"), r.Profile)
 	writeJSON(filepath.Join(root, "activation.json"), activation{Request: r, Fresh: true})
 	deployment.Write(r.Profile.StatePath, deployment.Marker{Version: 1, Release: deployment.Release, Maintenance: true})
-	discovery, err := Discover(ctx, home)
+	discovery, err := backend.Discover(ctx, home)
 	if err != nil || !discovery.Pending {
 		t.Fatalf("%+v %v", discovery, err)
 	}
 }
 func TestEachActivationRetainsItsOwnSnapshot(t *testing.T) {
-	home, r := fixture(t)
+	backend, home, r := fixture(t)
 	ctx := context.Background()
-	if err := Apply(ctx, home, r); err != nil {
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, _ := ReadCatalog(ctx, r.Profile.StatePath)
 	r.ExpectedRevision = snapshot.Revision
-	if err := Apply(ctx, home, r); err != nil {
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
-	if err := Apply(ctx, home, r); err != nil {
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	backups, err := os.ReadDir(filepath.Join(home, ".config/gpu-workload-supervisor/backups"))
@@ -206,9 +206,7 @@ func TestPostcommitFileFailureNeverRollsBack(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "integration"), []byte("new"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	before := writeIntegration
-	t.Cleanup(func() { writeIntegration = before })
-	writeIntegration = func(string, []byte) error { return os.ErrPermission }
+	tx.write = func(string, []byte) error { return os.ErrPermission }
 	hooks := Hooks{Quiescent: func() error { return nil }, Committed: func() (bool, error) { return true, nil }, Commit: func() error { t.Fatal("repeated catalog commit"); return nil }}
 	if err := tx.Apply(hooks); err == nil {
 		t.Fatal("write failure missing")
@@ -220,25 +218,25 @@ func TestPostcommitFileFailureNeverRollsBack(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, journalName)); err != nil {
 		t.Fatal("resume journal discarded")
 	}
-	writeIntegration = before
+	tx.write = deployment.AtomicWrite
 	if err := tx.Apply(hooks); err != nil {
 		t.Fatal("forward retry failed", err)
 	}
 }
 
 func TestCompatibleTupleRestoreAllowsSubsequentSetup(t *testing.T) {
-	home, r := fixture(t)
+	backend, home, r := fixture(t)
 	ctx := context.Background()
 	beforeRelease := deployment.Release
 	t.Cleanup(func() { deployment.Release = beforeRelease })
 	deployment.Release = "0.9.0"
-	if err := Apply(ctx, home, r); err != nil {
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	original, _ := ReadCatalog(ctx, r.Profile.StatePath)
 	r.ExpectedRevision = original.Revision
 	deployment.Release = "1.0.0"
-	if err := Apply(ctx, home, r); err != nil {
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
@@ -280,10 +278,10 @@ func TestCompatibleTupleRestoreAllowsSubsequentSetup(t *testing.T) {
 		t.Fatal(err)
 	}
 	restored.Close()
-	if err := Reconcile(ctx, home); err != nil {
+	if err := backend.Reconcile(ctx, home); err != nil {
 		t.Fatal(err)
 	}
-	if err := Apply(ctx, home, r); err != nil {
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal("matching restored ownership rejected", err)
 	}
 }

@@ -7,13 +7,11 @@ import (
 	"strings"
 )
 
-var probeApplication = Probe
-
-func discoverApplications(ctx context.Context, result *Discovery, units []string) {
+func (b Backend) discoverApplications(ctx context.Context, result *Discovery, units []string) {
 	// Only these four local default origins are probed. Non-default instances use
 	// an explicit endpoint selection; no port, process, or filesystem scanning.
 	for _, r := range []ProbeRequest{{App: "comfyui", Endpoint: "http://127.0.0.1:8188"}, {App: "ollama", Endpoint: "http://127.0.0.1:11434"}, {App: "llama.cpp", Endpoint: "http://127.0.0.1:8080"}, {App: "vllm", Endpoint: "http://127.0.0.1:8000"}} {
-		found, err := probeApplication(ctx, r)
+		found, err := b.probeApplication(ctx, r)
 		if err != nil {
 			found = candidate(r)
 			found.InstanceStatus = "unreachable"
@@ -42,7 +40,7 @@ func discoverApplications(ctx context.Context, result *Discovery, units []string
 		if !supportedName {
 			continue
 		}
-		output, err := runCommand(ctx, "/usr/bin/systemctl", "--user", "show", unit, "--property=ExecStart,ControlGroup,ActiveState,SubState", "--no-pager")
+		output, err := b.runCommand(ctx, "/usr/bin/systemctl", "--user", "show", unit, "--property=ExecStart,ControlGroup,ActiveState,SubState", "--no-pager")
 		if err != nil || len(output) > 1048576 {
 			continue
 		}

@@ -98,10 +98,14 @@ func Home() (string, error) {
 	return account.HomeDir, nil
 }
 func Plan(home string, request Request) (Preview, error) {
+	return SystemBackend().Plan(home, request)
+}
+
+func (b Backend) Plan(home string, request Request) (Preview, error) {
 	if err := Validate(request); err != nil {
 		return Preview{}, err
 	}
-	if _, err := makeRuntime(request); err != nil {
+	if _, err := b.makeRuntime(request); err != nil {
 		return Preview{}, err
 	}
 	profile := request.Profile
@@ -109,8 +113,19 @@ func Plan(home string, request Request) (Preview, error) {
 	return Preview{Release: deployment.Release, Profile: profile, Catalog: request.Catalog, Changes: []string{filepath.Join(home, ".config/gpu-workload-supervisor/operator.json"), "Commit validated workload catalog to " + profile.StatePath, "Enable packaged user reconciliation for future logins (no workload is started now)", "Retain verified binary/configuration/state backups; user units and models are unchanged"}}, nil
 }
 
-var makeRuntime = runtimeFor
-var runCommand = boundedCommand
+// Backend holds the host interactions setup performs. Tests inject fakes
+// instead of touching the real runtime, unit manager, or package binaries.
+type Backend struct {
+	makeRuntime      func(Request) (gpuruntime.Manager, error)
+	runCommand       func(ctx context.Context, name string, args ...string) ([]byte, error)
+	probeApplication func(ctx context.Context, request ProbeRequest) (ApplicationCandidate, error)
+	binaryDirectory  string
+	packageBinaryUID uint32
+}
+
+func SystemBackend() Backend {
+	return Backend{makeRuntime: runtimeFor, runCommand: boundedCommand, probeApplication: Probe, binaryDirectory: "/usr/bin"}
+}
 
 func runtimeFor(request Request) (gpuruntime.Manager, error) {
 	return gpuruntime.NewSystemdManager(gpuruntime.SystemdConfig{Catalog: &request.Catalog, SystemctlPath: request.Profile.SystemctlPath, NvidiaSMIPath: request.Profile.NvidiaSMIPath, GPUIndex: request.Profile.GPUIndex, CapacityHeadroomMiB: request.Profile.CapacityHeadroomMiB, HealthTimeout: 10 * time.Second})
@@ -125,6 +140,7 @@ func mkdirTrusted(path string) error {
 // Apply never stops workloads. A caller must explicitly bring the existing
 // deployment to closed, stable Idle before activation or adoption.
 type activationWork struct {
+	backend        Backend
 	home, root     string
 	request        Request
 	old            Profile
@@ -135,13 +151,17 @@ type activationWork struct {
 }
 
 func Apply(ctx context.Context, home string, request Request) error {
+	return SystemBackend().Apply(ctx, home, request)
+}
+
+func (b Backend) Apply(ctx context.Context, home string, request Request) error {
 	if err := Validate(request); err != nil {
 		return err
 	}
 	if !request.ConfirmQuiesced {
 		return errors.New("review preview and explicitly confirm quiescent activation")
 	}
-	work := activationWork{home: home, root: filepath.Join(home, ".config/gpu-workload-supervisor"), request: request}
+	work := activationWork{backend: b, home: home, root: filepath.Join(home, ".config/gpu-workload-supervisor"), request: request}
 	if err := mkdirTrusted(work.root); err != nil {
 		return err
 	}
@@ -172,7 +192,7 @@ func Apply(ctx context.Context, home string, request Request) error {
 	if err != nil {
 		return err
 	}
-	return commitConfiguration(ctx, home, work.root, request, manager, progress.Fresh)
+	return b.commitConfiguration(ctx, home, work.root, request, manager, progress.Fresh)
 }
 
 func (work *activationWork) inspect(ctx context.Context) error {
@@ -202,7 +222,7 @@ func (work *activationWork) inspect(ctx context.Context) error {
 }
 
 func (work activationWork) verifyRuntimes(ctx context.Context) (gpuruntime.Manager, error) {
-	manager, err := makeRuntime(work.request)
+	manager, err := work.backend.makeRuntime(work.request)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +237,7 @@ func (work activationWork) verifyRuntimes(ctx context.Context) (gpuruntime.Manag
 		if work.accepted.Revision == "" {
 			previous.Catalog = work.request.Catalog
 		}
-		oldManager, err := makeRuntime(previous)
+		oldManager, err := work.backend.makeRuntime(previous)
 		if err != nil {
 			return nil, err
 		}
@@ -280,7 +300,7 @@ func (work activationWork) enterMaintenance() (activation, error) {
 	return progress, deployment.Write(work.request.Profile.StatePath, marker)
 }
 
-func commitConfiguration(ctx context.Context, home, root string, request Request, manager gpuruntime.Manager, fresh bool) error {
+func (b Backend) commitConfiguration(ctx context.Context, home, root string, request Request, manager gpuruntime.Manager, fresh bool) error {
 	// A crash from this point intentionally leaves the maintenance fence in place.
 	stateStore, err := store.Open(ctx, request.Profile.StatePath)
 	if err != nil {
@@ -323,12 +343,12 @@ func commitConfiguration(ctx context.Context, home, root string, request Request
 			return err
 		}
 	}
-	if err := retainBinaries(root); err != nil {
+	if err := b.retainBinaries(root); err != nil {
 		return err
 	}
 	// systemctl enable installs only the package-owned unit link, without --now.
 	// Reject preexisting user overrides before invoking the standard unit manager.
-	if err := enableReconciliation(ctx, home, profile.SystemctlPath); err != nil {
+	if err := b.enableReconciliation(ctx, home, profile.SystemctlPath); err != nil {
 		return err
 	}
 	return deployment.Write(profile.StatePath, deployment.Marker{Version: 1, Release: deployment.Release})
@@ -364,7 +384,7 @@ type integration struct {
 
 const reconcileUnit = "gpu-workload-supervisor-reconcile.service"
 
-func enableReconciliation(ctx context.Context, home, systemctl string) error {
+func (b Backend) enableReconciliation(ctx context.Context, home, systemctl string) error {
 	userDir := filepath.Join(home, ".config/systemd/user")
 	if err := mkdirTrusted(userDir); err != nil {
 		return err
@@ -393,7 +413,7 @@ func enableReconciliation(ctx context.Context, home, systemctl string) error {
 	if err := writeJSON(filepath.Join(home, ".config/gpu-workload-supervisor/integration.json"), integration{1, reconcileUnit, target}); err != nil {
 		return err
 	}
-	output, err := runCommand(ctx, systemctl, "--user", "enable", reconcileUnit)
+	output, err := b.runCommand(ctx, systemctl, "--user", "enable", reconcileUnit)
 	if err != nil {
 		return fmt.Errorf("enable reconciliation: %w: %.4096s", err, output)
 	}
@@ -442,6 +462,10 @@ func RemoveIntegration(home string) error {
 }
 
 func Reconcile(ctx context.Context, home string) error {
+	return SystemBackend().Reconcile(ctx, home)
+}
+
+func (b Backend) Reconcile(ctx context.Context, home string) error {
 	data, err := privateRead(filepath.Join(home, ".config/gpu-workload-supervisor/operator.json"))
 	if err != nil {
 		return err
@@ -475,7 +499,7 @@ func Reconcile(ctx context.Context, home string) error {
 	if err != nil {
 		return err
 	}
-	manager, err := makeRuntime(Request{Profile: profile, Catalog: snapshot.Catalog})
+	manager, err := b.makeRuntime(Request{Profile: profile, Catalog: snapshot.Catalog})
 	if err != nil {
 		return err
 	}

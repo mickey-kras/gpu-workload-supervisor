@@ -14,30 +14,28 @@ type bindingRuntime struct {
 
 func (r bindingRuntime) Preflight(context.Context) error { return r.preflightError }
 func TestVerifyBindingsFailsClosed(t *testing.T) {
-	old := makeRuntime
-	t.Cleanup(func() { makeRuntime = old })
-	_, request := fixture(t)
-	if err := VerifyBindings(context.Background(), Request{}); err == nil {
+	backend, _, request := fixture(t)
+	if err := backend.VerifyBindings(context.Background(), Request{}); err == nil {
 		t.Fatal("invalid request")
 	}
 	for _, fail := range []bool{false, true} {
-		makeRuntime = func(Request) (gpuruntime.Manager, error) {
+		backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
 			var err error
 			if fail {
 				err = errors.New("binding changed")
 			}
 			return bindingRuntime{preflightError: err}, nil
 		}
-		if err := VerifyBindings(context.Background(), request); (err != nil) != fail {
+		if err := backend.VerifyBindings(context.Background(), request); (err != nil) != fail {
 			t.Fatalf("failure=%v: %v", fail, err)
 		}
 	}
-	makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
-	if err := VerifyBindings(context.Background(), request); err == nil {
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	if err := backend.VerifyBindings(context.Background(), request); err == nil {
 		t.Fatal("missing verifier")
 	}
-	makeRuntime = func(Request) (gpuruntime.Manager, error) { return nil, errors.New("runtime missing") }
-	if err := VerifyBindings(context.Background(), request); err == nil {
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return nil, errors.New("runtime missing") }
+	if err := backend.VerifyBindings(context.Background(), request); err == nil {
 		t.Fatal("missing runtime")
 	}
 }
