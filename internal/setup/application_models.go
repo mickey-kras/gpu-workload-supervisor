@@ -164,8 +164,8 @@ func (p applicationHTTP) llama(ctx context.Context, result *ApplicationCandidate
 		}
 		return llamaServedCandidates(ctx, body.Data, result)
 	}
-	if body.Data == nil {
-		return errors.New("missing native model inventory")
+	if len(body.Data) == 0 {
+		return errors.New("no llama.cpp identity evidence")
 	}
 	if err := inventoryBound(ctx, len(body.Data)); err != nil {
 		return err

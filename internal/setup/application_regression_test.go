@@ -76,14 +76,18 @@ func TestServedAliasCannotCollideWithModelRoot(t *testing.T) {
 	}
 }
 
-func TestEmptyLlamaFallbackCannotIdentifyApplication(t *testing.T) {
-	server := probeServer(t, map[string]string{"/v1/models": `{"data":[]}`})
-	got, err := Probe(context.Background(), ProbeRequest{App: "llama.cpp", Endpoint: server.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.InstanceStatus == "available" {
-		t.Fatalf("generic empty OpenAI models endpoint verified as llama.cpp: %+v", got)
+func TestEmptyLlamaInventoryCannotIdentifyApplication(t *testing.T) {
+	for _, path := range []string{"/models", "/v1/models"} {
+		t.Run(path, func(t *testing.T) {
+			server := probeServer(t, map[string]string{path: `{"data":[]}`})
+			got, err := Probe(context.Background(), ProbeRequest{App: "llama.cpp", Endpoint: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.InstanceStatus == "available" || got.InventoryStatus != "invalid" || len(got.Models) != 0 {
+				t.Fatalf("generic empty OpenAI models endpoint verified as llama.cpp: %+v", got)
+			}
+		})
 	}
 }
 
