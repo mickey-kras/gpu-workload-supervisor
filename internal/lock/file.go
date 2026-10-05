@@ -17,10 +17,6 @@ type File struct {
 	file *os.File
 }
 
-func Acquire(path string) (*File, error) {
-	return acquire(path, unix.LOCK_EX)
-}
-
 // AcquireShared holds a lifetime lock used by every proxy for a state store.
 func AcquireShared(path string) (*File, error) {
 	return acquire(path, unix.LOCK_SH)

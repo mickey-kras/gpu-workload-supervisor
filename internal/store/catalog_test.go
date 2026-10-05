@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"path/filepath"
 	"testing"
@@ -24,11 +25,26 @@ func TestCatalogCommitAtomicRevision(t *testing.T) {
 	if snap.Revision == "" || after.Version != before.Version+1 || after.LeaseFence != before.LeaseFence {
 		t.Fatal("catalog commit changed fence or failed version increment")
 	}
-	if _, err = s.ReplaceCatalog(ctx, "", c); err == nil {
-		t.Fatal("stale revision accepted")
+	next := snap.Catalog.Clone()
+	next.Profiles[0].Label = "Speech changed"
+	second, err := s.ReplaceCatalog(ctx, snap.Revision, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, _ = s.State(ctx)
+	if _, err = s.ReplaceCatalog(ctx, snap.Revision, next); !errors.Is(err, ErrVersionConflict) {
+		t.Fatalf("stale revision accepted: %v", err)
 	}
 	got, _ := s.Catalog(ctx)
-	if got.Revision != snap.Revision {
-		t.Fatal("failed update changed catalog")
+	if got.Revision != second.Revision {
+		t.Fatal("stale writer won")
+	}
+	state, _ := s.State(ctx)
+	if state != after {
+		t.Fatal("stale writer advanced state")
+	}
+	var count int
+	if err = s.db.QueryRow("SELECT COUNT(*) FROM workload_catalog_history").Scan(&count); err != nil || count != 2 {
+		t.Fatalf("history %d %v", count, err)
 	}
 }

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -13,9 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
-	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -27,165 +24,6 @@ import (
 )
 
 type routesFlag []workloadproxy.Route
-
-// activeHandler prevents new proxy work after shutdown begins and reports when
-// every admitted request has left its handler, even if Shutdown times out.
-type activeHandler struct {
-	handler         http.Handler
-	mu              sync.Mutex
-	active          int
-	ordinary        int
-	completion      int
-	maxOrdinary     int
-	maxCompletion   int
-	completionPath  string
-	stopping        bool
-	drained         chan struct{}
-	hijacked        map[net.Conn]struct{}
-	closingHijacked bool
-}
-
-// trackingWriter records connections that leave net/http's ownership on
-// Hijack. ReverseProxy uses ResponseController.Hijack for upgrades.
-type trackingWriter struct {
-	http.ResponseWriter
-	owner *activeHandler
-	conn  net.Conn
-}
-
-func (w *trackingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
-
-func (w *trackingWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	conn, rw, err := http.NewResponseController(w.ResponseWriter).Hijack()
-	if err != nil {
-		return nil, nil, err
-	}
-	w.owner.mu.Lock()
-	if w.owner.hijacked == nil {
-		w.owner.hijacked = make(map[net.Conn]struct{})
-	}
-	w.owner.hijacked[conn] = struct{}{}
-	w.conn = conn
-	closing := w.owner.closingHijacked
-	w.owner.mu.Unlock()
-	if closing {
-		_ = conn.Close()
-	}
-	return conn, rw, nil
-}
-
-func (h *activeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	isCompletion := r.Method == http.MethodPost && r.URL.Path == h.completionPath
-	switch h.admit(isCompletion) {
-	case admissionStopping:
-		http.Error(w, "proxy is shutting down", http.StatusServiceUnavailable)
-		return
-	case admissionFull:
-		capacityUnavailable(w)
-		return
-	}
-	writer := &trackingWriter{ResponseWriter: w, owner: h}
-	defer func() {
-		h.mu.Lock()
-		delete(h.hijacked, writer.conn)
-		h.active--
-		if isCompletion {
-			h.completion--
-		} else {
-			h.ordinary--
-		}
-		if h.stopping && h.active == 0 {
-			close(h.drained)
-		}
-		h.mu.Unlock()
-	}()
-	h.handler.ServeHTTP(writer, r)
-}
-
-type admissionResult uint8
-
-const (
-	admissionAccepted admissionResult = iota
-	admissionStopping
-	admissionFull
-)
-
-func (h *activeHandler) admit(isCompletion bool) admissionResult {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.stopping {
-		return admissionStopping
-	}
-	if isCompletion {
-		if h.maxCompletion > 0 && h.completion >= h.maxCompletion {
-			return admissionFull
-		}
-		h.completion++
-	} else {
-		if h.maxOrdinary > 0 && h.ordinary >= h.maxOrdinary {
-			return admissionFull
-		}
-		h.ordinary++
-	}
-	h.active++
-	return admissionAccepted
-}
-
-func capacityUnavailable(w http.ResponseWriter) {
-	w.Header().Set("Retry-After", "1")
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusServiceUnavailable)
-	_, _ = w.Write([]byte("{\"error\":\"proxy_capacity_exceeded\"}\n"))
-}
-
-func (h *activeHandler) closeHijacked() error {
-	h.mu.Lock()
-	h.closingHijacked = true
-	conns := make([]net.Conn, 0, len(h.hijacked))
-	for conn := range h.hijacked {
-		conns = append(conns, conn)
-	}
-	h.mu.Unlock()
-	var err error
-	for _, conn := range conns {
-		err = errors.Join(err, conn.Close())
-	}
-	return err
-}
-
-func (h *activeHandler) stop() <-chan struct{} {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if !h.stopping {
-		h.stopping = true
-		h.drained = make(chan struct{})
-		if h.active == 0 {
-			close(h.drained)
-		}
-	}
-	return h.drained
-}
-
-func shutdownAndDrain(server *http.Server, handler *activeHandler, timeout time.Duration) error {
-	drained := handler.stop()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	err := server.Shutdown(ctx)
-	if err != nil {
-		// Shutdown leaves active connections open when its deadline expires.
-		// Close cancels them; a handler may still need time to return.
-		err = errors.Join(err, server.Close(), handler.closeHijacked())
-	} else {
-		select {
-		case <-drained:
-			return nil
-		case <-ctx.Done():
-			err = errors.Join(ctx.Err(), server.Close(), handler.closeHijacked())
-		}
-	}
-	<-drained
-	return err
-}
 
 func (value *routesFlag) String() string {
 	items := make([]string, 0, len(*value))
@@ -219,7 +57,7 @@ type proxyServerSettings struct {
 
 func run() error {
 	flags := flag.NewFlagSet("gpu-workload-proxy", flag.ContinueOnError)
-	statePath := flags.String("state", defaultStatePath(), "SQLite state path")
+	statePath := flags.String("state", deployment.DefaultStatePath(), "SQLite state path")
 	listen := flags.String("listen", "127.0.0.1:8090", "HTTP listen address")
 	upstreamValue := flags.String("upstream", "", "absolute upstream URL")
 	workloadValue := flags.String("workload", "", "required configured workload ID")
@@ -279,9 +117,6 @@ func run() error {
 		JobIDHeader: *jobIDHeader, FenceIDHeader: *fenceIDHeader,
 		FenceEpochHeader: *fenceEpochHeader,
 	}
-	if err := workloadproxy.ValidateConfig(proxyConfig); err != nil {
-		return err
-	}
 	return serveProxy(proxyConfig, proxyServerSettings{
 		statePath: *statePath, listen: *listen,
 		readHeaderTimeout: *readHeaderTimeout, idleTimeout: *idleTimeout,
@@ -312,26 +147,22 @@ func serveProxy(proxyConfig workloadproxy.Config, settings proxyServerSettings) 
 	if err := deployment.Check(settings.statePath, ""); err != nil {
 		return err
 	}
-	stateStore, err := store.Open(context.Background(), settings.statePath)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	stateStore, err := store.Open(ctx, settings.statePath)
 	if err != nil {
 		return fmt.Errorf("open state store: %w", err)
 	}
 	defer stateStore.Close()
-	handler, err := workloadproxy.New(stateStore, proxyConfig)
+	handler, err := workloadproxy.NewWithContext(ctx, stateStore, proxyConfig)
 	if err != nil {
 		return err
 	}
-	tracked := &activeHandler{handler: handler, maxOrdinary: settings.maxInflight,
-		maxCompletion: settings.maxCompletionInflight, completionPath: proxyConfig.CompletionPath}
-	if tracked.completionPath == "" {
-		tracked.completionPath = workloadproxy.DefaultCompletionPath
-	}
+	tracked := workloadproxy.NewServer(handler, settings.maxInflight, settings.maxCompletionInflight, proxyConfig.CompletionPath)
 	server := &http.Server{
 		Addr: settings.listen, Handler: tracked, ReadHeaderTimeout: settings.readHeaderTimeout,
 		IdleTimeout: settings.idleTimeout,
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 	maintenanceCtx, stopMaintenance := context.WithCancel(ctx)
 	maintenanceDone := make(chan struct{})
 	go func() {
@@ -354,21 +185,10 @@ func serveProxy(proxyConfig workloadproxy.Config, settings proxyServerSettings) 
 	}()
 	select {
 	case err := <-result:
-		return errors.Join(err, shutdownAndDrain(server, tracked, settings.shutdownTimeout))
+		return errors.Join(err, tracked.ShutdownAndDrain(server, settings.shutdownTimeout))
 	case <-ctx.Done():
-		return shutdownAndDrain(server, tracked, settings.shutdownTimeout)
+		return tracked.ShutdownAndDrain(server, settings.shutdownTimeout)
 	}
-}
-
-func defaultStatePath() string {
-	if root := os.Getenv("XDG_STATE_HOME"); root != "" {
-		return filepath.Join(root, "gpu-workload-supervisor", "state.db")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "state.db"
-	}
-	return filepath.Join(home, ".local", "state", "gpu-workload-supervisor", "state.db")
 }
 
 func validateLoopbackAddress(address string) error {

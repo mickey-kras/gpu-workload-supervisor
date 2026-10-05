@@ -10,7 +10,7 @@ import (
 )
 
 func (s *Store) RegisterWork(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence) error {
-	tx, err := s.beginAdmittedWork(ctx, requestID, workload, fence)
+	tx, err := s.beginAdmittedWorkAtCatalog(ctx, requestID, workload, fence, nil)
 	if err != nil {
 		return err
 	}

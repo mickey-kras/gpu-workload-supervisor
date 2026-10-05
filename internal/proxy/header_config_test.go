@@ -22,7 +22,7 @@ func TestConfiguredHeaderNames(t *testing.T) {
 				case "epoch":
 					config.FenceEpochHeader = name
 				}
-				err := ValidateConfig(config)
+				_, _, _, _, err := validateConfig(config)
 				valid := name == "X-Valid_!#$%&'*+-.^`|~"
 				if (err == nil) != valid {
 					t.Errorf("header %q: error %v, valid=%v", name, err, valid)

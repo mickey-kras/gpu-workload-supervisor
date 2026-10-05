@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestLockHelper(t *testing.T) {
@@ -15,7 +17,7 @@ func TestLockHelper(t *testing.T) {
 		return
 	}
 	path := os.Args[len(os.Args)-1]
-	lock, err := Acquire(path)
+	lock, err := acquire(path, unix.LOCK_EX)
 	if err != nil {
 		os.Exit(2)
 	}
@@ -100,7 +102,7 @@ func TestSharedProxyLocksBlockExclusiveResolution(t *testing.T) {
 func TestAcquireCreatesPrivateFilesAndRejectsSymlink(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "private")
 	path := filepath.Join(directory, "state.lock")
-	lock, err := Acquire(path)
+	lock, err := acquire(path, unix.LOCK_EX)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,20 +128,20 @@ func TestAcquireCreatesPrivateFilesAndRejectsSymlink(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Acquire(link); err == nil {
+	if _, err := acquire(link, unix.LOCK_EX); err == nil {
 		t.Fatal("expected symlink rejection")
 	}
 }
 
 func TestAcquireRejectsInvalidLockPath(t *testing.T) {
-	if _, err := Acquire(""); err == nil {
+	if _, err := acquire("", unix.LOCK_EX); err == nil {
 		t.Fatal("empty lock path accepted")
 	}
 	parent := filepath.Join(t.TempDir(), "regular-file")
 	if err := os.WriteFile(parent, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Acquire(filepath.Join(parent, "lock")); err == nil {
+	if _, err := acquire(filepath.Join(parent, "lock"), unix.LOCK_EX); err == nil {
 		t.Fatal("regular file accepted as lock parent")
 	}
 	var missing *File
@@ -188,14 +190,14 @@ func TestContextLockTimesOutAndReleasesReadersIndependently(t *testing.T) {
 
 func TestCloseIsIdempotentWhileAnotherLockIsHeld(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.lock")
-	first, err := Acquire(path)
+	first, err := acquire(path, unix.LOCK_EX)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
-	second, err := Acquire(path)
+	second, err := acquire(path, unix.LOCK_EX)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -52,6 +52,9 @@ func TestConfigRejectsInvalidOriginsAndRoutes(t *testing.T) {
 		{"invalid completion path", func(config *Config) { config.CompletionPath = "finish" }},
 		{"request ID overlaps token", func(config *Config) { config.RequestIDHeader = DefaultRegistrationTokenHeader }},
 		{"fence headers overlap", func(config *Config) { config.FenceEpochHeader = DefaultFenceIDHeader }},
+		{"job ID overlaps request ID", func(config *Config) { config.JobIDHeader = DefaultRequestIDHeader }},
+		{"job ID overlaps token", func(config *Config) { config.JobIDHeader = "x-workload-registration-token" }},
+		{"job ID overlaps fence epoch", func(config *Config) { config.FenceEpochHeader = "X-Epoch"; config.JobIDHeader = "x-epoch" }},
 		{"request ID is Connection", func(config *Config) { config.RequestIDHeader = "connection" }},
 		{"fence is hop-by-hop", func(config *Config) { config.FenceIDHeader = "TE" }},
 		{"epoch is transport metadata", func(config *Config) { config.FenceEpochHeader = "Content-Length" }},
@@ -60,12 +63,12 @@ func TestConfigRejectsInvalidOriginsAndRoutes(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			config := valid
 			test.edit(&config)
-			if err := ValidateConfig(config); err == nil {
+			if _, _, _, _, err := validateConfig(config); err == nil {
 				t.Fatal("invalid proxy configuration accepted")
 			}
 		})
 	}
-	if err := ValidateConfig(valid); err != nil {
+	if _, _, _, _, err := validateConfig(valid); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -136,6 +136,9 @@ type failingCatalogStore struct{ fakeStore }
 func (*failingCatalogStore) Catalog(context.Context) (control.CatalogSnapshot, error) {
 	return control.CatalogSnapshot{}, errors.New("catalog unavailable")
 }
+func (*failingCatalogStore) AdmitWorkTokenAtCatalog(context.Context, string, string, control.Workload, control.Fence, string) (string, error) {
+	return "", errors.New("catalog unavailable")
+}
 func TestNativeCatalogReadFailure(t *testing.T) {
 	s, c, _, _ := nativeProxyFixture(t)
 	if _, err := New(&failingCatalogStore{}, c); err == nil {
