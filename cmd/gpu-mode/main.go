@@ -268,12 +268,12 @@ func acquireProxyLifetimeLock(statePath, command, reason string) (*lock.File, er
 		if len(reason) > 512 {
 			return nil, errors.New("resolution reason must contain 1 to 512 bytes")
 		}
-	case restoreStateCommand:
+	case restoreStateCommand, "configure":
 	default:
 		return nil, nil
 	}
 	// Proxies hold shared locks until their in-flight handlers finish. Refuse
-	// to abandon work while any proxy can still forward an admitted request.
+	// to abandon work or replace configuration while a proxy can still forward.
 	proxyLock, err := lock.TryAcquire(statePath + ".proxy.lock")
 	if err != nil {
 		return nil, fmt.Errorf("stop all workload proxies and wait for shutdown before %s: %w", command, err)

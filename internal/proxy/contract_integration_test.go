@@ -227,14 +227,14 @@ type pausedAdmission struct {
 	resume  chan struct{}
 }
 
-func (s *pausedAdmission) AdmitWorkToken(ctx context.Context, id, job string, workload control.Workload, fence control.Fence) (string, error) {
+func (s *pausedAdmission) AdmitWorkTokenAtCatalog(ctx context.Context, id, job string, workload control.Workload, fence control.Fence, revision string) (string, error) {
 	close(s.entered)
 	select {
 	case <-s.resume:
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
-	return s.Store.AdmitWorkToken(ctx, id, job, workload, fence)
+	return s.Store.AdmitWorkTokenAtCatalog(ctx, id, job, workload, fence, revision)
 }
 
 func (f *contractFixture) beginDrain() {

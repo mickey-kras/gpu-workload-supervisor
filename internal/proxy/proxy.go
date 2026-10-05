@@ -54,6 +54,8 @@ type Config struct {
 }
 
 type Handler struct {
+	nativeModel       *control.NativeModel
+	catalogRevision   string
 	store             StateStore
 	proxy             *httputil.ReverseProxy
 	workload          control.Workload
@@ -115,6 +117,10 @@ func New(stateStore StateStore, config Config) (*Handler, error) {
 	if config.FenceEpochHeader == "" {
 		config.FenceEpochHeader = DefaultFenceEpochHeader
 	}
+	native, revision, err := nativePolicy(stateStore, config)
+	if err != nil {
+		return nil, err
+	}
 	reverseProxy := httputil.NewSingleHostReverseProxy(config.Upstream)
 	reverseProxy.Transport = config.Transport
 	if reverseProxy.Transport == nil {
@@ -125,7 +131,7 @@ func New(stateStore StateStore, config Config) (*Handler, error) {
 		return nil
 	}
 	return &Handler{
-		store: stateStore, proxy: reverseProxy, workload: config.Workload,
+		store: stateStore, proxy: reverseProxy, workload: config.Workload, nativeModel: native, catalogRevision: revision,
 		executionRoutes: executionRoutes, readOnlyRoutes: readOnlyRoutes, passthroughRoutes: passthroughRoutes,
 		completionPath: completionPath, requestIDHeader: config.RequestIDHeader,
 		jobIDHeader: config.JobIDHeader, fenceIDHeader: config.FenceIDHeader,
@@ -268,8 +274,15 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 		h.finish(response, request)
 		return
 	}
+	if !h.checkNativeCatalog(response, request) {
+		return
+	}
 	if !canonicalPath(request.URL.Path) {
 		writeError(response, http.StatusBadRequest, "path_not_canonical")
+		return
+	}
+	if h.nativeModel != nil && (request.URL.RawQuery != "" || request.Header.Get("Content-Encoding") != "") {
+		writeError(response, 400, "native_request_invalid")
 		return
 	}
 	key := request.Method + " " + request.URL.Path
@@ -289,6 +302,9 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 }
 
 func (h *Handler) execute(response http.ResponseWriter, request *http.Request) {
+	if !h.checkNativeRequest(response, request) {
+		return
+	}
 	state, err := h.store.State(request.Context())
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "state_unavailable")
@@ -324,7 +340,7 @@ func (h *Handler) execute(response http.ResponseWriter, request *http.Request) {
 	if h.jobIDHeader != "" {
 		jobID = strings.TrimSpace(request.Header.Get(h.jobIDHeader))
 	}
-	token, err := h.store.AdmitWorkToken(request.Context(), requestID, jobID, h.workload, fence)
+	token, err := h.admitExecution(request.Context(), requestID, jobID, fence)
 	if err != nil {
 		h.writeWorkError(response, err)
 		return
@@ -353,6 +369,9 @@ func (h *Handler) executeUser(response http.ResponseWriter, request *http.Reques
 		return
 	}
 	defer gate.Close()
+	if !h.checkNativeCatalog(response, request) {
+		return
+	}
 	// Re-read under the gate: the earlier observation may precede a transfer.
 	state, err := h.store.State(request.Context())
 	if err != nil || state.Owner != control.OwnerUser {
@@ -422,6 +441,10 @@ func (h *Handler) withoutControlHeaders(request *http.Request) *http.Request {
 }
 
 func (h *Handler) writeWorkError(response http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrVersionConflict) {
+		writeError(response, http.StatusConflict, "configuration_changed")
+		return
+	}
 	switch {
 	case errors.Is(err, store.ErrStaleFence), errors.Is(err, store.ErrWorkloadMismatch):
 		writeError(response, http.StatusConflict, "lease_rejected")

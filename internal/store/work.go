@@ -86,6 +86,9 @@ func (s *Store) ResolveUnfinishedWork(ctx context.Context, expected uint64, reas
 }
 
 func (s *Store) beginAdmittedWork(ctx context.Context, requestID string, workload control.Workload, fence control.Fence) (*sql.Tx, error) {
+	return s.beginAdmittedWorkAtCatalog(ctx, requestID, workload, fence, nil)
+}
+func (s *Store) beginAdmittedWorkAtCatalog(ctx context.Context, requestID string, workload control.Workload, fence control.Fence, revision *string) (*sql.Tx, error) {
 	if err := control.ValidateRequestID(requestID); err != nil {
 		return nil, err
 	}
@@ -102,6 +105,15 @@ func (s *Store) beginAdmittedWork(ctx context.Context, requestID string, workloa
 			_ = tx.Rollback()
 		}
 	}()
+	if revision != nil {
+		catalog, err := readCatalog(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+		if catalog.Revision != *revision {
+			return nil, ErrVersionConflict
+		}
+	}
 	if err := validateAdmittedCatalog(ctx, tx, workload); err != nil {
 		return nil, err
 	}
@@ -133,8 +145,28 @@ func (s *Store) AdmitWorkToken(ctx context.Context, requestID, jobID string, wor
 	return token, nil
 }
 
+// AdmitWorkTokenAtCatalog binds admission and catalog verification to one transaction.
+func (s *Store) AdmitWorkTokenAtCatalog(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence, revision string) (string, error) {
+	token, err := newUUID()
+	if err != nil {
+		return "", err
+	}
+	if err := s.admitWorkAtCatalog(ctx, requestID, jobID, workload, fence, admissionBinding{token: token, revision: &revision}); err != nil {
+		return "", err
+	}
+	return token, nil
+}
 func (s *Store) admitWork(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence, token string) error {
-	tx, err := s.beginAdmittedWork(ctx, requestID, workload, fence)
+	return s.admitWorkAtCatalog(ctx, requestID, jobID, workload, fence, admissionBinding{token: token})
+}
+
+type admissionBinding struct {
+	token    string
+	revision *string
+}
+
+func (s *Store) admitWorkAtCatalog(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence, binding admissionBinding) error {
+	tx, err := s.beginAdmittedWorkAtCatalog(ctx, requestID, workload, fence, binding.revision)
 	if err != nil {
 		return err
 	}
@@ -142,7 +174,7 @@ func (s *Store) admitWork(ctx context.Context, requestID, jobID string, workload
 	result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO registered_work
 		(request_id, job_id, workload, lease_incarnation, lease_epoch, registered_at, registration_token)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		requestID, nullable(jobID), workload, fence.Incarnation, fence.Epoch, formatTime(s.now()), nullable(token))
+		requestID, nullable(jobID), workload, fence.Incarnation, fence.Epoch, formatTime(s.now()), nullable(binding.token))
 	if err != nil {
 		return fmt.Errorf("admit work: %w", err)
 	}
