@@ -21,6 +21,7 @@ import (
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
+	"golang.org/x/mod/semver"
 )
 
 type Profile struct {
@@ -333,36 +334,26 @@ func commitConfiguration(ctx context.Context, home, root string, request Request
 	return deployment.Write(profile.StatePath, deployment.Marker{Version: 1, Release: deployment.Release})
 }
 
+// newer permits only a stable target with a strictly higher release core.
+// Snapshot hashes do not establish chronology, and a snapshot may postdate the
+// stable tag with the same core. Exact-release reapplication is handled by inspect.
 func newer(next, previous string) bool {
-	parse := func(value string) ([3]int, bool) {
-		var out [3]int
-		parts := strings.Split(strings.TrimPrefix(value, "v"), ".")
-		if len(parts) != 3 {
-			return out, false
+	next = "v" + strings.TrimPrefix(next, "v")
+	previous = "v" + strings.TrimPrefix(previous, "v")
+	for _, version := range []string{next, previous} {
+		if !semver.IsValid(version) {
+			return false
 		}
-		for i, p := range parts {
-			n, err := strconv.Atoi(p)
-			if err != nil || n < 0 {
-				return out, false
-			}
-			out[i] = n
+		// Reject x/mod's major-only and major.minor shorthand versions.
+		if semver.Canonical(version) != strings.TrimSuffix(version, semver.Build(version)) {
+			return false
 		}
-		return out, true
 	}
-	a, ok := parse(next)
-	if !ok {
+	if semver.Prerelease(next) != "" {
 		return false
 	}
-	b, ok := parse(previous)
-	if !ok {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return a[i] > b[i]
-		}
-	}
-	return false
+	previousCore := strings.TrimSuffix(semver.Canonical(previous), semver.Prerelease(previous))
+	return semver.Compare(next, previousCore) > 0
 }
 
 type integration struct {
