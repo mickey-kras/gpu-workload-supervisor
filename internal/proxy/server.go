@@ -155,6 +155,8 @@ func (s *Server) stop() <-chan struct{} {
 	return s.drained
 }
 
+const forcedDrainTimeout = 5 * time.Second
+
 func (s *Server) ShutdownAndDrain(server *http.Server, timeout time.Duration) error {
 	drained := s.stop()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -172,6 +174,10 @@ func (s *Server) ShutdownAndDrain(server *http.Server, timeout time.Duration) er
 			err = errors.Join(ctx.Err(), server.Close(), s.closeHijacked())
 		}
 	}
-	<-drained
+	select {
+	case <-drained:
+	case <-time.After(forcedDrainTimeout):
+		err = errors.Join(err, errors.New("proxy handlers did not drain after forced close"))
+	}
 	return err
 }

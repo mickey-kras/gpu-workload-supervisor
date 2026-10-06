@@ -28,7 +28,7 @@ func TestNativeProxyRejectsModelBeforeAdmission(t *testing.T) {
 			defer upstream.Close()
 			u, _ := url.Parse(upstream.URL)
 			s := &nativeStore{fakeStore: fakeStore{state: admittedState(owner)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Profiles: []control.Profile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "ollama", Model: "selected", Endpoint: upstream.URL}}}}}}
-			h, err := New(s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/api/generate"}}})
+			h, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/api/generate"}}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -74,7 +74,7 @@ func TestNativeProxyRoutePolicies(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s, c, _, _ := nativeProxyFixture(t)
 			edit(&c)
-			if _, err := New(s, c); err == nil {
+			if _, err := NewWithContext(context.Background(), s, c); err == nil {
 				t.Fatal("unsafe routing accepted")
 			}
 		})
@@ -84,12 +84,12 @@ func TestNativeProxyRoutePolicies(t *testing.T) {
 		s.catalog.Catalog.Profiles[0].NativeModel.Runtime = family
 		c.ExecutionRoutes = []Route{{Method: "POST", Path: "/v1/chat/completions"}}
 		c.ReadOnlyRoutes = []Route{{Method: "GET", Path: "/v1/models"}}
-		if _, err := New(s, c); err != nil {
+		if _, err := NewWithContext(context.Background(), s, c); err != nil {
 			t.Fatal(err)
 		}
 		if family != "ollama" {
 			c.ExecutionRoutes = []Route{{Method: "POST", Path: "/api/generate"}}
-			if _, err := New(s, c); err == nil {
+			if _, err := NewWithContext(context.Background(), s, c); err == nil {
 				t.Fatal("non-Ollama route accepted")
 			}
 		}
@@ -97,7 +97,7 @@ func TestNativeProxyRoutePolicies(t *testing.T) {
 	s, c, _, _ := nativeProxyFixture(t)
 	for _, path := range []string{"/api/tags", "/api/ps", "/api/version"} {
 		c.ReadOnlyRoutes = []Route{{Method: "GET", Path: path}}
-		if _, err := New(s, c); err != nil {
+		if _, err := NewWithContext(context.Background(), s, c); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -107,7 +107,7 @@ func TestNativeProxyValidBodyAndLimits(t *testing.T) {
 		t.Run(string(owner), func(t *testing.T) {
 			s, c, _, calls := nativeProxyFixture(t)
 			s.state.Owner = owner
-			h, err := New(s, c)
+			h, err := NewWithContext(context.Background(), s, c)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -118,13 +118,16 @@ func TestNativeProxyValidBodyAndLimits(t *testing.T) {
 			if w.Code != 200 || *calls != 1 {
 				t.Fatalf("valid request denied: %d", w.Code)
 			}
-			for _, tc := range []struct{ path, encoding, body string }{{"/api/generate?model=other", "", `{"model":"selected"}`}, {"/api/generate", "gzip", `{"model":"selected"}`}, {"/api/generate", "", strings.Repeat("x", 16<<20+1)}} {
+			for _, tc := range []struct {
+				path, encoding, body string
+				code                 int
+			}{{"/api/generate?model=other", "", `{"model":"selected"}`, 400}, {"/api/generate", "gzip", `{"model":"selected"}`, 400}, {"/api/generate", "", strings.Repeat("x", 16<<20+1), 502}} {
 				req := httptest.NewRequest("POST", tc.path, strings.NewReader(tc.body))
 				req.Header.Set("Content-Encoding", tc.encoding)
 				w := httptest.NewRecorder()
 				h.ServeHTTP(w, req)
-				if w.Code != 400 || *calls != 1 {
-					t.Fatal("invalid native body forwarded")
+				if w.Code != tc.code || *calls != 1 {
+					t.Fatalf("invalid native body forwarded: %d want %d", w.Code, tc.code)
 				}
 			}
 		})
@@ -141,14 +144,14 @@ func (*failingCatalogStore) AdmitWorkTokenAtCatalog(context.Context, string, str
 }
 func TestNativeCatalogReadFailure(t *testing.T) {
 	s, c, _, _ := nativeProxyFixture(t)
-	if _, err := New(&failingCatalogStore{}, c); err == nil {
+	if _, err := NewWithContext(context.Background(), &failingCatalogStore{}, c); err == nil {
 		t.Fatal("catalog failure ignored")
 	}
-	h, err := New(s, c)
+	h, err := NewWithContext(context.Background(), s, c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.store = &failingCatalogStore{}
+	h.catalog = &failingCatalogStore{}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/generate", strings.NewReader(`{"model":"selected"}`)))
 	if w.Code != 503 {
@@ -166,7 +169,7 @@ func (s *nativeStore) AdmitWorkTokenAtCatalog(ctx context.Context, requestID, jo
 func TestNativeAdmissionRejectsChangedCatalog(t *testing.T) {
 	s, c, _, calls := nativeProxyFixture(t)
 	s.state.Owner = control.OwnerSupervisor
-	h, err := New(s, c)
+	h, err := NewWithContext(context.Background(), s, c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,5 +182,26 @@ func TestNativeAdmissionRejectsChangedCatalog(t *testing.T) {
 	h.writeWorkError(w, err)
 	if w.Code != 409 || *calls != 0 || len(s.admitted) != 0 {
 		t.Fatal("stale admission escaped", w.Code)
+	}
+}
+
+type brokenBody struct{}
+
+func (brokenBody) Read([]byte) (int, error) { return 0, errors.New("connection reset by peer") }
+func (brokenBody) Close() error             { return nil }
+
+func TestNativeBodyReadFailureIsNotModelMismatch(t *testing.T) {
+	s, c, _, calls := nativeProxyFixture(t)
+	h, err := NewWithContext(context.Background(), s, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/generate", brokenBody{}))
+	if w.Code != 502 || *calls != 0 || len(s.admitted) != 0 {
+		t.Fatalf("aborted upload classified: %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "native_body_read_failed") {
+		t.Fatalf("error code = %s", w.Body.String())
 	}
 }

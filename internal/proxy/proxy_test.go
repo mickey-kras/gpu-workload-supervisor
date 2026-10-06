@@ -327,7 +327,7 @@ func testHandler(t *testing.T, stateStore StateStore, upstream string) *Handler 
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := New(stateStore, Config{
+	handler, err := NewWithContext(context.Background(), stateStore, Config{
 		Upstream: target, Workload: control.WorkloadMedia,
 		ExecutionRoutes: []Route{{Method: http.MethodPost, Path: "/execute"}},
 		ReadOnlyRoutes:  []Route{{Method: http.MethodGet, Path: "/assets/item"}},
@@ -390,7 +390,7 @@ func TestRouteCollisionsAreRejected(t *testing.T) {
 		},
 	}
 	for index, config := range tests {
-		if _, err := New(&fakeStore{}, config); err == nil {
+		if _, err := NewWithContext(context.Background(), &fakeStore{}, config); err == nil {
 			t.Fatalf("case %d accepted route collision", index)
 		}
 	}
@@ -559,7 +559,7 @@ func TestExplicitReadRoutesRemainAvailableWhenAdmissionClosed(t *testing.T) {
 			}
 			state := admittedState(control.OwnerSupervisor)
 			state.Admission = control.AdmissionClosed
-			handler, err := New(&fakeStore{state: state}, Config{Upstream: target, Workload: control.WorkloadMedia, ExecutionRoutes: []Route{{Method: "GET", Path: "/execute"}}, ReadOnlyRoutes: []Route{{Method: method, Path: "/monitor"}}})
+			handler, err := NewWithContext(context.Background(), &fakeStore{state: state}, Config{Upstream: target, Workload: control.WorkloadMedia, ExecutionRoutes: []Route{{Method: "GET", Path: "/execute"}}, ReadOnlyRoutes: []Route{{Method: method, Path: "/monitor"}}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -584,5 +584,24 @@ func TestExplicitReadRoutesRemainAvailableWhenAdmissionClosed(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFinishRejectsDuplicateKeysAndTrailingData(t *testing.T) {
+	for _, body := range []string{
+		`{"requestId":"request-1","requestId":"request-1","fence":{"incarnation":"11111111-1111-4111-8111-111111111111","epoch":7},"outcome":"completed","registrationToken":"test-registration-token"}`,
+		`{"requestId":"request-1","fence":{"incarnation":"11111111-1111-4111-8111-111111111111","epoch":7},"outcome":"completed","registrationToken":"test-registration-token"} {}`,
+	} {
+		stateStore := &fakeStore{state: admittedState(control.OwnerSupervisor)}
+		handler := testHandler(t, stateStore, "http://127.0.0.1:1")
+		request := httptest.NewRequest(http.MethodPost, "http://proxy.test"+DefaultCompletionPath, strings.NewReader(body))
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d for %s", response.Code, body)
+		}
+		if len(stateStore.finished) != 0 {
+			t.Fatalf("invalid finish recorded for %s", body)
+		}
 	}
 }

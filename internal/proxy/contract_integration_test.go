@@ -70,7 +70,7 @@ func (f *contractFixture) server(upstream string, stateStore StateStore) *httpte
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	h, err := New(stateStore, Config{Upstream: u, Workload: control.WorkloadMedia, ExecutionRoutes: []Route{{Method: "POST", Path: "/execute"}}})
+	h, err := NewWithContext(context.Background(), stateStore, Config{Upstream: u, Workload: control.WorkloadMedia, ExecutionRoutes: []Route{{Method: "POST", Path: "/execute"}}})
 	if err != nil {
 		f.t.Fatal(err)
 	}
