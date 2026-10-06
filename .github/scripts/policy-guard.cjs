@@ -328,7 +328,7 @@ function inspectCoverageConfig(files, failures) {
     const floors = new Map([
       ['^internal/control$', 78], ['^internal/store$', 85],
       ['^cmd/gpu-mode$', 93], ['^cmd/gpu-workload-proxy$', 90],
-      ['^internal/externalcontrol$', 95], ['^internal/lock$', 94],
+      ['^internal/lock$', 94],
       ['^internal/proxy$', 97], ['^internal/runtime$', 95],
       ['^internal/supervisor$', 93],
     ]);

@@ -79,27 +79,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return json.NewEncoder(output).Encode(result)
 	}
 	if args[0] == "save-drafts" {
-		var request setup.DraftRequest
-		data, err := io.ReadAll(io.LimitReader(input, 65537))
-		if err != nil {
-			return err
-		}
-		if len(data) > 65536 {
-			return errors.New("draft request exceeds 64 KiB")
-		}
-		decoder := json.NewDecoder(bytes.NewReader(data))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil {
-			return err
-		}
-		if err := decoder.Decode(new(any)); err != io.EOF {
-			return errors.New("trailing draft request")
-		}
-		result, err := setup.SaveDrafts(home, request)
-		if err != nil {
-			return err
-		}
-		return json.NewEncoder(output).Encode(result)
+		return saveDrafts(home, input, output)
 	}
 	if args[0] == "fingerprint" {
 		return a.fingerprint(input, output)
@@ -141,4 +121,28 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		}
 	}
 	return json.NewEncoder(output).Encode(preview)
+}
+
+func saveDrafts(home string, input io.Reader, output io.Writer) error {
+	var request setup.DraftRequest
+	data, err := io.ReadAll(io.LimitReader(input, 65537))
+	if err != nil {
+		return err
+	}
+	if len(data) > 65536 {
+		return errors.New("draft request exceeds 64 KiB")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		return err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return errors.New("trailing draft request")
+	}
+	result, err := setup.SaveDrafts(home, request)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(output).Encode(result)
 }
