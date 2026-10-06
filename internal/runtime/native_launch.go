@@ -61,19 +61,11 @@ func parseLaunchUnit(raw []byte, runtimeName string) (parsedLaunchUnit, error) {
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
 			continue
 		}
-		if line == "[Unit]" || line == "[Service]" || line == "[Install]" {
-			section = line
+		if header, ok := launchSectionHeader(line); ok {
+			section = header
 			continue
 		}
-		key, value, ok := strings.Cut(line, "=")
-		if !ok || strings.ContainsAny(value, "\\$%`\"'") {
-			return unit, ErrLaunchUnsupported
-		}
-		if key != "Environment" && seen[section+key] {
-			return unit, ErrLaunchUnsupported
-		}
-		seen[section+key] = true
-		if err := unit.applyDirective(runtimeName, section, key, value); err != nil {
+		if err := unit.applyLaunchLine(seen, runtimeName, section, line); err != nil {
 			return unit, err
 		}
 	}
@@ -81,6 +73,26 @@ func parseLaunchUnit(raw []byte, runtimeName string) (parsedLaunchUnit, error) {
 		return unit, ErrLaunchUnsupported
 	}
 	return unit, nil
+}
+
+func launchSectionHeader(line string) (string, bool) {
+	switch line {
+	case "[Unit]", "[Service]", "[Install]":
+		return line, true
+	}
+	return "", false
+}
+
+func (u *parsedLaunchUnit) applyLaunchLine(seen map[string]bool, runtimeName, section, line string) error {
+	key, value, ok := strings.Cut(line, "=")
+	if !ok || strings.ContainsAny(value, "\\$%`\"'") {
+		return ErrLaunchUnsupported
+	}
+	if key != "Environment" && seen[section+key] {
+		return ErrLaunchUnsupported
+	}
+	seen[section+key] = true
+	return u.applyDirective(runtimeName, section, key, value)
 }
 
 func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value string) error {
