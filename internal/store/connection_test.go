@@ -62,7 +62,7 @@ func TestConnectionContentionAfterTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writer, err := sql.Open("sqlite", s.DurableStatePath()+"?_txlock=immediate")
+	writer, err := sql.Open("sqlite", storePath(s)+"?_txlock=immediate")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -37,7 +37,7 @@ func acceptanceController(t *testing.T) (*Controller, *store.Store, *acceptanceR
 	s := openStore(t)
 	cat := control.Catalog{Version: 1}
 	for _, id := range []control.Workload{"text", "media", "speech"} {
-		cat.Profiles = append(cat.Profiles, control.Profile{ID: id, Label: string(id), Adapter: "systemd", Unit: string(id) + ".service", Cgroup: "/workloads/" + string(id), HealthURL: "http://localhost:9000"})
+		cat.Profiles = append(cat.Profiles, control.WorkloadProfile{ID: id, Label: string(id), Adapter: "systemd", Unit: string(id) + ".service", Cgroup: "/workloads/" + string(id), HealthURL: "http://localhost:9000"})
 	}
 	snap, err := s.ReplaceCatalog(ctx, "", cat)
 	if err != nil {

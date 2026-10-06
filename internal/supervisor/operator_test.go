@@ -12,7 +12,7 @@ import (
 
 func TestOperatorPreservesTakeoverAndReturnsIdle(t *testing.T) {
 	s := openStore(t)
-	catalog := control.Catalog{Version: 1, Profiles: []control.Profile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user/text", HealthURL: "http://localhost:9000", BootPolicy: "retain"}}}
+	catalog := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user/text", HealthURL: "http://localhost:9000", BootPolicy: "retain"}}}
 	snap, e := s.ReplaceCatalog(context.Background(), "", catalog)
 	if e != nil {
 		t.Fatal(e)
@@ -53,7 +53,7 @@ func (s racingOperatorStore) StartOperatorTransition(ctx context.Context, e cont
 func TestOperatorRaceCannotReachRuntimeEffects(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	catalog := control.Catalog{Version: 1, Profiles: []control.Profile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user/text", HealthURL: "http://localhost:9000"}}}
+	catalog := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user/text", HealthURL: "http://localhost:9000"}}}
 	snap, e := s.ReplaceCatalog(ctx, "", catalog)
 	if e != nil {
 		t.Fatal(e)
@@ -77,7 +77,7 @@ func TestOperatorRaceCannotReachRuntimeEffects(t *testing.T) {
 func TestTakeoverDrainFailureNeverRestartsWorkload(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	catalog := control.Catalog{Version: 1, Profiles: []control.Profile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user/text", HealthURL: "http://localhost:9000"}}}
+	catalog := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user/text", HealthURL: "http://localhost:9000"}}}
 	snap, e := s.ReplaceCatalog(ctx, "", catalog)
 	if e != nil {
 		t.Fatal(e)

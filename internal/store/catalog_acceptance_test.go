@@ -11,7 +11,7 @@ import (
 )
 
 func acceptanceCatalog() control.Catalog {
-	return control.Catalog{Version: 1, Profiles: []control.Profile{{ID: "speech", Label: "Speech", Adapter: "systemd", Unit: "speech.service", Cgroup: "/workloads/speech", HealthURL: "http://localhost:9000"}}}
+	return control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "speech", Label: "Speech", Adapter: "systemd", Unit: "speech.service", Cgroup: "/workloads/speech", HealthURL: "http://localhost:9000"}}}
 }
 func TestReferencedCatalogAcceptance(t *testing.T) {
 	for _, ref := range []string{"active", "desired", "work", "source", "target", "previous"} {

@@ -101,7 +101,7 @@ func newSystemdFixture(t *testing.T) *systemdFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog := control.Catalog{Version: 1, Profiles: []control.Profile{
+	catalog := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{
 		{ID: control.WorkloadText, Label: "text", Adapter: "systemd", Unit: f.units[0], Cgroup: groups[0], HealthURL: health.URL},
 		{ID: control.WorkloadMedia, Label: "media", Adapter: "systemd", Unit: f.units[1], Cgroup: groups[1], HealthURL: health.URL},
 	}}

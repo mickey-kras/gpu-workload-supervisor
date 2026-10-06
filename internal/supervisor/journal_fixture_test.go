@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-func transitionEvents(s *store.Store, ctx context.Context, transitionID string) ([]store.TransitionEvent, error) {
-	db, err := sql.Open("sqlite", s.DurableStatePath())
+func transitionEvents(statePath string, ctx context.Context, transitionID string) ([]store.TransitionEvent, error) {
+	db, err := sql.Open("sqlite", statePath)
 	if err != nil {
 		return nil, err
 	}

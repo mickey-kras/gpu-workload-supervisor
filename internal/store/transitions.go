@@ -13,7 +13,7 @@ import (
 var ErrTransitionNotRunning = errors.New("transition is not running")
 
 var (
-	ErrRecoveryRequired  = errors.New("conditional transition requires stable non-error state")
+	ErrUnstableState     = errors.New("conditional transition requires stable non-error state")
 	ErrTransitionRunning = errors.New("conditional transition already running")
 )
 
@@ -211,13 +211,10 @@ func validateTransitionCatalog(ctx context.Context, tx *sql.Tx, tr Transition) e
 	if catalog.Revision != tr.ConfigurationRevision {
 		return ErrVersionConflict
 	}
-	if catalog.Revision != "" && tr.Target.DesiredWorkload != control.WorkloadIdle {
-		if _, ok := catalog.Catalog.Profile(tr.Target.DesiredWorkload); !ok {
-			return ErrWorkloadMismatch
+	if tr.Target.DesiredWorkload != control.WorkloadIdle {
+		if err := catalogAdmitsWorkload(catalog, tr.Target.DesiredWorkload); err != nil {
+			return err
 		}
-	}
-	if catalog.Revision == "" && tr.Target.DesiredWorkload != control.WorkloadIdle && tr.Target.DesiredWorkload != control.WorkloadText && tr.Target.DesiredWorkload != control.WorkloadMedia {
-		return ErrWorkloadMismatch
 	}
 	return nil
 }

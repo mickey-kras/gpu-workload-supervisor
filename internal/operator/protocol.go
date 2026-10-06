@@ -11,7 +11,12 @@ import (
 	"time"
 )
 
-const actionUserSwitch = "user-switch"
+const (
+	actionStatus        = "status"
+	actionTakeControl   = "take-control"
+	actionUserSwitch    = "user-switch"
+	actionReturnControl = "return-control"
+)
 
 const MaxRequestBytes = 16 * 1024
 const MaxResponseBytes = 64 * 1024
@@ -114,13 +119,13 @@ func validateRequest(r Request) Code {
 	if !token(r.RequestID, 64) {
 		return InvalidRequest
 	}
-	if r.Action == "status" {
+	if r.Action == actionStatus {
 		if r.Expected != nil || r.Target != "" {
 			return InvalidRequest
 		}
 		return OK
 	}
-	if r.Action != "take-control" && r.Action != actionUserSwitch && r.Action != "return-control" {
+	if r.Action != actionTakeControl && r.Action != actionUserSwitch && r.Action != actionReturnControl {
 		return InvalidRequest
 	}
 	if (r.Action == actionUserSwitch && !workloadID(string(r.Target))) || (r.Action != actionUserSwitch && r.Target != "") {
@@ -166,7 +171,7 @@ func requestFields(body []byte, action string) bool {
 			return false
 		}
 	}
-	if action == "status" {
+	if action == actionStatus {
 		_, e := m["expected"]
 		_, t := m["target"]
 		return !e && !t

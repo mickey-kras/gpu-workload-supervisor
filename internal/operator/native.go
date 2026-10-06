@@ -21,7 +21,7 @@ func NativeService(p Profile) Service {
 }
 
 func openNativeSession(ctx context.Context, p Profile) (Session, error) {
-	if ValidateProfile(p) != nil || deployment.Check(p.StatePath, p.ActivatedRelease) != nil {
+	if p.Validate() != nil || deployment.Check(p.StatePath, p.ActivatedRelease) != nil {
 		return Session{}, ErrIncompatibleConfiguration
 	}
 	s, err := store.Open(ctx, p.StatePath)

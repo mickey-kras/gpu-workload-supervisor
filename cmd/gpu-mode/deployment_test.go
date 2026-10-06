@@ -40,7 +40,7 @@ func TestLegacyRelativeStateWithoutMarkerStillOpens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog := control.Catalog{Version: 1, Profiles: []control.Profile{
+	catalog := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{
 		{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/workloads/text.service", HealthURL: "http://127.0.0.1:1/"},
 	}}
 	if _, err := stateStore.ReplaceCatalog(ctx, "", catalog); err != nil {

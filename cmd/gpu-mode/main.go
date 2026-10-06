@@ -211,8 +211,8 @@ func acquireProxyLifetimeLock(statePath, command, reason string) (*lock.File, er
 		if reason == "" {
 			return nil, errors.New("resolve-work requires -resolve-reason")
 		}
-		if len(reason) > 512 {
-			return nil, errors.New("resolution reason must contain 1 to 512 bytes")
+		if _, err := store.ValidateResolutionReason(reason); err != nil {
+			return nil, err
 		}
 	case restoreStateCommand, "configure":
 	default:

@@ -26,7 +26,7 @@ func ValidWorkloadID(id Workload) bool {
 	return workloadID.MatchString(string(id)) && id != WorkloadIdle && id != WorkloadUnknown
 }
 
-type Profile struct {
+type WorkloadProfile struct {
 	NativeModel *NativeModel `json:"nativeModel,omitempty"`
 	ID          Workload     `json:"id"`
 	Label       string       `json:"label"`
@@ -39,8 +39,8 @@ type Profile struct {
 	BootPolicy  string       `json:"bootPolicy,omitempty"`
 }
 type Catalog struct {
-	Version  int       `json:"version"`
-	Profiles []Profile `json:"profiles"`
+	Version  int               `json:"version"`
+	Profiles []WorkloadProfile `json:"profiles"`
 }
 type CatalogSnapshot struct {
 	Revision string  `json:"revision"`
@@ -73,16 +73,16 @@ func DecodeCatalog(r io.Reader) (Catalog, error) {
 	}
 	return c, c.Validate()
 }
-func (c Catalog) Profile(id Workload) (Profile, bool) {
+func (c Catalog) Profile(id Workload) (WorkloadProfile, bool) {
 	for _, p := range c.Profiles {
 		if p.ID == id {
 			return p, true
 		}
 	}
-	return Profile{}, false
+	return WorkloadProfile{}, false
 }
 func (c Catalog) Clone() Catalog {
-	c.Profiles = append([]Profile(nil), c.Profiles...)
+	c.Profiles = append([]WorkloadProfile(nil), c.Profiles...)
 	for i := range c.Profiles {
 		if c.Profiles[i].NativeModel != nil {
 			n := *c.Profiles[i].NativeModel
@@ -116,7 +116,7 @@ func ValidWorkloadLabel(label string) bool {
 	}) < 0
 }
 
-func (p Profile) validate() error {
+func (p WorkloadProfile) validate() error {
 	if err := p.validateNativeBinding(); err != nil {
 		return err
 	}
@@ -135,7 +135,7 @@ func (p Profile) validate() error {
 	return nil
 }
 
-func (p Profile) validateNativeBinding() error {
+func (p WorkloadProfile) validateNativeBinding() error {
 	if p.NativeModel == nil {
 		return nil
 	}
@@ -145,7 +145,7 @@ func (p Profile) validateNativeBinding() error {
 	return p.NativeModel.validate()
 }
 
-func (p Profile) validateNaming() error {
+func (p WorkloadProfile) validateNaming() error {
 	if !ValidWorkloadID(p.ID) {
 		return fmt.Errorf("invalid workload ID %q", p.ID)
 	}
@@ -161,7 +161,7 @@ func (p Profile) validateNaming() error {
 	return nil
 }
 
-func (p Profile) validatePlacement() error {
+func (p WorkloadProfile) validatePlacement() error {
 	if p.Cgroup == "/" || !strings.HasPrefix(p.Cgroup, "/") || path.Clean(p.Cgroup) != p.Cgroup || strings.IndexFunc(p.Cgroup, unicode.IsControl) >= 0 {
 		return errors.New("invalid workload cgroup")
 	}
@@ -171,7 +171,7 @@ func (p Profile) validatePlacement() error {
 	return nil
 }
 
-func (p Profile) validateEndpoints() error {
+func (p WorkloadProfile) validateEndpoints() error {
 	for _, e := range []string{p.HealthURL, p.ReleaseURL} {
 		if e == "" && e == p.ReleaseURL {
 			continue
@@ -188,7 +188,7 @@ func (p Profile) validateEndpoints() error {
 	return nil
 }
 
-func validateProfileOverlap(p Profile, previous []Profile) error {
+func validateProfileOverlap(p WorkloadProfile, previous []WorkloadProfile) error {
 	for _, q := range previous {
 		if err := validateNativeOverlap(p.NativeModel, q.NativeModel); err != nil {
 			return err
@@ -216,6 +216,6 @@ func validateNativeOverlap(a, b *NativeModel) error {
 	return nil
 }
 
-func profilesOverlap(p, q Profile) bool {
+func profilesOverlap(p, q WorkloadProfile) bool {
 	return p.ID == q.ID || p.Unit == q.Unit || p.Cgroup == q.Cgroup || strings.HasPrefix(p.Cgroup, q.Cgroup+"/") || strings.HasPrefix(q.Cgroup, p.Cgroup+"/")
 }

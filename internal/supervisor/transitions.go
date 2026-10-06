@@ -19,12 +19,14 @@ func (c *Controller) TransferToUser(ctx context.Context, target control.Workload
 	return c.transition(ctx, target, control.OwnerSupervisor, control.OwnerUser, initiator, false)
 }
 
-// SwitchUser explicitly authorizes stopping the current user workload.
+// SwitchUser changes the user-owned workload; it explicitly authorizes
+// stopping the current user workload.
 func (c *Controller) SwitchUser(ctx context.Context, target control.Workload, initiator string) (control.State, error) {
 	return c.transition(ctx, target, control.OwnerUser, control.OwnerUser, initiator, false)
 }
 
-// TransferToSupervisor explicitly authorizes stopping the current user workload.
+// TransferToSupervisor returns ownership to the supervisor; it explicitly
+// authorizes stopping the current user workload.
 func (c *Controller) TransferToSupervisor(ctx context.Context, target control.Workload, initiator string) (control.State, error) {
 	return c.transition(ctx, target, control.OwnerUser, control.OwnerSupervisor, initiator, false)
 }
@@ -56,7 +58,7 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 	if err := c.checkCatalog(ctx); err != nil {
 		return control.State{}, err
 	}
-	current, err := c.transitionSource(ctx, options.sourceOwner, options.verifyOnly)
+	current, err := c.transitionSource(ctx, options)
 	if err != nil {
 		return current, err
 	}
@@ -83,25 +85,25 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 	return c.executeTransition(ctx, transition, state, current, target, options)
 }
 
-func (c *Controller) transitionSource(ctx context.Context, sourceOwner control.Owner, verifyOnly bool) (control.State, error) {
+func (c *Controller) transitionSource(ctx context.Context, options transitionOptions) (control.State, error) {
 	current, err := c.store.State(ctx)
 	if err != nil {
 		return control.State{}, err
 	}
-	if current.Owner != sourceOwner {
+	if options.operator == nil && current.Owner != options.sourceOwner {
 		if current.Owner == control.OwnerUser {
 			return current, ErrUserOwned
 		}
 		return current, ErrSupervisorOwned
 	}
-	if verifyOnly {
+	if options.verifyOnly {
 		closed := closedReconciling(current)
 		current, err = c.store.Recover(ctx, current.Version, closed, "operator-user-recovery")
 		if err != nil {
 			return current, err
 		}
 	}
-	if current.Health == control.HealthError && !verifyOnly {
+	if current.Health == control.HealthError && !options.verifyOnly {
 		return current, ErrRecoveryRequired
 	}
 	if running, err := c.store.InProgressTransition(ctx); err != nil {
@@ -109,7 +111,7 @@ func (c *Controller) transitionSource(ctx context.Context, sourceOwner control.O
 	} else if running != "" {
 		return current, fmt.Errorf("%w: %s", ErrTransitionRunning, running)
 	}
-	if current.Phase != control.PhaseStable && !verifyOnly {
+	if current.Phase != control.PhaseStable && !options.verifyOnly {
 		return current, ErrReconcileRequired
 	}
 	return current, nil
@@ -133,10 +135,11 @@ func (c *Controller) unloadTransition(ctx context.Context, transitionID string, 
 	if verifyOnly {
 		return state, active, nil
 	}
-	state, err := c.setPhase(ctx, transitionID, state, control.PhaseUnloading)
+	unloading, err := c.store.SetTransitionPhase(ctx, transitionID, state.Version, control.PhaseUnloading)
 	if err != nil {
 		return state, active, err
 	}
+	state = unloading
 	if previous.Owner == control.OwnerUser {
 		// User submissions are not registered work. Terminate both runtimes,
 		// including queued media jobs, before waiting for HTTP handoffs.
@@ -177,10 +180,11 @@ func (c *Controller) loadTransition(ctx context.Context, transitionID string, st
 	if verifyOnly {
 		return state, nil
 	}
-	state, err := c.setPhase(ctx, transitionID, state, control.PhaseLoading)
+	loading, err := c.store.SetTransitionPhase(ctx, transitionID, state.Version, control.PhaseLoading)
 	if err != nil {
 		return state, err
 	}
+	state = loading
 	if target != control.WorkloadIdle && active != target {
 		err = c.effect(ctx, transitionID, state.Phase, "start "+string(target), func(actionCtx context.Context) error {
 			return c.runtime.Start(actionCtx, target)
@@ -194,10 +198,11 @@ func (c *Controller) executeTransition(ctx context.Context, transition store.Tra
 	if options.preserve {
 		fail = c.failPreserving
 	}
+	skipEffects := options.verifyOnly || options.preserve
 	if err := c.waitForDrain(ctx, transition.ID, transition.Deadline); err != nil {
 		return fail(transition.ID, state, current, err)
 	}
-	state, active, err := c.unloadTransition(ctx, transition.ID, state, current, target, options.verifyOnly || options.preserve)
+	state, active, err := c.unloadTransition(ctx, transition.ID, state, current, target, skipEffects)
 	if err != nil {
 		return fail(transition.ID, state, current, err)
 	}
@@ -206,14 +211,15 @@ func (c *Controller) executeTransition(ctx context.Context, transition store.Tra
 	if err != nil {
 		return fail(transition.ID, state, current, err)
 	}
-	state, err = c.loadTransition(ctx, transition.ID, state, active, target, options.verifyOnly || options.preserve)
+	state, err = c.loadTransition(ctx, transition.ID, state, active, target, skipEffects)
 	if err != nil {
 		return fail(transition.ID, state, current, err)
 	}
-	state, err = c.setPhase(ctx, transition.ID, state, control.PhaseVerifying)
+	verifying, err := c.store.SetTransitionPhase(ctx, transition.ID, state.Version, control.PhaseVerifying)
 	if err != nil {
 		return fail(transition.ID, state, current, err)
 	}
+	state = verifying
 	if err := c.waitReady(ctx, target, c.now().Add(c.config.VerifyTimeout)); err != nil {
 		return fail(transition.ID, state, current, err)
 	}

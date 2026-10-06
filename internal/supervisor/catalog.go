@@ -74,7 +74,7 @@ func (c *Controller) reconcileCatalog(ctx context.Context, recovering bool) (con
 		return c.latchObservationFailure(ctx, state, ErrRecoveryRequired)
 	}
 	if recovering {
-		state, err = c.beginRecovery(ctx)
+		state, err = c.beginRecovery(ctx, state)
 	} else {
 		if err = c.preflight(ctx); err != nil {
 			return c.latchObservationFailure(ctx, state, err)

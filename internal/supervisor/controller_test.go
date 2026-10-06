@@ -107,7 +107,8 @@ func (r *fakeRuntime) Healthy(context.Context, control.Workload) error {
 }
 
 func TestSwitchStopsTextBeforeStartingMedia(t *testing.T) {
-	stateStore := openStore(t)
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	stateStore := openStoreAt(t, statePath)
 	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true}
 	controller := testController(t, stateStore, runtime)
 	if _, err := controller.Reconcile(context.Background()); err != nil {
@@ -122,7 +123,7 @@ func TestSwitchStopsTextBeforeStartingMedia(t *testing.T) {
 		t.Fatalf("state = %#v", state)
 	}
 	assertCalls(t, runtime.calls, "stop text", "start media")
-	events, err := transitionEvents(stateStore, context.Background(), "11111111-1111-4111-8111-111111111111")
+	events, err := transitionEvents(statePath, context.Background(), "11111111-1111-4111-8111-111111111111")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +332,12 @@ func TestUserOwnershipBlocksSupervisorSwitchAndRecovery(t *testing.T) {
 
 func openStore(t *testing.T) *store.Store {
 	t.Helper()
-	stateStore, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"))
+	return openStoreAt(t, filepath.Join(t.TempDir(), "state.db"))
+}
+
+func openStoreAt(t *testing.T, statePath string) *store.Store {
+	t.Helper()
+	stateStore, err := store.Open(context.Background(), statePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +346,7 @@ func openStore(t *testing.T) *store.Store {
 }
 
 func testCatalog() control.Catalog {
-	return control.Catalog{Version: 1, Profiles: []control.Profile{
+	return control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{
 		{ID: control.WorkloadText, Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user/text", HealthURL: "http://localhost:9100", BootPolicy: "retain"},
 		{ID: control.WorkloadMedia, Label: "Media", Adapter: "systemd", Unit: "media.service", Cgroup: "/user/media", HealthURL: "http://localhost:9101"},
 	}}

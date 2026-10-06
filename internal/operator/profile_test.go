@@ -42,11 +42,11 @@ func TestPrivateProfileTrust(t *testing.T) {
 }
 func TestProfileLimits(t *testing.T) {
 	p := Profile{Version: 1, StatePath: "/a/state", ActivatedRelease: "v1", SystemctlPath: "/usr/bin/systemctl", NvidiaSMIPath: "/usr/bin/nvidia-smi"}
-	if e := ValidateProfile(p); e != nil {
+	if e := p.Validate(); e != nil {
 		t.Fatal(e)
 	}
 	p.StatusTimeoutSeconds = 61
-	if ValidateProfile(p) == nil {
+	if p.Validate() == nil {
 		t.Fatal("timeout accepted")
 	}
 }

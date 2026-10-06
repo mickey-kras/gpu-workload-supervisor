@@ -294,7 +294,7 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 		return
 	}
 	if h.nativeModel != nil && (request.URL.RawQuery != "" || request.Header.Get("Content-Encoding") != "") {
-		writeError(response, 400, "native_request_invalid")
+		writeError(response, http.StatusBadRequest, "native_request_invalid")
 		return
 	}
 	key := request.Method + " " + request.URL.Path

@@ -22,8 +22,8 @@ func TestNativeModelOverlap(t *testing.T) {
 	native := func() *NativeModel {
 		return &NativeModel{Runtime: "ollama", Instance: "local", Model: "a:latest", Endpoint: "http://127.0.0.1:11434", LaunchFile: "/units/a.service", LaunchSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 	}
-	second := func(n *NativeModel) Profile {
-		return Profile{ID: "vision", Label: "Vision", Adapter: "systemd", Unit: "vision.service", Cgroup: "/workloads/vision", HealthURL: "http://127.0.0.1:9100/health", NativeModel: n}
+	second := func(n *NativeModel) WorkloadProfile {
+		return WorkloadProfile{ID: "vision", Label: "Vision", Adapter: "systemd", Unit: "vision.service", Cgroup: "/workloads/vision", HealthURL: "http://127.0.0.1:9100/health", NativeModel: n}
 	}
 	cases := map[string]func(*NativeModel){
 		"runtime":   func(n *NativeModel) { n.Runtime = "vllm" },

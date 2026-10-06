@@ -24,17 +24,25 @@ const (
 var ErrNoUnfinishedWork = errors.New("no unfinished work to resolve")
 var ErrAdmissionOpen = errors.New("admission must be closed for work resolution")
 
+func ValidateResolutionReason(reason string) (string, error) {
+	reason = strings.TrimSpace(reason)
+	if len(reason) == 0 || len(reason) > 512 {
+		return "", errors.New("resolution reason must contain 1 to 512 bytes")
+	}
+	return reason, nil
+}
+
 // ResolveUnfinishedWork is reserved for verified operator recovery. The caller
 // must quiesce all proxy processes and stop/verify both runtimes first. This
 // transaction requires the closed, rotated state version and records the
 // resolution together with the terminal updates.
 func (s *Store) ResolveUnfinishedWork(ctx context.Context, expected uint64, reason string) (int64, error) {
-	reason = strings.TrimSpace(reason)
-	if len(reason) == 0 || len(reason) > 512 {
-		return 0, errors.New("resolution reason must contain 1 to 512 bytes")
+	reason, err := ValidateResolutionReason(reason)
+	if err != nil {
+		return 0, err
 	}
 	var count int64
-	_, err := s.withStateTx(ctx, expected, func(tx *sql.Tx, state control.State) (control.State, error) {
+	_, err = s.withStateTx(ctx, expected, func(tx *sql.Tx, state control.State) (control.State, error) {
 		var err error
 		count, err = s.resolveUnfinishedWork(ctx, tx, state, reason)
 		return state, err
@@ -84,7 +92,7 @@ func (s *Store) resolveUnfinishedWork(ctx context.Context, tx *sql.Tx, state con
 	return count, nil
 }
 
-func (s *Store) beginAdmittedWorkAtCatalog(ctx context.Context, requestID string, workload control.Workload, fence control.Fence, revision *string) (*sql.Tx, error) {
+func (s *Store) beginAdmittedWork(ctx context.Context, requestID string, workload control.Workload, fence control.Fence, revision *string) (*sql.Tx, error) {
 	if err := control.ValidateRequestID(requestID); err != nil {
 		return nil, err
 	}
@@ -119,7 +127,7 @@ func checkAdmissibleState(ctx context.Context, tx *sql.Tx, workload control.Work
 	if revision != nil && catalog.Revision != *revision {
 		return ErrVersionConflict
 	}
-	if err := validateAdmittedCatalog(catalog, workload); err != nil {
+	if err := catalogAdmitsWorkload(catalog, workload); err != nil {
 		return err
 	}
 	state, err := readState(ctx, tx)
@@ -143,7 +151,7 @@ func (s *Store) AdmitWorkToken(ctx context.Context, requestID, jobID string, wor
 	if err != nil {
 		return "", err
 	}
-	if err := s.admitWork(ctx, requestID, jobID, workload, fence, token); err != nil {
+	if err := s.admitWorkTx(ctx, requestID, jobID, workload, fence, admissionBinding{token: token}); err != nil {
 		return "", err
 	}
 	return token, nil
@@ -155,13 +163,10 @@ func (s *Store) AdmitWorkTokenAtCatalog(ctx context.Context, requestID, jobID st
 	if err != nil {
 		return "", err
 	}
-	if err := s.admitWorkAtCatalog(ctx, requestID, jobID, workload, fence, admissionBinding{token: token, revision: &revision}); err != nil {
+	if err := s.admitWorkTx(ctx, requestID, jobID, workload, fence, admissionBinding{token: token, revision: &revision}); err != nil {
 		return "", err
 	}
 	return token, nil
-}
-func (s *Store) admitWork(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence, token string) error {
-	return s.admitWorkAtCatalog(ctx, requestID, jobID, workload, fence, admissionBinding{token: token})
 }
 
 type admissionBinding struct {
@@ -169,8 +174,8 @@ type admissionBinding struct {
 	revision *string
 }
 
-func (s *Store) admitWorkAtCatalog(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence, binding admissionBinding) error {
-	tx, err := s.beginAdmittedWorkAtCatalog(ctx, requestID, workload, fence, binding.revision)
+func (s *Store) admitWorkTx(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence, binding admissionBinding) error {
+	tx, err := s.beginAdmittedWork(ctx, requestID, workload, fence, binding.revision)
 	if err != nil {
 		return err
 	}
@@ -340,7 +345,6 @@ func (s *Store) PendingWork(ctx context.Context) (int, error) {
 	return pending, err
 }
 
-// PendingWorkExcept probes all opposing registrations in one SQLite snapshot.
 // NULL legacy workload identities cannot be attributed to the retained target.
 func (s *Store) PendingWorkExcept(ctx context.Context, retained control.Workload) (int, error) {
 	var pending int
@@ -348,7 +352,7 @@ func (s *Store) PendingWorkExcept(ctx context.Context, retained control.Workload
 	return pending, err
 }
 
-func validateAdmittedCatalog(catalog control.CatalogSnapshot, workload control.Workload) error {
+func catalogAdmitsWorkload(catalog control.CatalogSnapshot, workload control.Workload) error {
 	if catalog.Revision != "" {
 		if _, ok := catalog.Catalog.Profile(workload); !ok {
 			return ErrWorkloadMismatch

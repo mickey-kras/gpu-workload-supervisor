@@ -86,10 +86,6 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 	return &SystemdManager{config: config, runner: runner, client: client, cgroups: cgroupFS{root: "/sys/fs/cgroup", verify: verifyUnifiedHierarchy}}, nil
 }
 
-func (m *SystemdManager) Observe(ctx context.Context) (Snapshot, error) {
-	return m.observeCatalog(ctx)
-}
-
 func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) error {
 	p, ok := m.config.Catalog.Profile(workload)
 	if !ok {
@@ -107,32 +103,20 @@ func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) e
 	return nil
 }
 
-func (m *SystemdManager) Stop(ctx context.Context, workload control.Workload) error {
-	return m.stopCatalog(ctx, workload)
-}
-
 // StopForRecovery shuts down every configured unit regardless of adapter policy.
 func (m *SystemdManager) StopForRecovery(ctx context.Context) error {
-	for _, unit := range m.units() {
-		if err := m.runSystemctl(ctx, "stop", unit); err != nil {
+	for _, p := range m.unitGroups() {
+		if err := m.runSystemctl(ctx, "stop", p.unit); err != nil {
 			return err
 		}
-		if err := m.requireStopped(ctx, unit); err != nil {
+		if err := m.requireStopped(ctx, p.unit); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (m *SystemdManager) Healthy(ctx context.Context, workload control.Workload) error {
-	return m.healthyCatalog(ctx, workload)
-}
-
 var ErrUnloadUnverified = errors.New("live media unload cannot be verified")
-
-func (m *SystemdManager) ReleasedFor(ctx context.Context, target control.Workload) error {
-	return m.releasedCatalog(ctx, target)
-}
 
 func (m *SystemdManager) releasedUnit(ctx context.Context, unit, group string, allowUnload bool) error {
 	state, err := m.unitState(ctx, unit)
@@ -164,18 +148,21 @@ type systemdUnitState struct {
 	hasCgroup bool
 }
 
+func (m *SystemdManager) profileForUnit(unit string) control.WorkloadProfile {
+	for _, p := range m.config.Catalog.Profiles {
+		if p.Unit == unit {
+			return p
+		}
+	}
+	return control.WorkloadProfile{}
+}
+
 func (m *SystemdManager) unitState(ctx context.Context, unit string) (systemdUnitState, error) {
 	state, err := m.readUnitState(ctx, unit)
 	if err != nil {
 		return state, err
 	}
-	expected := ""
-	for _, p := range m.config.Catalog.Profiles {
-		if p.Unit == unit {
-			expected = p.Cgroup
-		}
-	}
-	if state.cgroup != "" && state.cgroup != expected {
+	if expected := m.profileForUnit(unit).Cgroup; state.cgroup != "" && state.cgroup != expected {
 		return systemdUnitState{}, fmt.Errorf("%s ControlGroup does not match configured cgroup", unit)
 	}
 	return state, nil
@@ -194,8 +181,8 @@ func (m *SystemdManager) verifyManagerCgroup(ctx context.Context) error {
 	if err := validateCgroup(state.cgroup); err != nil {
 		return fmt.Errorf("systemd manager cgroup anchor: %w", err)
 	}
-	for _, group := range m.groups() {
-		if !strings.HasPrefix(group, state.cgroup+"/") {
+	for _, p := range m.unitGroups() {
+		if !strings.HasPrefix(p.group, state.cgroup+"/") {
 			return errors.New("configured cgroup is not within systemd manager root")
 		}
 	}
@@ -257,13 +244,7 @@ func (m *SystemdManager) resetStoppedFailure(ctx context.Context, unit string, s
 	if err := m.verifyManagerCgroup(ctx); err != nil {
 		return err
 	}
-	group := ""
-	for _, p := range m.config.Catalog.Profiles {
-		if p.Unit == unit {
-			group = p.Cgroup
-		}
-	}
-	if err := m.cgroups.empty(group); err != nil {
+	if err := m.cgroups.empty(m.profileForUnit(unit).Cgroup); err != nil {
 		return err
 	}
 	return m.runSystemctl(ctx, "reset-failed", unit)

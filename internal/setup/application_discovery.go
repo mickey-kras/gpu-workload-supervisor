@@ -31,7 +31,7 @@ func (b Backend) discoverApplications(ctx context.Context, result *Discovery, un
 
 // unitRelevant retains existing profile units under arbitrary names without
 // assuming that their unit identity establishes any of the supported applications.
-func unitRelevant(unit string, profiles []control.Profile) bool {
+func unitRelevant(unit string, profiles []control.WorkloadProfile) bool {
 	lower := strings.ToLower(unit)
 	for _, name := range []string{"comfyui", "ollama", "llama", "vllm"} {
 		if strings.Contains(lower, name) {
