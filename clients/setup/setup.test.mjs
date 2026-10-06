@@ -235,6 +235,17 @@ test('late binding cannot promote removed draft', async () => {
     assert.deepEqual(JSON.parse(ui.calls.at(-1).input).drafts, []);
 });
 
+test('choosing a model folder stores a directory reference instead of an endpoint', async () => {
+    const ui = await launch({filePath: '/models/llama-directory'});
+    ui.edit(ui.by('Application'), 'selected', 1); ui.by('Add workload').emit('clicked');
+    ui.by('Choose model folder...').emit('clicked');
+    await ui.by('Save drafts').emit('clicked');
+    const saved = JSON.parse(ui.calls.at(-1).input).drafts[0];
+    assert.equal(saved.reference, '/models/llama-directory');
+    assert.equal(saved.referenceKind, 'model-directory');
+    assert.equal(saved.endpoint, undefined);
+});
+
 test('cancelled file picker preserves draft input', async () => {
     const ui = await launch({fileError: {matches: () => true}});
     ui.edit(ui.by('Application'), 'selected', 1); ui.by('Add workload').emit('clicked');
