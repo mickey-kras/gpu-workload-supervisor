@@ -15,6 +15,8 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/setup"
 )
 
+const cmdVerifyBindings = "verify-bindings"
+
 type setupActions struct {
 	home      func() (string, error)
 	apply     func(context.Context, string, setup.Request) error
@@ -56,7 +58,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return err
 	}
 	switch args[0] {
-	case "discover", "fingerprint", "probe", "reconcile", "save-drafts", "verify-bindings", "validate", "apply":
+	case "discover", "fingerprint", "probe", "reconcile", "save-drafts", cmdVerifyBindings, "validate", "apply":
 		if a.euid() == 0 {
 			return errors.New("run guided setup as the desktop account, not root")
 		}
@@ -76,7 +78,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return a.runProbe(ctx, input, output)
 	case "reconcile":
 		return a.reconcile(ctx, home)
-	case "validate", "apply", "verify-bindings":
+	case "validate", "apply", cmdVerifyBindings:
 		return a.runPlanned(ctx, home, args[0], input, output)
 	}
 	return errors.New("unknown setup action")
@@ -138,7 +140,7 @@ func (a setupActions) runPlanned(ctx context.Context, home, action string, input
 	if err != nil {
 		return err
 	}
-	if action == "verify-bindings" {
+	if action == cmdVerifyBindings {
 		if err := a.verify(ctx, request); err != nil {
 			return err
 		}
