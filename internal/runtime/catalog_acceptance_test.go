@@ -13,7 +13,7 @@ import (
 func acceptanceCatalog() control.Catalog {
 	c := control.Catalog{Version: 1}
 	for _, id := range []control.Workload{"text", "media", "speech"} {
-		c.Profiles = append(c.Profiles, control.Profile{ID: id, Label: string(id), Adapter: "systemd", Unit: string(id) + ".service", Cgroup: "/workloads/" + string(id) + ".service", HealthURL: "http://localhost:9000"})
+		c.Profiles = append(c.Profiles, control.WorkloadProfile{ID: id, Label: string(id), Adapter: "systemd", Unit: string(id) + ".service", Cgroup: "/workloads/" + string(id) + ".service", HealthURL: "http://localhost:9000"})
 	}
 	return c
 }

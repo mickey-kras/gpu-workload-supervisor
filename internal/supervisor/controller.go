@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
@@ -34,6 +33,7 @@ type storeGateway interface {
 	UpdateState(context.Context, uint64, control.State) (control.State, error)
 	StartTransition(context.Context, uint64, store.Transition) (control.State, error)
 	StartOperatorTransition(context.Context, control.OperatorPrecondition, store.Transition) (control.State, error)
+	CheckOperatorPrecondition(context.Context, control.OperatorPrecondition) error
 	SetTransitionPhase(context.Context, string, uint64, control.Phase) (control.State, error)
 	FinishTransition(context.Context, string, string, uint64, control.State) (control.State, error)
 	AppendTransitionEvent(context.Context, store.TransitionEvent) error
@@ -103,14 +103,7 @@ func (c *Controller) enterReconciliation(ctx context.Context, state control.Stat
 	return entered, ctx.Err()
 }
 
-func (c *Controller) beginRecovery(ctx context.Context) (control.State, error) {
-	if err := c.checkCatalog(ctx); err != nil {
-		return control.State{}, err
-	}
-	state, err := c.store.State(ctx)
-	if err != nil {
-		return control.State{}, err
-	}
+func (c *Controller) beginRecovery(ctx context.Context, state control.State) (control.State, error) {
 	if state.Owner == control.OwnerUser {
 		return state, ErrUserOwned
 	}
@@ -147,9 +140,9 @@ func (c *Controller) ResolveUnfinishedWork(ctx context.Context, reason string) (
 	if err := c.checkCatalog(ctx); err != nil {
 		return control.State{}, 0, err
 	}
-	reason = strings.TrimSpace(reason)
-	if len(reason) == 0 || len(reason) > 512 {
-		return control.State{}, 0, errors.New("resolution reason must contain 1 to 512 bytes")
+	reason, err := store.ValidateResolutionReason(reason)
+	if err != nil {
+		return control.State{}, 0, err
 	}
 	state, err := c.store.State(ctx)
 	if err != nil {
@@ -277,14 +270,6 @@ func (c *Controller) checkReady(ctx context.Context, target control.Workload) er
 		return gpuruntime.SafeError(ErrHealthCheck.Error(), ErrHealthCheck, err)
 	}
 	return nil
-}
-
-func (c *Controller) setPhase(ctx context.Context, transitionID string, state control.State, phase control.Phase) (control.State, error) {
-	next, err := c.store.SetTransitionPhase(ctx, transitionID, state.Version, phase)
-	if err != nil {
-		return state, err
-	}
-	return next, nil
 }
 
 func (c *Controller) observe(ctx context.Context) (gpuruntime.Snapshot, error) {

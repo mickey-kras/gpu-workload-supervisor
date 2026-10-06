@@ -18,10 +18,6 @@ import (
 // Profile contains deployment paths and resource limits, never the live catalog.
 type Profile = deployment.Profile
 
-func ValidateProfile(p Profile) error {
-	return p.Validate()
-}
-
 // LoadProfile resolves the effective account from the OS database, ignoring HOME/XDG.
 func LoadProfile() (Profile, error) {
 	u, e := user.LookupId(strconv.Itoa(os.Geteuid()))
@@ -112,5 +108,5 @@ func loadProfileFD(fd, uid int) (Profile, error) {
 	if strictjson.DecodeLimited(bytes.NewReader(b), MaxRequestBytes, &p) != nil {
 		return p, errors.New("invalid profile JSON")
 	}
-	return p, ValidateProfile(p)
+	return p, p.Validate()
 }

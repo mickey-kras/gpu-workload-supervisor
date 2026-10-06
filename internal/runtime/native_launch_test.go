@@ -138,7 +138,7 @@ func TestQualifiedFingerprintRejectsUntrustedExecutable(t *testing.T) {
 	if _, err := InspectQualifiedNativeLaunch(path, n); err == nil {
 		t.Fatal("untrusted executable qualified")
 	}
-	if qualifyNativeLaunch(raw, n) == nil {
+	if qualifyNativeLaunchWithValidator(raw, n, validateNativeExecutable) == nil {
 		t.Fatal("untrusted executable qualified")
 	}
 }

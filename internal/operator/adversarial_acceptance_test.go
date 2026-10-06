@@ -214,7 +214,7 @@ func TestAcceptanceControllerStalePreconditionsHaveZeroEffects(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	snap, err := db.ReplaceCatalog(ctx, "", control.Catalog{Version: 1, Profiles: []control.Profile{{ID: "third", Label: "Third", Adapter: "systemd", Unit: "third.service", Cgroup: "/user/third", HealthURL: "http://localhost:9999"}}})
+	snap, err := db.ReplaceCatalog(ctx, "", control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "third", Label: "Third", Adapter: "systemd", Unit: "third.service", Cgroup: "/user/third", HealthURL: "http://localhost:9999"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

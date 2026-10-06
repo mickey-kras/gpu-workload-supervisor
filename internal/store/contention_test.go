@@ -21,7 +21,7 @@ func TestWritesReserveSnapshotBeforeConcurrentRetention(t *testing.T) {
 		t.Run(operation, func(t *testing.T) {
 			ctx := context.Background()
 			s := testStore(t)
-			other, err := Open(ctx, s.DurableStatePath())
+			other, err := Open(ctx, storePath(s))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -153,7 +153,7 @@ func TestStorePathRetainsURICharacters(t *testing.T) {
 func TestCanceledWriteWaitingForOtherStoreDoesNotCommit(t *testing.T) {
 	ctx := context.Background()
 	holder := testStore(t)
-	waiter, err := Open(ctx, holder.DurableStatePath())
+	waiter, err := Open(ctx, storePath(holder))
 	if err != nil {
 		t.Fatal(err)
 	}

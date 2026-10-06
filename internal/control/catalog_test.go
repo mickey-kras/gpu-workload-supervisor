@@ -9,7 +9,7 @@ import (
 )
 
 func validCatalog() Catalog {
-	return Catalog{Version: 1, Profiles: []Profile{{ID: "speech", Label: "Speech", Adapter: "systemd", Unit: "speech.service", Cgroup: "/workloads/speech", HealthURL: "http://127.0.0.1:9000/health"}}}
+	return Catalog{Version: 1, Profiles: []WorkloadProfile{{ID: "speech", Label: "Speech", Adapter: "systemd", Unit: "speech.service", Cgroup: "/workloads/speech", HealthURL: "http://127.0.0.1:9000/health"}}}
 }
 
 func TestCatalogThirdProfileAndStrictDecode(t *testing.T) {
@@ -62,7 +62,7 @@ func TestWorkloadLabelRejectsByteOrderMark(t *testing.T) {
 func TestCatalogRejectsInvalidProfiles(t *testing.T) {
 	cases := map[string]func(*Catalog){
 		"version": func(c *Catalog) { c.Version = 2 }, "empty": func(c *Catalog) { c.Profiles = nil },
-		"too many": func(c *Catalog) { c.Profiles = make([]Profile, 33) },
+		"too many": func(c *Catalog) { c.Profiles = make([]WorkloadProfile, 33) },
 		"reserved": func(c *Catalog) { c.Profiles[0].ID = "idle" }, "uppercase": func(c *Catalog) { c.Profiles[0].ID = "Speech" },
 		"empty label": func(c *Catalog) { c.Profiles[0].Label = "" },
 		"adapter":     func(c *Catalog) { c.Profiles[0].Adapter = "shell" }, "unit": func(c *Catalog) { c.Profiles[0].Unit = "../speech.service" },

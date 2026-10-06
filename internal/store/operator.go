@@ -13,6 +13,19 @@ var ErrConfigurationConflict = errors.New("operator configuration precondition f
 func (s *Store) StartOperatorTransition(ctx context.Context, e control.OperatorPrecondition, tr Transition) (control.State, error) {
 	return s.startTransition(ctx, e.Version, &e, tr)
 }
+
+// CheckOperatorPrecondition is the read-only fail-fast guard that keeps stale
+// operator requests away from runtime effects; the writer transaction remains
+// the authority and re-validates.
+func (s *Store) CheckOperatorPrecondition(ctx context.Context, e control.OperatorPrecondition) error {
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		state, err := readState(ctx, tx)
+		if err != nil {
+			return err
+		}
+		return operatorSource(ctx, tx, state, e)
+	})
+}
 func operatorSource(ctx context.Context, tx *sql.Tx, s control.State, e control.OperatorPrecondition) error {
 	if e.Incarnation == "" || e.Incarnation != s.LeaseFence.Incarnation || e.Version != s.Version {
 		return ErrVersionConflict
@@ -32,7 +45,7 @@ func operatorSource(ctx context.Context, tx *sql.Tx, s control.State, e control.
 		return ErrConfigurationConflict
 	}
 	if s.Phase != control.PhaseStable || s.Health == control.HealthError {
-		return ErrRecoveryRequired
+		return ErrUnstableState
 	}
 	var running bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM transitions WHERE status='in_progress')`).Scan(&running); err != nil {

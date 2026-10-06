@@ -130,7 +130,6 @@ func Backup(ctx context.Context, path, destination string) error {
 	return dir.Sync()
 }
 
-// ReadCatalog reads the accepted catalog and its revision from one SQLite row.
 // The mirror file is a rollback artifact and never a live configuration source.
 func ReadCatalog(ctx context.Context, path string) (control.CatalogSnapshot, error) {
 	var snapshot control.CatalogSnapshot

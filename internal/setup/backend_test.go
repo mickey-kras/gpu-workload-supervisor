@@ -32,7 +32,7 @@ func (r idleRuntime) Preflight(context.Context) error { return r.err }
 func fixture(t *testing.T) (Backend, string, Request) {
 	t.Helper()
 	home := t.TempDir()
-	r := Request{Version: 1, ConfirmQuiesced: true, Profile: Profile{Version: 1, StatePath: filepath.Join(home, "state/state.db"), SystemctlPath: "/usr/bin/systemctl", NvidiaSMIPath: "/usr/bin/nvidia-smi"}, Catalog: control.Catalog{Version: 1, Profiles: []control.Profile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health", BootPolicy: "stop-to-idle"}}}}
+	r := Request{Version: 1, ConfirmQuiesced: true, Profile: Profile{Version: 1, StatePath: filepath.Join(home, "state/state.db"), SystemctlPath: "/usr/bin/systemctl", NvidiaSMIPath: "/usr/bin/nvidia-smi"}, Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health", BootPolicy: "stop-to-idle"}}}}
 	backend := SystemBackend()
 	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
 	backend.runCommand = func(context.Context, string, ...string) ([]byte, error) {
@@ -113,7 +113,7 @@ func TestApplyFailuresAndMaintenanceResume(t *testing.T) {
 		t.Fatal("maintenance fence absent")
 	}
 	changed := r
-	changed.Catalog.Profiles = append([]control.Profile(nil), r.Catalog.Profiles...)
+	changed.Catalog.Profiles = append([]control.WorkloadProfile(nil), r.Catalog.Profiles...)
 	changed.Catalog.Profiles[0].Label = "Changed"
 	if err := backend.Apply(ctx, home, changed); err == nil {
 		t.Fatal("interrupted plan replaced")

@@ -58,7 +58,7 @@ func TestNativeLaunchDrift(t *testing.T) {
 	}
 }
 
-func nativeFixture(t *testing.T, family, endpoint string) (*SystemdManager, *fakeRunner, control.Profile, string) {
+func nativeFixture(t *testing.T, family, endpoint string) (*SystemdManager, *fakeRunner, control.WorkloadProfile, string) {
 	t.Helper()
 	c := acceptanceCatalog()
 	p := c.Profiles[2]
@@ -183,7 +183,7 @@ func TestNativeReadinessMalformedAndCanceled(t *testing.T) {
 	if m.nativeReady(ctx, control.NativeModel{Endpoint: "http://127.0.0.1:1"}) == nil {
 		t.Fatal("cancel ignored")
 	}
-	p := control.Profile{HealthURL: "http://127.0.0.1:1", NativeModel: &control.NativeModel{Runtime: "ollama"}}
+	p := control.WorkloadProfile{HealthURL: "http://127.0.0.1:1", NativeModel: &control.NativeModel{Runtime: "ollama"}}
 	if m.startNative(ctx, p) == nil {
 		t.Fatal("preload wait cancellation ignored")
 	}
@@ -243,7 +243,7 @@ func TestOllamaPreloadRequiresLocalModel(t *testing.T) {
 			}))
 			defer s.Close()
 			m := &SystemdManager{client: s.Client()}
-			p := control.Profile{HealthURL: s.URL, NativeModel: &control.NativeModel{Runtime: "ollama", Endpoint: s.URL, Model: "selected"}}
+			p := control.WorkloadProfile{HealthURL: s.URL, NativeModel: &control.NativeModel{Runtime: "ollama", Endpoint: s.URL, Model: "selected"}}
 			if m.startNative(context.Background(), p) == nil || loads != 0 {
 				t.Fatal("nonlocal model preloaded")
 			}

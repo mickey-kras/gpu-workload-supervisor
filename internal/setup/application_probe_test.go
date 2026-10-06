@@ -115,7 +115,7 @@ func TestProbeCancellationAndRedirect(t *testing.T) {
 	hits := 0
 	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++ }))
 	defer destination.Close()
-	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, destination.URL, 302) }))
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, destination.URL, http.StatusFound) }))
 	defer redirect.Close()
 	got, err := Probe(context.Background(), ProbeRequest{App: "ollama", Endpoint: redirect.URL})
 	if err != nil || hits != 0 || got.InventoryStatus == "available" {

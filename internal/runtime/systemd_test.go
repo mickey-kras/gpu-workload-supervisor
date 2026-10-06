@@ -217,7 +217,7 @@ func TestRedirectIsNotAcceptedAsHealthy(t *testing.T) {
 
 func testConfig() SystemdConfig {
 	return SystemdConfig{
-		Catalog: &control.Catalog{Version: 1, Profiles: []control.Profile{
+		Catalog: &control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{
 			{ID: control.WorkloadText, Label: "text", Adapter: "systemd", Unit: "text.service", Cgroup: "/workloads/text.service", HealthURL: "http://127.0.0.1:8080/health"},
 			{ID: control.WorkloadMedia, Label: "media", Adapter: control.AdapterMediaUnload, Unit: "media.service", Cgroup: "/workloads/media.service", HealthURL: "http://127.0.0.1:8188/", ReleaseURL: "http://127.0.0.1:8188/free"},
 		}},

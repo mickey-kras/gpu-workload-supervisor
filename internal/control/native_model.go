@@ -36,7 +36,7 @@ func (n NativeModel) validate() error {
 	if err != nil || u.RawQuery != "" || u.Path != "" {
 		return errors.New("native endpoint must be a base URL")
 	}
-	p := Profile{HealthURL: n.Endpoint}
+	p := WorkloadProfile{HealthURL: n.Endpoint}
 	if err := p.validateEndpoints(); err != nil {
 		return err
 	}

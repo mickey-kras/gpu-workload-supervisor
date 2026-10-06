@@ -7,41 +7,38 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
-const takeControlOperation = "take-control"
+const (
+	takeControlOperation   = "take-control"
+	userSwitchOperation    = "user-switch"
+	returnControlOperation = "return-control"
+)
 
-// OperatorTransition is the local account's conditional ownership path.
+// OperatorTransition is the local account's conditional ownership path. The
+// store guards the precondition before any runtime effect and re-validates it
+// inside the writer transaction, so the source owner binds to the
+// precondition owner rather than a stale read.
 func (c *Controller) OperatorTransition(ctx context.Context, action string, target control.Workload, e control.OperatorPrecondition) (control.State, error) {
-	s, err := c.store.State(ctx)
-	if err != nil {
-		return s, err
-	}
-	if e.Incarnation == "" || e.Incarnation != s.LeaseFence.Incarnation || e.Version != s.Version {
-		return s, store.ErrVersionConflict
-	}
-	if e.Owner != s.Owner {
-		return s, store.ErrWrongOwner
-	}
 	source, dest := control.OwnerUser, control.OwnerUser
 	switch action {
 	case takeControlOperation:
 		source = control.OwnerSupervisor
-	case "user-switch":
-	case "return-control":
+	case userSwitchOperation:
+	case returnControlOperation:
 		dest = control.OwnerSupervisor
 		target = control.WorkloadIdle
 	default:
-		return s, errors.New("invalid operator action")
+		return control.State{}, errors.New("invalid operator action")
 	}
-	if source != s.Owner {
-		return s, store.ErrWrongOwner
+	if source != e.Owner {
+		return control.State{}, store.ErrWrongOwner
+	}
+	if err := c.store.CheckOperatorPrecondition(ctx, e); err != nil {
+		return control.State{}, err
 	}
 	if action == takeControlOperation {
 		verified, err := c.Status(ctx)
 		if err != nil {
 			return verified, err
-		}
-		if verified.Version != e.Version {
-			return verified, store.ErrVersionConflict
 		}
 		target = verified.ActiveWorkload
 		if err = c.checkReady(ctx, target); err != nil {

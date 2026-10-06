@@ -34,7 +34,7 @@ func TestNativeActivationBeforeStateOpen(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	_, e = db.ReplaceCatalog(context.Background(), "", control.Catalog{Version: 1, Profiles: []control.Profile{{ID: "third", Label: "Third", Adapter: "systemd", Unit: "third.service", Cgroup: "/user/third", HealthURL: "http://localhost:9999"}}})
+	_, e = db.ReplaceCatalog(context.Background(), "", control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "third", Label: "Third", Adapter: "systemd", Unit: "third.service", Cgroup: "/user/third", HealthURL: "http://localhost:9999"}}})
 	if e != nil {
 		t.Fatal(e)
 	}

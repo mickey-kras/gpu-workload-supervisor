@@ -51,7 +51,7 @@ func TestDiscoveryAndOldRuntimeUseCommittedDatabaseCatalog(t *testing.T) {
 	}
 	prior, _ := s.Catalog(ctx)
 	replacement := r.Catalog
-	replacement.Profiles = append([]control.Profile(nil), r.Catalog.Profiles...)
+	replacement.Profiles = append([]control.WorkloadProfile(nil), r.Catalog.Profiles...)
 	replacement.Profiles[0].Unit = "changed.service"
 	replacement.Profiles[0].Label = "Accepted through CLI"
 	accepted, err := s.ReplaceCatalog(ctx, prior.Revision, replacement)

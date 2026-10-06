@@ -129,14 +129,6 @@ func parseUpstream(value string) (*url.URL, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse upstream: %w", err)
 	}
-	if upstream.Scheme != "http" && upstream.Scheme != "https" || upstream.Host == "" {
-		return nil, errors.New("upstream must be an absolute http or https URL")
-	}
-	if host := upstream.Hostname(); !strings.EqualFold(host, "localhost") {
-		if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-			return nil, errors.New("upstream host must be loopback")
-		}
-	}
 	return upstream, nil
 }
 

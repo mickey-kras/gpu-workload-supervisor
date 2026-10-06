@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -387,7 +388,8 @@ func TestRollbackFailureDoesNotClaimRestoredOwner(t *testing.T) {
 }
 
 func TestIdleRollbackDoesNotProceedPastFailedTextStop(t *testing.T) {
-	stateStore := openStore(t)
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	stateStore := openStoreAt(t, statePath)
 	stopErr := errors.New("text stop failed")
 	runtime := &fakeRuntime{active: control.WorkloadText, stopErr: stopErr}
 	controller := testController(t, stateStore, runtime)
@@ -408,7 +410,7 @@ func TestIdleRollbackDoesNotProceedPastFailedTextStop(t *testing.T) {
 		t.Fatalf("text stop failure was not reported: %v", err)
 	}
 	assertCalls(t, runtime.calls, "stop text")
-	events, err := transitionEvents(stateStore, context.Background(), "failed-idle-rollback")
+	events, err := transitionEvents(statePath, context.Background(), "failed-idle-rollback")
 	if err != nil || len(events) != 2 || events[0].Action != "stop text" || events[1].Outcome != "failed" {
 		t.Fatalf("rollback journal = %#v, %v", events, err)
 	}

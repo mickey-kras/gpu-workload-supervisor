@@ -16,12 +16,9 @@ const runtimeLlamaCPP = "llama.cpp"
 
 var ErrLaunchUnsupported = errors.New("native launch requires a supported direct local command")
 
-// qualifyNativeLaunch accepts a deliberately small systemd subset, not general
-// unit syntax. Unsupported indirection remains unavailable rather than guessed.
-func qualifyNativeLaunch(raw []byte, n control.NativeModel) error {
-	return qualifyNativeLaunchWithValidator(raw, n, validateNativeExecutable)
-}
-
+// qualifyNativeLaunchWithValidator accepts a deliberately small systemd subset,
+// not general unit syntax. Unsupported indirection remains unavailable rather
+// than guessed.
 func qualifyNativeLaunchWithValidator(raw []byte, n control.NativeModel, validate func(string) error) error {
 	unit, err := parseLaunchUnit(raw, n.Runtime)
 	if err != nil {

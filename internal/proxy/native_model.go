@@ -67,11 +67,11 @@ func (h *Handler) checkNativeCatalog(w http.ResponseWriter, r *http.Request) boo
 	}
 	snapshot, err := h.catalog.Catalog(r.Context())
 	if err != nil {
-		writeError(w, 503, "catalog_unavailable")
+		writeError(w, http.StatusServiceUnavailable, "catalog_unavailable")
 		return false
 	}
 	if snapshot.Revision != h.catalogRevision {
-		writeError(w, 409, "configuration_changed")
+		writeError(w, http.StatusConflict, "configuration_changed")
 		return false
 	}
 	return true
@@ -86,7 +86,7 @@ func (h *Handler) checkNativeRequest(w http.ResponseWriter, r *http.Request) boo
 		return false
 	}
 	if control.ValidateModelRequest(body, h.nativeModel.Model) != nil {
-		writeError(w, 400, "native_model_mismatch")
+		writeError(w, http.StatusBadRequest, "native_model_mismatch")
 		return false
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))

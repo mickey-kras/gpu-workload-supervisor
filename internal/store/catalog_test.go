@@ -16,7 +16,7 @@ func TestCatalogCommitAtomicRevision(t *testing.T) {
 	}
 	defer s.Close()
 	before, _ := s.State(ctx)
-	c := control.Catalog{Version: 1, Profiles: []control.Profile{{ID: "speech", Label: "Speech", Adapter: "systemd", Unit: "speech.service", Cgroup: "/user/speech", HealthURL: "http://localhost:9000"}}}
+	c := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "speech", Label: "Speech", Adapter: "systemd", Unit: "speech.service", Cgroup: "/user/speech", HealthURL: "http://localhost:9000"}}}
 	snap, err := s.ReplaceCatalog(ctx, "", c)
 	if err != nil {
 		t.Fatal(err)

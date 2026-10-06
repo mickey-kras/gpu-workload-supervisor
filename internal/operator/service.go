@@ -157,7 +157,7 @@ func errorCode(err error) Code {
 		return StaleState
 	case errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, store.ErrTransitionRunning) || errors.Is(err, supervisor.ErrTransitionRunning):
 		return Busy
-	case errors.Is(err, store.ErrRecoveryRequired) || errors.Is(err, supervisor.ErrRecoveryRequired) || errors.Is(err, supervisor.ErrReconcileRequired):
+	case errors.Is(err, store.ErrUnstableState) || errors.Is(err, supervisor.ErrRecoveryRequired) || errors.Is(err, supervisor.ErrReconcileRequired):
 		return RecoveryRequired
 	default:
 		return Unavailable

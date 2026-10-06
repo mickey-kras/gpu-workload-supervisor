@@ -10,7 +10,7 @@ import (
 )
 
 func (s *Store) RegisterWork(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence) error {
-	tx, err := s.beginAdmittedWorkAtCatalog(ctx, requestID, workload, fence, nil)
+	tx, err := s.beginAdmittedWork(ctx, requestID, workload, fence, nil)
 	if err != nil {
 		return err
 	}
@@ -82,7 +82,7 @@ func (s *Store) TransitionEvents(ctx context.Context, transitionID string) ([]Tr
 }
 
 func (s *Store) AdmitWork(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence) error {
-	return s.admitWork(ctx, requestID, jobID, workload, fence, "")
+	return s.admitWorkTx(ctx, requestID, jobID, workload, fence, admissionBinding{})
 }
 
 func (s *Store) FinishWorkFenced(ctx context.Context, requestID string, workload control.Workload, fence control.Fence, outcome WorkOutcome) error {

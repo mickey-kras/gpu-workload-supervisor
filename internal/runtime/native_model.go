@@ -61,7 +61,7 @@ func verifyNativeLaunchWithValidator(n control.NativeModel, validate func(string
 	}
 	return qualifyNativeLaunchWithValidator(b, n, validate)
 }
-func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Profile) error {
+func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.WorkloadProfile) error {
 	if p.NativeModel == nil {
 		return nil
 	}
@@ -164,7 +164,7 @@ func verifyServerModelList(payload modelListPayload, model string) error {
 	}
 	return nil
 }
-func (m *SystemdManager) startNative(ctx context.Context, p control.Profile) error {
+func (m *SystemdManager) startNative(ctx context.Context, p control.WorkloadProfile) error {
 	if p.NativeModel.Runtime != "ollama" {
 		return nil
 	}

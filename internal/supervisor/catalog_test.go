@@ -23,7 +23,7 @@ func TestThirdWorkloadLifecycle(t *testing.T) {
 	s := openStore(t)
 	r := &catalogRuntime{}
 	c := testController(t, s, r)
-	catalog := control.Catalog{Version: 1, Profiles: []control.Profile{{ID: "speech", Label: "Speech", Adapter: "systemd", Unit: "speech.service", Cgroup: "/user/speech", HealthURL: "http://localhost:9000"}}}
+	catalog := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "speech", Label: "Speech", Adapter: "systemd", Unit: "speech.service", Cgroup: "/user/speech", HealthURL: "http://localhost:9000"}}}
 	snap, err := s.ReplaceCatalog(ctx, c.config.Catalog.Revision, catalog)
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +52,7 @@ func TestStatusRejectsChangedCatalogBeforeObservation(t *testing.T) {
 	s := openStore(t)
 	r := &catalogRuntime{}
 	c := testController(t, s, r)
-	catalog := control.Catalog{Version: 1, Profiles: []control.Profile{{ID: "speech", Label: "Speech", Adapter: "systemd", Unit: "speech.service", Cgroup: "/user/speech", HealthURL: "http://localhost:9000"}}}
+	catalog := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "speech", Label: "Speech", Adapter: "systemd", Unit: "speech.service", Cgroup: "/user/speech", HealthURL: "http://localhost:9000"}}}
 	if _, err := s.ReplaceCatalog(ctx, c.config.Catalog.Revision, catalog); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func (r *failedCatalogPreflight) Preflight(context.Context) error {
 func TestCatalogReconcilePreflightFailureClosesAdmission(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	catalog := control.Catalog{Version: 1, Profiles: []control.Profile{{ID: "speech", Label: "Speech", Adapter: "systemd", Unit: "speech.service", Cgroup: "/user/speech", HealthURL: "http://localhost:9000"}}}
+	catalog := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "speech", Label: "Speech", Adapter: "systemd", Unit: "speech.service", Cgroup: "/user/speech", HealthURL: "http://localhost:9000"}}}
 	snap, err := s.ReplaceCatalog(ctx, "", catalog)
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +116,7 @@ func TestCatalogReconcilePreflightFailureClosesAdmission(t *testing.T) {
 func TestCatalogReconcileRetainsAdmittedWorkWithoutFenceRotation(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	catalog := control.Catalog{Version: 1, Profiles: []control.Profile{{ID: "speech", Label: "Speech", Adapter: "systemd", Unit: "speech.service", Cgroup: "/user/speech", HealthURL: "http://localhost:9000", BootPolicy: "retain"}}}
+	catalog := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "speech", Label: "Speech", Adapter: "systemd", Unit: "speech.service", Cgroup: "/user/speech", HealthURL: "http://localhost:9000", BootPolicy: "retain"}}}
 	snap, err := s.ReplaceCatalog(ctx, "", catalog)
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +145,7 @@ func TestCatalogReconcileRetainsAdmittedWorkWithoutFenceRotation(t *testing.T) {
 func TestCatalogRecoveryRetainsWorkCompletionAuthority(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	catalog := control.Catalog{Version: 1, Profiles: []control.Profile{{ID: "speech", Label: "Speech", Adapter: "systemd", Unit: "speech.service", Cgroup: "/user/speech", HealthURL: "http://localhost:9000", BootPolicy: "retain"}}}
+	catalog := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "speech", Label: "Speech", Adapter: "systemd", Unit: "speech.service", Cgroup: "/user/speech", HealthURL: "http://localhost:9000", BootPolicy: "retain"}}}
 	snap, err := s.ReplaceCatalog(ctx, "", catalog)
 	if err != nil {
 		t.Fatal(err)

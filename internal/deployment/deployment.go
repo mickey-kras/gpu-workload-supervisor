@@ -24,7 +24,6 @@ const (
 	stateFile = "state.db"
 )
 
-// DefaultStatePath is the per-user default SQLite state location.
 func DefaultStatePath() string {
 	if root := os.Getenv("XDG_STATE_HOME"); root != "" {
 		return filepath.Join(root, "gpu-workload-supervisor", stateFile)
