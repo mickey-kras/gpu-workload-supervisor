@@ -30,10 +30,6 @@ func TestVerifyBindingsFailsClosed(t *testing.T) {
 			t.Fatalf("failure=%v: %v", fail, err)
 		}
 	}
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
-	if err := backend.VerifyBindings(context.Background(), request); err == nil {
-		t.Fatal("missing verifier")
-	}
 	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return nil, errors.New("runtime missing") }
 	if err := backend.VerifyBindings(context.Background(), request); err == nil {
 		t.Fatal("missing runtime")

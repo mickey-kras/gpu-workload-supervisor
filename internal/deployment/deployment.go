@@ -2,15 +2,18 @@
 package deployment
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"golang.org/x/sys/unix"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
 // Release is set identically for all binaries by the release build.
@@ -31,6 +34,49 @@ func DefaultStatePath() string {
 		return stateFile
 	}
 	return filepath.Join(home, ".local", "state", "gpu-workload-supervisor", stateFile)
+}
+
+// Profile is the operator.json schema shared by setup (the writer) and the
+// operator (the reader). capacityHeadroomMiB stays without omitempty to match
+// the bytes setup has always written.
+type Profile struct {
+	Version                 int    `json:"version"`
+	StatePath               string `json:"statePath"`
+	ActivatedRelease        string `json:"activatedRelease"`
+	SystemctlPath           string `json:"systemctlPath"`
+	NvidiaSMIPath           string `json:"nvidiaSMIPath"`
+	GPUIndex                int    `json:"gpuIndex"`
+	CapacityHeadroomMiB     uint64 `json:"capacityHeadroomMiB"`
+	StatusTimeoutSeconds    int    `json:"statusTimeoutSeconds,omitempty"`
+	OperationTimeoutSeconds int    `json:"operationTimeoutSeconds,omitempty"`
+}
+
+func (p Profile) Validate() error {
+	if p.Version != 1 || !releaseToken(p.ActivatedRelease) || p.GPUIndex < 0 || p.StatusTimeoutSeconds < 0 || p.StatusTimeoutSeconds > 60 || p.OperationTimeoutSeconds < 0 || p.OperationTimeoutSeconds > 1800 {
+		return errors.New("invalid deployment profile")
+	}
+	for _, s := range []string{p.StatePath, p.SystemctlPath, p.NvidiaSMIPath} {
+		if !filepath.IsAbs(s) || filepath.Clean(s) != s || s == "/" {
+			return errors.New("profile requires absolute clean paths")
+		}
+	}
+	return nil
+}
+
+func releaseToken(s string) bool {
+	if len(s) == 0 || len(s) > 128 {
+		return false
+	}
+	for _, c := range []byte(s) {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.') {
+			return false
+		}
+	}
+	return true
+}
+
+func (p Profile) SystemdConfig(catalog *control.Catalog) gpuruntime.SystemdConfig {
+	return gpuruntime.SystemdConfig{Catalog: catalog, SystemctlPath: p.SystemctlPath, NvidiaSMIPath: p.NvidiaSMIPath, GPUIndex: p.GPUIndex, CapacityHeadroomMiB: p.CapacityHeadroomMiB, HealthTimeout: 10 * time.Second}
 }
 
 type Marker struct {
@@ -79,20 +125,8 @@ func Read(statePath string) (Marker, error) {
 		return marker, err
 	}
 	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, 4097))
-	if err != nil {
+	if err := strictjson.DecodeLimited(file, 4096, &marker); err != nil {
 		return marker, err
-	}
-	if len(data) > 4096 {
-		return marker, errors.New("oversized deployment marker")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&marker); err != nil {
-		return marker, err
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		return marker, errors.New("trailing deployment marker data")
 	}
 	if marker.Version != 1 || marker.Release == "" {
 		return marker, errors.New("invalid deployment marker")
