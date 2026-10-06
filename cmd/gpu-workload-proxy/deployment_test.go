@@ -25,7 +25,7 @@ func TestManagedProxyRefusesMissingDatabase(t *testing.T) {
 func TestLegacyProxyMayInitializeWithoutMarker(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	// Invalid proxy configuration stops startup after the permitted legacy opener.
-	if err := serveProxy(workloadproxy.Config{}, proxyServerSettings{statePath: path}); err == nil {
+	if err := serveProxy(workloadproxy.Config{}, proxyServerSettings{statePath: path, listen: "127.0.0.1:0"}); err == nil {
 		t.Fatal("accepted invalid proxy configuration")
 	}
 	if _, err := os.Stat(path); err != nil {

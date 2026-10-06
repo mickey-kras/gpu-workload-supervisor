@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"strings"
 	"testing"
@@ -37,7 +36,7 @@ func TestCompleteWorkFenced(t *testing.T) {
 	if err := stateStore.FinishWorkFenced(ctx, "request-1", control.WorkloadMedia, state.LeaseFence, WorkCompleted); err != nil {
 		t.Fatal(err)
 	}
-	if err := stateStore.FinishWorkFenced(ctx, "request-1", control.WorkloadMedia, state.LeaseFence, WorkCompleted); !errors.Is(err, sql.ErrNoRows) {
+	if err := stateStore.FinishWorkFenced(ctx, "request-1", control.WorkloadMedia, state.LeaseFence, WorkCompleted); !errors.Is(err, ErrWorkAlreadyCompleted) {
 		t.Fatalf("complete twice: %v", err)
 	}
 }
@@ -124,6 +123,37 @@ func TestAdmitWorkRejectsInvalidFence(t *testing.T) {
 	err := stateStore.AdmitWork(ctx, "request-1", "", control.WorkloadMedia, control.Fence{})
 	if err == nil || !strings.Contains(err.Error(), "invalid fence") {
 		t.Fatalf("admit with empty fence: %v", err)
+	}
+}
+
+func TestFinishWorkTokenRetryIsIdempotent(t *testing.T) {
+	stateStore := testStore(t)
+	ctx := context.Background()
+	state, err := stateStore.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.DesiredWorkload = control.WorkloadMedia
+	state.ActiveWorkload = control.WorkloadMedia
+	state.Phase = control.PhaseStable
+	state.Health = control.HealthHealthy
+	state.Admission = control.AdmissionOpen
+	state, err = stateStore.UpdateState(ctx, state.Version, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := stateStore.AdmitWorkToken(ctx, "request-1", "", control.WorkloadMedia, state.LeaseFence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stateStore.FinishWorkToken(ctx, "request-1", control.WorkloadMedia, state.LeaseFence, token, WorkCompleted); err != nil {
+		t.Fatal(err)
+	}
+	if err := stateStore.FinishWorkToken(ctx, "request-1", control.WorkloadMedia, state.LeaseFence, token, WorkCompleted); !errors.Is(err, ErrWorkAlreadyCompleted) {
+		t.Fatalf("idempotent retry: %v", err)
+	}
+	if err := stateStore.FinishWorkToken(ctx, "request-1", control.WorkloadMedia, state.LeaseFence, "forged", WorkCompleted); !errors.Is(err, ErrRegistrationTokenMismatch) {
+		t.Fatalf("forged token after completion: %v", err)
 	}
 }
 

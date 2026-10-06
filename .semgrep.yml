@@ -22,3 +22,72 @@ rules:
       - metavariable-regex:
           metavariable: $RUN
           regex: '.*\$\{\{.*github\.event\..*\}\}.*'
+  - id: go.sql-string-built-query
+    message: SQL must use bound parameters; do not build query text with fmt.Sprintf or string concatenation. Fixed-placeholder and fixed-table builders are allowlisted by test.
+    languages: [go]
+    severity: ERROR
+    patterns:
+      - pattern-either:
+          - pattern: $DB.$M($CTX, fmt.Sprintf(...), ...)
+          - pattern: $DB.$M(fmt.Sprintf(...), ...)
+          - pattern: $DB.$M($CTX, $X + $Y, ...)
+          - pattern: $DB.$M($X + $Y, ...)
+      - pattern-not-inside: |
+          func $F(...) $R {
+            ...
+            strings.TrimSuffix(strings.Repeat("?,", ...), ...)
+            ...
+          }
+      - pattern-not-inside: |
+          func pruneRecoveryAudits(...) $R {
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $M
+          regex: '^(Exec|ExecContext|Query|QueryContext|QueryRow|QueryRowContext)$'
+  - id: go.permissive-file-mode
+    message: State files must not be created with a mode more permissive than 0600. Test fixtures that exercise rejection paths are excluded.
+    languages: [go]
+    severity: ERROR
+    paths:
+      exclude:
+        - '*_test.go'
+    patterns:
+      - pattern-either:
+          - pattern: os.WriteFile($PATH, $DATA, $MODE)
+          - pattern: os.OpenFile($PATH, $FLAGS, $MODE)
+      - metavariable-comparison:
+          metavariable: $MODE
+          comparison: $MODE > 0o600
+  - id: go.cmd-listener-without-loopback-validation
+    message: Listeners in cmd/ must validate the loopback boundary with validateLoopbackAddress in the same function.
+    languages: [go]
+    severity: ERROR
+    paths:
+      include:
+        - 'cmd/*'
+    patterns:
+      - pattern-either:
+          - pattern: '&http.Server{...}'
+          - pattern: net.Listen(...)
+      - pattern-not-inside: |
+          func $F(...) $R {
+            ...
+            validateLoopbackAddress(...)
+            ...
+          }
+  - id: go.token-field-logging
+    message: Do not pass token fields to log/fmt calls; tokens are completion capabilities.
+    languages: [go]
+    severity: ERROR
+    patterns:
+      - pattern-either:
+          - pattern: log.$F(..., $X.$FIELD, ...)
+          - pattern: fmt.$F(..., $X.$FIELD, ...)
+          - pattern: $LOGGER.$F(..., $X.$FIELD, ...)
+      - metavariable-regex:
+          metavariable: $F
+          regex: '^(Print|Printf|Println|Fatal|Fatalf|Fatalln|Panic|Panicf|Panicln|Sprintf|Errorf)$'
+      - metavariable-regex:
+          metavariable: $FIELD
+          regex: '(?i).*token.*'

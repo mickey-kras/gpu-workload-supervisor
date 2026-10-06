@@ -452,6 +452,10 @@ func (h *Handler) writeWorkError(response http.ResponseWriter, err error) {
 		return
 	}
 	switch {
+	case errors.Is(err, store.ErrWorkAlreadyCompleted):
+		// The request ID is the idempotency key: a finish retried after a lost
+		// 204 replays as success instead of request_not_found.
+		response.WriteHeader(http.StatusNoContent)
 	case errors.Is(err, store.ErrStaleFence), errors.Is(err, store.ErrWorkloadMismatch):
 		writeError(response, http.StatusConflict, "lease_rejected")
 	case errors.Is(err, store.ErrRegistrationTokenMismatch):

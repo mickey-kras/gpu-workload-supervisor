@@ -295,6 +295,9 @@ func TestInterruptedTransitionRequiresExplicitRecovery(t *testing.T) {
 	if _, err := controller.Reconcile(context.Background()); !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("reconcile error = %v", err)
 	}
+	if running, err := stateStore.InProgressTransition(context.Background()); err != nil || running != "" {
+		t.Fatalf("latch left transition in progress = %q, error = %v", running, err)
+	}
 	if _, err := controller.Recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}

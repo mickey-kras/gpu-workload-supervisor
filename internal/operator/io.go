@@ -16,6 +16,10 @@ func ReadRequest(r io.Reader, budget time.Duration) ([]byte, error) {
 		e error
 	}
 	done := make(chan result, 1)
+	// On I/O timeout the blocked read outlives this call: Close does not
+	// interrupt pipe reads on Linux, so the goroutine leaks until process exit.
+	// gpu-operator exits after one request, bounding the leak; this is the
+	// accepted fallback.
 	go func() { b, e := io.ReadAll(io.LimitReader(r, MaxRequestBytes+1)); done <- result{b, e} }()
 	timer := time.NewTimer(budget)
 	defer timer.Stop()
@@ -50,6 +54,9 @@ func WriteResponse(w io.Writer, r Response, budget time.Duration) error {
 	}
 	b = append(b, '\n')
 	done := make(chan error, 1)
+	// Same fallback as ReadRequest: a timed-out write goroutine can stay
+	// blocked on a pipe until process exit, which gpu-operator reaches after
+	// one request.
 	go func() {
 		n, e := w.Write(b)
 		if e == nil && n != len(b) {

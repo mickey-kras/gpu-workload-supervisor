@@ -143,7 +143,11 @@ func (c *Controller) reconcileCatalogTarget(ctx context.Context, state control.S
 		return state, err
 	}
 	final := stableTarget(state, control.OwnerSupervisor, target)
-	return c.store.Recover(ctx, state.Version, final, "catalog-reconciliation")
+	// The settle write must survive caller cancellation once runtime effects
+	// have completed; an interrupted settle would strand the reconciliation.
+	finalizeCtx, cancel := context.WithTimeout(context.Background(), c.config.FinalizeTimeout)
+	defer cancel()
+	return c.store.Recover(finalizeCtx, state.Version, final, "catalog-reconciliation")
 }
 
 func (c *Controller) stopOpposingCatalog(ctx context.Context, target control.Workload) error {

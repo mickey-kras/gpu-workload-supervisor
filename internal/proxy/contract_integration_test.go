@@ -159,7 +159,7 @@ func TestHTTPResponsesRequireExplicitTerminalEvidence(t *testing.T) {
 			f.finish(proxy.URL, finish, http.StatusNoContent)
 			f.assertWork("job", token, true)
 			finish.Outcome = store.WorkAbandoned
-			f.finish(proxy.URL, finish, http.StatusNotFound)
+			f.finish(proxy.URL, finish, http.StatusNoContent)
 			var outcome string
 			if err := f.rows.QueryRow("SELECT completion_outcome FROM registered_work WHERE request_id='job'").Scan(&outcome); err != nil || outcome != string(store.WorkCompleted) {
 				t.Fatalf("duplicate changed terminal outcome: %s %v", outcome, err)

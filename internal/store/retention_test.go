@@ -259,6 +259,28 @@ func TestTokenedWorkPrunesUnderCurrentFenceWithoutLateCompletionCollision(t *tes
 	}
 }
 
+func TestPruneCompletedWorkCutoffIsSubsecondAware(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	state := admitRetentionWork(t, s, "early-fraction", "late-fraction")
+	base := fixedClock()()
+	finishRetentionWork(t, s, state, "early-fraction", base.Add(100*time.Millisecond))
+	finishRetentionWork(t, s, state, "late-fraction", base.Add(900*time.Millisecond))
+	if _, err := s.RotateFenceAndCloseAdmission(ctx, state.Version); err != nil {
+		t.Fatal(err)
+	}
+	count, err := s.PruneCompletedWork(ctx, base.Add(500*time.Millisecond), 256)
+	if err != nil || count != 1 {
+		t.Fatalf("subsecond prune = %d, %v", count, err)
+	}
+	if retentionWorkExists(t, s, "early-fraction") {
+		t.Fatal("completion before the fractional cutoff was kept")
+	}
+	if !retentionWorkExists(t, s, "late-fraction") {
+		t.Fatal("completion after the fractional cutoff was pruned")
+	}
+}
+
 func TestPruneCompletedWorkWithNoEligibleRows(t *testing.T) {
 	s := testStore(t)
 	count, err := s.PruneCompletedWork(context.Background(), fixedClock()().Add(-24*time.Hour), 256)

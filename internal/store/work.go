@@ -14,6 +14,10 @@ import (
 var ErrRequestConflict = errors.New("request id already exists")
 var ErrRegistrationTokenMismatch = errors.New("registration token does not match work")
 
+// ErrWorkAlreadyCompleted reports an idempotent finish retry: request, workload,
+// fence and token all match a registration that already reached a terminal state.
+var ErrWorkAlreadyCompleted = errors.New("work already completed")
+
 type WorkOutcome string
 
 const (
@@ -196,6 +200,8 @@ func (s *Store) FinishWorkToken(ctx context.Context, requestID string, workload 
 	if err := validateFinishedWork(requestID, workload, fence, outcome); err != nil {
 		return err
 	}
+	// Rows registered before completion tokens existed have a NULL
+	// registration_token; only an empty presented token may finish them.
 	result, err := s.db.ExecContext(ctx, `UPDATE registered_work
 		SET completed_at = ?, completion_outcome = ?
 		WHERE request_id = ? AND completed_at IS NULL
@@ -216,8 +222,9 @@ func (s *Store) FinishWorkToken(ctx context.Context, requestID string, workload 
 	var incarnation string
 	var epoch uint64
 	var registeredToken sql.NullString
-	err = s.db.QueryRowContext(ctx, `SELECT workload, lease_incarnation, lease_epoch, registration_token
-		FROM registered_work WHERE request_id = ?`, requestID).Scan(&registeredWorkload, &incarnation, &epoch, &registeredToken)
+	var completedAt sql.NullString
+	err = s.db.QueryRowContext(ctx, `SELECT workload, lease_incarnation, lease_epoch, registration_token, completed_at
+		FROM registered_work WHERE request_id = ?`, requestID).Scan(&registeredWorkload, &incarnation, &epoch, &registeredToken, &completedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return sql.ErrNoRows
 	}
@@ -232,6 +239,9 @@ func (s *Store) FinishWorkToken(ctx context.Context, requestID string, workload 
 	}
 	if registeredToken.Valid && registeredToken.String != token || !registeredToken.Valid && token != "" {
 		return ErrRegistrationTokenMismatch
+	}
+	if completedAt.Valid {
+		return ErrWorkAlreadyCompleted
 	}
 	return sql.ErrNoRows
 }
@@ -252,12 +262,13 @@ func validateFinishedWork(requestID string, workload control.Workload, fence con
 	return nil
 }
 
+// julianday compares timestamps at subsecond precision: a plain string compare
+// misorders fractional seconds and unixepoch truncates to whole seconds.
 const prunableWorkIDs = `SELECT work.request_id FROM registered_work AS work
 	JOIN control_state AS state ON state.singleton = 1
 	WHERE work.completed_at IS NOT NULL
 	  AND (work.registration_token IS NOT NULL OR work.lease_incarnation <> state.lease_incarnation OR work.lease_epoch <> state.lease_epoch)
-	  AND work.completed_at < ?
-	  AND unixepoch(work.completed_at) < unixepoch(?)
+	  AND julianday(work.completed_at) < julianday(?)
 	  AND NOT EXISTS (
 		SELECT 1 FROM transition_work AS snapshot
 		JOIN transitions AS tr ON tr.transition_id = snapshot.transition_id
@@ -266,7 +277,7 @@ const prunableWorkIDs = `SELECT work.request_id FROM registered_work AS work
 	ORDER BY work.completed_at, work.request_id LIMIT ?`
 
 func selectPrunableWorkIDs(ctx context.Context, tx *sql.Tx, cutoff string, limit int) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, prunableWorkIDs, cutoff, cutoff, limit)
+	rows, err := tx.QueryContext(ctx, prunableWorkIDs, cutoff, limit)
 	if err != nil {
 		return nil, fmt.Errorf("select completed work to prune: %w", err)
 	}

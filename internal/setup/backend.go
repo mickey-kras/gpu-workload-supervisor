@@ -392,9 +392,10 @@ func (b Backend) enableReconciliation(ctx context.Context, home, systemctl strin
 	if err := writeJSON(filepath.Join(home, ".config/gpu-workload-supervisor/integration.json"), integration{1, reconcileUnit, target}); err != nil {
 		return err
 	}
-	output, err := b.runCommand(ctx, systemctl, "--user", "enable", reconcileUnit)
-	if err != nil {
-		return fmt.Errorf("enable reconciliation: %w: %.4096s", err, output)
+	// Subprocess output is untrusted terminal input (control characters, unit
+	// payload echoes); the error carries only the exit status.
+	if _, err := b.runCommand(ctx, systemctl, "--user", "enable", reconcileUnit); err != nil {
+		return fmt.Errorf("enable reconciliation: %w", err)
 	}
 	return nil
 }
