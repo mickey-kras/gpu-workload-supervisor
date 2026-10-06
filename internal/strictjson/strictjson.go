@@ -22,30 +22,40 @@ func Check(d *json.Decoder) error {
 	}
 	switch delim {
 	case '{':
-		seen := map[string]bool{}
-		for d.More() {
-			key, err := d.Token()
-			if err != nil {
-				return err
-			}
-			name, ok := key.(string)
-			if !ok || seen[name] {
-				return ErrDuplicateKey
-			}
-			seen[name] = true
-			if err := Check(d); err != nil {
-				return err
-			}
-		}
+		return checkObject(d)
 	case '[':
-		for d.More() {
-			if err := Check(d); err != nil {
-				return err
-			}
-		}
+		return checkArray(d)
 	default:
 		return errors.New("invalid JSON value")
 	}
-	_, err = d.Token()
+}
+
+func checkObject(d *json.Decoder) error {
+	seen := map[string]bool{}
+	for d.More() {
+		key, err := d.Token()
+		if err != nil {
+			return err
+		}
+		name, ok := key.(string)
+		if !ok || seen[name] {
+			return ErrDuplicateKey
+		}
+		seen[name] = true
+		if err := Check(d); err != nil {
+			return err
+		}
+	}
+	_, err := d.Token()
+	return err
+}
+
+func checkArray(d *json.Decoder) error {
+	for d.More() {
+		if err := Check(d); err != nil {
+			return err
+		}
+	}
+	_, err := d.Token()
 	return err
 }

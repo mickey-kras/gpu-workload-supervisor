@@ -16,18 +16,21 @@ import (
 // Release is set identically for all binaries by the release build.
 var Release = "dev"
 
-const Suffix = ".deployment.json"
+const (
+	Suffix    = ".deployment.json"
+	stateFile = "state.db"
+)
 
 // DefaultStatePath is the per-user default SQLite state location.
 func DefaultStatePath() string {
 	if root := os.Getenv("XDG_STATE_HOME"); root != "" {
-		return filepath.Join(root, "gpu-workload-supervisor", "state.db")
+		return filepath.Join(root, "gpu-workload-supervisor", stateFile)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "state.db"
+		return stateFile
 	}
-	return filepath.Join(home, ".local", "state", "gpu-workload-supervisor", "state.db")
+	return filepath.Join(home, ".local", "state", "gpu-workload-supervisor", stateFile)
 }
 
 type Marker struct {
