@@ -26,7 +26,7 @@ export async function launch({units = [], profiles = [], pending = false, fail =
         add_bottom_bar(child) { this.append(child); }
         set_child(child) { this.append(child); }
         set_content(child) { this.append(child); }
-        add_css_class(name) { (this.cssClasses ??= []).push(name); }
+        add_css_class(name) { this.cssClasses ??= []; this.cssClasses.push(name); }
         remove(child) { this.children.splice(this.children.indexOf(child), 1); }
         present() { this.presented = true; }
         close() { this.closed = true; }
