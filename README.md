@@ -9,7 +9,7 @@
 
 GPU Workload Supervisor switches between text and media workloads that share one GPU. It stops and verifies the outgoing workload before starting the next, and blocks new requests when a transition or recovery fails. Use it when both workloads cannot safely run at once.
 
-It provides a controller (`gpu-mode`) and an execution proxy (`gpu-workload-proxy`). You supply the runtime services, health endpoints and deployment configuration.
+It provides four executables: `gpu-mode` (controller and workload transitions), `gpu-workload-proxy` (execution admission proxy), `gpu-operator` (one-request local operator backend), and `gpu-setup` (guided setup and catalog commit). You supply the runtime services, health endpoints and deployment configuration.
 
 Use this project independently of the memory stack. It does not require Memory Router, its agent integrations, or Hindsight.
 
@@ -27,7 +27,7 @@ Use this project independently of the memory stack. It does not require Memory R
 
 ## Install
 
-Download the Linux amd64 or arm64 archive from [Releases](https://github.com/mickey-kras/gpu-workload-supervisor/releases), verify it against the release checksum file, and extract both binaries into a version-specific directory. Use their absolute paths in commands and services. See [release verification](docs/RELEASING.md) and [backup before upgrading](docs/RESTORING.md#back-up-before-an-upgrade).
+Download the Linux amd64 or arm64 archive from [Releases](https://github.com/mickey-kras/gpu-workload-supervisor/releases), verify it against the release checksum file, and extract the four executables (`gpu-mode`, `gpu-workload-proxy`, `gpu-operator`, `gpu-setup`) into a version-specific directory. A Debian package with the same executables plus the GNOME desktop integration is published per architecture. Use absolute binary paths in commands and services. See [release verification](docs/RELEASING.md) and [backup before upgrading](docs/RESTORING.md#back-up-before-an-upgrade).
 
 Requires Linux with user-systemd and cgroup v2. Direct runtime requests bypass the supervisor, so deployment must prevent that bypass.
 

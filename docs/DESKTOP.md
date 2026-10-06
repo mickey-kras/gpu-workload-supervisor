@@ -60,20 +60,18 @@ stable target with a strictly higher major/minor/patch version. For example,
 snapshot. Snapshot commit hashes do not establish upgrade order. Reapplying the
 exact same release (including the same snapshot) remains supported.
 
-Setup obtains both controller and exclusive proxy gates, verifies the existing
-and proposed committed mappings have released the GPU, checks state read-only,
-and makes an integrity-checked SQLite `VACUUM INTO` snapshot including WAL content.
-Each activation retains its own snapshot under the private `backups/activation-*`
-directory. Managed snapshots retain the previous binary checksums, profile,
-accepted catalog, deployment marker, and state together.
+During activation:
 
-A durable maintenance marker is written before migration. The owned-file journal
-records before/after images before applying prerequisites. Pre-commit failure
-restores only owned integration; a known committed catalog is never rolled back.
-Post-commit failure retains maintenance and resumes forward. Reopening setup
-recovers the exact pending request, including whether the database was newly
-created. A stale preview is rejected before entering maintenance. Do not delete
-maintenance or migration metadata to bypass a failure.
+- Setup holds both controller and exclusive proxy gates and verifies the existing
+  and proposed committed mappings have released the GPU before snapshotting state.
+- Each activation retains an integrity-checked snapshot under the private
+  `backups/activation-*` directory: previous binary checksums, profile, accepted
+  catalog, deployment marker, and state together. Keep it for rollback.
+- Reopening setup after an interruption recovers the exact pending request;
+  post-commit failures resume forward, and a known committed catalog is never
+  rolled back.
+- A stale preview is rejected before maintenance starts.
+- Do not delete maintenance or migration metadata to bypass a failure.
 
 ## Restore and rollback
 
@@ -84,7 +82,7 @@ and running `restore-state` to rotate the fence before reconciliation.
 For a managed rollback, select one matching verified backup directory and restore
 its complete state, profile, ownership metadata, and compatible binary set together. Install the matching backend/extension package as well. The saved
 `manifest.json` records the release and SHA-256 of each saved executable. Saved
-binary files deliberately have private mode `0600`; verify the hashes before
+binary files have private mode `0600`; verify the hashes before
 making a chosen recovery copy executable with mode `0700`. Never substitute an
 unrelated installed binary or edit release/schema metadata to force compatibility.
 Restore the matching setup metadata to these locations:
@@ -116,20 +114,8 @@ data. Reinstall the matching release or activate a newer one through setup.
 
 ## Continuous integration coverage
 
-The required `quality / checks` job also runs native GJS/Gio transport tests,
-then extracts the actual amd64 snapshot Debian payload into a disposable runner
-and tests its setup executable as a newly created OS account with real user
-systemd and SQLite. This covers discovery, side-effect-free preview, explicit
-confirmation, an interrupted activation after catalog commit, durable forward
-resume, login reconciliation through the packaged unit, stale preview rejection,
-checksummed backup tuples, and owned integration removal/reapplication. A clearly
-identified NVIDIA command fixture is used; no GPU is claimed by this gate.
-
-A separate dpkg temporary-root test exercises unpack, remove, purge and reinstall
-of the unchanged payload and checks preservation of private data. It does not
-configure the package or bypass its GNOME 50 dependencies. These checks fail when
-prerequisites are absent; they are unconditional parts of the existing gate.
-The scripts require a disposable host and refuse existing installed backend paths.
+CI coverage of the package payload and setup executable is described in
+[DEVELOPMENT.md](DEVELOPMENT.md).
 
 Real GNOME Shell 50 rendering/session lifecycle, NVIDIA operation, dependency
 resolution and configured package installation, cross-version managed upgrade,

@@ -16,20 +16,27 @@ Take Control confirms preserving the verified current workload. Stop and Return
 confirms stopping work and returning Supervisor ownership in Idle. User workload
 selection is immediate; selecting the active workload does nothing. Normal menus
 show configured labels. Details retains owner, requested and active workloads,
-phase, health, admission and conservative observation freshness.
+phase, health, admission and observation freshness bounded to thirty seconds
+after dispatch.
 
-The client never optimistically changes committed ownership. Pending calls, stale
-observations, errors and recovery requirements disable mutations. One call may be
-outstanding; status polling backs off from five to sixty seconds and never overlaps
-a mutation. Freshness expires thirty seconds after dispatch, using monotonic time.
-Versions remain decimal strings. Retired enable generations, stale decisions and
-lower same-incarnation versions are rejected. Disconnects require fresh status;
-mutations are never replayed. Client read deadlines are 75 seconds for status and
-33 minutes for mutations. These exceed the backend's maximum operation plus
-cleanup/finalization and input/output budgets (74 seconds and 1,934 seconds,
-respectively); a client deadline leaves the outcome uncertain. Disable cancels local reads and removes UI resources,
-without killing the backend. The backend must independently preserve admitted
-operations across Shell restart. There is no recovery control in the extension.
+- The client never optimistically changes committed ownership.
+- Pending calls, stale observations, errors and recovery requirements disable
+  mutations.
+- One call may be outstanding; status polling backs off from five to sixty
+  seconds and never overlaps a mutation.
+- Freshness expires thirty seconds after dispatch, using monotonic time.
+- Versions remain decimal strings. Retired enable generations, stale decisions
+  and lower same-incarnation versions are rejected.
+- Disconnects require fresh status; mutations are never replayed.
+- Client read deadlines exceed the backend's maximum operation plus
+  cleanup/finalization and input/output budgets; the numbers are in
+  [OPERATOR.md](OPERATOR.md#lifetimes-and-limits).
+- A client deadline leaves the outcome uncertain.
+- Disable cancels local reads and removes UI resources, without killing the
+  backend.
+- The backend must independently preserve admitted operations across Shell
+  restart.
+- There is no recovery control in the extension.
 
 Run contract, model, and mocked lifecycle tests with `npm test --prefix clients/gnome`.
 Run the native bounded-stream smoke test with

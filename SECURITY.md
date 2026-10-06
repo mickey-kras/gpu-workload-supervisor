@@ -23,9 +23,8 @@ mutually untrusted processes sharing a UID; use separate service identities.
 
 CI uses pinned GitHub Actions, Go vulnerability analysis, dependency review,
 Gitleaks, Semgrep, Trivy, CodeQL, Aislop, and main-only SonarQube. Dependabot
-auto-merge requires verified bot commits, patch or minor updates, a known
-compatibility score of at least 75% for every dependency, and passing branch
-checks. Major or unscored updates need manual review.
+ecosystems, update rules, and auto-merge requirements are in
+[DEPENDABOT.md](docs/DEPENDABOT.md).
 
 ## Dependency licenses
 

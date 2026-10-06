@@ -2,9 +2,14 @@
 
 [Documentation](README.md) | [Repository](../README.md)
 
-Go modules, the pinned Aislop and policy npm toolchains, and GitHub Actions are updated daily.
-Dependabot owns its branch rebases. `go.sum` and the npm lockfile must be updated
-within the same PR.
+The scheduled ecosystems, each updated daily, are:
+
+- `gomod` at the repository root
+- `npm` in `.github/aislop`, `.github/scripts` and `clients/gnome`
+- `github-actions` at the repository root
+
+Dependabot owns its branch rebases. `go.sum` and the npm lockfiles must be
+updated within the same PR.
 CodeQL subactions are grouped so initialization and analysis always update together.
 Grouped updates retain the per-dependency compatibility and update-type checks below.
 
