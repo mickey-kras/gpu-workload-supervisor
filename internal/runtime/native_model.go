@@ -146,7 +146,7 @@ func verifyModelList(b []byte, n control.NativeModel) error {
 		return ErrModelIdentity
 	}
 	if n.Runtime == "ollama" {
-		return verifyOllamaModelList(payload, n.Model)
+		return verifyOllamaModelList(payload, n.ComparisonModel())
 	}
 	return verifyServerModelList(payload, n.Model)
 }

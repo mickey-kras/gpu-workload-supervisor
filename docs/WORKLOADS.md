@@ -83,13 +83,32 @@ metadata or downgrade a live database.
 A `systemd` profile may include `nativeModel` with `runtime` (`ollama`,
 `llama.cpp`, or `vllm`), `instance`, exact API `model`, loopback base `endpoint`,
 absolute `launchFile`, and its `launchSHA256`. Model names are case-sensitive.
-Each workload needs its own existing unit and non-overlapping cgroup. Two models
-in the same runtime instance can use different units on the same endpoint; the
-old unit stops and GPU release is verified before the next starts. Re-selecting
-an active workload does not restart that unit; opposing units remain reconciled.
-Shared-unit model replacement is unsupported. Stop workload proxies before
-applying a catalog change; setup and CLI configure both enforce the proxy
-lifetime lock, including in-flight requests.
+By default each workload needs its own existing unit and non-overlapping
+cgroup. Two models in the same runtime instance can use different units on the
+same endpoint; the old unit stops and GPU release is verified before the next
+starts. Re-selecting an active workload does not restart that unit; opposing
+units remain reconciled.
+
+Ollama workloads may instead share one unit, cgroup, endpoint and instance with
+different exact models. Untagged names canonicalize to `:latest`, so `m` and
+`m:latest` are the same model and cannot bind two profiles. Starting a sibling
+on the shared unit evicts every other loaded model over the Ollama API, waits
+for the eviction, preloads the target with infinite keep-alive, and verifies
+`/api/ps`; the unit keeps running. Switching to Idle or a non-shared workload
+unloads only the outgoing model and does not evict: release fails while any
+other model, such as an auto-loaded foreign model, remains in `/api/ps`. While
+the unit runs, release evidence is the loaded-model list; once the unit is
+dead, recursive cgroup emptiness is verified instead. An unload that cannot be
+verified fails the switch. `/api/ps` absence is scheduler bookkeeping: driver
+VRAM recovery lags an unload by roughly 0.5–1.5s (Ollama `waitForVRAMRecovery`)
+and can leak entirely in known cases
+([ollama/ollama#10597](https://github.com/ollama/ollama/issues/10597)), so
+cross-runtime admission after a shared-unit unload relies on the `requiredMiB`
+capacity probe, not `/api/ps` alone. llama.cpp and vLLM still need one unit per
+model.
+
+Stop workload proxies before applying a catalog change; setup and CLI configure
+both enforce the proxy lifetime lock, including in-flight requests.
 
 Launch-file constraints:
 

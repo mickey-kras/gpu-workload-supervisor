@@ -64,6 +64,13 @@ func Validate(request Request) error {
 			return errors.New("trusted paths must be absolute and clean")
 		}
 	}
+	for i, p := range request.Catalog.Profiles {
+		for _, q := range request.Catalog.Profiles[:i] {
+			if control.SharedOllamaUnit(p, q) {
+				return errors.New("shared Ollama units are catalog-only: apply the catalog with gpu-mode configure; setup does not create or verify shared-unit bindings")
+			}
+		}
+	}
 	return request.Catalog.Validate()
 }
 func Home() (string, error) {

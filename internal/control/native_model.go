@@ -14,8 +14,8 @@ import (
 )
 
 // NativeModel binds an existing per-model service to its runtime API identity.
-// Shared service units are intentionally unsupported: every binding is stopped
-// and its cgroup verified before a different binding starts.
+// Ollama profiles may share one unit with sibling profiles bound to different
+// models of the same instance; other runtimes require one unit per model.
 type NativeModel struct {
 	Runtime      string `json:"runtime"`
 	Instance     string `json:"instance"`
@@ -23,6 +23,20 @@ type NativeModel struct {
 	Endpoint     string `json:"endpoint"`
 	LaunchFile   string `json:"launchFile"`
 	LaunchSHA256 string `json:"launchSHA256"`
+}
+
+// ComparisonModel is the model identity as the runtime API reports it, used
+// only for comparison; the configured string is never rewritten. Ollama
+// canonicalizes an untagged name to the :latest tag in /api/ps.
+func (n NativeModel) ComparisonModel() string {
+	if n.Runtime != "ollama" {
+		return n.Model
+	}
+	base := n.Model[strings.LastIndex(n.Model, "/")+1:]
+	if strings.Contains(base, ":") {
+		return n.Model
+	}
+	return n.Model + ":latest"
 }
 
 func (n NativeModel) validate() error {

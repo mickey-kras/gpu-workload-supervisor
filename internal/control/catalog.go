@@ -210,12 +210,36 @@ func validateNativeOverlap(a, b *NativeModel) error {
 	if a.Endpoint == b.Endpoint && a.Instance != b.Instance {
 		return errors.New("native endpoint belongs to another instance")
 	}
-	if a.Instance == b.Instance && a.Model == b.Model {
+	if a.Instance == b.Instance && a.ComparisonModel() == b.ComparisonModel() {
 		return errors.New("ambiguous native model binding")
 	}
 	return nil
 }
 
 func profilesOverlap(p, q WorkloadProfile) bool {
-	return p.ID == q.ID || p.Unit == q.Unit || p.Cgroup == q.Cgroup || strings.HasPrefix(p.Cgroup, q.Cgroup+"/") || strings.HasPrefix(q.Cgroup, p.Cgroup+"/")
+	if p.ID == q.ID {
+		return true
+	}
+	if sharedOllamaUnit(p, q) {
+		return false
+	}
+	return p.Unit == q.Unit || p.Cgroup == q.Cgroup || strings.HasPrefix(p.Cgroup, q.Cgroup+"/") || strings.HasPrefix(q.Cgroup, p.Cgroup+"/")
+}
+
+// SharedOllamaUnit reports whether two profiles bind different models to one
+// Ollama unit: the only case where a unit and cgroup may repeat. Switching
+// between them replaces the loaded model through the Ollama API; the unit
+// keeps running.
+func SharedOllamaUnit(p, q WorkloadProfile) bool {
+	return sharedOllamaUnit(p, q)
+}
+
+func sharedOllamaUnit(p, q WorkloadProfile) bool {
+	if p.NativeModel == nil || q.NativeModel == nil {
+		return false
+	}
+	a, b := p.NativeModel, q.NativeModel
+	return a.Runtime == "ollama" && b.Runtime == "ollama" &&
+		a.Instance == b.Instance && a.Endpoint == b.Endpoint && a.ComparisonModel() != b.ComparisonModel() &&
+		p.Unit == q.Unit && p.Cgroup == q.Cgroup
 }

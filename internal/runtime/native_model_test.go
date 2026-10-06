@@ -21,7 +21,7 @@ import (
 func TestNativeIdentityRejectsHealthyWrongModel(t *testing.T) {
 	for _, family := range []string{"ollama", "llama.cpp", "vllm"} {
 		t.Run(family, func(t *testing.T) {
-			body := `{"data":[{"id":"other"}],"models":[{"name":"other"}]}`
+			body := `{"data":[{"id":"other"}],"models":[{"name":"other:latest","model":"other:latest"}]}`
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 			defer server.Close()
 			m := &SystemdManager{client: server.Client()}
@@ -29,11 +29,11 @@ func TestNativeIdentityRejectsHealthyWrongModel(t *testing.T) {
 			if m.nativeReady(context.Background(), n) == nil {
 				t.Fatal("wrong model accepted")
 			}
-			body = `{"data":[{"id":"selected"}],"models":[{"name":"selected"}]}`
+			body = `{"data":[{"id":"selected"}],"models":[{"name":"selected:latest","model":"selected:latest"}]}`
 			if err := m.nativeReady(context.Background(), n); err != nil {
 				t.Fatal(err)
 			}
-			body = `{"data":[{"id":"selected"},{"id":"other"}],"models":[{"name":"selected"},{"name":"other"}]}`
+			body = `{"data":[{"id":"selected"},{"id":"other"}],"models":[{"name":"selected:latest","model":"selected:latest"},{"name":"other:latest","model":"other:latest"}]}`
 			if m.nativeReady(context.Background(), n) == nil {
 				t.Fatal("multiple loaded models accepted")
 			}
@@ -137,7 +137,7 @@ func TestNativeStartPreloadsAndVerifiesSelectedModel(t *testing.T) {
 						w.WriteHeader(503)
 						return
 					}
-					fmt.Fprint(w, `{"data":[{"id":"selected"}],"models":[{"name":"selected"}]}`)
+					fmt.Fprint(w, `{"data":[{"id":"selected"}],"models":[{"name":"selected:latest","model":"selected:latest"}]}`)
 				}
 			}))
 			defer server.Close()
