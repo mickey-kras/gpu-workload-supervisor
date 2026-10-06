@@ -229,6 +229,11 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
   const dependency = '.github/workflows/dependency-review.yml';
   event(dependency, 'workflow_call');
   step(dependency, 'review', 'Dependency review', { uses: 'actions/dependency-review-action' });
+  const reviewInputs = workflows[dependency]?.jobs?.review?.steps?.find(s => s.name === 'Dependency review')?.with;
+  if (!reviewInputs || Object.keys(reviewInputs).length !== 1 ||
+      reviewInputs['config-file'] !== './.github/dependency-review-config.yml') {
+    failures.push('Dependency review inputs must use the protected config without overrides');
+  }
   inspectReleaseEntry(files, workflows, failures, checks);
   inspectReleasePublish(files, workflows, failures, checks, inspectGoReleaser);
   const bot = '.github/workflows/dependabot-auto-merge.yml';
@@ -269,11 +274,20 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
 
 function inspectScannerConfigs(files, failures) {
   try {
-    const config = YAML.parse(files['.github/dependency-review-config.yml']);
-    if (config['fail-on-severity'] !== 'high' ||
-        !['AGPL-3.0-only', 'GPL-3.0-only', 'SSPL-1.0'].every(license =>
-          config['deny-licenses']?.includes(license)) ||
-        config['allow-dependencies-licenses']?.length !== 0) {
+    const raw = files['.github/dependency-review-config.yml'];
+    const config = YAML.parse(raw, { uniqueKeys: true });
+    // Accept the exact old policy during the two-PR trusted-base migration.
+    const legacy = createHash('sha256').update(raw).digest('hex') ===
+      '4c1609c0713a00ac87aa31700c170e5046fe638fe3101ba6e8efae186e6acb4a';
+    const keys = ['fail-on-severity', 'vulnerability-check', 'license-check', 'warn-only', 'fail-on-scopes'];
+    const scopes = config?.['fail-on-scopes'];
+    const current = config && Object.keys(config).length === keys.length &&
+      keys.every(key => Object.hasOwn(config, key)) &&
+      config['fail-on-severity'] === 'high' && config['vulnerability-check'] === true &&
+      config['license-check'] === false && config['warn-only'] === false &&
+      Array.isArray(scopes) && scopes.length === 3 &&
+      ['runtime', 'development', 'unknown'].every(scope => scopes.includes(scope));
+    if (!legacy && !current) {
       failures.push('Dependency review policy was weakened');
     }
   } catch (error) {
