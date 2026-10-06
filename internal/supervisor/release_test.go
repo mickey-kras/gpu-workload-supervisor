@@ -18,7 +18,9 @@ type releaseOrderedRuntime struct {
 
 func (r *releaseOrderedRuntime) Observe(ctx context.Context) (gpuruntime.Snapshot, error) {
 	s, err := r.fakeRuntime.Observe(ctx)
-	s.MediaExclusive = r.exclusive
+	media := s.Workloads[control.WorkloadMedia]
+	media.Exclusive = r.exclusive
+	s.Workloads[control.WorkloadMedia] = media
 	return s, err
 }
 

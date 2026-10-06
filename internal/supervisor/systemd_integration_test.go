@@ -99,10 +99,12 @@ func newSystemdFixture(t *testing.T) *systemdFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	catalog := control.Catalog{Version: 1, Profiles: []control.Profile{
+		{ID: control.WorkloadText, Label: "text", Adapter: "systemd", Unit: f.units[0], Cgroup: groups[0], HealthURL: health.URL},
+		{ID: control.WorkloadMedia, Label: "media", Adapter: "systemd", Unit: f.units[1], Cgroup: groups[1], HealthURL: health.URL},
+	}}
 	f.manager, err = gpuruntime.NewSystemdManager(gpuruntime.SystemdConfig{
-		TextUnit: f.units[0], MediaUnit: f.units[1], TextCgroup: groups[0], MediaCgroup: groups[1],
-		TextHealthURL: health.URL, MediaHealthURL: health.URL, MediaStopMode: gpuruntime.MediaStopService,
-		SystemctlPath: executable, HealthTimeout: time.Second,
+		Catalog: &catalog, SystemctlPath: executable, HealthTimeout: time.Second,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +155,7 @@ func (f *systemdFixture) assertState(state control.State, owner control.Owner, t
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	if snapshot.TextActive != (target == control.WorkloadText) || snapshot.MediaReady != (target == control.WorkloadMedia) {
+	if snapshot.Workloads[control.WorkloadText].Active != (target == control.WorkloadText) || snapshot.Workloads[control.WorkloadMedia].Active != (target == control.WorkloadMedia) {
 		f.t.Fatalf("real units disagree with state: %#v", snapshot)
 	}
 }
@@ -252,7 +254,7 @@ func TestSystemdRestartPreservesUserAndDoesNotRestartStoppedWork(t *testing.T) {
 		t.Fatalf("restart lost owner: %#v %v", state, err)
 	}
 	snapshot, err := f.manager.Observe(ctx)
-	if err != nil || snapshot.TextActive || snapshot.MediaReady {
+	if err != nil || snapshot.AnyActive() {
 		t.Fatalf("stopped work restarted: %#v %v", snapshot, err)
 	}
 	state, err = f.controller.RecoverUser(ctx, control.WorkloadIdle, "qualification")
@@ -331,7 +333,7 @@ func TestSystemdFailuresLatchAndRequireExplicitRecovery(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if failure != "inspection" && snapshot.TextActive {
+			if failure != "inspection" && snapshot.Workloads[control.WorkloadText].Active {
 				t.Fatal("failure restarted stopped user work")
 			}
 			systemdCommand(t, "stop", f.units[0], f.units[1])
@@ -433,7 +435,7 @@ func TestSystemdAdmissionDrainAndConcurrentCommands(t *testing.T) {
 		t.Fatalf("concurrent command: %v", err)
 	}
 	snapshot, err := f.manager.Observe(ctx)
-	if err != nil || !snapshot.TextActive || snapshot.MediaReady {
+	if err != nil || !snapshot.Workloads[control.WorkloadText].Active || snapshot.Workloads[control.WorkloadMedia].Active {
 		t.Fatalf("runtime changed before drain: %#v %v", snapshot, err)
 	}
 	if err := f.store.FinishWorkToken(ctx, "running", control.WorkloadText, before.LeaseFence, token, store.WorkCompleted); err != nil {
@@ -476,7 +478,7 @@ func TestSystemdInterruptedJournalPhases(t *testing.T) {
 				t.Fatalf("interrupted journal reopened: %#v %v", state, err)
 			}
 			snapshot, err := f.manager.Observe(ctx)
-			if err != nil || snapshot.TextActive || snapshot.MediaReady {
+			if err != nil || snapshot.AnyActive() {
 				t.Fatalf("interrupted journal restarted work: %#v %v", snapshot, err)
 			}
 			state, err = f.controller.Recover(ctx)

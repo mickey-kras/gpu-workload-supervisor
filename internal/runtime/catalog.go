@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"fmt"
 	"net/http"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 func (m *SystemdManager) units() []string {
@@ -23,12 +25,9 @@ func (m *SystemdManager) groups() []string {
 	return out
 }
 func (m *SystemdManager) unitGroups() []struct{ unit, group string } {
-	out := []struct{ unit, group string }{{m.config.TextUnit, m.config.TextCgroup}, {m.config.MediaUnit, m.config.MediaCgroup}}
-	if m.config.Catalog != nil {
-		out = nil
-		for _, p := range m.config.Catalog.Profiles {
-			out = append(out, struct{ unit, group string }{p.Unit, p.Cgroup})
-		}
+	var out []struct{ unit, group string }
+	for _, p := range m.config.Catalog.Profiles {
+		out = append(out, struct{ unit, group string }{p.Unit, p.Cgroup})
 	}
 	return out
 }
@@ -40,7 +39,7 @@ func (m *SystemdManager) observeCatalog(ctx context.Context) (Snapshot, error) {
 			return Snapshot{}, err
 		}
 		if !(st.active == "active" && st.sub == "running") && !(st.active == "inactive" && st.sub == "dead") {
-			return Snapshot{}, errors.New("workload is neither running nor stopped")
+			return Snapshot{}, fmt.Errorf("%s is neither running nor stopped", p.Unit)
 		}
 		s.Workloads[p.ID] = WorkloadObservation{Active: st.active == "active", Exclusive: p.Adapter != control.AdapterMediaUnload}
 	}

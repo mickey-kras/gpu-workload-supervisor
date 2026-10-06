@@ -15,17 +15,11 @@ var ErrCapacity = errors.New("target GPU capacity unavailable")
 // Capacity is optional deployment policy, independent of release evidence.
 // Requirements are measured for each target, not inferred from idle usage.
 func (m *SystemdManager) capacity(ctx context.Context, workload control.Workload) error {
-	required := m.config.TextRequiredMiB
-	if workload == control.WorkloadMedia {
-		required = m.config.MediaRequiredMiB
+	p, ok := m.config.Catalog.Profile(workload)
+	if !ok {
+		return ErrCapacity
 	}
-	if m.config.Catalog != nil {
-		p, ok := m.config.Catalog.Profile(workload)
-		if !ok {
-			return ErrCapacity
-		}
-		required = p.RequiredMiB
-	}
+	required := p.RequiredMiB
 	if required == 0 {
 		return nil
 	}

@@ -26,7 +26,7 @@ func (c *Controller) rollback(ctx context.Context, transitionID string, previous
 }
 
 func (c *Controller) rollbackText(ctx context.Context, transitionID string, snapshot gpuruntime.Snapshot) error {
-	if !snapshot.TextActive {
+	if !snapshot.Workloads[control.WorkloadText].Active {
 		if err := c.waitExclusiveRelease(ctx, snapshot); err != nil {
 			return err
 		}
@@ -40,12 +40,12 @@ func (c *Controller) rollbackText(ctx context.Context, transitionID string, snap
 }
 
 func (c *Controller) rollbackMedia(ctx context.Context, transitionID string, snapshot gpuruntime.Snapshot) error {
-	if snapshot.TextActive {
+	if snapshot.Workloads[control.WorkloadText].Active {
 		if err := c.stopTextEffect(ctx, transitionID); err != nil {
 			return err
 		}
 	}
-	if !snapshot.MediaReady {
+	if !snapshot.Workloads[control.WorkloadMedia].Active {
 		if err := c.waitExclusiveRelease(ctx, snapshot); err != nil {
 			return err
 		}
@@ -59,7 +59,7 @@ func (c *Controller) rollbackMedia(ctx context.Context, transitionID string, sna
 }
 
 func (c *Controller) rollbackIdle(ctx context.Context, transitionID string, snapshot gpuruntime.Snapshot) error {
-	if snapshot.TextActive {
+	if snapshot.Workloads[control.WorkloadText].Active {
 		if err := c.stopTextEffect(ctx, transitionID); err != nil {
 			return err
 		}
@@ -80,7 +80,7 @@ func (c *Controller) stopTextEffect(ctx context.Context, transitionID string) er
 }
 
 func (c *Controller) waitExclusiveRelease(ctx context.Context, snapshot gpuruntime.Snapshot) error {
-	if !snapshot.MediaExclusive {
+	if !snapshot.Workloads[control.WorkloadMedia].Exclusive {
 		return nil
 	}
 	return c.waitReleased(ctx, c.now().Add(c.config.CleanupTimeout))

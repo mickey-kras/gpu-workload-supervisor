@@ -23,7 +23,7 @@ func TestCommandErrorsRedactOutputAndKeepCause(t *testing.T) {
 				}
 			}
 			config := testConfig()
-			config.TextRequiredMiB = 1
+			config.Catalog.Profiles[0].RequiredMiB = 1
 			manager, err := newSystemdManager(config, runner, http.DefaultClient)
 			if err != nil {
 				t.Fatal(err)

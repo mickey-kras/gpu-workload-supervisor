@@ -29,10 +29,10 @@ type fakeRuntime struct {
 }
 
 func (r *fakeRuntime) Observe(context.Context) (gpuruntime.Snapshot, error) {
-	return gpuruntime.Snapshot{
-		TextActive: r.active == control.WorkloadText,
-		MediaReady: r.mediaReady,
-	}, nil
+	return gpuruntime.Snapshot{Workloads: map[control.Workload]gpuruntime.WorkloadObservation{
+		control.WorkloadText:  {Active: r.active == control.WorkloadText, Exclusive: true},
+		control.WorkloadMedia: {Active: r.mediaReady},
+	}}, nil
 }
 
 func (r *fakeRuntime) Start(_ context.Context, workload control.Workload) error {

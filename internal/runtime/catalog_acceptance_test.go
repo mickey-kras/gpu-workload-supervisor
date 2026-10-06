@@ -159,7 +159,7 @@ func TestCatalogCapacityAndObservationErrorsAcceptance(t *testing.T) {
 	}
 }
 func TestCatalogAnyActiveAcceptance(t *testing.T) {
-	for _, s := range []Snapshot{{TextActive: true}, {MediaReady: true}, {Workloads: map[control.Workload]WorkloadObservation{"speech": {Active: true}}}} {
+	for _, s := range []Snapshot{{Workloads: map[control.Workload]WorkloadObservation{"text": {Active: true}}}, {Workloads: map[control.Workload]WorkloadObservation{"media": {Active: true}}}, {Workloads: map[control.Workload]WorkloadObservation{"speech": {Active: true}}}} {
 		if !s.AnyActive() {
 			t.Fatal("active workload missed")
 		}
