@@ -30,6 +30,8 @@ type systemdFixture struct {
 	units      []string
 	path       string
 	unitDir    string
+	catalog    control.Catalog
+	revision   string
 }
 
 func systemdCommand(t *testing.T, args ...string) string {
@@ -103,6 +105,7 @@ func newSystemdFixture(t *testing.T) *systemdFixture {
 		{ID: control.WorkloadText, Label: "text", Adapter: "systemd", Unit: f.units[0], Cgroup: groups[0], HealthURL: health.URL},
 		{ID: control.WorkloadMedia, Label: "media", Adapter: "systemd", Unit: f.units[1], Cgroup: groups[1], HealthURL: health.URL},
 	}}
+	f.catalog = catalog
 	f.manager, err = gpuruntime.NewSystemdManager(gpuruntime.SystemdConfig{
 		Catalog: &catalog, SystemctlPath: executable, HealthTimeout: time.Second,
 	})
@@ -136,7 +139,18 @@ func (f *systemdFixture) reopen(restored bool) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	f.controller, err = New(f.store, f.manager, Config{DrainTimeout: time.Second, VerifyTimeout: time.Second, ActionTimeout: 5 * time.Second, CleanupTimeout: 5 * time.Second, FinalizeTimeout: time.Second, PollInterval: 10 * time.Millisecond})
+	snapshot, err := f.store.Catalog(context.Background())
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if snapshot.Revision == "" {
+		snapshot, err = f.store.ReplaceCatalog(context.Background(), "", f.catalog)
+		if err != nil {
+			f.t.Fatal(err)
+		}
+	}
+	f.revision = snapshot.Revision
+	f.controller, err = New(f.store, f.manager, Config{Catalog: &snapshot, DrainTimeout: time.Second, VerifyTimeout: time.Second, ActionTimeout: 5 * time.Second, CleanupTimeout: 5 * time.Second, FinalizeTimeout: time.Second, PollInterval: 10 * time.Millisecond})
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -338,7 +352,7 @@ func TestSystemdFailuresLatchAndRequireExplicitRecovery(t *testing.T) {
 			}
 			systemdCommand(t, "stop", f.units[0], f.units[1])
 			f.reopen(false)
-			if _, err := f.controller.Reconcile(ctx); !errors.Is(err, ErrRecoveryRequired) {
+			if _, err := f.controller.Reconcile(ctx); !errors.Is(err, ErrUserOwned) {
 				t.Fatalf("restart forgot error: %v", err)
 			}
 			state, err = f.controller.RecoverUser(ctx, control.WorkloadIdle, "qualification")
@@ -463,7 +477,7 @@ func TestSystemdInterruptedJournalPhases(t *testing.T) {
 			}
 			target := before
 			target.DesiredWorkload = control.WorkloadText
-			state, err := f.store.StartTransition(ctx, before.Version, store.Transition{ID: "interrupted", Source: before, Target: target, Previous: before, Initiator: "qualification", Deadline: time.Now().Add(time.Minute)})
+			state, err := f.store.StartTransition(ctx, before.Version, store.Transition{ID: "interrupted", Source: before, Target: target, Previous: before, Initiator: "qualification", Deadline: time.Now().Add(time.Minute), ConfigurationRevision: f.revision})
 			if err != nil {
 				t.Fatal(err)
 			}

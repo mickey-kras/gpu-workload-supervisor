@@ -158,11 +158,7 @@ func TestTextAndIdleToMediaUseTargetAwareReleaseWhenUIRemainsAlive(t *testing.T)
 		if err != nil || state.ActiveWorkload != control.WorkloadMedia || runtime.releaseCalls < 2 {
 			t.Fatalf("source=%s state=%#v err=%v", source, state, err)
 		}
-		if source == control.WorkloadText {
-			assertCalls(t, runtime.calls, "stop text", "start media")
-		} else {
-			assertCalls(t, runtime.calls, "start media")
-		}
+		assertCalls(t, runtime.calls, "stop text", "start media")
 	}
 }
 

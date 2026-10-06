@@ -6,7 +6,6 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
@@ -147,7 +146,7 @@ func (c *Controller) unloadTransition(ctx context.Context, transitionID string, 
 		}
 		return state, control.WorkloadIdle, err
 	}
-	active, err = c.unloadForSwitch(ctx, transitionID, state.Phase, previous, target)
+	active, err = c.unloadCatalog(ctx, transitionID, state.Phase, previous, target)
 	return state, active, err
 }
 
@@ -188,45 +187,6 @@ func (c *Controller) loadTransition(ctx context.Context, transitionID string, st
 		})
 	}
 	return state, err
-}
-
-func (c *Controller) unloadForSwitch(ctx context.Context, transitionID string, phase control.Phase, current control.State, target control.Workload) (control.Workload, error) {
-	if c.config.Catalog != nil {
-		return c.unloadCatalog(ctx, transitionID, phase, current, target)
-	}
-	snapshot, err := c.observe(ctx)
-	if err != nil {
-		return control.WorkloadUnknown, gpuruntime.SafeError("observe before unload failed", ErrRuntimeObservation, err)
-	}
-	active, err := observedWorkload(current, snapshot)
-	if err != nil {
-		return control.WorkloadUnknown, err
-	}
-	if active != control.WorkloadIdle && active != target {
-		if err := c.effect(ctx, transitionID, phase, "stop "+string(active), func(actionCtx context.Context) error {
-			return c.runtime.Stop(actionCtx, active)
-		}); err != nil {
-			return active, err
-		}
-	}
-	if active != target && (active != control.WorkloadIdle || target == control.WorkloadMedia || snapshot.Workloads[control.WorkloadMedia].Exclusive && target != control.WorkloadText) {
-		if err := c.waitReleasedFor(ctx, target, c.now().Add(c.config.VerifyTimeout)); err != nil {
-			return active, err
-		}
-	}
-	if target == control.WorkloadText && active == control.WorkloadIdle {
-		return active, c.releaseMediaForText(ctx, transitionID, phase)
-	}
-	return active, nil
-}
-
-func (c *Controller) releaseMediaForText(ctx context.Context, transitionID string, phase control.Phase) error {
-	if err := c.effect(ctx, transitionID, phase, "release media", func(actionCtx context.Context) error {
-		return c.runtime.Stop(actionCtx, control.WorkloadMedia)
-	}); err != nil {
-		return err
-	}
-	return c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout))
 }
 
 func (c *Controller) executeTransition(ctx context.Context, transition store.Transition, state, current control.State, target control.Workload, options transitionOptions) (control.State, error) {

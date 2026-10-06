@@ -196,6 +196,7 @@ func TestResolutionRejectsInvalidReasonWithoutDisruptingWorkload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runtime.calls = nil
 	for _, reason := range []string{" \t\n ", strings.Repeat("x", 513)} {
 		_, count, err := controller.ResolveUnfinishedWork(ctx, reason)
 		if err == nil || count != 0 {

@@ -340,13 +340,6 @@ func (s *Store) PendingWork(ctx context.Context) (int, error) {
 	return pending, err
 }
 
-// PendingWorkload reports unfinished registrations for a single workload across all fences.
-func (s *Store) PendingWorkload(ctx context.Context, workload control.Workload) (int, error) {
-	var pending int
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM registered_work WHERE completed_at IS NULL AND workload = ?)`, workload).Scan(&pending)
-	return pending, err
-}
-
 // PendingWorkExcept probes all opposing registrations in one SQLite snapshot.
 // NULL legacy workload identities cannot be attributed to the retained target.
 func (s *Store) PendingWorkExcept(ctx context.Context, retained control.Workload) (int, error) {

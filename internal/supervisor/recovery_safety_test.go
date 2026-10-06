@@ -50,7 +50,7 @@ func TestRecoverInitiallyOpenFailureClosesAdmission(t *testing.T) {
 			case "observation":
 				r.observeErr = errors.New("observation failed")
 			case "health":
-				r.healthFailures = 1
+				r.healthFailures = 1000000
 			case "stop":
 				r.active = control.WorkloadMedia
 				r.stopErr = errors.New("stop failed")
@@ -117,6 +117,7 @@ func TestRecoverDrainsBeforeDestructiveStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	r.calls = nil
 	r.active = control.WorkloadMedia
 	c.config.DrainTimeout = 5 * time.Millisecond
 	if _, err := c.Recover(context.Background()); !errors.Is(err, ErrDrainTimeout) {
@@ -137,18 +138,18 @@ func TestRecoverDrainsBeforeDestructiveStop(t *testing.T) {
 	}
 }
 
-type cancelAfterRecoveryRead struct {
+type cancelAfterRecoveryEntry struct {
 	storeGateway
 	cancel context.CancelFunc
 }
 
-func (s *cancelAfterRecoveryRead) State(ctx context.Context) (control.State, error) {
-	state, err := s.storeGateway.State(ctx)
+func (s *cancelAfterRecoveryEntry) Recover(ctx context.Context, version uint64, state control.State, reason string) (control.State, error) {
+	recovered, err := s.storeGateway.Recover(ctx, version, state, reason)
 	s.cancel()
-	return state, err
+	return recovered, err
 }
 
-func TestRecoverCancellationBeforeEntryStillClosesAdmission(t *testing.T) {
+func TestRecoverCancellationAtEntryStillClosesAdmission(t *testing.T) {
 	s := openStore(t)
 	r := &fakeRuntime{active: control.WorkloadText}
 	c := testController(t, s, r)
@@ -157,7 +158,7 @@ func TestRecoverCancellationBeforeEntryStillClosesAdmission(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c.store = &cancelAfterRecoveryRead{storeGateway: s, cancel: cancel}
+	c.store = &cancelAfterRecoveryEntry{storeGateway: s, cancel: cancel}
 	if _, err := c.Recover(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("recovery = %v", err)
 	}

@@ -19,6 +19,7 @@ type fakeRuntime struct {
 	startErr               error
 	partialStart           bool
 	stopErr                error
+	stopTarget             control.Workload
 	releaseFailures        int
 	releaseCalls           int
 	blockRelease           bool
@@ -63,7 +64,7 @@ func (r *fakeRuntime) Stop(ctx context.Context, workload control.Workload) error
 	if r.cancelOnStop != nil {
 		r.cancelOnStop()
 	}
-	if r.stopErr != nil {
+	if r.stopErr != nil && (r.stopTarget == "" || r.stopTarget == workload) {
 		return r.stopErr
 	}
 	if r.active == workload {
@@ -112,6 +113,7 @@ func TestSwitchStopsTextBeforeStartingMedia(t *testing.T) {
 	if _, err := controller.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	runtime.calls = nil
 	state, err := controller.Switch(context.Background(), control.WorkloadMedia, "test")
 	if err != nil {
 		t.Fatal(err)
@@ -187,6 +189,7 @@ func TestSwitchFailureRollsBackAndLatchesError(t *testing.T) {
 	if _, err := controller.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	runtime.calls = nil
 	state, err := controller.Switch(context.Background(), control.WorkloadMedia, "test")
 	if err == nil {
 		t.Fatal("expected switch failure")
@@ -194,7 +197,7 @@ func TestSwitchFailureRollsBackAndLatchesError(t *testing.T) {
 	if state.ActiveWorkload != control.WorkloadText || state.Health != control.HealthError || state.Admission != control.AdmissionClosed {
 		t.Fatalf("unsafe failed state = %#v", state)
 	}
-	assertCalls(t, runtime.calls, "stop text", "start media", "start text")
+	assertCalls(t, runtime.calls, "stop text", "start media", "stop text", "stop media", "start text")
 }
 
 func TestFailedMediaStartRollsBackToIdleOnlyAfterRelease(t *testing.T) {
@@ -221,6 +224,7 @@ func TestFailedMediaStartRollsBackToIdleOnlyAfterRelease(t *testing.T) {
 			runtime.partialStart = true
 			runtime.blockReleaseAfterStart = tc.blockRelease
 			runtime.stopErr = tc.stopErr
+			runtime.stopTarget = control.WorkloadMedia
 			// Rollback includes real SQLite journal writes, so keep the normal cleanup
 			// budget. Only the deliberately blocked release probe needs a short timeout.
 			if tc.blockRelease {
@@ -231,7 +235,7 @@ func TestFailedMediaStartRollsBackToIdleOnlyAfterRelease(t *testing.T) {
 				state.Health != control.HealthError || state.Admission != control.AdmissionClosed {
 				t.Fatalf("failed media start state = %#v, error = %v", state, err)
 			}
-			assertCalls(t, runtime.calls, "start media", "stop media")
+			assertCalls(t, runtime.calls, "stop text", "start media", "stop text", "stop media")
 			if tc.stopErr != nil && !errors.Is(err, tc.stopErr) {
 				t.Fatalf("missing failed media stop: %v", err)
 			}
@@ -282,6 +286,7 @@ func TestInterruptedTransitionRequiresExplicitRecovery(t *testing.T) {
 	_, err = stateStore.StartTransition(context.Background(), current.Version, store.Transition{
 		ID: "interrupted", Source: current, Target: target, Previous: current,
 		Initiator: "test", Phase: control.PhaseDraining, Deadline: time.Now().Add(time.Minute),
+		ConfigurationRevision: controller.config.Catalog.Revision,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -289,11 +294,11 @@ func TestInterruptedTransitionRequiresExplicitRecovery(t *testing.T) {
 	if _, err := controller.Reconcile(context.Background()); !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("reconcile error = %v", err)
 	}
-	if running, err := stateStore.InProgressTransition(context.Background()); err != nil || running != "" {
-		t.Fatalf("running transition = %q, error = %v", running, err)
-	}
 	if _, err := controller.Recover(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	if running, err := stateStore.InProgressTransition(context.Background()); err != nil || running != "" {
+		t.Fatalf("running transition = %q, error = %v", running, err)
 	}
 	if _, err := controller.Switch(context.Background(), control.WorkloadMedia, "test"); err != nil {
 		t.Fatal(err)
@@ -334,9 +339,44 @@ func openStore(t *testing.T) *store.Store {
 	return stateStore
 }
 
+func testCatalog() control.Catalog {
+	return control.Catalog{Version: 1, Profiles: []control.Profile{
+		{ID: control.WorkloadText, Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user/text", HealthURL: "http://localhost:9100", BootPolicy: "retain"},
+		{ID: control.WorkloadMedia, Label: "Media", Adapter: "systemd", Unit: "media.service", Cgroup: "/user/media", HealthURL: "http://localhost:9101"},
+	}}
+}
+
+func installTestCatalog(t *testing.T, stateStore *store.Store) control.CatalogSnapshot {
+	t.Helper()
+	existing, err := stateStore.Catalog(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if existing.Revision != "" {
+		return existing
+	}
+	snapshot, err := stateStore.ReplaceCatalog(context.Background(), "", testCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
+}
+
 func testController(t *testing.T, stateStore storeGateway, runtime gpuruntime.Manager) *Controller {
 	t.Helper()
+	snapshot, err := stateStore.Catalog(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Revision == "" {
+		concrete, ok := stateStore.(*store.Store)
+		if !ok {
+			t.Fatal("testController requires an installed catalog; call installTestCatalog on the concrete store first")
+		}
+		snapshot = installTestCatalog(t, concrete)
+	}
 	controller, err := newController(stateStore, runtime, Config{
+		Catalog:      &snapshot,
 		DrainTimeout: time.Second, VerifyTimeout: time.Second,
 		ActionTimeout:  time.Second,
 		CleanupTimeout: time.Second, FinalizeTimeout: time.Second,
@@ -386,7 +426,7 @@ func TestSwitchToIdleReleasesMediaWithoutStoppingUI(t *testing.T) {
 	if result.ActiveWorkload != control.WorkloadIdle || result.Admission != control.AdmissionClosed {
 		t.Fatalf("state = %#v", result)
 	}
-	assertCalls(t, runtime.calls, "stop media")
+	assertCalls(t, runtime.calls, "stop text", "stop media")
 }
 
 func TestSwitchWaitsForGPUReleaseBeforeStartingText(t *testing.T) {
@@ -438,12 +478,13 @@ func TestCanceledSwitchClosesTransitionAfterRollbackTimeout(t *testing.T) {
 
 func TestRuntimeActionTimeoutClosesTransition(t *testing.T) {
 	stateStore := openStore(t)
-	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true, blockStop: true}
+	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true}
 	controller := testController(t, stateStore, runtime)
 	controller.config.ActionTimeout = time.Millisecond
 	if _, err := controller.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	runtime.blockStop = true
 	state, err := controller.Switch(context.Background(), control.WorkloadMedia, "test")
 	if err == nil {
 		t.Fatal("expected action timeout")
@@ -562,7 +603,7 @@ func TestSwitchIsIdempotent(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			stateStore := openStore(t)
-			runtime := &fakeRuntime{active: test.workload, mediaReady: true, blockRelease: test.workload != control.WorkloadIdle}
+			runtime := &fakeRuntime{active: test.workload, mediaReady: true}
 			controller := testController(t, stateStore, runtime)
 			state, err := stateStore.State(context.Background())
 			if err != nil {
@@ -583,8 +624,10 @@ func TestSwitchIsIdempotent(t *testing.T) {
 			if result.ActiveWorkload != test.workload || result.Health != control.HealthHealthy || result.Admission != test.admission {
 				t.Fatalf("state = %#v", result)
 			}
-			if len(runtime.calls) != 0 {
-				t.Fatalf("unexpected runtime calls: %#v", runtime.calls)
+			for _, call := range runtime.calls {
+				if call == "stop "+string(test.workload) || call == "start "+string(test.workload) {
+					t.Fatalf("idempotent switch restarted %s: %#v", test.workload, runtime.calls)
+				}
 			}
 		})
 	}

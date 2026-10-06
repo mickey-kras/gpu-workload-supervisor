@@ -39,7 +39,6 @@ type storeGateway interface {
 	AppendTransitionEvent(context.Context, store.TransitionEvent) error
 	PendingTransitionWork(context.Context, string) (int, error)
 	PendingWork(context.Context) (int, error)
-	PendingWorkload(context.Context, control.Workload) (int, error)
 	PendingWorkExcept(context.Context, control.Workload) (int, error)
 	InProgressTransition(context.Context) (string, error)
 	Recover(context.Context, uint64, control.State, string) (control.State, error)
@@ -76,109 +75,20 @@ func newController(stateStore storeGateway, runtime gpuruntime.Manager, config C
 	if config.DrainTimeout <= 0 || config.VerifyTimeout <= 0 || config.ActionTimeout <= 0 || config.CleanupTimeout <= 0 || config.FinalizeTimeout <= 0 || config.PollInterval <= 0 {
 		return nil, errors.New("timeouts and poll interval must be greater than zero")
 	}
-	if config.Catalog != nil {
-		snapshot := *config.Catalog
-		snapshot.Catalog = snapshot.Catalog.Clone()
-		if err := snapshot.Catalog.Validate(); err != nil {
-			return nil, err
-		}
-		config.Catalog = &snapshot
+	if config.Catalog == nil {
+		return nil, errors.New("workload catalog is required")
 	}
+	snapshot := *config.Catalog
+	snapshot.Catalog = snapshot.Catalog.Clone()
+	if err := snapshot.Catalog.Validate(); err != nil {
+		return nil, err
+	}
+	config.Catalog = &snapshot
 	return &Controller{store: stateStore, runtime: runtime, config: config, now: now, id: id}, nil
 }
 
 func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
-	if err := c.checkCatalog(ctx); err != nil {
-		return control.State{}, err
-	}
-	if c.config.Catalog != nil {
-		return c.reconcileCatalog(ctx, false)
-	}
-	state, err := c.reconcileSource(ctx)
-	if err != nil {
-		return state, err
-	}
-	if err := c.preflight(ctx); err != nil {
-		return c.latchObservationFailure(ctx, state, err)
-	}
-	snapshot, err := c.observe(ctx)
-	if err != nil {
-		return c.latchObservationFailure(ctx, state, err)
-	}
-	pendingMedia := 0
-	if snapshot.Workloads[control.WorkloadText].Active {
-		pendingMedia, err = c.store.PendingWorkload(ctx, control.WorkloadMedia)
-		if err != nil {
-			return c.latchObservationFailure(ctx, state, err)
-		}
-	}
-	needsEntry := needsReconcileEntry(state, snapshot, pendingMedia)
-	if needsEntry {
-		state, err = c.enterReconciliation(ctx, state)
-		if err != nil {
-			return state, err
-		}
-	}
-	textActive := snapshot.Workloads[control.WorkloadText].Active
-	if err := c.drainRecoveryWork(ctx, textActive, needsEntry); err != nil {
-		return state, err
-	}
-	return c.settleReconciled(ctx, state, textActive)
-}
-
-func (c *Controller) reconcileSource(ctx context.Context) (control.State, error) {
-	state, err := c.store.State(ctx)
-	if err != nil {
-		return control.State{}, err
-	}
-	running, err := c.store.InProgressTransition(ctx)
-	if err != nil {
-		return state, err
-	}
-	if running != "" || state.Health == control.HealthError {
-		return c.recoverLatched(ctx, state, running)
-	}
-	if state.Owner == control.OwnerUser {
-		return state, ErrUserOwned
-	}
-	return state, nil
-}
-
-func (c *Controller) recoverLatched(ctx context.Context, state control.State, running string) (control.State, error) {
-	final := closedReconciling(state)
-	final.ActiveWorkload = control.WorkloadUnknown
-	reason := "latched-error"
-	if running != "" {
-		reason = "interrupted-transition"
-	}
-	recovered, recoverErr := c.store.Recover(ctx, state.Version, final, reason)
-	return recovered, errors.Join(ErrRecoveryRequired, recoverErr)
-}
-
-func needsReconcileEntry(state control.State, snapshot gpuruntime.Snapshot, pendingMedia int) bool {
-	return !snapshot.Workloads[control.WorkloadText].Active || pendingMedia != 0 ||
-		state.ActiveWorkload != control.WorkloadText || state.DesiredWorkload != control.WorkloadText ||
-		state.Phase != control.PhaseStable || state.Health != control.HealthHealthy ||
-		state.Admission != control.AdmissionOpen
-}
-
-func (c *Controller) settleReconciled(ctx context.Context, state control.State, textActive bool) (control.State, error) {
-	state.Owner = control.OwnerSupervisor
-	state.Phase = control.PhaseStable
-	state.Health = control.HealthHealthy
-	if textActive {
-		if err := c.healthy(ctx, control.WorkloadText); err != nil {
-			return c.latchObservationFailure(ctx, state, err)
-		}
-		state.DesiredWorkload = control.WorkloadText
-		state.ActiveWorkload = control.WorkloadText
-		state.Admission = control.AdmissionOpen
-	} else {
-		state.DesiredWorkload = control.WorkloadIdle
-		state.ActiveWorkload = control.WorkloadIdle
-		state.Admission = control.AdmissionClosed
-	}
-	return c.store.UpdateState(ctx, state.Version, state)
+	return c.reconcileCatalog(ctx, false)
 }
 
 func (c *Controller) enterReconciliation(ctx context.Context, state control.State) (control.State, error) {
@@ -191,31 +101,6 @@ func (c *Controller) enterReconciliation(ctx context.Context, state control.Stat
 		return state, err
 	}
 	return entered, ctx.Err()
-}
-
-func (c *Controller) drainRecoveryWork(ctx context.Context, textActive, drainPendingMedia bool) error {
-	if textActive {
-		if !drainPendingMedia {
-			return nil
-		}
-		return c.waitForWork(ctx, c.now().Add(c.config.DrainTimeout), func(ctx context.Context) (int, error) {
-			return c.store.PendingWorkload(ctx, control.WorkloadMedia)
-		})
-	}
-	// Recovery never abandons existing registrations. They retain their
-	// completion authority under the old fence and must drain before stop.
-	if err := c.waitForWork(ctx, c.now().Add(c.config.DrainTimeout), c.store.PendingWork); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := c.runAction(ctx, func(actionCtx context.Context) error {
-		return c.runtime.Stop(actionCtx, control.WorkloadMedia)
-	}); err != nil {
-		return err
-	}
-	return c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout))
 }
 
 func (c *Controller) beginRecovery(ctx context.Context) (control.State, error) {
@@ -251,38 +136,7 @@ func (c *Controller) beginRecovery(ctx context.Context) (control.State, error) {
 }
 
 func (c *Controller) Recover(ctx context.Context) (control.State, error) {
-	if c.config.Catalog != nil {
-		return c.reconcileCatalog(ctx, true)
-	}
-	state, err := c.beginRecovery(ctx)
-	if err != nil {
-		return state, err
-	}
-	snapshot, err := c.observe(ctx)
-	if err != nil {
-		return state, err
-	}
-	textActive := snapshot.Workloads[control.WorkloadText].Active
-	if err := c.drainRecoveryWork(ctx, textActive, true); err != nil {
-		return state, err
-	}
-	final := state
-	final.Owner = control.OwnerSupervisor
-	final.Phase = control.PhaseStable
-	final.Health = control.HealthHealthy
-	if textActive {
-		if err := c.healthy(ctx, control.WorkloadText); err != nil {
-			return state, err
-		}
-		final.DesiredWorkload = control.WorkloadText
-		final.ActiveWorkload = control.WorkloadText
-		final.Admission = control.AdmissionOpen
-	} else {
-		final.DesiredWorkload = control.WorkloadIdle
-		final.ActiveWorkload = control.WorkloadIdle
-		final.Admission = control.AdmissionClosed
-	}
-	return c.store.Recover(ctx, state.Version, final, "operator-recovery")
+	return c.reconcileCatalog(ctx, true)
 }
 
 // ResolveUnfinishedWork is an explicit, disruptive operator action. The caller
@@ -488,7 +342,7 @@ func (c *Controller) fail(transitionID string, state, previous control.State, ca
 	var rollbackErr error
 	if previous.Owner == control.OwnerSupervisor {
 		rollbackCtx, cancelRollback := context.WithTimeout(context.Background(), c.config.CleanupTimeout)
-		rollbackErr = c.rollback(rollbackCtx, transitionID, previous)
+		rollbackErr = c.rollbackCatalog(rollbackCtx, transitionID, previous)
 		cancelRollback()
 	}
 

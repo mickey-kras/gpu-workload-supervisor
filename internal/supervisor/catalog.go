@@ -11,9 +11,6 @@ func (c *Controller) configuredTarget(id control.Workload) bool {
 	if id == control.WorkloadIdle {
 		return true
 	}
-	if c.config.Catalog == nil {
-		return id == control.WorkloadText || id == control.WorkloadMedia
-	}
 	_, ok := c.config.Catalog.Catalog.Profile(id)
 	return ok
 }
@@ -22,11 +19,7 @@ func (c *Controller) checkCatalog(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	expected := ""
-	if c.config.Catalog != nil {
-		expected = c.config.Catalog.Revision
-	}
-	if snap.Revision != expected {
+	if snap.Revision != c.config.Catalog.Revision {
 		return store.ErrVersionConflict
 	}
 	return nil
