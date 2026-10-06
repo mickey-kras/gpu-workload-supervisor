@@ -75,15 +75,7 @@ func (r ProbeRequest) validate() error {
 		return errors.New("select exactly one endpoint or file/directory reference")
 	}
 	if r.Endpoint != "" {
-		u, err := url.Parse(r.Endpoint)
-		if err != nil || u.User != nil || strings.ContainsAny(r.Endpoint, "?#") || (u.Path != "" && u.Path != "/") || (u.Scheme != "http" && u.Scheme != "https") || r.ReferenceKind != "" {
-			return errors.New("endpoint must be a loopback HTTP origin")
-		}
-		ip := net.ParseIP(u.Hostname())
-		if u.Hostname() != "localhost" && (ip == nil || !ip.IsLoopback()) {
-			return errors.New("endpoint must be loopback")
-		}
-		return nil
+		return r.validateEndpoint()
 	}
 	if !filepath.IsAbs(r.Reference) || filepath.Clean(r.Reference) != r.Reference || strings.ContainsRune(r.Reference, 0) || len(r.Reference) > 4096 {
 		return errors.New("reference must be an absolute clean path")
@@ -93,6 +85,17 @@ func (r ProbeRequest) validate() error {
 		return nil
 	}
 	return errors.New("unsupported reference kind")
+}
+func (r ProbeRequest) validateEndpoint() error {
+	u, err := url.Parse(r.Endpoint)
+	if err != nil || u.User != nil || strings.ContainsAny(r.Endpoint, "?#") || (u.Path != "" && u.Path != "/") || (u.Scheme != "http" && u.Scheme != "https") || r.ReferenceKind != "" {
+		return errors.New("endpoint must be a loopback HTTP origin")
+	}
+	ip := net.ParseIP(u.Hostname())
+	if u.Hostname() != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return errors.New("endpoint must be loopback")
+	}
+	return nil
 }
 func DecodeProbe(reader io.Reader) (ProbeRequest, error) {
 	var request ProbeRequest
@@ -162,29 +165,33 @@ func Probe(ctx context.Context, r ProbeRequest) (ApplicationCandidate, error) {
 		return result, ctx.Err()
 	}
 	if err != nil {
-		result.Models = []ModelCandidate{}
-		result.InventoryStatus = "invalid"
-		result.NextStep = "The application returned an invalid response; check its endpoint and version."
-		var status *probeHTTPError
-		if errors.As(err, &status) {
-			if status.code == 404 || status.code == 405 || status.code == 501 {
-				result.InstanceStatus = "unsupported"
-				result.InventoryStatus = "unsupported"
-				result.NextStep = "This API is unavailable; select an existing configuration or model reference."
-			} else {
-				result.InstanceStatus = "unreachable"
-				result.InventoryStatus = "unknown"
-				result.NextStep = "Check the application endpoint and access settings, then retry."
-			}
-		}
-		var network *url.Error
-		if errors.As(err, &network) {
-			result.InstanceStatus = "unreachable"
-			result.InventoryStatus = "unknown"
-			result.NextStep = "The application is unreachable. Start it separately or select an existing configuration; saved references are unchanged."
-		}
+		result = probeFailure(result, err)
 	}
 	return result, nil
+}
+func probeFailure(result ApplicationCandidate, err error) ApplicationCandidate {
+	result.Models = []ModelCandidate{}
+	result.InventoryStatus = "invalid"
+	result.NextStep = "The application returned an invalid response; check its endpoint and version."
+	var status *probeHTTPError
+	if errors.As(err, &status) {
+		if status.code == 404 || status.code == 405 || status.code == 501 {
+			result.InstanceStatus = "unsupported"
+			result.InventoryStatus = "unsupported"
+			result.NextStep = "This API is unavailable; select an existing configuration or model reference."
+		} else {
+			result.InstanceStatus = "unreachable"
+			result.InventoryStatus = "unknown"
+			result.NextStep = "Check the application endpoint and access settings, then retry."
+		}
+	}
+	var network *url.Error
+	if errors.As(err, &network) {
+		result.InstanceStatus = "unreachable"
+		result.InventoryStatus = "unknown"
+		result.NextStep = "The application is unreachable. Start it separately or select an existing configuration; saved references are unchanged."
+	}
+	return result
 }
 func mustPort(endpoint string) string { u, _ := url.Parse(endpoint); return u.Port() }
 func probeReference(ctx context.Context, r ProbeRequest, result ApplicationCandidate) (ApplicationCandidate, error) {
