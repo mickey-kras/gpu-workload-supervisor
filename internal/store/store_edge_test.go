@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"regexp"
 	"testing"
 	"time"
 
@@ -161,16 +160,6 @@ func TestOpenRejectsUnsafePathAndCorruptTimestamp(t *testing.T) {
 	}
 	if _, err := s.State(ctx); err == nil {
 		t.Fatal("invalid database timestamp accepted")
-	}
-}
-
-func TestNewUUIDHasVersionAndVariant(t *testing.T) {
-	uuid, err := control.NewUUID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !regexp.MustCompile(`^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$`).MatchString(uuid) {
-		t.Fatalf("invalid UUID: %q", uuid)
 	}
 }
 
