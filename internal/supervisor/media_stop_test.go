@@ -163,7 +163,7 @@ func TestExclusiveConcurrentBootFailsClosed(t *testing.T) {
 type delayedExclusiveRuntime struct{ exclusiveRuntime }
 
 func (r *delayedExclusiveRuntime) Start(ctx context.Context, workload control.Workload) error {
-	if err := r.Released(ctx); err != nil {
+	if err := r.ReleasedFor(ctx, control.WorkloadIdle); err != nil {
 		return err
 	}
 	return r.exclusiveRuntime.Start(ctx, workload)

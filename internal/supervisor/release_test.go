@@ -23,8 +23,8 @@ func (r *releaseOrderedRuntime) Observe(ctx context.Context) (gpuruntime.Snapsho
 	return s, err
 }
 
-func (r *releaseOrderedRuntime) Released(ctx context.Context) error {
-	if err := r.fakeRuntime.Released(ctx); err != nil {
+func (r *releaseOrderedRuntime) ReleasedFor(ctx context.Context, target control.Workload) error {
+	if err := r.fakeRuntime.ReleasedFor(ctx, target); err != nil {
 		return err
 	}
 	r.verified = true
@@ -137,7 +137,7 @@ type targetReleaseRuntime struct {
 
 func (r *targetReleaseRuntime) ReleasedFor(ctx context.Context, target control.Workload) error {
 	r.target = target
-	return r.fakeRuntime.Released(ctx)
+	return r.fakeRuntime.ReleasedFor(ctx, target)
 }
 
 func (r *targetReleaseRuntime) Start(ctx context.Context, target control.Workload) error {
@@ -170,7 +170,7 @@ type unsupportedReleaseRuntime struct {
 	probes int
 }
 
-func (r *unsupportedReleaseRuntime) Released(context.Context) error {
+func (r *unsupportedReleaseRuntime) ReleasedFor(context.Context, control.Workload) error {
 	r.probes++
 	return gpuruntime.ErrUnloadUnverified
 }
