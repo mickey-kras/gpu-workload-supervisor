@@ -31,6 +31,7 @@ type systemdFixture struct {
 	path       string
 	unitDir    string
 	catalog    control.Catalog
+	revision   string
 }
 
 func systemdCommand(t *testing.T, args ...string) string {
@@ -148,6 +149,7 @@ func (f *systemdFixture) reopen(restored bool) {
 			f.t.Fatal(err)
 		}
 	}
+	f.revision = snapshot.Revision
 	f.controller, err = New(f.store, f.manager, Config{Catalog: &snapshot, DrainTimeout: time.Second, VerifyTimeout: time.Second, ActionTimeout: 5 * time.Second, CleanupTimeout: 5 * time.Second, FinalizeTimeout: time.Second, PollInterval: 10 * time.Millisecond})
 	if err != nil {
 		f.t.Fatal(err)
@@ -350,7 +352,7 @@ func TestSystemdFailuresLatchAndRequireExplicitRecovery(t *testing.T) {
 			}
 			systemdCommand(t, "stop", f.units[0], f.units[1])
 			f.reopen(false)
-			if _, err := f.controller.Reconcile(ctx); !errors.Is(err, ErrRecoveryRequired) {
+			if _, err := f.controller.Reconcile(ctx); !errors.Is(err, ErrUserOwned) {
 				t.Fatalf("restart forgot error: %v", err)
 			}
 			state, err = f.controller.RecoverUser(ctx, control.WorkloadIdle, "qualification")
@@ -475,7 +477,7 @@ func TestSystemdInterruptedJournalPhases(t *testing.T) {
 			}
 			target := before
 			target.DesiredWorkload = control.WorkloadText
-			state, err := f.store.StartTransition(ctx, before.Version, store.Transition{ID: "interrupted", Source: before, Target: target, Previous: before, Initiator: "qualification", Deadline: time.Now().Add(time.Minute)})
+			state, err := f.store.StartTransition(ctx, before.Version, store.Transition{ID: "interrupted", Source: before, Target: target, Previous: before, Initiator: "qualification", Deadline: time.Now().Add(time.Minute), ConfigurationRevision: f.revision})
 			if err != nil {
 				t.Fatal(err)
 			}
