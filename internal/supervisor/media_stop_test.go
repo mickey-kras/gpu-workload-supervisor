@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 )
@@ -43,7 +42,7 @@ func TestExclusiveMediaTransitionsAndOwnership(t *testing.T) {
 	stateStore := openStore(t)
 	runtime := &exclusiveRuntime{}
 	controller := testController(t, stateStore, runtime)
-	controller.id = func() (string, error) { return uuid.NewString(), nil }
+	controller.id = control.NewUUID
 	if _, err := controller.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +135,7 @@ func TestExclusiveUserRecoveryRejectsWrongWorkloadWithoutStoppingUserWork(t *tes
 	stateStore := openStore(t)
 	runtime := &exclusiveRuntime{}
 	controller := testController(t, stateStore, runtime)
-	controller.id = func() (string, error) { return uuid.NewString(), nil }
+	controller.id = control.NewUUID
 	controller.config.VerifyTimeout = time.Millisecond
 	if _, err := controller.Reconcile(ctx); err != nil {
 		t.Fatal(err)

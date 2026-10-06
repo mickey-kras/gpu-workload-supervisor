@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 )
@@ -84,7 +83,7 @@ func TestFailedUserReleaseAndCapacityPreserveOwnerAndNeverRestart(t *testing.T) 
 				runtime.releaseFailures = 1000000
 			}
 			controller := testController(t, stateStore, runtime)
-			controller.id = func() (string, error) { return uuid.NewString(), nil }
+			controller.id = control.NewUUID
 			controller.config.VerifyTimeout = 5 * time.Millisecond
 			change := controller.SwitchUser
 			if transfer {
