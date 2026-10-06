@@ -57,6 +57,7 @@ func TestHealthDeadlineReconcileAndRecover(t *testing.T) {
 			var err error
 			runtime.block = true
 			c.config.ActionTimeout = 20 * time.Millisecond
+			c.config.VerifyTimeout = 40 * time.Millisecond
 			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			defer cancel()
 			start := time.Now()

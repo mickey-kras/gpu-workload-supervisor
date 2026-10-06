@@ -24,7 +24,7 @@ func TestThirdWorkloadLifecycle(t *testing.T) {
 	r := &catalogRuntime{}
 	c := testController(t, s, r)
 	catalog := control.Catalog{Version: 1, Profiles: []control.Profile{{ID: "speech", Label: "Speech", Adapter: "systemd", Unit: "speech.service", Cgroup: "/user/speech", HealthURL: "http://localhost:9000"}}}
-	snap, err := s.ReplaceCatalog(ctx, "", catalog)
+	snap, err := s.ReplaceCatalog(ctx, c.config.Catalog.Revision, catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestStatusRejectsChangedCatalogBeforeObservation(t *testing.T) {
 	r := &catalogRuntime{}
 	c := testController(t, s, r)
 	catalog := control.Catalog{Version: 1, Profiles: []control.Profile{{ID: "speech", Label: "Speech", Adapter: "systemd", Unit: "speech.service", Cgroup: "/user/speech", HealthURL: "http://localhost:9000"}}}
-	if _, err := s.ReplaceCatalog(ctx, "", catalog); err != nil {
+	if _, err := s.ReplaceCatalog(ctx, c.config.Catalog.Revision, catalog); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := s.State(ctx)

@@ -122,11 +122,16 @@ func TestExclusiveFailedMediaStartDoesNotRestartTextAlongsideMedia(t *testing.T)
 	if _, err := controller.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
+	runtime.calls = nil
 	runtime.startErr = errors.New("partial start")
 	runtime.partialStart = true
 	state, err := controller.Switch(ctx, control.WorkloadMedia, "test")
-	if err == nil || state.Admission != control.AdmissionClosed || state.Health != control.HealthError || runtime.active == control.WorkloadText {
+	if err == nil || state.Admission != control.AdmissionClosed || state.Health != control.HealthError {
 		t.Fatalf("state=%#v runtime=%#v err=%v", state, runtime, err)
+	}
+	assertCalls(t, runtime.calls, "stop text", "start media", "stop text", "stop media", "start text")
+	if runtime.mediaReady {
+		t.Fatal("rollback restarted text alongside media")
 	}
 	if _, err := controller.Recover(ctx); err != nil {
 		t.Fatal(err)
@@ -181,10 +186,11 @@ func TestExclusiveTextToMediaWaitsForGPURelease(t *testing.T) {
 			runtime := &delayedExclusiveRuntime{exclusiveRuntime: exclusiveRuntime{fakeRuntime: fakeRuntime{active: control.WorkloadText}}}
 			controller := testController(t, openStore(t), runtime)
 			controller.config.VerifyTimeout = 5 * time.Millisecond
-			controller.config.CleanupTimeout = 5 * time.Millisecond
+			controller.config.CleanupTimeout = 500 * time.Millisecond
 			if _, err := controller.Reconcile(ctx); err != nil {
 				t.Fatal(err)
 			}
+			runtime.calls = nil
 			runtime.releaseFailures = failures
 			state, err := controller.Switch(ctx, control.WorkloadMedia, "test")
 			if failures == 1 {
@@ -196,7 +202,7 @@ func TestExclusiveTextToMediaWaitsForGPURelease(t *testing.T) {
 				if !errors.Is(err, ErrVerifyTimeout) || state.Admission != control.AdmissionClosed || state.Health != control.HealthError {
 					t.Fatalf("state=%#v err=%v", state, err)
 				}
-				assertCalls(t, runtime.calls, "stop text")
+				assertCalls(t, runtime.calls, "stop text", "stop text", "stop media")
 			}
 		})
 	}

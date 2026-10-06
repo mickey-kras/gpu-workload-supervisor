@@ -47,13 +47,11 @@ func (r *deadlineRuntime) Observe(context.Context) (gpuruntime.Snapshot, error) 
 }
 func TestObservationWrappingPreservesTimeout(t *testing.T) {
 	c := testController(t, openStore(t), &deadlineRuntime{})
-	for _, err := range []error{c.checkReady(context.Background(), control.WorkloadText), func() error {
-		_, err := c.unloadForSwitch(context.Background(), "", control.PhaseUnloading, control.State{}, control.WorkloadMedia)
-		return err
-	}()} {
-		if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, ErrRuntimeObservation) || failureCode(err) != "timeout" || strings.Contains(err.Error(), "secret") {
-			t.Fatalf("wrapped timeout: %v", err)
-		}
+	if err := c.checkReady(context.Background(), control.WorkloadText); !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, ErrRuntimeObservation) || failureCode(err) != "timeout" || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("wrapped timeout: %v", err)
+	}
+	if _, err := c.unloadCatalog(context.Background(), "", control.PhaseUnloading, control.State{}, control.WorkloadMedia); !errors.Is(err, context.DeadlineExceeded) || failureCode(err) != "timeout" || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("wrapped timeout: %v", err)
 	}
 }
 

@@ -131,6 +131,7 @@ func TestReconcileLatchesRuntimeFailures(t *testing.T) {
 func TestReconcileDrainsAdmittedMediaBeforeStop(t *testing.T) {
 	stateStore := openStore(t)
 	runtime := &fakeRuntime{active: control.WorkloadMedia, mediaReady: true}
+	installTestCatalog(t, stateStore)
 	observed := &pendingObservedStore{Store: stateStore, polled: make(chan struct{}, 1)}
 	controller := testController(t, observed, runtime)
 	state, err := stateStore.State(context.Background())
@@ -160,18 +161,24 @@ func TestReconcileDrainsAdmittedMediaBeforeStop(t *testing.T) {
 		final, reconcileErr := controller.Reconcile(ctx)
 		finished <- result{final, reconcileErr}
 	}()
-	select {
-	case <-observed.polled:
-	case result := <-finished:
-		t.Fatalf("reconcile stopped without draining: state = %#v, error = %v", result.state, result.err)
-	case <-ctx.Done():
-		t.Fatal("reconcile never checked pending work")
+	var closed control.State
+	for {
+		select {
+		case <-observed.polled:
+		case result := <-finished:
+			t.Fatalf("reconcile stopped without draining: state = %#v, error = %v", result.state, result.err)
+		case <-ctx.Done():
+			t.Fatal("reconcile never checked pending work")
+		}
+		closed, err = stateStore.State(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if closed.Admission == control.AdmissionClosed {
+			break
+		}
 	}
-	closed, err := stateStore.State(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if closed.Admission != control.AdmissionClosed || closed.Health != control.HealthError || runtime.active != control.WorkloadMedia {
+	if closed.Health != control.HealthError || runtime.active != control.WorkloadMedia {
 		t.Fatalf("unsafe state during drain: %#v, runtime = %q", closed, runtime.active)
 	}
 	if _, err := stateStore.AdmitWorkToken(context.Background(), "late", "job", control.WorkloadMedia, state.LeaseFence); !errors.Is(err, store.ErrStaleFence) && !errors.Is(err, store.ErrAdmissionClosed) {
@@ -221,6 +228,7 @@ func TestReconcileCancellationAfterDrainDoesNotStopMedia(t *testing.T) {
 	runtime := &fakeRuntime{active: control.WorkloadMedia, mediaReady: true}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	installTestCatalog(t, stateStore)
 	controller := testController(t, &cancelAfterPendingStore{Store: stateStore, cancel: cancel}, runtime)
 	state, err := controller.Reconcile(ctx)
 	if !errors.Is(err, context.Canceled) || state.Admission != control.AdmissionClosed || state.Health != control.HealthError || runtime.active != control.WorkloadMedia || len(runtime.calls) != 0 {
@@ -237,7 +245,7 @@ func TestRecoveryVerifiesRuntimeBeforeOpeningAdmission(t *testing.T) {
 	}{
 		{"idle", &fakeRuntime{}, false, control.WorkloadIdle},
 		{"text", &fakeRuntime{active: control.WorkloadText}, false, control.WorkloadText},
-		{"unhealthy text", &fakeRuntime{active: control.WorkloadText, healthFailures: 1}, true, control.WorkloadUnknown},
+		{"unhealthy text", &fakeRuntime{active: control.WorkloadText, healthFailures: 1000000}, true, control.WorkloadUnknown},
 		{"failed media release", &fakeRuntime{stopErr: errors.New("release failed")}, true, control.WorkloadUnknown},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -274,7 +282,8 @@ func TestDrainDeadlineAndCancellationKeepWorkClosed(t *testing.T) {
 	target.DesiredWorkload = control.WorkloadMedia
 	_, err = stateStore.StartTransition(context.Background(), state.Version, store.Transition{
 		ID: "draining", Source: state, Target: target, Previous: state,
-		Deadline: time.Now().Add(time.Minute),
+		ConfigurationRevision: controller.config.Catalog.Revision,
+		Deadline:              time.Now().Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -321,11 +330,11 @@ func TestRollbackRestoresPreviousOwnerOrStopsUnexpectedText(t *testing.T) {
 		ready    bool
 		calls    []string
 	}{
-		{"media from text", control.WorkloadMedia, control.WorkloadText, false, []string{"stop text", "start media"}},
-		{"text from idle", control.WorkloadText, control.WorkloadIdle, false, []string{"start text"}},
+		{"media from text", control.WorkloadMedia, control.WorkloadText, false, []string{"stop text", "stop media", "start media"}},
+		{"text from idle", control.WorkloadText, control.WorkloadIdle, false, []string{"stop text", "stop media", "start text"}},
 		{"idle from text", control.WorkloadIdle, control.WorkloadText, false, []string{"stop text", "stop media"}},
-		{"idle from media", control.WorkloadIdle, control.WorkloadMedia, true, []string{"stop media"}},
-		{"media already ready", control.WorkloadMedia, control.WorkloadMedia, true, nil},
+		{"idle from media", control.WorkloadIdle, control.WorkloadMedia, true, []string{"stop text", "stop media"}},
+		{"media already ready", control.WorkloadMedia, control.WorkloadMedia, true, []string{"stop text", "stop media", "start media"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			stateStore := openStore(t)
@@ -337,14 +346,15 @@ func TestRollbackRestoresPreviousOwnerOrStopsUnexpectedText(t *testing.T) {
 			}
 			_, err = stateStore.StartTransition(context.Background(), state.Version, store.Transition{
 				ID: "rollback", Source: state, Target: state, Previous: state,
-				Deadline: time.Now().Add(time.Minute),
+				ConfigurationRevision: controller.config.Catalog.Revision,
+				Deadline:              time.Now().Add(time.Minute),
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			previous := state
 			previous.ActiveWorkload = test.previous
-			if err := controller.rollback(context.Background(), "rollback", previous); err != nil {
+			if err := controller.rollbackCatalog(context.Background(), "rollback", previous); err != nil {
 				t.Fatal(err)
 			}
 			assertCalls(t, runtime.calls, test.calls...)
@@ -362,17 +372,18 @@ func TestRollbackFailureDoesNotClaimRestoredOwner(t *testing.T) {
 	}
 	_, err = stateStore.StartTransition(context.Background(), state.Version, store.Transition{
 		ID: "failed-rollback", Source: state, Target: state, Previous: state,
-		Deadline: time.Now().Add(time.Minute),
+		ConfigurationRevision: controller.config.Catalog.Revision,
+		Deadline:              time.Now().Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	previous := state
 	previous.ActiveWorkload = control.WorkloadMedia
-	if err := controller.rollback(context.Background(), "failed-rollback", previous); err == nil {
+	if err := controller.rollbackCatalog(context.Background(), "failed-rollback", previous); err == nil {
 		t.Fatal("rollback start failure was ignored")
 	}
-	assertCalls(t, runtime.calls, "stop text", "start media")
+	assertCalls(t, runtime.calls, "stop text", "stop media", "start media")
 }
 
 func TestIdleRollbackDoesNotProceedPastFailedTextStop(t *testing.T) {
@@ -386,18 +397,19 @@ func TestIdleRollbackDoesNotProceedPastFailedTextStop(t *testing.T) {
 	}
 	if _, err := stateStore.StartTransition(context.Background(), state.Version, store.Transition{
 		ID: "failed-idle-rollback", Source: state, Target: state, Previous: state,
-		Deadline: time.Now().Add(time.Minute),
+		ConfigurationRevision: controller.config.Catalog.Revision,
+		Deadline:              time.Now().Add(time.Minute),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	previous := state
 	previous.ActiveWorkload = control.WorkloadIdle
-	if err := controller.rollback(context.Background(), "failed-idle-rollback", previous); !errors.Is(err, stopErr) {
+	if err := controller.rollbackCatalog(context.Background(), "failed-idle-rollback", previous); !errors.Is(err, stopErr) {
 		t.Fatalf("text stop failure was not reported: %v", err)
 	}
 	assertCalls(t, runtime.calls, "stop text")
 	events, err := transitionEvents(stateStore, context.Background(), "failed-idle-rollback")
-	if err != nil || len(events) != 2 || events[0].Action != "rollback stop text" || events[1].Outcome != "failed" {
+	if err != nil || len(events) != 2 || events[0].Action != "stop text" || events[1].Outcome != "failed" {
 		t.Fatalf("rollback journal = %#v, %v", events, err)
 	}
 }
@@ -413,6 +425,7 @@ func TestSwitchRejectsInvalidTargetAndTransitionIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	controller.id = func() (string, error) { return "", errors.New("identity unavailable") }
+	runtime.calls = nil
 	if _, err := controller.Switch(context.Background(), control.WorkloadMedia, "test"); err == nil {
 		t.Fatal("transition without identity accepted")
 	}
@@ -433,10 +446,12 @@ func TestSwitchRejectsConcurrentTransitionBeforeRuntimeEffects(t *testing.T) {
 	target.DesiredWorkload = control.WorkloadMedia
 	if _, err := stateStore.StartTransition(context.Background(), current.Version, store.Transition{
 		ID: "already-running", Source: current, Target: target, Previous: current,
-		Deadline: time.Now().Add(time.Minute),
+		ConfigurationRevision: controller.config.Catalog.Revision,
+		Deadline:              time.Now().Add(time.Minute),
 	}); err != nil {
 		t.Fatal(err)
 	}
+	runtime.calls = nil
 	if _, err := controller.Switch(context.Background(), control.WorkloadMedia, "other"); !errors.Is(err, ErrTransitionRunning) {
 		t.Fatalf("concurrent transition accepted: %v", err)
 	}
@@ -501,6 +516,15 @@ func TestConstructorRejectsMissingStoreRuntimeAndDeadlines(t *testing.T) {
 		DrainTimeout: time.Second, VerifyTimeout: time.Second,
 		ActionTimeout: time.Second, CleanupTimeout: time.Second,
 		FinalizeTimeout: time.Second, PollInterval: time.Millisecond,
+	}); err == nil {
+		t.Fatal("missing catalog accepted")
+	}
+	snapshot := installTestCatalog(t, stateStore)
+	if _, err := New(stateStore, runtime, Config{
+		Catalog:      &snapshot,
+		DrainTimeout: time.Second, VerifyTimeout: time.Second,
+		ActionTimeout: time.Second, CleanupTimeout: time.Second,
+		FinalizeTimeout: time.Second, PollInterval: time.Millisecond,
 	}); err != nil {
 		t.Fatalf("valid controller rejected: %v", err)
 	}
@@ -509,6 +533,7 @@ func TestConstructorRejectsMissingStoreRuntimeAndDeadlines(t *testing.T) {
 func TestStoreReadFailurePreventsRuntimeEffects(t *testing.T) {
 	stateStore := openStore(t)
 	runtime := &fakeRuntime{active: control.WorkloadText}
+	installTestCatalog(t, stateStore)
 	controller := testController(t, failingStore{storeGateway: stateStore, stateErr: errors.New("disk unavailable")}, runtime)
 	for name, operation := range map[string]func() error{
 		"status": func() error { _, err := controller.Status(context.Background()); return err },
@@ -532,11 +557,12 @@ func TestSwitchFailsClosedWhenTransitionJournalCannotProgress(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		inject func(*failingStore)
+		calls  []string
 	}{
-		{"in-progress read", func(s *failingStore) { s.transitionErr = errors.New("journal read failed") }},
-		{"transition insert", func(s *failingStore) { s.startErr = errors.New("journal insert failed") }},
-		{"work snapshot read", func(s *failingStore) { s.pendingErr = errors.New("snapshot failed") }},
-		{"phase update", func(s *failingStore) { s.phaseErr = errors.New("phase write failed") }},
+		{"in-progress read", func(s *failingStore) { s.transitionErr = errors.New("journal read failed") }, nil},
+		{"transition insert", func(s *failingStore) { s.startErr = errors.New("journal insert failed") }, nil},
+		{"work snapshot read", func(s *failingStore) { s.pendingErr = errors.New("snapshot failed") }, []string{"stop text", "stop media", "start text"}},
+		{"phase update", func(s *failingStore) { s.phaseErr = errors.New("phase write failed") }, []string{"stop text", "stop media", "start text"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			stateStore := openStore(t)
@@ -545,21 +571,24 @@ func TestSwitchFailsClosedWhenTransitionJournalCannotProgress(t *testing.T) {
 			if _, err := base.Reconcile(context.Background()); err != nil {
 				t.Fatal(err)
 			}
+			runtime.calls = nil
 			wrapped := &failingStore{storeGateway: stateStore}
 			test.inject(wrapped)
 			controller := testController(t, wrapped, runtime)
 			if _, err := controller.Switch(context.Background(), control.WorkloadMedia, "test"); err == nil {
 				t.Fatal("failed journal allowed transition")
 			}
-			if runtime.active != control.WorkloadText || len(runtime.calls) != 0 {
-				t.Fatalf("journal failure changed runtime: %#v", runtime.calls)
+			if runtime.active != control.WorkloadText {
+				t.Fatalf("journal failure did not restore text: %q", runtime.active)
 			}
+			assertCalls(t, runtime.calls, test.calls...)
 		})
 	}
 }
 
 func TestUserOwnedObservationFailureDoesNotLatchSupervisorState(t *testing.T) {
 	stateStore := openStore(t)
+	controller := testController(t, stateStore, observationFailure{&fakeRuntime{}})
 	state, err := stateStore.State(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -570,7 +599,6 @@ func TestUserOwnedObservationFailureDoesNotLatchSupervisorState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	controller := testController(t, stateStore, observationFailure{&fakeRuntime{}})
 	if observed, err := controller.Status(context.Background()); err == nil || observed != state {
 		t.Fatalf("user state changed on observation failure: %#v, %v", observed, err)
 	}

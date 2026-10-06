@@ -17,6 +17,7 @@ func TestStatusLatchesOpenAdmissionWhenRuntimeStops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runtime.calls = nil
 	runtime.active = control.WorkloadIdle
 
 	got, err := controller.Status(ctx)
@@ -49,6 +50,7 @@ func TestStatusLatchesOpenAdmissionWhenRuntimeUnhealthy(t *testing.T) {
 	if _, err := controller.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
+	runtime.calls = nil
 	runtime.healthFailures = 1
 
 	got, err := controller.Status(ctx)

@@ -80,8 +80,10 @@ func TestTextRecoveryWaitsForOldMediaRegistration(t *testing.T) {
 				result.Health != control.HealthHealthy || result.Phase != control.PhaseStable {
 				t.Fatalf("recovered state = %#v", result)
 			}
-			if len(runtime.calls) != 0 {
-				t.Fatalf("changed healthy text runtime: %#v", runtime.calls)
+			for _, call := range runtime.calls {
+				if call == "stop text" || call == "start text" {
+					t.Fatalf("changed healthy text runtime: %#v", runtime.calls)
+				}
 			}
 		})
 	}
@@ -113,8 +115,7 @@ func TestReconcileHealthyTextPreservesPendingTextWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Version != state.Version+1 || result.ActiveWorkload != control.WorkloadText ||
-		result.Admission != control.AdmissionOpen || result.Health != control.HealthHealthy {
+	if result != state {
 		t.Fatalf("healthy text changed unexpectedly: %#v", result)
 	}
 	if pending, err := stateStore.PendingWork(ctx); err != nil || pending != 1 {

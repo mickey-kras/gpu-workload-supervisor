@@ -15,6 +15,7 @@ import (
 
 func ownershipState(t *testing.T, stateStore *store.Store, owner control.Owner, workload control.Workload) control.State {
 	t.Helper()
+	installTestCatalog(t, stateStore)
 	state, err := stateStore.State(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -334,8 +335,18 @@ func TestOwnershipCrashBoundariesPreserveCommittedOwner(t *testing.T) {
 					runtime.calls = nil
 					fresh := testController(t, reopened, runtime)
 					state, err := fresh.Reconcile(ctx)
-					if !errors.Is(err, ErrRecoveryRequired) || state.Owner != source || state.Admission != control.AdmissionClosed || len(runtime.calls) > 0 {
-						t.Fatalf("restart recovery: %#v %v %v", state, err, runtime.calls)
+					if source == control.OwnerSupervisor {
+						if !errors.Is(err, ErrRecoveryRequired) || state.Owner != source || state.Admission != control.AdmissionClosed || len(runtime.calls) > 0 {
+							t.Fatalf("restart recovery: %#v %v %v", state, err, runtime.calls)
+						}
+						if _, err := fresh.Recover(ctx); err != nil {
+							t.Fatal(err)
+						}
+					} else {
+						if !errors.Is(err, ErrUserOwned) || state.Owner != source || len(runtime.calls) > 0 {
+							t.Fatalf("restart recovery: %#v %v %v", state, err, runtime.calls)
+						}
+						_, _ = fresh.RecoverUser(ctx, control.WorkloadText, "operator")
 					}
 				}
 				// Ownership and target are retained in the durable transition audit.
