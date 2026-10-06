@@ -187,22 +187,7 @@ function inspectCi(files, workflows, failures, checks) {
     'awk \'$1 == "total:" { coverage=$3+0; found=1 } END { if (!found || coverage < 90) exit 1 }\' coverage-summary.txt',
   ]);
   exactRun(ci, 'checks', 'Go vet', ['go vet ./...']);
-  const auditRun = workflows[ci]?.jobs?.checks?.steps?.find(s => s.name === 'Audit Aislop toolchain')?.run || '';
-  const temporaryAudit = auditRun.includes('.github/audit-tool/');
-  if (temporaryAudit) {
-    for (const [path, digest] of [['.github/audit-tool/audit-ci.json', '5d31c2834a2cd56fa7c8e6a62ea015c8c07d4da5bacd1e4af779950a3842f9ec'], ['.github/audit-tool/audit-fixture.json', 'b338f05c92807ac45b2c7d50eb8f1dbe6c8c29f671ceb2912c051e39c453ecd2'], ['.github/audit-tool/audit.cjs', '3302195e687c5a4940c88d32353f68bcb12b61475affc05af18cba6398cbbc31'], ['.github/audit-tool/audit.test.cjs', '4271a0e0cabfb6e07c779fa6a15b86751ed55ed25322abdd546e56772a58956b'], ['.github/audit-tool/package-lock.json', 'ac23769398329eb7cea03236037626c2197d20695c35c6f8af26ea7706b73660'], ['.github/audit-tool/package.json', '10e831899e68131e3fa58f3c62c18aeba8fceb87199de65f9861f015b63fb709']]) {
-      if (createHash('sha256').update(files[path] || '').digest('hex') !== digest) {
-        failures.push(`${path} changed the approved temporary audit exception`);
-      }
-    }
-  }
-  exactRun(ci, 'checks', 'Audit Aislop toolchain', temporaryAudit ? [
-    'npm ci --prefix .github/audit-tool --ignore-scripts --no-audit --no-fund',
-    'npm audit --prefix .github/audit-tool --audit-level=moderate',
-    'npm ci --prefix .github/aislop --ignore-scripts --no-audit --no-fund',
-    'node --test .github/audit-tool/audit.test.cjs',
-    'node .github/audit-tool/audit.cjs .github/aislop',
-  ] : [
+  exactRun(ci, 'checks', 'Audit Aislop toolchain', [
     'npm ci --prefix .github/aislop --ignore-scripts --no-audit --no-fund',
     'npm audit --prefix .github/aislop --audit-level=moderate',
   ]);
@@ -376,7 +361,6 @@ async function run({ github, context }) {
   if (tree.truncated) throw new Error('Cannot verify a truncated PR tree');
   const paths = tree.tree.filter(entry => entry.type === 'blob' &&
     (REQUIRED_FILES.includes(entry.path) ||
-      entry.path.startsWith('.github/audit-tool/') ||
       (entry.path.startsWith('.github/workflows/') && /\.ya?ml$/.test(entry.path))))
     .map(entry => entry.path);
   const files = {};
