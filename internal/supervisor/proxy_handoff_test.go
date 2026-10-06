@@ -55,7 +55,7 @@ func TestHTTPUserHandoffWaitsForForwardingWithoutRestartingStoppedWork(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			handler, err := proxy.New(stateStore, proxy.Config{Upstream: target, Workload: control.WorkloadText, ExecutionRoutes: []proxy.Route{{Method: "POST", Path: "/execute"}}})
+			handler, err := proxy.NewWithContext(context.Background(), stateStore, proxy.Config{Upstream: target, Workload: control.WorkloadText, ExecutionRoutes: []proxy.Route{{Method: "POST", Path: "/execute"}}})
 			if err != nil {
 				t.Fatal(err)
 			}

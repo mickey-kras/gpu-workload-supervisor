@@ -15,14 +15,6 @@ func (c *Controller) Switch(ctx context.Context, target control.Workload, initia
 	return c.transition(ctx, target, control.OwnerSupervisor, control.OwnerSupervisor, initiator, false)
 }
 
-// SwitchConditional preserves a caller's observed state token through the
-// authoritative transition transaction. It cannot transfer ownership.
-func (c *Controller) SwitchConditional(ctx context.Context, target control.Workload, initiator string, expected control.Precondition) (control.State, error) {
-	return c.transitionConditional(ctx, target, initiator, transitionOptions{
-		sourceOwner: control.OwnerSupervisor, targetOwner: control.OwnerSupervisor, expected: &expected,
-	})
-}
-
 // TransferToUser drains supervisor work before committing user ownership.
 func (c *Controller) TransferToUser(ctx context.Context, target control.Workload, initiator string) (control.State, error) {
 	return c.transition(ctx, target, control.OwnerSupervisor, control.OwnerUser, initiator, false)
@@ -55,7 +47,6 @@ type transitionOptions struct {
 	targetOwner control.Owner
 	verifyOnly  bool
 	preserve    bool
-	expected    *control.Precondition
 	operator    *control.OperatorPrecondition
 }
 
@@ -69,9 +60,6 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 	current, err := c.transitionSource(ctx, options.sourceOwner, options.verifyOnly)
 	if err != nil {
 		return current, err
-	}
-	if options.expected != nil && (options.expected.Incarnation == "" || options.expected.Incarnation != current.LeaseFence.Incarnation || options.expected.Version != current.Version) {
-		return current, store.ErrVersionConflict
 	}
 	if err := c.preflight(ctx); err != nil {
 		return current, err
@@ -96,13 +84,6 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 	return c.executeTransition(ctx, transition, state, current, target, options)
 }
 
-func (c *Controller) startTransition(ctx context.Context, version uint64, expected *control.Precondition, transition store.Transition) (control.State, error) {
-	if expected == nil {
-		return c.store.StartTransition(ctx, version, transition)
-	}
-	return c.store.StartTransitionConditional(ctx, *expected, transition)
-}
-
 func (c *Controller) transitionSource(ctx context.Context, sourceOwner control.Owner, verifyOnly bool) (control.State, error) {
 	current, err := c.store.State(ctx)
 	if err != nil {
@@ -115,10 +96,7 @@ func (c *Controller) transitionSource(ctx context.Context, sourceOwner control.O
 		return current, ErrSupervisorOwned
 	}
 	if verifyOnly {
-		closed := current
-		closed.Phase = control.PhaseReconciling
-		closed.Health = control.HealthError
-		closed.Admission = control.AdmissionClosed
+		closed := closedReconciling(current)
 		current, err = c.store.Recover(ctx, current.Version, closed, "operator-user-recovery")
 		if err != nil {
 			return current, err

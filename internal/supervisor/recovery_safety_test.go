@@ -87,7 +87,7 @@ func TestRecoverInitiallyOpenFailureClosesAdmission(t *testing.T) {
 				t.Fatalf("admission after failure = %v", err)
 			}
 			upstream, _ := url.Parse("http://127.0.0.1:1")
-			handler, err := proxy.New(s, proxy.Config{Upstream: upstream, Workload: before.ActiveWorkload, ExecutionRoutes: []proxy.Route{{Method: http.MethodPost, Path: "/execute"}}})
+			handler, err := proxy.NewWithContext(context.Background(), s, proxy.Config{Upstream: upstream, Workload: before.ActiveWorkload, ExecutionRoutes: []proxy.Route{{Method: http.MethodPost, Path: "/execute"}}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -138,12 +138,12 @@ func TestRecoverDrainsBeforeDestructiveStop(t *testing.T) {
 }
 
 type cancelAfterRecoveryRead struct {
-	StateStore
+	storeGateway
 	cancel context.CancelFunc
 }
 
 func (s *cancelAfterRecoveryRead) State(ctx context.Context) (control.State, error) {
-	state, err := s.StateStore.State(ctx)
+	state, err := s.storeGateway.State(ctx)
 	s.cancel()
 	return state, err
 }
@@ -157,7 +157,7 @@ func TestRecoverCancellationBeforeEntryStillClosesAdmission(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	c.store = &cancelAfterRecoveryRead{StateStore: s, cancel: cancel}
+	c.store = &cancelAfterRecoveryRead{storeGateway: s, cancel: cancel}
 	if _, err := c.Recover(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("recovery = %v", err)
 	}

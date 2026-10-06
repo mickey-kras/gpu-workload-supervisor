@@ -47,7 +47,7 @@ func TestForwardingFailureNeedsVerifiedAuditedResolution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := proxy.New(stateStore, proxy.Config{
+	handler, err := proxy.NewWithContext(context.Background(), stateStore, proxy.Config{
 		Upstream: upstream, Workload: control.WorkloadMedia,
 		ExecutionRoutes: []proxy.Route{{Method: http.MethodPost, Path: "/execute"}},
 	})

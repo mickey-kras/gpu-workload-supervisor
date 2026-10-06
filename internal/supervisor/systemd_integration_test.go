@@ -220,7 +220,7 @@ func TestSystemdDirectedTransitionsAndOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.assertState(state, control.OwnerSupervisor, control.WorkloadIdle)
-	if err := f.manager.Released(ctx); err != nil {
+	if err := f.manager.ReleasedFor(ctx, control.WorkloadIdle); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -294,12 +294,6 @@ func (m *qualificationFault) Healthy(ctx context.Context, workload control.Workl
 		return errors.New("injected health failure")
 	}
 	return m.SystemdManager.Healthy(ctx, workload)
-}
-func (m *qualificationFault) Released(ctx context.Context) error {
-	if m.failure == "release" {
-		return errors.New("injected release timeout")
-	}
-	return m.SystemdManager.Released(ctx)
 }
 func (m *qualificationFault) ReleasedFor(ctx context.Context, target control.Workload) error {
 	if m.failure == "release" {
@@ -379,13 +373,13 @@ func TestSystemdSurvivingDescendantBlocksRelease(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	systemdCommand(t, "stop", f.units[0])
-	if err := f.manager.Released(ctx); err == nil {
+	if err := f.manager.ReleasedFor(ctx, control.WorkloadIdle); err == nil {
 		t.Fatal("surviving descendant qualified as released")
 	}
 	systemdCommand(t, "kill", "--kill-whom=all", "--signal=KILL", f.units[0])
 	deadline = time.Now().Add(5 * time.Second)
 	for {
-		if err := f.manager.Released(ctx); err == nil {
+		if err := f.manager.ReleasedFor(ctx, control.WorkloadIdle); err == nil {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -525,7 +519,7 @@ func TestSystemdPreflightAllowsFailedRemovedCgroupRecovery(t *testing.T) {
 	if err := f.manager.Preflight(ctx); err != nil {
 		t.Fatalf("failed unit wedged preflight: %v", err)
 	}
-	if err := f.manager.Released(ctx); err == nil {
+	if err := f.manager.ReleasedFor(ctx, control.WorkloadIdle); err == nil {
 		t.Fatal("failed unit qualified as released")
 	}
 	state, err := f.controller.Reconcile(ctx)

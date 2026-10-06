@@ -42,7 +42,7 @@ func (observationFailure) Observe(context.Context) (gpuruntime.Snapshot, error) 
 }
 
 type failingStore struct {
-	StateStore
+	storeGateway
 	stateErr      error
 	transitionErr error
 	startErr      error
@@ -54,35 +54,35 @@ func (s failingStore) State(ctx context.Context) (control.State, error) {
 	if s.stateErr != nil {
 		return control.State{}, s.stateErr
 	}
-	return s.StateStore.State(ctx)
+	return s.storeGateway.State(ctx)
 }
 
 func (s failingStore) InProgressTransition(ctx context.Context) (string, error) {
 	if s.transitionErr != nil {
 		return "", s.transitionErr
 	}
-	return s.StateStore.InProgressTransition(ctx)
+	return s.storeGateway.InProgressTransition(ctx)
 }
 
 func (s failingStore) StartTransition(ctx context.Context, version uint64, tr store.Transition) (control.State, error) {
 	if s.startErr != nil {
 		return control.State{}, s.startErr
 	}
-	return s.StateStore.StartTransition(ctx, version, tr)
+	return s.storeGateway.StartTransition(ctx, version, tr)
 }
 
 func (s failingStore) SetTransitionPhase(ctx context.Context, id string, version uint64, phase control.Phase) (control.State, error) {
 	if s.phaseErr != nil {
 		return control.State{}, s.phaseErr
 	}
-	return s.StateStore.SetTransitionPhase(ctx, id, version, phase)
+	return s.storeGateway.SetTransitionPhase(ctx, id, version, phase)
 }
 
 func (s failingStore) PendingTransitionWork(ctx context.Context, id string) (int, error) {
 	if s.pendingErr != nil {
 		return 0, s.pendingErr
 	}
-	return s.StateStore.PendingTransitionWork(ctx, id)
+	return s.storeGateway.PendingTransitionWork(ctx, id)
 }
 
 func TestStatusObservationFailureLatchesClosedState(t *testing.T) {
@@ -509,7 +509,7 @@ func TestConstructorRejectsMissingStoreRuntimeAndDeadlines(t *testing.T) {
 func TestStoreReadFailurePreventsRuntimeEffects(t *testing.T) {
 	stateStore := openStore(t)
 	runtime := &fakeRuntime{active: control.WorkloadText}
-	controller := testController(t, failingStore{StateStore: stateStore, stateErr: errors.New("disk unavailable")}, runtime)
+	controller := testController(t, failingStore{storeGateway: stateStore, stateErr: errors.New("disk unavailable")}, runtime)
 	for name, operation := range map[string]func() error{
 		"status": func() error { _, err := controller.Status(context.Background()); return err },
 		"switch": func() error {
@@ -545,7 +545,7 @@ func TestSwitchFailsClosedWhenTransitionJournalCannotProgress(t *testing.T) {
 			if _, err := base.Reconcile(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			wrapped := &failingStore{StateStore: stateStore}
+			wrapped := &failingStore{storeGateway: stateStore}
 			test.inject(wrapped)
 			controller := testController(t, wrapped, runtime)
 			if _, err := controller.Switch(context.Background(), control.WorkloadMedia, "test"); err == nil {
