@@ -376,3 +376,15 @@ test('desktop integration gates cannot be removed, conditional, or allowed to fa
     }
   }
 });
+
+
+test('dependency review cannot override the protected vulnerability configuration', () => {
+  for (const override of [{ 'vulnerability-check': false }, { 'warn-only': true }, { 'config-file': './unchecked.yml' }]) {
+    const candidate = files();
+    const path = '.github/workflows/dependency-review.yml';
+    const workflow = YAML.parse(candidate[path]);
+    Object.assign(workflow.jobs.review.steps.find(step => step.name === 'Dependency review').with, override);
+    candidate[path] = YAML.stringify(workflow);
+    assert.ok(inspect(candidate).some(error => error.includes('without overrides')));
+  }
+});
