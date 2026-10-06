@@ -21,7 +21,11 @@ func operatorSource(ctx context.Context, tx *sql.Tx, s control.State, e control.
 		return ErrWrongOwner
 	}
 	var revision string
-	if err := tx.QueryRowContext(ctx, `SELECT revision FROM workload_catalog WHERE singleton=1`).Scan(&revision); err != nil {
+	err := tx.QueryRowContext(ctx, `SELECT revision FROM workload_catalog WHERE singleton=1`).Scan(&revision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrConfigurationConflict
+	}
+	if err != nil {
 		return err
 	}
 	if e.ConfigurationRevision == "" || revision != e.ConfigurationRevision {

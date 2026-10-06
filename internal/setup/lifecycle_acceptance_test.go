@@ -76,7 +76,7 @@ func TestAcceptanceRemovalRefusesUntrustedOwnership(t *testing.T) {
 func TestAcceptanceEnablePreservesUserDirectoryAndRecordConflicts(t *testing.T) {
 	for _, kind := range []string{"blocked-user-dir", "blocked-wants", "blocked-record"} {
 		t.Run(kind, func(t *testing.T) {
-			home, _ := fixture(t)
+			backend, home, _ := fixture(t)
 			root := filepath.Join(home, ".config/gpu-workload-supervisor")
 			if err := os.MkdirAll(root, 0700); err != nil {
 				t.Fatal(err)
@@ -91,11 +91,11 @@ func TestAcceptanceEnablePreservesUserDirectoryAndRecordConflicts(t *testing.T) 
 					t.Fatal(err)
 				}
 			}
-			runCommand = func(context.Context, string, ...string) ([]byte, error) {
+			backend.runCommand = func(context.Context, string, ...string) ([]byte, error) {
 				t.Fatal("command ran before filesystem validation")
 				return nil, nil
 			}
-			if err := enableReconciliation(context.Background(), home, "/usr/bin/systemctl"); err == nil {
+			if err := backend.enableReconciliation(context.Background(), home, "/usr/bin/systemctl"); err == nil {
 				t.Fatal("unsafe enable accepted")
 			}
 		})
@@ -105,8 +105,8 @@ func TestAcceptanceEnablePreservesUserDirectoryAndRecordConflicts(t *testing.T) 
 func TestAcceptanceBackupTupleRejectsMissingOrMismatchedMembers(t *testing.T) {
 	for _, kind := range []string{"malformed-manifest", "malformed-profile", "release-mismatch", "missing-marker", "missing-catalog", "missing-binary", "public-destination", "blocked-destination", "invalid-catalog"} {
 		t.Run(kind, func(t *testing.T) {
-			home, r := fixture(t)
-			if err := Apply(context.Background(), home, r); err != nil {
+			backend, home, r := fixture(t)
+			if err := backend.Apply(context.Background(), home, r); err != nil {
 				t.Fatal(err)
 			}
 			root := filepath.Join(home, ".config/gpu-workload-supervisor")
@@ -162,10 +162,10 @@ func TestAcceptanceBackupTupleRejectsMissingOrMismatchedMembers(t *testing.T) {
 func TestAcceptanceInterruptedActivationRequiresReadableOriginalPlan(t *testing.T) {
 	for _, kind := range []string{"missing", "malformed"} {
 		t.Run(kind, func(t *testing.T) {
-			home, r := fixture(t)
+			backend, home, r := fixture(t)
 			ctx := context.Background()
-			runCommand = func(context.Context, string, ...string) ([]byte, error) { return nil, errors.New("interrupted enable") }
-			if err := Apply(ctx, home, r); err == nil {
+			backend.runCommand = func(context.Context, string, ...string) ([]byte, error) { return nil, errors.New("interrupted enable") }
+			if err := backend.Apply(ctx, home, r); err == nil {
 				t.Fatal("missing injected failure")
 			}
 			path := filepath.Join(home, ".config/gpu-workload-supervisor/activation.json")
@@ -174,7 +174,7 @@ func TestAcceptanceInterruptedActivationRequiresReadableOriginalPlan(t *testing.
 			} else {
 				acceptanceWrite(t, path, []byte("{"))
 			}
-			if err := Apply(ctx, home, r); err == nil {
+			if err := backend.Apply(ctx, home, r); err == nil {
 				t.Fatal("resumed without original activation")
 			}
 			marker, err := deployment.Read(r.Profile.StatePath)

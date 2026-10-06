@@ -1,7 +1,6 @@
 # Configured workloads
 
-Existing Text/Media flags remain supported for deployments without an accepted
-catalog. A catalog is a version 1 JSON object containing 1–32 `profiles`:
+A catalog is a version 1 JSON object containing 1–32 `profiles`:
 
 ```json
 {
@@ -58,13 +57,13 @@ legacy state requires first reaching safe Idle using existing controls.
 Runtime commands use the durable snapshot, never silently re-read a catalog file:
 
 ```sh
-gpu-mode -state /absolute/state.db -configured -systemctl /usr/bin/systemctl reconcile
-gpu-mode -state /absolute/state.db -configured -systemctl /usr/bin/systemctl -workload speech switch
-gpu-mode -state /absolute/state.db -configured -systemctl /usr/bin/systemctl status
+gpu-mode -state /absolute/state.db -systemctl /usr/bin/systemctl reconcile
+gpu-mode -state /absolute/state.db -systemctl /usr/bin/systemctl -workload speech switch
+gpu-mode -state /absolute/state.db -systemctl /usr/bin/systemctl status
 ```
 
-Flags precede the command, following Go's flag parser. Legacy per-workload flags
-conflict with catalog configuration. Existing `text`, `media`, `idle` and ownership
+Flags precede the command, following Go's flag parser. Existing `text`, `media`,
+`idle` and ownership
 commands remain available; targets must be present in the effective catalog.
 Proxies accept configured workload IDs and SQLite validates registration against
 the accepted catalog and active allocation. Automation grants remain explicit:
@@ -72,7 +71,7 @@ adding a workload never grants an existing principal permission to select it.
 
 Schema v11 rebuilds workload-constrained tables transactionally, retaining state,
 fences, registrations, tokens, transitions, events and relationships. Older binaries
-reject this schema. Rollback follows [RESTORING.md](../RESTORING.md), using a
+reject this schema. Rollback follows [RESTORING.md](RESTORING.md), using a
 compatible verified backup and binary/configuration pair; never edit schema
 metadata or downgrade a live database.
 

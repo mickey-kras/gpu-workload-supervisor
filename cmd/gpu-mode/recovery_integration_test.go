@@ -60,6 +60,13 @@ func TestFreshCLIUserIdleRecoveryWiresConfiguredCgroups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	catalog := control.Catalog{Version: 1, Profiles: []control.Profile{
+		{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/workloads/text.service", HealthURL: "http://127.0.0.1:1/"},
+		{ID: "media", Label: "Media", Adapter: "systemd", Unit: "media.service", Cgroup: "/workloads/media.service", HealthURL: "http://127.0.0.1:1/"},
+	}}
+	if _, err := stateStore.ReplaceCatalog(ctx, "", catalog); err != nil {
+		t.Fatal(err)
+	}
 	if err := stateStore.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -72,11 +79,16 @@ func TestFreshCLIUserIdleRecoveryWiresConfiguredCgroups(t *testing.T) {
 		}
 		t.Cleanup(func() { output.Close() })
 		os.Stdout = output
-		os.Args = []string{"gpu-mode", "-state", statePath, "-text-unit", "text.service", "-media-unit", "media.service", "-text-cgroup", "/workloads/text.service", "-media-cgroup", "/workloads/media.service", "-text-health-url", "http://127.0.0.1:1/", "-media-health-url", "http://127.0.0.1:1/", "-media-stop-mode", "stop-service", "-systemctl", "/usr/bin/true", "-target", "idle", "recover-user"}
+		os.Args = []string{"gpu-mode", "-state", statePath, "-systemctl", "/usr/bin/true", "-target", "idle", "recover-user"}
 		runtime := &stoppedRecoveryRuntime{}
 		factory := func(config gpuruntime.SystemdConfig) (gpuruntime.Manager, error) {
-			if config.TextCgroup != "/workloads/text.service" || config.MediaCgroup != "/workloads/media.service" || config.MediaStopMode != gpuruntime.MediaStopService {
-				t.Fatalf("CLI dropped explicit identity: %#v", config)
+			if config.Catalog == nil {
+				t.Fatalf("accepted catalog not pinned: %#v", config)
+			}
+			text, _ := config.Catalog.Profile("text")
+			media, _ := config.Catalog.Profile("media")
+			if text.Cgroup != "/workloads/text.service" || media.Cgroup != "/workloads/media.service" {
+				t.Fatalf("CLI dropped accepted identity: %#v", config.Catalog)
 			}
 			return runtime, nil
 		}

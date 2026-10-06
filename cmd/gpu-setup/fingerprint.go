@@ -7,13 +7,10 @@ import (
 	"io"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 )
 
-var inspectLaunch = runtime.InspectQualifiedNativeLaunch
-
 // fingerprint qualifies an explicit launch file without executing or modifying it.
-func fingerprint(input io.Reader, output io.Writer) error {
+func (a setupActions) fingerprint(input io.Reader, output io.Writer) error {
 	data, err := io.ReadAll(io.LimitReader(input, 16385))
 	if err != nil {
 		return err
@@ -32,7 +29,7 @@ func fingerprint(input io.Reader, output io.Writer) error {
 	if decoder.Decode(new(json.RawMessage)) != io.EOF {
 		return errors.New("trailing fingerprint request")
 	}
-	hash, err := inspectLaunch(request.Binding.LaunchFile, request.Binding)
+	hash, err := a.inspect(request.Binding.LaunchFile, request.Binding)
 	if err != nil {
 		return err
 	}

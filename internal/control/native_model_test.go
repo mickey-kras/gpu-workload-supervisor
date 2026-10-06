@@ -3,7 +3,7 @@ package control
 import "testing"
 
 func TestNativeModelCatalogBinding(t *testing.T) {
-	c := acceptanceCatalog()
+	c := validCatalog()
 	c.Profiles[0].NativeModel = &NativeModel{Runtime: "ollama", Instance: "local", Model: "a:latest", Endpoint: "http://127.0.0.1:11434", LaunchFile: "/units/a.service", LaunchSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)

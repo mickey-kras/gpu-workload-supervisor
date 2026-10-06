@@ -22,6 +22,10 @@ type Discovery struct {
 }
 
 func Discover(ctx context.Context, home string) (Discovery, error) {
+	return SystemBackend().Discover(ctx, home)
+}
+
+func (b Backend) Discover(ctx context.Context, home string) (Discovery, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	result := Discovery{Request: Request{Version: 1, Profile: Profile{Version: 1, StatePath: filepath.Join(home, ".local/state/gpu-workload-supervisor/state.db"), SystemctlPath: "/usr/bin/systemctl", NvidiaSMIPath: "/usr/bin/nvidia-smi"}, Catalog: control.Catalog{Version: 1}}}
@@ -47,7 +51,7 @@ func Discover(ctx context.Context, home string) (Discovery, error) {
 			return result, err
 		}
 	}
-	output, err := runCommand(ctx, "/usr/bin/systemctl", "--user", "list-unit-files", "--type=service", "--no-legend", "--no-pager")
+	output, err := b.runCommand(ctx, "/usr/bin/systemctl", "--user", "list-unit-files", "--type=service", "--no-legend", "--no-pager")
 	if err != nil {
 		return result, err
 	}
@@ -55,7 +59,7 @@ func Discover(ctx context.Context, home string) (Discovery, error) {
 		return result, errors.New("unit discovery output too large")
 	}
 	result.Units = []string{}
-	discoverApplications(ctx, &result, serviceUnits(output))
+	b.discoverApplications(ctx, &result, serviceUnits(output))
 	return result, nil
 }
 

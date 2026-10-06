@@ -15,11 +15,12 @@ backup contents and the durable state directory with the service identity's priv
 permissions. Verify backup integrity and retain the previous binary/configuration
 before the new binary or proxy opens state and applies migrations.
 
-Before upgrading, add an explicit `-media-stop-mode unload` or
-`-media-stop-mode stop-service` to every runtime CLI configuration. The previous
-implicit choice is no longer accepted. `stop-service` is the only qualified media release path. Live-media `unload`
-remains unsupported because release cannot currently be verified, even with a
-configured release endpoint. See the [deployment policy](DEPLOYMENT.md).
+Before upgrading, select each media profile's stop policy explicitly through its
+catalog `adapter`. The previous implicit choice is no longer accepted. The
+`systemd` adapter stops the unit and is the only qualified media release path.
+The compatibility `media-unload` adapter remains unsupported for live media
+because release cannot currently be verified, even with a configured release
+endpoint. See the [deployment policy](DEPLOYMENT.md).
 `restore-state` and `prune-audit` need no media stop policy.
 
 An ordinary restart against the unchanged database is not a restore. After an

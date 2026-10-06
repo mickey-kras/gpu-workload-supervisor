@@ -9,16 +9,18 @@ import (
 	"net/http"
 )
 
-type catalogReader interface {
+type CatalogStore interface {
+	StateStore
 	Catalog(context.Context) (control.CatalogSnapshot, error)
+	AdmitWorkTokenAtCatalog(context.Context, string, string, control.Workload, control.Fence, string) (string, error)
 }
 
-func nativePolicy(stateStore StateStore, config Config) (*control.NativeModel, string, error) {
-	reader, ok := stateStore.(catalogReader)
+func nativePolicy(ctx context.Context, stateStore StateStore, config Config) (*control.NativeModel, string, error) {
+	reader, ok := stateStore.(CatalogStore)
 	if !ok {
 		return nil, "", nil
 	}
-	snapshot, err := reader.Catalog(context.Background())
+	snapshot, err := reader.Catalog(ctx)
 	if err != nil {
 		return nil, "", err
 	}
@@ -61,7 +63,7 @@ func nativeReadRoute(runtime, path string) bool {
 	return runtime == "ollama" && (path == "/api/tags" || path == "/api/ps" || path == "/api/version")
 }
 func (h *Handler) checkNativeCatalog(w http.ResponseWriter, r *http.Request) bool {
-	reader, ok := h.store.(catalogReader)
+	reader, ok := h.store.(CatalogStore)
 	if !ok {
 		return true
 	}
@@ -90,17 +92,10 @@ func (h *Handler) checkNativeRequest(w http.ResponseWriter, r *http.Request) boo
 	return true
 }
 
-type catalogAdmitter interface {
-	AdmitWorkTokenAtCatalog(context.Context, string, string, control.Workload, control.Fence, string) (string, error)
-}
-
 func (h *Handler) admitExecution(ctx context.Context, requestID, jobID string, fence control.Fence) (string, error) {
-	if _, bound := h.store.(catalogReader); !bound {
-		return h.store.AdmitWorkToken(ctx, requestID, jobID, h.workload, fence)
-	}
-	admitter, ok := h.store.(catalogAdmitter)
+	admitter, ok := h.store.(CatalogStore)
 	if !ok {
-		return "", errors.New("native catalog admission unavailable")
+		return h.store.AdmitWorkToken(ctx, requestID, jobID, h.workload, fence)
 	}
 	return admitter.AdmitWorkTokenAtCatalog(ctx, requestID, jobID, h.workload, fence, h.catalogRevision)
 }

@@ -6,11 +6,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"net/url"
 	"os"
 	"path/filepath"
 
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	_ "modernc.org/sqlite"
 )

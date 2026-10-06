@@ -32,8 +32,11 @@ type StateStore interface {
 	DurableStatePath() string
 	AcquireUserExecution(context.Context, bool) (*lock.File, error)
 	State(context.Context) (control.State, error)
+	Catalog(context.Context) (control.CatalogSnapshot, error)
 	UpdateState(context.Context, uint64, control.State) (control.State, error)
 	StartTransition(context.Context, uint64, store.Transition) (control.State, error)
+	StartTransitionConditional(context.Context, control.Precondition, store.Transition) (control.State, error)
+	StartOperatorTransition(context.Context, control.OperatorPrecondition, store.Transition) (control.State, error)
 	SetTransitionPhase(context.Context, string, uint64, control.Phase) (control.State, error)
 	FinishTransition(context.Context, string, string, uint64, control.State) (control.State, error)
 	AppendTransitionEvent(context.Context, store.TransitionEvent) error

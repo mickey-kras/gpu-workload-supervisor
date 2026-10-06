@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
 // NativeModel binds an existing per-model service to its runtime API identity.
@@ -48,7 +50,7 @@ func (n NativeModel) validate() error {
 // ValidateModelRequest rejects ambiguous JSON and lifecycle overrides before
 // any native model request can be registered or forwarded.
 func ValidateModelRequest(body []byte, model string) error {
-	if err := uniqueKeys(json.NewDecoder(bytes.NewReader(body))); err != nil {
+	if err := strictjson.Check(json.NewDecoder(bytes.NewReader(body))); err != nil {
 		return err
 	}
 	var value map[string]json.RawMessage

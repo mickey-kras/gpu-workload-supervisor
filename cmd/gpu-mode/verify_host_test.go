@@ -29,6 +29,13 @@ func TestVerifyHostDoesNotOpenState(t *testing.T) {
 			if err := os.WriteFile(path, before, 0600); err != nil {
 				t.Fatal(err)
 			}
+			catalog := filepath.Join(t.TempDir(), "catalog.json")
+			raw := `{"version":1,"profiles":[` +
+				`{"id":"text","label":"Text","adapter":"systemd","unit":"text.service","cgroup":"/workloads/text.service","healthURL":"http://127.0.0.1:1/"},` +
+				`{"id":"media","label":"Media","adapter":"systemd","unit":"media.service","cgroup":"/workloads/media.service","healthURL":"http://127.0.0.1:1/"}]}`
+			if err := os.WriteFile(catalog, []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
 			oldArgs := os.Args
 			t.Cleanup(func() { os.Args = oldArgs })
 			timeout := "1s"
@@ -38,7 +45,7 @@ func TestVerifyHostDoesNotOpenState(t *testing.T) {
 			if scenario == "invalid timeout" {
 				timeout = "0s"
 			}
-			os.Args = []string{"gpu-mode", "-state", path, "-text-unit", "text.service", "-media-unit", "media.service", "-text-cgroup", "/workloads/text.service", "-media-cgroup", "/workloads/media.service", "-text-health-url", "http://127.0.0.1:1/", "-media-health-url", "http://127.0.0.1:1/", "-media-stop-mode", "stop-service", "-systemctl", "/usr/bin/true", "-action-timeout", timeout, "verify-host"}
+			os.Args = []string{"gpu-mode", "-state", path, "-catalog", catalog, "-systemctl", "/usr/bin/true", "-action-timeout", timeout, "verify-host"}
 			called := false
 			runtime := &hostProbeRuntime{probe: func(ctx context.Context) error {
 				called = true

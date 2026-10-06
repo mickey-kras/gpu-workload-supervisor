@@ -10,38 +10,62 @@ import (
 	"os"
 	"time"
 
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/setup"
 )
 
-var homeForSetup = setup.Home
-var applySetup = setup.Apply
-var reconcileSetup = setup.Reconcile
-var discoverSetup = setup.Discover
-var probeSetup = setup.Probe
-var effectiveUID = os.Geteuid
-var verifyBindings = setup.VerifyBindings
+type setupActions struct {
+	home      func() (string, error)
+	apply     func(context.Context, string, setup.Request) error
+	reconcile func(context.Context, string) error
+	discover  func(context.Context, string) (setup.Discovery, error)
+	probe     func(context.Context, setup.ProbeRequest) (setup.ApplicationCandidate, error)
+	euid      func() int
+	verify    func(context.Context, setup.Request) error
+	inspect   func(string, control.NativeModel) (string, error)
+}
+
+func systemActions() setupActions {
+	return setupActions{
+		home:      setup.Home,
+		apply:     setup.Apply,
+		reconcile: setup.Reconcile,
+		discover:  setup.Discover,
+		probe:     setup.Probe,
+		euid:      os.Geteuid,
+		verify:    setup.VerifyBindings,
+		inspect:   runtime.InspectQualifiedNativeLaunch,
+	}
+}
 
 func main() {
-	if err := run(os.Args[1:], os.Stdin, os.Stdout); err != nil {
+	if err := systemActions().run(os.Args[1:], os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
-func run(args []string, input io.Reader, output io.Writer) error {
+func (a setupActions) run(args []string, input io.Reader, output io.Writer) error {
 	if len(args) != 1 {
 		return errors.New("usage: gpu-setup discover|probe|fingerprint|drafts|save-drafts|verify-bindings|validate|apply|reconcile|remove-integration")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	home, err := homeForSetup()
+	home, err := a.home()
 	if err != nil {
 		return err
+	}
+	switch args[0] {
+	case "discover", "fingerprint", "probe", "reconcile", "save-drafts", "verify-bindings", "validate", "apply":
+		if a.euid() == 0 {
+			return errors.New("run guided setup as the desktop account, not root")
+		}
 	}
 	if args[0] == "remove-integration" {
 		return setup.RemoveIntegration(home)
 	}
 	if args[0] == "discover" {
-		result, err := discoverSetup(ctx, home)
+		result, err := a.discover(ctx, home)
 		if err != nil {
 			return err
 		}
@@ -55,40 +79,17 @@ func run(args []string, input io.Reader, output io.Writer) error {
 		return json.NewEncoder(output).Encode(result)
 	}
 	if args[0] == "save-drafts" {
-		if effectiveUID() == 0 {
-			return errors.New("run guided setup as the desktop account, not root")
-		}
-		var request setup.DraftRequest
-		data, err := io.ReadAll(io.LimitReader(input, 65537))
-		if err != nil {
-			return err
-		}
-		if len(data) > 65536 {
-			return errors.New("draft request exceeds 64 KiB")
-		}
-		decoder := json.NewDecoder(bytes.NewReader(data))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&request); err != nil {
-			return err
-		}
-		if err := decoder.Decode(new(any)); err != io.EOF {
-			return errors.New("trailing draft request")
-		}
-		result, err := setup.SaveDrafts(home, request)
-		if err != nil {
-			return err
-		}
-		return json.NewEncoder(output).Encode(result)
+		return saveDrafts(home, input, output)
 	}
 	if args[0] == "fingerprint" {
-		return fingerprint(input, output)
+		return a.fingerprint(input, output)
 	}
 	if args[0] == "probe" {
 		request, err := setup.DecodeProbe(input)
 		if err != nil {
 			return err
 		}
-		result, err := probeSetup(ctx, request)
+		result, err := a.probe(ctx, request)
 
 		if err != nil {
 			return err
@@ -96,7 +97,7 @@ func run(args []string, input io.Reader, output io.Writer) error {
 		return json.NewEncoder(output).Encode(result)
 	}
 	if args[0] == "reconcile" {
-		return reconcileSetup(ctx, home)
+		return a.reconcile(ctx, home)
 	}
 	if args[0] != "validate" && args[0] != "apply" && args[0] != "verify-bindings" {
 		return errors.New("unknown setup action")
@@ -110,21 +111,38 @@ func run(args []string, input io.Reader, output io.Writer) error {
 		return err
 	}
 	if args[0] == "verify-bindings" {
-		if err := verifyBindings(ctx, request); err != nil {
+		if err := a.verify(ctx, request); err != nil {
 			return err
 		}
 	}
 	if args[0] == "apply" {
-		if err := applyAsDesktopAccount(ctx, home, request); err != nil {
+		if err := a.apply(ctx, home, request); err != nil {
 			return err
 		}
 	}
 	return json.NewEncoder(output).Encode(preview)
 }
 
-func applyAsDesktopAccount(ctx context.Context, home string, request setup.Request) error {
-	if effectiveUID() == 0 {
-		return errors.New("run guided setup as the desktop account, not root")
+func saveDrafts(home string, input io.Reader, output io.Writer) error {
+	var request setup.DraftRequest
+	data, err := io.ReadAll(io.LimitReader(input, 65537))
+	if err != nil {
+		return err
 	}
-	return applySetup(ctx, home, request)
+	if len(data) > 65536 {
+		return errors.New("draft request exceeds 64 KiB")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		return err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return errors.New("trailing draft request")
+	}
+	result, err := setup.SaveDrafts(home, request)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(output).Encode(result)
 }

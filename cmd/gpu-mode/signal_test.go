@@ -25,7 +25,7 @@ func TestPruneAuditSignalHelper(t *testing.T) {
 
 func TestPruneAuditInterruptedWhileControllerLockHeld(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.db")
-	held, err := lock.Acquire(statePath + ".lock")
+	held, err := lock.AcquireContext(context.Background(), statePath+".lock", false)
 	if err != nil {
 		t.Fatal(err)
 	}

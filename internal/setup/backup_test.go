@@ -81,9 +81,9 @@ func TestReadOnlyInspectionBackupAndUnsafeStates(t *testing.T) {
 	}
 }
 func TestBinaryTupleCorruptionAndPreservation(t *testing.T) {
-	home, r := fixture(t)
+	backend, home, r := fixture(t)
 	ctx := context.Background()
-	if err := Apply(ctx, home, r); err != nil {
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
@@ -113,14 +113,14 @@ func TestBinaryTupleCorruptionAndPreservation(t *testing.T) {
 	if err := copyActivation(root, t.TempDir(), profile); err == nil {
 		t.Fatal("missing manifest")
 	}
-	if err := os.Chmod(filepath.Join(binaryDirectory, "gpu-mode"), 0777); err != nil {
+	if err := os.Chmod(filepath.Join(backend.binaryDirectory, "gpu-mode"), 0777); err != nil {
 		t.Fatal(err)
 	}
-	if err := retainBinaries(root); err == nil {
+	if err := backend.retainBinaries(root); err == nil {
 		t.Fatal("untrusted package binary")
 	}
-	os.Remove(filepath.Join(binaryDirectory, "gpu-mode"))
-	if err := retainBinaries(root); err == nil {
+	os.Remove(filepath.Join(backend.binaryDirectory, "gpu-mode"))
+	if err := backend.retainBinaries(root); err == nil {
 		t.Fatal("missing package binary")
 	}
 }

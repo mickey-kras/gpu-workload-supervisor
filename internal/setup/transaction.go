@@ -20,6 +20,7 @@ import (
 type Transaction struct {
 	Root    string
 	Changes map[string][]byte
+	write   func(path string, data []byte) error
 }
 type Hooks struct {
 	Quiescent func() error
@@ -39,8 +40,6 @@ type ownership struct {
 	Version int               `json:"version"`
 	Files   map[string]string `json:"files"`
 }
-
-var writeIntegration = deployment.AtomicWrite
 
 const manifestName = "ownership.json"
 const journalName = "transaction.json"
@@ -212,6 +211,10 @@ func (tx Transaction) prepare(path string, owned ownership, h Hooks) (journal, b
 }
 
 func (tx Transaction) applyFiles(pending journal, alreadyCommitted bool) error {
+	write := tx.write
+	if write == nil {
+		write = deployment.AtomicWrite
+	}
 	names := make([]string, 0, len(pending.Files))
 	for name := range pending.Files {
 		names = append(names, name)
@@ -226,7 +229,7 @@ func (tx Transaction) applyFiles(pending journal, alreadyCommitted bool) error {
 		if err == nil && digest(current) != digest(e.Before) && digest(current) != digest(e.After) {
 			return errors.New("integration changed during setup")
 		}
-		if err := writeIntegration(filepath.Join(tx.Root, name), e.After); err != nil {
+		if err := write(filepath.Join(tx.Root, name), e.After); err != nil {
 			if alreadyCommitted {
 				return err
 			}

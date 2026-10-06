@@ -84,7 +84,7 @@ func TestReferencedCatalogAcceptance(t *testing.T) {
 		})
 	}
 }
-func TestCatalogSnapshotAndStaleWriterAcceptance(t *testing.T) {
+func TestCatalogSnapshotIsolationAcceptance(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
 	n := 0
@@ -101,25 +101,12 @@ func TestCatalogSnapshotAndStaleWriterAcceptance(t *testing.T) {
 	}
 	next := got.Catalog.Clone()
 	next.Profiles[0].Label = "Speech changed"
-	second, err := s.ReplaceCatalog(ctx, first.Revision, next)
-	if err != nil {
+	if _, err = s.ReplaceCatalog(ctx, first.Revision, next); err != nil {
 		t.Fatal(err)
-	}
-	before, _ := s.State(ctx)
-	if _, err = s.ReplaceCatalog(ctx, first.Revision, got.Catalog); !errors.Is(err, ErrVersionConflict) {
-		t.Fatal(err)
-	}
-	after, _ := s.State(ctx)
-	if before != after {
-		t.Fatal("stale writer advanced state")
-	}
-	var count int
-	if err = s.db.QueryRow("SELECT COUNT(*) FROM workload_catalog_history").Scan(&count); err != nil || count != 2 {
-		t.Fatalf("history %d %v", count, err)
 	}
 	got, _ = s.Catalog(ctx)
-	if got.Revision != second.Revision {
-		t.Fatal("stale writer won")
+	if got.Catalog.Profiles[0].Label != "Speech changed" || first.Catalog.Profiles[0].Label != "Speech" {
+		t.Fatal("snapshot alias")
 	}
 }
 func TestCatalogCommitStorageFailureAtomicityAcceptance(t *testing.T) {

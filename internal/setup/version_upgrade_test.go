@@ -43,12 +43,12 @@ func TestNewerRequiresHigherStableRelease(t *testing.T) {
 }
 
 func TestApplySnapshotReapplyAndHigherStableUpgrade(t *testing.T) {
-	home, request := fixture(t)
+	backend, home, request := fixture(t)
 	ctx := context.Background()
 	prior := deployment.Release
 	t.Cleanup(func() { deployment.Release = prior })
 	deployment.Release = "0.1.7-SNAPSHOT-5f16eb4"
-	if err := Apply(ctx, home, request); err != nil {
+	if err := backend.Apply(ctx, home, request); err != nil {
 		t.Fatal(err)
 	}
 	catalog, err := ReadCatalog(ctx, request.Profile.StatePath)
@@ -56,12 +56,12 @@ func TestApplySnapshotReapplyAndHigherStableUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	request.ExpectedRevision = catalog.Revision
-	if err := Apply(ctx, home, request); err != nil {
+	if err := backend.Apply(ctx, home, request); err != nil {
 		t.Fatal("same snapshot reapply rejected:", err)
 	}
 	for _, rejected := range []string{"0.1.7", "0.1.6", "0.1.8-SNAPSHOT-ffffff", "0.1.8-", "dev"} {
 		deployment.Release = rejected
-		if err := Apply(ctx, home, request); err == nil {
+		if err := backend.Apply(ctx, home, request); err == nil {
 			t.Fatalf("unsafe target %q accepted", rejected)
 		}
 		marker, err := deployment.Read(request.Profile.StatePath)
@@ -70,13 +70,13 @@ func TestApplySnapshotReapplyAndHigherStableUpgrade(t *testing.T) {
 		}
 	}
 	deployment.Release = "0.1.8"
-	if err := Apply(ctx, home, request); err != nil {
+	if err := backend.Apply(ctx, home, request); err != nil {
 		t.Fatal("snapshot to higher stable upgrade rejected:", err)
 	}
 	if err := deployment.Check(request.Profile.StatePath, "0.1.8"); err != nil {
 		t.Fatal(err)
 	}
-	found, err := Discover(ctx, home)
+	found, err := backend.Discover(ctx, home)
 	if err != nil {
 		t.Fatal(err)
 	}

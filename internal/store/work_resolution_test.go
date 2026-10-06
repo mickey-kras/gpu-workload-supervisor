@@ -37,7 +37,7 @@ func TestResolveUnfinishedWorkRequiresClosedRotatedFenceAndAudits(t *testing.T) 
 	ctx := context.Background()
 	stateStore := testStore(t)
 	opened := admittedResolutionWork(t, stateStore)
-	if _, err := stateStore.ResolveUnfinishedWork(ctx, opened.Version, "incident-123"); !errors.Is(err, ErrAdmissionClosed) {
+	if _, err := stateStore.ResolveUnfinishedWork(ctx, opened.Version, "incident-123"); !errors.Is(err, ErrAdmissionOpen) {
 		t.Fatalf("open admission accepted: %v", err)
 	}
 	closed := opened

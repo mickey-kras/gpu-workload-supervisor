@@ -13,6 +13,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
 const AdapterMediaUnload = "media-unload"
@@ -54,7 +56,10 @@ func DecodeCatalog(r io.Reader) (Catalog, error) {
 	if len(raw) > 65536 {
 		return c, errors.New("catalog exceeds 64 KiB")
 	}
-	if err = uniqueKeys(json.NewDecoder(bytes.NewReader(raw))); err != nil {
+	if err = strictjson.Check(json.NewDecoder(bytes.NewReader(raw))); err != nil {
+		if errors.Is(err, strictjson.ErrDuplicateKey) {
+			return c, errors.New("duplicate catalog key")
+		}
 		return c, err
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
@@ -102,32 +107,6 @@ func (c Catalog) Validate() error {
 		}
 	}
 	return nil
-}
-
-func uniqueKeys(d *json.Decoder) error {
-	token, err := d.Token()
-	if err != nil {
-		return err
-	}
-	delim, ok := token.(json.Delim)
-	if !ok {
-		return nil
-	}
-	if delim == '{' {
-		if err := uniqueObjectKeys(d); err != nil {
-			return err
-		}
-	} else if delim == '[' {
-		for d.More() {
-			if err := uniqueKeys(d); err != nil {
-				return err
-			}
-		}
-	} else {
-		return errors.New("invalid catalog JSON")
-	}
-	_, err = d.Token()
-	return err
 }
 
 // ValidWorkloadLabel is shared with local presentation protocols.
@@ -206,25 +185,6 @@ func validateProfileOverlap(p Profile, previous []Profile) error {
 		}
 		if p.ID == q.ID || p.Unit == q.Unit || p.Cgroup == q.Cgroup || strings.HasPrefix(p.Cgroup, q.Cgroup+"/") || strings.HasPrefix(q.Cgroup, p.Cgroup+"/") {
 			return errors.New("duplicate or overlapping profiles")
-		}
-	}
-	return nil
-}
-
-func uniqueObjectKeys(d *json.Decoder) error {
-	seen := map[string]bool{}
-	for d.More() {
-		key, err := d.Token()
-		if err != nil {
-			return err
-		}
-		name, ok := key.(string)
-		if !ok || seen[name] {
-			return errors.New("duplicate catalog key")
-		}
-		seen[name] = true
-		if err := uniqueKeys(d); err != nil {
-			return err
 		}
 	}
 	return nil

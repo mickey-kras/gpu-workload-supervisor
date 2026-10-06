@@ -64,19 +64,34 @@ export function addDraftEditor({Adw, Gtk, window, parent, initial, detected, com
         }
         changed(draft.snapshot());
     }
+    watchInstanceSelection({instance, instances, draft, endpoint, reference, clearBinding, show,
+        getBindingFields: () => bindingFields, setSync: value => syncing = value});
+    addRefreshButton({Gtk, group, draft, status, command, show});
+    addFilePickers({Gtk, window, group, draft, reference, endpoint, status, changed, clearBinding, clearModels, setSync: value => syncing = value});
+    bindingFields = addBindingEditor({Adw, Gtk, group, draft, initial, status, parent, removed, bind, command, changed});
+    const remove = new Gtk.Button({label: 'Remove draft from supervisor'}); group.add(remove);
+    remove.connect('clicked', () => { draft.cancel(); parent.remove(group); removed(); });
+    parent.append(group);
+    return {cancel: () => draft.cancel()};
+}
+
+function watchInstanceSelection({instance, instances, draft, endpoint, reference, clearBinding, show, getBindingFields, setSync}) {
     instance.connect('notify::selected', () => {
         const selected = instances[instance.selected - 1];
         if (!selected) return;
         clearBinding();
         draft.edit({endpoint: undefined, reference: undefined, referenceKind: undefined, model: ''});
-        syncing = true; endpoint.text = ''; syncing = false;
+        setSync(true); endpoint.text = ''; setSync(false);
         reference.label = 'No file or folder selected';
-        if (selected.endpoint) { draft.endpoint(selected.endpoint); syncing = true; endpoint.text = selected.endpoint; syncing = false; }
+        if (selected.endpoint) { draft.endpoint(selected.endpoint); setSync(true); endpoint.text = selected.endpoint; setSync(false); }
         else if (selected.reference) { draft.reference(selected.reference, selected.referenceKind); reference.label = selected.reference; }
         else draft.cancel();
-        for (const key of ['unit', 'cgroup']) if (selected[key]) bindingFields[key].text = selected[key];
+        for (const key of ['unit', 'cgroup']) if (selected[key]) getBindingFields()[key].text = selected[key];
         show(selected);
     });
+}
+
+function addRefreshButton({Gtk, group, draft, status, command, show}) {
     const refresh = new Gtk.Button({label: 'Refresh discovery'}); group.add(refresh);
     refresh.connect('clicked', async () => {
         const probe = draft.begin(); refresh.sensitive = false;
@@ -88,12 +103,6 @@ export function addDraftEditor({Adw, Gtk, window, parent, initial, detected, com
             if (probe.generation === draft.generation) status.label = `Discovery failed. Check the address or location, then retry.\n${error.message}`;
         } finally { refresh.sensitive = true; }
     });
-    addFilePickers({Gtk, window, group, draft, reference, endpoint, status, changed, clearBinding, clearModels, setSync: value => syncing = value});
-    bindingFields = addBindingEditor({Adw, Gtk, group, draft, initial, status, parent, removed, bind, command, changed});
-    const remove = new Gtk.Button({label: 'Remove draft from supervisor'}); group.add(remove);
-    remove.connect('clicked', () => { draft.cancel(); parent.remove(group); removed(); });
-    parent.append(group);
-    return {cancel: () => draft.cancel()};
 }
 
 function addFilePickers({Gtk, window, group, draft, reference, endpoint, status, changed, clearBinding, clearModels, setSync}) {

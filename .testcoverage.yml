@@ -6,13 +6,14 @@ threshold:
 # Existing packages below 90 remain explicit until their test gaps are closed.
 override:
   - path: ^internal/control$
-    threshold: 78
+    threshold: 86
   - path: ^internal/store$
     threshold: 85
   - path: ^cmd/gpu-mode$
     threshold: 93
   - path: ^cmd/gpu-workload-proxy$
     threshold: 90
+  # Retired package; entry kept until the policy guard accepts its removal.
   - path: ^internal/externalcontrol$
     threshold: 95
   - path: ^internal/lock$

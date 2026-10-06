@@ -121,3 +121,18 @@ func assertAuditTransitionIDs(t *testing.T, s *Store, table string, want []strin
 		t.Fatalf("%s retained IDs %v, want %v", table, got, want)
 	}
 }
+
+func TestPruneAuditHistoryRejectsInvalidCutoffAndLimit(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	for _, cutoff := range []time.Time{{}, s.now(), s.now().Add(time.Hour)} {
+		if _, err := s.PruneAuditHistory(ctx, cutoff, 1); err == nil {
+			t.Fatalf("cutoff %v accepted", cutoff)
+		}
+	}
+	for _, limit := range []int{0, -1, 1025} {
+		if _, err := s.PruneAuditHistory(ctx, s.now().Add(-time.Hour), limit); err == nil {
+			t.Fatalf("limit %d accepted", limit)
+		}
+	}
+}

@@ -95,12 +95,11 @@ type finishRequest struct {
 	Outcome           store.WorkOutcome `json:"outcome"`
 }
 
-func ValidateConfig(config Config) error {
-	_, _, _, _, err := validateConfig(config)
-	return err
+func New(stateStore StateStore, config Config) (*Handler, error) {
+	return NewWithContext(context.Background(), stateStore, config)
 }
 
-func New(stateStore StateStore, config Config) (*Handler, error) {
+func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (*Handler, error) {
 	if stateStore == nil {
 		return nil, errors.New("state store is required")
 	}
@@ -117,7 +116,7 @@ func New(stateStore StateStore, config Config) (*Handler, error) {
 	if config.FenceEpochHeader == "" {
 		config.FenceEpochHeader = DefaultFenceEpochHeader
 	}
-	native, revision, err := nativePolicy(stateStore, config)
+	native, revision, err := nativePolicy(ctx, stateStore, config)
 	if err != nil {
 		return nil, err
 	}
@@ -246,13 +245,16 @@ func validateDistinctControlHeaders(config Config) error {
 		fenceEpochHeader = DefaultFenceEpochHeader
 	}
 	headers := []string{requestIDHeader, fenceIDHeader, fenceEpochHeader, DefaultRegistrationTokenHeader}
+	if config.JobIDHeader != "" {
+		headers = append(headers, config.JobIDHeader)
+	}
 	for i, header := range headers {
 		if i < 3 && reservedTransportHeader(header) {
 			return errors.New("control header cannot be a hop-by-hop or transport header")
 		}
 		for _, previous := range headers[:i] {
 			if strings.EqualFold(header, previous) {
-				return errors.New("request ID, fence, and registration token headers must be distinct")
+				return errors.New("request ID, job ID, fence, and registration token headers must be distinct")
 			}
 		}
 	}

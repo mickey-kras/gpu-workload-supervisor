@@ -22,6 +22,7 @@ const (
 )
 
 var ErrNoUnfinishedWork = errors.New("no unfinished work to resolve")
+var ErrAdmissionOpen = errors.New("admission must be closed for work resolution")
 
 // ResolveUnfinishedWork is reserved for verified operator recovery. The caller
 // must quiesce all proxy processes and stop/verify both runtimes first. This
@@ -45,7 +46,7 @@ func (s *Store) ResolveUnfinishedWork(ctx context.Context, expected uint64, reas
 		return 0, ErrVersionConflict
 	}
 	if state.Admission != control.AdmissionClosed {
-		return 0, ErrAdmissionClosed
+		return 0, ErrAdmissionOpen
 	}
 	if state.Owner != control.OwnerSupervisor {
 		return 0, errors.New("supervisor ownership required for work resolution")
@@ -85,9 +86,6 @@ func (s *Store) ResolveUnfinishedWork(ctx context.Context, expected uint64, reas
 	return count, nil
 }
 
-func (s *Store) beginAdmittedWork(ctx context.Context, requestID string, workload control.Workload, fence control.Fence) (*sql.Tx, error) {
-	return s.beginAdmittedWorkAtCatalog(ctx, requestID, workload, fence, nil)
-}
 func (s *Store) beginAdmittedWorkAtCatalog(ctx context.Context, requestID string, workload control.Workload, fence control.Fence, revision *string) (*sql.Tx, error) {
 	if err := control.ValidateRequestID(requestID); err != nil {
 		return nil, err
@@ -105,16 +103,14 @@ func (s *Store) beginAdmittedWorkAtCatalog(ctx context.Context, requestID string
 			_ = tx.Rollback()
 		}
 	}()
-	if revision != nil {
-		catalog, err := readCatalog(ctx, tx)
-		if err != nil {
-			return nil, err
-		}
-		if catalog.Revision != *revision {
-			return nil, ErrVersionConflict
-		}
+	catalog, err := readCatalog(ctx, tx)
+	if err != nil {
+		return nil, err
 	}
-	if err := validateAdmittedCatalog(ctx, tx, workload); err != nil {
+	if revision != nil && catalog.Revision != *revision {
+		return nil, ErrVersionConflict
+	}
+	if err := validateAdmittedCatalog(catalog, workload); err != nil {
 		return nil, err
 	}
 	state, err := readState(ctx, tx)
@@ -356,11 +352,7 @@ func (s *Store) PendingWorkExcept(ctx context.Context, retained control.Workload
 	return pending, err
 }
 
-func validateAdmittedCatalog(ctx context.Context, tx *sql.Tx, workload control.Workload) error {
-	catalog, err := readCatalog(ctx, tx)
-	if err != nil {
-		return err
-	}
+func validateAdmittedCatalog(catalog control.CatalogSnapshot, workload control.Workload) error {
 	if catalog.Revision != "" {
 		if _, ok := catalog.Catalog.Profile(workload); !ok {
 			return ErrWorkloadMismatch

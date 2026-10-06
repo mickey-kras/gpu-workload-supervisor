@@ -6,18 +6,21 @@ Requires Linux with user-systemd and cgroup v2. Install a [verified release](REL
 
 ## Controller configuration
 
-Runtime identities, health endpoints, release behavior, and measured capacity requirements are deployment configuration:
+Runtime identities, health endpoints, release behavior, and measured capacity requirements are deployment configuration. They live in a version 1 workload [catalog](WORKLOADS.md), accepted durably while holding the controller gate:
 
 ```sh
 /PINNED/RELEASE/gpu-mode \
   -state /PRIVATE/DURABLE/STATE/state.db \
-  -text-unit TEXT.service \
-  -media-unit MEDIA.service \
-  -text-health-url http://127.0.0.1:PORT/health \
-  -media-health-url http://127.0.0.1:PORT/health \
-  -media-stop-mode stop-service \
-  -text-cgroup /DEPLOYMENT/CGROUP/TEXT.service \
-  -media-cgroup /DEPLOYMENT/CGROUP/MEDIA.service \
+  -catalog /PRIVATE/catalog.json \
+  configure
+```
+
+Every other runtime command pins the accepted catalog from state and fails
+before any effect when none has been accepted:
+
+```sh
+/PINNED/RELEASE/gpu-mode \
+  -state /PRIVATE/DURABLE/STATE/state.db \
   -systemctl /ABSOLUTE/PATH/systemctl \
   status
 ```
@@ -26,11 +29,12 @@ The uppercase paths, unit names, and `PORT` values are placeholders. Select a
 checksummed release and use its absolute version-pinned binary paths for the CLI
 and every proxy; do not rely on a mutable `PATH` selection. Keep one explicit
 `-state` path in a durable directory owned by the service identity with mode
-`0700`. Use the same state path, units, endpoints, cgroups, stop policy, capacity
-settings, trusted executables, and timeout flags in manual commands and automation.
-Put flags before the single command. In the examples below, `[runtime flags]`
-means this complete deployment configuration, including `-state`; it is not a
-literal CLI argument. `restore-state` needs only `-state`; `prune-audit` uses the [audit maintenance flags](OPERATIONS.md#retain-or-archive-audit-history).
+`0700`. Use the same state path, trusted executables, capacity settings, and
+timeout flags in manual commands and automation. Put flags before the single
+command. In the examples below, `[runtime flags]` means `-state` plus the
+trusted executable, capacity, and timeout flags; it is not a literal CLI
+argument. `configure` and `verify-host` take `-catalog` instead of pinning
+state. `restore-state` needs only `-state`; `prune-audit` uses the [audit maintenance flags](OPERATIONS.md#retain-or-archive-audit-history).
 Opening state, including through `status` or a proxy, can apply database migrations;
 back up before changing binaries.
 
@@ -43,8 +47,9 @@ keeps the existing error state. Before lifecycle effects, a capability preflight
 checks the host hierarchy, manager anchor, and unit mappings while allowing populated
 workload groups. Release checks still run after stopping to detect changes.
 
-Before opening state or enabling automation, run `gpu-mode [runtime flags]
-verify-host`. It checks those capabilities without creating state, acquiring
+Before opening state or enabling automation, run `gpu-mode -catalog
+/PRIVATE/catalog.json [probe flags] verify-host`. It checks those capabilities
+against a candidate catalog without creating state, acquiring
 state locks, migrating SQLite, or starting/stopping units. Exit status zero means
 the capability check passed; errors return nonzero. `-action-timeout` bounds the
 probe and Ctrl-C cancels it. This is not GPU release or workload health proof.
@@ -79,17 +84,19 @@ Unit completion or HTTP success never replaces recursive cgroup release evidence
 
 ## Verify workload release
 
-`stop-service` verifies both units are `inactive/dead` and their configured
-cgroup v2 subtrees have `cgroup.events` `populated 0`, which includes descendants.
+The `systemd` catalog adapter verifies both units are `inactive/dead` and their
+configured cgroup v2 subtrees have `cgroup.events` `populated 0`, which includes
+descendants.
 A removed workload cgroup is also released; missing events in an existing group,
 unreadable or malformed evidence, mismatched systemd metadata, and surviving
 children fail closed. The UI is unavailable outside media mode.
 
-Explicit `-media-stop-mode unload` sends the configured release request
+The compatibility `media-unload` adapter sends the configured release request
 and leaves the UI alive. **Live-media unload cannot currently be verified:** HTTP
 2xx does not prove the runtime has drained work and released models/resources, and
 no supported runtime-specific verifier is implemented. Release therefore fails
-closed promptly with an actionable error. Use `stop-service`, or explicitly stop media
+closed promptly with an actionable error. Use the `systemd` adapter, or explicitly
+stop media
 before recovery. Stopped media uses cgroup verification in either policy, including
 ownership changes and work resolution. Stopped text is always verified. Readiness
 and verify-only recovery also verify the opposing workload's release. Switching
@@ -98,13 +105,14 @@ it does not require unloading the destination itself.
 
 ## Configure cgroups
 
-Configure both cgroup paths from deployment knowledge of the actual systemd units
+Configure every profile's cgroup path from deployment knowledge of the actual
+systemd units
 (e.g. inspect `systemctl --user show --property=ControlGroup -- UNIT.service` while
 the unit is running). Paths are absolute **within** `/sys/fs/cgroup`, canonical,
 non-root, distinct, and non-overlapping. A nonempty systemd `ControlGroup` must
-match; an empty property after shutdown uses the explicit configuration, never an
-in-memory PID or path cache. Keep configuration consistent across CLI invocations
-and update it if unit placement changes. Blank metadata alone is not evidence.
+match; an empty property after shutdown uses the accepted catalog, never an
+in-memory PID or path cache. Accept an updated catalog if unit placement changes.
+Blank metadata alone is not evidence.
 All workload workers must remain in their configured subtree. Use the host unified
 cgroup v2 root mounted at `/sys/fs/cgroup`, alongside host user systemd. The same
 manager's loaded, active root `-.slice` must report an existing, readable cgroup
@@ -114,16 +122,17 @@ mappings are unsupported; missing or ambiguous manager anchors fail closed.
 
 ## Select an explicit media policy
 
-`-media-stop-mode` is required for runtime commands. Earlier versions defaulted to
-`unload`; add an explicit policy to every invocation before upgrading. Choose
-`stop-service` only after accepting that it stops the media UI and qualifying its
-unit shutdown. No omitted flag silently authorizes a service stop. `restore-state`
-requires no runtime policy.
+Every media profile selects its stop policy explicitly through its catalog
+`adapter`: `systemd` stops the unit, while the compatibility `media-unload`
+adapter sends the release request. Choose `systemd` only after accepting that it
+stops the media UI and qualifying its unit shutdown. No omitted field silently
+authorizes a service stop. `restore-state` requires no runtime policy.
 
 ## Migrate release checks
 
-**Migration:** remove `-release-max-used-mib` and configure both cgroup paths.
-Every explicit use of the old flag, including `=0`, is rejected before opening
+**Migration:** remove `-release-max-used-mib` and configure cgroup paths in the
+catalog. Every explicit use of the old flag, including `=0`, is rejected before
+opening
 state. Do not replace it with a larger threshold or a learned idle baseline.
 Release never queries total GPU memory or GPU process accounting: unrelated desktop
 allocations, PID reuse, and unavailable accounting cannot change the result.
@@ -132,9 +141,9 @@ cleanup has finished.
 
 ## Check capacity before startup
 
-Optional pre-start capacity checks use `-text-required-mib` and/or
-`-media-required-mib` (measured target requirements) plus
-`-capacity-headroom-mib`. A zero target requirement disables that target's check.
+Optional pre-start capacity checks use a profile's `requiredMiB` (measured target
+requirement) plus `-capacity-headroom-mib`. A zero or omitted target requirement
+disables that target's check.
 Configure `-nvidia-smi /ABSOLUTE/PATH/nvidia-smi` and `-gpu-index` when using these
 checks. Available `memory.free` must meet requirement plus headroom; delayed driver
 cleanup or other users can cause a distinct capacity error after successful
@@ -143,11 +152,13 @@ repair capacity before retrying. A capacity snapshot cannot reserve GPU memory.
 
 ## Validate configuration
 
-Invalid configuration is rejected: do not set headroom without at least one
-nonzero target requirement, overlap the workload cgroups, reuse one unit for both
-workloads, or omit the release URL under `unload`. `stop-service` does not need a
-release URL; if supplied, it is still validated. An unknown or empty stop policy
-is invalid. Both health URLs must be loopback URLs. The `systemctl` executable,
+Invalid configuration is rejected: a profile requirement plus headroom must not
+overflow, workload cgroups must not
+overlap, one unit must not serve two
+profiles, and the release URL is required under `media-unload`. The `systemd` adapter does
+not need a
+release URL; if supplied, it is still validated. An unknown adapter
+is invalid. Every health URL must be a loopback URL. The `systemctl` executable,
 and `nvidia-smi` when configured, must resolve to root-owned executable files under
 root-owned directories, with no group/world writable component. Supplying an
 obsolete flag is an error even for `status` or `restore-state`.
@@ -157,8 +168,8 @@ obsolete flag is an error even for `status` or `restore-state`.
 This policy provides service lifecycle exclusion, not request fencing. Disable
 independent runtime startup and updates in deployment configuration. Direct
 runtime requests bypass admission and registered-work draining; execution gates
-are still required for supervised requests. Use the same stop policy for every
-command sharing a state store.
+are still required for supervised requests. Every command sharing a state store
+pins the same durably accepted catalog.
 
 The state directory must be private and owned by the current user. Commands use an exclusive file lock. Opening the store applies pending migrations. Boot reconciliation does not resume incomplete work. Interrupted transitions and latched errors require explicit recovery.
 

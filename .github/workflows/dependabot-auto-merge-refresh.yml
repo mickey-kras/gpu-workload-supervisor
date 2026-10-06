@@ -3,7 +3,7 @@ name: dependabot auto-merge refresh
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "30 3 * * *"
 
 permissions:
   contents: write

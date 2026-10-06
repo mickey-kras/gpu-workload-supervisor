@@ -1,14 +1,17 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
 func TestManagedDeploymentRefusesBeforeDatabaseOpen(t *testing.T) {
@@ -32,9 +35,23 @@ func TestManagedDeploymentRefusesBeforeDatabaseOpen(t *testing.T) {
 }
 func TestLegacyRelativeStateWithoutMarkerStillOpens(t *testing.T) {
 	t.Chdir(t.TempDir())
+	ctx := context.Background()
+	stateStore, err := store.Open(ctx, "state.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := control.Catalog{Version: 1, Profiles: []control.Profile{
+		{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/workloads/text.service", HealthURL: "http://127.0.0.1:1/"},
+	}}
+	if _, err := stateStore.ReplaceCatalog(ctx, "", catalog); err != nil {
+		t.Fatal(err)
+	}
+	if err := stateStore.Close(); err != nil {
+		t.Fatal(err)
+	}
 	called := false
 	sentinel := errors.New("runtime reached")
-	err := executeWithState(func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error) { called = true; return nil, sentinel }, gpuruntime.SystemdConfig{}, "status", time.Time{}, modeExecution{statePath: "state.db"})
+	err = executeWithState(func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error) { called = true; return nil, sentinel }, gpuruntime.SystemdConfig{}, "status", time.Time{}, modeExecution{statePath: "state.db"})
 	if !called || !errors.Is(err, sentinel) {
 		t.Fatalf("legacy relative path failed: %v", err)
 	}

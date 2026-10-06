@@ -40,7 +40,7 @@ func TestAcceptanceProfileExactSchema(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "operator.json"), []byte(body), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := loadProfileAt(home, os.Geteuid()); err == nil {
+			if _, err := loadProfileHome(t, home, os.Geteuid()); err == nil {
 				t.Fatal("ambiguous profile schema accepted")
 			}
 		})
@@ -78,7 +78,7 @@ func TestAcceptanceProfileSpecialFilesAndAncestorLinks(t *testing.T) {
 				uid++
 			}
 			start := time.Now()
-			if _, err := loadProfileAt(home, uid); err == nil {
+			if _, err := loadProfileHome(t, home, uid); err == nil {
 				t.Fatal("untrusted path accepted")
 			}
 			if time.Since(start) > time.Second {

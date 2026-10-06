@@ -11,8 +11,6 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 )
 
-var binaryDirectory = "/usr/bin"
-var packageBinaryUID uint32 = 0
 var binaries = []string{"gpu-mode", "gpu-workload-proxy", "gpu-operator", "gpu-setup"}
 
 type binaryManifest struct {
@@ -20,19 +18,19 @@ type binaryManifest struct {
 	Hashes  map[string]string `json:"hashes"`
 }
 
-func retainBinaries(root string) error {
+func (b Backend) retainBinaries(root string) error {
 	directory := filepath.Join(root, "activated-binaries")
 	if err := mkdirTrusted(directory); err != nil {
 		return err
 	}
 	manifest := binaryManifest{Release: deployment.Release, Hashes: map[string]string{}}
 	for _, name := range binaries {
-		path := filepath.Join(binaryDirectory, name)
+		path := filepath.Join(b.binaryDirectory, name)
 		info, err := os.Lstat(path)
 		if err != nil {
 			return err
 		}
-		if !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 || info.Sys().(*syscall.Stat_t).Uid != packageBinaryUID {
+		if !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 || info.Sys().(*syscall.Stat_t).Uid != b.packageBinaryUID {
 			return errors.New("package executable is not trusted")
 		}
 		data, err := os.ReadFile(path)

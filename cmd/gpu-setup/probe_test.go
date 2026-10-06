@@ -11,11 +11,11 @@ import (
 )
 
 func TestRunProbe(t *testing.T) {
-	oldHome, oldProbe := homeForSetup, probeSetup
-	defer func() { homeForSetup = oldHome; probeSetup = oldProbe }()
-	homeForSetup = func() (string, error) { return t.TempDir(), nil }
+	actions := systemActions()
+	actions.home = func() (string, error) { return t.TempDir(), nil }
+	actions.euid = func() int { return 1000 }
 	for _, failed := range []bool{false, true} {
-		probeSetup = func(ctx context.Context, r setup.ProbeRequest) (setup.ApplicationCandidate, error) {
+		actions.probe = func(ctx context.Context, r setup.ProbeRequest) (setup.ApplicationCandidate, error) {
 			if r.App != "ollama" {
 				t.Fatal(r)
 			}
@@ -25,7 +25,7 @@ func TestRunProbe(t *testing.T) {
 			return setup.ApplicationCandidate{App: "ollama", LifecycleControl: "unverified"}, nil
 		}
 		var output bytes.Buffer
-		err := run([]string{"probe"}, strings.NewReader(`{"app":"ollama","endpoint":"http://127.0.0.1"}`), &output)
+		err := actions.run([]string{"probe"}, strings.NewReader(`{"app":"ollama","endpoint":"http://127.0.0.1"}`), &output)
 		if (err != nil) != failed {
 			t.Fatal(err)
 		}
@@ -33,7 +33,7 @@ func TestRunProbe(t *testing.T) {
 			t.Fatal(output.String())
 		}
 	}
-	if err := run([]string{"probe"}, strings.NewReader(`{}`), &bytes.Buffer{}); err == nil {
+	if err := actions.run([]string{"probe"}, strings.NewReader(`{}`), &bytes.Buffer{}); err == nil {
 		t.Fatal("bad probe accepted")
 	}
 }

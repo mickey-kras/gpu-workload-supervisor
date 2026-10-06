@@ -70,12 +70,12 @@ func TestCLIThirdCatalogWorkloadAndFailedReload(t *testing.T) {
 	if err = invoke("-catalog", file, "configure"); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"-configured", "reconcile"}, {"-configured", "-workload", "speech", "switch"}, {"-configured", "status"}} {
+	for _, args := range [][]string{{"reconcile"}, {"-workload", "speech", "switch"}, {"status"}} {
 		if err = invoke(args...); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err = invoke("-configured", "-workload", "unconfigured", "switch"); err == nil {
+	if err = invoke("-workload", "unconfigured", "switch"); err == nil {
 		t.Fatal("unconfigured target accepted")
 	}
 	if err = os.WriteFile(file, []byte(`{broken`), 0600); err != nil {
@@ -84,7 +84,7 @@ func TestCLIThirdCatalogWorkloadAndFailedReload(t *testing.T) {
 	if err = invoke("-catalog", file, "configure"); err == nil {
 		t.Fatal("invalid reload accepted")
 	}
-	if err = invoke("-configured", "status"); err != nil {
+	if err = invoke("status"); err != nil {
 		t.Fatal(err)
 	}
 	s, err := store.Open(context.Background(), statePath)

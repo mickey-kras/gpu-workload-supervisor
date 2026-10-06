@@ -18,6 +18,18 @@ var Release = "dev"
 
 const Suffix = ".deployment.json"
 
+// DefaultStatePath is the per-user default SQLite state location.
+func DefaultStatePath() string {
+	if root := os.Getenv("XDG_STATE_HOME"); root != "" {
+		return filepath.Join(root, "gpu-workload-supervisor", "state.db")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "state.db"
+	}
+	return filepath.Join(home, ".local", "state", "gpu-workload-supervisor", "state.db")
+}
+
 type Marker struct {
 	Version     int    `json:"version"`
 	Release     string `json:"release"`

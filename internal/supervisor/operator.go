@@ -52,19 +52,11 @@ func (c *Controller) OperatorTransition(ctx context.Context, action string, targ
 	return c.transitionConditional(ctx, target, "local-operator", transitionOptions{sourceOwner: source, targetOwner: dest, operator: &e, preserve: action == takeControlOperation})
 }
 
-type operatorStore interface {
-	StartOperatorTransition(context.Context, control.OperatorPrecondition, store.Transition) (control.State, error)
-}
-
 func (c *Controller) startRequestedTransition(ctx context.Context, version uint64, o transitionOptions, t store.Transition) (control.State, error) {
 	if o.operator == nil {
 		return c.startTransition(ctx, version, o.expected, t)
 	}
-	s, ok := c.store.(operatorStore)
-	if !ok {
-		return control.State{}, errors.New("store does not support operator transitions")
-	}
-	return s.StartOperatorTransition(ctx, *o.operator, t)
+	return c.store.StartOperatorTransition(ctx, *o.operator, t)
 }
 
 // failPreserving never executes lifecycle rollback: takeover has performed only

@@ -246,3 +246,28 @@ func TestConfigurationRejectsRelativeGPUProbe(t *testing.T) {
 		t.Fatal("expected GPU probe path validation failure")
 	}
 }
+
+func TestCatalogCapacityRequirementTriggersGPUProbeValidation(t *testing.T) {
+	config := testConfig()
+	if config.measuresCapacity() {
+		t.Fatal("zero requirements measured capacity")
+	}
+	config.TextRequiredMiB = 1
+	if !config.measuresCapacity() {
+		t.Fatal("measured text requirement ignored")
+	}
+	c := acceptanceCatalog()
+	config = testConfig()
+	config.Catalog = &c
+	if config.measuresCapacity() {
+		t.Fatal("zero profile requirements measured capacity")
+	}
+	c.Profiles[0].RequiredMiB = 100
+	config.NvidiaSMIPath = ""
+	if !config.measuresCapacity() {
+		t.Fatal("measured profile requirement ignored")
+	}
+	if _, err := newSystemdManager(config, &fakeRunner{}, http.DefaultClient); err == nil {
+		t.Fatal("catalog capacity check accepted missing GPU probe")
+	}
+}

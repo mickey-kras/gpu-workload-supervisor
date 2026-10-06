@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"golang.org/x/sys/unix"
 )
 
 // Fixtures emulate kernel evidence, not a list of PIDs. populated is recursive.
@@ -349,6 +350,36 @@ func TestManagerCgroupAnchorMustExistAndMatchBothWorkloads(t *testing.T) {
 		if err := m.Released(context.Background()); err == nil {
 			t.Fatalf("accepted %s manager anchor", evidence)
 		}
+	}
+}
+
+// Hermetic coverage of the production hierarchy probe wiring: the filesystem
+// check runs first, mountinfo failures propagate, and mount mappings decide.
+func TestHierarchyVerificationCombinesFilesystemAndMountEvidence(t *testing.T) {
+	valid := "1 2 0:1 / /sys/fs/cgroup rw - cgroup2 cgroup rw\n"
+	accept := func(int) error { return nil }
+	readMounts := func() (string, error) { return valid, nil }
+	if err := verifyHierarchy(-1, accept, readMounts); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := errors.New("probe failure")
+	if err := verifyHierarchy(-1, func(int) error { return sentinel }, readMounts); !errors.Is(err, sentinel) {
+		t.Fatalf("filesystem check bypassed: %v", err)
+	}
+	if err := verifyHierarchy(-1, accept, func() (string, error) { return "", sentinel }); !errors.Is(err, sentinel) {
+		t.Fatalf("mountinfo failure ignored: %v", err)
+	}
+	if err := verifyHierarchy(-1, accept, func() (string, error) { return "", nil }); err == nil {
+		t.Fatal("missing unified root accepted")
+	}
+	if err := requireCgroup2(unix.CGROUP2_SUPER_MAGIC); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireCgroup2(unix.TMPFS_MAGIC); err == nil {
+		t.Fatal("non-cgroup2 filesystem accepted")
+	}
+	if _, err := selfMountinfo(); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -26,37 +26,31 @@ func (r idleRuntime) Stop(context.Context, control.Workload) error    { return r
 func (r idleRuntime) StopForRecovery(context.Context) error           { return r.err }
 func (r idleRuntime) Healthy(context.Context, control.Workload) error { return r.err }
 func (r idleRuntime) Released(context.Context) error                  { return r.err }
-func fixture(t *testing.T) (string, Request) {
+func fixture(t *testing.T) (Backend, string, Request) {
 	t.Helper()
 	home := t.TempDir()
 	r := Request{Version: 1, ConfirmQuiesced: true, Profile: Profile{Version: 1, StatePath: filepath.Join(home, "state/state.db"), SystemctlPath: "/usr/bin/systemctl", NvidiaSMIPath: "/usr/bin/nvidia-smi"}, Catalog: control.Catalog{Version: 1, Profiles: []control.Profile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health", BootPolicy: "stop-to-idle"}}}}
-	priorRuntime, priorRun, priorDir, priorUID := makeRuntime, runCommand, binaryDirectory, packageBinaryUID
-	makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
-	runCommand = func(context.Context, string, ...string) ([]byte, error) {
+	backend := SystemBackend()
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	backend.runCommand = func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("text.service disabled\nmedia.service disabled\n"), nil
 	}
-	binaryDirectory = t.TempDir()
-	packageBinaryUID = uint32(os.Geteuid())
+	backend.binaryDirectory = t.TempDir()
+	backend.packageBinaryUID = uint32(os.Geteuid())
 	for _, name := range binaries {
-		if err := os.WriteFile(filepath.Join(binaryDirectory, name), []byte("binary-"+name), 0700); err != nil {
+		if err := os.WriteFile(filepath.Join(backend.binaryDirectory, name), []byte("binary-"+name), 0700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	t.Cleanup(func() {
-		makeRuntime = priorRuntime
-		runCommand = priorRun
-		binaryDirectory = priorDir
-		packageBinaryUID = priorUID
-	})
-	return home, r
+	return backend, home, r
 }
 func TestApplyFreshRepeatUpgradeDowngradeAndBackup(t *testing.T) {
-	home, r := fixture(t)
+	backend, home, r := fixture(t)
 	ctx := context.Background()
 	prior := deployment.Release
 	deployment.Release = "0.9.0"
 	t.Cleanup(func() { deployment.Release = prior })
-	if err := Apply(ctx, home, r); err != nil {
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	if err := deployment.Check(r.Profile.StatePath, deployment.Release); err != nil {
@@ -73,23 +67,23 @@ func TestApplyFreshRepeatUpgradeDowngradeAndBackup(t *testing.T) {
 		t.Fatal(state)
 	}
 	r.ExpectedRevision = snapshot.Revision
-	if err := Apply(ctx, home, r); err != nil {
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	deployment.Release = "1.0.0"
-	if err := Apply(ctx, home, r); err != nil {
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	deployment.Release = "0.8.0"
-	if err := Apply(ctx, home, r); err == nil {
+	if err := backend.Apply(ctx, home, r); err == nil {
 		t.Fatal("downgrade accepted")
 	}
 }
 func TestApplyFailuresAndMaintenanceResume(t *testing.T) {
-	home, r := fixture(t)
+	backend, home, r := fixture(t)
 	ctx := context.Background()
 	r.ConfirmQuiesced = false
-	if err := Apply(ctx, home, r); err == nil {
+	if err := backend.Apply(ctx, home, r); err == nil {
 		t.Fatal("implicit activation")
 	}
 	r.ConfirmQuiesced = true
@@ -97,19 +91,19 @@ func TestApplyFailuresAndMaintenanceResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Apply(ctx, home, r); err == nil {
+	if err := backend.Apply(ctx, home, r); err == nil {
 		t.Fatal("gate contention accepted")
 	}
 	gate.Close()
-	makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{err: errors.New("GPU busy")}, nil }
-	if err := Apply(ctx, home, r); err == nil {
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{err: errors.New("GPU busy")}, nil }
+	if err := backend.Apply(ctx, home, r); err == nil {
 		t.Fatal("live runtime accepted")
 	}
-	makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
-	runCommand = func(context.Context, string, ...string) ([]byte, error) {
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	backend.runCommand = func(context.Context, string, ...string) ([]byte, error) {
 		return nil, errors.New("unit manager unavailable")
 	}
-	if err := Apply(ctx, home, r); err == nil {
+	if err := backend.Apply(ctx, home, r); err == nil {
 		t.Fatal("enable failed silently")
 	}
 	if err := deployment.Check(r.Profile.StatePath, ""); err == nil {
@@ -118,11 +112,11 @@ func TestApplyFailuresAndMaintenanceResume(t *testing.T) {
 	changed := r
 	changed.Catalog.Profiles = append([]control.Profile(nil), r.Catalog.Profiles...)
 	changed.Catalog.Profiles[0].Label = "Changed"
-	if err := Apply(ctx, home, changed); err == nil {
+	if err := backend.Apply(ctx, home, changed); err == nil {
 		t.Fatal("interrupted plan replaced")
 	}
-	runCommand = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
-	if err := Apply(ctx, home, r); err != nil {
+	backend.runCommand = func(context.Context, string, ...string) ([]byte, error) { return nil, nil }
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	if err := deployment.Check(r.Profile.StatePath, deployment.Release); err != nil {
@@ -130,7 +124,7 @@ func TestApplyFailuresAndMaintenanceResume(t *testing.T) {
 	}
 }
 func TestDecodePlanDiscoverAndValidation(t *testing.T) {
-	home, r := fixture(t)
+	backend, home, r := fixture(t)
 	data, _ := json.Marshal(r)
 	if _, err := Decode(strings.NewReader(string(data))); err != nil {
 		t.Fatal(err)
@@ -140,7 +134,7 @@ func TestDecodePlanDiscoverAndValidation(t *testing.T) {
 			t.Fatal("bad input accepted")
 		}
 	}
-	if _, err := Plan(home, r); err != nil {
+	if _, err := backend.Plan(home, r); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Home(); err != nil {
@@ -156,18 +150,18 @@ func TestDecodePlanDiscoverAndValidation(t *testing.T) {
 	if err := Validate(bad); err == nil {
 		t.Fatal("negative GPU")
 	}
-	d, err := Discover(context.Background(), home)
+	d, err := backend.Discover(context.Background(), home)
 	if err != nil || len(d.Units) != 0 {
 		t.Fatalf("%+v %v", d, err)
 	}
-	if err := Apply(context.Background(), home, r); err != nil {
+	if err := backend.Apply(context.Background(), home, r); err != nil {
 		t.Fatal(err)
 	}
-	d, err = Discover(context.Background(), home)
+	d, err = backend.Discover(context.Background(), home)
 	if err != nil || d.Request.ExpectedRevision == "" {
 		t.Fatalf("%+v %v", d, err)
 	}
-	if err := Reconcile(context.Background(), home); err != nil {
+	if err := backend.Reconcile(context.Background(), home); err != nil {
 		t.Fatal(err)
 	}
 	for _, pair := range [][2]string{{"1.1.0", "1.0.9"}, {"v2.0.0", "1.9.9"}} {
@@ -183,9 +177,9 @@ func TestDecodePlanDiscoverAndValidation(t *testing.T) {
 }
 
 func TestOwnedIntegrationRemovalPreservesUserData(t *testing.T) {
-	home, r := fixture(t)
+	backend, home, r := fixture(t)
 	ctx := context.Background()
-	if err := Apply(ctx, home, r); err != nil {
+	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(home, ".config/systemd/user/default.target.wants", reconcileUnit)
@@ -204,7 +198,7 @@ func TestOwnedIntegrationRemovalPreservesUserData(t *testing.T) {
 	if err := RemoveIntegration(home); err != nil {
 		t.Fatal(err)
 	}
-	if err := enableReconciliation(ctx, home, r.Profile.SystemctlPath); err != nil {
+	if err := backend.enableReconciliation(ctx, home, r.Profile.SystemctlPath); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink("/some/user.service", link); err != nil {
@@ -213,13 +207,13 @@ func TestOwnedIntegrationRemovalPreservesUserData(t *testing.T) {
 	if err := RemoveIntegration(home); err == nil {
 		t.Fatal("foreign link removed")
 	}
-	if err := enableReconciliation(ctx, home, r.Profile.SystemctlPath); err == nil {
+	if err := backend.enableReconciliation(ctx, home, r.Profile.SystemctlPath); err == nil {
 		t.Fatal("foreign link overwritten")
 	}
 	os.Remove(link)
 	userUnit := filepath.Join(home, ".config/systemd/user", reconcileUnit)
 	os.WriteFile(userUnit, []byte("user"), 0600)
-	if err := enableReconciliation(ctx, home, r.Profile.SystemctlPath); err == nil {
+	if err := backend.enableReconciliation(ctx, home, r.Profile.SystemctlPath); err == nil {
 		t.Fatal("user unit overwritten")
 	}
 }
