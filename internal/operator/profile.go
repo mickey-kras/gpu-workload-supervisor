@@ -2,41 +2,24 @@ package operator
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
-	"golang.org/x/sys/unix"
 	"io"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
+	"golang.org/x/sys/unix"
 )
 
 // Profile contains deployment paths and resource limits, never the live catalog.
-type Profile struct {
-	Version                 int    `json:"version"`
-	StatePath               string `json:"statePath"`
-	ActivatedRelease        string `json:"activatedRelease"`
-	SystemctlPath           string `json:"systemctlPath"`
-	NvidiaSMIPath           string `json:"nvidiaSMIPath"`
-	GPUIndex                int    `json:"gpuIndex"`
-	CapacityHeadroomMiB     uint64 `json:"capacityHeadroomMiB,omitempty"`
-	StatusTimeoutSeconds    int    `json:"statusTimeoutSeconds,omitempty"`
-	OperationTimeoutSeconds int    `json:"operationTimeoutSeconds,omitempty"`
-}
+type Profile = deployment.Profile
 
 func ValidateProfile(p Profile) error {
-	if p.Version != 1 || !token(p.ActivatedRelease, 128) || p.GPUIndex < 0 || p.StatusTimeoutSeconds < 0 || p.StatusTimeoutSeconds > 60 || p.OperationTimeoutSeconds < 0 || p.OperationTimeoutSeconds > 1800 {
-		return errors.New("invalid deployment profile")
-	}
-	for _, s := range []string{p.StatePath, p.SystemctlPath, p.NvidiaSMIPath} {
-		if !filepath.IsAbs(s) || filepath.Clean(s) != s || s == "/" {
-			return errors.New("profile requires absolute clean paths")
-		}
-	}
-	return nil
+	return p.Validate()
 }
 
 // LoadProfile resolves the effective account from the OS database, ignoring HOME/XDG.
@@ -126,9 +109,7 @@ func loadProfileFD(fd, uid int) (Profile, error) {
 	if _, ok := fields(b, "version", "statePath", "activatedRelease", "systemctlPath", "nvidiaSMIPath", "gpuIndex", "capacityHeadroomMiB", "statusTimeoutSeconds", "operationTimeoutSeconds"); !ok {
 		return p, errors.New("invalid profile fields")
 	}
-	d := json.NewDecoder(bytes.NewReader(b))
-	d.DisallowUnknownFields()
-	if strictjson.Check(json.NewDecoder(bytes.NewReader(b))) != nil || d.Decode(&p) != nil || d.Decode(new(any)) != io.EOF {
+	if strictjson.DecodeLimited(bytes.NewReader(b), MaxRequestBytes, &p) != nil {
 		return p, errors.New("invalid profile JSON")
 	}
 	return p, ValidateProfile(p)

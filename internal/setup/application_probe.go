@@ -1,7 +1,6 @@
 package setup
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/httptransport"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
 // ProbeRequest contains explicit references only; it is never an execution plan.
@@ -99,20 +99,8 @@ func (r ProbeRequest) validateEndpoint() error {
 }
 func DecodeProbe(reader io.Reader) (ProbeRequest, error) {
 	var request ProbeRequest
-	data, err := io.ReadAll(io.LimitReader(reader, 16385))
-	if err != nil {
+	if err := strictjson.DecodeLimited(reader, 16384, &request); err != nil {
 		return request, err
-	}
-	if len(data) > 16384 {
-		return request, errors.New("probe request exceeds 16 KiB")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
-		return request, err
-	}
-	if decoder.Decode(new(json.RawMessage)) != io.EOF {
-		return request, errors.New("trailing probe request")
 	}
 	return request, request.validate()
 }

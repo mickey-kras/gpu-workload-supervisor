@@ -89,28 +89,28 @@ func TestBinaryTupleCorruptionAndPreservation(t *testing.T) {
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
 	profile, _ := os.ReadFile(filepath.Join(root, "operator.json"))
 	dest := t.TempDir()
-	if err := copyActivation(root, dest, profile); err != nil {
+	if err := copyActivation(context.Background(), root, dest, profile); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyActivation(root, dest, profile); err != nil {
+	if err := copyActivation(context.Background(), root, dest, profile); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dest, "operator.json"), []byte("edited"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyActivation(root, dest, profile); err == nil {
+	if err := copyActivation(context.Background(), root, dest, profile); err == nil {
 		t.Fatal("overwrote tuple")
 	}
 	if err := os.WriteFile(filepath.Join(root, "activated-binaries/gpu-mode"), []byte("tampered"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyActivation(root, t.TempDir(), profile); err == nil {
+	if err := copyActivation(context.Background(), root, t.TempDir(), profile); err == nil {
 		t.Fatal("accepted tampered binary")
 	}
 	if err := os.Remove(filepath.Join(root, "activated-binaries/manifest.json")); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyActivation(root, t.TempDir(), profile); err == nil {
+	if err := copyActivation(context.Background(), root, t.TempDir(), profile); err == nil {
 		t.Fatal("missing manifest")
 	}
 	if err := os.Chmod(filepath.Join(backend.binaryDirectory, "gpu-mode"), 0777); err != nil {

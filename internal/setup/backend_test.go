@@ -25,7 +25,10 @@ func (r idleRuntime) Start(context.Context, control.Workload) error   { return r
 func (r idleRuntime) Stop(context.Context, control.Workload) error    { return r.err }
 func (r idleRuntime) StopForRecovery(context.Context) error           { return r.err }
 func (r idleRuntime) Healthy(context.Context, control.Workload) error { return r.err }
-func (r idleRuntime) Released(context.Context) error                  { return r.err }
+func (r idleRuntime) ReleasedFor(context.Context, control.Workload) error {
+	return r.err
+}
+func (r idleRuntime) Preflight(context.Context) error { return r.err }
 func fixture(t *testing.T) (Backend, string, Request) {
 	t.Helper()
 	home := t.TempDir()
