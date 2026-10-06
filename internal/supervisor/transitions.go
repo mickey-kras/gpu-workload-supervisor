@@ -211,10 +211,11 @@ func (c *Controller) executeTransition(ctx context.Context, transition store.Tra
 		return fail(transition.ID, state, current, err)
 	}
 	userGate, err := c.acquireTransitionGate(ctx, options.sourceOwner, options.verifyOnly)
-	defer userGate.Close()
 	if err != nil {
+		_ = userGate.Close()
 		return fail(transition.ID, state, current, err)
 	}
+	defer userGate.Close()
 	state, err = c.loadTransition(ctx, transition.ID, state, active, target, skipEffects)
 	if err != nil {
 		return fail(transition.ID, state, current, err)
