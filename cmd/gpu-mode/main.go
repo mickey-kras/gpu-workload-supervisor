@@ -50,7 +50,6 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 	flags := flag.NewFlagSet("gpu-mode", flag.ContinueOnError)
 	catalogPath := flags.String("catalog", "", "catalog JSON for configure and verify-host")
 	catalogRevision := flags.String("configuration-revision", "", "expected accepted catalog revision for configure")
-	workload := flags.String("workload", "", "configured workload ID for switch")
 	statePath := flags.String("state", deployment.DefaultStatePath(), "SQLite state path")
 	gpuIndex := flags.Int("gpu-index", 0, "NVIDIA GPU index")
 	flags.Uint64("release-max-used-mib", 0, "removed: configure workload cgroups and optional target capacity in the catalog")
@@ -71,7 +70,7 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
-	if err := validateCatalogFlags(flags, *workload, target, *catalogPath); err != nil {
+	if err := validateCatalogFlags(flags, *catalogPath); err != nil {
 		return err
 	}
 	if err := validateCommandFlags(flags, *target); err != nil {
@@ -107,13 +106,7 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 // The accepted catalog is the only workload configuration model: configure and
 // verify-host take a candidate file, every other runtime command pins the
 // durably accepted catalog from state.
-func validateCatalogFlags(flags *flag.FlagSet, workload string, target *string, catalogPath string) error {
-	if workload != "" {
-		if *target != "" || flags.Arg(0) != "switch" {
-			return errors.New("-workload requires switch and conflicts with -target")
-		}
-		*target = workload
-	}
+func validateCatalogFlags(flags *flag.FlagSet, catalogPath string) error {
 	switch flags.Arg(0) {
 	case "configure", "verify-host":
 		if catalogPath == "" {
@@ -203,7 +196,7 @@ func validateCommandFlags(flags *flag.FlagSet, target string) error {
 		return errors.New("-release-max-used-mib has been removed: configure workload cgroups in the catalog; optional target capacity uses profile requiredMiB plus -capacity-headroom-mib")
 	}
 	if flags.NArg() != 1 {
-		return errors.New("usage: gpu-mode [flags] configure|switch|restore-state|prune-audit|verify-host|status|reconcile|recover|resolve-work|text|media|idle|take-control|user-switch|return-control|recover-user")
+		return errors.New("usage: gpu-mode [flags] configure|switch|restore-state|prune-audit|verify-host|status|reconcile|recover|resolve-work|take-control|user-switch|return-control|recover-user")
 	}
 	if auditFlag && flags.Arg(0) != pruneAuditCommand {
 		return errors.New("-audit-before and -audit-batch require prune-audit")
@@ -263,12 +256,6 @@ func executeCommand(ctx context.Context, controller *supervisor.Controller, comm
 		state, err = controller.RecoverUser(ctx, target, localCLIInitiator)
 	case "switch":
 		state, err = controller.Switch(ctx, target, localCLIInitiator)
-	case "text":
-		state, err = controller.Switch(ctx, control.WorkloadText, localCLIInitiator)
-	case "media":
-		state, err = controller.Switch(ctx, control.WorkloadMedia, localCLIInitiator)
-	case "idle":
-		state, err = controller.Switch(ctx, control.WorkloadIdle, localCLIInitiator)
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}

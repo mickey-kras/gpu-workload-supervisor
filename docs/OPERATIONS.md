@@ -6,15 +6,15 @@ Use the pinned binaries and complete [deployment configuration](DEPLOYMENT.md) f
 
 ## Switch workloads
 
-After successful reconciliation, run one command for the target you want:
+After successful reconciliation, select the target with one switch command:
 
 ```sh
-/PINNED/RELEASE/gpu-mode [runtime flags] text
-/PINNED/RELEASE/gpu-mode [runtime flags] media
-/PINNED/RELEASE/gpu-mode [runtime flags] idle
+/PINNED/RELEASE/gpu-mode [runtime flags] -target text switch
+/PINNED/RELEASE/gpu-mode [runtime flags] -target media switch
+/PINNED/RELEASE/gpu-mode [runtime flags] -target idle switch
 ```
 
-Replace the binary path and `[runtime flags]` with your deployment configuration. Put flags before the single command. `text` and `media` admit the selected workload after verification; `idle` keeps admission closed. These commands require supervisor ownership. Do not start runtimes independently.
+Replace the binary path and `[runtime flags]` with your deployment configuration. Put flags before the single command. `text` and `media` admit the selected workload after verification; `idle` keeps admission closed. Switching requires supervisor ownership. Do not start runtimes independently.
 
 ## Boot and explicit recovery
 
@@ -81,7 +81,7 @@ Ownership changes always require a target. Add the normal runtime flags before t
 
 - `take-control` changes supervisor ownership to user ownership. It closes admission, rotates the fence, drains registered work, and verifies the target before committing ownership.
 - `user-switch` selects `text`, `media`, or `idle` while user-owned. `return-control` selects the supervisor's workload explicitly. Both authorize terminating all current user work, including queued media work and same-target transfers. They stop both runtime units before starting the selected target.
-- `text`, `media`, and `idle` remain supervisor-only commands. They reject user-owned state.
+- `switch` remains a supervisor-only command. It rejects user-owned state.
 - User ownership keeps supervisor admission closed. Healthy, stable user execution bypasses lease registration only for the selected workload. Execution is blocked while switching, idle, or in an error state.
 
 User execution requests hold a shared cross-process handoff lock. User switches and returns close admission, stop user runtimes and verify release, then take the exclusive handoff lock. They wait up to `-drain-timeout` for forwarding handlers to exit before restarting anything. A stalled handler makes the operation fail closed; cancel the client request or stop the proxy before recovery. All proxies sharing a state database must use this version's handoff locking before enabling ownership commands.
