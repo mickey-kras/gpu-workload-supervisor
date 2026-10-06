@@ -276,9 +276,6 @@ function inspectScannerConfigs(files, failures) {
   try {
     const raw = files['.github/dependency-review-config.yml'];
     const config = YAML.parse(raw, { uniqueKeys: true });
-    // Accept the exact old policy during the two-PR trusted-base migration.
-    const legacy = createHash('sha256').update(raw).digest('hex') ===
-      '4c1609c0713a00ac87aa31700c170e5046fe638fe3101ba6e8efae186e6acb4a';
     const keys = ['fail-on-severity', 'vulnerability-check', 'license-check', 'warn-only', 'fail-on-scopes'];
     const scopes = config?.['fail-on-scopes'];
     const current = config && Object.keys(config).length === keys.length &&
@@ -287,7 +284,7 @@ function inspectScannerConfigs(files, failures) {
       config['license-check'] === false && config['warn-only'] === false &&
       Array.isArray(scopes) && scopes.length === 3 &&
       ['runtime', 'development', 'unknown'].every(scope => scopes.includes(scope));
-    if (!legacy && !current) {
+    if (!current) {
       failures.push('Dependency review policy was weakened');
     }
   } catch (error) {

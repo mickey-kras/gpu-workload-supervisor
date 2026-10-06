@@ -7,8 +7,8 @@ const reviewed = "# Vulnerabilities block updates; license obligations depend on
 const failures = content => inspect({ [path]: content }).filter(error => error.startsWith('Dependency review policy') || error.startsWith('Dependency review config'));
 const legacy = "# Dependency review policy for pull requests (actions/dependency-review-action).\n# Only dependencies a pull request adds or updates are reviewed, so existing\n# dependencies are grandfathered. A reviewed exception for one of them belongs\n# in allow-dependencies-licenses below as an exact package URL (purl).\nfail-on-severity: high\ndeny-licenses:\n  - AGPL-1.0-only\n  - AGPL-1.0-or-later\n  - AGPL-3.0-only\n  - AGPL-3.0-or-later\n  - GPL-1.0-only\n  - GPL-1.0-or-later\n  - GPL-2.0-only\n  - GPL-2.0-or-later\n  - GPL-3.0-only\n  - GPL-3.0-or-later\n  - LGPL-2.1-only\n  - LGPL-2.1-or-later\n  - LGPL-3.0-only\n  - LGPL-3.0-or-later\n  - SSPL-1.0\n  - LicenseRef-clearlydefined-OTHER\n# Grandfathered license exceptions as exact purls (e.g. pkg:npm/example@1.2.3).\nallow-dependencies-licenses: []\n";
 
-test('migration accepts only the exact legacy policy', () => {
-  assert.deepEqual(failures(legacy), []);
+test('retired blanket policy is rejected', () => {
+  assert.notDeepEqual(failures(legacy), []);
   assert.notDeepEqual(failures(legacy + '\n'), []);
 });
 
