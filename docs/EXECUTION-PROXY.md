@@ -54,7 +54,7 @@ Work is registered before forwarding and remains active after submission. The pr
 }
 ```
 
-The default completion path is `/_gpu-workload-supervisor/v1/work/finish`. A successful terminal update returns HTTP 204. Completion without the matching token is rejected for newly admitted work. Older registrations created before token support accept tokenless completion with their originally registered request ID and fence, including after the current fence rotates. Proxy, upstream, client, and process failures leave work incomplete for explicit reconciliation.
+The default completion path is `/_gpu-workload-supervisor/v1/work/finish`. A successful terminal update returns HTTP 204. Completion without the matching token is rejected for newly admitted work. Older registrations created before token support accept tokenless completion with their originally registered request ID and fence, including after the current fence rotates. Proxy, upstream, client, and process failures leave work incomplete for explicit reconciliation. Proxies bound to a [native model](WORKLOADS.md#native-model-bindings) instead complete registrations themselves once the upstream response carries verified terminal evidence; an external callback for the same registration then finds it already finished.
 
 ## Retention
 

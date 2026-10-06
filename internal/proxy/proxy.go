@@ -369,6 +369,7 @@ func (h *Handler) execute(response http.ResponseWriter, request *http.Request) {
 	}
 	proxy.ModifyResponse = func(upstreamResponse *http.Response) error {
 		upstreamResponse.Header.Set(DefaultRegistrationTokenHeader, token)
+		h.observeNativeTerminal(upstreamResponse, request.URL.Path, requestID, fence, token)
 		return nil
 	}
 	proxy.ServeHTTP(response, forwarded)
