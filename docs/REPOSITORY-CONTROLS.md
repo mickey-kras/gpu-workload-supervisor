@@ -42,5 +42,34 @@ immutability enabled before dispatch. A release fails closed when the reviewed
 value is absent or stale or a live rule weakens. After publication, an actual
 immutable release is required before branch cleanup or the automatic version bump.
 
-See [branching](../.github/BRANCHING.md), [Dependabot](DEPENDABOT.md), and
-[releasing](RELEASING.md) for operating details.
+Work branches match `^(feat|fix|refactor|docs|ci|security)/[a-z0-9]+(-[a-z0-9]+)*$`;
+the `branch-policy` check validates the full regex on same-repository PRs.
+Dependabot branches are accepted only for PRs authored by `dependabot[bot]`.
+Same-repository PR branches are updated after main pushes when the release App
+is configured; Dependabot rebases its own branches. Releases follow
+[RELEASING.md](RELEASING.md): manual dispatch from the validated `main` tip at
+the planned version, immutable `vX.Y.Z` tag, attested assets, and an automatic
+next-patch bump PR.
+
+## Dependabot
+
+Scheduled ecosystems and groups live in
+[.github/dependabot.yml](../.github/dependabot.yml). `go.sum` and the npm
+lockfiles must be updated within the same PR.
+
+The trusted `pull_request_target` automation checks the exact Dependabot
+identity, verified bot commits, same-repository origin, a minor or patch update,
+and a known compatibility score of at least 75% for every changed dependency.
+Eligible PRs queue squash auto-merge; required branch checks still decide when
+the merge happens. Major updates and updates without a score remain for manual
+review. The compatibility lookup and merge command use the workflow token.
+Enable repository auto-merge and squash merges before relying on this
+automation. The release App and `RELEASE_APP_ID` are needed for PR branch
+updates and releases, not for Dependabot compatibility lookup.
+
+The daily refresh rechecks open PRs and dispatches missing validation after a
+Dependabot merge. It never runs code from a PR head with write permissions.
+
+Review the pinned Semgrep image digest, Trivy CLI version, and the pinned
+`dependabot/fetch-metadata` checkout when updating scanner tooling. These are
+not dependency manifests and are not covered by the scheduled ecosystems.

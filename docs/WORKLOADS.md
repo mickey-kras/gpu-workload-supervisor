@@ -1,5 +1,7 @@
 # Configured workloads
 
+[Documentation](README.md) | [Repository](../README.md)
+
 A catalog is a version 1 JSON object containing 1-32 `profiles`:
 
 ```json
@@ -41,7 +43,9 @@ running retain profiles fail closed. Healthy retained registrations keep their
 completion tokens, fence and admission. To reproduce legacy boot behavior use
 `retain` for Text and `stop-to-idle` for Media.
 
-Accept configuration explicitly while holding the controller gate:
+Accept configuration explicitly while holding the controller gate. Examples
+abbreviate the [pinned absolute binary path](DEPLOYMENT.md#controller-configuration)
+as `gpu-mode`:
 
 ```sh
 gpu-mode -state /absolute/state.db -catalog /absolute/workloads.json configure

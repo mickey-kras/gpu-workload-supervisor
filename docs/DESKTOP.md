@@ -1,6 +1,6 @@
 # Local GNOME desktop installation
 
-[Documentation](README.md) | [Clients](CLIENTS.md) | [Restore procedure](RESTORING.md)
+[Documentation](README.md) | [Operator protocol](OPERATOR.md) | [Restore procedure](RESTORING.md)
 
 The Debian package contains the compatible CLI, proxy, one-shot operator backend,
 GNOME extension, and native Gtk4/Libadwaita setup application. GNOME Shell **50** is
@@ -40,9 +40,99 @@ The effective account's OS home determines the private profile location:
 `~/.config/gpu-workload-supervisor/operator.json`. Environment HOME/XDG overrides
 do not select runtime configuration. The accepted workload catalog and its opaque
 revision live in SQLite; `catalog.json` is only an owned setup/backup artifact.
-Ordinary controls never adopt edits to that mirror. Setup's `discover`, `validate`,
-and `apply` commands use a strict versioned JSON request over stdin; the desktop
-application supplies this request and renders the concrete preview.
+Ordinary controls never adopt edits to that mirror. Setup exposes `discover`,
+`probe`, `fingerprint`, `drafts`, `save-drafts`, `verify-bindings`, `validate`,
+`apply`, `reconcile` and `remove-integration`; request/response commands use a
+strict versioned JSON protocol over stdin/stdout. The desktop application
+supplies these requests and renders the concrete preview.
+
+## Manage workloads in setup
+
+Open **Manage workloads** from GPU Control in GNOME's top-right Quick Settings
+menu. The packaged setup application is also available in the application list.
+
+1. Choose ComfyUI, Ollama, llama.cpp or vLLM and select **Add workload**.
+2. Choose a detected instance. **Refresh discovery** reads its existing inventory;
+   it never starts an application or loads a model.
+3. Choose a native model, or an explicit model file/folder. ComfyUI skips model
+   selection because workflows choose models. File selection does not establish
+   compatibility.
+4. **Save drafts** to finish later. Drafts retain application, address/path and
+   model choices, and Advanced launch binding fields. Saved bindings remain
+   unverified; fingerprints are recomputed during verification. Drafts are
+   separate from selectable workloads.
+5. To configure an existing isolated service, open **Advanced launch binding**.
+   Supply its service, cgroup and health URL. Native model bindings also require
+   an instance ID, exact model ID, base URL and loaded service file. Setup reads
+   the file fingerprint and verifies the binding without changing the service.
+6. Select **Verify binding and add for review**, then **Review configuration**.
+   Switch to Idle and finish active jobs before confirming **Apply configuration**.
+
+Each model needs a distinct existing launch unit. Shared-unit model presets are
+not supported. Setup does not create or rewrite launch services. Model identity
+is checked again before GPU admission when switching workloads.
+
+Configured workloads can be renamed or edited. **Remove from supervisor** changes
+only supervisor configuration. Active/referenced workloads cannot be removed;
+finish their work and switch to Idle first. Applications, models, workflows and
+external configuration are preserved.
+
+**Set up later** closes the window without applying configuration. Save drafts
+first if you want to keep new choices. A stale-draft error requires reopening
+Manage workloads before retrying. Interrupted activation resumes its recorded
+configuration, with editing disabled until it completes.
+
+Native GTK keyboard/accessibility checks and real GPU qualification remain part
+of the GNOME/package host acceptance tracked in
+[issue #146](https://github.com/mickey-kras/gpu-workload-supervisor/issues/146)
+and [issue #148](https://github.com/mickey-kras/gpu-workload-supervisor/issues/148).
+Automated widget and protocol tests do not qualify the host installation.
+
+## Application discovery
+
+`gpu-setup discover` returns saved setup state plus `applications` candidates for
+ComfyUI, Ollama, llama.cpp and vLLM. It probes four default loopback ports and
+inspects recognizable user-service launch metadata. A service candidate and an
+endpoint candidate are separate observations; discovery does not correlate them
+or verify lifecycle ownership. Existing catalog profiles remain unchanged.
+
+For a non-default endpoint or explicit reference:
+
+```sh
+printf '%s' '{"app":"ollama","endpoint":"http://127.0.0.1:11434"}' | gpu-setup probe
+printf '%s' '{"app":"llama.cpp","reference":"/models/model.gguf","referenceKind":"model-file"}' | gpu-setup probe
+```
+
+`app` accepts `comfyui`, `ollama`, `llama.cpp`, `vllm`. Select exactly one
+`endpoint` or `reference`. `referenceKind` accepts `application`, `configuration`,
+`model-file`, `model-directory`. Endpoint values are loopback HTTP(S) origins,
+without credentials, path, query or fragment. References must be absolute clean
+paths; only regular files and directories are accepted. File contents are not
+executed or inspected, and directories are not enumerated.
+
+| Application | Read-only observations |
+| --- | --- |
+| ComfyUI | `/system_stats` version; workflows select models, no model picker |
+| Ollama | `/api/version`, available `/api/tags`, loaded `/api/ps`; remote entries marked `non-local` |
+| llama.cpp | Native `/models` with explicit statuses, or older `/v1/models` served identities; simple launch model references |
+| vLLM | `/version` and `/v1/models`; same-root aliases grouped; simple launch model references |
+
+Missing optional APIs report `unsupported` or unknown loaded state. Unreachable
+instances never become successful empty inventories. A verified stopped unit is
+`not-running`; a failed endpoint connection is `unreachable`. Saved references
+survive either condition. Served identities do not establish a disk inventory or
+distinct physical models. File selection does not establish compatibility.
+
+All candidates have `lifecycleControl: "unverified"`. They cannot activate a
+workload by themselves. Application management and model switching require the
+separate validated catalog/runtime path.
+
+Discovery uses fixed GET routes, disables redirects and ambient proxies, limits
+responses to 1 MiB, and bounds each probe to 3 seconds and discovery to 15 seconds.
+It never uses llama.cpp reload/routed autoload requests, starts applications,
+loads/unloads models, downloads files, scans drives, or writes application or
+supervisor configuration. Configuration files with custom syntax, shell wrappers
+and escaped launch commands remain explicit manual references.
 
 ## Upgrade and interrupted activation
 
@@ -75,16 +165,12 @@ During activation:
 
 ## Restore and rollback
 
-There is no automatic downgrade. Follow every step in [RESTORING.md](RESTORING.md),
-including stopping and preventing all state users, handling WAL/SHM correctly,
-and running `restore-state` to rotate the fence before reconciliation.
-
-For a managed rollback, select one matching verified backup directory and restore
-its complete state, profile, ownership metadata, and compatible binary set together. Install the matching backend/extension package as well. The saved
-`manifest.json` records the release and SHA-256 of each saved executable. Saved
-binary files have private mode `0600`; verify the hashes before
-making a chosen recovery copy executable with mode `0700`. Never substitute an
-unrelated installed binary or edit release/schema metadata to force compatibility.
+There is no automatic downgrade. Follow every step in [RESTORING.md](RESTORING.md).
+For a managed rollback, restore one matching verified backup directory's complete
+state, profile, ownership metadata and compatible binary set together, and install
+the matching backend/extension package. The saved `manifest.json` records the
+release and SHA-256 of each saved executable; saved binaries have mode `0600`.
+Verify the hashes before making a chosen recovery copy executable with mode `0700`.
 Restore the matching setup metadata to these locations:
 
 | Backup file | Private destination beneath `~/.config/gpu-workload-supervisor/` |
@@ -93,15 +179,10 @@ Restore the matching setup metadata to these locations:
 | `manifest.json` | `activated-binaries/manifest.json` |
 | `gpu-mode`, `gpu-workload-proxy`, `gpu-operator`, `gpu-setup` | Corresponding files in `activated-binaries/` |
 
-Restore `state.db` to the profile's original state path and
-`state.db.deployment.json` beside that database with the same basename. While all
-components remain stopped, remove the failed activation's `transaction.json` and
-`activation.json` from the private configuration directory: their plans belong to
-the failed tuple, not to the restored one. Preserve them with the failed deployment
-for investigation. Retain the restored ownership hashes so subsequent setup can
-recognize its files. The profile's state path must remain the original deployment path. Preserve the
-failed deployment separately, then run the matching release's `restore-state`
-and recovery procedure. If the exact pair cannot be verified, repair forward.
+While all components remain stopped, remove the failed activation's
+`transaction.json` and `activation.json` from the private configuration
+directory; preserve them with the failed deployment for investigation. If the
+exact backup/binary pair cannot be verified, repair forward.
 
 ## Remove and reinstall
 

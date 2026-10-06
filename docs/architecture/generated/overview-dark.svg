@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="520" viewBox="0 0 1120 520" role="img" aria-labelledby="title desc">
 <title id="title">GPU Workload Supervisor overview</title>
-<desc id="desc">Clients send requests through the execution proxy to text or media services sharing one GPU. The separate controller stops and verifies workloads before starting the next. Proxy and controller share durable SQLite state for admission, leases, and transition journaling. Blue components belong to this repository.</desc>
+<desc id="desc">Clients send requests through the execution proxy to catalog-configured workload services sharing one GPU. The separate controller stops and verifies workloads before starting the next. Proxy and controller share durable SQLite state for admission, leases, and transition journaling. Blue components belong to this repository.</desc>
 <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8b949e"/></marker></defs>
 <rect width="1120" height="520" rx="20" fill="#0d1117"/>
 <g font-family="Arial, Helvetica, sans-serif">
