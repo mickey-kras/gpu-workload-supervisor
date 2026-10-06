@@ -13,202 +13,133 @@ import (
 var ErrTransitionNotRunning = errors.New("transition is not running")
 
 var (
-	ErrUserOwned         = errors.New("conditional transition requires supervisor ownership")
 	ErrRecoveryRequired  = errors.New("conditional transition requires stable non-error state")
 	ErrTransitionRunning = errors.New("conditional transition already running")
 )
 
 func (s *Store) StartTransition(ctx context.Context, expected uint64, tr Transition) (control.State, error) {
-	return s.startTransition(ctx, expected, nil, nil, tr)
+	return s.startTransition(ctx, expected, nil, tr)
 }
 
-// StartTransitionConditional verifies both token components and the restricted
-// control boundary in the transaction that fences admission and inserts work.
-func (s *Store) StartTransitionConditional(ctx context.Context, expected control.Precondition, tr Transition) (control.State, error) {
-	return s.startTransition(ctx, expected.Version, &expected, nil, tr)
-}
-
-func (s *Store) startTransition(ctx context.Context, expected uint64, condition *control.Precondition, operator *control.OperatorPrecondition, tr Transition) (control.State, error) {
+func (s *Store) startTransition(ctx context.Context, expected uint64, operator *control.OperatorPrecondition, tr Transition) (control.State, error) {
 	if tr.ID == "" {
 		return control.State{}, errors.New("transition id is empty")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return control.State{}, err
-	}
-	defer tx.Rollback()
-	current, err := readState(ctx, tx)
-	if err != nil {
-		return control.State{}, err
-	}
-	if err := transitionPrecondition(ctx, tx, current, expected, condition); err != nil {
-		return control.State{}, err
-	}
-	if err := transitionOperatorSource(ctx, tx, current, operator); err != nil {
-		return control.State{}, err
-	}
-	if err := validateTransitionCatalog(ctx, tx, tr); err != nil {
-		return control.State{}, err
-	}
-	next := current
-	next.DesiredWorkload = tr.Target.DesiredWorkload
-	next.Admission = control.AdmissionClosed
-	next.Phase = control.PhaseDraining
-	next.LeaseFence.Epoch++
-	next.Version++
-	next.UpdatedAt = s.now().UTC()
-	if err := next.Validate(); err != nil {
-		return control.State{}, err
-	}
+	return s.withStateTx(ctx, expected, func(tx *sql.Tx, current control.State) (control.State, error) {
+		if err := transitionOperatorSource(ctx, tx, current, operator); err != nil {
+			return control.State{}, err
+		}
+		if err := validateTransitionCatalog(ctx, tx, tr); err != nil {
+			return control.State{}, err
+		}
+		next := current
+		next.DesiredWorkload = tr.Target.DesiredWorkload
+		next.Admission = control.AdmissionClosed
+		next.Phase = control.PhaseDraining
+		next.LeaseFence.Epoch++
+		next.Version++
+		next.UpdatedAt = s.now().UTC()
+		if err := next.Validate(); err != nil {
+			return control.State{}, err
+		}
+		if err := s.recordTransition(ctx, tx, current, next, tr); err != nil {
+			return control.State{}, err
+		}
+		if err := writeState(ctx, tx, next); err != nil {
+			return control.State{}, err
+		}
+		return next, nil
+	})
+}
+
+func (s *Store) recordTransition(ctx context.Context, tx *sql.Tx, current, next control.State, tr Transition) error {
 	source, err := json.Marshal(current)
 	if err != nil {
-		return control.State{}, err
+		return err
 	}
 	target, err := json.Marshal(tr.Target)
 	if err != nil {
-		return control.State{}, err
+		return err
 	}
 	previous, err := json.Marshal(tr.Previous)
 	if err != nil {
-		return control.State{}, err
+		return err
 	}
 	now := formatTime(s.now())
-	_, err = tx.ExecContext(ctx, `INSERT INTO transitions
+	if _, err := tx.ExecContext(ctx, `INSERT INTO transitions
 		(transition_id, lease_incarnation, lease_epoch, source_state, target_state,
 		 previous_state, initiator, job_id, phase, deadline, status, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_progress', ?, ?)`,
 		tr.ID, next.LeaseFence.Incarnation, next.LeaseFence.Epoch, source, target, previous,
-		tr.Initiator, nullable(tr.JobID), next.Phase, formatTime(tr.Deadline), now, now)
-	if err != nil {
-		return control.State{}, fmt.Errorf("insert transition: %w", err)
+		tr.Initiator, nullable(tr.JobID), next.Phase, formatTime(tr.Deadline), now, now); err != nil {
+		return fmt.Errorf("insert transition: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO transition_work(transition_id, request_id)
 		SELECT ?, request_id FROM registered_work WHERE completed_at IS NULL`, tr.ID); err != nil {
-		return control.State{}, fmt.Errorf("snapshot work: %w", err)
+		return fmt.Errorf("snapshot work: %w", err)
 	}
-	if err := writeState(ctx, tx, next); err != nil {
-		return control.State{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return control.State{}, err
-	}
-	return next, nil
+	return nil
 }
 
-func transitionPrecondition(ctx context.Context, tx *sql.Tx, current control.State, version uint64, expected *control.Precondition) error {
-	if current.Version != version {
-		return ErrVersionConflict
-	}
-	if expected == nil {
-		return nil
-	}
-	return conditionalSource(ctx, tx, current, *expected)
-}
-
-func conditionalSource(ctx context.Context, tx *sql.Tx, current control.State, expected control.Precondition) error {
-	if expected.Incarnation == "" || current.LeaseFence.Incarnation != expected.Incarnation {
-		return ErrVersionConflict
-	}
-	if current.Owner != control.OwnerSupervisor {
-		return ErrUserOwned
-	}
-	if current.Phase != control.PhaseStable || current.Health == control.HealthError {
-		return ErrRecoveryRequired
-	}
-	var running bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM transitions WHERE status = 'in_progress')`).Scan(&running); err != nil {
+func updateRunningTransition(ctx context.Context, tx *sql.Tx, query string, args ...any) error {
+	result, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
 		return err
 	}
-	if running {
-		return ErrTransitionRunning
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed != 1 {
+		return ErrTransitionNotRunning
 	}
 	return nil
 }
 
 func (s *Store) SetTransitionPhase(ctx context.Context, transitionID string, expected uint64, phase control.Phase) (control.State, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return control.State{}, err
-	}
-	defer tx.Rollback()
-	state, err := readState(ctx, tx)
-	if err != nil {
-		return control.State{}, err
-	}
-	if state.Version != expected {
-		return control.State{}, ErrVersionConflict
-	}
-	state.Phase = phase
-	state.Admission = control.AdmissionClosed
-	state.Version++
-	state.UpdatedAt = s.now().UTC()
-	if err := state.Validate(); err != nil {
-		return control.State{}, err
-	}
-	result, err := tx.ExecContext(ctx, `UPDATE transitions SET phase = ?, updated_at = ?
-		WHERE transition_id = ? AND status = 'in_progress'`,
-		phase, formatTime(s.now()), transitionID)
-	if err != nil {
-		return control.State{}, err
-	}
-	if changed, err := result.RowsAffected(); err != nil || changed != 1 {
-		if err != nil {
+	return s.withStateTx(ctx, expected, func(tx *sql.Tx, state control.State) (control.State, error) {
+		state.Phase = phase
+		state.Admission = control.AdmissionClosed
+		state.Version++
+		state.UpdatedAt = s.now().UTC()
+		if err := state.Validate(); err != nil {
 			return control.State{}, err
 		}
-		return control.State{}, ErrTransitionNotRunning
-	}
-	if err := writeState(ctx, tx, state); err != nil {
-		return control.State{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return control.State{}, err
-	}
-	return state, nil
+		if err := updateRunningTransition(ctx, tx, `UPDATE transitions SET phase = ?, updated_at = ?
+			WHERE transition_id = ? AND status = 'in_progress'`,
+			phase, formatTime(s.now()), transitionID); err != nil {
+			return control.State{}, err
+		}
+		if err := writeState(ctx, tx, state); err != nil {
+			return control.State{}, err
+		}
+		return state, nil
+	})
 }
 
 func (s *Store) FinishTransition(ctx context.Context, transitionID, status string, expected uint64, final control.State) (control.State, error) {
 	if status != "committed" && status != "failed" {
 		return control.State{}, errors.New("transition status must be committed or failed")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return control.State{}, err
-	}
-	defer tx.Rollback()
-	current, err := readState(ctx, tx)
-	if err != nil {
-		return control.State{}, err
-	}
-	if current.Version != expected {
-		return control.State{}, ErrVersionConflict
-	}
-	if final.LeaseFence != current.LeaseFence {
-		return control.State{}, ErrStaleFence
-	}
-	final.Version = current.Version + 1
-	final.UpdatedAt = s.now().UTC()
-	if err := final.Validate(); err != nil {
-		return control.State{}, err
-	}
-	result, err := tx.ExecContext(ctx, `UPDATE transitions SET phase = ?, status = ?, updated_at = ?
-		WHERE transition_id = ? AND status = 'in_progress'`,
-		final.Phase, status, formatTime(s.now()), transitionID)
-	if err != nil {
-		return control.State{}, err
-	}
-	if changed, err := result.RowsAffected(); err != nil || changed != 1 {
-		if err != nil {
+	return s.withStateTx(ctx, expected, func(tx *sql.Tx, current control.State) (control.State, error) {
+		if final.LeaseFence != current.LeaseFence {
+			return control.State{}, ErrStaleFence
+		}
+		final.Version = current.Version + 1
+		final.UpdatedAt = s.now().UTC()
+		if err := final.Validate(); err != nil {
 			return control.State{}, err
 		}
-		return control.State{}, ErrTransitionNotRunning
-	}
-	if err := writeState(ctx, tx, final); err != nil {
-		return control.State{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return control.State{}, err
-	}
-	return final, nil
+		if err := updateRunningTransition(ctx, tx, `UPDATE transitions SET phase = ?, status = ?, updated_at = ?
+			WHERE transition_id = ? AND status = 'in_progress'`,
+			final.Phase, status, formatTime(s.now()), transitionID); err != nil {
+			return control.State{}, err
+		}
+		if err := writeState(ctx, tx, final); err != nil {
+			return control.State{}, err
+		}
+		return final, nil
+	})
 }
 
 func (s *Store) PendingTransitionWork(ctx context.Context, transitionID string) (int, error) {
@@ -231,59 +162,45 @@ func (s *Store) InProgressTransition(ctx context.Context) (string, error) {
 }
 
 func (s *Store) Recover(ctx context.Context, expected uint64, final control.State, reason string) (control.State, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return control.State{}, err
-	}
-	defer tx.Rollback()
-	current, err := readState(ctx, tx)
-	if err != nil {
-		return control.State{}, err
-	}
-	if current.Version != expected {
-		return control.State{}, ErrVersionConflict
-	}
-	final.LeaseFence = current.LeaseFence
-	final.LeaseFence.Epoch++
-	final.Version = current.Version + 1
-	final.UpdatedAt = s.now().UTC()
-	if err := final.Validate(); err != nil {
-		return control.State{}, err
-	}
+	return s.withStateTx(ctx, expected, func(tx *sql.Tx, current control.State) (control.State, error) {
+		final.LeaseFence = current.LeaseFence
+		final.LeaseFence.Epoch++
+		final.Version = current.Version + 1
+		final.UpdatedAt = s.now().UTC()
+		if err := final.Validate(); err != nil {
+			return control.State{}, err
+		}
+		if err := s.failInProgressTransition(ctx, tx, final.Phase, reason); err != nil {
+			return control.State{}, err
+		}
+		if err := writeState(ctx, tx, final); err != nil {
+			return control.State{}, err
+		}
+		return final, nil
+	})
+}
+
+func (s *Store) failInProgressTransition(ctx context.Context, tx *sql.Tx, phase control.Phase, reason string) error {
 	var transitionID string
-	err = tx.QueryRowContext(ctx, `SELECT transition_id FROM transitions
+	err := tx.QueryRowContext(ctx, `SELECT transition_id FROM transitions
 		WHERE status = 'in_progress' ORDER BY created_at, transition_id LIMIT 1`).Scan(&transitionID)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return control.State{}, err
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
 	}
-	if err == nil {
-		result, updateErr := tx.ExecContext(ctx, `UPDATE transitions
-			SET phase = ?, status = 'failed', updated_at = ?
-			WHERE transition_id = ? AND status = 'in_progress'`,
-			final.Phase, formatTime(s.now()), transitionID)
-		if updateErr != nil {
-			return control.State{}, updateErr
-		}
-		if changed, rowsErr := result.RowsAffected(); rowsErr != nil || changed != 1 {
-			if rowsErr != nil {
-				return control.State{}, rowsErr
-			}
-			return control.State{}, ErrTransitionNotRunning
-		}
-		if _, eventErr := tx.ExecContext(ctx, `INSERT INTO transition_events
-			(transition_id, phase, kind, action, outcome, created_at)
-			VALUES (?, ?, 'observation', 'recovery', ?, ?)`,
-			transitionID, final.Phase, reason, formatTime(s.now())); eventErr != nil {
-			return control.State{}, eventErr
-		}
+	if err != nil {
+		return err
 	}
-	if err := writeState(ctx, tx, final); err != nil {
-		return control.State{}, err
+	if err := updateRunningTransition(ctx, tx, `UPDATE transitions
+		SET phase = ?, status = 'failed', updated_at = ?
+		WHERE transition_id = ? AND status = 'in_progress'`,
+		phase, formatTime(s.now()), transitionID); err != nil {
+		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return control.State{}, err
-	}
-	return final, nil
+	_, err = tx.ExecContext(ctx, `INSERT INTO transition_events
+		(transition_id, phase, kind, action, outcome, created_at)
+		VALUES (?, ?, 'observation', 'recovery', ?, ?)`,
+		transitionID, phase, reason, formatTime(s.now()))
+	return err
 }
 
 func validateTransitionCatalog(ctx context.Context, tx *sql.Tx, tr Transition) error {

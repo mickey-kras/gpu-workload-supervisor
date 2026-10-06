@@ -12,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	_ "modernc.org/sqlite"
@@ -58,11 +57,11 @@ type TransitionEvent struct {
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
-	return open(ctx, path, time.Now, newUUID)
+	return open(ctx, path, time.Now, control.NewUUID)
 }
 
 func OpenRestored(ctx context.Context, path string) (*Store, error) {
-	return openWithMode(ctx, path, time.Now, newUUID, true)
+	return openWithMode(ctx, path, time.Now, control.NewUUID, true)
 }
 
 func open(ctx context.Context, path string, now Clock, uuid func() (string, error)) (*Store, error) {
@@ -161,56 +160,30 @@ func (s *Store) UpdateState(ctx context.Context, expected uint64, next control.S
 	if err := next.Validate(); err != nil {
 		return control.State{}, fmt.Errorf("validate state: %w", err)
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return control.State{}, err
-	}
-	defer tx.Rollback()
-	current, err := readState(ctx, tx)
-	if err != nil {
-		return control.State{}, err
-	}
-	if current.Version != expected {
-		return control.State{}, ErrVersionConflict
-	}
-	if next.LeaseFence != current.LeaseFence {
-		return control.State{}, ErrStaleFence
-	}
-	next.Version = current.Version + 1
-	next.UpdatedAt = s.now().UTC()
-	if err := writeState(ctx, tx, next); err != nil {
-		return control.State{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return control.State{}, err
-	}
-	return next, nil
+	return s.withStateTx(ctx, expected, func(tx *sql.Tx, current control.State) (control.State, error) {
+		if next.LeaseFence != current.LeaseFence {
+			return control.State{}, ErrStaleFence
+		}
+		next.Version = current.Version + 1
+		next.UpdatedAt = s.now().UTC()
+		if err := writeState(ctx, tx, next); err != nil {
+			return control.State{}, err
+		}
+		return next, nil
+	})
 }
 
 func (s *Store) RotateFenceAndCloseAdmission(ctx context.Context, expected uint64) (control.State, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return control.State{}, err
-	}
-	defer tx.Rollback()
-	state, err := readState(ctx, tx)
-	if err != nil {
-		return control.State{}, err
-	}
-	if state.Version != expected {
-		return control.State{}, ErrVersionConflict
-	}
-	state.LeaseFence.Epoch++
-	state.Admission = control.AdmissionClosed
-	state.Version++
-	state.UpdatedAt = s.now().UTC()
-	if err := writeState(ctx, tx, state); err != nil {
-		return control.State{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return control.State{}, err
-	}
-	return state, nil
+	return s.withStateTx(ctx, expected, func(tx *sql.Tx, state control.State) (control.State, error) {
+		state.LeaseFence.Epoch++
+		state.Admission = control.AdmissionClosed
+		state.Version++
+		state.UpdatedAt = s.now().UTC()
+		if err := writeState(ctx, tx, state); err != nil {
+			return control.State{}, err
+		}
+		return state, nil
+	})
 }
 
 func (s *Store) RotateIncarnation(ctx context.Context) (control.State, error) {
@@ -218,15 +191,12 @@ func (s *Store) RotateIncarnation(ctx context.Context) (control.State, error) {
 	if err != nil {
 		return control.State{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return control.State{}, err
-	}
-	defer tx.Rollback()
-	state, err := readState(ctx, tx)
-	if err != nil {
-		return control.State{}, err
-	}
+	return s.stateTx(ctx, func(tx *sql.Tx, state control.State) (control.State, error) {
+		return s.rotateIncarnation(ctx, tx, state, incarnation)
+	})
+}
+
+func (s *Store) rotateIncarnation(ctx context.Context, tx *sql.Tx, state control.State, incarnation string) (control.State, error) {
 	if incarnation == state.LeaseFence.Incarnation {
 		return control.State{}, errors.New("new lease incarnation matches restored incarnation")
 	}
@@ -282,9 +252,6 @@ func (s *Store) RotateIncarnation(ctx context.Context) (control.State, error) {
 		state.LeaseFence.Epoch, abandoned, invalidated, now); err != nil {
 		return control.State{}, fmt.Errorf("record state restoration: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return control.State{}, err
-	}
 	return state, nil
 }
 
@@ -299,6 +266,43 @@ func (s *Store) AppendTransitionEvent(ctx context.Context, event TransitionEvent
 		(transition_id, phase, kind, action, outcome, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		event.TransitionID, event.Phase, event.Kind, event.Action, nullable(event.Outcome), formatTime(s.now()))
 	return err
+}
+
+func (s *Store) withTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) stateTx(ctx context.Context, fn func(tx *sql.Tx, cur control.State) (control.State, error)) (control.State, error) {
+	var next control.State
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		current, err := readState(ctx, tx)
+		if err != nil {
+			return err
+		}
+		next, err = fn(tx, current)
+		return err
+	})
+	if err != nil {
+		return control.State{}, err
+	}
+	return next, nil
+}
+
+func (s *Store) withStateTx(ctx context.Context, expected uint64, fn func(tx *sql.Tx, cur control.State) (control.State, error)) (control.State, error) {
+	return s.stateTx(ctx, func(tx *sql.Tx, cur control.State) (control.State, error) {
+		if cur.Version != expected {
+			return control.State{}, ErrVersionConflict
+		}
+		return fn(tx, cur)
+	})
 }
 
 type querier interface {
@@ -377,11 +381,6 @@ func preparePath(path string) error {
 		return err
 	}
 	return nil
-}
-
-func newUUID() (string, error) {
-	value, err := uuid.NewRandom()
-	return value.String(), err
 }
 
 func formatTime(t time.Time) string         { return t.UTC().Format(time.RFC3339Nano) }

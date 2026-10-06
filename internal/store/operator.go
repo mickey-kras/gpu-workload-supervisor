@@ -11,7 +11,7 @@ var ErrWrongOwner = errors.New("operator owner precondition failed")
 var ErrConfigurationConflict = errors.New("operator configuration precondition failed")
 
 func (s *Store) StartOperatorTransition(ctx context.Context, e control.OperatorPrecondition, tr Transition) (control.State, error) {
-	return s.startTransition(ctx, e.Version, nil, &e, tr)
+	return s.startTransition(ctx, e.Version, &e, tr)
 }
 func operatorSource(ctx context.Context, tx *sql.Tx, s control.State, e control.OperatorPrecondition) error {
 	if e.Incarnation == "" || e.Incarnation != s.LeaseFence.Incarnation || e.Version != s.Version {
