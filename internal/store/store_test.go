@@ -306,3 +306,43 @@ func TestRegisterWorkRequiresMatchingStableWorkload(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestUserExecutionGateSharesReadersAndBlocksWriters(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	first, err := s.AcquireUserExecution(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.AcquireUserExecution(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	exclusive, err := s.AcquireUserExecution(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	gate, err := s.AcquireUserExecution(blocked, true)
+	if err == nil {
+		gate.Close()
+		t.Fatal("shared acquisition bypassed the exclusive gate")
+	}
+	if err := exclusive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	released, err := s.AcquireUserExecution(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := released.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

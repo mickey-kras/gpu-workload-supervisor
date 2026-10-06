@@ -102,3 +102,71 @@ func TestTakeoverDrainFailureNeverRestartsWorkload(t *testing.T) {
 		t.Fatal(after, e)
 	}
 }
+
+func operatorFixture(t *testing.T, runtime *fakeRuntime) (*Controller, control.OperatorPrecondition) {
+	t.Helper()
+	s := openStore(t)
+	snap := installTestCatalog(t, s)
+	state := ownershipState(t, s, control.OwnerSupervisor, control.WorkloadText)
+	c := testController(t, s, runtime)
+	return c, control.OperatorPrecondition{Incarnation: state.LeaseFence.Incarnation, Version: state.Version, Owner: state.Owner, ConfigurationRevision: snap.Revision}
+}
+
+func operatorSideEffects(t *testing.T, c *Controller, runtime *fakeRuntime) {
+	t.Helper()
+	if len(runtime.calls) != 0 {
+		t.Fatalf("rejected request reached runtime: %v", runtime.calls)
+	}
+	if id, err := c.store.InProgressTransition(context.Background()); err != nil || id != "" {
+		t.Fatalf("rejected request started transition %q: %v", id, err)
+	}
+}
+
+func TestOperatorRejectsUnknownActionBeforeAnyEffect(t *testing.T) {
+	runtime := &fakeRuntime{active: control.WorkloadText}
+	c, e := operatorFixture(t, runtime)
+	if _, err := c.OperatorTransition(context.Background(), "restart", "", e); err == nil {
+		t.Fatal("unknown action accepted")
+	}
+	operatorSideEffects(t, c, runtime)
+}
+
+func TestOperatorRejectsWrongSourceOwnerBeforeAnyEffect(t *testing.T) {
+	runtime := &fakeRuntime{active: control.WorkloadText}
+	c, e := operatorFixture(t, runtime)
+	e.Owner = control.OwnerUser
+	if _, err := c.OperatorTransition(context.Background(), "take-control", "", e); !errors.Is(err, store.ErrWrongOwner) {
+		t.Fatalf("wrong owner = %v", err)
+	}
+	operatorSideEffects(t, c, runtime)
+}
+
+func TestOperatorTakeoverAbortsWhenStatusUnavailable(t *testing.T) {
+	runtime := &fakeRuntime{active: control.WorkloadText, observeErr: errors.New("runtime obscured")}
+	c, e := operatorFixture(t, runtime)
+	if _, err := c.OperatorTransition(context.Background(), "take-control", "", e); err == nil {
+		t.Fatal("takeover proceeded without runtime status")
+	}
+	operatorSideEffects(t, c, runtime)
+}
+
+func TestOperatorTakeoverAbortsWhenWorkloadNotReady(t *testing.T) {
+	s := openStore(t)
+	snap := installTestCatalog(t, s)
+	state := ownershipState(t, s, control.OwnerSupervisor, control.WorkloadText)
+	// A closed gate keeps Status observational, so the readiness gate below it
+	// is the first check that fails.
+	closed := state
+	closed.Admission = control.AdmissionClosed
+	closed, err := s.UpdateState(context.Background(), state.Version, closed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &fakeRuntime{active: control.WorkloadText, healthFailures: 1}
+	c := testController(t, s, runtime)
+	e := control.OperatorPrecondition{Incarnation: closed.LeaseFence.Incarnation, Version: closed.Version, Owner: closed.Owner, ConfigurationRevision: snap.Revision}
+	if _, err := c.OperatorTransition(context.Background(), "take-control", "", e); !errors.Is(err, ErrHealthCheck) {
+		t.Fatalf("unready workload = %v", err)
+	}
+	operatorSideEffects(t, c, runtime)
+}

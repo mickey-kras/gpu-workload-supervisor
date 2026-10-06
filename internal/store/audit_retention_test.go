@@ -136,3 +136,48 @@ func TestPruneAuditHistoryRejectsInvalidCutoffAndLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestPruneAuditHistoryRollsBackWhenStorageFails(t *testing.T) {
+	for _, mode := range []string{"missing journal", "blocked event delete", "missing recovery audit"} {
+		t.Run(mode, func(t *testing.T) {
+			s := testStore(t)
+			ctx := context.Background()
+			state, err := s.State(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tr := Transition{ID: "old", Fence: state.LeaseFence, Source: state, Target: state, Previous: state, Phase: control.PhaseDraining, Deadline: time.Now()}
+			if err := s.BeginTransition(ctx, tr); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.AppendTransitionEvent(ctx, TransitionEvent{TransitionID: tr.ID, Phase: control.PhaseDraining, Kind: "intent", Action: "test"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.db.ExecContext(ctx, `UPDATE transitions SET status='failed', updated_at='2000-01-01T00:00:00Z', lease_epoch=99 WHERE transition_id=?`, tr.ID); err != nil {
+				t.Fatal(err)
+			}
+			switch mode {
+			case "missing journal":
+				if _, err := s.db.ExecContext(ctx, "DROP TABLE transition_events; DROP TABLE transitions"); err != nil {
+					t.Fatal(err)
+				}
+			case "blocked event delete":
+				if _, err := s.db.ExecContext(ctx, `CREATE TRIGGER reject_event_delete BEFORE DELETE ON transition_events
+					BEGIN SELECT RAISE(ABORT, 'event store unavailable'); END`); err != nil {
+					t.Fatal(err)
+				}
+			case "missing recovery audit":
+				if _, err := s.db.ExecContext(ctx, "DROP TABLE state_restorations"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := s.PruneAuditHistory(ctx, s.now().Add(-time.Hour), 10); err == nil {
+				t.Fatal("prune committed despite storage failure")
+			}
+			if mode != "missing journal" {
+				assertAuditTransitionIDs(t, s, "transitions", []string{tr.ID})
+				assertAuditTransitionIDs(t, s, "transition_events", []string{tr.ID})
+			}
+		})
+	}
+}

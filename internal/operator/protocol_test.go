@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestDecodeStrict(t *testing.T) {
+func TestDecodeRejectsUnknownFieldsDuplicatesAndTrailingData(t *testing.T) {
 	good := `{"protocolVersion":1,"requestId":"r-1","action":"status"}`
 	if _, c := Decode([]byte(good)); c != "ok" {
 		t.Fatal(c)

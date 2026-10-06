@@ -16,6 +16,7 @@ type fakeRuntime struct {
 	active                 control.Workload
 	mediaReady             bool
 	healthFailures         int
+	observeErr             error
 	startErr               error
 	partialStart           bool
 	stopErr                error
@@ -30,6 +31,9 @@ type fakeRuntime struct {
 }
 
 func (r *fakeRuntime) Observe(context.Context) (gpuruntime.Snapshot, error) {
+	if r.observeErr != nil {
+		return gpuruntime.Snapshot{}, r.observeErr
+	}
 	return gpuruntime.Snapshot{Workloads: map[control.Workload]gpuruntime.WorkloadObservation{
 		control.WorkloadText:  {Active: r.active == control.WorkloadText, Exclusive: true},
 		control.WorkloadMedia: {Active: r.mediaReady},

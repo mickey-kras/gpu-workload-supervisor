@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -325,5 +326,83 @@ func TestOpenRestoredMigratesV8WithoutLosingResolutionAudit(t *testing.T) {
 	if err := restored.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master
 		WHERE type = 'index' AND name = 'idx_transitions_in_progress_order'`).Scan(&indexCount); err != nil || indexCount != 1 {
 		t.Fatalf("transition index after migration = %d, %v", indexCount, err)
+	}
+}
+
+func TestOpenRestoredRejectsMissingUninitializedOrCorruptDatabase(t *testing.T) {
+	ctx := context.Background()
+	if opened, err := OpenRestored(ctx, filepath.Join(t.TempDir(), "missing.db")); err == nil {
+		opened.Close()
+		t.Fatal("missing database accepted")
+	}
+
+	uninitialized := filepath.Join(t.TempDir(), "uninitialized.db")
+	db, err := sql.Open("sqlite", uninitialized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if opened, err := OpenRestored(ctx, uninitialized); err == nil {
+		opened.Close()
+		t.Fatal("database without applied migrations accepted")
+	}
+
+	invalidState := filepath.Join(t.TempDir(), "invalid-state.db")
+	s, err := open(ctx, invalidState, fixedClock(), fixedUUID("11111111-1111-4111-8111-111111111111"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, "UPDATE control_state SET updated_at = 'invalid' WHERE singleton = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if opened, err := OpenRestored(ctx, invalidState); err == nil {
+		opened.Close()
+		t.Fatal("invalid control state accepted")
+	}
+
+	corrupt := filepath.Join(t.TempDir(), "corrupt.db")
+	s, err = open(ctx, corrupt, fixedClock(), fixedUUID("11111111-1111-4111-8111-111111111111"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(corrupt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 16384; i < 16384+1024 && i < len(contents); i++ {
+		contents[i] ^= 0xFF
+	}
+	if err := os.WriteFile(corrupt, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if opened, err := OpenRestored(ctx, corrupt); err == nil || !strings.Contains(err.Error(), "quick_check") {
+		if opened != nil {
+			opened.Close()
+		}
+		t.Fatalf("corrupt database check = %v", err)
+	}
+}
+
+func TestValidateRestoredDatabaseRejectsUnreadableConnection(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "closed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRestoredDatabase(context.Background(), db); err == nil {
+		t.Fatal("closed connection passed restored validation")
 	}
 }

@@ -56,7 +56,7 @@ func TestDecodeLimitedAcceptsOneStrictValue(t *testing.T) {
 	}
 }
 
-func TestDecodeLimitedRejects(t *testing.T) {
+func TestDecodeLimitedRejectsUnknownDuplicateAndOversizeInput(t *testing.T) {
 	var v struct {
 		A int `json:"a"`
 	}
