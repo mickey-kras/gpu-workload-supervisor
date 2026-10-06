@@ -2,9 +2,17 @@
 
 [Documentation](README.md) | [Repository](../README.md)
 
-The release workflow publishes the tested source tree and two Linux archives,
-each containing the `gpu-mode` and `gpu-workload-proxy` executables for amd64 or
-arm64. It also publishes a checksum file covering all archives and the CycloneDX
+The release workflow publishes the tested source tree, two Linux archives
+(amd64 and arm64), and one Debian package per architecture. Each archive
+contains four executables:
+
+- `gpu-mode`: controller; runs and journals workload transitions
+- `gpu-workload-proxy`: execution admission and completion proxy
+- `gpu-operator`: one-request local operator backend
+- `gpu-setup`: guided setup, discovery and catalog commit
+
+The Debian package adds the GNOME Shell extension and setup application. The
+workflow also publishes a checksum file covering all archives and the CycloneDX
 source SBOM. Build provenance is recorded in GitHub attestations and can be
 checked with `gh attestation verify` on a downloaded asset.
 
@@ -26,6 +34,10 @@ checked with `gh attestation verify` on a downloaded asset.
    checks and repository protections still apply. Re-run the failed follow-up job
    to recover a failed bump without publishing another release. A newer planned
    version on main is preserved; a lower version or unrelated PR changes fail closed.
+
+A non-empty `docs/releases/vX.Y.Z.md` becomes the GitHub release notes. The
+file is optional; without one the release uses auto-generated notes. `v0.1.6`
+and `v0.1.7` shipped without notes files.
 
 The `release-automation` environment, `RELEASE_APP_ID` repository variable, App
 installation with Contents write and Pull requests write, release-branch/tag

@@ -1,6 +1,6 @@
 # Configured workloads
 
-A catalog is a version 1 JSON object containing 1–32 `profiles`:
+A catalog is a version 1 JSON object containing 1-32 `profiles`:
 
 ```json
 {
@@ -88,16 +88,20 @@ Shared-unit model replacement is unsupported. Stop workload proxies before
 applying a catalog change; setup and CLI configure both enforce the proxy
 lifetime lock, including in-flight requests.
 
-The launch file must match systemd's fragment, have no drop-ins or pending daemon
-reload, and use the supported direct-command subset. Executables and their
-resolved directory ancestry must be root-owned and not group/world writable.
-User-owned runtime installations are therefore not qualified by this adapter.
-Shell wrappers, hooks, environment files, downloads, automatic restart, command
-substitution, and unrecognized options are rejected. No application/model files
-are rewritten or installed. llama.cpp requires an existing local model file;
-vLLM requires an existing local model directory. Ollama requires `serve`, explicit
-`OLLAMA_NO_CLOUD=1` and matching `OLLAMA_HOST`; the selected model must be local
-before preloading. The command subset is intentionally restrictive.
+Launch-file constraints:
+
+- The launch file must match systemd's fragment, have no drop-ins or pending
+  daemon reload, and use the supported direct-command subset.
+- Executables and their resolved directory ancestry must be root-owned and not
+  group/world writable. User-owned runtime installations are therefore not
+  qualified by this adapter.
+- Shell wrappers, hooks, environment files, downloads, automatic restart,
+  command substitution, and unrecognized options are rejected.
+- No application/model files are rewritten or installed.
+- llama.cpp requires an existing local model file; vLLM requires an existing
+  local model directory.
+- Ollama requires `serve`, explicit `OLLAMA_NO_CLOUD=1` and matching
+  `OLLAMA_HOST`; the selected model must be local before preloading.
 
 Readiness requires native health plus exactly the selected model identity;
 Ollama checks its loaded model list. A native proxy accepts only supported

@@ -60,7 +60,7 @@ Completed registrations and their transition snapshot links are pruned after 30 
 
 All unclassified routes fail closed, including GET, HEAD and OPTIONS. Configure each verified read-only method/path with `-read-only-route`; HEAD is not inferred from GET. Required non-execution editing mutations must be explicitly configured as passthrough routes. When upgrading from implicit safe-method forwarding, inventory and configure these routes first. A method or route name alone does not prove that a backend operation is read-only.
 
-The listener is restricted to loopback because explicit user ownership bypasses supervisor lease registration. External exposure and requester authentication belong to the deployment boundary.
+The listener is restricted to loopback because explicit user ownership bypasses supervisor lease registration. Any process that can write the state directory can drive user-mode execution; processes running as the service UID are fully trusted (see [SECURITY.md](../SECURITY.md)). External exposure and requester authentication belong to the deployment boundary.
 
 The proxy is content-blind. Content inspection and domain policy belong to the caller.
 
@@ -72,9 +72,9 @@ upstream on a trusted network; registration tokens are completion capabilities.
 Custom transports supplied by Go callers must enforce the same trust boundary.
 
 The listener defaults to a 10-second header timeout and a 2-minute idle keep-alive
-timeout (`-read-header-timeout` and `-idle-timeout`). It deliberately has no total
-request-body read or response-write deadline so uploads and long-running streams
-can complete. Concurrent requests are capped at 128 by default (`-max-inflight`),
+timeout (`-read-header-timeout` and `-idle-timeout`). It has no total
+request-body read or response-write deadline, so uploads and long streams
+complete. Concurrent requests are capped at 128 by default (`-max-inflight`),
 with 16 separate slots reserved for POST completion reports at the configured
 completion path (`-max-completion-inflight`). Both limits must be positive. Saturation
 returns HTTP 503 with `proxy_capacity_exceeded` and `Retry-After: 1` before work

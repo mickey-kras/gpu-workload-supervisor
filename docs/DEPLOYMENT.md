@@ -25,39 +25,51 @@ before any effect when none has been accepted:
   status
 ```
 
-The uppercase paths, unit names, and `PORT` values are placeholders. Select a
-checksummed release and use its absolute version-pinned binary paths for the CLI
-and every proxy; do not rely on a mutable `PATH` selection. Keep one explicit
-`-state` path in a durable directory owned by the service identity with mode
-`0700`. Use the same state path, trusted executables, capacity settings, and
-timeout flags in manual commands and automation. Put flags before the single
-command. In the examples below, `[runtime flags]` means `-state` plus the
+The uppercase paths, unit names, and `PORT` values are placeholders. Rules:
+
+- Select a checksummed release and use its absolute version-pinned binary paths
+  for the CLI and every proxy; do not rely on a mutable `PATH` selection.
+- Keep one explicit `-state` path in a durable directory owned by the service
+  identity with mode `0700`.
+- Use the same state path, trusted executables, capacity settings, and timeout
+  flags in manual commands and automation.
+- Put flags before the single command.
+- Back up before changing binaries: opening state, including through `status`
+  or a proxy, can apply database migrations.
+
+In the examples below, `[runtime flags]` means `-state` plus the
 trusted executable, capacity, and timeout flags; it is not a literal CLI
 argument. `configure` and `verify-host` take `-catalog` instead of pinning
 state. `restore-state` needs only `-state`; `prune-audit` uses the [audit maintenance flags](OPERATIONS.md#retain-or-archive-audit-history).
-Opening state, including through `status` or a proxy, can apply database migrations;
-back up before changing binaries.
 
-`-health-timeout` bounds each complete health check, including the opposing
-unit/cgroup probe and HTTP request. `-action-timeout` also bounds controller health
-and observation probes. `-verify-timeout` bounds the entire readiness phase,
-including probes and polling; the earliest applicable deadline wins. Failed
-switch verification closes admission and requires recovery, while failed recovery
-keeps the existing error state. Before lifecycle effects, a capability preflight
-checks the host hierarchy, manager anchor, and unit mappings while allowing populated
-workload groups. Release checks still run after stopping to detect changes.
+Timeout flags:
+
+- `-health-timeout` bounds each complete health check, including the opposing
+  unit/cgroup probe and HTTP request.
+- `-action-timeout` also bounds controller health and observation probes.
+- `-verify-timeout` bounds the entire readiness phase, including probes and
+  polling; the earliest applicable deadline wins.
+
+Failed switch verification closes admission and requires recovery, while failed
+recovery keeps the existing error state. Before lifecycle effects, a capability
+preflight checks the host hierarchy, manager anchor, and unit mappings while
+allowing populated workload groups. Release checks still run after stopping to
+detect changes.
 
 Before opening state or enabling automation, run `gpu-mode -catalog
-/PRIVATE/catalog.json [probe flags] verify-host`. It checks those capabilities
-against a candidate catalog without creating state, acquiring
-state locks, migrating SQLite, or starting/stopping units. Exit status zero means
-the capability check passed; errors return nonzero. `-action-timeout` bounds the
-probe and Ctrl-C cancels it. This is not GPU release or workload health proof.
-A failed unit may have a removed cgroup: preflight accepts that capability state,
-but release still requires stopped units. For crashed units with unfinished work,
-stop proxies and use the documented `resolve-work` then `recover` sequence.
-After stopping a failed unit, recovery verifies its cgroup is empty before
-clearing systemd's retained failure state and rechecking `inactive/dead`.
+/PRIVATE/catalog.json [probe flags] verify-host`:
+
+- It checks those capabilities against a candidate catalog without creating
+  state, acquiring state locks, migrating SQLite, or starting/stopping units.
+- Exit status zero means the capability check passed; errors return nonzero.
+- `-action-timeout` bounds the probe and Ctrl-C cancels it.
+- This is not GPU release or workload health proof.
+- A failed unit may have a removed cgroup: preflight accepts that capability
+  state, but release still requires stopped units.
+- For crashed units with unfinished work, stop proxies and use the documented
+  `resolve-work` then `recover` sequence.
+- After stopping a failed unit, recovery verifies its cgroup is empty before
+  clearing systemd's retained failure state and rechecking `inactive/dead`.
 
 After target verification succeeds, durable finalization uses its own bounded
 `-finalize-timeout`, so caller cancellation does not strand a verified transition.
@@ -91,17 +103,19 @@ A removed workload cgroup is also released; missing events in an existing group,
 unreadable or malformed evidence, mismatched systemd metadata, and surviving
 children fail closed. The UI is unavailable outside media mode.
 
-The compatibility `media-unload` adapter sends the configured release request
-and leaves the UI alive. **Live-media unload cannot currently be verified:** HTTP
-2xx does not prove the runtime has drained work and released models/resources, and
-no supported runtime-specific verifier is implemented. Release therefore fails
-closed promptly with an actionable error. Use the `systemd` adapter, or explicitly
-stop media
-before recovery. Stopped media uses cgroup verification in either policy, including
-ownership changes and work resolution. Stopped text is always verified. Readiness
-and verify-only recovery also verify the opposing workload's release. Switching
-text or idle to media may retain the destination UI after text release is proven;
-it does not require unloading the destination itself.
+- The compatibility `media-unload` adapter sends the configured release request
+  and leaves the UI alive.
+- **Live-media unload cannot currently be verified:** HTTP 2xx does not prove
+  the runtime has drained work and released models/resources, and no supported
+  runtime-specific verifier is implemented.
+- Release therefore fails closed promptly with an actionable error.
+- Use the `systemd` adapter, or explicitly stop media before recovery.
+- Stopped media uses cgroup verification in either policy, including ownership
+  changes and work resolution.
+- Stopped text is always verified.
+- Readiness and verify-only recovery also verify the opposing workload's release.
+- Switching text or idle to media may retain the destination UI after text
+  release is proven; it does not require unloading the destination itself.
 
 ## Configure cgroups
 
@@ -152,16 +166,19 @@ repair capacity before retrying. A capacity snapshot cannot reserve GPU memory.
 
 ## Validate configuration
 
-Invalid configuration is rejected: a profile requirement plus headroom must not
-overflow, workload cgroups must not
-overlap, one unit must not serve two
-profiles, and the release URL is required under `media-unload`. The `systemd` adapter does
-not need a
-release URL; if supplied, it is still validated. An unknown adapter
-is invalid. Every health URL must be a loopback URL. The `systemctl` executable,
-and `nvidia-smi` when configured, must resolve to root-owned executable files under
-root-owned directories, with no group/world writable component. Supplying an
-obsolete flag is an error even for `status` or `restore-state`.
+Invalid configuration is rejected:
+
+- A profile requirement plus headroom must not overflow.
+- Workload cgroups must not overlap.
+- One unit must not serve two profiles.
+- The release URL is required under `media-unload`; the `systemd` adapter does
+  not need one, but a supplied URL is still validated.
+- An unknown adapter is invalid.
+- Every health URL must be a loopback URL.
+- The `systemctl` executable, and `nvidia-smi` when configured, must resolve to
+  root-owned executable files under root-owned directories, with no group/world
+  writable component.
+- Supplying an obsolete flag is an error even for `status` or `restore-state`.
 
 ## Prevent bypasses
 
