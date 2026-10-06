@@ -46,7 +46,7 @@ function scan(directory) {
   assert.ifError(result.error);
   assert.equal(result.signal, null);
   const report = JSON.parse(result.stdout);
-  assert.equal(report.cliVersion, '0.16.1');
+  assert.equal(report.cliVersion, '0.18.0');
   return report.diagnostics.filter(finding => finding.rule === 'ai-slop/hallucinated-import');
 }
 

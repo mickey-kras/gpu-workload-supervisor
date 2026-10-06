@@ -11,6 +11,6 @@
     "aislop:ci:sarif": "aislop ci --sarif"
   },
   "devDependencies": {
-    "aislop": "0.16.1"
+    "aislop": "0.18.0"
   }
 }
