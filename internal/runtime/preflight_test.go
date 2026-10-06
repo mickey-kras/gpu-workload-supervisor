@@ -109,15 +109,18 @@ func (r *failedStopRunner) Run(ctx context.Context, name string, args ...string)
 }
 
 func TestStopFailedUnitResetsOnlyAfterVerifiedEmptyCgroup(t *testing.T) {
-	for _, mode := range []MediaStopMode{MediaStopService, MediaStopUnload} {
+	for _, adapter := range []string{"systemd", control.AdapterMediaUnload} {
 		for _, scenario := range []string{"removed", "empty", "populated", "missing events", "missing metadata", "reset failure", "still failed"} {
-			t.Run(string(mode)+"/"+scenario, func(t *testing.T) {
+			t.Run(adapter+"/"+scenario, func(t *testing.T) {
 				r := &failedStopRunner{fakeRunner: fakeRunner{outputs: map[string][]byte{
 					textShowCommand:  []byte("LoadState=loaded\nActiveState=failed\nSubState=failed\nControlGroup=\n"),
 					mediaShowCommand: stoppedOutput(),
 				}}}
 				m := strictManager(t, r)
-				m.config.MediaStopMode = mode
+				m.config.Catalog.Profiles[1].Adapter = adapter
+				if adapter == control.AdapterMediaUnload {
+					m.config.Catalog.Profiles[1].ReleaseURL = "http://127.0.0.1:8188/free"
+				}
 				root := fixtureCgroups(t, m)
 				switch scenario {
 				case "empty":

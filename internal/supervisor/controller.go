@@ -106,7 +106,7 @@ func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
 		return c.latchObservationFailure(ctx, state, err)
 	}
 	pendingMedia := 0
-	if snapshot.TextActive {
+	if snapshot.Workloads[control.WorkloadText].Active {
 		pendingMedia, err = c.store.PendingWorkload(ctx, control.WorkloadMedia)
 		if err != nil {
 			return c.latchObservationFailure(ctx, state, err)
@@ -119,10 +119,11 @@ func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {
 			return state, err
 		}
 	}
-	if err := c.drainRecoveryWork(ctx, snapshot.TextActive, needsEntry); err != nil {
+	textActive := snapshot.Workloads[control.WorkloadText].Active
+	if err := c.drainRecoveryWork(ctx, textActive, needsEntry); err != nil {
 		return state, err
 	}
-	return c.settleReconciled(ctx, state, snapshot.TextActive)
+	return c.settleReconciled(ctx, state, textActive)
 }
 
 func (c *Controller) reconcileSource(ctx context.Context) (control.State, error) {
@@ -155,7 +156,7 @@ func (c *Controller) recoverLatched(ctx context.Context, state control.State, ru
 }
 
 func needsReconcileEntry(state control.State, snapshot gpuruntime.Snapshot, pendingMedia int) bool {
-	return !snapshot.TextActive || pendingMedia != 0 ||
+	return !snapshot.Workloads[control.WorkloadText].Active || pendingMedia != 0 ||
 		state.ActiveWorkload != control.WorkloadText || state.DesiredWorkload != control.WorkloadText ||
 		state.Phase != control.PhaseStable || state.Health != control.HealthHealthy ||
 		state.Admission != control.AdmissionOpen
@@ -261,14 +262,15 @@ func (c *Controller) Recover(ctx context.Context) (control.State, error) {
 	if err != nil {
 		return state, err
 	}
-	if err := c.drainRecoveryWork(ctx, snapshot.TextActive, true); err != nil {
+	textActive := snapshot.Workloads[control.WorkloadText].Active
+	if err := c.drainRecoveryWork(ctx, textActive, true); err != nil {
 		return state, err
 	}
 	final := state
 	final.Owner = control.OwnerSupervisor
 	final.Phase = control.PhaseStable
 	final.Health = control.HealthHealthy
-	if snapshot.TextActive {
+	if textActive {
 		if err := c.healthy(ctx, control.WorkloadText); err != nil {
 			return state, err
 		}

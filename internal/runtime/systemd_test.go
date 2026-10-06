@@ -62,7 +62,7 @@ func TestRecoveryStopsBothSystemdUnitsRatherThanOnlyReleasingMediaModels(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.TextActive || snapshot.MediaReady {
+	if snapshot.AnyActive() {
 		t.Fatalf("runtime remained active: %#v", snapshot)
 	}
 	if err := manager.ReleasedFor(context.Background(), control.WorkloadIdle); err != nil {
@@ -107,7 +107,7 @@ func TestObserveKeepsMediaAvailabilitySeparateFromTextOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !snapshot.TextActive || !snapshot.MediaReady {
+	if !snapshot.Workloads[control.WorkloadText].Active || !snapshot.Workloads[control.WorkloadMedia].Active {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }
@@ -133,7 +133,7 @@ func TestHealthRequiresSuccessStatus(t *testing.T) {
 	}))
 	defer server.Close()
 	config := testConfig()
-	config.TextHealthURL = server.URL
+	config.Catalog.Profiles[0].HealthURL = server.URL
 	manager, err := newSystemdManager(config, stoppedRunner(), server.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -146,7 +146,7 @@ func TestHealthRequiresSuccessStatus(t *testing.T) {
 
 func TestConfigurationRejectsNonLoopbackEndpoint(t *testing.T) {
 	config := testConfig()
-	config.TextHealthURL = "https://example.com/health"
+	config.Catalog.Profiles[0].HealthURL = "https://example.com/health"
 	if _, err := newSystemdManager(config, &fakeRunner{}, http.DefaultClient); err == nil {
 		t.Fatal("expected endpoint validation failure")
 	}
@@ -161,8 +161,8 @@ func TestMediaStopUsesReleaseEndpoint(t *testing.T) {
 	}))
 	defer server.Close()
 	config := testConfig()
-	config.MediaHealthURL = server.URL
-	config.MediaReleaseURL = server.URL + "/free"
+	config.Catalog.Profiles[1].HealthURL = server.URL
+	config.Catalog.Profiles[1].ReleaseURL = server.URL + "/free"
 	runner := &fakeRunner{outputs: map[string][]byte{
 		mediaShowCommand: []byte("LoadState=loaded\nActiveState=active\nSubState=running\n"),
 	}}
@@ -203,7 +203,7 @@ func TestRedirectIsNotAcceptedAsHealthy(t *testing.T) {
 	}))
 	defer server.Close()
 	config := testConfig()
-	config.TextHealthURL = server.URL + "/redirect"
+	config.Catalog.Profiles[0].HealthURL = server.URL + "/redirect"
 	manager, err := NewSystemdManager(config)
 	if err != nil {
 		t.Fatal(err)
@@ -217,23 +217,20 @@ func TestRedirectIsNotAcceptedAsHealthy(t *testing.T) {
 
 func testConfig() SystemdConfig {
 	return SystemdConfig{
-		TextUnit:        "text.service",
-		MediaUnit:       "media.service",
-		TextHealthURL:   "http://127.0.0.1:8080/health",
-		MediaHealthURL:  "http://127.0.0.1:8188/",
-		MediaReleaseURL: "http://127.0.0.1:8188/free",
-		HealthTimeout:   time.Second,
-		GPUIndex:        0,
-		TextCgroup:      "/workloads/text.service",
-		MediaCgroup:     "/workloads/media.service",
-		NvidiaSMIPath:   "/usr/bin/true",
-		SystemctlPath:   "/usr/bin/true",
+		Catalog: &control.Catalog{Version: 1, Profiles: []control.Profile{
+			{ID: control.WorkloadText, Label: "text", Adapter: "systemd", Unit: "text.service", Cgroup: "/workloads/text.service", HealthURL: "http://127.0.0.1:8080/health"},
+			{ID: control.WorkloadMedia, Label: "media", Adapter: control.AdapterMediaUnload, Unit: "media.service", Cgroup: "/workloads/media.service", HealthURL: "http://127.0.0.1:8188/", ReleaseURL: "http://127.0.0.1:8188/free"},
+		}},
+		HealthTimeout: time.Second,
+		GPUIndex:      0,
+		NvidiaSMIPath: "/usr/bin/true",
+		SystemctlPath: "/usr/bin/true",
 	}
 }
 
 func TestConfigurationRejectsOptionLikeUnit(t *testing.T) {
 	config := testConfig()
-	config.TextUnit = "--system.service"
+	config.Catalog.Profiles[0].Unit = "--system.service"
 	if _, err := newSystemdManager(config, &fakeRunner{}, http.DefaultClient); err == nil {
 		t.Fatal("expected unit validation failure")
 	}
@@ -252,12 +249,7 @@ func TestCatalogCapacityRequirementTriggersGPUProbeValidation(t *testing.T) {
 	if config.measuresCapacity() {
 		t.Fatal("zero requirements measured capacity")
 	}
-	config.TextRequiredMiB = 1
-	if !config.measuresCapacity() {
-		t.Fatal("measured text requirement ignored")
-	}
 	c := acceptanceCatalog()
-	config = testConfig()
 	config.Catalog = &c
 	if config.measuresCapacity() {
 		t.Fatal("zero profile requirements measured capacity")

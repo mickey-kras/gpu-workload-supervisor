@@ -29,14 +29,15 @@ func TestManagerRejectsUnsafeConfiguration(t *testing.T) {
 		name   string
 		change func(*SystemdConfig)
 	}{
-		{"missing unit", func(c *SystemdConfig) { c.TextUnit = "" }},
-		{"same unit", func(c *SystemdConfig) { c.MediaUnit = c.TextUnit }},
+		{"missing catalog", func(c *SystemdConfig) { c.Catalog = nil }},
+		{"missing unit", func(c *SystemdConfig) { c.Catalog.Profiles[0].Unit = "" }},
+		{"same unit", func(c *SystemdConfig) { c.Catalog.Profiles[1].Unit = c.Catalog.Profiles[0].Unit }},
 		{"negative GPU", func(c *SystemdConfig) { c.GPUIndex = -1 }},
-		{"missing cgroup", func(c *SystemdConfig) { c.TextCgroup = "" }},
+		{"missing cgroup", func(c *SystemdConfig) { c.Catalog.Profiles[0].Cgroup = "" }},
 		{"missing systemctl", func(c *SystemdConfig) { c.SystemctlPath = "/not/a/command" }},
 		{"zero timeout", func(c *SystemdConfig) { c.HealthTimeout = 0 }},
-		{"non-HTTP endpoint", func(c *SystemdConfig) { c.MediaHealthURL = "file:///tmp/health" }},
-		{"remote release", func(c *SystemdConfig) { c.MediaReleaseURL = "https://example.com/free" }},
+		{"non-HTTP endpoint", func(c *SystemdConfig) { c.Catalog.Profiles[1].HealthURL = "file:///tmp/health" }},
+		{"remote release", func(c *SystemdConfig) { c.Catalog.Profiles[1].ReleaseURL = "https://example.com/free" }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -79,15 +80,24 @@ func TestObserveRejectsAmbiguousAndFailedSystemdState(t *testing.T) {
 			t.Fatalf("invalid state accepted: %q", output)
 		}
 	}
-	runner.outputs[text] = []byte("LoadState=loaded\nActiveState=inactive")
+	runner.outputs[text] = stoppedOutput()
 	runner.errs[media] = errors.New("media observation failed")
 	if _, err := manager.Observe(context.Background()); err == nil {
 		t.Fatal("media observation failure accepted")
 	}
 	delete(runner.errs, media)
-	runner.outputs[media] = []byte("LoadState=loaded\nActiveState=active\nSubState=exited")
+	for _, output := range []string{
+		"LoadState=loaded\nActiveState=active\nSubState=exited",
+		"LoadState=loaded\nActiveState=inactive\nSubState=running",
+	} {
+		runner.outputs[media] = []byte(output)
+		if _, err := manager.Observe(context.Background()); err == nil {
+			t.Fatalf("ambiguous media state accepted: %q", output)
+		}
+	}
+	runner.outputs[media] = []byte("LoadState=loaded\nActiveState=active\nSubState=running\n")
 	snapshot, err := manager.Observe(context.Background())
-	if err != nil || snapshot.TextActive || !snapshot.MediaReady {
+	if err != nil || snapshot.Workloads[control.WorkloadText].Active || !snapshot.Workloads[control.WorkloadMedia].Active {
 		t.Fatalf("snapshot = %#v, error = %v", snapshot, err)
 	}
 }
@@ -192,7 +202,7 @@ func TestMediaStopRejectsSystemdInspectionFailure(t *testing.T) {
 	}
 }
 
-func TestMediaStopRequiresReleaseEndpointUnlessUnitIsInactive(t *testing.T) {
+func TestMediaUnloadRejectsTransitionalUnitStates(t *testing.T) {
 	for _, state := range []string{"failed", "deactivating", "activating"} {
 		t.Run(state, func(t *testing.T) {
 			runner := &fakeRunner{outputs: map[string][]byte{
@@ -205,8 +215,8 @@ func TestMediaStopRequiresReleaseEndpointUnlessUnitIsInactive(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := manager.Stop(context.Background(), control.WorkloadMedia); err == nil || (!strings.Contains(err.Error(), "media release request") || !errors.Is(err, releaseErr)) {
-				t.Fatalf("expected release failure for %s unit, got %v", state, err)
+			if err := manager.Stop(context.Background(), control.WorkloadMedia); err == nil || errors.Is(err, releaseErr) {
+				t.Fatalf("expected unload rejection for %s unit without a release request, got %v", state, err)
 			}
 		})
 	}

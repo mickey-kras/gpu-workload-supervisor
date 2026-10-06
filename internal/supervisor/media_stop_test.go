@@ -15,8 +15,10 @@ type exclusiveRuntime struct{ fakeRuntime }
 
 func (r *exclusiveRuntime) Observe(ctx context.Context) (gpuruntime.Snapshot, error) {
 	s, err := r.fakeRuntime.Observe(ctx)
-	s.MediaExclusive = true
-	if s.TextActive && s.MediaReady {
+	media := s.Workloads[control.WorkloadMedia]
+	media.Exclusive = true
+	s.Workloads[control.WorkloadMedia] = media
+	if s.Workloads[control.WorkloadText].Active && media.Active {
 		return s, errors.New("concurrent runtimes")
 	}
 	return s, err
@@ -102,7 +104,11 @@ func TestExclusiveIdleSwitchStopsUnexpectedMedia(t *testing.T) {
 
 func TestExclusiveVerificationRejectsMediaDuringTextAndIdle(t *testing.T) {
 	for _, target := range []control.Workload{control.WorkloadText, control.WorkloadIdle} {
-		if err := verifySnapshot(target, gpuruntime.Snapshot{TextActive: target == control.WorkloadText, MediaReady: true, MediaExclusive: true}); err == nil {
+		snapshot := gpuruntime.Snapshot{Workloads: map[control.Workload]gpuruntime.WorkloadObservation{
+			control.WorkloadText:  {Active: target == control.WorkloadText, Exclusive: true},
+			control.WorkloadMedia: {Active: true, Exclusive: true},
+		}}
+		if err := verifySnapshot(target, snapshot); err == nil {
 			t.Fatal("accepted media for", target)
 		}
 	}

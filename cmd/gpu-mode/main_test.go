@@ -104,12 +104,12 @@ func TestCLIStatusFailsClosedWhenTrustedProbeCannotObserveRuntime(t *testing.T) 
 func TestCLICommandsFailClosedWhenSystemdCannotBeObserved(t *testing.T) {
 	previousArgs, previousStdout := os.Args, os.Stdout
 	t.Cleanup(func() { os.Args, os.Stdout = previousArgs, previousStdout })
-	for _, command := range []string{"reconcile", "recover", "text", "media", "idle", "take-control", "user-switch", "return-control", "recover-user"} {
+	for _, command := range []string{"reconcile", "recover", "switch", "take-control", "user-switch", "return-control", "recover-user"} {
 		t.Run(command, func(t *testing.T) {
 			statePath := filepath.Join(t.TempDir(), "state.db")
 			seedCatalog(t, statePath)
 			args := []string{"gpu-mode", "-state", statePath, "-systemctl", "/usr/bin/true"}
-			if command == "take-control" || command == "user-switch" || command == "return-control" || command == "recover-user" {
+			if command != "reconcile" && command != "recover" {
 				args = append(args, "-target", "text")
 			}
 			args = append(args, command)
@@ -132,6 +132,21 @@ func TestCLICommandsFailClosedWhenSystemdCannotBeObserved(t *testing.T) {
 				t.Fatalf("command opened admission: %#v", state)
 			}
 			output.Close()
+		})
+	}
+}
+
+func TestCLIPositionalWorkloadShortcutsAreRemoved(t *testing.T) {
+	previousArgs := os.Args
+	t.Cleanup(func() { os.Args = previousArgs })
+	for _, shortcut := range []string{"text", "media", "idle"} {
+		t.Run(shortcut, func(t *testing.T) {
+			statePath := filepath.Join(t.TempDir(), "state.db")
+			seedCatalog(t, statePath)
+			os.Args = []string{"gpu-mode", "-state", statePath, "-systemctl", "/usr/bin/true", shortcut}
+			if err := run(); err == nil || !strings.Contains(err.Error(), "unknown command") {
+				t.Fatalf("positional shortcut = %v", err)
+			}
 		})
 	}
 }
@@ -262,7 +277,7 @@ func TestCLILegacyReleaseThresholdRejectedEvenWhenZero(t *testing.T) {
 func TestRemovedLegacyWorkloadFlagsAreRejectedBeforeOpeningState(t *testing.T) {
 	previous := os.Args
 	t.Cleanup(func() { os.Args = previous })
-	for _, flag := range []string{"-text-unit", "-media-unit", "-text-health-url", "-media-health-url", "-media-stop-mode", "-media-release-url", "-text-cgroup", "-media-cgroup", "-text-required-mib", "-media-required-mib", "-configured"} {
+	for _, flag := range []string{"-workload", "-text-unit", "-media-unit", "-text-health-url", "-media-health-url", "-media-stop-mode", "-media-release-url", "-text-cgroup", "-media-cgroup", "-text-required-mib", "-media-required-mib", "-configured"} {
 		path := filepath.Join(t.TempDir(), "state.db")
 		os.Args = []string{"gpu-mode", "-state", path, flag, "x", "status"}
 		if err := run(); err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {

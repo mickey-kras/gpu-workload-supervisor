@@ -17,8 +17,8 @@ func stoppedOutput() []byte {
 func strictManager(t *testing.T, runner CommandRunner) *SystemdManager {
 	t.Helper()
 	config := testConfig()
-	config.MediaStopMode = MediaStopService
-	config.MediaReleaseURL = ""
+	config.Catalog.Profiles[1].Adapter = "systemd"
+	config.Catalog.Profiles[1].ReleaseURL = ""
 	manager, err := newSystemdManager(config, runner, http.DefaultClient)
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +76,11 @@ func TestStopServiceStartsOnlyAfterBothUnitsAndCgroupsAreReleased(t *testing.T) 
 			if got := runner.calls[len(runner.calls)-1]; got != "/usr/bin/true --user start -- "+string(workload)+".service" {
 				t.Fatal(got)
 			}
-			writeEvents(t, manager.cgroups.root, "workloads/text.service", "populated 1\n")
+			opposing := "media.service"
+			if workload == control.WorkloadMedia {
+				opposing = "text.service"
+			}
+			writeEvents(t, manager.cgroups.root, "workloads/"+opposing, "populated 1\n")
 			runner.calls = nil
 			if err := manager.Start(context.Background(), workload); err == nil {
 				t.Fatal("ignored populated workload cgroup")
@@ -90,12 +94,13 @@ func TestStopServiceStartsOnlyAfterBothUnitsAndCgroupsAreReleased(t *testing.T) 
 	}
 }
 
-func TestStopServiceRejectsConcurrentRuntimesAndProbeFailures(t *testing.T) {
+func TestObserveReportsConcurrentRuntimesForSupervisorArbitration(t *testing.T) {
 	active := []byte("LoadState=loaded\nActiveState=active\nSubState=running\n")
 	runner := &fakeRunner{outputs: map[string][]byte{textShowCommand: active, mediaShowCommand: active}}
 	manager := strictManager(t, runner)
-	if _, err := manager.Observe(context.Background()); err == nil {
-		t.Fatal("accepted concurrent runtimes")
+	snapshot, err := manager.Observe(context.Background())
+	if err != nil || !snapshot.Workloads[control.WorkloadText].Active || !snapshot.Workloads[control.WorkloadMedia].Active {
+		t.Fatalf("concurrent runtimes not reported: %#v, %v", snapshot, err)
 	}
 	runner.errs = map[string]error{textShowCommand: errors.New("probe failed")}
 	if err := manager.Start(context.Background(), control.WorkloadMedia); err == nil {
@@ -104,16 +109,5 @@ func TestStopServiceRejectsConcurrentRuntimesAndProbeFailures(t *testing.T) {
 	runner.errs = map[string]error{"/usr/bin/true --user stop -- media.service": errors.New("stop failed")}
 	if err := manager.Stop(context.Background(), control.WorkloadMedia); err == nil {
 		t.Fatal("ignored stop failure")
-	}
-}
-
-func TestMediaStopModeValidation(t *testing.T) {
-	for _, mode := range []MediaStopMode{"", MediaStopUnload, MediaStopService, "STOP-SERVICE"} {
-		config := testConfig()
-		config.MediaStopMode = mode
-		_, err := newSystemdManager(config, &fakeRunner{}, http.DefaultClient)
-		if (err != nil) != (mode == "STOP-SERVICE") {
-			t.Fatalf("mode %q: %v", mode, err)
-		}
 	}
 }

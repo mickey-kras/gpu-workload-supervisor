@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"os/exec"
-	"regexp"
 	"strings"
 	"time"
 
@@ -35,36 +33,10 @@ func (ExecRunner) Run(ctx context.Context, name string, args ...string) ([]byte,
 	return output, err
 }
 
-var systemdUnitPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_.@-]*\.service$`)
-
-type MediaStopMode string
-
-const (
-	MediaStopUnload  MediaStopMode = "unload"
-	MediaStopService MediaStopMode = "stop-service"
-)
-
-func (mode MediaStopMode) Validate() error {
-	if mode != "" && mode != MediaStopUnload && mode != MediaStopService {
-		return fmt.Errorf("invalid media stop mode %q", mode)
-	}
-	return nil
-}
-
 type SystemdConfig struct {
 	Catalog             *control.Catalog
-	MediaStopMode       MediaStopMode
-	TextUnit            string
-	MediaUnit           string
-	TextHealthURL       string
-	MediaHealthURL      string
-	MediaReleaseURL     string
 	HealthTimeout       time.Duration
 	GPUIndex            int
-	TextCgroup          string
-	MediaCgroup         string
-	TextRequiredMiB     uint64
-	MediaRequiredMiB    uint64
 	CapacityHeadroomMiB uint64
 	NvidiaSMIPath       string
 	SystemctlPath       string
@@ -105,11 +77,6 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 		return nil, fmt.Errorf("systemctl: %w", err)
 	}
 	config.SystemctlPath = resolvedSystemctl
-	if config.Catalog == nil {
-		if err := config.validateEndpoints(); err != nil {
-			return nil, err
-		}
-	}
 	if config.HealthTimeout <= 0 || config.GPUIndex < 0 {
 		return nil, errors.New("invalid runtime timeout or GPU index")
 	}
@@ -119,116 +86,32 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 	return &SystemdManager{config: config, runner: runner, client: client, cgroups: cgroupFS{root: "/sys/fs/cgroup", verify: verifyUnifiedHierarchy}}, nil
 }
 
-func (config SystemdConfig) validateUnits() error {
-	if err := config.MediaStopMode.Validate(); err != nil {
-		return err
-	}
-	if config.TextUnit == "" || config.MediaUnit == "" {
-		return errors.New("text and media units are required")
-	}
-	if config.TextUnit == config.MediaUnit {
-		return errors.New("text and media units must differ")
-	}
-	if !systemdUnitPattern.MatchString(config.TextUnit) || !systemdUnitPattern.MatchString(config.MediaUnit) {
-		return errors.New("invalid systemd unit name")
-	}
-	return nil
-}
-
-func (config SystemdConfig) validateResources() error {
-	if config.GPUIndex < 0 {
-		return errors.New("GPU index must not be negative")
-	}
-	for _, group := range []string{config.TextCgroup, config.MediaCgroup} {
-		if err := validateCgroup(group); err != nil {
-			return err
-		}
-	}
-	if config.TextCgroup == config.MediaCgroup || strings.HasPrefix(config.TextCgroup, config.MediaCgroup+"/") || strings.HasPrefix(config.MediaCgroup, config.TextCgroup+"/") {
-		return errors.New("text and media cgroups must be distinct and non-overlapping")
-	}
-	if config.TextRequiredMiB > ^uint64(0)-config.CapacityHeadroomMiB || config.MediaRequiredMiB > ^uint64(0)-config.CapacityHeadroomMiB {
-		return errors.New("capacity requirement plus headroom overflows")
-	}
-	if config.CapacityHeadroomMiB != 0 && config.TextRequiredMiB == 0 && config.MediaRequiredMiB == 0 {
-		return errors.New("capacity headroom requires a measured target requirement")
-	}
-	return nil
-}
-
 func (m *SystemdManager) Observe(ctx context.Context) (Snapshot, error) {
-	if m.config.Catalog != nil {
-		return m.observeCatalog(ctx)
-	}
-	text, err := m.active(ctx, m.config.TextUnit)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	media, err := m.active(ctx, m.config.MediaUnit)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	if m.config.MediaStopMode == MediaStopService && text && media {
-		return Snapshot{}, errors.New("text and media units are both active")
-	}
-	return Snapshot{TextActive: text, MediaReady: media, MediaExclusive: m.config.MediaStopMode == MediaStopService}, nil
+	return m.observeCatalog(ctx)
 }
 
 func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) error {
-	if m.config.Catalog != nil {
-		p, ok := m.config.Catalog.Profile(workload)
-		if !ok {
-			return errors.New("unconfigured workload")
-		}
-		if err := m.verifyNativeBinding(ctx, p); err != nil {
-			return err
-		}
-		if err := m.startUnit(ctx, p.Unit, workload); err != nil {
-			return err
-		}
-		if p.NativeModel != nil {
-			return m.startNative(ctx, p)
-		}
-		return nil
+	p, ok := m.config.Catalog.Profile(workload)
+	if !ok {
+		return errors.New("unconfigured workload")
 	}
-	switch workload {
-	case control.WorkloadText:
-		return m.startUnit(ctx, m.config.TextUnit, control.WorkloadText)
-	case control.WorkloadMedia:
-		return m.startUnit(ctx, m.config.MediaUnit, control.WorkloadMedia)
-	default:
-		return fmt.Errorf("workload %q cannot be started", workload)
+	if err := m.verifyNativeBinding(ctx, p); err != nil {
+		return err
 	}
+	if err := m.startUnit(ctx, p.Unit, workload); err != nil {
+		return err
+	}
+	if p.NativeModel != nil {
+		return m.startNative(ctx, p)
+	}
+	return nil
 }
 
 func (m *SystemdManager) Stop(ctx context.Context, workload control.Workload) error {
-	if m.config.Catalog != nil {
-		return m.stopCatalog(ctx, workload)
-	}
-	switch workload {
-	case control.WorkloadText:
-		return m.stopUnit(ctx, m.config.TextUnit)
-	case control.WorkloadMedia:
-		if m.config.MediaStopMode == MediaStopService {
-			return m.stopUnit(ctx, m.config.MediaUnit)
-		}
-		state, err := m.unitState(ctx, m.config.MediaUnit)
-		if err != nil {
-			return err
-		}
-		if _, err := state.isActive(m.config.MediaUnit); err != nil {
-			return err
-		}
-		if state.active == "inactive" {
-			return nil
-		}
-		return m.releaseMedia(ctx)
-	default:
-		return fmt.Errorf("workload %q cannot be stopped", workload)
-	}
+	return m.stopCatalog(ctx, workload)
 }
 
-// StopForRecovery shuts down both units regardless of the media stop policy.
+// StopForRecovery shuts down every configured unit regardless of adapter policy.
 func (m *SystemdManager) StopForRecovery(ctx context.Context) error {
 	for _, unit := range m.units() {
 		if err := m.runSystemctl(ctx, "stop", unit); err != nil {
@@ -242,54 +125,13 @@ func (m *SystemdManager) StopForRecovery(ctx context.Context) error {
 }
 
 func (m *SystemdManager) Healthy(ctx context.Context, workload control.Workload) error {
-	if m.config.Catalog != nil {
-		return m.healthyCatalog(ctx, workload)
-	}
-	// The health budget includes the opposing unit/cgroup probe as well as HTTP.
-	ctx, cancel := context.WithTimeout(ctx, m.config.HealthTimeout)
-	defer cancel()
-	switch workload {
-	case control.WorkloadIdle:
-		return nil
-	case control.WorkloadText:
-		if err := m.releasedUnit(ctx, m.config.MediaUnit, m.config.MediaCgroup, m.config.MediaStopMode != MediaStopService); err != nil {
-			return err
-		}
-		return m.getHealthy(ctx, m.config.TextHealthURL)
-	case control.WorkloadMedia:
-		if err := m.releasedUnit(ctx, m.config.TextUnit, m.config.TextCgroup, false); err != nil {
-			return err
-		}
-		return m.getHealthy(ctx, m.config.MediaHealthURL)
-	default:
-		return fmt.Errorf("workload %q has no health check", workload)
-	}
+	return m.healthyCatalog(ctx, workload)
 }
 
 var ErrUnloadUnverified = errors.New("live media unload cannot be verified")
 
 func (m *SystemdManager) ReleasedFor(ctx context.Context, target control.Workload) error {
-	if m.config.Catalog != nil {
-		return m.releasedCatalog(ctx, target)
-	}
-	if target != control.WorkloadIdle && target != control.WorkloadText && target != control.WorkloadMedia {
-		return fmt.Errorf("invalid release target %q", target)
-	}
-	if err := m.releasedUnit(ctx, m.config.TextUnit, m.config.TextCgroup, false); err != nil {
-		return err
-	}
-	if target == control.WorkloadMedia && m.config.MediaStopMode != MediaStopService {
-		state, err := m.unitState(ctx, m.config.MediaUnit)
-		if err != nil {
-			return err
-		}
-		// The destination UI may already be running. It need not unload itself
-		// before accepting media work, but the opposing text subtree must be empty.
-		if state.active == "active" && state.sub == "running" {
-			return nil
-		}
-	}
-	return m.releasedUnit(ctx, m.config.MediaUnit, m.config.MediaCgroup, m.config.MediaStopMode != MediaStopService)
+	return m.releasedCatalog(ctx, target)
 }
 
 func (m *SystemdManager) releasedUnit(ctx context.Context, unit, group string, allowUnload bool) error {
@@ -315,31 +157,6 @@ func (m *SystemdManager) releasedUnit(ctx context.Context, unit, group string, a
 	return nil
 }
 
-func (m *SystemdManager) active(ctx context.Context, unit string) (bool, error) {
-	state, err := m.unitState(ctx, unit)
-	if err != nil {
-		return false, err
-	}
-	if m.config.MediaStopMode == MediaStopService && !(state.active == "active" && state.sub == "running") && !(state.active == "inactive" && state.sub == "dead") {
-		return false, fmt.Errorf("%s is not running or stopped", unit)
-	}
-	return state.isActive(unit)
-}
-
-func (state systemdUnitState) isActive(unit string) (bool, error) {
-	switch state.active {
-	case "active":
-		if state.sub != "running" && state.sub != "exited" {
-			return false, fmt.Errorf("%s has unsupported substate", unit)
-		}
-		return true, nil
-	case "inactive", "failed", "deactivating", "activating":
-		return false, nil
-	default:
-		return false, fmt.Errorf("%s has unsupported active state", unit)
-	}
-}
-
 type systemdUnitState struct {
 	active    string
 	sub       string
@@ -352,15 +169,10 @@ func (m *SystemdManager) unitState(ctx context.Context, unit string) (systemdUni
 	if err != nil {
 		return state, err
 	}
-	expected := m.config.TextCgroup
-	if unit == m.config.MediaUnit {
-		expected = m.config.MediaCgroup
-	}
-	if m.config.Catalog != nil {
-		for _, p := range m.config.Catalog.Profiles {
-			if p.Unit == unit {
-				expected = p.Cgroup
-			}
+	expected := ""
+	for _, p := range m.config.Catalog.Profiles {
+		if p.Unit == unit {
+			expected = p.Cgroup
 		}
 	}
 	if state.cgroup != "" && state.cgroup != expected {
@@ -445,15 +257,10 @@ func (m *SystemdManager) resetStoppedFailure(ctx context.Context, unit string, s
 	if err := m.verifyManagerCgroup(ctx); err != nil {
 		return err
 	}
-	group := m.config.TextCgroup
-	if unit == m.config.MediaUnit {
-		group = m.config.MediaCgroup
-	}
-	if m.config.Catalog != nil {
-		for _, p := range m.config.Catalog.Profiles {
-			if p.Unit == unit {
-				group = p.Cgroup
-			}
+	group := ""
+	for _, p := range m.config.Catalog.Profiles {
+		if p.Unit == unit {
+			group = p.Cgroup
 		}
 	}
 	if err := m.cgroups.empty(group); err != nil {
@@ -476,10 +283,7 @@ func (m *SystemdManager) stopUnit(ctx context.Context, unit string) error {
 	if err := m.runSystemctl(ctx, "stop", unit); err != nil {
 		return err
 	}
-	if m.config.Catalog != nil || m.config.MediaStopMode == MediaStopService {
-		return m.requireStopped(ctx, unit)
-	}
-	return nil
+	return m.requireStopped(ctx, unit)
 }
 
 func (m *SystemdManager) runSystemctl(ctx context.Context, action, unit string) error {
@@ -496,16 +300,6 @@ func (m *SystemdManager) getHealthy(ctx context.Context, endpoint string) error 
 		return fmt.Errorf("create health request: %w", err)
 	}
 	return m.checkHTTPResponse(request, "health")
-}
-
-func (m *SystemdManager) releaseMedia(ctx context.Context) error {
-	body := bytes.NewBufferString(`{"unload_models":true,"free_memory":true}`)
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, m.config.MediaReleaseURL, body)
-	if err != nil {
-		return fmt.Errorf("create media release request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	return m.checkHTTPResponse(request, "media release")
 }
 
 func (m *SystemdManager) checkHTTPResponse(request *http.Request, action string) error {
@@ -551,10 +345,7 @@ func (e *safeHTTPRequestError) Unwrap() error { return e.cause }
 
 func (config *SystemdConfig) prepareWorkloads() error {
 	if config.Catalog == nil {
-		if err := config.validateUnits(); err != nil {
-			return err
-		}
-		return config.validateResources()
+		return errors.New("workload catalog is required")
 	}
 	cloned := config.Catalog.Clone()
 	config.Catalog = &cloned
@@ -570,13 +361,10 @@ func (config *SystemdConfig) prepareWorkloads() error {
 }
 
 func (config SystemdConfig) measuresCapacity() bool {
-	if config.Catalog != nil {
-		for _, p := range config.Catalog.Profiles {
-			if p.RequiredMiB != 0 {
-				return true
-			}
+	for _, p := range config.Catalog.Profiles {
+		if p.RequiredMiB != 0 {
+			return true
 		}
-		return false
 	}
-	return config.TextRequiredMiB != 0 || config.MediaRequiredMiB != 0
+	return false
 }

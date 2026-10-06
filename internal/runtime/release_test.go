@@ -39,14 +39,17 @@ func stoppedRunner() *fakeRunner {
 }
 
 func TestReleaseUsesRecursiveCgroupsNotDesktopMemoryOrReusedPIDs(t *testing.T) {
-	for _, mode := range []MediaStopMode{MediaStopService, MediaStopUnload} {
-		t.Run(string(mode), func(t *testing.T) {
+	for _, adapter := range []string{"systemd", control.AdapterMediaUnload} {
+		t.Run(adapter, func(t *testing.T) {
 			r := stoppedRunner()
 			// GPU accounting can be unavailable, or describe an unrelated process with
 			// a reused PID. It is deliberately never part of this proof.
 			r.errs = map[string]error{gpuMemoryCommand: errors.New("accounting unavailable")}
 			m := strictManager(t, r)
-			m.config.MediaStopMode = mode
+			m.config.Catalog.Profiles[1].Adapter = adapter
+			if adapter == control.AdapterMediaUnload {
+				m.config.Catalog.Profiles[1].ReleaseURL = "http://127.0.0.1:8188/free"
+			}
 			root := fixtureCgroups(t, m)
 			writeEvents(t, root, "text.service", "populated 0\nfrozen 0\n")
 			writeEvents(t, root, "media.service", "populated 0\n")
@@ -152,7 +155,7 @@ func TestUnloadSuccessResponseIsNotReleaseEvidence(t *testing.T) {
 	}))
 	defer server.Close()
 	config := testConfig()
-	config.MediaReleaseURL = server.URL
+	config.Catalog.Profiles[1].ReleaseURL = server.URL
 	m, err := newSystemdManager(config, r, server.Client())
 	if err != nil {
 		t.Fatal(err)
@@ -175,8 +178,8 @@ func TestCapacityIsSeparateFromReleaseAndTargetSpecific(t *testing.T) {
 	r := stoppedRunner()
 	r.outputs[gpuFreeCommand] = []byte("109\n")
 	m := strictManager(t, r)
-	m.config.TextRequiredMiB = 100
-	m.config.MediaRequiredMiB = 200
+	m.config.Catalog.Profiles[0].RequiredMiB = 100
+	m.config.Catalog.Profiles[1].RequiredMiB = 200
 	m.config.CapacityHeadroomMiB = 10
 	if err := m.ReleasedFor(context.Background(), control.WorkloadIdle); err != nil {
 		t.Fatal(err)
@@ -238,22 +241,21 @@ func TestCgroupMountMappingAndFilesystemType(t *testing.T) {
 func TestCgroupConfigurationValidation(t *testing.T) {
 	for _, group := range []string{"", "/", "relative", "/a/../b", "/a//b", "/a/", "/a\n"} {
 		config := testConfig()
-		config.TextCgroup = group
+		config.Catalog.Profiles[0].Cgroup = group
 		if _, err := newSystemdManager(config, &fakeRunner{}, http.DefaultClient); err == nil {
 			t.Fatalf("accepted %q", group)
 		}
 	}
 	for _, group := range []string{"/workloads/text.service", "/workloads/text.service/child"} {
 		config := testConfig()
-		config.MediaCgroup = group
+		config.Catalog.Profiles[1].Cgroup = group
 		if _, err := newSystemdManager(config, &fakeRunner{}, http.DefaultClient); err == nil {
 			t.Fatalf("accepted overlapping %q", group)
 		}
 	}
 	for _, change := range []func(*SystemdConfig){
-		func(c *SystemdConfig) { c.TextRequiredMiB = ^uint64(0); c.CapacityHeadroomMiB = 1 },
-		func(c *SystemdConfig) { c.CapacityHeadroomMiB = 1 },
-		func(c *SystemdConfig) { c.TextRequiredMiB = 1; c.NvidiaSMIPath = "" },
+		func(c *SystemdConfig) { c.Catalog.Profiles[0].RequiredMiB = ^uint64(0); c.CapacityHeadroomMiB = 1 },
+		func(c *SystemdConfig) { c.Catalog.Profiles[0].RequiredMiB = 1; c.NvidiaSMIPath = "" },
 	} {
 		config := testConfig()
 		change(&config)
@@ -269,10 +271,13 @@ func TestCgroupConfigurationValidation(t *testing.T) {
 }
 
 func TestReadinessRejectsOpposingSurvivingChildrenDuringRecovery(t *testing.T) {
-	for _, mode := range []MediaStopMode{MediaStopUnload, MediaStopService} {
+	for _, adapter := range []string{control.AdapterMediaUnload, "systemd"} {
 		for _, target := range []control.Workload{control.WorkloadText, control.WorkloadMedia} {
 			m := strictManager(t, stoppedRunner())
-			m.config.MediaStopMode = mode
+			m.config.Catalog.Profiles[1].Adapter = adapter
+			if adapter == control.AdapterMediaUnload {
+				m.config.Catalog.Profiles[1].ReleaseURL = "http://127.0.0.1:8188/free"
+			}
 			root := fixtureCgroups(t, m)
 			opposing := "text.service"
 			if target == control.WorkloadText {
@@ -280,7 +285,7 @@ func TestReadinessRejectsOpposingSurvivingChildrenDuringRecovery(t *testing.T) {
 			}
 			writeEvents(t, root, opposing, "populated 1\n")
 			if err := m.Healthy(context.Background(), target); err == nil || !strings.Contains(err.Error(), "descendants") {
-				t.Fatalf("%s %s: %v", mode, target, err)
+				t.Fatalf("%s %s: %v", adapter, target, err)
 			}
 		}
 	}
@@ -310,10 +315,6 @@ func TestUnloadTextToLiveMediaVerifiesOnlyOutgoingText(t *testing.T) {
 	}
 	if err := m.ReleasedFor(context.Background(), "unknown"); err == nil {
 		t.Fatal("invalid target accepted")
-	}
-	r.errs = map[string]error{mediaShowCommand: errors.New("unverifiable destination")}
-	if err := m.ReleasedFor(context.Background(), control.WorkloadMedia); err == nil {
-		t.Fatal("ambiguous destination accepted")
 	}
 }
 

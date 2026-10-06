@@ -58,13 +58,12 @@ Runtime commands use the durable snapshot, never silently re-read a catalog file
 
 ```sh
 gpu-mode -state /absolute/state.db -systemctl /usr/bin/systemctl reconcile
-gpu-mode -state /absolute/state.db -systemctl /usr/bin/systemctl -workload speech switch
+gpu-mode -state /absolute/state.db -systemctl /usr/bin/systemctl -target speech switch
 gpu-mode -state /absolute/state.db -systemctl /usr/bin/systemctl status
 ```
 
-Flags precede the command, following Go's flag parser. Existing `text`, `media`,
-`idle` and ownership
-commands remain available; targets must be present in the effective catalog.
+Flags precede the command, following Go's flag parser. Workloads are selected
+only through `switch -target`; targets must be present in the effective catalog.
 Proxies accept configured workload IDs and SQLite validates registration against
 the accepted catalog and active allocation. Automation grants remain explicit:
 adding a workload never grants an existing principal permission to select it.

@@ -12,18 +12,15 @@ type WorkloadObservation struct {
 }
 
 type Snapshot struct {
-	Workloads      map[control.Workload]WorkloadObservation
-	TextActive     bool
-	MediaReady     bool
-	MediaExclusive bool
+	Workloads map[control.Workload]WorkloadObservation
 }
 
 type Manager interface {
 	Observe(context.Context) (Snapshot, error)
 	Start(context.Context, control.Workload) error
 	Stop(context.Context, control.Workload) error
-	// StopForRecovery shuts down both runtime units, including the media UI.
-	// Normal Stop(media) follows the configured media stop policy.
+	// StopForRecovery shuts down every configured runtime unit, including the
+	// media UI. Normal Stop follows the profile's adapter policy.
 	StopForRecovery(context.Context) error
 	Healthy(context.Context, control.Workload) error
 	ReleasedFor(context.Context, control.Workload) error
@@ -31,9 +28,6 @@ type Manager interface {
 }
 
 func (s Snapshot) AnyActive() bool {
-	if s.TextActive || s.MediaReady {
-		return true
-	}
 	for _, o := range s.Workloads {
 		if o.Active {
 			return true

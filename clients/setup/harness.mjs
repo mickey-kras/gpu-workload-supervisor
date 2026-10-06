@@ -26,9 +26,9 @@ export async function launch({units = [], profiles = [], pending = false, fail =
         add_bottom_bar(child) { this.append(child); }
         set_child(child) { this.append(child); }
         set_content(child) { this.append(child); }
-        add_css_class() {}
+        add_css_class(name) { (this.cssClasses ??= []).push(name); }
         remove(child) { this.children.splice(this.children.indexOf(child), 1); }
-        present() {}
+        present() { this.presented = true; }
         close() { this.closed = true; }
         grab_focus() { this.focused = true; }
         run() { this.emit('activate'); }
@@ -44,7 +44,12 @@ export async function launch({units = [], profiles = [], pending = false, fail =
         'gi://Adw?version=1': {default: Object.fromEntries(['Application', 'ApplicationWindow', 'HeaderBar', 'ToolbarView', 'PreferencesGroup', 'EntryRow', 'ComboRow', 'ExpanderRow'].map(name => [name, class extends Widget {}]))},
         'gi://Gtk?version=4.0': {default: {
             ...Object.fromEntries(['Box', 'Label', 'ScrolledWindow', 'Button', 'CheckButton'].map(name => [name, class extends Widget {}])),
-            FileDialog: class { open(window, cancel, callback) { callback(this, {}); } select_folder(window, cancel, callback) { callback(this, {}); } open_finish() { if (fileError) throw fileError; return {get_path: () => filePath}; } select_folder_finish() { return this.open_finish(); } }, DialogError: {DISMISSED: 1},
+            FileDialog: class { open(window, cancel, callback) { callback(this, {}); } select_folder(window, cancel, callback) { callback(this, {}); }
+                open_finish() {
+                    if (fileError) throw fileError;
+                    return {get_path: () => filePath};
+                }
+                select_folder_finish() { return this.open_finish(); } }, DialogError: {DISMISSED: 1},
             Orientation: {VERTICAL: 1, HORIZONTAL: 0}, PolicyType: {NEVER: 2},
             StringObject,
             StringList: {new: strings => ({get_string: index => strings[index],
@@ -54,7 +59,7 @@ export async function launch({units = [], profiles = [], pending = false, fail =
             })},
         }},
         'gi://GLib': {default: {getenv: () => 'GNOME', uuid_string_random: () => 'unique-id',
-            markup_escape_text: text => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+            markup_escape_text: text => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
         }},
         'gi://Gio': {default: {SubprocessFlags: {STDIN_PIPE: 1, STDOUT_PIPE: 2, STDERR_PIPE: 4},
             Subprocess: {new(argv) { return {
@@ -63,7 +68,11 @@ export async function launch({units = [], profiles = [], pending = false, fail =
                     if (argv[1] === deferAction) deferred.push(() => callback(this, {}));
                     else callback(this, {});
                 },
-                communicate_utf8_finish() { return [true, argv[1] === '--version' ? version : JSON.stringify(responses[argv[1]] ?? (argv[1] === 'discover' ? {request, units, pending} : {changes: ['Reviewed change']})), 'Backend unavailable']; },
+                communicate_utf8_finish() {
+                    if (argv[1] === '--version') return [true, version, 'Backend unavailable'];
+                    const fallback = argv[1] === 'discover' ? {request, units, pending} : {changes: ['Reviewed change']};
+                    return [true, JSON.stringify(responses[argv[1]] ?? fallback), 'Backend unavailable'];
+                },
                 get_successful: () => argv[1] !== fail,
             }; }} }},
     };
