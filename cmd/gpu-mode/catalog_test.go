@@ -73,12 +73,12 @@ func TestCLIThirdCatalogWorkloadAndFailedReload(t *testing.T) {
 	if err = invoke("-catalog", file, "configure"); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"reconcile"}, {"-workload", "speech", "switch"}, {"status"}} {
+	for _, args := range [][]string{{"reconcile"}, {"-target", "speech", "switch"}, {"status"}} {
 		if err = invoke(args...); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err = invoke("-workload", "unconfigured", "switch"); err == nil {
+	if err = invoke("-target", "unconfigured", "switch"); err == nil {
 		t.Fatal("unconfigured target accepted")
 	}
 	if err = os.WriteFile(file, []byte(`{broken`), 0600); err != nil {
