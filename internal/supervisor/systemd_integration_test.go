@@ -30,6 +30,7 @@ type systemdFixture struct {
 	units      []string
 	path       string
 	unitDir    string
+	catalog    control.Catalog
 }
 
 func systemdCommand(t *testing.T, args ...string) string {
@@ -103,6 +104,7 @@ func newSystemdFixture(t *testing.T) *systemdFixture {
 		{ID: control.WorkloadText, Label: "text", Adapter: "systemd", Unit: f.units[0], Cgroup: groups[0], HealthURL: health.URL},
 		{ID: control.WorkloadMedia, Label: "media", Adapter: "systemd", Unit: f.units[1], Cgroup: groups[1], HealthURL: health.URL},
 	}}
+	f.catalog = catalog
 	f.manager, err = gpuruntime.NewSystemdManager(gpuruntime.SystemdConfig{
 		Catalog: &catalog, SystemctlPath: executable, HealthTimeout: time.Second,
 	})
@@ -136,7 +138,17 @@ func (f *systemdFixture) reopen(restored bool) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	f.controller, err = New(f.store, f.manager, Config{DrainTimeout: time.Second, VerifyTimeout: time.Second, ActionTimeout: 5 * time.Second, CleanupTimeout: 5 * time.Second, FinalizeTimeout: time.Second, PollInterval: 10 * time.Millisecond})
+	snapshot, err := f.store.Catalog(context.Background())
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if snapshot.Revision == "" {
+		snapshot, err = f.store.ReplaceCatalog(context.Background(), "", f.catalog)
+		if err != nil {
+			f.t.Fatal(err)
+		}
+	}
+	f.controller, err = New(f.store, f.manager, Config{Catalog: &snapshot, DrainTimeout: time.Second, VerifyTimeout: time.Second, ActionTimeout: 5 * time.Second, CleanupTimeout: 5 * time.Second, FinalizeTimeout: time.Second, PollInterval: 10 * time.Millisecond})
 	if err != nil {
 		f.t.Fatal(err)
 	}
