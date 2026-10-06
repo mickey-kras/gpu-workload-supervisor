@@ -268,10 +268,6 @@ func (m *SystemdManager) Healthy(ctx context.Context, workload control.Workload)
 
 var ErrUnloadUnverified = errors.New("live media unload cannot be verified")
 
-func (m *SystemdManager) Released(ctx context.Context) error {
-	return m.ReleasedFor(ctx, control.WorkloadIdle)
-}
-
 func (m *SystemdManager) ReleasedFor(ctx context.Context, target control.Workload) error {
 	if m.config.Catalog != nil {
 		return m.releasedCatalog(ctx, target)

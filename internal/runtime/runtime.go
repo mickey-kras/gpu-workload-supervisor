@@ -26,13 +26,8 @@ type Manager interface {
 	// Normal Stop(media) follows the configured media stop policy.
 	StopForRecovery(context.Context) error
 	Healthy(context.Context, control.Workload) error
-	Released(context.Context) error
-}
-
-// TargetReleaseVerifier permits a destination runtime to remain alive when its
-// policy supports that. Other runtimes retain the all-workloads Released check.
-type TargetReleaseVerifier interface {
 	ReleasedFor(context.Context, control.Workload) error
+	Preflight(context.Context) error
 }
 
 func (s Snapshot) AnyActive() bool {

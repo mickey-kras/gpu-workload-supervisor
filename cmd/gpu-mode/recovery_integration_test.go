@@ -36,10 +36,11 @@ func (r *stoppedRecoveryRuntime) StopForRecovery(context.Context) error {
 func (r *stoppedRecoveryRuntime) Healthy(context.Context, control.Workload) error {
 	return nil
 }
-func (r *stoppedRecoveryRuntime) Released(context.Context) error {
+func (r *stoppedRecoveryRuntime) ReleasedFor(context.Context, control.Workload) error {
 	r.releaseCalls++
 	return nil
 }
+func (r *stoppedRecoveryRuntime) Preflight(context.Context) error { return nil }
 
 func TestFreshCLIUserIdleRecoveryWiresConfiguredCgroups(t *testing.T) {
 	ctx := context.Background()

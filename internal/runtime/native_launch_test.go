@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,15 +66,11 @@ func TestNativeLaunchFingerprintAndModelPath(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			hash, err := InspectNativeLaunch(path)
-			if err != nil || hash != qualified {
-				t.Fatal("fingerprint mismatch", err)
+			if want := fmt.Sprintf("%x", sha256.Sum256(raw)); qualified != want {
+				t.Fatal("fingerprint mismatch")
 			}
 			if _, err := inspectFixtureLaunch(path+"missing", n); err == nil {
 				t.Fatal("missing launch accepted")
-			}
-			if _, err := InspectNativeLaunch(path + "missing"); err == nil {
-				t.Fatal("missing launch hashed")
 			}
 			if err := os.WriteFile(path, []byte("invalid"), 0600); err != nil {
 				t.Fatal(err)

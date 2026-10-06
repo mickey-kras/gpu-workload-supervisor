@@ -50,7 +50,7 @@ func TestStopServiceRejectsUnverifiedShutdownAndObservation(t *testing.T) {
 			if _, err := manager.Observe(context.Background()); err == nil && state != "active/running" {
 				t.Fatal("accepted ambiguous observation")
 			}
-			if err := manager.Released(context.Background()); err == nil {
+			if err := manager.ReleasedFor(context.Background(), control.WorkloadIdle); err == nil {
 				t.Fatal("accepted release with media not stopped")
 			}
 			if err := manager.Start(context.Background(), control.WorkloadText); err == nil {

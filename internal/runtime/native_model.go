@@ -19,15 +19,6 @@ import (
 var ErrModelIdentity = errors.New("native model identity mismatch")
 var ErrLaunchChanged = errors.New("native launch binding changed")
 
-// InspectNativeLaunch fingerprints a bounded regular file without executing it.
-func InspectNativeLaunch(path string) (string, error) {
-	b, err := readNativeLaunch(path)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%x", sha256.Sum256(b)), nil
-}
-
 // InspectQualifiedNativeLaunch checks the supported launch subset before
 // returning the fingerprint recorded by onboarding. It does not execute it.
 func InspectQualifiedNativeLaunch(path string, binding control.NativeModel) (string, error) {
