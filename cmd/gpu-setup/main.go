@@ -61,69 +61,41 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 			return errors.New("run guided setup as the desktop account, not root")
 		}
 	}
-	if args[0] == "remove-integration" {
+	switch args[0] {
+	case "remove-integration":
 		return setup.RemoveIntegration(home)
-	}
-	if args[0] == "discover" {
-		result, err := a.discover(ctx, home)
-		if err != nil {
-			return err
-		}
-		return json.NewEncoder(output).Encode(result)
-	}
-	if args[0] == "drafts" {
-		result, err := setup.ReadDrafts(home)
-		if err != nil {
-			return err
-		}
-		return json.NewEncoder(output).Encode(result)
-	}
-	if args[0] == "save-drafts" {
-		return saveDrafts(home, input, output)
-	}
-	if args[0] == "fingerprint" {
+	case "discover":
+		return a.runDiscover(ctx, home, output)
+	case "drafts":
+		return runDrafts(home, output)
+	case "save-drafts":
+		return runSaveDrafts(home, input, output)
+	case "fingerprint":
 		return a.fingerprint(input, output)
-	}
-	if args[0] == "probe" {
-		request, err := setup.DecodeProbe(input)
-		if err != nil {
-			return err
-		}
-		result, err := a.probe(ctx, request)
-
-		if err != nil {
-			return err
-		}
-		return json.NewEncoder(output).Encode(result)
-	}
-	if args[0] == "reconcile" {
+	case "probe":
+		return a.runProbe(ctx, input, output)
+	case "reconcile":
 		return a.reconcile(ctx, home)
+	case "validate", "apply", "verify-bindings":
+		return a.runPlanned(ctx, home, args[0], input, output)
 	}
-	if args[0] != "validate" && args[0] != "apply" && args[0] != "verify-bindings" {
-		return errors.New("unknown setup action")
-	}
-	request, err := setup.Decode(input)
-	if err != nil {
-		return err
-	}
-	preview, err := setup.Plan(home, request)
-	if err != nil {
-		return err
-	}
-	if args[0] == "verify-bindings" {
-		if err := a.verify(ctx, request); err != nil {
-			return err
-		}
-	}
-	if args[0] == "apply" {
-		if err := a.apply(ctx, home, request); err != nil {
-			return err
-		}
-	}
-	return json.NewEncoder(output).Encode(preview)
+	return errors.New("unknown setup action")
 }
-
-func saveDrafts(home string, input io.Reader, output io.Writer) error {
+func (a setupActions) runDiscover(ctx context.Context, home string, output io.Writer) error {
+	result, err := a.discover(ctx, home)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(output).Encode(result)
+}
+func runDrafts(home string, output io.Writer) error {
+	result, err := setup.ReadDrafts(home)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(output).Encode(result)
+}
+func runSaveDrafts(home string, input io.Reader, output io.Writer) error {
 	var request setup.DraftRequest
 	data, err := io.ReadAll(io.LimitReader(input, 65537))
 	if err != nil {
@@ -145,4 +117,36 @@ func saveDrafts(home string, input io.Reader, output io.Writer) error {
 		return err
 	}
 	return json.NewEncoder(output).Encode(result)
+}
+func (a setupActions) runProbe(ctx context.Context, input io.Reader, output io.Writer) error {
+	request, err := setup.DecodeProbe(input)
+	if err != nil {
+		return err
+	}
+	result, err := a.probe(ctx, request)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(output).Encode(result)
+}
+func (a setupActions) runPlanned(ctx context.Context, home, action string, input io.Reader, output io.Writer) error {
+	request, err := setup.Decode(input)
+	if err != nil {
+		return err
+	}
+	preview, err := setup.Plan(home, request)
+	if err != nil {
+		return err
+	}
+	if action == "verify-bindings" {
+		if err := a.verify(ctx, request); err != nil {
+			return err
+		}
+	}
+	if action == "apply" {
+		if err := a.apply(ctx, home, request); err != nil {
+			return err
+		}
+	}
+	return json.NewEncoder(output).Encode(preview)
 }

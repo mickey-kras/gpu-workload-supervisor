@@ -68,37 +68,51 @@ func (p applicationHTTP) ollama(ctx context.Context, result *ApplicationCandidat
 	if err := p.version(ctx, "/api/version", result); err != nil {
 		return err
 	}
+	models, err := p.ollamaInventory(ctx)
+	if err != nil {
+		return err
+	}
+	loadedIDs, loadedKnown, err := p.ollamaLoadedIDs(ctx)
+	if err != nil {
+		return err
+	}
+	return ollamaCandidates(ctx, models, loadedIDs, loadedKnown, result)
+}
+func (p applicationHTTP) ollamaInventory(ctx context.Context) ([]ollamaModel, error) {
 	var tags struct {
 		Models []ollamaModel `json:"models"`
 	}
 	if err := p.get(ctx, "/api/tags", &tags); err != nil {
-		return err
+		return nil, err
 	}
 	if err := inventoryBound(ctx, len(tags.Models)); err != nil {
-		return err
+		return nil, err
 	}
 	if tags.Models == nil {
-		return errors.New("missing available model inventory")
+		return nil, errors.New("missing available model inventory")
 	}
 	for _, model := range tags.Models {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, err
 		}
 		if !validModelID(model.id()) {
-			return errors.New("invalid model identity")
+			return nil, errors.New("invalid model identity")
 		}
 	}
+	return tags.Models, nil
+}
+func (p applicationHTTP) ollamaLoadedIDs(ctx context.Context) (map[string]bool, bool, error) {
 	var ps struct {
 		Models []ollamaModel `json:"models"`
 	}
 	loadedKnown := p.get(ctx, "/api/ps", &ps) == nil && ps.Models != nil
 	if err := inventoryBound(ctx, len(ps.Models)); err != nil {
-		return err
+		return nil, false, err
 	}
 	loadedIDs := make(map[string]bool, len(ps.Models))
 	for _, model := range ps.Models {
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil, false, err
 		}
 		id := model.id()
 		if !validModelID(id) || loadedIDs[id] {
@@ -106,8 +120,11 @@ func (p applicationHTTP) ollama(ctx context.Context, result *ApplicationCandidat
 		}
 		loadedIDs[id] = true
 	}
+	return loadedIDs, loadedKnown, nil
+}
+func ollamaCandidates(ctx context.Context, models []ollamaModel, loadedIDs map[string]bool, loadedKnown bool, result *ApplicationCandidate) error {
 	seen := map[string]bool{}
-	for _, model := range tags.Models {
+	for _, model := range models {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -116,24 +133,28 @@ func (p applicationHTTP) ollama(ctx context.Context, result *ApplicationCandidat
 			return errors.New("duplicate model identity")
 		}
 		seen[id] = true
-		loaded := "unknown"
-		if loadedKnown {
-			loaded = "no"
-			if loadedIDs[id] {
-				loaded = "yes"
-			}
-		}
-		locality := "local"
-		if model.RemoteHost != "" || model.RemoteModel != "" {
-			locality = "non-local"
-		}
-		result.Models = append(result.Models, ModelCandidate{ID: id, Label: id, Source: "inventory", Loaded: loaded, Locality: locality})
+		result.Models = append(result.Models, ModelCandidate{ID: id, Label: id, Source: "inventory", Loaded: ollamaLoaded(id, loadedIDs, loadedKnown), Locality: ollamaLocality(model)})
 	}
 	result.InventoryStatus = "available"
 	if !loadedKnown {
 		result.NextStep = "Available inventory found; loaded-model observation is unavailable. Verify lifecycle control."
 	}
 	return nil
+}
+func ollamaLoaded(id string, loadedIDs map[string]bool, loadedKnown bool) string {
+	if !loadedKnown {
+		return "unknown"
+	}
+	if loadedIDs[id] {
+		return "yes"
+	}
+	return "no"
+}
+func ollamaLocality(model ollamaModel) string {
+	if model.RemoteHost != "" || model.RemoteModel != "" {
+		return "non-local"
+	}
+	return "local"
 }
 
 type servedModel struct {
@@ -170,11 +191,25 @@ func (p applicationHTTP) llama(ctx context.Context, result *ApplicationCandidate
 	if err := inventoryBound(ctx, len(body.Data)); err != nil {
 		return err
 	}
-	if len(body.Data) > 0 && body.Data[0].Status == nil {
+	if body.Data[0].Status == nil {
 		return llamaServedCandidates(ctx, body.Data, result)
 	}
+	return llamaNativeCandidates(ctx, body.Data, result)
+}
+func llamaLoadedState(status string) (string, error) {
+	switch status {
+	case "loaded":
+		return "yes", nil
+	case "unloaded":
+		return "no", nil
+	case "loading", "sleeping", "downloading":
+		return "unknown", nil
+	}
+	return "", errors.New("unsupported model status")
+}
+func llamaNativeCandidates(ctx context.Context, models []servedModel, result *ApplicationCandidate) error {
 	seen := map[string]bool{}
-	for _, model := range body.Data {
+	for _, model := range models {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -182,15 +217,9 @@ func (p applicationHTTP) llama(ctx context.Context, result *ApplicationCandidate
 			return errors.New("invalid native model candidate")
 		}
 		seen[model.ID] = true
-		loaded := "unknown"
-		switch model.Status.Value {
-		case "loaded":
-			loaded = "yes"
-		case "unloaded":
-			loaded = "no"
-		case "loading", "sleeping", "downloading":
-		default:
-			return errors.New("unsupported model status")
+		loaded, err := llamaLoadedState(model.Status.Value)
+		if err != nil {
+			return err
 		}
 		locality := "unknown"
 		if model.Path != "" {

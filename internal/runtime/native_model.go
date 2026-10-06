@@ -105,46 +105,70 @@ func (m *SystemdManager) nativeReady(ctx context.Context, n control.NativeModel)
 			return err
 		}
 	}
+	b, err := m.fetchModelList(ctx, n)
+	if err != nil {
+		return err
+	}
+	return verifyModelList(b, n)
+}
+
+func (m *SystemdManager) fetchModelList(ctx context.Context, n control.NativeModel) ([]byte, error) {
 	path := "/v1/models"
 	if n.Runtime == "ollama" {
 		path = "/api/ps"
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, n.Endpoint+path, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	resp, err := m.client.Do(req)
 	if err != nil {
-		return &safeHTTPRequestError{cause: err}
+		return nil, &safeHTTPRequestError{cause: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return ErrModelIdentity
+		return nil, ErrModelIdentity
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 65537))
 	if err != nil || len(b) > 65536 {
-		return ErrModelIdentity
+		return nil, ErrModelIdentity
 	}
-	var payload struct {
-		Data []struct {
-			ID     string `json:"id"`
-			Status *struct {
-				Value string `json:"value"`
-			} `json:"status"`
-		} `json:"data"`
-		Models []struct {
-			Name  string `json:"name"`
-			Model string `json:"model"`
-		} `json:"models"`
-	}
+	return b, nil
+}
+
+type modelListPayload struct {
+	Data []struct {
+		ID     string `json:"id"`
+		Status *struct {
+			Value string `json:"value"`
+		} `json:"status"`
+	} `json:"data"`
+	Models []struct {
+		Name  string `json:"name"`
+		Model string `json:"model"`
+	} `json:"models"`
+}
+
+func verifyModelList(b []byte, n control.NativeModel) error {
+	var payload modelListPayload
 	if json.Unmarshal(b, &payload) != nil {
 		return ErrModelIdentity
 	}
 	if n.Runtime == "ollama" {
-		if len(payload.Models) != 1 || (payload.Models[0].Name != n.Model && payload.Models[0].Model != n.Model) || (payload.Models[0].Name != "" && payload.Models[0].Name != n.Model) || (payload.Models[0].Model != "" && payload.Models[0].Model != n.Model) {
-			return ErrModelIdentity
-		}
-	} else if len(payload.Data) != 1 || payload.Data[0].ID != n.Model || (payload.Data[0].Status != nil && payload.Data[0].Status.Value != "loaded") {
+		return verifyOllamaModelList(payload, n.Model)
+	}
+	return verifyServerModelList(payload, n.Model)
+}
+
+func verifyOllamaModelList(payload modelListPayload, model string) error {
+	if len(payload.Models) != 1 || (payload.Models[0].Name != model && payload.Models[0].Model != model) || (payload.Models[0].Name != "" && payload.Models[0].Name != model) || (payload.Models[0].Model != "" && payload.Models[0].Model != model) {
+		return ErrModelIdentity
+	}
+	return nil
+}
+
+func verifyServerModelList(payload modelListPayload, model string) error {
+	if len(payload.Data) != 1 || payload.Data[0].ID != model || (payload.Data[0].Status != nil && payload.Data[0].Status.Value != "loaded") {
 		return ErrModelIdentity
 	}
 	return nil

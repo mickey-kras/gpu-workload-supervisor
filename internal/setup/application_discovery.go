@@ -5,12 +5,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 func (b Backend) discoverApplications(ctx context.Context, result *Discovery, units []string) {
 	// Only these four local default origins are probed. Non-default instances use
 	// an explicit endpoint selection; no port, process, or filesystem scanning.
-	for _, r := range []ProbeRequest{{App: "comfyui", Endpoint: "http://127.0.0.1:8188"}, {App: "ollama", Endpoint: "http://127.0.0.1:11434"}, {App: "llama.cpp", Endpoint: "http://127.0.0.1:8080"}, {App: "vllm", Endpoint: "http://127.0.0.1:8000"}} {
+	for _, r := range []ProbeRequest{{App: "comfyui", Endpoint: "http://127.0.0.1:8188"}, {App: "ollama", Endpoint: "http://127.0.0.1:11434"}, {App: appLlamaCPP, Endpoint: "http://127.0.0.1:8080"}, {App: "vllm", Endpoint: "http://127.0.0.1:8000"}} {
 		found, err := b.probeApplication(ctx, r)
 		if err != nil {
 			found = candidate(r)
@@ -23,51 +25,57 @@ func (b Backend) discoverApplications(ctx context.Context, result *Discovery, un
 		if ctx.Err() != nil {
 			return
 		}
-		// Existing profiles may use arbitrary names; retain them without assuming
-		// that their unit identity establishes any of the supported applications.
-		supportedName := false
-		lower := strings.ToLower(unit)
-		for _, name := range []string{"comfyui", "ollama", "llama", "vllm"} {
-			if strings.Contains(lower, name) {
-				supportedName = true
-			}
-		}
-		for _, profile := range result.Request.Catalog.Profiles {
-			if profile.Unit == unit {
-				supportedName = true
-			}
-		}
-		if !supportedName {
-			continue
-		}
-		output, err := b.runCommand(ctx, "/usr/bin/systemctl", "--user", "show", unit, "--property=ExecStart,ControlGroup,ActiveState,SubState", "--no-pager")
-		if err != nil || len(output) > 1048576 {
-			continue
-		}
-		app := appFromUnit(string(output))
-		if app == "" {
-			continue
-		}
-		found := candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"})
-		found.Reference = ""
-		found.ReferenceKind = ""
-		found.Unit = unit
-		found.Label = appLabel(app) + " - " + unit
-		values := unitProperties(string(output))
-		found.Cgroup = values["ControlGroup"]
-		found.Models = launchModels(app, string(output))
-		if values["ActiveState"] == "inactive" && values["SubState"] == "dead" {
-			found.InstanceStatus = "not-running"
-			found.NextStep = "This instance is stopped. Select its existing launch configuration or start it separately to read its inventory."
-		} else {
-			found.NextStep = "Select this instance's endpoint or existing launch configuration. Lifecycle control is unverified."
-		}
-		if app == "comfyui" {
-			found.InventoryStatus = "not-applicable"
-		}
-		result.Units = append(result.Units, unit)
-		result.Applications = append(result.Applications, found)
+		b.discoverUnit(ctx, result, unit)
 	}
+}
+
+// unitRelevant retains existing profile units under arbitrary names without
+// assuming that their unit identity establishes any of the supported applications.
+func unitRelevant(unit string, profiles []control.Profile) bool {
+	lower := strings.ToLower(unit)
+	for _, name := range []string{"comfyui", "ollama", "llama", "vllm"} {
+		if strings.Contains(lower, name) {
+			return true
+		}
+	}
+	for _, profile := range profiles {
+		if profile.Unit == unit {
+			return true
+		}
+	}
+	return false
+}
+func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit string) {
+	if !unitRelevant(unit, result.Request.Catalog.Profiles) {
+		return
+	}
+	output, err := b.runCommand(ctx, "/usr/bin/systemctl", "--user", "show", unit, "--property=ExecStart,ControlGroup,ActiveState,SubState", "--no-pager")
+	if err != nil || len(output) > 1048576 {
+		return
+	}
+	app := appFromUnit(string(output))
+	if app == "" {
+		return
+	}
+	found := candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"})
+	found.Reference = ""
+	found.ReferenceKind = ""
+	found.Unit = unit
+	found.Label = appLabel(app) + " - " + unit
+	values := unitProperties(string(output))
+	found.Cgroup = values["ControlGroup"]
+	found.Models = launchModels(app, string(output))
+	if values["ActiveState"] == "inactive" && values["SubState"] == "dead" {
+		found.InstanceStatus = "not-running"
+		found.NextStep = "This instance is stopped. Select its existing launch configuration or start it separately to read its inventory."
+	} else {
+		found.NextStep = "Select this instance's endpoint or existing launch configuration. Lifecycle control is unverified."
+	}
+	if app == "comfyui" {
+		found.InventoryStatus = "not-applicable"
+	}
+	result.Units = append(result.Units, unit)
+	result.Applications = append(result.Applications, found)
 }
 func unitProperties(output string) map[string]string {
 	values := map[string]string{}
@@ -93,7 +101,7 @@ func appFromUnit(output string) string {
 	case "ollama":
 		return "ollama"
 	case "llama-server":
-		return "llama.cpp"
+		return appLlamaCPP
 	case "vllm":
 		return "vllm"
 	}
@@ -121,7 +129,7 @@ func appFromUnit(output string) string {
 // launchModels extracts only simple, explicit launch arguments. Escaped or
 // shell-based commands remain manual references instead of being interpreted.
 func launchModels(app, output string) []ModelCandidate {
-	if app != "llama.cpp" && app != "vllm" || appFromUnit(output) != app {
+	if app != appLlamaCPP && app != "vllm" || appFromUnit(output) != app {
 		return nil
 	}
 	start := unitProperties(output)["ExecStart"]
@@ -129,29 +137,7 @@ func launchModels(app, output string) []ModelCandidate {
 	if len(arguments) != 2 || strings.ContainsAny(arguments[1], "\\\"'\n") {
 		return nil
 	}
-	fields := strings.Fields(arguments[1])
-	model := ""
-	var aliases []string
-	for i := 1; i < len(fields); i++ {
-		flag := fields[i]
-		if ((app == "llama.cpp" && flag == "-m") || flag == "--model" || (app == "vllm" && flag == "serve")) && i+1 < len(fields) && !strings.HasPrefix(fields[i+1], "-") {
-			model = fields[i+1]
-			i++
-			continue
-		}
-		if strings.HasPrefix(flag, "--model=") {
-			model = strings.TrimPrefix(flag, "--model=")
-		}
-		if flag == "--alias" || flag == "--served-model-name" {
-			for i+1 < len(fields) && !strings.HasPrefix(fields[i+1], "-") {
-				i++
-				aliases = append(aliases, fields[i])
-				if flag == "--alias" {
-					break
-				}
-			}
-		}
-	}
+	model, aliases := launchArguments(app, strings.Fields(arguments[1]))
 	if !validModelID(model) {
 		return nil
 	}
@@ -160,4 +146,43 @@ func launchModels(app, output string) []ModelCandidate {
 		locality = "local"
 	}
 	return []ModelCandidate{{ID: model, Label: model, Source: "configuration", Loaded: "unknown", Locality: locality, Aliases: aliases}}
+}
+func launchArguments(app string, fields []string) (string, []string) {
+	model := ""
+	var aliases []string
+	for i := 1; i < len(fields); i++ {
+		if value, ok := modelFlagValue(app, fields, i); ok {
+			model = value
+			i++
+			continue
+		}
+		if strings.HasPrefix(fields[i], "--model=") {
+			model = strings.TrimPrefix(fields[i], "--model=")
+			continue
+		}
+		i = consumeAliasFlags(fields, i, &aliases)
+	}
+	return model, aliases
+}
+func modelFlagValue(app string, fields []string, i int) (string, bool) {
+	if (app == appLlamaCPP && fields[i] == "-m") || fields[i] == "--model" || (app == "vllm" && fields[i] == "serve") {
+		if i+1 < len(fields) && !strings.HasPrefix(fields[i+1], "-") {
+			return fields[i+1], true
+		}
+	}
+	return "", false
+}
+func consumeAliasFlags(fields []string, i int, aliases *[]string) int {
+	flag := fields[i]
+	if flag != "--alias" && flag != "--served-model-name" {
+		return i
+	}
+	for i+1 < len(fields) && !strings.HasPrefix(fields[i+1], "-") {
+		i++
+		*aliases = append(*aliases, fields[i])
+		if flag == "--alias" {
+			break
+		}
+	}
+	return i
 }
