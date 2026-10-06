@@ -9,7 +9,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
-func TestCompleteWorkFenced(t *testing.T) {
+func TestFinishWorkRejectsStaleFenceAndRepeatedCompletion(t *testing.T) {
 	stateStore := testStore(t)
 	ctx := context.Background()
 	state, err := stateStore.State(ctx)

@@ -17,10 +17,9 @@ import (
 )
 
 func TestExecutionRejectsInvalidRequestIDBeforeRegistration(t *testing.T) {
+	// Boundary inputs are covered by the control package policy tests; here one
+	// invalid ID proves rejection happens before any upstream or store effect.
 	for _, tc := range []struct{ name, id, code string }{
-		{"over boundary", strings.Repeat("x", 8193), "request_id_too_long"},
-		{"original regression", strings.Repeat("x", 65536), "request_id_too_long"},
-		{"byte not character bound", strings.Repeat("é", 4097), "request_id_too_long"},
 		{"invalid UTF-8", "invalid\xff", "request_id_invalid"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
