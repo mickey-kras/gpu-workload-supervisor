@@ -47,6 +47,26 @@ func fixture(t *testing.T) (Backend, string, Request) {
 	}
 	return backend, home, r
 }
+func TestEnableReconciliationErrorExcludesSubprocessOutput(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("sentinel-output\x1b[31m\n"), errors.New("exit status 1")
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".config/gpu-workload-supervisor"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	err := backend.enableReconciliation(context.Background(), home, r.Profile.SystemctlPath)
+	if err == nil {
+		t.Fatal("expected enable failure")
+	}
+	if strings.Contains(err.Error(), "sentinel") || strings.ContainsAny(err.Error(), "\x1b\n") {
+		t.Fatalf("unsafe error: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "exit status 1") {
+		t.Fatalf("lost exit status: %v", err)
+	}
+}
+
 func TestApplyFreshRepeatUpgradeDowngradeAndBackup(t *testing.T) {
 	backend, home, r := fixture(t)
 	ctx := context.Background()

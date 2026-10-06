@@ -98,7 +98,11 @@ func (c *Controller) transitionSource(ctx context.Context, options transitionOpt
 	}
 	if options.verifyOnly {
 		closed := closedReconciling(current)
-		current, err = c.store.Recover(ctx, current.Version, closed, "operator-user-recovery")
+		// The recovery entry commits independently of caller cancellation so an
+		// interrupted verify-only recovery still fails the latched transition row.
+		entryCtx, cancelEntry := context.WithTimeout(context.Background(), c.config.FinalizeTimeout)
+		current, err = c.store.Recover(entryCtx, current.Version, closed, "operator-user-recovery")
+		cancelEntry()
 		if err != nil {
 			return current, err
 		}

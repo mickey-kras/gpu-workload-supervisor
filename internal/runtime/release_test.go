@@ -256,6 +256,7 @@ func TestCgroupConfigurationValidation(t *testing.T) {
 	for _, change := range []func(*SystemdConfig){
 		func(c *SystemdConfig) { c.Catalog.Profiles[0].RequiredMiB = ^uint64(0); c.CapacityHeadroomMiB = 1 },
 		func(c *SystemdConfig) { c.Catalog.Profiles[0].RequiredMiB = 1; c.NvidiaSMIPath = "" },
+		func(c *SystemdConfig) { c.CapacityHeadroomMiB = 1 },
 	} {
 		config := testConfig()
 		change(&config)
@@ -265,6 +266,12 @@ func TestCgroupConfigurationValidation(t *testing.T) {
 	}
 	config := testConfig()
 	config.NvidiaSMIPath = ""
+	if _, err := newSystemdManager(config, &fakeRunner{}, http.DefaultClient); err != nil {
+		t.Fatal(err)
+	}
+	config = testConfig()
+	config.Catalog.Profiles[0].RequiredMiB = 1
+	config.CapacityHeadroomMiB = 1
 	if _, err := newSystemdManager(config, &fakeRunner{}, http.DefaultClient); err != nil {
 		t.Fatal(err)
 	}

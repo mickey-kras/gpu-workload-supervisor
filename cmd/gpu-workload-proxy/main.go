@@ -133,6 +133,11 @@ func parseUpstream(value string) (*url.URL, error) {
 }
 
 func serveProxy(proxyConfig workloadproxy.Config, settings proxyServerSettings) error {
+	// Re-validate at the listen site: run() checks first, but the listener must
+	// never depend on a distant caller for the loopback boundary.
+	if err := validateLoopbackAddress(settings.listen); err != nil {
+		return err
+	}
 	// Hold the shared lock until every in-flight handler has finished. Recovery
 	// takes its exclusive counterpart before it can abandon unresolved work.
 	proxyLock, err := lock.AcquireShared(settings.statePath + ".proxy.lock")
@@ -158,6 +163,10 @@ func serveProxy(proxyConfig workloadproxy.Config, settings proxyServerSettings) 
 	server := &http.Server{
 		Addr: settings.listen, Handler: tracked, ReadHeaderTimeout: settings.readHeaderTimeout,
 		IdleTimeout: settings.idleTimeout,
+		// Pin the 1 MiB header cap explicitly instead of inheriting it from the
+		// Go default. ReadTimeout/WriteTimeout stay unset: execution responses
+		// are long-lived streams and a total deadline would sever them.
+		MaxHeaderBytes: 1 << 20,
 	}
 	maintenanceCtx, stopMaintenance := context.WithCancel(ctx)
 	maintenanceDone := make(chan struct{})

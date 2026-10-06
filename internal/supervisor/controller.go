@@ -16,7 +16,7 @@ var (
 	ErrSupervisorOwned    = errors.New("GPU is in supervisor control mode")
 	ErrUserOwned          = errors.New("GPU is in user control mode")
 	ErrTransitionRunning  = errors.New("another transition is running")
-	ErrDrainTimeout       = errors.New("timed out waiting for admitted work")
+	ErrDrainTimeout       = errors.New("timed out waiting for admitted work; run gpu-mode resolve-work after stopping runtimes to resolve orphaned admissions")
 	ErrVerifyTimeout      = errors.New("timed out verifying workload")
 	ErrRecoveryRequired   = errors.New("explicit recovery is required")
 	ErrReconcileRequired  = errors.New("reconciliation required before switching")
@@ -30,7 +30,6 @@ type storeGateway interface {
 	AcquireUserExecution(context.Context, bool) (*lock.File, error)
 	State(context.Context) (control.State, error)
 	Catalog(context.Context) (control.CatalogSnapshot, error)
-	UpdateState(context.Context, uint64, control.State) (control.State, error)
 	StartTransition(context.Context, uint64, store.Transition) (control.State, error)
 	StartOperatorTransition(context.Context, control.OperatorPrecondition, store.Transition) (control.State, error)
 	CheckOperatorPrecondition(context.Context, control.OperatorPrecondition) error
@@ -197,14 +196,20 @@ func (c *Controller) waitForWork(ctx context.Context, deadline time.Time, pendin
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// A genuine probe failure outranks the deadline; only the probe's own
+		// expiry against the drain budget reports ErrDrainTimeout.
+		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		// An observed empty queue completes the drain even at the deadline.
+		if err == nil && pending == 0 {
+			return nil
+		}
 		if c.pastDeadline(drainCtx, deadline) {
 			return ErrDrainTimeout
 		}
 		if err != nil {
 			return err
-		}
-		if pending == 0 {
-			return nil
 		}
 		select {
 		case <-drainCtx.Done():
@@ -237,6 +242,11 @@ func (c *Controller) pollUntil(ctx context.Context, deadline time.Time, probe fu
 			return ctx.Err()
 		}
 		if verifyCtx.Err() != nil || !c.now().Before(deadline) {
+			// The parent may have been canceled between the probe and this
+			// branch; caller cancellation is not a verification timeout.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			return errors.Join(ErrVerifyTimeout, lastErr)
 		}
 		if lastErr == nil || errors.Is(lastErr, gpuruntime.ErrUnloadUnverified) {
@@ -347,12 +357,14 @@ func (c *Controller) fail(transitionID string, state, previous control.State, ca
 	return updated, errors.Join(cause, rollbackErr, journalErr, finishErr)
 }
 
+// The latch uses Recover semantics so an interrupted in-progress transition is
+// failed with the latch instead of remaining in_progress until explicit recovery.
 func (c *Controller) latchObservationFailure(ctx context.Context, state control.State, cause error) (control.State, error) {
 	state = closedReconciling(state)
 	state.ActiveWorkload = control.WorkloadUnknown
 	finalizeCtx, cancel := context.WithTimeout(context.Background(), c.config.FinalizeTimeout)
 	defer cancel()
-	updated, err := c.store.UpdateState(finalizeCtx, state.Version, state)
+	updated, err := c.store.Recover(finalizeCtx, state.Version, state, "observation-latch")
 	return updated, errors.Join(cause, err)
 }
 

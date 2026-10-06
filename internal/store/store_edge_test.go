@@ -42,7 +42,7 @@ func TestRegisterWorkRequiresOpenAdmissionAndCompletesOnce(t *testing.T) {
 	if err := s.FinishWorkFenced(ctx, "request", control.WorkloadText, opened.LeaseFence, WorkCompleted); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.FinishWorkFenced(ctx, "request", control.WorkloadText, opened.LeaseFence, WorkCompleted); !errors.Is(err, sql.ErrNoRows) {
+	if err := s.FinishWorkFenced(ctx, "request", control.WorkloadText, opened.LeaseFence, WorkCompleted); !errors.Is(err, ErrWorkAlreadyCompleted) {
 		t.Fatalf("duplicate completion error = %v", err)
 	}
 	if err := s.FinishWorkFenced(ctx, "missing", control.WorkloadText, opened.LeaseFence, WorkCompleted); !errors.Is(err, sql.ErrNoRows) {

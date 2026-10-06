@@ -338,6 +338,11 @@ func (config *SystemdConfig) prepareWorkloads() error {
 			return errors.New("capacity requirement plus headroom overflows")
 		}
 	}
+	// Headroom is only ever added to a measured requirement; without one it
+	// would be accepted but silently never applied.
+	if config.CapacityHeadroomMiB != 0 && !config.measuresCapacity() {
+		return errors.New("capacity headroom requires a measured target requirement")
+	}
 	return nil
 }
 

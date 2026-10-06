@@ -110,7 +110,7 @@ func TestBoundaryRequestIDCompletesThroughHTTPAndStore(t *testing.T) {
 			if got := finish(token); got != http.StatusNoContent {
 				t.Fatalf("finish status=%d", got)
 			}
-			if got := finish(token); got != http.StatusNotFound {
+			if got := finish(token); got != http.StatusNoContent {
 				t.Fatalf("repeat finish status=%d", got)
 			}
 			if count, err := s.PruneCompletedWork(ctx, time.Now().Add(time.Hour), 1); err != nil || count != 1 {
