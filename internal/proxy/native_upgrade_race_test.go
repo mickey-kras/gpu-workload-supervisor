@@ -25,7 +25,7 @@ func TestNativeLegacyNativeUpgradeRace(t *testing.T) {
 	n := s.catalog.Catalog.Profiles[0].NativeModel
 	s.catalog.Catalog.Profiles[0].NativeModel = nil
 	wrapped := &catalogRaceUpgradeStore{nativeStore: s, mutate: func() { s.catalog.Revision = "two"; s.catalog.Catalog.Profiles[0].NativeModel = n }}
-	h, err := New(wrapped, c)
+	h, err := NewWithContext(context.Background(), wrapped, c)
 	if err != nil {
 		t.Fatal(err)
 	}

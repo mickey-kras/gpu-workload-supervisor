@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -56,7 +57,7 @@ func TestExplicitTransportPreservesUpstreamTLSConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := admittedState(control.OwnerSupervisor)
-	handler, err := New(&fakeStore{state: state}, Config{
+	handler, err := NewWithContext(context.Background(), &fakeStore{state: state}, Config{
 		Upstream: target, Workload: control.WorkloadMedia,
 		ExecutionRoutes: []Route{{Method: http.MethodPost, Path: "/execute"}},
 		Transport:       upstream.Client().Transport,

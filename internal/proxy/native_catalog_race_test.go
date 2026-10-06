@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"io"
 	"net/http/httptest"
@@ -24,7 +25,7 @@ func (*catalogRaceBody) Close() error { return nil }
 func TestNativeCatalogChangesDuringBody(t *testing.T) {
 	s, c, _, calls := nativeProxyFixture(t)
 	s.state.Owner = control.OwnerUser
-	h, err := New(s, c)
+	h, err := NewWithContext(context.Background(), s, c)
 	if err != nil {
 		t.Fatal(err)
 	}

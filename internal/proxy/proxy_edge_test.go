@@ -26,7 +26,7 @@ func TestConfigRejectsInvalidOriginsAndRoutes(t *testing.T) {
 	}
 	valid := Config{Upstream: target, Workload: control.WorkloadMedia,
 		ExecutionRoutes: []Route{{Method: "POST", Path: "/execute"}}}
-	if _, err := New(nil, valid); err == nil {
+	if _, err := NewWithContext(context.Background(), nil, valid); err == nil {
 		t.Fatal("nil state store accepted")
 	}
 	tests := []struct {
@@ -35,6 +35,8 @@ func TestConfigRejectsInvalidOriginsAndRoutes(t *testing.T) {
 	}{
 		{"missing upstream", func(config *Config) { config.Upstream = nil }},
 		{"unsupported scheme", func(config *Config) { config.Upstream = &url.URL{Scheme: "file", Host: "localhost"} }},
+		{"public upstream IP", func(config *Config) { config.Upstream = &url.URL{Scheme: "http", Host: "192.0.2.1:8080"} }},
+		{"upstream domain", func(config *Config) { config.Upstream = &url.URL{Scheme: "http", Host: "upstream.internal:8080"} }},
 		{"invalid workload", func(config *Config) { config.Workload = control.WorkloadIdle }},
 		{"no execution route", func(config *Config) { config.ExecutionRoutes = nil }},
 		{"invalid execution route", func(config *Config) { config.ExecutionRoutes = []Route{{Method: "POST", Path: "/x/../execute"}} }},
@@ -70,6 +72,14 @@ func TestConfigRejectsInvalidOriginsAndRoutes(t *testing.T) {
 	}
 	if _, _, _, _, err := validateConfig(valid); err != nil {
 		t.Fatal(err)
+	}
+	for _, raw := range []string{"http://127.0.0.1:1", "https://[::1]:8443", "http://LOCALHOST:9000"} {
+		loopback, _ := url.Parse(raw)
+		config := valid
+		config.Upstream = loopback
+		if _, _, _, _, err := validateConfig(config); err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
 	}
 }
 
@@ -148,7 +158,7 @@ func TestPassthroughMutationsRemoveControlHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := New(&fakeStore{state: admittedState(control.OwnerSupervisor)}, Config{
+	handler, err := NewWithContext(context.Background(), &fakeStore{state: admittedState(control.OwnerSupervisor)}, Config{
 		Upstream: target, Workload: control.WorkloadMedia,
 		ExecutionRoutes:   []Route{{Method: http.MethodPost, Path: "/execute"}},
 		PassthroughRoutes: []Route{{Method: http.MethodPost, Path: "/control"}},

@@ -39,3 +39,44 @@ func TestCheckRejectsMalformedJSON(t *testing.T) {
 		}
 	}
 }
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }
+
+func TestDecodeLimitedAcceptsOneStrictValue(t *testing.T) {
+	var v struct {
+		A int `json:"a"`
+	}
+	if err := DecodeLimited(strings.NewReader(`{"a":1}`), 1024, &v); err != nil || v.A != 1 {
+		t.Fatalf("decode: %v %#v", err, v)
+	}
+	if err := DecodeLimited(strings.NewReader(`{"a":1}`+"  \n"), 1024, &v); err != nil {
+		t.Fatalf("trailing whitespace: %v", err)
+	}
+}
+
+func TestDecodeLimitedRejects(t *testing.T) {
+	var v struct {
+		A int `json:"a"`
+	}
+	for _, body := range []string{
+		`{"a":1,"b":2}`,
+		`{"a":1} {"a":2}`,
+		`{"a":`,
+		`{"a":"x"}`,
+	} {
+		if err := DecodeLimited(strings.NewReader(body), 1024, &v); err == nil {
+			t.Fatalf("accepted %s", body)
+		}
+	}
+	if err := DecodeLimited(strings.NewReader(`{"a":1,"a":2}`), 1024, &v); !errors.Is(err, ErrDuplicateKey) {
+		t.Fatalf("duplicate key: %v", err)
+	}
+	if err := DecodeLimited(strings.NewReader(`{"a":12345678}`), 8, &v); err == nil {
+		t.Fatal("oversize body accepted")
+	}
+	if err := DecodeLimited(failingReader{}, 1024, &v); err == nil {
+		t.Fatal("read failure ignored")
+	}
+}

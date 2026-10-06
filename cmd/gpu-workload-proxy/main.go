@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"path"
 	"strings"
 	"syscall"
 	"time"
@@ -35,7 +34,7 @@ func (value *routesFlag) String() string {
 
 func (value *routesFlag) Set(input string) error {
 	method, path, ok := strings.Cut(input, ":")
-	if !ok || strings.TrimSpace(method) == "" || !canonicalPath(path) {
+	if !ok || strings.TrimSpace(method) == "" || !workloadproxy.CanonicalPath(path) {
 		return errors.New("route must use METHOD:/absolute/path")
 	}
 	*value = append(*value, workloadproxy.Route{Method: strings.ToUpper(strings.TrimSpace(method)), Path: path})
@@ -107,7 +106,7 @@ func run() error {
 	if len(routes) == 0 {
 		return errors.New("at least one execution route is required")
 	}
-	if !canonicalPath(*completionPath) {
+	if !workloadproxy.CanonicalPath(*completionPath) {
 		return errors.New("completion path must be canonical and absolute")
 	}
 	proxyConfig := workloadproxy.Config{
@@ -132,6 +131,11 @@ func parseUpstream(value string) (*url.URL, error) {
 	}
 	if upstream.Scheme != "http" && upstream.Scheme != "https" || upstream.Host == "" {
 		return nil, errors.New("upstream must be an absolute http or https URL")
+	}
+	if host := upstream.Hostname(); !strings.EqualFold(host, "localhost") {
+		if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+			return nil, errors.New("upstream host must be loopback")
+		}
 	}
 	return upstream, nil
 }
@@ -204,8 +208,4 @@ func validateLoopbackAddress(address string) error {
 		return errors.New("listen address must be loopback")
 	}
 	return nil
-}
-
-func canonicalPath(value string) bool {
-	return value != "" && strings.HasPrefix(value, "/") && path.Clean(value) == value
 }
