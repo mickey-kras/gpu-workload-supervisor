@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 )
@@ -23,8 +22,8 @@ func (r *releaseOrderedRuntime) Observe(ctx context.Context) (gpuruntime.Snapsho
 	return s, err
 }
 
-func (r *releaseOrderedRuntime) Released(ctx context.Context) error {
-	if err := r.fakeRuntime.Released(ctx); err != nil {
+func (r *releaseOrderedRuntime) ReleasedFor(ctx context.Context, target control.Workload) error {
+	if err := r.fakeRuntime.ReleasedFor(ctx, target); err != nil {
 		return err
 	}
 	r.verified = true
@@ -84,7 +83,7 @@ func TestFailedUserReleaseAndCapacityPreserveOwnerAndNeverRestart(t *testing.T) 
 				runtime.releaseFailures = 1000000
 			}
 			controller := testController(t, stateStore, runtime)
-			controller.id = func() (string, error) { return uuid.NewString(), nil }
+			controller.id = control.NewUUID
 			controller.config.VerifyTimeout = 5 * time.Millisecond
 			change := controller.SwitchUser
 			if transfer {
@@ -137,7 +136,7 @@ type targetReleaseRuntime struct {
 
 func (r *targetReleaseRuntime) ReleasedFor(ctx context.Context, target control.Workload) error {
 	r.target = target
-	return r.fakeRuntime.Released(ctx)
+	return r.fakeRuntime.ReleasedFor(ctx, target)
 }
 
 func (r *targetReleaseRuntime) Start(ctx context.Context, target control.Workload) error {
@@ -170,7 +169,7 @@ type unsupportedReleaseRuntime struct {
 	probes int
 }
 
-func (r *unsupportedReleaseRuntime) Released(context.Context) error {
+func (r *unsupportedReleaseRuntime) ReleasedFor(context.Context, control.Workload) error {
 	r.probes++
 	return gpuruntime.ErrUnloadUnverified
 }

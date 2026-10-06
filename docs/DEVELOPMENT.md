@@ -19,12 +19,23 @@ go test -race -coverprofile=coverage.out ./...
 go run github.com/vladopajic/go-test-coverage/v2@v2.19.0 --config=.testcoverage.yml
 ```
 
-The optional systemd integration suite requires a real user-systemd manager and host cgroup v2. It fails when those prerequisites are unavailable:
+The optional systemd integration suite, its prerequisites and its coverage limits are documented under [host qualification](DEPLOYMENT.md#qualify-the-host); complete that qualification before enabling execution.
 
-```sh
-go test -race -count=1 -timeout=10m -tags=systemd_integration -run '^TestSystemd' -v ./internal/supervisor
-```
+## Desktop package CI
 
-It exercises lifecycle and ownership transitions, restart/restore, descendant release, draining and concurrent commands against real units and SQLite. Health endpoints are fixtures; failures and interrupted journal phases are injected. These tests do not qualify an operator's GPU, driver, workload API or boot automation. Complete [host qualification](DEPLOYMENT.md#qualify-the-host) before enabling execution.
+The required `quality / checks` job also runs native GJS/Gio transport tests,
+then extracts the actual amd64 snapshot Debian payload into a disposable runner
+and tests its setup executable as a newly created OS account with real user
+systemd and SQLite. This covers discovery, side-effect-free preview, explicit
+confirmation, an interrupted activation after catalog commit, durable forward
+resume, login reconciliation through the packaged unit, stale preview rejection,
+checksummed backup tuples, and owned integration removal/reapplication. A clearly
+identified NVIDIA command fixture is used; no GPU is claimed by this gate.
+
+A separate dpkg temporary-root test exercises unpack, remove, purge and reinstall
+of the unchanged payload and checks preservation of private data. It does not
+configure the package or bypass its GNOME 50 dependencies. These checks fail when
+prerequisites are absent; they are unconditional parts of the existing gate.
+The scripts require a disposable host and refuse existing installed backend paths.
 
 See [repository controls](REPOSITORY-CONTROLS.md), [dependency updates](DEPENDABOT.md) and [releasing](RELEASING.md).

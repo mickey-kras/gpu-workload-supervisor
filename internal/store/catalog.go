@@ -11,9 +11,7 @@ import (
 
 var ErrCatalogReferenced = errors.New("workload profile is referenced by live state or unfinished work")
 
-func readCatalog(ctx context.Context, q interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}) (control.CatalogSnapshot, error) {
+func readCatalog(ctx context.Context, q querier) (control.CatalogSnapshot, error) {
 	var s control.CatalogSnapshot
 	var b []byte
 	err := q.QueryRowContext(ctx, "SELECT revision, catalog FROM workload_catalog WHERE singleton=1").Scan(&s.Revision, &b)
@@ -37,50 +35,56 @@ func (s *Store) ReplaceCatalog(ctx context.Context, expected string, c control.C
 		return control.CatalogSnapshot{}, err
 	}
 	c = c.Clone()
-	tx, err := s.db.BeginTx(ctx, nil)
+	var old control.CatalogSnapshot
+	var revision string
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		old, revision, err = s.replaceCatalog(ctx, tx, expected, c)
+		return err
+	})
 	if err != nil {
-		return control.CatalogSnapshot{}, err
-	}
-	defer tx.Rollback()
-	old, err := readCatalog(ctx, tx)
-	if err != nil {
-		return old, err
-	}
-	if old.Revision != expected {
-		return old, ErrVersionConflict
-	}
-	state, err := readState(ctx, tx)
-	if err != nil {
-		return old, err
-	}
-	refs := map[control.Workload]bool{state.ActiveWorkload: true, state.DesiredWorkload: true}
-	if err := readCatalogWorkReferences(ctx, tx, refs); err != nil {
-		return old, err
-	}
-	if err := validateCatalogReferences(c, old, refs); err != nil {
-		return old, err
-	}
-	revision, err := s.uuid()
-	if err != nil {
-		return old, err
-	}
-	b, err := json.Marshal(c)
-	if err != nil {
-		return old, err
-	}
-	if _, err = tx.ExecContext(ctx, "INSERT INTO workload_catalog(singleton,revision,catalog) VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision,catalog=excluded.catalog", revision, b); err != nil {
-		return old, err
-	}
-	if _, err = tx.ExecContext(ctx, "INSERT INTO workload_catalog_history(revision,catalog) VALUES(?,?)", revision, b); err != nil {
-		return old, err
-	}
-	if _, err = tx.ExecContext(ctx, "UPDATE control_state SET version=version+1,updated_at=? WHERE singleton=1", formatTime(s.now())); err != nil {
-		return old, err
-	}
-	if err = tx.Commit(); err != nil {
 		return old, err
 	}
 	return control.CatalogSnapshot{Revision: revision, Catalog: c}, nil
+}
+
+func (s *Store) replaceCatalog(ctx context.Context, tx *sql.Tx, expected string, c control.Catalog) (control.CatalogSnapshot, string, error) {
+	old, err := readCatalog(ctx, tx)
+	if err != nil {
+		return old, "", err
+	}
+	if old.Revision != expected {
+		return old, "", ErrVersionConflict
+	}
+	state, err := readState(ctx, tx)
+	if err != nil {
+		return old, "", err
+	}
+	refs := map[control.Workload]bool{state.ActiveWorkload: true, state.DesiredWorkload: true}
+	if err := readCatalogWorkReferences(ctx, tx, refs); err != nil {
+		return old, "", err
+	}
+	if err := validateCatalogReferences(c, old, refs); err != nil {
+		return old, "", err
+	}
+	revision, err := s.uuid()
+	if err != nil {
+		return old, "", err
+	}
+	b, err := json.Marshal(c)
+	if err != nil {
+		return old, "", err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO workload_catalog(singleton,revision,catalog) VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision,catalog=excluded.catalog", revision, b); err != nil {
+		return old, "", err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO workload_catalog_history(revision,catalog) VALUES(?,?)", revision, b); err != nil {
+		return old, "", err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE control_state SET version=version+1,updated_at=? WHERE singleton=1", formatTime(s.now())); err != nil {
+		return old, "", err
+	}
+	return old, revision, nil
 }
 
 // readCatalogWorkReferences uses the replacement transaction's snapshot so live

@@ -41,6 +41,8 @@ func TestProxyFlagValidation(t *testing.T) {
 		{"missing upstream", "upstream is required", nil},
 		{"malformed upstream", "parse upstream", []string{"-upstream", "http://%"}},
 		{"relative upstream", "upstream must be an absolute", []string{"-upstream", "/path"}},
+		{"public upstream", "upstream host must be loopback", []string{"-upstream", "http://192.0.2.1:8080"}},
+		{"upstream domain", "upstream host must be loopback", []string{"-upstream", "http://upstream.internal:8080"}},
 		{"unknown workload", "workload must be a valid workload ID", []string{"-upstream", "http://127.0.0.1:1", "-workload", "INVALID"}},
 		{"no routes", "at least one execution route", []string{"-upstream", "http://127.0.0.1:1", "-workload", "media"}},
 		{"invalid finish path", "completion path must be canonical", []string{"-upstream", "http://127.0.0.1:1", "-workload", "media", "-execute-route", "POST:/execute", "-completion-path", "/a/../finish"}},

@@ -30,6 +30,19 @@ A lease fence combines a store-incarnation UUID with a monotonic epoch. A fresh 
 
 SQLite uses WAL mode, full synchronous writes, foreign keys, and one database connection. Transition side effects are recorded as intent and observation events.
 
+The controller is separate from the request path; it manages runtime transitions and writes the durable state the proxy uses for admission. The proxy also writes that state when it admits and finishes work.
+
+## State ownership
+
+Four executables open, migrate, and write `state.db`:
+
+- `gpu-mode` records workload transitions.
+- `gpu-workload-proxy` writes admission and completion records (`AdmitWorkToken`, `FinishWorkToken`).
+- `gpu-operator` runs the embedded supervisor transitions behind local requests.
+- `gpu-setup` commits the accepted catalog.
+
+Opening the database from any of them can apply pending migrations; back up before changing binaries.
+
 ## Clients
 
 The shipped local client is the GNOME Shell extension in `clients/gnome/`,
@@ -45,4 +58,4 @@ The repository README uses one overview with light/dark variants. Its topology f
 python3 scripts/architecture-overview.py
 ```
 
-The controller is separate from the request path; it manages runtime transitions and writes the durable state the proxy uses for admission. Do not hand-edit the generated SVG files.
+Do not hand-edit the generated SVG files.

@@ -23,7 +23,7 @@ checks deployment activation before opening or migrating state.
 
 Write exactly one compact JSON document followed by a newline, then close stdin.
 Input is limited to 16 KiB and two seconds. Unknown, duplicate, case-aliased and
-trailing fields/documents are rejected. The 1–64 byte request ID consists of
+trailing fields/documents are rejected. The 1-64 byte request ID consists of
 ASCII letters, digits, hyphen, underscore or period and is only a correlation
 identifier, never an execution lease.
 

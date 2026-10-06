@@ -322,11 +322,8 @@ func TestThirdWorkloadOperatorResolutionAcceptance(t *testing.T) {
 		t.Fatalf("pending %d %v", pending, err)
 	}
 }
-func TestCatalogConstructorRejectsInvalidAndBindsStatePathAcceptance(t *testing.T) {
+func TestCatalogConstructorRejectsInvalidAcceptance(t *testing.T) {
 	c, s, r, snap := acceptanceController(t)
-	if c.DurableStatePath() != s.DurableStatePath() {
-		t.Fatal("wrong gate path")
-	}
 	cfg := c.config
 	snap.Catalog.Version = 99
 	cfg.Catalog = snap

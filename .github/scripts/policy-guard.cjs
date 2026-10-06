@@ -330,20 +330,14 @@ function inspectCoverageConfig(files, failures) {
     ]);
     const validFloor = (value, minimum) => typeof value === 'number' &&
       Number.isInteger(value) && value >= minimum && value <= 100;
-    // Retired with the externalcontrol package; tolerated at 95+ until the
-    // stale override entry is removed in a follow-up.
-    const legacyPath = '^internal/externalcontrol$';
     const override = config.override;
-    const core = Array.isArray(override) ? override.filter(rule => rule.path !== legacyPath) : [];
-    const legacy = Array.isArray(override) ? override.filter(rule => rule.path === legacyPath) : [];
     if (Object.keys(config).some(key => !['profile', 'threshold', 'override'].includes(key)) ||
         config.profile !== 'coverage.out' ||
         !validFloor(config.threshold?.total, 90) || !validFloor(config.threshold?.package, 90) ||
-        !Array.isArray(override) || core.length !== floors.size ||
+        !Array.isArray(override) || override.length !== floors.size ||
         new Set(override.map(rule => rule.path)).size !== override.length ||
-        core.some(rule => !floors.has(rule.path) ||
-          !validFloor(rule.threshold, floors.get(rule.path))) ||
-        legacy.some(rule => !validFloor(rule.threshold, 95))) {
+        override.some(rule => !floors.has(rule.path) ||
+          !validFloor(rule.threshold, floors.get(rule.path)))) {
       failures.push('Package coverage policy was weakened');
     }
   } catch (error) {

@@ -1,7 +1,6 @@
 package setup
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,21 +19,13 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 	"golang.org/x/mod/semver"
 )
 
-type Profile struct {
-	Version                 int    `json:"version"`
-	StatePath               string `json:"statePath"`
-	ActivatedRelease        string `json:"activatedRelease"`
-	SystemctlPath           string `json:"systemctlPath"`
-	NvidiaSMIPath           string `json:"nvidiaSMIPath"`
-	GPUIndex                int    `json:"gpuIndex"`
-	CapacityHeadroomMiB     uint64 `json:"capacityHeadroomMiB"`
-	StatusTimeoutSeconds    int    `json:"statusTimeoutSeconds,omitempty"`
-	OperationTimeoutSeconds int    `json:"operationTimeoutSeconds,omitempty"`
-}
+type Profile = deployment.Profile
+
 type Request struct {
 	Version          int             `json:"version"`
 	Profile          Profile         `json:"profile"`
@@ -56,20 +47,8 @@ type Preview struct {
 
 func Decode(reader io.Reader) (Request, error) {
 	var request Request
-	data, err := io.ReadAll(io.LimitReader(reader, 262145))
-	if err != nil {
+	if err := strictjson.DecodeLimited(reader, 262144, &request); err != nil {
 		return request, err
-	}
-	if len(data) > 262144 {
-		return request, errors.New("setup request exceeds 256 KiB")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
-		return request, err
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		return request, errors.New("trailing setup request")
 	}
 	return request, Validate(request)
 }
@@ -128,7 +107,7 @@ func SystemBackend() Backend {
 }
 
 func runtimeFor(request Request) (gpuruntime.Manager, error) {
-	return gpuruntime.NewSystemdManager(gpuruntime.SystemdConfig{Catalog: &request.Catalog, SystemctlPath: request.Profile.SystemctlPath, NvidiaSMIPath: request.Profile.NvidiaSMIPath, GPUIndex: request.Profile.GPUIndex, CapacityHeadroomMiB: request.Profile.CapacityHeadroomMiB, HealthTimeout: 10 * time.Second})
+	return gpuruntime.NewSystemdManager(request.Profile.SystemdConfig(&request.Catalog))
 }
 func mkdirTrusted(path string) error {
 	if err := os.MkdirAll(path, 0700); err != nil {
@@ -226,7 +205,7 @@ func (work activationWork) verifyRuntimes(ctx context.Context) (gpuruntime.Manag
 	if err != nil {
 		return nil, err
 	}
-	if err := manager.Released(ctx); err != nil {
+	if err := manager.ReleasedFor(ctx, control.WorkloadIdle); err != nil {
 		return nil, fmt.Errorf("configured workloads have not released the GPU: %w", err)
 	}
 	if work.existing && work.old.StatePath != "" {
@@ -241,7 +220,7 @@ func (work activationWork) verifyRuntimes(ctx context.Context) (gpuruntime.Manag
 		if err != nil {
 			return nil, err
 		}
-		if err := oldManager.Released(ctx); err != nil {
+		if err := oldManager.ReleasedFor(ctx, control.WorkloadIdle); err != nil {
 			return nil, err
 		}
 	}
@@ -267,7 +246,7 @@ func (work activationWork) backup(ctx context.Context) error {
 		return err
 	}
 	if work.old.StatePath != "" {
-		return copyActivation(work.root, directory, work.oldProfileData)
+		return copyActivation(ctx, work.root, directory, work.oldProfileData)
 	}
 	return nil
 }
@@ -316,7 +295,7 @@ func (b Backend) commitConfiguration(ctx context.Context, home, root string, req
 		snapshot, err := stateStore.Catalog(ctx)
 		return reflect.DeepEqual(snapshot.Catalog, request.Catalog), err
 	}
-	err = tx.Apply(Hooks{Quiescent: func() error { return manager.Released(ctx) }, Committed: committed, Commit: func() error {
+	err = tx.Apply(Hooks{Quiescent: func() error { return manager.ReleasedFor(ctx, control.WorkloadIdle) }, Committed: committed, Commit: func() error {
 		same, err := committed()
 		if err != nil {
 			return err

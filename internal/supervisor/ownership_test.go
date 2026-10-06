@@ -184,7 +184,7 @@ func TestFailedUserChangesNeverRestartStoppedWork(t *testing.T) {
 				case "cancel":
 					runtime.cancelOnStop = cancel
 				case "phase":
-					controller.store = &phaseFailureAfterStop{StateStore: stateStore}
+					controller.store = &phaseFailureAfterStop{storeGateway: stateStore}
 				}
 				change := controller.SwitchUser
 				if transfer {
@@ -207,13 +207,13 @@ func TestFailedUserChangesNeverRestartStoppedWork(t *testing.T) {
 	}
 }
 
-type phaseFailureAfterStop struct{ StateStore }
+type phaseFailureAfterStop struct{ storeGateway }
 
 func (s phaseFailureAfterStop) SetTransitionPhase(ctx context.Context, id string, version uint64, phase control.Phase) (control.State, error) {
 	if phase == control.PhaseLoading {
 		return control.State{}, errors.New("phase write failed")
 	}
-	return s.StateStore.SetTransitionPhase(ctx, id, version, phase)
+	return s.storeGateway.SetTransitionPhase(ctx, id, version, phase)
 }
 
 func TestUserRecoveryVerifiesExplicitTargetWithoutRuntimeChanges(t *testing.T) {
@@ -252,19 +252,19 @@ func TestUserRecoveryFailureLeavesClosedOwnership(t *testing.T) {
 }
 
 type crashStore struct {
-	StateStore
+	storeGateway
 	point string
 }
 
 func (s crashStore) StartTransition(ctx context.Context, version uint64, tr store.Transition) (control.State, error) {
-	state, err := s.StateStore.StartTransition(ctx, version, tr)
+	state, err := s.storeGateway.StartTransition(ctx, version, tr)
 	if err == nil && s.point == "draining" {
 		panic("process stopped")
 	}
 	return state, err
 }
 func (s crashStore) SetTransitionPhase(ctx context.Context, id string, version uint64, phase control.Phase) (control.State, error) {
-	state, err := s.StateStore.SetTransitionPhase(ctx, id, version, phase)
+	state, err := s.storeGateway.SetTransitionPhase(ctx, id, version, phase)
 	if err == nil && s.point == string(phase) {
 		panic("process stopped")
 	}
@@ -274,7 +274,7 @@ func (s crashStore) FinishTransition(ctx context.Context, id, status string, ver
 	if s.point == "commit" {
 		return control.State{}, errors.New("commit unavailable")
 	}
-	final, err := s.StateStore.FinishTransition(ctx, id, status, version, state)
+	final, err := s.storeGateway.FinishTransition(ctx, id, status, version, state)
 	if err == nil && s.point == "committed" {
 		panic("process stopped")
 	}

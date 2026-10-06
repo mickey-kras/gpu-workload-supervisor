@@ -9,8 +9,7 @@ import (
 
 const takeControlOperation = "take-control"
 
-// OperatorTransition is the local account's conditional ownership path. The
-// automation SwitchConditional path remains Supervisor-only.
+// OperatorTransition is the local account's conditional ownership path.
 func (c *Controller) OperatorTransition(ctx context.Context, action string, target control.Workload, e control.OperatorPrecondition) (control.State, error) {
 	s, err := c.store.State(ctx)
 	if err != nil {
@@ -54,7 +53,7 @@ func (c *Controller) OperatorTransition(ctx context.Context, action string, targ
 
 func (c *Controller) startRequestedTransition(ctx context.Context, version uint64, o transitionOptions, t store.Transition) (control.State, error) {
 	if o.operator == nil {
-		return c.startTransition(ctx, version, o.expected, t)
+		return c.store.StartTransition(ctx, version, t)
 	}
 	return c.store.StartOperatorTransition(ctx, *o.operator, t)
 }
@@ -63,11 +62,8 @@ func (c *Controller) startRequestedTransition(ctx context.Context, version uint6
 // observations and work draining. Existing admitted work must not be restarted
 // merely because the drain or subsequent verification failed.
 func (c *Controller) failPreserving(id string, state, previous control.State, cause error) (control.State, error) {
-	final := state
+	final := closedReconciling(state)
 	final.Owner = previous.Owner
-	final.Phase = control.PhaseReconciling
-	final.Health = control.HealthError
-	final.Admission = control.AdmissionClosed
 	final.ActiveWorkload = control.WorkloadUnknown
 	ctx, cancel := context.WithTimeout(context.Background(), c.config.FinalizeTimeout)
 	defer cancel()

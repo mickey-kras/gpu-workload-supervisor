@@ -15,12 +15,11 @@ type CatalogStore interface {
 	AdmitWorkTokenAtCatalog(context.Context, string, string, control.Workload, control.Fence, string) (string, error)
 }
 
-func nativePolicy(ctx context.Context, stateStore StateStore, config Config) (*control.NativeModel, string, error) {
-	reader, ok := stateStore.(CatalogStore)
-	if !ok {
+func nativePolicy(ctx context.Context, catalog CatalogStore, config Config) (*control.NativeModel, string, error) {
+	if catalog == nil {
 		return nil, "", nil
 	}
-	snapshot, err := reader.Catalog(ctx)
+	snapshot, err := catalog.Catalog(ctx)
 	if err != nil {
 		return nil, "", err
 	}
@@ -63,11 +62,10 @@ func nativeReadRoute(runtime, path string) bool {
 	return runtime == "ollama" && (path == "/api/tags" || path == "/api/ps" || path == "/api/version")
 }
 func (h *Handler) checkNativeCatalog(w http.ResponseWriter, r *http.Request) bool {
-	reader, ok := h.store.(CatalogStore)
-	if !ok {
+	if h.catalog == nil {
 		return true
 	}
-	snapshot, err := reader.Catalog(r.Context())
+	snapshot, err := h.catalog.Catalog(r.Context())
 	if err != nil {
 		writeError(w, 503, "catalog_unavailable")
 		return false
@@ -83,7 +81,11 @@ func (h *Handler) checkNativeRequest(w http.ResponseWriter, r *http.Request) boo
 		return true
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<20))
-	if err != nil || control.ValidateModelRequest(body, h.nativeModel.Model) != nil {
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "native_body_read_failed")
+		return false
+	}
+	if control.ValidateModelRequest(body, h.nativeModel.Model) != nil {
 		writeError(w, 400, "native_model_mismatch")
 		return false
 	}
@@ -93,9 +95,8 @@ func (h *Handler) checkNativeRequest(w http.ResponseWriter, r *http.Request) boo
 }
 
 func (h *Handler) admitExecution(ctx context.Context, requestID, jobID string, fence control.Fence) (string, error) {
-	admitter, ok := h.store.(CatalogStore)
-	if !ok {
+	if h.catalog == nil {
 		return h.store.AdmitWorkToken(ctx, requestID, jobID, h.workload, fence)
 	}
-	return admitter.AdmitWorkTokenAtCatalog(ctx, requestID, jobID, h.workload, fence, h.catalogRevision)
+	return h.catalog.AdmitWorkTokenAtCatalog(ctx, requestID, jobID, h.workload, fence, h.catalogRevision)
 }

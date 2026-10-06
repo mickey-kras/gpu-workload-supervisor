@@ -28,7 +28,7 @@ func Discover(ctx context.Context, home string) (Discovery, error) {
 func (b Backend) Discover(ctx context.Context, home string) (Discovery, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	result := Discovery{Request: Request{Version: 1, Profile: Profile{Version: 1, StatePath: filepath.Join(home, ".local/state/gpu-workload-supervisor/state.db"), SystemctlPath: "/usr/bin/systemctl", NvidiaSMIPath: "/usr/bin/nvidia-smi"}, Catalog: control.Catalog{Version: 1}}}
+	result := Discovery{Request: Request{Version: 1, Profile: Profile{Version: 1, StatePath: deployment.DefaultStatePath(), SystemctlPath: "/usr/bin/systemctl", NvidiaSMIPath: "/usr/bin/nvidia-smi"}, Catalog: control.Catalog{Version: 1}}}
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
 	if data, err := privateRead(filepath.Join(root, "activation.json")); err == nil {
 		// A pending activation is resumed verbatim; changing it could discard the

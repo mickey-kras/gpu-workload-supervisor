@@ -36,7 +36,7 @@ func openNativeSession(ctx context.Context, p Profile) (Session, error) {
 	if snap.Revision == "" || snap.Catalog.Validate() != nil {
 		return fail(ErrIncompatibleConfiguration)
 	}
-	manager, err := gpuruntime.NewSystemdManager(gpuruntime.SystemdConfig{Catalog: &snap.Catalog, SystemctlPath: p.SystemctlPath, NvidiaSMIPath: p.NvidiaSMIPath, GPUIndex: p.GPUIndex, CapacityHeadroomMiB: p.CapacityHeadroomMiB, HealthTimeout: 10 * time.Second})
+	manager, err := gpuruntime.NewSystemdManager(p.SystemdConfig(&snap.Catalog))
 	if err != nil {
 		return fail(ErrIncompatibleConfiguration)
 	}

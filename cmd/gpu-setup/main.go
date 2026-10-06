@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +12,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/setup"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
 const cmdVerifyBindings = "verify-bindings"
@@ -99,20 +99,8 @@ func runDrafts(home string, output io.Writer) error {
 }
 func runSaveDrafts(home string, input io.Reader, output io.Writer) error {
 	var request setup.DraftRequest
-	data, err := io.ReadAll(io.LimitReader(input, 65537))
-	if err != nil {
+	if err := strictjson.DecodeLimited(input, 65536, &request); err != nil {
 		return err
-	}
-	if len(data) > 65536 {
-		return errors.New("draft request exceeds 64 KiB")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
-		return err
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		return errors.New("trailing draft request")
 	}
 	result, err := setup.SaveDrafts(home, request)
 	if err != nil {

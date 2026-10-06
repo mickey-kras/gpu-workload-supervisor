@@ -15,7 +15,6 @@ export class ApplicationDraft {
         this.input = {app};
     }
     get needsModel() { return this.input.app !== 'comfyui'; }
-    get ready() { return false; }
     edit(values) {
         this.input = {...this.input, ...values};
         this.cancel();

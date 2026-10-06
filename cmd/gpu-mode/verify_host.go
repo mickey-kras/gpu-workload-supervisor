@@ -20,13 +20,9 @@ func verifyHost(config gpuruntime.SystemdConfig, timeout time.Duration, newRunti
 	if err != nil {
 		return err
 	}
-	verifier, ok := manager.(gpuruntime.CapabilityPreflight)
-	if !ok {
-		return errors.New("runtime does not support host capability verification")
-	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	probe, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return verifier.Preflight(probe)
+	return manager.Preflight(probe)
 }

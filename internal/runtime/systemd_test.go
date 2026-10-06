@@ -65,7 +65,7 @@ func TestRecoveryStopsBothSystemdUnitsRatherThanOnlyReleasingMediaModels(t *test
 	if snapshot.TextActive || snapshot.MediaReady {
 		t.Fatalf("runtime remained active: %#v", snapshot)
 	}
-	if err := manager.Released(context.Background()); err != nil {
+	if err := manager.ReleasedFor(context.Background(), control.WorkloadIdle); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -187,7 +187,7 @@ func TestInactiveMediaReleaseIgnoresDesktopMemory(t *testing.T) {
 		if err := manager.Stop(context.Background(), control.WorkloadMedia); err != nil {
 			t.Fatal(err)
 		}
-		if err := manager.Released(context.Background()); err != nil {
+		if err := manager.ReleasedFor(context.Background(), control.WorkloadIdle); err != nil {
 			t.Fatalf("desktop memory %s: %v", used, err)
 		}
 	}

@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"io"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -17,6 +17,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/httptransport"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
 const (
@@ -57,6 +58,7 @@ type Handler struct {
 	nativeModel       *control.NativeModel
 	catalogRevision   string
 	store             StateStore
+	catalog           CatalogStore
 	proxy             *httputil.ReverseProxy
 	workload          control.Workload
 	executionRoutes   map[string]struct{}
@@ -95,10 +97,6 @@ type finishRequest struct {
 	Outcome           store.WorkOutcome `json:"outcome"`
 }
 
-func New(stateStore StateStore, config Config) (*Handler, error) {
-	return NewWithContext(context.Background(), stateStore, config)
-}
-
 func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (*Handler, error) {
 	if stateStore == nil {
 		return nil, errors.New("state store is required")
@@ -116,7 +114,8 @@ func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (
 	if config.FenceEpochHeader == "" {
 		config.FenceEpochHeader = DefaultFenceEpochHeader
 	}
-	native, revision, err := nativePolicy(ctx, stateStore, config)
+	catalog, _ := stateStore.(CatalogStore)
+	native, revision, err := nativePolicy(ctx, catalog, config)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +129,7 @@ func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (
 		return nil
 	}
 	return &Handler{
-		store: stateStore, proxy: reverseProxy, workload: config.Workload, nativeModel: native, catalogRevision: revision,
+		store: stateStore, catalog: catalog, proxy: reverseProxy, workload: config.Workload, nativeModel: native, catalogRevision: revision,
 		executionRoutes: executionRoutes, readOnlyRoutes: readOnlyRoutes, passthroughRoutes: passthroughRoutes,
 		completionPath: completionPath, requestIDHeader: config.RequestIDHeader,
 		jobIDHeader: config.JobIDHeader, fenceIDHeader: config.FenceIDHeader,
@@ -144,6 +143,9 @@ func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, ma
 	}
 	if config.Upstream.Scheme != "http" && config.Upstream.Scheme != "https" {
 		return nil, nil, nil, "", errors.New("upstream scheme must be http or https")
+	}
+	if host := config.Upstream.Hostname(); !isLoopbackHost(host) {
+		return nil, nil, nil, "", errors.New("upstream host must be loopback")
 	}
 	if !control.ValidWorkloadID(config.Workload) {
 		return nil, nil, nil, "", errors.New("workload must be a valid workload ID")
@@ -170,7 +172,7 @@ func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, ma
 	if completionPath == "" {
 		completionPath = DefaultCompletionPath
 	}
-	if !canonicalPath(completionPath) {
+	if !CanonicalPath(completionPath) {
 		return nil, nil, nil, "", errors.New("completion path must be canonical and absolute")
 	}
 	completionKey := http.MethodPost + " " + completionPath
@@ -178,6 +180,14 @@ func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, ma
 		return nil, nil, nil, "", err
 	}
 	return executionRoutes, readOnlyRoutes, passthroughRoutes, completionPath, nil
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func validateConfiguredHeaderNames(config Config) error {
@@ -279,7 +289,7 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 	if !h.checkNativeCatalog(response, request) {
 		return
 	}
-	if !canonicalPath(request.URL.Path) {
+	if !CanonicalPath(request.URL.Path) {
 		writeError(response, http.StatusBadRequest, "path_not_canonical")
 		return
 	}
@@ -392,15 +402,8 @@ func (h *Handler) executeUser(response http.ResponseWriter, request *http.Reques
 }
 
 func (h *Handler) finish(response http.ResponseWriter, request *http.Request) {
-	request.Body = http.MaxBytesReader(response, request.Body, 64<<10)
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
 	var finish finishRequest
-	if err := decoder.Decode(&finish); err != nil {
-		writeError(response, http.StatusBadRequest, "finish_request_invalid")
-		return
-	}
-	if err := requireJSONEOF(decoder); err != nil {
+	if err := strictjson.DecodeLimited(request.Body, 64<<10, &finish); err != nil {
 		writeError(response, http.StatusBadRequest, "finish_request_invalid")
 		return
 	}
@@ -463,17 +466,6 @@ func (h *Handler) writeWorkError(response http.ResponseWriter, err error) {
 	}
 }
 
-func requireJSONEOF(decoder *json.Decoder) error {
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("trailing JSON value")
-		}
-		return err
-	}
-	return nil
-}
-
 func routeSet(routes []Route, required bool) (map[string]struct{}, error) {
 	if required && len(routes) == 0 {
 		return nil, errors.New("at least one execution route is required")
@@ -481,7 +473,7 @@ func routeSet(routes []Route, required bool) (map[string]struct{}, error) {
 	result := make(map[string]struct{}, len(routes))
 	for _, route := range routes {
 		method := strings.ToUpper(strings.TrimSpace(route.Method))
-		if method == "" || !canonicalPath(route.Path) {
+		if method == "" || !CanonicalPath(route.Path) {
 			return nil, errors.New("routes require a method and canonical absolute path")
 		}
 		result[method+" "+route.Path] = struct{}{}
@@ -489,7 +481,7 @@ func routeSet(routes []Route, required bool) (map[string]struct{}, error) {
 	return result, nil
 }
 
-func canonicalPath(value string) bool {
+func CanonicalPath(value string) bool {
 	return value != "" && strings.HasPrefix(value, "/") && path.Clean(value) == value
 }
 

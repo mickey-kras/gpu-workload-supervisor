@@ -143,7 +143,7 @@ func TestAcceptanceBackupTupleRejectsMissingOrMismatchedMembers(t *testing.T) {
 			case "invalid-catalog":
 				acceptanceWrite(t, filepath.Join(root, "catalog.json"), []byte("{"))
 			}
-			err = copyActivation(root, dest, profile)
+			err = copyActivation(context.Background(), root, dest, profile)
 			if kind == "invalid-catalog" || kind == "missing-catalog" { // The durable DB catalog is authoritative, so a stale mirror cannot corrupt the tuple.
 				if err != nil {
 					t.Fatal(err)

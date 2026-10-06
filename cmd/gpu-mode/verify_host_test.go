@@ -20,7 +20,7 @@ func (r *hostProbeRuntime) Preflight(ctx context.Context) error { return r.probe
 
 func TestVerifyHostDoesNotOpenState(t *testing.T) {
 	sentinel := errors.New("unsupported hierarchy")
-	for _, scenario := range []string{"success", "failure", "unsupported", "factory failure", "timeout", "invalid timeout"} {
+	for _, scenario := range []string{"success", "failure", "factory failure", "timeout", "invalid timeout"} {
 		t.Run(scenario, func(t *testing.T) {
 			root := t.TempDir()
 			path := filepath.Join(root, "state.db")
@@ -65,9 +65,6 @@ func TestVerifyHostDoesNotOpenState(t *testing.T) {
 			err := runWithRuntimeFactory(func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error) {
 				if scenario == "factory failure" {
 					return nil, sentinel
-				}
-				if scenario == "unsupported" {
-					return &stoppedRecoveryRuntime{}, nil
 				}
 				return runtime, nil
 			})

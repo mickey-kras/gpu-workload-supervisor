@@ -129,10 +129,4 @@ Record evidence for all of the following before enabling execution:
 - Trusted authentication/ingress, callback access, token handling and host/network
   isolation. These are deployment responsibilities, not supervisor features.
 
-Repository evidence: `internal/proxy/contract_integration_test.go` exercises real
-HTTP and SQLite registration/completion, interrupted streams, restart and closure
-ordering. `internal/supervisor/proxy_handoff_test.go` covers in-flight User requests.
-`internal/supervisor/orphan_recovery_test.go` covers failed forwarding, lifetime locks,
-verified audited resolution and failed resolution. The real-systemd qualification
-suite covers runtime lifecycle and release behavior; it does not certify backend
-routes or job semantics.
+Repository evidence: `internal/proxy/contract_integration_test.go`, `internal/supervisor/proxy_handoff_test.go` and `internal/supervisor/orphan_recovery_test.go`; the real-systemd qualification suite covers runtime lifecycle and release behavior, not backend routes or job semantics.

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"time"
 )
 
 const commandOutputLimit = 1024 * 1024
@@ -24,6 +25,7 @@ func boundedCommand(ctx context.Context, name string, args ...string) ([]byte, e
 	command := exec.CommandContext(ctx, name, args...)
 	command.Stdout = output
 	command.Stderr = output
+	command.WaitDelay = 100 * time.Millisecond
 	err := command.Run()
 	return output.buffer.Bytes(), err
 }

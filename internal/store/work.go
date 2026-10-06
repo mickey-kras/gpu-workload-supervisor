@@ -33,18 +33,19 @@ func (s *Store) ResolveUnfinishedWork(ctx context.Context, expected uint64, reas
 	if len(reason) == 0 || len(reason) > 512 {
 		return 0, errors.New("resolution reason must contain 1 to 512 bytes")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	var count int64
+	_, err := s.withStateTx(ctx, expected, func(tx *sql.Tx, state control.State) (control.State, error) {
+		var err error
+		count, err = s.resolveUnfinishedWork(ctx, tx, state, reason)
+		return state, err
+	})
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
-	state, err := readState(ctx, tx)
-	if err != nil {
-		return 0, err
-	}
-	if state.Version != expected {
-		return 0, ErrVersionConflict
-	}
+	return count, nil
+}
+
+func (s *Store) resolveUnfinishedWork(ctx context.Context, tx *sql.Tx, state control.State, reason string) (int64, error) {
 	if state.Admission != control.AdmissionClosed {
 		return 0, ErrAdmissionOpen
 	}
@@ -80,15 +81,15 @@ func (s *Store) ResolveUnfinishedWork(ctx context.Context, expected uint64, reas
 		state.LeaseFence.Epoch, state.Version, reason, count, now); err != nil {
 		return 0, fmt.Errorf("audit unfinished work resolution: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return 0, err
-	}
 	return count, nil
 }
 
 func (s *Store) beginAdmittedWorkAtCatalog(ctx context.Context, requestID string, workload control.Workload, fence control.Fence, revision *string) (*sql.Tx, error) {
 	if err := control.ValidateRequestID(requestID); err != nil {
 		return nil, err
+	}
+	if err := fence.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid fence: %w", err)
 	}
 	if !control.ValidWorkloadID(workload) {
 		return nil, errors.New("invalid workload")
@@ -138,7 +139,7 @@ func checkAdmissibleState(ctx context.Context, tx *sql.Tx, workload control.Work
 }
 
 func (s *Store) AdmitWorkToken(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence) (string, error) {
-	token, err := newUUID()
+	token, err := control.NewUUID()
 	if err != nil {
 		return "", err
 	}
@@ -150,7 +151,7 @@ func (s *Store) AdmitWorkToken(ctx context.Context, requestID, jobID string, wor
 
 // AdmitWorkTokenAtCatalog binds admission and catalog verification to one transaction.
 func (s *Store) AdmitWorkTokenAtCatalog(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence, revision string) (string, error) {
-	token, err := newUUID()
+	token, err := control.NewUUID()
 	if err != nil {
 		return "", err
 	}
@@ -174,19 +175,14 @@ func (s *Store) admitWorkAtCatalog(ctx context.Context, requestID, jobID string,
 		return err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO registered_work
+	if _, err := tx.ExecContext(ctx, `INSERT INTO registered_work
 		(request_id, job_id, workload, lease_incarnation, lease_epoch, registered_at, registration_token)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		requestID, nullable(jobID), workload, fence.Incarnation, fence.Epoch, formatTime(s.now()), nullable(binding.token))
-	if err != nil {
+		requestID, nullable(jobID), workload, fence.Incarnation, fence.Epoch, formatTime(s.now()), nullable(binding.token)); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint") {
+			return ErrRequestConflict
+		}
 		return fmt.Errorf("admit work: %w", err)
-	}
-	changed, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if changed != 1 {
-		return ErrRequestConflict
 	}
 	return tx.Commit()
 }
@@ -211,7 +207,7 @@ func (s *Store) FinishWorkToken(ctx context.Context, requestID string, workload 
 	if changed == 1 {
 		return nil
 	}
-	var registeredWorkload control.Workload
+	var registeredWorkload sql.NullString
 	var incarnation string
 	var epoch uint64
 	var registeredToken sql.NullString
@@ -223,7 +219,7 @@ func (s *Store) FinishWorkToken(ctx context.Context, requestID string, workload 
 	if err != nil {
 		return err
 	}
-	if registeredWorkload != workload {
+	if !registeredWorkload.Valid || control.Workload(registeredWorkload.String) != workload {
 		return ErrWorkloadMismatch
 	}
 	if incarnation != fence.Incarnation || epoch != fence.Epoch {

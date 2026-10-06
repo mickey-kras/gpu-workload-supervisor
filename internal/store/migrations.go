@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
@@ -156,6 +157,23 @@ func (s *Store) initialize(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := s.applyMigrations(ctx, tx); err != nil {
+		return err
+	}
+	if err := s.seedControlState(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	state, err := readState(ctx, s.db)
+	if err != nil {
+		return err
+	}
+	return state.Validate()
+}
+
+func (s *Store) applyMigrations(ctx context.Context, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version INTEGER PRIMARY KEY,
 		applied_at TEXT NOT NULL
@@ -179,6 +197,10 @@ func (s *Store) initialize(ctx context.Context) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func (s *Store) seedControlState(ctx context.Context, tx *sql.Tx) error {
 	var count int
 	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM control_state").Scan(&count); err != nil {
 		return err
@@ -202,12 +224,5 @@ func (s *Store) initialize(ctx context.Context) error {
 	if count > 1 {
 		return fmt.Errorf("control_state contains %d rows", count)
 	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	state, err := readState(ctx, s.db)
-	if err != nil {
-		return err
-	}
-	return state.Validate()
+	return nil
 }

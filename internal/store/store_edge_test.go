@@ -165,7 +165,7 @@ func TestOpenRejectsUnsafePathAndCorruptTimestamp(t *testing.T) {
 }
 
 func TestNewUUIDHasVersionAndVariant(t *testing.T) {
-	uuid, err := newUUID()
+	uuid, err := control.NewUUID()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -44,7 +44,7 @@ func (b Backend) retainBinaries(root string) error {
 	}
 	return writeJSON(filepath.Join(directory, "manifest.json"), manifest)
 }
-func copyActivation(root, destination string, profile []byte) error {
+func copyActivation(ctx context.Context, root, destination string, profile []byte) error {
 	data, err := privateRead(filepath.Join(root, "activated-binaries/manifest.json"))
 	if err != nil {
 		return errors.New("prior activated binary set missing; repair before upgrade")
@@ -66,7 +66,7 @@ func copyActivation(root, destination string, profile []byte) error {
 		return err
 	}
 	files["state.db"+deployment.Suffix] = marker
-	accepted, err := ReadCatalog(context.Background(), old.StatePath)
+	accepted, err := ReadCatalog(ctx, old.StatePath)
 	if err != nil {
 		return err
 	}

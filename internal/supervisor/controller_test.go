@@ -82,7 +82,9 @@ func (r *fakeRuntime) StopForRecovery(ctx context.Context) error {
 	return nil
 }
 
-func (r *fakeRuntime) Released(ctx context.Context) error {
+func (r *fakeRuntime) Preflight(context.Context) error { return nil }
+
+func (r *fakeRuntime) ReleasedFor(ctx context.Context, _ control.Workload) error {
 	r.releaseCalls++
 	if r.blockRelease {
 		<-ctx.Done()
@@ -332,7 +334,7 @@ func openStore(t *testing.T) *store.Store {
 	return stateStore
 }
 
-func testController(t *testing.T, stateStore StateStore, runtime gpuruntime.Manager) *Controller {
+func testController(t *testing.T, stateStore storeGateway, runtime gpuruntime.Manager) *Controller {
 	t.Helper()
 	controller, err := newController(stateStore, runtime, Config{
 		DrainTimeout: time.Second, VerifyTimeout: time.Second,

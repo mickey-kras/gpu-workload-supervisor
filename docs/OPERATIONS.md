@@ -48,18 +48,20 @@ are outside this repository.
 /PINNED/RELEASE/gpu-mode [runtime flags] recover
 ```
 
-`status` reports persisted ownership and admission plus observed active workload;
-it is not a full readiness/release check and can latch an observation failure for
-supervisor-owned state. Check the exit code as well as JSON. A successful idle
-reconciliation is stable and healthy with admission closed. Select `text` or
-`media` through the controller to admit that workload; do not start its runtime
-independently. Use `recover` only after repairing the cause of a supervisor-owned
-failure. Recovery first closes admission and rotates its fence. Before stopping
-media it waits up to `-drain-timeout` for already admitted work to finish; old
-registrations retain their completion authority. Failed or canceled recovery
-stays closed with error health and unknown runtime state. Unfinished orphan work
-requires the explicit `resolve-work` procedure below before destructive recovery
-can proceed. User-owned recovery is described below.
+- `status` reports persisted ownership and admission plus observed active
+  workload; it is not a full readiness/release check and can latch an
+  observation failure for supervisor-owned state. Check the exit code as well
+  as JSON.
+- A successful idle `reconcile` is stable and healthy with admission closed.
+  Select `text` or `media` through the controller to admit that workload; do
+  not start its runtime independently.
+- Use `recover` only after repairing the cause of a supervisor-owned failure.
+  Recovery first closes admission and rotates its fence. Before stopping media
+  it waits up to `-drain-timeout` for already admitted work to finish; old
+  registrations retain their completion authority. Failed or canceled recovery
+  stays closed with error health and unknown runtime state.
+- Unfinished orphan work requires the explicit `resolve-work` procedure below
+  before destructive recovery can proceed.
 
 Runtime error messages omit untrusted command output and may omit the underlying
 probe detail. Inspect the affected unit with `systemctl --user status UNIT` and

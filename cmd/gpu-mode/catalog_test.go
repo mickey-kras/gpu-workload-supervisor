@@ -39,7 +39,10 @@ func (r *cliCatalogRuntime) StopForRecovery(context.Context) error {
 	return nil
 }
 func (r *cliCatalogRuntime) Healthy(context.Context, control.Workload) error { return nil }
-func (r *cliCatalogRuntime) Released(context.Context) error                  { return nil }
+func (r *cliCatalogRuntime) ReleasedFor(context.Context, control.Workload) error {
+	return nil
+}
+func (r *cliCatalogRuntime) Preflight(context.Context) error { return nil }
 func TestCLIThirdCatalogWorkloadAndFailedReload(t *testing.T) {
 	oldArgs, oldStdout := os.Args, os.Stdout
 	t.Cleanup(func() { os.Args, os.Stdout = oldArgs, oldStdout })
