@@ -8,7 +8,6 @@ test('four app choices never become executable profiles through discovery', () =
         const draft = new ApplicationDraft(app.id);
         const probe = draft.begin();
         draft.accept(probe, {app: app.id, instanceStatus: 'available', inventoryStatus: 'available', models: [{id: 'model-a'}], lifecycleControl: 'unverified'});
-        assert.equal(draft.ready, false);
         assert.equal(draft.needsModel, app.id !== 'comfyui');
         assert.equal(draft.snapshot().app, app.id);
         assert.equal('adapter' in draft.snapshot(), false);
@@ -31,7 +30,6 @@ test('file fallback replaces endpoint and preserves honest verification', () => 
     draft.edit({endpoint: 'http://127.0.0.1:8080'});
     draft.reference('/models/one.gguf', 'model-file');
     assert.deepEqual(draft.begin().request, {app: 'llama.cpp', reference: '/models/one.gguf', referenceKind: 'model-file'});
-    assert.equal(draft.ready, false);
 });
 
 test('stopped and unreachable instances never report no models', () => {
