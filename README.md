@@ -1,13 +1,13 @@
 # GPU Workload Supervisor
 
 [![PR validation](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/pr-validation.yml/badge.svg?event=pull_request)](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/pr-validation.yml?query=event%3Apull_request)
-[![coverage](https://img.shields.io/badge/coverage-%E2%89%A590%25%20%28CI--gated%29-brightgreen)](https://github.com/mickey-kras/gpu-workload-supervisor/blob/main/.github/workflows/ci.yml)
+[![coverage](https://img.shields.io/badge/total%20coverage-%E2%89%A590%25%20%28CI--gated%29-brightgreen)](https://github.com/mickey-kras/gpu-workload-supervisor/blob/main/.github/workflows/ci.yml)
 [![codeql](https://img.shields.io/github/check-runs/mickey-kras/gpu-workload-supervisor/main?nameFilter=codeql%20%2F%20analyze&label=codeql&logo=github)](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/main.yml?query=branch%3Amain)
 [![aislop](https://badges.scanaislop.com/score/mickey-kras/gpu-workload-supervisor.svg)](https://scanaislop.com/mickey-kras/gpu-workload-supervisor)
 [![main + SonarQube](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/main.yml/badge.svg?branch=main)](https://github.com/mickey-kras/gpu-workload-supervisor/actions/workflows/main.yml?query=branch%3Amain)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-GPU Workload Supervisor switches between text and media workloads that share one GPU. It stops and verifies the outgoing workload before starting the next, and blocks new requests when a transition or recovery fails. Use it when both workloads cannot safely run at once.
+GPU Workload Supervisor switches between catalog-configured workloads that share one GPU. It stops and verifies the outgoing workload before starting the next, and blocks new requests when a transition or recovery fails. Use it when the workloads cannot safely run at once.
 
 It provides four executables: `gpu-mode` (controller and workload transitions), `gpu-workload-proxy` (execution admission proxy), `gpu-operator` (one-request local operator backend), and `gpu-setup` (guided setup and catalog commit). You supply the runtime services, health endpoints and deployment configuration.
 
@@ -19,7 +19,7 @@ Use this project independently of the memory stack. It does not require Memory R
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/generated/overview-dark.svg">
     <source media="(prefers-color-scheme: light)" srcset="docs/architecture/generated/overview-light.svg">
-    <img alt="Clients reach text or media runtimes through the execution proxy. A separate controller switches workloads; both share durable state. Supervisor components are highlighted." src="docs/architecture/generated/overview-light.svg">
+    <img alt="Clients reach configured workload runtimes through the execution proxy. A separate controller switches workloads; both share durable state. Supervisor components are highlighted." src="docs/architecture/generated/overview-light.svg">
   </picture>
 </a>
 

@@ -24,7 +24,7 @@ mutually untrusted processes sharing a UID; use separate service identities.
 CI uses pinned GitHub Actions, Go vulnerability analysis, dependency review,
 Gitleaks, Semgrep, Trivy, CodeQL, Aislop, and main-only SonarQube. Dependabot
 ecosystems, update rules, and auto-merge requirements are in
-[DEPENDABOT.md](docs/DEPENDABOT.md).
+[REPOSITORY-CONTROLS.md](docs/REPOSITORY-CONTROLS.md#dependabot).
 
 ## Dependency licenses
 

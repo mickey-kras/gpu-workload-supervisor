@@ -144,14 +144,10 @@ authorizes a service stop. `restore-state` requires no runtime policy.
 
 ## Migrate release checks
 
-**Migration:** remove `-release-max-used-mib` and configure cgroup paths in the
-catalog. Every explicit use of the old flag, including `=0`, is rejected before
-opening
-state. Do not replace it with a larger threshold or a learned idle baseline.
-Release never queries total GPU memory or GPU process accounting: unrelated desktop
-allocations, PID reuse, and unavailable accounting cannot change the result.
-Cgroup evidence proves workload processes are gone, not that asynchronous driver
-cleanup has finished.
+Remove `-release-max-used-mib` (including explicit `=0`; it is rejected) and
+configure cgroup paths in the catalog. Release uses cgroup evidence, never GPU
+memory accounting. See the [v0.1.5 operator notes](releases/v0.1.5.md) for the
+full migration.
 
 ## Check capacity before startup
 
@@ -188,8 +184,6 @@ runtime requests bypass admission and registered-work draining; execution gates
 are still required for supervised requests. Every command sharing a state store
 pins the same durably accepted catalog.
 
-The state directory must be private and owned by the current user. Commands use an exclusive file lock. Opening the store applies pending migrations. Boot reconciliation does not resume incomplete work. Interrupted transitions and latched errors require explicit recovery.
-
 ## Qualify the host
 
 The tagged suite (`go test -race -count=1 -timeout=10m -tags=systemd_integration
@@ -214,9 +208,7 @@ and does not itself provide request fencing.
 
 ## Trust boundary
 
-Processes sharing the supervisor identity are trusted. A compromised process with the same operating-system permissions can bypass advisory locks, state files, and service control. Strong isolation requires separate service identities and operating-system enforced permissions.
-
-Execution requests must not have a route that bypasses the gate while supervisor ownership is active.
+Processes sharing the supervisor identity are fully trusted; strong isolation requires separate service identities (see [SECURITY.md](../SECURITY.md)). Execution requests must not have a route that bypasses the gate while supervisor ownership is active.
 
 ## Next
 

@@ -46,13 +46,13 @@ Opening the database from any of them can apply pending migrations; back up befo
 ## Clients
 
 The shipped local client is the GNOME Shell extension in `clients/gnome/`,
-packaged per [desktop installation](DESKTOP.md); its contract is in
-[CLIENTS.md](CLIENTS.md). Browser automation is not implemented.
+packaged per [desktop installation](DESKTOP.md); its contract is the client
+half of the [operator protocol](OPERATOR.md#gnome-shell-extension-client).
 
 
 ## Updating the overview
 
-The repository README uses one overview with light/dark variants. Its topology follows `internal/proxy`, `internal/supervisor`, `internal/store`, and `internal/runtime`. Regenerate both maintained SVG assets with:
+The repository README uses one overview with light/dark variants. Its topology follows `internal/proxy`, `internal/supervisor`, `internal/store`, `internal/runtime`, `internal/control`, and `internal/operator`. Regenerate both maintained SVG assets with:
 
 ```sh
 python3 scripts/architecture-overview.py
