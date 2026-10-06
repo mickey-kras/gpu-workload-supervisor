@@ -97,6 +97,22 @@ func InitialState(incarnation string, now time.Time) State {
 }
 
 func (s State) Validate() error {
+	if err := s.validateFields(); err != nil {
+		return err
+	}
+	if s.Owner == OwnerUser && s.Admission != AdmissionClosed {
+		return errors.New("supervisor admission must be closed during user ownership")
+	}
+	if s.Phase != PhaseStable && s.Admission != AdmissionClosed {
+		return errors.New("admission must be closed outside stable phase")
+	}
+	if s.Health == HealthError && s.Admission != AdmissionClosed {
+		return errors.New("admission must be closed while health is error")
+	}
+	return nil
+}
+
+func (s State) validateFields() error {
 	if s.Owner != OwnerSupervisor && s.Owner != OwnerUser {
 		return fmt.Errorf("invalid owner %q", s.Owner)
 	}
@@ -125,15 +141,6 @@ func (s State) Validate() error {
 	}
 	if s.UpdatedAt.IsZero() {
 		return errors.New("updated timestamp is empty")
-	}
-	if s.Owner == OwnerUser && s.Admission != AdmissionClosed {
-		return errors.New("supervisor admission must be closed during user ownership")
-	}
-	if s.Phase != PhaseStable && s.Admission != AdmissionClosed {
-		return errors.New("admission must be closed outside stable phase")
-	}
-	if s.Health == HealthError && s.Admission != AdmissionClosed {
-		return errors.New("admission must be closed while health is error")
 	}
 	return nil
 }

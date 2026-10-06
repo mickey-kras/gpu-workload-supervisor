@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
@@ -114,5 +115,32 @@ func TestFinishWorkRejectsDifferentWorkload(t *testing.T) {
 	}
 	if err := stateStore.FinishWorkFenced(ctx, "request-1", control.WorkloadMedia, state.LeaseFence, WorkAbandoned); !errors.Is(err, ErrWorkloadMismatch) {
 		t.Fatalf("finish different workload: %v", err)
+	}
+}
+
+func TestAdmitWorkRejectsInvalidFence(t *testing.T) {
+	stateStore := testStore(t)
+	ctx := context.Background()
+	err := stateStore.AdmitWork(ctx, "request-1", "", control.WorkloadMedia, control.Fence{})
+	if err == nil || !strings.Contains(err.Error(), "invalid fence") {
+		t.Fatalf("admit with empty fence: %v", err)
+	}
+}
+
+func TestFinishWorkLegacyNullWorkload(t *testing.T) {
+	stateStore := testStore(t)
+	ctx := context.Background()
+	state, err := stateStore.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stateStore.db.ExecContext(ctx, `INSERT INTO registered_work
+		(request_id, job_id, workload, lease_incarnation, lease_epoch, registered_at)
+		VALUES ('legacy-1', NULL, NULL, ?, ?, ?)`,
+		state.LeaseFence.Incarnation, state.LeaseFence.Epoch, formatTime(stateStore.now())); err != nil {
+		t.Fatal(err)
+	}
+	if err := stateStore.FinishWorkFenced(ctx, "legacy-1", control.WorkloadText, state.LeaseFence, WorkAbandoned); !errors.Is(err, ErrWorkloadMismatch) {
+		t.Fatalf("finish legacy null workload: %v", err)
 	}
 }
