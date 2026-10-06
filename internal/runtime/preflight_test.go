@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 func TestCapabilityPreflight(t *testing.T) {
@@ -81,7 +83,7 @@ func TestPreflightRemovedCgroupsRespectUnitState(t *testing.T) {
 			if (err == nil) != tc.allowed {
 				t.Fatalf("preflight %s/%s: %v", tc.active, tc.sub, err)
 			}
-			if tc.active == "failed" && m.Released(context.Background()) == nil {
+			if tc.active == "failed" && m.ReleasedFor(context.Background(), control.WorkloadIdle) == nil {
 				t.Fatal("failed unit treated as release evidence")
 			}
 		})
@@ -148,7 +150,7 @@ func TestStopFailedUnitResetsOnlyAfterVerifiedEmptyCgroup(t *testing.T) {
 				if (scenario == "populated" || scenario == "missing events" || scenario == "missing metadata") && reset {
 					t.Fatal("reset failure before verifying empty group")
 				}
-				if wantSuccess && m.Released(context.Background()) != nil {
+				if wantSuccess && m.ReleasedFor(context.Background(), control.WorkloadIdle) != nil {
 					t.Fatal("recovered stopped unit failed release")
 				}
 			})

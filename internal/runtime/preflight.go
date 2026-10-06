@@ -5,10 +5,6 @@ import (
 	"errors"
 )
 
-// CapabilityPreflight checks release verification capability without requiring
-// workloads to be stopped. Release evidence must still be checked after stopping.
-type CapabilityPreflight interface{ Preflight(context.Context) error }
-
 func (m *SystemdManager) Preflight(ctx context.Context) error {
 	if m.config.Catalog != nil {
 		for _, p := range m.config.Catalog.Profiles {

@@ -50,15 +50,15 @@ func TestReleaseUsesRecursiveCgroupsNotDesktopMemoryOrReusedPIDs(t *testing.T) {
 			root := fixtureCgroups(t, m)
 			writeEvents(t, root, "text.service", "populated 0\nfrozen 0\n")
 			writeEvents(t, root, "media.service", "populated 0\n")
-			if err := m.Released(context.Background()); err != nil {
+			if err := m.ReleasedFor(context.Background(), control.WorkloadIdle); err != nil {
 				t.Fatal(err)
 			}
 			writeEvents(t, root, "text.service", "populated 1\n")
-			if err := m.Released(context.Background()); err == nil {
+			if err := m.ReleasedFor(context.Background(), control.WorkloadIdle); err == nil {
 				t.Fatal("surviving descendant accepted")
 			}
 			writeEvents(t, root, "text.service", "populated 0\n")
-			if err := m.Released(context.Background()); err != nil {
+			if err := m.ReleasedFor(context.Background(), control.WorkloadIdle); err != nil {
 				t.Fatal(err)
 			}
 			for _, call := range r.calls {
@@ -73,7 +73,7 @@ func TestReleaseUsesRecursiveCgroupsNotDesktopMemoryOrReusedPIDs(t *testing.T) {
 func TestFreshManagerCanVerifyRemovedConfiguredCgroups(t *testing.T) {
 	m := strictManager(t, stoppedRunner())
 	fixtureCgroups(t, m)
-	if err := m.Released(context.Background()); err != nil {
+	if err := m.ReleasedFor(context.Background(), control.WorkloadIdle); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -84,7 +84,7 @@ func TestCgroupEvidenceFailsClosed(t *testing.T) {
 			m := strictManager(t, stoppedRunner())
 			root := fixtureCgroups(t, m)
 			writeEvents(t, root, "text.service", evidence)
-			if err := m.Released(context.Background()); err == nil {
+			if err := m.ReleasedFor(context.Background(), control.WorkloadIdle); err == nil {
 				t.Fatal("ambiguous evidence accepted")
 			}
 		})
@@ -124,7 +124,7 @@ func TestCgroupEvidenceFailsClosed(t *testing.T) {
 			case "missing hierarchy":
 				m.cgroups.root = filepath.Join(root, "missing")
 			}
-			if err := m.Released(context.Background()); err == nil {
+			if err := m.ReleasedFor(context.Background(), control.WorkloadIdle); err == nil {
 				t.Fatal("unverifiable cgroup accepted")
 			}
 		})
@@ -136,7 +136,7 @@ func TestReleaseRejectsMissingOrMismatchedCgroupMetadata(t *testing.T) {
 		r := stoppedRunner()
 		r.outputs[textShowCommand] = []byte("LoadState=loaded\nActiveState=inactive\nSubState=dead\n" + metadata)
 		m := strictManager(t, r)
-		if err := m.Released(context.Background()); err == nil {
+		if err := m.ReleasedFor(context.Background(), control.WorkloadIdle); err == nil {
 			t.Fatalf("accepted metadata %q", metadata)
 		}
 	}
@@ -166,7 +166,7 @@ func TestUnloadSuccessResponseIsNotReleaseEvidence(t *testing.T) {
 	default:
 		t.Fatal("release endpoint was not called")
 	}
-	if err := m.Released(context.Background()); !errors.Is(err, ErrUnloadUnverified) || !strings.Contains(err.Error(), "stop-service") {
+	if err := m.ReleasedFor(context.Background(), control.WorkloadIdle); !errors.Is(err, ErrUnloadUnverified) || !strings.Contains(err.Error(), "stop-service") {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -178,7 +178,7 @@ func TestCapacityIsSeparateFromReleaseAndTargetSpecific(t *testing.T) {
 	m.config.TextRequiredMiB = 100
 	m.config.MediaRequiredMiB = 200
 	m.config.CapacityHeadroomMiB = 10
-	if err := m.Released(context.Background()); err != nil {
+	if err := m.ReleasedFor(context.Background(), control.WorkloadIdle); err != nil {
 		t.Fatal(err)
 	}
 	rejected := func(target control.Workload) {
@@ -305,7 +305,7 @@ func TestUnloadTextToLiveMediaVerifiesOnlyOutgoingText(t *testing.T) {
 	if err := m.Start(context.Background(), control.WorkloadMedia); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Released(context.Background()); !errors.Is(err, ErrUnloadUnverified) {
+	if err := m.ReleasedFor(context.Background(), control.WorkloadIdle); !errors.Is(err, ErrUnloadUnverified) {
 		t.Fatalf("idle accepted live media: %v", err)
 	}
 	if err := m.ReleasedFor(context.Background(), "unknown"); err == nil {
@@ -330,7 +330,7 @@ func TestManagerCgroupAnchorMustExistAndMatchBothWorkloads(t *testing.T) {
 		r := stoppedRunner()
 		r.outputs[rootShowCommand] = []byte(metadata)
 		m := strictManager(t, r)
-		if err := m.Released(context.Background()); err == nil {
+		if err := m.ReleasedFor(context.Background(), control.WorkloadIdle); err == nil {
 			t.Fatalf("accepted root metadata %q", metadata)
 		}
 	}
@@ -347,7 +347,7 @@ func TestManagerCgroupAnchorMustExistAndMatchBothWorkloads(t *testing.T) {
 		} else if evidence == "malformed" {
 			writeEvents(t, m.cgroups.root, "workloads", "populated unknown\n")
 		}
-		if err := m.Released(context.Background()); err == nil {
+		if err := m.ReleasedFor(context.Background(), control.WorkloadIdle); err == nil {
 			t.Fatalf("accepted %s manager anchor", evidence)
 		}
 	}
