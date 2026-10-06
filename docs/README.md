@@ -19,6 +19,7 @@ Start with [deployment](DEPLOYMENT.md), [boot reconciliation](OPERATIONS.md#boot
 
 - [State and responsibility](ARCHITECTURE.md)
 - [Proxy adapter contract](PROXY-CONTRACT.md): runtime evidence required before enabling execution
+- [Demand activation and inactivity idle plan](AUTO-IDLE.md): planned policy, not implemented
 
 ## Maintain
 
