@@ -112,9 +112,16 @@ inference routes with the exact JSON `model`, rejects lifetime overrides,
 ambiguous keys, query parameters and encoded bodies, and stops accepting new
 requests when its catalog revision changes. Its upstream must match the binding.
 
-These bindings support operator switching. They do not add runtime-specific
-terminal completion callbacks: Supervisor-mode execution still requires the
-existing trusted completion adapter contract. Direct access to native API ports
-bypasses proxy enforcement and must remain outside the managed execution path.
+Supervisor-mode execution of a native binding finishes itself: the proxy
+observes the upstream response and completes the registration on verified
+terminal evidence. Ollama generation/chat terminates with a `"done":true`
+object; OpenAI-compatible chat/completion streams terminate with a
+`data: [DONE]` event, non-streaming responses when every choice carries a
+non-null `finish_reason`, and embedding responses when the complete result
+body parses. EOF, disconnects, errors and ambiguous bodies never complete
+work; unproven registrations stay unfinished for explicit reconciliation, and
+an external completion callback remains accepted first-come. Direct access to
+native API ports bypasses proxy enforcement and must remain outside the
+managed execution path.
 Real GPU/systemd/runtime qualification is still required on the deployment host;
 HTTP and lifecycle fixtures are not hardware qualification.
