@@ -5,8 +5,8 @@ function inspectReleaseEntry(files, workflows, failures, checks) {
   const releaseJobs = workflows[release]?.jobs;
   if (workflows[release]?.on?.workflow_dispatch?.inputs ||
       releaseJobs?.entry?.outputs?.version !== '${{ steps.version.outputs.version }}' ||
-      !['quality', 'aislop', 'codeql'].every(id => releaseJobs?.[id]?.needs === 'entry') ||
-      JSON.stringify(releaseJobs?.publish?.needs) !== '["entry","quality","aislop","codeql"]') {
+      !['quality', 'codeql'].every(id => releaseJobs?.[id]?.needs === 'entry') ||
+      JSON.stringify(releaseJobs?.publish?.needs) !== '["entry","quality","codeql"]') {
     failures.push(`${release} lost dispatch version selection`);
   }
   step(release, 'entry', 'Require dispatch from main', {

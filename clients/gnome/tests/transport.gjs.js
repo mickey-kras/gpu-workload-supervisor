@@ -1,7 +1,5 @@
 // Native Gio/process integration. Does not qualify Shell rendering or GPU effects.
-// aislop-ignore-next-line ai-slop/hallucinated-import -- GNOME 50 GJS runtime supplies this native module, not npm.
 import Gio from 'gi://Gio';
-// aislop-ignore-next-line ai-slop/hallucinated-import -- GNOME 50 GJS runtime supplies this native module, not npm.
 import GLib from 'gi://GLib';
 import { readBounded, Transport } from '../gpu-workload-supervisor@local/transport.js';
 

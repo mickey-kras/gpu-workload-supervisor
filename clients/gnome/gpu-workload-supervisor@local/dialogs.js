@@ -1,8 +1,5 @@
-// aislop-ignore-next-line ai-slop/hallucinated-import -- GNOME 50 GJS runtime supplies this native module, not npm.
 import Clutter from 'gi://Clutter';
-// aislop-ignore-next-line ai-slop/hallucinated-import -- GNOME 50 GJS runtime supplies this native module, not npm.
 import St from 'gi://St';
-// aislop-ignore-next-line ai-slop/hallucinated-import -- GNOME 50 GJS runtime supplies this native module, not npm.
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 export function ownershipDialog(action, label, confirm, onClose) {
     const dialog = new ModalDialog.ModalDialog();

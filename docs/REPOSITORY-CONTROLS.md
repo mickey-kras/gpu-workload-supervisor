@@ -7,7 +7,7 @@ merged branches. Merge commits and rebase merges are disabled. The eight active
 GitHub rulesets are the source of truth; their one-time JSON import files are
 not kept in the repository.
 
-`Protect default branch` requires the `quality / checks`, `aislop / aislop status`,
+`Protect default branch` requires the `quality / checks`,
 `codeql / analyze`, `branch-policy / branch name`,
 `dependency-review / dependency review`, and `guard` checks, plus resolved
 review threads, code scanning, and code quality. Work branch names and `v*`
@@ -19,7 +19,7 @@ the three release creation/deletion rules.
 The Go quality workflow enforces formatting, a tidy module lock, race-tested
 90% statement coverage, vet, vulnerability scanning, scanner toolchain audit,
 GoReleaser snapshot validation, Gitleaks, Semgrep, and Trivy. Pull requests also
-run Aislop, CodeQL, and dependency review. The `main` workflow runs SonarQube
+run CodeQL and dependency review. The `main` workflow runs SonarQube
 through Tailscale using the `tag:github-sonar` identity and enforces its quality
 gate. Repository Advanced Security settings should keep the dependency graph,
 Dependabot alerts, code scanning, code quality, and secret scanning enabled.

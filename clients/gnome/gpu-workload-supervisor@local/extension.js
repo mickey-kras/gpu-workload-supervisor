@@ -1,16 +1,9 @@
-// aislop-ignore-next-line ai-slop/hallucinated-import -- GNOME 50 GJS runtime supplies this native module, not npm.
 import Gio from 'gi://Gio';
-// aislop-ignore-next-line ai-slop/hallucinated-import -- GNOME 50 GJS runtime supplies this native module, not npm.
 import GLib from 'gi://GLib';
-// aislop-ignore-next-line ai-slop/hallucinated-import -- GNOME 50 GJS runtime supplies this native module, not npm.
 import GObject from 'gi://GObject';
-// aislop-ignore-next-line ai-slop/hallucinated-import -- GNOME 50 GJS runtime supplies this native module, not npm.
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
-// aislop-ignore-next-line ai-slop/hallucinated-import -- GNOME 50 GJS runtime supplies this native module, not npm.
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-// aislop-ignore-next-line ai-slop/hallucinated-import -- GNOME 50 GJS runtime supplies this native module, not npm.
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
-// aislop-ignore-next-line ai-slop/hallucinated-import -- GNOME 50 GJS runtime supplies this native module, not npm.
 import * as QuickSettings from 'resource:///org/gnome/shell/ui/quickSettings.js';
 import { Model } from './model.js';
 import { Transport } from './transport.js';

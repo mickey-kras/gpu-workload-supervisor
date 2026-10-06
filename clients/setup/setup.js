@@ -1,10 +1,6 @@
-// aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Adw from 'gi://Adw?version=1';
-// aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Gtk from 'gi://Gtk?version=4.0';
-// aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Gio from 'gi://Gio';
-// aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import GLib from 'gi://GLib';
 import {ReviewedConfiguration} from './review.mjs';
 import {applications} from './onboarding.mjs';

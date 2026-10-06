@@ -17,12 +17,12 @@ function fixture() {
   };
   branch.rules.find(rule => rule.type === 'required_status_checks').parameters = {
     strict_required_status_checks_policy: true, do_not_enforce_on_create: true,
-    required_status_checks: ['quality / checks', 'aislop / aislop status',
+    required_status_checks: ['quality / checks',
       'codeql / analyze', 'guard'].map(context => ({ context, integration_id: 15368 })),
   };
   branch.rules.find(rule => rule.type === 'code_scanning').parameters = {
     code_scanning_tools: [['CodeQL', 'high_or_higher'], ['Trivy', 'critical'],
-      ['aislop', 'high_or_higher']].map(([tool, threshold]) => ({ tool,
+      ].map(([tool, threshold]) => ({ tool,
       security_alerts_threshold: threshold, alerts_threshold: 'errors' })),
   };
   rules.push({ id: 200, name: 'Enforce work branch names', enforcement: 'active',

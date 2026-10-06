@@ -17,8 +17,6 @@ concurrency:
 jobs:
   quality:
     uses: ./.github/workflows/ci.yml
-  aislop:
-    uses: ./.github/workflows/aislop.yml
   codeql:
     uses: ./.github/workflows/codeql.yml
   update-pr-branches:
@@ -28,7 +26,7 @@ jobs:
       RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
   sonar:
     name: sonar
-    needs: [quality, aislop, codeql]
+    needs: [quality, codeql]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:

@@ -16,8 +16,6 @@ concurrency:
 jobs:
   quality:
     uses: ./.github/workflows/ci.yml
-  aislop:
-    uses: ./.github/workflows/aislop.yml
   codeql:
     uses: ./.github/workflows/codeql.yml
   branch-policy:

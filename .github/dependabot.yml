@@ -11,30 +11,10 @@ updates:
     open-pull-requests-limit: 3
 
   - package-ecosystem: npm
-    directory: /.github/aislop
-    schedule:
-      interval: cron
-      cronjob: "3 3 * * *"
-    cooldown:
-      default-days: 7
-    rebase-strategy: auto
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: npm
     directory: /.github/scripts
     schedule:
       interval: cron
       cronjob: "3 5 * * *"
-    cooldown:
-      default-days: 7
-    rebase-strategy: auto
-    open-pull-requests-limit: 3
-
-  - package-ecosystem: npm
-    directory: /.github/audit-tool
-    schedule:
-      interval: cron
-      cronjob: "3 11 * * *"
     cooldown:
       default-days: 7
     rebase-strategy: auto

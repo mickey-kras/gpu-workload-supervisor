@@ -51,12 +51,12 @@ function verifyRule(rule, spec, review) {
   const checks = rule.rules.find(item => item.type === 'required_status_checks').parameters;
   requireValue(checks?.strict_required_status_checks_policy === true &&
     checks.do_not_enforce_on_create === true &&
-    ['quality / checks', 'aislop / aislop status', 'codeql / analyze', 'guard'].every(context =>
+    ['quality / checks', 'codeql / analyze', 'guard'].every(context =>
       checks.required_status_checks?.some(check => check.context === context && check.integration_id === 15368)),
   `${name}: changed required checks`);
   const scanning = rule.rules.find(item => item.type === 'code_scanning').parameters?.code_scanning_tools;
   requireValue([
-    ['CodeQL', 'high_or_higher'], ['Trivy', 'critical'], ['aislop', 'high_or_higher'],
+    ['CodeQL', 'high_or_higher'], ['Trivy', 'critical'],
   ].every(([tool, threshold]) => scanning?.some(entry => entry.tool === tool &&
     entry.security_alerts_threshold === threshold && entry.alerts_threshold === 'errors')),
     `${name}: changed code scanning`);

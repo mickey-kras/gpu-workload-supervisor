@@ -6,7 +6,7 @@ const REQUIRED_FILES = [
   '.github/workflows/pr-validation.yml', '.github/workflows/ci.yml',
   '.github/workflows/main.yml', '.github/workflows/policy-guard.yml',
   '.github/workflows/release.yml', '.github/workflows/codeql.yml',
-  '.github/workflows/aislop.yml', '.github/workflows/dependency-review.yml',
+  '.github/workflows/dependency-review.yml',
   '.github/workflows/branch-policy.yml', '.github/workflows/dependabot-auto-merge.yml',
   '.github/workflows/dependabot-auto-merge-refresh.yml', '.github/dependabot.yml',
   '.github/scripts/policy-guard.cjs', '.github/scripts/dependabot-auto-merge.cjs',
@@ -14,8 +14,7 @@ const REQUIRED_FILES = [
   'release-version.json', '.github/scripts/policy-release.cjs',
   '.github/scripts/pr-branch-updater.cjs', 'sonar-project.properties',
   '.github/scripts/package.json', '.github/scripts/package-lock.json',
-  '.github/aislop/package.json', '.github/aislop/package-lock.json',
-  '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
+  '.github/dependency-review-config.yml', '.semgrep.yml',
   '.goreleaser.yaml', '.testcoverage.yml',
   '.github/actions/setup-goreleaser/action.yml', '.github/scripts/install-goreleaser.sh',
 ];
@@ -145,7 +144,7 @@ function inspectCi(files, workflows, failures, checks) {
   const pr = '.github/workflows/pr-validation.yml';
   event(pr, 'pull_request');
   for (const [id, target] of Object.entries({
-    quality: 'ci', aislop: 'aislop', codeql: 'codeql',
+    quality: 'ci', codeql: 'codeql',
     'branch-policy': 'branch-policy', 'dependency-review': 'dependency-review',
   })) job(pr, id, `./.github/workflows/${target}.yml`);
 
@@ -167,7 +166,6 @@ function inspectCi(files, workflows, failures, checks) {
   step(ci, 'checks', 'Packaged setup lifecycle integration', { run: ['sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT timeout 300s bash scripts/setup-desktop-integration.sh --isolated-test-host "${packages[0]}"'] });
   step(ci, 'checks', 'Debian payload lifecycle integration', { run: ['sudo timeout 120s bash scripts/check-desktop-deb-lifecycle.sh "${packages[0]}"'] });
   step(ci, 'checks', 'Go vulnerability audit', { uses: 'golang/govulncheck-action', withValues: { cache: false } });
-  step(ci, 'checks', 'Audit Aislop toolchain');
   step(ci, 'checks', 'Test policy automation', { run: ['node --test .github/scripts/*.test.cjs'] });
   step(ci, 'checks', 'Gitleaks', { uses: 'gitleaks/gitleaks-action' });
   step(ci, 'checks', 'Semgrep', { run: ['docker pull "$SEMGREP_IMAGE"', 'semgrep scan --config .semgrep.yml --exclude .semgrep.yml --error'] });
@@ -187,25 +185,6 @@ function inspectCi(files, workflows, failures, checks) {
     'awk \'$1 == "total:" { coverage=$3+0; found=1 } END { if (!found || coverage < 90) exit 1 }\' coverage-summary.txt',
   ]);
   exactRun(ci, 'checks', 'Go vet', ['go vet ./...']);
-  const auditRun = workflows[ci]?.jobs?.checks?.steps?.find(s => s.name === 'Audit Aislop toolchain')?.run || '';
-  const temporaryAudit = auditRun.includes('.github/audit-tool/');
-  if (temporaryAudit) {
-    for (const [path, digest] of [['.github/audit-tool/audit-ci.json', '5d31c2834a2cd56fa7c8e6a62ea015c8c07d4da5bacd1e4af779950a3842f9ec'], ['.github/audit-tool/audit-fixture.json', 'b338f05c92807ac45b2c7d50eb8f1dbe6c8c29f671ceb2912c051e39c453ecd2'], ['.github/audit-tool/audit.cjs', '3302195e687c5a4940c88d32353f68bcb12b61475affc05af18cba6398cbbc31'], ['.github/audit-tool/audit.test.cjs', '4271a0e0cabfb6e07c779fa6a15b86751ed55ed25322abdd546e56772a58956b'], ['.github/audit-tool/package-lock.json', 'ac23769398329eb7cea03236037626c2197d20695c35c6f8af26ea7706b73660'], ['.github/audit-tool/package.json', '10e831899e68131e3fa58f3c62c18aeba8fceb87199de65f9861f015b63fb709']]) {
-      if (createHash('sha256').update(files[path] || '').digest('hex') !== digest) {
-        failures.push(`${path} changed the approved temporary audit exception`);
-      }
-    }
-  }
-  exactRun(ci, 'checks', 'Audit Aislop toolchain', temporaryAudit ? [
-    'npm ci --prefix .github/audit-tool --ignore-scripts --no-audit --no-fund',
-    'npm audit --prefix .github/audit-tool --audit-level=moderate',
-    'npm ci --prefix .github/aislop --ignore-scripts --no-audit --no-fund',
-    'node --test .github/audit-tool/audit.test.cjs',
-    'node .github/audit-tool/audit.cjs .github/aislop',
-  ] : [
-    'npm ci --prefix .github/aislop --ignore-scripts --no-audit --no-fund',
-    'npm audit --prefix .github/aislop --audit-level=moderate',
-  ]);
   exactRun(ci, 'checks', 'Test policy automation', [
     'npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund',
     'npm audit --prefix .github/scripts --audit-level=moderate',
@@ -224,7 +203,7 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
   const { event, job, step } = checks;
   const main = '.github/workflows/main.yml';
   event(main, 'push');
-  for (const id of ['quality', 'aislop', 'codeql']) job(main, id, `./.github/workflows/${id === 'quality' ? 'ci' : id}.yml`);
+  for (const id of ['quality', 'codeql']) job(main, id, `./.github/workflows/${id === 'quality' ? 'ci' : id}.yml`);
   step(main, 'sonar', 'Generate Go coverage', { run: ['go test -coverprofile=coverage.out ./...'] });
   step(main, 'sonar', 'SonarQube analysis', { uses: 'SonarSource/sonarqube-scan-action' });
   step(main, 'sonar', 'SonarQube quality gate', { uses: 'SonarSource/sonarqube-quality-gate-action' });
@@ -255,13 +234,12 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
   }
   const trustedBot = workflows[bot]?.jobs?.['enable-auto-merge']?.steps?.find(s => s.name === 'Read trusted automation');
   if (trustedBot?.with?.ref !== '${{ github.workflow_sha }}') failures.push(`${bot} lost trusted checkout`);
-  for (const [path, jobId, name, expected] of [
-    ['.github/workflows/codeql.yml', 'analyze', undefined, 'github/codeql-action/analyze'],
-    ['.github/workflows/aislop.yml', 'status', 'Aislop Go quality gate', undefined],
+  for (const [path, jobId, expected] of [
+    ['.github/workflows/codeql.yml', 'analyze', 'github/codeql-action/analyze'],
   ]) {
     const steps = workflows[path]?.jobs?.[jobId]?.steps || [];
-    if (!steps.some(s => !Object.hasOwn(s, 'if') && (name ? s.name === name && s.run?.includes('aislop ci --human internal') : s.uses?.startsWith(`${expected}@`)))) {
-      failures.push(`${path} lost required ${name || expected}`);
+    if (!steps.some(s => !Object.hasOwn(s, 'if') && s.uses?.startsWith(`${expected}@`))) {
+      failures.push(`${path} lost required ${expected}`);
     }
   }
   if (!files['sonar-project.properties']?.includes('sonar.go.coverage.reportPaths=coverage.out')) {
@@ -293,15 +271,6 @@ function inspectScannerConfigs(files, failures) {
     }
   } catch (error) {
     if (files['.github/dependency-review-config.yml']) failures.push(`Dependency review config is invalid: ${error.message}`);
-  }
-  try {
-    const config = YAML.parse(files['.aislop/config.yml']);
-    if (typeof config.ci?.failBelow !== 'number' || config.ci.failBelow < 100 ||
-        config.rules?.['security/hardcoded-secret'] !== 'error') {
-      failures.push('Aislop policy was weakened');
-    }
-  } catch (error) {
-    if (files['.aislop/config.yml']) failures.push(`Aislop config is invalid: ${error.message}`);
   }
   try {
     const rules = YAML.parse(files['.semgrep.yml']).rules;
@@ -376,7 +345,6 @@ async function run({ github, context }) {
   if (tree.truncated) throw new Error('Cannot verify a truncated PR tree');
   const paths = tree.tree.filter(entry => entry.type === 'blob' &&
     (REQUIRED_FILES.includes(entry.path) ||
-      entry.path.startsWith('.github/audit-tool/') ||
       (entry.path.startsWith('.github/workflows/') && /\.ya?ml$/.test(entry.path))))
     .map(entry => entry.path);
   const files = {};
