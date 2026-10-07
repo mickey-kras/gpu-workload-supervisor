@@ -37,6 +37,12 @@ func TestDecodeSetIdlePolicyRequiresExpectedAndSettings(t *testing.T) {
 		"long revision":      strings.Replace(setIdlePolicyRequest, `"s1"`, `"`+strings.Repeat("x", 129)+`"`, 1),
 		"fractional timeout": strings.Replace(setIdlePolicyRequest, `:60`, `:5.5`, 1),
 		"string timeout":     strings.Replace(setIdlePolicyRequest, `:60`, `:"60"`, 1),
+		"null timeout":       strings.Replace(setIdlePolicyRequest, `:60`, `:null`, 1),
+		"null revision":      strings.Replace(setIdlePolicyRequest, `"s1"`, `null`, 1),
+		"missing timeout":    strings.Replace(setIdlePolicyRequest, `"timeoutMinutes":60,`, ``, 1),
+		"missing revision":   strings.Replace(setIdlePolicyRequest, `,"settingsRevision":"s1"`, ``, 1),
+		"boolean timeout":    strings.Replace(setIdlePolicyRequest, `:60`, `:true`, 1),
+		"object timeout":     strings.Replace(setIdlePolicyRequest, `:60`, `:{}`, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, c := Decode([]byte(s)); c != InvalidRequest {

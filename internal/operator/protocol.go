@@ -231,7 +231,15 @@ func requestFields(body []byte, action string) bool {
 	}
 	if action == actionSetIdlePolicy {
 		s, ok := fields(m["settings"], "timeoutMinutes", "settingsRevision")
-		return ok && len(s) == 2
+		if !ok || len(s) != 2 {
+			return false
+		}
+		// encoding/json decodes a raw null into int as 0; reject it here so a
+		// malformed timeout cannot silently read as an explicit Off.
+		if bytes.Equal(bytes.TrimSpace(s["timeoutMinutes"]), []byte("null")) {
+			return false
+		}
+		return !bytes.Equal(bytes.TrimSpace(s["settingsRevision"]), []byte("null"))
 	}
 	return true
 }
