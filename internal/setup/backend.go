@@ -369,6 +369,11 @@ func (b Backend) commitConfiguration(ctx context.Context, home, root string, req
 			return err
 		}
 	}
+	// Pin the journal to committed the moment the catalog commit is durable and
+	// before the fence clears, so writes-pending reliably means "no commit".
+	if err := commitOwnedUnitJournal(root, plan); err != nil {
+		return err
+	}
 	if err := b.retainBinaries(root); err != nil {
 		return err
 	}
@@ -385,6 +390,24 @@ func (b Backend) commitConfiguration(ctx context.Context, home, root string, req
 	return b.finalizeOwnedUnits(ctx, home, root, request, plan)
 }
 
+// commitOwnedUnitJournal pins the owned-units journal to committed immediately
+// after the catalog transaction resolves, closing the window where a crash
+// would otherwise look like a pre-commit crash and lose proven deletes.
+func commitOwnedUnitJournal(root string, plan unitPlan) error {
+	if plan.empty() {
+		return nil
+	}
+	journal, present, err := readOwnedUnitJournal(root)
+	if err != nil {
+		return err
+	}
+	if !present {
+		return errors.New("owned-units journal missing after catalog commit")
+	}
+	journal.Phase = ownedJournalCommitted
+	return writeOwnedUnitJournal(root, journal)
+}
+
 // finalizeOwnedUnits performs the post-commit owned-unit effects: journaled
 // content-proof deletes, one daemon-reload, and verification that every owned
 // profile in the committed catalog has its exact rendering on disk.
@@ -399,9 +422,8 @@ func (b Backend) finalizeOwnedUnits(ctx context.Context, home, root string, requ
 	if !present {
 		return errors.New("owned-units journal missing after catalog commit")
 	}
-	journal.Phase = ownedJournalCommitted
-	if err := writeOwnedUnitJournal(root, journal); err != nil {
-		return err
+	if journal.Phase != ownedJournalCommitted {
+		return errors.New("owned-units journal not pinned to the committed catalog")
 	}
 	if err := b.applyOwnedUnitDeletes(ctx, home, journal); err != nil {
 		return err
@@ -442,16 +464,35 @@ func (b Backend) resumeOwnedUnitJournal(ctx context.Context, home string, req Re
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if marker.Maintenance {
-		// The activation fence resumes the original request verbatim, and its
-		// plan rewrites this journal.
-		return nil
-	}
 	if journal.Phase == ownedJournalPending {
-		return clearOwnedUnitJournal(root)
+		if !marker.Maintenance {
+			// The journal is pinned to committed before the fence clears, so
+			// writes-pending without a fence genuinely means no commit.
+			return clearOwnedUnitJournal(root)
+		}
+		committed, err := catalogMatchesRequest(ctx, req)
+		if err != nil {
+			return err
+		}
+		if !committed {
+			// Genuine pre-commit crash: the activation fence replays the
+			// original request verbatim, and its plan rewrites this journal.
+			return nil
+		}
+		// Crash between the catalog commit and the journal pin: fall through
+		// and replay the proven deletes now.
 	}
-	reloaded := false
+	var reloaded []string
 	for name, proof := range journal.Deletes {
+		path := filepath.Join(ownedUnitDirectory(home), name)
+		current, err := privateRead(path)
+		if errors.Is(err, os.ErrNotExist) {
+			// The delete already ran; nothing remains to protect or remove.
+			continue
+		}
+		if err != nil {
+			return err
+		}
 		if p, ok := ownedProfileForUnit(req.Catalog, name); ok {
 			raw, err := ownedRenderChecked(p)
 			if err != nil {
@@ -462,28 +503,36 @@ func (b Backend) resumeOwnedUnitJournal(ctx context.Context, home string, req Re
 			}
 			continue
 		}
-		path := filepath.Join(ownedUnitDirectory(home), name)
-		current, err := privateRead(path)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
 		if digest(current) != proof {
 			return fmt.Errorf("%w: %s", ErrOwnedUnitModified, name)
 		}
 		if err := os.Remove(path); err != nil {
 			return err
 		}
-		reloaded = true
+		reloaded = append(reloaded, name)
 	}
-	if reloaded {
-		if _, err := b.runCommand(ctx, req.Profile.SystemctlPath, "--user", "daemon-reload"); err != nil {
-			return fmt.Errorf("daemon-reload: %w", err)
+	if len(reloaded) > 0 {
+		if err := b.daemonReloadOwnedUnits(ctx, req.Profile.SystemctlPath, reloaded); err != nil {
+			return err
 		}
 	}
 	return clearOwnedUnitJournal(root)
+}
+
+// catalogMatchesRequest reports whether the committed catalog already equals
+// the request's, which proves the previous activation committed before it
+// crashed.
+func catalogMatchesRequest(ctx context.Context, req Request) (bool, error) {
+	stateStore, err := store.Open(ctx, req.Profile.StatePath)
+	if err != nil {
+		return false, err
+	}
+	defer stateStore.Close()
+	snapshot, err := stateStore.Catalog(ctx)
+	if err != nil {
+		return false, err
+	}
+	return reflect.DeepEqual(snapshot.Catalog, req.Catalog), nil
 }
 
 func ownedProfileForUnit(c control.Catalog, unit string) (control.WorkloadProfile, bool) {

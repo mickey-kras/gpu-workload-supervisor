@@ -89,11 +89,16 @@ func (b Backend) planOwnedUnits(req Request, accepted control.CatalogSnapshot, h
 		}
 		plan.Writes[p.Unit] = raw
 	}
+	deleted := map[string]bool{}
 	for _, p := range accepted.Catalog.Profiles {
 		if p.NativeModel == nil || p.NativeModel.Owned == nil {
 			continue
 		}
 		if _, kept := plan.Writes[p.Unit]; kept {
+			continue
+		}
+		if deleted[p.Unit] {
+			// Shared Ollama pairs carry one unit file across profiles.
 			continue
 		}
 		path := filepath.Join(ownedUnitDirectory(home), p.Unit)
@@ -108,6 +113,7 @@ func (b Backend) planOwnedUnits(req Request, accepted control.CatalogSnapshot, h
 			return plan, fmt.Errorf("%w: %s", ErrOwnedUnitModified, p.Unit)
 		}
 		plan.Deletes = append(plan.Deletes, p.Unit)
+		deleted[p.Unit] = true
 	}
 	sort.Strings(plan.Deletes)
 	return plan, nil
@@ -153,7 +159,7 @@ func readOwnedUnitJournal(root string) (unitJournal, bool, error) {
 	if err := json.Unmarshal(data, &j); err != nil {
 		return j, false, err
 	}
-	if j.Version != 1 || j.Writes == nil || j.Deletes == nil || (j.Phase != ownedJournalPending && j.Phase != ownedJournalCommitted && j.Phase != "done") {
+	if j.Version != 1 || j.Writes == nil || j.Deletes == nil || (j.Phase != ownedJournalPending && j.Phase != ownedJournalCommitted) {
 		return j, false, errors.New("unsupported owned-units journal")
 	}
 	return j, true, nil
