@@ -10,6 +10,7 @@ import (
 )
 
 var ErrCatalogReferenced = errors.New("workload profile is referenced by live state or unfinished work")
+var ErrCatalogRevisionNotFound = errors.New("no catalog recorded at the requested revision")
 
 func readCatalog(ctx context.Context, q querier) (control.CatalogSnapshot, error) {
 	var s control.CatalogSnapshot
@@ -21,11 +22,28 @@ func readCatalog(ctx context.Context, q querier) (control.CatalogSnapshot, error
 	if err != nil {
 		return s, err
 	}
-	err = json.Unmarshal(b, &s.Catalog)
+	s.Catalog, err = control.DecodeCatalogBytes(b)
 	return s, err
 }
 func (s *Store) Catalog(ctx context.Context) (control.CatalogSnapshot, error) {
 	return readCatalog(ctx, s.db)
+}
+
+// CatalogAtRevision reads a historical catalog blob, giving owned-unit cleanup
+// and audit a recoverable content proof for profiles the current catalog no
+// longer carries.
+func (s *Store) CatalogAtRevision(ctx context.Context, revision string) (control.CatalogSnapshot, error) {
+	var s2 control.CatalogSnapshot
+	var b []byte
+	err := s.db.QueryRowContext(ctx, "SELECT revision, catalog FROM workload_catalog_history WHERE revision=?", revision).Scan(&s2.Revision, &b)
+	if errors.Is(err, sql.ErrNoRows) {
+		return s2, ErrCatalogRevisionNotFound
+	}
+	if err != nil {
+		return s2, err
+	}
+	s2.Catalog, err = control.DecodeCatalogBytes(b)
+	return s2, err
 }
 
 // ReplaceCatalog is called while holding the controller gate. The writer
@@ -56,6 +74,9 @@ func (s *Store) replaceCatalog(ctx context.Context, tx *sql.Tx, expected string,
 	if old.Revision != expected {
 		return old, "", ErrVersionConflict
 	}
+	if err := validateCatalogVersionTransition(old.Catalog, c); err != nil {
+		return old, "", err
+	}
 	state, err := readState(ctx, tx)
 	if err != nil {
 		return old, "", err
@@ -85,6 +106,22 @@ func (s *Store) replaceCatalog(ctx context.Context, tx *sql.Tx, expected string,
 		return old, "", err
 	}
 	return old, revision, nil
+}
+
+// validateCatalogVersionTransition permits 1→1, 1→2 and 2→2. A 2→1 downgrade
+// is safe only when the new catalog carries no owned profiles; owned profiles
+// in a v1 catalog are already rejected by Validate, so this guard is the
+// defense-in-depth layer behind it.
+func validateCatalogVersionTransition(old, next control.Catalog) error {
+	if old.Version != 2 || next.Version != 1 {
+		return nil
+	}
+	for _, p := range next.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Owned != nil {
+			return control.ErrOwnedCatalogManagedBySetup
+		}
+	}
+	return nil
 }
 
 // readCatalogWorkReferences uses the replacement transaction's snapshot so live

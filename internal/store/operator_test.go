@@ -14,7 +14,7 @@ func TestOperatorStartAtomic(t *testing.T) {
 			s := testStore(t)
 			ctx := context.Background()
 			s.db.Exec(`CREATE TABLE IF NOT EXISTS workload_catalog (singleton INTEGER PRIMARY KEY, revision TEXT NOT NULL, catalog BLOB NOT NULL)`)
-			s.db.Exec(`INSERT INTO workload_catalog VALUES(1,'rev','{}')`)
+			s.db.Exec(`INSERT INTO workload_catalog VALUES(1,'rev','{"version":1,"profiles":[{"id":"text","label":"Text","adapter":"systemd","unit":"text.service","cgroup":"/user/text","healthURL":"http://localhost:9000"}]}')`)
 			state, _ := s.State(ctx)
 			state.Phase = control.PhaseStable
 			state.ActiveWorkload = control.WorkloadIdle
