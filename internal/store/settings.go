@@ -30,9 +30,14 @@ func (s *Store) Settings(ctx context.Context) (control.PolicyState, error) {
 // interrupt an unstable state or a running transition. Every write rotates
 // the opaque settings revision and clears the armed deadline, so a later
 // policy tick must re-verify before idling.
-func (s *Store) SetIdlePolicy(ctx context.Context, e control.SettingsPrecondition, p control.IdlePolicy) (control.PolicyState, error) {
+func (s *Store) SetIdlePolicy(ctx context.Context, e control.SettingsPrecondition, p control.IdlePolicy, evidenceAvailable bool) (control.PolicyState, error) {
 	if err := p.Validate(); err != nil {
 		return control.PolicyState{}, errors.Join(ErrInvalidIdleTimeout, err)
+	}
+	// Enabling is gated on the hosting process carrying a qualified evidence
+	// provider; the store defends the invariant so no caller can bypass it.
+	if p.TimeoutMinutes != control.IdlePolicyOff && !evidenceAvailable {
+		return control.PolicyState{}, ErrEvidenceUnavailable
 	}
 	revision, err := s.uuid()
 	if err != nil {
@@ -43,6 +48,17 @@ func (s *Store) SetIdlePolicy(ctx context.Context, e control.SettingsPreconditio
 		state, err := readState(ctx, tx)
 		if err != nil {
 			return err
+		}
+		// A live transition persists a non-stable phase, which would shadow
+		// the transition check inside operatorSource with ErrUnstableState.
+		// Settings writes must report the running transition as busy, so the
+		// in-progress check runs first.
+		running, err := transitionRunning(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if running {
+			return ErrTransitionRunning
 		}
 		if err := operatorSource(ctx, tx, state, e.OperatorPrecondition()); err != nil {
 			return err

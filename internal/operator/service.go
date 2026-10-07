@@ -23,7 +23,7 @@ type Backend interface {
 type PolicyStore interface {
 	State(context.Context) (control.State, error)
 	Settings(context.Context) (control.PolicyState, error)
-	SetIdlePolicy(context.Context, control.SettingsPrecondition, control.IdlePolicy) (control.PolicyState, error)
+	SetIdlePolicy(context.Context, control.SettingsPrecondition, control.IdlePolicy, bool) (control.PolicyState, error)
 }
 type Session struct {
 	Backend   Backend
@@ -168,7 +168,7 @@ func (s Session) setIdlePolicy(ctx context.Context, req Request) (control.State,
 		ConfigurationRevision: e.ConfigurationRevision,
 		SettingsRevision:      req.Settings.SettingsRevision,
 	}
-	settings, err := s.PolicyStore.SetIdlePolicy(ctx, precondition, control.IdlePolicy{TimeoutMinutes: req.Settings.TimeoutMinutes})
+	settings, err := s.PolicyStore.SetIdlePolicy(ctx, precondition, control.IdlePolicy{TimeoutMinutes: req.Settings.TimeoutMinutes}, s.IdlePolicyConfigurable)
 	if err != nil {
 		return control.State{}, nil, errorCode(err)
 	}

@@ -47,12 +47,18 @@ func operatorSource(ctx context.Context, tx *sql.Tx, s control.State, e control.
 	if s.Phase != control.PhaseStable || s.Health == control.HealthError {
 		return ErrUnstableState
 	}
-	var running bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM transitions WHERE status='in_progress')`).Scan(&running); err != nil {
+	running, err := transitionRunning(ctx, tx)
+	if err != nil {
 		return err
 	}
 	if running {
 		return ErrTransitionRunning
 	}
 	return nil
+}
+
+func transitionRunning(ctx context.Context, tx *sql.Tx) (bool, error) {
+	var running bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM transitions WHERE status='in_progress')`).Scan(&running)
+	return running, err
 }

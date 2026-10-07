@@ -25,9 +25,12 @@ func (p *policyStoreFixture) State(context.Context) (control.State, error) {
 func (p *policyStoreFixture) Settings(context.Context) (control.PolicyState, error) {
 	return p.settings, p.err
 }
-func (p *policyStoreFixture) SetIdlePolicy(_ context.Context, e control.SettingsPrecondition, policy control.IdlePolicy) (control.PolicyState, error) {
+func (p *policyStoreFixture) SetIdlePolicy(_ context.Context, e control.SettingsPrecondition, policy control.IdlePolicy, evidenceAvailable bool) (control.PolicyState, error) {
 	if p.err != nil {
 		return p.settings, p.err
+	}
+	if policy.TimeoutMinutes != control.IdlePolicyOff && !evidenceAvailable {
+		return p.settings, store.ErrEvidenceUnavailable
 	}
 	p.setCalls++
 	p.settings.Policy = policy
@@ -257,5 +260,60 @@ func TestSettingsSurfaceAgainstRealStore(t *testing.T) {
 	}
 	if after.Version != state.Version || after.IdlePolicy.TimeoutMinutes != 0 {
 		t.Fatalf("settings write moved control state: %+v", after)
+	}
+}
+
+// TestSetIdlePolicyDuringLiveTransitionReturnsBusy drives the full protocol
+// path while a real operator transition is persisted (phase=draining): the
+// response code must be busy, never recovery_required.
+func TestSetIdlePolicyDuringLiveTransitionReturnsBusy(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	snap, err := db.ReplaceCatalog(ctx, "", control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "third", Label: "Third", Adapter: "systemd", Unit: "third.service", Cgroup: "/user/third", HealthURL: "http://localhost:9999"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := db.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Phase = control.PhaseStable
+	state.ActiveWorkload = control.WorkloadIdle
+	state, err = db.UpdateState(ctx, state.Version, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := db.Settings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	precondition := control.OperatorPrecondition{
+		Incarnation: state.LeaseFence.Incarnation, Version: state.Version,
+		Owner: state.Owner, ConfigurationRevision: snap.Revision,
+	}
+	started, err := db.StartOperatorTransition(ctx, precondition, store.Transition{
+		ID: "operator-live", Target: state, Previous: state,
+		ConfigurationRevision: snap.Revision, Deadline: time.Now().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Phase != control.PhaseDraining {
+		t.Fatalf("live transition phase = %q", started.Phase)
+	}
+	b := &backendFixture{state: started}
+	svc := Service{StatePath: path, Open: func(context.Context) (Session, error) {
+		return Session{Backend: b, Revision: snap.Revision, Workloads: []Workload{{"idle", "Idle"}, {"third", "Third"}}, PolicyStore: db, IdlePolicyConfigurable: true}, nil
+	}}
+	r := svc.Handle(Request{ProtocolVersion: 1, RequestID: "s-busy", Action: "set-idle-policy",
+		Expected: &Expected{started.LeaseFence.Incarnation, strconv.FormatUint(started.Version, 10), started.Owner, snap.Revision},
+		Settings: &SettingsRequest{TimeoutMinutes: 30, SettingsRevision: settings.SettingsRevision}})
+	if r.Code != Busy || r.Status != nil {
+		t.Fatalf("set-idle-policy during live transition = %+v, want busy", r)
 	}
 }
