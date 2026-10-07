@@ -779,20 +779,20 @@ func TestStartIdleTransitionHoldsEvidenceFenceThroughCommit(t *testing.T) {
 	ctx := context.Background()
 	*now = deadline
 	var queue sync.Mutex
-	queue.Lock()
 	mutated := make(chan control.State, 1)
-	started := make(chan struct{})
+	fenceHeld := make(chan struct{})
 	go func() {
-		close(started)
+		<-fenceHeld
 		queue.Lock()
 		defer queue.Unlock()
 		state, _ := s.State(context.Background())
 		mutated <- state
 	}()
-	<-started
 	acquired, released := 0, 0
 	_, err := s.StartIdleTransition(ctx, deadline, idleDrain(t, s, "idle-fenced"), func(context.Context) (func(), error) {
 		acquired++
+		queue.Lock()
+		close(fenceHeld)
 		return func() {
 			released++
 			check, cancel := context.WithTimeout(ctx, time.Second)
