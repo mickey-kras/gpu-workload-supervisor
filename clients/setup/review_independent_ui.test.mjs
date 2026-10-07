@@ -6,7 +6,7 @@ test('refreshed inventory preserves selected model', async () => {
     const ui = await launch({responses: {probe: {app: 'ollama', instanceStatus: 'available', inventoryStatus: 'available', models: [{id: 'one'}, {id: 'two'}]}}});
     ui.edit(ui.by('Application'), 'selected', 1); ui.by('Add workload').emit('clicked');
     await ui.by('Refresh discovery').emit('clicked');
-    ui.edit(ui.by('Model'), 'selected', 1);
+    ui.edit(ui.by('Model'), 'selected', 2);
     await ui.by('Save drafts').emit('clicked');
     assert.equal(JSON.parse(ui.calls.at(-1).input).drafts[0].model, 'two');
     await ui.by('Refresh discovery').emit('clicked');
