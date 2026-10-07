@@ -535,4 +535,3 @@ func (work *activationWork) inspectExistingCatalog(ctx context.Context) error {
 	}
 	return nil
 }
-

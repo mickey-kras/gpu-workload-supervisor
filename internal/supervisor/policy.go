@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-		"time"
+	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
@@ -164,4 +164,3 @@ func (c *Controller) PolicyIdle(ctx context.Context, armed time.Time, acquire fu
 }
 
 const inactivityPolicyInitiator = "inactivity-policy"
-

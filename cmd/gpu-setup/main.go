@@ -148,4 +148,3 @@ func (a setupActions) runPlanned(ctx context.Context, home, action string, input
 	}
 	return json.NewEncoder(output).Encode(preview)
 }
-

@@ -620,4 +620,3 @@ func TestRemoveIntegrationFailsClosedWhenRecordLacksSystemctlPath(t *testing.T) 
 		t.Fatal("timer link removed despite failed validation", err)
 	}
 }
-

@@ -12,12 +12,12 @@ import (
 )
 
 type evidenceFixture struct {
-	attestation     Attestation
-	err             error
-	acquireErr      error
-	calls           int
-	acquireCalls    int
-	releaseCalls    int
+	attestation  Attestation
+	err          error
+	acquireErr   error
+	calls        int
+	acquireCalls int
+	releaseCalls int
 }
 
 func (e *evidenceFixture) Attest(context.Context) (Attestation, error) {
@@ -357,8 +357,8 @@ func TestPolicyTickAbortsDrainWhenEvidenceInvalidatedBeforeCommit(t *testing.T) 
 	// The provider's evidence moved on: the attested generation cannot be
 	// acquired (new external work queued since the attestation).
 	revoked := &evidenceFixture{
-		attestation:   Attestation{AttestedAt: now, Token: "gen-2"},
-		acquireErr: errors.New("evidence generation moved"),
+		attestation: Attestation{AttestedAt: now, Token: "gen-2"},
+		acquireErr:  errors.New("evidence generation moved"),
 	}
 	if err := c.PolicyTick(context.Background(), revoked); !errors.Is(err, store.ErrEvidenceUnavailable) {
 		t.Fatalf("invalidated evidence: %v", err)
@@ -381,4 +381,3 @@ func TestPolicyTickAbortsDrainWhenEvidenceInvalidatedBeforeCommit(t *testing.T) 
 		t.Fatal("stable evidence did not re-arm")
 	}
 }
-

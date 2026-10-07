@@ -189,4 +189,3 @@ func pendingWorkTx(ctx context.Context, tx *sql.Tx) (int, error) {
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM registered_work WHERE completed_at IS NULL)`).Scan(&pending)
 	return pending, err
 }
-

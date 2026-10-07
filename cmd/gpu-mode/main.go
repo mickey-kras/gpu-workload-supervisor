@@ -379,4 +379,3 @@ func pinCatalog(snapshot control.CatalogSnapshot) (*control.CatalogSnapshot, err
 	}
 	return &snapshot, nil
 }
-
