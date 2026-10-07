@@ -249,18 +249,36 @@ func TestOwnedUnitDeleteContentProof(t *testing.T) {
 	}
 }
 
-func fakeOwnedCommand(_ context.Context, _ string, args ...string) ([]byte, error) {
-	for _, arg := range args {
-		if arg == "--property=NeedDaemonReload" {
+func fakeOwnedCommandFor(home string) func(context.Context, string, ...string) ([]byte, error) {
+	return func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		fragment := false
+		reload := false
+		unit := ""
+		for i, arg := range args {
+			switch arg {
+			case "--property=FragmentPath":
+				fragment = true
+			case "--property=NeedDaemonReload":
+				reload = true
+			case "--":
+				if i+1 < len(args) {
+					unit = args[i+1]
+				}
+			}
+		}
+		if fragment {
+			return []byte("FragmentPath=" + filepath.Join(ownedUnitDirectory(home), unit) + "\nDropInPaths=\n"), nil
+		}
+		if reload {
 			return []byte("NeedDaemonReload=no\n"), nil
 		}
+		return []byte("ok\n"), nil
 	}
-	return []byte("ok\n"), nil
 }
 
 func TestApplyOwnedLifecycle(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
 	ctx := context.Background()
@@ -436,7 +454,7 @@ func TestResumeOwnedUnitJournalAtApplyEntry(t *testing.T) {
 
 func TestApplyCarriedSharedPairVerbatim(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	native := func(model string) *control.NativeModel {
 		return &control.NativeModel{Runtime: "ollama", Instance: "local", Model: model, Endpoint: "http://127.0.0.1:11434", LaunchFile: "/etc/systemd/user/ollama.service", LaunchSHA256: strings.Repeat("0", 64)}
@@ -482,7 +500,7 @@ func TestApplyCarriedSharedPairVerbatim(t *testing.T) {
 
 func TestApplyOwnedSharedPairRenderedBySetup(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	draft := func(id, model string) Draft {
 		return Draft{ID: id, Label: "Owned " + id, App: "ollama", Model: model, Binding: &DraftBinding{Instance: "local", Owned: &DraftOwnedLaunch{Port: 11434}}}
 	}

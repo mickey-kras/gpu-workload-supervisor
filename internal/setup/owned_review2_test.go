@@ -19,7 +19,7 @@ import (
 // overwritten unit behind, and the committed request must still apply cleanly.
 func TestApplyRollsBackOwnedWritesOnFailedPrecheck(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
@@ -54,7 +54,7 @@ func TestApplyRollsBackOwnedWritesOnFailedPrecheck(t *testing.T) {
 // did not write, even while rolling back.
 func TestRollbackRefusesForeignModifiedUnit(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
 	plan := unitPlan{Writes: map[string][]byte{profile.Unit: raw}, proven: map[string]string{}, written: map[string]bool{}, prior: map[string][]byte{}, absent: map[string]bool{profile.Unit: true}}
 	dir := ownedUnitDirectory(home)
@@ -92,7 +92,7 @@ func currentRevision(t *testing.T, r Request) string {
 // to adopted), instead of deleting it after commit.
 func TestPlanOwnedUnitsPreservesAdoptedReference(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
 	dir := ownedUnitDirectory(home)
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -124,7 +124,7 @@ func TestPlanOwnedUnitsPreservesAdoptedReference(t *testing.T) {
 // owned writes and removals are listed instead of "user units unchanged".
 func TestPlanPreviewReportsOwnedUnitChanges(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
@@ -176,7 +176,7 @@ func changesContain(changes []string, needle string) bool {
 func TestResumeReloadsAfterCompletedDelete(t *testing.T) {
 	backend, home, r := fixture(t)
 	var verified []string
-	backend.runCommand = recordingOwnedCommand(&verified)
+	backend.runCommand = recordingOwnedCommand(&verified, home)
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
 	if err := os.MkdirAll(root, 0700); err != nil {
@@ -222,7 +222,7 @@ func TestOwnedProfileRejectsGrammarUnsafeModelPath(t *testing.T) {
 // succeeds after the post-commit crash window and clears the fence.
 func TestMaintenanceResumeCompletesCrashWindowApply(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	stale, staleRaw := ownedFixtureProfile(t, home, "stale", 9300)
 	r.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health"}}}
@@ -301,7 +301,7 @@ func TestManagerCgroupQueryRequiresConcreteAnswer(t *testing.T) {
 // pre-commit failure follows an overwrite of an existing owned unit.
 func TestRollbackRestoresOverwrittenUnit(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
 	dir := ownedUnitDirectory(home)
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -328,7 +328,7 @@ func TestRollbackRestoresOverwrittenUnit(t *testing.T) {
 // fingerprint.
 func TestPlanOwnedUnitsDeletesWhenAdoptedReferenceDrifts(t *testing.T) {
 	backend, home, _ := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
 	dir := ownedUnitDirectory(home)
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -398,7 +398,7 @@ func TestClearOwnedUnitJournalWithoutJournal(t *testing.T) {
 // be touched by rollback.
 func TestRollbackLeavesUnchangedUnitByteIdentical(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	vision, visionRaw := ownedFixtureProfile(t, home, "vision", 9100)
 	code, codeRaw := ownedFixtureProfile(t, home, "code", 9102)
@@ -429,7 +429,7 @@ func TestRollbackLeavesUnchangedUnitByteIdentical(t *testing.T) {
 // consuming the interrupted activation's journal (the relocation crash case).
 func TestResumeRejectsMismatchedRecoveryRequest(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	stale, staleRaw := ownedFixtureProfile(t, home, "stale", 9300)
 	dir := ownedUnitDirectory(home)
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -477,7 +477,7 @@ func TestResumeRejectsMismatchedRecoveryRequest(t *testing.T) {
 // so only genuinely interrupted activations guard the journal.
 func TestSuccessfulApplyRetiresActivationRecord(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
 	if err := backend.Apply(context.Background(), home, r); err != nil {
@@ -492,7 +492,7 @@ func TestSuccessfulApplyRetiresActivationRecord(t *testing.T) {
 // durable in order: unit directory first, journal directory last.
 func TestJournalRetireSyncsDirectories(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	var synced []string
 	restore := syncDir
 	syncDir = func(path string) error { synced = append(synced, path); return nil }
@@ -537,7 +537,7 @@ func TestPlanOwnedUnitsRejectsForeignHomeLaunchFile(t *testing.T) {
 // deletions from the user-facing preview.
 func TestPlanPreviewMatchesPlanSemantics(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
@@ -644,7 +644,7 @@ func TestApplyRollsBackWhenReloadFails(t *testing.T) {
 // the foreign file is untouched.
 func TestApplyRollsBackPartialWriteOnCollision(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	code, codeRaw := ownedFixtureProfile(t, home, "code", 9102)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{code}}
@@ -688,7 +688,7 @@ func TestApplyRollsBackPartialWriteOnCollision(t *testing.T) {
 func TestResumeRecoversPendingWritesWithoutFence(t *testing.T) {
 	backend, home, r := fixture(t)
 	var verified []string
-	backend.runCommand = recordingOwnedCommand(&verified)
+	backend.runCommand = recordingOwnedCommand(&verified, home)
 	ctx := context.Background()
 	stale, staleRaw := ownedFixtureProfile(t, home, "stale", 9300)
 	dir := ownedUnitDirectory(home)
@@ -725,7 +725,7 @@ func TestResumeRecoversPendingWritesWithoutFence(t *testing.T) {
 // catalog, not deleted.
 func TestResumeRestoresOverwrittenPendingWrite(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
@@ -756,7 +756,7 @@ func TestResumeRestoresOverwrittenPendingWrite(t *testing.T) {
 // TestResumeRefusesTamperedPendingWrite never recovers over foreign content.
 func TestResumeRefusesTamperedPendingWrite(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	stale, _ := ownedFixtureProfile(t, home, "stale", 9300)
 	dir := ownedUnitDirectory(home)
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -785,7 +785,7 @@ func TestResumeRefusesTamperedPendingWrite(t *testing.T) {
 // the state database: a read-only database file still previews fine.
 func TestPlanPreviewKeepsStateDatabaseReadOnly(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
@@ -914,7 +914,7 @@ func TestFinalizeDeletesSyncUnitDir(t *testing.T) {
 // before abortOwnedUnitWrites retires the pending journal.
 func TestRollbackSyncsUnitDirBeforeJournalClear(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	var synced []string
 	restore := syncDir
 	syncDir = func(path string) error { synced = append(synced, path); return nil }
@@ -990,7 +990,7 @@ func TestPlanPreviewFailsOnUnreadableUnitFile(t *testing.T) {
 // state database and the mismatched request fails without consuming anything.
 func TestResumeRejectsForeignStatePathJournal(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	stale, staleRaw := ownedFixtureProfile(t, home, "stale", 9300)
 	dir := ownedUnitDirectory(home)
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -1036,7 +1036,7 @@ func TestJournalWithoutStatePathRejected(t *testing.T) {
 // fails loudly, the journal survives, and the next apply replays recovery.
 func TestRollbackFailureRetainsPendingJournal(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
@@ -1084,7 +1084,7 @@ func TestRollbackFailureRetainsPendingJournal(t *testing.T) {
 func TestResumeReloadsWhenPendingRecoveryMatchesDisk(t *testing.T) {
 	backend, home, r := fixture(t)
 	var verified []string
-	backend.runCommand = recordingOwnedCommand(&verified)
+	backend.runCommand = recordingOwnedCommand(&verified, home)
 	ctx := context.Background()
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
@@ -1193,7 +1193,7 @@ func TestDiscoveryAccountsAdoptedOwnedBinding(t *testing.T) {
 // schedules the file for proven deletion so preflight cannot latch an orphan.
 func TestApplyDeletesDroppedAdoptedOwnedBinding(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
@@ -1229,7 +1229,7 @@ func TestApplyDeletesDroppedAdoptedOwnedBinding(t *testing.T) {
 // a dropped adopted binding no longer matches its proven fingerprint.
 func TestApplyRefusesDriftedAdoptedOwnedBinding(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
@@ -1260,7 +1260,7 @@ func TestApplyRefusesDriftedAdoptedOwnedBinding(t *testing.T) {
 // committed catalog still binds exactly, even when a pending journal names it.
 func TestResumeKeepsAdoptedBindingDuringPendingRecovery(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
@@ -1310,7 +1310,7 @@ func TestResumeKeepsAdoptedBindingDuringPendingRecovery(t *testing.T) {
 // say so before Apply runs.
 func TestPlanPreviewListsDroppedAdoptedOwnedBindingRemoval(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
@@ -1350,7 +1350,7 @@ func TestPlanPreviewListsDroppedAdoptedOwnedBindingRemoval(t *testing.T) {
 // block recovery of a newer interrupted activation once its fence is gone.
 func TestResumeIgnoresStaleActivationRecordWithoutFence(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
@@ -1382,5 +1382,48 @@ func TestResumeIgnoresStaleActivationRecordWithoutFence(t *testing.T) {
 	}
 	if _, present, _ := readOwnedUnitJournal(root); present {
 		t.Fatal("journal not retired")
+	}
+}
+
+// dropInCommand answers like a healthy manager except the written unit reports
+// a drop-in override (or a foreign fragment), shadowing setup's file.
+func dropInCommand(home string, dropIn bool) func(context.Context, string, ...string) ([]byte, error) {
+	delegate := fakeOwnedCommandFor(home)
+	return func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		for _, arg := range args {
+			if arg == "--property=FragmentPath" {
+				unit := args[len(args)-1]
+				fragment := filepath.Join(ownedUnitDirectory(home), unit)
+				if !dropIn {
+					fragment = "/etc/systemd/user/" + unit
+				}
+				return []byte("FragmentPath=" + fragment + "\nDropInPaths=/home/u/.config/systemd/user/" + unit + ".d/override.conf\n"), nil
+			}
+		}
+		return delegate(ctx, name, args...)
+	}
+}
+
+// TestApplyRejectsShadowedOwnedUnitBinding fails the commit when the loaded
+// unit does not bind setup's file exactly: a drop-in or foreign fragment that
+// systemd accepts silently would wedge the next supervisor preflight.
+func TestApplyRejectsShadowedOwnedUnitBinding(t *testing.T) {
+	for name, dropIn := range map[string]bool{"drop-in override": true, "foreign fragment": false} {
+		t.Run(name, func(t *testing.T) {
+			backend, home, r := fixture(t)
+			backend.runCommand = dropInCommand(home, dropIn)
+			profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+			r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+			err := backend.Apply(context.Background(), home, r)
+			if !errors.Is(err, gpuruntime.ErrLaunchChanged) {
+				t.Fatalf("shadowed binding committed: %v", err)
+			}
+			if _, lerr := os.Lstat(filepath.Join(ownedUnitDirectory(home), profile.Unit)); !errors.Is(lerr, os.ErrNotExist) {
+				t.Fatal("shadowed unit left behind")
+			}
+			if _, present, _ := readOwnedUnitJournal(filepath.Join(home, ".config/gpu-workload-supervisor")); present {
+				t.Fatal("journal left behind")
+			}
+		})
 	}
 }

@@ -14,15 +14,16 @@ import (
 
 // recordingOwnedCommand answers systemctl like a healthy user manager and
 // records the units whose NeedDaemonReload property was verified.
-func recordingOwnedCommand(verified *[]string) func(context.Context, string, ...string) ([]byte, error) {
-	return func(_ context.Context, _ string, args ...string) ([]byte, error) {
+func recordingOwnedCommand(verified *[]string, home string) func(context.Context, string, ...string) ([]byte, error) {
+	delegate := fakeOwnedCommandFor(home)
+	return func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		for i, arg := range args {
 			if arg == "--property=NeedDaemonReload" && i+2 < len(args) {
 				*verified = append(*verified, args[i+2])
-				return []byte("NeedDaemonReload=no\n"), nil
+				break
 			}
 		}
-		return []byte("ok\n"), nil
+		return delegate(ctx, name, args...)
 	}
 }
 
@@ -32,7 +33,7 @@ func recordingOwnedCommand(verified *[]string) func(context.Context, string, ...
 func TestResumeReplaysDeletesFromCrashWindow(t *testing.T) {
 	backend, home, r := fixture(t)
 	var verified []string
-	backend.runCommand = recordingOwnedCommand(&verified)
+	backend.runCommand = recordingOwnedCommand(&verified, home)
 	ctx := context.Background()
 	stale, staleRaw := ownedFixtureProfile(t, home, "stale", 9300)
 	// The committed catalog no longer carries the stale profile.
@@ -79,7 +80,7 @@ func TestResumeReplaysDeletesFromCrashWindow(t *testing.T) {
 // original request and recomputes the plan.
 func TestResumeDefersGenuinePreCommitCrash(t *testing.T) {
 	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	stale, staleRaw := ownedFixtureProfile(t, home, "stale", 9300)
 	dir := ownedUnitDirectory(home)
@@ -119,7 +120,7 @@ func TestResumeDefersGenuinePreCommitCrash(t *testing.T) {
 // protection, even if the new request re-adds the unit with a divergent spec.
 func TestResumeSkipsConflictCheckWhenDeleteAlreadyRan(t *testing.T) {
 	backend, home, _ := fixture(t)
-	backend.runCommand = fakeOwnedCommand
+	backend.runCommand = fakeOwnedCommandFor(home)
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
 	req := ownedFixtureRequest(t, home, profile)
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
@@ -178,8 +179,8 @@ func TestPlanOwnedUnitsDedupesSharedUnitDeletes(t *testing.T) {
 // unpinned journal.
 func TestCommitOwnedUnitJournalPinning(t *testing.T) {
 	backend, _, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
 	home := t.TempDir()
+	backend.runCommand = fakeOwnedCommandFor(home)
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
 	if err := os.MkdirAll(root, 0700); err != nil {
 		t.Fatal(err)

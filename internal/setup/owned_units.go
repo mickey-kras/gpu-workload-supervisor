@@ -482,6 +482,26 @@ func (b Backend) applyOwnedUnitDeletes(ctx context.Context, home string, j unitJ
 
 // daemonReloadOwnedUnits reloads the user manager once and requires systemd to
 // report no pending reload for every touched unit before evidence is trusted.
+// verifyOwnedUnitBindings mirrors the runtime preflight rule before commit:
+// each written unit must load from exactly the file setup wrote, with no
+// drop-ins, or the applied catalog would wedge the next supervisor start.
+func (b Backend) verifyOwnedUnitBindings(ctx context.Context, systemctl, home string, units []string) error {
+	for _, unit := range units {
+		out, err := b.runCommand(ctx, systemctl, "--user", "show", "--property=FragmentPath", "--property=DropInPaths", "--", unit)
+		if err != nil {
+			return fmt.Errorf("inspect %s: %w", unit, err)
+		}
+		values, err := gpuruntime.ParseUnitProperties(out)
+		if err != nil {
+			return err
+		}
+		if err := gpuruntime.CheckNativeBinding(values, unit, filepath.Join(ownedUnitDirectory(home), unit)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (b Backend) daemonReloadOwnedUnits(ctx context.Context, systemctl string, units []string) error {
 	if _, err := b.runCommand(ctx, systemctl, "--user", "daemon-reload"); err != nil {
 		return fmt.Errorf("daemon-reload: %w", err)

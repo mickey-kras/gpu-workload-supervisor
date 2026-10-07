@@ -211,6 +211,13 @@ func (b Backend) resumeOwnedUnitJournal(ctx context.Context, home string, req Re
 		// Crash between the catalog commit and the journal pin: fall through
 		// and replay the proven deletes now.
 	}
+	return b.replayCommittedDeletes(ctx, home, root, req, journal)
+}
+
+// replayCommittedDeletes replays a committed journal's proven deletes: units
+// the request still renders are kept, everything else is removed with content
+// proof, then systemd is refreshed and the journal retired.
+func (b Backend) replayCommittedDeletes(ctx context.Context, home, root string, req Request, journal unitJournal) error {
 	var reloaded []string
 	removed := false
 	for name, proof := range journal.Deletes {
@@ -409,4 +416,31 @@ func requireMatchingActivation(root string, req Request) error {
 		return errors.New("interrupted activation must resume its original request")
 	}
 	return nil
+}
+
+func (work activationWork) verifyRuntimes(ctx context.Context) (gpuruntime.Manager, error) {
+	manager, err := work.backend.makeRuntime(work.request)
+	if err != nil {
+		return nil, err
+	}
+	if err := manager.ReleasedFor(ctx, control.WorkloadIdle); err != nil {
+		return nil, fmt.Errorf("configured workloads have not released the GPU: %w", err)
+	}
+	if work.existing && work.old.StatePath != "" {
+		previous := work.request
+		previous.Profile = work.old
+		previous.Catalog = work.accepted.Catalog
+		// Before the first commit, only the recorded setup plan has a mapping.
+		if work.accepted.Revision == "" {
+			previous.Catalog = work.request.Catalog
+		}
+		oldManager, err := work.backend.makeRuntime(previous)
+		if err != nil {
+			return nil, err
+		}
+		if err := oldManager.ReleasedFor(ctx, control.WorkloadIdle); err != nil {
+			return nil, err
+		}
+	}
+	return manager, nil
 }

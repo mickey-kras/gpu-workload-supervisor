@@ -122,3 +122,22 @@ func TestDraftOwnedRejectsGrammarUnsafeValues(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestDraftOwnedRejectsMissingSynthesisFields fails at save time for owned
+// drafts that OwnedProfile could never render: no instance, or an owned Ollama
+// draft without a model.
+func TestDraftOwnedRejectsMissingSynthesisFields(t *testing.T) {
+	for name, d := range map[string]Draft{
+		"llama without instance":  {ID: "vision", Label: "Vision", App: "llama.cpp", Binding: &DraftBinding{Owned: &DraftOwnedLaunch{ModelPath: "/models/vision.gguf", Port: 9100}}},
+		"ollama without instance": {ID: "vision", Label: "Vision", App: "ollama", Model: "vision", Binding: &DraftBinding{Owned: &DraftOwnedLaunch{Port: 9100}}},
+		"ollama without model":    {ID: "vision", Label: "Vision", App: "ollama", Binding: &DraftBinding{Instance: "owned", Owned: &DraftOwnedLaunch{Port: 9100}}},
+	} {
+		if err := validateDrafts(1, []Draft{d}); err == nil {
+			t.Fatalf("%s saved", name)
+		}
+	}
+	valid := Draft{ID: "vision", Label: "Vision", App: "ollama", Model: "vision", Binding: &DraftBinding{Instance: "owned", Owned: &DraftOwnedLaunch{Port: 9100}}}
+	if err := validateDrafts(1, []Draft{valid}); err != nil {
+		t.Fatal(err)
+	}
+}
