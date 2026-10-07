@@ -73,10 +73,10 @@ export function addDraftEditor({Adw, Gtk, window, parent, initial, detected, com
             const chosen = draft.snapshot().model;
             models = candidate.models ?? [];
             const selection = models.findIndex(item => item.id === chosen) + 1;
-            const prompt = chosen && !selection ? `Saved model unavailable: ${chosen}` :
-                models.length ? 'Choose a model...' :
-                    candidate.inventoryStatus === 'available' ? 'No models reported by this application' :
-                        `Model inventory: ${candidate.inventoryStatus ?? 'not checked'}`;
+            let prompt = `Model inventory: ${candidate.inventoryStatus ?? 'not checked'}`;
+            if (chosen && !selection) prompt = `Saved model unavailable: ${chosen}`;
+            else if (models.length) prompt = 'Choose a model...';
+            else if (candidate.inventoryStatus === 'available') prompt = 'No models reported by this application';
             syncing = true;
             model.model = Gtk.StringList.new([prompt, ...models.map(item => item.label || item.id)]);
             model.selected = selection;

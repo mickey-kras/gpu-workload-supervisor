@@ -47,7 +47,7 @@ export class ApplicationDraft {
 // Slugs mirror the backend's ValidWorkloadID rule; null means keep the draft UUID.
 export function profileIDFromModel(app, model) {
     if (!model) return null;
-    const slug = `${app}-${model}`.toLowerCase().replace(/[^a-z0-9_]+/g, '-')
+    const slug = `${app}-${model}`.toLowerCase().replaceAll(/[^a-z0-9_]+/g, '-')
         .replace(/^[^a-z]+/, '').replace(/-+$/, '').slice(0, 64).replace(/-+$/, '');
     return /^[a-z][a-z0-9_-]{0,63}$/.test(slug) && slug !== 'idle' && slug !== 'unknown' ? slug : null;
 }
