@@ -46,7 +46,7 @@ type storeGateway interface {
 	Settings(context.Context) (control.PolicyState, error)
 	DisarmIdleDeadline(context.Context) error
 	ArmIdleDeadline(context.Context, string, time.Time, time.Time) error
-	StartIdleTransition(context.Context, time.Time, store.Transition) (control.State, error)
+	StartIdleTransition(context.Context, time.Time, store.Transition, func(context.Context) error) (control.State, error)
 	CheckActivationPrecondition(context.Context, control.OperatorPrecondition) error
 	StartActivationTransition(context.Context, control.OperatorPrecondition, store.Transition) (control.State, error)
 }

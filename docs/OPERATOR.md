@@ -151,14 +151,13 @@ and never idles. When qualified fresh evidence (attestation no older than 120
 seconds) shows no queued/reserved/running/unresolved work and no unfinished
 admissions, the tick commits a verified armed deadline (last activity +
 timeout). Once the armed deadline has elapsed without newer activity, the
-tick revalidates the attestation's evidence generation with the provider
-immediately before the drain decision and then drains the workload into
-idle; a revoked generation disarms and fails closed. The residual window
-between revalidation and the store commit is fenced on the store side only
-for registered admissions (`StartIdleTransition` rechecks pending work in
-the same transaction); external queue state cannot be fenced atomically
-without provider/database coupling, so providers must refuse the next
-admission for work that raced the commit. Any preemption — new activity, an
+tick drains the workload into idle with the provider's evidence-generation
+revalidation invoked inside the store's writer transaction, atomically with
+the pending-work recheck under the single-writer lock; a revoked generation
+aborts the commit, disarms, and fails closed. The residual window is only
+provider-internal: evidence moving after the provider's own revalidation
+returns is outside the store's reach, so providers must refuse the next
+admission for work materializing in that gap. Any preemption — new activity, an
 admission, a state change — aborts cleanly with exit 0 and no latch; the next
 tick re-verifies from fresh evidence.
 

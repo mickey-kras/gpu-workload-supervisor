@@ -157,8 +157,19 @@ func TestDecodePlanDiscoverAndValidation(t *testing.T) {
 			t.Fatal("bad input accepted")
 		}
 	}
-	if _, err := backend.Plan(home, r); err != nil {
+	preview, err := backend.Plan(home, r)
+	if err != nil {
 		t.Fatal(err)
+	}
+	// The preview must disclose the recurring timer enablement, not only the
+	// login-triggered reconciliation.
+	var mentionsReconcile, mentionsTimer bool
+	for _, change := range preview.Changes {
+		mentionsReconcile = mentionsReconcile || strings.Contains(change, "reconciliation")
+		mentionsTimer = mentionsTimer || strings.Contains(change, "idle-policy timer")
+	}
+	if !mentionsReconcile || !mentionsTimer {
+		t.Fatalf("preview changes omit unit enablement: %v", preview.Changes)
 	}
 	if _, err := Home(); err != nil {
 		t.Fatal(err)

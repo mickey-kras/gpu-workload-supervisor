@@ -33,9 +33,19 @@ func (s *Store) touchActivity(ctx context.Context, tx *sql.Tx) error {
 
 // DisarmIdleDeadline clears the verified armed deadline (and the attestation
 // it was armed from) outside any transition; the next policy tick must
-// re-verify before a deadline can be armed again.
+// re-verify before a deadline can be armed again. An already-disarmed state
+// is read-only: the timer ticks every minute with the policy Off by default,
+// and a no-op must not churn updated_at and the WAL forever.
 func (s *Store) DisarmIdleDeadline(ctx context.Context) error {
 	return s.withTx(ctx, func(tx *sql.Tx) error {
+		var armed int
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM idle_policy_state
+			WHERE singleton = 1 AND (armed_deadline IS NOT NULL OR attestation_at IS NOT NULL))`).Scan(&armed); err != nil {
+			return err
+		}
+		if armed == 0 {
+			return nil
+		}
 		return s.disarmIdleDeadline(ctx, tx)
 	})
 }
@@ -96,7 +106,13 @@ func (s *Store) ArmIdleDeadline(ctx context.Context, expectedSettingsRevision st
 // admitted work is pending, the armed deadline matches and has elapsed, and no
 // activity was recorded since the arm. Any mismatch is a clean preemption, not
 // an error, and never latches state.
-func (s *Store) StartIdleTransition(ctx context.Context, armed time.Time, tr Transition) (control.State, error) {
+//
+// guard, when non-nil, runs inside the same writer transaction immediately
+// before the commit — atomically with the pending-work recheck under the
+// single-writer lock. The policy engine wires it to the evidence provider's
+// generation revalidation; a guard error aborts the commit (nothing is
+// recorded, the armed deadline survives for the caller to disarm).
+func (s *Store) StartIdleTransition(ctx context.Context, armed time.Time, tr Transition, guard func(context.Context) error) (control.State, error) {
 	if tr.ID == "" {
 		return control.State{}, errors.New("transition id is empty")
 	}
@@ -106,6 +122,11 @@ func (s *Store) StartIdleTransition(ctx context.Context, armed time.Time, tr Tra
 		}
 		if err := validateTransitionCatalog(ctx, tx, tr); err != nil {
 			return control.State{}, err
+		}
+		if guard != nil {
+			if err := guard(ctx); err != nil {
+				return control.State{}, err
+			}
 		}
 		return s.beginTransitionTx(ctx, tx, current, tr)
 	})

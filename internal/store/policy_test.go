@@ -256,7 +256,7 @@ func TestStartIdleTransitionFiresArmedElapsedDeadline(t *testing.T) {
 	ctx := context.Background()
 	tr := idleDrain(t, s, "idle-1")
 	*now = deadline // exactly at the deadline: elapsed
-	started, err := s.StartIdleTransition(ctx, deadline, tr)
+	started, err := s.StartIdleTransition(ctx, deadline, tr, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func TestStartIdleTransitionPreemptsOnAnyMismatch(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := s.StartIdleTransition(ctx, armed, idleDrain(t, s, "idle-1")); !errors.Is(err, ErrPolicyPreempted) {
+			if _, err := s.StartIdleTransition(ctx, armed, idleDrain(t, s, "idle-1"), nil); !errors.Is(err, ErrPolicyPreempted) {
 				t.Fatalf("%s: %v, want ErrPolicyPreempted", mode, err)
 			}
 			after, err := s.State(ctx)
@@ -417,7 +417,7 @@ func TestArmedDeadlineSurvivesRestartAndFiresAfterReopen(t *testing.T) {
 	if settings.ArmedDeadline == nil || !settings.ArmedDeadline.Equal(deadline) {
 		t.Fatalf("armed deadline lost across restart: %#v", settings.ArmedDeadline)
 	}
-	started, err := reopened.StartIdleTransition(ctx, deadline, idleDrain(t, reopened, "idle-after-restart"))
+	started, err := reopened.StartIdleTransition(ctx, deadline, idleDrain(t, reopened, "idle-after-restart"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -530,7 +530,7 @@ func TestAdmitAndIdleStartAreMutuallyExclusiveInEitherOrder(t *testing.T) {
 		if err := s.AdmitWork(ctx, "req", "job", control.WorkloadText, state.LeaseFence); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.StartIdleTransition(ctx, deadline, idleDrain(t, s, "idle-1")); !errors.Is(err, ErrPolicyPreempted) {
+		if _, err := s.StartIdleTransition(ctx, deadline, idleDrain(t, s, "idle-1"), nil); !errors.Is(err, ErrPolicyPreempted) {
 			t.Fatalf("idle after admit: %v", err)
 		}
 	})
@@ -538,7 +538,7 @@ func TestAdmitAndIdleStartAreMutuallyExclusiveInEitherOrder(t *testing.T) {
 		s, now, deadline := armedFixture(t)
 		ctx := context.Background()
 		*now = deadline
-		if _, err := s.StartIdleTransition(ctx, deadline, idleDrain(t, s, "idle-1")); err != nil {
+		if _, err := s.StartIdleTransition(ctx, deadline, idleDrain(t, s, "idle-1"), nil); err != nil {
 			t.Fatal(err)
 		}
 		fence := idleDrainFence(t, s)
@@ -722,5 +722,78 @@ func TestArmIdleDeadlineRejectsDegradedHealth(t *testing.T) {
 	}
 	if settings, _ := s.Settings(ctx); settings.ArmedDeadline != nil {
 		t.Fatal("degraded workload armed a deadline")
+	}
+}
+
+// The timer ticks every minute with the policy Off by default; disarming an
+// already-disarmed state must be read-only (no updated_at churn, no WAL
+// writes), while a real arm is still cleared.
+func TestDisarmIdleDeadlineIsReadOnlyWhenAlreadyDisarmed(t *testing.T) {
+	s, _ := policyFixture(t)
+	ctx := context.Background()
+	updatedAt := func() string {
+		var v string
+		if err := s.db.QueryRowContext(ctx, `SELECT updated_at FROM idle_policy_state WHERE singleton = 1`).Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	before := updatedAt()
+	for i := 0; i < 3; i++ {
+		if err := s.DisarmIdleDeadline(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if after := updatedAt(); after != before {
+		t.Fatalf("already-disarmed tick wrote state: %q -> %q", before, after)
+	}
+	// A real arm is still cleared by the next disarm.
+	fingerprint := enablePolicy(t, s)
+	deadline := policyEpoch.Add(5 * time.Minute)
+	if err := s.ArmIdleDeadline(ctx, fingerprint, deadline, policyEpoch.Add(4*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DisarmIdleDeadline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	settings, _ := s.Settings(ctx)
+	if settings.ArmedDeadline != nil || settings.AttestationAt != nil {
+		t.Fatalf("real arm not cleared: %#v", settings)
+	}
+	// And the next disarm is read-only again.
+	before = updatedAt()
+	if err := s.DisarmIdleDeadline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after := updatedAt(); after != before {
+		t.Fatalf("second disarm wrote state: %q -> %q", before, after)
+	}
+}
+
+// The in-transaction guard runs atomically with the idle guards: a rejection
+// aborts the commit (nothing recorded, armed deadline intact for the caller
+// to disarm), and a nil guard keeps the non-policy behavior unchanged.
+func TestStartIdleTransitionGuardAbortsCommitInTransaction(t *testing.T) {
+	s, now, deadline := armedFixture(t)
+	ctx := context.Background()
+	*now = deadline
+	reject := errors.New("evidence generation revoked")
+	if _, err := s.StartIdleTransition(ctx, deadline, idleDrain(t, s, "idle-1"), func(context.Context) error { return reject }); !errors.Is(err, reject) {
+		t.Fatalf("guard rejection: %v", err)
+	}
+	after, _ := s.State(ctx)
+	if after.Phase != control.PhaseStable || after.ActiveWorkload != control.WorkloadText {
+		t.Fatalf("guard rejection committed: %+v", after)
+	}
+	settings, _ := s.Settings(ctx)
+	if settings.ArmedDeadline == nil {
+		t.Fatal("guard rejection disarmed inside the aborted transaction")
+	}
+	if _, err := s.InProgressTransition(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// And with the guard satisfied, the same armed deadline commits.
+	if _, err := s.StartIdleTransition(ctx, deadline, idleDrain(t, s, "idle-2"), func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
@@ -103,17 +104,23 @@ func (c *Controller) PolicyTick(ctx context.Context, evidence EvidenceProvider) 
 	if c.now().Before(*armed) {
 		return nil
 	}
-	// Final fence: revalidate the evidence generation immediately before the
-	// drain decision, so work queued after the attestation aborts the idle.
-	// The residual window between this check and the store commit is closed
-	// on the store side only for registered admissions (StartIdleTransition
-	// revalidates pending work in-transaction); external queue state cannot
-	// be fenced atomically without provider/database coupling, so a race
-	// there is absorbed by the provider revoking the next admission instead.
-	if err := evidence.Revalidate(ctx, attestation.Token); err != nil {
-		return errors.Join(c.store.DisarmIdleDeadline(ctx), store.ErrEvidenceUnavailable, err)
+	// Final fence: the store invokes this guard inside the writer transaction
+	// immediately before the idle commit, atomically with its pending-work
+	// recheck under the single-writer lock — work queued after the
+	// attestation aborts the drain. The only residual is provider-internal:
+	// evidence moving after the provider's own Revalidate returns is outside
+	// the store's reach and must be absorbed by the provider refusing the
+	// next admission.
+	guard := func(ctx context.Context) error {
+		if err := evidence.Revalidate(ctx, attestation.Token); err != nil {
+			return fmt.Errorf("%w: evidence generation revoked", store.ErrEvidenceUnavailable)
+		}
+		return nil
 	}
-	_, err = c.PolicyIdle(ctx, *armed)
+	_, err = c.PolicyIdle(ctx, *armed, guard)
+	if errors.Is(err, store.ErrEvidenceUnavailable) {
+		return errors.Join(c.store.DisarmIdleDeadline(ctx), err)
+	}
 	if errors.Is(err, store.ErrPolicyPreempted) {
 		return nil
 	}
@@ -122,8 +129,10 @@ func (c *Controller) PolicyTick(ctx context.Context, evidence EvidenceProvider) 
 
 // PolicyIdle drains the active workload into idle behind the armed deadline.
 // The deadline is the concurrency token; the store revalidates it together
-// with the stability and pending-work guards inside the writer transaction.
-func (c *Controller) PolicyIdle(ctx context.Context, armed time.Time) (control.State, error) {
+// with the stability and pending-work guards inside the writer transaction,
+// and invokes guard (when non-nil) in the same transaction immediately
+// before committing.
+func (c *Controller) PolicyIdle(ctx context.Context, armed time.Time, guard func(context.Context) error) (control.State, error) {
 	if err := c.checkCatalog(ctx); err != nil {
 		return control.State{}, err
 	}
@@ -148,7 +157,7 @@ func (c *Controller) PolicyIdle(ctx context.Context, armed time.Time) (control.S
 		Deadline: c.now().Add(c.config.DrainTimeout),
 	}
 	transition.ConfigurationRevision = c.config.Catalog.Revision
-	state, err := c.store.StartIdleTransition(ctx, armed, transition)
+	state, err := c.store.StartIdleTransition(ctx, armed, transition, guard)
 	if err != nil {
 		return current, err
 	}
