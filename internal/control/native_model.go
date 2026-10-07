@@ -148,10 +148,20 @@ func (o OwnedLaunch) validateModelPath() error {
 	if !filepath.IsAbs(o.ModelPath) || filepath.Clean(o.ModelPath) != o.ModelPath {
 		return errors.New("owned launch model path must be absolute and clean")
 	}
-	if o.Alias != "" && strings.IndexFunc(o.Alias, unicode.IsControl) >= 0 {
-		return errors.New("invalid owned launch alias")
+	if !grammarExpressible(o.ModelPath) || (o.Alias != "" && !grammarExpressible(o.Alias)) {
+		return errors.New("owned launch values must be expressible in the unit command grammar")
 	}
 	return nil
+}
+
+// grammarExpressible reports whether a value survives the launch grammar's
+// tokenization unchanged: no whitespace (ExecStart splits on strings.Fields),
+// none of the quoting/specifier characters directive parsing rejects, and no
+// control bytes. Values that fail would render units that can never qualify.
+func grammarExpressible(value string) bool {
+	return !strings.ContainsAny(value, "\\$%\"'`") &&
+		strings.IndexFunc(value, unicode.IsSpace) < 0 &&
+		strings.IndexFunc(value, unicode.IsControl) < 0
 }
 
 // ValidateModelRequest rejects ambiguous JSON and lifecycle overrides before

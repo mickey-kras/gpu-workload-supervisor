@@ -245,6 +245,62 @@ func TestOwnedServedModelNameMatchesCatalog(t *testing.T) {
 	})
 }
 
+// TestOwnedValuesFitCommandGrammar rejects owned values the rendered ExecStart
+// could never carry through the launch grammar's tokenization, so admitted
+// catalogs cannot produce unqualifiable units.
+func TestOwnedValuesFitCommandGrammar(t *testing.T) {
+	cases := map[string]func(*OwnedLaunch){
+		"whitespace model path":  func(o *OwnedLaunch) { o.ModelPath = "/models/my model.gguf" },
+		"tab model path":         func(o *OwnedLaunch) { o.ModelPath = "/models/my\tmodel.gguf" },
+		"newline model path":     func(o *OwnedLaunch) { o.ModelPath = "/models/my\nmodel.gguf" },
+		"quote model path":       func(o *OwnedLaunch) { o.ModelPath = "/models/we\"ird.gguf" },
+		"single quote path":      func(o *OwnedLaunch) { o.ModelPath = "/models/we'ird.gguf" },
+		"backtick model path":    func(o *OwnedLaunch) { o.ModelPath = "/models/we`ird.gguf" },
+		"dollar model path":      func(o *OwnedLaunch) { o.ModelPath = "/models/$HOME.gguf" },
+		"percent model path":     func(o *OwnedLaunch) { o.ModelPath = "/models/100%.gguf" },
+		"backslash model path":   func(o *OwnedLaunch) { o.ModelPath = "/models/win\\path.gguf" },
+		"whitespace alias":       func(o *OwnedLaunch) { o.Alias = "my model" },
+		"quote alias":            func(o *OwnedLaunch) { o.Alias = "mo\"del" },
+		"control alias":          func(o *OwnedLaunch) { o.Alias = "bad\x01alias" },
+		"specifier escape alias": func(o *OwnedLaunch) { o.Alias = "100%%" },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			p := ownedLlamaProfile()
+			mutate(p.NativeModel.Owned)
+			p.NativeModel.Model = p.NativeModel.Owned.Alias
+			if p.NativeModel.Model == "" {
+				p.NativeModel.Model = p.NativeModel.Owned.ModelPath
+			}
+			if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{p}}).Validate(); err == nil {
+				t.Fatal("grammar-inexpressible owned value accepted")
+			}
+		})
+	}
+	t.Run("normal path and alias accepted", func(t *testing.T) {
+		p := ownedLlamaProfile()
+		p.NativeModel.Owned.ModelPath = "/models/vision-q8_4.0-final.gguf"
+		p.NativeModel.Owned.Alias = "vision-q8"
+		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{p}}).Validate(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("vllm whitespace model path rejected", func(t *testing.T) {
+		p := ownedLlamaProfile()
+		p.NativeModel.Runtime = "vllm"
+		p.NativeModel.Model = "/models/my model"
+		p.NativeModel.Owned = &OwnedLaunch{ModelPath: "/models/my model", Port: 9100}
+		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{p}}).Validate(); err == nil {
+			t.Fatal("vllm whitespace path accepted")
+		}
+	})
+	t.Run("ollama unaffected", func(t *testing.T) {
+		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{ownedOllamaProfile("chat", "qwen3:latest")}}).Validate(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 func TestOwnedEndpointSharingRule(t *testing.T) {
 	t.Run("shared owned ollama pair accepted", func(t *testing.T) {
 		c := Catalog{Version: 2, Profiles: []WorkloadProfile{ownedOllamaProfile("chat", "qwen3:latest"), ownedOllamaProfile("code", "qwen3-coder:latest")}}
