@@ -25,7 +25,7 @@ func ownedSupervisorCatalog() control.Catalog {
 			Endpoint:     "http://127.0.0.1:9100",
 			LaunchFile:   "/home/u/.config/systemd/user/gws-owned-vision.service",
 			LaunchSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			Owned:        &control.OwnedLaunch{ModelPath: "/models/vision-q8.gguf", Port: 9100},
+			Owned:        &control.OwnedLaunch{ModelPath: "/models/vision-q8.gguf", Port: 9100, Alias: "vision-q8"},
 		},
 	}}}
 }
