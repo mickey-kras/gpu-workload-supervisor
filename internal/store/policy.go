@@ -107,17 +107,22 @@ func (s *Store) ArmIdleDeadline(ctx context.Context, expectedSettingsRevision st
 // activity was recorded since the arm. Any mismatch is a clean preemption, not
 // an error, and never latches state.
 //
-// guard, when non-nil, runs inside the same writer transaction immediately
-// before the commit — atomically with the pending-work recheck under the
-// single-writer lock. The policy engine wires it to the evidence provider's
-// generation revalidation; a guard error aborts the commit (nothing is
-// recorded, the armed deadline survives for the caller to disarm). The guard
-// must NEVER call back into the Store: the store is single-writer
-// (SetMaxOpenConns(1)), so a nested call stalls until the context deadline.
-func (s *Store) StartIdleTransition(ctx context.Context, armed time.Time, tr Transition, guard func(context.Context) error) (control.State, error) {
+// acquire, when non-nil, atomically validates and holds the external evidence
+// generation inside the writer transaction. Its release callback runs only
+// after that transaction commits or rolls back, so external queue mutations
+// cannot slip between validation and the durable admission closure. The
+// provider must return a non-nil release on success and must not call back into
+// the Store while acquiring: the store is single-writer (SetMaxOpenConns(1)).
+func (s *Store) StartIdleTransition(ctx context.Context, armed time.Time, tr Transition, acquire func(context.Context) (func(), error)) (control.State, error) {
 	if tr.ID == "" {
 		return control.State{}, errors.New("transition id is empty")
 	}
+	var release func()
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
 	return s.stateTx(ctx, func(tx *sql.Tx, current control.State) (control.State, error) {
 		if err := s.idleSource(ctx, tx, current, armed, tr); err != nil {
 			return control.State{}, err
@@ -125,10 +130,18 @@ func (s *Store) StartIdleTransition(ctx context.Context, armed time.Time, tr Tra
 		if err := validateTransitionCatalog(ctx, tx, tr); err != nil {
 			return control.State{}, err
 		}
-		if guard != nil {
-			if err := guard(ctx); err != nil {
+		if acquire != nil {
+			held, err := acquire(ctx)
+			if err != nil {
+				if held != nil {
+					held()
+				}
 				return control.State{}, err
 			}
+			if held == nil {
+				return control.State{}, ErrEvidenceUnavailable
+			}
+			release = held
 		}
 		return s.beginTransitionTx(ctx, tx, current, tr)
 	})
@@ -179,3 +192,4 @@ func pendingWorkTx(ctx context.Context, tx *sql.Tx) (int, error) {
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM registered_work WHERE completed_at IS NULL)`).Scan(&pending)
 	return pending, err
 }
+

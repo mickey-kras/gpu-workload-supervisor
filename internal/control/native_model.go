@@ -57,6 +57,16 @@ func (n NativeModel) ComparisonModel() string {
 // malformedOllamaModel rejects empty name segments so a configured string
 // cannot canonicalize to an identity the API would never report, such as
 // "foo/" becoming "foo/:latest".
+// ValidNativeModelIdentity applies the catalog's model-identity rule
+// (non-blank, bounded, no control characters) plus the runtime-specific
+// grammar, so draft surfaces can reject failing names at save time.
+func ValidNativeModelIdentity(runtime, model string) bool {
+	if strings.TrimSpace(model) == "" || len(model) > 1024 || strings.IndexFunc(model, unicode.IsControl) >= 0 {
+		return false
+	}
+	return runtime != "ollama" || !malformedOllamaModel(model)
+}
+
 func malformedOllamaModel(model string) bool {
 	for _, segment := range strings.Split(model, "/") {
 		if segment == "" {
@@ -70,10 +80,7 @@ func (n NativeModel) validate() error {
 	if n.Runtime != "ollama" && n.Runtime != "llama.cpp" && n.Runtime != "vllm" {
 		return errors.New("unsupported native runtime")
 	}
-	if !workloadID.MatchString(n.Instance) || strings.TrimSpace(n.Model) == "" || len(n.Model) > 1024 || strings.IndexFunc(n.Model, unicode.IsControl) >= 0 {
-		return errors.New("invalid native model identity")
-	}
-	if n.Runtime == "ollama" && malformedOllamaModel(n.Model) {
+	if !ValidInstanceID(n.Instance) || !ValidNativeModelIdentity(n.Runtime, n.Model) {
 		return errors.New("invalid native model identity")
 	}
 	u, err := url.Parse(n.Endpoint)
@@ -154,6 +161,36 @@ func (o OwnedLaunch) validateModelPath() error {
 		return errors.New("owned launch values must be expressible in the unit command grammar")
 	}
 	return nil
+}
+
+// ValidInstanceID reports whether a native instance name satisfies the
+// workload-ID grammar the catalog requires; draft surfaces must reject
+// failing names at save time.
+func ValidInstanceID(instance string) bool {
+	return workloadID.MatchString(instance)
+}
+
+// OwnedUnitFilePrefix names supervisor-owned unit files.
+const OwnedUnitFilePrefix = "gws-owned-"
+
+// AdoptedOwnedFile reports whether an adopted profile still binds a
+// supervisor-owned unit file: an owned profile converted to adopted while
+// keeping its launch file. Every layer that accounts for owned files
+// (preflight, discovery, the configure gate, plan deletes, journal recovery)
+// must classify these bindings with this single rule.
+func (p WorkloadProfile) AdoptedOwnedFile() bool {
+	n := p.NativeModel
+	if n == nil || n.Owned != nil {
+		return false
+	}
+	base := filepath.Base(n.LaunchFile)
+	return strings.HasPrefix(base, OwnedUnitFilePrefix) && strings.HasSuffix(base, ".service")
+}
+
+// LaunchGrammarExpressible exposes grammarExpressible to draft surfaces so
+// unrenderable values fail at save time instead of at apply time.
+func LaunchGrammarExpressible(value string) bool {
+	return grammarExpressible(value)
 }
 
 // grammarExpressible reports whether a value survives the launch grammar's

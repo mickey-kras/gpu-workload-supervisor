@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -770,30 +771,82 @@ func TestDisarmIdleDeadlineIsReadOnlyWhenAlreadyDisarmed(t *testing.T) {
 	}
 }
 
-// The in-transaction guard runs atomically with the idle guards: a rejection
-// aborts the commit (nothing recorded, armed deadline intact for the caller
-// to disarm), and a nil guard keeps the non-policy behavior unchanged.
-func TestStartIdleTransitionGuardAbortsCommitInTransaction(t *testing.T) {
+// The provider fence is released after rollback on a failed acquisition or
+// after commit on success; queued external work cannot get past it while the
+// durable transition still permits admission.
+func TestStartIdleTransitionHoldsEvidenceFenceThroughCommit(t *testing.T) {
+	s, now, deadline := armedFixture(t)
+	ctx := context.Background()
+	*now = deadline
+	var queue sync.Mutex
+	queue.Lock()
+	mutated := make(chan control.State, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		queue.Lock()
+		defer queue.Unlock()
+		state, _ := s.State(context.Background())
+		mutated <- state
+	}()
+	<-started
+	acquired, released := 0, 0
+	_, err := s.StartIdleTransition(ctx, deadline, idleDrain(t, s, "idle-fenced"), func(context.Context) (func(), error) {
+		acquired++
+		return func() {
+			released++
+			check, cancel := context.WithTimeout(ctx, time.Second)
+			defer cancel()
+			state, err := s.State(check)
+			if err != nil || state.Phase != control.PhaseDraining || state.Admission != control.AdmissionClosed {
+				t.Errorf("fence released before durable drain: state=%+v err=%v", state, err)
+			}
+			queue.Unlock()
+		}, nil
+	})
+	if err != nil || acquired != 1 || released != 1 {
+		t.Fatalf("fenced transition: err=%v acquisitions=%d releases=%d", err, acquired, released)
+	}
+	select {
+	case state := <-mutated:
+		if state.Phase != control.PhaseDraining || state.Admission != control.AdmissionClosed {
+			t.Fatalf("external queue mutation preceded durable drain: %+v", state)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("external queue mutation remained blocked after commit")
+	}
+}
+
+// A failed provider acquisition aborts the transition without clearing the
+// arm; a provider returning a held fence with an error is cleaned up exactly
+// once, and a missing release cannot authorize a commit.
+func TestStartIdleTransitionAcquireFailureRollsBack(t *testing.T) {
 	s, now, deadline := armedFixture(t)
 	ctx := context.Background()
 	*now = deadline
 	reject := errors.New("evidence generation revoked")
-	if _, err := s.StartIdleTransition(ctx, deadline, idleDrain(t, s, "idle-1"), func(context.Context) error { return reject }); !errors.Is(err, reject) {
-		t.Fatalf("guard rejection: %v", err)
+	released := 0
+	if _, err := s.StartIdleTransition(ctx, deadline, idleDrain(t, s, "idle-1"), func(context.Context) (func(), error) {
+		return func() { released++ }, reject
+	}); !errors.Is(err, reject) || released != 1 {
+		t.Fatalf("acquisition error=%v releases=%d", err, released)
+	}
+	if _, err := s.StartIdleTransition(ctx, deadline, idleDrain(t, s, "idle-2"), func(context.Context) (func(), error) {
+		return nil, nil
+	}); !errors.Is(err, ErrEvidenceUnavailable) {
+		t.Fatalf("missing release: %v", err)
 	}
 	after, _ := s.State(ctx)
 	if after.Phase != control.PhaseStable || after.ActiveWorkload != control.WorkloadText {
-		t.Fatalf("guard rejection committed: %+v", after)
+		t.Fatalf("failed acquisition committed: %+v", after)
 	}
 	settings, _ := s.Settings(ctx)
 	if settings.ArmedDeadline == nil {
-		t.Fatal("guard rejection disarmed inside the aborted transaction")
+		t.Fatal("failed acquisition disarmed inside aborted transaction")
 	}
-	if _, err := s.InProgressTransition(ctx); err != nil {
-		t.Fatal(err)
-	}
-	// And with the guard satisfied, the same armed deadline commits.
-	if _, err := s.StartIdleTransition(ctx, deadline, idleDrain(t, s, "idle-2"), func(context.Context) error { return nil }); err != nil {
-		t.Fatal(err)
+	if _, err := s.StartIdleTransition(ctx, deadline, idleDrain(t, s, "idle-3"), func(context.Context) (func(), error) {
+		return func() { released++ }, nil
+	}); err != nil || released != 2 {
+		t.Fatalf("successful acquisition: err=%v releases=%d", err, released)
 	}
 }

@@ -61,6 +61,24 @@ func verifyNativeLaunchWithValidator(n control.NativeModel, validate func(string
 	}
 	return qualifyNativeLaunchWithValidator(b, n, validate)
 }
+
+// verifyOwnedSpec is the spec↔fingerprint chain for owned launches: the
+// deterministic re-render must exist, match the recorded digest, and qualify
+// under the shared grammar before the on-disk binding is checked.
+func verifyOwnedSpec(p control.WorkloadProfile) error {
+	if p.NativeModel == nil || p.NativeModel.Owned == nil {
+		return nil
+	}
+	raw, err := RenderOwnedUnit(p)
+	if err != nil {
+		return err
+	}
+	if fmt.Sprintf("%x", sha256.Sum256(raw)) != p.NativeModel.LaunchSHA256 {
+		return fmt.Errorf("%w: rendered digest differs from the recorded launch fingerprint", ErrOwnedRender)
+	}
+	return renderMustQualify(raw, *p.NativeModel)
+}
+
 func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.WorkloadProfile) error {
 	if p.NativeModel == nil {
 		return nil
@@ -76,17 +94,37 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 	if err != nil {
 		return ErrLaunchChanged
 	}
+	values, err := ParseUnitProperties(b)
+	if err != nil {
+		return err
+	}
+	if values["NeedDaemonReload"] != "no" {
+		return ErrLaunchChanged
+	}
+	return CheckNativeBinding(values, p.Unit, p.NativeModel.LaunchFile)
+}
+
+// ParseUnitProperties parses systemctl show output into key/value pairs,
+// rejecting duplicate keys as ambiguous.
+func ParseUnitProperties(out []byte) (map[string]string, error) {
 	values := map[string]string{}
-	for _, line := range strings.Split(string(b), "\n") {
+	for _, line := range strings.Split(string(out), "\n") {
 		if k, v, ok := strings.Cut(line, "="); ok {
 			if _, exists := values[k]; exists {
-				return ErrLaunchChanged
+				return nil, ErrLaunchChanged
 			}
 			values[k] = v
 		}
 	}
-	if values["FragmentPath"] != p.NativeModel.LaunchFile || values["DropInPaths"] != "" || values["NeedDaemonReload"] != "no" {
-		return ErrLaunchChanged
+	return values, nil
+}
+
+// CheckNativeBinding rejects a loaded unit whose binding does not match the
+// catalog's launch file: exact fragment path and no drop-ins. Setup's
+// post-reload verification and the runtime preflight share this rule.
+func CheckNativeBinding(values map[string]string, unit, launchFile string) error {
+	if values["FragmentPath"] != launchFile || values["DropInPaths"] != "" {
+		return fmt.Errorf("%w: %s", ErrLaunchChanged, unit)
 	}
 	return nil
 }

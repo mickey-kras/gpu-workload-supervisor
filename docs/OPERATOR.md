@@ -126,9 +126,11 @@ ownership is `wrong_owner`, a recovery latch is `recovery_required`, a stale
 precondition is `stale_state`. When the precondition was readable but the
 workload cannot start now — an active workload (`active != idle`) or
 unfinished admitted work — the response is `deferred` and includes the
-observed current `status` plus the current committed `leaseFence`, so a
-caller that lost a committed activation response recovers the committed
-generation on retry instead of being locked out by its own stale fence;
+observed current `status` plus the current committed `leaseFence`. After a lost
+activation response,
+the caller must fetch fresh `status` and retry with that status's `expected`
+object: replaying the old precondition returns `stale_state`. A deferred
+response to the fresh retry recovers the committed generation;
 `deferred` latches nothing and may be retried.
 Activation uses the mutation-class lifetime.
 
@@ -152,13 +154,14 @@ seconds) shows no queued/reserved/running/unresolved work and no unfinished
 admissions, the tick commits a verified armed deadline (last activity +
 timeout). Once the armed deadline has elapsed without newer activity, the
 tick drains the workload into idle with the provider's evidence-generation
-revalidation invoked inside the store's writer transaction, atomically with
-the pending-work recheck under the single-writer lock; a revoked generation
-aborts the commit, disarms, and fails closed. The residual window is only
-provider-internal: evidence moving after the provider's own revalidation
-returns is outside the store's reach, so providers must refuse the next
-admission for work materializing in that gap. Any preemption — new activity, an
-admission, a state change — aborts cleanly with exit 0 and no latch; the next
+fence acquired inside the store's
+writer transaction, atomically with the pending-work recheck under the
+single-writer lock. The provider atomically validates the attested generation
+and excludes new queue/reservation changes until the store releases the fence
+after commit or rollback. A revoked generation aborts the commit, disarms,
+and fails closed. After commit, draining closes admission before the fence
+is released. Any preemption — new activity, an admission, a state change —
+aborts cleanly with exit 0 and no latch; the next
 tick re-verifies from fresh evidence.
 
 Status and mutations both use the same nonblocking controller gate. `busy` means
@@ -240,3 +243,4 @@ extension or qualify a distribution.
 
 Browser automation is not implemented. There is no dashboard or browser client,
 and no transport grants browser callers the local operator's authority.
+

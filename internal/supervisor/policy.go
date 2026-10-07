@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
+		"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
@@ -16,7 +16,7 @@ const MaxAttestationAge = 2 * time.Minute
 
 // Attestation is the qualified evidence snapshot: registered proxies/jobs and
 // sessions, plus an authoritative observation timestamp and an opaque
-// generation token the provider can revalidate before the drain commits.
+// generation token the provider can validate and hold through the drain commit.
 type Attestation struct {
 	Queued     []string
 	Reserved   []string
@@ -24,7 +24,7 @@ type Attestation struct {
 	Unresolved []string
 	AttestedAt time.Time
 	// Token is the provider's evidence generation/fingerprint; empty fails
-	// closed. Revalidate must report any change since the attestation.
+	// closed. AcquireFence must report any change since the attestation.
 	Token string
 }
 
@@ -33,10 +33,11 @@ type Attestation struct {
 // evaluation fails closed.
 type EvidenceProvider interface {
 	Attest(context.Context) (Attestation, error)
-	// Revalidate reports whether the evidence generation behind a prior
-	// attestation's token is still current. It is the last fence before the
-	// idle drain commits; any error or mismatch fails closed.
-	Revalidate(ctx context.Context, token string) error
+	// AcquireFence atomically validates the attested generation and excludes
+	// external queue/reservation changes until release. The store calls release
+	// after its idle transition transaction commits or rolls back. Providers
+	// must not call into the Store while holding this fence.
+	AcquireFence(ctx context.Context, token string) (release func(), err error)
 }
 
 func (a Attestation) anyEvidence() bool {
@@ -104,20 +105,17 @@ func (c *Controller) PolicyTick(ctx context.Context, evidence EvidenceProvider) 
 	if c.now().Before(*armed) {
 		return nil
 	}
-	// Final fence: the store invokes this guard inside the writer transaction
-	// immediately before the idle commit, atomically with its pending-work
-	// recheck under the single-writer lock — work queued after the
-	// attestation aborts the drain. The only residual is provider-internal:
-	// evidence moving after the provider's own Revalidate returns is outside
-	// the store's reach and must be absorbed by the provider refusing the
-	// next admission.
-	guard := func(ctx context.Context) error {
-		if err := evidence.Revalidate(ctx, attestation.Token); err != nil {
-			return fmt.Errorf("%w: evidence generation revoked", store.ErrEvidenceUnavailable)
+	// Acquire inside the store's writer transaction and hold the provider's
+	// queue-mutation fence through commit. An error or missing release fails
+	// closed; after commit the durable draining state closes admission.
+	acquire := func(ctx context.Context) (func(), error) {
+		release, err := evidence.AcquireFence(ctx, attestation.Token)
+		if err != nil {
+			return release, fmt.Errorf("%w: acquire evidence fence: %w", store.ErrEvidenceUnavailable, err)
 		}
-		return nil
+		return release, nil
 	}
-	_, err = c.PolicyIdle(ctx, *armed, guard)
+	_, err = c.PolicyIdle(ctx, *armed, acquire)
 	if errors.Is(err, store.ErrEvidenceUnavailable) {
 		return errors.Join(c.store.DisarmIdleDeadline(ctx), err)
 	}
@@ -130,9 +128,8 @@ func (c *Controller) PolicyTick(ctx context.Context, evidence EvidenceProvider) 
 // PolicyIdle drains the active workload into idle behind the armed deadline.
 // The deadline is the concurrency token; the store revalidates it together
 // with the stability and pending-work guards inside the writer transaction,
-// and invokes guard (when non-nil) in the same transaction immediately
-// before committing.
-func (c *Controller) PolicyIdle(ctx context.Context, armed time.Time, guard func(context.Context) error) (control.State, error) {
+// and holds the external evidence fence (when non-nil) through commit.
+func (c *Controller) PolicyIdle(ctx context.Context, armed time.Time, acquire func(context.Context) (func(), error)) (control.State, error) {
 	if err := c.checkCatalog(ctx); err != nil {
 		return control.State{}, err
 	}
@@ -157,7 +154,7 @@ func (c *Controller) PolicyIdle(ctx context.Context, armed time.Time, guard func
 		Deadline: c.now().Add(c.config.DrainTimeout),
 	}
 	transition.ConfigurationRevision = c.config.Catalog.Revision
-	state, err := c.store.StartIdleTransition(ctx, armed, transition, guard)
+	state, err := c.store.StartIdleTransition(ctx, armed, transition, acquire)
 	if err != nil {
 		return current, err
 	}
@@ -167,3 +164,4 @@ func (c *Controller) PolicyIdle(ctx context.Context, armed time.Time, guard func
 }
 
 const inactivityPolicyInitiator = "inactivity-policy"
+

@@ -14,9 +14,10 @@ import (
 type evidenceFixture struct {
 	attestation     Attestation
 	err             error
-	revalidateErr   error
+	acquireErr      error
 	calls           int
-	revalidateCalls int
+	acquireCalls    int
+	releaseCalls    int
 }
 
 func (e *evidenceFixture) Attest(context.Context) (Attestation, error) {
@@ -24,15 +25,15 @@ func (e *evidenceFixture) Attest(context.Context) (Attestation, error) {
 	return e.attestation, e.err
 }
 
-func (e *evidenceFixture) Revalidate(_ context.Context, token string) error {
-	e.revalidateCalls++
-	if e.revalidateErr != nil {
-		return e.revalidateErr
+func (e *evidenceFixture) AcquireFence(_ context.Context, token string) (func(), error) {
+	e.acquireCalls++
+	if e.acquireErr != nil {
+		return nil, e.acquireErr
 	}
 	if token == "" || token != e.attestation.Token {
-		return errors.New("stale evidence generation")
+		return nil, errors.New("stale evidence generation")
 	}
-	return nil
+	return func() { e.releaseCalls++ }, nil
 }
 
 func freshEvidence() *evidenceFixture {
@@ -225,8 +226,8 @@ func TestPolicyTickFiresOnceArmedDeadlineElapses(t *testing.T) {
 	if err := c.PolicyTick(context.Background(), firing); err != nil {
 		t.Fatal(err)
 	}
-	if firing.revalidateCalls != 1 {
-		t.Fatalf("drain committed without evidence revalidation: %d calls", firing.revalidateCalls)
+	if firing.acquireCalls != 1 || firing.releaseCalls != 1 {
+		t.Fatalf("drain did not acquire and release evidence once: %d acquisitions, %d releases", firing.acquireCalls, firing.releaseCalls)
 	}
 	state, _ := s.State(context.Background())
 	if state.ActiveWorkload != control.WorkloadIdle || state.Owner != control.OwnerSupervisor || state.Phase != control.PhaseStable {
@@ -338,7 +339,7 @@ func TestPolicyTickDisarmsAndNoOpsWhileDegradedThenArmsWhenHealthy(t *testing.T)
 }
 
 // Work queued after the attestation but before the drain commit must abort
-// the idle: the generation revalidation is the last fence.
+// the idle: generation acquisition is the final fence.
 func TestPolicyTickAbortsDrainWhenEvidenceInvalidatedBeforeCommit(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	s := openStoreWithClock(t, func() time.Time { return now })
@@ -353,11 +354,11 @@ func TestPolicyTickAbortsDrainWhenEvidenceInvalidatedBeforeCommit(t *testing.T) 
 		t.Fatal("first tick did not arm")
 	}
 	now = now.Add(6 * time.Minute)
-	// The provider's evidence moved on: the armed generation no longer
-	// revalidates (new external work queued since the attestation).
+	// The provider's evidence moved on: the attested generation cannot be
+	// acquired (new external work queued since the attestation).
 	revoked := &evidenceFixture{
 		attestation:   Attestation{AttestedAt: now, Token: "gen-2"},
-		revalidateErr: errors.New("evidence generation moved"),
+		acquireErr: errors.New("evidence generation moved"),
 	}
 	if err := c.PolicyTick(context.Background(), revoked); !errors.Is(err, store.ErrEvidenceUnavailable) {
 		t.Fatalf("invalidated evidence: %v", err)
@@ -380,3 +381,4 @@ func TestPolicyTickAbortsDrainWhenEvidenceInvalidatedBeforeCommit(t *testing.T) 
 		t.Fatal("stable evidence did not re-arm")
 	}
 }
+
