@@ -51,15 +51,14 @@ func (b Backend) Discover(ctx context.Context, home string) (Discovery, error) {
 			return result, err
 		}
 	}
-	output, err := b.runCommand(ctx, "/usr/bin/systemctl", "--user", "list-unit-files", "--type=service", "--no-legend", "--no-pager")
-	if err != nil {
-		return result, err
-	}
-	if len(output) > 1048576 {
-		return result, errors.New("unit discovery output too large")
+	// Unit listing is best-effort: endpoint probes and saved state still apply
+	// when the user bus is unavailable or its answer is unusable.
+	var units []string
+	if output, err := b.runCommand(ctx, "/usr/bin/systemctl", "--user", "list-unit-files", "--type=service", "--no-legend", "--no-pager"); err == nil && len(output) <= 1048576 {
+		units = serviceUnits(output)
 	}
 	result.Units = []string{}
-	b.discoverApplications(ctx, &result, serviceUnits(output))
+	b.discoverApplications(ctx, &result, units)
 	return result, nil
 }
 

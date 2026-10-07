@@ -64,7 +64,9 @@ func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit strin
 	found.Label = appLabel(app) + " - " + unit
 	values := unitProperties(string(output))
 	found.Cgroup = values["ControlGroup"]
-	found.Models = launchModels(app, string(output))
+	if models := launchModels(app, string(output)); models != nil {
+		found.Models = models
+	}
 	if values["ActiveState"] == "inactive" && values["SubState"] == "dead" {
 		found.InstanceStatus = "not-running"
 		found.NextStep = "This instance is stopped. Select its existing launch configuration or start it separately to read its inventory."

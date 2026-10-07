@@ -8,7 +8,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import {ReviewedConfiguration} from './review.mjs';
 import {applications} from './onboarding.mjs';
-import {addDraftEditor} from './discovery-ui.mjs';
+import {addDraftEditor, addErrorReporter} from './discovery-ui.mjs';
 
 // The setup application is short-lived. Runtime controls use gpu-operator.
 function command(argv, input = null) {
@@ -38,6 +38,7 @@ app.connect('activate', () => {
     heading.add_css_class('title-1'); box.append(heading);
     box.append(new Gtk.Label({label: 'Add ComfyUI, Ollama, llama.cpp or vLLM. Applications and models must already be installed. Discovery never starts applications or loads models.', wrap: true, xalign: 0}));
     const status = new Gtk.Label({label: 'Checking your desktop and available services…', wrap: true, xalign: 0, selectable: true}); box.append(status);
+    const reportError = addErrorReporter({Adw, Gtk, parent: box, status});
     const rows = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 18}); box.append(rows);
     const settings = new Adw.PreferencesGroup(); box.append(settings);
     const advanced = new Adw.ExpanderRow({title: 'Advanced settings', subtitle: 'State database and NVIDIA GPU'});
@@ -67,7 +68,7 @@ app.connect('activate', () => {
         const current = {...profile};
         profiles.push(current);
         const group = new Adw.PreferencesGroup({title: GLib.markup_escape_text(current.label || 'New workload', -1),
-            description: 'Select a service, then enter its existing cgroup and health endpoint.'});
+            description: 'Required: the existing service, its cgroup path and its health URL. Optional identity and resource settings are under Workload details.'});
         field(group, 'Display name', current.label, text => {
             current.label = text; group.title = GLib.markup_escape_text(text || 'New workload', -1);
         });
@@ -77,13 +78,13 @@ app.connect('activate', () => {
             expression: Gtk.PropertyExpression.new(Gtk.StringObject.$gtype, null, 'string'),
             model: Gtk.StringList.new(['Choose a service…', ...choices.slice(1, -1), 'Enter another service…']),
             selected: current.unit ? choices.indexOf(current.unit) : 0});
+        group.add(service);
+        field(group, 'Cgroup path beneath /sys/fs/cgroup (required)', current.cgroup, text => current.cgroup = text);
+        field(group, 'Loopback health URL (required)', current.healthURL, text => current.healthURL = text);
 
         const details = new Adw.ExpanderRow({title: 'Workload details',
             subtitle: 'Stable ID, manual service name, VRAM and login behavior', expanded: !current.id});
         group.add(details);
-        details.add_row(service);
-        field(details, 'Cgroup path beneath /sys/fs/cgroup (required)', current.cgroup, text => current.cgroup = text);
-        field(details, 'Loopback health URL (required)', current.healthURL, text => current.healthURL = text);
         const manualService = field(details, 'Service name (manual entry)', current.unit, text => {
             current.unit = text;
             syncingService = true;
@@ -137,7 +138,8 @@ app.connect('activate', () => {
                 if (current()) { addProfile(profile); status.label = 'Launch binding verified. Review and confirm configuration before applying. Model readiness is checked when switching workloads.'; }
             },
             changed: value => { drafts = drafts.map(item => item.id === initial.id ? value : item); draftGeneration++; saveDrafts.sensitive = !pending; },
-            removed: () => { drafts = drafts.filter(item => item.id !== initial.id); draftGeneration++; saveDrafts.sensitive = !pending; }}));
+            removed: () => { drafts = drafts.filter(item => item.id !== initial.id); draftGeneration++; saveDrafts.sensitive = !pending; },
+            taken: () => profiles.map(profile => profile.id)}));
     }
     addApplication.connect('clicked', () => {
         const selected = applications[application.selected];
@@ -152,7 +154,7 @@ app.connect('activate', () => {
             const result = JSON.parse(await command(['/usr/bin/gpu-setup', 'save-drafts'], JSON.stringify({version: 1, expectedRevision: draftRevision, drafts})));
             draftRevision = result.revision; saved = true;
             status.label = 'Drafts saved. Saved launch bindings remain unverified. Drafts are not selectable in GPU Control until safe lifecycle control is configured and verified.';
-        } catch (error) { status.label = `Drafts were not saved. Reopen Manage workloads to refresh before retrying.\n${error.message}`; }
+        } catch (error) { reportError('Drafts were not saved. Reopen Manage workloads to refresh before retrying.', error); }
         finally { saveDrafts.sensitive = !pending && (!saved || generation !== draftGeneration); }
     });
     const later = new Gtk.Button({label: 'Set up later'}); box.append(later);
@@ -194,7 +196,10 @@ app.connect('activate', () => {
             }
             status.label = `Review changes:\n${preview.changes.join('\n')}\n\n${profiles.length} workload(s) configured. Confirm below to apply.`;
             valid = true; confirm.sensitive = true;
-        } catch (error) { status.label = error.message; invalidate(); }
+        } catch (error) {
+            reportError('Review failed. Correct the fields above or reopen Manage workloads to refresh, then review again.', error);
+            invalidate();
+        }
         finally { review.sensitive = true; }
     });
     apply.connect('clicked', async () => {
@@ -207,7 +212,10 @@ app.connect('activate', () => {
         try {
             await command(['/usr/bin/gpu-setup', 'apply'], activationRequest);
             status.label = 'Configuration activated. Reconciliation is enabled for future logins. Log out and back in to discover the extension, then enable “GPU Workload Supervisor” in Extensions. GPU Control appears in the top-right Quick Settings menu. No workload was started.';
-        } catch (error) { status.label = `Setup needs attention: ${error.message}\nSwitch to Idle and finish active jobs before changing configured workloads. Reopen Manage workloads to refresh or resume an interrupted activation. State and backups are preserved.`; }
+        } catch (error) {
+            reportError('Setup needs attention. Switch to Idle and finish active jobs before changing configured workloads. Reopen Manage workloads to refresh or resume an interrupted activation. State and backups are preserved.', error);
+            review.sensitive = true; later.sensitive = true;
+        }
         finally { invalidate(); }
     });
     window.present();

@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -40,6 +41,13 @@ func TestApplicationDiscoveryFiltersServicesByExecutable(t *testing.T) {
 	service := got.Applications[4]
 	if service.App != "ollama" || service.InstanceStatus != "not-running" || service.Cgroup != "/user.slice/ollama.service" || service.LifecycleControl != "unverified" {
 		t.Fatalf("%+v", service)
+	}
+	data, err := json.Marshal(service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"models":[]`) {
+		t.Fatalf("unit candidate must report an empty model list, not null: %s", data)
 	}
 }
 func TestServiceIdentityDoesNotExecuteConfiguration(t *testing.T) {

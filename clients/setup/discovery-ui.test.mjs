@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {launch} from './harness.mjs';
 
-const saved = {id: 'draft-one', app: 'ollama', label: 'Qwen', model: 'qwen:latest'};
+const saved = {id: 'draft-one', app: 'ollama', label: 'Qwen', model: 'qwen:latest', endpoint: 'http://127.0.0.1:11434'};
 
 for (const [name, probe] of [
     ['missing from the refreshed inventory', {app: 'ollama', instanceStatus: 'available', inventoryStatus: 'available', models: [{id: 'other'}]}],

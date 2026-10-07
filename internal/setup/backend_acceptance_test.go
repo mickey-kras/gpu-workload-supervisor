@@ -200,7 +200,7 @@ func TestAcceptanceDiscoveryAndReconciliationRejectDamagedProfiles(t *testing.T)
 }
 
 func TestAcceptanceDiscoveryFailures(t *testing.T) {
-	for _, kind := range []string{"malformed-activation", "malformed-marker", "command-failure", "oversized-output"} {
+	for _, kind := range []string{"malformed-activation", "malformed-marker"} {
 		t.Run(kind, func(t *testing.T) {
 			backend, home, r := fixture(t)
 			root := filepath.Join(home, ".config/gpu-workload-supervisor")
@@ -210,6 +210,19 @@ func TestAcceptanceDiscoveryFailures(t *testing.T) {
 			case "malformed-marker":
 				acceptanceJSON(t, filepath.Join(root, "activation.json"), activation{Request: r})
 				acceptanceWrite(t, r.Profile.StatePath+deployment.Suffix, []byte("{"))
+			}
+			if _, err := backend.Discover(context.Background(), home); err == nil {
+				t.Fatal("discovery failure ignored")
+			}
+		})
+	}
+}
+
+func TestDiscoveryDegradesToEndpointsWhenUnitListingFails(t *testing.T) {
+	for _, kind := range []string{"command-failure", "oversized-output"} {
+		t.Run(kind, func(t *testing.T) {
+			backend, home, _ := fixture(t)
+			switch kind {
 			case "command-failure":
 				backend.runCommand = func(context.Context, string, ...string) ([]byte, error) {
 					return nil, errors.New("user bus unavailable")
@@ -219,8 +232,21 @@ func TestAcceptanceDiscoveryFailures(t *testing.T) {
 					return []byte(strings.Repeat("x", 1048577)), nil
 				}
 			}
-			if _, err := backend.Discover(context.Background(), home); err == nil {
-				t.Fatal("discovery failure ignored")
+			backend.probeApplication = func(_ context.Context, r ProbeRequest) (ApplicationCandidate, error) { return candidate(r), nil }
+			found, err := backend.Discover(context.Background(), home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(found.Units) != 0 {
+				t.Fatalf("unavailable unit listing leaked: %v", found.Units)
+			}
+			if len(found.Applications) != 4 {
+				t.Fatalf("endpoint probes skipped: %+v", found.Applications)
+			}
+			for _, application := range found.Applications {
+				if application.Endpoint == "" || application.Unit != "" {
+					t.Fatalf("unexpected candidate: %+v", application)
+				}
 			}
 		})
 	}
