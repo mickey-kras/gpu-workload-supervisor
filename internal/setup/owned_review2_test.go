@@ -1765,3 +1765,48 @@ func TestDiscoveryErrorsOnUnreadableUnitDir(t *testing.T) {
 		t.Fatalf("missing dir = %v %+v", err, owned)
 	}
 }
+
+// TestRollbackRemovalRejectsConcurrentDisplacement injects an atomic replace
+// of a newly created unit between the rollback's content proof and its unlink:
+// the foreign content survives, the abort fails with a typed error, and the
+// journal is retained for recovery.
+func TestRollbackRemovalRejectsConcurrentDisplacement(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommandFor(home)
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{err: errors.New("busy")}, nil }
+	path := filepath.Join(ownedUnitDirectory(home), profile.Unit)
+	restore := ownedStat
+	ownedStat = func(p string) (os.FileInfo, error) {
+		if p != path {
+			return restore(p)
+		}
+		// Pin the verified inode, then displace it with foreign content.
+		pin, err := os.Open(p)
+		if err != nil {
+			return nil, err
+		}
+		defer pin.Close()
+		if err := os.Remove(p); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(p, []byte("concurrent render"), 0600); err != nil {
+			return nil, err
+		}
+		return os.Stat(p)
+	}
+	err := backend.Apply(context.Background(), home, r)
+	ownedStat = restore
+	if !errors.Is(err, ErrOwnedUnitCollision) {
+		t.Fatalf("concurrent displacement deleted: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "concurrent render" {
+		t.Fatal("foreign content destroyed by rollback")
+	}
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	if _, present, _ := readOwnedUnitJournal(root); !present {
+		t.Fatal("journal dropped while rollback could not finish")
+	}
+}

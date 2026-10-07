@@ -448,7 +448,9 @@ func (b Backend) rollbackOwnedUnitWrites(ctx context.Context, home, systemctl st
 			continue
 		}
 		if plan.absent[name] {
-			if err := os.Remove(path); err != nil {
+			// Bind the removal to the inode whose content this plan wrote,
+			// same as every other delete path.
+			if err := provenDelete(path, digest(plan.Writes[name])); err != nil {
 				failed = append(failed, name)
 			}
 			changed = true
