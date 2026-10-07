@@ -75,9 +75,7 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 		Initiator: initiator, Phase: control.PhaseDraining,
 		Deadline: c.now().Add(c.config.DrainTimeout),
 	}
-	if c.config.Catalog != nil {
-		transition.ConfigurationRevision = c.config.Catalog.Revision
-	}
+	transition.ConfigurationRevision = c.config.Catalog.Revision
 	state, err := c.startRequestedTransition(ctx, current.Version, options, transition)
 	if err != nil {
 		return current, err

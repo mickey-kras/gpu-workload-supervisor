@@ -39,11 +39,26 @@ func (n NativeModel) ComparisonModel() string {
 	return n.Model + ":latest"
 }
 
+// malformedOllamaModel rejects empty name segments so a configured string
+// cannot canonicalize to an identity the API would never report, such as
+// "foo/" becoming "foo/:latest".
+func malformedOllamaModel(model string) bool {
+	for _, segment := range strings.Split(model, "/") {
+		if segment == "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (n NativeModel) validate() error {
 	if n.Runtime != "ollama" && n.Runtime != "llama.cpp" && n.Runtime != "vllm" {
 		return errors.New("unsupported native runtime")
 	}
 	if !workloadID.MatchString(n.Instance) || strings.TrimSpace(n.Model) == "" || len(n.Model) > 1024 || strings.IndexFunc(n.Model, unicode.IsControl) >= 0 {
+		return errors.New("invalid native model identity")
+	}
+	if n.Runtime == "ollama" && malformedOllamaModel(n.Model) {
 		return errors.New("invalid native model identity")
 	}
 	u, err := url.Parse(n.Endpoint)
