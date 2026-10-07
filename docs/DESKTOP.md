@@ -68,8 +68,11 @@ menu. The packaged setup application is also available in the application list.
 6. Select **Verify binding and add for review**, then **Review configuration**.
    Switch to Idle and finish active jobs before confirming **Apply configuration**.
 
-Each model needs a distinct existing launch unit. Shared-unit model presets are
-not supported. Setup does not create or rewrite launch services. Model identity
+Each model needs a distinct existing launch unit. Shared-unit presets are not
+offered here; shared Ollama units are catalog-only (see
+[WORKLOADS.md](WORKLOADS.md)) and setup rejects catalogs that contain them —
+apply them with `gpu-mode configure` instead. Setup does not create or rewrite
+launch services. Model identity
 is checked again before GPU admission when switching workloads.
 
 Configured workloads can be renamed or edited. **Remove from supervisor** changes

@@ -94,6 +94,11 @@ func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) e
 	if err := m.verifyNativeBinding(ctx, p); err != nil {
 		return err
 	}
+	if m.sharedUnitProfile(p) {
+		if err := m.evictSharedOllamaUnit(ctx, p); err != nil {
+			return err
+		}
+	}
 	if err := m.startUnit(ctx, p.Unit, workload); err != nil {
 		return err
 	}
@@ -105,11 +110,16 @@ func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) e
 
 // StopForRecovery shuts down every configured unit regardless of adapter policy.
 func (m *SystemdManager) StopForRecovery(ctx context.Context) error {
-	for _, p := range m.unitGroups() {
-		if err := m.runSystemctl(ctx, "stop", p.unit); err != nil {
+	seen := map[string]bool{}
+	for _, p := range m.config.Catalog.Profiles {
+		if seen[p.Unit] {
+			continue
+		}
+		seen[p.Unit] = true
+		if err := m.runSystemctl(ctx, "stop", p.Unit); err != nil {
 			return err
 		}
-		if err := m.requireStopped(ctx, p.unit); err != nil {
+		if err := m.requireStopped(ctx, p.Unit); err != nil {
 			return err
 		}
 	}
@@ -181,8 +191,8 @@ func (m *SystemdManager) verifyManagerCgroup(ctx context.Context) error {
 	if err := validateCgroup(state.cgroup); err != nil {
 		return fmt.Errorf("systemd manager cgroup anchor: %w", err)
 	}
-	for _, p := range m.unitGroups() {
-		if !strings.HasPrefix(p.group, state.cgroup+"/") {
+	for _, p := range m.config.Catalog.Profiles {
+		if !strings.HasPrefix(p.Cgroup, state.cgroup+"/") {
 			return errors.New("configured cgroup is not within systemd manager root")
 		}
 	}

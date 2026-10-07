@@ -16,8 +16,13 @@ func (m *SystemdManager) Preflight(ctx context.Context) error {
 	if err := m.verifyManagerCgroup(ctx); err != nil {
 		return err
 	}
-	for _, workload := range m.unitGroups() {
-		if err := m.preflightWorkloadCgroup(ctx, workload.unit, workload.group); err != nil {
+	seen := map[string]bool{}
+	for _, p := range m.config.Catalog.Profiles {
+		if seen[p.Unit] {
+			continue
+		}
+		seen[p.Unit] = true
+		if err := m.preflightWorkloadCgroup(ctx, p.Unit, p.Cgroup); err != nil {
 			return err
 		}
 	}

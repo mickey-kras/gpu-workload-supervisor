@@ -93,12 +93,17 @@ Database conflicts or commit errors still require inspection and recovery.
 
 Test graceful and forced stopping with the real runtime, driver, and workers.
 Unit completion or HTTP success never replaces recursive cgroup release evidence.
+Profiles sharing one Ollama unit are the exception: the unit keeps running
+across model switches, so their release evidence is the daemon's loaded-model
+list, with cgroup emptiness required once the shared unit is dead.
 
 ## Verify workload release
 
 The `systemd` catalog adapter verifies both units are `inactive/dead` and their
 configured cgroup v2 subtrees have `cgroup.events` `populated 0`, which includes
-descendants.
+descendants. Running units shared by sibling Ollama profiles are verified at
+model level instead: any loaded model other than the sibling target's own fails
+release.
 A removed workload cgroup is also released; missing events in an existing group,
 unreadable or malformed evidence, mismatched systemd metadata, and surviving
 children fail closed. The UI is unavailable outside media mode.
@@ -123,7 +128,8 @@ Configure every profile's cgroup path from deployment knowledge of the actual
 systemd units
 (e.g. inspect `systemctl --user show --property=ControlGroup -- UNIT.service` while
 the unit is running). Paths are absolute **within** `/sys/fs/cgroup`, canonical,
-non-root, distinct, and non-overlapping. A nonempty systemd `ControlGroup` must
+non-root, distinct, and non-overlapping; only sibling profiles sharing one
+Ollama unit repeat the same unit and cgroup. A nonempty systemd `ControlGroup` must
 match; an empty property after shutdown uses the accepted catalog, never an
 in-memory PID or path cache. Accept an updated catalog if unit placement changes.
 Blank metadata alone is not evidence.
@@ -146,7 +152,8 @@ authorizes a service stop. `restore-state` requires no runtime policy.
 
 Remove `-release-max-used-mib` (including explicit `=0`; it is rejected) and
 configure cgroup paths in the catalog. Release uses cgroup evidence, never GPU
-memory accounting. See the [v0.1.5 operator notes](releases/v0.1.5.md) for the
+memory accounting (running shared Ollama units use the loaded-model list, as
+above). See the [v0.1.5 operator notes](releases/v0.1.5.md) for the
 full migration.
 
 ## Check capacity before startup

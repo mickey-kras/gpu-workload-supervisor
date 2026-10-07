@@ -10,13 +10,6 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
-func (m *SystemdManager) unitGroups() []struct{ unit, group string } {
-	var out []struct{ unit, group string }
-	for _, p := range m.config.Catalog.Profiles {
-		out = append(out, struct{ unit, group string }{p.Unit, p.Cgroup})
-	}
-	return out
-}
 func (m *SystemdManager) Observe(ctx context.Context) (Snapshot, error) {
 	s := Snapshot{Workloads: map[control.Workload]WorkloadObservation{}}
 	for _, p := range m.config.Catalog.Profiles {
@@ -27,7 +20,13 @@ func (m *SystemdManager) Observe(ctx context.Context) (Snapshot, error) {
 		if !(st.active == "active" && st.sub == "running") && !(st.active == "inactive" && st.sub == "dead") {
 			return Snapshot{}, fmt.Errorf("%s is neither running nor stopped", p.Unit)
 		}
-		s.Workloads[p.ID] = WorkloadObservation{Active: st.active == "active", Exclusive: p.Adapter != control.AdapterMediaUnload}
+		active := st.active == "active"
+		if m.sharedUnitProfile(p) {
+			if active, err = m.observeSharedOllama(ctx, p, active); err != nil {
+				return Snapshot{}, err
+			}
+		}
+		s.Workloads[p.ID] = WorkloadObservation{Active: active, Exclusive: p.Adapter != control.AdapterMediaUnload}
 	}
 	return s, nil
 }
@@ -37,8 +36,15 @@ func (m *SystemdManager) ReleasedFor(ctx context.Context, target control.Workloa
 			return errors.New("unconfigured release target")
 		}
 	}
+	loadedByUnit := map[string]map[string]bool{}
 	for _, p := range m.config.Catalog.Profiles {
 		if p.ID == target {
+			continue
+		}
+		if m.sharedUnitProfile(p) {
+			if err := m.releasedSharedOllama(ctx, p, target, loadedByUnit); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := m.releasedUnit(ctx, p.Unit, p.Cgroup, p.Adapter == control.AdapterMediaUnload); err != nil {
@@ -72,6 +78,9 @@ func (m *SystemdManager) Stop(ctx context.Context, id control.Workload) error {
 	p, ok := m.config.Catalog.Profile(id)
 	if !ok {
 		return errors.New("unconfigured workload")
+	}
+	if m.sharedUnitProfile(p) {
+		return m.stopSharedOllama(ctx, p)
 	}
 	if p.Adapter != control.AdapterMediaUnload {
 		return m.stopUnit(ctx, p.Unit)
