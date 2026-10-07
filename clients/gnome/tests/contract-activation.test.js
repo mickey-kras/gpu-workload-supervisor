@@ -65,10 +65,21 @@ test('activate-workload ok fails closed on a malformed lease fence', () => {
         activateOk((r) => (r.leaseFence.epoch = 7)), // numbers never pass
         activateOk((r) => (r.leaseFence.epoch = 'not-a-number')),
         activateOk((r) => (r.leaseFence.epoch = '')),
+        activateOk((r) => (r.leaseFence.epoch = '0')), // zero epoch
+        activateOk((r) => (r.leaseFence.epoch = '01')), // leading zero
+        activateOk((r) => (r.leaseFence.epoch = '18446744073709551616')), // max uint64 + 1
+        activateOk((r) => (r.leaseFence.epoch = '99999999999999999999')), // 20 digits over range
         activateOk((r) => (r.leaseFence.incarnation = '')),
         activateOk((r) => (r.leaseFence.incarnation = 'has space')),
     ]) {
         assert.throws(() => parseResponse(body, 'r1', 'activate-workload'));
+    }
+});
+
+test('lease fence epoch accepts canonical uint64 strings', () => {
+    for (const epoch of ['1', '7', '18446744073709551615']) {
+        const r = parseResponse(activateOk((r) => (r.leaseFence.epoch = epoch)), 'r1', 'activate-workload');
+        assert.equal(r.leaseFence.epoch, epoch);
     }
 });
 

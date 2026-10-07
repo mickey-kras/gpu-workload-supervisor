@@ -145,11 +145,17 @@ export const SETTINGS_ACTIONS = ['get-settings', 'set-idle-policy'];
 export const ACTIVATE_ACTION = 'activate-workload';
 
 // The committed fence handed to the activating caller: an opaque incarnation
-// token plus a decimal epoch string (never a number).
+// token plus a canonical nonzero uint64 epoch string (never a number), the
+// same shape the expected version uses.
 function validateLeaseFence(f) {
     keys(f, ['incarnation', 'epoch']);
     token(f.incarnation);
-    if (typeof f.epoch !== 'string' || !/^[0-9]{1,20}$/.test(f.epoch)) fail();
+    if (
+        typeof f.epoch !== 'string' ||
+        !/^[1-9][0-9]{0,19}$/.test(f.epoch) ||
+        compareVersions(f.epoch, '18446744073709551615') > 0
+    )
+        fail();
 }
 
 export function parseResponse(text, requestId, action) {

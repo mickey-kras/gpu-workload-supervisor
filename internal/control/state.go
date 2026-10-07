@@ -145,7 +145,9 @@ func (s State) validateFields() error {
 		return err
 	}
 	// An armed deadline is only meaningful on an open, stable, supervisor-owned
-	// workload; carrying it anywhere else is a bug, so fail closed.
+	// workload; carrying it anywhere else is a bug, so fail closed. Degraded
+	// health stays readable so the next tick can disarm it; arming and firing
+	// both require healthy.
 	if s.PendingIdleDeadline != nil && (s.Owner != OwnerSupervisor || s.Phase != PhaseStable || s.Health == HealthError || s.Admission != AdmissionOpen) {
 		return errors.New("pending idle deadline requires stable open supervisor ownership")
 	}

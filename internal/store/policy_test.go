@@ -705,3 +705,22 @@ func TestArmIdleDeadlineRevalidatesActivityAndPendingWork(t *testing.T) {
 		}
 	})
 }
+
+// A degraded workload can never fire its deadline, so arming must preempt
+// rather than advertise a permanently overdue deadline.
+func TestArmIdleDeadlineRejectsDegradedHealth(t *testing.T) {
+	s, _ := policyFixture(t)
+	ctx := context.Background()
+	fingerprint := enablePolicy(t, s)
+	state, _ := s.State(ctx)
+	state.Health = control.HealthDegraded
+	if _, err := s.UpdateState(ctx, state.Version, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ArmIdleDeadline(ctx, fingerprint, policyEpoch.Add(5*time.Minute), policyEpoch); !errors.Is(err, ErrPolicyPreempted) {
+		t.Fatalf("arm on degraded workload: %v", err)
+	}
+	if settings, _ := s.Settings(ctx); settings.ArmedDeadline != nil {
+		t.Fatal("degraded workload armed a deadline")
+	}
+}

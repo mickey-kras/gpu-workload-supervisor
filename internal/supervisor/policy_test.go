@@ -272,3 +272,48 @@ func TestPolicyTickFailsClosedOnFutureDatedAttestation(t *testing.T) {
 		t.Fatal("future attestation armed a deadline")
 	}
 }
+
+func TestPolicyTickDisarmsAndNoOpsWhileDegradedThenArmsWhenHealthy(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	ownershipState(t, s, control.OwnerSupervisor, control.WorkloadText)
+	enableIdlePolicy(t, s, 5)
+	c := testController(t, s, &fakeRuntime{active: control.WorkloadText})
+	// Arm once on the healthy workload, then degrade health.
+	if err := c.PolicyTick(ctx, freshEvidence()); err != nil {
+		t.Fatal(err)
+	}
+	if settings, _ := s.Settings(ctx); settings.ArmedDeadline == nil {
+		t.Fatal("healthy tick did not arm")
+	}
+	state, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Health = control.HealthDegraded
+	if _, err := s.UpdateState(ctx, state.Version, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.PolicyTick(ctx, freshEvidence()); err != nil {
+		t.Fatal(err)
+	}
+	settings, _ := s.Settings(ctx)
+	if settings.ArmedDeadline != nil {
+		t.Fatal("degraded tick kept the armed deadline")
+	}
+	state, _ = s.State(ctx)
+	if state.Phase != control.PhaseStable || state.ActiveWorkload != control.WorkloadText {
+		t.Fatalf("degraded tick moved the workload: %+v", state)
+	}
+	// Recovery to healthy arms normally again.
+	state.Health = control.HealthHealthy
+	if _, err := s.UpdateState(ctx, state.Version, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.PolicyTick(ctx, freshEvidence()); err != nil {
+		t.Fatal(err)
+	}
+	if settings, _ := s.Settings(ctx); settings.ArmedDeadline == nil {
+		t.Fatal("recovered workload did not arm")
+	}
+}

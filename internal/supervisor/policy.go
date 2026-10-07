@@ -50,7 +50,11 @@ func (c *Controller) PolicyTick(ctx context.Context, evidence EvidenceProvider) 
 	if err != nil {
 		return err
 	}
-	if state.Owner == control.OwnerUser || state.Phase != control.PhaseStable || state.Health == control.HealthError ||
+	// Only a healthy, stable, supervisor-owned, running workload is eligible;
+	// anything else (including degraded health, which the downstream idle
+	// guard also rejects) disarms and no-ops, so no permanently overdue
+	// deadline can be advertised or futilely fired.
+	if state.Owner == control.OwnerUser || state.Phase != control.PhaseStable || state.Health != control.HealthHealthy ||
 		state.ActiveWorkload == control.WorkloadIdle || state.ActiveWorkload == control.WorkloadUnknown {
 		return c.store.DisarmIdleDeadline(ctx)
 	}

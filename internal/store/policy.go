@@ -63,7 +63,9 @@ func (s *Store) ArmIdleDeadline(ctx context.Context, expectedSettingsRevision st
 		if err != nil {
 			return err
 		}
-		if state.Owner != control.OwnerSupervisor || state.Phase != control.PhaseStable || state.Health == control.HealthError || state.Admission != control.AdmissionOpen {
+		// Healthy-only, consistent with idleSource: arming a deadline on a
+		// degraded workload would advertise a deadline that can never fire.
+		if state.Owner != control.OwnerSupervisor || state.Phase != control.PhaseStable || state.Health != control.HealthHealthy || state.Admission != control.AdmissionOpen {
 			return ErrPolicyPreempted
 		}
 		// TOCTOU: an admission or completion may have committed after the
