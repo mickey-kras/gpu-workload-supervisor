@@ -16,6 +16,8 @@ const (
 	actionTakeControl   = "take-control"
 	actionUserSwitch    = "user-switch"
 	actionReturnControl = "return-control"
+	actionGetSettings   = "get-settings"
+	actionSetIdlePolicy = "set-idle-policy"
 )
 
 const MaxRequestBytes = 16 * 1024
@@ -48,10 +50,28 @@ type Request struct {
 	Action          string           `json:"action"`
 	Expected        *Expected        `json:"expected,omitempty"`
 	Target          control.Workload `json:"target,omitempty"`
+	Settings        *SettingsRequest `json:"settings,omitempty"`
 }
 type Workload struct {
 	ID    control.Workload `json:"id"`
 	Label string           `json:"label"`
+}
+
+// SettingsRequest carries the desired idle policy plus the opaque settings
+// revision copied from a fresh get-settings response.
+type SettingsRequest struct {
+	TimeoutMinutes   int    `json:"timeoutMinutes"`
+	SettingsRevision string `json:"settingsRevision"`
+}
+type IdlePolicyStatus struct {
+	TimeoutMinutes int `json:"timeoutMinutes"`
+}
+
+// SettingsResponse reports the committed idle policy and its current opaque
+// concurrency token.
+type SettingsResponse struct {
+	Policy           IdlePolicyStatus `json:"policy"`
+	SettingsRevision string           `json:"settingsRevision"`
 }
 type Capabilities struct {
 	TakeControl   bool `json:"takeControl"`
@@ -71,10 +91,11 @@ type Status struct {
 	Capabilities    Capabilities      `json:"capabilities"`
 }
 type Response struct {
-	ProtocolVersion int     `json:"protocolVersion"`
-	RequestID       string  `json:"requestId"`
-	Code            Code    `json:"code"`
-	Status          *Status `json:"status,omitempty"`
+	ProtocolVersion int               `json:"protocolVersion"`
+	RequestID       string            `json:"requestId"`
+	Code            Code              `json:"code"`
+	Status          *Status           `json:"status,omitempty"`
+	Settings        *SettingsResponse `json:"settings,omitempty"`
 }
 
 func token(s string, max int) bool {
@@ -119,19 +140,38 @@ func validateRequest(r Request) Code {
 	if !token(r.RequestID, 64) {
 		return InvalidRequest
 	}
-	if r.Action == actionStatus {
-		if r.Expected != nil || r.Target != "" {
+	if r.Action == actionStatus || r.Action == actionGetSettings {
+		if r.Expected != nil || r.Target != "" || r.Settings != nil {
 			return InvalidRequest
 		}
 		return OK
 	}
+	if r.Action == actionSetIdlePolicy {
+		if r.Target != "" {
+			return InvalidRequest
+		}
+		if code := validateSettings(r.Settings); code != OK {
+			return code
+		}
+		return validateExpected(r.Expected)
+	}
 	if r.Action != actionTakeControl && r.Action != actionUserSwitch && r.Action != actionReturnControl {
 		return InvalidRequest
 	}
-	if (r.Action == actionUserSwitch && !workloadID(string(r.Target))) || (r.Action != actionUserSwitch && r.Target != "") {
+	if r.Settings != nil || (r.Action == actionUserSwitch && !workloadID(string(r.Target))) || (r.Action != actionUserSwitch && r.Target != "") {
 		return InvalidRequest
 	}
 	return validateExpected(r.Expected)
+}
+
+func validateSettings(s *SettingsRequest) Code {
+	if s == nil || !token(s.SettingsRevision, 128) {
+		return InvalidRequest
+	}
+	if (control.IdlePolicy{TimeoutMinutes: s.TimeoutMinutes}).Validate() != nil {
+		return InvalidRequest
+	}
+	return OK
 }
 
 func validateExpected(e *Expected) Code {
@@ -162,7 +202,7 @@ func fields(body []byte, allowed ...string) (map[string]json.RawMessage, bool) {
 	return m, true
 }
 func requestFields(body []byte, action string) bool {
-	m, ok := fields(body, "protocolVersion", "requestId", "action", "expected", "target")
+	m, ok := fields(body, "protocolVersion", "requestId", "action", "expected", "target", "settings")
 	if !ok {
 		return false
 	}
@@ -171,10 +211,14 @@ func requestFields(body []byte, action string) bool {
 			return false
 		}
 	}
-	if action == actionStatus {
+	if action == actionStatus || action == actionGetSettings {
 		_, e := m["expected"]
 		_, t := m["target"]
-		return !e && !t
+		_, s := m["settings"]
+		return !e && !t && !s
+	}
+	if _, s := m["settings"]; s && action != actionSetIdlePolicy {
+		return false
 	}
 	if action != actionUserSwitch {
 		if _, ok := m["target"]; ok {
@@ -182,5 +226,20 @@ func requestFields(body []byte, action string) bool {
 		}
 	}
 	e, ok := fields(m["expected"], "incarnation", "version", "owner", "configurationRevision")
-	return ok && len(e) == 4
+	if !ok || len(e) != 4 {
+		return false
+	}
+	if action == actionSetIdlePolicy {
+		s, ok := fields(m["settings"], "timeoutMinutes", "settingsRevision")
+		if !ok || len(s) != 2 {
+			return false
+		}
+		// encoding/json decodes a raw null into int as 0; reject it here so a
+		// malformed timeout cannot silently read as an explicit Off.
+		if bytes.Equal(bytes.TrimSpace(s["timeoutMinutes"]), []byte("null")) {
+			return false
+		}
+		return !bytes.Equal(bytes.TrimSpace(s["settingsRevision"]), []byte("null"))
+	}
+	return true
 }

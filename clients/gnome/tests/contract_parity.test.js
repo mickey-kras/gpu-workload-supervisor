@@ -37,3 +37,34 @@ test('client error codes match the go operator codes', () => {
 test('client expected fields match the go Expected json tags', () => {
     assert.deepEqual([...clientFields].sort(), [...goFields].sort());
 });
+
+const goStructTags = (name) => {
+    const block = go.match(new RegExp(`type ${name} struct \\{([\\s\\S]*?)\\}`));
+    assert.ok(block, `go ${name} struct not found`);
+    return [...block[1].matchAll(/json:"([^",]+)[^"]*"/g)]
+        .map((m) => m[1])
+        .sort();
+};
+const clientKeyList = (call) => {
+    const block = client.match(new RegExp(`${call},\\s*\\[([\\s\\S]*?)\\]\\)`));
+    assert.ok(block, `client ${call} field list not found`);
+    return [...block[1].matchAll(/'([^']+)'/g)].map((m) => m[1]).sort();
+};
+
+test('client capabilities keys match the go Capabilities json tags', () => {
+    assert.deepEqual(
+        clientKeyList('keys\\(s\\.capabilities'),
+        goStructTags('Capabilities'),
+    );
+});
+
+test('client settings fields match the go SettingsResponse json tags', () => {
+    assert.deepEqual(
+        clientKeyList('keys\\(settings'),
+        goStructTags('SettingsResponse'),
+    );
+    assert.deepEqual(
+        clientKeyList('keys\\(p'),
+        goStructTags('IdlePolicyStatus'),
+    );
+});

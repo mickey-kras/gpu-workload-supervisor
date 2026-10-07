@@ -34,7 +34,8 @@ identifier, never an execution lease.
 ```
 
 The response contains `protocolVersion`, `requestId`, and `code`. A successful
-response additionally contains `status` with:
+response to `status` and the transition actions additionally contains `status`
+with:
 
 - `owner`, `desiredWorkload`, `activeWorkload`, `phase`, `health`, `admission`;
 - `observedAt` (UTC RFC3339);
@@ -60,6 +61,45 @@ requires User ownership and stops work before committing Supervisor ownership in
 Idle. The store checks incarnation, version, owner and configuration revision in
 the transition transaction before effects. A repeated request is never replayed.
 
+## Operator settings
+
+`get-settings` takes no `expected` and answers from durable state without
+observing the runtime. A successful response contains `settings` — and never
+`status`, because an unobserved durable snapshot is not a fresh observation:
+
+```json
+{"protocolVersion":1,"requestId":"r3","action":"get-settings"}
+```
+
+```json
+{"protocolVersion":1,"requestId":"r3","code":"ok","settings":{"policy":{"timeoutMinutes":0},"settingsRevision":"opaque"}}
+```
+
+`policy.timeoutMinutes` is 0 (Off) or 5–1440 minutes. `settingsRevision` is an
+opaque concurrency token rotated on every committed write.
+
+`set-idle-policy` carries the complete `expected` object from a fresh
+successful status plus a `settings` object whose `settingsRevision` is copied
+from a fresh successful **get-settings** (never from status, which does not
+carry it):
+
+```json
+{"protocolVersion":1,"requestId":"r4","action":"set-idle-policy","expected":{"incarnation":"opaque","version":"42","owner":"supervisor","configurationRevision":"opaque"},"settings":{"timeoutMinutes":60,"settingsRevision":"opaque"}}
+```
+
+The store revalidates incarnation, version, owner, configuration revision and
+settings revision inside the writer transaction; settings never interrupt an
+unstable state or a running transition. A committed write rotates the settings
+revision and clears any armed idle deadline in the same transaction. Enabling
+(`timeoutMinutes` nonzero) is rejected with `unavailable` while the hosting
+process has no qualified idle-evidence provider; a stale settings revision is
+`stale_state`, a running transition is `busy`, and an out-of-bounds timeout is
+`invalid_request`. The successful response contains the updated `settings`
+object only. Both settings actions use the status-class lifetime. A
+mixed-version peer that does not know these actions answers `invalid_request`
+with the strict error shape, which clients treat as the idle policy being
+unavailable.
+
 Status and mutations both use the same nonblocking controller gate. `busy` means
 no request was queued. Errors contain no status and use exactly:
 `invalid_request`, `unsupported_version`, `incompatible_configuration`,
@@ -73,8 +113,8 @@ Status defaults to 30 seconds, with a profile maximum of 60 seconds. Mutation
 execution defaults to 15 minutes, with a maximum of 30 minutes. Existing failure
 cleanup can add two minutes and durable finalization can add ten seconds.
 Response writing has a separate two-second limit and a 64 KiB cap. Clients should
-allow 75 seconds for status and 33 minutes for mutations, and age observations
-from monotonic dispatch time.
+allow 75 seconds for status and the settings actions and 33 minutes for
+mutations, and age observations from monotonic dispatch time.
 
 Before admission the process detaches its session and ignores SIGHUP and SIGPIPE;
 failure to detach returns `unavailable`. The operation context is independent of

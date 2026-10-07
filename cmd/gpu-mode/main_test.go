@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
@@ -333,5 +334,47 @@ func TestAuditFlagsRejectedOutsidePruneBeforeOpeningState(t *testing.T) {
 				t.Fatalf("state created: %v", err)
 			}
 		})
+	}
+}
+
+func TestCLIShowSettingsPrintsCommittedIdlePolicy(t *testing.T) {
+	previous, previousOutput := os.Args, os.Stdout
+	defer func() { os.Args, os.Stdout = previous, previousOutput }()
+	path := filepath.Join(t.TempDir(), "state.db")
+	os.Args = []string{"gpu-mode", "-state", path, "-target", "text", "show-settings"}
+	if err := run(); err == nil || !strings.Contains(err.Error(), "-target is not supported") {
+		t.Fatalf("target accepted for show-settings: %v", err)
+	}
+	output, err := os.CreateTemp(t.TempDir(), "output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	os.Stdout = output
+	os.Args = []string{"gpu-mode", "-state", path, "show-settings"}
+	if err := run(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := output.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Policy           control.IdlePolicy `json:"policy"`
+		SettingsRevision string             `json:"settingsRevision"`
+		LastActivityAt   *time.Time         `json:"lastActivityAt"`
+		ArmedDeadline    *time.Time         `json:"armedDeadline"`
+		AttestationAt    *time.Time         `json:"attestationAt"`
+	}
+	if err := json.NewDecoder(output).Decode(&result); err != nil {
+		t.Fatalf("show-settings output is not JSON: %v", err)
+	}
+	if result.Policy.TimeoutMinutes != 0 {
+		t.Fatalf("seeded policy = %#v, want Off", result.Policy)
+	}
+	if result.SettingsRevision == "" {
+		t.Fatal("settings revision is empty")
+	}
+	if result.LastActivityAt == nil || result.ArmedDeadline != nil || result.AttestationAt != nil {
+		t.Fatalf("seeded policy state = %+v", result)
 	}
 }

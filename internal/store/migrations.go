@@ -149,7 +149,21 @@ CREATE INDEX idx_registered_work_completed_at ON registered_work(completed_at) W
 CREATE INDEX idx_transition_work_request_id ON transition_work(request_id);
 `
 
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11}
+const schemaV12 = `
+CREATE TABLE operator_settings(
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    revision TEXT NOT NULL,
+    idle_timeout_minutes INTEGER NOT NULL CHECK(idle_timeout_minutes BETWEEN 0 AND 1440),
+    updated_at TEXT NOT NULL);
+CREATE TABLE idle_policy_state(
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    last_activity_at TEXT,
+    armed_deadline TEXT,
+    attestation_at TEXT,
+    updated_at TEXT NOT NULL);
+`
+
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12}
 
 func (s *Store) initialize(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -161,6 +175,9 @@ func (s *Store) initialize(ctx context.Context) error {
 		return err
 	}
 	if err := s.seedControlState(ctx, tx); err != nil {
+		return err
+	}
+	if err := s.seedOperatorSettings(ctx, tx); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -223,6 +240,45 @@ func (s *Store) seedControlState(ctx context.Context, tx *sql.Tx) error {
 	}
 	if count > 1 {
 		return fmt.Errorf("control_state contains %d rows", count)
+	}
+	return nil
+}
+
+// seedOperatorSettings seeds the v12 settings singletons on first open and on
+// upgrade: the idle policy starts Off with an opaque revision, and activity
+// starts at migration time so a fresh install never appears long-idle.
+func (s *Store) seedOperatorSettings(ctx context.Context, tx *sql.Tx) error {
+	var count int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM operator_settings").Scan(&count); err != nil {
+		return err
+	}
+	if count > 1 {
+		return fmt.Errorf("operator_settings contains %d rows", count)
+	}
+	now := formatTime(s.now())
+	if count == 0 {
+		revision, err := s.uuid()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO operator_settings
+			(singleton, revision, idle_timeout_minutes, updated_at)
+			VALUES (1, ?, 0, ?)`, revision, now); err != nil {
+			return err
+		}
+	}
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM idle_policy_state").Scan(&count); err != nil {
+		return err
+	}
+	if count > 1 {
+		return fmt.Errorf("idle_policy_state contains %d rows", count)
+	}
+	if count == 0 {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO idle_policy_state
+			(singleton, last_activity_at, armed_deadline, attestation_at, updated_at)
+			VALUES (1, ?, NULL, NULL, ?)`, now, now); err != nil {
+			return err
+		}
 	}
 	return nil
 }
