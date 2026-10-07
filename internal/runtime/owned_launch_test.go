@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
@@ -311,5 +312,58 @@ func TestQualifyOwnedUnitRejectsUnqualifiedHosts(t *testing.T) {
 	adopted.NativeModel.Owned = nil
 	if err := QualifyOwnedUnit(adopted); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestPreflightAccountsAdoptedOwnedUnitBinding covers owned→adopted
+// conversion: an exact binding (launch path + proven fingerprint) accounts for
+// the unit file, while a drifted fingerprint stays fail-closed.
+func TestPreflightAccountsAdoptedOwnedUnitBinding(t *testing.T) {
+	dir := t.TempDir()
+	name := "gws-owned-vision.service"
+	raw := []byte("[Unit]\nDescription=converted\n")
+	if err := os.WriteFile(filepath.Join(dir, name), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	adopted := control.WorkloadProfile{
+		ID:        "vision",
+		Label:     "Vision",
+		Adapter:   "systemd",
+		Unit:      name,
+		Cgroup:    "/workloads/" + name,
+		HealthURL: "http://127.0.0.1:9100/health",
+		NativeModel: &control.NativeModel{
+			Runtime:      "llama.cpp",
+			Instance:     "second",
+			Model:        "vision",
+			Endpoint:     "http://127.0.0.1:9100",
+			LaunchFile:   filepath.Join(dir, name),
+			LaunchSHA256: fmt.Sprintf("%x", sha256.Sum256(raw)),
+		},
+	}
+	manager := func() *SystemdManager {
+		catalog := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{adopted}}
+		config := testConfig()
+		config.Catalog = &catalog
+		m, err := newSystemdManager(config, stoppedRunner(), http.DefaultClient)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	if err := manager().preflightOwned(t.Context(), dir); err != nil {
+		t.Fatalf("exact adopted binding treated as orphan: %v", err)
+	}
+	m := manager()
+	m.config.Catalog.Profiles[0].NativeModel.LaunchSHA256 = strings.Repeat("0", 64)
+	if err := m.preflightOwned(t.Context(), dir); !errors.Is(err, ErrOrphanedOwnedUnit) {
+		t.Fatalf("drifted fingerprint accounted: %v", err)
+	}
+	// An unreferenced gws-owned file is still an orphan.
+	if err := os.WriteFile(filepath.Join(dir, "gws-owned-stray.service"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager().preflightOwned(t.Context(), dir); !errors.Is(err, ErrOrphanedOwnedUnit) {
+		t.Fatalf("stray unit accounted: %v", err)
 	}
 }

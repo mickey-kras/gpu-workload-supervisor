@@ -186,7 +186,7 @@ func TestCommitOwnedUnitJournalPinning(t *testing.T) {
 		t.Fatal(err)
 	}
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
-	plan := unitPlan{Writes: map[string][]byte{profile.Unit: raw}, proven: map[string]string{}}
+	plan := unitPlan{Writes: map[string][]byte{profile.Unit: raw}, proven: map[string]string{}, prior: map[string][]byte{}, absent: map[string]bool{}, written: map[string]bool{}}
 	if err := commitOwnedUnitJournal(root, plan); err == nil || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("missing journal pinned: %v", err)
 	}

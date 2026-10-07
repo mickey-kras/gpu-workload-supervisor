@@ -2,7 +2,9 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,18 +65,35 @@ func (m *SystemdManager) preflightOwned(_ context.Context, unitDir string) error
 		return err
 	}
 	managed := map[string]bool{}
+	// An owned profile converted to adopted keeps its launch file on disk; an
+	// exact binding (this path with a proven fingerprint) accounts for it,
+	// while a drifted fingerprint stays fail-closed.
+	adopted := map[string]string{}
 	if m.config.Catalog != nil {
 		for _, p := range m.config.Catalog.Profiles {
-			if p.NativeModel != nil && p.NativeModel.Owned != nil {
-				managed[p.Unit] = true
+			if p.NativeModel == nil {
+				continue
 			}
+			if p.NativeModel.Owned != nil {
+				managed[p.Unit] = true
+				continue
+			}
+			adopted[p.NativeModel.LaunchFile] = p.NativeModel.LaunchSHA256
 		}
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if strings.HasPrefix(name, "gws-owned-") && strings.HasSuffix(name, ".service") && !managed[name] {
-			return ErrOrphanedOwnedUnit
+		if !strings.HasPrefix(name, "gws-owned-") || !strings.HasSuffix(name, ".service") || managed[name] {
+			continue
 		}
+		path := filepath.Join(unitDir, name)
+		if sha, ok := adopted[path]; ok {
+			data, err := os.ReadFile(path)
+			if err == nil && fmt.Sprintf("%x", sha256.Sum256(data)) == sha {
+				continue
+			}
+		}
+		return ErrOrphanedOwnedUnit
 	}
 	return nil
 }

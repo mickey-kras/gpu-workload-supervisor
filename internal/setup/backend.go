@@ -190,11 +190,14 @@ func (b Backend) Apply(ctx context.Context, home string, request Request) error 
 		if err := writeOwnedUnitJournal(work.root, journal); err != nil {
 			return err
 		}
+		// From the first unit write onward the installation is mutated: any
+		// failure, including a partial write loop or a failed reload, must roll
+		// back with the content snapshots.
 		if err := b.applyOwnedUnitWrites(ctx, home, plan, journal); err != nil {
-			return err
+			return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
 		}
 		if err := b.daemonReloadOwnedUnits(ctx, request.Profile.SystemctlPath, plan.writeNames()); err != nil {
-			return err
+			return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
 		}
 	}
 	// Any pre-commit failure must leave the committed installation untouched:

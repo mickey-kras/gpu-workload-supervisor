@@ -56,7 +56,7 @@ func TestRollbackRefusesForeignModifiedUnit(t *testing.T) {
 	backend, home, r := fixture(t)
 	backend.runCommand = fakeOwnedCommand
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
-	plan := unitPlan{Writes: map[string][]byte{profile.Unit: raw}, proven: map[string]string{}, prior: map[string][]byte{}, absent: map[string]bool{profile.Unit: true}}
+	plan := unitPlan{Writes: map[string][]byte{profile.Unit: raw}, proven: map[string]string{}, written: map[string]bool{}, prior: map[string][]byte{}, absent: map[string]bool{profile.Unit: true}}
 	dir := ownedUnitDirectory(home)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
@@ -310,7 +310,7 @@ func TestRollbackRestoresOverwrittenUnit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, profile.Unit), []byte("old render"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	plan := unitPlan{Writes: map[string][]byte{profile.Unit: raw}, proven: map[string]string{profile.Unit: digest([]byte("old render"))}, prior: map[string][]byte{}, absent: map[string]bool{}}
+	plan := unitPlan{Writes: map[string][]byte{profile.Unit: raw}, proven: map[string]string{profile.Unit: digest([]byte("old render"))}, prior: map[string][]byte{}, absent: map[string]bool{}, written: map[string]bool{}}
 	if err := backend.applyOwnedUnitWrites(context.Background(), home, plan, newOwnedUnitJournal(plan)); err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +369,7 @@ func TestRollbackReportsReloadFailure(t *testing.T) {
 	backend, home, r := fixture(t)
 	backend.runCommand = func(context.Context, string, ...string) ([]byte, error) { return nil, errors.New("reload failed") }
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
-	plan := unitPlan{Writes: map[string][]byte{profile.Unit: raw}, proven: map[string]string{}, prior: map[string][]byte{}, absent: map[string]bool{profile.Unit: true}}
+	plan := unitPlan{Writes: map[string][]byte{profile.Unit: raw}, proven: map[string]string{}, written: map[string]bool{}, prior: map[string][]byte{}, absent: map[string]bool{profile.Unit: true}}
 	dir := ownedUnitDirectory(home)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
@@ -409,7 +409,7 @@ func TestRollbackLeavesUnchangedUnitByteIdentical(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, vision.Unit), visionRaw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	plan := unitPlan{Writes: map[string][]byte{vision.Unit: visionRaw, code.Unit: codeRaw}, proven: map[string]string{}, prior: map[string][]byte{}, absent: map[string]bool{}}
+	plan := unitPlan{Writes: map[string][]byte{vision.Unit: visionRaw, code.Unit: codeRaw}, proven: map[string]string{}, written: map[string]bool{}, prior: map[string][]byte{}, absent: map[string]bool{}}
 	if err := backend.applyOwnedUnitWrites(ctx, home, plan, newOwnedUnitJournal(plan)); err != nil {
 		t.Fatal(err)
 	}
@@ -596,5 +596,202 @@ func TestPlanPreviewFailsOnUnrenderableOwnedProfile(t *testing.T) {
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
 	if _, err := backend.Plan(home, r); err == nil {
 		t.Fatal("unrenderable owned profile previewed")
+	}
+}
+
+// failReloadCommand answers everything except daemon-reload, which fails.
+func failReloadCommand(_ context.Context, _ string, args ...string) ([]byte, error) {
+	for _, arg := range args {
+		if arg == "--property=NeedDaemonReload" {
+			return []byte("NeedDaemonReload=no\n"), nil
+		}
+		if arg == "daemon-reload" {
+			return nil, errors.New("reload failed")
+		}
+	}
+	return []byte("ok\n"), nil
+}
+
+// TestApplyRollsBackWhenReloadFails covers the post-write reload failure: the
+// freshly written unit is removed and the pending journal dropped.
+func TestApplyRollsBackWhenReloadFails(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = failReloadCommand
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	if err := backend.Apply(context.Background(), home, r); err == nil {
+		t.Fatal("failed reload applied")
+	}
+	if _, err := os.Lstat(filepath.Join(ownedUnitDirectory(home), profile.Unit)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("unit left behind after failed reload")
+	}
+	if _, present, _ := readOwnedUnitJournal(filepath.Join(home, ".config/gpu-workload-supervisor")); present {
+		t.Fatal("journal left behind after failed reload")
+	}
+}
+
+// TestApplyRollsBackPartialWriteOnCollision covers a mid-loop collision: the
+// unit written before the collision is restored to the committed render, and
+// the foreign file is untouched.
+func TestApplyRollsBackPartialWriteOnCollision(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	ctx := context.Background()
+	code, codeRaw := ownedFixtureProfile(t, home, "code", 9102)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{code}}
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	// Update code and add vision (separate instance); plant foreign content at
+	// vision's path so the write loop fails after rewriting code.
+	updated, _ := ownedFixtureProfile(t, home, "code", 9103)
+	draft := ownedDraft("vision", 9100)
+	draft.Binding.Instance = "second"
+	vision, _, err := OwnedProfile(draft, "/user.slice/user-1000.slice/user@1000.service", home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := ownedUnitDirectory(home)
+	if err := os.WriteFile(filepath.Join(dir, vision.Unit), []byte("foreign"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{updated, vision}}
+	r.ExpectedRevision = currentRevision(t, r)
+	if err := backend.Apply(ctx, home, r); !errors.Is(err, ErrOwnedUnitCollision) {
+		t.Fatalf("collision not surfaced: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, code.Unit))
+	if err != nil || string(data) != string(codeRaw) {
+		t.Fatalf("committed unit not restored after partial write: %v", err)
+	}
+	data, _ = os.ReadFile(filepath.Join(dir, vision.Unit))
+	if string(data) != "foreign" {
+		t.Fatal("foreign content destroyed")
+	}
+	if _, present, _ := readOwnedUnitJournal(filepath.Join(home, ".config/gpu-workload-supervisor")); present {
+		t.Fatal("journal left behind after collision rollback")
+	}
+}
+
+// TestResumeRecoversPendingWritesWithoutFence reproduces the crash between a
+// unit write and maintenance entry: the journaled write is removed before the
+// journal is retired, so the unit cannot become a permanent orphan.
+func TestResumeRecoversPendingWritesWithoutFence(t *testing.T) {
+	backend, home, r := fixture(t)
+	var verified []string
+	backend.runCommand = recordingOwnedCommand(&verified)
+	ctx := context.Background()
+	stale, staleRaw := ownedFixtureProfile(t, home, "stale", 9300)
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stale.Unit), staleRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	journal := unitJournal{Version: 1, Writes: map[string]string{stale.Unit: digest(staleRaw)}, Deletes: map[string]string{}, Phase: ownedJournalPending}
+	if err := writeOwnedUnitJournal(root, journal); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.resumeOwnedUnitJournal(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, stale.Unit)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("uncommitted write not recovered")
+	}
+	if _, present, _ := readOwnedUnitJournal(root); present {
+		t.Fatal("journal not retired")
+	}
+	if len(verified) != 1 || verified[0] != stale.Unit {
+		t.Fatalf("recovery skipped reload: %v", verified)
+	}
+}
+
+// TestResumeRestoresOverwrittenPendingWrite covers the update variant of the
+// same crash window: the committed render is restored from the accepted
+// catalog, not deleted.
+func TestResumeRestoresOverwrittenPendingWrite(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	ctx := context.Background()
+	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	updated, updatedRaw := ownedFixtureProfile(t, home, "vision", 9101)
+	dir := ownedUnitDirectory(home)
+	if err := os.WriteFile(filepath.Join(dir, profile.Unit), updatedRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	journal := unitJournal{Version: 1, Writes: map[string]string{profile.Unit: digest(updatedRaw)}, Deletes: map[string]string{}, Phase: ownedJournalPending}
+	if err := writeOwnedUnitJournal(root, journal); err != nil {
+		t.Fatal(err)
+	}
+	r.ExpectedRevision = currentRevision(t, r)
+	if err := backend.resumeOwnedUnitJournal(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, profile.Unit))
+	if string(data) != string(raw) {
+		t.Fatal("committed render not restored")
+	}
+	_ = updated
+}
+
+// TestResumeRefusesTamperedPendingWrite never recovers over foreign content.
+func TestResumeRefusesTamperedPendingWrite(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	stale, _ := ownedFixtureProfile(t, home, "stale", 9300)
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stale.Unit), []byte("foreign"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	journal := unitJournal{Version: 1, Writes: map[string]string{stale.Unit: digest([]byte("journaled render"))}, Deletes: map[string]string{}, Phase: ownedJournalPending}
+	if err := writeOwnedUnitJournal(root, journal); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.resumeOwnedUnitJournal(context.Background(), home, r); !errors.Is(err, ErrOwnedUnitModified) {
+		t.Fatalf("tampered write recovered over: %v", err)
+	}
+	if _, present, _ := readOwnedUnitJournal(root); !present {
+		t.Fatal("journal consumed despite tamper")
+	}
+}
+
+// TestPlanPreviewKeepsStateDatabaseReadOnly proves the preview never writes to
+// the state database: a read-only database file still previews fine.
+func TestPlanPreviewKeepsStateDatabaseReadOnly(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	ctx := context.Background()
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(r.Profile.StatePath, 0400); err != nil {
+		t.Fatal(err)
+	}
+	r.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health"}}}
+	preview, err := backend.Plan(home, r)
+	if err != nil {
+		t.Fatalf("preview wrote to a read-only database: %v", err)
+	}
+	if !changesContain(preview.Changes, "Remove supervisor-owned unit "+profile.Unit) {
+		t.Fatalf("removal missing: %v", preview.Changes)
 	}
 }

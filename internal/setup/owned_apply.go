@@ -8,12 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
 // abortOwnedUnitWrites rolls back pre-commit unit writes and drops the pending
@@ -74,12 +74,7 @@ func (b Backend) plannedOwnedUnitRemovals(home string, request Request) ([]strin
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	stateStore, err := store.Open(ctx, request.Profile.StatePath)
-	if err != nil {
-		return nil, err
-	}
-	defer stateStore.Close()
-	snapshot, err := stateStore.Catalog(ctx)
+	snapshot, err := ReadCatalog(ctx, request.Profile.StatePath)
 	if err != nil {
 		return nil, err
 	}
@@ -195,8 +190,10 @@ func (b Backend) resumeOwnedUnitJournal(ctx context.Context, home string, req Re
 	if journal.Phase == ownedJournalPending {
 		if !marker.Maintenance {
 			// The journal is pinned to committed before the fence clears, so
-			// writes-pending without a fence genuinely means no commit.
-			return clearOwnedUnitJournal(root)
+			// writes-pending without a fence genuinely means no commit: recover
+			// the journaled writes before retiring the journal, or the
+			// uncommitted units would be orphaned forever.
+			return b.retirePendingJournal(ctx, home, root, req, journal)
 		}
 		committed, err := catalogMatchesRequest(ctx, req)
 		if err != nil {
@@ -260,16 +257,75 @@ func (b Backend) resumeOwnedUnitJournal(ctx context.Context, home string, req Re
 // the request's, which proves the previous activation committed before it
 // crashed.
 func catalogMatchesRequest(ctx context.Context, req Request) (bool, error) {
-	stateStore, err := store.Open(ctx, req.Profile.StatePath)
-	if err != nil {
-		return false, err
+	snapshot, err := ReadCatalog(ctx, req.Profile.StatePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
 	}
-	defer stateStore.Close()
-	snapshot, err := stateStore.Catalog(ctx)
 	if err != nil {
 		return false, err
 	}
 	return reflect.DeepEqual(snapshot.Catalog, req.Catalog), nil
+}
+
+// retirePendingJournal recovers a no-fence pending journal: the catalog was
+// never committed, so each journaled write is uncommitted content. Units the
+// accepted catalog still owns are restored to the accepted rendering; units it
+// never owned are removed. Foreign content is never destroyed.
+func (b Backend) retirePendingJournal(ctx context.Context, home, root string, req Request, journal unitJournal) error {
+	snapshot, err := ReadCatalog(ctx, req.Profile.StatePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	dir := ownedUnitDirectory(home)
+	names := make([]string, 0, len(journal.Writes))
+	for name := range journal.Writes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var reloaded []string
+	for _, name := range names {
+		path := filepath.Join(dir, name)
+		current, err := privateRead(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		accepted, ok := ownedProfileForUnit(snapshot.Catalog, name)
+		if ok {
+			raw, err := ownedRenderChecked(accepted)
+			if err != nil {
+				return err
+			}
+			if digest(current) == digest(raw) {
+				continue
+			}
+			if digest(current) != journal.Writes[name] {
+				return fmt.Errorf("%w: %s", ErrOwnedUnitModified, name)
+			}
+			if err := deployment.AtomicWrite(path, raw); err != nil {
+				return err
+			}
+		} else {
+			if digest(current) != journal.Writes[name] {
+				return fmt.Errorf("%w: %s", ErrOwnedUnitModified, name)
+			}
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+		}
+		reloaded = append(reloaded, name)
+	}
+	if len(reloaded) > 0 {
+		if err := syncDir(dir); err != nil {
+			return err
+		}
+		if err := b.daemonReloadOwnedUnits(ctx, req.Profile.SystemctlPath, reloaded); err != nil {
+			return err
+		}
+	}
+	return clearOwnedUnitJournal(root)
 }
 
 func ownedProfileForUnit(c control.Catalog, unit string) (control.WorkloadProfile, bool) {

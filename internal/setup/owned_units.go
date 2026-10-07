@@ -39,9 +39,11 @@ type unitPlan struct {
 	// overwrite may touch, so only content the supervisor rendered is replaced.
 	proven map[string]string
 	// prior/absent snapshot the pre-write state so a failed pre-commit check
-	// can restore the committed installation exactly.
-	prior  map[string][]byte
-	absent map[string]bool
+	// can restore the committed installation exactly. written marks the units
+	// AtomicWrite actually replaced; rollback touches only those.
+	prior   map[string][]byte
+	absent  map[string]bool
+	written map[string]bool
 }
 
 func (p unitPlan) empty() bool {
@@ -86,7 +88,7 @@ func ownedUnitDirectory(home string) string {
 // profile's deterministic render is retained and the apply fails before any
 // commit, so file and catalog profile both survive.
 func (b Backend) planOwnedUnits(req Request, accepted control.CatalogSnapshot, home string) (unitPlan, error) {
-	plan := unitPlan{Writes: map[string][]byte{}, proven: map[string]string{}, prior: map[string][]byte{}, absent: map[string]bool{}}
+	plan := unitPlan{Writes: map[string][]byte{}, proven: map[string]string{}, prior: map[string][]byte{}, absent: map[string]bool{}, written: map[string]bool{}}
 	for _, p := range accepted.Catalog.Profiles {
 		if p.NativeModel == nil || p.NativeModel.Owned == nil {
 			continue
@@ -271,6 +273,7 @@ func (b Backend) applyOwnedUnitWrites(ctx context.Context, home string, plan uni
 		if err := deployment.AtomicWrite(path, raw); err != nil {
 			return err
 		}
+		plan.written[name] = true
 	}
 	return nil
 }
@@ -283,6 +286,10 @@ func (b Backend) rollbackOwnedUnitWrites(ctx context.Context, home, systemctl st
 	dir := ownedUnitDirectory(home)
 	var failed []string
 	for _, name := range plan.writeNames() {
+		if !plan.written[name] {
+			// Never written (idempotent skip or unreached): leave untouched.
+			continue
+		}
 		path := filepath.Join(dir, name)
 		current, err := privateRead(path)
 		switch {
