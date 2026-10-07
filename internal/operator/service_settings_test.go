@@ -1,0 +1,261 @@
+package operator
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+)
+
+type policyStoreFixture struct {
+	state    control.State
+	settings control.PolicyState
+	err      error
+	setCalls int
+}
+
+func (p *policyStoreFixture) State(context.Context) (control.State, error) {
+	return p.state, p.err
+}
+func (p *policyStoreFixture) Settings(context.Context) (control.PolicyState, error) {
+	return p.settings, p.err
+}
+func (p *policyStoreFixture) SetIdlePolicy(_ context.Context, e control.SettingsPrecondition, policy control.IdlePolicy) (control.PolicyState, error) {
+	if p.err != nil {
+		return p.settings, p.err
+	}
+	p.setCalls++
+	p.settings.Policy = policy
+	p.settings.SettingsRevision = "rotated"
+	return p.settings, nil
+}
+
+func stableFixtureState() control.State {
+	state := control.InitialState("inc", time.Now())
+	state.Phase = control.PhaseStable
+	state.ActiveWorkload = control.WorkloadIdle
+	return state
+}
+
+func settingsService(t *testing.T, b Backend, p PolicyStore, configurable bool) Service {
+	t.Helper()
+	return Service{StatePath: filepath.Join(t.TempDir(), "state.db"), Open: func(context.Context) (Session, error) {
+		return Session{Backend: b, Revision: "rev", Workloads: []Workload{{"idle", "Idle"}}, Close: func() error { return nil }, PolicyStore: p, IdlePolicyConfigurable: configurable}, nil
+	}}
+}
+
+func TestGetSettingsReturnsCommittedPolicyAndRevision(t *testing.T) {
+	b := &backendFixture{state: stableFixtureState()}
+	p := &policyStoreFixture{state: stableFixtureState(), settings: control.PolicyState{Policy: control.IdlePolicy{TimeoutMinutes: 30}, SettingsRevision: "s-rev"}}
+	s := settingsService(t, b, p, false)
+	r := s.Handle(Request{ProtocolVersion: 1, RequestID: "r", Action: "get-settings"})
+	if r.Code != OK || r.Status == nil || r.Settings == nil {
+		t.Fatalf("response %+v", r)
+	}
+	if r.Settings.Policy.TimeoutMinutes != 30 || r.Settings.SettingsRevision != "s-rev" {
+		t.Fatalf("settings %+v", r.Settings)
+	}
+	if b.called {
+		t.Fatal("get-settings touched the controller backend")
+	}
+	if r.Status.Capabilities.IdlePolicyConfigurable {
+		t.Fatal("idle policy advertised as configurable without an evidence provider")
+	}
+	if r.Status.IdlePolicy.TimeoutMinutes != 0 {
+		t.Fatalf("status idle policy = %+v, want store read model", r.Status.IdlePolicy)
+	}
+}
+
+func TestStatusCarriesIdlePolicyAndOmitsSettings(t *testing.T) {
+	state := stableFixtureState()
+	state.IdlePolicy = control.IdlePolicy{TimeoutMinutes: 45}
+	b := &backendFixture{state: state}
+	p := &policyStoreFixture{state: state, settings: control.PolicyState{SettingsRevision: "s-rev"}}
+	s := settingsService(t, b, p, true)
+	r := s.Handle(Request{ProtocolVersion: 1, RequestID: "r", Action: "status"})
+	if r.Code != OK || r.Settings != nil {
+		t.Fatalf("response %+v", r)
+	}
+	if r.Status.IdlePolicy.TimeoutMinutes != 45 {
+		t.Fatalf("status idle policy = %+v", r.Status.IdlePolicy)
+	}
+	if !r.Status.Capabilities.IdlePolicyConfigurable {
+		t.Fatal("configurable host did not advertise idlePolicyConfigurable")
+	}
+}
+
+func setIdleRequest(state control.State, timeout int) Request {
+	return Request{ProtocolVersion: 1, RequestID: "r", Action: "set-idle-policy",
+		Expected: &Expected{state.LeaseFence.Incarnation, strconv.FormatUint(state.Version, 10), state.Owner, "rev"},
+		Settings: &SettingsRequest{TimeoutMinutes: timeout, SettingsRevision: "s-rev"}}
+}
+
+func TestSetIdlePolicyEnableRejectedWithoutEvidenceProvider(t *testing.T) {
+	b := &backendFixture{state: stableFixtureState()}
+	p := &policyStoreFixture{state: stableFixtureState(), settings: control.PolicyState{SettingsRevision: "s-rev"}}
+	s := settingsService(t, b, p, false)
+	r := s.Handle(setIdleRequest(p.state, 60))
+	if r.Code != Unavailable || r.Status != nil || r.Settings != nil {
+		t.Fatalf("response %+v", r)
+	}
+	if p.setCalls != 0 {
+		t.Fatal("enable reached the store without an evidence provider")
+	}
+}
+
+func TestSetIdlePolicyOffAlwaysAllowedAndRotatesRevision(t *testing.T) {
+	b := &backendFixture{state: stableFixtureState()}
+	p := &policyStoreFixture{state: stableFixtureState(), settings: control.PolicyState{SettingsRevision: "s-rev"}}
+	s := settingsService(t, b, p, false)
+	r := s.Handle(setIdleRequest(p.state, 0))
+	if r.Code != OK || r.Settings == nil {
+		t.Fatalf("response %+v", r)
+	}
+	if r.Settings.SettingsRevision != "rotated" || r.Settings.Policy.TimeoutMinutes != 0 {
+		t.Fatalf("settings %+v", r.Settings)
+	}
+	if p.setCalls != 1 || b.called {
+		t.Fatal("set-idle-policy touched the controller backend")
+	}
+}
+
+func TestSetIdlePolicyEnableCommitsWhenConfigurable(t *testing.T) {
+	b := &backendFixture{state: stableFixtureState()}
+	p := &policyStoreFixture{state: stableFixtureState(), settings: control.PolicyState{SettingsRevision: "s-rev"}}
+	s := settingsService(t, b, p, true)
+	r := s.Handle(setIdleRequest(p.state, 120))
+	if r.Code != OK || r.Settings == nil || r.Settings.Policy.TimeoutMinutes != 120 {
+		t.Fatalf("response %+v", r)
+	}
+}
+
+func TestSetIdlePolicyMapsTypedStoreErrors(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		code Code
+	}{
+		{store.ErrSettingsConflict, StaleState},
+		{store.ErrInvalidIdleTimeout, InvalidRequest},
+		{store.ErrWrongOwner, WrongOwner},
+		{store.ErrUnstableState, RecoveryRequired},
+		{store.ErrTransitionRunning, Busy},
+		{store.ErrConfigurationConflict, StaleState},
+		{errors.New("disk gone"), Unavailable},
+	} {
+		b := &backendFixture{state: stableFixtureState()}
+		p := &policyStoreFixture{state: stableFixtureState(), err: tc.err, settings: control.PolicyState{SettingsRevision: "s-rev"}}
+		s := settingsService(t, b, p, true)
+		if r := s.Handle(setIdleRequest(p.state, 60)); r.Code != tc.code || r.Status != nil {
+			t.Fatalf("%v -> %+v, want %s", tc.err, r, tc.code)
+		}
+	}
+}
+
+func TestSetIdlePolicyRejectsStaleCatalogRevisionBeforeStore(t *testing.T) {
+	b := &backendFixture{state: stableFixtureState()}
+	p := &policyStoreFixture{state: stableFixtureState(), settings: control.PolicyState{SettingsRevision: "s-rev"}}
+	s := settingsService(t, b, p, true)
+	req := setIdleRequest(p.state, 60)
+	req.Expected.ConfigurationRevision = "old"
+	if r := s.Handle(req); r.Code != StaleState || p.setCalls != 0 {
+		t.Fatalf("response %+v calls=%d", r, p.setCalls)
+	}
+}
+
+func TestSettingsActionsUseStatusBudget(t *testing.T) {
+	s := Service{StatusTimeout: 31 * time.Second}
+	for _, action := range []string{"status", "get-settings", "set-idle-policy"} {
+		budget, ok := s.requestBudget(action)
+		if !ok || budget != 31*time.Second {
+			t.Fatalf("%s budget=%v ok=%v", action, budget, ok)
+		}
+	}
+}
+
+func TestSettingsActionsFailClosedWithoutPolicyStore(t *testing.T) {
+	b := &backendFixture{state: stableFixtureState()}
+	s := settingsService(t, b, nil, false)
+	if r := s.Handle(Request{ProtocolVersion: 1, RequestID: "r", Action: "get-settings"}); r.Code != Unavailable || r.Status != nil {
+		t.Fatalf("get-settings %+v", r)
+	}
+	if r := s.Handle(setIdleRequest(stableFixtureState(), 0)); r.Code != Unavailable || r.Status != nil {
+		t.Fatalf("set-idle-policy %+v", r)
+	}
+}
+
+// TestSettingsSurfaceAgainstRealStore drives the full service path over a real
+// SQLite store: seeded Off, enable gated without an evidence provider, and a
+// committed write rotating the opaque settings revision.
+func TestSettingsSurfaceAgainstRealStore(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.db")
+	db, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	snap, err := db.ReplaceCatalog(ctx, "", control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "third", Label: "Third", Adapter: "systemd", Unit: "third.service", Cgroup: "/user/third", HealthURL: "http://localhost:9999"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := db.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Phase = control.PhaseStable
+	state.ActiveWorkload = control.WorkloadIdle
+	state, err = db.UpdateState(ctx, state.Version, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &backendFixture{state: state}
+	svc := Service{StatePath: path, Open: func(context.Context) (Session, error) {
+		return Session{Backend: b, Revision: snap.Revision, Workloads: []Workload{{"idle", "Idle"}, {"third", "Third"}}, PolicyStore: db, IdlePolicyConfigurable: false}, nil
+	}}
+
+	r := svc.Handle(Request{ProtocolVersion: 1, RequestID: "g1", Action: "get-settings"})
+	if r.Code != OK || r.Settings == nil {
+		t.Fatalf("get-settings %+v", r)
+	}
+	if r.Settings.Policy.TimeoutMinutes != 0 || r.Settings.SettingsRevision == "" {
+		t.Fatalf("seeded settings %+v", r.Settings)
+	}
+
+	expected := &Expected{state.LeaseFence.Incarnation, strconv.FormatUint(state.Version, 10), state.Owner, snap.Revision}
+	r = svc.Handle(Request{ProtocolVersion: 1, RequestID: "s1", Action: "set-idle-policy", Expected: expected,
+		Settings: &SettingsRequest{TimeoutMinutes: 60, SettingsRevision: r.Settings.SettingsRevision}})
+	if r.Code != Unavailable {
+		t.Fatalf("enable without evidence provider = %s", r.Code)
+	}
+
+	r = svc.Handle(Request{ProtocolVersion: 1, RequestID: "s2", Action: "set-idle-policy", Expected: expected,
+		Settings: &SettingsRequest{TimeoutMinutes: 0, SettingsRevision: "stale-revision"}})
+	if r.Code != StaleState {
+		t.Fatalf("stale settings revision = %s", r.Code)
+	}
+
+	fresh := svc.Handle(Request{ProtocolVersion: 1, RequestID: "g2", Action: "get-settings"})
+	if fresh.Code != OK {
+		t.Fatalf("get-settings %+v", fresh)
+	}
+	r = svc.Handle(Request{ProtocolVersion: 1, RequestID: "s3", Action: "set-idle-policy", Expected: expected,
+		Settings: &SettingsRequest{TimeoutMinutes: 0, SettingsRevision: fresh.Settings.SettingsRevision}})
+	if r.Code != OK || r.Settings == nil || r.Settings.Policy.TimeoutMinutes != 0 {
+		t.Fatalf("committed off write %+v", r)
+	}
+	if r.Settings.SettingsRevision == fresh.Settings.SettingsRevision {
+		t.Fatal("off write did not rotate the settings revision")
+	}
+	after, err := db.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Version != state.Version || after.IdlePolicy.TimeoutMinutes != 0 {
+		t.Fatalf("settings write moved control state: %+v", after)
+	}
+}

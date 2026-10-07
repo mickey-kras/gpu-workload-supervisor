@@ -48,5 +48,5 @@ func openNativeSession(ctx context.Context, p Profile) (Session, error) {
 	for _, p := range snap.Catalog.Profiles {
 		ws = append(ws, Workload{p.ID, p.Label})
 	}
-	return Session{Backend: controller, Revision: snap.Revision, Workloads: ws, Close: s.Close}, nil
+	return Session{Backend: controller, Revision: snap.Revision, Workloads: ws, Close: s.Close, PolicyStore: s, IdlePolicyConfigurable: false}, nil
 }

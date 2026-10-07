@@ -140,7 +140,7 @@ func validateRestoredDatabase(ctx context.Context, db *sql.DB) error {
 	if migrations == 0 {
 		return errors.New("restored state database is not initialized")
 	}
-	if _, err := readState(ctx, db); err != nil {
+	if _, err := readControlState(ctx, db); err != nil {
 		return fmt.Errorf("restored control state is invalid: %w", err)
 	}
 	return nil
@@ -304,6 +304,22 @@ type querier interface {
 }
 
 func readState(ctx context.Context, q querier) (control.State, error) {
+	state, err := readControlState(ctx, q)
+	if err != nil {
+		return state, err
+	}
+	policy, err := readPolicyState(ctx, q)
+	if err != nil {
+		return control.State{}, err
+	}
+	state.IdlePolicy = policy.Policy
+	return state, state.Validate()
+}
+
+// readControlState reads only the control_state singleton. Restore preflight
+// runs it before pending migrations apply, so it must not depend on tables
+// introduced after the restored backup was taken.
+func readControlState(ctx context.Context, q querier) (control.State, error) {
 	var state control.State
 	var updated string
 	err := q.QueryRowContext(ctx, `SELECT owner, desired_workload, active_workload, phase,

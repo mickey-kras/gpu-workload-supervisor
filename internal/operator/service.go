@@ -17,11 +17,24 @@ type Backend interface {
 	Status(context.Context) (control.State, error)
 	OperatorTransition(context.Context, string, control.Workload, control.OperatorPrecondition) (control.State, error)
 }
+
+// PolicyStore serves the typed settings surface straight from durable state:
+// settings actions never observe or drive the runtime.
+type PolicyStore interface {
+	State(context.Context) (control.State, error)
+	Settings(context.Context) (control.PolicyState, error)
+	SetIdlePolicy(context.Context, control.SettingsPrecondition, control.IdlePolicy) (control.PolicyState, error)
+}
 type Session struct {
 	Backend   Backend
 	Revision  string
 	Workloads []Workload
 	Close     func() error
+	// PolicyStore is nil only in tests; settings actions then fail closed.
+	PolicyStore PolicyStore
+	// IdlePolicyConfigurable is false until the hosting process carries a
+	// qualified evidence provider; enabling the policy is rejected while false.
+	IdlePolicyConfigurable bool
 }
 
 // Service opens state only after nonblocking gate acquisition. Its operation
@@ -62,7 +75,7 @@ func (s Service) Handle(req Request) Response {
 		result.Code = IncompatibleConfiguration
 		return result
 	}
-	state, code := session.execute(ctx, req)
+	state, settings, code := session.execute(ctx, req)
 	if code != OK {
 		result.Code = code
 		return result
@@ -76,12 +89,13 @@ func (s Service) Handle(req Request) Response {
 	}
 	result.Code = OK
 	result.Status = session.status(state)
+	result.Settings = settings
 	return result
 }
 
 func (s Service) requestBudget(action string) (time.Duration, bool) {
 	budget, fallback, maximum := s.OperationTimeout, 15*time.Minute, 30*time.Minute
-	if action == "status" {
+	if action == actionStatus || action == actionGetSettings || action == actionSetIdlePolicy {
 		budget, fallback, maximum = s.StatusTimeout, 30*time.Second, 60*time.Second
 	}
 	if budget == 0 {
@@ -90,23 +104,86 @@ func (s Service) requestBudget(action string) (time.Duration, bool) {
 	return budget, budget >= 0 && budget <= maximum
 }
 
-func (s Session) execute(ctx context.Context, req Request) (control.State, Code) {
-	var state control.State
-	var err error
-	if req.Action == "status" {
-		state, err = s.Backend.Status(ctx)
-	} else {
+func (s Session) execute(ctx context.Context, req Request) (control.State, *SettingsResponse, Code) {
+	switch req.Action {
+	case actionGetSettings:
+		return s.getSettings(ctx)
+	case actionSetIdlePolicy:
+		return s.setIdlePolicy(ctx, req)
+	case actionStatus:
+		state, err := s.Backend.Status(ctx)
+		if err != nil {
+			return state, nil, errorCode(err)
+		}
+		return state, nil, OK
+	default:
+		var state control.State
 		if code := s.validateTransition(req); code != OK {
-			return state, code
+			return state, nil, code
 		}
 		e := req.Expected
 		version, _ := strconv.ParseUint(e.Version, 10, 64)
-		state, err = s.Backend.OperatorTransition(ctx, req.Action, req.Target, control.OperatorPrecondition{Incarnation: e.Incarnation, Version: version, Owner: e.Owner, ConfigurationRevision: e.ConfigurationRevision})
+		state, err := s.Backend.OperatorTransition(ctx, req.Action, req.Target, control.OperatorPrecondition{Incarnation: e.Incarnation, Version: version, Owner: e.Owner, ConfigurationRevision: e.ConfigurationRevision})
+		if err != nil {
+			return state, nil, errorCode(err)
+		}
+		return state, nil, OK
 	}
+}
+
+func (s Session) getSettings(ctx context.Context) (control.State, *SettingsResponse, Code) {
+	if s.PolicyStore == nil {
+		return control.State{}, nil, Unavailable
+	}
+	state, err := s.PolicyStore.State(ctx)
 	if err != nil {
-		return state, errorCode(err)
+		return control.State{}, nil, errorCode(err)
 	}
-	return state, OK
+	settings, err := s.PolicyStore.Settings(ctx)
+	if err != nil {
+		return control.State{}, nil, errorCode(err)
+	}
+	return state, settingsResponse(settings), OK
+}
+
+// setIdlePolicy commits only through the typed store surface; enabling is
+// rejected fail-closed while the host has no qualified evidence provider.
+func (s Session) setIdlePolicy(ctx context.Context, req Request) (control.State, *SettingsResponse, Code) {
+	if s.PolicyStore == nil {
+		return control.State{}, nil, Unavailable
+	}
+	if req.Expected == nil || req.Settings == nil {
+		return control.State{}, nil, InvalidRequest
+	}
+	if req.Expected.ConfigurationRevision != s.Revision {
+		return control.State{}, nil, StaleState
+	}
+	if req.Settings.TimeoutMinutes != control.IdlePolicyOff && !s.IdlePolicyConfigurable {
+		return control.State{}, nil, errorCode(store.ErrEvidenceUnavailable)
+	}
+	e := req.Expected
+	version, _ := strconv.ParseUint(e.Version, 10, 64)
+	precondition := control.SettingsPrecondition{
+		Incarnation: e.Incarnation, Version: version, Owner: e.Owner,
+		ConfigurationRevision: e.ConfigurationRevision,
+		SettingsRevision:      req.Settings.SettingsRevision,
+	}
+	settings, err := s.PolicyStore.SetIdlePolicy(ctx, precondition, control.IdlePolicy{TimeoutMinutes: req.Settings.TimeoutMinutes})
+	if err != nil {
+		return control.State{}, nil, errorCode(err)
+	}
+	state, err := s.PolicyStore.State(ctx)
+	if err != nil {
+		return control.State{}, nil, errorCode(err)
+	}
+	return state, settingsResponse(settings), OK
+}
+
+func settingsResponse(s control.PolicyState) *SettingsResponse {
+	return &SettingsResponse{
+		Policy:           IdlePolicyStatus{TimeoutMinutes: s.Policy.TimeoutMinutes},
+		SettingsRevision: s.SettingsRevision,
+	}
 }
 
 func (s Session) validateTransition(req Request) Code {
@@ -129,7 +206,7 @@ func (s Session) validateTransition(req Request) Code {
 
 func (session Session) status(state control.State) *Status {
 	ready := state.Phase == control.PhaseStable && state.Health != control.HealthError && state.ActiveWorkload != control.WorkloadUnknown
-	return &Status{Owner: state.Owner, DesiredWorkload: state.DesiredWorkload, ActiveWorkload: state.ActiveWorkload, Phase: state.Phase, Health: state.Health, Admission: state.Admission, ObservedAt: time.Now().UTC(), Expected: Expected{state.LeaseFence.Incarnation, strconv.FormatUint(state.Version, 10), state.Owner, session.Revision}, Workloads: session.Workloads, Capabilities: Capabilities{ready && state.Owner == control.OwnerSupervisor, ready && state.Owner == control.OwnerUser, ready && state.Owner == control.OwnerUser}}
+	return &Status{Owner: state.Owner, DesiredWorkload: state.DesiredWorkload, ActiveWorkload: state.ActiveWorkload, Phase: state.Phase, Health: state.Health, Admission: state.Admission, ObservedAt: time.Now().UTC(), Expected: Expected{state.LeaseFence.Incarnation, strconv.FormatUint(state.Version, 10), state.Owner, session.Revision}, Workloads: session.Workloads, Capabilities: Capabilities{ready && state.Owner == control.OwnerSupervisor, ready && state.Owner == control.OwnerUser, ready && state.Owner == control.OwnerUser, session.IdlePolicyConfigurable}, IdlePolicy: IdlePolicyStatus{TimeoutMinutes: state.IdlePolicy.TimeoutMinutes}}
 }
 func validCatalog(s Session) bool {
 	if !token(s.Revision, 128) || len(s.Workloads) == 0 || len(s.Workloads) > 65 {
@@ -153,8 +230,12 @@ func errorCode(err error) Code {
 		return Timeout
 	case errors.Is(err, store.ErrWrongOwner) || errors.Is(err, supervisor.ErrUserOwned) || errors.Is(err, supervisor.ErrSupervisorOwned):
 		return WrongOwner
-	case errors.Is(err, store.ErrVersionConflict) || errors.Is(err, store.ErrStaleFence) || errors.Is(err, store.ErrConfigurationConflict):
+	case errors.Is(err, store.ErrVersionConflict) || errors.Is(err, store.ErrStaleFence) || errors.Is(err, store.ErrConfigurationConflict) || errors.Is(err, store.ErrSettingsConflict):
 		return StaleState
+	case errors.Is(err, store.ErrInvalidIdleTimeout):
+		return InvalidRequest
+	case errors.Is(err, store.ErrEvidenceUnavailable):
+		return Unavailable
 	case errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, store.ErrTransitionRunning) || errors.Is(err, supervisor.ErrTransitionRunning):
 		return Busy
 	case errors.Is(err, store.ErrUnstableState) || errors.Is(err, supervisor.ErrRecoveryRequired) || errors.Is(err, supervisor.ErrReconcileRequired):

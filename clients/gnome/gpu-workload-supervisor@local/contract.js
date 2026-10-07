@@ -87,6 +87,18 @@ function validateCatalog(s) {
         fail();
 }
 
+function validateIdlePolicy(p) {
+    keys(p, ['timeoutMinutes']);
+    const t = p.timeoutMinutes;
+    if (!Number.isInteger(t) || (t !== 0 && (t < 5 || t > 1440))) fail();
+}
+
+export function validateSettings(settings) {
+    keys(settings, ['policy', 'settingsRevision']);
+    validateIdlePolicy(settings.policy);
+    token(settings.settingsRevision);
+}
+
 function validateStatus(s) {
     keys(s, [
         'owner',
@@ -99,6 +111,7 @@ function validateStatus(s) {
         'expected',
         'workloads',
         'capabilities',
+        'idlePolicy',
     ]);
     one(s.owner, ['supervisor', 'user']);
     one(s.phase, [
@@ -119,22 +132,30 @@ function validateStatus(s) {
         fail();
     validateExpected(s);
     validateCatalog(s);
-    keys(s.capabilities, ['takeControl', 'userSwitch', 'returnControl']);
+    keys(s.capabilities, [
+        'takeControl',
+        'userSwitch',
+        'returnControl',
+        'idlePolicyConfigurable',
+    ]);
     if (Object.values(s.capabilities).some((v) => typeof v !== 'boolean'))
         fail();
+    validateIdlePolicy(s.idlePolicy);
 }
 
 export function parseResponse(text, requestId) {
     if (new TextEncoder().encode(text).length > 65536) fail();
     const r = JSON.parse(text);
-    if (r.code === 'ok')
-        keys(r, ['protocolVersion', 'requestId', 'code', 'status']);
-    else {
+    if (r.code === 'ok') {
+        const base = ['protocolVersion', 'requestId', 'code', 'status'];
+        keys(r, Object.hasOwn(r, 'settings') ? [...base, 'settings'] : base);
+    } else {
         keys(r, ['protocolVersion', 'requestId', 'code']);
         one(r.code, ERROR_CODES);
     }
     if (r.protocolVersion !== 1 || r.requestId !== requestId) fail();
     if (r.code !== 'ok') return r;
     validateStatus(r.status);
+    if (Object.hasOwn(r, 'settings')) validateSettings(r.settings);
     return r;
 }

@@ -46,7 +46,8 @@ function status(owner = 'supervisor', activeWorkload = 'render') {
         observedAt: '2026-10-04T00:00:00Z',
         expected: { incarnation: 'a', version: '1', owner, configurationRevision: 'c1' },
         workloads: [{ id: 'idle', label: 'Idle' }, { id: 'render', label: 'Rendering' }],
-        capabilities: { takeControl: owner === 'supervisor', returnControl: owner === 'user', userSwitch: owner === 'user' },
+        capabilities: { takeControl: owner === 'supervisor', returnControl: owner === 'user', userSwitch: owner === 'user', idlePolicyConfigurable: false },
+        idlePolicy: { timeoutMinutes: 0 },
     };
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
