@@ -1427,3 +1427,59 @@ func TestApplyRejectsShadowedOwnedUnitBinding(t *testing.T) {
 		})
 	}
 }
+
+// TestResumeRestoresAcceptedRenderingBeforeReplay covers the full P1 chain:
+// crash after the updated unit was written and maintenance entered but before
+// commit; the resumed attempt fails pre-commit; the accepted rendering must be
+// what rollback restores, not the uncommitted bytes.
+func TestResumeRestoresAcceptedRenderingBeforeReplay(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommandFor(home)
+	ctx := context.Background()
+	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	updated, updatedRaw := ownedFixtureProfile(t, home, "vision", 9101)
+	r2 := r
+	r2.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{updated}}
+	r2.ExpectedRevision = currentRevision(t, r)
+	// Crash window: v2 written, maintenance entered, catalog never committed.
+	if err := os.WriteFile(filepath.Join(ownedUnitDirectory(home), profile.Unit), updatedRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	record, _ := json.Marshal(activation{Request: r2})
+	if err := os.WriteFile(filepath.Join(root, "activation.json"), record, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := deployment.Write(r.Profile.StatePath, deployment.Marker{Version: 1, Release: deployment.Release, Maintenance: true}); err != nil {
+		t.Fatal(err)
+	}
+	journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{profile.Unit: digest(updatedRaw)}, Deletes: map[string]string{}, Phase: ownedJournalPending}
+	if err := writeOwnedUnitJournal(root, journal); err != nil {
+		t.Fatal(err)
+	}
+	// Resumed attempt fails at the pre-commit runtime check.
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{err: errors.New("busy")}, nil }
+	if err := backend.Apply(ctx, home, r2); err == nil {
+		t.Fatal("apply succeeded despite busy runtime")
+	}
+	data, _ := os.ReadFile(filepath.Join(ownedUnitDirectory(home), profile.Unit))
+	if string(data) != string(raw) {
+		t.Fatal("rollback did not restore the accepted rendering")
+	}
+	if _, present, _ := readOwnedUnitJournal(root); present {
+		t.Fatal("journal left behind")
+	}
+	// The same resume succeeds when the runtime frees up.
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	if err := backend.Apply(ctx, home, r2); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(filepath.Join(ownedUnitDirectory(home), profile.Unit))
+	if string(data) != string(updatedRaw) {
+		t.Fatal("successful resume did not apply the update")
+	}
+}

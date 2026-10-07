@@ -70,7 +70,7 @@ func (n NativeModel) validate() error {
 	if n.Runtime != "ollama" && n.Runtime != "llama.cpp" && n.Runtime != "vllm" {
 		return errors.New("unsupported native runtime")
 	}
-	if !workloadID.MatchString(n.Instance) || strings.TrimSpace(n.Model) == "" || len(n.Model) > 1024 || strings.IndexFunc(n.Model, unicode.IsControl) >= 0 {
+	if !ValidInstanceID(n.Instance) || strings.TrimSpace(n.Model) == "" || len(n.Model) > 1024 || strings.IndexFunc(n.Model, unicode.IsControl) >= 0 {
 		return errors.New("invalid native model identity")
 	}
 	if n.Runtime == "ollama" && malformedOllamaModel(n.Model) {
@@ -152,6 +152,13 @@ func (o OwnedLaunch) validateModelPath() error {
 		return errors.New("owned launch values must be expressible in the unit command grammar")
 	}
 	return nil
+}
+
+// ValidInstanceID reports whether a native instance name satisfies the
+// workload-ID grammar the catalog requires; draft surfaces must reject
+// failing names at save time.
+func ValidInstanceID(instance string) bool {
+	return workloadID.MatchString(instance)
 }
 
 // OwnedUnitFilePrefix names supervisor-owned unit files.

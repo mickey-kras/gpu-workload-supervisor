@@ -412,7 +412,7 @@ func TestResumeOwnedUnitJournalAtApplyEntry(t *testing.T) {
 		}
 	})
 
-	t.Run("maintenance fence leaves the journal for activation resume", func(t *testing.T) {
+	t.Run("maintenance fence recovers pending writes before activation resume", func(t *testing.T) {
 		journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{stale.Unit: digest(staleRaw)}, Deletes: map[string]string{}, Phase: ownedJournalPending}
 		if err := writeOwnedUnitJournal(root, journal); err != nil {
 			t.Fatal(err)
@@ -426,11 +426,8 @@ func TestResumeOwnedUnitJournalAtApplyEntry(t *testing.T) {
 		if err := backend.resumeOwnedUnitJournal(ctx, home, r); err != nil {
 			t.Fatal(err)
 		}
-		if _, present, _ := readOwnedUnitJournal(root); !present {
-			t.Fatal("journal cleared under maintenance fence")
-		}
-		if err := clearOwnedUnitJournal(root); err != nil {
-			t.Fatal(err)
+		if _, present, _ := readOwnedUnitJournal(root); present {
+			t.Fatal("pending journal not recovered under maintenance fence")
 		}
 		os.Remove(r.Profile.StatePath + deployment.Suffix)
 	})

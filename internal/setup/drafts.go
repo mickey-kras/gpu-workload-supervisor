@@ -134,6 +134,9 @@ func validateDraft(d Draft, ids map[string]bool) error {
 			if d.Binding.Instance == "" {
 				return errors.New("owned drafts require an instance")
 			}
+			if !control.ValidInstanceID(d.Binding.Instance) {
+				return errors.New("owned draft instance must be a valid workload identifier")
+			}
 			if d.App == "ollama" && d.Model == "" {
 				return errors.New("owned ollama drafts require a model and instance")
 			}

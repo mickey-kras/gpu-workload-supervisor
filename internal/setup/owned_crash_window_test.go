@@ -107,11 +107,14 @@ func TestResumeDefersGenuinePreCommitCrash(t *testing.T) {
 	if err := backend.resumeOwnedUnitJournal(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
+	// Pending deletes never ran (deletes only execute post-commit), so the
+	// unit survives; recovery retires the journal and the fenced replay
+	// replans from the committed catalog.
 	if _, err := os.Lstat(filepath.Join(dir, stale.Unit)); err != nil {
-		t.Fatal("pre-commit unit deleted during deferral")
+		t.Fatal("pre-commit unit deleted during recovery")
 	}
-	if _, present, _ := readOwnedUnitJournal(root); !present {
-		t.Fatal("journal cleared while activation resume still needs it")
+	if _, present, _ := readOwnedUnitJournal(root); present {
+		t.Fatal("pending journal not recovered before replay")
 	}
 }
 

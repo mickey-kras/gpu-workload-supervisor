@@ -141,3 +141,18 @@ func TestDraftOwnedRejectsMissingSynthesisFields(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestDraftOwnedRejectsInvalidInstanceSyntax applies the catalog's workload-ID
+// grammar to owned instances at save time.
+func TestDraftOwnedRejectsInvalidInstanceSyntax(t *testing.T) {
+	for _, instance := range []string{"Local", "bad!name", "white space", ""} {
+		d := Draft{ID: "vision", Label: "Vision", App: "llama.cpp", Binding: &DraftBinding{Instance: instance, Owned: &DraftOwnedLaunch{ModelPath: "/models/vision.gguf", Port: 9100}}}
+		if err := validateDrafts(1, []Draft{d}); err == nil {
+			t.Fatalf("instance %q saved", instance)
+		}
+	}
+	d := Draft{ID: "vision", Label: "Vision", App: "llama.cpp", Binding: &DraftBinding{Instance: "rig-2", Owned: &DraftOwnedLaunch{ModelPath: "/models/vision.gguf", Port: 9100}}}
+	if err := validateDrafts(1, []Draft{d}); err != nil {
+		t.Fatal(err)
+	}
+}

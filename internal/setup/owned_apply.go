@@ -204,9 +204,11 @@ func (b Backend) resumeOwnedUnitJournal(ctx context.Context, home string, req Re
 			return err
 		}
 		if !committed {
-			// Genuine pre-commit crash: the activation fence replays the
-			// original request verbatim, and its plan rewrites this journal.
-			return nil
+			// Genuine pre-commit crash: the fence replays the original request
+			// verbatim, but the journaled writes left uncommitted content on
+			// disk. Recover them first — the journal is the source of truth —
+			// so the resumed plan snapshots accepted bytes as rollback priors.
+			return b.retirePendingJournal(ctx, home, root, req, journal)
 		}
 		// Crash between the catalog commit and the journal pin: fall through
 		// and replay the proven deletes now.
