@@ -77,7 +77,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 	case "fingerprint":
 		return a.fingerprint(input, output)
 	case "render-owned":
-		return a.renderOwned(home, input, output)
+		return a.renderOwned(ctx, home, input, output)
 	case "probe":
 		return a.runProbe(ctx, input, output)
 	case "reconcile":

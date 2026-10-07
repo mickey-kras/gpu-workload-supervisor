@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path"
 	"reflect"
 	"strings"
 	"syscall"
@@ -347,11 +346,7 @@ func ownedProfilesVerbatim(accepted, next control.Catalog) error {
 		if p.NativeModel == nil {
 			return false
 		}
-		if p.NativeModel.Owned != nil {
-			return true
-		}
-		base := path.Base(p.NativeModel.LaunchFile)
-		return strings.HasPrefix(base, "gws-owned-") && strings.HasSuffix(base, ".service")
+		return p.NativeModel.Owned != nil || p.AdoptedOwnedFile()
 	}
 	carried := map[control.Workload]bool{}
 	for _, p := range next.Profiles {

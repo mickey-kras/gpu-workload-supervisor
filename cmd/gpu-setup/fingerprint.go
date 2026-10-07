@@ -31,7 +31,7 @@ func (a setupActions) fingerprint(input io.Reader, output io.Writer) error {
 
 // renderOwned previews the derived owned launch identity and deterministic
 // unit rendering for a draft. It writes nothing.
-func (a setupActions) renderOwned(home string, input io.Reader, output io.Writer) error {
+func (a setupActions) renderOwned(ctx context.Context, home string, input io.Reader, output io.Writer) error {
 	var request struct {
 		Draft         setup.Draft `json:"draft"`
 		ManagerCgroup string      `json:"managerCgroup"`
@@ -44,7 +44,7 @@ func (a setupActions) renderOwned(home string, input io.Reader, output io.Writer
 	if systemctl == "" {
 		systemctl = "systemctl"
 	}
-	actual, err := a.managerCgroup(context.Background(), systemctl)
+	actual, err := a.managerCgroup(ctx, systemctl)
 	if err != nil {
 		return err
 	}

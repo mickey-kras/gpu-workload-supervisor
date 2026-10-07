@@ -78,7 +78,9 @@ func (m *SystemdManager) preflightOwned(_ context.Context, unitDir string) error
 				managed[p.Unit] = true
 				continue
 			}
-			adopted[p.NativeModel.LaunchFile] = p.NativeModel.LaunchSHA256
+			if p.AdoptedOwnedFile() {
+				adopted[p.NativeModel.LaunchFile] = p.NativeModel.LaunchSHA256
+			}
 		}
 	}
 	for _, entry := range entries {

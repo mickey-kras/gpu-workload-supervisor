@@ -91,7 +91,9 @@ func discoverOwnedUnits(home string, catalog control.Catalog) []OwnedUnitStatus 
 			managed[p.Unit] = p.NativeModel.LaunchSHA256
 			continue
 		}
-		adopted[p.NativeModel.LaunchFile] = p.NativeModel.LaunchSHA256
+		if p.AdoptedOwnedFile() {
+			adopted[p.NativeModel.LaunchFile] = p.NativeModel.LaunchSHA256
+		}
 	}
 	var owned []OwnedUnitStatus
 	for _, entry := range entries {

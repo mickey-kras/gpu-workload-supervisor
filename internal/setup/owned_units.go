@@ -133,18 +133,31 @@ func (b Backend) planOwnedUnits(req Request, accepted control.CatalogSnapshot, h
 	}
 	deleted := map[string]bool{}
 	for _, p := range accepted.Catalog.Profiles {
-		if p.NativeModel == nil || p.NativeModel.Owned == nil {
+		if p.NativeModel == nil || (p.NativeModel.Owned == nil && !p.AdoptedOwnedFile()) {
 			continue
 		}
-		if _, kept := plan.Writes[p.Unit]; kept {
+		unit := p.Unit
+		proof := plan.proven[unit]
+		if p.NativeModel.Owned == nil {
+			// Adopted profile still binding the owned-unit file: exact path
+			// and proven digest, the same rule preflight and discovery apply.
+			unit = filepath.Base(p.NativeModel.LaunchFile)
+			if p.NativeModel.LaunchFile != filepath.Join(ownedUnitDirectory(home), unit) {
+				continue
+			}
+			proof = p.NativeModel.LaunchSHA256
+		}
+		// Record the proof so the journal and delete stages share it.
+		plan.proven[unit] = proof
+		if _, kept := plan.Writes[unit]; kept {
 			continue
 		}
-		if deleted[p.Unit] {
+		if deleted[unit] {
 			// Shared Ollama pairs carry one unit file across profiles.
 			continue
 		}
-		path := filepath.Join(ownedUnitDirectory(home), p.Unit)
-		if ownedUnitStillReferenced(req.Catalog, path, plan.proven[p.Unit]) {
+		path := filepath.Join(ownedUnitDirectory(home), unit)
+		if ownedUnitStillReferenced(req.Catalog, path, proof) {
 			// The requested catalog still claims this exact file (for example
 			// an owned profile converted to adopted); keep it.
 			continue
@@ -156,11 +169,11 @@ func (b Backend) planOwnedUnits(req Request, accepted control.CatalogSnapshot, h
 		if err != nil {
 			return plan, err
 		}
-		if digest(data) != plan.proven[p.Unit] {
-			return plan, fmt.Errorf("%w: %s", ErrOwnedUnitModified, p.Unit)
+		if digest(data) != proof {
+			return plan, fmt.Errorf("%w: %s", ErrOwnedUnitModified, unit)
 		}
-		plan.Deletes = append(plan.Deletes, p.Unit)
-		deleted[p.Unit] = true
+		plan.Deletes = append(plan.Deletes, unit)
+		deleted[unit] = true
 	}
 	sort.Strings(plan.Deletes)
 	return plan, nil

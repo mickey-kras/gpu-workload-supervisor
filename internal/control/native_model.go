@@ -154,6 +154,29 @@ func (o OwnedLaunch) validateModelPath() error {
 	return nil
 }
 
+// OwnedUnitFilePrefix names supervisor-owned unit files.
+const OwnedUnitFilePrefix = "gws-owned-"
+
+// AdoptedOwnedFile reports whether an adopted profile still binds a
+// supervisor-owned unit file: an owned profile converted to adopted while
+// keeping its launch file. Every layer that accounts for owned files
+// (preflight, discovery, the configure gate, plan deletes, journal recovery)
+// must classify these bindings with this single rule.
+func (p WorkloadProfile) AdoptedOwnedFile() bool {
+	n := p.NativeModel
+	if n == nil || n.Owned != nil {
+		return false
+	}
+	base := filepath.Base(n.LaunchFile)
+	return strings.HasPrefix(base, OwnedUnitFilePrefix) && strings.HasSuffix(base, ".service")
+}
+
+// LaunchGrammarExpressible exposes grammarExpressible to draft surfaces so
+// unrenderable values fail at save time instead of at apply time.
+func LaunchGrammarExpressible(value string) bool {
+	return grammarExpressible(value)
+}
+
 // grammarExpressible reports whether a value survives the launch grammar's
 // tokenization unchanged: no whitespace (ExecStart splits on strings.Fields),
 // none of the quoting/specifier characters directive parsing rejects, and no

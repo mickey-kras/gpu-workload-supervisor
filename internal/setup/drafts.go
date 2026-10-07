@@ -181,6 +181,14 @@ func validateDraftOwned(app string, o *DraftOwnedLaunch) error {
 			return errors.New("vllm owned launches require an absolute model directory")
 		}
 	}
+	// Same grammar gate as catalog validation: values that cannot survive the
+	// unit command grammar must fail at save time, not at apply time.
+	if o.ModelPath != "" && !control.LaunchGrammarExpressible(o.ModelPath) {
+		return errors.New("owned launch values must be expressible in the unit command grammar")
+	}
+	if o.Alias != "" && !control.LaunchGrammarExpressible(o.Alias) {
+		return errors.New("owned launch values must be expressible in the unit command grammar")
+	}
 	return nil
 }
 

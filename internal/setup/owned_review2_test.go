@@ -1180,3 +1180,120 @@ func TestDiscoveryAccountsAdoptedOwnedBinding(t *testing.T) {
 		t.Fatalf("drifted binding misclassified: %+v", owned)
 	}
 }
+
+// TestApplyDeletesDroppedAdoptedOwnedBinding covers the conversion lifecycle:
+// owned -> adopted keeping the file -> binding dropped. The dropped binding
+// schedules the file for proven deletion so preflight cannot latch an orphan.
+func TestApplyDeletesDroppedAdoptedOwnedBinding(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	ctx := context.Background()
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	// Convert to adopted, keeping the exact binding.
+	adopted := profile
+	nativeCopy := *profile.NativeModel
+	nativeCopy.Owned = nil
+	adopted.NativeModel = &nativeCopy
+	r.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{adopted}}
+	r.ExpectedRevision = currentRevision(t, r)
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(ownedUnitDirectory(home), profile.Unit)
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatal("conversion dropped the preserved file")
+	}
+	// Drop the binding entirely: the file must be deleted with content proof.
+	r.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health"}}}
+	r.ExpectedRevision = currentRevision(t, r)
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("dropped adopted binding left the owned file behind")
+	}
+}
+
+// TestApplyRefusesDriftedAdoptedOwnedBinding fails closed when the file behind
+// a dropped adopted binding no longer matches its proven fingerprint.
+func TestApplyRefusesDriftedAdoptedOwnedBinding(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	ctx := context.Background()
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	adopted := profile
+	nativeCopy := *profile.NativeModel
+	nativeCopy.Owned = nil
+	adopted.NativeModel = &nativeCopy
+	r.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{adopted}}
+	r.ExpectedRevision = currentRevision(t, r)
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(ownedUnitDirectory(home), profile.Unit)
+	if err := os.WriteFile(path, []byte("tampered"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health"}}}
+	r.ExpectedRevision = currentRevision(t, r)
+	if err := backend.Apply(ctx, home, r); !errors.Is(err, ErrOwnedUnitModified) {
+		t.Fatalf("drifted adopted binding deleted: %v", err)
+	}
+}
+
+// TestResumeKeepsAdoptedBindingDuringPendingRecovery never deletes a file the
+// committed catalog still binds exactly, even when a pending journal names it.
+func TestResumeKeepsAdoptedBindingDuringPendingRecovery(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	ctx := context.Background()
+	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	adopted := profile
+	nativeCopy := *profile.NativeModel
+	nativeCopy.Owned = nil
+	adopted.NativeModel = &nativeCopy
+	r.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{adopted}}
+	r.ExpectedRevision = currentRevision(t, r)
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{profile.Unit: digest([]byte("uncommitted render"))}, Deletes: map[string]string{}, Phase: ownedJournalPending}
+	if err := writeOwnedUnitJournal(root, journal); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.resumeOwnedUnitJournal(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(ownedUnitDirectory(home), profile.Unit))
+	if string(data) != string(raw) {
+		t.Fatal("adopted-bound file deleted during recovery")
+	}
+	// Drifted bytes fail loudly instead of being deleted.
+	if err := os.WriteFile(filepath.Join(ownedUnitDirectory(home), profile.Unit), []byte("tampered"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	journal2 := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{profile.Unit: digest([]byte("uncommitted render"))}, Deletes: map[string]string{}, Phase: ownedJournalPending}
+	if err := writeOwnedUnitJournal(root, journal2); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.resumeOwnedUnitJournal(ctx, home, r); !errors.Is(err, ErrOwnedUnitModified) {
+		t.Fatalf("drifted adopted binding recovered over: %v", err)
+	}
+	data, _ = os.ReadFile(filepath.Join(ownedUnitDirectory(home), profile.Unit))
+	if string(data) != "tampered" {
+		t.Fatal("drifted file destroyed")
+	}
+}

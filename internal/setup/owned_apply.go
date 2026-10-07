@@ -306,6 +306,17 @@ func (b Backend) retirePendingJournal(ctx context.Context, home, root string, re
 			return err
 		}
 		accepted, ok := ownedProfileForUnit(snapshot.Catalog, name)
+		if !ok {
+			// Exact adopted binding (converted profile keeping its file): the
+			// catalog proves content by digest alone, so matching bytes are
+			// kept and drifted bytes fail loudly — never deleted.
+			if bound, sha := adoptedOwnedBinding(snapshot.Catalog, dir, name); bound {
+				if digest(current) == sha {
+					continue
+				}
+				return fmt.Errorf("%w: %s", ErrOwnedUnitModified, name)
+			}
+		}
 		if ok {
 			raw, err := ownedRenderChecked(accepted)
 			if err != nil {
@@ -338,6 +349,17 @@ func (b Backend) retirePendingJournal(ctx context.Context, home, root string, re
 		}
 	}
 	return clearOwnedUnitJournal(root)
+}
+
+// adoptedOwnedBinding resolves an exact adopted binding to the owned-unit
+// file at dir/name: path equality plus the profile's proven fingerprint.
+func adoptedOwnedBinding(c control.Catalog, dir, name string) (bool, string) {
+	for _, p := range c.Profiles {
+		if p.AdoptedOwnedFile() && p.NativeModel.LaunchFile == filepath.Join(dir, name) {
+			return true, p.NativeModel.LaunchSHA256
+		}
+	}
+	return false, ""
 }
 
 func ownedProfileForUnit(c control.Catalog, unit string) (control.WorkloadProfile, bool) {
