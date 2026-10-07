@@ -146,7 +146,7 @@ func newTerminalFixtureWith(t *testing.T, runtime, route string, upstreamHandler
 	upstream := httptest.NewServer(upstreamHandler)
 	t.Cleanup(upstream.Close)
 	u, _ := url.Parse(upstream.URL)
-	s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: runtime, Model: "selected", Endpoint: upstream.URL}}}}}}
+	s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: runtime, Model: "selected", Endpoint: upstream.URL}}}}}}
 	h, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: route}}})
 	if err != nil {
 		t.Fatal(err)
