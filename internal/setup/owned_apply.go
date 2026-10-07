@@ -25,13 +25,37 @@ func (b Backend) abortOwnedUnitWrites(ctx context.Context, home, root string, re
 	}
 	// The journal survives a failed rollback: its journaled writes still need
 	// recovery, and clearing it would leave uncommitted content unaccounted.
+	// It is pruned to the entries that actually mutated disk first, so
+	// untouched planned writes never become false recovery obligations.
 	if err := b.rollbackOwnedUnitWrites(ctx, home, request.Profile.SystemctlPath, plan); err != nil {
+		if jerr := pruneOwnedUnitJournal(root, plan); jerr != nil {
+			err = errors.Join(err, jerr)
+		}
 		return errors.Join(cause, err)
+	}
+	if errors.Is(cause, errOwnedWriteDetection) {
+		// A write may have landed unrecorded; the pending journal must survive.
+		return cause
 	}
 	if err := clearOwnedUnitJournal(root); err != nil {
 		return errors.Join(cause, err)
 	}
 	return cause
+}
+
+// pruneOwnedUnitJournal rewrites a retained journal to cover only the plan
+// entries that were actually written.
+func pruneOwnedUnitJournal(root string, plan unitPlan) error {
+	journal, present, err := readOwnedUnitJournal(root)
+	if err != nil || !present {
+		return err
+	}
+	for name := range journal.Writes {
+		if !plan.written[name] {
+			delete(journal.Writes, name)
+		}
+	}
+	return writeOwnedUnitJournal(root, journal)
 }
 
 // previewOwnedUnitChanges reports the owned-unit writes and removals the

@@ -305,7 +305,7 @@ func (b Backend) applyOwnedUnitWrites(ctx context.Context, home string, plan uni
 			// inode being replaced, so a concurrent atomic replace cannot be
 			// silently destroyed.
 			if err := provenReplace(path, raw, currentDigest); err != nil {
-				return err
+				return coverWriteError(plan, path, name, raw, err)
 			}
 			plan.written[name] = true
 			continue
@@ -316,12 +316,31 @@ func (b Backend) applyOwnedUnitWrites(ctx context.Context, home string, plan uni
 		}
 		// AtomicWrite creates the file 0600, matching the setup private-file
 		// convention that privateRead trust checks enforce.
-		if err := deployment.AtomicWrite(path, raw); err != nil {
-			return err
+		if err := ownedAtomicWrite(path, raw); err != nil {
+			return coverWriteError(plan, path, name, raw, err)
 		}
 		plan.written[name] = true
 	}
 	return nil
+}
+
+// errOwnedWriteDetection marks a write error whose landing could not be
+// confirmed; abort must retain the pending journal so recovery owns the file.
+var errOwnedWriteDetection = errors.New("owned unit write outcome undetectable")
+
+// coverWriteError decides whether a failed write still landed the requested
+// content (AtomicWrite can rename into place and then fail the parent-dir
+// sync); landed writes are recorded so rollback owns them. When detection
+// itself fails, the returned error carries errOwnedWriteDetection.
+func coverWriteError(plan unitPlan, path, name string, raw []byte, err error) error {
+	landed, derr := privateRead(path)
+	if derr != nil && !errors.Is(derr, os.ErrNotExist) {
+		return errors.Join(err, fmt.Errorf("%w: %s", errOwnedWriteDetection, name))
+	}
+	if derr == nil && digest(landed) == digest(raw) {
+		plan.written[name] = true
+	}
+	return err
 }
 
 // ownedStat/ownedAtomicWrite are seams for concurrency-fault injection.
@@ -448,7 +467,18 @@ func (b Backend) rollbackOwnedUnitWrites(ctx context.Context, home, systemctl st
 			return err
 		}
 	}
-	return b.daemonReloadOwnedUnits(ctx, systemctl, plan.writeNames())
+	// Only units actually written reached systemd; never-written planned names
+	// (idempotent skips, unreached entries after a collision) need no reload.
+	var touched []string
+	for _, name := range plan.writeNames() {
+		if plan.written[name] {
+			touched = append(touched, name)
+		}
+	}
+	if len(touched) == 0 {
+		return nil
+	}
+	return b.daemonReloadOwnedUnits(ctx, systemctl, touched)
 }
 
 // applyOwnedUnitDeletes removes only content the journal proves the supervisor

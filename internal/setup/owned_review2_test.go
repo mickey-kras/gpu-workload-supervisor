@@ -1532,3 +1532,161 @@ func TestResumeFinishesCommittedDeleteBeforeReAdd(t *testing.T) {
 		t.Fatal("re-added unit not recreated")
 	}
 }
+
+// TestAtomicWriteLandedErrorIsRolledBack injects rename-landed-then-failed
+// AtomicWrite faults on create and overwrite: the visibly mutated file is
+// covered by rollback, not skipped.
+func TestAtomicWriteLandedErrorIsRolledBack(t *testing.T) {
+	t.Run("create", func(t *testing.T) {
+		backend, home, r := fixture(t)
+		backend.runCommand = fakeOwnedCommandFor(home)
+		profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+		r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+		restore := ownedAtomicWrite
+		ownedAtomicWrite = func(path string, data []byte) error {
+			// The rename lands, then the parent-dir sync reports failure.
+			if err := deployment.AtomicWrite(path, data); err != nil {
+				return err
+			}
+			return errors.New("dir sync fault")
+		}
+		defer func() { ownedAtomicWrite = restore }()
+		if err := backend.Apply(context.Background(), home, r); err == nil {
+			t.Fatal("fault swallowed")
+		}
+		ownedAtomicWrite = restore
+		if _, err := os.Lstat(filepath.Join(ownedUnitDirectory(home), profile.Unit)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("landed unit left orphaned after rollback")
+		}
+		if _, present, _ := readOwnedUnitJournal(filepath.Join(home, ".config/gpu-workload-supervisor")); present {
+			t.Fatal("journal left behind after covered rollback")
+		}
+	})
+
+	t.Run("overwrite", func(t *testing.T) {
+		backend, home, r := fixture(t)
+		backend.runCommand = fakeOwnedCommandFor(home)
+		ctx := context.Background()
+		profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
+		r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+		if err := backend.Apply(ctx, home, r); err != nil {
+			t.Fatal(err)
+		}
+		updated, updatedRaw := ownedFixtureProfile(t, home, "vision", 9101)
+		r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{updated}}
+		r.ExpectedRevision = currentRevision(t, r)
+		restore := ownedAtomicWrite
+		failed := false
+		ownedAtomicWrite = func(path string, data []byte) error {
+			if !failed && string(data) == string(updatedRaw) {
+				failed = true
+				if err := deployment.AtomicWrite(path, data); err != nil {
+					return err
+				}
+				return errors.New("dir sync fault")
+			}
+			return deployment.AtomicWrite(path, data)
+		}
+		defer func() { ownedAtomicWrite = restore }()
+		if err := backend.Apply(ctx, home, r); err == nil {
+			t.Fatal("fault swallowed")
+		}
+		ownedAtomicWrite = restore
+		data, _ := os.ReadFile(filepath.Join(ownedUnitDirectory(home), profile.Unit))
+		if string(data) != string(raw) {
+			t.Fatal("accepted rendering not restored after landed overwrite fault")
+		}
+		if _, present, _ := readOwnedUnitJournal(filepath.Join(home, ".config/gpu-workload-supervisor")); present {
+			t.Fatal("journal left behind after covered rollback")
+		}
+	})
+}
+
+// TestUndetectableWriteRetainsJournal injects a write fault whose landing
+// cannot be verified: the pending journal must survive for recovery, and the
+// next apply recovers cleanly.
+func TestUndetectableWriteRetainsJournal(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommandFor(home)
+	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	restore := ownedAtomicWrite
+	ownedAtomicWrite = func(path string, _ []byte) error {
+		// Landing state undetectable: world-readable file rejects privateRead.
+		if err := os.WriteFile(path, raw, 0644); err != nil {
+			return err
+		}
+		return errors.New("ambiguous write fault")
+	}
+	if err := backend.Apply(context.Background(), home, r); err == nil {
+		t.Fatal("fault swallowed")
+	}
+	ownedAtomicWrite = restore
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	if _, present, _ := readOwnedUnitJournal(root); !present {
+		t.Fatal("journal dropped with write outcome undetectable")
+	}
+	// Recovery: the journaled content is proven, removed, and the retry applies.
+	if err := os.Chmod(filepath.Join(ownedUnitDirectory(home), profile.Unit), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.Apply(context.Background(), home, r); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(ownedUnitDirectory(home), profile.Unit))
+	if string(data) != string(raw) {
+		t.Fatal("retry did not apply cleanly")
+	}
+}
+
+// TestRollbackSkipsUntouchedUnitsAndPrunesJournal covers the foreign-file
+// collision with an unavailable manager: rollback reloads nothing it never
+// wrote, and the retained journal covers only the unit that mutated.
+func TestRollbackSkipsUntouchedUnitsAndPrunesJournal(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommandFor(home)
+	ctx := context.Background()
+	code, _ := ownedFixtureProfile(t, home, "code", 9102)
+	draft := ownedDraft("vision", 9100)
+	draft.Binding.Instance = "second"
+	vision, _, err := OwnedProfile(draft, "/user.slice/user-1000.slice/user@1000.service", home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{code, vision}}
+	// Foreign content occupies the second unit; the manager is down.
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, vision.Unit), []byte("foreign"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	backend.runCommand = failReloadCommand
+	if err := backend.Apply(ctx, home, r); !errors.Is(err, ErrOwnedUnitCollision) {
+		t.Fatalf("collision not surfaced: %v", err)
+	}
+	// Rollback removed the written unit; the retained journal covers only it.
+	if _, err := os.Lstat(filepath.Join(dir, code.Unit)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("written unit not rolled back")
+	}
+	journal, present, err := readOwnedUnitJournal(filepath.Join(home, ".config/gpu-workload-supervisor"))
+	if err != nil || !present {
+		t.Fatal("journal not retained after rollback reload failure")
+	}
+	if len(journal.Writes) != 1 || journal.Writes[code.Unit] == "" {
+		t.Fatalf("journal not pruned to mutated entries: %+v", journal.Writes)
+	}
+	// Manager recovers: resume clears the minimal journal without a false
+	// proof failure on the foreign file, then the plan reports the collision.
+	backend.runCommand = fakeOwnedCommandFor(home)
+	if err := backend.Apply(ctx, home, r); !errors.Is(err, ErrOwnedUnitCollision) {
+		t.Fatalf("retry = %v", err)
+	}
+	if errors.Is(backend.Apply(ctx, home, r), ErrOwnedUnitModified) {
+		t.Fatal("foreign file misreported as modified owned content")
+	}
+	if _, present, _ := readOwnedUnitJournal(filepath.Join(home, ".config/gpu-workload-supervisor")); present {
+		t.Fatal("journal left behind after recovery")
+	}
+}
