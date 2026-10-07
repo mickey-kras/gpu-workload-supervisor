@@ -35,6 +35,7 @@ func fixture(t *testing.T) (Backend, string, Request) {
 	r := Request{Version: 1, ConfirmQuiesced: true, Profile: Profile{Version: 1, StatePath: filepath.Join(home, "state/state.db"), SystemctlPath: "/usr/bin/systemctl", NvidiaSMIPath: "/usr/bin/nvidia-smi"}, Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health", BootPolicy: "stop-to-idle"}}}}
 	backend := SystemBackend()
 	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	backend.qualifyOwned = func(control.WorkloadProfile) error { return nil }
 	backend.runCommand = func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("text.service disabled\nmedia.service disabled\n"), nil
 	}

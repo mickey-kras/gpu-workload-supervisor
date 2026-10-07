@@ -40,7 +40,7 @@ func TestVerifyBindingsFailsClosed(t *testing.T) {
 }
 
 func TestSetupRejectsSharedOllamaUnitCatalogs(t *testing.T) {
-	backend, _, request := fixture(t)
+	backend, home, request := fixture(t)
 	native := func(model string) *control.NativeModel {
 		return &control.NativeModel{Runtime: "ollama", Instance: "local", Model: model, Endpoint: "http://127.0.0.1:11434", LaunchFile: "/etc/systemd/user/ollama.service", LaunchSHA256: strings.Repeat("0", 64)}
 	}
@@ -51,10 +51,15 @@ func TestSetupRejectsSharedOllamaUnitCatalogs(t *testing.T) {
 	if err := request.Catalog.Validate(); err != nil {
 		t.Fatal("shared-unit catalog is valid for the CLI", err)
 	}
-	if err := Validate(request); err == nil || !strings.Contains(err.Error(), "catalog-only") {
-		t.Fatalf("shared-unit catalog accepted by setup: %v", err)
+	// Validate stays pure and cannot see the accepted snapshot; a new adopted
+	// shared pair is rejected at Apply, not at decode/plan time.
+	if err := Validate(request); err != nil {
+		t.Fatalf("pure validation rejected a shared-unit catalog: %v", err)
 	}
-	if err := backend.VerifyBindings(context.Background(), request); err == nil {
-		t.Fatal("verify-bindings accepted a shared-unit catalog")
+	if _, err := backend.Plan(home, request); err != nil {
+		t.Fatalf("plan preview rejected a carried pair: %v", err)
+	}
+	if err := backend.Apply(context.Background(), home, request); err == nil || !strings.Contains(err.Error(), "catalog-only") {
+		t.Fatalf("new adopted shared pair accepted by apply: %v", err)
 	}
 }

@@ -18,26 +18,28 @@ import (
 const cmdVerifyBindings = "verify-bindings"
 
 type setupActions struct {
-	home      func() (string, error)
-	apply     func(context.Context, string, setup.Request) error
-	reconcile func(context.Context, string) error
-	discover  func(context.Context, string) (setup.Discovery, error)
-	probe     func(context.Context, setup.ProbeRequest) (setup.ApplicationCandidate, error)
-	euid      func() int
-	verify    func(context.Context, setup.Request) error
-	inspect   func(string, control.NativeModel) (string, error)
+	home          func() (string, error)
+	apply         func(context.Context, string, setup.Request) error
+	reconcile     func(context.Context, string) error
+	discover      func(context.Context, string) (setup.Discovery, error)
+	probe         func(context.Context, setup.ProbeRequest) (setup.ApplicationCandidate, error)
+	euid          func() int
+	verify        func(context.Context, setup.Request) error
+	inspect       func(string, control.NativeModel) (string, error)
+	managerCgroup func(context.Context, string) (string, error)
 }
 
 func systemActions() setupActions {
 	return setupActions{
-		home:      setup.Home,
-		apply:     setup.Apply,
-		reconcile: setup.Reconcile,
-		discover:  setup.Discover,
-		probe:     setup.Probe,
-		euid:      os.Geteuid,
-		verify:    setup.VerifyBindings,
-		inspect:   runtime.InspectQualifiedNativeLaunch,
+		home:          setup.Home,
+		apply:         setup.Apply,
+		reconcile:     setup.Reconcile,
+		discover:      setup.Discover,
+		probe:         setup.Probe,
+		euid:          os.Geteuid,
+		verify:        setup.VerifyBindings,
+		inspect:       runtime.InspectQualifiedNativeLaunch,
+		managerCgroup: setup.ManagerCgroup,
 	}
 }
 
@@ -49,7 +51,7 @@ func main() {
 }
 func (a setupActions) run(args []string, input io.Reader, output io.Writer) error {
 	if len(args) != 1 {
-		return errors.New("usage: gpu-setup discover|probe|fingerprint|drafts|save-drafts|verify-bindings|validate|apply|reconcile|remove-integration")
+		return errors.New("usage: gpu-setup discover|probe|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|reconcile|remove-integration")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -58,7 +60,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return err
 	}
 	switch args[0] {
-	case "discover", "fingerprint", "probe", "reconcile", "save-drafts", cmdVerifyBindings, "validate", "apply":
+	case "discover", "fingerprint", "probe", "reconcile", "save-drafts", cmdVerifyBindings, "validate", "apply", "render-owned":
 		if a.euid() == 0 {
 			return errors.New("run guided setup as the desktop account, not root")
 		}
@@ -74,6 +76,8 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return runSaveDrafts(home, input, output)
 	case "fingerprint":
 		return a.fingerprint(input, output)
+	case "render-owned":
+		return a.renderOwned(ctx, home, input, output)
 	case "probe":
 		return a.runProbe(ctx, input, output)
 	case "reconcile":

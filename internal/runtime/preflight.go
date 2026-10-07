@@ -2,12 +2,24 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
+	"os"
+	"os/user"
+	"path/filepath"
+	"strconv"
+	"strings"
 )
+
+var ErrOrphanedOwnedUnit = errors.New("supervisor-owned unit not in catalog")
 
 func (m *SystemdManager) Preflight(ctx context.Context) error {
 	if m.config.Catalog != nil {
 		for _, p := range m.config.Catalog.Profiles {
+			if err := verifyOwnedSpec(p); err != nil {
+				return err
+			}
 			if err := m.verifyNativeBinding(ctx, p); err != nil {
 				return err
 			}
@@ -25,6 +37,77 @@ func (m *SystemdManager) Preflight(ctx context.Context) error {
 		if err := m.preflightWorkloadCgroup(ctx, p.Unit, p.Cgroup); err != nil {
 			return err
 		}
+	}
+	unitDir, err := m.ownedUnitDirectory()
+	if err != nil {
+		return err
+	}
+	return m.preflightOwned(ctx, unitDir)
+}
+
+// lookupAccountID is a seam for account-resolution faults.
+var lookupAccountID = user.LookupId
+
+// ownedUnitDirectory resolves the setup-managed unit directory from the
+// account record of the running euid — the same source setup uses — never
+// from the ambient HOME, and fails closed when the account is unresolvable.
+func (m *SystemdManager) ownedUnitDirectory() (string, error) {
+	if m.config.OwnedUnitDir != "" {
+		return m.config.OwnedUnitDir, nil
+	}
+	account, err := lookupAccountID(strconv.Itoa(os.Geteuid()))
+	if err != nil || account.HomeDir == "" {
+		return "", fmt.Errorf("owned unit directory unresolvable for euid %d: %w", os.Geteuid(), err)
+	}
+	return filepath.Join(account.HomeDir, ".config/systemd/user"), nil
+}
+
+// preflightOwned fails closed on supervisor-owned unit files the current
+// catalog cannot account for. It reads the directory only; unit contents are
+// verified elsewhere by digest.
+func (m *SystemdManager) preflightOwned(_ context.Context, unitDir string) error {
+	if unitDir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(unitDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	managed := map[string]bool{}
+	// An owned profile converted to adopted keeps its launch file on disk; an
+	// exact binding (this path with a proven fingerprint) accounts for it,
+	// while a drifted fingerprint stays fail-closed.
+	adopted := map[string]string{}
+	if m.config.Catalog != nil {
+		for _, p := range m.config.Catalog.Profiles {
+			if p.NativeModel == nil {
+				continue
+			}
+			if p.NativeModel.Owned != nil {
+				managed[p.Unit] = true
+				continue
+			}
+			if p.AdoptedOwnedFile() {
+				adopted[p.NativeModel.LaunchFile] = p.NativeModel.LaunchSHA256
+			}
+		}
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "gws-owned-") || !strings.HasSuffix(name, ".service") || managed[name] {
+			continue
+		}
+		path := filepath.Join(unitDir, name)
+		if sha, ok := adopted[path]; ok {
+			data, err := os.ReadFile(path)
+			if err == nil && fmt.Sprintf("%x", sha256.Sum256(data)) == sha {
+				continue
+			}
+		}
+		return ErrOrphanedOwnedUnit
 	}
 	return nil
 }

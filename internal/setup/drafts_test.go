@@ -97,3 +97,77 @@ func TestDraftBindingsRemainUntrustedAndRoundTrip(t *testing.T) {
 		t.Fatal("oversized binding accepted")
 	}
 }
+
+// TestDraftOwnedRejectsGrammarUnsafeValues fails at save time for model paths
+// or aliases that the unit command grammar cannot express, matching catalog
+// validation.
+func TestDraftOwnedRejectsGrammarUnsafeValues(t *testing.T) {
+	owned := func(modelPath, alias string) Draft {
+		return Draft{ID: "vision", Label: "Vision", App: "llama.cpp", Binding: &DraftBinding{Instance: "owned", Owned: &DraftOwnedLaunch{ModelPath: modelPath, Port: 9100, Alias: alias}}}
+	}
+	for name, d := range map[string]Draft{
+		"space in model path":     owned("/models/vision v2.gguf", ""),
+		"quote in model path":     owned(`/models/vis"ion.gguf`, ""),
+		"percent in model path":   owned("/models/vision%i.gguf", ""),
+		"dollar in model path":    owned("/models/$vision.gguf", ""),
+		"backslash in model path": owned(`/models/vis\ion.gguf`, ""),
+		"space in alias":          owned("/models/vision.gguf", "vision v2"),
+		"backtick in alias":       owned("/models/vision.gguf", "vis`ion"),
+	} {
+		if err := validateDrafts(1, []Draft{d}); err == nil {
+			t.Fatalf("%s saved", name)
+		}
+	}
+	if err := validateDrafts(1, []Draft{owned("/models/vision-v2.Q4_K_M.gguf", "vision-v2")}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDraftOwnedRejectsMissingSynthesisFields fails at save time for owned
+// drafts that OwnedProfile could never render: no instance, or an owned Ollama
+// draft without a model.
+func TestDraftOwnedRejectsMissingSynthesisFields(t *testing.T) {
+	for name, d := range map[string]Draft{
+		"llama without instance":  {ID: "vision", Label: "Vision", App: "llama.cpp", Binding: &DraftBinding{Owned: &DraftOwnedLaunch{ModelPath: "/models/vision.gguf", Port: 9100}}},
+		"ollama without instance": {ID: "vision", Label: "Vision", App: "ollama", Model: "vision", Binding: &DraftBinding{Owned: &DraftOwnedLaunch{Port: 9100}}},
+		"ollama without model":    {ID: "vision", Label: "Vision", App: "ollama", Binding: &DraftBinding{Instance: "owned", Owned: &DraftOwnedLaunch{Port: 9100}}},
+	} {
+		if err := validateDrafts(1, []Draft{d}); err == nil {
+			t.Fatalf("%s saved", name)
+		}
+	}
+	valid := Draft{ID: "vision", Label: "Vision", App: "ollama", Model: "vision", Binding: &DraftBinding{Instance: "owned", Owned: &DraftOwnedLaunch{Port: 9100}}}
+	if err := validateDrafts(1, []Draft{valid}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDraftOwnedRejectsInvalidInstanceSyntax applies the catalog's workload-ID
+// grammar to owned instances at save time.
+func TestDraftOwnedRejectsInvalidInstanceSyntax(t *testing.T) {
+	for _, instance := range []string{"Local", "bad!name", "white space", ""} {
+		d := Draft{ID: "vision", Label: "Vision", App: "llama.cpp", Binding: &DraftBinding{Instance: instance, Owned: &DraftOwnedLaunch{ModelPath: "/models/vision.gguf", Port: 9100}}}
+		if err := validateDrafts(1, []Draft{d}); err == nil {
+			t.Fatalf("instance %q saved", instance)
+		}
+	}
+	d := Draft{ID: "vision", Label: "Vision", App: "llama.cpp", Binding: &DraftBinding{Instance: "rig-2", Owned: &DraftOwnedLaunch{ModelPath: "/models/vision.gguf", Port: 9100}}}
+	if err := validateDrafts(1, []Draft{d}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDraftOwnedRejectsInvalidOllamaModel applies the catalog's model-identity
+// rule to owned Ollama drafts at save time.
+func TestDraftOwnedRejectsInvalidOllamaModel(t *testing.T) {
+	for _, model := range []string{"   ", "foo/", "/bar", "vis\x00ion", "a//b"} {
+		d := Draft{ID: "vision", Label: "Vision", App: "ollama", Model: model, Binding: &DraftBinding{Instance: "rig", Owned: &DraftOwnedLaunch{Port: 9100}}}
+		if err := validateDrafts(1, []Draft{d}); err == nil {
+			t.Fatalf("model %q saved", model)
+		}
+	}
+	d := Draft{ID: "vision", Label: "Vision", App: "ollama", Model: "library/vision:latest", Binding: &DraftBinding{Instance: "rig", Owned: &DraftOwnedLaunch{Port: 9100}}}
+	if err := validateDrafts(1, []Draft{d}); err != nil {
+		t.Fatal(err)
+	}
+}

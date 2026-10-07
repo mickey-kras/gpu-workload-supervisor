@@ -64,15 +64,9 @@ func Validate(request Request) error {
 			return errors.New("trusted paths must be absolute and clean")
 		}
 	}
-	for i, p := range request.Catalog.Profiles {
-		for _, q := range request.Catalog.Profiles[:i] {
-			if control.SharedOllamaUnit(p, q) {
-				return errors.New("shared Ollama units are catalog-only: apply the catalog with gpu-mode configure; setup does not create or verify shared-unit bindings")
-			}
-		}
-	}
 	return request.Catalog.Validate()
 }
+
 func Home() (string, error) {
 	account, err := user.LookupId(strconv.Itoa(os.Geteuid()))
 	if err != nil {
@@ -96,7 +90,22 @@ func (b Backend) Plan(home string, request Request) (Preview, error) {
 	}
 	profile := request.Profile
 	profile.ActivatedRelease = deployment.Release
-	return Preview{Release: deployment.Release, Profile: profile, Catalog: request.Catalog, Changes: []string{filepath.Join(home, ".config/gpu-workload-supervisor/operator.json"), "Commit validated workload catalog to " + profile.StatePath, "Enable packaged user reconciliation for future logins (no workload is started now)", "Retain verified binary/configuration/state backups; user units and models are unchanged"}}, nil
+	changes := []string{
+		filepath.Join(home, ".config/gpu-workload-supervisor/operator.json"),
+		"Commit validated workload catalog to " + profile.StatePath,
+		"Enable packaged user reconciliation for future logins (no workload is started now)",
+	}
+	ownedChanges, err := b.previewOwnedUnitChanges(home, request)
+	if err != nil {
+		return Preview{}, err
+	}
+	if len(ownedChanges) == 0 {
+		changes = append(changes, "Retain verified binary/configuration/state backups; user units and models are unchanged")
+	} else {
+		changes = append(changes, ownedChanges...)
+		changes = append(changes, "Retain verified binary/configuration/state backups")
+	}
+	return Preview{Release: deployment.Release, Profile: profile, Catalog: request.Catalog, Changes: changes}, nil
 }
 
 // Backend holds the host interactions setup performs. Tests inject fakes
@@ -105,6 +114,9 @@ type Backend struct {
 	makeRuntime      func(Request) (gpuruntime.Manager, error)
 	runCommand       func(ctx context.Context, name string, args ...string) ([]byte, error)
 	probeApplication func(ctx context.Context, request ProbeRequest) (ApplicationCandidate, error)
+	// qualifyOwned renders and qualifies an owned profile against the host
+	// before anything becomes durable; nil selects the runtime default.
+	qualifyOwned     func(control.WorkloadProfile) error
 	binaryDirectory  string
 	packageBinaryUID uint32
 }
@@ -115,12 +127,6 @@ func SystemBackend() Backend {
 
 func runtimeFor(request Request) (gpuruntime.Manager, error) {
 	return gpuruntime.NewSystemdManager(request.Profile.SystemdConfig(&request.Catalog))
-}
-func mkdirTrusted(path string) error {
-	if err := os.MkdirAll(path, 0700); err != nil {
-		return err
-	}
-	return TrustedDirectory(path)
 }
 
 // Apply never stops workloads. A caller must explicitly bring the existing
@@ -164,21 +170,66 @@ func (b Backend) Apply(ctx context.Context, home string, request Request) error 
 		return err
 	}
 	defer proxy.Close()
+	if err := b.resumeOwnedUnitJournal(ctx, home, request); err != nil {
+		return err
+	}
 	if err := work.inspect(ctx); err != nil {
 		return err
 	}
-	manager, err := work.verifyRuntimes(ctx)
+	if err := work.verifySharedPairPreservation(); err != nil {
+		return err
+	}
+	// Owned unit writes precede the quiescence check so newly rendered units
+	// are loaded when release evidence is gathered; deletes stay post-commit.
+	plan, err := b.planOwnedUnits(request, work.accepted, home)
 	if err != nil {
 		return err
 	}
+	if !plan.empty() {
+		journal := newOwnedUnitJournal(plan, request.Profile.StatePath)
+		if err := writeOwnedUnitJournal(work.root, journal); err != nil {
+			return err
+		}
+		// From the first unit write onward the installation is mutated: any
+		// failure, including a partial write loop or a failed reload, must roll
+		// back with the content snapshots.
+		if err := b.applyOwnedUnitWrites(ctx, home, plan, journal); err != nil {
+			return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
+		}
+		if err := b.daemonReloadOwnedUnits(ctx, request.Profile.SystemctlPath, plan.writeNames()); err != nil {
+			return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
+		}
+		// The loaded binding must match the written file before commit; a
+		// foreign drop-in or fragment would wedge the next supervisor preflight.
+		if err := b.verifyOwnedUnitBindings(ctx, request.Profile.SystemctlPath, home, plan.writeNames()); err != nil {
+			return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
+		}
+	}
+	// Any pre-commit failure must leave the committed installation untouched:
+	// roll back the journaled writes with their content snapshots.
+	manager, err := work.verifyRuntimes(ctx)
+	if err != nil {
+		return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
+	}
 	if err := work.backup(ctx); err != nil {
-		return err
+		return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
 	}
 	progress, err := work.enterMaintenance()
 	if err != nil {
-		return err
+		return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
 	}
-	return b.commitConfiguration(ctx, home, work.root, request, manager, progress.Fresh)
+	return b.commitConfiguration(ctx, commitOptions{home: home, root: work.root, request: request, manager: manager, fresh: progress.Fresh, plan: plan})
+}
+
+// commitOptions carries the durable commit's inputs: the activation context,
+// the runtime evidence source, and the owned-unit plan.
+type commitOptions struct {
+	home    string
+	root    string
+	request Request
+	manager gpuruntime.Manager
+	fresh   bool
+	plan    unitPlan
 }
 
 func (work *activationWork) inspect(ctx context.Context) error {
@@ -205,33 +256,6 @@ func (work *activationWork) inspect(ctx context.Context) error {
 		return errors.New("configuration revision changed; refresh setup before activation")
 	}
 	return nil
-}
-
-func (work activationWork) verifyRuntimes(ctx context.Context) (gpuruntime.Manager, error) {
-	manager, err := work.backend.makeRuntime(work.request)
-	if err != nil {
-		return nil, err
-	}
-	if err := manager.ReleasedFor(ctx, control.WorkloadIdle); err != nil {
-		return nil, fmt.Errorf("configured workloads have not released the GPU: %w", err)
-	}
-	if work.existing && work.old.StatePath != "" {
-		previous := work.request
-		previous.Profile = work.old
-		previous.Catalog = work.accepted.Catalog
-		// Before the first commit, only the recorded setup plan has a mapping.
-		if work.accepted.Revision == "" {
-			previous.Catalog = work.request.Catalog
-		}
-		oldManager, err := work.backend.makeRuntime(previous)
-		if err != nil {
-			return nil, err
-		}
-		if err := oldManager.ReleasedFor(ctx, control.WorkloadIdle); err != nil {
-			return nil, err
-		}
-	}
-	return manager, nil
 }
 
 func (work activationWork) backup(ctx context.Context) error {
@@ -286,8 +310,9 @@ func (work activationWork) enterMaintenance() (activation, error) {
 	return progress, deployment.Write(work.request.Profile.StatePath, marker)
 }
 
-func (b Backend) commitConfiguration(ctx context.Context, home, root string, request Request, manager gpuruntime.Manager, fresh bool) error {
+func (b Backend) commitConfiguration(ctx context.Context, c commitOptions) error {
 	// A crash from this point intentionally leaves the maintenance fence in place.
+	home, root, request, manager, plan := c.home, c.root, c.request, c.manager, c.plan
 	stateStore, err := store.Open(ctx, request.Profile.StatePath)
 	if err != nil {
 		return err
@@ -316,7 +341,7 @@ func (b Backend) commitConfiguration(ctx context.Context, home, root string, req
 	if err != nil {
 		return err
 	}
-	if fresh {
+	if c.fresh {
 		state, err := stateStore.State(ctx)
 		if err != nil {
 			return err
@@ -329,6 +354,11 @@ func (b Backend) commitConfiguration(ctx context.Context, home, root string, req
 			return err
 		}
 	}
+	// Pin the journal to committed the moment the catalog commit is durable and
+	// before the fence clears, so writes-pending reliably means "no commit".
+	if err := commitOwnedUnitJournal(root, plan); err != nil {
+		return err
+	}
 	if err := b.retainBinaries(root); err != nil {
 		return err
 	}
@@ -337,7 +367,20 @@ func (b Backend) commitConfiguration(ctx context.Context, home, root string, req
 	if err := b.enableReconciliation(ctx, home, profile.SystemctlPath); err != nil {
 		return err
 	}
-	return deployment.Write(profile.StatePath, deployment.Marker{Version: 1, Release: deployment.Release})
+	if err := deployment.Write(profile.StatePath, deployment.Marker{Version: 1, Release: deployment.Release}); err != nil {
+		return err
+	}
+	// The maintenance fence is cleared; owned-unit deletes run post-commit so a
+	// failed commit never loses files and deletes never need rollback.
+	if err := b.finalizeOwnedUnits(ctx, home, root, request, plan); err != nil {
+		return err
+	}
+	// Retire the activation record so only a genuinely interrupted activation
+	// guards the owned-units journal.
+	if err := os.Remove(filepath.Join(root, "activation.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // newer permits only a stable target with a strictly higher release core.

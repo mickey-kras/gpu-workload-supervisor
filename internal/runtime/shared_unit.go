@@ -150,6 +150,11 @@ func (m *SystemdManager) releasedSharedOllama(ctx context.Context, p control.Wor
 			return fmt.Errorf("%s model %s is still loaded", p.Unit, model)
 		}
 	}
+	// Quiescence is not binding proof: an active shared unit must still sit at
+	// the exact manager-root derivation, same as the dead branch.
+	if err := m.verifyManagerCgroup(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
