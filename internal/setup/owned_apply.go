@@ -65,6 +65,24 @@ func pruneOwnedUnitJournal(root string, plan unitPlan) error {
 func (b Backend) previewOwnedUnitChanges(home string, request Request) ([]string, error) {
 	var changes []string
 	dir := ownedUnitDirectory(home)
+	// One read-only catalog fetch per preview, shared by writes and removals.
+	var snapshot control.CatalogSnapshot
+	proven := map[string]string{}
+	if _, err := os.Stat(request.Profile.StatePath); !errors.Is(err, os.ErrNotExist) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		snapshot, err = ReadCatalog(ctx, request.Profile.StatePath)
+		if err != nil {
+			return nil, err
+		}
+		entries, err := acceptedOwnedUnitEntries(snapshot.Catalog, home)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			proven[e.unit] = e.proof
+		}
+	}
 	for _, p := range request.Catalog.Profiles {
 		if p.NativeModel == nil || p.NativeModel.Owned == nil {
 			continue
@@ -80,9 +98,14 @@ func (b Backend) previewOwnedUnitChanges(home string, request Request) ([]string
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, err
 		}
+		// Same ownership proof as the plan: existing content must be the
+		// accepted rendering, or apply would collide after confirmation.
+		if err == nil && proven[p.Unit] != digest(current) {
+			return nil, fmt.Errorf("%w: %s", ErrOwnedUnitCollision, p.Unit)
+		}
 		changes = append(changes, "Write supervisor-owned unit "+p.Unit+" under ~/.config/systemd/user")
 	}
-	removals, err := b.plannedOwnedUnitRemovals(home, request)
+	removals, err := b.plannedOwnedUnitRemovals(home, request, snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -93,17 +116,8 @@ func (b Backend) previewOwnedUnitChanges(home string, request Request) ([]string
 }
 
 // plannedOwnedUnitRemovals lists owned units in the accepted catalog that the
-// request drops. Without a state database nothing has been accepted yet.
-func (b Backend) plannedOwnedUnitRemovals(home string, request Request) ([]string, error) {
-	if _, err := os.Stat(request.Profile.StatePath); errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	snapshot, err := ReadCatalog(ctx, request.Profile.StatePath)
-	if err != nil {
-		return nil, err
-	}
+// request drops. A zero snapshot means nothing has been accepted yet.
+func (b Backend) plannedOwnedUnitRemovals(home string, request Request, snapshot control.CatalogSnapshot) ([]string, error) {
 	entries, err := acceptedOwnedUnitEntries(snapshot.Catalog, home)
 	if err != nil {
 		return nil, err

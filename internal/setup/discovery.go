@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"time"
 
@@ -68,16 +69,28 @@ func (b Backend) Discover(ctx context.Context, home string) (Discovery, error) {
 	}
 	result.Units = []string{}
 	b.discoverApplications(ctx, &result, units)
-	result.OwnedUnits = discoverOwnedUnits(home, result.Request.Catalog)
+	owned, err := discoverOwnedUnits(home, result.Request.Catalog)
+	if err != nil {
+		return result, err
+	}
+	result.OwnedUnits = owned
 	return result, nil
 }
 
+// ErrOwnedUnitDiscovery marks an owned-unit directory that exists but cannot
+// be inspected; runtime preflight propagates the same failure, so discovery
+// must fail loudly instead of reporting an empty inventory.
+var ErrOwnedUnitDiscovery = errors.New("owned unit directory unreadable")
+
 // discoverOwnedUnits inventories supervisor-owned unit files by directory
 // listing and content digest only; it never parses unit contents.
-func discoverOwnedUnits(home string, catalog control.Catalog) []OwnedUnitStatus {
+func discoverOwnedUnits(home string, catalog control.Catalog) ([]OwnedUnitStatus, error) {
 	entries, err := os.ReadDir(ownedUnitDirectory(home))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("%w: %w", ErrOwnedUnitDiscovery, err)
 	}
 	managed := map[string]string{}
 	// Exact adopted bindings (owned profiles converted to adopted while keeping
@@ -119,7 +132,7 @@ func discoverOwnedUnits(home string, catalog control.Catalog) []OwnedUnitStatus 
 		}
 		owned = append(owned, status)
 	}
-	return owned
+	return owned, nil
 }
 
 func discoverCurrent(ctx context.Context, root string, result *Discovery) error {

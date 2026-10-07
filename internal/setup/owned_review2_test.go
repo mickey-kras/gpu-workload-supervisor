@@ -874,7 +874,10 @@ func TestDiscoveryReportsUntrustedOwnedUnit(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "gws-owned-dir.service"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	owned := discoverOwnedUnits(home, control.Catalog{})
+	owned, err := discoverOwnedUnits(home, control.Catalog{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(owned) != 2 {
 		t.Fatalf("untrusted entries omitted: %+v", owned)
 	}
@@ -1177,12 +1180,18 @@ func TestDiscoveryAccountsAdoptedOwnedBinding(t *testing.T) {
 		Cgroup: "/user.slice/x", HealthURL: "http://127.0.0.1:9100/health",
 		NativeModel: &control.NativeModel{Runtime: "llama.cpp", Instance: "second", Model: "vision", Endpoint: "http://127.0.0.1:9100", LaunchFile: filepath.Join(dir, "gws-owned-vision.service"), LaunchSHA256: digest(raw)},
 	}
-	owned := discoverOwnedUnits(home, control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{adopted}})
+	owned, err := discoverOwnedUnits(home, control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{adopted}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(owned) != 1 || owned[0].State != "managed" {
 		t.Fatalf("adopted binding not accounted: %+v", owned)
 	}
 	adopted.NativeModel.LaunchSHA256 = digest([]byte("drifted"))
-	owned = discoverOwnedUnits(home, control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{adopted}})
+	owned, err = discoverOwnedUnits(home, control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{adopted}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(owned) != 1 || owned[0].State != "orphaned" {
 		t.Fatalf("drifted binding misclassified: %+v", owned)
 	}
@@ -1688,5 +1697,71 @@ func TestRollbackSkipsUntouchedUnitsAndPrunesJournal(t *testing.T) {
 	}
 	if _, present, _ := readOwnedUnitJournal(filepath.Join(home, ".config/gpu-workload-supervisor")); present {
 		t.Fatal("journal left behind after recovery")
+	}
+}
+
+// TestPlanPreviewRejectsOwnedUnitCollision makes the preview plan-accurate:
+// foreign or drifted content at the destination fails validate with the same
+// typed error apply would return, instead of previewing a doomed write.
+func TestPlanPreviewRejectsOwnedUnitCollision(t *testing.T) {
+	t.Run("foreign file without accepted binding", func(t *testing.T) {
+		backend, home, r := fixture(t)
+		backend.runCommand = fakeOwnedCommandFor(home)
+		profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+		r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+		dir := ownedUnitDirectory(home)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, profile.Unit), []byte("foreign"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := backend.Plan(home, r); !errors.Is(err, ErrOwnedUnitCollision) {
+			t.Fatalf("foreign destination previewed as writable: %v", err)
+		}
+	})
+
+	t.Run("drifted accepted unit", func(t *testing.T) {
+		backend, home, r := fixture(t)
+		backend.runCommand = fakeOwnedCommandFor(home)
+		profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+		r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+		if err := backend.Apply(context.Background(), home, r); err != nil {
+			t.Fatal(err)
+		}
+		updated, _ := ownedFixtureProfile(t, home, "vision", 9101)
+		path := filepath.Join(ownedUnitDirectory(home), profile.Unit)
+		if err := os.WriteFile(path, []byte("hand edited"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{updated}}
+		if _, err := backend.Plan(home, r); !errors.Is(err, ErrOwnedUnitCollision) {
+			t.Fatalf("drifted unit previewed as writable: %v", err)
+		}
+	})
+}
+
+// TestDiscoveryErrorsOnUnreadableUnitDir propagates directory inspection
+// failures like runtime preflight does, while a missing directory stays an
+// empty inventory.
+func TestDiscoveryErrorsOnUnreadableUnitDir(t *testing.T) {
+	home := t.TempDir()
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0000); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0700)
+	if _, err := discoverOwnedUnits(home, control.Catalog{}); !errors.Is(err, ErrOwnedUnitDiscovery) {
+		t.Fatalf("unreadable dir reported empty inventory: %v", err)
+	}
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	owned, err := discoverOwnedUnits(home, control.Catalog{})
+	if err != nil || len(owned) != 0 {
+		t.Fatalf("missing dir = %v %+v", err, owned)
 	}
 }

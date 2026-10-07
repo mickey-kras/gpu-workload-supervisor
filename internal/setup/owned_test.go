@@ -572,7 +572,11 @@ func TestDiscoverOwnedUnitsStates(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog := control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
-	if got := discoverOwnedUnits(home, catalog); len(got) != 0 {
+	got, err := discoverOwnedUnits(home, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
 		t.Fatalf("empty scan %+v", got)
 	}
 	write := func(name string, data []byte) {
@@ -584,7 +588,10 @@ func TestDiscoverOwnedUnitsStates(t *testing.T) {
 	write("gwsowned-not-mine.service", []byte("x"))
 	write("gws-owned-stale.service", []byte("y"))
 	write("other.service", []byte("z"))
-	got := discoverOwnedUnits(home, catalog)
+	got, err = discoverOwnedUnits(home, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
 	states := map[string]string{}
 	for _, u := range got {
 		states[u.Name] = u.State
@@ -593,7 +600,10 @@ func TestDiscoverOwnedUnitsStates(t *testing.T) {
 		t.Fatalf("scan %+v", got)
 	}
 	write(profile.Unit, []byte("edited"))
-	got = discoverOwnedUnits(home, catalog)
+	got, err = discoverOwnedUnits(home, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
 	states = map[string]string{}
 	for _, u := range got {
 		states[u.Name] = u.State
