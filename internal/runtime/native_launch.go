@@ -110,16 +110,21 @@ func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value strin
 		if runtimeName != "ollama" {
 			return ErrLaunchUnsupported
 		}
-		if value == "OLLAMA_NO_CLOUD=1" && !u.cloudOff {
-			u.cloudOff = true
-		} else if strings.HasPrefix(value, "OLLAMA_HOST=") && u.host == "" {
-			u.host = strings.TrimPrefix(value, "OLLAMA_HOST=")
-		} else if value == "OLLAMA_MAX_LOADED_MODELS=1" && !u.maxLoadedPinned {
-			u.maxLoadedPinned = true
-		} else {
-			return ErrLaunchUnsupported
-		}
+		return u.applyOllamaEnvironment(value)
 	default:
+		return ErrLaunchUnsupported
+	}
+	return nil
+}
+
+func (u *parsedLaunchUnit) applyOllamaEnvironment(value string) error {
+	if value == "OLLAMA_NO_CLOUD=1" && !u.cloudOff {
+		u.cloudOff = true
+	} else if strings.HasPrefix(value, "OLLAMA_HOST=") && u.host == "" {
+		u.host = strings.TrimPrefix(value, "OLLAMA_HOST=")
+	} else if value == "OLLAMA_MAX_LOADED_MODELS=1" && !u.maxLoadedPinned {
+		u.maxLoadedPinned = true
+	} else {
 		return ErrLaunchUnsupported
 	}
 	return nil
