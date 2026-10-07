@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
 // seedCatalog durably accepts a two-workload catalog through the configure
@@ -377,4 +379,61 @@ func TestCLIShowSettingsPrintsCommittedIdlePolicy(t *testing.T) {
 	if result.LastActivityAt == nil || result.ArmedDeadline != nil || result.AttestationAt != nil {
 		t.Fatalf("seeded policy state = %+v", result)
 	}
+}
+
+func TestCLIIdlePolicyTick(t *testing.T) {
+	previous := os.Args
+	defer func() { os.Args = previous }()
+
+	t.Run("off policy is a clean no-op", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "state.db")
+		seedCatalog(t, path)
+		os.Args = []string{"gpu-mode", "-state", path, "-systemctl", "/usr/bin/true", "idle-policy-tick"}
+		if err := run(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("enabled policy fails closed without evidence", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "state.db")
+		seedCatalog(t, path)
+		ctx := context.Background()
+		s, err := store.Open(ctx, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state, err := s.State(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state.Phase = control.PhaseStable
+		state.DesiredWorkload = control.WorkloadText
+		state.ActiveWorkload = control.WorkloadText
+		state.Admission = control.AdmissionOpen
+		state, err = s.UpdateState(ctx, state.Version, state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		snap, err := s.Catalog(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		settings, err := s.Settings(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := control.SettingsPrecondition{
+			Incarnation: state.LeaseFence.Incarnation, Version: state.Version, Owner: state.Owner,
+			ConfigurationRevision: snap.Revision, SettingsRevision: settings.SettingsRevision,
+		}
+		if _, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 5}, true); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		os.Args = []string{"gpu-mode", "-state", path, "-systemctl", "/usr/bin/true", "idle-policy-tick"}
+		if err := run(); err == nil || !strings.Contains(err.Error(), "evidence") {
+			t.Fatalf("enabled tick without evidence: %v", err)
+		}
+	})
 }

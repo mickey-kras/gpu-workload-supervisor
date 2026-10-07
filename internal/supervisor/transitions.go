@@ -126,6 +126,9 @@ func stableTarget(state control.State, owner control.Owner, target control.Workl
 	state.Phase = control.PhaseStable
 	state.Health = control.HealthHealthy
 	state.Admission = control.AdmissionClosed
+	// A committed target starts fresh: any armed idle deadline was disarmed at
+	// transition start, and the next tick must re-verify before arming again.
+	state.PendingIdleDeadline = nil
 	if owner == control.OwnerSupervisor && target != control.WorkloadIdle {
 		state.Admission = control.AdmissionOpen
 	}

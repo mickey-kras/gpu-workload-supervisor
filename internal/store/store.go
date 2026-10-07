@@ -59,6 +59,13 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	return open(ctx, path, time.Now, control.NewUUID)
 }
 
+// OpenWithClock opens the store with an explicit clock. The policy engine's
+// deadline arithmetic is clock-driven, so supervision tests use this seam to
+// travel time deterministically.
+func OpenWithClock(ctx context.Context, path string, now Clock) (*Store, error) {
+	return open(ctx, path, now, control.NewUUID)
+}
+
 func OpenRestored(ctx context.Context, path string) (*Store, error) {
 	return openWithMode(ctx, path, time.Now, control.NewUUID, true)
 }
@@ -140,7 +147,7 @@ func validateRestoredDatabase(ctx context.Context, db *sql.DB) error {
 	if migrations == 0 {
 		return errors.New("restored state database is not initialized")
 	}
-	if _, err := readState(ctx, db); err != nil {
+	if _, err := readControlState(ctx, db); err != nil {
 		return fmt.Errorf("restored control state is invalid: %w", err)
 	}
 	return nil
@@ -173,6 +180,10 @@ func (s *Store) RotateFenceAndCloseAdmission(ctx context.Context, expected uint6
 		state.Admission = control.AdmissionClosed
 		state.Version++
 		state.UpdatedAt = s.now().UTC()
+		if err := s.disarmIdleDeadline(ctx, tx); err != nil {
+			return control.State{}, err
+		}
+		state.PendingIdleDeadline = nil
 		if err := writeState(ctx, tx, state); err != nil {
 			return control.State{}, err
 		}
@@ -232,6 +243,10 @@ func (s *Store) rotateIncarnation(ctx context.Context, tx *sql.Tx, state control
 	state.ActiveWorkload = control.WorkloadUnknown
 	state.Version++
 	state.UpdatedAt = s.now().UTC()
+	if err := s.disarmIdleDeadline(ctx, tx); err != nil {
+		return control.State{}, err
+	}
+	state.PendingIdleDeadline = nil
 	if err := state.Validate(); err != nil {
 		return control.State{}, err
 	}
@@ -304,6 +319,23 @@ type querier interface {
 }
 
 func readState(ctx context.Context, q querier) (control.State, error) {
+	state, err := readControlState(ctx, q)
+	if err != nil {
+		return state, err
+	}
+	policy, err := readPolicyState(ctx, q)
+	if err != nil {
+		return control.State{}, err
+	}
+	state.IdlePolicy = policy.Policy
+	state.PendingIdleDeadline = policy.ArmedDeadline
+	return state, state.Validate()
+}
+
+// readControlState reads only the control_state singleton. Restore preflight
+// runs it before pending migrations apply, so it must not depend on tables
+// introduced after the restored backup was taken.
+func readControlState(ctx context.Context, q querier) (control.State, error) {
 	var state control.State
 	var updated string
 	err := q.QueryRowContext(ctx, `SELECT owner, desired_workload, active_workload, phase,

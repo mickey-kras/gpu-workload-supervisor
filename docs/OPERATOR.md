@@ -100,12 +100,60 @@ mixed-version peer that does not know these actions answers `invalid_request`
 with the strict error shape, which clients treat as the idle policy being
 unavailable.
 
+## Demand activation
+
+`activate-workload` starts a catalog workload from the idle, admission-closed
+supervisor state. It carries the complete `expected` object from a fresh
+successful status and a `target` workload (a configured profile, never
+`idle`); no `settings` field. The store revalidates the operator precondition
+plus owner=supervisor, phase=stable, health=healthy, admission=closed,
+active/desired=idle, and zero unfinished admitted work inside the writer
+transaction.
+
+```json
+{"protocolVersion":1,"requestId":"r5","action":"activate-workload","expected":{"incarnation":"opaque","version":"42","owner":"supervisor","configurationRevision":"opaque"},"target":"text"}
+```
+
+A committed activation rotates the lease fence; the successful response
+additionally carries the fresh fence for exactly one execution generation:
+
+```json
+{"protocolVersion":1,"requestId":"r5","code":"ok","status":{"owner":"supervisor","...":"..."},"leaseFence":{"incarnation":"opaque","epoch":"7"}}
+```
+
+Activation never interrupts: a running transition stays `busy`, user
+ownership is `wrong_owner`, a recovery latch is `recovery_required`, a stale
+precondition is `stale_state`. When the precondition was readable but the
+workload cannot start now — an active workload (`active != idle`) or
+unfinished admitted work — the response is `deferred` and includes the
+observed current `status`; `deferred` latches nothing and may be retried.
+Activation uses the mutation-class lifetime.
+
+## Inactivity policy tick
+
+`gpu-mode idle-policy-tick` is the oneshot policy evaluation driven by the
+`gpu-workload-supervisor-idle.timer` user timer (every 60 seconds, gated on
+`ConditionPathExists=%h/.config/gpu-workload-supervisor/operator.json`). It
+reads the committed settings and durable state; an Off policy, user
+ownership, a non-stable or latched state, or an active/unknown workload
+no-ops after disarming any armed deadline. With no qualified evidence
+provider configured, an enabled policy fails closed: the tick exits nonzero
+and never idles. When qualified fresh evidence (attestation no older than 120
+seconds) shows no queued/reserved/running/unresolved work and no unfinished
+admissions, the tick commits a verified armed deadline (last activity +
+timeout). Once the armed deadline has elapsed without newer activity, the
+tick drains the workload into idle. Any preemption — new activity, an
+admission, a state change — aborts cleanly with exit 0 and no latch; the next
+tick re-verifies from fresh evidence.
+
 Status and mutations both use the same nonblocking controller gate. `busy` means
 no request was queued. Errors contain no status and use exactly:
 `invalid_request`, `unsupported_version`, `incompatible_configuration`,
-`stale_state`, `wrong_owner`, `busy`, `recovery_required`, `timeout`, `unavailable`.
-Invalid request envelopes may have an empty correlation ID. Error responses do
-not disclose profile paths or runtime output.
+`stale_state`, `wrong_owner`, `busy`, `recovery_required`, `timeout`,
+`unavailable`, `deferred`. A `deferred` activation response additionally
+carries the observed current status. Invalid request envelopes may have an
+empty correlation ID. Error responses do not disclose profile paths or
+runtime output.
 
 ## Lifetimes and limits
 

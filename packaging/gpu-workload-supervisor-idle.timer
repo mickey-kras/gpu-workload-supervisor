@@ -1,0 +1,9 @@
+[Unit]
+Description=GPU workload supervisor inactivity policy timer
+
+[Timer]
+OnUnitActiveSec=60s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

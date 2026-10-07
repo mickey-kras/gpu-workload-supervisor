@@ -73,6 +73,12 @@ type State struct {
 	LeaseFence      Fence     `json:"leaseFence"`
 	Version         uint64    `json:"version"`
 	UpdatedAt       time.Time `json:"updatedAt"`
+	// IdlePolicy and PendingIdleDeadline are read-model fields loaded from
+	// operator_settings / idle_policy_state; write paths never persist them
+	// through control_state (they carry over in memory and are re-read from
+	// their own tables on the next load).
+	IdlePolicy          IdlePolicy `json:"idlePolicy"`
+	PendingIdleDeadline *time.Time `json:"pendingIdleDeadline,omitempty"`
 }
 
 func InitialState(incarnation string, now time.Time) State {
@@ -134,6 +140,14 @@ func (s State) validateFields() error {
 	}
 	if s.UpdatedAt.IsZero() {
 		return errors.New("updated timestamp is empty")
+	}
+	if err := s.IdlePolicy.Validate(); err != nil {
+		return err
+	}
+	// An armed deadline is only meaningful on an open, stable, supervisor-owned
+	// workload; carrying it anywhere else is a bug, so fail closed.
+	if s.PendingIdleDeadline != nil && (s.Owner != OwnerSupervisor || s.Phase != PhaseStable || s.Health == HealthError || s.Admission != AdmissionOpen) {
+		return errors.New("pending idle deadline requires stable open supervisor ownership")
 	}
 	return nil
 }

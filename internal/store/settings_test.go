@@ -43,7 +43,9 @@ func stableSettingsFixture(t *testing.T, s *Store) (control.SettingsPrecondition
 		t.Fatal(err)
 	}
 	state.Phase = control.PhaseStable
-	state.ActiveWorkload = control.WorkloadIdle
+	state.DesiredWorkload = control.WorkloadText
+	state.ActiveWorkload = control.WorkloadText
+	state.Admission = control.AdmissionOpen
 	if _, err := s.UpdateState(ctx, state.Version, state); err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +170,7 @@ func TestSetIdlePolicyRejectsStalePreconditionsWithoutEffects(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				current.Admission = control.AdmissionClosed
 				if mode == "unstable phase" {
 					current.Phase = control.PhaseDraining
 				} else {

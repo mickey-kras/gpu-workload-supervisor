@@ -54,7 +54,7 @@ The policy loop consumes one attestation from the orchestration adapter; no othe
 
 1. Content: queued, reserved, running, and unresolved work sets, each as a set of job identities. Unresolved maps to store primitives: `PendingWork` (registrations retaining completion authority); `ResolveUnfinishedWork` stays reserved for verified operator recovery, never for policy cleanup.
 2. Push vs pull: open decision. Pull on each policy evaluation is the default; push invalidation may supplement but never replaces a fresh pull at decision time.
-3. Freshness: the attestation carries an adapter timestamp; attestations older than a bounded staleness limit are treated as missing. Limit value set at implementation, recorded here.
+3. Freshness: the attestation carries an adapter timestamp; attestations older than a bounded staleness limit are treated as missing. Limit value set at implementation, recorded here. **Implementation: 120 seconds (`MaxAttestationAge` in `internal/supervisor/policy.go`); the user timer ticks every 60 seconds (`packaging/gpu-workload-supervisor-idle.timer`).**
 4. Adapter outage or unreachable adapter -> fail closed: evidence counts as missing, no idle transition.
 5. Uncertain, partial, or missing attestation -> no idle transition.
 

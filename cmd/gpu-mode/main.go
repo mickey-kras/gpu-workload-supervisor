@@ -21,10 +21,11 @@ import (
 )
 
 const (
-	restoreStateCommand = "restore-state"
-	pruneAuditCommand   = "prune-audit"
-	showSettingsCommand = "show-settings"
-	localCLIInitiator   = "local-cli"
+	restoreStateCommand   = "restore-state"
+	pruneAuditCommand     = "prune-audit"
+	showSettingsCommand   = "show-settings"
+	idlePolicyTickCommand = "idle-policy-tick"
+	localCLIInitiator     = "local-cli"
 )
 
 func main() {
@@ -182,6 +183,11 @@ func executeWithState(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Mana
 	if err != nil {
 		return err
 	}
+	// The oneshot policy tick carries no qualified evidence provider yet, so an
+	// enabled policy fails closed; an Off policy is a clean no-op.
+	if command == idlePolicyTickCommand {
+		return controller.PolicyTick(ctx, nil)
+	}
 	return executeCommand(ctx, controller, command, options.resolveReason, control.Workload(options.target))
 }
 
@@ -200,7 +206,7 @@ func validateCommandFlags(flags *flag.FlagSet, target string) error {
 		return errors.New("-release-max-used-mib has been removed: configure workload cgroups in the catalog; optional target capacity uses profile requiredMiB plus -capacity-headroom-mib")
 	}
 	if flags.NArg() != 1 {
-		return errors.New("usage: gpu-mode [flags] configure|switch|restore-state|prune-audit|verify-host|status|reconcile|recover|resolve-work|take-control|user-switch|return-control|recover-user|show-settings")
+		return errors.New("usage: gpu-mode [flags] configure|switch|restore-state|prune-audit|verify-host|status|reconcile|recover|resolve-work|take-control|user-switch|return-control|recover-user|show-settings|idle-policy-tick")
 	}
 	if auditFlag && flags.Arg(0) != pruneAuditCommand {
 		return errors.New("-audit-before and -audit-batch require prune-audit")
