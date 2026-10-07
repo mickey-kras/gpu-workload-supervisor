@@ -1,0 +1,328 @@
+package setup
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"time"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+)
+
+// abortOwnedUnitWrites rolls back pre-commit unit writes and drops the pending
+// journal so a later apply starts from the committed installation, not from
+// half-applied uncommitted content.
+func (b Backend) abortOwnedUnitWrites(ctx context.Context, home, root string, request Request, plan unitPlan, cause error) error {
+	if plan.empty() {
+		return cause
+	}
+	if err := b.rollbackOwnedUnitWrites(ctx, home, request.Profile.SystemctlPath, plan); err != nil {
+		cause = errors.Join(cause, err)
+	}
+	if err := clearOwnedUnitJournal(root); err != nil {
+		cause = errors.Join(cause, err)
+	}
+	return cause
+}
+
+// previewOwnedUnitChanges reports the owned-unit writes and removals the
+// request will cause so the activation preview is never materially false.
+// The preview mirrors planOwnedUnits semantics: idempotent writes and
+// referenced deletions are not changes.
+func (b Backend) previewOwnedUnitChanges(home string, request Request) ([]string, error) {
+	var changes []string
+	dir := ownedUnitDirectory(home)
+	for _, p := range request.Catalog.Profiles {
+		if p.NativeModel == nil || p.NativeModel.Owned == nil {
+			continue
+		}
+		raw, err := ownedRenderChecked(p)
+		if err != nil {
+			return nil, err
+		}
+		current, err := privateRead(filepath.Join(dir, p.Unit))
+		if err == nil && digest(current) == digest(raw) {
+			continue
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		changes = append(changes, "Write supervisor-owned unit "+p.Unit+" under ~/.config/systemd/user")
+	}
+	removals, err := b.plannedOwnedUnitRemovals(home, request)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range removals {
+		changes = append(changes, "Remove supervisor-owned unit "+name+" from ~/.config/systemd/user")
+	}
+	return changes, nil
+}
+
+// plannedOwnedUnitRemovals lists owned units in the accepted catalog that the
+// request drops. Without a state database nothing has been accepted yet.
+func (b Backend) plannedOwnedUnitRemovals(home string, request Request) ([]string, error) {
+	if _, err := os.Stat(request.Profile.StatePath); errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stateStore, err := store.Open(ctx, request.Profile.StatePath)
+	if err != nil {
+		return nil, err
+	}
+	defer stateStore.Close()
+	snapshot, err := stateStore.Catalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+	kept := map[string]bool{}
+	for _, p := range request.Catalog.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Owned != nil {
+			kept[p.Unit] = true
+		}
+	}
+	dir := ownedUnitDirectory(home)
+	var removals []string
+	for _, p := range snapshot.Catalog.Profiles {
+		if p.NativeModel == nil || p.NativeModel.Owned == nil || kept[p.Unit] {
+			continue
+		}
+		raw, err := ownedRenderChecked(p)
+		if err != nil {
+			return nil, err
+		}
+		path := filepath.Join(dir, p.Unit)
+		if ownedUnitStillReferenced(request.Catalog, path, digest(raw)) {
+			continue
+		}
+		if _, err := privateRead(path); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return nil, err
+		}
+		removals = append(removals, p.Unit)
+	}
+	return removals, nil
+}
+
+// commitOwnedUnitJournal pins the owned-units journal to committed immediately
+// after the catalog transaction resolves, closing the window where a crash
+// would otherwise look like a pre-commit crash and lose proven deletes.
+func commitOwnedUnitJournal(root string, plan unitPlan) error {
+	if plan.empty() {
+		return nil
+	}
+	journal, present, err := readOwnedUnitJournal(root)
+	if err != nil {
+		return err
+	}
+	if !present {
+		return errors.New("owned-units journal missing after catalog commit")
+	}
+	journal.Phase = ownedJournalCommitted
+	return writeOwnedUnitJournal(root, journal)
+}
+
+// finalizeOwnedUnits performs the post-commit owned-unit effects: journaled
+// content-proof deletes, one daemon-reload, and verification that every owned
+// profile in the committed catalog has its exact rendering on disk.
+func (b Backend) finalizeOwnedUnits(ctx context.Context, home, root string, request Request, plan unitPlan) error {
+	if plan.empty() {
+		return nil
+	}
+	journal, present, err := readOwnedUnitJournal(root)
+	if err != nil {
+		return err
+	}
+	if !present {
+		return errors.New("owned-units journal missing after catalog commit")
+	}
+	if journal.Phase != ownedJournalCommitted {
+		return errors.New("owned-units journal not pinned to the committed catalog")
+	}
+	if err := b.applyOwnedUnitDeletes(ctx, home, journal); err != nil {
+		return err
+	}
+	if err := b.daemonReloadOwnedUnits(ctx, request.Profile.SystemctlPath, plan.unitNames()); err != nil {
+		return err
+	}
+	for _, p := range request.Catalog.Profiles {
+		if p.NativeModel == nil || p.NativeModel.Owned == nil {
+			continue
+		}
+		raw, err := ownedRenderChecked(p)
+		if err != nil {
+			return err
+		}
+		data, err := privateRead(filepath.Join(ownedUnitDirectory(home), p.Unit))
+		if err != nil {
+			return err
+		}
+		if digest(data) != digest(raw) {
+			return fmt.Errorf("%w: %s", gpuruntime.ErrLaunchChanged, p.Unit)
+		}
+	}
+	return clearOwnedUnitJournal(root)
+}
+
+// resumeOwnedUnitJournal replays a stale owned-units journal from a previous
+// post-commit crash before planning. Deletes are idempotent; a new request
+// that rewrites a journaled delete drops it only when the digests agree, and
+// divergent content is never deleted or overwritten without proof.
+func (b Backend) resumeOwnedUnitJournal(ctx context.Context, home string, req Request) error {
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	journal, present, err := readOwnedUnitJournal(root)
+	if err != nil || !present {
+		return err
+	}
+	// A different request must never consume the interrupted activation's
+	// journal: its proven deletes belong to the recorded original request.
+	if err := requireMatchingActivation(root, req); err != nil {
+		return err
+	}
+	marker, err := deployment.Read(req.Profile.StatePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if journal.Phase == ownedJournalPending {
+		if !marker.Maintenance {
+			// The journal is pinned to committed before the fence clears, so
+			// writes-pending without a fence genuinely means no commit.
+			return clearOwnedUnitJournal(root)
+		}
+		committed, err := catalogMatchesRequest(ctx, req)
+		if err != nil {
+			return err
+		}
+		if !committed {
+			// Genuine pre-commit crash: the activation fence replays the
+			// original request verbatim, and its plan rewrites this journal.
+			return nil
+		}
+		// Crash between the catalog commit and the journal pin: fall through
+		// and replay the proven deletes now.
+	}
+	var reloaded []string
+	removed := false
+	for name, proof := range journal.Deletes {
+		path := filepath.Join(ownedUnitDirectory(home), name)
+		current, err := privateRead(path)
+		if errors.Is(err, os.ErrNotExist) {
+			// The delete already ran; systemd may still have the unit cached,
+			// so the reload below must still happen.
+			reloaded = append(reloaded, name)
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if p, ok := ownedProfileForUnit(req.Catalog, name); ok {
+			raw, err := ownedRenderChecked(p)
+			if err != nil {
+				return err
+			}
+			if digest(raw) != proof {
+				return fmt.Errorf("%w: %s", ErrOwnedUnitModified, name)
+			}
+			continue
+		}
+		if digest(current) != proof {
+			return fmt.Errorf("%w: %s", ErrOwnedUnitModified, name)
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		reloaded = append(reloaded, name)
+		removed = true
+	}
+	if removed {
+		if err := syncDir(ownedUnitDirectory(home)); err != nil {
+			return err
+		}
+	}
+	if len(reloaded) > 0 {
+		if err := b.daemonReloadOwnedUnits(ctx, req.Profile.SystemctlPath, reloaded); err != nil {
+			return err
+		}
+	}
+	return clearOwnedUnitJournal(root)
+}
+
+// catalogMatchesRequest reports whether the committed catalog already equals
+// the request's, which proves the previous activation committed before it
+// crashed.
+func catalogMatchesRequest(ctx context.Context, req Request) (bool, error) {
+	stateStore, err := store.Open(ctx, req.Profile.StatePath)
+	if err != nil {
+		return false, err
+	}
+	defer stateStore.Close()
+	snapshot, err := stateStore.Catalog(ctx)
+	if err != nil {
+		return false, err
+	}
+	return reflect.DeepEqual(snapshot.Catalog, req.Catalog), nil
+}
+
+func ownedProfileForUnit(c control.Catalog, unit string) (control.WorkloadProfile, bool) {
+	for _, p := range c.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Owned != nil && p.Unit == unit {
+			return p, true
+		}
+	}
+	return control.WorkloadProfile{}, false
+}
+
+// verifySharedPairPreservation is the §2.3 setup gate, enforced in Apply after
+// inspect because Validate is pure: a shared Ollama pair is appliable only when
+// both profiles are owned (setup renders the shared unit) or both are carried
+// verbatim from the accepted catalog.
+func (work *activationWork) verifySharedPairPreservation() error {
+	for i, p := range work.request.Catalog.Profiles {
+		for _, q := range work.request.Catalog.Profiles[:i] {
+			if !control.SharedOllamaUnit(p, q) {
+				continue
+			}
+			if p.NativeModel.Owned != nil && q.NativeModel.Owned != nil {
+				continue
+			}
+			acceptedP, okP := work.accepted.Catalog.Profile(p.ID)
+			acceptedQ, okQ := work.accepted.Catalog.Profile(q.ID)
+			if !okP || !okQ || !reflect.DeepEqual(acceptedP, p) || !reflect.DeepEqual(acceptedQ, q) {
+				return errors.New("shared Ollama units are catalog-only: apply the catalog with gpu-mode configure; setup does not create or verify adopted shared-unit bindings")
+			}
+		}
+	}
+	return nil
+}
+
+// requireMatchingActivation blocks journal consumption by any request other
+// than the one the in-flight activation recorded. A successful commit retires
+// the record, so its presence means the activation is genuinely interrupted.
+func requireMatchingActivation(root string, req Request) error {
+	saved, err := privateRead(filepath.Join(root, "activation.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var progress activation
+	if err := json.Unmarshal(saved, &progress); err != nil {
+		return err
+	}
+	original, _ := json.Marshal(progress.Request)
+	requested, _ := json.Marshal(req)
+	if digest(original) != digest(requested) {
+		return errors.New("interrupted activation must resume its original request")
+	}
+	return nil
+}

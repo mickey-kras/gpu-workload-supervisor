@@ -25,8 +25,18 @@ func managerCgroup(ctx context.Context, runCommand func(context.Context, string,
 	if err != nil {
 		return "", fmt.Errorf("query manager cgroup: %w", err)
 	}
-	cgroup, ok := strings.CutPrefix(strings.TrimSpace(string(out)), "ControlGroup=")
-	if !ok || cgroup == "" {
+	var cgroup string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		value, ok := strings.CutPrefix(line, "ControlGroup=")
+		if !ok || value == "" {
+			continue
+		}
+		if cgroup != "" {
+			return "", ErrManagerCgroupMismatch
+		}
+		cgroup = value
+	}
+	if cgroup == "" {
 		return "", ErrManagerCgroupMismatch
 	}
 	return cgroup, nil

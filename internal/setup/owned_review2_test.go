@@ -143,6 +143,14 @@ func TestPlanPreviewReportsOwnedUnitChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Close()
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	_, raw := ownedFixtureProfile(t, home, "vision", 9100)
+	if err := os.WriteFile(filepath.Join(dir, profile.Unit), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
 	r.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health"}}}
 	preview, err = backend.Plan(home, r)
 	if err != nil {
@@ -277,6 +285,12 @@ func TestManagerCgroupQueryRequiresConcreteAnswer(t *testing.T) {
 	if _, err := managerCgroup(context.Background(), empty, "systemctl"); !errors.Is(err, ErrManagerCgroupMismatch) {
 		t.Fatalf("empty cgroup accepted: %v", err)
 	}
+	duplicate := func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("ControlGroup=/user.slice/a\nControlGroup=/user.slice/evil\n"), nil
+	}
+	if _, err := managerCgroup(context.Background(), duplicate, "systemctl"); !errors.Is(err, ErrManagerCgroupMismatch) {
+		t.Fatalf("duplicate cgroup accepted: %v", err)
+	}
 	broken := func(context.Context, string, ...string) ([]byte, error) { return nil, errors.New("no bus") }
 	if _, err := managerCgroup(context.Background(), broken, "systemctl"); err == nil {
 		t.Fatal("query failure accepted")
@@ -376,5 +390,211 @@ func TestClearOwnedUnitJournalWithoutJournal(t *testing.T) {
 	}
 	if err := clearOwnedUnitJournal(root); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestRollbackLeavesUnchangedUnitByteIdentical reproduces the truncation
+// blocker: a mixed plan where one unit's render already matches disk must not
+// be touched by rollback.
+func TestRollbackLeavesUnchangedUnitByteIdentical(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	ctx := context.Background()
+	vision, visionRaw := ownedFixtureProfile(t, home, "vision", 9100)
+	code, codeRaw := ownedFixtureProfile(t, home, "code", 9102)
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, vision.Unit), visionRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan := unitPlan{Writes: map[string][]byte{vision.Unit: visionRaw, code.Unit: codeRaw}, proven: map[string]string{}, prior: map[string][]byte{}, absent: map[string]bool{}}
+	if err := backend.applyOwnedUnitWrites(ctx, home, plan, newOwnedUnitJournal(plan)); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.rollbackOwnedUnitWrites(ctx, home, r.Profile.SystemctlPath, plan); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, vision.Unit))
+	if err != nil || string(data) != string(visionRaw) {
+		t.Fatalf("unchanged unit mutated by rollback: %q %v", data, err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, code.Unit)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("added unit not removed by rollback")
+	}
+}
+
+// TestResumeRejectsMismatchedRecoveryRequest blocks a different request from
+// consuming the interrupted activation's journal (the relocation crash case).
+func TestResumeRejectsMismatchedRecoveryRequest(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	stale, staleRaw := ownedFixtureProfile(t, home, "stale", 9300)
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stale.Unit), staleRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalCommitted}
+	if err := writeOwnedUnitJournal(root, journal); err != nil {
+		t.Fatal(err)
+	}
+	original := ownedFixtureRequest(t, home)
+	original.Profile.StatePath = filepath.Join(home, "other/state.db")
+	fence, err := json.Marshal(activation{Request: original})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "activation.json"), fence, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.resumeOwnedUnitJournal(context.Background(), home, r); err == nil {
+		t.Fatal("mismatched recovery request consumed the journal")
+	}
+	if _, present, _ := readOwnedUnitJournal(root); !present {
+		t.Fatal("journal consumed by mismatched request")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, stale.Unit)); err != nil {
+		t.Fatal("proven unit deleted by mismatched request")
+	}
+}
+
+// TestSuccessfulApplyRetiresActivationRecord leaves no activation.json behind,
+// so only genuinely interrupted activations guard the journal.
+func TestSuccessfulApplyRetiresActivationRecord(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	if err := backend.Apply(context.Background(), home, r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".config/gpu-workload-supervisor/activation.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("activation record not retired")
+	}
+}
+
+// TestJournalRetireSyncsDirectories makes unit removal and journal retirement
+// durable in order: unit directory first, journal directory last.
+func TestJournalRetireSyncsDirectories(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	var synced []string
+	restore := syncDir
+	syncDir = func(path string) error { synced = append(synced, path); return nil }
+	defer func() { syncDir = restore }()
+	stale, staleRaw := ownedFixtureProfile(t, home, "stale", 9300)
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stale.Unit), staleRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalCommitted}
+	if err := writeOwnedUnitJournal(root, journal); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.resumeOwnedUnitJournal(context.Background(), home, r); err != nil {
+		t.Fatal(err)
+	}
+	if len(synced) != 2 || synced[0] != dir || synced[1] != root {
+		t.Fatalf("sync order %v", synced)
+	}
+}
+
+// TestPlanOwnedUnitsRejectsForeignHomeLaunchFile refuses to write or commit an
+// owned profile whose launch file escapes the setup home.
+func TestPlanOwnedUnitsRejectsForeignHomeLaunchFile(t *testing.T) {
+	backend, home, _ := fixture(t)
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	profile.NativeModel.LaunchFile = "/home/other/.config/systemd/user/" + profile.Unit
+	req := ownedFixtureRequest(t, home, profile)
+	if _, err := backend.planOwnedUnits(req, control.CatalogSnapshot{}, home); !errors.Is(err, ErrOwnedLaunchFileOutsideHome) {
+		t.Fatalf("foreign-home launch file planned: %v", err)
+	}
+}
+
+// TestPlanPreviewMatchesPlanSemantics omits idempotent writes and referenced
+// deletions from the user-facing preview.
+func TestPlanPreviewMatchesPlanSemantics(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	ctx := context.Background()
+	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	r.ExpectedRevision = currentRevision(t, r)
+	preview, err := backend.Plan(home, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changesContain(preview.Changes, "Write supervisor-owned unit") || changesContain(preview.Changes, "Remove supervisor-owned unit") {
+		t.Fatalf("idempotent apply misreported: %v", preview.Changes)
+	}
+	if !changesContain(preview.Changes, "unchanged") {
+		t.Fatalf("unchanged line missing: %v", preview.Changes)
+	}
+	// Adopted conversion keeps the file: no removal in the preview.
+	adopted := profile
+	nativeCopy := *profile.NativeModel
+	nativeCopy.Owned = nil
+	adopted.NativeModel = &nativeCopy
+	r.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{adopted}}
+	preview, err = backend.Plan(home, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changesContain(preview.Changes, "Remove supervisor-owned unit") {
+		t.Fatalf("preserved unit listed for removal: %v", preview.Changes)
+	}
+	_ = raw
+}
+
+// TestSyncDirDurability covers the real directory fsync helper directly.
+func TestSyncDirDurability(t *testing.T) {
+	if err := syncDir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncDir(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("missing directory synced")
+	}
+}
+
+// TestRequireMatchingActivationRejectsCorruptRecord fails loudly on an
+// unreadable activation record instead of consuming the journal.
+func TestRequireMatchingActivationRejectsCorruptRecord(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "activation.json"), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, r := fixture(t)
+	if err := requireMatchingActivation(root, r); err == nil {
+		t.Fatal("corrupt activation record accepted")
+	}
+}
+
+// TestPlanPreviewFailsOnUnrenderableOwnedProfile surfaces a fingerprint/render
+// disagreement instead of printing a false preview.
+func TestPlanPreviewFailsOnUnrenderableOwnedProfile(t *testing.T) {
+	backend, home, r := fixture(t)
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	profile.NativeModel.LaunchSHA256 = "0000000000000000000000000000000000000000000000000000000000000000"
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	if _, err := backend.Plan(home, r); err == nil {
+		t.Fatal("unrenderable owned profile previewed")
 	}
 }

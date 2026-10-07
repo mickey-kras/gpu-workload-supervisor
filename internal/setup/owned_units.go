@@ -15,7 +15,21 @@ import (
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 )
 
-var ErrOwnedUnitCollision = errors.New("owned unit path exists with foreign content")
+var (
+	ErrOwnedUnitCollision         = errors.New("owned unit path exists with foreign content")
+	ErrOwnedLaunchFileOutsideHome = errors.New("owned launch file must live under the setup home systemd user directory")
+)
+
+// syncDir makes directory entries (unit writes, unlinks, journal retirement)
+// durable across power loss before the operation is considered complete.
+var syncDir = func(path string) error {
+	d, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
 var ErrOwnedUnitModified = errors.New("owned unit content changed; refusing removal")
 
 type unitPlan struct {
@@ -90,6 +104,12 @@ func (b Backend) planOwnedUnits(req Request, accepted control.CatalogSnapshot, h
 	for _, p := range req.Catalog.Profiles {
 		if p.NativeModel == nil || p.NativeModel.Owned == nil {
 			continue
+		}
+		// The catalog layer checks only the suffix (it is host-independent);
+		// here the exact home is known, so pin the launch file to it before
+		// writing or committing anything.
+		if p.NativeModel.LaunchFile != filepath.Join(ownedUnitDirectory(home), p.Unit) {
+			return plan, fmt.Errorf("%w: %s", ErrOwnedLaunchFileOutsideHome, p.Unit)
 		}
 		// Qualify against this host before anything becomes durable: the
 		// packaged executable must be present and trusted and the model path
@@ -200,10 +220,14 @@ func writeOwnedUnitJournal(root string, j unitJournal) error {
 }
 
 func clearOwnedUnitJournal(root string) error {
-	if err := os.Remove(ownedUnitJournalPath(root)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	err := os.Remove(ownedUnitJournalPath(root))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
 		return err
 	}
-	return nil
+	return syncDir(root)
 }
 
 // applyOwnedUnitWrites replays journaled writes idempotently: digest equality
@@ -227,6 +251,9 @@ func (b Backend) applyOwnedUnitWrites(ctx context.Context, home string, plan uni
 		path := filepath.Join(dir, name)
 		current, err := privateRead(path)
 		if err == nil {
+			// Snapshot before any branch: rollback must restore exactly these
+			// bytes, including when the write below is skipped as idempotent.
+			plan.prior[name] = current
 			currentDigest := digest(current)
 			if currentDigest == digest(raw) {
 				continue
@@ -234,7 +261,6 @@ func (b Backend) applyOwnedUnitWrites(ctx context.Context, home string, plan uni
 			if plan.proven[name] != currentDigest {
 				return fmt.Errorf("%w: %s", ErrOwnedUnitCollision, name)
 			}
-			plan.prior[name] = current
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		} else {
@@ -332,4 +358,11 @@ func (b Backend) daemonReloadOwnedUnits(ctx context.Context, systemctl string, u
 		}
 	}
 	return nil
+}
+
+func mkdirTrusted(path string) error {
+	if err := os.MkdirAll(path, 0700); err != nil {
+		return err
+	}
+	return TrustedDirectory(path)
 }
