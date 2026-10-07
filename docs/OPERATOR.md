@@ -126,7 +126,10 @@ ownership is `wrong_owner`, a recovery latch is `recovery_required`, a stale
 precondition is `stale_state`. When the precondition was readable but the
 workload cannot start now — an active workload (`active != idle`) or
 unfinished admitted work — the response is `deferred` and includes the
-observed current `status`; `deferred` latches nothing and may be retried.
+observed current `status` plus the current committed `leaseFence`, so a
+caller that lost a committed activation response recovers the committed
+generation on retry instead of being locked out by its own stale fence;
+`deferred` latches nothing and may be retried.
 Activation uses the mutation-class lifetime.
 
 ## Inactivity policy tick
@@ -148,7 +151,14 @@ and never idles. When qualified fresh evidence (attestation no older than 120
 seconds) shows no queued/reserved/running/unresolved work and no unfinished
 admissions, the tick commits a verified armed deadline (last activity +
 timeout). Once the armed deadline has elapsed without newer activity, the
-tick drains the workload into idle. Any preemption — new activity, an
+tick revalidates the attestation's evidence generation with the provider
+immediately before the drain decision and then drains the workload into
+idle; a revoked generation disarms and fails closed. The residual window
+between revalidation and the store commit is fenced on the store side only
+for registered admissions (`StartIdleTransition` rechecks pending work in
+the same transaction); external queue state cannot be fenced atomically
+without provider/database coupling, so providers must refuse the next
+admission for work that raced the commit. Any preemption — new activity, an
 admission, a state change — aborts cleanly with exit 0 and no latch; the next
 tick re-verifies from fresh evidence.
 

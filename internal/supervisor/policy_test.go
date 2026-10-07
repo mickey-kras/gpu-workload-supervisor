@@ -12,9 +12,11 @@ import (
 )
 
 type evidenceFixture struct {
-	attestation Attestation
-	err         error
-	calls       int
+	attestation     Attestation
+	err             error
+	revalidateErr   error
+	calls           int
+	revalidateCalls int
 }
 
 func (e *evidenceFixture) Attest(context.Context) (Attestation, error) {
@@ -22,8 +24,19 @@ func (e *evidenceFixture) Attest(context.Context) (Attestation, error) {
 	return e.attestation, e.err
 }
 
+func (e *evidenceFixture) Revalidate(_ context.Context, token string) error {
+	e.revalidateCalls++
+	if e.revalidateErr != nil {
+		return e.revalidateErr
+	}
+	if token == "" || token != e.attestation.Token {
+		return errors.New("stale evidence generation")
+	}
+	return nil
+}
+
 func freshEvidence() *evidenceFixture {
-	return &evidenceFixture{attestation: Attestation{AttestedAt: time.Now()}}
+	return &evidenceFixture{attestation: Attestation{AttestedAt: time.Now(), Token: "gen-1"}}
 }
 
 func enableIdlePolicy(t *testing.T, s *store.Store, timeout int) control.PolicyState {
@@ -195,7 +208,9 @@ func TestPolicyTickFiresOnceArmedDeadlineElapses(t *testing.T) {
 	enableIdlePolicy(t, s, 5)
 	r := &fakeRuntime{active: control.WorkloadText}
 	c := tickController(t, s, r, func() time.Time { return now })
-	attest := func() *evidenceFixture { return &evidenceFixture{attestation: Attestation{AttestedAt: now}} }
+	attest := func() *evidenceFixture {
+		return &evidenceFixture{attestation: Attestation{AttestedAt: now, Token: "gen-1"}}
+	}
 	if err := c.PolicyTick(context.Background(), attest()); err != nil {
 		t.Fatal(err)
 	}
@@ -206,8 +221,12 @@ func TestPolicyTickFiresOnceArmedDeadlineElapses(t *testing.T) {
 		t.Fatal("first tick fired instead of arming")
 	}
 	now = now.Add(6 * time.Minute)
-	if err := c.PolicyTick(context.Background(), attest()); err != nil {
+	firing := attest()
+	if err := c.PolicyTick(context.Background(), firing); err != nil {
 		t.Fatal(err)
+	}
+	if firing.revalidateCalls != 1 {
+		t.Fatalf("drain committed without evidence revalidation: %d calls", firing.revalidateCalls)
 	}
 	state, _ := s.State(context.Background())
 	if state.ActiveWorkload != control.WorkloadIdle || state.Owner != control.OwnerSupervisor || state.Phase != control.PhaseStable {
@@ -315,5 +334,49 @@ func TestPolicyTickDisarmsAndNoOpsWhileDegradedThenArmsWhenHealthy(t *testing.T)
 	}
 	if settings, _ := s.Settings(ctx); settings.ArmedDeadline == nil {
 		t.Fatal("recovered workload did not arm")
+	}
+}
+
+// Work queued after the attestation but before the drain commit must abort
+// the idle: the generation revalidation is the last fence.
+func TestPolicyTickAbortsDrainWhenEvidenceInvalidatedBeforeCommit(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	s := openStoreWithClock(t, func() time.Time { return now })
+	ownershipState(t, s, control.OwnerSupervisor, control.WorkloadText)
+	enableIdlePolicy(t, s, 5)
+	r := &fakeRuntime{active: control.WorkloadText}
+	c := tickController(t, s, r, func() time.Time { return now })
+	if err := c.PolicyTick(context.Background(), &evidenceFixture{attestation: Attestation{AttestedAt: now, Token: "gen-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if settings, _ := s.Settings(context.Background()); settings.ArmedDeadline == nil {
+		t.Fatal("first tick did not arm")
+	}
+	now = now.Add(6 * time.Minute)
+	// The provider's evidence moved on: the armed generation no longer
+	// revalidates (new external work queued since the attestation).
+	revoked := &evidenceFixture{
+		attestation:   Attestation{AttestedAt: now, Token: "gen-2"},
+		revalidateErr: errors.New("evidence generation moved"),
+	}
+	if err := c.PolicyTick(context.Background(), revoked); !errors.Is(err, store.ErrEvidenceUnavailable) {
+		t.Fatalf("invalidated evidence: %v", err)
+	}
+	state, _ := s.State(context.Background())
+	if state.ActiveWorkload != control.WorkloadText || state.Phase != control.PhaseStable {
+		t.Fatalf("drain proceeded on invalidated evidence: %+v", state)
+	}
+	if settings, _ := s.Settings(context.Background()); settings.ArmedDeadline != nil {
+		t.Fatal("invalidated evidence kept the armed deadline")
+	}
+	if len(r.calls) != 0 {
+		t.Fatal("invalidated drain drove runtime effects", r.calls)
+	}
+	// Stable evidence re-arms and drains normally on a later tick.
+	if err := c.PolicyTick(context.Background(), &evidenceFixture{attestation: Attestation{AttestedAt: now, Token: "gen-2"}}); err != nil {
+		t.Fatal(err)
+	}
+	if settings, _ := s.Settings(context.Background()); settings.ArmedDeadline == nil {
+		t.Fatal("stable evidence did not re-arm")
 	}
 }

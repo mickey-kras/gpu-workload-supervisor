@@ -112,12 +112,33 @@ test('deferred responses carry the observed status', () => {
 test('deferred responses fail closed on any other shape', () => {
     for (const body of [
         deferred((r) => delete r.status),
-        deferred((r) => (r.leaseFence = { incarnation: 'x', epoch: '1' })),
+        deferred((r) => (r.leaseFence = { incarnation: 'x', epoch: '1', extra: 1 })),
+        deferred((r) => (r.leaseFence = null)),
+        deferred((r) => (r.leaseFence = { incarnation: 'x' })), // missing epoch
         deferred((r) => (r.status = { owner: 'supervisor' })), // invalid status
         deferred((r) => (r.status = null)),
     ]) {
         assert.throws(() => parseResponse(body, 'r1', 'activate-workload'));
     }
+});
+
+test('deferred may carry the current fence, bound to the status incarnation', () => {
+    // Bound fence: accepted (recoverable committed generation).
+    const bound = deferred((r) => {
+        r.leaseFence = { incarnation: r.status.expected.incarnation, epoch: '9' };
+    });
+    const ok = parseResponse(bound, 'r1', 'activate-workload');
+    assert.equal(ok.leaseFence.epoch, '9');
+    // Unbound fence (another generation than the reported status): rejected.
+    const unbound = deferred((r) => {
+        r.leaseFence = { incarnation: 'other-incarnation', epoch: '9' };
+    });
+    assert.throws(() => parseResponse(unbound, 'r1', 'activate-workload'));
+    // Fence shape is still strict on deferred responses.
+    const badEpoch = deferred((r) => {
+        r.leaseFence = { incarnation: r.status.expected.incarnation, epoch: '0' };
+    });
+    assert.throws(() => parseResponse(badEpoch, 'r1', 'activate-workload'));
 });
 
 test('deferred is rejected on every action except activate-workload', () => {

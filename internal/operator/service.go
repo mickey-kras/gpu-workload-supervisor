@@ -97,9 +97,15 @@ func (s Service) Handle(req Request) Response {
 	if code != OK {
 		result.Code = code
 		// A deferred activation still reports the observed current status so
-		// the desktop can render why the workload did not start.
+		// the desktop can render why the workload did not start, and the
+		// current fence so an orchestration caller that lost a committed
+		// activation response can recover the committed generation on retry
+		// instead of being locked out by its own stale fence.
 		if code == Deferred && state.Validate() == nil && token(state.LeaseFence.Incarnation, 128) {
 			result.Status = session.status(state)
+			if req.Action == actionActivateWorkload {
+				result.LeaseFence = fenceResponse(state)
+			}
 		}
 		return result
 	}
@@ -113,9 +119,13 @@ func (s Service) Handle(req Request) Response {
 	result.Code = OK
 	result.Status = session.status(state)
 	if req.Action == actionActivateWorkload {
-		result.LeaseFence = &FenceResponse{Incarnation: state.LeaseFence.Incarnation, Epoch: strconv.FormatUint(state.LeaseFence.Epoch, 10)}
+		result.LeaseFence = fenceResponse(state)
 	}
 	return result
+}
+
+func fenceResponse(state control.State) *FenceResponse {
+	return &FenceResponse{Incarnation: state.LeaseFence.Incarnation, Epoch: strconv.FormatUint(state.LeaseFence.Epoch, 10)}
 }
 
 func (s Service) requestBudget(action string) (time.Duration, bool) {

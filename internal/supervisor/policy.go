@@ -14,13 +14,17 @@ import (
 const MaxAttestationAge = 2 * time.Minute
 
 // Attestation is the qualified evidence snapshot: registered proxies/jobs and
-// sessions, plus an authoritative observation timestamp.
+// sessions, plus an authoritative observation timestamp and an opaque
+// generation token the provider can revalidate before the drain commits.
 type Attestation struct {
 	Queued     []string
 	Reserved   []string
 	Running    []string
 	Unresolved []string
 	AttestedAt time.Time
+	// Token is the provider's evidence generation/fingerprint; empty fails
+	// closed. Revalidate must report any change since the attestation.
+	Token string
 }
 
 // EvidenceProvider is a qualified external evidence adapter. gpu-operator and
@@ -28,6 +32,10 @@ type Attestation struct {
 // evaluation fails closed.
 type EvidenceProvider interface {
 	Attest(context.Context) (Attestation, error)
+	// Revalidate reports whether the evidence generation behind a prior
+	// attestation's token is still current. It is the last fence before the
+	// idle drain commits; any error or mismatch fails closed.
+	Revalidate(ctx context.Context, token string) error
 }
 
 func (a Attestation) anyEvidence() bool {
@@ -64,8 +72,9 @@ func (c *Controller) PolicyTick(ctx context.Context, evidence EvidenceProvider) 
 	attestation, err := evidence.Attest(ctx)
 	// Freshness is bounded in both directions: a timestamp ahead of the
 	// supervisor clock (frozen or erroneous adapter clock) would otherwise
-	// qualify an arbitrarily old empty snapshot forever.
-	if err != nil || attestation.AttestedAt.IsZero() || attestation.AttestedAt.After(c.now()) ||
+	// qualify an arbitrarily old empty snapshot forever. A missing generation
+	// token cannot be revalidated before the drain commit, so it fails closed.
+	if err != nil || attestation.AttestedAt.IsZero() || attestation.Token == "" || attestation.AttestedAt.After(c.now()) ||
 		c.now().Sub(attestation.AttestedAt) > MaxAttestationAge {
 		return errors.Join(c.store.DisarmIdleDeadline(ctx), store.ErrEvidenceUnavailable, err)
 	}
@@ -93,6 +102,16 @@ func (c *Controller) PolicyTick(ctx context.Context, evidence EvidenceProvider) 
 	}
 	if c.now().Before(*armed) {
 		return nil
+	}
+	// Final fence: revalidate the evidence generation immediately before the
+	// drain decision, so work queued after the attestation aborts the idle.
+	// The residual window between this check and the store commit is closed
+	// on the store side only for registered admissions (StartIdleTransition
+	// revalidates pending work in-transaction); external queue state cannot
+	// be fenced atomically without provider/database coupling, so a race
+	// there is absorbed by the provider revoking the next admission instead.
+	if err := evidence.Revalidate(ctx, attestation.Token); err != nil {
+		return errors.Join(c.store.DisarmIdleDeadline(ctx), store.ErrEvidenceUnavailable, err)
 	}
 	_, err = c.PolicyIdle(ctx, *armed)
 	if errors.Is(err, store.ErrPolicyPreempted) {

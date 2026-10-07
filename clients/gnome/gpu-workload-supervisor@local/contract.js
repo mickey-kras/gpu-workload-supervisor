@@ -176,15 +176,23 @@ export function parseResponse(text, requestId, action) {
         // it is a malformed response and fails closed.
         if (action !== ACTIVATE_ACTION) fail();
         // A deferred activation reports the observed current status so the
-        // desktop can render why the workload did not start.
-        keys(r, [...base, 'status']);
+        // desktop can render why the workload did not start, and optionally
+        // the current lease fence so a caller that lost a committed
+        // activation response can recover the committed generation.
+        keys(r, 'leaseFence' in r ? [...base, 'status', 'leaseFence'] : [...base, 'status']);
     } else {
         keys(r, base);
         one(r.code, ERROR_CODES);
     }
     if (r.protocolVersion !== 1 || r.requestId !== requestId) fail();
     if (r.code !== 'ok') {
-        if (r.code === 'deferred') validateStatus(r.status);
+        if (r.code === 'deferred') {
+            validateStatus(r.status);
+            if ('leaseFence' in r) {
+                validateLeaseFence(r.leaseFence);
+                if (r.leaseFence.incarnation !== r.status.expected.incarnation) fail();
+            }
+        }
         return r;
     }
     if (SETTINGS_ACTIONS.includes(action)) {

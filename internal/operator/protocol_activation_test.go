@@ -86,8 +86,18 @@ func TestActivateWorkloadDeferredCarriesStatus(t *testing.T) {
 			t.Fatalf("%v -> %+v, want %s", tc.err, r, tc.code)
 		}
 		if tc.code == Deferred {
-			if r.Status == nil || r.LeaseFence != nil {
-				t.Fatalf("deferred response must carry status only: %+v", r)
+			// Deferred carries the observed status AND the current committed
+			// fence, so a caller that lost a committed activation response can
+			// recover the committed generation on retry.
+			if r.Status == nil || r.LeaseFence == nil {
+				t.Fatalf("deferred response must carry status and fence: %+v", r)
+			}
+			want := strconv.FormatUint(state.LeaseFence.Epoch, 10)
+			if r.LeaseFence.Incarnation != state.LeaseFence.Incarnation || r.LeaseFence.Epoch != want {
+				t.Fatalf("deferred fence %+v, want %s/%s", r.LeaseFence, state.LeaseFence.Incarnation, want)
+			}
+			if r.Status.Expected.Incarnation != r.LeaseFence.Incarnation {
+				t.Fatalf("fence not bound to status: %+v", r)
 			}
 		} else if r.Status != nil {
 			t.Fatalf("non-deferred error carries status: %+v", r)
