@@ -23,6 +23,7 @@ import (
 const (
 	restoreStateCommand = "restore-state"
 	pruneAuditCommand   = "prune-audit"
+	showSettingsCommand = "show-settings"
 	localCLIInitiator   = "local-cli"
 )
 
@@ -152,6 +153,9 @@ func executeWithState(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Mana
 	if command == pruneAuditCommand {
 		return pruneAudit(ctx, stateStore, auditCutoff, options.auditBatch)
 	}
+	if command == showSettingsCommand {
+		return showSettings(ctx, stateStore)
+	}
 	snapshot, err := stateStore.Catalog(ctx)
 	if err != nil {
 		return err
@@ -196,7 +200,7 @@ func validateCommandFlags(flags *flag.FlagSet, target string) error {
 		return errors.New("-release-max-used-mib has been removed: configure workload cgroups in the catalog; optional target capacity uses profile requiredMiB plus -capacity-headroom-mib")
 	}
 	if flags.NArg() != 1 {
-		return errors.New("usage: gpu-mode [flags] configure|switch|restore-state|prune-audit|verify-host|status|reconcile|recover|resolve-work|take-control|user-switch|return-control|recover-user")
+		return errors.New("usage: gpu-mode [flags] configure|switch|restore-state|prune-audit|verify-host|status|reconcile|recover|resolve-work|take-control|user-switch|return-control|recover-user|show-settings")
 	}
 	if auditFlag && flags.Arg(0) != pruneAuditCommand {
 		return errors.New("-audit-before and -audit-batch require prune-audit")
@@ -263,6 +267,22 @@ func executeCommand(ctx context.Context, controller *supervisor.Controller, comm
 		return errors.Join(err, encodeErr)
 	}
 	return err
+}
+
+// showSettings is the read-only ops view of the typed operator settings; the
+// only write path is the set-idle-policy operator action.
+func showSettings(ctx context.Context, stateStore *store.Store) error {
+	settings, err := stateStore.Settings(ctx)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(struct {
+		Policy           control.IdlePolicy `json:"policy"`
+		SettingsRevision string             `json:"settingsRevision"`
+		LastActivityAt   *time.Time         `json:"lastActivityAt"`
+		ArmedDeadline    *time.Time         `json:"armedDeadline"`
+		AttestationAt    *time.Time         `json:"attestationAt"`
+	}{settings.Policy, settings.SettingsRevision, settings.LastActivityAt, settings.ArmedDeadline, settings.AttestationAt})
 }
 
 func restoreState(ctx context.Context, stateStore *store.Store) error {

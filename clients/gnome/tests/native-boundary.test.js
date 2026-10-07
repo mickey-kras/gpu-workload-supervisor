@@ -88,7 +88,7 @@ for (const failure of [null, 'write', 'close', 'read', 'wait', 'invalid']) {
 }
 
 test('transport deadline and detach cancel client I/O without replaying the backend', async () => {
-    for (const action of ['status', 'take-control']) {
+    for (const action of ['status', 'get-settings', 'set-idle-policy', 'take-control']) {
         let timeout;
         let budget;
         let cancellations = 0;
@@ -113,7 +113,10 @@ test('transport deadline and detach cancel client I/O without replaying the back
         });
         const transport = new Transport();
         void transport.call({ action });
-        assert.equal(budget, action === 'status' ? 75000 : 1980000);
+        assert.equal(
+            budget,
+            ['status', 'get-settings', 'set-idle-policy'].includes(action) ? 75000 : 1980000,
+        );
         assert.equal(cancellations, 0);
         assert.equal(timeout(), false);
         assert.equal(cancellations, 1);

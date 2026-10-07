@@ -3,7 +3,7 @@ import Gio from 'gi://Gio';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GNOME 50 GJS runtime supplies this native module, not npm.
 import GLib from 'gi://GLib';
 import { ResponseBuffer } from './framing.js';
-import { parseResponse } from './contract.js';
+import { parseResponse, SETTINGS_ACTIONS } from './contract.js';
 export async function readBounded(stream, cancellable) {
     const result = new ResponseBuffer();
     for (;;) {
@@ -46,11 +46,15 @@ export class Transport {
         this.cancel = cancel;
         const input = process.get_stdin_pipe(),
             output = process.get_stdout_pipe();
-        // Status: 60s operation + 10s fault latch + 2s each for input/output.
-        // Mutation: 1800s operation + 120s cleanup + 10s finalization +
-        // 2s each for input/output. Round above these 74s / 1934s bounds.
+        // Status class (status and the typed settings actions): 60s operation
+        // + 10s fault latch + 2s each for input/output. Mutation: 1800s
+        // operation + 120s cleanup + 10s finalization + 2s each for
+        // input/output. Round above these 74s / 1934s bounds.
         // Expiration cancels client I/O only; admitted effects remain backend-owned.
-        const budget = request.action === 'status' ? 75000 : 1980000;
+        const budget =
+            request.action === 'status' || SETTINGS_ACTIONS.includes(request.action)
+                ? 75000
+                : 1980000;
         let timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, budget, () => {
             timer = 0;
             cancel.cancel();
@@ -93,7 +97,7 @@ export class Transport {
                     }
                 }),
             );
-            return parseResponse(text, request.requestId);
+            return parseResponse(text, request.requestId, request.action);
         } finally {
             if (timer) GLib.source_remove(timer);
             // Closing our descriptors does not cancel or kill the backend.

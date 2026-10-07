@@ -87,6 +87,18 @@ function validateCatalog(s) {
         fail();
 }
 
+function validateIdlePolicy(p) {
+    keys(p, ['timeoutMinutes']);
+    const t = p.timeoutMinutes;
+    if (!Number.isInteger(t) || (t !== 0 && (t < 5 || t > 1440))) fail();
+}
+
+export function validateSettings(settings) {
+    keys(settings, ['policy', 'settingsRevision']);
+    validateIdlePolicy(settings.policy);
+    token(settings.settingsRevision);
+}
+
 function validateStatus(s) {
     keys(s, [
         'owner',
@@ -124,17 +136,32 @@ function validateStatus(s) {
         fail();
 }
 
-export function parseResponse(text, requestId) {
+// The typed settings actions answer with a settings object only and never
+// mint a status from durable state; every other ok response keeps the exact
+// version-1 shape with status and no settings.
+export const SETTINGS_ACTIONS = ['get-settings', 'set-idle-policy'];
+
+export function parseResponse(text, requestId, action) {
     if (new TextEncoder().encode(text).length > 65536) fail();
     const r = JSON.parse(text);
-    if (r.code === 'ok')
-        keys(r, ['protocolVersion', 'requestId', 'code', 'status']);
-    else {
-        keys(r, ['protocolVersion', 'requestId', 'code']);
+    const base = ['protocolVersion', 'requestId', 'code'];
+    if (r.code === 'ok') {
+        keys(
+            r,
+            SETTINGS_ACTIONS.includes(action)
+                ? [...base, 'settings']
+                : [...base, 'status'],
+        );
+    } else {
+        keys(r, base);
         one(r.code, ERROR_CODES);
     }
     if (r.protocolVersion !== 1 || r.requestId !== requestId) fail();
     if (r.code !== 'ok') return r;
+    if (SETTINGS_ACTIONS.includes(action)) {
+        validateSettings(r.settings);
+        return r;
+    }
     validateStatus(r.status);
     return r;
 }

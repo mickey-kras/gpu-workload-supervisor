@@ -17,11 +17,24 @@ type Backend interface {
 	Status(context.Context) (control.State, error)
 	OperatorTransition(context.Context, string, control.Workload, control.OperatorPrecondition) (control.State, error)
 }
+
+// PolicyStore serves the typed settings surface straight from durable state:
+// settings actions never observe or drive the runtime.
+type PolicyStore interface {
+	Settings(context.Context) (control.PolicyState, error)
+	SetIdlePolicy(context.Context, control.SettingsPrecondition, control.IdlePolicy, bool) (control.PolicyState, error)
+}
 type Session struct {
 	Backend   Backend
 	Revision  string
 	Workloads []Workload
 	Close     func() error
+	// PolicyStore is nil only in tests; settings actions then fail closed.
+	PolicyStore PolicyStore
+	// IdlePolicyConfigurable is false until the hosting process carries a
+	// qualified evidence provider; it gates set-idle-policy enable writes and
+	// is never advertised on the version-1 status shape.
+	IdlePolicyConfigurable bool
 }
 
 // Service opens state only after nonblocking gate acquisition. Its operation
@@ -62,6 +75,23 @@ func (s Service) Handle(req Request) Response {
 		result.Code = IncompatibleConfiguration
 		return result
 	}
+	// Settings actions answer from durable state only and never mint a status:
+	// an unobserved durable snapshot must not surface as a fresh, actionable
+	// observation with derived capabilities.
+	if req.Action == actionGetSettings || req.Action == actionSetIdlePolicy {
+		settings, code := session.executeSettings(ctx, req)
+		if code != OK {
+			result.Code = code
+			return result
+		}
+		if ctx.Err() != nil {
+			result.Code = Timeout
+			return result
+		}
+		result.Code = OK
+		result.Settings = settings
+		return result
+	}
 	state, code := session.execute(ctx, req)
 	if code != OK {
 		result.Code = code
@@ -81,7 +111,7 @@ func (s Service) Handle(req Request) Response {
 
 func (s Service) requestBudget(action string) (time.Duration, bool) {
 	budget, fallback, maximum := s.OperationTimeout, 15*time.Minute, 30*time.Minute
-	if action == "status" {
+	if action == actionStatus || action == actionGetSettings || action == actionSetIdlePolicy {
 		budget, fallback, maximum = s.StatusTimeout, 30*time.Second, 60*time.Second
 	}
 	if budget == 0 {
@@ -91,22 +121,81 @@ func (s Service) requestBudget(action string) (time.Duration, bool) {
 }
 
 func (s Session) execute(ctx context.Context, req Request) (control.State, Code) {
-	var state control.State
-	var err error
-	if req.Action == "status" {
-		state, err = s.Backend.Status(ctx)
-	} else {
-		if code := s.validateTransition(req); code != OK {
-			return state, code
+	if req.Action == actionStatus {
+		state, err := s.Backend.Status(ctx)
+		if err != nil {
+			return state, errorCode(err)
 		}
-		e := req.Expected
-		version, _ := strconv.ParseUint(e.Version, 10, 64)
-		state, err = s.Backend.OperatorTransition(ctx, req.Action, req.Target, control.OperatorPrecondition{Incarnation: e.Incarnation, Version: version, Owner: e.Owner, ConfigurationRevision: e.ConfigurationRevision})
+		return state, OK
 	}
+	var state control.State
+	if code := s.validateTransition(req); code != OK {
+		return state, code
+	}
+	e := req.Expected
+	version, _ := strconv.ParseUint(e.Version, 10, 64)
+	state, err := s.Backend.OperatorTransition(ctx, req.Action, req.Target, control.OperatorPrecondition{Incarnation: e.Incarnation, Version: version, Owner: e.Owner, ConfigurationRevision: e.ConfigurationRevision})
 	if err != nil {
 		return state, errorCode(err)
 	}
 	return state, OK
+}
+
+// executeSettings serves the typed settings surface straight from durable
+// state: the settings object is the entire success payload, and neither
+// action observes or drives the runtime.
+func (s Session) executeSettings(ctx context.Context, req Request) (*SettingsResponse, Code) {
+	if req.Action == actionGetSettings {
+		return s.getSettings(ctx)
+	}
+	return s.setIdlePolicy(ctx, req)
+}
+
+func (s Session) getSettings(ctx context.Context) (*SettingsResponse, Code) {
+	if s.PolicyStore == nil {
+		return nil, Unavailable
+	}
+	settings, err := s.PolicyStore.Settings(ctx)
+	if err != nil {
+		return nil, errorCode(err)
+	}
+	return settingsResponse(settings), OK
+}
+
+// setIdlePolicy commits only through the typed store surface; enabling is
+// rejected fail-closed while the host has no qualified evidence provider.
+func (s Session) setIdlePolicy(ctx context.Context, req Request) (*SettingsResponse, Code) {
+	if s.PolicyStore == nil {
+		return nil, Unavailable
+	}
+	if req.Expected == nil || req.Settings == nil {
+		return nil, InvalidRequest
+	}
+	if req.Expected.ConfigurationRevision != s.Revision {
+		return nil, StaleState
+	}
+	if req.Settings.TimeoutMinutes != control.IdlePolicyOff && !s.IdlePolicyConfigurable {
+		return nil, errorCode(store.ErrEvidenceUnavailable)
+	}
+	e := req.Expected
+	version, _ := strconv.ParseUint(e.Version, 10, 64)
+	precondition := control.SettingsPrecondition{
+		Incarnation: e.Incarnation, Version: version, Owner: e.Owner,
+		ConfigurationRevision: e.ConfigurationRevision,
+		SettingsRevision:      req.Settings.SettingsRevision,
+	}
+	settings, err := s.PolicyStore.SetIdlePolicy(ctx, precondition, control.IdlePolicy{TimeoutMinutes: req.Settings.TimeoutMinutes}, s.IdlePolicyConfigurable)
+	if err != nil {
+		return nil, errorCode(err)
+	}
+	return settingsResponse(settings), OK
+}
+
+func settingsResponse(s control.PolicyState) *SettingsResponse {
+	return &SettingsResponse{
+		Policy:           IdlePolicyStatus{TimeoutMinutes: s.Policy.TimeoutMinutes},
+		SettingsRevision: s.SettingsRevision,
+	}
 }
 
 func (s Session) validateTransition(req Request) Code {
@@ -153,8 +242,12 @@ func errorCode(err error) Code {
 		return Timeout
 	case errors.Is(err, store.ErrWrongOwner) || errors.Is(err, supervisor.ErrUserOwned) || errors.Is(err, supervisor.ErrSupervisorOwned):
 		return WrongOwner
-	case errors.Is(err, store.ErrVersionConflict) || errors.Is(err, store.ErrStaleFence) || errors.Is(err, store.ErrConfigurationConflict):
+	case errors.Is(err, store.ErrVersionConflict) || errors.Is(err, store.ErrStaleFence) || errors.Is(err, store.ErrConfigurationConflict) || errors.Is(err, store.ErrSettingsConflict):
 		return StaleState
+	case errors.Is(err, store.ErrInvalidIdleTimeout):
+		return InvalidRequest
+	case errors.Is(err, store.ErrEvidenceUnavailable):
+		return Unavailable
 	case errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, store.ErrTransitionRunning) || errors.Is(err, supervisor.ErrTransitionRunning):
 		return Busy
 	case errors.Is(err, store.ErrUnstableState) || errors.Is(err, supervisor.ErrRecoveryRequired) || errors.Is(err, supervisor.ErrReconcileRequired):
