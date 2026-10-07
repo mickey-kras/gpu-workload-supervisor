@@ -377,24 +377,24 @@ const (
 )
 
 func (b Backend) enableReconciliation(ctx context.Context, home, systemctl string) error {
-	return b.enableUserUnit(ctx, home, systemctl, reconcileUnit, "default.target.wants", "integration.json")
+	return b.enableUserUnit(ctx, home, systemctl, reconcileUnit, "reconciliation", "default.target.wants", "integration.json")
 }
 
 // enableIdleTimer mirrors the reconciliation enablement exactly: the packaged
 // timer is only link-enabled (no --now, no daemon), preexisting user overrides
 // are refused, and ownership is recorded for symmetric removal.
 func (b Backend) enableIdleTimer(ctx context.Context, home, systemctl string) error {
-	return b.enableUserUnit(ctx, home, systemctl, idleTimerUnit, "timers.target.wants", "integration-idle.json")
+	return b.enableUserUnit(ctx, home, systemctl, idleTimerUnit, "idle timer", "timers.target.wants", "integration-idle.json")
 }
 
-func (b Backend) enableUserUnit(ctx context.Context, home, systemctl, unit, wantsDirectory, recordName string) error {
+func (b Backend) enableUserUnit(ctx context.Context, home, systemctl, unit, label, wantsDirectory, recordName string) error {
 	userDir := filepath.Join(home, ".config/systemd/user")
 	if err := mkdirTrusted(userDir); err != nil {
 		return err
 	}
 	userUnit := filepath.Join(userDir, unit)
 	if _, err := os.Lstat(userUnit); err == nil {
-		return fmt.Errorf("user unit %s exists; refusing override", unit)
+		return fmt.Errorf("user %s unit exists; refusing override", label)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -407,7 +407,7 @@ func (b Backend) enableUserUnit(ctx context.Context, home, systemctl, unit, want
 	if info, err := os.Lstat(link); err == nil {
 		destination, err := os.Readlink(link)
 		if err != nil || info.Mode()&os.ModeSymlink == 0 || destination != target {
-			return fmt.Errorf("unowned enablement for %s exists", unit)
+			return fmt.Errorf("unowned %s enablement exists", label)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -419,7 +419,7 @@ func (b Backend) enableUserUnit(ctx context.Context, home, systemctl, unit, want
 	// Subprocess output is untrusted terminal input (control characters, unit
 	// payload echoes); the error carries only the exit status.
 	if _, err := b.runCommand(ctx, systemctl, "--user", "enable", unit); err != nil {
-		return fmt.Errorf("enable %s: %w", unit, err)
+		return fmt.Errorf("enable %s: %w", label, err)
 	}
 	return nil
 }

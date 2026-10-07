@@ -1,7 +1,11 @@
 [Unit]
 Description=GPU workload supervisor inactivity policy timer
 
+# OnActiveSec seeds the first event after the timer itself activates;
+# OnUnitActiveSec alone is relative to the service's last activation, which a
+# fresh install does not have.
 [Timer]
+OnActiveSec=60s
 OnUnitActiveSec=60s
 Persistent=false
 

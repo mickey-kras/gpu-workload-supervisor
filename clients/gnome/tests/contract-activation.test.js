@@ -35,6 +35,8 @@ const activateOk = (mutate = null) => {
         status: statusBody(),
         leaseFence: { incarnation: 'opaque-incarnation', epoch: '7' },
     };
+    // A well-formed response binds the fence to the status incarnation.
+    r.status.expected.incarnation = r.leaseFence.incarnation;
     if (mutate) mutate(r);
     return JSON.stringify(r);
 };
@@ -80,6 +82,18 @@ test('lease fence epoch accepts canonical uint64 strings', () => {
     for (const epoch of ['1', '7', '18446744073709551615']) {
         const r = parseResponse(activateOk((r) => (r.leaseFence.epoch = epoch)), 'r1', 'activate-workload');
         assert.equal(r.leaseFence.epoch, epoch);
+    }
+});
+
+test('lease fence is bound to the returned status incarnation', () => {
+    const r = parseResponse(activateOk(), 'r1', 'activate-workload');
+    assert.equal(r.leaseFence.incarnation, r.status.expected.incarnation);
+    // A fence from another generation than the returned status fails closed.
+    for (const body of [
+        activateOk((r) => (r.leaseFence.incarnation = 'other-incarnation')),
+        activateOk((r) => (r.status.expected.incarnation = 'other-incarnation')),
+    ]) {
+        assert.throws(() => parseResponse(body, 'r1', 'activate-workload'));
     }
 });
 

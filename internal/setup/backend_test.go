@@ -352,3 +352,26 @@ func TestPolicyTickFailsLoudlyWithoutOperatorProfile(t *testing.T) {
 		t.Fatal("tick without operator.json silently used defaults")
 	}
 }
+
+// The packaged lifecycle fixture matches on these refusal messages; keep them
+// stable per unit.
+func TestUserUnitOverrideRefusalMessages(t *testing.T) {
+	backend, home, r := fixture(t)
+	ctx := context.Background()
+	for _, unit := range []string{reconcileUnit, idleTimerUnit} {
+		if err := os.MkdirAll(filepath.Join(home, ".config/systemd/user"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(home, ".config/systemd/user", unit), []byte("user"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := backend.enableReconciliation(ctx, home, r.Profile.SystemctlPath); err == nil ||
+		!strings.Contains(err.Error(), "user reconciliation unit exists") {
+		t.Fatalf("reconcile refusal: %v", err)
+	}
+	if err := backend.enableIdleTimer(ctx, home, r.Profile.SystemctlPath); err == nil ||
+		!strings.Contains(err.Error(), "user idle timer unit exists") {
+		t.Fatalf("idle timer refusal: %v", err)
+	}
+}

@@ -192,6 +192,12 @@ export function parseResponse(text, requestId, action) {
         return r;
     }
     validateStatus(r.status);
-    if (action === ACTIVATE_ACTION) validateLeaseFence(r.leaseFence);
+    if (action === ACTIVATE_ACTION) {
+        validateLeaseFence(r.leaseFence);
+        // The handed-out fence must be the fence the returned status commits:
+        // a mismatched incarnation would be rejected as stale by every
+        // admission, so bind them here and fail closed otherwise.
+        if (r.leaseFence.incarnation !== r.status.expected.incarnation) fail();
+    }
     return r;
 }

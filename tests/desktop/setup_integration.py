@@ -14,6 +14,7 @@ import subprocess
 HOME = pathlib.Path(pwd.getpwuid(os.geteuid()).pw_dir)
 ROOT = HOME / ".config/gpu-workload-supervisor"
 UNIT = "gpu-workload-supervisor-reconcile.service"
+TIMER = "gpu-workload-supervisor-idle.timer"
 
 
 def run(*args, request=None, error=None):
@@ -116,6 +117,8 @@ def main():
     assert not json.loads(marker.read_text())["maintenance"]
     link = user_units / "default.target.wants" / UNIT
     assert link.is_symlink() and os.readlink(link) == "/usr/lib/systemd/user/" + UNIT
+    timer_link = user_units / "timers.target.wants" / TIMER
+    assert timer_link.is_symlink() and os.readlink(timer_link) == "/usr/lib/systemd/user/" + TIMER
     assert run("systemctl", "--user", "show", "--property=ActiveState", "--value", UNIT).strip() == "inactive"
     run("systemctl", "--user", "start", UNIT)
     assert run("systemctl", "--user", "show", "--property=Result", "--value", UNIT).strip() == "success"
@@ -164,6 +167,7 @@ def main():
     preserved = {path: digest(path) for path in (ROOT / "operator.json", state, workload)}
     setup("remove-integration")
     assert not link.exists() and not link.is_symlink()
+    assert not timer_link.exists() and not timer_link.is_symlink()
     for path, expected in preserved.items():
         assert digest(path) == expected, f"removal changed {path}"
     # A later activation recreates only owned integration and preserves the unit.
@@ -171,6 +175,7 @@ def main():
     request["confirmQuiesced"] = True
     setup("apply", request)
     assert link.is_symlink()
+    assert timer_link.is_symlink()
     assert digest(workload) == preserved[workload]
     print("PASS: packaged setup, real user systemd, interrupted resume, stale preview, backups, removal/reapply")
 
