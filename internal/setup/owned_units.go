@@ -24,6 +24,10 @@ type unitPlan struct {
 	// proven records the accepted catalog's digest for units a delete or an
 	// overwrite may touch, so only content the supervisor rendered is replaced.
 	proven map[string]string
+	// prior/absent snapshot the pre-write state so a failed pre-commit check
+	// can restore the committed installation exactly.
+	prior  map[string][]byte
+	absent map[string]bool
 }
 
 func (p unitPlan) empty() bool {
@@ -68,7 +72,7 @@ func ownedUnitDirectory(home string) string {
 // profile's deterministic render is retained and the apply fails before any
 // commit, so file and catalog profile both survive.
 func (b Backend) planOwnedUnits(req Request, accepted control.CatalogSnapshot, home string) (unitPlan, error) {
-	plan := unitPlan{Writes: map[string][]byte{}, proven: map[string]string{}}
+	plan := unitPlan{Writes: map[string][]byte{}, proven: map[string]string{}, prior: map[string][]byte{}, absent: map[string]bool{}}
 	for _, p := range accepted.Catalog.Profiles {
 		if p.NativeModel == nil || p.NativeModel.Owned == nil {
 			continue
@@ -79,9 +83,19 @@ func (b Backend) planOwnedUnits(req Request, accepted control.CatalogSnapshot, h
 		}
 		plan.proven[p.Unit] = digest(raw)
 	}
+	qualify := b.qualifyOwned
+	if qualify == nil {
+		qualify = gpuruntime.QualifyOwnedUnit
+	}
 	for _, p := range req.Catalog.Profiles {
 		if p.NativeModel == nil || p.NativeModel.Owned == nil {
 			continue
+		}
+		// Qualify against this host before anything becomes durable: the
+		// packaged executable must be present and trusted and the model path
+		// must exist with the right type.
+		if err := qualify(p); err != nil {
+			return plan, err
 		}
 		raw, err := ownedRenderChecked(p)
 		if err != nil {
@@ -102,6 +116,11 @@ func (b Backend) planOwnedUnits(req Request, accepted control.CatalogSnapshot, h
 			continue
 		}
 		path := filepath.Join(ownedUnitDirectory(home), p.Unit)
+		if ownedUnitStillReferenced(req.Catalog, path, plan.proven[p.Unit]) {
+			// The requested catalog still claims this exact file (for example
+			// an owned profile converted to adopted); keep it.
+			continue
+		}
 		data, err := privateRead(path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -117,6 +136,17 @@ func (b Backend) planOwnedUnits(req Request, accepted control.CatalogSnapshot, h
 	}
 	sort.Strings(plan.Deletes)
 	return plan, nil
+}
+
+// ownedUnitStillReferenced reports whether any profile in the catalog claims
+// the unit file at path with the proven digest, whether owned or adopted.
+func ownedUnitStillReferenced(c control.Catalog, path, sha256 string) bool {
+	for _, p := range c.Profiles {
+		if p.NativeModel != nil && p.NativeModel.LaunchFile == path && p.NativeModel.LaunchSHA256 == sha256 {
+			return true
+		}
+	}
+	return false
 }
 
 // ownedRenderChecked re-renders an owned profile and pins the spec↔fingerprint
@@ -204,8 +234,11 @@ func (b Backend) applyOwnedUnitWrites(ctx context.Context, home string, plan uni
 			if plan.proven[name] != currentDigest {
 				return fmt.Errorf("%w: %s", ErrOwnedUnitCollision, name)
 			}
+			plan.prior[name] = current
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
+		} else {
+			plan.absent[name] = true
 		}
 		// AtomicWrite creates the file 0600, matching the setup private-file
 		// convention that privateRead trust checks enforce.
@@ -214,6 +247,43 @@ func (b Backend) applyOwnedUnitWrites(ctx context.Context, home string, plan uni
 		}
 	}
 	return nil
+}
+
+// rollbackOwnedUnitWrites restores the pre-apply state after a failed
+// pre-commit check: units the write created are removed, overwritten units get
+// their snapshotted content back. Files whose content no longer matches the
+// write are foreign modifications and are never destroyed.
+func (b Backend) rollbackOwnedUnitWrites(ctx context.Context, home, systemctl string, plan unitPlan) error {
+	dir := ownedUnitDirectory(home)
+	var failed []string
+	for _, name := range plan.writeNames() {
+		path := filepath.Join(dir, name)
+		current, err := privateRead(path)
+		switch {
+		case err == nil && digest(current) == digest(plan.Writes[name]):
+			// The written content is intact and safe to replace.
+		case errors.Is(err, os.ErrNotExist) && !plan.absent[name]:
+			// The overwrite target vanished; restoring it is still correct.
+		case errors.Is(err, os.ErrNotExist):
+			continue
+		default:
+			failed = append(failed, name)
+			continue
+		}
+		if plan.absent[name] {
+			if err := os.Remove(path); err != nil {
+				failed = append(failed, name)
+			}
+			continue
+		}
+		if err := deployment.AtomicWrite(path, plan.prior[name]); err != nil {
+			failed = append(failed, name)
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("%w: %s", ErrOwnedUnitCollision, strings.Join(failed, ", "))
+	}
+	return b.daemonReloadOwnedUnits(ctx, systemctl, plan.writeNames())
 }
 
 // applyOwnedUnitDeletes removes only content the journal proves the supervisor

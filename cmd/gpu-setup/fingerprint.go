@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -34,9 +35,21 @@ func (a setupActions) renderOwned(home string, input io.Reader, output io.Writer
 	var request struct {
 		Draft         setup.Draft `json:"draft"`
 		ManagerCgroup string      `json:"managerCgroup"`
+		SystemctlPath string      `json:"systemctlPath"`
 	}
 	if err := strictjson.DecodeLimited(input, 16384, &request); err != nil {
 		return err
+	}
+	systemctl := request.SystemctlPath
+	if systemctl == "" {
+		systemctl = "systemctl"
+	}
+	actual, err := a.managerCgroup(context.Background(), systemctl)
+	if err != nil {
+		return err
+	}
+	if request.ManagerCgroup == "" || request.ManagerCgroup != actual {
+		return setup.ErrManagerCgroupMismatch
 	}
 	profile, raw, err := setup.OwnedProfile(request.Draft, request.ManagerCgroup, home)
 	if err != nil {

@@ -18,26 +18,28 @@ import (
 const cmdVerifyBindings = "verify-bindings"
 
 type setupActions struct {
-	home      func() (string, error)
-	apply     func(context.Context, string, setup.Request) error
-	reconcile func(context.Context, string) error
-	discover  func(context.Context, string) (setup.Discovery, error)
-	probe     func(context.Context, setup.ProbeRequest) (setup.ApplicationCandidate, error)
-	euid      func() int
-	verify    func(context.Context, setup.Request) error
-	inspect   func(string, control.NativeModel) (string, error)
+	home          func() (string, error)
+	apply         func(context.Context, string, setup.Request) error
+	reconcile     func(context.Context, string) error
+	discover      func(context.Context, string) (setup.Discovery, error)
+	probe         func(context.Context, setup.ProbeRequest) (setup.ApplicationCandidate, error)
+	euid          func() int
+	verify        func(context.Context, setup.Request) error
+	inspect       func(string, control.NativeModel) (string, error)
+	managerCgroup func(context.Context, string) (string, error)
 }
 
 func systemActions() setupActions {
 	return setupActions{
-		home:      setup.Home,
-		apply:     setup.Apply,
-		reconcile: setup.Reconcile,
-		discover:  setup.Discover,
-		probe:     setup.Probe,
-		euid:      os.Geteuid,
-		verify:    setup.VerifyBindings,
-		inspect:   runtime.InspectQualifiedNativeLaunch,
+		home:          setup.Home,
+		apply:         setup.Apply,
+		reconcile:     setup.Reconcile,
+		discover:      setup.Discover,
+		probe:         setup.Probe,
+		euid:          os.Geteuid,
+		verify:        setup.VerifyBindings,
+		inspect:       runtime.InspectQualifiedNativeLaunch,
+		managerCgroup: setup.ManagerCgroup,
 	}
 }
 

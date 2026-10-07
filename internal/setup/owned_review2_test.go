@@ -1,0 +1,380 @@
+package setup
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+)
+
+// TestApplyRollsBackOwnedWritesOnFailedPrecheck reproduces the mutation leak:
+// an owned update whose workload is not quiescent must not leave the
+// overwritten unit behind, and the committed request must still apply cleanly.
+func TestApplyRollsBackOwnedWritesOnFailedPrecheck(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	ctx := context.Background()
+	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	// Update the owned profile; make the workload non-quiescent.
+	updated, _ := ownedFixtureProfile(t, home, "vision", 9101)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{updated}}
+	r.ExpectedRevision = currentRevision(t, r)
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{err: errors.New("busy")}, nil }
+	if err := backend.Apply(ctx, home, r); err == nil {
+		t.Fatal("non-quiescent workload applied")
+	}
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	data, err := os.ReadFile(filepath.Join(ownedUnitDirectory(home), profile.Unit))
+	if err != nil || string(data) != string(raw) {
+		t.Fatalf("committed unit not restored: %v", err)
+	}
+	if _, present, _ := readOwnedUnitJournal(filepath.Join(home, ".config/gpu-workload-supervisor")); present {
+		t.Fatal("pending journal left behind after rollback")
+	}
+	// The committed catalog still applies without a collision.
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.ExpectedRevision = currentRevision(t, r)
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatalf("committed request rejected after rollback: %v", err)
+	}
+}
+
+// TestRollbackRefusesForeignModifiedUnit never destroys content the supervisor
+// did not write, even while rolling back.
+func TestRollbackRefusesForeignModifiedUnit(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
+	plan := unitPlan{Writes: map[string][]byte{profile.Unit: raw}, proven: map[string]string{}, prior: map[string][]byte{}, absent: map[string]bool{profile.Unit: true}}
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.applyOwnedUnitWrites(context.Background(), home, plan, newOwnedUnitJournal(plan)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, profile.Unit), []byte("foreign"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.rollbackOwnedUnitWrites(context.Background(), home, r.Profile.SystemctlPath, plan); !errors.Is(err, ErrOwnedUnitCollision) {
+		t.Fatalf("foreign content destroyed or ignored: %v", err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, profile.Unit))
+	if string(data) != "foreign" {
+		t.Fatal("foreign content overwritten")
+	}
+}
+
+func currentRevision(t *testing.T, r Request) string {
+	t.Helper()
+	s := openStoreAt(t, r.Profile.StatePath)
+	snap, err := s.Catalog(context.Background())
+	s.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snap.Revision
+}
+
+// TestPlanOwnedUnitsPreservesAdoptedReference keeps the unit file when the
+// requested catalog still claims it with the proven digest (owned converted
+// to adopted), instead of deleting it after commit.
+func TestPlanOwnedUnitsPreservesAdoptedReference(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, profile.Unit), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	accepted := control.CatalogSnapshot{Revision: "r1", Catalog: control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}}
+	adopted := profile
+	nativeCopy := *profile.NativeModel
+	nativeCopy.Owned = nil
+	nativeCopy.LaunchFile = filepath.Join(dir, profile.Unit)
+	adopted.NativeModel = &nativeCopy
+	adopted.NativeModel.LaunchSHA256 = digest(raw)
+	req := ownedFixtureRequest(t, home)
+	req.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{adopted}}
+	_ = r
+	plan, err := backend.planOwnedUnits(req, accepted, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Deletes) != 0 {
+		t.Fatalf("adopted reference scheduled for deletion: %v", plan.Deletes)
+	}
+}
+
+// TestPlanPreviewReportsOwnedUnitChanges makes the activation preview honest:
+// owned writes and removals are listed instead of "user units unchanged".
+func TestPlanPreviewReportsOwnedUnitChanges(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	ctx := context.Background()
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	preview, err := backend.Plan(home, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changesContain(preview.Changes, "Write supervisor-owned unit "+profile.Unit) {
+		t.Fatalf("write missing from preview: %v", preview.Changes)
+	}
+	if changesContain(preview.Changes, "unchanged") {
+		t.Fatalf("preview claims units unchanged: %v", preview.Changes)
+	}
+	s := openStoreAt(t, r.Profile.StatePath)
+	if _, err := s.ReplaceCatalog(ctx, "", r.Catalog); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	r.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health"}}}
+	preview, err = backend.Plan(home, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changesContain(preview.Changes, "Remove supervisor-owned unit "+profile.Unit) {
+		t.Fatalf("removal missing from preview: %v", preview.Changes)
+	}
+}
+
+func changesContain(changes []string, needle string) bool {
+	for _, c := range changes {
+		if strings.Contains(c, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestResumeReloadsAfterCompletedDelete refreshes systemd even when the
+// journaled delete already removed the file, so the unit is not left cached
+// and startable.
+func TestResumeReloadsAfterCompletedDelete(t *testing.T) {
+	backend, home, r := fixture(t)
+	var verified []string
+	backend.runCommand = recordingOwnedCommand(&verified)
+	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{profile.Unit: digest(raw)}, Phase: ownedJournalCommitted}
+	if err := writeOwnedUnitJournal(root, journal); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.resumeOwnedUnitJournal(context.Background(), home, r); err != nil {
+		t.Fatal(err)
+	}
+	if len(verified) != 1 || verified[0] != profile.Unit {
+		t.Fatalf("no reload for completed delete: %v", verified)
+	}
+	if _, present, _ := readOwnedUnitJournal(root); present {
+		t.Fatal("journal not cleared")
+	}
+}
+
+// TestPlanOwnedUnitsQualifiesOwnedLaunches fails the plan loudly when the host
+// cannot run the owned launch, before anything becomes durable.
+func TestPlanOwnedUnitsQualifiesOwnedLaunches(t *testing.T) {
+	backend, home, _ := fixture(t)
+	backend.qualifyOwned = func(control.WorkloadProfile) error { return errors.New("untrusted executable") }
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	req := ownedFixtureRequest(t, home, profile)
+	if _, err := backend.planOwnedUnits(req, control.CatalogSnapshot{}, home); err == nil || !strings.Contains(err.Error(), "untrusted executable") {
+		t.Fatalf("unqualified owned launch planned: %v", err)
+	}
+}
+
+// TestOwnedProfileRejectsGrammarUnsafeModelPath surfaces the catalog grammar
+// rule at draft synthesis: whitespace in a rendered field fails loudly.
+func TestOwnedProfileRejectsGrammarUnsafeModelPath(t *testing.T) {
+	draft := Draft{ID: "vision", Label: "Vision", App: "llama.cpp", Model: "vision", Binding: &DraftBinding{Instance: "owned", Owned: &DraftOwnedLaunch{ModelPath: "/models/my model.gguf", Port: 9100}}}
+	if _, _, err := OwnedProfile(draft, "/user.slice/user-1000.slice/user@1000.service", t.TempDir()); err == nil {
+		t.Fatal("whitespace model path synthesized")
+	}
+}
+
+// TestMaintenanceResumeCompletesCrashWindowApply proves the full Apply resume
+// succeeds after the post-commit crash window and clears the fence.
+func TestMaintenanceResumeCompletesCrashWindowApply(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	ctx := context.Background()
+	stale, staleRaw := ownedFixtureProfile(t, home, "stale", 9300)
+	r.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health"}}}
+	s := openStoreAt(t, r.Profile.StatePath)
+	if _, err := s.ReplaceCatalog(ctx, "", r.Catalog); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stale.Unit), staleRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalPending}
+	if err := writeOwnedUnitJournal(root, journal); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(r.Profile.StatePath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := deployment.Write(r.Profile.StatePath, deployment.Marker{Version: 1, Release: deployment.Release, Maintenance: true}); err != nil {
+		t.Fatal(err)
+	}
+	fence, err := json.Marshal(activation{Request: r})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "activation.json"), fence, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, stale.Unit)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("crash-window delete dropped during resume apply")
+	}
+	marker, err := deployment.Read(r.Profile.StatePath)
+	if err != nil || marker.Maintenance {
+		t.Fatalf("fence not cleared: %+v %v", marker, err)
+	}
+}
+
+// TestManagerCgroupQueryRequiresConcreteAnswer rejects empty or malformed
+// manager answers instead of deriving an uncontrollable cgroup.
+func TestManagerCgroupQueryRequiresConcreteAnswer(t *testing.T) {
+	ok := func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("ControlGroup=/user.slice/user-1000.slice/user@1000.service\n"), nil
+	}
+	got, err := managerCgroup(context.Background(), ok, "systemctl")
+	if err != nil || got != "/user.slice/user-1000.slice/user@1000.service" {
+		t.Fatalf("%q %v", got, err)
+	}
+	empty := func(context.Context, string, ...string) ([]byte, error) { return []byte("ControlGroup=\n"), nil }
+	if _, err := managerCgroup(context.Background(), empty, "systemctl"); !errors.Is(err, ErrManagerCgroupMismatch) {
+		t.Fatalf("empty cgroup accepted: %v", err)
+	}
+	broken := func(context.Context, string, ...string) ([]byte, error) { return nil, errors.New("no bus") }
+	if _, err := managerCgroup(context.Background(), broken, "systemctl"); err == nil {
+		t.Fatal("query failure accepted")
+	}
+}
+
+// TestRollbackRestoresOverwrittenUnit restores snapshotted content when a
+// pre-commit failure follows an overwrite of an existing owned unit.
+func TestRollbackRestoresOverwrittenUnit(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, profile.Unit), []byte("old render"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan := unitPlan{Writes: map[string][]byte{profile.Unit: raw}, proven: map[string]string{profile.Unit: digest([]byte("old render"))}, prior: map[string][]byte{}, absent: map[string]bool{}}
+	if err := backend.applyOwnedUnitWrites(context.Background(), home, plan, newOwnedUnitJournal(plan)); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.rollbackOwnedUnitWrites(context.Background(), home, r.Profile.SystemctlPath, plan); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, profile.Unit))
+	if string(data) != "old render" {
+		t.Fatalf("prior content not restored: %q", data)
+	}
+}
+
+// TestPlanOwnedUnitsDeletesWhenAdoptedReferenceDrifts keeps the fail-closed
+// delete when the requested catalog references the unit with a different
+// fingerprint.
+func TestPlanOwnedUnitsDeletesWhenAdoptedReferenceDrifts(t *testing.T) {
+	backend, home, _ := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, profile.Unit), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	accepted := control.CatalogSnapshot{Revision: "r1", Catalog: control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}}
+	adopted := profile
+	nativeCopy := *profile.NativeModel
+	nativeCopy.Owned = nil
+	nativeCopy.LaunchFile = filepath.Join(dir, profile.Unit)
+	adopted.NativeModel = &nativeCopy
+	adopted.NativeModel.LaunchSHA256 = digest([]byte("different render"))
+	req := ownedFixtureRequest(t, home)
+	req.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{adopted}}
+	plan, err := backend.planOwnedUnits(req, accepted, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Deletes) != 1 {
+		t.Fatalf("drifted reference suppressed the delete: %v", plan.Deletes)
+	}
+}
+
+// TestManagerCgroupWrapsSystemBackend exercises the production wrapper's error
+// propagation with a systemctl binary that cannot exist.
+func TestManagerCgroupWrapsSystemBackend(t *testing.T) {
+	if _, err := ManagerCgroup(context.Background(), "/nonexistent/systemctl"); err == nil {
+		t.Fatal("missing systemctl accepted")
+	}
+}
+
+// TestRollbackReportsReloadFailure surfaces a failed daemon-reload during
+// rollback instead of pretending the installation was restored.
+func TestRollbackReportsReloadFailure(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = func(context.Context, string, ...string) ([]byte, error) { return nil, errors.New("reload failed") }
+	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
+	plan := unitPlan{Writes: map[string][]byte{profile.Unit: raw}, proven: map[string]string{}, prior: map[string][]byte{}, absent: map[string]bool{profile.Unit: true}}
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.applyOwnedUnitWrites(context.Background(), home, plan, newOwnedUnitJournal(plan)); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.rollbackOwnedUnitWrites(context.Background(), home, r.Profile.SystemctlPath, plan); err == nil {
+		t.Fatal("reload failure swallowed")
+	}
+}
+
+// TestClearOwnedUnitJournalWithoutJournal is the idempotent no-op path.
+func TestClearOwnedUnitJournalWithoutJournal(t *testing.T) {
+	root := filepath.Join(t.TempDir(), ".config/gpu-workload-supervisor")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := clearOwnedUnitJournal(root); err != nil {
+		t.Fatal(err)
+	}
+}

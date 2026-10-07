@@ -1,14 +1,36 @@
 package setup
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 )
+
+var ErrManagerCgroupMismatch = errors.New("manager cgroup does not match the running user manager")
+
+// ManagerCgroup asks the running user manager for its root control group so
+// owned profiles derive cgroups from the host, not from request input.
+func ManagerCgroup(ctx context.Context, systemctl string) (string, error) {
+	return managerCgroup(ctx, SystemBackend().runCommand, systemctl)
+}
+
+func managerCgroup(ctx context.Context, runCommand func(context.Context, string, ...string) ([]byte, error), systemctl string) (string, error) {
+	out, err := runCommand(ctx, systemctl, "--user", "show", "-.slice", "--property=ControlGroup")
+	if err != nil {
+		return "", fmt.Errorf("query manager cgroup: %w", err)
+	}
+	cgroup, ok := strings.CutPrefix(strings.TrimSpace(string(out)), "ControlGroup=")
+	if !ok || cgroup == "" {
+		return "", ErrManagerCgroupMismatch
+	}
+	return cgroup, nil
+}
 
 // OwnedProfile synthesizes a catalog profile and its deterministic unit
 // rendering from an owned launch draft. The manager cgroup and home directory

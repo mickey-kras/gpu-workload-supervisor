@@ -77,3 +77,17 @@ func renderMustQualify(raw []byte, n control.NativeModel) error {
 	}
 	return nil
 }
+
+// QualifyOwnedUnit renders an owned profile's unit and qualifies it against
+// this host, proving the packaged executable is present and trusted and the
+// model path exists with the right type before anything becomes durable.
+func QualifyOwnedUnit(p control.WorkloadProfile) error {
+	if p.NativeModel == nil || p.NativeModel.Owned == nil {
+		return nil
+	}
+	raw, err := RenderOwnedUnit(p)
+	if err != nil {
+		return err
+	}
+	return renderMustQualify(raw, *p.NativeModel)
+}

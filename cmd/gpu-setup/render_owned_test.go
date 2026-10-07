@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/setup"
 )
 
 func TestRenderOwnedGoldenOutput(t *testing.T) {
@@ -13,6 +17,9 @@ func TestRenderOwnedGoldenOutput(t *testing.T) {
 	home := t.TempDir()
 	actions.home = func() (string, error) { return home, nil }
 	actions.euid = func() int { return 1000 }
+	actions.managerCgroup = func(context.Context, string) (string, error) {
+		return "/user.slice/user-1000.slice/user@1000.service", nil
+	}
 	input := `{"draft":{"id":"vision","label":"Vision","app":"llama.cpp","binding":{"instance":"owned","owned":{"modelPath":"/models/vision.gguf","port":9100,"ctxSize":8192}}},"managerCgroup":"/user.slice/user-1000.slice/user@1000.service"}`
 	var output bytes.Buffer
 	if err := actions.run([]string{"render-owned"}, strings.NewReader(input), &output); err != nil {
@@ -65,6 +72,35 @@ func TestRenderOwnedGoldenOutput(t *testing.T) {
 	bad := strings.Replace(input, `"port":9100`, `"port":80`, 1)
 	if err := actions.renderOwned(home, strings.NewReader(bad), &bytes.Buffer{}); err == nil {
 		t.Fatal("privileged port accepted")
+	}
+}
+
+// TestRenderOwnedVerifiesManagerCgroupAgainstHost rejects caller-supplied
+// manager cgroups that do not match the running user manager, so a typo or a
+// stale value cannot derive an uncontrollable cgroup.
+func TestRenderOwnedVerifiesManagerCgroupAgainstHost(t *testing.T) {
+	actions := systemActions()
+	home := t.TempDir()
+	actions.home = func() (string, error) { return home, nil }
+	actions.euid = func() int { return 1000 }
+	actions.managerCgroup = func(context.Context, string) (string, error) {
+		return "/user.slice/user-1000.slice/user@1000.service", nil
+	}
+	input := `{"draft":{"id":"vision","label":"Vision","app":"llama.cpp","binding":{"instance":"owned","owned":{"modelPath":"/models/vision.gguf","port":9100}}},"managerCgroup":"/user.slice/user-1000.slice/user@1000.service"}`
+	if err := actions.renderOwned(home, strings.NewReader(input), &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	foreign := strings.Replace(input, `user@1000.service`, `user@1001.service`, 1)
+	if err := actions.renderOwned(home, strings.NewReader(foreign), &bytes.Buffer{}); !errors.Is(err, setup.ErrManagerCgroupMismatch) {
+		t.Fatalf("foreign manager cgroup accepted: %v", err)
+	}
+	empty := strings.Replace(input, `"managerCgroup":"/user.slice/user-1000.slice/user@1000.service"`, `"managerCgroup":""`, 1)
+	if err := actions.renderOwned(home, strings.NewReader(empty), &bytes.Buffer{}); !errors.Is(err, setup.ErrManagerCgroupMismatch) {
+		t.Fatalf("empty manager cgroup accepted: %v", err)
+	}
+	actions.managerCgroup = func(context.Context, string) (string, error) { return "", errors.New("no user manager") }
+	if err := actions.renderOwned(home, strings.NewReader(input), &bytes.Buffer{}); err == nil {
+		t.Fatal("unavailable manager accepted")
 	}
 }
 

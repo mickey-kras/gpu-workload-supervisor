@@ -295,3 +295,21 @@ func TestPreflightOrphanScan(t *testing.T) {
 		t.Fatal("default unit directory unresolved")
 	}
 }
+
+// TestQualifyOwnedUnitRejectsUnqualifiedHosts proves the pre-commit
+// qualification gate: a render whose packaged executable is absent or whose
+// launch cannot be parsed by the shared qualifier fails loudly.
+func TestQualifyOwnedUnitRejectsUnqualifiedHosts(t *testing.T) {
+	p := ownedRenderProfile("ollama", "chat", &control.OwnedLaunch{Port: 11434})
+	restore := ownedBinaryDirectory
+	ownedBinaryDirectory = filepath.Join(t.TempDir(), "empty")
+	defer func() { ownedBinaryDirectory = restore }()
+	if err := QualifyOwnedUnit(p); !errors.Is(err, ErrOwnedRender) {
+		t.Fatalf("missing packaged executable qualified: %v", err)
+	}
+	adopted := p
+	adopted.NativeModel.Owned = nil
+	if err := QualifyOwnedUnit(adopted); err != nil {
+		t.Fatal(err)
+	}
+}

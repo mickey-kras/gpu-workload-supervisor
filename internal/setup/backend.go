@@ -112,7 +112,22 @@ func (b Backend) Plan(home string, request Request) (Preview, error) {
 	}
 	profile := request.Profile
 	profile.ActivatedRelease = deployment.Release
-	return Preview{Release: deployment.Release, Profile: profile, Catalog: request.Catalog, Changes: []string{filepath.Join(home, ".config/gpu-workload-supervisor/operator.json"), "Commit validated workload catalog to " + profile.StatePath, "Enable packaged user reconciliation for future logins (no workload is started now)", "Retain verified binary/configuration/state backups; user units and models are unchanged"}}, nil
+	changes := []string{
+		filepath.Join(home, ".config/gpu-workload-supervisor/operator.json"),
+		"Commit validated workload catalog to " + profile.StatePath,
+		"Enable packaged user reconciliation for future logins (no workload is started now)",
+	}
+	ownedChanges, err := b.previewOwnedUnitChanges(request)
+	if err != nil {
+		return Preview{}, err
+	}
+	if len(ownedChanges) == 0 {
+		changes = append(changes, "Retain verified binary/configuration/state backups; user units and models are unchanged")
+	} else {
+		changes = append(changes, ownedChanges...)
+		changes = append(changes, "Retain verified binary/configuration/state backups")
+	}
+	return Preview{Release: deployment.Release, Profile: profile, Catalog: request.Catalog, Changes: changes}, nil
 }
 
 // Backend holds the host interactions setup performs. Tests inject fakes
@@ -121,6 +136,9 @@ type Backend struct {
 	makeRuntime      func(Request) (gpuruntime.Manager, error)
 	runCommand       func(ctx context.Context, name string, args ...string) ([]byte, error)
 	probeApplication func(ctx context.Context, request ProbeRequest) (ApplicationCandidate, error)
+	// qualifyOwned renders and qualifies an owned profile against the host
+	// before anything becomes durable; nil selects the runtime default.
+	qualifyOwned     func(control.WorkloadProfile) error
 	binaryDirectory  string
 	packageBinaryUID uint32
 }
@@ -207,18 +225,36 @@ func (b Backend) Apply(ctx context.Context, home string, request Request) error 
 			return err
 		}
 	}
+	// Any pre-commit failure must leave the committed installation untouched:
+	// roll back the journaled writes with their content snapshots.
 	manager, err := work.verifyRuntimes(ctx)
 	if err != nil {
-		return err
+		return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
 	}
 	if err := work.backup(ctx); err != nil {
-		return err
+		return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
 	}
 	progress, err := work.enterMaintenance()
 	if err != nil {
-		return err
+		return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
 	}
 	return b.commitConfiguration(ctx, home, work.root, request, manager, progress.Fresh, plan)
+}
+
+// abortOwnedUnitWrites rolls back pre-commit unit writes and drops the pending
+// journal so a later apply starts from the committed installation, not from
+// half-applied uncommitted content.
+func (b Backend) abortOwnedUnitWrites(ctx context.Context, home, root string, request Request, plan unitPlan, cause error) error {
+	if plan.empty() {
+		return cause
+	}
+	if err := b.rollbackOwnedUnitWrites(ctx, home, request.Profile.SystemctlPath, plan); err != nil {
+		cause = errors.Join(cause, err)
+	}
+	if err := clearOwnedUnitJournal(root); err != nil {
+		cause = errors.Join(cause, err)
+	}
+	return cause
 }
 
 func (work *activationWork) inspect(ctx context.Context) error {
@@ -390,6 +426,57 @@ func (b Backend) commitConfiguration(ctx context.Context, home, root string, req
 	return b.finalizeOwnedUnits(ctx, home, root, request, plan)
 }
 
+// previewOwnedUnitChanges reports the owned-unit writes and removals the
+// request will cause so the activation preview is never materially false.
+func (b Backend) previewOwnedUnitChanges(request Request) ([]string, error) {
+	var changes []string
+	for _, p := range request.Catalog.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Owned != nil {
+			changes = append(changes, "Write supervisor-owned unit "+p.Unit+" under ~/.config/systemd/user")
+		}
+	}
+	removals, err := b.plannedOwnedUnitRemovals(request)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range removals {
+		changes = append(changes, "Remove supervisor-owned unit "+name+" from ~/.config/systemd/user")
+	}
+	return changes, nil
+}
+
+// plannedOwnedUnitRemovals lists owned units in the accepted catalog that the
+// request drops. Without a state database nothing has been accepted yet.
+func (b Backend) plannedOwnedUnitRemovals(request Request) ([]string, error) {
+	if _, err := os.Stat(request.Profile.StatePath); errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stateStore, err := store.Open(ctx, request.Profile.StatePath)
+	if err != nil {
+		return nil, err
+	}
+	defer stateStore.Close()
+	snapshot, err := stateStore.Catalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+	kept := map[string]bool{}
+	for _, p := range request.Catalog.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Owned != nil {
+			kept[p.Unit] = true
+		}
+	}
+	var removals []string
+	for _, p := range snapshot.Catalog.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Owned != nil && !kept[p.Unit] {
+			removals = append(removals, p.Unit)
+		}
+	}
+	return removals, nil
+}
+
 // commitOwnedUnitJournal pins the owned-units journal to committed immediately
 // after the catalog transaction resolves, closing the window where a crash
 // would otherwise look like a pre-commit crash and lose proven deletes.
@@ -487,7 +574,9 @@ func (b Backend) resumeOwnedUnitJournal(ctx context.Context, home string, req Re
 		path := filepath.Join(ownedUnitDirectory(home), name)
 		current, err := privateRead(path)
 		if errors.Is(err, os.ErrNotExist) {
-			// The delete already ran; nothing remains to protect or remove.
+			// The delete already ran; systemd may still have the unit cached,
+			// so the reload below must still happen.
+			reloaded = append(reloaded, name)
 			continue
 		}
 		if err != nil {
