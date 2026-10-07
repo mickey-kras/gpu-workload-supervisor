@@ -45,10 +45,21 @@ export class ApplicationDraft {
 }
 
 // Slugs mirror the backend's ValidWorkloadID rule; null means keep the draft UUID.
+// Trimming is index-based (plain scans and slices) so derivation stays linear and
+// carries no backtracking regexes (SonarQube javascript:S5852).
 export function profileIDFromModel(app, model) {
     if (!model) return null;
-    const slug = `${app}-${model}`.toLowerCase().replaceAll(/[^a-z0-9_]+/g, '-')
-        .replace(/^[^a-z]+/, '').replace(/-+$/, '').slice(0, 64).replace(/-+$/, '');
+    let slug = `${app}-${model}`.toLowerCase().replaceAll(/[^a-z0-9_]+/g, '-');
+    // Strip the leading run outside [a-z].
+    let start = 0;
+    while (start < slug.length && (slug[start] < 'a' || slug[start] > 'z')) start++;
+    // Strip trailing dashes before and after the 64-character cut.
+    let end = slug.length;
+    while (end > start && slug[end - 1] === '-') end--;
+    slug = slug.slice(start, end).slice(0, 64);
+    end = slug.length;
+    while (end > 0 && slug[end - 1] === '-') end--;
+    slug = slug.slice(0, end);
     return /^[a-z][a-z0-9_-]{0,63}$/.test(slug) && slug !== 'idle' && slug !== 'unknown' ? slug : null;
 }
 

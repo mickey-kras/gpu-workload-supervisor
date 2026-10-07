@@ -41,6 +41,30 @@ test('profile IDs slugify app and model within backend rules and refuse unusable
     assert.ok(long.length <= 64 && /^[a-z][a-z0-9_-]*$/.test(long) && !long.endsWith('-'));
 });
 
+test('profile IDs strip leading non-letters and trailing dashes and normalize case', () => {
+    assert.equal(profileIDFromModel('9lives', 'one'), 'lives-one');
+    assert.equal(profileIDFromModel('--x', 'model'), 'x-model');
+    assert.equal(profileIDFromModel('vllm', 'model---'), 'vllm-model');
+    assert.equal(profileIDFromModel('VLLM', 'Model'), 'vllm-model');
+    assert.equal(profileIDFromModel('vllm', 'Qwen/QWEN'), 'vllm-qwen-qwen');
+});
+
+test('profile IDs re-trim trailing dashes after the 64-character cut', () => {
+    assert.equal(profileIDFromModel('a'.repeat(63), 'x'), 'a'.repeat(63));
+    assert.equal(profileIDFromModel('a'.repeat(64), '-'), 'a'.repeat(64));
+});
+
+test('profile IDs refuse empty-after-strip and reserved slugs', () => {
+    assert.equal(profileIDFromModel('---', '...'), null);
+    assert.equal(profileIDFromModel('idle', '!'), null);
+    assert.equal(profileIDFromModel('unknown', '!'), null);
+    assert.equal(profileIDFromModel('', 'idle'), null);
+});
+
+test('profile ID derivation stays linear on pathological dash runs', () => {
+    assert.equal(profileIDFromModel('ollama', `a${'-'.repeat(50000)}b`), 'ollama-a-b');
+});
+
 test('stopped and unreachable instances never report no models', () => {
     assert.match(candidateMessage({instanceStatus: 'not-running'}), /Not running/);
     assert.match(candidateMessage({instanceStatus: 'unreachable'}), /Unable to reach/);
