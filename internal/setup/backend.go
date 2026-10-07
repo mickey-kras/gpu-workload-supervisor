@@ -376,50 +376,65 @@ const (
 	idleTimerUnit = "gpu-workload-supervisor-idle.timer"
 )
 
+// unitEnablement describes one packaged user unit's enablement: the unit
+// name, the refusal-message label (stable: the packaged lifecycle fixture
+// matches on it), the wants directory, and the ownership record file.
+type unitEnablement struct {
+	unit           string
+	label          string
+	wantsDirectory string
+	recordName     string
+}
+
+var (
+	reconcileEnablement = unitEnablement{reconcileUnit, "reconciliation", "default.target.wants", "integration.json"}
+	idleTimerEnablement = unitEnablement{idleTimerUnit, "idle timer", "timers.target.wants", "integration-idle.json"}
+)
+
 func (b Backend) enableReconciliation(ctx context.Context, home, systemctl string) error {
-	return b.enableUserUnit(ctx, home, systemctl, reconcileUnit, "reconciliation", "default.target.wants", "integration.json")
+	return b.enableUserUnit(ctx, home, systemctl, reconcileEnablement)
 }
 
 // enableIdleTimer mirrors the reconciliation enablement exactly: the packaged
 // timer is only link-enabled (no --now, no daemon), preexisting user overrides
 // are refused, and ownership is recorded for symmetric removal.
 func (b Backend) enableIdleTimer(ctx context.Context, home, systemctl string) error {
-	return b.enableUserUnit(ctx, home, systemctl, idleTimerUnit, "idle timer", "timers.target.wants", "integration-idle.json")
+	return b.enableUserUnit(ctx, home, systemctl, idleTimerEnablement)
 }
 
-func (b Backend) enableUserUnit(ctx context.Context, home, systemctl, unit, label, wantsDirectory, recordName string) error {
+func (b Backend) enableUserUnit(ctx context.Context, home, systemctl string, e unitEnablement) error {
 	userDir := filepath.Join(home, ".config/systemd/user")
 	if err := mkdirTrusted(userDir); err != nil {
 		return err
 	}
-	userUnit := filepath.Join(userDir, unit)
+	userUnit := filepath.Join(userDir, e.unit)
 	if _, err := os.Lstat(userUnit); err == nil {
-		return fmt.Errorf("user %s unit exists; refusing override", label)
+		return fmt.Errorf("user %s unit exists; refusing override", e.label)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	wants := filepath.Join(userDir, wantsDirectory)
+	wants := filepath.Join(userDir, e.wantsDirectory)
 	if err := mkdirTrusted(wants); err != nil {
 		return err
 	}
-	target := "/usr/lib/systemd/user/" + unit
-	link := filepath.Join(wants, unit)
+	target := "/usr/lib/systemd/user/" + e.unit
+	link := filepath.Join(wants, e.unit)
 	if info, err := os.Lstat(link); err == nil {
 		destination, err := os.Readlink(link)
 		if err != nil || info.Mode()&os.ModeSymlink == 0 || destination != target {
-			return fmt.Errorf("unowned %s enablement exists", label)
+			return fmt.Errorf("unowned %s enablement exists", e.label)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	// Record planned ownership before the standard unit manager creates the link.
-	if err := writeJSON(filepath.Join(home, ".config/gpu-workload-supervisor", recordName), integration{1, unit, target}); err != nil {
+	if err := writeJSON(filepath.Join(home, ".config/gpu-workload-supervisor", e.recordName), integration{1, e.unit, target}); err != nil {
 		return err
 	}
 	// Subprocess output is untrusted terminal input (control characters, unit
 	// payload echoes); the error carries only the exit status.
-	if _, err := b.runCommand(ctx, systemctl, "--user", "enable", unit); err != nil {
-		return fmt.Errorf("enable %s: %w", label, err)
+	if _, err := b.runCommand(ctx, systemctl, "--user", "enable", e.unit); err != nil {
+		return fmt.Errorf("enable %s: %w", e.label, err)
 	}
 	return nil
 }
@@ -427,18 +442,45 @@ func (b Backend) enableUserUnit(ctx context.Context, home, systemctl, unit, labe
 // RemoveIntegration removes only the recorded enablement links. It does not stop
 // any service and preserves profiles, state, audit, models and user workload units.
 func RemoveIntegration(home string) error {
-	if err := removeIntegration(home, "integration.json", reconcileUnit, "default.target.wants"); err != nil {
-		return err
-	}
-	return removeIntegration(home, "integration-idle.json", idleTimerUnit, "timers.target.wants")
+	return SystemBackend().RemoveIntegration(context.Background(), home)
 }
 
-func removeIntegration(home, recordName, unit, wantsDirectory string) error {
+func (b Backend) RemoveIntegration(ctx context.Context, home string) error {
+	if err := removeIntegration(home, reconcileEnablement); err != nil {
+		return err
+	}
+	// A login may have activated the idle timer: removing only the wants link
+	// leaves the loaded unit firing every 60 seconds until the user manager
+	// exits, and the preserved operator profile keeps the service condition
+	// true. Stop the timer before removing its link; if it was never enabled
+	// there is nothing to stop. (The reconcile unit is a login-triggered
+	// oneshot, so nothing recurring persists for it.)
+	recorded, err := integrationRecorded(home, idleTimerEnablement.recordName)
+	if err != nil {
+		return err
+	}
+	if recorded {
+		if _, err := b.runCommand(ctx, "/usr/bin/systemctl", "--user", "stop", idleTimerUnit); err != nil {
+			return fmt.Errorf("stop idle timer: %w", err)
+		}
+	}
+	return removeIntegration(home, idleTimerEnablement)
+}
+
+func integrationRecorded(home, recordName string) (bool, error) {
+	_, err := os.Lstat(filepath.Join(home, ".config/gpu-workload-supervisor", recordName))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return true, err
+}
+
+func removeIntegration(home string, e unitEnablement) error {
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
 	if err := TrustedDirectory(root); err != nil {
 		return err
 	}
-	data, err := privateRead(filepath.Join(root, recordName))
+	data, err := privateRead(filepath.Join(root, e.recordName))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -449,14 +491,14 @@ func removeIntegration(home, recordName, unit, wantsDirectory string) error {
 	if err := json.Unmarshal(data, &owned); err != nil {
 		return err
 	}
-	if owned.Version != 1 || owned.Unit != unit || owned.Target != "/usr/lib/systemd/user/"+unit {
+	if owned.Version != 1 || owned.Unit != e.unit || owned.Target != "/usr/lib/systemd/user/"+e.unit {
 		return errors.New("invalid integration ownership record")
 	}
-	directory := filepath.Join(home, ".config/systemd/user", wantsDirectory)
+	directory := filepath.Join(home, ".config/systemd/user", e.wantsDirectory)
 	if err := TrustedDirectory(directory); err != nil {
 		return err
 	}
-	link := filepath.Join(directory, unit)
+	link := filepath.Join(directory, e.unit)
 	target, err := os.Readlink(link)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -469,7 +511,7 @@ func removeIntegration(home, recordName, unit, wantsDirectory string) error {
 			return err
 		}
 	}
-	return os.Remove(filepath.Join(root, recordName))
+	return os.Remove(filepath.Join(root, e.recordName))
 }
 
 func Reconcile(ctx context.Context, home string) error {

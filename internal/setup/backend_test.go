@@ -209,7 +209,7 @@ func TestOwnedIntegrationRemovalPreservesUserData(t *testing.T) {
 	if err := os.Symlink("/usr/lib/systemd/user/"+reconcileUnit, link); err != nil {
 		t.Fatal(err)
 	}
-	if err := RemoveIntegration(home); err != nil {
+	if err := backend.RemoveIntegration(ctx, home); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(r.Profile.StatePath); err != nil {
@@ -218,7 +218,7 @@ func TestOwnedIntegrationRemovalPreservesUserData(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".config/gpu-workload-supervisor/operator.json")); err != nil {
 		t.Fatal("profile removed", err)
 	}
-	if err := RemoveIntegration(home); err != nil {
+	if err := backend.RemoveIntegration(ctx, home); err != nil {
 		t.Fatal(err)
 	}
 	if err := backend.enableReconciliation(ctx, home, r.Profile.SystemctlPath); err != nil {
@@ -227,7 +227,7 @@ func TestOwnedIntegrationRemovalPreservesUserData(t *testing.T) {
 	if err := os.Symlink("/some/user.service", link); err != nil {
 		t.Fatal(err)
 	}
-	if err := RemoveIntegration(home); err == nil {
+	if err := backend.RemoveIntegration(ctx, home); err == nil {
 		t.Fatal("foreign link removed")
 	}
 	if err := backend.enableReconciliation(ctx, home, r.Profile.SystemctlPath); err == nil {
@@ -264,7 +264,7 @@ func TestApplyEnablesAndRemovesIdleTimerSymmetrically(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := RemoveIntegration(home); err != nil {
+	if err := backend.RemoveIntegration(ctx, home); err != nil {
 		t.Fatal(err)
 	}
 	for _, link := range []string{reconcileLink, timerLink} {
@@ -279,7 +279,7 @@ func TestApplyEnablesAndRemovesIdleTimerSymmetrically(t *testing.T) {
 	if err := os.Symlink("/some/foreign.timer", timerLink); err != nil {
 		t.Fatal(err)
 	}
-	if err := RemoveIntegration(home); err == nil {
+	if err := backend.RemoveIntegration(ctx, home); err == nil {
 		t.Fatal("foreign timer link removed")
 	}
 	if _, err := os.Lstat(timerLink); err != nil {
@@ -373,5 +373,84 @@ func TestUserUnitOverrideRefusalMessages(t *testing.T) {
 	if err := backend.enableIdleTimer(ctx, home, r.Profile.SystemctlPath); err == nil ||
 		!strings.Contains(err.Error(), "user idle timer unit exists") {
 		t.Fatalf("idle timer refusal: %v", err)
+	}
+}
+
+func TestRemoveIntegrationStopsActiveIdleTimer(t *testing.T) {
+	backend, home, r := fixture(t)
+	ctx := context.Background()
+	var commands [][]string
+	backend.runCommand = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		commands = append(commands, append([]string{name}, args...))
+		return []byte("ok\n"), nil
+	}
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []unitEnablement{reconcileEnablement, idleTimerEnablement} {
+		link := filepath.Join(home, ".config/systemd/user", e.wantsDirectory, e.unit)
+		if err := os.Symlink("/usr/lib/systemd/user/"+e.unit, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commands = nil
+	if err := backend.RemoveIntegration(ctx, home); err != nil {
+		t.Fatal(err)
+	}
+	if len(commands) != 1 ||
+		commands[0][0] != "/usr/bin/systemctl" ||
+		strings.Join(commands[0][1:], " ") != "--user stop "+idleTimerUnit {
+		t.Fatalf("removal commands: %v", commands)
+	}
+	for _, e := range []unitEnablement{reconcileEnablement, idleTimerEnablement} {
+		if _, err := os.Lstat(filepath.Join(home, ".config/gpu-workload-supervisor", e.recordName)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("record survived: %s", e.recordName)
+		}
+	}
+}
+
+func TestRemoveIntegrationSkipsStopWhenTimerNeverEnabled(t *testing.T) {
+	backend, home, r := fixture(t)
+	ctx := context.Background()
+	if err := os.MkdirAll(filepath.Join(home, ".config/gpu-workload-supervisor"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.enableReconciliation(ctx, home, r.Profile.SystemctlPath); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, ".config/systemd/user/default.target.wants", reconcileUnit)
+	if err := os.Symlink("/usr/lib/systemd/user/"+reconcileUnit, link); err != nil {
+		t.Fatal(err)
+	}
+	var commands [][]string
+	backend.runCommand = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		commands = append(commands, append([]string{name}, args...))
+		return []byte("ok\n"), nil
+	}
+	if err := backend.RemoveIntegration(ctx, home); err != nil {
+		t.Fatal(err)
+	}
+	if len(commands) != 0 {
+		t.Fatalf("stopped a timer that was never enabled: %v", commands)
+	}
+}
+
+func TestRemoveIntegrationFailsLoudlyWhenTimerStopFails(t *testing.T) {
+	backend, home, r := fixture(t)
+	ctx := context.Background()
+	if err := os.MkdirAll(filepath.Join(home, ".config/gpu-workload-supervisor"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.enableIdleTimer(ctx, home, r.Profile.SystemctlPath); err != nil {
+		t.Fatal(err)
+	}
+	backend.runCommand = func(context.Context, string, ...string) ([]byte, error) {
+		return nil, errors.New("exit status 1")
+	}
+	if err := backend.RemoveIntegration(ctx, home); err == nil || !strings.Contains(err.Error(), "stop idle timer") {
+		t.Fatalf("failed stop accepted: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".config/gpu-workload-supervisor", idleTimerEnablement.recordName)); err != nil {
+		t.Fatal("ownership record lost after failed stop", err)
 	}
 }
