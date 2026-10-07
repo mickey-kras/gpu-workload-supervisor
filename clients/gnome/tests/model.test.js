@@ -31,9 +31,7 @@ export const fixture = (
             takeControl: owner === 'supervisor',
             userSwitch: owner === 'user',
             returnControl: owner === 'user',
-            idlePolicyConfigurable: false,
         },
-        idlePolicy: { timeoutMinutes: 0 },
     },
 });
 test('strict envelope and lossless token', () => {

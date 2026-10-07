@@ -74,10 +74,9 @@ type SettingsResponse struct {
 	SettingsRevision string           `json:"settingsRevision"`
 }
 type Capabilities struct {
-	TakeControl            bool `json:"takeControl"`
-	UserSwitch             bool `json:"userSwitch"`
-	ReturnControl          bool `json:"returnControl"`
-	IdlePolicyConfigurable bool `json:"idlePolicyConfigurable"`
+	TakeControl   bool `json:"takeControl"`
+	UserSwitch    bool `json:"userSwitch"`
+	ReturnControl bool `json:"returnControl"`
 }
 type Status struct {
 	Owner           control.Owner     `json:"owner"`
@@ -90,7 +89,6 @@ type Status struct {
 	Expected        Expected          `json:"expected"`
 	Workloads       []Workload        `json:"workloads"`
 	Capabilities    Capabilities      `json:"capabilities"`
-	IdlePolicy      IdlePolicyStatus  `json:"idlePolicy"`
 }
 type Response struct {
 	ProtocolVersion int               `json:"protocolVersion"`

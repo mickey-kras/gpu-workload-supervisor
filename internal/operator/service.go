@@ -33,7 +33,8 @@ type Session struct {
 	// PolicyStore is nil only in tests; settings actions then fail closed.
 	PolicyStore PolicyStore
 	// IdlePolicyConfigurable is false until the hosting process carries a
-	// qualified evidence provider; enabling the policy is rejected while false.
+	// qualified evidence provider; it gates set-idle-policy enable writes and
+	// is never advertised on the version-1 status shape.
 	IdlePolicyConfigurable bool
 }
 
@@ -206,7 +207,7 @@ func (s Session) validateTransition(req Request) Code {
 
 func (session Session) status(state control.State) *Status {
 	ready := state.Phase == control.PhaseStable && state.Health != control.HealthError && state.ActiveWorkload != control.WorkloadUnknown
-	return &Status{Owner: state.Owner, DesiredWorkload: state.DesiredWorkload, ActiveWorkload: state.ActiveWorkload, Phase: state.Phase, Health: state.Health, Admission: state.Admission, ObservedAt: time.Now().UTC(), Expected: Expected{state.LeaseFence.Incarnation, strconv.FormatUint(state.Version, 10), state.Owner, session.Revision}, Workloads: session.Workloads, Capabilities: Capabilities{ready && state.Owner == control.OwnerSupervisor, ready && state.Owner == control.OwnerUser, ready && state.Owner == control.OwnerUser, session.IdlePolicyConfigurable}, IdlePolicy: IdlePolicyStatus{TimeoutMinutes: state.IdlePolicy.TimeoutMinutes}}
+	return &Status{Owner: state.Owner, DesiredWorkload: state.DesiredWorkload, ActiveWorkload: state.ActiveWorkload, Phase: state.Phase, Health: state.Health, Admission: state.Admission, ObservedAt: time.Now().UTC(), Expected: Expected{state.LeaseFence.Incarnation, strconv.FormatUint(state.Version, 10), state.Owner, session.Revision}, Workloads: session.Workloads, Capabilities: Capabilities{ready && state.Owner == control.OwnerSupervisor, ready && state.Owner == control.OwnerUser, ready && state.Owner == control.OwnerUser}}
 }
 func validCatalog(s Session) bool {
 	if !token(s.Revision, 128) || len(s.Workloads) == 0 || len(s.Workloads) > 65 {

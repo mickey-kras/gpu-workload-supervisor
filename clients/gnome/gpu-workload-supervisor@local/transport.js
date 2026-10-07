@@ -93,7 +93,7 @@ export class Transport {
                     }
                 }),
             );
-            return parseResponse(text, request.requestId);
+            return parseResponse(text, request.requestId, request.action);
         } finally {
             if (timer) GLib.source_remove(timer);
             // Closing our descriptors does not cancel or kill the backend.

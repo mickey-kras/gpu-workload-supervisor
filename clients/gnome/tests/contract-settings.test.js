@@ -28,9 +28,7 @@ const fixture = () => ({
             takeControl: true,
             userSwitch: false,
             returnControl: false,
-            idlePolicyConfigurable: false,
         },
-        idlePolicy: { timeoutMinutes: 0 },
     },
 });
 
@@ -44,10 +42,26 @@ const okWithSettings = (mutate = null) => {
     return JSON.stringify(r);
 };
 
-test('get-settings response carries a strict settings object', () => {
-    const r = parseResponse(okWithSettings(), 'r1');
-    assert.equal(r.settings.policy.timeoutMinutes, 60);
-    assert.equal(r.settings.settingsRevision, 's-rev-1');
+test('settings actions carry a strict settings object', () => {
+    for (const action of ['get-settings', 'set-idle-policy']) {
+        const r = parseResponse(okWithSettings(), 'r1', action);
+        assert.equal(r.settings.policy.timeoutMinutes, 60);
+        assert.equal(r.settings.settingsRevision, 's-rev-1');
+    }
+});
+
+test('settings actions fail closed without the settings object', () => {
+    for (const action of ['get-settings', 'set-idle-policy']) {
+        assert.throws(() =>
+            parseResponse(JSON.stringify(fixture()), 'r1', action),
+        );
+    }
+});
+
+test('other actions reject a settings object outright', () => {
+    for (const action of ['status', 'take-control', 'user-switch', 'return-control', undefined]) {
+        assert.throws(() => parseResponse(okWithSettings(), 'r1', action));
+    }
 });
 
 test('malformed settings objects fail closed', () => {
@@ -63,7 +77,9 @@ test('malformed settings objects fail closed', () => {
         (r) => (r.settings = null),
         (r) => (r.settings = 'off'),
     ]) {
-        assert.throws(() => parseResponse(okWithSettings(mutate), 'r1'));
+        assert.throws(() =>
+            parseResponse(okWithSettings(mutate), 'r1', 'get-settings'),
+        );
     }
 });
 
@@ -82,23 +98,17 @@ test('validateSettings enforces the exact typed shape', () => {
     }
 });
 
-test('status without the idle policy surface fails closed', () => {
+test('status keeps the exact version-1 shape without policy fields', () => {
     for (const mutate of [
-        (r) => delete r.status.idlePolicy,
-        (r) => (r.status.idlePolicy = { timeoutMinutes: 3 }),
-        (r) => (r.status.idlePolicy = { timeoutMinutes: 0, extra: true }),
-        (r) => delete r.status.capabilities.idlePolicyConfigurable,
-        (r) => (r.status.capabilities.idlePolicyConfigurable = 'no'),
+        (r) => (r.status.idlePolicy = { timeoutMinutes: 0 }),
+        (r) => (r.status.capabilities.idlePolicyConfigurable = false),
     ]) {
         const r = fixture();
         mutate(r);
-        assert.throws(() => parseResponse(JSON.stringify(r), 'r1'));
+        assert.throws(() => parseResponse(JSON.stringify(r), 'r1', 'status'));
     }
-});
-
-test('enabled committed policy inside bounds validates', () => {
-    const r = fixture();
-    r.status.idlePolicy = { timeoutMinutes: 1440 };
-    r.status.capabilities.idlePolicyConfigurable = true;
-    assert.equal(parseResponse(JSON.stringify(r), 'r1').status.idlePolicy.timeoutMinutes, 1440);
+    assert.equal(
+        parseResponse(JSON.stringify(fixture()), 'r1', 'status').code,
+        'ok',
+    );
 });

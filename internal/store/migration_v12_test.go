@@ -63,13 +63,6 @@ func TestMigratesV11SeedingSettingsOffAndPreservingRows(t *testing.T) {
 		if settings.ArmedDeadline != nil || settings.AttestationAt != nil {
 			t.Errorf("seeded policy state armed: %#v", settings)
 		}
-		state, err := s.State(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if state.IdlePolicy.TimeoutMinutes != 0 {
-			t.Errorf("upgraded read model policy = %#v", state.IdlePolicy)
-		}
 		if err := s.Close(); err != nil {
 			t.Fatal(err)
 		}

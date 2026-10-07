@@ -2,9 +2,11 @@ package operator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,29 +68,27 @@ func TestGetSettingsReturnsCommittedPolicyAndRevision(t *testing.T) {
 	if b.called {
 		t.Fatal("get-settings touched the controller backend")
 	}
-	if r.Status.Capabilities.IdlePolicyConfigurable {
-		t.Fatal("idle policy advertised as configurable without an evidence provider")
-	}
-	if r.Status.IdlePolicy.TimeoutMinutes != 0 {
-		t.Fatalf("status idle policy = %+v, want store read model", r.Status.IdlePolicy)
-	}
 }
 
-func TestStatusCarriesIdlePolicyAndOmitsSettings(t *testing.T) {
+// The status response keeps the exact protocol-v1 shape: no idle policy
+// fields, no settings object — the readout lives on get-settings only.
+func TestStatusKeepsV1ShapeAndOmitsSettings(t *testing.T) {
 	state := stableFixtureState()
-	state.IdlePolicy = control.IdlePolicy{TimeoutMinutes: 45}
 	b := &backendFixture{state: state}
 	p := &policyStoreFixture{state: state, settings: control.PolicyState{SettingsRevision: "s-rev"}}
 	s := settingsService(t, b, p, true)
 	r := s.Handle(Request{ProtocolVersion: 1, RequestID: "r", Action: "status"})
-	if r.Code != OK || r.Settings != nil {
+	if r.Code != OK || r.Settings != nil || r.Status == nil {
 		t.Fatalf("response %+v", r)
 	}
-	if r.Status.IdlePolicy.TimeoutMinutes != 45 {
-		t.Fatalf("status idle policy = %+v", r.Status.IdlePolicy)
+	encoded, err := json.Marshal(r.Status)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !r.Status.Capabilities.IdlePolicyConfigurable {
-		t.Fatal("configurable host did not advertise idlePolicyConfigurable")
+	for _, forbidden := range []string{"idlePolicy", "idlePolicyConfigurable"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("status leaks %s: %s", forbidden, encoded)
+		}
 	}
 }
 
@@ -258,7 +258,7 @@ func TestSettingsSurfaceAgainstRealStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.Version != state.Version || after.IdlePolicy.TimeoutMinutes != 0 {
+	if after.Version != state.Version {
 		t.Fatalf("settings write moved control state: %+v", after)
 	}
 }

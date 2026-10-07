@@ -73,10 +73,6 @@ type State struct {
 	LeaseFence      Fence     `json:"leaseFence"`
 	Version         uint64    `json:"version"`
 	UpdatedAt       time.Time `json:"updatedAt"`
-	// IdlePolicy is a read-model field loaded from operator_settings; write
-	// paths never persist it through control_state (it carries over in memory
-	// and is re-read from its own table on the next load).
-	IdlePolicy IdlePolicy `json:"idlePolicy"`
 }
 
 func InitialState(incarnation string, now time.Time) State {
@@ -138,9 +134,6 @@ func (s State) validateFields() error {
 	}
 	if s.UpdatedAt.IsZero() {
 		return errors.New("updated timestamp is empty")
-	}
-	if err := s.IdlePolicy.Validate(); err != nil {
-		return err
 	}
 	return nil
 }

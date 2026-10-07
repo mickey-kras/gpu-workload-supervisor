@@ -111,7 +111,6 @@ function validateStatus(s) {
         'expected',
         'workloads',
         'capabilities',
-        'idlePolicy',
     ]);
     one(s.owner, ['supervisor', 'user']);
     one(s.phase, [
@@ -132,23 +131,21 @@ function validateStatus(s) {
         fail();
     validateExpected(s);
     validateCatalog(s);
-    keys(s.capabilities, [
-        'takeControl',
-        'userSwitch',
-        'returnControl',
-        'idlePolicyConfigurable',
-    ]);
+    keys(s.capabilities, ['takeControl', 'userSwitch', 'returnControl']);
     if (Object.values(s.capabilities).some((v) => typeof v !== 'boolean'))
         fail();
-    validateIdlePolicy(s.idlePolicy);
 }
 
-export function parseResponse(text, requestId) {
+// The settings object is part of the response only for the typed settings
+// actions; every other ok response keeps the exact version-1 shape.
+const SETTINGS_ACTIONS = ['get-settings', 'set-idle-policy'];
+
+export function parseResponse(text, requestId, action) {
     if (new TextEncoder().encode(text).length > 65536) fail();
     const r = JSON.parse(text);
     if (r.code === 'ok') {
         const base = ['protocolVersion', 'requestId', 'code', 'status'];
-        keys(r, Object.hasOwn(r, 'settings') ? [...base, 'settings'] : base);
+        keys(r, SETTINGS_ACTIONS.includes(action) ? [...base, 'settings'] : base);
     } else {
         keys(r, ['protocolVersion', 'requestId', 'code']);
         one(r.code, ERROR_CODES);
@@ -156,6 +153,6 @@ export function parseResponse(text, requestId) {
     if (r.protocolVersion !== 1 || r.requestId !== requestId) fail();
     if (r.code !== 'ok') return r;
     validateStatus(r.status);
-    if (Object.hasOwn(r, 'settings')) validateSettings(r.settings);
+    if (SETTINGS_ACTIONS.includes(action)) validateSettings(r.settings);
     return r;
 }

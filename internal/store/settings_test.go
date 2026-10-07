@@ -81,13 +81,6 @@ func TestSettingsSeededOffWithOpaqueRevision(t *testing.T) {
 	if settings.ArmedDeadline != nil || settings.AttestationAt != nil {
 		t.Fatalf("seeded policy state armed: %#v", settings)
 	}
-	state, err := s.State(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state.IdlePolicy.TimeoutMinutes != 0 {
-		t.Fatalf("state read model policy = %#v, want Off", state.IdlePolicy)
-	}
 }
 
 func TestSetIdlePolicyCommitsAndRotatesRevisionWithoutTouchingControlState(t *testing.T) {
@@ -115,8 +108,12 @@ func TestSetIdlePolicyCommitsAndRotatesRevisionWithoutTouchingControlState(t *te
 	if after.Version != before.Version || after.LeaseFence != before.LeaseFence {
 		t.Fatalf("settings write moved control state: before=%+v after=%+v", before, after)
 	}
-	if after.IdlePolicy.TimeoutMinutes != 60 {
-		t.Fatalf("state read model policy = %#v", after.IdlePolicy)
+	persisted, err := s.Settings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Policy.TimeoutMinutes != 60 || persisted.SettingsRevision != committed.SettingsRevision {
+		t.Fatalf("persisted settings = %#v", persisted)
 	}
 }
 
