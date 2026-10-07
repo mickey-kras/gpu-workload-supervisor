@@ -132,16 +132,13 @@ func (s *Store) StartIdleTransition(ctx context.Context, armed time.Time, tr Tra
 		}
 		if acquire != nil {
 			held, err := acquire(ctx)
+			release = held
 			if err != nil {
-				if held != nil {
-					held()
-				}
 				return control.State{}, err
 			}
 			if held == nil {
 				return control.State{}, ErrEvidenceUnavailable
 			}
-			release = held
 		}
 		return s.beginTransitionTx(ctx, tx, current, tr)
 	})

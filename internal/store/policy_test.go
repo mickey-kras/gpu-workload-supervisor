@@ -827,7 +827,15 @@ func TestStartIdleTransitionAcquireFailureRollsBack(t *testing.T) {
 	reject := errors.New("evidence generation revoked")
 	released := 0
 	if _, err := s.StartIdleTransition(ctx, deadline, idleDrain(t, s, "idle-1"), func(context.Context) (func(), error) {
-		return func() { released++ }, reject
+		return func() {
+			released++
+			check, cancel := context.WithTimeout(ctx, time.Second)
+			defer cancel()
+			state, err := s.State(check)
+			if err != nil || state.Phase != control.PhaseStable {
+				t.Errorf("fence released before rollback: state=%+v err=%v", state, err)
+			}
+		}, reject
 	}); !errors.Is(err, reject) || released != 1 {
 		t.Fatalf("acquisition error=%v releases=%d", err, released)
 	}
