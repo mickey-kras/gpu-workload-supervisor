@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
@@ -525,5 +526,96 @@ func TestRemoveIntegrationLeavesEverythingIntactOnMalformedTimerRecord(t *testin
 	}
 	if _, err := os.Lstat(timerRecord); err != nil {
 		t.Fatal("timer ownership evidence lost", err)
+	}
+}
+
+func TestRemoveIntegrationStopsTimerWithRecordedSystemctlPath(t *testing.T) {
+	backend, home, r := fixture(t)
+	ctx := context.Background()
+	r.Profile.SystemctlPath = "/opt/CI/bin/systemctl"
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	timerLink := filepath.Join(home, ".config/systemd/user/timers.target.wants", idleTimerUnit)
+	if err := os.Symlink("/usr/lib/systemd/user/"+idleTimerUnit, timerLink); err != nil {
+		t.Fatal(err)
+	}
+	var stopName string
+	backend.runCommand = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) == 3 && args[1] == "stop" {
+			stopName = name
+		}
+		return []byte("ok\n"), nil
+	}
+	if err := backend.RemoveIntegration(ctx, home); err != nil {
+		t.Fatal(err)
+	}
+	if stopName != "/opt/CI/bin/systemctl" {
+		t.Fatalf("stop used %q, want the recorded enable-time executable", stopName)
+	}
+}
+
+func TestRemoveIntegrationIsBoundedByCallerContext(t *testing.T) {
+	backend, home, r := fixture(t)
+	ctx := context.Background()
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	timerLink := filepath.Join(home, ".config/systemd/user/timers.target.wants", idleTimerUnit)
+	if err := os.Symlink("/usr/lib/systemd/user/"+idleTimerUnit, timerLink); err != nil {
+		t.Fatal(err)
+	}
+	// An unresponsive user manager: the stop blocks until the caller's
+	// deadline instead of hanging removal forever.
+	backend.runCommand = func(cmdCtx context.Context, name string, args ...string) ([]byte, error) {
+		<-cmdCtx.Done()
+		return nil, cmdCtx.Err()
+	}
+	bounded, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	if err := backend.RemoveIntegration(bounded, home); err == nil {
+		t.Fatal("hung stop was not bounded by the caller context")
+	}
+	// Nothing was deleted: both integrations remain fully intact.
+	for _, e := range []unitEnablement{reconcileEnablement, idleTimerEnablement} {
+		if _, err := os.Lstat(filepath.Join(home, ".config/gpu-workload-supervisor", e.recordName)); err != nil {
+			t.Fatalf("record lost after bounded stop: %s (%v)", e.recordName, err)
+		}
+	}
+	if _, err := os.Lstat(timerLink); err != nil {
+		t.Fatal("timer link lost after bounded stop", err)
+	}
+}
+
+func TestRemoveIntegrationFailsClosedWhenRecordLacksSystemctlPath(t *testing.T) {
+	backend, home, r := fixture(t)
+	ctx := context.Background()
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	timerLink := filepath.Join(home, ".config/systemd/user/timers.target.wants", idleTimerUnit)
+	if err := os.Symlink("/usr/lib/systemd/user/"+idleTimerUnit, timerLink); err != nil {
+		t.Fatal(err)
+	}
+	// Legacy record without the retained executable.
+	record := filepath.Join(home, ".config/gpu-workload-supervisor", idleTimerEnablement.recordName)
+	if err := os.WriteFile(record, []byte(`{"version":1,"unit":"gpu-workload-supervisor-idle.timer","target":"/usr/lib/systemd/user/gpu-workload-supervisor-idle.timer"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stopped := false
+	backend.runCommand = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) == 3 && args[1] == "stop" {
+			stopped = true
+		}
+		return []byte("ok\n"), nil
+	}
+	if err := backend.RemoveIntegration(ctx, home); err == nil || !strings.Contains(err.Error(), "systemctl") {
+		t.Fatalf("record without systemctl accepted: %v", err)
+	}
+	if stopped {
+		t.Fatal("timer stopped despite unverifiable executable")
+	}
+	if _, err := os.Lstat(timerLink); err != nil {
+		t.Fatal("timer link removed despite failed validation", err)
 	}
 }

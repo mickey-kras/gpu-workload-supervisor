@@ -67,7 +67,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 	}
 	switch args[0] {
 	case "remove-integration":
-		return setup.RemoveIntegration(home)
+		return setup.RemoveIntegration(ctx, home)
 	case "discover":
 		return a.runDiscover(ctx, home, output)
 	case "drafts":

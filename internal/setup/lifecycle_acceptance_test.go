@@ -18,9 +18,9 @@ func TestAcceptanceRemovalRefusesUntrustedOwnership(t *testing.T) {
 			root := filepath.Join(home, ".config/gpu-workload-supervisor")
 			record := filepath.Join(root, "integration.json")
 			wants := filepath.Join(home, ".config/systemd/user/default.target.wants")
-			owned := integration{1, reconcileUnit, "/usr/lib/systemd/user/" + reconcileUnit}
+			owned := integration{Version: 1, Unit: reconcileUnit, Target: "/usr/lib/systemd/user/" + reconcileUnit}
 			if kind == "missing-root" {
-				if err := RemoveIntegration(home); err == nil {
+				if err := RemoveIntegration(context.Background(), home); err == nil {
 					t.Fatal("missing ownership root accepted")
 				}
 				return
@@ -57,7 +57,7 @@ func TestAcceptanceRemovalRefusesUntrustedOwnership(t *testing.T) {
 			if kind == "regular-link" {
 				acceptanceWrite(t, link, []byte("user-owned unit"))
 			}
-			if err := RemoveIntegration(home); err == nil {
+			if err := RemoveIntegration(context.Background(), home); err == nil {
 				t.Fatal("unsafe removal accepted")
 			}
 			if _, err := os.Lstat(record); err != nil {

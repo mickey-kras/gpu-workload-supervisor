@@ -111,7 +111,9 @@ func (s *Store) ArmIdleDeadline(ctx context.Context, expectedSettingsRevision st
 // before the commit — atomically with the pending-work recheck under the
 // single-writer lock. The policy engine wires it to the evidence provider's
 // generation revalidation; a guard error aborts the commit (nothing is
-// recorded, the armed deadline survives for the caller to disarm).
+// recorded, the armed deadline survives for the caller to disarm). The guard
+// must NEVER call back into the Store: the store is single-writer
+// (SetMaxOpenConns(1)), so a nested call stalls until the context deadline.
 func (s *Store) StartIdleTransition(ctx context.Context, armed time.Time, tr Transition, guard func(context.Context) error) (control.State, error) {
 	if tr.ID == "" {
 		return control.State{}, errors.New("transition id is empty")

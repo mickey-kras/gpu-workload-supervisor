@@ -13,6 +13,10 @@ type integration struct {
 	Version int    `json:"version"`
 	Unit    string `json:"unit"`
 	Target  string `json:"target"`
+	// Systemctl retains the enable-time executable so removal stops the timer
+	// with the same configured binary on hosts with a non-default systemctl
+	// path; removal never re-reads the operator profile.
+	Systemctl string `json:"systemctl,omitempty"`
 }
 
 const (
@@ -72,7 +76,7 @@ func (b Backend) enableUserUnit(ctx context.Context, home, systemctl string, e u
 		return err
 	}
 	// Record planned ownership before the standard unit manager creates the link.
-	if err := writeJSON(filepath.Join(home, ".config/gpu-workload-supervisor", e.recordName), integration{1, e.unit, target}); err != nil {
+	if err := writeJSON(filepath.Join(home, ".config/gpu-workload-supervisor", e.recordName), integration{Version: 1, Unit: e.unit, Target: target, Systemctl: systemctl}); err != nil {
 		return err
 	}
 	// Subprocess output is untrusted terminal input (control characters, unit
@@ -85,8 +89,10 @@ func (b Backend) enableUserUnit(ctx context.Context, home, systemctl string, e u
 
 // RemoveIntegration removes only the recorded enablement links. It does not stop
 // any service and preserves profiles, state, audit, models and user workload units.
-func RemoveIntegration(home string) error {
-	return SystemBackend().RemoveIntegration(context.Background(), home)
+// The caller's context bounds the timer-stop subprocess; the CLI passes its
+// verb deadline so an unresponsive user manager cannot hang removal forever.
+func RemoveIntegration(ctx context.Context, home string) error {
+	return SystemBackend().RemoveIntegration(ctx, home)
 }
 
 // RemoveIntegration is all-or-nothing: both integrations (records and links)
@@ -104,11 +110,13 @@ func (b Backend) RemoveIntegration(ctx context.Context, home string) error {
 	// A login may have activated the idle timer: removing only the wants link
 	// leaves the loaded unit firing every 60 seconds until the user manager
 	// exits, and the preserved operator profile keeps the service condition
-	// true. Stop the timer before deleting anything; if it was never enabled
-	// there is nothing to stop. (The reconcile unit is a login-triggered
-	// oneshot, so nothing recurring persists for it.)
+	// true. Stop the timer before deleting anything, with the enable-time
+	// systemctl executable retained in the ownership record (the profile is
+	// never re-read here); if it was never enabled there is nothing to stop.
+	// (The reconcile unit is a login-triggered oneshot, so nothing recurring
+	// persists for it.)
 	if idle.recorded {
-		if _, err := b.runCommand(ctx, "/usr/bin/systemctl", "--user", "stop", idleTimerUnit); err != nil {
+		if _, err := b.runCommand(ctx, idle.systemctl, "--user", "stop", idleTimerUnit); err != nil {
 			return fmt.Errorf("stop idle timer: %w", err)
 		}
 	}
@@ -122,6 +130,7 @@ func (b Backend) RemoveIntegration(ctx context.Context, home string) error {
 type pendingRemoval struct {
 	recordPath string
 	linkPath   string
+	systemctl  string
 	recorded   bool
 	hasLink    bool
 }
@@ -158,9 +167,15 @@ func inspectIntegration(home string, e unitEnablement) (pendingRemoval, error) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return pendingRemoval{}, err
 	}
-	removal := pendingRemoval{recordPath: recordPath, linkPath: linkPath, recorded: true, hasLink: err == nil}
+	removal := pendingRemoval{recordPath: recordPath, linkPath: linkPath, systemctl: owned.Systemctl, recorded: true, hasLink: err == nil}
 	if removal.hasLink && target != owned.Target {
 		return pendingRemoval{}, errors.New("modified integration link is preserved")
+	}
+	// The timer record must retain the enable-time systemctl executable:
+	// without it removal cannot stop a loaded timer, so fail closed and ask
+	// for a re-apply (which rewrites the record) instead of guessing a path.
+	if e.unit == idleTimerUnit && removal.systemctl == "" {
+		return pendingRemoval{}, errors.New("integration record lacks the systemctl path; re-run apply to repair enablement")
 	}
 	return removal, nil
 }
