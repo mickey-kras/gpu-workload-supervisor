@@ -21,9 +21,6 @@ type policyStoreFixture struct {
 	setCalls int
 }
 
-func (p *policyStoreFixture) State(context.Context) (control.State, error) {
-	return p.state, p.err
-}
 func (p *policyStoreFixture) Settings(context.Context) (control.PolicyState, error) {
 	return p.settings, p.err
 }
@@ -59,8 +56,11 @@ func TestGetSettingsReturnsCommittedPolicyAndRevision(t *testing.T) {
 	p := &policyStoreFixture{state: stableFixtureState(), settings: control.PolicyState{Policy: control.IdlePolicy{TimeoutMinutes: 30}, SettingsRevision: "s-rev"}}
 	s := settingsService(t, b, p, false)
 	r := s.Handle(Request{ProtocolVersion: 1, RequestID: "r", Action: "get-settings"})
-	if r.Code != OK || r.Status == nil || r.Settings == nil {
+	if r.Code != OK || r.Settings == nil {
 		t.Fatalf("response %+v", r)
+	}
+	if r.Status != nil {
+		t.Fatalf("get-settings minted a status from durable state: %+v", r.Status)
 	}
 	if r.Settings.Policy.TimeoutMinutes != 30 || r.Settings.SettingsRevision != "s-rev" {
 		t.Fatalf("settings %+v", r.Settings)
@@ -116,7 +116,7 @@ func TestSetIdlePolicyOffAlwaysAllowedAndRotatesRevision(t *testing.T) {
 	p := &policyStoreFixture{state: stableFixtureState(), settings: control.PolicyState{SettingsRevision: "s-rev"}}
 	s := settingsService(t, b, p, false)
 	r := s.Handle(setIdleRequest(p.state, 0))
-	if r.Code != OK || r.Settings == nil {
+	if r.Code != OK || r.Settings == nil || r.Status != nil {
 		t.Fatalf("response %+v", r)
 	}
 	if r.Settings.SettingsRevision != "rotated" || r.Settings.Policy.TimeoutMinutes != 0 {
@@ -132,7 +132,7 @@ func TestSetIdlePolicyEnableCommitsWhenConfigurable(t *testing.T) {
 	p := &policyStoreFixture{state: stableFixtureState(), settings: control.PolicyState{SettingsRevision: "s-rev"}}
 	s := settingsService(t, b, p, true)
 	r := s.Handle(setIdleRequest(p.state, 120))
-	if r.Code != OK || r.Settings == nil || r.Settings.Policy.TimeoutMinutes != 120 {
+	if r.Code != OK || r.Settings == nil || r.Settings.Policy.TimeoutMinutes != 120 || r.Status != nil {
 		t.Fatalf("response %+v", r)
 	}
 }
@@ -222,7 +222,7 @@ func TestSettingsSurfaceAgainstRealStore(t *testing.T) {
 	}}
 
 	r := svc.Handle(Request{ProtocolVersion: 1, RequestID: "g1", Action: "get-settings"})
-	if r.Code != OK || r.Settings == nil {
+	if r.Code != OK || r.Settings == nil || r.Status != nil {
 		t.Fatalf("get-settings %+v", r)
 	}
 	if r.Settings.Policy.TimeoutMinutes != 0 || r.Settings.SettingsRevision == "" {

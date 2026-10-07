@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseResponse, validateSettings } from '../gpu-workload-supervisor@local/contract.js';
 
-const fixture = () => ({
+const statusFixture = () => ({
     protocolVersion: 1,
     requestId: 'r1',
     code: 'ok',
@@ -32,35 +32,49 @@ const fixture = () => ({
     },
 });
 
-const okWithSettings = (mutate = null) => {
-    const r = fixture();
-    r.settings = {
-        policy: { timeoutMinutes: 60 },
-        settingsRevision: 's-rev-1',
+// Settings actions answer with the settings object only; they never mint a
+// status from durable state.
+const settingsFixture = (mutate = null) => {
+    const r = {
+        protocolVersion: 1,
+        requestId: 'r1',
+        code: 'ok',
+        settings: {
+            policy: { timeoutMinutes: 60 },
+            settingsRevision: 's-rev-1',
+        },
     };
     if (mutate) mutate(r);
     return JSON.stringify(r);
 };
 
-test('settings actions carry a strict settings object', () => {
+test('settings actions carry a strict settings-only object', () => {
     for (const action of ['get-settings', 'set-idle-policy']) {
-        const r = parseResponse(okWithSettings(), 'r1', action);
+        const r = parseResponse(settingsFixture(), 'r1', action);
         assert.equal(r.settings.policy.timeoutMinutes, 60);
         assert.equal(r.settings.settingsRevision, 's-rev-1');
+        assert.equal(r.status, undefined);
     }
 });
 
-test('settings actions fail closed without the settings object', () => {
+test('settings actions fail closed on any other shape', () => {
     for (const action of ['get-settings', 'set-idle-policy']) {
-        assert.throws(() =>
-            parseResponse(JSON.stringify(fixture()), 'r1', action),
-        );
+        for (const body of [
+            JSON.stringify(statusFixture()), // status minted instead of settings
+            settingsFixture((r) => (r.status = statusFixture().status)), // both
+            settingsFixture((r) => delete r.settings),
+        ]) {
+            assert.throws(() => parseResponse(body, 'r1', action));
+        }
     }
 });
 
 test('other actions reject a settings object outright', () => {
     for (const action of ['status', 'take-control', 'user-switch', 'return-control', undefined]) {
-        assert.throws(() => parseResponse(okWithSettings(), 'r1', action));
+        assert.throws(() => parseResponse(settingsFixture(), 'r1', action));
+        const withSettings = statusFixture();
+        withSettings.settings = { policy: { timeoutMinutes: 0 }, settingsRevision: 's' };
+        assert.throws(() => parseResponse(JSON.stringify(withSettings), 'r1', action));
     }
 });
 
@@ -78,7 +92,7 @@ test('malformed settings objects fail closed', () => {
         (r) => (r.settings = 'off'),
     ]) {
         assert.throws(() =>
-            parseResponse(okWithSettings(mutate), 'r1', 'get-settings'),
+            parseResponse(settingsFixture(mutate), 'r1', 'get-settings'),
         );
     }
 });
@@ -103,12 +117,12 @@ test('status keeps the exact version-1 shape without policy fields', () => {
         (r) => (r.status.idlePolicy = { timeoutMinutes: 0 }),
         (r) => (r.status.capabilities.idlePolicyConfigurable = false),
     ]) {
-        const r = fixture();
+        const r = statusFixture();
         mutate(r);
         assert.throws(() => parseResponse(JSON.stringify(r), 'r1', 'status'));
     }
     assert.equal(
-        parseResponse(JSON.stringify(fixture()), 'r1', 'status').code,
+        parseResponse(JSON.stringify(statusFixture()), 'r1', 'status').code,
         'ok',
     );
 });

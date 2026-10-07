@@ -136,23 +136,32 @@ function validateStatus(s) {
         fail();
 }
 
-// The settings object is part of the response only for the typed settings
-// actions; every other ok response keeps the exact version-1 shape.
-const SETTINGS_ACTIONS = ['get-settings', 'set-idle-policy'];
+// The typed settings actions answer with a settings object only and never
+// mint a status from durable state; every other ok response keeps the exact
+// version-1 shape with status and no settings.
+export const SETTINGS_ACTIONS = ['get-settings', 'set-idle-policy'];
 
 export function parseResponse(text, requestId, action) {
     if (new TextEncoder().encode(text).length > 65536) fail();
     const r = JSON.parse(text);
+    const base = ['protocolVersion', 'requestId', 'code'];
     if (r.code === 'ok') {
-        const base = ['protocolVersion', 'requestId', 'code', 'status'];
-        keys(r, SETTINGS_ACTIONS.includes(action) ? [...base, 'settings'] : base);
+        keys(
+            r,
+            SETTINGS_ACTIONS.includes(action)
+                ? [...base, 'settings']
+                : [...base, 'status'],
+        );
     } else {
-        keys(r, ['protocolVersion', 'requestId', 'code']);
+        keys(r, base);
         one(r.code, ERROR_CODES);
     }
     if (r.protocolVersion !== 1 || r.requestId !== requestId) fail();
     if (r.code !== 'ok') return r;
+    if (SETTINGS_ACTIONS.includes(action)) {
+        validateSettings(r.settings);
+        return r;
+    }
     validateStatus(r.status);
-    if (SETTINGS_ACTIONS.includes(action)) validateSettings(r.settings);
     return r;
 }

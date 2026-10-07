@@ -21,7 +21,6 @@ type Backend interface {
 // PolicyStore serves the typed settings surface straight from durable state:
 // settings actions never observe or drive the runtime.
 type PolicyStore interface {
-	State(context.Context) (control.State, error)
 	Settings(context.Context) (control.PolicyState, error)
 	SetIdlePolicy(context.Context, control.SettingsPrecondition, control.IdlePolicy, bool) (control.PolicyState, error)
 }
@@ -76,7 +75,24 @@ func (s Service) Handle(req Request) Response {
 		result.Code = IncompatibleConfiguration
 		return result
 	}
-	state, settings, code := session.execute(ctx, req)
+	// Settings actions answer from durable state only and never mint a status:
+	// an unobserved durable snapshot must not surface as a fresh, actionable
+	// observation with derived capabilities.
+	if req.Action == actionGetSettings || req.Action == actionSetIdlePolicy {
+		settings, code := session.executeSettings(ctx, req)
+		if code != OK {
+			result.Code = code
+			return result
+		}
+		if ctx.Err() != nil {
+			result.Code = Timeout
+			return result
+		}
+		result.Code = OK
+		result.Settings = settings
+		return result
+	}
+	state, code := session.execute(ctx, req)
 	if code != OK {
 		result.Code = code
 		return result
@@ -90,7 +106,6 @@ func (s Service) Handle(req Request) Response {
 	}
 	result.Code = OK
 	result.Status = session.status(state)
-	result.Settings = settings
 	return result
 }
 
@@ -105,62 +120,62 @@ func (s Service) requestBudget(action string) (time.Duration, bool) {
 	return budget, budget >= 0 && budget <= maximum
 }
 
-func (s Session) execute(ctx context.Context, req Request) (control.State, *SettingsResponse, Code) {
-	switch req.Action {
-	case actionGetSettings:
-		return s.getSettings(ctx)
-	case actionSetIdlePolicy:
-		return s.setIdlePolicy(ctx, req)
-	case actionStatus:
+func (s Session) execute(ctx context.Context, req Request) (control.State, Code) {
+	if req.Action == actionStatus {
 		state, err := s.Backend.Status(ctx)
 		if err != nil {
-			return state, nil, errorCode(err)
+			return state, errorCode(err)
 		}
-		return state, nil, OK
-	default:
-		var state control.State
-		if code := s.validateTransition(req); code != OK {
-			return state, nil, code
-		}
-		e := req.Expected
-		version, _ := strconv.ParseUint(e.Version, 10, 64)
-		state, err := s.Backend.OperatorTransition(ctx, req.Action, req.Target, control.OperatorPrecondition{Incarnation: e.Incarnation, Version: version, Owner: e.Owner, ConfigurationRevision: e.ConfigurationRevision})
-		if err != nil {
-			return state, nil, errorCode(err)
-		}
-		return state, nil, OK
+		return state, OK
 	}
+	var state control.State
+	if code := s.validateTransition(req); code != OK {
+		return state, code
+	}
+	e := req.Expected
+	version, _ := strconv.ParseUint(e.Version, 10, 64)
+	state, err := s.Backend.OperatorTransition(ctx, req.Action, req.Target, control.OperatorPrecondition{Incarnation: e.Incarnation, Version: version, Owner: e.Owner, ConfigurationRevision: e.ConfigurationRevision})
+	if err != nil {
+		return state, errorCode(err)
+	}
+	return state, OK
 }
 
-func (s Session) getSettings(ctx context.Context) (control.State, *SettingsResponse, Code) {
-	if s.PolicyStore == nil {
-		return control.State{}, nil, Unavailable
+// executeSettings serves the typed settings surface straight from durable
+// state: the settings object is the entire success payload, and neither
+// action observes or drives the runtime.
+func (s Session) executeSettings(ctx context.Context, req Request) (*SettingsResponse, Code) {
+	if req.Action == actionGetSettings {
+		return s.getSettings(ctx)
 	}
-	state, err := s.PolicyStore.State(ctx)
-	if err != nil {
-		return control.State{}, nil, errorCode(err)
+	return s.setIdlePolicy(ctx, req)
+}
+
+func (s Session) getSettings(ctx context.Context) (*SettingsResponse, Code) {
+	if s.PolicyStore == nil {
+		return nil, Unavailable
 	}
 	settings, err := s.PolicyStore.Settings(ctx)
 	if err != nil {
-		return control.State{}, nil, errorCode(err)
+		return nil, errorCode(err)
 	}
-	return state, settingsResponse(settings), OK
+	return settingsResponse(settings), OK
 }
 
 // setIdlePolicy commits only through the typed store surface; enabling is
 // rejected fail-closed while the host has no qualified evidence provider.
-func (s Session) setIdlePolicy(ctx context.Context, req Request) (control.State, *SettingsResponse, Code) {
+func (s Session) setIdlePolicy(ctx context.Context, req Request) (*SettingsResponse, Code) {
 	if s.PolicyStore == nil {
-		return control.State{}, nil, Unavailable
+		return nil, Unavailable
 	}
 	if req.Expected == nil || req.Settings == nil {
-		return control.State{}, nil, InvalidRequest
+		return nil, InvalidRequest
 	}
 	if req.Expected.ConfigurationRevision != s.Revision {
-		return control.State{}, nil, StaleState
+		return nil, StaleState
 	}
 	if req.Settings.TimeoutMinutes != control.IdlePolicyOff && !s.IdlePolicyConfigurable {
-		return control.State{}, nil, errorCode(store.ErrEvidenceUnavailable)
+		return nil, errorCode(store.ErrEvidenceUnavailable)
 	}
 	e := req.Expected
 	version, _ := strconv.ParseUint(e.Version, 10, 64)
@@ -171,13 +186,9 @@ func (s Session) setIdlePolicy(ctx context.Context, req Request) (control.State,
 	}
 	settings, err := s.PolicyStore.SetIdlePolicy(ctx, precondition, control.IdlePolicy{TimeoutMinutes: req.Settings.TimeoutMinutes}, s.IdlePolicyConfigurable)
 	if err != nil {
-		return control.State{}, nil, errorCode(err)
+		return nil, errorCode(err)
 	}
-	state, err := s.PolicyStore.State(ctx)
-	if err != nil {
-		return control.State{}, nil, errorCode(err)
-	}
-	return state, settingsResponse(settings), OK
+	return settingsResponse(settings), OK
 }
 
 func settingsResponse(s control.PolicyState) *SettingsResponse {

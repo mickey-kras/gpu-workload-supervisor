@@ -49,7 +49,12 @@ function pendingTransport() {
     )
         .replaceAll(/^import .*;\n/gm, '')
         .replaceAll('export ', '');
-    const context = vm.createContext({ Gio, GLib, TextEncoder });
+    const context = vm.createContext({
+        Gio,
+        GLib,
+        TextEncoder,
+        SETTINGS_ACTIONS: ['get-settings', 'set-idle-policy'],
+    });
     vm.runInContext(
         `${source}\n globalThis.transport = new Transport();`,
         context,
@@ -72,6 +77,8 @@ function pendingTransport() {
 
 for (const [action, backendBound, clientBudget] of [
     ['status', 60000 + 10000 + 2000 + 2000, 75000],
+    ['get-settings', 60000 + 10000 + 2000 + 2000, 75000],
+    ['set-idle-policy', 60000 + 10000 + 2000 + 2000, 75000],
     ['take-control', 1800000 + 120000 + 10000 + 2000 + 2000, 1980000],
     ['user-switch', 1800000 + 120000 + 10000 + 2000 + 2000, 1980000],
     ['return-control', 1800000 + 120000 + 10000 + 2000 + 2000, 1980000],
