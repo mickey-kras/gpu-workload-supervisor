@@ -556,3 +556,70 @@ func idleDrainFence(t *testing.T, s *Store) control.Fence {
 	}
 	return state.LeaseFence
 }
+
+// Activity invalidates the armed deadline atomically: the read model (and
+// show-settings) must never report a stale verified pending deadline.
+func TestActivityAfterArmClearsArmedDeadline(t *testing.T) {
+	assertCleared := func(t *testing.T, s *Store) {
+		t.Helper()
+		settings, err := s.Settings(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if settings.ArmedDeadline != nil || settings.AttestationAt != nil {
+			t.Fatalf("stale pending deadline reported: armed=%v attested=%v", settings.ArmedDeadline, settings.AttestationAt)
+		}
+	}
+
+	t.Run("admit after arm clears", func(t *testing.T) {
+		s, now, deadline := armedFixture(t)
+		ctx := context.Background()
+		state, _ := s.State(ctx)
+		*now = deadline
+		if err := s.AdmitWork(ctx, "req", "job", control.WorkloadText, state.LeaseFence); err != nil {
+			t.Fatal(err)
+		}
+		assertCleared(t, s)
+	})
+	t.Run("finish after arm clears", func(t *testing.T) {
+		s, now := policyFixture(t)
+		ctx := context.Background()
+		state, _ := s.State(ctx)
+		// Admit at the seeded activity time so the armed deadline stays
+		// consistent with last_activity_at.
+		if err := s.AdmitWork(ctx, "req", "job", control.WorkloadText, state.LeaseFence); err != nil {
+			t.Fatal(err)
+		}
+		fingerprint := enablePolicy(t, s)
+		deadline := policyEpoch.Add(5 * time.Minute)
+		if err := s.ArmIdleDeadline(ctx, fingerprint, deadline, policyEpoch.Add(4*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		*now = deadline
+		if err := s.FinishWorkFenced(ctx, "req", control.WorkloadText, state.LeaseFence, WorkCompleted); err != nil {
+			t.Fatal(err)
+		}
+		assertCleared(t, s)
+	})
+	t.Run("committed non-idle transition clears", func(t *testing.T) {
+		s, now, deadline := armedFixture(t)
+		ctx := context.Background()
+		state, _ := s.State(ctx)
+		snap, _ := s.Catalog(ctx)
+		media := state
+		media.DesiredWorkload = control.WorkloadMedia
+		media.ActiveWorkload = control.WorkloadMedia
+		media.Admission = control.AdmissionOpen
+		tr := Transition{ID: "to-media", Source: state, Target: media, Previous: state, ConfigurationRevision: snap.Revision, Deadline: time.Now().Add(time.Minute)}
+		*now = deadline
+		started, err := s.StartTransition(ctx, state.Version, tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		media.LeaseFence = started.LeaseFence
+		if _, err := s.FinishTransition(ctx, tr.ID, "committed", started.Version, media); err != nil {
+			t.Fatal(err)
+		}
+		assertCleared(t, s)
+	})
+}

@@ -9,6 +9,7 @@ export const ERROR_CODES = [
     'recovery_required',
     'timeout',
     'unavailable',
+    'deferred',
 ];
 const fail = () => {
     throw new Error('Invalid operator response');
@@ -138,8 +139,18 @@ function validateStatus(s) {
 
 // The typed settings actions answer with a settings object only and never
 // mint a status from durable state; every other ok response keeps the exact
-// version-1 shape with status and no settings.
+// version-1 shape with status and no settings. A successful activate-workload
+// additionally carries the freshly rotated lease fence.
 export const SETTINGS_ACTIONS = ['get-settings', 'set-idle-policy'];
+export const ACTIVATE_ACTION = 'activate-workload';
+
+// The committed fence handed to the activating caller: an opaque incarnation
+// token plus a decimal epoch string (never a number).
+function validateLeaseFence(f) {
+    keys(f, ['incarnation', 'epoch']);
+    token(f.incarnation);
+    if (typeof f.epoch !== 'string' || !/^[0-9]{1,20}$/.test(f.epoch)) fail();
+}
 
 export function parseResponse(text, requestId, action) {
     if (new TextEncoder().encode(text).length > 65536) fail();
@@ -150,18 +161,28 @@ export function parseResponse(text, requestId, action) {
             r,
             SETTINGS_ACTIONS.includes(action)
                 ? [...base, 'settings']
-                : [...base, 'status'],
+                : action === ACTIVATE_ACTION
+                  ? [...base, 'status', 'leaseFence']
+                  : [...base, 'status'],
         );
+    } else if (r.code === 'deferred') {
+        // A deferred activation reports the observed current status so the
+        // desktop can render why the workload did not start.
+        keys(r, [...base, 'status']);
     } else {
         keys(r, base);
         one(r.code, ERROR_CODES);
     }
     if (r.protocolVersion !== 1 || r.requestId !== requestId) fail();
-    if (r.code !== 'ok') return r;
+    if (r.code !== 'ok') {
+        if (r.code === 'deferred') validateStatus(r.status);
+        return r;
+    }
     if (SETTINGS_ACTIONS.includes(action)) {
         validateSettings(r.settings);
         return r;
     }
     validateStatus(r.status);
+    if (action === ACTIVATE_ACTION) validateLeaseFence(r.leaseFence);
     return r;
 }

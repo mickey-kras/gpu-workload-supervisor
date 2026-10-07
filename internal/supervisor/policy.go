@@ -58,7 +58,11 @@ func (c *Controller) PolicyTick(ctx context.Context, evidence EvidenceProvider) 
 		return errors.Join(c.store.DisarmIdleDeadline(ctx), store.ErrEvidenceUnavailable)
 	}
 	attestation, err := evidence.Attest(ctx)
-	if err != nil || attestation.AttestedAt.IsZero() || c.now().Sub(attestation.AttestedAt) > MaxAttestationAge {
+	// Freshness is bounded in both directions: a timestamp ahead of the
+	// supervisor clock (frozen or erroneous adapter clock) would otherwise
+	// qualify an arbitrarily old empty snapshot forever.
+	if err != nil || attestation.AttestedAt.IsZero() || attestation.AttestedAt.After(c.now()) ||
+		c.now().Sub(attestation.AttestedAt) > MaxAttestationAge {
 		return errors.Join(c.store.DisarmIdleDeadline(ctx), store.ErrEvidenceUnavailable, err)
 	}
 	pending, err := c.store.PendingWork(ctx)

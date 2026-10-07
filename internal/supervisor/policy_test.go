@@ -257,3 +257,18 @@ func openStoreWithClock(t *testing.T, clock func() time.Time) *store.Store {
 	t.Cleanup(func() { s.Close() })
 	return s
 }
+
+func TestPolicyTickFailsClosedOnFutureDatedAttestation(t *testing.T) {
+	s := openStore(t)
+	ownershipState(t, s, control.OwnerSupervisor, control.WorkloadText)
+	enableIdlePolicy(t, s, 5)
+	c := testController(t, s, &fakeRuntime{active: control.WorkloadText})
+	future := &evidenceFixture{attestation: Attestation{AttestedAt: time.Now().Add(time.Minute)}}
+	if err := c.PolicyTick(context.Background(), future); !errors.Is(err, store.ErrEvidenceUnavailable) {
+		t.Fatalf("future attestation: %v", err)
+	}
+	settings, _ := s.Settings(context.Background())
+	if settings.ArmedDeadline != nil {
+		t.Fatal("future attestation armed a deadline")
+	}
+}
