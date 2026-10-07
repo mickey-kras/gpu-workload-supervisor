@@ -207,6 +207,47 @@ func TestPreflightFlagsOrphanedOwnedUnit(t *testing.T) {
 	}
 }
 
+// TestOwnedCgroupMustDeriveFromManagerRoot rejects hand-edited owned profiles
+// whose cgroup carries a foreign or nested prefix: only the exact derivation
+// from the discovered manager root is admissible.
+func TestOwnedCgroupMustDeriveFromManagerRoot(t *testing.T) {
+	owned := ownedRenderProfile("ollama", "chat", &control.OwnedLaunch{Port: 11434})
+	owned.Label = "Chat"
+	owned.Adapter = "systemd"
+	owned.HealthURL = "http://127.0.0.1:11434/api/tags"
+	owned.NativeModel.LaunchSHA256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	manager := func(cgroup string) *SystemdManager {
+		owned.Cgroup = cgroup
+		catalog := control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{owned}}
+		config := testConfig()
+		config.Catalog = &catalog
+		m, err := newSystemdManager(config, stoppedRunner(), http.DefaultClient)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixtureCgroups(t, m)
+		return m
+	}
+	// A cgroup missing the app.slice suffix never reaches this check: catalog
+	// validation rejects it at load. These cases carry the right suffix but a
+	// wrong prefix, which only the discovered manager root can rule out.
+	for name, cgroup := range map[string]string{
+		"foreign prefix":   "/elsewhere/app.slice/" + owned.Unit,
+		"nested injection": "/workloads/other.slice/app.slice/" + owned.Unit,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := manager(cgroup).verifyManagerCgroup(t.Context()); err == nil {
+				t.Fatal("foreign owned cgroup accepted")
+			}
+		})
+	}
+	t.Run("exact derivation accepted", func(t *testing.T) {
+		if err := manager("/workloads/app.slice/" + owned.Unit).verifyManagerCgroup(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 func TestPreflightOrphanScan(t *testing.T) {
 	dir := t.TempDir()
 	m := &SystemdManager{config: SystemdConfig{OwnedUnitDir: dir}}

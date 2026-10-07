@@ -198,6 +198,12 @@ func (m *SystemdManager) verifyManagerCgroup(ctx context.Context) error {
 		if !strings.HasPrefix(p.Cgroup, state.cgroup+"/") {
 			return errors.New("configured cgroup is not within systemd manager root")
 		}
+		// Owned profiles admit no degrees of freedom: the cgroup must be the
+		// exact derivation from the discovered manager root, so a hand-edited
+		// profile cannot escape into a foreign or nested prefix.
+		if p.NativeModel != nil && p.NativeModel.Owned != nil && p.Cgroup != OwnedCgroup(state.cgroup, p) {
+			return errors.New("owned workload cgroup must derive from the systemd manager root")
+		}
 	}
 	if err := m.cgroups.check(state.cgroup, false); err != nil {
 		return SafeError("systemd manager cgroup anchor is unavailable", err)
