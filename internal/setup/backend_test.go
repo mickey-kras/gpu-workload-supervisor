@@ -240,3 +240,115 @@ func TestOwnedIntegrationRemovalPreservesUserData(t *testing.T) {
 		t.Fatal("user unit overwritten")
 	}
 }
+
+func TestApplyEnablesAndRemovesIdleTimerSymmetrically(t *testing.T) {
+	backend, home, r := fixture(t)
+	ctx := context.Background()
+	var enabled []string
+	backend.runCommand = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) == 3 && args[0] == "--user" && args[1] == "enable" {
+			enabled = append(enabled, args[2])
+		}
+		return []byte("text.service disabled\n"), nil
+	}
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	if len(enabled) != 2 || enabled[0] != reconcileUnit || enabled[1] != idleTimerUnit {
+		t.Fatalf("enabled units: %v", enabled)
+	}
+	timerLink := filepath.Join(home, ".config/systemd/user/timers.target.wants", idleTimerUnit)
+	reconcileLink := filepath.Join(home, ".config/systemd/user/default.target.wants", reconcileUnit)
+	for _, link := range []string{reconcileLink, timerLink} {
+		if err := os.Symlink("/usr/lib/systemd/user/"+filepath.Base(link), link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := RemoveIntegration(home); err != nil {
+		t.Fatal(err)
+	}
+	for _, link := range []string{reconcileLink, timerLink} {
+		if _, err := os.Lstat(link); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("link survived removal: %s", link)
+		}
+	}
+	// A foreign timer link is preserved, and removal reports it.
+	if err := backend.enableIdleTimer(ctx, home, r.Profile.SystemctlPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/some/foreign.timer", timerLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveIntegration(home); err == nil {
+		t.Fatal("foreign timer link removed")
+	}
+	if _, err := os.Lstat(timerLink); err != nil {
+		t.Fatal("foreign timer link lost", err)
+	}
+	// A user-provided timer override is refused.
+	os.Remove(timerLink)
+	if err := os.WriteFile(filepath.Join(home, ".config/systemd/user", idleTimerUnit), []byte("user"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.enableIdleTimer(ctx, home, r.Profile.SystemctlPath); err == nil {
+		t.Fatal("user timer override overwritten")
+	}
+}
+
+func TestPolicyTickEvaluatesThePersistedProfile(t *testing.T) {
+	backend, home, r := fixture(t)
+	ctx := context.Background()
+	// The fixture profile uses a non-default state path under the temp home;
+	// a tick that ignored operator.json would never find this state.
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.PolicyTick(ctx, home); err != nil {
+		t.Fatalf("tick with off policy: %v", err)
+	}
+	// Enable the policy on a stable running workload: without a qualified
+	// evidence provider the tick must fail closed, never idle silently.
+	s, err := store.Open(ctx, r.Profile.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.DesiredWorkload = control.WorkloadText
+	state.ActiveWorkload = control.WorkloadText
+	state.Admission = control.AdmissionOpen
+	state, err = s.UpdateState(ctx, state.Version, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := s.Catalog(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := s.Settings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := control.SettingsPrecondition{
+		Incarnation: state.LeaseFence.Incarnation, Version: state.Version, Owner: state.Owner,
+		ConfigurationRevision: snap.Revision, SettingsRevision: settings.SettingsRevision,
+	}
+	if _, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 5}, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.PolicyTick(ctx, home); err == nil || !strings.Contains(err.Error(), "evidence") {
+		t.Fatalf("enabled tick without evidence: %v", err)
+	}
+}
+
+func TestPolicyTickFailsLoudlyWithoutOperatorProfile(t *testing.T) {
+	backend, home, _ := fixture(t)
+	if err := backend.PolicyTick(context.Background(), home); err == nil {
+		t.Fatal("tick without operator.json silently used defaults")
+	}
+}

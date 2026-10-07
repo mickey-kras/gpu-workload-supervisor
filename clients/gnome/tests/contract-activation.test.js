@@ -95,6 +95,12 @@ test('deferred responses fail closed on any other shape', () => {
     }
 });
 
+test('deferred is rejected on every action except activate-workload', () => {
+    for (const action of ['status', 'get-settings', 'set-idle-policy', 'take-control', 'user-switch', 'return-control', undefined]) {
+        assert.throws(() => parseResponse(deferred(), 'r1', action), `deferred accepted for ${action}`);
+    }
+});
+
 test('unknown error codes are still rejected', () => {
     for (const code of ['deferredx', 'ok2', '', 'DEFERRED']) {
         const body = JSON.stringify({

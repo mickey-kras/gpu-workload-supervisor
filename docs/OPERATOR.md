@@ -131,9 +131,15 @@ Activation uses the mutation-class lifetime.
 
 ## Inactivity policy tick
 
-`gpu-mode idle-policy-tick` is the oneshot policy evaluation driven by the
+`gpu-setup idle-policy-tick` is the oneshot policy evaluation driven by the
 `gpu-workload-supervisor-idle.timer` user timer (every 60 seconds, gated on
-`ConditionPathExists=%h/.config/gpu-workload-supervisor/operator.json`). It
+`ConditionPathExists=%h/.config/gpu-workload-supervisor/operator.json`;
+guided setup enables the packaged timer link alongside the reconciliation
+unit, and remove-integration removes both). It reads the persisted
+`operator.json` profile — failing loudly when the file is unreadable rather
+than falling back to default paths — and opens the profile's configured state
+path and runtime. (`gpu-mode -state <path> idle-policy-tick` remains the
+explicit-path form for diagnostics.) The tick
 reads the committed settings and durable state; an Off policy, user
 ownership, a non-stable or latched state, or an active/unknown workload
 no-ops after disarming any armed deadline. With no qualified evidence

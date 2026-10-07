@@ -98,6 +98,11 @@ func TestInjectedCommandBoundaries(t *testing.T) {
 	if err := actions.run([]string{"reconcile"}, nil, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
+	called := false
+	actions.policyTick = func(context.Context, string) error { called = true; return nil }
+	if err := actions.run([]string{"idle-policy-tick"}, nil, &bytes.Buffer{}); err != nil || !called {
+		t.Fatalf("idle-policy-tick dispatch: %v called=%v", err, called)
+	}
 }
 
 func TestDraftCommands(t *testing.T) {
@@ -153,7 +158,7 @@ func TestRootRejectedForAllSetupActions(t *testing.T) {
 	actions := systemActions()
 	actions.home = func() (string, error) { return t.TempDir(), nil }
 	actions.euid = func() int { return 0 }
-	for _, action := range []string{"discover", "probe", "fingerprint", "save-drafts", "verify-bindings", "validate", "apply", "reconcile"} {
+	for _, action := range []string{"discover", "probe", "fingerprint", "save-drafts", "verify-bindings", "validate", "apply", "reconcile", "idle-policy-tick"} {
 		if err := actions.run([]string{action}, strings.NewReader(request), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "not root") {
 			t.Fatalf("%s accepted as root: %v", action, err)
 		}

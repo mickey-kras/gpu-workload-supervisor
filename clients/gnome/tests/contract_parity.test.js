@@ -12,13 +12,14 @@ const client = readFileSync(
     'utf8'
 );
 
-// Line comments may contain parentheses (doc comments do), which a naive
-// `[\s\S]*?\)` match terminates on; strip comments and anchor the block end
-// at a closing paren on its own line.
-const stripLineComments = (source) => source.replace(/\/\/[^\n]*/g, '');
+// Comments (line and block) may contain parentheses or a line-start `)`,
+// which a naive `[\s\S]*?\)` match terminates on; strip both comment forms
+// and anchor the block end at a closing paren on its own line.
+const stripComments = (source) =>
+    source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 const extractCodeBlock = (source) => {
-    const block = stripLineComments(source).match(
-        /type Code string\s*const \(([\s\S]*?)\n\)/
+    const block = stripComments(source).match(
+        /type Code string\s*const \(([\s\S]*?)^\)$/m
     );
     assert.ok(block, 'go Code const block not found');
     return [...block[1].matchAll(/Code = "([^"]+)"/g)]
@@ -48,6 +49,19 @@ test('code extraction is not fooled by parentheses inside doc comments', () => {
 const (
 	OK Code = "ok"
 	// Deferred is only a workload-activation outcome (never a latch).
+	Deferred Code = "deferred"
+)
+`;
+    assert.deepEqual(extractCodeBlock(sample), ['deferred']);
+});
+
+test('code extraction is not fooled by a line-start paren inside block comments', () => {
+    const sample = `type Code string
+const (
+	OK Code = "ok"
+	/*
+)
+	misleading line-start paren */
 	Deferred Code = "deferred"
 )
 `;

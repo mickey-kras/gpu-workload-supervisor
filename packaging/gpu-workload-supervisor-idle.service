@@ -4,4 +4,4 @@ ConditionPathExists=%h/.config/gpu-workload-supervisor/operator.json
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/gpu-mode idle-policy-tick
+ExecStart=/usr/bin/gpu-setup idle-policy-tick

@@ -337,6 +337,9 @@ func (b Backend) commitConfiguration(ctx context.Context, home, root string, req
 	if err := b.enableReconciliation(ctx, home, profile.SystemctlPath); err != nil {
 		return err
 	}
+	if err := b.enableIdleTimer(ctx, home, profile.SystemctlPath); err != nil {
+		return err
+	}
 	return deployment.Write(profile.StatePath, deployment.Marker{Version: 1, Release: deployment.Release})
 }
 
@@ -368,53 +371,74 @@ type integration struct {
 	Target  string `json:"target"`
 }
 
-const reconcileUnit = "gpu-workload-supervisor-reconcile.service"
+const (
+	reconcileUnit = "gpu-workload-supervisor-reconcile.service"
+	idleTimerUnit = "gpu-workload-supervisor-idle.timer"
+)
 
 func (b Backend) enableReconciliation(ctx context.Context, home, systemctl string) error {
+	return b.enableUserUnit(ctx, home, systemctl, reconcileUnit, "default.target.wants", "integration.json")
+}
+
+// enableIdleTimer mirrors the reconciliation enablement exactly: the packaged
+// timer is only link-enabled (no --now, no daemon), preexisting user overrides
+// are refused, and ownership is recorded for symmetric removal.
+func (b Backend) enableIdleTimer(ctx context.Context, home, systemctl string) error {
+	return b.enableUserUnit(ctx, home, systemctl, idleTimerUnit, "timers.target.wants", "integration-idle.json")
+}
+
+func (b Backend) enableUserUnit(ctx context.Context, home, systemctl, unit, wantsDirectory, recordName string) error {
 	userDir := filepath.Join(home, ".config/systemd/user")
 	if err := mkdirTrusted(userDir); err != nil {
 		return err
 	}
-	userUnit := filepath.Join(userDir, reconcileUnit)
+	userUnit := filepath.Join(userDir, unit)
 	if _, err := os.Lstat(userUnit); err == nil {
-		return errors.New("user reconciliation unit exists; refusing override")
+		return fmt.Errorf("user unit %s exists; refusing override", unit)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	wants := filepath.Join(userDir, "default.target.wants")
+	wants := filepath.Join(userDir, wantsDirectory)
 	if err := mkdirTrusted(wants); err != nil {
 		return err
 	}
-	target := "/usr/lib/systemd/user/" + reconcileUnit
-	link := filepath.Join(wants, reconcileUnit)
+	target := "/usr/lib/systemd/user/" + unit
+	link := filepath.Join(wants, unit)
 	if info, err := os.Lstat(link); err == nil {
 		destination, err := os.Readlink(link)
 		if err != nil || info.Mode()&os.ModeSymlink == 0 || destination != target {
-			return errors.New("unowned reconciliation enablement exists")
+			return fmt.Errorf("unowned enablement for %s exists", unit)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	// Record planned ownership before the standard unit manager creates the link.
-	if err := writeJSON(filepath.Join(home, ".config/gpu-workload-supervisor/integration.json"), integration{1, reconcileUnit, target}); err != nil {
+	if err := writeJSON(filepath.Join(home, ".config/gpu-workload-supervisor", recordName), integration{1, unit, target}); err != nil {
 		return err
 	}
 	// Subprocess output is untrusted terminal input (control characters, unit
 	// payload echoes); the error carries only the exit status.
-	if _, err := b.runCommand(ctx, systemctl, "--user", "enable", reconcileUnit); err != nil {
-		return fmt.Errorf("enable reconciliation: %w", err)
+	if _, err := b.runCommand(ctx, systemctl, "--user", "enable", unit); err != nil {
+		return fmt.Errorf("enable %s: %w", unit, err)
 	}
 	return nil
 }
 
-// RemoveIntegration removes only the recorded enablement link. It does not stop
+// RemoveIntegration removes only the recorded enablement links. It does not stop
 // any service and preserves profiles, state, audit, models and user workload units.
 func RemoveIntegration(home string) error {
+	if err := removeIntegration(home, "integration.json", reconcileUnit, "default.target.wants"); err != nil {
+		return err
+	}
+	return removeIntegration(home, "integration-idle.json", idleTimerUnit, "timers.target.wants")
+}
+
+func removeIntegration(home, recordName, unit, wantsDirectory string) error {
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
 	if err := TrustedDirectory(root); err != nil {
 		return err
 	}
-	data, err := privateRead(filepath.Join(root, "integration.json"))
+	data, err := privateRead(filepath.Join(root, recordName))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -425,14 +449,14 @@ func RemoveIntegration(home string) error {
 	if err := json.Unmarshal(data, &owned); err != nil {
 		return err
 	}
-	if owned.Version != 1 || owned.Unit != reconcileUnit || owned.Target != "/usr/lib/systemd/user/"+reconcileUnit {
+	if owned.Version != 1 || owned.Unit != unit || owned.Target != "/usr/lib/systemd/user/"+unit {
 		return errors.New("invalid integration ownership record")
 	}
-	directory := filepath.Join(home, ".config/systemd/user/default.target.wants")
+	directory := filepath.Join(home, ".config/systemd/user", wantsDirectory)
 	if err := TrustedDirectory(directory); err != nil {
 		return err
 	}
-	link := filepath.Join(directory, reconcileUnit)
+	link := filepath.Join(directory, unit)
 	target, err := os.Readlink(link)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -445,7 +469,7 @@ func RemoveIntegration(home string) error {
 			return err
 		}
 	}
-	return os.Remove(filepath.Join(root, "integration.json"))
+	return os.Remove(filepath.Join(root, recordName))
 }
 
 func Reconcile(ctx context.Context, home string) error {
@@ -453,49 +477,89 @@ func Reconcile(ctx context.Context, home string) error {
 }
 
 func (b Backend) Reconcile(ctx context.Context, home string) error {
-	data, err := privateRead(filepath.Join(home, ".config/gpu-workload-supervisor/operator.json"))
+	controller, cleanup, err := b.activatedController(ctx, home)
 	if err != nil {
 		return err
+	}
+	defer cleanup()
+	_, err = controller.Reconcile(ctx)
+	return err
+}
+
+// PolicyTick evaluates the inactivity policy once against the persisted
+// operator profile. It is the profile-aware oneshot behind the idle user
+// timer: an unreadable operator.json fails loudly rather than silently
+// falling back to default paths.
+func PolicyTick(ctx context.Context, home string) error {
+	return SystemBackend().PolicyTick(ctx, home)
+}
+
+func (b Backend) PolicyTick(ctx context.Context, home string) error {
+	controller, cleanup, err := b.activatedController(ctx, home)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	// No qualified evidence provider ships with the supervisor, so an enabled
+	// policy fails closed and an Off policy is a clean no-op.
+	return controller.PolicyTick(ctx, nil)
+}
+
+// activatedController loads the persisted operator.json profile, validates
+// activation, and builds a controller against the profile's state path and
+// runtime configuration. The returned cleanup releases the store and gate.
+func (b Backend) activatedController(ctx context.Context, home string) (*supervisor.Controller, func(), error) {
+	data, err := privateRead(filepath.Join(home, ".config/gpu-workload-supervisor/operator.json"))
+	if err != nil {
+		return nil, nil, err
 	}
 	var profile Profile
 	if err := json.Unmarshal(data, &profile); err != nil {
-		return err
+		return nil, nil, err
 	}
 	if profile.Version != 1 || profile.ActivatedRelease == "" {
-		return errors.New("reconciliation requires an activated managed profile")
+		return nil, nil, errors.New("an activated managed profile is required")
 	}
 	gate, err := lock.TryAcquire(profile.StatePath + ".lock")
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	defer gate.Close()
+	cleanup := func() { gate.Close() }
 	if err := deployment.Check(profile.StatePath, profile.ActivatedRelease); err != nil {
-		return err
+		cleanup()
+		return nil, nil, err
 	}
 	file, err := deployment.OpenPrivate(profile.StatePath)
 	if err != nil {
-		return err
+		cleanup()
+		return nil, nil, err
 	}
 	file.Close()
 	stateStore, err := store.Open(ctx, profile.StatePath)
 	if err != nil {
-		return err
+		cleanup()
+		return nil, nil, err
 	}
-	defer stateStore.Close()
+	cleanup = func() {
+		stateStore.Close()
+		gate.Close()
+	}
 	snapshot, err := stateStore.Catalog(ctx)
 	if err != nil {
-		return err
+		cleanup()
+		return nil, nil, err
 	}
 	manager, err := b.makeRuntime(Request{Profile: profile, Catalog: snapshot.Catalog})
 	if err != nil {
-		return err
+		cleanup()
+		return nil, nil, err
 	}
 	controller, err := supervisor.New(stateStore, manager, supervisor.Config{Catalog: &snapshot, DrainTimeout: 2 * time.Minute, VerifyTimeout: time.Minute, ActionTimeout: time.Minute, CleanupTimeout: time.Minute, FinalizeTimeout: 10 * time.Second, PollInterval: 250 * time.Millisecond})
 	if err != nil {
-		return err
+		cleanup()
+		return nil, nil, err
 	}
-	_, err = controller.Reconcile(ctx)
-	return err
+	return controller, cleanup, nil
 }
 
 func (work *activationWork) readPreviousProfile() error {

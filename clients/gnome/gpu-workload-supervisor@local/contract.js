@@ -166,6 +166,9 @@ export function parseResponse(text, requestId, action) {
                   : [...base, 'status'],
         );
     } else if (r.code === 'deferred') {
+        // Deferred is defined only for activate-workload; on any other action
+        // it is a malformed response and fails closed.
+        if (action !== ACTIVATE_ACTION) fail();
         // A deferred activation reports the observed current status so the
         // desktop can render why the workload did not start.
         keys(r, [...base, 'status']);
