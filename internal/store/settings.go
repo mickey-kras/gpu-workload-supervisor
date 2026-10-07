@@ -45,47 +45,52 @@ func (s *Store) SetIdlePolicy(ctx context.Context, e control.SettingsPreconditio
 	}
 	var result control.PolicyState
 	err = s.withTx(ctx, func(tx *sql.Tx) error {
-		state, err := readState(ctx, tx)
-		if err != nil {
-			return err
-		}
-		// A live transition persists a non-stable phase, which would shadow
-		// the transition check inside operatorSource with ErrUnstableState.
-		// Settings writes must report the running transition as busy, so the
-		// in-progress check runs first.
-		running, err := transitionRunning(ctx, tx)
-		if err != nil {
-			return err
-		}
-		if running {
-			return ErrTransitionRunning
-		}
-		if err := operatorSource(ctx, tx, state, e.OperatorPrecondition()); err != nil {
-			return err
-		}
-		current, err := readPolicyState(ctx, tx)
-		if err != nil {
-			return err
-		}
-		if e.SettingsRevision == "" || current.SettingsRevision != e.SettingsRevision {
-			return ErrSettingsConflict
-		}
-		now := formatTime(s.now())
-		if err := updateSingleton(ctx, tx, `UPDATE operator_settings
-			SET revision = ?, idle_timeout_minutes = ?, updated_at = ?
-			WHERE singleton = 1`, revision, p.TimeoutMinutes, now); err != nil {
-			return err
-		}
-		if err := s.disarmIdleDeadline(ctx, tx); err != nil {
-			return err
-		}
-		result, err = readPolicyState(ctx, tx)
+		var err error
+		result, err = s.setIdlePolicy(ctx, tx, e, p, revision)
 		return err
 	})
 	if err != nil {
 		return control.PolicyState{}, err
 	}
 	return result, nil
+}
+
+func (s *Store) setIdlePolicy(ctx context.Context, tx *sql.Tx, e control.SettingsPrecondition, p control.IdlePolicy, revision string) (control.PolicyState, error) {
+	state, err := readState(ctx, tx)
+	if err != nil {
+		return control.PolicyState{}, err
+	}
+	// A live transition persists a non-stable phase, which would shadow
+	// the transition check inside operatorSource with ErrUnstableState.
+	// Settings writes must report the running transition as busy, so the
+	// in-progress check runs first.
+	running, err := transitionRunning(ctx, tx)
+	if err != nil {
+		return control.PolicyState{}, err
+	}
+	if running {
+		return control.PolicyState{}, ErrTransitionRunning
+	}
+	if err := operatorSource(ctx, tx, state, e.OperatorPrecondition()); err != nil {
+		return control.PolicyState{}, err
+	}
+	current, err := readPolicyState(ctx, tx)
+	if err != nil {
+		return control.PolicyState{}, err
+	}
+	if e.SettingsRevision == "" || current.SettingsRevision != e.SettingsRevision {
+		return control.PolicyState{}, ErrSettingsConflict
+	}
+	now := formatTime(s.now())
+	if err := updateSingleton(ctx, tx, `UPDATE operator_settings
+			SET revision = ?, idle_timeout_minutes = ?, updated_at = ?
+			WHERE singleton = 1`, revision, p.TimeoutMinutes, now); err != nil {
+		return control.PolicyState{}, err
+	}
+	if err := s.disarmIdleDeadline(ctx, tx); err != nil {
+		return control.PolicyState{}, err
+	}
+	return readPolicyState(ctx, tx)
 }
 
 // disarmIdleDeadline clears the verified armed deadline (and the attestation

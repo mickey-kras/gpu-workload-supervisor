@@ -140,13 +140,17 @@ func validateRequest(r Request) Code {
 	if !token(r.RequestID, 64) {
 		return InvalidRequest
 	}
-	if r.Action == actionStatus || r.Action == actionGetSettings {
+	return validateAction(r)
+}
+
+func validateAction(r Request) Code {
+	switch r.Action {
+	case actionStatus, actionGetSettings:
 		if r.Expected != nil || r.Target != "" || r.Settings != nil {
 			return InvalidRequest
 		}
 		return OK
-	}
-	if r.Action == actionSetIdlePolicy {
+	case actionSetIdlePolicy:
 		if r.Target != "" {
 			return InvalidRequest
 		}
@@ -154,10 +158,14 @@ func validateRequest(r Request) Code {
 			return code
 		}
 		return validateExpected(r.Expected)
-	}
-	if r.Action != actionTakeControl && r.Action != actionUserSwitch && r.Action != actionReturnControl {
+	case actionTakeControl, actionUserSwitch, actionReturnControl:
+		return validateTransitionRequest(r)
+	default:
 		return InvalidRequest
 	}
+}
+
+func validateTransitionRequest(r Request) Code {
 	if r.Settings != nil || (r.Action == actionUserSwitch && !workloadID(string(r.Target))) || (r.Action != actionUserSwitch && r.Target != "") {
 		return InvalidRequest
 	}
@@ -225,6 +233,10 @@ func requestFields(body []byte, action string) bool {
 			return false
 		}
 	}
+	return mutationFields(m, action)
+}
+
+func mutationFields(m map[string]json.RawMessage, action string) bool {
 	e, ok := fields(m["expected"], "incarnation", "version", "owner", "configurationRevision")
 	if !ok || len(e) != 4 {
 		return false

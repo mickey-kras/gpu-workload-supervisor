@@ -121,22 +121,24 @@ func (n NativeModel) validateOwned() error {
 		if o.MaxModelLen != 0 {
 			return errors.New("max-model-len is a vllm owned launch field")
 		}
-		if err := o.validateModelPath(); err != nil {
-			return err
-		}
-		if o.servedModelName() != n.Model {
-			return errors.New("owned launch served model name must match the catalog model")
-		}
 	case "vllm":
 		if o.CtxSize != 0 || o.GPULayers != 0 {
 			return errors.New("ctx-size and gpu-layers are llama.cpp owned launch fields")
 		}
-		if err := o.validateModelPath(); err != nil {
-			return err
-		}
-		if o.servedModelName() != n.Model {
-			return errors.New("owned launch served model name must match the catalog model")
-		}
+	}
+	if n.Runtime == "llama.cpp" || n.Runtime == "vllm" {
+		return n.validateOwnedModel()
+	}
+	return nil
+}
+
+func (n NativeModel) validateOwnedModel() error {
+	o := n.Owned
+	if err := o.validateModelPath(); err != nil {
+		return err
+	}
+	if o.servedModelName() != n.Model {
+		return errors.New("owned launch served model name must match the catalog model")
 	}
 	return nil
 }
