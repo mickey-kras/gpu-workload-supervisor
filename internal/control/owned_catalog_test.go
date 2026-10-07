@@ -191,8 +191,55 @@ func TestOwnedLaunchPerRuntimeAdmissibility(t *testing.T) {
 	t.Run("defaults without optional fields", func(t *testing.T) {
 		p := ownedLlamaProfile()
 		p.NativeModel.Owned = &OwnedLaunch{ModelPath: "/models/vision-q8.gguf", Port: 9100}
+		p.NativeModel.Model = "/models/vision-q8.gguf"
 		c := Catalog{Version: 2, Profiles: []WorkloadProfile{p}}
 		if err := c.Validate(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// TestOwnedServedModelNameMatchesCatalog locks the render⇄verify invariant at
+// admission: a profile whose rendered unit would serve a name other than
+// NativeModel.Model could never qualify, so the catalog rejects it up front.
+func TestOwnedServedModelNameMatchesCatalog(t *testing.T) {
+	t.Run("mismatched alias rejected", func(t *testing.T) {
+		p := ownedLlamaProfile()
+		p.NativeModel.Owned.Alias = "other-name"
+		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{p}}).Validate(); err == nil {
+			t.Fatal("mismatched alias accepted")
+		}
+	})
+	t.Run("empty alias with divergent model path rejected", func(t *testing.T) {
+		p := ownedLlamaProfile()
+		p.NativeModel.Owned.Alias = ""
+		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{p}}).Validate(); err == nil {
+			t.Fatal("model-path fallback diverging from model accepted")
+		}
+	})
+	t.Run("empty alias with model path as identity accepted", func(t *testing.T) {
+		p := ownedLlamaProfile()
+		p.NativeModel.Owned.Alias = ""
+		p.NativeModel.Model = p.NativeModel.Owned.ModelPath
+		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{p}}).Validate(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("matching alias accepted", func(t *testing.T) {
+		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{ownedLlamaProfile()}}).Validate(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("vllm mismatched served name rejected", func(t *testing.T) {
+		p := ownedLlamaProfile()
+		p.NativeModel.Runtime = "vllm"
+		p.NativeModel.Owned = &OwnedLaunch{ModelPath: "/models/vision", Port: 9100, Alias: "not-vision-q8"}
+		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{p}}).Validate(); err == nil {
+			t.Fatal("mismatched vllm served name accepted")
+		}
+	})
+	t.Run("ollama unaffected", func(t *testing.T) {
+		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{ownedOllamaProfile("chat", "qwen3:latest")}}).Validate(); err != nil {
 			t.Fatal(err)
 		}
 	})

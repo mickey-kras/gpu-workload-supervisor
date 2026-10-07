@@ -117,6 +117,9 @@ func (n NativeModel) validateOwned() error {
 		if err := o.validateModelPath(); err != nil {
 			return err
 		}
+		if o.servedModelName() != n.Model {
+			return errors.New("owned launch served model name must match the catalog model")
+		}
 	case "vllm":
 		if o.CtxSize != 0 || o.GPULayers != 0 {
 			return errors.New("ctx-size and gpu-layers are llama.cpp owned launch fields")
@@ -124,8 +127,21 @@ func (n NativeModel) validateOwned() error {
 		if err := o.validateModelPath(); err != nil {
 			return err
 		}
+		if o.servedModelName() != n.Model {
+			return errors.New("owned launch served model name must match the catalog model")
+		}
 	}
 	return nil
+}
+
+// servedModelName is the model name the rendered unit actually serves: the
+// alias flag when set, otherwise the model path fallback, exactly as the
+// qualification grammar interprets the command line.
+func (o OwnedLaunch) servedModelName() string {
+	if o.Alias != "" {
+		return o.Alias
+	}
+	return o.ModelPath
 }
 
 func (o OwnedLaunch) validateModelPath() error {
