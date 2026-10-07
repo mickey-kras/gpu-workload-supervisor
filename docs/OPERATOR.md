@@ -146,7 +146,7 @@ than falling back to default paths — and opens the profile's configured state
 path and runtime. (`gpu-mode -state <path> idle-policy-tick` remains the
 explicit-path form for diagnostics.) The tick
 reads the committed settings and durable state; an Off policy, user
-ownership, a non-stable or latched state, or an active/unknown workload
+ownership, a non-stable or latched state, or an idle/unknown workload
 no-ops after disarming any armed deadline. With no qualified evidence
 provider configured, an enabled policy fails closed: the tick exits nonzero
 and never idles. When qualified fresh evidence (attestation no older than 120
