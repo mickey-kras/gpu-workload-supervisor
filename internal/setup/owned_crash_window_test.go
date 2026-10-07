@@ -53,7 +53,7 @@ func TestResumeReplaysDeletesFromCrashWindow(t *testing.T) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		t.Fatal(err)
 	}
-	journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalPending}
+	journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalPending}
 	if err := writeOwnedUnitJournal(root, journal); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestResumeDefersGenuinePreCommitCrash(t *testing.T) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		t.Fatal(err)
 	}
-	journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalPending}
+	journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalPending}
 	if err := writeOwnedUnitJournal(root, journal); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestResumeSkipsConflictCheckWhenDeleteAlreadyRan(t *testing.T) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		t.Fatal(err)
 	}
-	journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{profile.Unit: digest([]byte("older render"))}, Phase: ownedJournalCommitted}
+	journal := unitJournal{Version: 1, StatePath: req.Profile.StatePath, Writes: map[string]string{}, Deletes: map[string]string{profile.Unit: digest([]byte("older render"))}, Phase: ownedJournalCommitted}
 	if err := writeOwnedUnitJournal(root, journal); err != nil {
 		t.Fatal(err)
 	}
@@ -177,6 +177,8 @@ func TestPlanOwnedUnitsDedupesSharedUnitDeletes(t *testing.T) {
 // flips to committed only with a present journal, and finalize refuses an
 // unpinned journal.
 func TestCommitOwnedUnitJournalPinning(t *testing.T) {
+	backend, _, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
 	home := t.TempDir()
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
 	if err := os.MkdirAll(root, 0700); err != nil {
@@ -190,7 +192,7 @@ func TestCommitOwnedUnitJournalPinning(t *testing.T) {
 	if err := commitOwnedUnitJournal(root, plan); err == nil || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("missing journal pinned: %v", err)
 	}
-	journal := newOwnedUnitJournal(plan)
+	journal := newOwnedUnitJournal(plan, r.Profile.StatePath)
 	if err := writeOwnedUnitJournal(root, journal); err != nil {
 		t.Fatal(err)
 	}
@@ -201,8 +203,6 @@ func TestCommitOwnedUnitJournalPinning(t *testing.T) {
 	if err != nil || !present || pinned.Phase != ownedJournalCommitted {
 		t.Fatalf("journal not pinned: %+v %v %v", pinned, present, err)
 	}
-	backend, _, r := fixture(t)
-	backend.runCommand = fakeOwnedCommand
 	if err := writeOwnedUnitJournal(root, journal); err != nil {
 		t.Fatal(err)
 	}

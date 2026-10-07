@@ -37,6 +37,7 @@ func ownedFixtureProfile(t *testing.T, home, id string, port uint16) (control.Wo
 func ownedFixtureRequest(t *testing.T, home string, profiles ...control.WorkloadProfile) Request {
 	t.Helper()
 	_, _, r := fixture(t)
+	r.Profile.StatePath = filepath.Join(home, "state/state.db")
 	r.Catalog = control.Catalog{Version: 2, Profiles: profiles}
 	return r
 }
@@ -165,7 +166,7 @@ func TestOwnedUnitWriteCollisionAndOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	journal := newOwnedUnitJournal(plan)
+	journal := newOwnedUnitJournal(plan, req.Profile.StatePath)
 	if err := backend.applyOwnedUnitWrites(context.Background(), home, plan, journal); err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +201,7 @@ func TestOwnedUnitWriteCollisionAndOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := backend.applyOwnedUnitWrites(context.Background(), home, plan2, newOwnedUnitJournal(plan2)); err != nil {
+	if err := backend.applyOwnedUnitWrites(context.Background(), home, plan2, newOwnedUnitJournal(plan2, req2.Profile.StatePath)); err != nil {
 		t.Fatal(err)
 	}
 	data, _ = os.ReadFile(path)
@@ -328,7 +329,7 @@ func TestResumeOwnedUnitJournalAtApplyEntry(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, stale.Unit), staleRaw, 0600); err != nil {
 			t.Fatal(err)
 		}
-		journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalCommitted}
+		journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalCommitted}
 		if err := os.MkdirAll(root, 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -353,7 +354,7 @@ func TestResumeOwnedUnitJournalAtApplyEntry(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, profile.Unit), raw, 0600); err != nil {
 			t.Fatal(err)
 		}
-		journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{profile.Unit: digest(raw)}, Phase: ownedJournalCommitted}
+		journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{}, Deletes: map[string]string{profile.Unit: digest(raw)}, Phase: ownedJournalCommitted}
 		if err := writeOwnedUnitJournal(root, journal); err != nil {
 			t.Fatal(err)
 		}
@@ -367,7 +368,7 @@ func TestResumeOwnedUnitJournalAtApplyEntry(t *testing.T) {
 	})
 
 	t.Run("divergent digest rewrite refuses", func(t *testing.T) {
-		journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{profile.Unit: digest([]byte("older render"))}, Phase: ownedJournalCommitted}
+		journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{}, Deletes: map[string]string{profile.Unit: digest([]byte("older render"))}, Phase: ownedJournalCommitted}
 		if err := writeOwnedUnitJournal(root, journal); err != nil {
 			t.Fatal(err)
 		}
@@ -381,7 +382,7 @@ func TestResumeOwnedUnitJournalAtApplyEntry(t *testing.T) {
 	})
 
 	t.Run("writes-pending journal without fence is cleared", func(t *testing.T) {
-		journal := unitJournal{Version: 1, Writes: map[string]string{stale.Unit: digest(staleRaw)}, Deletes: map[string]string{}, Phase: ownedJournalPending}
+		journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{stale.Unit: digest(staleRaw)}, Deletes: map[string]string{}, Phase: ownedJournalPending}
 		if err := writeOwnedUnitJournal(root, journal); err != nil {
 			t.Fatal(err)
 		}
@@ -394,7 +395,7 @@ func TestResumeOwnedUnitJournalAtApplyEntry(t *testing.T) {
 	})
 
 	t.Run("maintenance fence leaves the journal for activation resume", func(t *testing.T) {
-		journal := unitJournal{Version: 1, Writes: map[string]string{stale.Unit: digest(staleRaw)}, Deletes: map[string]string{}, Phase: ownedJournalPending}
+		journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{stale.Unit: digest(staleRaw)}, Deletes: map[string]string{}, Phase: ownedJournalPending}
 		if err := writeOwnedUnitJournal(root, journal); err != nil {
 			t.Fatal(err)
 		}
@@ -420,7 +421,7 @@ func TestResumeOwnedUnitJournalAtApplyEntry(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, stale.Unit), []byte("edited"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalCommitted}
+		journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalCommitted}
 		if err := writeOwnedUnitJournal(root, journal); err != nil {
 			t.Fatal(err)
 		}

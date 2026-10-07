@@ -80,10 +80,18 @@ func discoverOwnedUnits(home string, catalog control.Catalog) []OwnedUnitStatus 
 		return nil
 	}
 	managed := map[string]string{}
+	// Exact adopted bindings (owned profiles converted to adopted while keeping
+	// the file) account for the unit, matching preflightOwned semantics.
+	adopted := map[string]string{}
 	for _, p := range catalog.Profiles {
-		if p.NativeModel != nil && p.NativeModel.Owned != nil {
-			managed[p.Unit] = p.NativeModel.LaunchSHA256
+		if p.NativeModel == nil {
+			continue
 		}
+		if p.NativeModel.Owned != nil {
+			managed[p.Unit] = p.NativeModel.LaunchSHA256
+			continue
+		}
+		adopted[p.NativeModel.LaunchFile] = p.NativeModel.LaunchSHA256
 	}
 	var owned []OwnedUnitStatus
 	for _, entry := range entries {
@@ -104,6 +112,8 @@ func discoverOwnedUnits(home string, catalog control.Catalog) []OwnedUnitStatus 
 			if want != status.Digest {
 				status.State = "modified"
 			}
+		} else if want, ok := adopted[filepath.Join(ownedUnitDirectory(home), name)]; ok && want == status.Digest {
+			status.State = "managed"
 		}
 		owned = append(owned, status)
 	}

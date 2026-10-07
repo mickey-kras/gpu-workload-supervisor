@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path"
 	"reflect"
 	"strings"
 	"syscall"
@@ -338,11 +339,23 @@ func configureCatalog(ctx context.Context, stateStore *store.Store, options mode
 
 // ownedProfilesVerbatim is the configure side of the tool gate: configure may
 // carry setup-managed owned profiles only verbatim, never add, remove, or
-// modify them.
+// modify them. Adopted profiles still binding an owned-unit file (an owned
+// profile converted while keeping its launch file) are setup-managed too,
+// mirroring the runtime orphan scan's accounting.
 func ownedProfilesVerbatim(accepted, next control.Catalog) error {
+	setupManaged := func(p control.WorkloadProfile) bool {
+		if p.NativeModel == nil {
+			return false
+		}
+		if p.NativeModel.Owned != nil {
+			return true
+		}
+		base := path.Base(p.NativeModel.LaunchFile)
+		return strings.HasPrefix(base, "gws-owned-") && strings.HasSuffix(base, ".service")
+	}
 	carried := map[control.Workload]bool{}
 	for _, p := range next.Profiles {
-		if p.NativeModel == nil || p.NativeModel.Owned == nil {
+		if !setupManaged(p) {
 			continue
 		}
 		prior, ok := accepted.Profile(p.ID)
@@ -352,7 +365,7 @@ func ownedProfilesVerbatim(accepted, next control.Catalog) error {
 		carried[p.ID] = true
 	}
 	for _, p := range accepted.Profiles {
-		if p.NativeModel != nil && p.NativeModel.Owned != nil && !carried[p.ID] {
+		if setupManaged(p) && !carried[p.ID] {
 			return control.ErrOwnedCatalogManagedBySetup
 		}
 	}

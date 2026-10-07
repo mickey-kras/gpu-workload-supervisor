@@ -186,7 +186,7 @@ func (b Backend) Apply(ctx context.Context, home string, request Request) error 
 		return err
 	}
 	if !plan.empty() {
-		journal := newOwnedUnitJournal(plan)
+		journal := newOwnedUnitJournal(plan, request.Profile.StatePath)
 		if err := writeOwnedUnitJournal(work.root, journal); err != nil {
 			return err
 		}

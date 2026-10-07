@@ -23,11 +23,13 @@ func (b Backend) abortOwnedUnitWrites(ctx context.Context, home, root string, re
 	if plan.empty() {
 		return cause
 	}
+	// The journal survives a failed rollback: its journaled writes still need
+	// recovery, and clearing it would leave uncommitted content unaccounted.
 	if err := b.rollbackOwnedUnitWrites(ctx, home, request.Profile.SystemctlPath, plan); err != nil {
-		cause = errors.Join(cause, err)
+		return errors.Join(cause, err)
 	}
 	if err := clearOwnedUnitJournal(root); err != nil {
-		cause = errors.Join(cause, err)
+		return errors.Join(cause, err)
 	}
 	return cause
 }
@@ -140,6 +142,9 @@ func (b Backend) finalizeOwnedUnits(ctx context.Context, home, root string, requ
 	if !present {
 		return errors.New("owned-units journal missing after catalog commit")
 	}
+	if journal.StatePath != request.Profile.StatePath {
+		return ErrOwnedJournalStateMismatch
+	}
 	if journal.Phase != ownedJournalCommitted {
 		return errors.New("owned-units journal not pinned to the committed catalog")
 	}
@@ -177,6 +182,11 @@ func (b Backend) resumeOwnedUnitJournal(ctx context.Context, home string, req Re
 	journal, present, err := readOwnedUnitJournal(root)
 	if err != nil || !present {
 		return err
+	}
+	// The journal is self-contained proof: it may only be consumed against the
+	// state database that journaled it.
+	if journal.StatePath != req.Profile.StatePath {
+		return ErrOwnedJournalStateMismatch
 	}
 	// A different request must never consume the interrupted activation's
 	// journal: its proven deletes belong to the recorded original request.
@@ -234,7 +244,7 @@ func (b Backend) resumeOwnedUnitJournal(ctx context.Context, home string, req Re
 		if digest(current) != proof {
 			return fmt.Errorf("%w: %s", ErrOwnedUnitModified, name)
 		}
-		if err := os.Remove(path); err != nil {
+		if err := provenDelete(path, proof); err != nil {
 			return err
 		}
 		reloaded = append(reloaded, name)
@@ -282,7 +292,10 @@ func (b Backend) retirePendingJournal(ctx context.Context, home, root string, re
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	var reloaded []string
+	// Every journaled write may have reached systemd, even one whose recovery
+	// finds the file already restored or removed, so all of them reload.
+	reloaded := names
+	changed := false
 	for _, name := range names {
 		path := filepath.Join(dir, name)
 		current, err := privateRead(path)
@@ -308,18 +321,17 @@ func (b Backend) retirePendingJournal(ctx context.Context, home, root string, re
 				return err
 			}
 		} else {
-			if digest(current) != journal.Writes[name] {
-				return fmt.Errorf("%w: %s", ErrOwnedUnitModified, name)
-			}
-			if err := os.Remove(path); err != nil {
+			if err := provenDelete(path, journal.Writes[name]); err != nil {
 				return err
 			}
 		}
-		reloaded = append(reloaded, name)
+		changed = true
 	}
 	if len(reloaded) > 0 {
-		if err := syncDir(dir); err != nil {
-			return err
+		if changed {
+			if err := syncDir(dir); err != nil {
+				return err
+			}
 		}
 		if err := b.daemonReloadOwnedUnits(ctx, req.Profile.SystemctlPath, reloaded); err != nil {
 			return err

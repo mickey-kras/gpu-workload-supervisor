@@ -65,11 +65,16 @@ func (p unitPlan) unitNames() []string {
 }
 
 type unitJournal struct {
-	Version int               `json:"version"`
-	Writes  map[string]string `json:"writes"`  // name -> sha256 hex
-	Deletes map[string]string `json:"deletes"` // name -> sha256 hex (content proof captured before delete)
-	Phase   string            `json:"phase"`   // "writes-pending" | "committed" | "done"
+	Version   int               `json:"version"`
+	StatePath string            `json:"statePath"` // state database this journal belongs to
+	Writes    map[string]string `json:"writes"`    // name -> sha256 hex
+	Deletes   map[string]string `json:"deletes"`   // name -> sha256 hex (content proof captured before delete)
+	Phase     string            `json:"phase"`     // "writes-pending" | "committed"
 }
+
+// ErrOwnedJournalStateMismatch rejects consuming a journal against a state
+// database other than the one that journaled it: the proof is self-contained.
+var ErrOwnedJournalStateMismatch = errors.New("owned-units journal belongs to a different state database")
 
 const (
 	ownedUnitJournalName  = "owned-units-journal.json"
@@ -185,8 +190,9 @@ func ownedRenderChecked(p control.WorkloadProfile) ([]byte, error) {
 	return raw, nil
 }
 
-func newOwnedUnitJournal(plan unitPlan) unitJournal {
-	j := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{}, Phase: ownedJournalPending}
+func newOwnedUnitJournal(plan unitPlan, statePath string) unitJournal {
+	j := unitJournal{Version: 1,
+		StatePath: statePath, Writes: map[string]string{}, Deletes: map[string]string{}, Phase: ownedJournalPending}
 	for name, raw := range plan.Writes {
 		j.Writes[name] = digest(raw)
 	}
@@ -212,7 +218,7 @@ func readOwnedUnitJournal(root string) (unitJournal, bool, error) {
 	if err := json.Unmarshal(data, &j); err != nil {
 		return j, false, err
 	}
-	if j.Version != 1 || j.Writes == nil || j.Deletes == nil || (j.Phase != ownedJournalPending && j.Phase != ownedJournalCommitted) {
+	if j.Version != 1 || j.StatePath == "" || j.Writes == nil || j.Deletes == nil || (j.Phase != ownedJournalPending && j.Phase != ownedJournalCommitted) {
 		return j, false, errors.New("unsupported owned-units journal")
 	}
 	return j, true, nil
@@ -333,6 +339,38 @@ func provenReplace(path string, raw []byte, proof string) error {
 	return nil
 }
 
+// provenDelete unlinks path only while the inode whose content matched proof
+// is still the one at path, mirroring provenReplace. Without unlink-by-inode
+// the check/unlink pair cannot be fully atomic; the window is narrowed to the
+// unlink syscall itself. Foreign content is never destroyed.
+func provenDelete(path, proof string) error {
+	file, err := deployment.OpenPrivate(path)
+	if err != nil {
+		return err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return err
+	}
+	current, err := io.ReadAll(file)
+	file.Close()
+	if err != nil {
+		return err
+	}
+	if digest(current) != proof {
+		return fmt.Errorf("%w: %s", ErrOwnedUnitModified, filepath.Base(path))
+	}
+	latest, err := ownedStat(path)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(info, latest) {
+		return fmt.Errorf("%w: %s", ErrOwnedUnitCollision, filepath.Base(path))
+	}
+	return os.Remove(path)
+}
+
 // rollbackOwnedUnitWrites restores the pre-apply state after a failed
 // pre-commit check: units the write created are removed, overwritten units get
 // their snapshotted content back. Files whose content no longer matches the
@@ -366,7 +404,7 @@ func (b Backend) rollbackOwnedUnitWrites(ctx context.Context, home, systemctl st
 			changed = true
 			continue
 		}
-		if err := deployment.AtomicWrite(path, plan.prior[name]); err != nil {
+		if err := ownedAtomicWrite(path, plan.prior[name]); err != nil {
 			failed = append(failed, name)
 		}
 		changed = true
@@ -396,17 +434,11 @@ func (b Backend) applyOwnedUnitDeletes(ctx context.Context, home string, j unitJ
 	removed := false
 	for _, name := range names {
 		path := filepath.Join(dir, name)
-		current, err := privateRead(path)
+		err := provenDelete(path, j.Deletes[name])
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
-			return err
-		}
-		if digest(current) != j.Deletes[name] {
-			return fmt.Errorf("%w: %s", ErrOwnedUnitModified, name)
-		}
-		if err := os.Remove(path); err != nil {
 			return err
 		}
 		removed = true

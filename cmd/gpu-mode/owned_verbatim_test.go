@@ -142,3 +142,43 @@ func TestConfigureCarriesOwnedProfilesVerbatim(t *testing.T) {
 		}
 	})
 }
+
+// TestAdoptedOwnedFileBindingStaysBehindGate mirrors the preflight orphan
+// scan: an owned profile converted to adopted while keeping its launch file is
+// still setup-managed, so configure cannot alter or drop it.
+func TestAdoptedOwnedFileBindingStaysBehindGate(t *testing.T) {
+	owned := ownedCLIProfile()
+	converted := owned
+	nativeCopy := *owned.NativeModel
+	nativeCopy.Owned = nil
+	converted.NativeModel = &nativeCopy
+	accepted := control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{converted}}
+
+	t.Run("carried verbatim accepted", func(t *testing.T) {
+		if err := ownedProfilesVerbatim(accepted, accepted.Clone()); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("removal rejected", func(t *testing.T) {
+		next := control.Catalog{Version: 2}
+		if err := ownedProfilesVerbatim(accepted, next); !errors.Is(err, control.ErrOwnedCatalogManagedBySetup) {
+			t.Fatalf("adopted owned-file binding removed: %v", err)
+		}
+	})
+	t.Run("modification rejected", func(t *testing.T) {
+		next := accepted.Clone()
+		next.Profiles[0].NativeModel.Model = "vision-q6"
+		if err := ownedProfilesVerbatim(accepted, next); !errors.Is(err, control.ErrOwnedCatalogManagedBySetup) {
+			t.Fatalf("adopted owned-file binding modified: %v", err)
+		}
+	})
+	t.Run("unrelated adopted profile unmanaged", func(t *testing.T) {
+		plain := control.WorkloadProfile{ID: "chat", NativeModel: &control.NativeModel{LaunchFile: "/etc/systemd/user/ollama.service"}}
+		a := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{plain}}
+		n := a.Clone()
+		n.Profiles[0].NativeModel.Model = "other"
+		if err := ownedProfilesVerbatim(a, n); err != nil {
+			t.Fatal(err)
+		}
+	})
+}

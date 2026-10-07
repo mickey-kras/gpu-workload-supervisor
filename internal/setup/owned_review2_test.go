@@ -61,7 +61,7 @@ func TestRollbackRefusesForeignModifiedUnit(t *testing.T) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := backend.applyOwnedUnitWrites(context.Background(), home, plan, newOwnedUnitJournal(plan)); err != nil {
+	if err := backend.applyOwnedUnitWrites(context.Background(), home, plan, newOwnedUnitJournal(plan, r.Profile.StatePath)); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, profile.Unit), []byte("foreign"), 0600); err != nil {
@@ -182,7 +182,7 @@ func TestResumeReloadsAfterCompletedDelete(t *testing.T) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		t.Fatal(err)
 	}
-	journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{profile.Unit: digest(raw)}, Phase: ownedJournalCommitted}
+	journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{}, Deletes: map[string]string{profile.Unit: digest(raw)}, Phase: ownedJournalCommitted}
 	if err := writeOwnedUnitJournal(root, journal); err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func TestMaintenanceResumeCompletesCrashWindowApply(t *testing.T) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		t.Fatal(err)
 	}
-	journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalPending}
+	journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalPending}
 	if err := writeOwnedUnitJournal(root, journal); err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func TestRollbackRestoresOverwrittenUnit(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := unitPlan{Writes: map[string][]byte{profile.Unit: raw}, proven: map[string]string{profile.Unit: digest([]byte("old render"))}, prior: map[string][]byte{}, absent: map[string]bool{}, written: map[string]bool{}}
-	if err := backend.applyOwnedUnitWrites(context.Background(), home, plan, newOwnedUnitJournal(plan)); err != nil {
+	if err := backend.applyOwnedUnitWrites(context.Background(), home, plan, newOwnedUnitJournal(plan, r.Profile.StatePath)); err != nil {
 		t.Fatal(err)
 	}
 	if err := backend.rollbackOwnedUnitWrites(context.Background(), home, r.Profile.SystemctlPath, plan); err != nil {
@@ -374,7 +374,7 @@ func TestRollbackReportsReloadFailure(t *testing.T) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := backend.applyOwnedUnitWrites(context.Background(), home, plan, newOwnedUnitJournal(plan)); err != nil {
+	if err := backend.applyOwnedUnitWrites(context.Background(), home, plan, newOwnedUnitJournal(plan, r.Profile.StatePath)); err != nil {
 		t.Fatal(err)
 	}
 	if err := backend.rollbackOwnedUnitWrites(context.Background(), home, r.Profile.SystemctlPath, plan); err == nil {
@@ -410,7 +410,7 @@ func TestRollbackLeavesUnchangedUnitByteIdentical(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := unitPlan{Writes: map[string][]byte{vision.Unit: visionRaw, code.Unit: codeRaw}, proven: map[string]string{}, written: map[string]bool{}, prior: map[string][]byte{}, absent: map[string]bool{}}
-	if err := backend.applyOwnedUnitWrites(ctx, home, plan, newOwnedUnitJournal(plan)); err != nil {
+	if err := backend.applyOwnedUnitWrites(ctx, home, plan, newOwnedUnitJournal(plan, r.Profile.StatePath)); err != nil {
 		t.Fatal(err)
 	}
 	if err := backend.rollbackOwnedUnitWrites(ctx, home, r.Profile.SystemctlPath, plan); err != nil {
@@ -442,7 +442,7 @@ func TestResumeRejectsMismatchedRecoveryRequest(t *testing.T) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		t.Fatal(err)
 	}
-	journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalCommitted}
+	journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalCommitted}
 	if err := writeOwnedUnitJournal(root, journal); err != nil {
 		t.Fatal(err)
 	}
@@ -502,7 +502,7 @@ func TestJournalRetireSyncsDirectories(t *testing.T) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		t.Fatal(err)
 	}
-	journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalCommitted}
+	journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalCommitted}
 	if err := writeOwnedUnitJournal(root, journal); err != nil {
 		t.Fatal(err)
 	}
@@ -625,8 +625,10 @@ func TestApplyRollsBackWhenReloadFails(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(ownedUnitDirectory(home), profile.Unit)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("unit left behind after failed reload")
 	}
-	if _, present, _ := readOwnedUnitJournal(filepath.Join(home, ".config/gpu-workload-supervisor")); present {
-		t.Fatal("journal left behind after failed reload")
+	// The rollback reload fails too, so the pending journal must survive for
+	// the next apply to finish recovery.
+	if _, present, _ := readOwnedUnitJournal(filepath.Join(home, ".config/gpu-workload-supervisor")); !present {
+		t.Fatal("journal dropped while rollback could not complete")
 	}
 }
 
@@ -693,7 +695,7 @@ func TestResumeRecoversPendingWritesWithoutFence(t *testing.T) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		t.Fatal(err)
 	}
-	journal := unitJournal{Version: 1, Writes: map[string]string{stale.Unit: digest(staleRaw)}, Deletes: map[string]string{}, Phase: ownedJournalPending}
+	journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{stale.Unit: digest(staleRaw)}, Deletes: map[string]string{}, Phase: ownedJournalPending}
 	if err := writeOwnedUnitJournal(root, journal); err != nil {
 		t.Fatal(err)
 	}
@@ -729,7 +731,7 @@ func TestResumeRestoresOverwrittenPendingWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
-	journal := unitJournal{Version: 1, Writes: map[string]string{profile.Unit: digest(updatedRaw)}, Deletes: map[string]string{}, Phase: ownedJournalPending}
+	journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{profile.Unit: digest(updatedRaw)}, Deletes: map[string]string{}, Phase: ownedJournalPending}
 	if err := writeOwnedUnitJournal(root, journal); err != nil {
 		t.Fatal(err)
 	}
@@ -760,7 +762,7 @@ func TestResumeRefusesTamperedPendingWrite(t *testing.T) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		t.Fatal(err)
 	}
-	journal := unitJournal{Version: 1, Writes: map[string]string{stale.Unit: digest([]byte("journaled render"))}, Deletes: map[string]string{}, Phase: ownedJournalPending}
+	journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{stale.Unit: digest([]byte("journaled render"))}, Deletes: map[string]string{}, Phase: ownedJournalPending}
 	if err := writeOwnedUnitJournal(root, journal); err != nil {
 		t.Fatal(err)
 	}
@@ -879,7 +881,7 @@ func TestDiscoveryReportsUntrustedOwnedUnit(t *testing.T) {
 // TestFinalizeDeletesSyncUnitDir makes the finalize path's unlinks durable
 // before the journal is retired.
 func TestFinalizeDeletesSyncUnitDir(t *testing.T) {
-	backend, home, _ := fixture(t)
+	backend, home, r := fixture(t)
 	var synced []string
 	restore := syncDir
 	syncDir = func(path string) error { synced = append(synced, path); return nil }
@@ -892,7 +894,7 @@ func TestFinalizeDeletesSyncUnitDir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, stale.Unit), staleRaw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalCommitted}
+	journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalCommitted}
 	if err := backend.applyOwnedUnitDeletes(context.Background(), home, journal); err != nil {
 		t.Fatal(err)
 	}
@@ -912,14 +914,14 @@ func TestRollbackSyncsUnitDirBeforeJournalClear(t *testing.T) {
 	defer func() { syncDir = restore }()
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
 	plan := unitPlan{Writes: map[string][]byte{profile.Unit: raw}, proven: map[string]string{}, prior: map[string][]byte{}, absent: map[string]bool{}, written: map[string]bool{}}
-	if err := backend.applyOwnedUnitWrites(context.Background(), home, plan, newOwnedUnitJournal(plan)); err != nil {
+	if err := backend.applyOwnedUnitWrites(context.Background(), home, plan, newOwnedUnitJournal(plan, r.Profile.StatePath)); err != nil {
 		t.Fatal(err)
 	}
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
 	if err := os.MkdirAll(root, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeOwnedUnitJournal(root, newOwnedUnitJournal(plan)); err != nil {
+	if err := writeOwnedUnitJournal(root, newOwnedUnitJournal(plan, r.Profile.StatePath)); err != nil {
 		t.Fatal(err)
 	}
 	if err := backend.abortOwnedUnitWrites(context.Background(), home, root, r, plan, errors.New("precheck failed")); err == nil {
@@ -973,5 +975,208 @@ func TestPlanPreviewFailsOnUnreadableUnitFile(t *testing.T) {
 	}
 	if _, err := backend.Plan(home, r); err == nil {
 		t.Fatal("unreadable unit file previewed")
+	}
+}
+
+// TestResumeRejectsForeignStatePathJournal reproduces the pre-maintenance
+// crash followed by a relocated request: the journal is bound to its original
+// state database and the mismatched request fails without consuming anything.
+func TestResumeRejectsForeignStatePathJournal(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	stale, staleRaw := ownedFixtureProfile(t, home, "stale", 9300)
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stale.Unit), staleRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	journal := unitJournal{Version: 1, StatePath: filepath.Join(home, "original/state.db"), Writes: map[string]string{stale.Unit: digest(staleRaw)}, Deletes: map[string]string{}, Phase: ownedJournalPending}
+	if err := writeOwnedUnitJournal(root, journal); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.resumeOwnedUnitJournal(context.Background(), home, r); !errors.Is(err, ErrOwnedJournalStateMismatch) {
+		t.Fatalf("foreign state path consumed journal: %v", err)
+	}
+	if _, present, _ := readOwnedUnitJournal(root); !present {
+		t.Fatal("journal consumed by mismatched request")
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, stale.Unit))
+	if string(data) != string(staleRaw) {
+		t.Fatal("journaled unit mutated by mismatched request")
+	}
+}
+
+// TestJournalWithoutStatePathRejected fails closed on journals that predate
+// the state-path binding.
+func TestJournalWithoutStatePathRejected(t *testing.T) {
+	root := t.TempDir()
+	journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{}, Phase: ownedJournalPending}
+	if err := writeOwnedUnitJournal(root, journal); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := readOwnedUnitJournal(root); err == nil {
+		t.Fatal("journal without statePath accepted")
+	}
+}
+
+// TestRollbackFailureRetainsPendingJournal injects a restore fault: the abort
+// fails loudly, the journal survives, and the next apply replays recovery.
+func TestRollbackFailureRetainsPendingJournal(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	ctx := context.Background()
+	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	// Fault: restoring the committed render fails transiently.
+	restore := ownedAtomicWrite
+	ownedAtomicWrite = func(path string, data []byte) error {
+		if string(data) == string(raw) {
+			return errors.New("transient write fault")
+		}
+		return restore(path, data)
+	}
+	defer func() { ownedAtomicWrite = restore }()
+	updated, updatedRaw := ownedFixtureProfile(t, home, "vision", 9101)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{updated}}
+	r.ExpectedRevision = currentRevision(t, r)
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{err: errors.New("busy")}, nil }
+	if err := backend.Apply(ctx, home, r); err == nil {
+		t.Fatal("apply succeeded despite rollback fault")
+	}
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	ownedAtomicWrite = restore
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	if _, present, _ := readOwnedUnitJournal(root); !present {
+		t.Fatal("journal dropped while rollback failed")
+	}
+	// Recovery replays: the committed render is restored and the journal retired.
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.ExpectedRevision = currentRevision(t, r)
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(ownedUnitDirectory(home), profile.Unit))
+	if string(data) != string(raw) {
+		t.Fatal("committed render not restored by recovery")
+	}
+	_ = updatedRaw
+}
+
+// TestResumeReloadsWhenPendingRecoveryMatchesDisk refreshes systemd even when
+// recovery finds nothing to mutate: the journaled write may already have been
+// loaded.
+func TestResumeReloadsWhenPendingRecoveryMatchesDisk(t *testing.T) {
+	backend, home, r := fixture(t)
+	var verified []string
+	backend.runCommand = recordingOwnedCommand(&verified)
+	ctx := context.Background()
+	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	// Crash window: journaled write landed but the file already matches the
+	// accepted render (rollback restored bytes, reload never ran).
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{profile.Unit: digest([]byte("uncommitted render"))}, Deletes: map[string]string{}, Phase: ownedJournalPending}
+	if err := writeOwnedUnitJournal(root, journal); err != nil {
+		t.Fatal(err)
+	}
+	r.ExpectedRevision = currentRevision(t, r)
+	verified = nil
+	if err := backend.resumeOwnedUnitJournal(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	if len(verified) != 1 || verified[0] != profile.Unit {
+		t.Fatalf("matching recovery skipped reload: %v", verified)
+	}
+	if _, present, _ := readOwnedUnitJournal(root); present {
+		t.Fatal("journal not retired")
+	}
+	data, _ := os.ReadFile(filepath.Join(ownedUnitDirectory(home), profile.Unit))
+	if string(data) != string(raw) {
+		t.Fatal("accepted render mutated")
+	}
+}
+
+// TestProvenDeleteRejectsConcurrentDisplacement injects a replace between the
+// delete proof and the unlink: the foreign inode survives.
+func TestProvenDeleteRejectsConcurrentDisplacement(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gws-owned-vision.service")
+	if err := os.WriteFile(path, []byte("proven render"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	pin, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pin.Close()
+	restore := ownedStat
+	ownedStat = func(p string) (os.FileInfo, error) {
+		if err := os.Remove(p); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(p, []byte("concurrent render"), 0600); err != nil {
+			return nil, err
+		}
+		return os.Stat(p)
+	}
+	defer func() { ownedStat = restore }()
+	if err := provenDelete(path, digest([]byte("proven render"))); !errors.Is(err, ErrOwnedUnitCollision) {
+		t.Fatalf("concurrent displacement deleted: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "concurrent render" {
+		t.Fatal("foreign content destroyed")
+	}
+}
+
+// TestProvenDeleteFailsOnProofMismatch never unlinks unproven content.
+func TestProvenDeleteFailsOnProofMismatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gws-owned-vision.service")
+	if err := os.WriteFile(path, []byte("unexpected"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := provenDelete(path, digest([]byte("proven render"))); !errors.Is(err, ErrOwnedUnitModified) {
+		t.Fatalf("unproven content deleted: %v", err)
+	}
+}
+
+// TestDiscoveryAccountsAdoptedOwnedBinding mirrors the runtime orphan scan: an
+// exact adopted binding manages the file, a drifted one does not.
+func TestDiscoveryAccountsAdoptedOwnedBinding(t *testing.T) {
+	home := t.TempDir()
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte("[Unit]\nDescription=converted\n")
+	if err := os.WriteFile(filepath.Join(dir, "gws-owned-vision.service"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	adopted := control.WorkloadProfile{
+		ID: "vision", Label: "Vision", Adapter: "systemd", Unit: "gws-owned-vision.service",
+		Cgroup: "/user.slice/x", HealthURL: "http://127.0.0.1:9100/health",
+		NativeModel: &control.NativeModel{Runtime: "llama.cpp", Instance: "second", Model: "vision", Endpoint: "http://127.0.0.1:9100", LaunchFile: filepath.Join(dir, "gws-owned-vision.service"), LaunchSHA256: digest(raw)},
+	}
+	owned := discoverOwnedUnits(home, control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{adopted}})
+	if len(owned) != 1 || owned[0].State != "managed" {
+		t.Fatalf("adopted binding not accounted: %+v", owned)
+	}
+	adopted.NativeModel.LaunchSHA256 = digest([]byte("drifted"))
+	owned = discoverOwnedUnits(home, control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{adopted}})
+	if len(owned) != 1 || owned[0].State != "orphaned" {
+		t.Fatalf("drifted binding misclassified: %+v", owned)
 	}
 }
