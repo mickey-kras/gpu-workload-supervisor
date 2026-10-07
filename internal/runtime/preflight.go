@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -36,18 +38,28 @@ func (m *SystemdManager) Preflight(ctx context.Context) error {
 			return err
 		}
 	}
-	return m.preflightOwned(ctx, m.ownedUnitDirectory())
+	unitDir, err := m.ownedUnitDirectory()
+	if err != nil {
+		return err
+	}
+	return m.preflightOwned(ctx, unitDir)
 }
 
-func (m *SystemdManager) ownedUnitDirectory() string {
+// lookupAccountID is a seam for account-resolution faults.
+var lookupAccountID = user.LookupId
+
+// ownedUnitDirectory resolves the setup-managed unit directory from the
+// account record of the running euid — the same source setup uses — never
+// from the ambient HOME, and fails closed when the account is unresolvable.
+func (m *SystemdManager) ownedUnitDirectory() (string, error) {
 	if m.config.OwnedUnitDir != "" {
-		return m.config.OwnedUnitDir
+		return m.config.OwnedUnitDir, nil
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
+	account, err := lookupAccountID(strconv.Itoa(os.Geteuid()))
+	if err != nil || account.HomeDir == "" {
+		return "", fmt.Errorf("owned unit directory unresolvable for euid %d: %w", os.Geteuid(), err)
 	}
-	return filepath.Join(home, ".config/systemd/user")
+	return filepath.Join(account.HomeDir, ".config/systemd/user"), nil
 }
 
 // preflightOwned fails closed on supervisor-owned unit files the current

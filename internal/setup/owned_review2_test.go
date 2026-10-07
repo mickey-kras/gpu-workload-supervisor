@@ -455,6 +455,13 @@ func TestResumeRejectsMismatchedRecoveryRequest(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "activation.json"), fence, 0600); err != nil {
 		t.Fatal(err)
 	}
+	// The fence proves the record current: a different request is rejected.
+	if err := os.MkdirAll(filepath.Dir(r.Profile.StatePath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := deployment.Write(r.Profile.StatePath, deployment.Marker{Version: 1, Release: deployment.Release, Maintenance: true}); err != nil {
+		t.Fatal(err)
+	}
 	if err := backend.resumeOwnedUnitJournal(context.Background(), home, r); err == nil {
 		t.Fatal("mismatched recovery request consumed the journal")
 	}
@@ -1295,5 +1302,85 @@ func TestResumeKeepsAdoptedBindingDuringPendingRecovery(t *testing.T) {
 	data, _ = os.ReadFile(filepath.Join(ownedUnitDirectory(home), profile.Unit))
 	if string(data) != "tampered" {
 		t.Fatal("drifted file destroyed")
+	}
+}
+
+// TestPlanPreviewListsDroppedAdoptedOwnedBindingRemoval keeps preview honest:
+// dropping an adopted binding deletes the preserved file, so the preview must
+// say so before Apply runs.
+func TestPlanPreviewListsDroppedAdoptedOwnedBindingRemoval(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	ctx := context.Background()
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	adopted := profile
+	nativeCopy := *profile.NativeModel
+	nativeCopy.Owned = nil
+	adopted.NativeModel = &nativeCopy
+	r.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{adopted}}
+	r.ExpectedRevision = currentRevision(t, r)
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	// Conversion alone must not preview a removal (the binding keeps the file).
+	preview, err := backend.Plan(home, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changesContain(preview.Changes, "Remove supervisor-owned unit "+profile.Unit) {
+		t.Fatalf("kept binding previewed as removal: %v", preview.Changes)
+	}
+	// Dropping the binding previews the removal Apply will perform.
+	r.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health"}}}
+	preview, err = backend.Plan(home, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changesContain(preview.Changes, "Remove supervisor-owned unit "+profile.Unit) {
+		t.Fatalf("dropped adopted binding missing from preview: %v", preview.Changes)
+	}
+}
+
+// TestResumeIgnoresStaleActivationRecordWithoutFence completes the crash
+// chain: a stale activation.json from a previous successful apply must not
+// block recovery of a newer interrupted activation once its fence is gone.
+func TestResumeIgnoresStaleActivationRecordWithoutFence(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	ctx := context.Background()
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	// Stale record from an earlier request (crash before its removal).
+	stale, _ := json.Marshal(activation{Request: ownedFixtureRequest(t, home)})
+	if err := os.WriteFile(filepath.Join(root, "activation.json"), stale, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Newer activation crashed after journal creation, before enterMaintenance:
+	// pending journal, no fence, stale record above.
+	stray, strayRaw := ownedFixtureProfile(t, home, "stray", 9400)
+	if err := os.WriteFile(filepath.Join(ownedUnitDirectory(home), stray.Unit), strayRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{stray.Unit: digest(strayRaw)}, Deletes: map[string]string{}, Phase: ownedJournalPending}
+	if err := writeOwnedUnitJournal(root, journal); err != nil {
+		t.Fatal(err)
+	}
+	r.ExpectedRevision = currentRevision(t, r)
+	if err := backend.resumeOwnedUnitJournal(ctx, home, r); err != nil {
+		t.Fatalf("stale activation record blocked recovery: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(ownedUnitDirectory(home), stray.Unit)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("uncommitted write not recovered")
+	}
+	if _, present, _ := readOwnedUnitJournal(root); present {
+		t.Fatal("journal not retired")
 	}
 }

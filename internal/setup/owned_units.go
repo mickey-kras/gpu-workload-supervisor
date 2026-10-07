@@ -93,17 +93,52 @@ func ownedUnitDirectory(home string) string {
 // content-proven at plan time: a file whose digest differs from the accepted
 // profile's deterministic render is retained and the apply fails before any
 // commit, so file and catalog profile both survive.
-func (b Backend) planOwnedUnits(req Request, accepted control.CatalogSnapshot, home string) (unitPlan, error) {
-	plan := unitPlan{Writes: map[string][]byte{}, proven: map[string]string{}, prior: map[string][]byte{}, absent: map[string]bool{}, written: map[string]bool{}}
-	for _, p := range accepted.Catalog.Profiles {
-		if p.NativeModel == nil || p.NativeModel.Owned == nil {
+// ownedUnitEntry is one unit file the accepted catalog accounts for, with
+// the content proof that authorizes its deletion.
+type ownedUnitEntry struct {
+	unit  string
+	path  string
+	proof string
+}
+
+// acceptedOwnedUnitEntries enumerates unit files the accepted catalog
+// accounts for — owned profiles and exact adopted bindings — so plan and
+// preview enumerate the same set under the same rule.
+func acceptedOwnedUnitEntries(accepted control.Catalog, home string) ([]ownedUnitEntry, error) {
+	dir := ownedUnitDirectory(home)
+	var entries []ownedUnitEntry
+	for _, p := range accepted.Profiles {
+		if p.NativeModel == nil {
 			continue
 		}
-		raw, err := ownedRenderChecked(p)
-		if err != nil {
-			return plan, err
+		if p.NativeModel.Owned != nil {
+			raw, err := ownedRenderChecked(p)
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, ownedUnitEntry{unit: p.Unit, path: filepath.Join(dir, p.Unit), proof: digest(raw)})
+			continue
 		}
-		plan.proven[p.Unit] = digest(raw)
+		if p.AdoptedOwnedFile() {
+			unit := filepath.Base(p.NativeModel.LaunchFile)
+			path := filepath.Join(dir, unit)
+			if p.NativeModel.LaunchFile != path {
+				continue
+			}
+			entries = append(entries, ownedUnitEntry{unit: unit, path: path, proof: p.NativeModel.LaunchSHA256})
+		}
+	}
+	return entries, nil
+}
+
+func (b Backend) planOwnedUnits(req Request, accepted control.CatalogSnapshot, home string) (unitPlan, error) {
+	plan := unitPlan{Writes: map[string][]byte{}, proven: map[string]string{}, prior: map[string][]byte{}, absent: map[string]bool{}, written: map[string]bool{}}
+	entries, err := acceptedOwnedUnitEntries(accepted.Catalog, home)
+	if err != nil {
+		return plan, err
+	}
+	for _, e := range entries {
+		plan.proven[e.unit] = e.proof
 	}
 	qualify := b.qualifyOwned
 	if qualify == nil {
@@ -132,48 +167,31 @@ func (b Backend) planOwnedUnits(req Request, accepted control.CatalogSnapshot, h
 		plan.Writes[p.Unit] = raw
 	}
 	deleted := map[string]bool{}
-	for _, p := range accepted.Catalog.Profiles {
-		if p.NativeModel == nil || (p.NativeModel.Owned == nil && !p.AdoptedOwnedFile()) {
+	for _, e := range entries {
+		if _, kept := plan.Writes[e.unit]; kept {
 			continue
 		}
-		unit := p.Unit
-		proof := plan.proven[unit]
-		if p.NativeModel.Owned == nil {
-			// Adopted profile still binding the owned-unit file: exact path
-			// and proven digest, the same rule preflight and discovery apply.
-			unit = filepath.Base(p.NativeModel.LaunchFile)
-			if p.NativeModel.LaunchFile != filepath.Join(ownedUnitDirectory(home), unit) {
-				continue
-			}
-			proof = p.NativeModel.LaunchSHA256
-		}
-		// Record the proof so the journal and delete stages share it.
-		plan.proven[unit] = proof
-		if _, kept := plan.Writes[unit]; kept {
-			continue
-		}
-		if deleted[unit] {
+		if deleted[e.unit] {
 			// Shared Ollama pairs carry one unit file across profiles.
 			continue
 		}
-		path := filepath.Join(ownedUnitDirectory(home), unit)
-		if ownedUnitStillReferenced(req.Catalog, path, proof) {
+		if ownedUnitStillReferenced(req.Catalog, e.path, e.proof) {
 			// The requested catalog still claims this exact file (for example
 			// an owned profile converted to adopted); keep it.
 			continue
 		}
-		data, err := privateRead(path)
+		data, err := privateRead(e.path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			return plan, err
 		}
-		if digest(data) != proof {
-			return plan, fmt.Errorf("%w: %s", ErrOwnedUnitModified, unit)
+		if digest(data) != e.proof {
+			return plan, fmt.Errorf("%w: %s", ErrOwnedUnitModified, e.unit)
 		}
-		plan.Deletes = append(plan.Deletes, unit)
-		deleted[unit] = true
+		plan.Deletes = append(plan.Deletes, e.unit)
+		deleted[e.unit] = true
 	}
 	sort.Strings(plan.Deletes)
 	return plan, nil

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -292,8 +294,9 @@ func TestPreflightOrphanScan(t *testing.T) {
 		t.Fatal("unreadable unit directory accepted")
 	}
 	m.config.OwnedUnitDir = ""
-	if got := m.ownedUnitDirectory(); got == "" {
-		t.Fatal("default unit directory unresolved")
+	got, err := m.ownedUnitDirectory()
+	if err != nil || got == "" {
+		t.Fatalf("default unit directory unresolved: %v", err)
 	}
 }
 
@@ -365,5 +368,38 @@ func TestPreflightAccountsAdoptedOwnedUnitBinding(t *testing.T) {
 	}
 	if err := manager().preflightOwned(t.Context(), dir); !errors.Is(err, ErrOrphanedOwnedUnit) {
 		t.Fatalf("stray unit accounted: %v", err)
+	}
+}
+
+// TestPreflightFailsClosedWhenAccountUnresolvable proves the orphan scan is
+// never silently skipped: when the account record cannot be resolved the
+// preflight errors instead of disabling the scan.
+func TestPreflightFailsClosedWhenAccountUnresolvable(t *testing.T) {
+	m := strictManager(t, stoppedRunner())
+	m.config.OwnedUnitDir = ""
+	restore := lookupAccountID
+	lookupAccountID = func(string) (*user.User, error) { return nil, errors.New("no account record") }
+	defer func() { lookupAccountID = restore }()
+	if err := m.Preflight(t.Context()); err == nil {
+		t.Fatal("unresolvable account silently disabled the orphan scan")
+	}
+}
+
+// TestPreflightDerivesHomeFromAccountRecord ignores the ambient HOME: the scan
+// directory comes from the passwd entry for the euid, same as setup.
+func TestPreflightDerivesHomeFromAccountRecord(t *testing.T) {
+	m := strictManager(t, stoppedRunner())
+	m.config.OwnedUnitDir = ""
+	t.Setenv("HOME", "/nonexistent-home")
+	account, err := user.LookupId(strconv.Itoa(os.Geteuid()))
+	if err != nil || account.HomeDir == "" {
+		t.Skip("no account record for euid")
+	}
+	got, err := m.ownedUnitDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != filepath.Join(account.HomeDir, ".config/systemd/user") {
+		t.Fatalf("scan derived from ambient HOME: %s", got)
 	}
 }

@@ -80,33 +80,23 @@ func (b Backend) plannedOwnedUnitRemovals(home string, request Request) ([]strin
 	if err != nil {
 		return nil, err
 	}
-	kept := map[string]bool{}
-	for _, p := range request.Catalog.Profiles {
-		if p.NativeModel != nil && p.NativeModel.Owned != nil {
-			kept[p.Unit] = true
-		}
+	entries, err := acceptedOwnedUnitEntries(snapshot.Catalog, home)
+	if err != nil {
+		return nil, err
 	}
-	dir := ownedUnitDirectory(home)
 	var removals []string
-	for _, p := range snapshot.Catalog.Profiles {
-		if p.NativeModel == nil || p.NativeModel.Owned == nil || kept[p.Unit] {
+	for _, e := range entries {
+		if ownedUnitStillReferenced(request.Catalog, e.path, e.proof) {
 			continue
 		}
-		raw, err := ownedRenderChecked(p)
-		if err != nil {
-			return nil, err
-		}
-		path := filepath.Join(dir, p.Unit)
-		if ownedUnitStillReferenced(request.Catalog, path, digest(raw)) {
-			continue
-		}
-		if _, err := privateRead(path); errors.Is(err, os.ErrNotExist) {
+		if _, err := privateRead(e.path); errors.Is(err, os.ErrNotExist) {
 			continue
 		} else if err != nil {
 			return nil, err
 		}
-		removals = append(removals, p.Unit)
+		removals = append(removals, e.unit)
 	}
+	sort.Strings(removals)
 	return removals, nil
 }
 
@@ -188,14 +178,18 @@ func (b Backend) resumeOwnedUnitJournal(ctx context.Context, home string, req Re
 	if journal.StatePath != req.Profile.StatePath {
 		return ErrOwnedJournalStateMismatch
 	}
-	// A different request must never consume the interrupted activation's
-	// journal: its proven deletes belong to the recorded original request.
-	if err := requireMatchingActivation(root, req); err != nil {
-		return err
-	}
 	marker, err := deployment.Read(req.Profile.StatePath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
+	}
+	// The activation record is enforced only while the maintenance fence proves
+	// it current: a stale record left by a crash after journal retire must not
+	// block recovery of a newer interrupted activation. The journal's own
+	// state-path binding above still rejects foreign databases.
+	if marker.Maintenance {
+		if err := requireMatchingActivation(root, req); err != nil {
+			return err
+		}
 	}
 	if journal.Phase == ownedJournalPending {
 		if !marker.Maintenance {
