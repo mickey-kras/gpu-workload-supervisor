@@ -441,8 +441,19 @@ func TestRemoveIntegrationFailsLoudlyWhenTimerStopFails(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, ".config/gpu-workload-supervisor"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := backend.enableIdleTimer(ctx, home, r.Profile.SystemctlPath); err != nil {
-		t.Fatal(err)
+	for _, enable := range []func() error{
+		func() error { return backend.enableReconciliation(ctx, home, r.Profile.SystemctlPath) },
+		func() error { return backend.enableIdleTimer(ctx, home, r.Profile.SystemctlPath) },
+	} {
+		if err := enable(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, e := range []unitEnablement{reconcileEnablement, idleTimerEnablement} {
+		link := filepath.Join(home, ".config/systemd/user", e.wantsDirectory, e.unit)
+		if err := os.Symlink("/usr/lib/systemd/user/"+e.unit, link); err != nil {
+			t.Fatal(err)
+		}
 	}
 	backend.runCommand = func(context.Context, string, ...string) ([]byte, error) {
 		return nil, errors.New("exit status 1")
@@ -450,7 +461,58 @@ func TestRemoveIntegrationFailsLoudlyWhenTimerStopFails(t *testing.T) {
 	if err := backend.RemoveIntegration(ctx, home); err == nil || !strings.Contains(err.Error(), "stop idle timer") {
 		t.Fatalf("failed stop accepted: %v", err)
 	}
-	if _, err := os.Lstat(filepath.Join(home, ".config/gpu-workload-supervisor", idleTimerEnablement.recordName)); err != nil {
-		t.Fatal("ownership record lost after failed stop", err)
+	// All-or-nothing: a failed stop leaves BOTH integrations fully intact.
+	for _, e := range []unitEnablement{reconcileEnablement, idleTimerEnablement} {
+		if _, err := os.Lstat(filepath.Join(home, ".config/gpu-workload-supervisor", e.recordName)); err != nil {
+			t.Fatalf("record lost after failed stop: %s (%v)", e.recordName, err)
+		}
+		if _, err := os.Lstat(filepath.Join(home, ".config/systemd/user", e.wantsDirectory, e.unit)); err != nil {
+			t.Fatalf("link lost after failed stop: %s (%v)", e.unit, err)
+		}
+	}
+}
+
+func TestRemoveIntegrationLeavesEverythingIntactOnMalformedTimerRecord(t *testing.T) {
+	backend, home, r := fixture(t)
+	ctx := context.Background()
+	if err := os.MkdirAll(filepath.Join(home, ".config/gpu-workload-supervisor"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.enableReconciliation(ctx, home, r.Profile.SystemctlPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.enableIdleTimer(ctx, home, r.Profile.SystemctlPath); err != nil {
+		t.Fatal(err)
+	}
+	reconcileLink := filepath.Join(home, ".config/systemd/user/default.target.wants", reconcileUnit)
+	if err := os.Symlink("/usr/lib/systemd/user/"+reconcileUnit, reconcileLink); err != nil {
+		t.Fatal(err)
+	}
+	// Corrupt the timer record after enablement.
+	timerRecord := filepath.Join(home, ".config/gpu-workload-supervisor", idleTimerEnablement.recordName)
+	if err := os.WriteFile(timerRecord, []byte("garbage"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stopped := false
+	backend.runCommand = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) == 3 && args[1] == "stop" {
+			stopped = true
+		}
+		return []byte("ok\n"), nil
+	}
+	if err := backend.RemoveIntegration(ctx, home); err == nil {
+		t.Fatal("malformed timer record accepted")
+	}
+	if stopped {
+		t.Fatal("timer stopped before its record was validated")
+	}
+	if _, err := os.Lstat(reconcileLink); err != nil {
+		t.Fatal("reconcile link lost", err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".config/gpu-workload-supervisor", reconcileEnablement.recordName)); err != nil {
+		t.Fatal("reconcile record lost", err)
+	}
+	if _, err := os.Lstat(timerRecord); err != nil {
+		t.Fatal("timer ownership evidence lost", err)
 	}
 }

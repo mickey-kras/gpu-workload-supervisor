@@ -445,73 +445,92 @@ func RemoveIntegration(home string) error {
 	return SystemBackend().RemoveIntegration(context.Background(), home)
 }
 
+// RemoveIntegration is all-or-nothing: both integrations (records and links)
+// are validated and the idle timer is stopped before either owned link is
+// deleted, so a failed removal leaves the installation fully intact.
 func (b Backend) RemoveIntegration(ctx context.Context, home string) error {
-	if err := removeIntegration(home, reconcileEnablement); err != nil {
+	reconcile, err := inspectIntegration(home, reconcileEnablement)
+	if err != nil {
+		return err
+	}
+	idle, err := inspectIntegration(home, idleTimerEnablement)
+	if err != nil {
 		return err
 	}
 	// A login may have activated the idle timer: removing only the wants link
 	// leaves the loaded unit firing every 60 seconds until the user manager
 	// exits, and the preserved operator profile keeps the service condition
-	// true. Stop the timer before removing its link; if it was never enabled
+	// true. Stop the timer before deleting anything; if it was never enabled
 	// there is nothing to stop. (The reconcile unit is a login-triggered
 	// oneshot, so nothing recurring persists for it.)
-	recorded, err := integrationRecorded(home, idleTimerEnablement.recordName)
-	if err != nil {
-		return err
-	}
-	if recorded {
+	if idle.recorded {
 		if _, err := b.runCommand(ctx, "/usr/bin/systemctl", "--user", "stop", idleTimerUnit); err != nil {
 			return fmt.Errorf("stop idle timer: %w", err)
 		}
 	}
-	return removeIntegration(home, idleTimerEnablement)
-}
-
-func integrationRecorded(home, recordName string) (bool, error) {
-	_, err := os.Lstat(filepath.Join(home, ".config/gpu-workload-supervisor", recordName))
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
+	if err := idle.remove(); err != nil {
+		return err
 	}
-	return true, err
+	return reconcile.remove()
 }
 
-func removeIntegration(home string, e unitEnablement) error {
+// pendingRemoval is a validated integration awaiting deletion.
+type pendingRemoval struct {
+	recordPath string
+	linkPath   string
+	recorded   bool
+	hasLink    bool
+}
+
+// inspectIntegration validates the ownership record and the recorded link
+// without touching anything; a foreign or modified link is reported, never
+// removed.
+func inspectIntegration(home string, e unitEnablement) (pendingRemoval, error) {
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
 	if err := TrustedDirectory(root); err != nil {
-		return err
+		return pendingRemoval{}, err
 	}
-	data, err := privateRead(filepath.Join(root, e.recordName))
+	recordPath := filepath.Join(root, e.recordName)
+	data, err := privateRead(recordPath)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return pendingRemoval{}, nil
 	}
 	if err != nil {
-		return err
+		return pendingRemoval{}, err
 	}
 	var owned integration
 	if err := json.Unmarshal(data, &owned); err != nil {
-		return err
+		return pendingRemoval{}, err
 	}
 	if owned.Version != 1 || owned.Unit != e.unit || owned.Target != "/usr/lib/systemd/user/"+e.unit {
-		return errors.New("invalid integration ownership record")
+		return pendingRemoval{}, errors.New("invalid integration ownership record")
 	}
 	directory := filepath.Join(home, ".config/systemd/user", e.wantsDirectory)
 	if err := TrustedDirectory(directory); err != nil {
-		return err
+		return pendingRemoval{}, err
 	}
-	link := filepath.Join(directory, e.unit)
-	target, err := os.Readlink(link)
+	linkPath := filepath.Join(directory, e.unit)
+	target, err := os.Readlink(linkPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+		return pendingRemoval{}, err
 	}
-	if err == nil {
-		if target != owned.Target {
-			return errors.New("modified integration link is preserved")
-		}
-		if err := os.Remove(link); err != nil {
+	removal := pendingRemoval{recordPath: recordPath, linkPath: linkPath, recorded: true, hasLink: err == nil}
+	if removal.hasLink && target != owned.Target {
+		return pendingRemoval{}, errors.New("modified integration link is preserved")
+	}
+	return removal, nil
+}
+
+func (p pendingRemoval) remove() error {
+	if !p.recorded {
+		return nil
+	}
+	if p.hasLink {
+		if err := os.Remove(p.linkPath); err != nil {
 			return err
 		}
 	}
-	return os.Remove(filepath.Join(root, e.recordName))
+	return os.Remove(p.recordPath)
 }
 
 func Reconcile(ctx context.Context, home string) error {
