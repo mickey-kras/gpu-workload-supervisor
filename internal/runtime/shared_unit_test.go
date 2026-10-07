@@ -9,8 +9,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -540,5 +542,49 @@ func TestSharedUnitEvictPropagatesFailures(t *testing.T) {
 	defer cancel()
 	if err := m.evictOtherOllamaModels(ctx, n); !errors.Is(err, ErrUnloadUnverified) {
 		t.Fatalf("unverified eviction accepted: %v", err)
+	}
+}
+
+// TestActiveSharedOllamaQuiescenceValidatesManagerCgroup closes the bypass:
+// an active shared Ollama unit with no models loaded must still prove the
+// exact manager-root derivation before quiescence is accepted.
+func TestActiveSharedOllamaQuiescenceValidatesManagerCgroup(t *testing.T) {
+	const unit = "gws-owned-ollama-local.service"
+	ownedPair := func(cgroup string) func(*control.Catalog) {
+		return func(c *control.Catalog) {
+			u, _ := url.Parse(c.Profiles[0].NativeModel.Endpoint)
+			port, _ := strconv.Atoi(u.Port())
+			profile := func(id, model string) control.WorkloadProfile {
+				return control.WorkloadProfile{
+					ID: control.Workload(id), Label: id, Adapter: "systemd", Unit: unit,
+					Cgroup: cgroup, HealthURL: c.Profiles[0].NativeModel.Endpoint + "/health",
+					NativeModel: &control.NativeModel{
+						Runtime: "ollama", Instance: "local", Model: model,
+						Endpoint:     c.Profiles[0].NativeModel.Endpoint,
+						LaunchFile:   "/home/u/.config/systemd/user/" + unit,
+						LaunchSHA256: c.Profiles[0].NativeModel.LaunchSHA256,
+						Owned:        &control.OwnedLaunch{Port: uint16(port)},
+					},
+				}
+			}
+			c.Version = 2
+			c.Profiles = []control.WorkloadProfile{profile("alpha", "alpha"), profile("beta", "beta")}
+		}
+	}
+	show := func(cgroup string) []byte {
+		return []byte("LoadState=loaded\nActiveState=active\nSubState=running\nControlGroup=" + cgroup + "\n")
+	}
+	showCmd := "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- " + unit
+
+	m, r, _, _ := sharedOllamaFixture(t, ownedPair("/elsewhere/app.slice/"+unit))
+	r.outputs[showCmd] = show("/elsewhere/app.slice/" + unit)
+	if err := m.ReleasedFor(context.Background(), control.WorkloadIdle); err == nil {
+		t.Fatal("foreign manager-root prefix accepted on an active shared unit")
+	}
+
+	m, r, _, _ = sharedOllamaFixture(t, ownedPair("/workloads/app.slice/"+unit))
+	r.outputs[showCmd] = show("/workloads/app.slice/" + unit)
+	if err := m.ReleasedFor(context.Background(), control.WorkloadIdle); err != nil {
+		t.Fatal(err)
 	}
 }

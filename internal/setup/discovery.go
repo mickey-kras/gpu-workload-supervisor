@@ -93,6 +93,9 @@ func discoverOwnedUnits(home string, catalog control.Catalog) []OwnedUnitStatus 
 		}
 		data, err := privateRead(filepath.Join(ownedUnitDirectory(home), name))
 		if err != nil {
+			// An unreadable or untrusted unit still blocks runtime preflight by
+			// name; surface it so the UI can diagnose and clean up.
+			owned = append(owned, OwnedUnitStatus{Name: name, State: "modified"})
 			continue
 		}
 		status := OwnedUnitStatus{Name: name, Digest: digest(data), State: "orphaned"}

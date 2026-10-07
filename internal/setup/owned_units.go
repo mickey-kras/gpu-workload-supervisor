@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -263,6 +264,14 @@ func (b Backend) applyOwnedUnitWrites(ctx context.Context, home string, plan uni
 			if plan.proven[name] != currentDigest {
 				return fmt.Errorf("%w: %s", ErrOwnedUnitCollision, name)
 			}
+			// Overwrite with the ownership proof re-checked against the exact
+			// inode being replaced, so a concurrent atomic replace cannot be
+			// silently destroyed.
+			if err := provenReplace(path, raw, currentDigest); err != nil {
+				return err
+			}
+			plan.written[name] = true
+			continue
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		} else {
@@ -278,6 +287,52 @@ func (b Backend) applyOwnedUnitWrites(ctx context.Context, home string, plan uni
 	return nil
 }
 
+// ownedStat/ownedAtomicWrite are seams for concurrency-fault injection.
+var ownedStat = os.Stat
+var ownedAtomicWrite = deployment.AtomicWrite
+
+// provenReplace replaces path with raw only while the inode whose content
+// matched proof is still the one at path. Without rename-at-exchange the
+// check/rename pair cannot be fully atomic; the window is narrowed to the
+// rename syscall itself, and the landed content is re-verified afterwards.
+func provenReplace(path string, raw []byte, proof string) error {
+	file, err := deployment.OpenPrivate(path)
+	if err != nil {
+		return err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return err
+	}
+	current, err := io.ReadAll(file)
+	file.Close()
+	if err != nil {
+		return err
+	}
+	if digest(current) != proof {
+		return fmt.Errorf("%w: %s", ErrOwnedUnitModified, filepath.Base(path))
+	}
+	latest, err := ownedStat(path)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(info, latest) {
+		return fmt.Errorf("%w: %s", ErrOwnedUnitCollision, filepath.Base(path))
+	}
+	if err := ownedAtomicWrite(path, raw); err != nil {
+		return err
+	}
+	landed, err := privateRead(path)
+	if err != nil {
+		return err
+	}
+	if digest(landed) != digest(raw) {
+		return fmt.Errorf("%w: %s", ErrOwnedUnitCollision, filepath.Base(path))
+	}
+	return nil
+}
+
 // rollbackOwnedUnitWrites restores the pre-apply state after a failed
 // pre-commit check: units the write created are removed, overwritten units get
 // their snapshotted content back. Files whose content no longer matches the
@@ -285,6 +340,7 @@ func (b Backend) applyOwnedUnitWrites(ctx context.Context, home string, plan uni
 func (b Backend) rollbackOwnedUnitWrites(ctx context.Context, home, systemctl string, plan unitPlan) error {
 	dir := ownedUnitDirectory(home)
 	var failed []string
+	changed := false
 	for _, name := range plan.writeNames() {
 		if !plan.written[name] {
 			// Never written (idempotent skip or unreached): leave untouched.
@@ -307,14 +363,21 @@ func (b Backend) rollbackOwnedUnitWrites(ctx context.Context, home, systemctl st
 			if err := os.Remove(path); err != nil {
 				failed = append(failed, name)
 			}
+			changed = true
 			continue
 		}
 		if err := deployment.AtomicWrite(path, plan.prior[name]); err != nil {
 			failed = append(failed, name)
 		}
+		changed = true
 	}
 	if len(failed) > 0 {
 		return fmt.Errorf("%w: %s", ErrOwnedUnitCollision, strings.Join(failed, ", "))
+	}
+	if changed {
+		if err := syncDir(dir); err != nil {
+			return err
+		}
 	}
 	return b.daemonReloadOwnedUnits(ctx, systemctl, plan.writeNames())
 }
@@ -330,6 +393,7 @@ func (b Backend) applyOwnedUnitDeletes(ctx context.Context, home string, j unitJ
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	removed := false
 	for _, name := range names {
 		path := filepath.Join(dir, name)
 		current, err := privateRead(path)
@@ -345,6 +409,10 @@ func (b Backend) applyOwnedUnitDeletes(ctx context.Context, home string, j unitJ
 		if err := os.Remove(path); err != nil {
 			return err
 		}
+		removed = true
+	}
+	if removed {
+		return syncDir(dir)
 	}
 	return nil
 }

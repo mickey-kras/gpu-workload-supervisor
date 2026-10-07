@@ -795,3 +795,183 @@ func TestPlanPreviewKeepsStateDatabaseReadOnly(t *testing.T) {
 		t.Fatalf("removal missing: %v", preview.Changes)
 	}
 }
+
+// TestProvenReplaceRejectsConcurrentDisplacement injects a replace between the
+// ownership re-check and the rename: the foreign inode is detected and left
+// intact, and the write fails loudly.
+func TestProvenReplaceRejectsConcurrentDisplacement(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gws-owned-vision.service")
+	if err := os.WriteFile(path, []byte("proven render"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Pin the verified inode so the displacement cannot reuse its number.
+	pin, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pin.Close()
+	restore := ownedStat
+	ownedStat = func(p string) (os.FileInfo, error) {
+		// A concurrent writer atomically replaces the file after our digest
+		// proof but before our rename.
+		if err := os.Remove(p); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(p, []byte("concurrent render"), 0600); err != nil {
+			return nil, err
+		}
+		return os.Stat(p)
+	}
+	defer func() { ownedStat = restore }()
+	err = provenReplace(path, []byte("new render"), digest([]byte("proven render")))
+	if !errors.Is(err, ErrOwnedUnitCollision) {
+		t.Fatalf("concurrent displacement not detected: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "concurrent render" {
+		t.Fatal("foreign content destroyed")
+	}
+}
+
+// TestProvenReplaceFailsOnProofMismatch never replaces content the proof does
+// not cover.
+func TestProvenReplaceFailsOnProofMismatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gws-owned-vision.service")
+	if err := os.WriteFile(path, []byte("unexpected"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := provenReplace(path, []byte("new render"), digest([]byte("proven render"))); !errors.Is(err, ErrOwnedUnitModified) {
+		t.Fatalf("unproven content replaced: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "unexpected" {
+		t.Fatal("content modified")
+	}
+}
+
+// TestDiscoveryReportsUntrustedOwnedUnit surfaces a gws-owned file that fails
+// the private-file check instead of silently omitting it.
+func TestDiscoveryReportsUntrustedOwnedUnit(t *testing.T) {
+	home := t.TempDir()
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "gws-owned-vision.service"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "gws-owned-dir.service"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	owned := discoverOwnedUnits(home, control.Catalog{})
+	if len(owned) != 2 {
+		t.Fatalf("untrusted entries omitted: %+v", owned)
+	}
+	for _, status := range owned {
+		if status.State != "modified" || status.Digest != "" {
+			t.Fatalf("untrusted entry misclassified: %+v", status)
+		}
+	}
+}
+
+// TestFinalizeDeletesSyncUnitDir makes the finalize path's unlinks durable
+// before the journal is retired.
+func TestFinalizeDeletesSyncUnitDir(t *testing.T) {
+	backend, home, _ := fixture(t)
+	var synced []string
+	restore := syncDir
+	syncDir = func(path string) error { synced = append(synced, path); return nil }
+	defer func() { syncDir = restore }()
+	stale, staleRaw := ownedFixtureProfile(t, home, "stale", 9300)
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stale.Unit), staleRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalCommitted}
+	if err := backend.applyOwnedUnitDeletes(context.Background(), home, journal); err != nil {
+		t.Fatal(err)
+	}
+	if len(synced) != 1 || synced[0] != dir {
+		t.Fatalf("unit dir not synced after delete: %v", synced)
+	}
+}
+
+// TestRollbackSyncsUnitDirBeforeJournalClear makes rollback removals durable
+// before abortOwnedUnitWrites retires the pending journal.
+func TestRollbackSyncsUnitDirBeforeJournalClear(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommand
+	var synced []string
+	restore := syncDir
+	syncDir = func(path string) error { synced = append(synced, path); return nil }
+	defer func() { syncDir = restore }()
+	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
+	plan := unitPlan{Writes: map[string][]byte{profile.Unit: raw}, proven: map[string]string{}, prior: map[string][]byte{}, absent: map[string]bool{}, written: map[string]bool{}}
+	if err := backend.applyOwnedUnitWrites(context.Background(), home, plan, newOwnedUnitJournal(plan)); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeOwnedUnitJournal(root, newOwnedUnitJournal(plan)); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.abortOwnedUnitWrites(context.Background(), home, root, r, plan, errors.New("precheck failed")); err == nil {
+		t.Fatal("cause swallowed")
+	}
+	if len(synced) != 2 || synced[0] != ownedUnitDirectory(home) || synced[1] != root {
+		t.Fatalf("sync order %v", synced)
+	}
+}
+
+// TestProvenReplaceErrorPaths fails loudly on missing files, write faults, and
+// post-rename content disagreement.
+func TestProvenReplaceErrorPaths(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "gws-owned-vision.service")
+	if err := provenReplace(path, []byte("x"), digest([]byte("x"))); err == nil {
+		t.Fatal("missing file replaced")
+	}
+	if err := os.WriteFile(path, []byte("proven render"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	proof := digest([]byte("proven render"))
+	restoreWrite := ownedAtomicWrite
+	ownedAtomicWrite = func(string, []byte) error { return errors.New("write fault") }
+	if err := provenReplace(path, []byte("new render"), proof); err == nil {
+		t.Fatal("write fault swallowed")
+	}
+	ownedAtomicWrite = func(p string, _ []byte) error { return os.WriteFile(p, []byte("wrong"), 0600) }
+	if err := provenReplace(path, []byte("new render"), proof); !errors.Is(err, ErrOwnedUnitCollision) {
+		t.Fatalf("landed content disagreement accepted: %v", err)
+	}
+	ownedAtomicWrite = restoreWrite
+	if err := provenReplace(path, []byte("new render"), digest([]byte("wrong"))); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "new render" {
+		t.Fatal("replace did not land")
+	}
+}
+
+// TestPlanPreviewFailsOnUnreadableUnitFile surfaces unit-file read faults in
+// the preview instead of pretending the write is planned.
+func TestPlanPreviewFailsOnUnreadableUnitFile(t *testing.T) {
+	backend, home, r := fixture(t)
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	dir := ownedUnitDirectory(home)
+	if err := os.MkdirAll(filepath.Join(dir, profile.Unit), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.Plan(home, r); err == nil {
+		t.Fatal("unreadable unit file previewed")
+	}
+}

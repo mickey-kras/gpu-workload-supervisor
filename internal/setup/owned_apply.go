@@ -304,7 +304,7 @@ func (b Backend) retirePendingJournal(ctx context.Context, home, root string, re
 			if digest(current) != journal.Writes[name] {
 				return fmt.Errorf("%w: %s", ErrOwnedUnitModified, name)
 			}
-			if err := deployment.AtomicWrite(path, raw); err != nil {
+			if err := provenReplace(path, raw, digest(current)); err != nil {
 				return err
 			}
 		} else {
