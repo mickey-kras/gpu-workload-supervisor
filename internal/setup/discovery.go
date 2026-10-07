@@ -19,6 +19,15 @@ type Discovery struct {
 	Units        []string               `json:"units"`
 	Pending      bool                   `json:"pending"`
 	Applications []ApplicationCandidate `json:"applications"`
+	OwnedUnits   []OwnedUnitStatus      `json:"ownedUnits"`
+}
+
+// OwnedUnitStatus reports one supervisor-owned unit file so the UI can offer
+// adopt/cleanup choices. State is "managed", "orphaned", or "modified".
+type OwnedUnitStatus struct {
+	Name   string `json:"name"`
+	Digest string `json:"digest"`
+	State  string `json:"state"`
 }
 
 func Discover(ctx context.Context, home string) (Discovery, error) {
@@ -59,7 +68,43 @@ func (b Backend) Discover(ctx context.Context, home string) (Discovery, error) {
 	}
 	result.Units = []string{}
 	b.discoverApplications(ctx, &result, units)
+	result.OwnedUnits = discoverOwnedUnits(home, result.Request.Catalog)
 	return result, nil
+}
+
+// discoverOwnedUnits inventories supervisor-owned unit files by directory
+// listing and content digest only; it never parses unit contents.
+func discoverOwnedUnits(home string, catalog control.Catalog) []OwnedUnitStatus {
+	entries, err := os.ReadDir(ownedUnitDirectory(home))
+	if err != nil {
+		return nil
+	}
+	managed := map[string]string{}
+	for _, p := range catalog.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Owned != nil {
+			managed[p.Unit] = p.NativeModel.LaunchSHA256
+		}
+	}
+	var owned []OwnedUnitStatus
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, "gws-owned-") || !strings.HasSuffix(name, ".service") {
+			continue
+		}
+		data, err := privateRead(filepath.Join(ownedUnitDirectory(home), name))
+		if err != nil {
+			continue
+		}
+		status := OwnedUnitStatus{Name: name, Digest: digest(data), State: "orphaned"}
+		if want, ok := managed[name]; ok {
+			status.State = "managed"
+			if want != status.Digest {
+				status.State = "modified"
+			}
+		}
+		owned = append(owned, status)
+	}
+	return owned
 }
 
 func discoverCurrent(ctx context.Context, root string, result *Discovery) error {

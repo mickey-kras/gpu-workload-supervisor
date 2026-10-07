@@ -12,12 +12,23 @@ import (
 
 // Drafts record user choices only. They never enter the executable catalog.
 type DraftBinding struct {
-	Unit       string `json:"unit,omitempty"`
-	Cgroup     string `json:"cgroup,omitempty"`
-	HealthURL  string `json:"healthURL,omitempty"`
-	Instance   string `json:"instance,omitempty"`
-	Model      string `json:"model,omitempty"`
-	LaunchFile string `json:"launchFile,omitempty"`
+	Unit       string            `json:"unit,omitempty"`
+	Cgroup     string            `json:"cgroup,omitempty"`
+	HealthURL  string            `json:"healthURL,omitempty"`
+	Instance   string            `json:"instance,omitempty"`
+	Model      string            `json:"model,omitempty"`
+	LaunchFile string            `json:"launchFile,omitempty"`
+	Owned      *DraftOwnedLaunch `json:"owned,omitempty"`
+}
+
+// DraftOwnedLaunch mirrors control.OwnedLaunch for the draft surface.
+type DraftOwnedLaunch struct {
+	ModelPath   string `json:"modelPath,omitempty"`
+	Port        uint16 `json:"port"`
+	CtxSize     uint32 `json:"ctxSize,omitempty"`
+	GPULayers   uint32 `json:"gpuLayers,omitempty"`
+	MaxModelLen uint32 `json:"maxModelLen,omitempty"`
+	Alias       string `json:"alias,omitempty"`
 }
 
 type Draft struct {
@@ -113,6 +124,11 @@ func validateDraft(d Draft, ids map[string]bool) error {
 	if err := validateDraftBinding(d.Binding); err != nil {
 		return err
 	}
+	if d.Binding != nil {
+		if err := validateDraftOwned(d.App, d.Binding.Owned); err != nil {
+			return err
+		}
+	}
 	if d.Endpoint != "" && d.Reference != "" {
 		return errors.New("choose an endpoint or file location")
 	}
@@ -138,6 +154,36 @@ func validateDraftBinding(binding *DraftBinding) error {
 	}
 	return nil
 }
+
+// validateDraftOwned mirrors the catalog's per-runtime owned admissibility so
+// a draft that cannot synthesize a valid owned profile fails at save time.
+func validateDraftOwned(app string, o *DraftOwnedLaunch) error {
+	if o == nil {
+		return nil
+	}
+	if app != "ollama" && app != appLlamaCPP && app != "vllm" {
+		return errors.New("owned launches are only supported for native model runtimes")
+	}
+	if o.Port < 1024 {
+		return errors.New("owned launch port must be an unprivileged TCP port")
+	}
+	switch app {
+	case "ollama":
+		if o.ModelPath != "" || o.CtxSize != 0 || o.GPULayers != 0 || o.MaxModelLen != 0 || o.Alias != "" {
+			return errors.New("ollama owned launches accept only a port")
+		}
+	case appLlamaCPP:
+		if o.MaxModelLen != 0 || !filepath.IsAbs(o.ModelPath) || filepath.Clean(o.ModelPath) != o.ModelPath {
+			return errors.New("llama.cpp owned launches require an absolute model file")
+		}
+	case "vllm":
+		if o.CtxSize != 0 || o.GPULayers != 0 || !filepath.IsAbs(o.ModelPath) || filepath.Clean(o.ModelPath) != o.ModelPath {
+			return errors.New("vllm owned launches require an absolute model directory")
+		}
+	}
+	return nil
+}
+
 func validateDraftReference(d Draft) error {
 	if d.Reference == "" {
 		if d.ReferenceKind != "" {

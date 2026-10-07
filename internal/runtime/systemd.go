@@ -40,6 +40,9 @@ type SystemdConfig struct {
 	CapacityHeadroomMiB uint64
 	NvidiaSMIPath       string
 	SystemctlPath       string
+	// OwnedUnitDir locates supervisor-owned unit files for the preflight
+	// orphan scan; empty derives the effective user's systemd user directory.
+	OwnedUnitDir string
 }
 
 type SystemdManager struct {

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/setup"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
@@ -23,4 +26,27 @@ func (a setupActions) fingerprint(input io.Reader, output io.Writer) error {
 	return json.NewEncoder(output).Encode(struct {
 		SHA256 string `json:"sha256"`
 	}{hash})
+}
+
+// renderOwned previews the derived owned launch identity and deterministic
+// unit rendering for a draft. It writes nothing.
+func (a setupActions) renderOwned(home string, input io.Reader, output io.Writer) error {
+	var request struct {
+		Draft         setup.Draft `json:"draft"`
+		ManagerCgroup string      `json:"managerCgroup"`
+	}
+	if err := strictjson.DecodeLimited(input, 16384, &request); err != nil {
+		return err
+	}
+	profile, raw, err := setup.OwnedProfile(request.Draft, request.ManagerCgroup, home)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(output).Encode(struct {
+		Unit       string                  `json:"unit"`
+		Cgroup     string                  `json:"cgroup"`
+		LaunchFile string                  `json:"launchFile"`
+		SHA256     string                  `json:"sha256"`
+		Profile    control.WorkloadProfile `json:"profile"`
+	}{profile.Unit, profile.Cgroup, profile.NativeModel.LaunchFile, fmt.Sprintf("%x", sha256.Sum256(raw)), profile})
 }

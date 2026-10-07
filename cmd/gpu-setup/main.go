@@ -49,7 +49,7 @@ func main() {
 }
 func (a setupActions) run(args []string, input io.Reader, output io.Writer) error {
 	if len(args) != 1 {
-		return errors.New("usage: gpu-setup discover|probe|fingerprint|drafts|save-drafts|verify-bindings|validate|apply|reconcile|remove-integration")
+		return errors.New("usage: gpu-setup discover|probe|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|reconcile|remove-integration")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -58,7 +58,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return err
 	}
 	switch args[0] {
-	case "discover", "fingerprint", "probe", "reconcile", "save-drafts", cmdVerifyBindings, "validate", "apply":
+	case "discover", "fingerprint", "probe", "reconcile", "save-drafts", cmdVerifyBindings, "validate", "apply", "render-owned":
 		if a.euid() == 0 {
 			return errors.New("run guided setup as the desktop account, not root")
 		}
@@ -74,6 +74,8 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return runSaveDrafts(home, input, output)
 	case "fingerprint":
 		return a.fingerprint(input, output)
+	case "render-owned":
+		return a.renderOwned(home, input, output)
 	case "probe":
 		return a.runProbe(ctx, input, output)
 	case "reconcile":

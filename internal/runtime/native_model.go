@@ -61,6 +61,24 @@ func verifyNativeLaunchWithValidator(n control.NativeModel, validate func(string
 	}
 	return qualifyNativeLaunchWithValidator(b, n, validate)
 }
+
+// verifyOwnedSpec is the spec↔fingerprint chain for owned launches: the
+// deterministic re-render must exist, match the recorded digest, and qualify
+// under the shared grammar before the on-disk binding is checked.
+func verifyOwnedSpec(p control.WorkloadProfile) error {
+	if p.NativeModel == nil || p.NativeModel.Owned == nil {
+		return nil
+	}
+	raw, err := RenderOwnedUnit(p)
+	if err != nil {
+		return err
+	}
+	if fmt.Sprintf("%x", sha256.Sum256(raw)) != p.NativeModel.LaunchSHA256 {
+		return fmt.Errorf("%w: rendered digest differs from the recorded launch fingerprint", ErrOwnedRender)
+	}
+	return renderMustQualify(raw, *p.NativeModel)
+}
+
 func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.WorkloadProfile) error {
 	if p.NativeModel == nil {
 		return nil

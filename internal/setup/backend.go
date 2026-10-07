@@ -64,14 +64,30 @@ func Validate(request Request) error {
 			return errors.New("trusted paths must be absolute and clean")
 		}
 	}
-	for i, p := range request.Catalog.Profiles {
-		for _, q := range request.Catalog.Profiles[:i] {
-			if control.SharedOllamaUnit(p, q) {
-				return errors.New("shared Ollama units are catalog-only: apply the catalog with gpu-mode configure; setup does not create or verify shared-unit bindings")
+	return request.Catalog.Validate()
+}
+
+// verifySharedPairPreservation is the §2.3 setup gate, enforced in Apply after
+// inspect because Validate is pure: a shared Ollama pair is appliable only when
+// both profiles are owned (setup renders the shared unit) or both are carried
+// verbatim from the accepted catalog.
+func (work *activationWork) verifySharedPairPreservation() error {
+	for i, p := range work.request.Catalog.Profiles {
+		for _, q := range work.request.Catalog.Profiles[:i] {
+			if !control.SharedOllamaUnit(p, q) {
+				continue
+			}
+			if p.NativeModel.Owned != nil && q.NativeModel.Owned != nil {
+				continue
+			}
+			acceptedP, okP := work.accepted.Catalog.Profile(p.ID)
+			acceptedQ, okQ := work.accepted.Catalog.Profile(q.ID)
+			if !okP || !okQ || !reflect.DeepEqual(acceptedP, p) || !reflect.DeepEqual(acceptedQ, q) {
+				return errors.New("shared Ollama units are catalog-only: apply the catalog with gpu-mode configure; setup does not create or verify adopted shared-unit bindings")
 			}
 		}
 	}
-	return request.Catalog.Validate()
+	return nil
 }
 func Home() (string, error) {
 	account, err := user.LookupId(strconv.Itoa(os.Geteuid()))
@@ -164,8 +180,32 @@ func (b Backend) Apply(ctx context.Context, home string, request Request) error 
 		return err
 	}
 	defer proxy.Close()
+	if err := b.resumeOwnedUnitJournal(ctx, home, request); err != nil {
+		return err
+	}
 	if err := work.inspect(ctx); err != nil {
 		return err
+	}
+	if err := work.verifySharedPairPreservation(); err != nil {
+		return err
+	}
+	// Owned unit writes precede the quiescence check so newly rendered units
+	// are loaded when release evidence is gathered; deletes stay post-commit.
+	plan, err := b.planOwnedUnits(request, work.accepted, home)
+	if err != nil {
+		return err
+	}
+	if !plan.empty() {
+		journal := newOwnedUnitJournal(plan)
+		if err := writeOwnedUnitJournal(work.root, journal); err != nil {
+			return err
+		}
+		if err := b.applyOwnedUnitWrites(ctx, home, plan, journal); err != nil {
+			return err
+		}
+		if err := b.daemonReloadOwnedUnits(ctx, request.Profile.SystemctlPath, plan.writeNames()); err != nil {
+			return err
+		}
 	}
 	manager, err := work.verifyRuntimes(ctx)
 	if err != nil {
@@ -178,7 +218,7 @@ func (b Backend) Apply(ctx context.Context, home string, request Request) error 
 	if err != nil {
 		return err
 	}
-	return b.commitConfiguration(ctx, home, work.root, request, manager, progress.Fresh)
+	return b.commitConfiguration(ctx, home, work.root, request, manager, progress.Fresh, plan)
 }
 
 func (work *activationWork) inspect(ctx context.Context) error {
@@ -286,7 +326,7 @@ func (work activationWork) enterMaintenance() (activation, error) {
 	return progress, deployment.Write(work.request.Profile.StatePath, marker)
 }
 
-func (b Backend) commitConfiguration(ctx context.Context, home, root string, request Request, manager gpuruntime.Manager, fresh bool) error {
+func (b Backend) commitConfiguration(ctx context.Context, home, root string, request Request, manager gpuruntime.Manager, fresh bool, plan unitPlan) error {
 	// A crash from this point intentionally leaves the maintenance fence in place.
 	stateStore, err := store.Open(ctx, request.Profile.StatePath)
 	if err != nil {
@@ -337,7 +377,122 @@ func (b Backend) commitConfiguration(ctx context.Context, home, root string, req
 	if err := b.enableReconciliation(ctx, home, profile.SystemctlPath); err != nil {
 		return err
 	}
-	return deployment.Write(profile.StatePath, deployment.Marker{Version: 1, Release: deployment.Release})
+	if err := deployment.Write(profile.StatePath, deployment.Marker{Version: 1, Release: deployment.Release}); err != nil {
+		return err
+	}
+	// The maintenance fence is cleared; owned-unit deletes run post-commit so a
+	// failed commit never loses files and deletes never need rollback.
+	return b.finalizeOwnedUnits(ctx, home, root, request, plan)
+}
+
+// finalizeOwnedUnits performs the post-commit owned-unit effects: journaled
+// content-proof deletes, one daemon-reload, and verification that every owned
+// profile in the committed catalog has its exact rendering on disk.
+func (b Backend) finalizeOwnedUnits(ctx context.Context, home, root string, request Request, plan unitPlan) error {
+	if plan.empty() {
+		return nil
+	}
+	journal, present, err := readOwnedUnitJournal(root)
+	if err != nil {
+		return err
+	}
+	if !present {
+		return errors.New("owned-units journal missing after catalog commit")
+	}
+	journal.Phase = ownedJournalCommitted
+	if err := writeOwnedUnitJournal(root, journal); err != nil {
+		return err
+	}
+	if err := b.applyOwnedUnitDeletes(ctx, home, journal); err != nil {
+		return err
+	}
+	if err := b.daemonReloadOwnedUnits(ctx, request.Profile.SystemctlPath, plan.unitNames()); err != nil {
+		return err
+	}
+	for _, p := range request.Catalog.Profiles {
+		if p.NativeModel == nil || p.NativeModel.Owned == nil {
+			continue
+		}
+		raw, err := ownedRenderChecked(p)
+		if err != nil {
+			return err
+		}
+		data, err := privateRead(filepath.Join(ownedUnitDirectory(home), p.Unit))
+		if err != nil {
+			return err
+		}
+		if digest(data) != digest(raw) {
+			return fmt.Errorf("%w: %s", gpuruntime.ErrLaunchChanged, p.Unit)
+		}
+	}
+	return clearOwnedUnitJournal(root)
+}
+
+// resumeOwnedUnitJournal replays a stale owned-units journal from a previous
+// post-commit crash before planning. Deletes are idempotent; a new request
+// that rewrites a journaled delete drops it only when the digests agree, and
+// divergent content is never deleted or overwritten without proof.
+func (b Backend) resumeOwnedUnitJournal(ctx context.Context, home string, req Request) error {
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	journal, present, err := readOwnedUnitJournal(root)
+	if err != nil || !present {
+		return err
+	}
+	marker, err := deployment.Read(req.Profile.StatePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if marker.Maintenance {
+		// The activation fence resumes the original request verbatim, and its
+		// plan rewrites this journal.
+		return nil
+	}
+	if journal.Phase == ownedJournalPending {
+		return clearOwnedUnitJournal(root)
+	}
+	reloaded := false
+	for name, proof := range journal.Deletes {
+		if p, ok := ownedProfileForUnit(req.Catalog, name); ok {
+			raw, err := ownedRenderChecked(p)
+			if err != nil {
+				return err
+			}
+			if digest(raw) != proof {
+				return fmt.Errorf("%w: %s", ErrOwnedUnitModified, name)
+			}
+			continue
+		}
+		path := filepath.Join(ownedUnitDirectory(home), name)
+		current, err := privateRead(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if digest(current) != proof {
+			return fmt.Errorf("%w: %s", ErrOwnedUnitModified, name)
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		reloaded = true
+	}
+	if reloaded {
+		if _, err := b.runCommand(ctx, req.Profile.SystemctlPath, "--user", "daemon-reload"); err != nil {
+			return fmt.Errorf("daemon-reload: %w", err)
+		}
+	}
+	return clearOwnedUnitJournal(root)
+}
+
+func ownedProfileForUnit(c control.Catalog, unit string) (control.WorkloadProfile, bool) {
+	for _, p := range c.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Owned != nil && p.Unit == unit {
+			return p, true
+		}
+	}
+	return control.WorkloadProfile{}, false
 }
 
 // newer permits only a stable target with a strictly higher release core.

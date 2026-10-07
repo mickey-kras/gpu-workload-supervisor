@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"reflect"
 	"strings"
 	"syscall"
 	"time"
@@ -301,11 +302,41 @@ func configureCatalog(ctx context.Context, stateStore *store.Store, options mode
 	if err != nil {
 		return err
 	}
-	accepted, err := stateStore.ReplaceCatalog(ctx, options.catalogRevision, catalog)
+	accepted, err := stateStore.Catalog(ctx)
 	if err != nil {
 		return err
 	}
-	return json.NewEncoder(os.Stdout).Encode(accepted)
+	if err := ownedProfilesVerbatim(accepted.Catalog, catalog); err != nil {
+		return err
+	}
+	committed, err := stateStore.ReplaceCatalog(ctx, options.catalogRevision, catalog)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(committed)
+}
+
+// ownedProfilesVerbatim is the configure side of the tool gate: configure may
+// carry setup-managed owned profiles only verbatim, never add, remove, or
+// modify them.
+func ownedProfilesVerbatim(accepted, next control.Catalog) error {
+	carried := map[control.Workload]bool{}
+	for _, p := range next.Profiles {
+		if p.NativeModel == nil || p.NativeModel.Owned == nil {
+			continue
+		}
+		prior, ok := accepted.Profile(p.ID)
+		if !ok || !reflect.DeepEqual(p, prior) {
+			return control.ErrOwnedCatalogManagedBySetup
+		}
+		carried[p.ID] = true
+	}
+	for _, p := range accepted.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Owned != nil && !carried[p.ID] {
+			return control.ErrOwnedCatalogManagedBySetup
+		}
+	}
+	return nil
 }
 
 func pinCatalog(snapshot control.CatalogSnapshot) (*control.CatalogSnapshot, error) {
