@@ -80,11 +80,11 @@ test('late validation cannot enable applying edited settings', async () => {
 
 
 test('required workload fields stay visible and removing a card removes only that profile', async () => {
-    const ui = await launch({profiles: [{id: 'keep', unit: 'keep.service', label: 'Keep'}, {unit: 'edit.service', label: 'Edit'}]});
+    const ui = await launch({profiles: [{id: 'keep', unit: 'keep.service', label: 'Keep'}, {id: 'edit', unit: 'edit.service', label: 'Edit'}]});
     const group = ui.by('Edit');
-    assert.ok(group.children.find(widget => widget.title === 'Workload details').children.includes(ui.widgets.filter(widget => widget.title === 'Cgroup path beneath /sys/fs/cgroup (required)')[1]));
-    assert.ok(group.children.find(widget => widget.title === 'Workload details').children.includes(ui.widgets.filter(widget => widget.title === 'Loopback health URL (required)')[1]));
-    assert.equal(group.children.find(widget => widget.title === 'Workload details').expanded, true);
+    for (const title of ['Existing user service', 'Cgroup path beneath /sys/fs/cgroup (required)', 'Loopback health URL (required)'])
+        assert.ok(group.children.includes(ui.widgets.filter(widget => widget.title === title)[1]), `required field stays at card top level: ${title}`);
+    assert.equal(group.children.find(widget => widget.title === 'Workload details').expanded, false);
     group.children.find(widget => widget.label === 'Remove from supervisor').emit('clicked');
     const reviewing = ui.by('Review configuration').emit('clicked');
     assert.deepEqual(JSON.parse(ui.calls.at(-1).input).catalog.profiles, [{id: 'keep', unit: 'keep.service', label: 'Keep'}]);
@@ -105,8 +105,9 @@ for (const failure of ['discover', 'validate', 'apply']) {
                 ui.edit(confirm, 'active', true, 'toggled');
                 await ui.by('Apply configuration').emit('clicked');
                 assert.equal(confirm.sensitive, false);
-                assert.equal(ui.by('Review configuration').sensitive, false);
                 assert.equal(ui.by('Add existing service (Advanced)').sensitive, false);
+                assert.equal(ui.by('Set up later').sensitive, true, 'failed apply must not trap the user');
+                assert.equal(ui.by('Review configuration').sensitive, true, 'recovery requires a fresh review');
             }
             await ui.by('Apply configuration').emit('clicked');
             assert.equal(ui.calls.filter(call => call.argv[1] === 'apply').length, failure === 'apply' ? 1 : 0);
@@ -115,6 +116,31 @@ for (const failure of ['discover', 'validate', 'apply']) {
         assert.ok(ui.widgets.some(widget => widget.label?.includes('Backend unavailable')));
     });
 }
+
+test('apply failure keeps the raw backend error collapsed under the actionable summary', async () => {
+    const ui = await launch({fail: 'apply'});
+    const reviewing = ui.by('Review configuration').emit('clicked');
+    ui.finish(); await reviewing;
+    const confirm = ui.widgets.find(widget => widget.children.some(child => child.label?.startsWith('I have paused')));
+    ui.edit(confirm, 'active', true, 'toggled');
+    await ui.by('Apply configuration').emit('clicked');
+    const details = ui.by('Technical details');
+    assert.equal(details.visible, true);
+    assert.equal(details.expanded, false);
+    assert.ok(details.children.some(child => child.label === 'Backend unavailable'));
+    assert.ok(ui.widgets.some(widget => widget.label?.startsWith('Setup needs attention.')));
+});
+
+test('validation failure names the next action and collapses the raw error', async () => {
+    const ui = await launch({fail: 'validate'});
+    const reviewing = ui.by('Review configuration').emit('clicked');
+    ui.finish(); await reviewing;
+    const details = ui.by('Technical details');
+    assert.equal(details.visible, true);
+    assert.ok(details.children.some(child => child.label === 'Backend unavailable'));
+    assert.ok(ui.widgets.some(widget => widget.label?.includes('reopen Manage workloads to refresh, then review again')));
+    assert.equal(ui.by('Apply configuration').sensitive, false);
+});
 
 test('invalid numerical input fails before backend validation and can be corrected', async () => {
     const ui = await launch();
@@ -166,7 +192,7 @@ test('manual service names preserve template instances and picker updates the sa
 
 test('workload titles escape markup while reviewed labels retain their exact text', async () => {
     const ui = await launch({profiles: [{id: 'literal', label: '<b>GPU & work</b>', unit: 'literal.service'}]});
-    const group = ui.widgets.find(widget => widget.description?.startsWith('Select a service'));
+    const group = ui.widgets.find(widget => widget.description?.startsWith('Required:'));
     assert.equal(group.title, '&lt;b&gt;GPU &amp; work&lt;/b&gt;');
     ui.edit(ui.by('Display name'), 'text', 'Render < & >');
     assert.equal(group.title, 'Render &lt; &amp; &gt;');
@@ -195,6 +221,7 @@ for (const [index, app] of ['comfyui', 'ollama', 'llama.cpp', 'vllm'].entries())
         const ui = await launch({responses: {probe: {app, instanceStatus: 'available', inventoryStatus: 'available', models: [{id: 'one', label: 'One'}, {id: 'two', label: 'Two'}]}}});
         ui.edit(ui.by('Application'), 'selected', index);
         ui.by('Add workload').emit('clicked');
+        ui.edit(ui.by('Application address'), 'text', 'http://127.0.0.1:11434');
         await ui.by('Refresh discovery').emit('clicked');
         assert.equal(JSON.parse(ui.calls.find(call => call.argv[1] === 'probe').input).app, app);
         if (app !== 'comfyui') {
@@ -213,6 +240,25 @@ for (const [index, app] of ['comfyui', 'ollama', 'llama.cpp', 'vllm'].entries())
         assert.equal(ui.calls.filter(call => call.argv[1] === 'apply').length, 0);
     });
 }
+
+test('promoted binding prefills a friendly label and stable ID, falling back on collision', async () => {
+    const ui = await launch({responses: {probe: {app: 'ollama', instanceStatus: 'available', inventoryStatus: 'available', models: [{id: 'qwen:latest'}]}, fingerprint: {sha256: 'fp'}}});
+    const promote = async () => {
+        ui.edit(ui.by('Application'), 'selected', 1);
+        ui.by('Add workload').emit('clicked');
+        ui.edit(ui.widgets.filter(widget => widget.title === 'Application address').at(-1), 'text', 'http://127.0.0.1:11434');
+        await ui.widgets.filter(widget => widget.label === 'Refresh discovery').at(-1).emit('clicked');
+        ui.edit(ui.widgets.filter(widget => widget.title === 'Model').at(-1), 'selected', 1);
+        await ui.widgets.filter(widget => widget.label === 'Verify binding and add for review').at(-1).emit('clicked');
+        return JSON.parse(ui.calls.filter(call => call.argv[1] === 'verify-bindings').at(-1).input).catalog.profiles.at(-1);
+    };
+    const first = await promote();
+    assert.equal(first.id, 'ollama-qwen-latest');
+    assert.equal(first.label, 'Ollama - qwen:latest');
+    const second = await promote();
+    assert.equal(second.id, 'draft-unique-id', 'ID collision keeps the unique draft ID');
+    assert.equal(second.label, 'Ollama - qwen:latest');
+});
 
 test('failed verification keeps draft and supports retry; removing draft never applies', async () => {
     const ui = await launch({fail: 'verify-bindings'});

@@ -1,7 +1,21 @@
-import {ApplicationDraft, applications, candidateMessage} from './onboarding.mjs';
+import {ApplicationDraft, applications, candidateMessage, profileIDFromModel} from './onboarding.mjs';
+
+// Backend error detail stays available but collapsed behind the actionable summary.
+export function addErrorReporter({Adw, Gtk, parent, status}) {
+    const details = new Adw.ExpanderRow({title: 'Technical details', visible: false});
+    const text = new Gtk.Label({wrap: true, xalign: 0, selectable: true});
+    details.add_row(text);
+    if (parent.add) parent.add(details); else parent.append(details);
+    return (summary, error) => {
+        status.label = summary;
+        text.label = error.message;
+        details.expanded = false;
+        details.visible = true;
+    };
+}
 
 // Native widgets are passed by the setup window; this module never starts apps.
-export function addDraftEditor({Adw, Gtk, window, parent, initial, detected, command, changed, removed, bind}) {
+export function addDraftEditor({Adw, Gtk, window, parent, initial, detected, command, changed, removed, bind, taken}) {
     const draft = new ApplicationDraft(initial.app);
     draft.edit(initial);
     const group = new Adw.PreferencesGroup({title: applications.find(app => app.id === initial.app).label,
@@ -11,6 +25,8 @@ export function addDraftEditor({Adw, Gtk, window, parent, initial, detected, com
     name.connect('changed', () => { draft.edit({label: name.text}); changed(draft.snapshot()); });
     const status = new Gtk.Label({label: 'Choose a detected instance or check an address. Discovery does not start applications or load models.', wrap: true, xalign: 0, selectable: true});
     group.add(status);
+    const reportError = addErrorReporter({Adw, Gtk, parent: group, status});
+    let probeGuidance = null;
     const instances = detected.filter(candidate => candidate.app === initial.app);
     const instance = new Adw.ComboRow({title: 'Detected instance', use_markup: false,
         model: Gtk.StringList.new(['Choose an instance...', ...instances.map(candidate => `${candidate.label} (${candidate.instanceStatus})`)]), selected: 0});
@@ -69,17 +85,18 @@ export function addDraftEditor({Adw, Gtk, window, parent, initial, detected, com
         changed(draft.snapshot());
     }
     watchInstanceSelection({instance, instances, draft, endpoint, reference, clearBinding, show,
-        getBindingFields: () => bindingFields, setSync: value => syncing = value});
-    addRefreshButton({Gtk, group, draft, status, command, show});
+        getBindingFields: () => bindingFields, setSync: value => syncing = value,
+        setProbeGuidance: guidance => probeGuidance = guidance});
+    addRefreshButton({Gtk, group, draft, status, command, show, reportError, guidance: () => probeGuidance});
     addFilePickers({Gtk, window, group, draft, reference, endpoint, status, changed, clearBinding, clearModels, setSync: value => syncing = value});
-    bindingFields = addBindingEditor({Adw, Gtk, group, draft, initial, status, parent, removed, bind, command, changed});
+    bindingFields = addBindingEditor({Adw, Gtk, group, draft, initial, status, parent, removed, bind, command, changed, taken, reportError});
     const remove = new Gtk.Button({label: 'Remove draft from supervisor'}); group.add(remove);
     remove.connect('clicked', () => { draft.cancel(); parent.remove(group); removed(); });
     parent.append(group);
     return {cancel: () => draft.cancel()};
 }
 
-function watchInstanceSelection({instance, instances, draft, endpoint, reference, clearBinding, show, getBindingFields, setSync}) {
+function watchInstanceSelection({instance, instances, draft, endpoint, reference, clearBinding, show, getBindingFields, setSync, setProbeGuidance}) {
     instance.connect('notify::selected', () => {
         const selected = instances[instance.selected - 1];
         if (!selected) return;
@@ -90,21 +107,27 @@ function watchInstanceSelection({instance, instances, draft, endpoint, reference
         if (selected.endpoint) { draft.endpoint(selected.endpoint); setSync(true); endpoint.text = selected.endpoint; setSync(false); }
         else if (selected.reference) { draft.reference(selected.reference, selected.referenceKind); reference.label = selected.reference; }
         else draft.cancel();
+        setProbeGuidance(selected.endpoint || selected.reference ? null : selected.nextStep);
         for (const key of ['unit', 'cgroup']) if (selected[key]) getBindingFields()[key].text = selected[key];
         show(selected);
     });
 }
 
-function addRefreshButton({Gtk, group, draft, status, command, show}) {
+function addRefreshButton({Gtk, group, draft, status, command, show, reportError, guidance}) {
     const refresh = new Gtk.Button({label: 'Refresh discovery'}); group.add(refresh);
     refresh.connect('clicked', async () => {
+        const target = draft.snapshot();
+        if (!target.endpoint && !target.reference) {
+            status.label = guidance() ?? 'Choose a detected instance, enter the application address, or select a model file or folder before refreshing.';
+            return;
+        }
         const probe = draft.begin(); refresh.sensitive = false;
         status.label = 'Checking application without starting it...';
         try {
             const candidate = JSON.parse(await command(['/usr/bin/gpu-setup', 'probe'], JSON.stringify(probe.request)));
             if (draft.accept(probe, candidate)) show(candidate);
         } catch (error) {
-            if (probe.generation === draft.generation) status.label = `Discovery failed. Check the address or location, then retry.\n${error.message}`;
+            if (probe.generation === draft.generation) reportError('Discovery failed. Check the address or location, then retry.', error);
         } finally { refresh.sensitive = true; }
     });
 }
@@ -133,7 +156,7 @@ function addFilePickers({Gtk, window, group, draft, reference, endpoint, status,
     }
 }
 
-function addBindingEditor({Adw, Gtk, group, draft, initial, status, parent, removed, bind, command, changed}) {
+function addBindingEditor({Adw, Gtk, group, draft, initial, status, parent, removed, bind, command, changed, taken, reportError}) {
     const binding = new Adw.ExpanderRow({title: 'Advanced launch binding', subtitle: 'Use an existing isolated service. Saved binding fields remain unverified.'});
     group.add(binding);
     const fields = {};
@@ -148,7 +171,11 @@ function addBindingEditor({Adw, Gtk, group, draft, initial, status, parent, remo
     const promote = new Gtk.Button({label: 'Verify binding and add for review'}); binding.add_row(promote);
     promote.connect('clicked', async () => {
         const input = draft.snapshot();
-        const profile = {id: input.id, label: input.label, adapter: 'systemd', bootPolicy: 'stop-to-idle',
+        const appLabel = applications.find(app => app.id === input.app).label;
+        const label = input.model && input.label === appLabel ? `${appLabel} - ${input.model}` : input.label;
+        const proposed = profileIDFromModel(input.app, input.model);
+        const id = proposed && !taken().includes(proposed) ? proposed : input.id;
+        const profile = {id, label, adapter: 'systemd', bootPolicy: 'stop-to-idle',
             unit: fields.unit.text, cgroup: fields.cgroup.text, healthURL: fields.healthURL.text};
         if (draft.needsModel) profile.nativeModel = {runtime: input.app, instance: fields.instance.text, model: fields.model.text,
             endpoint: input.endpoint ?? '', launchFile: fields.launchFile.text, launchSHA256: fields.launchSHA256.text};
@@ -164,7 +191,7 @@ function addBindingEditor({Adw, Gtk, group, draft, initial, status, parent, remo
             await bind(profile, () => generation === draft.generation);
             if (generation !== draft.generation) { status.label = 'Draft changed during verification. Verify the updated binding.'; return; }
             draft.cancel(); parent.remove(group); removed();
-        } catch (error) { status.label = `Binding is not verified. Check Advanced launch binding, then retry.\n${error.message}`; }
+        } catch (error) { reportError('Binding is not verified. Check Advanced launch binding, then retry.', error); }
         finally { promote.sensitive = true; }
     });
     return fields;
