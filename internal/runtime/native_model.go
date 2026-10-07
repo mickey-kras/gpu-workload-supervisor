@@ -118,6 +118,11 @@ func (m *SystemdManager) fetchModelList(ctx context.Context, n control.NativeMod
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		// 5xx is a transient daemon condition retried by the poll loop; 4xx
+		// contradicts the bound model identity and is permanent.
+		if resp.StatusCode >= http.StatusInternalServerError {
+			return nil, fmt.Errorf("model list status %d", resp.StatusCode)
+		}
 		return nil, ErrModelIdentity
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 65537))

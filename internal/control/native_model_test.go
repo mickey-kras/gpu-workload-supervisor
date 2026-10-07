@@ -51,6 +51,32 @@ func TestNativeModelOverlap(t *testing.T) {
 	})
 }
 
+func TestNativeModelRejectsMalformedOllamaModel(t *testing.T) {
+	native := func(model string) *NativeModel {
+		return &NativeModel{Runtime: "ollama", Instance: "local", Model: model, Endpoint: "http://127.0.0.1:11434", LaunchFile: "/units/a.service", LaunchSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	}
+	for _, model := range []string{"foo/", "/foo", "foo//bar", "/"} {
+		c := validCatalog()
+		c.Profiles[0].NativeModel = native(model)
+		if c.Validate() == nil {
+			t.Fatalf("malformed ollama model %q accepted", model)
+		}
+	}
+	for _, model := range []string{"foo", "foo:latest", "library/foo", "library/foo:tag"} {
+		c := validCatalog()
+		c.Profiles[0].NativeModel = native(model)
+		if err := c.Validate(); err != nil {
+			t.Fatalf("valid ollama model %q rejected: %v", model, err)
+		}
+	}
+	c := validCatalog()
+	c.Profiles[0].NativeModel = native("foo/")
+	c.Profiles[0].NativeModel.Runtime = "vllm"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("non-ollama model rejected by the ollama rule: %v", err)
+	}
+}
+
 func TestNativeModelRequest(t *testing.T) {
 	for _, body := range []string{`{"model":"selected","Model":"other"}`, `{"model":"a","Keep_Alive":0}`, `{"model":"other"}`, `{"model":"a","model":"other"}`, `{"model":"a","keep_alive":0}`, `{}`, `{"model":"a"} {}`} {
 		if ValidateModelRequest([]byte(body), "a") == nil {

@@ -197,21 +197,25 @@ func (m *SystemdManager) observeSharedOllama(ctx context.Context, p control.Work
 
 // A shared unit may hold auto-loaded leftovers; evict every model but the
 // target before the release and capacity checks, then confirm the eviction
-// before preloading so readiness verifies exactly one loaded model.
+// before preloading so readiness verifies exactly one loaded model. A foreign
+// model can appear mid-poll, so each observation evicts models not already
+// asked to unload instead of waiting for Start to time out.
 func (m *SystemdManager) evictOtherOllamaModels(ctx context.Context, n control.NativeModel) error {
+	target := n.ComparisonModel()
+	evicted := map[string]bool{}
 	loaded, err := m.loadedOllamaModels(ctx, n)
 	if err != nil {
 		return err
 	}
-	target := n.ComparisonModel()
-	for model := range loaded {
-		if model != target {
-			if err := m.setOllamaKeepAlive(ctx, n.Endpoint, model, 0); err != nil {
-				return err
-			}
-		}
+	if err := m.evictOllamaModels(ctx, n.Endpoint, loaded, target, evicted); err != nil {
+		return err
 	}
-	return m.pollOllamaModels(ctx, n, func(loaded map[string]bool) bool {
+	var evictErr error
+	err = m.pollOllamaModels(ctx, n, func(loaded map[string]bool) bool {
+		if err := m.evictOllamaModels(ctx, n.Endpoint, loaded, target, evicted); err != nil {
+			evictErr = err
+			return false
+		}
 		for model := range loaded {
 			if model != target {
 				return true
@@ -219,6 +223,20 @@ func (m *SystemdManager) evictOtherOllamaModels(ctx context.Context, n control.N
 		}
 		return false
 	})
+	return errors.Join(err, evictErr)
+}
+
+func (m *SystemdManager) evictOllamaModels(ctx context.Context, endpoint string, loaded map[string]bool, target string, evicted map[string]bool) error {
+	for model := range loaded {
+		if model == target || evicted[model] {
+			continue
+		}
+		if err := m.setOllamaKeepAlive(ctx, endpoint, model, 0); err != nil {
+			return err
+		}
+		evicted[model] = true
+	}
+	return nil
 }
 
 // Eviction needs the running unit's API; a stopped unit holds no models.

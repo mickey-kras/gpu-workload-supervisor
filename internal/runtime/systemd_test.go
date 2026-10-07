@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 )
 
 type fakeRunner struct {
+	mu      sync.Mutex
 	outputs map[string][]byte
 	errs    map[string]error
 	calls   []string
@@ -28,12 +30,14 @@ type recoveryRunner struct{ fakeRunner }
 
 func (r *recoveryRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	command := strings.Join(append([]string{name}, args...), " ")
+	r.mu.Lock()
 	if command == "/usr/bin/true --user stop -- text.service" {
 		r.outputs[textShowCommand] = []byte("LoadState=loaded\nActiveState=inactive\nSubState=dead\nControlGroup=\n")
 	}
 	if command == "/usr/bin/true --user stop -- media.service" {
 		r.outputs[mediaShowCommand] = []byte("LoadState=loaded\nActiveState=inactive\nSubState=dead\nControlGroup=\n")
 	}
+	r.mu.Unlock()
 	return r.fakeRunner.Run(ctx, name, args...)
 }
 
@@ -85,6 +89,8 @@ func TestRecoveryReportsMediaUnitStopFailure(t *testing.T) {
 
 func (r *fakeRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
 	call := strings.Join(append([]string{name}, args...), " ")
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.calls = append(r.calls, call)
 	if call == rootShowCommand {
 		if _, configured := r.outputs[call]; !configured && r.errs[call] == nil {

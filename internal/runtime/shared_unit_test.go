@@ -28,6 +28,8 @@ type sharedOllamaServer struct {
 	loaded      map[string]int
 	pending     map[string]int
 	unloadDelay int
+	arriveAt    int
+	arrival     string
 	requests    []string
 	psCalls     int
 }
@@ -58,6 +60,9 @@ func (s *sharedOllamaServer) handler() http.Handler {
 				} else {
 					s.pending[model] = left - 1
 				}
+			}
+			if s.arrival != "" && s.psCalls == s.arriveAt {
+				s.loaded[s.arrival] = -1
 			}
 			models := []map[string]string{}
 			for model := range s.loaded {
@@ -110,7 +115,7 @@ func (s *sharedOllamaServer) handler() http.Handler {
 func sharedOllamaFixture(t *testing.T, mutate ...func(*control.Catalog)) (*SystemdManager, *fakeRunner, *sharedOllamaServer, string) {
 	t.Helper()
 	backend := &sharedOllamaServer{
-		known:   map[string]bool{"alpha:latest": true, "beta:latest": true, "gamma:latest": true},
+		known:   map[string]bool{"alpha:latest": true, "beta:latest": true, "gamma:latest": true, "delta:latest": true},
 		loaded:  map[string]int{},
 		pending: map[string]int{},
 	}
@@ -245,6 +250,35 @@ func TestSharedUnitStopPollFailsFastOnIdentityError(t *testing.T) {
 	}
 }
 
+func TestFetchModelListStatusMapping(t *testing.T) {
+	for _, status := range []int{http.StatusBadRequest, http.StatusNotFound} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+		}))
+		m := &SystemdManager{client: server.Client()}
+		n := control.NativeModel{Runtime: "ollama", Endpoint: server.URL, Model: "alpha"}
+		if _, err := m.fetchModelList(context.Background(), n); !errors.Is(err, ErrModelIdentity) {
+			t.Fatalf("status %d: err = %v", status, err)
+		}
+		server.Close()
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	m := &SystemdManager{client: server.Client()}
+	n := control.NativeModel{Runtime: "ollama", Endpoint: server.URL, Model: "alpha"}
+	if _, err := m.fetchModelList(context.Background(), n); err == nil || errors.Is(err, ErrModelIdentity) {
+		t.Fatalf("500 mapped to permanent identity failure: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	err := m.pollOllamaModels(ctx, n, func(map[string]bool) bool { return true })
+	if !errors.Is(err, ErrUnloadUnverified) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("transient 500 not retried to the deadline: %v", err)
+	}
+}
+
 func TestSharedUnitStopTimesOutWhenModelStaysLoaded(t *testing.T) {
 	m, _, backend, _ := sharedOllamaFixture(t)
 	backend.load("alpha")
@@ -322,6 +356,24 @@ func TestSharedUnitStartEvictsLeftoversBeforePreload(t *testing.T) {
 	}
 	if len(backend.requests) != 2 || backend.requests[0] != "gamma:latest:0" || backend.requests[1] != "beta:-1" {
 		t.Fatalf("requests = %#v", backend.requests)
+	}
+	if len(backend.loaded) != 1 || backend.loaded["beta:latest"] != -1 {
+		t.Fatalf("loaded = %#v", backend.loaded)
+	}
+}
+
+func TestSharedUnitStartReEvictsModelAppearingMidPoll(t *testing.T) {
+	m, _, backend, _ := sharedOllamaFixture(t)
+	backend.unloadDelay = 2
+	backend.load("gamma")
+	backend.arriveAt = 2
+	backend.arrival = "delta:latest"
+	if err := m.Start(context.Background(), "beta"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"gamma:latest:0", "delta:latest:0", "beta:-1"}
+	if fmt.Sprintf("%#v", backend.requests) != fmt.Sprintf("%#v", want) {
+		t.Fatalf("requests = %#v, want %#v", backend.requests, want)
 	}
 	if len(backend.loaded) != 1 || backend.loaded["beta:latest"] != -1 {
 		t.Fatalf("loaded = %#v", backend.loaded)
