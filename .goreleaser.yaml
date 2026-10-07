@@ -82,6 +82,10 @@ nfpms:
         dst: /usr/share/applications/gpu-workload-supervisor-setup.desktop
       - src: packaging/gpu-workload-supervisor-reconcile.service
         dst: /usr/lib/systemd/user/gpu-workload-supervisor-reconcile.service
+      - src: packaging/gpu-workload-supervisor-idle.service
+        dst: /usr/lib/systemd/user/gpu-workload-supervisor-idle.service
+      - src: packaging/gpu-workload-supervisor-idle.timer
+        dst: /usr/lib/systemd/user/gpu-workload-supervisor-idle.timer
       - src: LICENSE
         dst: /usr/share/doc/gpu-workload-supervisor/copyright
       - src: THIRD_PARTY_NOTICES/

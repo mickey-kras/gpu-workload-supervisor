@@ -12,12 +12,13 @@ import (
 )
 
 const (
-	actionStatus        = "status"
-	actionTakeControl   = "take-control"
-	actionUserSwitch    = "user-switch"
-	actionReturnControl = "return-control"
-	actionGetSettings   = "get-settings"
-	actionSetIdlePolicy = "set-idle-policy"
+	actionStatus           = "status"
+	actionTakeControl      = "take-control"
+	actionUserSwitch       = "user-switch"
+	actionReturnControl    = "return-control"
+	actionGetSettings      = "get-settings"
+	actionSetIdlePolicy    = "set-idle-policy"
+	actionActivateWorkload = "activate-workload"
 )
 
 const MaxRequestBytes = 16 * 1024
@@ -36,6 +37,10 @@ const (
 	RecoveryRequired          Code = "recovery_required"
 	Timeout                   Code = "timeout"
 	Unavailable               Code = "unavailable"
+	// Deferred is only a workload-activation outcome: the precondition was
+	// readable, but the workload cannot start now (not idle, or unfinished
+	// admitted work). It never latches anything and may be retried.
+	Deferred Code = "deferred"
 )
 
 type Expected struct {
@@ -96,6 +101,15 @@ type Response struct {
 	Code            Code              `json:"code"`
 	Status          *Status           `json:"status,omitempty"`
 	Settings        *SettingsResponse `json:"settings,omitempty"`
+	// LeaseFence is present only on a successful activate-workload response:
+	// the freshly rotated fence authorizes exactly one execution generation.
+	LeaseFence *FenceResponse `json:"leaseFence,omitempty"`
+}
+
+// FenceResponse hands the committed fence to the activating caller.
+type FenceResponse struct {
+	Incarnation string `json:"incarnation"`
+	Epoch       string `json:"epoch"`
 }
 
 func token(s string, max int) bool {
@@ -156,6 +170,11 @@ func validateAction(r Request) Code {
 		}
 		if code := validateSettings(r.Settings); code != OK {
 			return code
+		}
+		return validateExpected(r.Expected)
+	case actionActivateWorkload:
+		if r.Settings != nil || !workloadID(string(r.Target)) || r.Target == control.WorkloadIdle {
+			return InvalidRequest
 		}
 		return validateExpected(r.Expected)
 	case actionTakeControl, actionUserSwitch, actionReturnControl:
@@ -228,7 +247,7 @@ func requestFields(body []byte, action string) bool {
 	if _, s := m["settings"]; s && action != actionSetIdlePolicy {
 		return false
 	}
-	if action != actionUserSwitch {
+	if action != actionUserSwitch && action != actionActivateWorkload {
 		if _, ok := m["target"]; ok {
 			return false
 		}

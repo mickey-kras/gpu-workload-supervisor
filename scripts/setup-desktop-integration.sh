@@ -13,12 +13,15 @@ fi
 package=$(realpath "$2")
 repo=$(cd "$(dirname "$0")/.." && pwd)
 unit=gpu-workload-supervisor-reconcile.service
+units=(gpu-workload-supervisor-reconcile.service gpu-workload-supervisor-idle.service gpu-workload-supervisor-idle.timer)
 binaries=(gpu-mode gpu-workload-proxy gpu-operator gpu-setup)
 for name in "${binaries[@]}"; do
   test ! -e "/usr/bin/$name" && test ! -L "/usr/bin/$name"
 done
-test ! -e "/usr/lib/systemd/user/$unit"
-test ! -L "/usr/lib/systemd/user/$unit"
+for name in "${units[@]}"; do
+  test ! -e "/usr/lib/systemd/user/$name"
+  test ! -L "/usr/lib/systemd/user/$name"
+done
 probe=/usr/bin/gws-ci-nvidia-fixture
 test ! -e "$probe" && test ! -L "$probe"
 test "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs
@@ -62,8 +65,10 @@ for name in "${binaries[@]}"; do
   install -o root -g root -m 755 "$work/package/usr/bin/$name" "/usr/bin/$name"
   installed+=("/usr/bin/$name")
 done
-install -o root -g root -m 644 "$work/package/usr/lib/systemd/user/$unit" "/usr/lib/systemd/user/$unit"
-installed+=("/usr/lib/systemd/user/$unit")
+for name in "${units[@]}"; do
+  install -o root -g root -m 644 "$work/package/usr/lib/systemd/user/$name" "/usr/lib/systemd/user/$name"
+  installed+=("/usr/lib/systemd/user/$name")
+done
 cat > "$probe" <<'PROBE'
 #!/bin/sh
 case "$1" in

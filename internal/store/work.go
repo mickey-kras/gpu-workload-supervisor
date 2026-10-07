@@ -193,6 +193,9 @@ func (s *Store) admitWorkTx(ctx context.Context, requestID, jobID string, worklo
 		}
 		return fmt.Errorf("admit work: %w", err)
 	}
+	if err := s.touchActivity(ctx, tx); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -202,20 +205,35 @@ func (s *Store) FinishWorkToken(ctx context.Context, requestID string, workload 
 	}
 	// Rows registered before completion tokens existed have a NULL
 	// registration_token; only an empty presented token may finish them.
-	result, err := s.db.ExecContext(ctx, `UPDATE registered_work
-		SET completed_at = ?, completion_outcome = ?
-		WHERE request_id = ? AND completed_at IS NULL
-		  AND workload = ? AND lease_incarnation = ? AND lease_epoch = ?
-		  AND ((registration_token IS NULL AND ? = '') OR registration_token = ?)`,
-		formatTime(s.now()), outcome, requestID, workload, fence.Incarnation, fence.Epoch, token, token)
-	if err != nil {
-		return fmt.Errorf("finish work: %w", err)
-	}
-	changed, err := result.RowsAffected()
+	// A successful finish records activity in the same writer transaction.
+	finished := false
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, `UPDATE registered_work
+			SET completed_at = ?, completion_outcome = ?
+			WHERE request_id = ? AND completed_at IS NULL
+			  AND workload = ? AND lease_incarnation = ? AND lease_epoch = ?
+			  AND ((registration_token IS NULL AND ? = '') OR registration_token = ?)`,
+			formatTime(s.now()), outcome, requestID, workload, fence.Incarnation, fence.Epoch, token, token)
+		if err != nil {
+			return fmt.Errorf("finish work: %w", err)
+		}
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if changed != 1 {
+			return nil
+		}
+		if err := s.touchActivity(ctx, tx); err != nil {
+			return err
+		}
+		finished = true
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	if changed == 1 {
+	if finished {
 		return nil
 	}
 	var registeredWorkload sql.NullString

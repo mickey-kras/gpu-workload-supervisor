@@ -9,6 +9,7 @@ export const ERROR_CODES = [
     'recovery_required',
     'timeout',
     'unavailable',
+    'deferred',
 ];
 const fail = () => {
     throw new Error('Invalid operator response');
@@ -138,8 +139,24 @@ function validateStatus(s) {
 
 // The typed settings actions answer with a settings object only and never
 // mint a status from durable state; every other ok response keeps the exact
-// version-1 shape with status and no settings.
+// version-1 shape with status and no settings. A successful activate-workload
+// additionally carries the freshly rotated lease fence.
 export const SETTINGS_ACTIONS = ['get-settings', 'set-idle-policy'];
+export const ACTIVATE_ACTION = 'activate-workload';
+
+// The committed fence handed to the activating caller: an opaque incarnation
+// token plus a canonical nonzero uint64 epoch string (never a number), the
+// same shape the expected version uses.
+function validateLeaseFence(f) {
+    keys(f, ['incarnation', 'epoch']);
+    token(f.incarnation);
+    if (
+        typeof f.epoch !== 'string' ||
+        !/^[1-9][0-9]{0,19}$/.test(f.epoch) ||
+        compareVersions(f.epoch, '18446744073709551615') > 0
+    )
+        fail();
+}
 
 export function parseResponse(text, requestId, action) {
     if (new TextEncoder().encode(text).length > 65536) fail();
@@ -150,18 +167,45 @@ export function parseResponse(text, requestId, action) {
             r,
             SETTINGS_ACTIONS.includes(action)
                 ? [...base, 'settings']
-                : [...base, 'status'],
+                : action === ACTIVATE_ACTION
+                  ? [...base, 'status', 'leaseFence']
+                  : [...base, 'status'],
         );
+    } else if (r.code === 'deferred') {
+        // Deferred is defined only for activate-workload; on any other action
+        // it is a malformed response and fails closed.
+        if (action !== ACTIVATE_ACTION) fail();
+        // A deferred activation reports the observed current status so the
+        // desktop can render why the workload did not start, and optionally
+        // the current lease fence so a caller that lost a committed
+        // activation response can recover the committed generation.
+        keys(r, 'leaseFence' in r ? [...base, 'status', 'leaseFence'] : [...base, 'status']);
     } else {
         keys(r, base);
         one(r.code, ERROR_CODES);
     }
     if (r.protocolVersion !== 1 || r.requestId !== requestId) fail();
-    if (r.code !== 'ok') return r;
+    if (r.code !== 'ok') {
+        if (r.code === 'deferred') {
+            validateStatus(r.status);
+            if ('leaseFence' in r) {
+                validateLeaseFence(r.leaseFence);
+                if (r.leaseFence.incarnation !== r.status.expected.incarnation) fail();
+            }
+        }
+        return r;
+    }
     if (SETTINGS_ACTIONS.includes(action)) {
         validateSettings(r.settings);
         return r;
     }
     validateStatus(r.status);
+    if (action === ACTIVATE_ACTION) {
+        validateLeaseFence(r.leaseFence);
+        // The handed-out fence must be the fence the returned status commits:
+        // a mismatched incarnation would be rejected as stale by every
+        // admission, so bind them here and fail closed otherwise.
+        if (r.leaseFence.incarnation !== r.status.expected.incarnation) fail();
+    }
     return r;
 }

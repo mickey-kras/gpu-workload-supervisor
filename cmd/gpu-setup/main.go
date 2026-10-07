@@ -21,6 +21,7 @@ type setupActions struct {
 	home          func() (string, error)
 	apply         func(context.Context, string, setup.Request) error
 	reconcile     func(context.Context, string) error
+	policyTick    func(context.Context, string) error
 	discover      func(context.Context, string) (setup.Discovery, error)
 	probe         func(context.Context, setup.ProbeRequest) (setup.ApplicationCandidate, error)
 	euid          func() int
@@ -34,6 +35,7 @@ func systemActions() setupActions {
 		home:          setup.Home,
 		apply:         setup.Apply,
 		reconcile:     setup.Reconcile,
+		policyTick:    setup.PolicyTick,
 		discover:      setup.Discover,
 		probe:         setup.Probe,
 		euid:          os.Geteuid,
@@ -51,7 +53,7 @@ func main() {
 }
 func (a setupActions) run(args []string, input io.Reader, output io.Writer) error {
 	if len(args) != 1 {
-		return errors.New("usage: gpu-setup discover|probe|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|reconcile|remove-integration")
+		return errors.New("usage: gpu-setup discover|probe|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|reconcile|idle-policy-tick|remove-integration")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -60,14 +62,14 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return err
 	}
 	switch args[0] {
-	case "discover", "fingerprint", "probe", "reconcile", "save-drafts", cmdVerifyBindings, "validate", "apply", "render-owned":
+	case "discover", "fingerprint", "probe", "reconcile", "idle-policy-tick", "save-drafts", cmdVerifyBindings, "validate", "apply", "render-owned":
 		if a.euid() == 0 {
 			return errors.New("run guided setup as the desktop account, not root")
 		}
 	}
 	switch args[0] {
 	case "remove-integration":
-		return setup.RemoveIntegration(home)
+		return setup.RemoveIntegration(ctx, home)
 	case "discover":
 		return a.runDiscover(ctx, home, output)
 	case "drafts":
@@ -82,6 +84,8 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return a.runProbe(ctx, input, output)
 	case "reconcile":
 		return a.reconcile(ctx, home)
+	case "idle-policy-tick":
+		return a.policyTick(ctx, home)
 	case "validate", "apply", cmdVerifyBindings:
 		return a.runPlanned(ctx, home, args[0], input, output)
 	}

@@ -43,6 +43,12 @@ type storeGateway interface {
 	Recover(context.Context, uint64, control.State, string) (control.State, error)
 	RotateFenceAndCloseAdmission(context.Context, uint64) (control.State, error)
 	ResolveUnfinishedWork(context.Context, uint64, string) (int64, error)
+	Settings(context.Context) (control.PolicyState, error)
+	DisarmIdleDeadline(context.Context) error
+	ArmIdleDeadline(context.Context, string, time.Time, time.Time) error
+	StartIdleTransition(context.Context, time.Time, store.Transition, func(context.Context) (func(), error)) (control.State, error)
+	CheckActivationPrecondition(context.Context, control.OperatorPrecondition) error
+	StartActivationTransition(context.Context, control.OperatorPrecondition, store.Transition) (control.State, error)
 }
 
 type Config struct {
@@ -380,6 +386,7 @@ func closedReconciling(s control.State) control.State {
 	s.Phase = control.PhaseReconciling
 	s.Health = control.HealthError
 	s.Admission = control.AdmissionClosed
+	s.PendingIdleDeadline = nil
 	return s
 }
 

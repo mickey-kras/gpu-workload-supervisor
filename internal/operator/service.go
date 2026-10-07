@@ -16,6 +16,7 @@ import (
 type Backend interface {
 	Status(context.Context) (control.State, error)
 	OperatorTransition(context.Context, string, control.Workload, control.OperatorPrecondition) (control.State, error)
+	ActivateWorkload(context.Context, control.Workload, control.OperatorPrecondition) (control.State, error)
 }
 
 // PolicyStore serves the typed settings surface straight from durable state:
@@ -99,6 +100,17 @@ func (session Session) respond(ctx context.Context, req Request, result Response
 	state, code := session.execute(ctx, req)
 	if code != OK {
 		result.Code = code
+		// A deferred activation still reports the observed current status so
+		// the desktop can render why the workload did not start, and the
+		// current fence so an orchestration caller that lost a committed
+		// activation response can recover the committed generation on retry
+		// instead of being locked out by its own stale fence.
+		if code == Deferred && state.Validate() == nil && token(state.LeaseFence.Incarnation, 128) {
+			result.Status = session.status(state)
+			if req.Action == actionActivateWorkload {
+				result.LeaseFence = fenceResponse(state)
+			}
+		}
 		return result
 	}
 	if ctx.Err() != nil {
@@ -110,7 +122,14 @@ func (session Session) respond(ctx context.Context, req Request, result Response
 	}
 	result.Code = OK
 	result.Status = session.status(state)
+	if req.Action == actionActivateWorkload {
+		result.LeaseFence = fenceResponse(state)
+	}
 	return result
+}
+
+func fenceResponse(state control.State) *FenceResponse {
+	return &FenceResponse{Incarnation: state.LeaseFence.Incarnation, Epoch: strconv.FormatUint(state.LeaseFence.Epoch, 10)}
 }
 
 func (s Service) requestBudget(action string) (time.Duration, bool) {
@@ -138,7 +157,13 @@ func (s Session) execute(ctx context.Context, req Request) (control.State, Code)
 	}
 	e := req.Expected
 	version, _ := strconv.ParseUint(e.Version, 10, 64)
-	state, err := s.Backend.OperatorTransition(ctx, req.Action, req.Target, control.OperatorPrecondition{Incarnation: e.Incarnation, Version: version, Owner: e.Owner, ConfigurationRevision: e.ConfigurationRevision})
+	precondition := control.OperatorPrecondition{Incarnation: e.Incarnation, Version: version, Owner: e.Owner, ConfigurationRevision: e.ConfigurationRevision}
+	var err error
+	if req.Action == actionActivateWorkload {
+		state, err = s.Backend.ActivateWorkload(ctx, req.Target, precondition)
+	} else {
+		state, err = s.Backend.OperatorTransition(ctx, req.Action, req.Target, precondition)
+	}
 	if err != nil {
 		return state, errorCode(err)
 	}
@@ -209,7 +234,7 @@ func (s Session) validateTransition(req Request) Code {
 	if req.Expected.ConfigurationRevision != s.Revision {
 		return StaleState
 	}
-	if req.Action == actionUserSwitch {
+	if req.Action == actionUserSwitch || req.Action == actionActivateWorkload {
 		for _, w := range s.Workloads {
 			if w.ID == req.Target {
 				return OK
@@ -252,6 +277,8 @@ func errorCode(err error) Code {
 		return InvalidRequest
 	case errors.Is(err, store.ErrEvidenceUnavailable):
 		return Unavailable
+	case errors.Is(err, store.ErrNotIdle) || errors.Is(err, store.ErrUnresolvedWork):
+		return Deferred
 	case errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, store.ErrTransitionRunning) || errors.Is(err, supervisor.ErrTransitionRunning):
 		return Busy
 	case errors.Is(err, store.ErrUnstableState) || errors.Is(err, supervisor.ErrRecoveryRequired) || errors.Is(err, supervisor.ErrReconcileRequired):

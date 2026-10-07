@@ -27,6 +27,20 @@ func (b *backendFixture) OperatorTransition(ctx context.Context, a string, w con
 	}
 	return b.state, b.err
 }
+func (b *backendFixture) ActivateWorkload(ctx context.Context, w control.Workload, e control.OperatorPrecondition) (control.State, error) {
+	b.called = true
+	if ctx.Err() != nil {
+		return b.state, ctx.Err()
+	}
+	if b.err != nil {
+		return b.state, b.err
+	}
+	state := b.state
+	state.DesiredWorkload = w
+	state.ActiveWorkload = w
+	state.LeaseFence.Epoch++
+	return state, nil
+}
 func TestServiceGateBeforeOpen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	gate, e := lock.TryAcquire(path + ".lock")

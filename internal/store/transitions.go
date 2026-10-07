@@ -32,24 +32,35 @@ func (s *Store) startTransition(ctx context.Context, expected uint64, operator *
 		if err := validateTransitionCatalog(ctx, tx, tr); err != nil {
 			return control.State{}, err
 		}
-		next := current
-		next.DesiredWorkload = tr.Target.DesiredWorkload
-		next.Admission = control.AdmissionClosed
-		next.Phase = control.PhaseDraining
-		next.LeaseFence.Epoch++
-		next.Version++
-		next.UpdatedAt = s.now().UTC()
-		if err := next.Validate(); err != nil {
-			return control.State{}, err
-		}
-		if err := s.recordTransition(ctx, tx, current, next, tr); err != nil {
-			return control.State{}, err
-		}
-		if err := writeState(ctx, tx, next); err != nil {
-			return control.State{}, err
-		}
-		return next, nil
+		return s.beginTransitionTx(ctx, tx, current, tr)
 	})
+}
+
+// beginTransitionTx persists the draining entry. Every transition disarms the
+// verified idle deadline in the same transaction: the next policy tick must
+// re-attest and re-arm before idling.
+func (s *Store) beginTransitionTx(ctx context.Context, tx *sql.Tx, current control.State, tr Transition) (control.State, error) {
+	next := current
+	next.DesiredWorkload = tr.Target.DesiredWorkload
+	next.Admission = control.AdmissionClosed
+	next.Phase = control.PhaseDraining
+	next.LeaseFence.Epoch++
+	next.Version++
+	next.UpdatedAt = s.now().UTC()
+	if err := s.disarmIdleDeadline(ctx, tx); err != nil {
+		return control.State{}, err
+	}
+	next.PendingIdleDeadline = nil
+	if err := next.Validate(); err != nil {
+		return control.State{}, err
+	}
+	if err := s.recordTransition(ctx, tx, current, next, tr); err != nil {
+		return control.State{}, err
+	}
+	if err := writeState(ctx, tx, next); err != nil {
+		return control.State{}, err
+	}
+	return next, nil
 }
 
 func (s *Store) recordTransition(ctx context.Context, tx *sql.Tx, current, next control.State, tr Transition) error {
@@ -100,6 +111,7 @@ func (s *Store) SetTransitionPhase(ctx context.Context, transitionID string, exp
 	return s.withStateTx(ctx, expected, func(tx *sql.Tx, state control.State) (control.State, error) {
 		state.Phase = phase
 		state.Admission = control.AdmissionClosed
+		state.PendingIdleDeadline = nil
 		state.Version++
 		state.UpdatedAt = s.now().UTC()
 		if err := state.Validate(); err != nil {
@@ -125,10 +137,16 @@ func (s *Store) FinishTransition(ctx context.Context, transitionID, status strin
 		if final.LeaseFence != current.LeaseFence {
 			return control.State{}, ErrStaleFence
 		}
+		final.PendingIdleDeadline = nil
 		final.Version = current.Version + 1
 		final.UpdatedAt = s.now().UTC()
 		if err := final.Validate(); err != nil {
 			return control.State{}, err
+		}
+		if status == "committed" && final.ActiveWorkload != control.WorkloadIdle {
+			if err := s.touchActivity(ctx, tx); err != nil {
+				return control.State{}, err
+			}
 		}
 		if err := updateRunningTransition(ctx, tx, `UPDATE transitions SET phase = ?, status = ?, updated_at = ?
 			WHERE transition_id = ? AND status = 'in_progress'`,
@@ -167,6 +185,10 @@ func (s *Store) Recover(ctx context.Context, expected uint64, final control.Stat
 		final.LeaseFence.Epoch++
 		final.Version = current.Version + 1
 		final.UpdatedAt = s.now().UTC()
+		if err := s.disarmIdleDeadline(ctx, tx); err != nil {
+			return control.State{}, err
+		}
+		final.PendingIdleDeadline = nil
 		if err := final.Validate(); err != nil {
 			return control.State{}, err
 		}
