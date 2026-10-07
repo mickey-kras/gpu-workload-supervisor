@@ -355,6 +355,123 @@ func TestOwnedEndpointSharingRule(t *testing.T) {
 	})
 }
 
+// TestSharedUnitRequiresIdenticalLaunchBindings locks the launch fingerprint
+// for profiles sharing one unit: only one launch file exists, so divergent
+// bindings would guarantee ErrLaunchChanged for at least one profile. The rule
+// covers adopted pairs too because they can drift the same way.
+func TestSharedUnitRequiresIdenticalLaunchBindings(t *testing.T) {
+	adopted := func(id, model string) WorkloadProfile {
+		return WorkloadProfile{
+			ID:        Workload(id),
+			Label:     "Ollama " + model,
+			Adapter:   "systemd",
+			Unit:      "ollama.service",
+			Cgroup:    "/workloads/ollama.service",
+			HealthURL: "http://127.0.0.1:11434/health",
+			NativeModel: &NativeModel{
+				Runtime:      "ollama",
+				Instance:     "local",
+				Model:        model,
+				Endpoint:     "http://127.0.0.1:11434",
+				LaunchFile:   "/etc/systemd/user/ollama.service",
+				LaunchSHA256: strings.Repeat("0", 64),
+			},
+		}
+	}
+	t.Run("owned divergent hash rejected", func(t *testing.T) {
+		a, b := ownedOllamaProfile("chat", "qwen3:latest"), ownedOllamaProfile("code", "qwen3-coder:latest")
+		b.NativeModel.LaunchSHA256 = strings.Repeat("f", 64)
+		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{a, b}}).Validate(); err == nil {
+			t.Fatal("divergent hash on shared owned unit accepted")
+		}
+	})
+	t.Run("owned divergent file rejected", func(t *testing.T) {
+		a, b := ownedOllamaProfile("chat", "qwen3:latest"), ownedOllamaProfile("code", "qwen3-coder:latest")
+		b.NativeModel.LaunchFile = "/home/u/.config/systemd/user/other.service"
+		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{a, b}}).Validate(); err == nil {
+			t.Fatal("divergent launch file on shared owned unit accepted")
+		}
+	})
+	t.Run("owned identical accepted", func(t *testing.T) {
+		a, b := ownedOllamaProfile("chat", "qwen3:latest"), ownedOllamaProfile("code", "qwen3-coder:latest")
+		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{a, b}}).Validate(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("adopted divergent hash rejected", func(t *testing.T) {
+		a, b := adopted("alpha", "a"), adopted("beta", "b")
+		b.NativeModel.LaunchSHA256 = strings.Repeat("1", 64)
+		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{a, b}}).Validate(); err == nil {
+			t.Fatal("divergent hash on shared adopted unit accepted")
+		}
+	})
+	t.Run("adopted identical accepted", func(t *testing.T) {
+		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{adopted("alpha", "a"), adopted("beta", "b")}}).Validate(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// TestNativeEndpointNormalizedCollision compares endpoints by socket address,
+// never by stored text: padded ports and equivalent loopback spellings collide.
+func TestNativeEndpointNormalizedCollision(t *testing.T) {
+	adopted := func(id, instance, endpoint string) WorkloadProfile {
+		return WorkloadProfile{
+			ID:        Workload(id),
+			Label:     "Llama " + id,
+			Adapter:   "systemd",
+			Unit:      "llama-" + id + ".service",
+			Cgroup:    "/workloads/llama-" + id,
+			HealthURL: endpoint + "/health",
+			NativeModel: &NativeModel{
+				Runtime:      "llama.cpp",
+				Instance:     instance,
+				Model:        "m-" + id,
+				Endpoint:     endpoint,
+				LaunchFile:   "/units/llama-" + id + ".service",
+				LaunchSHA256: strings.Repeat("2", 64),
+			},
+		}
+	}
+	t.Run("zero padded port collides", func(t *testing.T) {
+		a := adopted("a", "one", "http://127.0.0.1:9100")
+		b := adopted("b", "two", "http://127.0.0.1:09100")
+		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{a, b}}).Validate(); err == nil {
+			t.Fatal("zero-padded port endpoint accepted as distinct")
+		}
+	})
+	t.Run("ipv6 loopback forms collide", func(t *testing.T) {
+		a := adopted("a", "one", "http://[::1]:9100")
+		b := adopted("b", "two", "http://[0:0:0:0:0:0:0:1]:9100")
+		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{a, b}}).Validate(); err == nil {
+			t.Fatal("expanded IPv6 loopback accepted as distinct")
+		}
+	})
+	t.Run("hostname casing collides", func(t *testing.T) {
+		a := adopted("a", "one", "http://LOCALHOST:9100")
+		b := adopted("b", "two", "http://localhost:9100")
+		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{a, b}}).Validate(); err == nil {
+			t.Fatal("case-variant hostname accepted as distinct")
+		}
+	})
+	t.Run("distinct ports accepted", func(t *testing.T) {
+		a := adopted("a", "one", "http://127.0.0.1:9100")
+		b := adopted("b", "two", "http://127.0.0.1:9101")
+		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{a, b}}).Validate(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("stored endpoint never rewritten", func(t *testing.T) {
+		c := Catalog{Version: 1, Profiles: []WorkloadProfile{adopted("a", "one", "http://127.0.0.1:9100")}}
+		if err := c.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if c.Profiles[0].NativeModel.Endpoint != "http://127.0.0.1:9100" {
+			t.Fatalf("endpoint rewritten to %q", c.Profiles[0].NativeModel.Endpoint)
+		}
+	})
+}
+
 func TestOwnedUnitNameDerivation(t *testing.T) {
 	if got := OwnedUnitName("ollama", "local", "chat"); got != "gws-owned-ollama-local.service" {
 		t.Fatalf("ollama owned unit %q", got)

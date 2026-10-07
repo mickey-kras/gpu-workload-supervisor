@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -248,6 +249,9 @@ func validateProfileOverlap(p WorkloadProfile, previous []WorkloadProfile) error
 		if ownedEndpointCollision(p, q) {
 			return errors.New("native endpoint belongs to another instance")
 		}
+		if sharedOllamaUnit(p, q) && (p.NativeModel.LaunchFile != q.NativeModel.LaunchFile || p.NativeModel.LaunchSHA256 != q.NativeModel.LaunchSHA256) {
+			return errors.New("shared Ollama unit requires identical launch bindings")
+		}
 		if profilesOverlap(p, q) {
 			return errors.New("duplicate or overlapping profiles")
 		}
@@ -259,7 +263,7 @@ func validateProfileOverlap(p WorkloadProfile, previous []WorkloadProfile) error
 // profiles may share an endpoint only when they share one Ollama instance per
 // the shared-unit rule.
 func ownedEndpointCollision(p, q WorkloadProfile) bool {
-	if p.NativeModel == nil || q.NativeModel == nil || p.NativeModel.Endpoint != q.NativeModel.Endpoint {
+	if p.NativeModel == nil || q.NativeModel == nil || nativeEndpointKey(p.NativeModel.Endpoint) != nativeEndpointKey(q.NativeModel.Endpoint) {
 		return false
 	}
 	if p.NativeModel.Owned == nil && q.NativeModel.Owned == nil {
@@ -268,14 +272,34 @@ func ownedEndpointCollision(p, q WorkloadProfile) bool {
 	return !sharedOllamaUnit(p, q)
 }
 
+// nativeEndpointKey normalizes an endpoint to its socket address for collision
+// detection only; the stored endpoint string is never rewritten. Textually
+// different URLs that name the same TCP socket (zero-padded ports, hostname
+// casing, expanded IPv6 loopback forms) must collide.
+func nativeEndpointKey(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	host := strings.ToLower(u.Hostname())
+	if ip := net.ParseIP(host); ip != nil {
+		host = ip.String()
+	}
+	port := u.Port()
+	if n, err := strconv.Atoi(port); err == nil {
+		port = strconv.Itoa(n)
+	}
+	return host + ":" + port
+}
+
 func validateNativeOverlap(a, b *NativeModel) error {
 	if a == nil || b == nil {
 		return nil
 	}
-	if a.Instance == b.Instance && (a.Runtime != b.Runtime || a.Endpoint != b.Endpoint) {
+	if a.Instance == b.Instance && (a.Runtime != b.Runtime || nativeEndpointKey(a.Endpoint) != nativeEndpointKey(b.Endpoint)) {
 		return errors.New("inconsistent native runtime instance")
 	}
-	if a.Endpoint == b.Endpoint && a.Instance != b.Instance {
+	if nativeEndpointKey(a.Endpoint) == nativeEndpointKey(b.Endpoint) && a.Instance != b.Instance {
 		return errors.New("native endpoint belongs to another instance")
 	}
 	if a.Instance == b.Instance && a.ComparisonModel() == b.ComparisonModel() {
