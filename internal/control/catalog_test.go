@@ -61,7 +61,7 @@ func TestWorkloadLabelRejectsByteOrderMark(t *testing.T) {
 
 func TestCatalogRejectsInvalidProfiles(t *testing.T) {
 	cases := map[string]func(*Catalog){
-		"version": func(c *Catalog) { c.Version = 2 }, "empty": func(c *Catalog) { c.Profiles = nil },
+		"version": func(c *Catalog) { c.Version = 3 }, "empty": func(c *Catalog) { c.Profiles = nil },
 		"too many": func(c *Catalog) { c.Profiles = make([]WorkloadProfile, 33) },
 		"reserved": func(c *Catalog) { c.Profiles[0].ID = "idle" }, "uppercase": func(c *Catalog) { c.Profiles[0].ID = "Speech" },
 		"empty label": func(c *Catalog) { c.Profiles[0].Label = "" },

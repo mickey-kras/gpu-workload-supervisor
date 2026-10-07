@@ -42,9 +42,10 @@ func qualifyNativeLaunchWithValidator(raw []byte, n control.NativeModel, validat
 }
 
 type parsedLaunchUnit struct {
-	execStart string
-	cloudOff  bool
-	host      string
+	execStart       string
+	cloudOff        bool
+	host            string
+	maxLoadedPinned bool
 }
 
 func parseLaunchUnit(raw []byte, runtimeName string) (parsedLaunchUnit, error) {
@@ -113,6 +114,8 @@ func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value strin
 			u.cloudOff = true
 		} else if strings.HasPrefix(value, "OLLAMA_HOST=") && u.host == "" {
 			u.host = strings.TrimPrefix(value, "OLLAMA_HOST=")
+		} else if value == "OLLAMA_MAX_LOADED_MODELS=1" && !u.maxLoadedPinned {
+			u.maxLoadedPinned = true
 		} else {
 			return ErrLaunchUnsupported
 		}
