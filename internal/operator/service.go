@@ -75,6 +75,10 @@ func (s Service) Handle(req Request) Response {
 		result.Code = IncompatibleConfiguration
 		return result
 	}
+	return session.respond(ctx, req, result)
+}
+
+func (session Session) respond(ctx context.Context, req Request, result Response) Response {
 	// Settings actions answer from durable state only and never mint a status:
 	// an unobserved durable snapshot must not surface as a fresh, actionable
 	// observation with derived capabilities.
