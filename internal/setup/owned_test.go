@@ -368,7 +368,11 @@ func TestResumeOwnedUnitJournalAtApplyEntry(t *testing.T) {
 		}
 	})
 
-	t.Run("equal digest rewrite drops the delete", func(t *testing.T) {
+	t.Run("re-added unit still finishes the committed delete", func(t *testing.T) {
+		// The accepted catalog already dropped the unit, so the file is
+		// removed even though the request re-adds it identically; the resumed
+		// plan recreates it. Preserving it would leave an unjournaled orphan
+		// if the resumed attempt then failed.
 		if err := os.WriteFile(filepath.Join(dir, profile.Unit), raw, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -380,12 +384,20 @@ func TestResumeOwnedUnitJournalAtApplyEntry(t *testing.T) {
 		if err := backend.resumeOwnedUnitJournal(ctx, home, req); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := os.Lstat(filepath.Join(dir, profile.Unit)); err != nil {
-			t.Fatal("rewritten unit deleted")
+		if _, err := os.Lstat(filepath.Join(dir, profile.Unit)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("committed delete not finished")
+		}
+		if _, present, _ := readOwnedUnitJournal(root); present {
+			t.Fatal("journal not retired after finishing the delete")
 		}
 	})
 
 	t.Run("divergent digest rewrite refuses", func(t *testing.T) {
+		// Content the journal never proved is fail-closed: the delete is
+		// refused and the journal survives for inspection.
+		if err := os.WriteFile(filepath.Join(dir, profile.Unit), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
 		journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{}, Deletes: map[string]string{profile.Unit: digest([]byte("older render"))}, Phase: ownedJournalCommitted}
 		if err := writeOwnedUnitJournal(root, journal); err != nil {
 			t.Fatal(err)
@@ -394,9 +406,13 @@ func TestResumeOwnedUnitJournalAtApplyEntry(t *testing.T) {
 		if err := backend.resumeOwnedUnitJournal(ctx, home, req); !errors.Is(err, ErrOwnedUnitModified) {
 			t.Fatalf("divergent rewrite = %v", err)
 		}
+		if _, present, _ := readOwnedUnitJournal(root); !present {
+			t.Fatal("journal consumed despite divergent content")
+		}
 		if err := clearOwnedUnitJournal(root); err != nil {
 			t.Fatal(err)
 		}
+		os.Remove(filepath.Join(dir, profile.Unit))
 	})
 
 	t.Run("writes-pending journal without fence is cleared", func(t *testing.T) {

@@ -234,16 +234,10 @@ func (b Backend) replayCommittedDeletes(ctx context.Context, home, root string, 
 		if err != nil {
 			return err
 		}
-		if p, ok := ownedProfileForUnit(req.Catalog, name); ok {
-			raw, err := ownedRenderChecked(p)
-			if err != nil {
-				return err
-			}
-			if digest(raw) != proof {
-				return fmt.Errorf("%w: %s", ErrOwnedUnitModified, name)
-			}
-			continue
-		}
+		// A committed delete is finished even when the new request re-adds
+		// the unit: the accepted catalog already excludes it, so preserving
+		// the file would leave it unjournaled if this attempt then fails.
+		// The resumed plan recreates the unit from the request instead.
 		if digest(current) != proof {
 			return fmt.Errorf("%w: %s", ErrOwnedUnitModified, name)
 		}

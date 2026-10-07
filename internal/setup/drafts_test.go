@@ -156,3 +156,18 @@ func TestDraftOwnedRejectsInvalidInstanceSyntax(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestDraftOwnedRejectsInvalidOllamaModel applies the catalog's model-identity
+// rule to owned Ollama drafts at save time.
+func TestDraftOwnedRejectsInvalidOllamaModel(t *testing.T) {
+	for _, model := range []string{"   ", "foo/", "/bar", "vis\x00ion", "a//b"} {
+		d := Draft{ID: "vision", Label: "Vision", App: "ollama", Model: model, Binding: &DraftBinding{Instance: "rig", Owned: &DraftOwnedLaunch{Port: 9100}}}
+		if err := validateDrafts(1, []Draft{d}); err == nil {
+			t.Fatalf("model %q saved", model)
+		}
+	}
+	d := Draft{ID: "vision", Label: "Vision", App: "ollama", Model: "library/vision:latest", Binding: &DraftBinding{Instance: "rig", Owned: &DraftOwnedLaunch{Port: 9100}}}
+	if err := validateDrafts(1, []Draft{d}); err != nil {
+		t.Fatal(err)
+	}
+}

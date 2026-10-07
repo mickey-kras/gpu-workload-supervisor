@@ -140,6 +140,9 @@ func validateDraft(d Draft, ids map[string]bool) error {
 			if d.App == "ollama" && d.Model == "" {
 				return errors.New("owned ollama drafts require a model and instance")
 			}
+			if d.App == "ollama" && !control.ValidNativeModelIdentity(d.App, d.Model) {
+				return errors.New("invalid native model identity")
+			}
 		}
 	}
 	if d.Endpoint != "" && d.Reference != "" {

@@ -57,6 +57,16 @@ func (n NativeModel) ComparisonModel() string {
 // malformedOllamaModel rejects empty name segments so a configured string
 // cannot canonicalize to an identity the API would never report, such as
 // "foo/" becoming "foo/:latest".
+// ValidNativeModelIdentity applies the catalog's model-identity rule
+// (non-blank, bounded, no control characters) plus the runtime-specific
+// grammar, so draft surfaces can reject failing names at save time.
+func ValidNativeModelIdentity(runtime, model string) bool {
+	if strings.TrimSpace(model) == "" || len(model) > 1024 || strings.IndexFunc(model, unicode.IsControl) >= 0 {
+		return false
+	}
+	return runtime != "ollama" || !malformedOllamaModel(model)
+}
+
 func malformedOllamaModel(model string) bool {
 	for _, segment := range strings.Split(model, "/") {
 		if segment == "" {
@@ -70,10 +80,7 @@ func (n NativeModel) validate() error {
 	if n.Runtime != "ollama" && n.Runtime != "llama.cpp" && n.Runtime != "vllm" {
 		return errors.New("unsupported native runtime")
 	}
-	if !ValidInstanceID(n.Instance) || strings.TrimSpace(n.Model) == "" || len(n.Model) > 1024 || strings.IndexFunc(n.Model, unicode.IsControl) >= 0 {
-		return errors.New("invalid native model identity")
-	}
-	if n.Runtime == "ollama" && malformedOllamaModel(n.Model) {
+	if !ValidInstanceID(n.Instance) || !ValidNativeModelIdentity(n.Runtime, n.Model) {
 		return errors.New("invalid native model identity")
 	}
 	u, err := url.Parse(n.Endpoint)

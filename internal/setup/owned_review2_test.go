@@ -1483,3 +1483,52 @@ func TestResumeRestoresAcceptedRenderingBeforeReplay(t *testing.T) {
 		t.Fatal("successful resume did not apply the update")
 	}
 }
+
+// TestResumeFinishesCommittedDeleteBeforeReAdd covers the re-add wedge: a
+// committed delete whose file survived is finished at resume, so a re-add
+// attempt that then fails leaves catalog and disk consistent (no orphan).
+func TestResumeFinishesCommittedDeleteBeforeReAdd(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommandFor(home)
+	ctx := context.Background()
+	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	// Crash after the delete committed but before finalize: committed catalog
+	// without the unit, proven delete journaled, file still on disk.
+	dropped := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health"}}}
+	s := openStoreAt(t, r.Profile.StatePath)
+	if _, err := s.ReplaceCatalog(ctx, currentRevision(t, r), dropped); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{}, Deletes: map[string]string{profile.Unit: digest(raw)}, Phase: ownedJournalCommitted}
+	if err := writeOwnedUnitJournal(root, journal); err != nil {
+		t.Fatal(err)
+	}
+	// Re-add request whose attempt fails before commit: the finished delete
+	// plus rollback leave no unjournaled file behind.
+	r.ExpectedRevision = currentRevision(t, r)
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{err: errors.New("busy")}, nil }
+	if err := backend.Apply(ctx, home, r); err == nil {
+		t.Fatal("apply succeeded despite busy runtime")
+	}
+	if _, err := os.Lstat(filepath.Join(ownedUnitDirectory(home), profile.Unit)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("failed re-add left an unjournaled unit file")
+	}
+	if _, present, _ := readOwnedUnitJournal(root); present {
+		t.Fatal("journal left behind")
+	}
+	// Happy re-add path: the unit is recreated from the request.
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(ownedUnitDirectory(home), profile.Unit))
+	if string(data) != string(raw) {
+		t.Fatal("re-added unit not recreated")
+	}
+}
