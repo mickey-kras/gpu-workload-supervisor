@@ -581,18 +581,17 @@ func TestActivityAfterArmClearsArmedDeadline(t *testing.T) {
 		}
 		assertCleared(t, s)
 	})
-	t.Run("finish after arm clears", func(t *testing.T) {
-		s, now := policyFixture(t)
+	t.Run("finish clears an already-armed deadline", func(t *testing.T) {
+		// Arming requires zero pending work, so a finish can only land after
+		// an arm when the work was admitted after the arm; admit clears first.
+		// The finish path therefore funnels through the same touchActivity
+		// clearing, exercised here on a deadline armed then disarmed by admit:
+		// finishing the admitted work must leave the armed fields cleared.
+		s, now, deadline := armedFixture(t)
 		ctx := context.Background()
 		state, _ := s.State(ctx)
-		// Admit at the seeded activity time so the armed deadline stays
-		// consistent with last_activity_at.
+		*now = deadline.Add(-time.Minute)
 		if err := s.AdmitWork(ctx, "req", "job", control.WorkloadText, state.LeaseFence); err != nil {
-			t.Fatal(err)
-		}
-		fingerprint := enablePolicy(t, s)
-		deadline := policyEpoch.Add(5 * time.Minute)
-		if err := s.ArmIdleDeadline(ctx, fingerprint, deadline, policyEpoch.Add(4*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
 		*now = deadline
@@ -621,5 +620,88 @@ func TestActivityAfterArmClearsArmedDeadline(t *testing.T) {
 			t.Fatal(err)
 		}
 		assertCleared(t, s)
+	})
+}
+
+// An admission or completion landing between the evaluator's settings read
+// and the arm must preempt the arm, so a stale computed deadline is never
+// committed.
+func TestArmIdleDeadlineRevalidatesActivityAndPendingWork(t *testing.T) {
+	newDeadline := func(t *testing.T, s *Store) (fingerprint string, deadline time.Time) {
+		t.Helper()
+		settings, err := s.Settings(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return settings.SettingsRevision, settings.LastActivityAt.Add(time.Duration(settings.Policy.TimeoutMinutes) * time.Minute)
+	}
+
+	t.Run("matching deadline still arms", func(t *testing.T) {
+		s, _ := policyFixture(t)
+		enablePolicy(t, s)
+		fingerprint, deadline := newDeadline(t, s)
+		if err := s.ArmIdleDeadline(context.Background(), fingerprint, deadline, policyEpoch.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		settings, _ := s.Settings(context.Background())
+		if settings.ArmedDeadline == nil || !settings.ArmedDeadline.Equal(deadline) {
+			t.Fatalf("armed = %#v", settings.ArmedDeadline)
+		}
+	})
+	t.Run("admit between read and arm preempts", func(t *testing.T) {
+		s, now := policyFixture(t)
+		enablePolicy(t, s)
+		fingerprint, deadline := newDeadline(t, s)
+		*now = now.Add(time.Minute)
+		state, _ := s.State(context.Background())
+		if err := s.AdmitWork(context.Background(), "req", "job", control.WorkloadText, state.LeaseFence); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.ArmIdleDeadline(context.Background(), fingerprint, deadline, policyEpoch.Add(time.Minute)); !errors.Is(err, ErrPolicyPreempted) {
+			t.Fatalf("arm after concurrent admit: %v", err)
+		}
+		if settings, _ := s.Settings(context.Background()); settings.ArmedDeadline != nil {
+			t.Fatalf("stale deadline armed: %v", settings.ArmedDeadline)
+		}
+	})
+	t.Run("finish between read and arm preempts", func(t *testing.T) {
+		s, now := policyFixture(t)
+		ctx := context.Background()
+		state, _ := s.State(ctx)
+		// Admit at the seeded activity time so the read's deadline matches.
+		if err := s.AdmitWork(ctx, "req", "job", control.WorkloadText, state.LeaseFence); err != nil {
+			t.Fatal(err)
+		}
+		enablePolicy(t, s)
+		fingerprint, deadline := newDeadline(t, s)
+		*now = now.Add(time.Minute)
+		if err := s.FinishWorkFenced(ctx, "req", control.WorkloadText, state.LeaseFence, WorkCompleted); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.ArmIdleDeadline(ctx, fingerprint, deadline, policyEpoch.Add(time.Minute)); !errors.Is(err, ErrPolicyPreempted) {
+			t.Fatalf("arm after concurrent finish: %v", err)
+		}
+		if settings, _ := s.Settings(ctx); settings.ArmedDeadline != nil {
+			t.Fatalf("stale deadline armed: %v", settings.ArmedDeadline)
+		}
+	})
+	t.Run("pending work preempts a freshly computed deadline", func(t *testing.T) {
+		s, now := policyFixture(t)
+		ctx := context.Background()
+		enablePolicy(t, s)
+		*now = now.Add(time.Minute)
+		state, _ := s.State(ctx)
+		if err := s.AdmitWork(ctx, "req", "job", control.WorkloadText, state.LeaseFence); err != nil {
+			t.Fatal(err)
+		}
+		// Read after the admission: the deadline matches the current marker,
+		// so the pending-work guard is the one under test.
+		fingerprint, deadline := newDeadline(t, s)
+		if err := s.ArmIdleDeadline(ctx, fingerprint, deadline, policyEpoch.Add(2*time.Minute)); !errors.Is(err, ErrPolicyPreempted) {
+			t.Fatalf("arm with pending work: %v", err)
+		}
+		if settings, _ := s.Settings(ctx); settings.ArmedDeadline != nil {
+			t.Fatalf("deadline armed with pending work: %v", settings.ArmedDeadline)
+		}
 	})
 }

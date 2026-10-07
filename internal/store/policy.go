@@ -66,6 +66,22 @@ func (s *Store) ArmIdleDeadline(ctx context.Context, expectedSettingsRevision st
 		if state.Owner != control.OwnerSupervisor || state.Phase != control.PhaseStable || state.Health == control.HealthError || state.Admission != control.AdmissionOpen {
 			return ErrPolicyPreempted
 		}
+		// TOCTOU: an admission or completion may have committed after the
+		// evaluator read the settings; revalidate the supplied deadline against
+		// the current activity marker and require no pending work, so a stale
+		// computed deadline is never armed. Mismatch is a clean preemption,
+		// not a latch: the next tick re-verifies from fresh evidence.
+		pending, err := pendingWorkTx(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if pending > 0 {
+			return ErrPolicyPreempted
+		}
+		if policy.LastActivityAt == nil ||
+			!deadline.Equal(policy.LastActivityAt.Add(time.Duration(policy.Policy.TimeoutMinutes)*time.Minute)) {
+			return ErrPolicyPreempted
+		}
 		return updateSingleton(ctx, tx, `UPDATE idle_policy_state
 			SET armed_deadline = ?, attestation_at = ?, updated_at = ?
 			WHERE singleton = 1`, formatTime(deadline), formatTime(attestationAt), formatTime(s.now()))
