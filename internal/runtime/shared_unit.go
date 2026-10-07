@@ -135,40 +135,57 @@ func (m *SystemdManager) releasedSharedOllama(ctx context.Context, p control.Wor
 		return err
 	}
 	if st.active == "inactive" && st.sub == "dead" {
-		if !st.hasCgroup {
-			return fmt.Errorf("%s ControlGroup metadata unavailable", p.Unit)
-		}
-		if err := m.verifyManagerCgroup(ctx); err != nil {
-			return err
-		}
-		if err := m.cgroups.empty(p.Cgroup); err != nil {
-			return fmt.Errorf("%s release: %w", p.Unit, err)
-		}
-		return nil
+		return m.releasedDeadSharedOllama(ctx, p, st)
 	}
 	if st.active != "active" || st.sub != "running" {
 		return fmt.Errorf("%s is neither running nor stopped", p.Unit)
 	}
-	loaded, ok := loadedByUnit[p.Unit]
-	if !ok {
-		loaded, err = m.loadedOllamaModels(ctx, *p.NativeModel)
-		if err != nil {
-			return err
-		}
-		loadedByUnit[p.Unit] = loaded
+	loaded, err := m.sharedOllamaLoaded(ctx, p, loadedByUnit)
+	if err != nil {
+		return err
 	}
-	allowed := ""
-	if target != control.WorkloadIdle {
-		if t, found := m.config.Catalog.Profile(target); found && control.SharedOllamaUnit(p, t) {
-			allowed = t.NativeModel.ComparisonModel()
-		}
-	}
+	allowed := m.allowedSharedModel(p, target)
 	for model := range loaded {
 		if model != allowed {
 			return fmt.Errorf("%s model %s is still loaded", p.Unit, model)
 		}
 	}
 	return nil
+}
+
+func (m *SystemdManager) releasedDeadSharedOllama(ctx context.Context, p control.WorkloadProfile, st systemdUnitState) error {
+	if !st.hasCgroup {
+		return fmt.Errorf("%s ControlGroup metadata unavailable", p.Unit)
+	}
+	if err := m.verifyManagerCgroup(ctx); err != nil {
+		return err
+	}
+	if err := m.cgroups.empty(p.Cgroup); err != nil {
+		return fmt.Errorf("%s release: %w", p.Unit, err)
+	}
+	return nil
+}
+
+func (m *SystemdManager) sharedOllamaLoaded(ctx context.Context, p control.WorkloadProfile, loadedByUnit map[string]map[string]bool) (map[string]bool, error) {
+	if loaded, ok := loadedByUnit[p.Unit]; ok {
+		return loaded, nil
+	}
+	loaded, err := m.loadedOllamaModels(ctx, *p.NativeModel)
+	if err != nil {
+		return nil, err
+	}
+	loadedByUnit[p.Unit] = loaded
+	return loaded, nil
+}
+
+func (m *SystemdManager) allowedSharedModel(p control.WorkloadProfile, target control.Workload) string {
+	if target == control.WorkloadIdle {
+		return ""
+	}
+	if t, found := m.config.Catalog.Profile(target); found && control.SharedOllamaUnit(p, t) {
+		return t.NativeModel.ComparisonModel()
+	}
+	return ""
 }
 
 func (m *SystemdManager) observeSharedOllama(ctx context.Context, p control.WorkloadProfile, unitActive bool) (bool, error) {

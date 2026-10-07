@@ -186,29 +186,8 @@ func (c *Controller) waitForWork(ctx context.Context, deadline time.Time, pendin
 	ticker := time.NewTicker(c.config.PollInterval)
 	defer ticker.Stop()
 	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if c.pastDeadline(drainCtx, deadline) {
-			return ErrDrainTimeout
-		}
-		pending, err := pendingWork(drainCtx)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		// A genuine probe failure outranks the deadline; only the probe's own
-		// expiry against the drain budget reports ErrDrainTimeout.
-		if err != nil && !errors.Is(err, context.DeadlineExceeded) {
-			return err
-		}
-		// An observed empty queue completes the drain even at the deadline.
-		if err == nil && pending == 0 {
-			return nil
-		}
-		if c.pastDeadline(drainCtx, deadline) {
-			return ErrDrainTimeout
-		}
-		if err != nil {
+		done, err := c.workDrained(ctx, drainCtx, deadline, pendingWork)
+		if done {
 			return err
 		}
 		select {
@@ -216,6 +195,35 @@ func (c *Controller) waitForWork(ctx context.Context, deadline time.Time, pendin
 		case <-ticker.C:
 		}
 	}
+}
+
+func (c *Controller) workDrained(ctx, drainCtx context.Context, deadline time.Time, pendingWork func(context.Context) (int, error)) (bool, error) {
+	if ctx.Err() != nil {
+		return true, ctx.Err()
+	}
+	if c.pastDeadline(drainCtx, deadline) {
+		return true, ErrDrainTimeout
+	}
+	pending, err := pendingWork(drainCtx)
+	if ctx.Err() != nil {
+		return true, ctx.Err()
+	}
+	// A genuine probe failure outranks the deadline; only the probe's own
+	// expiry against the drain budget reports ErrDrainTimeout.
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		return true, err
+	}
+	// An observed empty queue completes the drain even at the deadline.
+	if err == nil && pending == 0 {
+		return true, nil
+	}
+	if c.pastDeadline(drainCtx, deadline) {
+		return true, ErrDrainTimeout
+	}
+	if err != nil {
+		return true, err
+	}
+	return false, nil
 }
 
 func (c *Controller) pastDeadline(ctx context.Context, deadline time.Time) bool {
