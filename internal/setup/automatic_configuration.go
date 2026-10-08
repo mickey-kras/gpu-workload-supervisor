@@ -71,7 +71,7 @@ func (b Backend) Prepare(ctx context.Context, request PrepareRequest) (PreparedA
 }
 
 func (b Backend) showAutomatic(ctx context.Context, unit string) (map[string]string, error) {
-	out, err := b.runCommand(ctx, "/usr/bin/systemctl", "--user", "show", "--property=Id,LoadState,ExecStart,ControlGroup,ActiveState,SubState,FragmentPath,DropInPaths,NeedDaemonReload,Slice", "--no-pager", "--", unit)
+	out, err := b.runCommand(ctx, "/usr/bin/systemctl", "--user", "show", "--property=Id,LoadState,ExecStart,ExecStartPre,ControlGroup,ActiveState,SubState,FragmentPath,DropInPaths,NeedDaemonReload,Slice", "--no-pager", "--", unit)
 	if err != nil {
 		return nil, fmt.Errorf("could not inspect installation %s: %w", unit, err)
 	}
@@ -89,7 +89,7 @@ func (b Backend) automaticConfiguration(ctx context.Context, app, unit, model st
 }
 func (b Backend) configurationFromMetadata(ctx context.Context, app, unit, model string, values map[string]string) (control.WorkloadProfile, error) {
 	p := control.WorkloadProfile{Adapter: "systemd", Unit: unit}
-	if values["NeedDaemonReload"] != "no" || values["DropInPaths"] != "" {
+	if values["NeedDaemonReload"] != "no" {
 		return p, errors.New("installation has changed or uses unsupported overrides; reload its supported direct launch and retry")
 	}
 	if appFromUnit("ExecStart="+values["ExecStart"]) != app {
@@ -97,15 +97,23 @@ func (b Backend) configurationFromMetadata(ctx context.Context, app, unit, model
 	}
 	inspect := b.inspectAutomatic
 	if inspect == nil {
-		inspect = gpuruntime.InspectAutomaticLaunch
+		inspect = func(path, app string) (gpuruntime.AutomaticLaunch, error) {
+			return gpuruntime.InspectAutomaticLaunchSources(path, app, strings.Fields(values["DropInPaths"]))
+		}
 	}
 	launch, err := inspect(values["FragmentPath"], app)
 	if err != nil {
 		return p, fmt.Errorf("unsupported existing launch; choose a supported direct local configuration: %w", err)
 	}
+	if err := gpuruntime.CheckNativeBindingSources(values, unit, values["FragmentPath"], launch.DropIns); err != nil {
+		return p, errors.New("loaded drop-in configuration differs from inspected source files")
+	}
 	args := execArguments.FindAllStringSubmatch(values["ExecStart"], -1)
 	if len(args) != 1 || strings.Join(strings.Fields(args[0][1]), " ") != strings.Join(strings.Fields(launch.Command), " ") {
 		return p, errors.New("loaded launch configuration differs from its file; reload and retry")
+	}
+	if err := gpuruntime.CheckLoadedPreCommands(values["ExecStartPre"], launch.PreCommands); err != nil {
+		return p, errors.New("loaded startup preparation differs from its file; reload and retry")
 	}
 	root, err := b.showAutomatic(ctx, "-.slice")
 	if err != nil {
@@ -139,7 +147,7 @@ func (b Backend) configurationFromMetadata(ctx context.Context, app, unit, model
 	}
 	if app == "comfyui" {
 		p.HealthURL = launch.Endpoint + "/system_stats"
-		p.LaunchBinding = &control.LaunchBinding{Runtime: app, Endpoint: launch.Endpoint, LaunchFile: values["FragmentPath"], LaunchSHA256: launch.SHA256}
+		p.LaunchBinding = &control.LaunchBinding{Runtime: app, Endpoint: launch.Endpoint, LaunchFile: values["FragmentPath"], LaunchSHA256: launch.SHA256, DropIns: launch.DropIns}
 	} else {
 		if app != "ollama" {
 			model = launch.Model
@@ -151,7 +159,7 @@ func (b Backend) configurationFromMetadata(ctx context.Context, app, unit, model
 		if app == "ollama" {
 			p.HealthURL = launch.Endpoint + "/api/tags"
 		}
-		p.NativeModel = &control.NativeModel{Runtime: app, Instance: "instance-" + candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"}).ID, Model: model, Endpoint: launch.Endpoint, LaunchFile: values["FragmentPath"], LaunchSHA256: launch.SHA256}
+		p.NativeModel = &control.NativeModel{Runtime: app, Instance: "instance-" + candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"}).ID, Model: model, Endpoint: launch.Endpoint, LaunchFile: values["FragmentPath"], LaunchSHA256: launch.SHA256, DropIns: launch.DropIns}
 	}
 	return p, nil
 }
@@ -181,7 +189,9 @@ func (b Backend) unitAtReference(ctx context.Context, d Draft) (string, error) {
 		if d.Endpoint != "" {
 			inspect := b.inspectAutomatic
 			if inspect == nil {
-				inspect = gpuruntime.InspectAutomaticLaunch
+				inspect = func(path, app string) (gpuruntime.AutomaticLaunch, error) {
+					return gpuruntime.InspectAutomaticLaunchSources(path, app, strings.Fields(values["DropInPaths"]))
+				}
 			}
 			launch, err := inspect(values["FragmentPath"], d.App)
 			if err != nil {

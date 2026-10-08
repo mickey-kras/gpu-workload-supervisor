@@ -95,8 +95,8 @@ func TestComfyScriptTrustRejectedDuringDiscoveryAndBeforeStart(t *testing.T) {
 				t.Fatal("trusted existing script rejected:", err)
 			}
 			p := control.WorkloadProfile{ID: "comfy", Unit: "comfy.service", LaunchBinding: &control.LaunchBinding{Runtime: "comfyui", Endpoint: launch.Endpoint, LaunchFile: unit, LaunchSHA256: launch.SHA256}}
-			cmd := "/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload -- comfy.service"
-			runner := &fakeRunner{outputs: map[string][]byte{cmd: []byte("FragmentPath=" + unit + "\nDropInPaths=\nNeedDaemonReload=no\n")}}
+			cmd := "/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload --property=ExecStartPre --property=ExecStart -- comfy.service"
+			runner := &fakeRunner{outputs: map[string][]byte{cmd: []byte("ExecStart={ path=" + strings.Fields(strings.Split(string(raw), "ExecStart=")[1])[0] + " ; argv[]=" + strings.TrimSpace(strings.Split(string(raw), "ExecStart=")[1]) + " ; }\nFragmentPath=" + unit + "\nDropInPaths=\nNeedDaemonReload=no\n")}}
 			manager := &SystemdManager{config: SystemdConfig{SystemctlPath: "/usr/bin/true", Catalog: &control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{p}}}, runner: runner}
 			if err := manager.verifyNativeBinding(context.Background(), p); err != nil {
 				t.Fatal(err)

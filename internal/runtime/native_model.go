@@ -8,10 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"golang.org/x/sys/unix"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
@@ -25,41 +23,54 @@ func InspectQualifiedNativeLaunch(path string, binding control.NativeModel) (str
 	return inspectQualifiedNativeLaunch(path, binding, validateNativeExecutable)
 }
 func inspectQualifiedNativeLaunch(path string, binding control.NativeModel, validate func(string) error) (string, error) {
-	b, err := readNativeLaunch(path)
+	if binding.Owned != nil && len(binding.DropIns) > 0 {
+		return "", ErrLaunchUnsupported
+	}
+	sources, err := readLaunchSources(path, binding.DropIns)
 	if err != nil {
 		return "", err
 	}
-	if err := qualifyNativeLaunchWithValidator(b, binding, validate); err != nil {
+	var unit parsedLaunchUnit
+	if binding.Owned != nil {
+		unit, err = parseLaunchUnit(sources[0], binding.Runtime)
+	} else {
+		unit, err = parseExternalLaunchSources(sources, binding.Runtime)
+	}
+	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%x", sha256.Sum256(b)), nil
+	if err := qualifyParsedLaunch(unit, binding, validate); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(sources[0])), nil
 }
-func readNativeLaunch(path string) ([]byte, error) {
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
-	if err != nil {
-		return nil, ErrLaunchChanged
-	}
-	f := os.NewFile(uintptr(fd), path)
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
-		return nil, ErrLaunchChanged
-	}
-	b, err := io.ReadAll(io.LimitReader(f, 1<<20+1))
-	if err != nil || len(b) > 1<<20 {
-		return nil, ErrLaunchChanged
-	}
-	return b, nil
-}
+
 func verifyNativeLaunchWithValidator(n control.NativeModel, validate func(string) error) error {
-	b, err := readNativeLaunch(n.LaunchFile)
+	_, err := readVerifiedNativeLaunch(n, validate)
+	return err
+}
+
+func readVerifiedNativeLaunch(n control.NativeModel, validate func(string) error) (parsedLaunchUnit, error) {
+	var unit parsedLaunchUnit
+	if n.Owned != nil && len(n.DropIns) > 0 {
+		return unit, ErrLaunchUnsupported
+	}
+	sources, err := readLaunchSources(n.LaunchFile, n.DropIns)
 	if err != nil {
-		return err
+		return unit, err
 	}
-	if fmt.Sprintf("%x", sha256.Sum256(b)) != n.LaunchSHA256 {
-		return ErrLaunchChanged
+	if fmt.Sprintf("%x", sha256.Sum256(sources[0])) != n.LaunchSHA256 {
+		return unit, ErrLaunchChanged
 	}
-	return qualifyNativeLaunchWithValidator(b, n, validate)
+	if n.Owned != nil {
+		unit, err = parseLaunchUnit(sources[0], n.Runtime)
+	} else {
+		unit, err = parseExternalLaunchSources(sources, n.Runtime)
+	}
+	if err != nil {
+		return unit, err
+	}
+	return unit, qualifyParsedLaunch(unit, n, validate)
 }
 
 // verifyOwnedSpec is the spec↔fingerprint chain for owned launches: the
@@ -98,30 +109,44 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 		validate = validateNativeExecutable
 	}
 	launchFile := ""
+	command := ""
+	var preCommands []string
+	var dropIns []control.LaunchSource
 	if p.NativeModel != nil {
 		launchFile = p.NativeModel.LaunchFile
-		if err := verifyNativeLaunchWithValidator(*p.NativeModel, validate); err != nil {
+		dropIns = p.NativeModel.DropIns
+		launch, err := readVerifiedNativeLaunch(*p.NativeModel, validate)
+		if err != nil {
 			return err
 		}
+		command = launch.execStart
+		preCommands = launch.preCommands
 	} else {
 		binding := p.LaunchBinding
 		launchFile = binding.LaunchFile
-		raw, err := readNativeLaunch(launchFile)
+		dropIns = binding.DropIns
+		sources, err := readLaunchSources(launchFile, dropIns)
 		if err != nil {
 			return err
 		}
 		if m.nativeExecutableValidator == nil {
 			validate = validateComfyExecutable
 		}
-		found, err := inspectAutomaticLaunch(raw, binding.Runtime, validate)
+		unit, err := parseExternalLaunchSources(sources, binding.Runtime)
 		if err != nil {
 			return err
 		}
+		found, err := inspectParsedAutomaticLaunch(unit, sources[0], binding.Runtime, validate)
+		if err != nil {
+			return err
+		}
+		command = found.Command
+		preCommands = found.PreCommands
 		if found.SHA256 != binding.LaunchSHA256 || found.Endpoint != binding.Endpoint {
 			return ErrLaunchChanged
 		}
 	}
-	b, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show", "--property=FragmentPath", "--property=DropInPaths", "--property=NeedDaemonReload", "--", p.Unit)
+	b, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show", "--property=FragmentPath", "--property=DropInPaths", "--property=NeedDaemonReload", "--property=ExecStartPre", "--property=ExecStart", "--", p.Unit)
 	if err != nil {
 		return ErrLaunchChanged
 	}
@@ -132,7 +157,13 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 	if values["NeedDaemonReload"] != "no" {
 		return ErrLaunchChanged
 	}
-	return CheckNativeBinding(values, p.Unit, launchFile)
+	if err := CheckLoadedLaunchCommand(values["ExecStart"], command); err != nil {
+		return err
+	}
+	if err := CheckLoadedPreCommands(values["ExecStartPre"], preCommands); err != nil {
+		return err
+	}
+	return CheckNativeBindingSources(values, p.Unit, launchFile, dropIns)
 }
 
 // ParseUnitProperties parses systemctl show output into key/value pairs,

@@ -70,14 +70,18 @@ def prepare_session():
 
 def stopped_application():
     """Configure a recognized launch without executing its application fixture."""
-    unit = HOME / ".config/systemd/user/gws-ci-comfyui.service"
+    # The service name carries no application keyword; ExecStart proves identity.
+    unit = HOME / ".config/systemd/user/gws-ci-image-worker.service"
+    drop_in = unit.parent / (unit.name + ".d") / "10-startup.conf"
+    drop_in_original = "[Service]\nExecStartPre=/usr/bin/true --\n"
     application = HOME / "ComfyUI/main.py"
     started = HOME / "application-started"
     write(application, f"from pathlib import Path\nPath({str(started)!r}).touch()\n")
     interpreter = str(pathlib.Path("/usr/bin/python3").resolve())
-    original = ("[Service]\nType=exec\nExecStart=" + interpreter + " " + str(application) +
+    original = ("[Service]\nType=exec\nExecStartPre=/usr/bin/true\nExecStart=" + interpreter + " " + str(application) +
                 " --listen 127.0.0.1 --port 18188 --disable-auto-launch\n")
     write(unit, original)
+    write(drop_in, drop_in_original)
     run("systemctl", "--user", "daemon-reload")
     # Activate only infrastructure: no application startup is necessary to
     # observe the real supported parent slice's placement.
@@ -110,6 +114,12 @@ def stopped_application():
     assert "nativeModel" not in profile, "ComfyUI must not require a model"
     binding = profile["launchBinding"]
     assert binding["launchFile"] == str(unit) and binding["launchSHA256"] == digest(unit)
+    assert binding["dropIns"] == [{"path": str(drop_in), "sha256": digest(drop_in)}], binding
+    # Prepare succeeded against both loaded pre-start commands without running them.
+    loaded_pre = run("systemctl", "--user", "show", unit.name,
+                     "--property=ExecStartPre", "--value")
+    assert loaded_pre.count("path=/usr/bin/true") == 2, loaded_pre
+    assert "argv[]=/usr/bin/true --" in loaded_pre, loaded_pre
     stopped()
     request = found["request"]
     request["catalog"]["profiles"].append(profile)
@@ -123,8 +133,19 @@ def stopped_application():
     request["confirmQuiesced"] = True
     setup("apply", request)
     stopped()
-    configured = json.loads(setup("discover"))["request"]
+    configured_discovery = json.loads(setup("discover"))
+    retained, = [item for item in configured_discovery["applications"] if item.get("unit") == unit.name]
+    assert retained["recognized"] and retained["configurationStatus"] == "ready", retained
+    assert retained["binding"]["launchFile"] == str(unit), retained
+    configured = configured_discovery["request"]
     assert configured["catalog"]["profiles"][-1] == profile
+    assert unit.read_text() == original, "setup changed external flags or pre-start hooks"
+    assert drop_in.read_text() == drop_in_original, "setup changed the external drop-in"
+    duplicate = copy.deepcopy(configured)
+    duplicate_profile = copy.deepcopy(profile)
+    duplicate_profile["id"] = "ci-comfyui-duplicate"
+    duplicate["catalog"]["profiles"].append(duplicate_profile)
+    setup("validate", duplicate, "duplicate or overlapping profiles")
     # A changed external launch invalidates its retained verification evidence.
     write(unit, original + "# external edit\n")
     run("systemctl", "--user", "daemon-reload")
@@ -132,7 +153,17 @@ def stopped_application():
     stopped()
     write(unit, original)
     run("systemctl", "--user", "daemon-reload")
-    preserved = {path: digest(path) for path in (unit, application)}
+    # A changed drop-in also invalidates the recorded binding after manager reload.
+    write(drop_in, drop_in_original + "# external drop-in edit\n")
+    run("systemctl", "--user", "daemon-reload")
+    setup("verify-bindings", configured, "drop-in")
+    stopped()
+    write(drop_in, drop_in_original)
+    run("systemctl", "--user", "daemon-reload")
+    setup("verify-bindings", configured)
+    assert json.loads(setup("prepare", {"draft": draft}))["profile"] == profile
+    stopped()
+    preserved = {path: digest(path) for path in (unit, drop_in, application)}
     configured["catalog"]["profiles"] = [item for item in configured["catalog"]["profiles"]
                                            if item["id"] != profile["id"]]
     configured["confirmQuiesced"] = True
@@ -205,7 +236,12 @@ def main():
     assert before["status"]["workloads"] == [{"id": "idle", "label": "Idle"}, {"id": "ci-workload", "label": "CI workload"}]
     configured = json.loads(setup("discover"))
     assert configured["request"]["catalog"] == request["catalog"]
-    assert not any(app.get("unit") == workload.name for app in configured["applications"])
+    # Existing catalog units remain visible even when their launch is unsupported.
+    retained, = [app for app in configured["applications"] if app.get("unit") == workload.name]
+    assert not retained["recognized"], retained
+    assert retained["app"] == "", retained
+    assert retained["configurationStatus"] == "unsupported", retained
+    assert "not supported" in retained["nextStep"], retained
     current = configured["request"]
     current["confirmQuiesced"] = True
     updated = copy.deepcopy(current)
@@ -252,7 +288,7 @@ def main():
     assert timer_link.is_symlink()
     assert digest(workload) == preserved[workload]
     stopped_application()
-    print("PASS: packaged setup, real user systemd, interrupted resume, stale preview, backups, removal/reapply, stopped automatic configuration")
+    print("PASS: packaged setup, real user systemd, interrupted resume, stale preview, backups, removal/reapply, stopped keywordless automatic configuration preserving external flags/pre-start hooks")
 
 
 if __name__ == "__main__":

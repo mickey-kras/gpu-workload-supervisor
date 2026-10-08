@@ -405,6 +405,22 @@ func TestSharedUnitRequiresIdenticalLaunchBindings(t *testing.T) {
 			t.Fatal("divergent hash on shared adopted unit accepted")
 		}
 	})
+	t.Run("adopted drop-in evidence must match", func(t *testing.T) {
+		a, b := adopted("alpha", "a"), adopted("beta", "b")
+		source := LaunchSource{Path: "/etc/systemd/user/ollama.service.d/10-options.conf", SHA256: strings.Repeat("a", 64)}
+		a.NativeModel.DropIns = []LaunchSource{source}
+		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{a, b}}).Validate(); err == nil {
+			t.Fatal("missing shared source accepted")
+		}
+		b.NativeModel.DropIns = []LaunchSource{source}
+		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{a, b}}).Validate(); err != nil {
+			t.Fatal(err)
+		}
+		b.NativeModel.DropIns[0].SHA256 = strings.Repeat("b", 64)
+		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{a, b}}).Validate(); err == nil {
+			t.Fatal("divergent shared source accepted")
+		}
+	})
 	t.Run("adopted identical accepted", func(t *testing.T) {
 		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{adopted("alpha", "a"), adopted("beta", "b")}}).Validate(); err != nil {
 			t.Fatal(err)

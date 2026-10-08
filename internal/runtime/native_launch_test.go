@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -16,7 +17,7 @@ func TestNativeLaunchQualificationRejectsIndirectionAndMutation(t *testing.T) {
 	good := string(nativeLaunchFixture(t, n.Runtime, n.Endpoint, n.Model))
 	cases := []string{
 		"garbage", "[Other]\nKey=value", "[Service]\nExecStart=/bin/sh -c true", "[Service]\nExecStart=llama-server",
-		good + "ExecStartPre=/usr/bin/true\n", good + "ExecStopPost=/usr/bin/true\n", good + "EnvironmentFile=/tmp/config\n", good + "Environment=LD_PRELOAD=/tmp/lib.so\n",
+		good + "ExecStopPost=/usr/bin/true\n", good + "EnvironmentFile=/tmp/config\n", good + "Environment=LD_PRELOAD=/tmp/lib.so\n",
 		good + "Restart=always\n", good + "Type=forking\n", good + "ExecStart=/usr/bin/true\n", good + "BindPaths=/tmp\n", good + "ExecSearchPath=/tmp\n",
 		strings.Replace(good, " --model ", " --hf-repo ", 1), strings.Replace(good, " --alias selected", " --alias other", 1), strings.Replace(good, " --host localhost", " --host 0.0.0.0", 1), strings.Replace(good, " --port 9000", " --port 9001", 1),
 		strings.TrimSpace(good) + " --port 9000", strings.TrimSpace(good) + " --unknown x", strings.TrimSpace(good) + " --ctx-size 0", strings.TrimSpace(good) + " --ctx-size nope", strings.TrimSpace(good) + " --max-model-len 1024", strings.TrimSpace(good) + " --alias another", strings.TrimSpace(good) + " --flag", strings.TrimSpace(good) + " --ctx-size $CTX", strings.TrimSpace(good) + " --ctx-size %i", strings.TrimSpace(good) + " --ctx-size '12'",
@@ -140,5 +141,72 @@ func TestQualifiedFingerprintRejectsUntrustedExecutable(t *testing.T) {
 	}
 	if qualifyNativeLaunchWithValidator(raw, n, validateNativeExecutable) == nil {
 		t.Fatal("untrusted executable qualified")
+	}
+}
+
+func TestNativeLaunchPreservesDocumentedLlamaOptionsAndPreparation(t *testing.T) {
+	n := control.NativeModel{Runtime: "llama.cpp", Endpoint: "http://localhost:9000", Model: "selected"}
+	good := strings.TrimSpace(string(nativeLaunchFixture(t, n.Runtime, n.Endpoint, n.Model)))
+	for _, options := range []string{
+		"--parallel 4 --cont-batching --flash-attn on --spec-type draft-mtp --spec-draft-n-max 4 --spec-draft-n-min 0",
+		"-np -1 -nocb -fa auto",
+	} {
+		model := strings.Fields(strings.Split(good, "ExecStart=")[1])[2]
+		raw := []byte(good + " " + options + "\nExecStartPre=/usr/bin/test -f " + model + "\nExecStartPre=-/usr/bin/true\n")
+		launch, err := inspectAutomaticLaunch(raw, n.Runtime, fixtureExecutableValidator)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(launch.PreCommands) != 2 || launch.SHA256 != fmt.Sprintf("%x", sha256.Sum256(raw)) || !strings.HasSuffix(launch.Command, options) {
+			t.Fatalf("preparation or options lost: %+v", launch)
+		}
+	}
+	for _, options := range []string{"--parallel 0", "--parallel nope", "-np 2 --parallel 3", "-cb --no-cont-batching", "--flash-attn yes", "--spec-type draft-simple", "--spec-draft-model /other.gguf", "--spec-draft-n-max -1"} {
+		if qualifyFixtureLaunch([]byte(good+" "+options), n) == nil {
+			t.Errorf("unsupported options accepted: %s", options)
+		}
+	}
+	for _, command := range []string{"/bin/sh -c true", "env true", "+/usr/bin/true", "/usr/bin/env true", "/usr/bin/systemctl start other.service", "/missing/helper", "/usr/bin/true $ARGS", "/usr/bin/true ; /usr/bin/true"} {
+		if qualifyFixtureLaunch([]byte(good+"\nExecStartPre="+command+"\n"), n) == nil {
+			t.Errorf("unsafe preparation accepted: %s", command)
+		}
+	}
+}
+
+func TestLoadedStartupPreparationMustMatchBoundCommands(t *testing.T) {
+	output := "{ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; start_time=[n/a] ; } { path=/usr/bin/sleep ; argv[]=/usr/bin/sleep 1 ; ignore_errors=yes ; start_time=[n/a] ; }"
+	commands := []string{"/usr/bin/true", "-/usr/bin/sleep 1"}
+	if err := CheckLoadedPreCommands(output, commands); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"", output + " garbage", strings.Replace(output, "sleep 1", "sleep 2", 1), strings.Replace(output, "ignore_errors=yes", "ignore_errors=no", 1), strings.Replace(output, "path=/usr/bin/true", "path=/usr/bin/false", 1)} {
+		if CheckLoadedPreCommands(bad, commands) == nil {
+			t.Errorf("changed loaded preparation accepted: %s", bad)
+		}
+	}
+	if CheckLoadedPreCommands(output, nil) == nil {
+		t.Fatal("unbound loaded preparation accepted")
+	}
+}
+
+func TestNativeStartupPreparationRecheckedBeforeStart(t *testing.T) {
+	m, r, p, cmd := nativeFixture(t, "llama.cpp", "http://localhost:9000")
+	raw, err := os.ReadFile(p.NativeModel.LaunchFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, []byte("ExecStartPre=/usr/bin/true\n")...)
+	if err := os.WriteFile(p.NativeModel.LaunchFile, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	p.NativeModel.LaunchSHA256 = fmt.Sprintf("%x", sha256.Sum256(raw))
+	good := string(r.outputs[cmd]) + "ExecStartPre={ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; }\n"
+	r.outputs[cmd] = []byte(good)
+	if err := m.verifyNativeBinding(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	r.outputs[cmd] = []byte(strings.Replace(good, "argv[]=/usr/bin/true", "argv[]=/usr/bin/false", 1))
+	if m.verifyNativeBinding(context.Background(), p) == nil {
+		t.Fatal("changed preparation accepted")
 	}
 }

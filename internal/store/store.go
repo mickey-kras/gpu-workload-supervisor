@@ -162,6 +162,9 @@ func (s *Store) UpdateState(ctx context.Context, expected uint64, next control.S
 		return control.State{}, fmt.Errorf("validate state: %w", err)
 	}
 	return s.withStateTx(ctx, expected, func(tx *sql.Tx, current control.State) (control.State, error) {
+		if err := temporaryDiscoveryPending(ctx, tx); err != nil {
+			return control.State{}, err
+		}
 		if next.LeaseFence != current.LeaseFence {
 			return control.State{}, ErrStaleFence
 		}
@@ -176,6 +179,9 @@ func (s *Store) UpdateState(ctx context.Context, expected uint64, next control.S
 
 func (s *Store) RotateFenceAndCloseAdmission(ctx context.Context, expected uint64) (control.State, error) {
 	return s.withStateTx(ctx, expected, func(tx *sql.Tx, state control.State) (control.State, error) {
+		if err := temporaryDiscoveryPending(ctx, tx); err != nil {
+			return control.State{}, err
+		}
 		state.LeaseFence.Epoch++
 		state.Admission = control.AdmissionClosed
 		state.Version++
@@ -202,6 +208,9 @@ func (s *Store) RotateIncarnation(ctx context.Context) (control.State, error) {
 }
 
 func (s *Store) rotateIncarnation(ctx context.Context, tx *sql.Tx, state control.State, incarnation string) (control.State, error) {
+	if err := temporaryDiscoveryPending(ctx, tx); err != nil {
+		return control.State{}, err
+	}
 	if incarnation == state.LeaseFence.Incarnation {
 		return control.State{}, errors.New("new lease incarnation matches restored incarnation")
 	}

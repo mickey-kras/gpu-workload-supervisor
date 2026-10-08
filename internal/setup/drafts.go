@@ -39,6 +39,7 @@ type Draft struct {
 	Reference     string        `json:"reference,omitempty"`
 	ReferenceKind string        `json:"referenceKind,omitempty"`
 	Model         string        `json:"model,omitempty"`
+	Models        []string      `json:"models,omitempty"`
 	Binding       *DraftBinding `json:"binding,omitempty"`
 }
 type DraftSnapshot struct {
@@ -136,7 +137,21 @@ func validateDraft(d Draft, ids map[string]bool) error {
 	if err := validateDraftReference(d); err != nil {
 		return err
 	}
-	if d.App == "comfyui" && d.Model != "" {
+	if len(d.Models) > 32 {
+		return errors.New("too many draft model selections")
+	}
+	models := map[string]bool{}
+	for _, model := range d.Models {
+		if !control.ValidNativeModelIdentity(d.App, model) {
+			return errors.New("invalid draft model selection")
+		}
+		identity := (control.NativeModel{Runtime: d.App, Model: model}).ComparisonModel()
+		if models[identity] {
+			return errors.New("duplicate draft model selection")
+		}
+		models[identity] = true
+	}
+	if d.App == "comfyui" && (d.Model != "" || len(d.Models) != 0) {
 		return errors.New("ComfyUI workflows select models")
 	}
 	return nil

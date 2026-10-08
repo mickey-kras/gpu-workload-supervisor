@@ -21,8 +21,8 @@ func TestComfyLaunchBindingRecheckedBeforeStarting(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := control.WorkloadProfile{ID: "comfy", Adapter: "systemd", Unit: "comfy.service", Cgroup: "/workloads/comfy.service", HealthURL: launch.Endpoint + "/system_stats", LaunchBinding: &control.LaunchBinding{Runtime: "comfyui", Endpoint: launch.Endpoint, LaunchFile: path, LaunchSHA256: launch.SHA256}}
-	cmd := "/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload -- comfy.service"
-	r := &fakeRunner{outputs: map[string][]byte{cmd: []byte("FragmentPath=" + path + "\nDropInPaths=\nNeedDaemonReload=no\n")}}
+	cmd := "/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload --property=ExecStartPre --property=ExecStart -- comfy.service"
+	r := &fakeRunner{outputs: map[string][]byte{cmd: []byte("ExecStart={ path=" + strings.Fields(strings.Split(string(raw), "ExecStart=")[1])[0] + " ; argv[]=" + strings.TrimSpace(strings.Split(string(raw), "ExecStart=")[1]) + " ; }\nFragmentPath=" + path + "\nDropInPaths=\nNeedDaemonReload=no\n")}}
 	m := &SystemdManager{config: SystemdConfig{SystemctlPath: "/usr/bin/true", Catalog: &control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{p}}}, runner: r, nativeExecutableValidator: fixtureExecutableValidator}
 	if err := m.verifyNativeBinding(context.Background(), p); err != nil {
 		t.Fatal(err)

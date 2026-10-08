@@ -111,6 +111,7 @@ func (b Backend) Plan(home string, request Request) (Preview, error) {
 // Backend holds the host interactions setup performs. Tests inject fakes
 // instead of touching the real runtime, unit manager, or package binaries.
 type Backend struct {
+	temporaryProfile func() (Profile, error)
 	makeRuntime      func(Request) (gpuruntime.Manager, error)
 	runCommand       func(ctx context.Context, name string, args ...string) ([]byte, error)
 	probeApplication func(ctx context.Context, request ProbeRequest) (ApplicationCandidate, error)
@@ -177,7 +178,7 @@ func (b Backend) Apply(ctx context.Context, home string, request Request) error 
 	if err := work.inspect(ctx); err != nil {
 		return err
 	}
-	if err := work.verifySharedPairPreservation(); err != nil {
+	if err := work.verifySharedPairBindings(ctx); err != nil {
 		return err
 	}
 	// Owned unit writes precede the quiescence check so newly rendered units
@@ -488,6 +489,9 @@ func (work *activationWork) inspectExistingCatalog(ctx context.Context) error {
 		return err
 	}
 	if work.existing {
+		if err := checkNoTemporaryDiscovery(ctx, work.request.Profile.StatePath); err != nil {
+			return err
+		}
 		if !work.marker.Maintenance {
 			if err := Inspect(ctx, work.request.Profile.StatePath); err != nil {
 				return err

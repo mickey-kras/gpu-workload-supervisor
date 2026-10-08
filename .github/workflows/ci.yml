@@ -167,3 +167,48 @@ jobs:
           packages=(dist/gpu-workload-supervisor_*_linux_amd64.deb)
           test "${#packages[@]}" -eq 1
           sudo timeout 120s bash scripts/check-desktop-deb-lifecycle.sh "${packages[0]}"
+
+      - name: Prepare CI-tested candidate artifacts
+        id: candidate
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          built_commit="$(git rev-parse HEAD)"
+          echo "commit=$built_commit" >> "$GITHUB_OUTPUT"
+          mkdir candidate-artifacts
+          cp dist/*.tar.gz dist/*.deb dist/checksums.txt candidate-artifacts/
+          python3 - <<'PYTHON'
+          import json
+          import os
+          import pathlib
+          import subprocess
+
+          manifest = {
+              "schemaVersion": 1,
+              "kind": "ci-tested-snapshot-candidate",
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              # Pull request checkout builds the tested synthetic merge, not its head.
+              "builtCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "eventCommit": os.environ["GITHUB_SHA"],
+              "pullRequestHead": os.environ.get("PR_HEAD_SHA") or None,
+              "pullRequestBase": os.environ.get("PR_BASE_SHA") or None,
+              "eventName": os.environ["GITHUB_EVENT_NAME"],
+              "runID": os.environ["GITHUB_RUN_ID"],
+              "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "runURL": os.environ["GITHUB_SERVER_URL"] + "/" + os.environ["GITHUB_REPOSITORY"] + "/actions/runs/" + os.environ["GITHUB_RUN_ID"],
+              "qualification": "CI fixture checks; real GPU and GNOME host qualification remains required",
+          }
+          pathlib.Path("candidate-artifacts/candidate-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          PYTHON
+          (cd candidate-artifacts && sha256sum candidate-manifest.json >> checksums.txt && sha256sum --check checksums.txt)
+      - name: Upload CI-tested candidate artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: candidate-${{ steps.candidate.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate-artifacts/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

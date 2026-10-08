@@ -216,3 +216,70 @@ func TestLaunchBindingCatalogCloneAndValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestDiscoveryRecognizesKeywordlessDirectApplications(t *testing.T) {
+	for _, app := range []string{"comfyui", "ollama", appLlamaCPP, "vllm"} {
+		t.Run(app, func(t *testing.T) {
+			b, d, metadata := automaticFixture(t, app)
+			unit := "inference-worker.service"
+			metadata[unit] = metadata[d.Binding.Unit]
+			metadata[unit]["Id"] = unit
+			oldRun := b.runCommand
+			b.runCommand = func(ctx context.Context, exe string, args ...string) ([]byte, error) {
+				if strings.Contains(strings.Join(args, " "), "list-unit-files") {
+					return []byte(unit + " disabled\n"), nil
+				}
+				return oldRun(ctx, exe, args...)
+			}
+			result := Discovery{}
+			b.discoverApplications(context.Background(), &result, []string{unit})
+			if len(result.Units) != 1 || result.Units[0] != unit || len(result.Applications) != 5 || !result.Applications[4].Recognized {
+				t.Fatalf("keywordless direct service excluded: %+v", result)
+			}
+			d.Binding.Unit = unit
+			if _, err := b.Prepare(context.Background(), PrepareRequest{Draft: d}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestPrepareRequiresLoadedStartupPreparationMatch(t *testing.T) {
+	b, d, metadata := automaticFixture(t, appLlamaCPP)
+	inspect := b.inspectAutomatic
+	b.inspectAutomatic = func(path, app string) (gpuruntime.AutomaticLaunch, error) {
+		launch, err := inspect(path, app)
+		launch.PreCommands = []string{"/usr/bin/true"}
+		return launch, err
+	}
+	if _, err := b.Prepare(context.Background(), PrepareRequest{Draft: d}); err == nil {
+		t.Fatal("missing loaded preparation accepted")
+	}
+	metadata[d.Binding.Unit]["ExecStartPre"] = "{ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; }"
+	if _, err := b.Prepare(context.Background(), PrepareRequest{Draft: d}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPrepareRetainsLoadedDropInEvidence(t *testing.T) {
+	b, d, metadata := automaticFixture(t, appLlamaCPP)
+	inspect := b.inspectAutomatic
+	source := control.LaunchSource{Path: "/opt/launch/10-tuning.conf", SHA256: strings.Repeat("b", 64)}
+	b.inspectAutomatic = func(path, app string) (gpuruntime.AutomaticLaunch, error) {
+		launch, err := inspect(path, app)
+		launch.DropIns = []control.LaunchSource{source}
+		return launch, err
+	}
+	metadata[d.Binding.Unit]["DropInPaths"] = source.Path
+	got, err := b.Prepare(context.Background(), PrepareRequest{Draft: d})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !control.EqualLaunchSources(got.Profile.NativeModel.DropIns, []control.LaunchSource{source}) {
+		t.Fatal("drop-in evidence discarded")
+	}
+	metadata[d.Binding.Unit]["DropInPaths"] += " /opt/launch/20-unbound.conf"
+	if _, err := b.Prepare(context.Background(), PrepareRequest{Draft: d}); err == nil {
+		t.Fatal("unbound source accepted")
+	}
+}

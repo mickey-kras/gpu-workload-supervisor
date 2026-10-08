@@ -41,10 +41,11 @@ func ValidWorkloadID(id Workload) bool {
 }
 
 type LaunchBinding struct {
-	Runtime      string `json:"runtime"`
-	Endpoint     string `json:"endpoint"`
-	LaunchFile   string `json:"launchFile"`
-	LaunchSHA256 string `json:"launchSHA256"`
+	Runtime      string         `json:"runtime"`
+	Endpoint     string         `json:"endpoint"`
+	LaunchFile   string         `json:"launchFile"`
+	LaunchSHA256 string         `json:"launchSHA256"`
+	DropIns      []LaunchSource `json:"dropIns,omitempty"`
 }
 
 type WorkloadProfile struct {
@@ -118,10 +119,12 @@ func (c Catalog) Clone() Catalog {
 	for i := range c.Profiles {
 		if c.Profiles[i].LaunchBinding != nil {
 			b := *c.Profiles[i].LaunchBinding
+			b.DropIns = append([]LaunchSource(nil), b.DropIns...)
 			c.Profiles[i].LaunchBinding = &b
 		}
 		if c.Profiles[i].NativeModel != nil {
 			n := *c.Profiles[i].NativeModel
+			n.DropIns = append([]LaunchSource(nil), n.DropIns...)
 			if n.Owned != nil {
 				o := *n.Owned
 				n.Owned = &o
@@ -191,6 +194,9 @@ func (p WorkloadProfile) validateNativeBinding() error {
 			return errors.New("unsupported application launch binding")
 		}
 		if err := validateLaunchEvidence(b.Endpoint, b.LaunchFile, b.LaunchSHA256); err != nil {
+			return err
+		}
+		if err := ValidateLaunchSources(b.LaunchFile, b.DropIns); err != nil {
 			return err
 		}
 		if p.HealthURL != b.Endpoint+"/system_stats" {
@@ -278,7 +284,7 @@ func validateProfileOverlap(p WorkloadProfile, previous []WorkloadProfile) error
 		if ownedEndpointCollision(p, q) {
 			return errors.New("native endpoint belongs to another instance")
 		}
-		if sharedOllamaUnit(p, q) && (p.NativeModel.LaunchFile != q.NativeModel.LaunchFile || p.NativeModel.LaunchSHA256 != q.NativeModel.LaunchSHA256) {
+		if sharedOllamaUnit(p, q) && (p.NativeModel.LaunchFile != q.NativeModel.LaunchFile || p.NativeModel.LaunchSHA256 != q.NativeModel.LaunchSHA256 || !EqualLaunchSources(p.NativeModel.DropIns, q.NativeModel.DropIns)) {
 			return errors.New("shared Ollama unit requires identical launch bindings")
 		}
 		if profilesOverlap(p, q) {

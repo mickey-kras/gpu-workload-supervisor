@@ -163,7 +163,15 @@ var execArguments = regexp.MustCompile(`argv\[\]=([^;]+)\s*;`)
 func appFromUnit(output string) string {
 	start := unitProperties(output)["ExecStart"]
 	paths := execPath.FindAllStringSubmatch(start, -1)
-	if len(paths) != 1 {
+	if len(paths) != 1 || !filepath.IsAbs(paths[0][1]) {
+		return ""
+	}
+	arguments := execArguments.FindAllStringSubmatch(start, -1)
+	if len(arguments) != 1 || strings.ContainsAny(arguments[0][1], "\\\"'\n") {
+		return ""
+	}
+	fields := strings.Fields(arguments[0][1])
+	if len(fields) < 2 || fields[0] != paths[0][1] {
 		return ""
 	}
 	switch filepath.Base(paths[0][1]) {
@@ -176,14 +184,6 @@ func appFromUnit(output string) string {
 	}
 	executable := filepath.Base(paths[0][1])
 	if executable != "python" && executable != "python3" && !strings.HasPrefix(executable, "python3.") {
-		return ""
-	}
-	arguments := execArguments.FindStringSubmatch(start)
-	if len(arguments) != 2 {
-		return ""
-	}
-	fields := strings.Fields(arguments[1])
-	if len(fields) < 2 {
 		return ""
 	}
 	if len(fields) >= 3 && fields[1] == "-m" && (fields[2] == "vllm.entrypoints.openai.api_server" || fields[2] == "vllm") {

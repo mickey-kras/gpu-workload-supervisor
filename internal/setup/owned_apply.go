@@ -346,11 +346,10 @@ func ownedProfileForUnit(c control.Catalog, unit string) (control.WorkloadProfil
 	return control.WorkloadProfile{}, false
 }
 
-// verifySharedPairPreservation is the §2.3 setup gate, enforced in Apply after
-// inspect because Validate is pure: a shared Ollama pair is appliable only when
-// both profiles are owned (setup renders the shared unit) or both are carried
-// verbatim from the accepted catalog.
-func (work *activationWork) verifySharedPairPreservation() error {
+// verifySharedPairBindings preflights new or edited adopted Ollama groups before
+// owned writes. Pending owned launches are excluded from this read-only check;
+// Apply verifies the complete catalog and GPU release again before commit.
+func (work *activationWork) verifySharedPairBindings(ctx context.Context) error {
 	for i, p := range work.request.Catalog.Profiles {
 		for _, q := range work.request.Catalog.Profiles[:i] {
 			if !control.SharedOllamaUnit(p, q) {
@@ -362,7 +361,7 @@ func (work *activationWork) verifySharedPairPreservation() error {
 			acceptedP, okP := work.accepted.Catalog.Profile(p.ID)
 			acceptedQ, okQ := work.accepted.Catalog.Profile(q.ID)
 			if !okP || !okQ || !reflect.DeepEqual(acceptedP, p) || !reflect.DeepEqual(acceptedQ, q) {
-				return errors.New("shared Ollama units are catalog-only: apply the catalog with gpu-mode configure; setup does not create or verify adopted shared-unit bindings")
+				return work.backend.verifyBindings(ctx, work.home, work.request)
 			}
 		}
 	}

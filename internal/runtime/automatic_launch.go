@@ -15,18 +15,57 @@ import (
 
 // AutomaticLaunch is evidence read from a supported direct launch. Inspection
 // never rewrites the existing file or runs its command.
-type AutomaticLaunch struct{ Endpoint, Model, SHA256, Command string }
+type AutomaticLaunch struct {
+	Endpoint, Model, SHA256, Command string
+	PreCommands                      []string
+	DropIns                          []control.LaunchSource
+}
 
 func InspectAutomaticLaunch(path, app string) (AutomaticLaunch, error) {
-	raw, err := readNativeLaunch(path)
-	if err != nil {
-		return AutomaticLaunch{}, err
-	}
+	return InspectAutomaticLaunchSources(path, app, nil)
+}
+
+func InspectAutomaticLaunchSources(path, app string, dropInPaths []string) (AutomaticLaunch, error) {
 	validate := validateNativeExecutable
 	if app == "comfyui" {
 		validate = validateComfyExecutable
 	}
-	return inspectAutomaticLaunch(raw, app, validate)
+	return inspectAutomaticLaunchSourcesWithValidator(path, app, dropInPaths, validate)
+}
+
+func inspectAutomaticLaunchSourcesWithValidator(path, app string, dropInPaths []string, validate func(string) error) (AutomaticLaunch, error) {
+	if len(dropInPaths) > 32 {
+		return AutomaticLaunch{}, ErrLaunchUnsupported
+	}
+	raw, err := readLaunchSource(path)
+	if err != nil {
+		return AutomaticLaunch{}, fmt.Errorf("%w: launch source %s unreadable or untrusted", err, path)
+	}
+	sources := [][]byte{raw}
+	seen := map[string]bool{path: true}
+	var dropIns []control.LaunchSource
+	for _, path := range dropInPaths {
+		if seen[path] || !strings.HasSuffix(path, ".conf") || !control.LaunchGrammarExpressible(path) {
+			return AutomaticLaunch{}, ErrLaunchUnsupported
+		}
+		seen[path] = true
+		raw, err := readLaunchSource(path)
+		if err != nil {
+			return AutomaticLaunch{}, fmt.Errorf("%w: drop-in %s unreadable or untrusted", err, path)
+		}
+		sources = append(sources, raw)
+		dropIns = append(dropIns, control.LaunchSource{Path: path, SHA256: fmt.Sprintf("%x", sha256.Sum256(raw))})
+	}
+	if err := control.ValidateLaunchSources(path, dropIns); err != nil {
+		return AutomaticLaunch{}, err
+	}
+	u, err := parseExternalLaunchSources(sources, app)
+	if err != nil {
+		return AutomaticLaunch{}, err
+	}
+	result, err := inspectParsedAutomaticLaunch(u, sources[0], app, validate)
+	result.DropIns = dropIns
+	return result, err
 }
 
 func inspectAutomaticLaunch(raw []byte, app string, validate func(string) error) (AutomaticLaunch, error) {
@@ -34,11 +73,22 @@ func inspectAutomaticLaunch(raw []byte, app string, validate func(string) error)
 	if err != nil {
 		return AutomaticLaunch{}, err
 	}
+	if err := u.validatePreCommands(validate); err != nil {
+		return AutomaticLaunch{}, err
+	}
+	return inspectParsedAutomaticLaunch(u, raw, app, validate)
+}
+
+func inspectParsedAutomaticLaunch(u parsedLaunchUnit, raw []byte, app string, validate func(string) error) (AutomaticLaunch, error) {
+	if err := u.validatePreCommands(validate); err != nil {
+		return AutomaticLaunch{}, err
+	}
 	args := strings.Fields(u.execStart)
 	if len(args) < 2 || !filepath.IsAbs(args[0]) || validate(args[0]) != nil {
 		return AutomaticLaunch{}, ErrLaunchUnsupported
 	}
-	result := AutomaticLaunch{Command: u.execStart, SHA256: fmt.Sprintf("%x", sha256.Sum256(raw))}
+	var err error
+	result := AutomaticLaunch{Command: u.execStart, PreCommands: u.preCommands, SHA256: fmt.Sprintf("%x", sha256.Sum256(raw))}
 	if app == "comfyui" {
 		result.Endpoint, err = comfyLaunchEndpoint(args)
 		if err != nil {
@@ -51,7 +101,7 @@ func inspectAutomaticLaunch(raw []byte, app string, validate func(string) error)
 	}
 	if app == "ollama" {
 		result.Endpoint = "http://" + u.host
-		if err := qualifyNativeLaunchWithValidator(raw, control.NativeModel{Runtime: app, Endpoint: result.Endpoint}, validate); err != nil {
+		if err := qualifyParsedLaunch(u, control.NativeModel{Runtime: app, Endpoint: result.Endpoint}, validate); err != nil {
 			return AutomaticLaunch{}, err
 		}
 		return result, nil
@@ -65,7 +115,7 @@ func inspectAutomaticLaunch(raw []byte, app string, validate func(string) error)
 	if result.Model == "" {
 		result.Model = f.model
 	}
-	err = qualifyNativeLaunchWithValidator(raw, control.NativeModel{Runtime: app, Model: result.Model, Endpoint: result.Endpoint}, validate)
+	err = qualifyParsedLaunch(u, control.NativeModel{Runtime: app, Model: result.Model, Endpoint: result.Endpoint}, validate)
 	return result, err
 }
 

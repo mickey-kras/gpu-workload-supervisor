@@ -40,6 +40,9 @@ func (s *Store) startTransition(ctx context.Context, expected uint64, operator *
 // verified idle deadline in the same transaction: the next policy tick must
 // re-attest and re-arm before idling.
 func (s *Store) beginTransitionTx(ctx context.Context, tx *sql.Tx, current control.State, tr Transition) (control.State, error) {
+	if err := temporaryDiscoveryPending(ctx, tx); err != nil {
+		return control.State{}, err
+	}
 	next := current
 	next.DesiredWorkload = tr.Target.DesiredWorkload
 	next.Admission = control.AdmissionClosed
@@ -109,6 +112,9 @@ func updateRunningTransition(ctx context.Context, tx *sql.Tx, query string, args
 
 func (s *Store) SetTransitionPhase(ctx context.Context, transitionID string, expected uint64, phase control.Phase) (control.State, error) {
 	return s.withStateTx(ctx, expected, func(tx *sql.Tx, state control.State) (control.State, error) {
+		if err := temporaryDiscoveryPending(ctx, tx); err != nil {
+			return control.State{}, err
+		}
 		state.Phase = phase
 		state.Admission = control.AdmissionClosed
 		state.PendingIdleDeadline = nil
@@ -134,6 +140,9 @@ func (s *Store) FinishTransition(ctx context.Context, transitionID, status strin
 		return control.State{}, errors.New("transition status must be committed or failed")
 	}
 	return s.withStateTx(ctx, expected, func(tx *sql.Tx, current control.State) (control.State, error) {
+		if err := temporaryDiscoveryPending(ctx, tx); err != nil {
+			return control.State{}, err
+		}
 		return s.finishTransitionTx(ctx, tx, current, transitionID, status, final)
 	})
 }
@@ -159,6 +168,9 @@ func (s *Store) InProgressTransition(ctx context.Context) (string, error) {
 
 func (s *Store) Recover(ctx context.Context, expected uint64, final control.State, reason string) (control.State, error) {
 	return s.withStateTx(ctx, expected, func(tx *sql.Tx, current control.State) (control.State, error) {
+		if err := temporaryDiscoveryPending(ctx, tx); err != nil {
+			return control.State{}, err
+		}
 		final.LeaseFence = current.LeaseFence
 		final.LeaseFence.Epoch++
 		final.Version = current.Version + 1

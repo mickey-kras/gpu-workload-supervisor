@@ -17,15 +17,16 @@ open **GPU Workload Setup** as the desktop account. Package installation install
 files only: there are no maintainer scripts opening user databases, enumerating
 sessions, stopping workloads, or enabling services for arbitrary users.
 
-Choose ComfyUI, Ollama, llama.cpp or vLLM. Setup selects one recognized
-installation automatically, or asks you to choose when several exist. Choose a
-model only when the runtime needs it; ComfyUI workflows select their own models.
+Choose applications, choose models only when relevant, then finish. Setup
+presents ComfyUI, Ollama, llama.cpp and vLLM once each, with models grouped under
+their application. It selects one unambiguous recognized installation; additional
+installation controls are deferred. ComfyUI workflows select their own models.
 Applications and models must already exist.
 
-Select **Finish**, review the application and intended start/stop control, then
-confirm after active jobs finish and choose **Apply**. ComfyUI closes when you
-switch to another workload. **Advanced** exposes service, endpoint, launch and
-resource settings for inspection or supported overrides. Automatic and manual
+Review the ready-to-finish summary after active jobs finish, then select
+**Finish setup** to confirm activation. ComfyUI closes when you switch to another
+workload. Labeled gears expose service, endpoint, launch and resource settings
+for inspection or supported overrides. Automatic and manual
 configuration use the same validation and activation safeguards.
 
 Setup refuses stale configuration, edited integration files, live workloads,
@@ -44,7 +45,8 @@ do not select runtime configuration. The accepted workload catalog and its opaqu
 revision live in SQLite; `catalog.json` is only an owned setup/backup artifact.
 Ordinary controls never adopt edits to that mirror. Setup exposes `discover`,
 `probe`, `prepare`, `fingerprint`, `drafts`, `save-drafts`, `verify-bindings`, `validate`,
-`apply`, `reconcile` and `remove-integration`; request/response commands use a
+`apply`, `temporary-status`, `temporary-discover`, `temporary-cleanup`, `reconcile`
+and `remove-integration`; request/response commands use a
 strict versioned JSON protocol over stdin/stdout. The desktop application
 supplies these requests and renders the concrete preview.
 
@@ -53,28 +55,27 @@ supplies these requests and renders the concrete preview.
 Open **Manage workloads** from GPU Control in GNOME's top-right Quick Settings
 menu. The packaged setup application is also available in the application list.
 
-1. Choose the application and select **Add workload**.
-2. Select an installation or model only when a choice is needed. **Refresh discovery**
-   reads existing metadata and inventory without starting the application.
-3. Select **Finish**. Setup prepares and verifies the configuration internally,
-   then presents its start/stop summary.
-4. Finish active jobs, switch to Idle, confirm the summary and select **Apply**.
+1. Select application cards, then **Continue**.
+2. Choose relevant models beneath each application, then **Continue**. ComfyUI
+   skips model selection. Discovery refresh reads metadata without startup.
+3. Review the summary, finish active jobs and switch to Idle before **Finish setup**.
+   Setup verifies current evidence and uses the existing activation safeguards.
 
-**Save drafts** keeps choices for later without making them selectable workloads.
+**Save selections for later** keeps choices for later without making them selectable workloads.
 Missing or unsupported installations offer a location/address fallback and
 explain what evidence is missing. Custom wrappers and ambiguous configuration
 require a supported launch or validated Advanced configuration; setup does not
 guess ownership from a healthy endpoint.
 
-Existing recognized service files are adopted without rewriting their launch
-options. Optional **Advanced** settings also retain the existing managed-launch
+Existing recognized service files and supported drop-ins are adopted without
+rewriting their launch options. Optional gear settings retain the managed-launch
 and explicit-binding workflows. Applications, environments and models are never
 installed, updated or downloaded by setup.
 
-llama.cpp and vLLM models use distinct units. Ollama models with the same instance
-name and port can share a managed unit. Setup also preserves an adopted shared
-pair unchanged from the accepted catalog. New or edited adopted shared bindings
-require `gpu-mode configure`; setup does not verify them. The backend
+llama.cpp and vLLM external services retain the model pinned by their launch;
+choosing another model does not rewrite their service. Ollama models can share
+one verified instance. New or edited adopted groups receive read-only launch and
+cgroup preflight, followed by complete activation and GPU release checks. The backend
 `render-owned` command returns a preview only; Apply creates the managed launch
 files. See [WORKLOADS.md](WORKLOADS.md). Model identity is checked again before
 GPU admission.
@@ -85,7 +86,7 @@ only supervisor configuration. Active/referenced workloads cannot be removed;
 finish their work and switch to Idle first. Applications, models, workflows and
 external configuration are preserved.
 
-**Set up later** closes the window without applying configuration. Save drafts
+**Set up later** closes the window without applying configuration. **Save selections for later**
 first if you want to keep new choices. A stale-draft error requires reopening
 Manage workloads before retrying. Interrupted activation resumes its recorded
 configuration, with editing disabled until it completes.
@@ -144,18 +145,26 @@ unknown versions require explicit qualified evidence. Runtime rechecks placement
 and launch identity; upgrading systemd can require refreshing setup. Source
 inspection and fixture checks do not replace host qualification.
 
-Stopped Ollama may require an existing model name when its native inventory is
-unavailable. Setup does not start it to enumerate models; local model readiness
-is checked by the runtime before admission. Temporary-start setup sessions are
-not implemented; installations needing additional running evidence remain
-blocked. No direct service-start action bypasses ownership safeguards.
+Stopped Ollama may require an existing model name when native inventory is
+unavailable. Metadata-only setup remains available. An initialized compatible
+Supervisor in healthy, closed Idle can offer a separate temporary inventory
+action with explicit startup/GPU-use consent and paused external application
+control. It starts only the qualified stopped service, keeps admission closed,
+and returns models after verified stop and GPU/cgroup release. Cancellation
+requests cleanup; interrupted or failed cleanup remains recorded and blocks
+ordinary controls until explicit guarded cleanup succeeds. It never stops an
+application that was already running or a replaced service invocation. Native
+model readiness remains a separate runtime check before admission.
 
 Discovery uses fixed GET routes, disables redirects and ambient proxies, limits
 responses to 1 MiB, and bounds each probe to 3 seconds and discovery to 15 seconds.
 It never uses llama.cpp reload/routed autoload requests, starts applications,
 loads/unloads models, downloads files, scans drives, or writes application or
-supervisor configuration. Configuration files with custom syntax, shell wrappers
-and escaped launch commands remain explicit manual references.
+supervisor configuration. Unsupported syntax, shell wrappers and escaped launch
+commands receive actionable guidance. External adoption validates the effective
+unit plus ordered contributing file hashes and pre-start commands. Supported
+llama.cpp parallel, continuous-batching, flash-attention and MTP options are
+preserved; generating a managed launch uses its separate restricted format.
 
 ## Upgrade and interrupted activation
 
@@ -226,3 +235,5 @@ CI coverage of the package payload and setup executable is described in
 Real GNOME Shell 50 rendering/session lifecycle, NVIDIA operation, dependency
 resolution and configured package installation, cross-version managed upgrade,
 and complete rollback/fence rotation still require deployment qualification.
+Use the [pinned candidate qualification checklist](SETUP-QUALIFICATION.md);
+successful automated checks do not close host acceptance.

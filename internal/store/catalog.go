@@ -67,6 +67,9 @@ func (s *Store) ReplaceCatalog(ctx context.Context, expected string, c control.C
 }
 
 func (s *Store) replaceCatalog(ctx context.Context, tx *sql.Tx, expected string, c control.Catalog) (control.CatalogSnapshot, string, error) {
+	if err := temporaryDiscoveryPending(ctx, tx); err != nil {
+		return control.CatalogSnapshot{}, "", err
+	}
 	old, err := readCatalog(ctx, tx)
 	if err != nil {
 		return old, "", err

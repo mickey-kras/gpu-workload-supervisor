@@ -163,7 +163,15 @@ CREATE TABLE idle_policy_state(
     updated_at TEXT NOT NULL);
 `
 
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12}
+const schemaV13 = `
+CREATE TABLE temporary_discovery_sessions (
+ id TEXT PRIMARY KEY REFERENCES transitions(transition_id),
+ payload BLOB NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('starting','running','cleanup_required','completed')));
+CREATE UNIQUE INDEX idx_temporary_discovery_active ON temporary_discovery_sessions((1)) WHERE status != 'completed';
+`
+
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13}
 
 func (s *Store) initialize(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)

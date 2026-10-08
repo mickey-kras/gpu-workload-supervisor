@@ -158,7 +158,7 @@ func sharedOllamaFixture(t *testing.T, mutate ...func(*control.Catalog)) (*Syste
 	showCmd := "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- ollama.service"
 	r.outputs[showCmd] = []byte("LoadState=loaded\nActiveState=active\nSubState=running\nControlGroup=/workloads/ollama.service\n")
 	r.outputs["/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- chat.service"] = stoppedOutput()
-	r.outputs["/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload -- ollama.service"] = []byte("FragmentPath=" + path + "\nDropInPaths=\nNeedDaemonReload=no\n")
+	r.outputs["/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload --property=ExecStartPre --property=ExecStart -- ollama.service"] = []byte("ExecStart={ path=" + strings.Fields(strings.Split(string(data), "ExecStart=")[1])[0] + " ; argv[]=" + strings.TrimSpace(strings.Split(string(data), "ExecStart=")[1]) + " ; }\nFragmentPath=" + path + "\nDropInPaths=\nNeedDaemonReload=no\n")
 	fixtureCgroups(t, m)
 	return m, r, backend, showCmd
 }
@@ -586,5 +586,76 @@ func TestActiveSharedOllamaQuiescenceValidatesManagerCgroup(t *testing.T) {
 	r.outputs[showCmd] = show("/workloads/app.slice/" + unit)
 	if err := m.ReleasedFor(context.Background(), control.WorkloadIdle); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSharedAdoptedOllamaGroupPreflightVerifiesExactBinding(t *testing.T) {
+	for _, failure := range []string{"none", "missing file", "changed hash", "wrong fragment", "unrecorded dropin", "needs reload", "missing unit", "missing cgroup", "wrong cgroup", "orphaned owned unit"} {
+		t.Run(failure, func(t *testing.T) {
+			m, r, backend, show := sharedOllamaFixture(t)
+			m.config.OwnedUnitDir = t.TempDir()
+			root := fixtureCgroups(t, m)
+			writeEvents(t, root, "ollama.service", "populated 0\n")
+			p := m.config.Catalog.Profiles[0]
+			fragment := ""
+			for command := range r.outputs {
+				if strings.Contains(command, "--property=FragmentPath") && strings.HasSuffix(command, "-- ollama.service") {
+					if fragment != "" {
+						t.Fatal("ambiguous fragment metadata fixture")
+					}
+					fragment = command
+				}
+			}
+			if fragment == "" {
+				t.Fatal("fragment metadata fixture unavailable")
+			}
+			switch failure {
+			case "missing file":
+				if err := os.Remove(p.NativeModel.LaunchFile); err != nil {
+					t.Fatal(err)
+				}
+			case "changed hash":
+				if err := os.WriteFile(p.NativeModel.LaunchFile, []byte("changed externally"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "wrong fragment":
+				r.outputs[fragment] = []byte("FragmentPath=/elsewhere/ollama.service\nDropInPaths=\nNeedDaemonReload=no\n")
+			case "unrecorded dropin":
+				r.outputs[fragment] = []byte("FragmentPath=" + p.NativeModel.LaunchFile + "\nDropInPaths=/elsewhere/override.conf\nNeedDaemonReload=no\n")
+			case "needs reload":
+				r.outputs[fragment] = []byte("FragmentPath=" + p.NativeModel.LaunchFile + "\nDropInPaths=\nNeedDaemonReload=yes\n")
+			case "missing unit":
+				r.outputs[show] = []byte("LoadState=not-found\nActiveState=inactive\nSubState=dead\nControlGroup=\n")
+			case "missing cgroup":
+				if err := os.RemoveAll(filepath.Join(root, "ollama.service")); err != nil {
+					t.Fatal(err)
+				}
+			case "wrong cgroup":
+				r.outputs[show] = []byte("LoadState=loaded\nActiveState=active\nSubState=running\nControlGroup=/elsewhere\n")
+			case "orphaned owned unit":
+				if err := os.WriteFile(filepath.Join(m.config.OwnedUnitDir, "gws-owned-orphan.service"), []byte("external content"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := m.Preflight(t.Context())
+			if (err != nil) != (failure != "none") {
+				t.Fatalf("%s: %v", failure, err)
+			}
+			if len(backend.requests) != 0 || backend.psCalls != 0 {
+				t.Fatal("read-only preflight contacted model API")
+			}
+			fragmentRead := false
+			for _, call := range r.calls {
+				if call == fragment {
+					fragmentRead = true
+				}
+				if strings.Contains(call, " start ") || strings.Contains(call, " stop ") || strings.Contains(call, "daemon-reload") {
+					t.Fatalf("preflight mutated runtime: %s", call)
+				}
+			}
+			if failure != "missing file" && failure != "changed hash" && !fragmentRead {
+				t.Fatal("fragment metadata mutation was not exercised")
+			}
+		})
 	}
 }

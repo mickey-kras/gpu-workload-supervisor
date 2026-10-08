@@ -49,7 +49,7 @@ func TestApplicationDiscoveryFiltersServicesByExecutable(t *testing.T) {
 	}
 }
 func TestServiceIdentityDoesNotExecuteConfiguration(t *testing.T) {
-	for _, input := range []string{"ExecStart={ path=/bin/bash ; argv[]=/bin/bash -c ollama serve ; }", "ExecStart={ path=/usr/bin/python ; argv[]=/usr/bin/python /tmp/main.py ; }", "ExecStart={ path=/usr/bin/not-ollama ; argv[]=/usr/bin/not-ollama ; }"} {
+	for _, input := range []string{"ExecStart={ path=/bin/bash ; argv[]=/bin/bash -c ollama serve ; }", "ExecStart={ path=/usr/bin/python ; argv[]=/usr/bin/python /tmp/main.py ; }", "ExecStart={ path=/usr/bin/not-ollama ; argv[]=/usr/bin/not-ollama ; }", "ExecStart={ path=llama-server ; argv[]=llama-server -m /a ; }", "ExecStart={ path=/usr/bin/llama-server ; argv[]=/usr/bin/other -m /a ; }", "ExecStart={ path=/usr/bin/llama-server ; argv[]=/usr/bin/llama-server -m /a ; } { path=/usr/bin/other ; argv[]=/usr/bin/other x ; }"} {
 		if appFromUnit(input) != "" {
 			t.Fatal("guessed application", input)
 		}
