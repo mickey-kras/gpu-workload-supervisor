@@ -3,6 +3,7 @@ package setup
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -310,5 +311,198 @@ func TestKeywordlessApplicationWithRepeatedSystemctlPreCommandsIsDiscovered(t *t
 	metadata[unit]["ExecStartPre"] = "{ path=/usr/bin/test ; argv[]=/usr/bin/test -f /models/a.gguf ; ignore_errors=no ; }\nExecStartPre={ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; }"
 	if _, err := b.Prepare(context.Background(), PrepareRequest{Draft: d}); err == nil {
 		t.Fatal("reversed startup preconditions accepted")
+	}
+}
+
+func TestReferenceResolutionSkipsUnrelatedInspectionFailures(t *testing.T) {
+	for _, kind := range []string{"endpoint", "application-directory"} {
+		t.Run(kind, func(t *testing.T) {
+			b, d, _ := automaticFixture(t, "comfyui")
+			d.Binding = nil
+			if kind == "endpoint" {
+				d.Endpoint = "http://127.0.0.1:8080"
+			} else {
+				d.ReferenceKind = kind
+				d.Reference = "/opt/ComfyUI"
+			}
+			run := b.runCommand
+			var failed []string
+			b.runCommand = func(ctx context.Context, exe string, args ...string) ([]byte, error) {
+				if strings.Contains(strings.Join(args, " "), "list-unit-files") {
+					return []byte("disappeared.service disabled\ncomfyui.service enabled\nuninspectable.service disabled\n"), nil
+				}
+				unit := args[len(args)-1]
+				if unit == "disappeared.service" || unit == "uninspectable.service" {
+					failed = append(failed, unit)
+					return nil, errors.New("unrelated service unavailable")
+				}
+				return run(ctx, exe, args...)
+			}
+			got, err := b.Prepare(context.Background(), PrepareRequest{Draft: d})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Profile.Unit != "comfyui.service" || len(failed) != 2 {
+				t.Fatalf("matching installation lost or enumeration cut short: %+v %v", got, failed)
+			}
+		})
+	}
+}
+
+func TestReferenceResolutionRetainsMissingAmbiguousAndInspectionFailureErrors(t *testing.T) {
+	for _, kind := range []string{"endpoint", "application-directory"} {
+		for _, scenario := range []string{"no-match", "ambiguous", "all-uninspectable", "unsafe-launch"} {
+			t.Run(kind+"/"+scenario, func(t *testing.T) {
+				b, d, metadata := automaticFixture(t, "comfyui")
+				d.Binding = nil
+				if kind == "endpoint" {
+					d.Endpoint = "http://127.0.0.1:8080"
+				} else {
+					d.ReferenceKind = kind
+					d.Reference = "/opt/ComfyUI"
+				}
+				if scenario == "no-match" {
+					d.Endpoint = "http://127.0.0.1:9999"
+					if kind == "application-directory" {
+						d.Endpoint = ""
+						d.Reference = "/missing"
+					}
+				}
+				metadata["second.service"] = metadata["comfyui.service"]
+				listing := "uninspectable.service disabled\ncomfyui.service enabled\n"
+				if scenario == "ambiguous" {
+					listing += "second.service enabled\n"
+				}
+				if scenario == "all-uninspectable" {
+					listing = "uninspectable.service disabled\nmissing.service disabled\n"
+				}
+				cause := errors.New("service inspection unavailable")
+				run := b.runCommand
+				b.runCommand = func(ctx context.Context, exe string, args ...string) ([]byte, error) {
+					if strings.Contains(strings.Join(args, " "), "list-unit-files") {
+						return []byte(listing), nil
+					}
+					unit := args[len(args)-1]
+					if unit == "uninspectable.service" || unit == "missing.service" {
+						return nil, cause
+					}
+					return run(ctx, exe, args...)
+				}
+				if scenario == "unsafe-launch" {
+					b.inspectAutomatic = func(string, string) (gpuruntime.AutomaticLaunch, error) {
+						return gpuruntime.AutomaticLaunch{}, errors.New("untrusted executable")
+					}
+				}
+				_, err := b.Prepare(context.Background(), PrepareRequest{Draft: d})
+				if err == nil {
+					t.Fatal("unsafe reference resolved", scenario)
+				}
+				if scenario == "all-uninspectable" && (!errors.Is(err, cause) || !strings.Contains(err.Error(), "could not be inspected")) {
+					t.Fatal("systemic inspection failure hidden", err)
+				}
+				if scenario == "ambiguous" && !strings.Contains(err.Error(), "multiple installations") {
+					t.Fatal("ambiguity was not retained", err)
+				}
+				if scenario == "no-match" && !strings.Contains(err.Error(), "no supported loaded installation") {
+					t.Fatal("no-match gate changed", err)
+				}
+			})
+		}
+	}
+}
+
+func TestReferenceResolutionCancellationDoesNotBecomeFallback(t *testing.T) {
+	for _, stage := range []string{"before-listing", "listing", "before-match", "after-match", "successful-observation", "launch-inspection", "wrapped-listing", "wrapped-observation", "wrapped-launch"} {
+		t.Run(stage, func(t *testing.T) {
+			b, d, _ := automaticFixture(t, "comfyui")
+			d.Binding = nil
+			d.Endpoint = "http://127.0.0.1:8080"
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			run := b.runCommand
+			listing := "before.service disabled\ncomfyui.service enabled\nafter.service disabled\n"
+			b.runCommand = func(ctx context.Context, exe string, args ...string) ([]byte, error) {
+				if strings.Contains(strings.Join(args, " "), "list-unit-files") {
+					if stage == "listing" {
+						cancel()
+					}
+					if stage == "wrapped-listing" {
+						return nil, fmt.Errorf("command: %w", context.DeadlineExceeded)
+					}
+					return []byte(listing), nil
+				}
+				unit := args[len(args)-1]
+				if unit == "before.service" || unit == "after.service" {
+					if (stage == "before-match" && unit == "before.service") || (stage == "after-match" && unit == "after.service") {
+						cancel()
+					}
+					if stage == "wrapped-observation" {
+						return nil, fmt.Errorf("command: %w", context.Canceled)
+					}
+					return nil, errors.New("unrelated service unavailable")
+				}
+				result, err := run(ctx, exe, args...)
+				if stage == "successful-observation" {
+					cancel()
+				}
+				return result, err
+			}
+			inspect := b.inspectAutomatic
+			b.inspectAutomatic = func(path, app string) (gpuruntime.AutomaticLaunch, error) {
+				if stage == "launch-inspection" {
+					cancel()
+				}
+				if stage == "wrapped-launch" {
+					return gpuruntime.AutomaticLaunch{}, fmt.Errorf("inspect: %w", context.DeadlineExceeded)
+				}
+				return inspect(path, app)
+			}
+			if stage == "before-listing" {
+				cancel()
+			}
+			_, err := b.Prepare(ctx, PrepareRequest{Draft: d})
+			want := context.Canceled
+			if stage == "wrapped-listing" || stage == "wrapped-launch" {
+				want = context.DeadlineExceeded
+			}
+			if !errors.Is(err, want) {
+				t.Fatalf("cancellation changed into fallback: %v", err)
+			}
+		})
+	}
+}
+
+func TestReferenceResolutionPreservesGlobalBoundsAndExplicitUnitFailures(t *testing.T) {
+	for _, kind := range []string{"list-error", "oversized", "too-many"} {
+		t.Run(kind, func(t *testing.T) {
+			b, d, _ := automaticFixture(t, "comfyui")
+			d.Binding = nil
+			d.Reference = "/opt/ComfyUI"
+			d.ReferenceKind = "application-directory"
+			shows := 0
+			b.runCommand = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+				if !strings.Contains(strings.Join(args, " "), "list-unit-files") {
+					shows++
+					return nil, errors.New("unexpected inspection")
+				}
+				switch kind {
+				case "list-error":
+					return nil, errors.New("desktop bus unavailable")
+				case "oversized":
+					return []byte(strings.Repeat("x", commandOutputLimit+1)), nil
+				default:
+					return []byte(strings.Repeat("unit.service disabled\n", 257)), nil
+				}
+			}
+			if _, err := b.Prepare(context.Background(), PrepareRequest{Draft: d}); err == nil || shows != 0 {
+				t.Fatal("global discovery boundary weakened", err, shows)
+			}
+		})
+	}
+	b, d, _ := automaticFixture(t, "comfyui")
+	cause := errors.New("explicit selected unit unavailable")
+	b.runCommand = func(context.Context, string, ...string) ([]byte, error) { return nil, cause }
+	if _, err := b.Prepare(context.Background(), PrepareRequest{Draft: d}); !errors.Is(err, cause) {
+		t.Fatal("explicit unit failure hidden", err)
 	}
 }

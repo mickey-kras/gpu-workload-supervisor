@@ -168,7 +168,13 @@ func (b Backend) unitAtReference(ctx context.Context, d Draft) (string, error) {
 	if d.Endpoint == "" && (d.Reference == "" || (d.ReferenceKind != "configuration" && d.ReferenceKind != "application-directory" && d.ReferenceKind != "application")) {
 		return "", errors.New("choose a recognized installation or its configuration location")
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	out, err := b.runCommand(ctx, "/usr/bin/systemctl", "--user", "list-unit-files", "--type=service", "--no-legend", "--no-pager")
+	if cancelErr := referenceCancellationError(ctx, err); cancelErr != nil {
+		return "", cancelErr
+	}
 	if err != nil || len(out) > commandOutputLimit {
 		return "", errors.New("application services could not be listed; check your desktop session and retry")
 	}
@@ -177,11 +183,23 @@ func (b Backend) unitAtReference(ctx context.Context, d Draft) (string, error) {
 		return "", errors.New("too many services for bounded discovery; select a recognized installation explicitly")
 	}
 	selected := ""
+	inspected := false
+	var firstInspectionError error
 	for _, unit := range units {
-		values, err := b.showAutomatic(ctx, unit)
-		if err != nil {
+		if err := ctx.Err(); err != nil {
 			return "", err
 		}
+		values, err := b.showAutomatic(ctx, unit)
+		if cancelErr := referenceCancellationError(ctx, err); cancelErr != nil {
+			return "", cancelErr
+		}
+		if err != nil {
+			if firstInspectionError == nil {
+				firstInspectionError = err
+			}
+			continue
+		}
+		inspected = true
 		if appFromUnit("ExecStart="+values["ExecStart"]) != d.App {
 			continue
 		}
@@ -194,6 +212,9 @@ func (b Backend) unitAtReference(ctx context.Context, d Draft) (string, error) {
 				}
 			}
 			launch, err := inspect(values["FragmentPath"], d.App)
+			if cancelErr := referenceCancellationError(ctx, err); cancelErr != nil {
+				return "", cancelErr
+			}
 			if err != nil {
 				continue
 			}
@@ -217,8 +238,26 @@ func (b Backend) unitAtReference(ctx context.Context, d Draft) (string, error) {
 			selected = unit
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if !inspected && firstInspectionError != nil {
+		return "", fmt.Errorf("application services could not be inspected; check your desktop session and retry: %w", firstInspectionError)
+	}
 	if selected == "" {
 		return "", errors.New("no supported loaded installation uses this location; install a supported direct user service or choose its configuration")
 	}
 	return selected, nil
+}
+
+// referenceCancellationError distinguishes a stopped scan from an unavailable
+// candidate so cancellation cannot silently become a fallback selection.
+func referenceCancellationError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return nil
 }
