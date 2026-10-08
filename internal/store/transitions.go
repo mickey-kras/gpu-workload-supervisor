@@ -134,29 +134,7 @@ func (s *Store) FinishTransition(ctx context.Context, transitionID, status strin
 		return control.State{}, errors.New("transition status must be committed or failed")
 	}
 	return s.withStateTx(ctx, expected, func(tx *sql.Tx, current control.State) (control.State, error) {
-		if final.LeaseFence != current.LeaseFence {
-			return control.State{}, ErrStaleFence
-		}
-		final.PendingIdleDeadline = nil
-		final.Version = current.Version + 1
-		final.UpdatedAt = s.now().UTC()
-		if err := final.Validate(); err != nil {
-			return control.State{}, err
-		}
-		if status == "committed" && final.ActiveWorkload != control.WorkloadIdle {
-			if err := s.touchActivity(ctx, tx); err != nil {
-				return control.State{}, err
-			}
-		}
-		if err := updateRunningTransition(ctx, tx, `UPDATE transitions SET phase = ?, status = ?, updated_at = ?
-			WHERE transition_id = ? AND status = 'in_progress'`,
-			final.Phase, status, formatTime(s.now()), transitionID); err != nil {
-			return control.State{}, err
-		}
-		if err := writeState(ctx, tx, final); err != nil {
-			return control.State{}, err
-		}
-		return final, nil
+		return s.finishTransitionTx(ctx, tx, current, transitionID, status, final)
 	})
 }
 
@@ -246,4 +224,30 @@ func transitionOperatorSource(ctx context.Context, tx *sql.Tx, current control.S
 		return nil
 	}
 	return operatorSource(ctx, tx, current, *operator)
+}
+
+func (s *Store) finishTransitionTx(ctx context.Context, tx *sql.Tx, current control.State, transitionID, status string, final control.State) (control.State, error) {
+	if final.LeaseFence != current.LeaseFence {
+		return control.State{}, ErrStaleFence
+	}
+	final.PendingIdleDeadline = nil
+	final.Version = current.Version + 1
+	final.UpdatedAt = s.now().UTC()
+	if err := final.Validate(); err != nil {
+		return control.State{}, err
+	}
+	if status == "committed" && final.ActiveWorkload != control.WorkloadIdle {
+		if err := s.touchActivity(ctx, tx); err != nil {
+			return control.State{}, err
+		}
+	}
+	if err := updateRunningTransition(ctx, tx, `UPDATE transitions SET phase = ?, status = ?, updated_at = ?
+		WHERE transition_id = ? AND status = 'in_progress'`,
+		final.Phase, status, formatTime(s.now()), transitionID); err != nil {
+		return control.State{}, err
+	}
+	if err := writeState(ctx, tx, final); err != nil {
+		return control.State{}, err
+	}
+	return final, nil
 }

@@ -144,6 +144,10 @@ func (s State) validateFields() error {
 	if err := s.IdlePolicy.Validate(); err != nil {
 		return err
 	}
+	return s.validatePendingIdleDeadline()
+}
+
+func (s State) validatePendingIdleDeadline() error {
 	// An armed deadline is only meaningful on an open, stable, supervisor-owned
 	// workload; carrying it anywhere else is a bug, so fail closed. Degraded
 	// health stays readable so the next tick can disarm it; arming and firing

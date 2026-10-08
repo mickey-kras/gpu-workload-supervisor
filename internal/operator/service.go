@@ -84,18 +84,7 @@ func (session Session) respond(ctx context.Context, req Request, result Response
 	// an unobserved durable snapshot must not surface as a fresh, actionable
 	// observation with derived capabilities.
 	if req.Action == actionGetSettings || req.Action == actionSetIdlePolicy {
-		settings, code := session.executeSettings(ctx, req)
-		if code != OK {
-			result.Code = code
-			return result
-		}
-		if ctx.Err() != nil {
-			result.Code = Timeout
-			return result
-		}
-		result.Code = OK
-		result.Settings = settings
-		return result
+		return session.respondSettings(ctx, req, result)
 	}
 	state, code := session.execute(ctx, req)
 	if code != OK {
@@ -286,4 +275,19 @@ func errorCode(err error) Code {
 	default:
 		return Unavailable
 	}
+}
+
+func (session Session) respondSettings(ctx context.Context, req Request, result Response) Response {
+	settings, code := session.executeSettings(ctx, req)
+	if code != OK {
+		result.Code = code
+		return result
+	}
+	if ctx.Err() != nil {
+		result.Code = Timeout
+		return result
+	}
+	result.Code = OK
+	result.Settings = settings
+	return result
 }
