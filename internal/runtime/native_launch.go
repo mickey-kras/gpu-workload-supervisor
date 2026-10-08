@@ -14,7 +14,10 @@ import (
 	"strings"
 )
 
-const runtimeLlamaCPP = "llama.cpp"
+const (
+	runtimeLlamaCPP = "llama.cpp"
+	flagParallel    = "--parallel"
+)
 
 var ErrLaunchUnsupported = errors.New("native launch requires a supported direct local command")
 
@@ -283,7 +286,7 @@ func canonicalServerFlag(key, runtimeName string) string {
 	case "-ngl":
 		return "--n-gpu-layers"
 	case "-np":
-		return "--parallel"
+		return flagParallel
 	case "-cb":
 		return "--cont-batching"
 	case "-nocb":
@@ -310,17 +313,16 @@ func (f *serverFlags) apply(runtimeName, key, value string) error {
 			return ErrLaunchUnsupported
 		}
 		f.alias = value
-	case "--parallel", "--spec-draft-n-max", "--spec-draft-n-min":
-		if runtimeName != runtimeLlamaCPP {
-			return ErrLaunchUnsupported
-		}
-		if key == "--parallel" && value == "-1" {
-			return nil
-		}
-		v, err := strconv.ParseUint(value, 10, 32)
-		if err != nil || (v == 0 && key != "--spec-draft-n-min") {
-			return ErrLaunchUnsupported
-		}
+	default:
+		return validateServerOption(runtimeName, key, value)
+	}
+	return nil
+}
+
+func validateServerOption(runtimeName, key, value string) error {
+	switch key {
+	case flagParallel, "--spec-draft-n-max", "--spec-draft-n-min":
+		return validateLlamaNumericOption(runtimeName, key, value)
 	case "--flash-attn":
 		if runtimeName != runtimeLlamaCPP || (value != "on" && value != "off" && value != "auto") {
 			return ErrLaunchUnsupported
@@ -339,6 +341,20 @@ func (f *serverFlags) apply(runtimeName, key, value string) error {
 			return ErrLaunchUnsupported
 		}
 	default:
+		return ErrLaunchUnsupported
+	}
+	return nil
+}
+
+func validateLlamaNumericOption(runtimeName, key, value string) error {
+	if runtimeName != runtimeLlamaCPP {
+		return ErrLaunchUnsupported
+	}
+	if key == flagParallel && value == "-1" {
+		return nil
+	}
+	v, err := strconv.ParseUint(value, 10, 32)
+	if err != nil || (v == 0 && key != "--spec-draft-n-min") {
 		return ErrLaunchUnsupported
 	}
 	return nil

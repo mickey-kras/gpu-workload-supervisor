@@ -20,7 +20,7 @@ export class TemporaryDiscovery {
         if (this.app === 'ollama') {
             this.modelGroup.add(this.temporaryExplanation); this.modelGroup.add(this.temporaryConsent); this.modelGroup.add(this.temporaryStart); this.modelGroup.add(this.temporaryCancel);
         }
-        this.temporaryConsent.connect('toggled', () => { this.temporaryStart.sensitive = this.temporaryConsent.active && !this.temporaryPromise; });
+        this.temporaryConsent.connect('toggled', () => { this.temporaryStart.sensitive = this.temporaryConsent.active && this.temporaryPromise === null; });
         this.temporaryCancel.connect('clicked', () => this.cancelDetection());
         this.temporaryStart.connect('clicked', () => this.start());
     }
@@ -32,7 +32,7 @@ export class TemporaryDiscovery {
         } catch (error) { this.reportError('The stopped state was restored, but model-check status could not be refreshed. Reopen setup before another temporary check.', error); }
     }
     async cleanupTemporary() {
-        if (this.temporaryPromise) { this.temporaryOperation.cancel?.(); await this.temporaryPromise; }
+        if (this.temporaryPromise !== null) { this.temporaryOperation.cancel?.(); await this.temporaryPromise; }
         if (!this.temporarySession || this.temporarySession.status === 'completed') return;
         if (!this.temporarySession.id || !this.temporarySession.token) throw new Error('The current temporary check could not be identified. Reopen setup to read its durable recovery record.');
         try {
@@ -46,8 +46,8 @@ export class TemporaryDiscovery {
         this.draft.cancel(); try { await this.cleanupTemporary(); this.status.label = 'Model detection cancelled. Previous stopped state restored.'; } catch (error) { this.reportError('Cancellation needs cleanup. Keep external controls paused and retry.', error); }
     }
     async start() {
-        if (this.temporarySession && this.temporarySession.status !== 'completed' && !this.temporaryPromise) { try { await this.cleanupTemporary(); this.temporaryStart.label = 'Start Ollama briefly to list models'; this.temporaryStart.sensitive = false; } catch (error) { this.reportError('Temporary cleanup needs attention. Reopen setup if its current record cannot be read.', error); } return; }
-        if (!this.temporaryConsent.active || !this.temporaryStatus?.available || this.temporaryPromise) return;
+        if (this.temporarySession && this.temporarySession.status !== 'completed' && this.temporaryPromise === null) { try { await this.cleanupTemporary(); this.temporaryStart.label = 'Start Ollama briefly to list models'; this.temporaryStart.sensitive = false; } catch (error) { this.reportError('Temporary cleanup needs attention. Reopen setup if its current record cannot be read.', error); } return; }
+        if (!this.temporaryConsent.active || !this.temporaryStatus?.available || this.temporaryPromise !== null) return;
         this.temporarySession = null;
         const input = this.draft.snapshot(); const generation = this.draft.generation;
         this.temporaryStart.sensitive = false; this.temporaryCancel.visible = true; this.changed(input);
@@ -84,7 +84,7 @@ export class TemporaryDiscovery {
         this.temporaryExplanation.visible = canStart; this.temporaryConsent.visible = canStart; this.temporaryStart.visible = canStart;
     }
     cancel() {
-        if (!this.temporaryPromise && this.temporarySession && !this.temporarySession.id) {
+        if (this.temporaryPromise === null && this.temporarySession && !this.temporarySession.id) {
             this.reportError('Temporary check status is unknown. Leaving setup preserves its durable recovery block; reopen setup to check it.', new Error('No current session identity is available for safe cleanup.'));
             return Promise.resolve();
         }
@@ -94,9 +94,9 @@ export class TemporaryDiscovery {
         return this.cleanupTemporary();
     }
     active() {
-        return Boolean(this.temporaryPromise || (this.temporarySession?.id && this.temporarySession.status !== 'completed'));
+        return Boolean(this.temporaryPromise !== null || (this.temporarySession?.id && this.temporarySession.status !== 'completed'));
     }
     blocked() {
-        return Boolean(this.temporaryPromise || (this.temporarySession && this.temporarySession.status !== 'completed'));
+        return Boolean(this.temporaryPromise !== null || (this.temporarySession && this.temporarySession.status !== 'completed'));
     }
 }

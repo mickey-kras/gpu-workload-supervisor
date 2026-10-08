@@ -17,7 +17,10 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
-const cmdVerifyBindings = "verify-bindings"
+const (
+	cmdVerifyBindings    = "verify-bindings"
+	cmdTemporaryDiscover = "temporary-discover"
+)
 
 type setupActions struct {
 	home              func() (string, error)
@@ -66,7 +69,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return errors.New("usage: gpu-setup discover|probe|prepare|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|temporary-status|temporary-discover|temporary-cleanup|reconcile|idle-policy-tick|remove-integration")
 	}
 	parent := context.Background()
-	if args[0] == "temporary-discover" {
+	if args[0] == cmdTemporaryDiscover {
 		signalCtx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
 		parent = signalCtx
@@ -78,19 +81,23 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return err
 	}
 	switch args[0] {
-	case "temporary-discover", "temporary-status", "temporary-cleanup", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "save-drafts", cmdVerifyBindings, "validate", "apply", "render-owned":
+	case cmdTemporaryDiscover, "temporary-status", "temporary-cleanup", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "save-drafts", cmdVerifyBindings, "validate", "apply", "render-owned":
 		if a.euid() == 0 {
 			return errors.New("run guided setup as the desktop account, not root")
 		}
 	}
-	switch args[0] {
+	return a.runAction(ctx, home, args[0], input, output)
+}
+
+func (a setupActions) runAction(ctx context.Context, home, action string, input io.Reader, output io.Writer) error {
+	switch action {
 	case "temporary-status":
 		result, err := a.temporaryStatus(ctx, home)
 		if err != nil {
 			return err
 		}
 		return json.NewEncoder(output).Encode(result)
-	case "temporary-discover":
+	case cmdTemporaryDiscover:
 		var request setup.TemporaryDiscoveryRequest
 		if err := strictjson.DecodeLimited(input, 16384, &request); err != nil {
 			return err
@@ -139,7 +146,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 	case "idle-policy-tick":
 		return a.policyTick(ctx, home)
 	case "validate", "apply", cmdVerifyBindings:
-		return a.runPlanned(ctx, home, args[0], input, output)
+		return a.runPlanned(ctx, home, action, input, output)
 	}
 	return errors.New("unknown setup action")
 }
