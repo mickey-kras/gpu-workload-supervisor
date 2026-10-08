@@ -153,9 +153,13 @@ func validateDraftBinding(binding *DraftBinding) error {
 	return nil
 }
 
-// validateDraftOwned mirrors the catalog's per-runtime owned admissibility so
-// a draft that cannot synthesize a valid owned profile fails at save time.
+// validateDraftOwned enforces complete model choices before profile synthesis.
 func validateDraftOwned(app string, o *DraftOwnedLaunch) error {
+	return validateOwnedOptions(app, o, false)
+}
+
+// Drafts can defer model selection while retaining otherwise valid launch choices.
+func validateOwnedOptions(app string, o *DraftOwnedLaunch, allowMissingPath bool) error {
 	if o == nil {
 		return nil
 	}
@@ -165,17 +169,18 @@ func validateDraftOwned(app string, o *DraftOwnedLaunch) error {
 	if o.Port < 1024 {
 		return errors.New("owned launch port must be an unprivileged TCP port")
 	}
+	validModelPath := (allowMissingPath && o.ModelPath == "") || (filepath.IsAbs(o.ModelPath) && filepath.Clean(o.ModelPath) == o.ModelPath)
 	switch app {
 	case "ollama":
 		if o.ModelPath != "" || o.CtxSize != 0 || o.GPULayers != 0 || o.MaxModelLen != 0 || o.Alias != "" {
 			return errors.New("ollama owned launches accept only a port")
 		}
 	case appLlamaCPP:
-		if o.MaxModelLen != 0 || !filepath.IsAbs(o.ModelPath) || filepath.Clean(o.ModelPath) != o.ModelPath {
+		if o.MaxModelLen != 0 || !validModelPath {
 			return errors.New("llama.cpp owned launches require an absolute model file")
 		}
 	case "vllm":
-		if o.CtxSize != 0 || o.GPULayers != 0 || !filepath.IsAbs(o.ModelPath) || filepath.Clean(o.ModelPath) != o.ModelPath {
+		if o.CtxSize != 0 || o.GPULayers != 0 || !validModelPath {
 			return errors.New("vllm owned launches require an absolute model directory")
 		}
 	}
@@ -215,10 +220,10 @@ func validateDraftSynthesis(d Draft) error {
 	if d.Binding == nil {
 		return nil
 	}
-	if err := validateDraftOwned(d.App, d.Binding.Owned); err != nil {
+	if err := validateOwnedOptions(d.App, d.Binding.Owned, true); err != nil {
 		return err
 	}
-	// Synthesis prerequisites, mirroring OwnedProfile.
+	// Validate supplied identity; readiness still requires a model in OwnedProfile.
 	if d.Binding.Owned == nil {
 		return nil
 	}
@@ -228,10 +233,7 @@ func validateDraftSynthesis(d Draft) error {
 	if !control.ValidInstanceID(d.Binding.Instance) {
 		return errors.New("owned draft instance must be a valid workload identifier")
 	}
-	if d.App == "ollama" && d.Model == "" {
-		return errors.New("owned ollama drafts require a model and instance")
-	}
-	if d.App == "ollama" && !control.ValidNativeModelIdentity(d.App, d.Model) {
+	if d.App == "ollama" && d.Model != "" && !control.ValidNativeModelIdentity(d.App, d.Model) {
 		return errors.New("invalid native model identity")
 	}
 	return nil
