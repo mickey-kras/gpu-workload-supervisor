@@ -10,11 +10,23 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 var ErrOrphanedOwnedUnit = errors.New("supervisor-owned unit not in catalog")
 
 func (m *SystemdManager) Preflight(ctx context.Context) error {
+	return m.preflight(ctx, nil)
+}
+
+// PreflightWithOwnedRemovals permits only exact accepted unit contents that
+// setup will remove after committing the replacement catalog.
+func (m *SystemdManager) PreflightWithOwnedRemovals(ctx context.Context, removals map[string]string) error {
+	return m.preflight(ctx, removals)
+}
+
+func (m *SystemdManager) preflight(ctx context.Context, removals map[string]string) error {
 	if err := m.preflightBindings(ctx); err != nil {
 		return err
 	}
@@ -35,7 +47,39 @@ func (m *SystemdManager) Preflight(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return m.preflightOwned(ctx, unitDir)
+	return m.preflightOwnedWithRemovals(ctx, unitDir, removals)
+}
+
+// PreflightAdopted verifies existing bindings during a setup preview. Owned
+// units may not exist yet; Apply must run full Preflight after rendering them.
+func (m *SystemdManager) PreflightAdopted(ctx context.Context, removals map[string]string) error {
+	if err := m.verifyManagerCgroup(ctx); err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, p := range m.config.Catalog.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Owned != nil {
+			if err := m.verifyOwnedSpec(p); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := m.verifyNativeBinding(ctx, p); err != nil {
+			return err
+		}
+		if seen[p.Unit] {
+			continue
+		}
+		seen[p.Unit] = true
+		if err := m.preflightWorkloadCgroup(ctx, p.Unit, p.Cgroup); err != nil {
+			return err
+		}
+	}
+	unitDir, err := m.ownedUnitDirectory()
+	if err != nil {
+		return err
+	}
+	return m.preflightOwnedWithRemovals(ctx, unitDir, removals)
 }
 
 // lookupAccountID is a seam for account-resolution faults.
@@ -58,7 +102,11 @@ func (m *SystemdManager) ownedUnitDirectory() (string, error) {
 // preflightOwned fails closed on supervisor-owned unit files the current
 // catalog cannot account for. It reads the directory only; unit contents are
 // verified elsewhere by digest.
-func (m *SystemdManager) preflightOwned(_ context.Context, unitDir string) error {
+func (m *SystemdManager) preflightOwned(ctx context.Context, unitDir string) error {
+	return m.preflightOwnedWithRemovals(ctx, unitDir, nil)
+}
+
+func (m *SystemdManager) preflightOwnedWithRemovals(_ context.Context, unitDir string, removals map[string]string) error {
 	if unitDir == "" {
 		return nil
 	}
@@ -77,6 +125,12 @@ func (m *SystemdManager) preflightOwned(_ context.Context, unitDir string) error
 		}
 		path := filepath.Join(unitDir, name)
 		if sha, ok := adopted[path]; ok {
+			data, err := os.ReadFile(path)
+			if err == nil && fmt.Sprintf("%x", sha256.Sum256(data)) == sha {
+				continue
+			}
+		}
+		if sha, ok := removals[name]; ok {
 			data, err := os.ReadFile(path)
 			if err == nil && fmt.Sprintf("%x", sha256.Sum256(data)) == sha {
 				continue
@@ -109,7 +163,7 @@ func (m *SystemdManager) preflightWorkloadCgroup(ctx context.Context, unit, grou
 func (m *SystemdManager) preflightBindings(ctx context.Context) error {
 	if m.config.Catalog != nil {
 		for _, p := range m.config.Catalog.Profiles {
-			if err := verifyOwnedSpec(p); err != nil {
+			if err := m.verifyOwnedSpec(p); err != nil {
 				return err
 			}
 			if err := m.verifyNativeBinding(ctx, p); err != nil {
@@ -141,4 +195,12 @@ func (m *SystemdManager) ownedBindings() (map[string]bool, map[string]string) {
 		}
 	}
 	return managed, adopted
+}
+
+func (m *SystemdManager) verifyOwnedSpec(p control.WorkloadProfile) error {
+	validate := m.nativeExecutableValidator
+	if validate == nil {
+		validate = validateNativeExecutable
+	}
+	return verifyOwnedSpecWithValidator(p, validate)
 }

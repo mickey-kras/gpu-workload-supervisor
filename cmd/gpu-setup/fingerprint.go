@@ -48,10 +48,10 @@ func (a setupActions) renderOwned(ctx context.Context, home string, input io.Rea
 	if err != nil {
 		return err
 	}
-	if request.ManagerCgroup == "" || request.ManagerCgroup != actual {
+	if actual == "" || (request.ManagerCgroup != "" && request.ManagerCgroup != actual) {
 		return setup.ErrManagerCgroupMismatch
 	}
-	profile, raw, err := setup.OwnedProfile(request.Draft, request.ManagerCgroup, home)
+	profile, raw, err := setup.OwnedProfile(request.Draft, actual, home)
 	if err != nil {
 		return err
 	}

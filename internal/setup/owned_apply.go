@@ -392,9 +392,12 @@ func requireMatchingActivation(root string, req Request) error {
 	return nil
 }
 
-func (work activationWork) verifyRuntimes(ctx context.Context) (gpuruntime.Manager, error) {
+func (work activationWork) verifyRuntimes(ctx context.Context, plan unitPlan) (gpuruntime.Manager, error) {
 	manager, err := work.backend.makeRuntime(work.request)
 	if err != nil {
+		return nil, err
+	}
+	if err := verifyActivationBindings(ctx, manager, plan); err != nil {
 		return nil, err
 	}
 	if err := manager.ReleasedFor(ctx, control.WorkloadIdle); err != nil {
@@ -516,4 +519,21 @@ func acceptedOwnedUnitProofs(catalog control.Catalog, home string) (map[string]s
 		proven[e.unit] = e.proof
 	}
 	return proven, nil
+}
+
+func verifyActivationBindings(ctx context.Context, manager gpuruntime.Manager, plan unitPlan) error {
+	preflight := manager.Preflight
+	if preview, ok := manager.(interface {
+		PreflightWithOwnedRemovals(context.Context, map[string]string) error
+	}); ok && len(plan.Deletes) > 0 {
+		removals := map[string]string{}
+		for _, name := range plan.Deletes {
+			removals[name] = plan.proven[name]
+		}
+		preflight = func(ctx context.Context) error { return preview.PreflightWithOwnedRemovals(ctx, removals) }
+	}
+	if err := preflight(ctx); err != nil {
+		return fmt.Errorf("configured workload bindings are not verified: %w", err)
+	}
+	return nil
 }

@@ -66,6 +66,10 @@ func verifyNativeLaunchWithValidator(n control.NativeModel, validate func(string
 // deterministic re-render must exist, match the recorded digest, and qualify
 // under the shared grammar before the on-disk binding is checked.
 func verifyOwnedSpec(p control.WorkloadProfile) error {
+	return verifyOwnedSpecWithValidator(p, validateNativeExecutable)
+}
+
+func verifyOwnedSpecWithValidator(p control.WorkloadProfile, validate func(string) error) error {
 	if p.NativeModel == nil || p.NativeModel.Owned == nil {
 		return nil
 	}
@@ -76,7 +80,10 @@ func verifyOwnedSpec(p control.WorkloadProfile) error {
 	if fmt.Sprintf("%x", sha256.Sum256(raw)) != p.NativeModel.LaunchSHA256 {
 		return fmt.Errorf("%w: rendered digest differs from the recorded launch fingerprint", ErrOwnedRender)
 	}
-	return renderMustQualify(raw, *p.NativeModel)
+	if err := qualifyNativeLaunchWithValidator(raw, *p.NativeModel, validate); err != nil {
+		return fmt.Errorf("%w: %v", ErrOwnedRender, err)
+	}
+	return nil
 }
 
 func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.WorkloadProfile) error {

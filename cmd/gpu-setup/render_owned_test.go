@@ -95,8 +95,16 @@ func TestRenderOwnedVerifiesManagerCgroupAgainstHost(t *testing.T) {
 		t.Fatalf("foreign manager cgroup accepted: %v", err)
 	}
 	empty := strings.Replace(input, `"managerCgroup":"/user.slice/user-1000.slice/user@1000.service"`, `"managerCgroup":""`, 1)
+	var derived bytes.Buffer
+	if err := actions.renderOwned(context.Background(), home, strings.NewReader(empty), &derived); err != nil {
+		t.Fatalf("host-derived manager cgroup rejected: %v", err)
+	}
+	if !strings.Contains(derived.String(), "/user.slice/user-1000.slice/user@1000.service/app.slice/") {
+		t.Fatalf("preview did not derive the observed manager root: %s", derived.String())
+	}
+	actions.managerCgroup = func(context.Context, string) (string, error) { return "", nil }
 	if err := actions.renderOwned(context.Background(), home, strings.NewReader(empty), &bytes.Buffer{}); !errors.Is(err, setup.ErrManagerCgroupMismatch) {
-		t.Fatalf("empty manager cgroup accepted: %v", err)
+		t.Fatalf("empty observed manager root accepted: %v", err)
 	}
 	actions.managerCgroup = func(context.Context, string) (string, error) { return "", errors.New("no user manager") }
 	if err := actions.renderOwned(context.Background(), home, strings.NewReader(input), &bytes.Buffer{}); err == nil {

@@ -303,7 +303,12 @@ func (b Backend) commitConfiguration(ctx context.Context, c commitOptions) error
 		snapshot, err := stateStore.Catalog(ctx)
 		return reflect.DeepEqual(snapshot.Catalog, request.Catalog), err
 	}
-	err = tx.Apply(Hooks{Quiescent: func() error { return manager.ReleasedFor(ctx, control.WorkloadIdle) }, Committed: committed, Commit: func() error {
+	err = tx.Apply(Hooks{Quiescent: func() error {
+		if err := verifyActivationBindings(ctx, manager, plan); err != nil {
+			return err
+		}
+		return manager.ReleasedFor(ctx, control.WorkloadIdle)
+	}, Committed: committed, Commit: func() error {
 		return commitRequestedCatalog(ctx, stateStore, request, committed)
 	}})
 	if err != nil {
@@ -532,7 +537,7 @@ func (work activationWork) finishActivation(ctx context.Context, plan unitPlan) 
 	b, home, request := work.backend, work.home, work.request
 	// Any pre-commit failure must leave the committed installation untouched:
 	// roll back the journaled writes with their content snapshots.
-	manager, err := work.verifyRuntimes(ctx)
+	manager, err := work.verifyRuntimes(ctx, plan)
 	if err != nil {
 		return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
 	}
