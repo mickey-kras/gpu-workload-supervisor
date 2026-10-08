@@ -1,8 +1,9 @@
-export function createProfileEditor({current, Adw, Gtk, GLib, units, field, invalidate, applicationRuntime, onRemove, onEdit}) {
+export function createProfileEditor({current, Adw, Gtk, GLib, units, field, invalidate, applicationRuntime, onRemove, onEdit, onLabelEdit}) {
     const group = new Adw.PreferencesGroup({title: GLib.markup_escape_text(current.label || 'New workload', -1),
         description: current.nativeModel ? `${current.nativeModel.runtime} · ${current.nativeModel.model}. Applications and model files are preserved.` : 'Start and stop this installation from GPU Control. Applications and files are preserved.'});
     field(group, 'Display name', current.label, text => {
         current.label = text; group.title = GLib.markup_escape_text(text || 'New workload', -1);
+        onLabelEdit?.(text);
     });
     const details = new Adw.ExpanderRow({title: 'Advanced',
         subtitle: 'Stable ID, manual service name, VRAM and login behavior', expanded: false});

@@ -39,7 +39,7 @@ type Draft struct {
 	Reference     string        `json:"reference,omitempty"`
 	ReferenceKind string        `json:"referenceKind,omitempty"`
 	Model         string        `json:"model,omitempty"`
-	Models        []string      `json:"models,omitempty"`
+	Models        []string      `json:"models,omitzero"` // Nil means no choice; [] preserves explicit deselection.
 	Binding       *DraftBinding `json:"binding,omitempty"`
 }
 type DraftSnapshot struct {

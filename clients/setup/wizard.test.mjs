@@ -365,6 +365,7 @@ test('deselect/reselect restores original model IDs and deliberately edited reso
     const originals = [model('stable-a', 'a', 'Custom A', 7777), model('stable-b', 'b', 'Custom B', 8888)];
     const ui = await launch(options([installation('ollama', [{id: 'a'}, {id: 'b'}])], {discover: {request: {...request, catalog: {version: 1, profiles: originals}}, units: [], applications: [installation('ollama', [{id: 'a'}, {id: 'b'}])]}}));
     ui.edit(ui.by('Measured VRAM requirement (MiB; optional)'), 'text', '7999');
+    ui.edit(ui.by('Display name'), 'text', 'Renamed A');
     ui.edit(ui.by('Use Ollama'), 'active', false); ui.edit(ui.by('Use Ollama'), 'active', true);
     await ui.by('Continue').emit('clicked');
     assert.equal(ui.by('a').active, true); assert.equal(ui.by('b').active, true);
@@ -372,7 +373,7 @@ test('deselect/reselect restores original model IDs and deliberately edited reso
     await ui.by('Back').emit('clicked'); await ui.by('Continue').emit('clicked');
     const checked = JSON.parse(ui.calls.filter(call => call.argv[1] === 'validate').at(-1).input).catalog.profiles;
     assert.deepEqual(checked.map(profile => ({id: profile.id, label: profile.label, requiredMiB: profile.requiredMiB, bootPolicy: profile.bootPolicy, systemdSlice: profile.systemdSlice})), [
-        {id: 'stable-a', label: 'Custom A', requiredMiB: 7999, bootPolicy: 'retain', systemdSlice: 'app.slice'},
+        {id: 'stable-a', label: 'Renamed A', requiredMiB: 7999, bootPolicy: 'retain', systemdSlice: 'app.slice'},
         {id: 'stable-b', label: 'Custom B', requiredMiB: 8888, bootPolicy: 'retain', systemdSlice: 'app.slice'},
     ]);
 });

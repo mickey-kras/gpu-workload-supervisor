@@ -58,6 +58,7 @@ app.connect('activate', () => {
     const draftEditors = [];
     let request = null; let pending = false; let units = []; let valid = false; const profiles = []; const profileApps = new Map(); const profileRows = new Map();
     const reviewed = new ReviewedConfiguration();
+    const editedLabels = new Map();
     const review = new Gtk.Button({label: 'Continue', sensitive: false});
     review.add_css_class('suggested-action');
     const apply = new Gtk.Button({label: 'Finish setup', sensitive: false, visible: false});
@@ -79,6 +80,7 @@ app.connect('activate', () => {
         profiles.push(current);
         const group = createProfileEditor({current, Adw, Gtk, GLib, units, field, invalidate,
             applicationRuntime: profileApps.get(current.id),
+            onLabelEdit: label => editedLabels.set(current.id, label),
             onRemove: group => { profiles.splice(profiles.indexOf(current), 1); rows.remove(group); invalidate(); },
             onEdit: draft => appendDraft(draft, current, true)});
         rows.append(group); profileRows.set(current, group); return current;
@@ -155,7 +157,7 @@ app.connect('activate', () => {
         });
         applicationGroup.append(card); applicationCards.set(choice.id, {select, gear, detection});
     }
-    const catalogFor = items => ({...request.catalog, version: items.some(profile => profile.nativeModel?.owned) ? 2 : request.catalog.version, profiles: items});
+    const catalogFor = items => ({...request.catalog, version: items.some(profile => profile.nativeModel?.owned) ? 2 : request.catalog.version, profiles: items, disabled: items.length === 0});
     function appendDraft(initial, replacing = null, reveal = false) {
         if (drafts.some(draft => draft.id === initial.id)) { status.label = 'This workload already has an open selection. Finish or remove that selection first.'; return; }
         drafts.push(initial);
@@ -188,7 +190,10 @@ app.connect('activate', () => {
                     status.label = 'Application checked. Finish setup to confirm the changes.';
                 }
             },
-            changed: value => { invalidate(); drafts = drafts.map(item => item.id === initial.id ? value : item); draftGeneration++; saveDrafts.sensitive = !pending; },
+            changed: value => {
+                if (drafts.find(item => item.id === initial.id)?.label !== value.label) editedLabels.delete(initial.id);
+                invalidate(); drafts = drafts.map(item => item.id === initial.id ? value : item); draftGeneration++; saveDrafts.sensitive = !pending;
+            },
             removed: (finished = false) => { if (!finished) invalidate(); drafts = drafts.filter(item => item.id !== initial.id); draftGeneration++; saveDrafts.sensitive = !pending; },
             taken: () => profiles.map(profile => profile.id)});
         editor.group.visible = reveal; editor.replacing = replacing; draftEditors.push(editor);
@@ -285,7 +290,7 @@ app.connect('activate', () => {
                 const sameModel = editor.replacing?.nativeModel?.model === profile.nativeModel?.model;
                 const replacingModelKept = result.profiles.some(item => item.nativeModel?.model === editor.replacing?.nativeModel?.model);
                 const previous = editor.staged?.find(existing => existing.nativeModel?.model === profile.nativeModel?.model) ?? (sameModel || (index === 0 && !replacingModelKept) ? editor.replacing : null);
-                return previous ? {...previous, ...profile, label: profile.nativeModel?.model !== editor.originalModel ? previous.label : profile.label, id: previous.id, requiredMiB: previous.requiredMiB, bootPolicy: previous.bootPolicy} : profile;
+                return previous ? {...previous, ...profile, label: editedLabels.get(previous.id) ?? (profile.nativeModel?.model !== editor.originalModel ? previous.label : profile.label), id: previous.id, requiredMiB: previous.requiredMiB, bootPolicy: previous.bootPolicy} : profile;
             }));
             const items = [...profiles.filter(profile => !replaced.has(profile)), ...additions];
             const keys = new Set(); const ids = new Set();

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -66,6 +67,9 @@ type WorkloadProfile struct {
 type Catalog struct {
 	Version  int               `json:"version"`
 	Profiles []WorkloadProfile `json:"profiles"`
+	// Disabled explicitly represents removing every configured workload.
+	// Unmarked empty catalogs remain invalid so missing configuration fails closed.
+	Disabled bool `json:"disabled,omitempty"`
 }
 type CatalogSnapshot struct {
 	Revision string  `json:"revision"`
@@ -115,7 +119,7 @@ func (c Catalog) Profile(id Workload) (WorkloadProfile, bool) {
 	return WorkloadProfile{}, false
 }
 func (c Catalog) Clone() Catalog {
-	c.Profiles = append([]WorkloadProfile(nil), c.Profiles...)
+	c.Profiles = slices.Clone(c.Profiles)
 	for i := range c.Profiles {
 		if c.Profiles[i].LaunchBinding != nil {
 			b := *c.Profiles[i].LaunchBinding
@@ -137,6 +141,12 @@ func (c Catalog) Clone() Catalog {
 func (c Catalog) Validate() error {
 	if c.Version != 1 && c.Version != 2 {
 		return errors.New("unsupported catalog version")
+	}
+	if c.Disabled {
+		if len(c.Profiles) != 0 {
+			return errors.New("disabled catalog must contain no profiles")
+		}
+		return nil
 	}
 	if len(c.Profiles) < 1 || len(c.Profiles) > 32 {
 		return errors.New("catalog requires 1 to 32 profiles")
