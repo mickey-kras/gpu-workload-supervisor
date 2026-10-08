@@ -147,6 +147,9 @@ jobs:
             bash scripts/check-desktop-package.sh "${packages[0]}"
           done
 
+      - name: Sonar privacy tests
+        run: python3 -m unittest discover -s tests -p test_sonar_privacy.py
+
       - name: Native desktop transport integration
         run: |
           sudo apt-get update
