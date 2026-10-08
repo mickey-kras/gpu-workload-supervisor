@@ -157,7 +157,7 @@ app.connect('activate', () => {
     }
     const catalogFor = items => ({...request.catalog, version: items.some(profile => profile.nativeModel?.owned) ? 2 : request.catalog.version, profiles: items});
     function appendDraft(initial, replacing = null, reveal = false) {
-        if (drafts.some(draft => draft.id === initial.id)) { status.label = 'This workload already has an open draft. Finish or remove that draft first.'; return; }
+        if (drafts.some(draft => draft.id === initial.id)) { status.label = 'This workload already has an open selection. Finish or remove that selection first.'; return; }
         drafts.push(initial);
         const editor = addDraftEditor({Adw, Gtk, Gio, window, parent: draftRows, initial, detected: discovered, discoveryErrors, command, modelParent: modelPage, temporaryStatus, openSettings: () => { invalidate(); setStep(0); },
             bind: async (profile, current, finish = false) => {
@@ -200,8 +200,8 @@ app.connect('activate', () => {
         try {
             const result = JSON.parse(await command(['/usr/bin/gpu-setup', 'save-drafts'], JSON.stringify({version: 1, expectedRevision: draftRevision, drafts})));
             draftRevision = result.revision; saved = true;
-            status.label = 'Drafts saved. Saved applications still need verification. Drafts are not selectable in GPU Control until safe lifecycle control is configured and verified.';
-        } catch (error) { reportError('Drafts were not saved. Reopen Manage workloads to refresh before retrying.', error); }
+            status.label = 'Selections saved. Saved applications still need a check before they can run. They are not selectable in GPU Control until safe start and stop control is set up and checked.';
+        } catch (error) { reportError('Selections were not saved. Reopen Manage workloads to refresh before retrying.', error); }
         finally { saveDrafts.sensitive = !pending && (!saved || generation !== draftGeneration); }
     });
     const later = new Gtk.Button({label: 'Set up later'});

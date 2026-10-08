@@ -112,8 +112,10 @@ both enforce the proxy lifetime lock, including in-flight requests.
 
 Launch-file constraints:
 
-- The launch file must match systemd's fragment, have no drop-ins or pending
-  daemon reload, and use the supported direct-command subset.
+- The launch file must match systemd's fragment with no pending daemon
+  reload, and use the supported direct-command subset. Supported drop-ins
+  are adopted without rewriting and verified by hash; unsupported or
+  ambiguous drop-in configuration is still rejected.
 - Executables and their resolved directory ancestry must be root-owned and not
   group/world writable. User-owned runtime installations are therefore not
   qualified by this adapter.

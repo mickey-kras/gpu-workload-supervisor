@@ -265,7 +265,7 @@ test('failed verification keeps draft and supports retry; removing draft never a
     ui.selectApplication(ui.applicationIndex ?? 0);
     await ui.by('Verify binding and add for review').emit('clicked');
     assert.equal(ui.by('Verify binding and add for review').sensitive, true);
-    await ui.by('Remove draft from supervisor').emit('clicked');
+    await ui.by('Remove this application').emit('clicked');
     await ui.by('Save selections for later').emit('clicked');
     assert.deepEqual(JSON.parse(ui.calls.at(-1).input).drafts, []);
 });
@@ -274,7 +274,7 @@ test('late binding cannot promote removed draft', async () => {
     const ui = await launch({deferAction: 'verify-bindings'});
     ui.selectApplication(ui.applicationIndex ?? 0);
     const binding = ui.by('Verify binding and add for review').emit('clicked');
-    await ui.by('Remove draft from supervisor').emit('clicked');
+    await ui.by('Remove this application').emit('clicked');
     ui.finish(); await binding;
     assert.equal(ui.widgets.filter(widget => widget.title === 'Display name').length, 0);
     await ui.by('Save selections for later').emit('clicked');

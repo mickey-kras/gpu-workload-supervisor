@@ -70,10 +70,10 @@ export function candidateMessage(candidate) {
         'discovery-error': 'Discovery failed. Retry to check this installation.',
         unreachable: 'Unable to reach this application. Check its address and refresh.',
         missing: 'Application or selected path is missing. Choose another location.',
-        unsupported: 'This setup is not supported. Keep it as a draft or choose another instance.',
+        unsupported: 'This setup is not supported. Save the selection for later or choose another instance.',
         invalid: 'Configuration could not be read. Check the selected address or location.',
         candidate: 'Application found. Choose its installation to check start and stop controls.',
-        available: 'Application responded. Its start and stop controls still need verification.',
+        available: 'Application responded. Its start and stop controls still need a check.',
     };
     if (candidate?.configurationStatus === 'ready' && candidate.instanceStatus !== 'not-running') return 'Installation recognized. Ready to configure.';
     return states[candidate?.instanceStatus] ?? 'Choose an application instance or provide its location.';

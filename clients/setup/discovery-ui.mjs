@@ -253,7 +253,7 @@ class DraftEditor {
                 if (generation === this.draft.generation) this.reportError('Setup could not finish. Check the installation or Advanced settings, then retry.', error);
             } finally { this.finish.sensitive = true; }
         });
-        const remove = new this.Gtk.Button({label: 'Remove draft from supervisor'}); this.group.add(remove);
+        const remove = new this.Gtk.Button({label: 'Remove this application'}); this.group.add(remove);
         remove.connect('clicked', async () => { this.draft.cancel(); try { await this.temporary.cleanup(); this.parent.remove(this.group); if (this.modelParent && this.draft.needsModel) this.modelParent.remove(this.modelGroup); this.removed(); } catch (error) { this.reportError('Temporary cleanup must finish before removing this selection.', error); } });
         this.parent.append(this.group);
     }

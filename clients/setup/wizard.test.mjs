@@ -227,7 +227,7 @@ test('explicit cancellation signals the helper and reports failed safe cleanup w
     assert.ok(ui.widgets.some(widget => widget.label?.includes('Cancellation needs cleanup')));
     await ui.by('Back').emit('clicked');
     assert.equal(heading(ui).label, 'Choose models');
-    await ui.by('Remove draft from supervisor').emit('clicked');
+    await ui.by('Remove this application').emit('clicked');
     assert.ok(ui.widgets.some(widget => widget.label?.includes('before removing this selection')));
 });
 

@@ -67,7 +67,7 @@ for (const cancel of ['edit', 'remove', 'close']) {
         ui.selectApplication(ui.applicationIndex ?? 0);
         const preparing = ui.by('Check application').emit('clicked');
         if (cancel === 'edit') ui.edit(ui.by('Friendly name'), 'text', 'Changed');
-        else if (cancel === 'remove') ui.by('Remove draft from supervisor').emit('clicked');
+        else if (cancel === 'remove') ui.by('Remove this application').emit('clicked');
         else ui.widgets.find(widget => widget.title === 'Manage applications').emit('close-request');
         ui.finish(); await preparing;
         assert.ok(!ui.calls.some(call => ['verify-bindings', 'validate', 'apply'].includes(call.argv[1])));
@@ -180,7 +180,7 @@ for (const phase of ['validate', 'final verification']) {
                 await new Promise(resolve => setImmediate(resolve));
                 assert.equal(ui.widgets.filter(widget => widget.title === 'Display name').length, existing ? 1 : 0, 'a pending draft is never staged in the editable catalog');
                 if (existing) assert.equal(ui.by('Display name').text, 'Original');
-                if (action === 'remove') ui.by('Remove draft from supervisor').emit('clicked');
+                if (action === 'remove') ui.by('Remove this application').emit('clicked');
                 else if (action === 'edit') ui.edit(ui.by('Friendly name'), 'text', 'Updated draft');
                 else ui.widgets.find(widget => widget.title === 'Manage applications').emit('close-request');
                 ui.finish(); await finishing;
