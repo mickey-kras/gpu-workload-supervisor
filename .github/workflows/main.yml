@@ -43,6 +43,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Mask configured SonarQube endpoint
+        env:
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: python3 .github/scripts/mask-sonar-context.py configured
       - uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
         with:
           oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
@@ -64,6 +68,11 @@ jobs:
         run: |
           npm ci --prefix clients/gnome --ignore-scripts --no-audit --no-fund
           npm run coverage --prefix clients/gnome
+      - name: Mask advertised SonarQube endpoint
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: python3 .github/scripts/mask-sonar-context.py advertised
       - name: SonarQube analysis
         uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
         env:
