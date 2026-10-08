@@ -59,44 +59,7 @@ func (s *Store) ArmIdleDeadline(ctx context.Context, expectedSettingsRevision st
 		return errors.New("arm requires a settings revision, deadline and attestation time")
 	}
 	return s.withTx(ctx, func(tx *sql.Tx) error {
-		policy, err := readPolicyState(ctx, tx)
-		if err != nil {
-			return err
-		}
-		if policy.SettingsRevision != expectedSettingsRevision {
-			return ErrSettingsConflict
-		}
-		if policy.Policy.TimeoutMinutes == control.IdlePolicyOff {
-			return errors.Join(ErrInvalidIdleTimeout, errors.New("cannot arm a deadline while the policy is off"))
-		}
-		state, err := readControlState(ctx, tx)
-		if err != nil {
-			return err
-		}
-		// Healthy-only, consistent with idleSource: arming a deadline on a
-		// degraded workload would advertise a deadline that can never fire.
-		if state.Owner != control.OwnerSupervisor || state.Phase != control.PhaseStable || state.Health != control.HealthHealthy || state.Admission != control.AdmissionOpen {
-			return ErrPolicyPreempted
-		}
-		// TOCTOU: an admission or completion may have committed after the
-		// evaluator read the settings; revalidate the supplied deadline against
-		// the current activity marker and require no pending work, so a stale
-		// computed deadline is never armed. Mismatch is a clean preemption,
-		// not a latch: the next tick re-verifies from fresh evidence.
-		pending, err := pendingWorkTx(ctx, tx)
-		if err != nil {
-			return err
-		}
-		if pending > 0 {
-			return ErrPolicyPreempted
-		}
-		if policy.LastActivityAt == nil ||
-			!deadline.Equal(policy.LastActivityAt.Add(time.Duration(policy.Policy.TimeoutMinutes)*time.Minute)) {
-			return ErrPolicyPreempted
-		}
-		return updateSingleton(ctx, tx, `UPDATE idle_policy_state
-			SET armed_deadline = ?, attestation_at = ?, updated_at = ?
-			WHERE singleton = 1`, formatTime(deadline), formatTime(attestationAt), formatTime(s.now()))
+		return s.armIdleDeadlineTx(ctx, tx, expectedSettingsRevision, deadline, attestationAt)
 	})
 }
 
@@ -188,4 +151,45 @@ func pendingWorkTx(ctx context.Context, tx *sql.Tx) (int, error) {
 	var pending int
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM registered_work WHERE completed_at IS NULL)`).Scan(&pending)
 	return pending, err
+}
+
+func (s *Store) armIdleDeadlineTx(ctx context.Context, tx *sql.Tx, expectedSettingsRevision string, deadline, attestationAt time.Time) error {
+	policy, err := readPolicyState(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if policy.SettingsRevision != expectedSettingsRevision {
+		return ErrSettingsConflict
+	}
+	if policy.Policy.TimeoutMinutes == control.IdlePolicyOff {
+		return errors.Join(ErrInvalidIdleTimeout, errors.New("cannot arm a deadline while the policy is off"))
+	}
+	state, err := readControlState(ctx, tx)
+	if err != nil {
+		return err
+	}
+	// Healthy-only, consistent with idleSource: arming a deadline on a
+	// degraded workload would advertise a deadline that can never fire.
+	if state.Owner != control.OwnerSupervisor || state.Phase != control.PhaseStable || state.Health != control.HealthHealthy || state.Admission != control.AdmissionOpen {
+		return ErrPolicyPreempted
+	}
+	// TOCTOU: an admission or completion may have committed after the
+	// evaluator read the settings; revalidate the supplied deadline against
+	// the current activity marker and require no pending work, so a stale
+	// computed deadline is never armed. Mismatch is a clean preemption,
+	// not a latch: the next tick re-verifies from fresh evidence.
+	pending, err := pendingWorkTx(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if pending > 0 {
+		return ErrPolicyPreempted
+	}
+	if policy.LastActivityAt == nil ||
+		!deadline.Equal(policy.LastActivityAt.Add(time.Duration(policy.Policy.TimeoutMinutes)*time.Minute)) {
+		return ErrPolicyPreempted
+	}
+	return updateSingleton(ctx, tx, `UPDATE idle_policy_state
+		SET armed_deadline = ?, attestation_at = ?, updated_at = ?
+		WHERE singleton = 1`, formatTime(deadline), formatTime(attestationAt), formatTime(s.now()))
 }

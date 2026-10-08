@@ -16,6 +16,11 @@ import (
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 )
 
+const (
+	ownedUnitErrorFormat = "%w: %s"
+	systemctlUserFlag    = "--user"
+)
+
 var (
 	ErrOwnedUnitCollision         = errors.New("owned unit path exists with foreign content")
 	ErrOwnedLaunchFileOutsideHome = errors.New("owned launch file must live under the setup home systemd user directory")
@@ -140,38 +145,12 @@ func (b Backend) planOwnedUnits(req Request, accepted control.CatalogSnapshot, h
 	for _, e := range entries {
 		plan.proven[e.unit] = e.proof
 	}
-	qualify := b.qualifyOwned
-	if qualify == nil {
-		qualify = gpuruntime.QualifyOwnedUnit
-	}
-	for _, p := range req.Catalog.Profiles {
-		if p.NativeModel == nil || p.NativeModel.Owned == nil {
-			continue
-		}
-		// The catalog layer checks only the suffix (it is host-independent);
-		// here the exact home is known, so pin the launch file to it before
-		// writing or committing anything.
-		if p.NativeModel.LaunchFile != filepath.Join(ownedUnitDirectory(home), p.Unit) {
-			return plan, fmt.Errorf("%w: %s", ErrOwnedLaunchFileOutsideHome, p.Unit)
-		}
-		// Qualify against this host before anything becomes durable: the
-		// packaged executable must be present and trusted and the model path
-		// must exist with the right type.
-		if err := qualify(p); err != nil {
-			return plan, err
-		}
-		raw, err := ownedRenderChecked(p)
-		if err != nil {
-			return plan, err
-		}
-		plan.Writes[p.Unit] = raw
+	if err := b.planOwnedUnitWrites(req, home, plan); err != nil {
+		return plan, err
 	}
 	deleted := map[string]bool{}
 	for _, e := range entries {
-		if _, kept := plan.Writes[e.unit]; kept {
-			continue
-		}
-		if deleted[e.unit] {
+		if _, kept := plan.Writes[e.unit]; kept || deleted[e.unit] {
 			// Shared Ollama pairs carry one unit file across profiles.
 			continue
 		}
@@ -188,7 +167,7 @@ func (b Backend) planOwnedUnits(req Request, accepted control.CatalogSnapshot, h
 			return plan, err
 		}
 		if digest(data) != e.proof {
-			return plan, fmt.Errorf("%w: %s", ErrOwnedUnitModified, e.unit)
+			return plan, fmt.Errorf(ownedUnitErrorFormat, ErrOwnedUnitModified, e.unit)
 		}
 		plan.Deletes = append(plan.Deletes, e.unit)
 		deleted[e.unit] = true
@@ -284,42 +263,9 @@ func (b Backend) applyOwnedUnitWrites(ctx context.Context, home string, plan uni
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		raw := plan.Writes[name]
-		if j.Writes[name] != digest(raw) {
-			return fmt.Errorf("owned-units journal disagrees with the plan for %s", name)
-		}
-		path := filepath.Join(dir, name)
-		current, err := privateRead(path)
-		if err == nil {
-			// Snapshot before any branch: rollback must restore exactly these
-			// bytes, including when the write below is skipped as idempotent.
-			plan.prior[name] = current
-			currentDigest := digest(current)
-			if currentDigest == digest(raw) {
-				continue
-			}
-			if plan.proven[name] != currentDigest {
-				return fmt.Errorf("%w: %s", ErrOwnedUnitCollision, name)
-			}
-			// Overwrite with the ownership proof re-checked against the exact
-			// inode being replaced, so a concurrent atomic replace cannot be
-			// silently destroyed.
-			if err := provenReplace(path, raw, currentDigest); err != nil {
-				return coverWriteError(plan, path, name, raw, err)
-			}
-			plan.written[name] = true
-			continue
-		} else if !errors.Is(err, os.ErrNotExist) {
+		if err := applyOwnedUnitWrite(dir, name, plan, j); err != nil {
 			return err
-		} else {
-			plan.absent[name] = true
 		}
-		// AtomicWrite creates the file 0600, matching the setup private-file
-		// convention that privateRead trust checks enforce.
-		if err := ownedAtomicWrite(path, raw); err != nil {
-			return coverWriteError(plan, path, name, raw, err)
-		}
-		plan.written[name] = true
 	}
 	return nil
 }
@@ -335,7 +281,7 @@ var errOwnedWriteDetection = errors.New("owned unit write outcome undetectable")
 func coverWriteError(plan unitPlan, path, name string, raw []byte, err error) error {
 	landed, derr := privateRead(path)
 	if derr != nil && !errors.Is(derr, os.ErrNotExist) {
-		return errors.Join(err, fmt.Errorf("%w: %s", errOwnedWriteDetection, name))
+		return errors.Join(err, fmt.Errorf(ownedUnitErrorFormat, errOwnedWriteDetection, name))
 	}
 	if derr == nil && digest(landed) == digest(raw) {
 		plan.written[name] = true
@@ -367,14 +313,14 @@ func provenReplace(path string, raw []byte, proof string) error {
 		return err
 	}
 	if digest(current) != proof {
-		return fmt.Errorf("%w: %s", ErrOwnedUnitModified, filepath.Base(path))
+		return fmt.Errorf(ownedUnitErrorFormat, ErrOwnedUnitModified, filepath.Base(path))
 	}
 	latest, err := ownedStat(path)
 	if err != nil {
 		return err
 	}
 	if !os.SameFile(info, latest) {
-		return fmt.Errorf("%w: %s", ErrOwnedUnitCollision, filepath.Base(path))
+		return fmt.Errorf(ownedUnitErrorFormat, ErrOwnedUnitCollision, filepath.Base(path))
 	}
 	if err := ownedAtomicWrite(path, raw); err != nil {
 		return err
@@ -384,7 +330,7 @@ func provenReplace(path string, raw []byte, proof string) error {
 		return err
 	}
 	if digest(landed) != digest(raw) {
-		return fmt.Errorf("%w: %s", ErrOwnedUnitCollision, filepath.Base(path))
+		return fmt.Errorf(ownedUnitErrorFormat, ErrOwnedUnitCollision, filepath.Base(path))
 	}
 	return nil
 }
@@ -409,14 +355,14 @@ func provenDelete(path, proof string) error {
 		return err
 	}
 	if digest(current) != proof {
-		return fmt.Errorf("%w: %s", ErrOwnedUnitModified, filepath.Base(path))
+		return fmt.Errorf(ownedUnitErrorFormat, ErrOwnedUnitModified, filepath.Base(path))
 	}
 	latest, err := ownedStat(path)
 	if err != nil {
 		return err
 	}
 	if !os.SameFile(info, latest) {
-		return fmt.Errorf("%w: %s", ErrOwnedUnitCollision, filepath.Base(path))
+		return fmt.Errorf(ownedUnitErrorFormat, ErrOwnedUnitCollision, filepath.Base(path))
 	}
 	return os.Remove(path)
 }
@@ -434,35 +380,14 @@ func (b Backend) rollbackOwnedUnitWrites(ctx context.Context, home, systemctl st
 			// Never written (idempotent skip or unreached): leave untouched.
 			continue
 		}
-		path := filepath.Join(dir, name)
-		current, err := privateRead(path)
-		switch {
-		case err == nil && digest(current) == digest(plan.Writes[name]):
-			// The written content is intact and safe to replace.
-		case errors.Is(err, os.ErrNotExist) && !plan.absent[name]:
-			// The overwrite target vanished; restoring it is still correct.
-		case errors.Is(err, os.ErrNotExist):
-			continue
-		default:
-			failed = append(failed, name)
-			continue
-		}
-		if plan.absent[name] {
-			// Bind the removal to the inode whose content this plan wrote,
-			// same as every other delete path.
-			if err := provenDelete(path, digest(plan.Writes[name])); err != nil {
-				failed = append(failed, name)
-			}
-			changed = true
-			continue
-		}
-		if err := ownedAtomicWrite(path, plan.prior[name]); err != nil {
+		mutated, err := rollbackOwnedUnitWrite(dir, name, plan)
+		if err != nil {
 			failed = append(failed, name)
 		}
-		changed = true
+		changed = changed || mutated
 	}
 	if len(failed) > 0 {
-		return fmt.Errorf("%w: %s", ErrOwnedUnitCollision, strings.Join(failed, ", "))
+		return fmt.Errorf(ownedUnitErrorFormat, ErrOwnedUnitCollision, strings.Join(failed, ", "))
 	}
 	if changed {
 		if err := syncDir(dir); err != nil {
@@ -519,7 +444,7 @@ func (b Backend) applyOwnedUnitDeletes(ctx context.Context, home string, j unitJ
 // drop-ins, or the applied catalog would wedge the next supervisor start.
 func (b Backend) verifyOwnedUnitBindings(ctx context.Context, systemctl, home string, units []string) error {
 	for _, unit := range units {
-		out, err := b.runCommand(ctx, systemctl, "--user", "show", "--property=FragmentPath", "--property=DropInPaths", "--", unit)
+		out, err := b.runCommand(ctx, systemctl, systemctlUserFlag, "show", "--property=FragmentPath", "--property=DropInPaths", "--", unit)
 		if err != nil {
 			return fmt.Errorf("inspect %s: %w", unit, err)
 		}
@@ -535,11 +460,11 @@ func (b Backend) verifyOwnedUnitBindings(ctx context.Context, systemctl, home st
 }
 
 func (b Backend) daemonReloadOwnedUnits(ctx context.Context, systemctl string, units []string) error {
-	if _, err := b.runCommand(ctx, systemctl, "--user", "daemon-reload"); err != nil {
+	if _, err := b.runCommand(ctx, systemctl, systemctlUserFlag, "daemon-reload"); err != nil {
 		return fmt.Errorf("daemon-reload: %w", err)
 	}
 	for _, unit := range units {
-		out, err := b.runCommand(ctx, systemctl, "--user", "show", "--property=NeedDaemonReload", "--", unit)
+		out, err := b.runCommand(ctx, systemctl, systemctlUserFlag, "show", "--property=NeedDaemonReload", "--", unit)
 		if err != nil {
 			return fmt.Errorf("inspect %s: %w", unit, err)
 		}
@@ -555,4 +480,94 @@ func mkdirTrusted(path string) error {
 		return err
 	}
 	return TrustedDirectory(path)
+}
+
+func (b Backend) planOwnedUnitWrites(req Request, home string, plan unitPlan) error {
+	qualify := b.qualifyOwned
+	if qualify == nil {
+		qualify = gpuruntime.QualifyOwnedUnit
+	}
+	for _, p := range req.Catalog.Profiles {
+		if p.NativeModel == nil || p.NativeModel.Owned == nil {
+			continue
+		}
+		// The catalog layer checks only the suffix (it is host-independent);
+		// here the exact home is known, so pin the launch file to it before
+		// writing or committing anything.
+		if p.NativeModel.LaunchFile != filepath.Join(ownedUnitDirectory(home), p.Unit) {
+			return fmt.Errorf(ownedUnitErrorFormat, ErrOwnedLaunchFileOutsideHome, p.Unit)
+		}
+		// Qualify against this host before anything becomes durable: the
+		// packaged executable must be present and trusted and the model path
+		// must exist with the right type.
+		if err := qualify(p); err != nil {
+			return err
+		}
+		raw, err := ownedRenderChecked(p)
+		if err != nil {
+			return err
+		}
+		plan.Writes[p.Unit] = raw
+	}
+	return nil
+}
+
+func applyOwnedUnitWrite(dir, name string, plan unitPlan, j unitJournal) error {
+	raw := plan.Writes[name]
+	if j.Writes[name] != digest(raw) {
+		return fmt.Errorf("owned-units journal disagrees with the plan for %s", name)
+	}
+	path := filepath.Join(dir, name)
+	current, err := privateRead(path)
+	if err == nil {
+		// Snapshot before any branch: rollback must restore exactly these
+		// bytes, including when the write below is skipped as idempotent.
+		plan.prior[name] = current
+		currentDigest := digest(current)
+		if currentDigest == digest(raw) {
+			return nil
+		}
+		if plan.proven[name] != currentDigest {
+			return fmt.Errorf(ownedUnitErrorFormat, ErrOwnedUnitCollision, name)
+		}
+		// Overwrite with the ownership proof re-checked against the exact
+		// inode being replaced, so a concurrent atomic replace cannot be
+		// silently destroyed.
+		if err := provenReplace(path, raw, currentDigest); err != nil {
+			return coverWriteError(plan, path, name, raw, err)
+		}
+		plan.written[name] = true
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	} else {
+		plan.absent[name] = true
+	}
+	// AtomicWrite creates the file 0600, matching the setup private-file
+	// convention that privateRead trust checks enforce.
+	if err := ownedAtomicWrite(path, raw); err != nil {
+		return coverWriteError(plan, path, name, raw, err)
+	}
+	plan.written[name] = true
+	return nil
+}
+
+func rollbackOwnedUnitWrite(dir, name string, plan unitPlan) (bool, error) {
+	path := filepath.Join(dir, name)
+	current, err := privateRead(path)
+	switch {
+	case err == nil && digest(current) == digest(plan.Writes[name]):
+		// The written content is intact and safe to replace.
+	case errors.Is(err, os.ErrNotExist) && !plan.absent[name]:
+		// The overwrite target vanished; restoring it is still correct.
+	case errors.Is(err, os.ErrNotExist):
+		return false, nil
+	default:
+		return false, ErrOwnedUnitCollision
+	}
+	if plan.absent[name] {
+		// Bind removal to the content this plan wrote.
+		return true, provenDelete(path, digest(plan.Writes[name]))
+	}
+	return true, ownedAtomicWrite(path, plan.prior[name])
 }

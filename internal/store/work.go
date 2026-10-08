@@ -236,32 +236,7 @@ func (s *Store) FinishWorkToken(ctx context.Context, requestID string, workload 
 	if finished {
 		return nil
 	}
-	var registeredWorkload sql.NullString
-	var incarnation string
-	var epoch uint64
-	var registeredToken sql.NullString
-	var completedAt sql.NullString
-	err = s.db.QueryRowContext(ctx, `SELECT workload, lease_incarnation, lease_epoch, registration_token, completed_at
-		FROM registered_work WHERE request_id = ?`, requestID).Scan(&registeredWorkload, &incarnation, &epoch, &registeredToken, &completedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return sql.ErrNoRows
-	}
-	if err != nil {
-		return err
-	}
-	if !registeredWorkload.Valid || control.Workload(registeredWorkload.String) != workload {
-		return ErrWorkloadMismatch
-	}
-	if incarnation != fence.Incarnation || epoch != fence.Epoch {
-		return ErrStaleFence
-	}
-	if registeredToken.Valid && registeredToken.String != token || !registeredToken.Valid && token != "" {
-		return ErrRegistrationTokenMismatch
-	}
-	if completedAt.Valid {
-		return ErrWorkAlreadyCompleted
-	}
-	return sql.ErrNoRows
+	return s.unfinishedWorkError(ctx, requestID, workload, fence, token)
 }
 
 func validateFinishedWork(requestID string, workload control.Workload, fence control.Fence, outcome WorkOutcome) error {
@@ -390,4 +365,33 @@ func catalogAdmitsWorkload(catalog control.CatalogSnapshot, workload control.Wor
 		return ErrWorkloadMismatch
 	}
 	return nil
+}
+
+func (s *Store) unfinishedWorkError(ctx context.Context, requestID string, workload control.Workload, fence control.Fence, token string) error {
+	var registeredWorkload sql.NullString
+	var incarnation string
+	var epoch uint64
+	var registeredToken sql.NullString
+	var completedAt sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT workload, lease_incarnation, lease_epoch, registration_token, completed_at
+		FROM registered_work WHERE request_id = ?`, requestID).Scan(&registeredWorkload, &incarnation, &epoch, &registeredToken, &completedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return sql.ErrNoRows
+	}
+	if err != nil {
+		return err
+	}
+	if !registeredWorkload.Valid || control.Workload(registeredWorkload.String) != workload {
+		return ErrWorkloadMismatch
+	}
+	if incarnation != fence.Incarnation || epoch != fence.Epoch {
+		return ErrStaleFence
+	}
+	if registeredToken.Valid && registeredToken.String != token || !registeredToken.Valid && token != "" {
+		return ErrRegistrationTokenMismatch
+	}
+	if completedAt.Valid {
+		return ErrWorkAlreadyCompleted
+	}
+	return sql.ErrNoRows
 }

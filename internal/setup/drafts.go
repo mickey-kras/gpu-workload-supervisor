@@ -124,26 +124,8 @@ func validateDraft(d Draft, ids map[string]bool) error {
 	if err := validateDraftBinding(d.Binding); err != nil {
 		return err
 	}
-	if d.Binding != nil {
-		if err := validateDraftOwned(d.App, d.Binding.Owned); err != nil {
-			return err
-		}
-		// Synthesis prerequisites, mirroring OwnedProfile: without these the
-		// saved draft can never render a profile.
-		if d.Binding.Owned != nil {
-			if d.Binding.Instance == "" {
-				return errors.New("owned drafts require an instance")
-			}
-			if !control.ValidInstanceID(d.Binding.Instance) {
-				return errors.New("owned draft instance must be a valid workload identifier")
-			}
-			if d.App == "ollama" && d.Model == "" {
-				return errors.New("owned ollama drafts require a model and instance")
-			}
-			if d.App == "ollama" && !control.ValidNativeModelIdentity(d.App, d.Model) {
-				return errors.New("invalid native model identity")
-			}
-		}
+	if err := validateDraftSynthesis(d); err != nil {
+		return err
 	}
 	if d.Endpoint != "" && d.Reference != "" {
 		return errors.New("choose an endpoint or file location")
@@ -197,6 +179,10 @@ func validateDraftOwned(app string, o *DraftOwnedLaunch) error {
 			return errors.New("vllm owned launches require an absolute model directory")
 		}
 	}
+	return validateDraftLaunchGrammar(o)
+}
+
+func validateDraftLaunchGrammar(o *DraftOwnedLaunch) error {
 	// Same grammar gate as catalog validation: values that cannot survive the
 	// unit command grammar must fail at save time, not at apply time.
 	if o.ModelPath != "" && !control.LaunchGrammarExpressible(o.ModelPath) {
@@ -223,4 +209,30 @@ func validateDraftReference(d Draft) error {
 		return nil
 	}
 	return errors.New("invalid draft reference kind")
+}
+
+func validateDraftSynthesis(d Draft) error {
+	if d.Binding == nil {
+		return nil
+	}
+	if err := validateDraftOwned(d.App, d.Binding.Owned); err != nil {
+		return err
+	}
+	// Synthesis prerequisites, mirroring OwnedProfile.
+	if d.Binding.Owned == nil {
+		return nil
+	}
+	if d.Binding.Instance == "" {
+		return errors.New("owned drafts require an instance")
+	}
+	if !control.ValidInstanceID(d.Binding.Instance) {
+		return errors.New("owned draft instance must be a valid workload identifier")
+	}
+	if d.App == "ollama" && d.Model == "" {
+		return errors.New("owned ollama drafts require a model and instance")
+	}
+	if d.App == "ollama" && !control.ValidNativeModelIdentity(d.App, d.Model) {
+		return errors.New("invalid native model identity")
+	}
+	return nil
 }

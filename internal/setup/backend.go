@@ -190,35 +190,11 @@ func (b Backend) Apply(ctx context.Context, home string, request Request) error 
 		if err := writeOwnedUnitJournal(work.root, journal); err != nil {
 			return err
 		}
-		// From the first unit write onward the installation is mutated: any
-		// failure, including a partial write loop or a failed reload, must roll
-		// back with the content snapshots.
-		if err := b.applyOwnedUnitWrites(ctx, home, plan, journal); err != nil {
-			return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
-		}
-		if err := b.daemonReloadOwnedUnits(ctx, request.Profile.SystemctlPath, plan.writeNames()); err != nil {
-			return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
-		}
-		// The loaded binding must match the written file before commit; a
-		// foreign drop-in or fragment would wedge the next supervisor preflight.
-		if err := b.verifyOwnedUnitBindings(ctx, request.Profile.SystemctlPath, home, plan.writeNames()); err != nil {
+		if err := b.prepareOwnedUnitWrites(ctx, home, request, plan, journal); err != nil {
 			return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
 		}
 	}
-	// Any pre-commit failure must leave the committed installation untouched:
-	// roll back the journaled writes with their content snapshots.
-	manager, err := work.verifyRuntimes(ctx)
-	if err != nil {
-		return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
-	}
-	if err := work.backup(ctx); err != nil {
-		return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
-	}
-	progress, err := work.enterMaintenance()
-	if err != nil {
-		return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
-	}
-	return b.commitConfiguration(ctx, commitOptions{home: home, root: work.root, request: request, manager: manager, fresh: progress.Fresh, plan: plan})
+	return work.finishActivation(ctx, plan)
 }
 
 // commitOptions carries the durable commit's inputs: the activation context,
@@ -328,29 +304,13 @@ func (b Backend) commitConfiguration(ctx context.Context, c commitOptions) error
 		return reflect.DeepEqual(snapshot.Catalog, request.Catalog), err
 	}
 	err = tx.Apply(Hooks{Quiescent: func() error { return manager.ReleasedFor(ctx, control.WorkloadIdle) }, Committed: committed, Commit: func() error {
-		same, err := committed()
-		if err != nil {
-			return err
-		}
-		if same {
-			return nil
-		}
-		_, err = stateStore.ReplaceCatalog(ctx, request.ExpectedRevision, request.Catalog)
-		return err
+		return commitRequestedCatalog(ctx, stateStore, request, committed)
 	}})
 	if err != nil {
 		return err
 	}
 	if c.fresh {
-		state, err := stateStore.State(ctx)
-		if err != nil {
-			return err
-		}
-		state.ActiveWorkload = control.WorkloadIdle
-		state.DesiredWorkload = control.WorkloadIdle
-		state.Phase = control.PhaseStable
-		state.Admission = control.AdmissionClosed
-		if _, err := stateStore.UpdateState(ctx, state.Version, state); err != nil {
+		if err := initializeIdleState(ctx, stateStore); err != nil {
 			return err
 		}
 	}
@@ -533,4 +493,67 @@ func (work *activationWork) inspectExistingCatalog(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (b Backend) prepareOwnedUnitWrites(ctx context.Context, home string, request Request, plan unitPlan, journal unitJournal) error {
+	// From the first unit write onward the installation is mutated: any
+	// failure, including a partial write loop or a failed reload, must roll
+	// back with the content snapshots.
+	if err := b.applyOwnedUnitWrites(ctx, home, plan, journal); err != nil {
+		return err
+	}
+	if err := b.daemonReloadOwnedUnits(ctx, request.Profile.SystemctlPath, plan.writeNames()); err != nil {
+		return err
+	}
+	// The loaded binding must match the written file before commit; a
+	// foreign drop-in or fragment would wedge the next supervisor preflight.
+	if err := b.verifyOwnedUnitBindings(ctx, request.Profile.SystemctlPath, home, plan.writeNames()); err != nil {
+		return err
+	}
+	return nil
+}
+
+func initializeIdleState(ctx context.Context, stateStore *store.Store) error {
+	state, err := stateStore.State(ctx)
+	if err != nil {
+		return err
+	}
+	state.ActiveWorkload = control.WorkloadIdle
+	state.DesiredWorkload = control.WorkloadIdle
+	state.Phase = control.PhaseStable
+	state.Admission = control.AdmissionClosed
+	if _, err := stateStore.UpdateState(ctx, state.Version, state); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (work activationWork) finishActivation(ctx context.Context, plan unitPlan) error {
+	b, home, request := work.backend, work.home, work.request
+	// Any pre-commit failure must leave the committed installation untouched:
+	// roll back the journaled writes with their content snapshots.
+	manager, err := work.verifyRuntimes(ctx)
+	if err != nil {
+		return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
+	}
+	if err := work.backup(ctx); err != nil {
+		return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
+	}
+	progress, err := work.enterMaintenance()
+	if err != nil {
+		return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
+	}
+	return b.commitConfiguration(ctx, commitOptions{home: home, root: work.root, request: request, manager: manager, fresh: progress.Fresh, plan: plan})
+}
+
+func commitRequestedCatalog(ctx context.Context, stateStore *store.Store, request Request, committed func() (bool, error)) error {
+	same, err := committed()
+	if err != nil {
+		return err
+	}
+	if same {
+		return nil
+	}
+	_, err = stateStore.ReplaceCatalog(ctx, request.ExpectedRevision, request.Catalog)
+	return err
 }

@@ -121,15 +121,7 @@ func discoverOwnedUnits(home string, catalog control.Catalog) ([]OwnedUnitStatus
 			owned = append(owned, OwnedUnitStatus{Name: name, State: "modified"})
 			continue
 		}
-		status := OwnedUnitStatus{Name: name, Digest: digest(data), State: "orphaned"}
-		if want, ok := managed[name]; ok {
-			status.State = "managed"
-			if want != status.Digest {
-				status.State = "modified"
-			}
-		} else if want, ok := adopted[filepath.Join(ownedUnitDirectory(home), name)]; ok && want == status.Digest {
-			status.State = "managed"
-		}
+		status := discoveredOwnedUnitStatus(home, name, data, managed, adopted)
 		owned = append(owned, status)
 	}
 	return owned, nil
@@ -161,4 +153,17 @@ func serviceUnits(output []byte) []string {
 		}
 	}
 	return units
+}
+
+func discoveredOwnedUnitStatus(home, name string, data []byte, managed, adopted map[string]string) OwnedUnitStatus {
+	status := OwnedUnitStatus{Name: name, Digest: digest(data), State: "orphaned"}
+	if want, ok := managed[name]; ok {
+		status.State = "managed"
+		if want != status.Digest {
+			status.State = "modified"
+		}
+	} else if want, ok := adopted[filepath.Join(ownedUnitDirectory(home), name)]; ok && want == status.Digest {
+		status.State = "managed"
+	}
+	return status
 }

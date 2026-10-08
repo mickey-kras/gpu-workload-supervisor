@@ -96,33 +96,12 @@ func (c *Controller) PolicyTick(ctx context.Context, evidence EvidenceProvider) 
 	if armed == nil || !armed.Equal(deadline) {
 		// No armed deadline yet (or activity/policy moved it): commit the
 		// verified deadline and let a later tick fire once it elapses.
-		err := c.store.ArmIdleDeadline(ctx, settings.SettingsRevision, deadline, attestation.AttestedAt)
-		if errors.Is(err, store.ErrSettingsConflict) || errors.Is(err, store.ErrPolicyPreempted) {
-			return nil
-		}
-		return err
+		return c.armPolicyDeadline(ctx, settings.SettingsRevision, deadline, attestation.AttestedAt)
 	}
 	if c.now().Before(*armed) {
 		return nil
 	}
-	// Acquire inside the store's writer transaction and hold the provider's
-	// queue-mutation fence through commit. An error or missing release fails
-	// closed; after commit the durable draining state closes admission.
-	acquire := func(ctx context.Context) (func(), error) {
-		release, err := evidence.AcquireFence(ctx, attestation.Token)
-		if err != nil {
-			return release, fmt.Errorf("%w: acquire evidence fence: %w", store.ErrEvidenceUnavailable, err)
-		}
-		return release, nil
-	}
-	_, err = c.PolicyIdle(ctx, *armed, acquire)
-	if errors.Is(err, store.ErrEvidenceUnavailable) {
-		return errors.Join(c.store.DisarmIdleDeadline(ctx), err)
-	}
-	if errors.Is(err, store.ErrPolicyPreempted) {
-		return nil
-	}
-	return err
+	return c.firePolicyDeadline(ctx, *armed, evidence, attestation.Token)
 }
 
 // PolicyIdle drains the active workload into idle behind the armed deadline.
@@ -164,3 +143,32 @@ func (c *Controller) PolicyIdle(ctx context.Context, armed time.Time, acquire fu
 }
 
 const inactivityPolicyInitiator = "inactivity-policy"
+
+func (c *Controller) armPolicyDeadline(ctx context.Context, settingsRevision string, deadline, attestationAt time.Time) error {
+	err := c.store.ArmIdleDeadline(ctx, settingsRevision, deadline, attestationAt)
+	if errors.Is(err, store.ErrSettingsConflict) || errors.Is(err, store.ErrPolicyPreempted) {
+		return nil
+	}
+	return err
+}
+
+func (c *Controller) firePolicyDeadline(ctx context.Context, armed time.Time, evidence EvidenceProvider, token string) error {
+	// Acquire inside the store's writer transaction and hold the provider's
+	// queue-mutation fence through commit. An error or missing release fails
+	// closed; after commit the durable draining state closes admission.
+	acquire := func(ctx context.Context) (func(), error) {
+		release, err := evidence.AcquireFence(ctx, token)
+		if err != nil {
+			return release, fmt.Errorf("%w: acquire evidence fence: %w", store.ErrEvidenceUnavailable, err)
+		}
+		return release, nil
+	}
+	_, err := c.PolicyIdle(ctx, armed, acquire)
+	if errors.Is(err, store.ErrEvidenceUnavailable) {
+		return errors.Join(c.store.DisarmIdleDeadline(ctx), err)
+	}
+	if errors.Is(err, store.ErrPolicyPreempted) {
+		return nil
+	}
+	return err
+}
