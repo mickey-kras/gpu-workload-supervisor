@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/operator"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
@@ -46,7 +47,7 @@ func TemporaryStatus(ctx context.Context, home string) (TemporaryDiscoveryStatus
 }
 func (b Backend) TemporaryStatus(ctx context.Context, home string) (TemporaryDiscoveryStatus, error) {
 	result := TemporaryDiscoveryStatus{}
-	_, err := privateRead(filepath.Join(home, ".config/gpu-workload-supervisor/operator.json"))
+	data, err := privateRead(filepath.Join(home, ".config/gpu-workload-supervisor/operator.json"))
 	if errors.Is(err, os.ErrNotExist) {
 		result.Reason = "Temporary discovery requires an initialized compatible supervisor in healthy, closed Idle. You can continue with read-only discovery or enter the installed model manually."
 		return result, nil
@@ -54,21 +55,28 @@ func (b Backend) TemporaryStatus(ctx context.Context, home string) (TemporaryDis
 	if err != nil {
 		return result, err
 	}
-	c, cleanup, err := b.activatedController(ctx, home)
-	if err != nil {
+	var profile Profile
+	if err = json.Unmarshal(data, &profile); err != nil {
 		return result, err
 	}
-	defer cleanup()
-	result.Session, err = c.TemporaryDiscoveryStatus(ctx)
-	if err != nil {
+	if err = profile.Validate(); err != nil {
 		return result, err
 	}
-	e, err := c.TemporaryDiscoveryEligibility(ctx)
-	result.Expected = &operator.Expected{Incarnation: e.Incarnation, Version: strconv.FormatUint(e.Version, 10), Owner: e.Owner, ConfigurationRevision: e.ConfigurationRevision}
-	if err != nil {
+	inspection, err := inspectTemporaryDiscovery(ctx, profile)
+	if errors.Is(err, store.ErrTemporaryDiscoveryUpgradeRequired) {
 		result.Reason = err.Error()
+		return result, nil
+	}
+	if err != nil {
+		return result, err
+	}
+	result.Session = inspection.Session
+	state := inspection.State
+	result.Expected = &operator.Expected{Incarnation: state.LeaseFence.Incarnation, Version: strconv.FormatUint(state.Version, 10), Owner: state.Owner, ConfigurationRevision: inspection.Catalog.Revision}
+	if inspection.Eligibility != nil {
+		result.Reason = inspection.Eligibility.Error()
 	} else {
-		result.Available = result.Session == nil || result.Session.Status == "completed"
+		result.Available = true
 	}
 	return result, nil
 }
@@ -93,6 +101,10 @@ func (b Backend) temporaryController(ctx context.Context, home string) (*supervi
 	}
 	proxy, err := lock.TryAcquire(p.StatePath + ".proxy.lock")
 	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := inspectTemporaryDiscovery(ctx, p); err != nil {
+		proxy.Close()
 		return nil, nil, err
 	}
 	c, cleanup, err := b.activatedController(ctx, home)
@@ -218,4 +230,18 @@ func checkNoTemporaryDiscovery(ctx context.Context, path string) error {
 		return store.ErrTemporaryCleanupRequired
 	}
 	return nil
+}
+
+// This preflight is read-only even for lifecycle verbs. Writable Store.Open is
+// permitted only after the normal activation path has installed this schema.
+func inspectTemporaryDiscovery(ctx context.Context, profile Profile) (store.TemporaryDiscoveryInspection, error) {
+	if err := deployment.Check(profile.StatePath, profile.ActivatedRelease); err != nil {
+		return store.TemporaryDiscoveryInspection{}, err
+	}
+	db, err := readOnlyDB(profile.StatePath)
+	if err != nil {
+		return store.TemporaryDiscoveryInspection{}, err
+	}
+	defer db.Close()
+	return store.InspectTemporaryDiscovery(ctx, db)
 }

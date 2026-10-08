@@ -23,8 +23,12 @@ func temporaryDiscoveryPending(ctx context.Context, tx *sql.Tx) error {
 }
 
 func (s *Store) TemporaryDiscoveryStatus(ctx context.Context) (*control.TemporaryDiscoverySession, error) {
+	return readTemporaryDiscoveryStatus(ctx, s.db)
+}
+
+func readTemporaryDiscoveryStatus(ctx context.Context, q querier) (*control.TemporaryDiscoverySession, error) {
 	var raw []byte
-	err := s.db.QueryRowContext(ctx, `SELECT payload FROM temporary_discovery_sessions ORDER BY rowid DESC LIMIT 1`).Scan(&raw)
+	err := q.QueryRowContext(ctx, `SELECT payload FROM temporary_discovery_sessions ORDER BY rowid DESC LIMIT 1`).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
