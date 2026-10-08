@@ -18,12 +18,18 @@ import (
 
 type observedHandoffStore struct {
 	*store.Store
-	attempt chan struct{}
+	attempt        chan struct{}
+	handoffTimeout time.Duration
 }
 
 func (s observedHandoffStore) AcquireUserExecution(ctx context.Context, shared bool) (*lock.File, error) {
 	if !shared {
 		close(s.attempt)
+		if s.handoffTimeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, s.handoffTimeout)
+			defer cancel()
+		}
 	}
 	return s.Store.AcquireUserExecution(ctx, shared)
 }
@@ -83,11 +89,10 @@ func TestHTTPUserHandoffWaitsForForwardingWithoutRestartingStoppedWork(t *testin
 				runtime.startErr = errors.New("target unavailable")
 			}
 			observed := observedHandoffStore{Store: stateStore, attempt: make(chan struct{})}
-			controller := testController(t, observed, runtime)
-			controller.config.DrainTimeout = time.Second
 			if failure == "handoff timeout" {
-				controller.config.DrainTimeout = 20 * time.Millisecond
+				observed.handoffTimeout = 20 * time.Millisecond
 			}
+			controller := testController(t, observed, runtime)
 			type result struct {
 				state control.State
 				err   error
