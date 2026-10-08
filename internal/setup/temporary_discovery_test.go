@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type setupDiscoveryRuntime struct {
@@ -206,5 +207,35 @@ func TestTemporaryStatusDoesNotHideBrokenInitializedDeployment(t *testing.T) {
 	}
 	if status, err := b.TemporaryStatus(context.Background(), home); err == nil || status.Available || strings.Contains(status.Reason, "initialized") {
 		t.Fatalf("missing initialized marker hidden as fresh setup: %+v %v", status, err)
+	}
+}
+
+func TestApplyRefusesUnfinishedTemporarySession(t *testing.T) {
+	backend, home, r := fixture(t)
+	ctx := context.Background()
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(ctx, r.Profile.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := s.Catalog(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := control.OperatorPrecondition{Incarnation: state.LeaseFence.Incarnation, Version: state.Version, Owner: state.Owner, ConfigurationRevision: snap.Revision}
+	tr := store.Transition{ID: "temporary", Source: state, Target: state, Previous: state, Initiator: "temporary-native-discovery", Phase: control.PhaseDraining, Deadline: time.Now().Add(time.Minute), ConfigurationRevision: snap.Revision}
+	session := control.TemporaryDiscoverySession{ID: "temporary", Token: "token", Status: "starting", PriorStopped: true}
+	if _, err := s.StartTemporaryDiscovery(ctx, e, tr, session); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if err := backend.Apply(ctx, home, r); !errors.Is(err, store.ErrTemporaryCleanupRequired) {
+		t.Fatalf("apply during unfinished temporary session: %v", err)
 	}
 }

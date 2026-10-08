@@ -21,6 +21,10 @@ type PreparedApplication struct {
 
 var selectedUnitName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*\.service$`)
 
+// ErrOwnedDraftPrepare rejects owned launch drafts: prepare only qualifies
+// existing installations; owned profiles are synthesized by OwnedProfile.
+var ErrOwnedDraftPrepare = errors.New("owned launch drafts cannot be prepared from an existing installation")
+
 func Prepare(ctx context.Context, request PrepareRequest) (PreparedApplication, error) {
 	return SystemBackend().Prepare(ctx, request)
 }
@@ -29,12 +33,20 @@ func (b Backend) Prepare(ctx context.Context, request PrepareRequest) (PreparedA
 	if err := validateDraft(d, map[string]bool{}); err != nil {
 		return PreparedApplication{}, err
 	}
+	if d.Binding != nil && d.Binding.Owned != nil {
+		return PreparedApplication{}, ErrOwnedDraftPrepare
+	}
 	if d.Binding == nil || d.Binding.Unit == "" {
 		unit, err := b.unitAtReference(ctx, d)
 		if err != nil {
 			return PreparedApplication{}, err
 		}
-		d.Binding = &DraftBinding{Unit: unit}
+		binding := DraftBinding{Unit: unit}
+		if d.Binding != nil {
+			binding = *d.Binding
+			binding.Unit = unit
+		}
+		d.Binding = &binding
 	}
 	if !selectedUnitName.MatchString(d.Binding.Unit) {
 		return PreparedApplication{}, errors.New("choose a recognized installed application first")

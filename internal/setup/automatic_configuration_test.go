@@ -506,3 +506,38 @@ func TestReferenceResolutionPreservesGlobalBoundsAndExplicitUnitFailures(t *test
 		t.Fatal("explicit unit failure hidden", err)
 	}
 }
+
+func TestPrepareResolvesUnitAndRetainsMatchingOverrides(t *testing.T) {
+	b, d, _ := automaticFixture(t, "comfyui")
+	d.Model = ""
+	d.Reference = "/opt/launch/comfyui.service"
+	d.ReferenceKind = "configuration"
+	d.Binding = &DraftBinding{HealthURL: "http://127.0.0.1:8080/system_stats", LaunchFile: "/opt/launch/comfyui.service", Cgroup: "/manager/app.slice/comfyui.service"}
+	got, err := b.Prepare(context.Background(), PrepareRequest{Draft: d})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Profile.Unit != "comfyui.service" || got.Profile.HealthURL != d.Binding.HealthURL || got.Profile.LaunchBinding == nil {
+		t.Fatalf("override discarded: %+v", got.Profile)
+	}
+	d.Binding.Cgroup = "/attacker"
+	if _, err := b.Prepare(context.Background(), PrepareRequest{Draft: d}); err == nil {
+		t.Fatal("mismatched override accepted once the unit was resolved")
+	}
+}
+
+func TestPrepareRejectsOwnedDraft(t *testing.T) {
+	b, d, _ := automaticFixture(t, "vllm")
+	d.Binding = &DraftBinding{Unit: "vllm.service", Instance: "local", Owned: &DraftOwnedLaunch{ModelPath: "/models/served", Port: 9100}}
+	if _, err := b.Prepare(context.Background(), PrepareRequest{Draft: d}); !errors.Is(err, ErrOwnedDraftPrepare) {
+		t.Fatalf("owned draft prepared: %v", err)
+	}
+}
+
+func TestPrepareRejectsModelConflictingWithExistingLaunch(t *testing.T) {
+	b, d, _ := automaticFixture(t, appLlamaCPP)
+	d.Model = "other-model"
+	if _, err := b.Prepare(context.Background(), PrepareRequest{Draft: d}); err == nil {
+		t.Fatal("model conflicting with the existing launch accepted")
+	}
+}
