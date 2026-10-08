@@ -14,6 +14,8 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
+const nativeRuntimeLlamaCPP = "llama.cpp"
+
 // NativeModel binds an existing per-model service to its runtime API identity.
 // Ollama profiles may share one unit with sibling profiles bound to different
 // models of the same instance; other runtimes require one unit per model.
@@ -77,7 +79,7 @@ func malformedOllamaModel(model string) bool {
 }
 
 func (n NativeModel) validate() error {
-	if n.Runtime != "ollama" && n.Runtime != "llama.cpp" && n.Runtime != "vllm" {
+	if n.Runtime != "ollama" && n.Runtime != nativeRuntimeLlamaCPP && n.Runtime != "vllm" {
 		return errors.New("unsupported native runtime")
 	}
 	if !ValidInstanceID(n.Instance) || !ValidNativeModelIdentity(n.Runtime, n.Model) {
@@ -117,7 +119,7 @@ func (n NativeModel) validateOwned() error {
 		if o.ModelPath != "" || o.CtxSize != 0 || o.GPULayers != 0 || o.MaxModelLen != 0 || o.Alias != "" {
 			return errors.New("ollama owned launches accept only a port")
 		}
-	case "llama.cpp":
+	case nativeRuntimeLlamaCPP:
 		if o.MaxModelLen != 0 {
 			return errors.New("max-model-len is a vllm owned launch field")
 		}
@@ -126,7 +128,7 @@ func (n NativeModel) validateOwned() error {
 			return errors.New("ctx-size and gpu-layers are llama.cpp owned launch fields")
 		}
 	}
-	if n.Runtime == "llama.cpp" || n.Runtime == "vllm" {
+	if n.Runtime == nativeRuntimeLlamaCPP || n.Runtime == "vllm" {
 		return n.validateOwnedModel()
 	}
 	return nil

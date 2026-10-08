@@ -15,15 +15,8 @@ import (
 var ErrOrphanedOwnedUnit = errors.New("supervisor-owned unit not in catalog")
 
 func (m *SystemdManager) Preflight(ctx context.Context) error {
-	if m.config.Catalog != nil {
-		for _, p := range m.config.Catalog.Profiles {
-			if err := verifyOwnedSpec(p); err != nil {
-				return err
-			}
-			if err := m.verifyNativeBinding(ctx, p); err != nil {
-				return err
-			}
-		}
+	if err := m.preflightBindings(ctx); err != nil {
+		return err
 	}
 	if err := m.verifyManagerCgroup(ctx); err != nil {
 		return err
@@ -76,25 +69,7 @@ func (m *SystemdManager) preflightOwned(_ context.Context, unitDir string) error
 	if err != nil {
 		return err
 	}
-	managed := map[string]bool{}
-	// An owned profile converted to adopted keeps its launch file on disk; an
-	// exact binding (this path with a proven fingerprint) accounts for it,
-	// while a drifted fingerprint stays fail-closed.
-	adopted := map[string]string{}
-	if m.config.Catalog != nil {
-		for _, p := range m.config.Catalog.Profiles {
-			if p.NativeModel == nil {
-				continue
-			}
-			if p.NativeModel.Owned != nil {
-				managed[p.Unit] = true
-				continue
-			}
-			if p.AdoptedOwnedFile() {
-				adopted[p.NativeModel.LaunchFile] = p.NativeModel.LaunchSHA256
-			}
-		}
-	}
+	managed, adopted := m.ownedBindings()
 	for _, entry := range entries {
 		name := entry.Name()
 		if !strings.HasPrefix(name, "gws-owned-") || !strings.HasSuffix(name, ".service") || managed[name] {
@@ -129,4 +104,41 @@ func (m *SystemdManager) preflightWorkloadCgroup(ctx context.Context, unit, grou
 		return err
 	}
 	return nil
+}
+
+func (m *SystemdManager) preflightBindings(ctx context.Context) error {
+	if m.config.Catalog != nil {
+		for _, p := range m.config.Catalog.Profiles {
+			if err := verifyOwnedSpec(p); err != nil {
+				return err
+			}
+			if err := m.verifyNativeBinding(ctx, p); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (m *SystemdManager) ownedBindings() (map[string]bool, map[string]string) {
+	managed := map[string]bool{}
+	// An owned profile converted to adopted keeps its launch file on disk; an
+	// exact binding (this path with a proven fingerprint) accounts for it,
+	// while a drifted fingerprint stays fail-closed.
+	adopted := map[string]string{}
+	if m.config.Catalog != nil {
+		for _, p := range m.config.Catalog.Profiles {
+			if p.NativeModel == nil {
+				continue
+			}
+			if p.NativeModel.Owned != nil {
+				managed[p.Unit] = true
+				continue
+			}
+			if p.AdoptedOwnedFile() {
+				adopted[p.NativeModel.LaunchFile] = p.NativeModel.LaunchSHA256
+			}
+		}
+	}
+	return managed, adopted
 }

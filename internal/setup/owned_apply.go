@@ -75,33 +75,21 @@ func (b Backend) previewOwnedUnitChanges(home string, request Request) ([]string
 		if err != nil {
 			return nil, err
 		}
-		entries, err := acceptedOwnedUnitEntries(snapshot.Catalog, home)
+		proven, err = acceptedOwnedUnitProofs(snapshot.Catalog, home)
 		if err != nil {
 			return nil, err
-		}
-		for _, e := range entries {
-			proven[e.unit] = e.proof
 		}
 	}
 	for _, p := range request.Catalog.Profiles {
 		if p.NativeModel == nil || p.NativeModel.Owned == nil {
 			continue
 		}
-		raw, err := ownedRenderChecked(p)
+		changed, err := previewOwnedUnitWrite(dir, p, proven)
 		if err != nil {
 			return nil, err
 		}
-		current, err := privateRead(filepath.Join(dir, p.Unit))
-		if err == nil && digest(current) == digest(raw) {
+		if !changed {
 			continue
-		}
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
-		// Same ownership proof as the plan: existing content must be the
-		// accepted rendering, or apply would collide after confirmation.
-		if err == nil && proven[p.Unit] != digest(current) {
-			return nil, fmt.Errorf("%w: %s", ErrOwnedUnitCollision, p.Unit)
 		}
 		changes = append(changes, "Write supervisor-owned unit "+p.Unit+" under ~/.config/systemd/user")
 	}
@@ -182,21 +170,8 @@ func (b Backend) finalizeOwnedUnits(ctx context.Context, home, root string, requ
 	if err := b.daemonReloadOwnedUnits(ctx, request.Profile.SystemctlPath, plan.unitNames()); err != nil {
 		return err
 	}
-	for _, p := range request.Catalog.Profiles {
-		if p.NativeModel == nil || p.NativeModel.Owned == nil {
-			continue
-		}
-		raw, err := ownedRenderChecked(p)
-		if err != nil {
-			return err
-		}
-		data, err := privateRead(filepath.Join(ownedUnitDirectory(home), p.Unit))
-		if err != nil {
-			return err
-		}
-		if digest(data) != digest(raw) {
-			return fmt.Errorf("%w: %s", gpuruntime.ErrLaunchChanged, p.Unit)
-		}
+	if err := verifyOwnedUnitRenderings(home, request.Catalog); err != nil {
+		return err
 	}
 	return clearOwnedUnitJournal(root)
 }
@@ -277,7 +252,7 @@ func (b Backend) replayCommittedDeletes(ctx context.Context, home, root string, 
 		// the file would leave it unjournaled if this attempt then fails.
 		// The resumed plan recreates the unit from the request instead.
 		if digest(current) != proof {
-			return fmt.Errorf("%w: %s", ErrOwnedUnitModified, name)
+			return fmt.Errorf(ownedUnitErrorFormat, ErrOwnedUnitModified, name)
 		}
 		if err := provenDelete(path, proof); err != nil {
 			return err
@@ -332,46 +307,11 @@ func (b Backend) retirePendingJournal(ctx context.Context, home, root string, re
 	reloaded := names
 	changed := false
 	for _, name := range names {
-		path := filepath.Join(dir, name)
-		current, err := privateRead(path)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
+		mutated, err := recoverPendingOwnedUnit(dir, name, snapshot.Catalog, journal.Writes[name])
 		if err != nil {
 			return err
 		}
-		accepted, ok := ownedProfileForUnit(snapshot.Catalog, name)
-		if !ok {
-			// Exact adopted binding (converted profile keeping its file): the
-			// catalog proves content by digest alone, so matching bytes are
-			// kept and drifted bytes fail loudly — never deleted.
-			if bound, sha := adoptedOwnedBinding(snapshot.Catalog, dir, name); bound {
-				if digest(current) == sha {
-					continue
-				}
-				return fmt.Errorf("%w: %s", ErrOwnedUnitModified, name)
-			}
-		}
-		if ok {
-			raw, err := ownedRenderChecked(accepted)
-			if err != nil {
-				return err
-			}
-			if digest(current) == digest(raw) {
-				continue
-			}
-			if digest(current) != journal.Writes[name] {
-				return fmt.Errorf("%w: %s", ErrOwnedUnitModified, name)
-			}
-			if err := provenReplace(path, raw, digest(current)); err != nil {
-				return err
-			}
-		} else {
-			if err := provenDelete(path, journal.Writes[name]); err != nil {
-				return err
-			}
-		}
-		changed = true
+		changed = changed || mutated
 	}
 	if len(reloaded) > 0 {
 		if changed {
@@ -477,4 +417,103 @@ func (work activationWork) verifyRuntimes(ctx context.Context) (gpuruntime.Manag
 		}
 	}
 	return manager, nil
+}
+
+func previewOwnedUnitWrite(dir string, p control.WorkloadProfile, proven map[string]string) (bool, error) {
+	raw, err := ownedRenderChecked(p)
+	if err != nil {
+		return false, err
+	}
+	current, err := privateRead(filepath.Join(dir, p.Unit))
+	if err == nil && digest(current) == digest(raw) {
+		return false, nil
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	// Same ownership proof as the plan: existing content must be the
+	// accepted rendering, or apply would collide after confirmation.
+	if err == nil && proven[p.Unit] != digest(current) {
+		return false, fmt.Errorf(ownedUnitErrorFormat, ErrOwnedUnitCollision, p.Unit)
+	}
+	return true, nil
+}
+
+func verifyOwnedUnitRenderings(home string, catalog control.Catalog) error {
+	for _, p := range catalog.Profiles {
+		if p.NativeModel == nil || p.NativeModel.Owned == nil {
+			continue
+		}
+		raw, err := ownedRenderChecked(p)
+		if err != nil {
+			return err
+		}
+		data, err := privateRead(filepath.Join(ownedUnitDirectory(home), p.Unit))
+		if err != nil {
+			return err
+		}
+		if digest(data) != digest(raw) {
+			return fmt.Errorf(ownedUnitErrorFormat, gpuruntime.ErrLaunchChanged, p.Unit)
+		}
+	}
+	return nil
+}
+
+func recoverPendingOwnedUnit(dir, name string, catalog control.Catalog, proof string) (bool, error) {
+	path := filepath.Join(dir, name)
+	current, err := privateRead(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	accepted, ok := ownedProfileForUnit(catalog, name)
+	if !ok {
+		// Exact adopted binding (converted profile keeping its file): the
+		// catalog proves content by digest alone, so matching bytes are
+		// kept and drifted bytes fail loudly — never deleted.
+		if bound, sha := adoptedOwnedBinding(catalog, dir, name); bound {
+			if digest(current) == sha {
+				return false, nil
+			}
+			return false, fmt.Errorf(ownedUnitErrorFormat, ErrOwnedUnitModified, name)
+		}
+	}
+	if ok {
+		return restorePendingOwnedUnit(path, name, current, accepted, proof)
+	}
+	if err := provenDelete(path, proof); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func restorePendingOwnedUnit(path, name string, current []byte, accepted control.WorkloadProfile, proof string) (bool, error) {
+	raw, err := ownedRenderChecked(accepted)
+	if err != nil {
+		return false, err
+	}
+	if digest(current) == digest(raw) {
+		return false, nil
+	}
+	if digest(current) != proof {
+		return false, fmt.Errorf(ownedUnitErrorFormat, ErrOwnedUnitModified, name)
+	}
+	if err := provenReplace(path, raw, digest(current)); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func acceptedOwnedUnitProofs(catalog control.Catalog, home string) (map[string]string, error) {
+	proven := map[string]string{}
+	entries, err := acceptedOwnedUnitEntries(catalog, home)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range entries {
+		proven[e.unit] = e.proof
+	}
+	return proven, nil
 }
