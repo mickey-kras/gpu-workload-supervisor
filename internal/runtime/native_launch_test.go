@@ -210,3 +210,97 @@ func TestNativeStartupPreparationRecheckedBeforeStart(t *testing.T) {
 		t.Fatal("changed preparation accepted")
 	}
 }
+
+// Trusted interpreter binaries do not make their input code trustworthy. The
+// unit fingerprint binds this path, but does not bind a script replaced later.
+func TestStartupPreparationRejectsUnboundCodeAndWrappers(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "preflight.pl")
+	if err := os.WriteFile(script, []byte("exit 0;\n"), 0666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(script, 0666); err != nil {
+		t.Fatal(err)
+	}
+	commands := []string{
+		"/usr/bin/perl " + script,
+		"/usr/bin/python3 " + script,
+		"/usr/bin/ruby " + script,
+		"/usr/bin/node " + script,
+		"/usr/bin/awk -f " + script,
+		"/usr/bin/busybox sh " + script,
+		"/usr/bin/timeout 1 /usr/bin/perl " + script,
+		"/usr/bin/xargs /usr/bin/perl " + script,
+		"/opt/trusted/test -f /models/selected.gguf",
+	}
+	n := control.NativeModel{Runtime: "ollama", Endpoint: "http://localhost:9000", Model: "selected"}
+	good := "[Service]\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=localhost:9000\nExecStart=/usr/bin/ollama serve\n"
+	// Trust all executable paths to isolate the missing command-policy check.
+	// Script input remains writable by a different principal.
+	validate := func(string) error { return nil }
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			raw := []byte(good + "ExecStartPre=" + command + "\n")
+			if err := qualifyNativeLaunchWithValidator(raw, n, validate); err == nil {
+				t.Fatal("preparation can execute unbound code")
+			}
+			if _, err := inspectAutomaticLaunch(raw, n.Runtime, validate); err == nil {
+				t.Fatal("automatic inspection accepted preparation that can execute unbound code")
+			}
+		})
+	}
+}
+
+func TestStartupPreparationRejectsWritableScriptWithTrustedInterpreter(t *testing.T) {
+	const interpreter = "/usr/bin/perl"
+	if err := validateNativeExecutable(interpreter); err != nil {
+		t.Skipf("trusted Perl executable unavailable: %v", err)
+	}
+	script := filepath.Join(t.TempDir(), "preflight.pl")
+	if err := os.WriteFile(script, []byte("exit 0;\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(script, 0666); err != nil {
+		t.Fatal(err)
+	}
+	unit := parsedLaunchUnit{preCommands: []string{interpreter + " " + script}}
+	if err := unit.validatePreCommands(validateNativeExecutable); err == nil {
+		t.Fatal("trusted interpreter accepted a script writable by another principal")
+	}
+}
+
+func TestStartupPreparationPreservesSupportedChecks(t *testing.T) {
+	n := control.NativeModel{Runtime: "ollama", Endpoint: "http://localhost:9000"}
+	good := "[Service]\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=localhost:9000\nExecStart=/usr/bin/ollama serve\n"
+	commands := []string{"/usr/bin/true", "-/usr/bin/true --", "/bin/false", "-/bin/false --"}
+	for _, predicate := range []string{"-e", "-f", "-d", "-r", "-w", "-x", "-s"} {
+		commands = append(commands, "/usr/bin/test "+predicate+" /models/selected.gguf", "-/bin/test "+predicate+" /models/selected.gguf")
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			raw := []byte(good + "ExecStartPre=" + command + "\n")
+			validate := func(string) error { return nil }
+			launch, err := inspectAutomaticLaunch(raw, n.Runtime, validate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(launch.PreCommands) != 1 || launch.PreCommands[0] != command || launch.SHA256 != fmt.Sprintf("%x", sha256.Sum256(raw)) {
+				t.Fatalf("supported preparation changed: %+v", launch)
+			}
+			unit := parsedLaunchUnit{preCommands: []string{command}}
+			if unit.validatePreCommands(func(string) error { return ErrLaunchUnsupported }) == nil {
+				t.Fatal("allowed grammar bypassed executable trust")
+			}
+		})
+	}
+	for _, command := range []string{
+		"/usr/bin/test -f relative", "/usr/bin/test -f /models/../selected.gguf",
+		"/usr/bin/test -f /models/selected.gguf -o -d /models", "/usr/bin/test /models/selected.gguf",
+		"/usr/bin/test -f /models/selected.gguf extra", "/usr/bin/true ignored", "/usr/bin/false -- extra",
+		"--/usr/bin/true", "+/usr/bin/test -f /models/selected.gguf", "/usr/bin/../bin/true",
+	} {
+		raw := []byte(good + "ExecStartPre=" + command + "\n")
+		if qualifyNativeLaunchWithValidator(raw, n, func(string) error { return nil }) == nil {
+			t.Errorf("unsupported preparation grammar accepted: %s", command)
+		}
+	}
+}

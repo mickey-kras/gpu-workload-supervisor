@@ -319,3 +319,42 @@ func TestSystemctlRepeatedPreCommandPropertiesRetainExactOrderedBinding(t *testi
 		t.Fatal("bounded systemctl command list rejected", err)
 	}
 }
+
+func TestExternalStartupPreparationRejectsInterpretersInUnitAndDropIn(t *testing.T) {
+	n := control.NativeModel{Runtime: "ollama", Endpoint: "http://localhost:9000"}
+	good := []byte("[Service]\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=localhost:9000\nExecStart=/usr/bin/ollama serve\nExecStartPre=/usr/bin/true --\n")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "worker.service")
+	drop := filepath.Join(dir, "10-preflight.conf")
+	for _, inDropIn := range []bool{false, true} {
+		for _, command := range []string{"/usr/bin/perl /tmp/preflight.pl", "/usr/bin/python3 /tmp/preflight.py", "/usr/bin/timeout 1 /usr/bin/perl /tmp/preflight.pl"} {
+			raw := []byte("[Service]\nExecStartPre=" + command + "\n")
+			var dropPaths []string
+			primary := append([]byte(nil), good...)
+			if inDropIn {
+				if err := os.WriteFile(drop, raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+				dropPaths = []string{drop}
+			} else {
+				primary = append(primary, raw...)
+			}
+			if err := os.WriteFile(path, primary, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := inspectAutomaticLaunchSourcesWithValidator(path, n.Runtime, dropPaths, func(string) error { return nil }); err == nil {
+				t.Errorf("external interpreter accepted (drop-in=%v): %s", inDropIn, command)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(after, primary) {
+				t.Fatal("inspection changed adopted unit")
+			}
+			if inDropIn {
+				after, err = os.ReadFile(drop)
+				if err != nil || !bytes.Equal(after, raw) {
+					t.Fatal("inspection changed adopted drop-in")
+				}
+			}
+		}
+	}
+}

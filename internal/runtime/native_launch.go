@@ -132,10 +132,11 @@ func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value strin
 	return nil
 }
 
-// Startup preparation is retained verbatim for adopted units. It is never run
-// during inspection. Like the main executable, each direct command must be
-// trusted; expansion, shell wrappers and systemd privilege prefixes remain
-// outside the supported grammar.
+// Startup preparation is retained verbatim for adopted units and never run
+// during inspection. Only fixed system primitives with a bounded argument
+// grammar are supported: trusting an interpreter or wrapper does not bind the
+// code it can execute. Every accepted executable must also pass the ordinary
+// trust check; expansion and systemd privilege prefixes remain unsupported.
 func (u parsedLaunchUnit) validatePreCommands(validate func(string) error) error {
 	for _, command := range u.preCommands {
 		if strings.ContainsAny(command, ";|&<>\\$%`\"'") {
@@ -145,12 +146,29 @@ func (u parsedLaunchUnit) validatePreCommands(validate func(string) error) error
 		if len(args) == 0 || !filepath.IsAbs(args[0]) || validate(args[0]) != nil {
 			return fmt.Errorf("%w: ExecStartPre requires a trusted direct executable", ErrLaunchUnsupported)
 		}
-		switch filepath.Base(args[0]) {
-		case "sh", "bash", "dash", "zsh", "fish", "env", "systemctl", "systemd-run", "sudo", "su":
-			return fmt.Errorf("%w: ExecStartPre wrapper %s", ErrLaunchUnsupported, filepath.Base(args[0]))
+		if !supportedPreCommand(args) {
+			return fmt.Errorf("%w: ExecStartPre supports only system true/false with optional --, or test with one absolute file predicate", ErrLaunchUnsupported)
 		}
 	}
 	return nil
+}
+
+// Exact system paths avoid accepting a helper merely named test or true.
+// File predicates inspect their operand; they cannot execute it or load code.
+func supportedPreCommand(args []string) bool {
+	switch args[0] {
+	case "/usr/bin/true", "/bin/true", "/usr/bin/false", "/bin/false":
+		return len(args) == 1 || (len(args) == 2 && args[1] == "--")
+	case "/usr/bin/test", "/bin/test":
+		if len(args) != 3 || !filepath.IsAbs(args[2]) || filepath.Clean(args[2]) != args[2] {
+			return false
+		}
+		switch args[1] {
+		case "-e", "-f", "-d", "-r", "-w", "-x", "-s":
+			return true
+		}
+	}
+	return false
 }
 
 func (u *parsedLaunchUnit) applyOllamaEnvironment(value string) error {
