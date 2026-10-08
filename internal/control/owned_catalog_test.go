@@ -259,10 +259,12 @@ func TestOwnedValuesFitCommandGrammar(t *testing.T) {
 		"dollar model path":      func(o *OwnedLaunch) { o.ModelPath = "/models/$HOME.gguf" },
 		"percent model path":     func(o *OwnedLaunch) { o.ModelPath = "/models/100%.gguf" },
 		"backslash model path":   func(o *OwnedLaunch) { o.ModelPath = "/models/win\\path.gguf" },
+		"semicolon model path":   func(o *OwnedLaunch) { o.ModelPath = "/models/a;b.gguf" },
 		"whitespace alias":       func(o *OwnedLaunch) { o.Alias = "my model" },
 		"quote alias":            func(o *OwnedLaunch) { o.Alias = "mo\"del" },
 		"control alias":          func(o *OwnedLaunch) { o.Alias = "bad\x01alias" },
 		"specifier escape alias": func(o *OwnedLaunch) { o.Alias = "100%%" },
+		"semicolon alias":        func(o *OwnedLaunch) { o.Alias = "a;b" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

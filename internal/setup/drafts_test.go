@@ -113,8 +113,10 @@ func TestDraftOwnedRejectsGrammarUnsafeValues(t *testing.T) {
 		"percent in model path":   owned("/models/vision%i.gguf", ""),
 		"dollar in model path":    owned("/models/$vision.gguf", ""),
 		"backslash in model path": owned(`/models/vis\ion.gguf`, ""),
+		"semicolon model path":    owned("/models/a;b.gguf", ""),
 		"space in alias":          owned("/models/vision.gguf", "vision v2"),
 		"backtick in alias":       owned("/models/vision.gguf", "vis`ion"),
+		"semicolon alias":         owned("/models/vision.gguf", "a;b"),
 	} {
 		if err := validateDrafts(1, []Draft{d}); err == nil {
 			t.Fatalf("%s saved", name)

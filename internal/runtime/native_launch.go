@@ -120,6 +120,9 @@ func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value strin
 		}
 		u.preCommands = append(u.preCommands, value)
 	case "[Service]ExecStart":
+		if strings.Contains(value, ";") {
+			return fmt.Errorf("%w: semicolon delimiter in ExecStart", ErrLaunchUnsupported)
+		}
 		u.execStart = value
 	case "[Service]Environment":
 		if runtimeName != "ollama" {

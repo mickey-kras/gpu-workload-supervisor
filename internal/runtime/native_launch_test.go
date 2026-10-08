@@ -28,7 +28,7 @@ func TestNativeLaunchQualificationRejectsIndirectionAndMutation(t *testing.T) {
 			t.Errorf("unsafe launch accepted: %s", raw)
 		}
 	}
-	valid := "# comment\n; comment\n[Unit]\nDescription=Native model\n" + good + "Type=exec\nRestart=no\n[Install]\nWantedBy=default.target\n"
+	valid := "# comment\n; comment\n[Unit]\nDescription=Native model; local\n" + good + "Type=exec\nRestart=no\n[Install]\nWantedBy=default.target\n"
 	if err := qualifyFixtureLaunch([]byte(valid), n); err != nil {
 		t.Fatal(err)
 	}

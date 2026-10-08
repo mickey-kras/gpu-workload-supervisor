@@ -153,8 +153,8 @@ func parseExternalLaunchSources(sources [][]byte, runtimeName string) (parsedLau
 	if len(starts) != 1 || len(pre) > 32 {
 		return unit, fmt.Errorf("%w: effective ExecStart or ExecStartPre command count", ErrLaunchUnsupported)
 	}
-	if strings.ContainsAny(starts[0], "\\$%`\"'") {
-		return unit, fmt.Errorf("%w: expansion or quoting in ExecStart", ErrLaunchUnsupported)
+	if strings.ContainsAny(starts[0], "\\$%`\"';") {
+		return unit, fmt.Errorf("%w: expansion, quoting or semicolon delimiter in ExecStart", ErrLaunchUnsupported)
 	}
 	unit.execStart = starts[0]
 	unit.preCommands = pre

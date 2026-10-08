@@ -249,10 +249,11 @@ func LaunchGrammarExpressible(value string) bool {
 
 // grammarExpressible reports whether a value survives the launch grammar's
 // tokenization unchanged: no whitespace (ExecStart splits on strings.Fields),
-// none of the quoting/specifier characters directive parsing rejects, and no
-// control bytes. Values that fail would render units that can never qualify.
+// none of the quoting/specifier characters directive parsing rejects, no
+// semicolon delimiters in loaded command metadata, and no control bytes.
+// Values that fail would render units that can never qualify.
 func grammarExpressible(value string) bool {
-	return !strings.ContainsAny(value, "\\$%\"'`") &&
+	return !strings.ContainsAny(value, "\\$%\"'`;") &&
 		strings.IndexFunc(value, unicode.IsSpace) < 0 &&
 		strings.IndexFunc(value, unicode.IsControl) < 0
 }
