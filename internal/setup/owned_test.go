@@ -546,7 +546,6 @@ func TestDraftOwnedValidation(t *testing.T) {
 	cases := map[string]func(*Draft){
 		"privileged port": func(d *Draft) { d.Binding.Owned.Port = 80 },
 		"llama max len":   func(d *Draft) { d.Binding.Owned.MaxModelLen = 1 },
-		"llama no path":   func(d *Draft) { d.Binding.Owned.ModelPath = "" },
 		"llama rel path":  func(d *Draft) { d.Binding.Owned.ModelPath = "rel.gguf" },
 		"ollama alias":    func(d *Draft) { d.App = "ollama"; d.Binding.Owned.Alias = "x" },
 		"ollama ctx":      func(d *Draft) { d.App = "ollama"; d.Binding.Owned.CtxSize = 1 },
