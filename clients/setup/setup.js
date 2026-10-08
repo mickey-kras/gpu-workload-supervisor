@@ -138,6 +138,7 @@ app.connect('activate', () => {
     const applicationGroup = new Adw.PreferencesGroup(); applicationGroup.add(application); box.append(applicationGroup);
     const addApplication = new Gtk.Button({label: 'Add workload', sensitive: false}); box.append(addApplication);
     const saveDrafts = new Gtk.Button({label: 'Save drafts', sensitive: false}); box.append(saveDrafts);
+    const catalogFor = items => ({...request.catalog, version: items.some(profile => profile.nativeModel?.owned) ? 2 : request.catalog.version, profiles: items});
     function appendDraft(initial, replacing = null) {
         if (drafts.some(draft => draft.id === initial.id)) { status.label = 'This workload already has an open draft. Finish or remove that draft first.'; return; }
         drafts.push(initial);
@@ -146,7 +147,7 @@ app.connect('activate', () => {
                 replacing ??= profiles.find(existing => existing.id === initial.id && existing.nativeModel?.owned) ?? null;
                 if (replacing && !profiles.includes(replacing)) throw new Error('The original workload was removed. Reopen Manage workloads before editing it.');
                 const preserveSettings = () => replacing ? {...profile, requiredMiB: replacing.requiredMiB, bootPolicy: replacing.bootPolicy} : profile;
-                const candidate = JSON.stringify({...request, catalog: {...request.catalog, profiles: [...profiles.filter(existing => existing !== replacing), preserveSettings()]}, confirmQuiesced: false});
+                const candidate = JSON.stringify({...request, catalog: catalogFor([...profiles.filter(existing => existing !== replacing), preserveSettings()]), confirmQuiesced: false});
                 const owned = profile.nativeModel?.owned;
                 await command(['/usr/bin/gpu-setup', 'verify-bindings'], candidate);
                 if (replacing && !profiles.includes(replacing)) throw new Error('The original workload changed during preview. Reopen Manage workloads.');
@@ -187,7 +188,7 @@ app.connect('activate', () => {
         if (!Number.isSafeInteger(request.profile.gpuIndex) || request.profile.gpuIndex < 0 ||
             profiles.some(profile => !Number.isSafeInteger(profile.requiredMiB ?? 0) || (profile.requiredMiB ?? 0) < 0))
             throw new Error('GPU index and VRAM requirements must be nonnegative whole numbers.');
-        return JSON.stringify({...request, catalog: {...request.catalog, profiles}, confirmQuiesced: false});
+        return JSON.stringify({...request, catalog: catalogFor(profiles), confirmQuiesced: false});
     };
     review.connect('clicked', async () => {
         if (!request) return;

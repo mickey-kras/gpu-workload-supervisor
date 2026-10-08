@@ -40,6 +40,7 @@ export function addDraftEditor({Adw, Gtk, window, parent, initial, detected, com
         if (syncing) return;
         draft.endpoint(endpoint.text); reference.label = 'No file or folder selected';
         clearBinding(); clearModels();
+        clearOwnedReference();
         changed(draft.snapshot());
     });
     let model = null;
@@ -54,9 +55,13 @@ export function addDraftEditor({Adw, Gtk, window, parent, initial, detected, com
         if (syncing) return;
         const selected = models[model.selected - 1];
         if (!selected) return;
-        draft.edit({model: selected.id});
+        const input = draft.snapshot();
+        draft.edit({model: selected.id, binding: input.binding && !input.binding.owned ? {...input.binding, model: selected.id} : input.binding});
+        syncing = true;
         if (bindingFields.model) bindingFields.model.text = selected.id;
+        syncing = false;
         if (ownedFields.model) ownedFields.model.text = selected.id;
+        if (ownedFields.modelPath) ownedFields.modelPath.text = selected.id.startsWith('/') ? selected.id : '';
         changed(draft.snapshot());
     });
     function clearModels() {
@@ -65,9 +70,23 @@ export function addDraftEditor({Adw, Gtk, window, parent, initial, detected, com
         if (model) { model.model = Gtk.StringList.new(['Check an instance to list models']); model.selected = 0; }
         syncing = false;
         draft.edit({model: undefined});
+        if (ownedFields.model) ownedFields.model.text = '';
+    }
+    function clearOwnedReference() {
+        if (ownedFields.model) ownedFields.model.text = '';
+        if (ownedFields.modelPath) ownedFields.modelPath.text = '';
+    }
+    function selectOwnedReference(path, kind) {
+        if (!ownedFields.modelPath) return;
+        const expected = initial.app === 'llama.cpp' ? 'model-file' : 'model-directory';
+        ownedFields.modelPath.text = kind === expected ? path : '';
     }
     function clearBinding() {
+        syncing = true;
         for (const field of Object.values(bindingFields)) field.text = '';
+        syncing = false;
+        const binding = draft.snapshot().binding;
+        draft.edit({binding: binding?.owned ? {instance: binding.instance, owned: {...binding.owned}} : undefined});
     }
     function show(candidate) {
         status.label = [candidateMessage(candidate), candidate.nextStep].filter(Boolean).join('\n');
@@ -88,30 +107,34 @@ export function addDraftEditor({Adw, Gtk, window, parent, initial, detected, com
     }
     watchInstanceSelection({instance, instances, draft, endpoint, reference, clearBinding, show,
         getBindingFields: () => bindingFields, setSync: value => syncing = value,
-        setProbeGuidance: guidance => probeGuidance = guidance});
+        setProbeGuidance: guidance => probeGuidance = guidance, clearOwnedReference, selectOwnedReference});
     addRefreshButton({Gtk, group, draft, status, command, show, reportError, guidance: () => probeGuidance});
-    addFilePickers({Gtk, window, group, draft, reference, endpoint, status, changed, clearBinding, clearModels, setSync: value => syncing = value, selectedReference: path => { if (ownedFields.modelPath) ownedFields.modelPath.text = path; }});
+    addFilePickers({Gtk, window, group, draft, reference, endpoint, status, changed, clearBinding, clearModels, setSync: value => syncing = value, selectedReference: selectOwnedReference});
     if (draft.needsModel) ownedFields = addOwnedEditor({Adw, Gtk, group, draft, initial, command, bind, changed, taken, status, reportError, parent, removed});
-    bindingFields = addBindingEditor({Adw, Gtk, group, draft, initial, status, parent, removed, bind, command, changed, taken, reportError});
+    bindingFields = addBindingEditor({Adw, Gtk, group, draft, initial, status, parent, removed, bind, command, changed, taken, reportError, isSyncing: () => syncing});
     const remove = new Gtk.Button({label: 'Remove draft from supervisor'}); group.add(remove);
     remove.connect('clicked', () => { draft.cancel(); parent.remove(group); removed(); });
     parent.append(group);
     return {cancel: () => draft.cancel()};
 }
 
-function watchInstanceSelection({instance, instances, draft, endpoint, reference, clearBinding, show, getBindingFields, setSync, setProbeGuidance}) {
+function watchInstanceSelection({instance, instances, draft, endpoint, reference, clearBinding, show, getBindingFields, setSync, setProbeGuidance, clearOwnedReference, selectOwnedReference}) {
     instance.connect('notify::selected', () => {
         const selected = instances[instance.selected - 1];
         if (!selected) return;
         clearBinding();
         draft.edit({endpoint: undefined, reference: undefined, referenceKind: undefined, model: ''});
+        clearOwnedReference();
         setSync(true); endpoint.text = ''; setSync(false);
         reference.label = 'No file or folder selected';
         if (selected.endpoint) { draft.endpoint(selected.endpoint); setSync(true); endpoint.text = selected.endpoint; setSync(false); }
-        else if (selected.reference) { draft.reference(selected.reference, selected.referenceKind); reference.label = selected.reference; }
+        else if (selected.reference) { draft.reference(selected.reference, selected.referenceKind); reference.label = selected.reference; selectOwnedReference(selected.reference, selected.referenceKind); }
         else draft.cancel();
         setProbeGuidance(selected.endpoint || selected.reference ? null : selected.nextStep);
+        setSync(true);
         for (const key of ['unit', 'cgroup']) if (selected[key]) getBindingFields()[key].text = selected[key];
+        setSync(false);
+        if (!draft.snapshot().binding?.owned) draft.edit({binding: {unit: selected.unit ?? '', cgroup: selected.cgroup ?? ''}});
         show(selected);
     });
 }
@@ -148,7 +171,7 @@ function addFilePickers({Gtk, window, group, draft, reference, endpoint, status,
                     if (!path) return;
                     clearBinding(); clearModels();
                     draft.reference(path, kind); reference.label = path;
-                    selectedReference(path);
+                    selectedReference(path, kind);
                     setSync(true); endpoint.text = ''; setSync(false);
                     status.label = 'Location selected. Compatibility and safe lifecycle control are not verified.';
                     changed(draft.snapshot());
@@ -218,7 +241,7 @@ function addOwnedEditor({Adw, Gtk, group, draft, initial, command, bind, changed
     return fields;
 }
 
-function addBindingEditor({Adw, Gtk, group, draft, initial, status, parent, removed, bind, command, changed, taken, reportError}) {
+function addBindingEditor({Adw, Gtk, group, draft, initial, status, parent, removed, bind, command, changed, taken, reportError, isSyncing}) {
     const binding = new Adw.ExpanderRow({title: 'Advanced launch binding', subtitle: 'Use an existing isolated service. Saved binding fields remain unverified.'});
     group.add(binding);
     const fields = {};
@@ -226,6 +249,7 @@ function addBindingEditor({Adw, Gtk, group, draft, initial, status, parent, remo
         const row = new Adw.EntryRow({title, text: initial.binding?.[key] ?? (key === 'model' ? initial.model ?? '' : ''), editable: key !== 'launchSHA256'});
         binding.add_row(row); fields[key] = row;
         if (key !== 'launchSHA256') row.connect('changed', () => {
+            if (isSyncing()) return;
             const values = Object.fromEntries(Object.entries(fields).filter(([name]) => name !== 'launchSHA256').map(([name, field]) => [name, field.text]));
             draft.edit({binding: values}); changed(draft.snapshot());
         });

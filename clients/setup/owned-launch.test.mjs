@@ -17,6 +17,8 @@ test('managed launch is previewed without fingerprinting a nonexistent unit or s
     await ui.by('Review configuration').emit('clicked');
     const reviewed = JSON.parse(ui.calls.at(-1).input);
     assert.deepEqual(reviewed.catalog.profiles[0], owned);
+    assert.equal(reviewed.catalog.version, 2);
+    assert.ok(ui.calls.filter(call => ['verify-bindings', 'validate'].includes(call.argv[1])).every(call => JSON.parse(call.input).catalog.version === 2));
     assert.ok(!ui.calls.some(call => ['fingerprint', 'apply'].includes(call.argv[1])));
     assert.ok(ui.widgets.some(widget => widget.label?.includes('verification during Apply')));
     const confirm = ui.widgets.find(widget => widget.children.some(child => child.label?.startsWith('I have paused')));
@@ -25,6 +27,7 @@ test('managed launch is previewed without fingerprinting a nonexistent unit or s
     const applied = JSON.parse(ui.calls.at(-1).input);
     assert.deepEqual(applied.catalog.profiles[0], owned);
     assert.equal(applied.confirmQuiesced, true);
+    assert.equal(applied.catalog.version, 2);
 });
 
 test('a second Ollama model preserves the shared instance and derived service', async () => {
@@ -140,4 +143,72 @@ test('a failed mixed-catalog adopted binding check cannot promote a managed prev
     assert.equal(request.catalog.profiles.length, 2);
     assert.ok(ui.by('Preview managed launch and add for review'));
     assert.ok(!ui.calls.some(call => call.argv[1] === 'apply'));
+});
+
+for (const app of ['llama.cpp', 'vllm']) {
+    test(`${app} detected references replace a previous picker path and addresses clear it`, async () => {
+        const kind = app === 'llama.cpp' ? 'model-file' : 'model-directory';
+        const ui = await launch({responses: {drafts: {drafts: [{...draft, app}]}, 'render-owned': {profile: owned},
+            discover: {request: {profile: {statePath: '/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: []}}, units: [], applications: [
+                {app, label: 'File setup', instanceStatus: 'candidate', reference: '/models/detected', referenceKind: kind},
+                {app, label: 'Address setup', instanceStatus: 'available', endpoint: 'http://127.0.0.1:9000'}]}}, deferAction: 'unused'});
+        await ui.by(app === 'llama.cpp' ? 'Choose model file...' : 'Choose model folder...').emit('clicked');
+        ui.edit(ui.by('Detected instance'), 'selected', 1);
+        await ui.by('Preview managed launch and add for review').emit('clicked');
+        const rendered = JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input);
+        assert.equal(rendered.draft.binding.owned.modelPath, '/models/detected');
+    });
+
+    test(`${app} detected and manually edited addresses retire old managed model paths`, async () => {
+        for (const select of ['detected', 'manual']) {
+            const initial = {...draft, app, reference: '/models/old', referenceKind: app === 'llama.cpp' ? 'model-file' : 'model-directory', binding: {instance: 'local', owned: {port: 9000, modelPath: '/models/old'}}};
+            const ui = await launch({responses: {drafts: {drafts: [initial]}, discover: {request: {profile: {statePath: '/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: []}}, units: [], applications: [{app, label: 'Address setup', instanceStatus: 'available', endpoint: 'http://127.0.0.1:9000'}]}}, deferAction: 'unused'});
+            if (select === 'detected') ui.edit(ui.by('Detected instance'), 'selected', 1);
+            else ui.edit(ui.by('Application address'), 'text', 'http://127.0.0.1:9000');
+            assert.equal(ui.by(app === 'llama.cpp' ? 'Model file' : 'Model directory').text, '');
+            await ui.by('Save drafts').emit('clicked');
+            assert.equal(JSON.parse(ui.calls.at(-1).input).drafts[0].binding.owned.modelPath, undefined);
+        }
+    });
+
+    test(`${app} detected native inventory model prefills the managed path`, async () => {
+        const ui = await launch({responses: {drafts: {drafts: [{...draft, app}]}, 'render-owned': {profile: owned}, discover: {request: {profile: {statePath: '/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: []}}, units: [], applications: [{app, label: 'Running setup', instanceStatus: 'available', endpoint: 'http://127.0.0.1:9000', models: [{id: '/models/discovered'}]}]}}, deferAction: 'unused'});
+        ui.edit(ui.by('Detected instance'), 'selected', 1);
+        ui.edit(ui.by('Model'), 'selected', 1);
+        await ui.by('Preview managed launch and add for review').emit('clicked');
+        assert.equal(JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input).draft.binding.owned.modelPath, '/models/discovered');
+    });
+}
+
+test('changing an Ollama native inventory choice preserves saved managed options on reopen', async () => {
+    const initial = {...draft, endpoint: 'http://127.0.0.1:11434', binding: {instance: 'custom', owned: {port: 12345}}};
+    const ui = await launch({responses: {drafts: {drafts: [initial]}, probe: {app: 'ollama', instanceStatus: 'available', inventoryStatus: 'available', models: [{id: 'other:latest'}]}}, deferAction: 'unused'});
+    await ui.by('Refresh discovery').emit('clicked');
+    ui.edit(ui.by('Model'), 'selected', 1);
+    assert.equal(ui.by('Model name').text, 'other:latest');
+    await ui.by('Save drafts').emit('clicked');
+    const saved = JSON.parse(ui.calls.at(-1).input).drafts[0];
+    assert.deepEqual(saved.binding, {instance: 'custom', owned: {port: 12345}});
+    assert.equal(saved.model, 'other:latest');
+    const reopened = await launch({responses: {drafts: {drafts: [saved]}}});
+    assert.equal(reopened.by('Launch port').text, '12345');
+    assert.equal(reopened.by('Instance name').text, 'custom');
+    assert.equal(reopened.by('Model name').text, 'other:latest');
+});
+
+test('selecting a detected service preserves custom managed options in saved drafts', async () => {
+    const initial = {...draft, binding: {instance: 'custom', owned: {port: 12345}}};
+    const ui = await launch({responses: {drafts: {drafts: [initial]}, discover: {
+        request: {profile: {statePath: '/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: []}}, units: [],
+        applications: [{app: 'ollama', label: 'Existing service', instanceStatus: 'available',
+            unit: 'external.service', cgroup: '/user/external.service', endpoint: 'http://127.0.0.1:11434', models: [{id: 'other:latest'}]}]}}, deferAction: 'unused'});
+    ui.edit(ui.by('Detected instance'), 'selected', 1);
+    ui.edit(ui.by('Model'), 'selected', 1);
+    await ui.by('Save drafts').emit('clicked');
+    const saved = JSON.parse(ui.calls.at(-1).input).drafts[0];
+    assert.deepEqual(saved.binding, {instance: 'custom', owned: {port: 12345}});
+    assert.equal(saved.model, 'other:latest');
+    const reopened = await launch({responses: {drafts: {drafts: [saved]}}});
+    assert.equal(reopened.by('Launch port').text, '12345');
+    assert.equal(reopened.by('Instance name').text, 'custom');
 });
