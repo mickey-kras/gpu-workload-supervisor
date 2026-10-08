@@ -152,7 +152,7 @@ function validateLeaseFence(f) {
     token(f.incarnation);
     if (
         typeof f.epoch !== 'string' ||
-        !/^[1-9][0-9]{0,19}$/.test(f.epoch) ||
+        !/^[1-9]\d{0,19}$/.test(f.epoch) ||
         compareVersions(f.epoch, '18446744073709551615') > 0
     )
         fail();
@@ -161,38 +161,10 @@ function validateLeaseFence(f) {
 export function parseResponse(text, requestId, action) {
     if (new TextEncoder().encode(text).length > 65536) fail();
     const r = JSON.parse(text);
-    const base = ['protocolVersion', 'requestId', 'code'];
-    if (r.code === 'ok') {
-        keys(
-            r,
-            SETTINGS_ACTIONS.includes(action)
-                ? [...base, 'settings']
-                : action === ACTIVATE_ACTION
-                  ? [...base, 'status', 'leaseFence']
-                  : [...base, 'status'],
-        );
-    } else if (r.code === 'deferred') {
-        // Deferred is defined only for activate-workload; on any other action
-        // it is a malformed response and fails closed.
-        if (action !== ACTIVATE_ACTION) fail();
-        // A deferred activation reports the observed current status so the
-        // desktop can render why the workload did not start, and optionally
-        // the current lease fence so a caller that lost a committed
-        // activation response can recover the committed generation.
-        keys(r, 'leaseFence' in r ? [...base, 'status', 'leaseFence'] : [...base, 'status']);
-    } else {
-        keys(r, base);
-        one(r.code, ERROR_CODES);
-    }
+    validateResponseKeys(r, action);
     if (r.protocolVersion !== 1 || r.requestId !== requestId) fail();
     if (r.code !== 'ok') {
-        if (r.code === 'deferred') {
-            validateStatus(r.status);
-            if ('leaseFence' in r) {
-                validateLeaseFence(r.leaseFence);
-                if (r.leaseFence.incarnation !== r.status.expected.incarnation) fail();
-            }
-        }
+        if (r.code === 'deferred') validateDeferredStatus(r);
         return r;
     }
     if (SETTINGS_ACTIONS.includes(action)) {
@@ -208,4 +180,37 @@ export function parseResponse(text, requestId, action) {
         if (r.leaseFence.incarnation !== r.status.expected.incarnation) fail();
     }
     return r;
+}
+
+function successfulResponseKeys(base, action) {
+    if (SETTINGS_ACTIONS.includes(action)) return [...base, 'settings'];
+    if (action === ACTIVATE_ACTION) return [...base, 'status', 'leaseFence'];
+    return [...base, 'status'];
+}
+
+function validateResponseKeys(r, action) {
+    const base = ['protocolVersion', 'requestId', 'code'];
+    if (r.code === 'ok') {
+        keys(r, successfulResponseKeys(base, action));
+    } else if (r.code === 'deferred') {
+        // Deferred is defined only for activate-workload; on any other action
+        // it is a malformed response and fails closed.
+        if (action !== ACTIVATE_ACTION) fail();
+        // A deferred activation reports the observed current status so the
+        // desktop can render why the workload did not start, and optionally
+        // the current lease fence so a caller that lost a committed
+        // activation response can recover the committed generation.
+        keys(r, 'leaseFence' in r ? [...base, 'status', 'leaseFence'] : [...base, 'status']);
+    } else {
+        keys(r, base);
+        one(r.code, ERROR_CODES);
+    }
+}
+
+function validateDeferredStatus(r) {
+    validateStatus(r.status);
+    if ('leaseFence' in r) {
+        validateLeaseFence(r.leaseFence);
+        if (r.leaseFence.incarnation !== r.status.expected.incarnation) fail();
+    }
 }
