@@ -291,3 +291,11 @@ func TestTemporaryDiscoveryPreservesQualifiedDropInAndRefusesSourceDrift(t *test
 		})
 	}
 }
+
+func TestTemporaryDiscoveryExcludesOwnedUnits(t *testing.T) {
+	m, r, v := temporaryManagerFixture(t)
+	v.Unit = control.OwnedUnitFilePrefix + "vision.service"
+	if _, err := m.StartTemporaryDiscovery(context.Background(), v); !errors.Is(err, ErrLaunchUnsupported) || r.starts != 0 {
+		t.Fatalf("owned unit temporarily started: %v %+v", err, r)
+	}
+}

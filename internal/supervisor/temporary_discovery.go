@@ -76,18 +76,19 @@ func (c *Controller) DiscoverNativeTemporary(ctx context.Context, v control.Temp
 	startCtx, cancelStart := context.WithTimeout(ctx, c.config.ActionTimeout)
 	launch, startErr := r.StartTemporaryDiscovery(startCtx, v)
 	cancelStart()
-	persistCtx, cancel := context.WithTimeout(context.Background(), c.config.FinalizeTimeout)
-	persistLaunchErr := s.RecordTemporaryLaunch(persistCtx, id, token, launch)
+	recordCtx, cancelRecord := context.WithTimeout(context.Background(), c.config.FinalizeTimeout)
+	persistLaunchErr := s.RecordTemporaryLaunch(recordCtx, id, token, launch)
+	cancelRecord()
 	if persistLaunchErr != nil {
 		startErr = errors.Join(startErr, persistLaunchErr)
-		launch.InvocationID = ""
 	}
 	status := "running"
 	if startErr != nil {
 		status = "cleanup_required"
 	}
-	persistErr := s.UpdateTemporaryDiscovery(persistCtx, id, token, launch.InvocationID, status, failureMessage(startErr))
-	cancel()
+	updateCtx, cancelUpdate := context.WithTimeout(context.Background(), c.config.FinalizeTimeout)
+	persistErr := s.UpdateTemporaryDiscovery(updateCtx, id, token, launch.InvocationID, status, failureMessage(startErr))
+	cancelUpdate()
 	if startErr == nil && persistErr == nil {
 		result, err = inspect(ctx, v.Endpoint)
 	} else {
@@ -104,6 +105,13 @@ func failureMessage(err error) string {
 		return "temporary discovery failed; inspect service and explicit cleanup status"
 	}
 	return ""
+}
+
+func cleanupFailureMessage(invocation string) string {
+	if invocation == "" {
+		return "Cleanup failed. Admission remains closed. No service invocation was recorded; inspect the service manually before retrying explicit cleanup."
+	}
+	return "Cleanup failed. Admission remains closed. Inspect the recorded service invocation before retrying explicit cleanup."
 }
 
 func (c *Controller) CleanupTemporaryDiscovery(ctx context.Context, id, token string) error {
@@ -135,14 +143,18 @@ func (c *Controller) cleanupTemporaryDiscovery(ctx context.Context, id, token st
 	if record == nil || record.ID != id {
 		return store.ErrStaleFence
 	}
-	err = r.StopTemporaryDiscovery(cleanupCtx, record.Candidate, record.InvocationID)
+	invocation := record.InvocationID
+	if invocation == "" {
+		invocation = record.LaunchEvidence.InvocationID
+	}
+	err = r.StopTemporaryDiscovery(cleanupCtx, record.Candidate, invocation)
 	if err == nil {
 		_, err = s.FinishTemporaryDiscovery(cleanupCtx, id, token)
 	}
 	if err != nil {
 		finalCtx, cancel := context.WithTimeout(context.Background(), c.config.FinalizeTimeout)
 		defer cancel()
-		markErr := s.UpdateTemporaryDiscovery(finalCtx, id, token, record.InvocationID, "cleanup_required", "Cleanup failed. Admission remains closed. Inspect the recorded service invocation before retrying explicit cleanup.")
+		markErr := s.UpdateTemporaryDiscovery(finalCtx, id, token, invocation, "cleanup_required", cleanupFailureMessage(invocation))
 		return errors.Join(store.ErrTemporaryCleanupRequired, err, markErr)
 	}
 	return nil

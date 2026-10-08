@@ -10,7 +10,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
-var ErrTemporaryInvocationChanged = errors.New("temporary discovery invocation changed or start evidence is ambiguous; refusing to stop this service. Inspect and stop it manually if appropriate, then retry explicit cleanup")
+var ErrTemporaryInvocationChanged = errors.New("temporary discovery invocation changed or start evidence is ambiguous; refusing to stop this service. Inspect the unit and the persisted session evidence, stop it manually if appropriate, then retry explicit cleanup")
 
 func (m *SystemdManager) temporaryProperties(ctx context.Context, unit string) (map[string]string, error) {
 	out, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show", "--property=Id,LoadState,ActiveState,SubState,ControlGroup,Slice,FragmentPath,DropInPaths,NeedDaemonReload,InvocationID,ActiveEnterTimestampMonotonic,ExecStart,ExecStartPre", "--no-pager", "--", unit)
@@ -21,7 +21,7 @@ func (m *SystemdManager) temporaryProperties(ctx context.Context, unit string) (
 }
 
 func (m *SystemdManager) verifyTemporaryBinding(ctx context.Context, v control.TemporaryDiscoveryCandidate) (map[string]string, error) {
-	if !automaticUnitName.MatchString(v.Unit) || strings.HasPrefix(v.Unit, "gpu-supervisor-") || validateCgroup(v.Cgroup) != nil || v.SystemdSlice != "app.slice" {
+	if !automaticUnitName.MatchString(v.Unit) || strings.HasPrefix(v.Unit, control.OwnedUnitFilePrefix) || validateCgroup(v.Cgroup) != nil || v.SystemdSlice != "app.slice" {
 		return nil, ErrLaunchUnsupported
 	}
 	validate := m.nativeExecutableValidator

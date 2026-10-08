@@ -3,9 +3,12 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
-	"testing"
 )
 
 type discoveryRuntimeFixture struct {
@@ -225,5 +228,84 @@ func TestTemporarySessionStatusAndCleanupRejectClosedStoreAndWrongToken(t *testi
 	}
 	if _, err := c.TemporaryDiscoveryStatus(context.Background()); err == nil {
 		t.Fatal("closed store status succeeded")
+	}
+}
+
+type flakyDiscoveryUpdate struct {
+	*store.Store
+	failures int
+}
+
+func (s *flakyDiscoveryUpdate) UpdateTemporaryDiscovery(ctx context.Context, id, token, invocation, status, message string) error {
+	if s.failures > 0 {
+		s.failures--
+		return errors.New("session store busy")
+	}
+	return s.Store.UpdateTemporaryDiscovery(ctx, id, token, invocation, status, message)
+}
+
+func TestTemporaryDiscoveryRecoversWhenSessionUpdateFailsAfterLaunchRecord(t *testing.T) {
+	s := openStore(t)
+	ownershipState(t, s, control.OwnerSupervisor, control.WorkloadIdle)
+	r := &discoveryRuntimeFixture{fakeRuntime: fakeRuntime{active: control.WorkloadIdle}, stopped: true}
+	c := testController(t, &flakyDiscoveryUpdate{Store: s, failures: 1}, r)
+	e, err := c.TemporaryDiscoveryEligibility(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.DiscoverNativeTemporary(context.Background(), control.TemporaryDiscoveryCandidate{Unit: "ollama.service"}, e, true, func(context.Context, string) ([]byte, error) {
+		t.Fatal("inventory reached despite failed session update")
+		return nil, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "session store busy") {
+		t.Fatalf("update failure hidden: %v", err)
+	}
+	if r.stops != 1 || r.running {
+		t.Fatalf("recorded launch survived cleanup: %+v", r)
+	}
+	record, err := c.TemporaryDiscoveryStatus(context.Background())
+	if err != nil || record == nil || record.Status != "completed" {
+		t.Fatalf("session stuck after cleanup: %+v %v", record, err)
+	}
+	if _, err := c.Recover(context.Background()); err != nil {
+		t.Fatalf("admission remained closed: %v", err)
+	}
+}
+
+func TestTemporaryDiscoveryCleanupFallsBackToLaunchEvidenceAfterCrash(t *testing.T) {
+	s := openStore(t)
+	state := ownershipState(t, s, control.OwnerSupervisor, control.WorkloadIdle)
+	r := &discoveryRuntimeFixture{fakeRuntime: fakeRuntime{active: control.WorkloadIdle}, stopped: true, running: true}
+	c := testController(t, s, r)
+	snap, err := s.Catalog(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := control.OperatorPrecondition{Incarnation: state.LeaseFence.Incarnation, Version: state.Version, Owner: state.Owner, ConfigurationRevision: snap.Revision}
+	tr := store.Transition{ID: "crash-session", Source: state, Target: state, Previous: state, Initiator: "temporary-native-discovery", Phase: control.PhaseDraining, Deadline: time.Now().Add(time.Minute), ConfigurationRevision: snap.Revision}
+	record := control.TemporaryDiscoverySession{ID: "crash-session", Token: "crash-token", Status: "starting", PriorStopped: true, Candidate: control.TemporaryDiscoveryCandidate{Unit: "ollama.service"}}
+	if _, err := s.StartTemporaryDiscovery(context.Background(), e, tr, record); err != nil {
+		t.Fatal(err)
+	}
+	launch := control.TemporaryDiscoveryLaunchEvidence{InvocationID: "12345678901234567890123456789012", JobID: "1", ActivationTimestamp: "10"}
+	if err := s.RecordTemporaryLaunch(context.Background(), record.ID, record.Token, launch); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := s.TemporaryDiscoveryStatus(context.Background())
+	if err != nil || pending.InvocationID != "" || pending.LaunchEvidence.InvocationID != launch.InvocationID {
+		t.Fatalf("crash window record: %+v %v", pending, err)
+	}
+	if err := c.CleanupTemporaryDiscovery(context.Background(), record.ID, record.Token); err != nil {
+		t.Fatal(err)
+	}
+	if r.stops != 1 || r.running {
+		t.Fatalf("crash-window launch survived cleanup: %+v", r)
+	}
+	done, err := s.TemporaryDiscoveryStatus(context.Background())
+	if err != nil || done.Status != "completed" {
+		t.Fatalf("%+v %v", done, err)
+	}
+	if _, err := c.Recover(context.Background()); err != nil {
+		t.Fatalf("admission remained closed: %v", err)
 	}
 }
