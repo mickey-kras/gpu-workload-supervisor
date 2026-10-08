@@ -172,8 +172,8 @@ repair capacity before retrying. A capacity snapshot cannot reserve GPU memory.
 Invalid configuration is rejected:
 
 - A profile requirement plus headroom must not overflow.
-- Workload cgroups must not overlap.
-- One unit must not serve two profiles.
+- Workload cgroups must not overlap, except the validated shared Ollama instance.
+- One unit must not serve two profiles, except shared Ollama profiles with distinct model identities (see [WORKLOADS.md](WORKLOADS.md)).
 - The release URL is required under `media-unload`; the `systemd` adapter does
   not need one, but a supplied URL is still validated.
 - An unknown adapter is invalid.
