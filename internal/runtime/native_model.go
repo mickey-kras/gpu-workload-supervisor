@@ -167,13 +167,23 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 }
 
 // ParseUnitProperties parses systemctl show output into key/value pairs,
-// rejecting duplicate keys as ambiguous.
+// ExecStartPre arrays are printed as one repeated property per command by
+// systemctl. Preserve their order; scalar duplicates remain ambiguous.
 func ParseUnitProperties(out []byte) (map[string]string, error) {
 	values := map[string]string{}
 	for _, line := range strings.Split(string(out), "\n") {
 		if k, v, ok := strings.Cut(line, "="); ok {
-			if _, exists := values[k]; exists {
-				return nil, ErrLaunchChanged
+			if previous, exists := values[k]; exists {
+				if k != "ExecStartPre" || strings.TrimSpace(previous) == "" || strings.TrimSpace(v) == "" {
+					return nil, ErrLaunchChanged
+				}
+				v = previous + " " + v
+			}
+			if k == "ExecStartPre" && strings.TrimSpace(v) != "" {
+				commands := loadedPreCommand.FindAllStringSubmatch(v, -1)
+				if len(commands) == 0 || len(commands) > 32 || strings.Trim(loadedPreCommand.ReplaceAllString(v, ""), " ;\t\r\n") != "" {
+					return nil, ErrLaunchChanged
+				}
 			}
 			values[k] = v
 		}

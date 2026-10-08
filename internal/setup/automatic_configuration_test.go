@@ -283,3 +283,32 @@ func TestPrepareRetainsLoadedDropInEvidence(t *testing.T) {
 		t.Fatal("unbound source accepted")
 	}
 }
+
+func TestKeywordlessApplicationWithRepeatedSystemctlPreCommandsIsDiscovered(t *testing.T) {
+	b, d, metadata := automaticFixture(t, appLlamaCPP)
+	unit := "inference-worker.service"
+	metadata[unit] = metadata[d.Binding.Unit]
+	metadata[unit]["Id"] = unit
+	metadata[unit]["DropInPaths"] = "/opt/launch/10-precondition.conf"
+	metadata[unit]["ExecStartPre"] = "{ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; }\nExecStartPre={ path=/usr/bin/test ; argv[]=/usr/bin/test -f /models/a.gguf ; ignore_errors=no ; }"
+	inspect := b.inspectAutomatic
+	b.inspectAutomatic = func(path, app string) (gpuruntime.AutomaticLaunch, error) {
+		launch, err := inspect(path, app)
+		launch.PreCommands = []string{"/usr/bin/true", "/usr/bin/test -f /models/a.gguf"}
+		launch.DropIns = []control.LaunchSource{{Path: metadata[unit]["DropInPaths"], SHA256: strings.Repeat("b", 64)}}
+		return launch, err
+	}
+	result := Discovery{}
+	b.discoverUnit(context.Background(), &result, unit)
+	if len(result.Applications) != 1 || !result.Applications[0].Recognized || result.Applications[0].Binding.Unit != unit {
+		t.Fatalf("supported keywordless main/drop-in preconditions omitted: %+v", result)
+	}
+	d.Binding.Unit = unit
+	if _, err := b.Prepare(context.Background(), PrepareRequest{Draft: d}); err != nil {
+		t.Fatal(err)
+	}
+	metadata[unit]["ExecStartPre"] = "{ path=/usr/bin/test ; argv[]=/usr/bin/test -f /models/a.gguf ; ignore_errors=no ; }\nExecStartPre={ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; }"
+	if _, err := b.Prepare(context.Background(), PrepareRequest{Draft: d}); err == nil {
+		t.Fatal("reversed startup preconditions accepted")
+	}
+}

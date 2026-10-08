@@ -81,6 +81,11 @@ func TestAdoptedDropInLaunchStartStopIdentityAndDrift(t *testing.T) {
 	}
 	command := strings.TrimSpace(strings.Split(string(original), "ExecStart=")[1]) + " --parallel 2 --cont-batching --flash-attn on --spec-type draft-mtp --spec-draft-n-max 4"
 	model := strings.Fields(command)[2]
+	original = append(original, []byte("ExecStartPre=/usr/bin/true\n")...)
+	if err := os.WriteFile(p.NativeModel.LaunchFile, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	p.NativeModel.LaunchSHA256 = fmt.Sprintf("%x", sha256.Sum256(original))
 	drop := filepath.Join(filepath.Dir(p.NativeModel.LaunchFile), "10-tuning.conf")
 	raw := []byte("[Service]\nExecStart=\nExecStart=" + command + "\nExecStartPre=/usr/bin/test -f " + model + "\nWorkingDirectory=/opt\nLimitMEMLOCK=infinity\n")
 	if err := os.WriteFile(drop, raw, 0600); err != nil {
@@ -92,7 +97,7 @@ func TestAdoptedDropInLaunchStartStopIdentityAndDrift(t *testing.T) {
 	}
 	p.NativeModel.DropIns = launch.DropIns
 	m.config.Catalog.Profiles[2] = p
-	runner.outputs[cmd] = []byte("FragmentPath=" + p.NativeModel.LaunchFile + "\nDropInPaths=" + drop + "\nNeedDaemonReload=no\nExecStart={ path=" + strings.Fields(command)[0] + " ; argv[]=" + command + " ; ignore_errors=no ; }\nExecStartPre={ path=/usr/bin/test ; argv[]=/usr/bin/test -f " + model + " ; ignore_errors=no ; }\n")
+	runner.outputs[cmd] = []byte("FragmentPath=" + p.NativeModel.LaunchFile + "\nDropInPaths=" + drop + "\nNeedDaemonReload=no\nExecStart={ path=" + strings.Fields(command)[0] + " ; argv[]=" + command + " ; ignore_errors=no ; }\nExecStartPre={ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; }\nExecStartPre={ path=/usr/bin/test ; argv[]=/usr/bin/test -f " + model + " ; ignore_errors=no ; }\n")
 	ctx := context.Background()
 	if err := m.Start(ctx, p.ID); err != nil {
 		t.Fatal(err)
@@ -278,5 +283,39 @@ func TestLoadedSourceBindingsRejectChangedOrderOrPaths(t *testing.T) {
 	}
 	if CheckLoadedLaunchCommand("{ path=/usr/bin/ollama ; argv[]=/usr/bin/ollama serve ; ignore_errors=yes ; }", "/usr/bin/ollama serve") == nil {
 		t.Fatal("loaded main ignore-errors override accepted")
+	}
+}
+
+func TestSystemctlRepeatedPreCommandPropertiesRetainExactOrderedBinding(t *testing.T) {
+	first := "{ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; start_time=[n/a] ; }"
+	second := "{ path=/usr/bin/test ; argv[]=/usr/bin/test -f /opt/model.gguf ; ignore_errors=yes ; start_time=[n/a] ; }"
+	commands := []string{"/usr/bin/true", "-/usr/bin/test -f /opt/model.gguf"}
+	props, err := ParseUnitProperties([]byte("Id=worker.service\nExecStartPre=" + first + "\nExecStartPre=" + second + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckLoadedPreCommands(props["ExecStartPre"], commands); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{second + " " + first, first, first + " " + strings.Replace(second, "ignore_errors=yes", "ignore_errors=no", 1), first + " " + strings.Replace(second, "/opt/model.gguf", "/opt/other.gguf", 1)} {
+		if CheckLoadedPreCommands(value, commands) == nil {
+			t.Fatal("changed ordered startup binding accepted", value)
+		}
+	}
+	for _, raw := range []string{
+		"Id=worker.service\nId=other.service\n",
+		"ExecStart=one\nExecStart=two\n",
+		"DropInPaths=/first\nDropInPaths=/second\n",
+		"ExecStartPre=\nExecStartPre=" + first + "\n",
+		"ExecStartPre=" + first + "\nExecStartPre=\n",
+		"ExecStartPre=" + first + "\nExecStartPre=malformed\n",
+		strings.Repeat("ExecStartPre="+first+"\n", 33),
+	} {
+		if _, err := ParseUnitProperties([]byte(raw)); err == nil {
+			t.Fatal("ambiguous or unbounded systemctl metadata accepted", raw)
+		}
+	}
+	if _, err := ParseUnitProperties([]byte(strings.Repeat("ExecStartPre="+first+"\n", 32))); err != nil {
+		t.Fatal("bounded systemctl command list rejected", err)
 	}
 }

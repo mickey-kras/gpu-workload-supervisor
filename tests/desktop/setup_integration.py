@@ -68,6 +68,26 @@ def prepare_session():
             assert environment.get(key) == expected, f"disposable session mismatch: {key}"
 
 
+def discovered_application(discovery, unit):
+    matches = [item for item in discovery["applications"] if item.get("unit") == unit.name]
+    if len(matches) != 1:
+        # These diagnostics contain only the disposable fixture account's sources.
+        diagnostics = {
+            "expectedUnit": unit.name,
+            "matchingCandidates": matches,
+            "applications": discovery["applications"],
+            "errors": discovery.get("errors", []),
+            "discoveredUnits": discovery["units"],
+            "loadedMetadata": run("systemctl", "--user", "show", "--no-pager", "--", unit.name),
+            "effectiveSource": run("systemctl", "--user", "cat", "--no-pager", "--", unit.name),
+            "serviceFiles": run("systemctl", "--user", "list-unit-files", "--type=service",
+                                "--no-legend", "--no-pager"),
+        }
+        raise AssertionError("expected exactly one application candidate: " +
+                             json.dumps(diagnostics, indent=2))
+    return matches[0]
+
+
 def stopped_application():
     """Configure a recognized launch without executing its application fixture."""
     # The service name carries no application keyword; ExecStart proves identity.
@@ -99,7 +119,7 @@ def stopped_application():
 
     stopped()
     found = json.loads(setup("discover"))
-    installation, = [item for item in found["applications"] if item.get("unit") == unit.name]
+    installation = discovered_application(found, unit)
     assert installation["app"] == "comfyui" and installation["recognized"]
     assert installation["configurationStatus"] == "ready", installation
     assert installation["inventoryStatus"] == "not-applicable"
@@ -134,7 +154,7 @@ def stopped_application():
     setup("apply", request)
     stopped()
     configured_discovery = json.loads(setup("discover"))
-    retained, = [item for item in configured_discovery["applications"] if item.get("unit") == unit.name]
+    retained = discovered_application(configured_discovery, unit)
     assert retained["recognized"] and retained["configurationStatus"] == "ready", retained
     assert retained["binding"]["launchFile"] == str(unit), retained
     configured = configured_discovery["request"]
@@ -237,7 +257,7 @@ def main():
     configured = json.loads(setup("discover"))
     assert configured["request"]["catalog"] == request["catalog"]
     # Existing catalog units remain visible even when their launch is unsupported.
-    retained, = [app for app in configured["applications"] if app.get("unit") == workload.name]
+    retained = discovered_application(configured, workload)
     assert not retained["recognized"], retained
     assert retained["app"] == "", retained
     assert retained["configurationStatus"] == "unsupported", retained
