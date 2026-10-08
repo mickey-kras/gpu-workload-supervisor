@@ -137,6 +137,10 @@ func validateDraft(d Draft, ids map[string]bool) error {
 	if err := validateDraftReference(d); err != nil {
 		return err
 	}
+	return validateDraftModels(d)
+}
+
+func validateDraftModels(d Draft) error {
 	if len(d.Models) > 32 {
 		return errors.New("too many draft model selections")
 	}

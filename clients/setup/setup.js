@@ -195,7 +195,7 @@ app.connect('activate', () => {
                 if (drafts.find(item => item.id === initial.id)?.label !== value.label) editedLabels.delete(editor?.replacing ?? replacing);
                 invalidate(); drafts = drafts.map(item => item.id === initial.id ? value : item); draftGeneration++; saveDrafts.sensitive = !pending;
             },
-            removed: (finished = false) => { if (!finished) invalidate(); drafts = drafts.filter(item => item.id !== initial.id); draftGeneration++; saveDrafts.sensitive = !pending; },
+            removed: (finished = false) => { if (!finished) { invalidate(); } drafts = drafts.filter(item => item.id !== initial.id); draftGeneration++; saveDrafts.sensitive = !pending; },
             taken: () => profiles.map(profile => profile.id)});
         editor.group.visible = reveal; editor.replacing = replacing; draftEditors.push(editor);
     }
@@ -274,6 +274,23 @@ app.connect('activate', () => {
         }
         finally { review.sensitive = true; }
     }
+    function preparedStillCurrent({editor, result}) {
+        return result.current() && (!editor.replacing || profiles.includes(editor.replacing)) && (editor.staged ?? []).every(profile => profiles.includes(profile));
+    }
+    function preservePreparedProfile(editor, result, profile, index) {
+        const sameModel = editor.replacing?.nativeModel?.model === profile.nativeModel?.model;
+        const replacingModelKept = result.profiles.some(item => item.nativeModel?.model === editor.replacing?.nativeModel?.model);
+        const previous = editor.staged?.find(existing => existing.nativeModel?.model === profile.nativeModel?.model) ?? (sameModel || (index === 0 && !replacingModelKept) ? editor.replacing : null);
+        if (previous) {
+            const updated = {...previous, ...profile, label: editedLabels.get(previous) ?? (profile.nativeModel?.model !== editor.originalModel ? previous.label : profile.label), id: previous.id, requiredMiB: previous.requiredMiB, bootPolicy: previous.bootPolicy};
+            if (editedLabels.has(previous)) editedLabels.set(updated, editedLabels.get(previous));
+            return updated;
+        }
+        return profile;
+    }
+    function preparedProfiles({editor, result}) {
+        return result.profiles.map((profile, index) => preservePreparedProfile(editor, result, profile, index));
+    }
     async function continueSetup() {
         if (!request || closed) return;
         if (draftEditors.some(editor => editor.temporaryActive()) || (temporaryStatus?.session && temporaryStatus.session.status !== 'completed')) { status.label = 'Restore the stopped application before continuing.'; return; }
@@ -284,18 +301,10 @@ app.connect('activate', () => {
         try {
             const prepared = [];
             for (const editor of editors) prepared.push({editor, result: await editor.prepare()});
-            const current = () => !closed && generation === draftGeneration && prepared.every(item => item.result.current() && (!item.editor.replacing || profiles.includes(item.editor.replacing)) && (item.editor.staged ?? []).every(profile => profiles.includes(profile)));
+            const current = () => !closed && generation === draftGeneration && prepared.every(preparedStillCurrent);
             if (!current()) { status.label = 'The selected application changed while checking it. Reopen setup to refresh.'; return; }
             const replaced = new Set(prepared.flatMap(({editor}) => editor.staged ?? (editor.replacing ? [editor.replacing] : [])));
-            const additions = prepared.flatMap(({editor, result}) => result.profiles.map((profile, index) => {
-                const sameModel = editor.replacing?.nativeModel?.model === profile.nativeModel?.model;
-                const replacingModelKept = result.profiles.some(item => item.nativeModel?.model === editor.replacing?.nativeModel?.model);
-                const previous = editor.staged?.find(existing => existing.nativeModel?.model === profile.nativeModel?.model) ?? (sameModel || (index === 0 && !replacingModelKept) ? editor.replacing : null);
-                if (!previous) return profile;
-                const updated = {...previous, ...profile, label: editedLabels.get(previous) ?? (profile.nativeModel?.model !== editor.originalModel ? previous.label : profile.label), id: previous.id, requiredMiB: previous.requiredMiB, bootPolicy: previous.bootPolicy};
-                if (editedLabels.has(previous)) editedLabels.set(updated, editedLabels.get(previous));
-                return updated;
-            }));
+            const additions = prepared.flatMap(preparedProfiles);
             const items = [...profiles.filter(profile => !replaced.has(profile)), ...additions];
             const keys = new Set(); const ids = new Set();
             for (const profile of items) {
@@ -343,6 +352,58 @@ app.connect('activate', () => {
         closed = true; draftEditors.forEach(editor => editor.cancel()); return false;
     });
     window.present();
+    function addRecoveryCleanup() {
+        if (!temporaryStatus.session || temporaryStatus.session.status === 'completed') return;
+        const cleanupConsent = new Gtk.CheckButton({label: 'I have paused external application controls and finished any resumed work.'});
+        const retryCleanup = new Gtk.Button({label: 'Restore stopped application', sensitive: false});
+        cleanupConsent.connect('toggled', () => { retryCleanup.sensitive = cleanupConsent.active; });
+        applicationPage.append(new Gtk.Label({label: 'An earlier temporary model check still blocks setup. Restoring its stopped state will stop this application. Finish resumed work and pause external application controls before restoring it. Leaving setup keeps the recovery record for next time.', wrap: true, xalign: 0}));
+        applicationPage.append(cleanupConsent); applicationPage.append(retryCleanup);
+        retryCleanup.connect('clicked', async () => {
+            if (!cleanupConsent.active || temporaryStatus.session.status === 'completed') return;
+            retryCleanup.sensitive = false;
+            try {
+                const result = JSON.parse(await command(['/usr/bin/gpu-setup', 'temporary-cleanup'], JSON.stringify({id: temporaryStatus.session.id, token: temporaryStatus.session.token, externalControlPaused: true})));
+                if (result.error || result.session?.status !== 'completed') throw new Error(result.error || 'Cleanup remains incomplete.');
+                temporaryStatus.session = result.session; temporaryStatus.available = false; temporaryStatus.expected = undefined;
+                cleanupConsent.sensitive = false;
+                const refreshed = JSON.parse(await command(['/usr/bin/gpu-setup', 'temporary-status']));
+                Object.assign(temporaryStatus, refreshed, {session: refreshed.session ?? result.session});
+                status.label = 'Previous stopped state restored. Reopen setup to refresh detection.';
+            } catch (error) { reportError(temporaryStatus.session.status === 'completed' ? 'The stopped state was restored, but model-check status could not be refreshed. Reopen setup before another temporary check.' : 'Temporary cleanup needs attention. Pause external controls and acknowledge again before retrying.', error); }
+            finally { cleanupConsent.active = false; retryCleanup.sensitive = false; }
+        });
+    }
+    function addConfiguredOllama() {
+        // Existing Ollama models share one recognized installation. Ordinary
+        // editing uses that application's model group, without adding it again.
+        const existingOllama = profiles.filter(profile => runtimeOf(profile) === 'ollama');
+        const recognizedOllama = discovered.filter(candidate => candidate.app === 'ollama' && candidate.recognized);
+        if (!pending && existingOllama.length && recognizedOllama.length === 1 && !drafts.some(draft => draft.app === 'ollama')) {
+            const current = existingOllama.find(profile => profile.unit === recognizedOllama[0].unit);
+            if (current && recognizedOllama[0].models?.length > 1) {
+                const related = existingOllama.filter(profile => profile.unit === current.unit);
+                appendDraft({id: current.id, app: 'ollama', label: current.label, model: current.nativeModel.model, models: related.map(profile => profile.nativeModel.model), endpoint: current.nativeModel.endpoint,
+                    binding: current.nativeModel.owned ? {instance: current.nativeModel.instance, owned: {...current.nativeModel.owned}} : {unit: current.unit, cgroup: current.cgroup, healthURL: current.healthURL, instance: current.nativeModel.instance, model: current.nativeModel.model, launchFile: current.nativeModel.launchFile}}, current);
+                draftEditors.at(-1).staged = related;
+            }
+        }
+    }
+    function updateApplicationCards() {
+        for (const [appID, card] of applicationCards) {
+            const candidates = discovered.filter(candidate => candidate.app === appID);
+            const known = candidates.filter(candidate => candidate.recognized);
+            card.detection.label = detectionMessage(known);
+            card.select.sensitive = !pending; card.gear.sensitive = !pending;
+            card.select.active = drafts.some(draft => draft.app === appID) || profiles.some(profile => runtimeOf(profile) === appID);
+        }
+    }
+    function detectionMessage(known) {
+        if (discoveryErrors.length && !known.length) return 'Detection failed. Open settings to retry or choose a location.';
+        if (known.length > 1) return 'Choose an installation in settings.';
+        if (!known.length) return 'Not detected. Install it first, or choose its location in settings.';
+        return known[0].instanceStatus === 'not-running' ? 'Installed and stopped. Ready to configure.' : 'Installation recognized.';
+    }
     (async () => {
         try {
             const version = await command(['/usr/bin/gnome-shell', '--version']);
@@ -355,27 +416,7 @@ app.connect('activate', () => {
                 const saved = JSON.parse(await command(['/usr/bin/gpu-setup', 'drafts']));
                 draftRevision = saved.revision ?? '';
                 for (const draft of saved.drafts ?? []) appendDraft(draft);
-                if (temporaryStatus.session && temporaryStatus.session.status !== 'completed') {
-                    const cleanupConsent = new Gtk.CheckButton({label: 'I have paused external application controls and finished any resumed work.'});
-                    const retryCleanup = new Gtk.Button({label: 'Restore stopped application', sensitive: false});
-                    cleanupConsent.connect('toggled', () => { retryCleanup.sensitive = cleanupConsent.active; });
-                    applicationPage.append(new Gtk.Label({label: 'An earlier temporary model check still blocks setup. Restoring its stopped state will stop this application. Finish resumed work and pause external application controls before restoring it. Leaving setup keeps the recovery record for next time.', wrap: true, xalign: 0}));
-                    applicationPage.append(cleanupConsent); applicationPage.append(retryCleanup);
-                    retryCleanup.connect('clicked', async () => {
-                        if (!cleanupConsent.active || temporaryStatus.session.status === 'completed') return;
-                        retryCleanup.sensitive = false;
-                        try {
-                            const result = JSON.parse(await command(['/usr/bin/gpu-setup', 'temporary-cleanup'], JSON.stringify({id: temporaryStatus.session.id, token: temporaryStatus.session.token, externalControlPaused: true})));
-                            if (result.error || result.session?.status !== 'completed') throw new Error(result.error || 'Cleanup remains incomplete.');
-                            temporaryStatus.session = result.session; temporaryStatus.available = false; temporaryStatus.expected = undefined;
-                            cleanupConsent.sensitive = false;
-                            const refreshed = JSON.parse(await command(['/usr/bin/gpu-setup', 'temporary-status']));
-                            Object.assign(temporaryStatus, refreshed, {session: refreshed.session ?? result.session});
-                            status.label = 'Previous stopped state restored. Reopen setup to refresh detection.';
-                        } catch (error) { reportError(temporaryStatus.session.status === 'completed' ? 'The stopped state was restored, but model-check status could not be refreshed. Reopen setup before another temporary check.' : 'Temporary cleanup needs attention. Pause external controls and acknowledge again before retrying.', error); }
-                        finally { cleanupConsent.active = false; retryCleanup.sensitive = false; }
-                    });
-                }
+                addRecoveryCleanup();
             }
             applicationGroup.sensitive = !pending;
             status.label = pending ? 'Interrupted setup found. Review and resume its original configuration.' :
@@ -387,27 +428,9 @@ app.connect('activate', () => {
                 editor.replacing ??= profiles.find(profile => profile.id === editor.id) ?? null;
                 if (editor.replacing) editor.staged = profiles.filter(profile => runtimeOf(profile) === editor.app && profile.unit === editor.replacing.unit);
             }
-            // Existing Ollama models share one recognized installation. Ordinary
-            // editing uses that application's model group, without adding it again.
-            const existingOllama = profiles.filter(profile => runtimeOf(profile) === 'ollama');
-            const recognizedOllama = discovered.filter(candidate => candidate.app === 'ollama' && candidate.recognized);
-            if (!pending && existingOllama.length && recognizedOllama.length === 1 && !drafts.some(draft => draft.app === 'ollama')) {
-                const current = existingOllama.find(profile => profile.unit === recognizedOllama[0].unit);
-                if (current && recognizedOllama[0].models?.length > 1) {
-                    const related = existingOllama.filter(profile => profile.unit === current.unit);
-                    appendDraft({id: current.id, app: 'ollama', label: current.label, model: current.nativeModel.model, models: related.map(profile => profile.nativeModel.model), endpoint: current.nativeModel.endpoint,
-                        binding: current.nativeModel.owned ? {instance: current.nativeModel.instance, owned: {...current.nativeModel.owned}} : {unit: current.unit, cgroup: current.cgroup, healthURL: current.healthURL, instance: current.nativeModel.instance, model: current.nativeModel.model, launchFile: current.nativeModel.launchFile}}, current);
-                    draftEditors.at(-1).staged = related;
-                }
-            }
+            addConfiguredOllama();
             add.sensitive = !pending; rows.sensitive = !pending; settings.sensitive = !pending;
-            for (const [appID, card] of applicationCards) {
-                const candidates = discovered.filter(candidate => candidate.app === appID);
-                const known = candidates.filter(candidate => candidate.recognized);
-                card.detection.label = discoveryErrors.length && !known.length ? 'Detection failed. Open settings to retry or choose a location.' : known.length === 1 ? (known[0].instanceStatus === 'not-running' ? 'Installed and stopped. Ready to configure.' : 'Installation recognized.') : known.length > 1 ? 'Choose an installation in settings.' : 'Not detected. Install it first, or choose its location in settings.';
-                card.select.sensitive = !pending; card.gear.sensitive = !pending;
-                card.select.active = drafts.some(draft => draft.app === appID) || profiles.some(profile => runtimeOf(profile) === appID);
-            }
+            updateApplicationCards();
             review.sensitive = true;
             if (discoveryErrors.length) reportError('Some installations could not be checked. Choose an application location or reopen setup to retry discovery.', new Error(discoveryErrors.join('\n')));
         } catch (error) { status.label = error.message; review.sensitive = false; }

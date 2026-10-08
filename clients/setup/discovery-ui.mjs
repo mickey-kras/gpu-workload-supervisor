@@ -58,7 +58,7 @@ class DraftEditor {
         this.probeGuidance = null;
         this.instances = this.detected.filter(candidate => candidate.app === this.initial.app);
         this.instance = new this.Adw.ComboRow({title: 'Detected instance', use_markup: false,
-            model: this.Gtk.StringList.new(['Choose an instance...', ...this.instances.map(candidate => `${candidate.label}${candidate.location ? ` · ${candidate.location}` : ''}`)]), selected: 0});
+            model: this.Gtk.StringList.new(['Choose an instance...', ...this.instances.map(candidate => `${candidate.label}${candidate.location ? ' · ' + candidate.location : ''}`)]), selected: 0});
         this.group.add(this.instance);
         this.details = new this.Adw.ExpanderRow({title: 'Advanced', subtitle: 'Inspect or override technical configuration'});
         if (!this.modelParent) {
@@ -192,10 +192,7 @@ class DraftEditor {
         if (candidate.recognized && ['llama.cpp', 'vllm'].includes(this.initial.app) && candidate.binding?.model)
             this.models = this.models.filter(item => item.id === candidate.binding.model);
         const selection = this.models.findIndex(item => item.id === chosen) + 1;
-        let prompt = candidate.inventoryStatus === 'unsupported' ? 'Models could not be listed. Choose a model location.' : 'Check this installation to list models';
-        if (chosen && !selection) prompt = `Saved model unavailable: ${chosen}`;
-        else if (this.models.length) prompt = 'Choose a model...';
-        else if (candidate.inventoryStatus === 'available') prompt = 'No models reported by this application';
+        const prompt = this.modelPrompt(candidate, chosen, selection);
         this.syncing = true;
         this.model.model = this.Gtk.StringList.new([prompt, ...this.models.map(item => item.label || item.id)]);
         this.model.selected = selection || (candidate.recognized && this.models.length === 1 && !chosen ? 1 : 0);
@@ -208,6 +205,13 @@ class DraftEditor {
             this.syncing = true; this.modelName.text = this.draft.snapshot().model ?? ''; this.syncing = false;
             if (this.modelName.visible) this.model.visible = false;
         }
+    }
+    modelPrompt(candidate, chosen, selection) {
+        if (chosen && !selection) return `Saved model unavailable: ${chosen}`;
+        if (this.models.length) return 'Choose a model...';
+        if (candidate.inventoryStatus === 'available') return 'No models reported by this application';
+        if (candidate.inventoryStatus === 'unsupported') return 'Models could not be listed. Choose a model location.';
+        return 'Check this installation to list models';
     }
     show(candidate) {
         const input = this.draft.snapshot();
@@ -253,7 +257,7 @@ class DraftEditor {
             } finally { this.finish.sensitive = true; }
         });
         const remove = new this.Gtk.Button({label: 'Remove this application'}); this.group.add(remove);
-        remove.connect('clicked', async () => { this.draft.cancel(); try { await this.temporary.cleanup(); this.parent.remove(this.group); if (this.modelParent && this.draft.needsModel) this.modelParent.remove(this.modelGroup); this.removed(); } catch (error) { this.reportError('Temporary cleanup must finish before removing this selection.', error); } });
+        remove.connect('clicked', async () => { this.draft.cancel(); try { await this.temporary.cleanup(); this.parent.remove(this.group); if (this.modelParent && this.draft.needsModel) { this.modelParent.remove(this.modelGroup); } this.removed(); } catch (error) { this.reportError('Temporary cleanup must finish before removing this selection.', error); } });
         this.parent.append(this.group);
     }
     initialDiscovery() {
@@ -282,20 +286,31 @@ class DraftEditor {
             prepare: () => this.prepare(),
         };
     }
+    selectedModels(input) {
+        if (!this.draft.needsModel) return [''];
+        if (input.models !== undefined && input.models !== null) return input.models;
+        const model = input.model || input.binding?.owned?.modelPath;
+        return model ? [model] : [];
+    }
+    modelInput(input, selectedModel) {
+        const value = {...input, model: selectedModel, binding: input.binding && !input.binding.owned ? {...input.binding, model: selectedModel} : input.binding};
+        delete value.models;
+        const changedModel = selectedModel !== (this.initial.model ?? this.initial.binding?.owned?.modelPath);
+        const proposed = profileIDFromModel(input.app, selectedModel);
+        if (proposed && (input.id.startsWith('draft-') || changedModel)) value.id = proposed;
+        const appLabel = applications.find(app => app.id === input.app).label;
+        if (selectedModel && (input.label === appLabel || changedModel)) value.label = `${appLabel} - ${this.models.find(item => item.id === selectedModel)?.label || selectedModel}`;
+        return value;
+    }
     async prepare() {
         if (this.temporary.blocked()) throw new Error('Finish temporary application cleanup before continuing.');
         const input = this.draft.snapshot();
         const generation = this.draft.generation;
-        const selected = this.draft.needsModel ? (input.models ?? (input.model || input.binding?.owned?.modelPath ? [input.model || input.binding.owned.modelPath] : [])) : [''];
+        const selected = this.selectedModels(input);
         if (!selected.length) throw new Error('Choose at least one existing model.');
         const prepared = [];
         for (const selectedModel of selected) {
-            const value = {...input, model: selectedModel, binding: input.binding && !input.binding.owned ? {...input.binding, model: selectedModel} : input.binding};
-            delete value.models;
-            const proposed = profileIDFromModel(input.app, selectedModel);
-            if (proposed && (input.id.startsWith('draft-') || selectedModel !== (this.initial.model ?? this.initial.binding?.owned?.modelPath))) value.id = proposed;
-            const appLabel = applications.find(app => app.id === input.app).label;
-            if (selectedModel && (input.label === appLabel || selectedModel !== (this.initial.model ?? this.initial.binding?.owned?.modelPath))) value.label = `${appLabel} - ${this.models.find(item => item.id === selectedModel)?.label || selectedModel}`;
+            const value = this.modelInput(input, selectedModel);
             const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', input.binding?.owned ? 'render-owned' : 'prepare'], JSON.stringify({draft: value})));
             if (generation !== this.draft.generation) throw new Error('Application changed while checking it. Continue again.');
             prepared.push(result.profile);

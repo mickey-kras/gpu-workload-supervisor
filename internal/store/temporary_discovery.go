@@ -115,14 +115,8 @@ func (s *Store) UpdateTemporaryDiscovery(ctx context.Context, id, token, invocat
 		if err != nil {
 			return err
 		}
-		if status != "running" && status != "cleanup_required" {
-			return errors.New("invalid temporary discovery status")
-		}
-		if invocation != "" && (v.LaunchEvidence.InvocationID != invocation || v.LaunchEvidence.JobID == "" || v.LaunchEvidence.ActivationTimestamp == "") {
-			return ErrStaleFence
-		}
-		if v.InvocationID != "" && invocation != v.InvocationID {
-			return ErrStaleFence
+		if err := validateTemporaryUpdate(v, invocation, status); err != nil {
+			return err
 		}
 		v.InvocationID = invocation
 		v.Status = status
@@ -135,6 +129,19 @@ func (s *Store) UpdateTemporaryDiscovery(ctx context.Context, id, token, invocat
 		_, err = tx.ExecContext(ctx, `UPDATE temporary_discovery_sessions SET payload=?,status=? WHERE id=?`, raw, status, id)
 		return err
 	})
+}
+
+func validateTemporaryUpdate(v control.TemporaryDiscoverySession, invocation, status string) error {
+	if status != "running" && status != "cleanup_required" {
+		return errors.New("invalid temporary discovery status")
+	}
+	if invocation != "" && (v.LaunchEvidence.InvocationID != invocation || v.LaunchEvidence.JobID == "" || v.LaunchEvidence.ActivationTimestamp == "") {
+		return ErrStaleFence
+	}
+	if v.InvocationID != "" && invocation != v.InvocationID {
+		return ErrStaleFence
+	}
+	return nil
 }
 
 func (s *Store) FinishTemporaryDiscovery(ctx context.Context, id, token string) (control.State, error) {

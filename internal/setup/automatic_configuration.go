@@ -12,6 +12,8 @@ import (
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 )
 
+const automaticSystemctlPath = "/usr/bin/systemctl"
+
 type PrepareRequest struct {
 	Draft Draft `json:"draft"`
 }
@@ -55,6 +57,18 @@ func (b Backend) Prepare(ctx context.Context, request PrepareRequest) (PreparedA
 	if err != nil {
 		return PreparedApplication{}, err
 	}
+	if err := validatePreparedInstallation(d, found); err != nil {
+		return PreparedApplication{}, err
+	}
+	found.ID = control.Workload(d.ID)
+	found.Label = d.Label
+	if err := (control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{found}}).Validate(); err != nil {
+		return PreparedApplication{}, err
+	}
+	return PreparedApplication{Profile: found}, nil
+}
+
+func validatePreparedInstallation(d Draft, found control.WorkloadProfile) error {
 	endpoint, launchFile, instance, model := "", "", "", ""
 	if found.NativeModel != nil {
 		endpoint = found.NativeModel.Endpoint
@@ -68,22 +82,17 @@ func (b Backend) Prepare(ctx context.Context, request PrepareRequest) (PreparedA
 	}
 	for _, pair := range [][2]string{{d.Endpoint, endpoint}, {d.Binding.Cgroup, found.Cgroup}, {d.Binding.HealthURL, found.HealthURL}, {d.Binding.LaunchFile, launchFile}, {d.Binding.Instance, instance}, {d.Binding.Model, model}} {
 		if pair[0] != "" && pair[0] != pair[1] {
-			return PreparedApplication{}, errors.New("installation settings changed or the override does not match its supported launch; refresh and retry")
+			return errors.New("installation settings changed or the override does not match its supported launch; refresh and retry")
 		}
 	}
 	if d.App != "comfyui" && d.App != "ollama" && d.Model != "" && d.Model != model {
-		return PreparedApplication{}, errors.New("selected model does not match the existing launch; choose its configured model")
+		return errors.New("selected model does not match the existing launch; choose its configured model")
 	}
-	found.ID = control.Workload(d.ID)
-	found.Label = d.Label
-	if err := (control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{found}}).Validate(); err != nil {
-		return PreparedApplication{}, err
-	}
-	return PreparedApplication{Profile: found}, nil
+	return nil
 }
 
 func (b Backend) showAutomatic(ctx context.Context, unit string) (map[string]string, error) {
-	out, err := b.runCommand(ctx, "/usr/bin/systemctl", "--user", "show", "--property=Id,LoadState,ExecStart,ExecStartPre,ControlGroup,ActiveState,SubState,FragmentPath,DropInPaths,NeedDaemonReload,Slice", "--no-pager", "--", unit)
+	out, err := b.runCommand(ctx, automaticSystemctlPath, "--user", "show", "--property=Id,LoadState,ExecStart,ExecStartPre,ControlGroup,ActiveState,SubState,FragmentPath,DropInPaths,NeedDaemonReload,Slice", "--no-pager", "--", unit)
 	if err != nil {
 		return nil, fmt.Errorf("could not inspect installation %s: %w", unit, err)
 	}
@@ -107,13 +116,7 @@ func (b Backend) configurationFromMetadata(ctx context.Context, app, unit, model
 	if appFromUnit("ExecStart="+values["ExecStart"]) != app {
 		return p, errors.New("installation launch does not match the selected application")
 	}
-	inspect := b.inspectAutomatic
-	if inspect == nil {
-		inspect = func(path, app string) (gpuruntime.AutomaticLaunch, error) {
-			return gpuruntime.InspectAutomaticLaunchSources(path, app, strings.Fields(values["DropInPaths"]))
-		}
-	}
-	launch, err := inspect(values["FragmentPath"], app)
+	launch, err := b.inspectAutomaticMetadata(values, app)
 	if err != nil {
 		return p, fmt.Errorf("unsupported existing launch; choose a supported direct local configuration: %w", err)
 	}
@@ -127,36 +130,55 @@ func (b Backend) configurationFromMetadata(ctx context.Context, app, unit, model
 	if err := gpuruntime.CheckLoadedPreCommands(values["ExecStartPre"], launch.PreCommands); err != nil {
 		return p, errors.New("loaded startup preparation differs from its file; reload and retry")
 	}
+	if err := b.resolveInstallationPlacement(ctx, unit, values, &p); err != nil {
+		return p, err
+	}
+	if err := (ProbeRequest{App: app, Endpoint: launch.Endpoint}).validate(); err != nil {
+		return p, err
+	}
+	err = bindInstallationLaunch(&p, values, launch, app, unit, model)
+	return p, err
+}
+
+func (b Backend) inspectAutomaticMetadata(values map[string]string, app string) (gpuruntime.AutomaticLaunch, error) {
+	if b.inspectAutomatic != nil {
+		return b.inspectAutomatic(values["FragmentPath"], app)
+	}
+	return gpuruntime.InspectAutomaticLaunchSources(values["FragmentPath"], app, strings.Fields(values["DropInPaths"]))
+}
+
+func (b Backend) resolveInstallationPlacement(ctx context.Context, unit string, values map[string]string, p *control.WorkloadProfile) error {
 	root, err := b.showAutomatic(ctx, "-.slice")
 	if err != nil {
-		return p, err
+		return err
 	}
 	slice := map[string]string{}
 	if values["ControlGroup"] == "" {
 		slice, err = b.showAutomatic(ctx, "app.slice")
 		if err != nil {
-			return p, err
+			return err
 		}
 	}
 	p.Cgroup, err = gpuruntime.ResolveAutomaticCgroup(unit, values, slice, root)
 	if err != nil {
-		return p, err
+		return err
 	}
 	if values["ControlGroup"] == "" {
-		out, err := b.runCommand(ctx, "/usr/bin/systemctl", "--version")
+		out, err := b.runCommand(ctx, automaticSystemctlPath, "--version")
 		if err != nil {
-			return p, err
+			return err
 		}
 		version, err := gpuruntime.SupportedSystemdPlacementVersion(out)
 		if err != nil {
-			return p, err
+			return err
 		}
 		p.SystemdSlice = "app.slice"
 		p.SystemdVersion = version
 	}
-	if err := (ProbeRequest{App: app, Endpoint: launch.Endpoint}).validate(); err != nil {
-		return p, err
-	}
+	return nil
+}
+
+func bindInstallationLaunch(p *control.WorkloadProfile, values map[string]string, launch gpuruntime.AutomaticLaunch, app, unit, model string) error {
 	if app == "comfyui" {
 		p.HealthURL = launch.Endpoint + "/system_stats"
 		p.LaunchBinding = &control.LaunchBinding{Runtime: app, Endpoint: launch.Endpoint, LaunchFile: values["FragmentPath"], LaunchSHA256: launch.SHA256, DropIns: launch.DropIns}
@@ -165,7 +187,7 @@ func (b Backend) configurationFromMetadata(ctx context.Context, app, unit, model
 			model = launch.Model
 		}
 		if app == "ollama" && model == "" {
-			return p, errors.New("choose an existing local Ollama model; setup will not start Ollama or download models")
+			return errors.New("choose an existing local Ollama model; setup will not start Ollama or download models")
 		}
 		p.HealthURL = launch.Endpoint + "/health"
 		if app == "ollama" {
@@ -173,7 +195,7 @@ func (b Backend) configurationFromMetadata(ctx context.Context, app, unit, model
 		}
 		p.NativeModel = &control.NativeModel{Runtime: app, Instance: "instance-" + candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"}).ID, Model: model, Endpoint: launch.Endpoint, LaunchFile: values["FragmentPath"], LaunchSHA256: launch.SHA256, DropIns: launch.DropIns}
 	}
-	return p, nil
+	return nil
 }
 
 func (b Backend) unitAtReference(ctx context.Context, d Draft) (string, error) {
@@ -183,7 +205,7 @@ func (b Backend) unitAtReference(ctx context.Context, d Draft) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	out, err := b.runCommand(ctx, "/usr/bin/systemctl", "--user", "list-unit-files", "--type=service", "--no-legend", "--no-pager")
+	out, err := b.runCommand(ctx, automaticSystemctlPath, "--user", "list-unit-files", "--type=service", "--no-legend", "--no-pager")
 	if cancelErr := referenceCancellationError(ctx, err); cancelErr != nil {
 		return "", cancelErr
 	}
@@ -194,72 +216,98 @@ func (b Backend) unitAtReference(ctx context.Context, d Draft) (string, error) {
 	if len(units) > 256 {
 		return "", errors.New("too many services for bounded discovery; select a recognized installation explicitly")
 	}
-	selected := ""
-	inspected := false
-	var firstInspectionError error
-	for _, unit := range units {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		values, err := b.showAutomatic(ctx, unit)
-		if cancelErr := referenceCancellationError(ctx, err); cancelErr != nil {
-			return "", cancelErr
-		}
-		if err != nil {
-			if firstInspectionError == nil {
-				firstInspectionError = err
-			}
-			continue
-		}
-		inspected = true
-		if appFromUnit("ExecStart="+values["ExecStart"]) != d.App {
-			continue
-		}
-		match := values["FragmentPath"] == d.Reference
-		if d.Endpoint != "" {
-			inspect := b.inspectAutomatic
-			if inspect == nil {
-				inspect = func(path, app string) (gpuruntime.AutomaticLaunch, error) {
-					return gpuruntime.InspectAutomaticLaunchSources(path, app, strings.Fields(values["DropInPaths"]))
-				}
-			}
-			launch, err := inspect(values["FragmentPath"], d.App)
-			if cancelErr := referenceCancellationError(ctx, err); cancelErr != nil {
-				return "", cancelErr
-			}
-			if err != nil {
-				continue
-			}
-			match = strings.TrimSuffix(d.Endpoint, "/") == launch.Endpoint
-		}
-		if d.ReferenceKind == "application-directory" {
-			match = filepath.Dir(values["FragmentPath"]) == d.Reference
-			args := execArguments.FindStringSubmatch(values["ExecStart"])
-			if len(args) == 2 {
-				for _, arg := range strings.Fields(args[1]) {
-					if filepath.IsAbs(arg) && filepath.Dir(arg) == d.Reference {
-						match = true
-					}
-				}
-			}
-		}
-		if match {
-			if selected != "" {
-				return "", errors.New("multiple installations use this location; choose the installation explicitly")
-			}
-			selected = unit
-		}
+	selection, err := b.scanReferenceUnits(ctx, d, units)
+	if err != nil {
+		return "", err
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if !inspected && firstInspectionError != nil {
-		return "", fmt.Errorf("application services could not be inspected; check your desktop session and retry: %w", firstInspectionError)
+	if !selection.inspected && selection.firstInspectionError != nil {
+		return "", fmt.Errorf("application services could not be inspected; check your desktop session and retry: %w", selection.firstInspectionError)
 	}
-	if selected == "" {
+	if selection.selected == "" {
 		return "", errors.New("no supported loaded installation uses this location; install a supported direct user service or choose its configuration")
 	}
-	return selected, nil
+	return selection.selected, nil
+}
+
+type referenceSelection struct {
+	selected             string
+	inspected            bool
+	firstInspectionError error
+}
+
+func (b Backend) scanReferenceUnits(ctx context.Context, d Draft, units []string) (referenceSelection, error) {
+	selection := referenceSelection{}
+	for _, unit := range units {
+		if err := b.inspectReferenceUnit(ctx, d, unit, &selection); err != nil {
+			return selection, err
+		}
+	}
+	return selection, nil
+}
+
+func (b Backend) inspectReferenceUnit(ctx context.Context, d Draft, unit string, selection *referenceSelection) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	values, err := b.showAutomatic(ctx, unit)
+	if cancelErr := referenceCancellationError(ctx, err); cancelErr != nil {
+		return cancelErr
+	}
+	if err != nil {
+		if selection.firstInspectionError == nil {
+			selection.firstInspectionError = err
+		}
+		return nil
+	}
+	selection.inspected = true
+	if appFromUnit("ExecStart="+values["ExecStart"]) != d.App {
+		return nil
+	}
+	match, err := b.referenceMatches(ctx, d, values)
+	if err != nil {
+		return err
+	}
+	if match {
+		if selection.selected != "" {
+			return errors.New("multiple installations use this location; choose the installation explicitly")
+		}
+		selection.selected = unit
+	}
+	return nil
+}
+
+func (b Backend) referenceMatches(ctx context.Context, d Draft, values map[string]string) (bool, error) {
+	match := values["FragmentPath"] == d.Reference
+	if d.Endpoint != "" {
+		launch, err := b.inspectAutomaticMetadata(values, d.App)
+		if cancelErr := referenceCancellationError(ctx, err); cancelErr != nil {
+			return false, cancelErr
+		}
+		if err != nil {
+			return false, nil
+		}
+		match = strings.TrimSuffix(d.Endpoint, "/") == launch.Endpoint
+	}
+	if d.ReferenceKind == "application-directory" {
+		match = directoryReferenceMatches(values, d.Reference)
+	}
+	return match, nil
+}
+
+func directoryReferenceMatches(values map[string]string, reference string) bool {
+	match := filepath.Dir(values["FragmentPath"]) == reference
+	args := execArguments.FindStringSubmatch(values["ExecStart"])
+	if len(args) == 2 {
+		for _, arg := range strings.Fields(args[1]) {
+			if filepath.IsAbs(arg) && filepath.Dir(arg) == reference {
+				match = true
+			}
+		}
+	}
+	return match
 }
 
 // referenceCancellationError distinguishes a stopped scan from an unavailable

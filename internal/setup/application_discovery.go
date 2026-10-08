@@ -57,14 +57,7 @@ func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit strin
 	}
 	app := appFromUnit("ExecStart=" + values["ExecStart"])
 	if app == "" {
-		if unitRelevant(unit, result.Request.Catalog.Profiles) {
-			found := candidate(ProbeRequest{App: applicationHint(unit), Reference: unit, ReferenceKind: "configuration"})
-			found.Unit = unit
-			found.InstanceStatus = "unsupported"
-			found.ConfigurationStatus = "unsupported"
-			found.NextStep = "This launch is not supported. Choose a supported direct application configuration."
-			result.Applications = append(result.Applications, found)
-		}
+		addUnsupportedUnit(result, unit)
 		return
 	}
 	found := candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"})
@@ -89,44 +82,7 @@ func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit strin
 	if err != nil {
 		found.NextStep = err.Error()
 	} else {
-		found.Recognized = true
-		found.ConfigurationStatus = "ready"
-		endpoint := ""
-		launchFile := ""
-		instance := ""
-		model := ""
-		if profile.NativeModel != nil {
-			endpoint = profile.NativeModel.Endpoint
-			launchFile = profile.NativeModel.LaunchFile
-			instance = profile.NativeModel.Instance
-			model = profile.NativeModel.Model
-		}
-		if profile.LaunchBinding != nil {
-			endpoint = profile.LaunchBinding.Endpoint
-			launchFile = profile.LaunchBinding.LaunchFile
-		}
-		found.Endpoint = endpoint
-		found.Cgroup = profile.Cgroup
-		found.Binding = &DraftBinding{Unit: unit, Cgroup: profile.Cgroup, HealthURL: profile.HealthURL, Instance: instance, Model: model, LaunchFile: launchFile}
-		if app == "ollama" {
-			found.Binding.Model = ""
-			found.ConfigurationStatus = "model-required"
-		}
-		found.NextStep = "Ready to configure. Finish to review and confirm control of this installation."
-		if found.InstanceStatus == "not-running" {
-			found.NextStep = "Installed and stopped. Ready to configure."
-		} else {
-			observed, probeErr := b.probeApplication(ctx, ProbeRequest{App: app, Endpoint: endpoint})
-			if probeErr != nil {
-				found.NextStep = "Application inventory could not be read. Retry or choose an existing model."
-			} else {
-				found.InstanceStatus = observed.InstanceStatus
-				found.InventoryStatus = observed.InventoryStatus
-				if app == "ollama" {
-					found.Models = observed.Models
-				}
-			}
-		}
+		b.recognizeUnit(ctx, &found, app, unit, profile)
 	}
 	if app == "comfyui" {
 		found.InventoryStatus = "not-applicable"
@@ -134,6 +90,62 @@ func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit strin
 	result.Units = append(result.Units, unit)
 	result.Applications = append(result.Applications, found)
 }
+func addUnsupportedUnit(result *Discovery, unit string) {
+	if unitRelevant(unit, result.Request.Catalog.Profiles) {
+		found := candidate(ProbeRequest{App: applicationHint(unit), Reference: unit, ReferenceKind: "configuration"})
+		found.Unit = unit
+		found.InstanceStatus = "unsupported"
+		found.ConfigurationStatus = "unsupported"
+		found.NextStep = "This launch is not supported. Choose a supported direct application configuration."
+		result.Applications = append(result.Applications, found)
+	}
+}
+
+func (b Backend) recognizeUnit(ctx context.Context, found *ApplicationCandidate, app, unit string, profile control.WorkloadProfile) {
+	found.Recognized = true
+	found.ConfigurationStatus = "ready"
+	endpoint := ""
+	launchFile := ""
+	instance := ""
+	model := ""
+	if profile.NativeModel != nil {
+		endpoint = profile.NativeModel.Endpoint
+		launchFile = profile.NativeModel.LaunchFile
+		instance = profile.NativeModel.Instance
+		model = profile.NativeModel.Model
+	}
+	if profile.LaunchBinding != nil {
+		endpoint = profile.LaunchBinding.Endpoint
+		launchFile = profile.LaunchBinding.LaunchFile
+	}
+	found.Endpoint = endpoint
+	found.Cgroup = profile.Cgroup
+	found.Binding = &DraftBinding{Unit: unit, Cgroup: profile.Cgroup, HealthURL: profile.HealthURL, Instance: instance, Model: model, LaunchFile: launchFile}
+	if app == "ollama" {
+		found.Binding.Model = ""
+		found.ConfigurationStatus = "model-required"
+	}
+	found.NextStep = "Ready to configure. Finish to review and confirm control of this installation."
+	b.discoverUnitInventory(ctx, found, app)
+}
+
+func (b Backend) discoverUnitInventory(ctx context.Context, found *ApplicationCandidate, app string) {
+	if found.InstanceStatus == "not-running" {
+		found.NextStep = "Installed and stopped. Ready to configure."
+	} else {
+		observed, probeErr := b.probeApplication(ctx, ProbeRequest{App: app, Endpoint: found.Endpoint})
+		if probeErr != nil {
+			found.NextStep = "Application inventory could not be read. Retry or choose an existing model."
+		} else {
+			found.InstanceStatus = observed.InstanceStatus
+			found.InventoryStatus = observed.InventoryStatus
+			if app == "ollama" {
+				found.Models = observed.Models
+			}
+		}
+	}
+}
+
 func applicationHint(unit string) string {
 	lower := strings.ToLower(unit)
 	for _, app := range []string{"comfyui", "ollama", "vllm"} {

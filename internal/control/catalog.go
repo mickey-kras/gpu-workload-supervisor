@@ -198,6 +198,19 @@ func (p WorkloadProfile) validateNativeBinding() error {
 	if p.SystemdSlice != "" && (p.SystemdSlice != "app.slice" || (p.SystemdVersion != 252 && p.SystemdVersion != 255 && p.SystemdVersion != 259)) {
 		return errors.New("unsupported automatic systemd slice")
 	}
+	if err := p.validateApplicationBinding(); err != nil {
+		return err
+	}
+	if p.NativeModel == nil {
+		return nil
+	}
+	if p.Adapter != "systemd" {
+		return errors.New("native models require stop-service bindings")
+	}
+	return p.NativeModel.validate()
+}
+
+func (p WorkloadProfile) validateApplicationBinding() error {
 	if p.LaunchBinding != nil {
 		b := p.LaunchBinding
 		if p.NativeModel != nil || b.Runtime != "comfyui" || p.Adapter != "systemd" {
@@ -213,13 +226,7 @@ func (p WorkloadProfile) validateNativeBinding() error {
 			return errors.New("ComfyUI health route must match launch endpoint")
 		}
 	}
-	if p.NativeModel == nil {
-		return nil
-	}
-	if p.Adapter != "systemd" {
-		return errors.New("native models require stop-service bindings")
-	}
-	return p.NativeModel.validate()
+	return nil
 }
 
 // validateOwnedPlacement pins an owned profile to its derived unit name, the

@@ -79,8 +79,14 @@ export function addBindingEditor({Adw, Gtk, group, draftGroup, draft, initial, s
             const previous = draft.snapshot().binding;
             const changedSource = ['unit', 'instance', 'launchFile'].some(key => values[key] !== previous?.[key]);
             const changedModel = values.model !== previous?.model;
-            draft.edit({binding: values, ...(changedSource ? {model: undefined, models: undefined} : changedModel ? {model: values.model, models: undefined} : {})});
-            if (changedSource) { if (fields.model) fields.model.text = ''; modelChanged(undefined); }
+            let modelChanges = {};
+            if (changedSource) modelChanges = {model: undefined, models: undefined};
+            else if (changedModel) modelChanges = {model: values.model, models: undefined};
+            draft.edit({binding: values, ...modelChanges});
+            if (changedSource) {
+                if (fields.model) { fields.model.text = ''; }
+                modelChanged(undefined);
+            }
             else if (changedModel) modelChanged(values.model);
             changed(draft.snapshot());
         });

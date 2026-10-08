@@ -152,23 +152,7 @@ func (b Backend) TemporaryDiscover(ctx context.Context, home string, r Temporary
 	n := profile.NativeModel
 	v := control.TemporaryDiscoveryCandidate{Unit: r.Unit, LaunchFile: n.LaunchFile, LaunchSHA256: n.LaunchSHA256, DropIns: n.DropIns, Endpoint: n.Endpoint, Cgroup: profile.Cgroup, SystemdSlice: "app.slice", SystemdVersion: systemdVersion}
 	e := control.OperatorPrecondition{Incarnation: r.Expected.Incarnation, Version: version, Owner: r.Expected.Owner, ConfigurationRevision: r.Expected.ConfigurationRevision}
-	raw, operationErr := c.DiscoverNativeTemporary(ctx, v, e, true, func(ctx context.Context, endpoint string) ([]byte, error) {
-		// The existing read-only inventory probe makes only metadata requests.
-		var found ApplicationCandidate
-		var err error
-		for {
-			found, err = b.probeApplication(ctx, ProbeRequest{App: "ollama", Endpoint: endpoint})
-			if err == nil && found.InventoryStatus == "available" {
-				break
-			}
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(100 * time.Millisecond):
-			}
-		}
-		return json.Marshal(found.Models)
-	})
+	raw, operationErr := c.DiscoverNativeTemporary(ctx, v, e, true, b.temporaryModels)
 	statusCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	result.Session, err = c.TemporaryDiscoveryStatus(statusCtx)
@@ -184,6 +168,25 @@ func (b Backend) TemporaryDiscover(ctx context.Context, home string, r Temporary
 	}
 	return result, nil
 }
+
+func (b Backend) temporaryModels(ctx context.Context, endpoint string) ([]byte, error) {
+	// The existing read-only inventory probe makes only metadata requests.
+	var found ApplicationCandidate
+	var err error
+	for {
+		found, err = b.probeApplication(ctx, ProbeRequest{App: "ollama", Endpoint: endpoint})
+		if err == nil && found.InventoryStatus == "available" {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return json.Marshal(found.Models)
+}
+
 func TemporaryCleanup(ctx context.Context, home string, r TemporaryCleanupRequest) (TemporaryDiscoveryResult, error) {
 	return SystemBackend().TemporaryCleanup(ctx, home, r)
 }

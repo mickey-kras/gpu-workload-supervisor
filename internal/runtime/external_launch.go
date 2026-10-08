@@ -16,6 +16,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const launchExpansionCharacters = "\\$%`\"'"
+
 // readLaunchSource opens every path component without following symlinks. Only
 // root or the desktop principal may write source files or replace ancestors.
 func readLaunchSource(path string) ([]byte, error) {
@@ -44,11 +46,7 @@ func readLaunchSource(path string) ([]byte, error) {
 			unix.Close(fd)
 			return nil, ErrLaunchChanged
 		}
-		writable := stat.Mode&0022 != 0
-		if i < len(parts)-2 && stat.Uid == 0 && stat.Mode&unix.S_ISVTX != 0 {
-			writable = false
-		}
-		if (stat.Uid != 0 && stat.Uid != uint32(os.Geteuid())) || writable || (leaf && (stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Mode&0444 == 0 || stat.Size > 1<<20)) {
+		if !trustedLaunchSourceComponent(stat, i, len(parts)) {
 			unix.Close(fd)
 			return nil, ErrLaunchChanged
 		}
@@ -81,108 +79,144 @@ func readLaunchSources(path string, dropIns []control.LaunchSource) ([][]byte, e
 	return sources, nil
 }
 
+type externalLaunchDirectives struct {
+	scalars               map[string]string
+	starts, pre, envOrder []string
+	env                   map[string]string
+}
+
 // parseExternalLaunchSources models the effective subset rather than rendering
 // an adopted service into the owned grammar. Scalars override; command lists
 // append, with explicit empty assignments resetting the list.
 func parseExternalLaunchSources(sources [][]byte, runtimeName string) (parsedLaunchUnit, error) {
 	var unit parsedLaunchUnit
-	scalars := map[string]string{}
-	var starts, pre, envOrder []string
-	env := map[string]string{}
+	directives := externalLaunchDirectives{scalars: map[string]string{}, env: map[string]string{}}
 	for _, raw := range sources {
-		section := ""
-		scanner := bufio.NewScanner(bytes.NewReader(raw))
-		scanner.Buffer(make([]byte, 4096), 1<<20)
-		pending := ""
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
-				continue
-			}
-			if strings.HasSuffix(line, "\\") {
-				pending += strings.TrimSuffix(line, "\\") + " "
-				continue
-			}
-			line = pending + line
-			pending = ""
-			if header, ok := launchSectionHeader(line); ok {
-				section = header
-				continue
-			}
-			key, value, ok := strings.Cut(line, "=")
-			key = strings.TrimSpace(key)
-			value = strings.TrimSpace(value)
-			if !ok {
-				return unit, fmt.Errorf("%w: malformed unit directive", ErrLaunchUnsupported)
-			}
-			switch section + key {
-			case "[Service]ExecStart":
-				if value == "" {
-					starts = nil
-				} else {
-					starts = append(starts, value)
-				}
-			case "[Service]ExecStartPre":
-				if value == "" {
-					pre = nil
-				} else {
-					pre = append(pre, value)
-				}
-			case "[Service]Environment":
-				if value == "" {
-					env = map[string]string{}
-					envOrder = nil
-					continue
-				}
-				name, _, ok := strings.Cut(value, "=")
-				if !ok || strings.ContainsAny(value, "\\$%`\"'") {
-					return unit, fmt.Errorf("%w: unsupported Environment assignment", ErrLaunchUnsupported)
-				}
-				if _, exists := env[name]; !exists {
-					envOrder = append(envOrder, name)
-				}
-				env[name] = value
-			default:
-				scalars[section+key] = value
-			}
-		}
-		if scanner.Err() != nil || pending != "" {
-			return unit, ErrLaunchUnsupported
+		if err := directives.readSource(raw); err != nil {
+			return unit, err
 		}
 	}
-	if len(starts) != 1 || len(pre) > 32 {
+	if len(directives.starts) != 1 || len(directives.pre) > 32 {
 		return unit, fmt.Errorf("%w: effective ExecStart or ExecStartPre command count", ErrLaunchUnsupported)
 	}
-	if strings.ContainsAny(starts[0], "\\$%`\"';") {
+	if strings.ContainsAny(directives.starts[0], launchExpansionCharacters+";") {
 		return unit, fmt.Errorf("%w: expansion, quoting or semicolon delimiter in ExecStart", ErrLaunchUnsupported)
 	}
-	unit.execStart = starts[0]
-	unit.preCommands = pre
-	for _, name := range envOrder {
-		if err := unit.applyDirective(runtimeName, "[Service]", "Environment", env[name]); err != nil {
+	unit.execStart = directives.starts[0]
+	unit.preCommands = directives.pre
+	for _, name := range directives.envOrder {
+		if err := unit.applyDirective(runtimeName, "[Service]", "Environment", directives.env[name]); err != nil {
 			return unit, fmt.Errorf("%w: unsupported Environment variable %s", err, name)
 		}
 	}
-	for directive, value := range scalars {
-		end := strings.Index(directive, "]")
-		if end < 0 {
-			return unit, fmt.Errorf("%w: directive outside supported section", ErrLaunchUnsupported)
-		}
-		section, key := directive[:end+1], directive[end+1:]
-		if accepted, err := externalDirective(section, key, value); accepted || err != nil {
-			if err != nil {
-				return unit, err
-			}
-			continue
-		}
-		if strings.ContainsAny(value, "\\$%`\"'") {
-			return unit, fmt.Errorf("%w: expansion or quoting in %s", ErrLaunchUnsupported, key)
-		}
-		if err := unit.applyDirective(runtimeName, section, key, value); err != nil {
-			return unit, fmt.Errorf("%w: unsupported directive or value %s", err, key)
+	for directive, value := range directives.scalars {
+		if err := unit.applyExternalScalar(runtimeName, directive, value); err != nil {
+			return unit, err
 		}
 	}
 	return unit, nil
+}
+
+func (d *externalLaunchDirectives) readSource(raw []byte) error {
+	section := ""
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	scanner.Buffer(make([]byte, 4096), 1<<20)
+	pending := ""
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasSuffix(line, "\\") {
+			pending += strings.TrimSuffix(line, "\\") + " "
+			continue
+		}
+		line = pending + line
+		pending = ""
+		if header, ok := launchSectionHeader(line); ok {
+			section = header
+			continue
+		}
+		if err := d.applyLine(section, line); err != nil {
+			return err
+		}
+	}
+	if scanner.Err() != nil || pending != "" {
+		return ErrLaunchUnsupported
+	}
+	return nil
+}
+
+func (d *externalLaunchDirectives) applyLine(section, line string) error {
+	key, value, ok := strings.Cut(line, "=")
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if !ok {
+		return fmt.Errorf("%w: malformed unit directive", ErrLaunchUnsupported)
+	}
+	switch section + key {
+	case "[Service]ExecStart":
+		d.starts = appendLaunchAssignment(d.starts, value)
+	case "[Service]ExecStartPre":
+		d.pre = appendLaunchAssignment(d.pre, value)
+	case "[Service]Environment":
+		return d.applyEnvironment(value)
+	default:
+		d.scalars[section+key] = value
+	}
+	return nil
+}
+
+func appendLaunchAssignment(commands []string, value string) []string {
+	if value == "" {
+		return nil
+	}
+	return append(commands, value)
+}
+
+func (d *externalLaunchDirectives) applyEnvironment(value string) error {
+	if value == "" {
+		d.env = map[string]string{}
+		d.envOrder = nil
+		return nil
+	}
+	name, _, ok := strings.Cut(value, "=")
+	if !ok || strings.ContainsAny(value, launchExpansionCharacters) {
+		return fmt.Errorf("%w: unsupported Environment assignment", ErrLaunchUnsupported)
+	}
+	if _, exists := d.env[name]; !exists {
+		d.envOrder = append(d.envOrder, name)
+	}
+	d.env[name] = value
+	return nil
+}
+
+func (unit *parsedLaunchUnit) applyExternalScalar(runtimeName, directive, value string) error {
+	end := strings.Index(directive, "]")
+	if end < 0 {
+		return fmt.Errorf("%w: directive outside supported section", ErrLaunchUnsupported)
+	}
+	section, key := directive[:end+1], directive[end+1:]
+	if accepted, err := externalDirective(section, key, value); accepted || err != nil {
+		return err
+	}
+	if strings.ContainsAny(value, launchExpansionCharacters) {
+		return fmt.Errorf("%w: expansion or quoting in %s", ErrLaunchUnsupported, key)
+	}
+	if err := unit.applyDirective(runtimeName, section, key, value); err != nil {
+		return fmt.Errorf("%w: unsupported directive or value %s", err, key)
+	}
+	return nil
+}
+
+func trustedLaunchSourceComponent(stat unix.Stat_t, index, count int) bool {
+	writable := stat.Mode&0022 != 0
+	if index < count-2 && stat.Uid == 0 && stat.Mode&unix.S_ISVTX != 0 {
+		writable = false
+	}
+	trustedOwner := stat.Uid == 0 || stat.Uid == uint32(os.Geteuid())
+	leaf := index == count-1
+	return trustedOwner && !writable && (!leaf || (stat.Mode&unix.S_IFMT == unix.S_IFREG && stat.Mode&0444 != 0 && stat.Size <= 1<<20))
 }
 
 var orderingUnit = regexp.MustCompile(`^[A-Za-z0-9_.:-]+\.(service|target|socket|slice)$`)
@@ -195,55 +229,63 @@ func externalDirective(section, key, value string) (bool, error) {
 	case "[Unit]Description", "[Unit]Documentation", "[Install]WantedBy":
 		return true, nil
 	case "[Unit]After", "[Unit]Before":
-		for _, name := range strings.Fields(value) {
-			if !orderingUnit.MatchString(name) {
-				return unsupported()
-			}
+		if !validOrderingUnits(value) {
+			return unsupported()
 		}
 		return true, nil
 	case "[Service]WorkingDirectory":
-		if !filepath.IsAbs(value) || filepath.Clean(value) != value || strings.ContainsAny(value, "\\$%`\"'") {
+		if !filepath.IsAbs(value) || filepath.Clean(value) != value || strings.ContainsAny(value, launchExpansionCharacters) {
 			return unsupported()
 		}
 		return true, nil
 	case "[Service]TimeoutStartSec", "[Service]TimeoutStopSec", "[Service]RestartSec":
-		// A bounded integer duration in seconds needs no systemd expression parsing.
-		v, err := strconv.ParseUint(value, 10, 32)
-		if err != nil || v == 0 {
+		if !validExternalNumber(value, 32, false) {
 			return unsupported()
 		}
 		return true, nil
 	case "[Service]LimitNOFILE", "[Service]LimitMEMLOCK":
-		if value == "infinity" {
-			return true, nil
-		}
-		v, err := strconv.ParseUint(value, 10, 64)
-		if err != nil || v == 0 {
+		if !validExternalNumber(value, 64, true) {
 			return unsupported()
 		}
 		return true, nil
-	case "[Service]StandardOutput", "[Service]StandardError":
-		if value != "journal" && value != "null" && value != "inherit" {
-			return unsupported()
-		}
-		return true, nil
-	case "[Service]KillMode":
-		if value != "control-group" && value != "mixed" {
-			return unsupported()
-		}
-		return true, nil
-	case "[Service]RemainAfterExit":
-		if value != "no" {
-			return unsupported()
-		}
-		return true, nil
-	case "[Service]Slice":
-		if value != "app.slice" {
+	case "[Service]StandardOutput", "[Service]StandardError", "[Service]KillMode", "[Service]RemainAfterExit", "[Service]Slice":
+		if !validExternalServiceValue(key, value) {
 			return unsupported()
 		}
 		return true, nil
 	}
 	return false, nil
+}
+
+func validOrderingUnits(value string) bool {
+	for _, name := range strings.Fields(value) {
+		if !orderingUnit.MatchString(name) {
+			return false
+		}
+	}
+	return true
+}
+
+func validExternalNumber(value string, bits int, allowInfinity bool) bool {
+	if allowInfinity && value == "infinity" {
+		return true
+	}
+	v, err := strconv.ParseUint(value, 10, bits)
+	return err == nil && v != 0
+}
+
+func validExternalServiceValue(key, value string) bool {
+	switch key {
+	case "StandardOutput", "StandardError":
+		return value == "journal" || value == "null" || value == "inherit"
+	case "KillMode":
+		return value == "control-group" || value == "mixed"
+	case "RemainAfterExit":
+		return value == "no"
+	case "Slice":
+		return value == "app.slice"
+	}
+	return false
 }
 
 func CheckNativeBindingSources(values map[string]string, unit, launchFile string, dropIns []control.LaunchSource) error {

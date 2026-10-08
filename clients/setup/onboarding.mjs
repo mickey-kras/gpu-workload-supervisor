@@ -65,7 +65,7 @@ export function profileIDFromModel(app, model) {
 
 export function candidateMessage(candidate) {
     const states = {
-        'not-running': candidate?.configurationStatus === 'ready' || candidate?.configurationStatus === 'model-required' ? 'Installed and stopped. Ready to configure.' : candidate?.unit ? 'Installed and stopped. More configuration evidence is needed; choose its location or inspect Advanced settings.' : 'Application wasn’t detected at this address. Install it first, or choose its location.',
+        'not-running': stoppedCandidateMessage(candidate),
         ambiguous: 'More than one installation matches. Choose the installation you want to control.',
         'discovery-error': 'Discovery failed. Retry to check this installation.',
         unreachable: 'Unable to reach this application. Check its address and refresh.',
@@ -77,4 +77,10 @@ export function candidateMessage(candidate) {
     };
     if (candidate?.configurationStatus === 'ready' && candidate.instanceStatus !== 'not-running') return 'Installation recognized. Ready to configure.';
     return states[candidate?.instanceStatus] ?? 'Choose an application instance or provide its location.';
+}
+
+function stoppedCandidateMessage(candidate) {
+    if (candidate?.configurationStatus === 'ready' || candidate?.configurationStatus === 'model-required') return 'Installed and stopped. Ready to configure.';
+    if (candidate?.unit) return 'Installed and stopped. More configuration evidence is needed; choose its location or inspect Advanced settings.';
+    return 'Application wasn’t detected at this address. Install it first, or choose its location.';
 }

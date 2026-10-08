@@ -56,7 +56,10 @@ type ModelCandidate struct {
 	Aliases  []string `json:"aliases,omitempty"`
 }
 
-const appLlamaCPP = "llama.cpp"
+const (
+	appLlamaCPP             = "llama.cpp"
+	referenceModelDirectory = "model-directory"
+)
 
 func appLabel(app string) string {
 	switch app {
@@ -85,7 +88,7 @@ func (r ProbeRequest) validate() error {
 		return errors.New("reference must be an absolute clean path")
 	}
 	switch r.ReferenceKind {
-	case "application", "application-directory", "configuration", "model-file", "model-directory":
+	case "application", "application-directory", "configuration", "model-file", referenceModelDirectory:
 		return nil
 	}
 	return errors.New("unsupported reference kind")
@@ -195,7 +198,7 @@ func probeReference(ctx context.Context, r ProbeRequest, result ApplicationCandi
 		return missingReference(err, result), nil
 	}
 	// Do not resolve links or open devices/FIFOs. A selection is only a candidate.
-	directory := r.ReferenceKind == "model-directory" || r.ReferenceKind == "application-directory"
+	directory := r.ReferenceKind == referenceModelDirectory || r.ReferenceKind == "application-directory"
 	if (directory && !info.IsDir()) || (!directory && !info.Mode().IsRegular()) {
 		result.InstanceStatus = "invalid"
 		result.NextStep = "Select a regular file or a model directory; symbolic links and special files are not inspected."
@@ -218,7 +221,7 @@ func missingReference(err error, result ApplicationCandidate) ApplicationCandida
 	return result
 }
 func referencedCandidate(r ProbeRequest, directory bool, result ApplicationCandidate) ApplicationCandidate {
-	if r.ReferenceKind == "model-file" || (directory && r.ReferenceKind == "model-directory") {
+	if r.ReferenceKind == "model-file" || (directory && r.ReferenceKind == referenceModelDirectory) {
 		source := "file"
 		if directory {
 			source = "directory"

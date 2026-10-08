@@ -13,6 +13,8 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
+const loopbackHTTPPrefix = "http://"
+
 // AutomaticLaunch is evidence read from a supported direct launch. Inspection
 // never rewrites the existing file or runs its command.
 type AutomaticLaunch struct {
@@ -100,7 +102,7 @@ func inspectParsedAutomaticLaunch(u parsedLaunchUnit, raw []byte, app string, va
 		return result, nil
 	}
 	if app == "ollama" {
-		result.Endpoint = "http://" + u.host
+		result.Endpoint = loopbackHTTPPrefix + u.host
 		if err := qualifyParsedLaunch(u, control.NativeModel{Runtime: app, Endpoint: result.Endpoint}, validate); err != nil {
 			return AutomaticLaunch{}, err
 		}
@@ -110,7 +112,7 @@ func inspectParsedAutomaticLaunch(u parsedLaunchUnit, raw []byte, app string, va
 	if err != nil {
 		return AutomaticLaunch{}, err
 	}
-	result.Endpoint = "http://" + net.JoinHostPort(f.bindHost, f.port)
+	result.Endpoint = loopbackHTTPPrefix + net.JoinHostPort(f.bindHost, f.port)
 	result.Model = f.alias
 	if result.Model == "" {
 		result.Model = f.model
@@ -127,18 +129,31 @@ func comfyLaunchEndpoint(args []string) (string, error) {
 	if !filepath.IsAbs(args[1]) || filepath.Base(args[1]) != "main.py" || !strings.EqualFold(filepath.Base(filepath.Dir(args[1])), "ComfyUI") {
 		return "", ErrLaunchUnsupported
 	}
+	host, port, err := comfyLaunchAddress(args[2:])
+	if err != nil {
+		return "", err
+	}
+	ip := net.ParseIP(host)
+	number, err := strconv.ParseUint(port, 10, 16)
+	if ip == nil || !ip.IsLoopback() || err != nil || number == 0 {
+		return "", ErrLaunchUnsupported
+	}
+	return loopbackHTTPPrefix + net.JoinHostPort(host, port), nil
+}
+
+func comfyLaunchAddress(args []string) (string, string, error) {
 	host, port := "127.0.0.1", "8188"
 	seen := map[string]bool{}
-	for i := 2; i < len(args); i++ {
+	for i := 0; i < len(args); i++ {
 		key := args[i]
 		if seen[key] {
-			return "", ErrLaunchUnsupported
+			return "", "", ErrLaunchUnsupported
 		}
 		seen[key] = true
 		switch key {
 		case "--listen", "--port":
 			if i+1 >= len(args) {
-				return "", ErrLaunchUnsupported
+				return "", "", ErrLaunchUnsupported
 			}
 			i++
 			if key == "--listen" {
@@ -148,15 +163,10 @@ func comfyLaunchEndpoint(args []string) (string, error) {
 			}
 		case "--disable-auto-launch":
 		default:
-			return "", ErrLaunchUnsupported
+			return "", "", ErrLaunchUnsupported
 		}
 	}
-	ip := net.ParseIP(host)
-	number, err := strconv.ParseUint(port, 10, 16)
-	if ip == nil || !ip.IsLoopback() || err != nil || number == 0 {
-		return "", ErrLaunchUnsupported
-	}
-	return "http://" + net.JoinHostPort(host, port), nil
+	return host, port, nil
 }
 
 func validateComfyExecutable(path string) error {
@@ -204,18 +214,22 @@ func validateComfyScript(path string) error {
 			unix.Close(fd)
 			return ErrLaunchUnsupported
 		}
-		trustedOwner := stat.Uid == 0 || stat.Uid == uint32(os.Geteuid())
-		writable := stat.Mode&0022 != 0
-		// A root-owned sticky ancestor (such as /tmp) cannot replace entries in
-		// the subsequently checked private application directory.
-		if i < len(parts)-2 && stat.Uid == 0 && stat.Mode&unix.S_ISVTX != 0 {
-			writable = false
-		}
-		if !trustedOwner || writable || (leaf && (stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Mode&0444 == 0)) {
+		if !trustedComfyComponent(stat, i, len(parts)) {
 			unix.Close(fd)
 			return ErrLaunchUnsupported
 		}
 	}
 	unix.Close(fd)
 	return nil
+}
+
+func trustedComfyComponent(stat unix.Stat_t, index, count int) bool {
+	trustedOwner := stat.Uid == 0 || stat.Uid == uint32(os.Geteuid())
+	writable := stat.Mode&0022 != 0
+	// A root-owned sticky ancestor cannot replace the subsequently checked private directory.
+	if index < count-2 && stat.Uid == 0 && stat.Mode&unix.S_ISVTX != 0 {
+		writable = false
+	}
+	leaf := index == count-1
+	return trustedOwner && !writable && (!leaf || (stat.Mode&unix.S_IFMT == unix.S_IFREG && stat.Mode&0444 != 0))
 }

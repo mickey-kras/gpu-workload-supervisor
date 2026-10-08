@@ -10,6 +10,8 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
+const temporaryApplicationSlice = "app.slice"
+
 var ErrTemporaryInvocationChanged = errors.New("temporary discovery invocation changed or start evidence is ambiguous; refusing to stop this service. Inspect the unit and the persisted session evidence, stop it manually if appropriate, then retry explicit cleanup")
 
 func (m *SystemdManager) temporaryProperties(ctx context.Context, unit string) (map[string]string, error) {
@@ -21,7 +23,7 @@ func (m *SystemdManager) temporaryProperties(ctx context.Context, unit string) (
 }
 
 func (m *SystemdManager) verifyTemporaryBinding(ctx context.Context, v control.TemporaryDiscoveryCandidate) (map[string]string, error) {
-	if !automaticUnitName.MatchString(v.Unit) || strings.HasPrefix(v.Unit, control.OwnedUnitFilePrefix) || validateCgroup(v.Cgroup) != nil || v.SystemdSlice != "app.slice" {
+	if !automaticUnitName.MatchString(v.Unit) || strings.HasPrefix(v.Unit, control.OwnedUnitFilePrefix) || validateCgroup(v.Cgroup) != nil || v.SystemdSlice != temporaryApplicationSlice {
 		return nil, ErrLaunchUnsupported
 	}
 	validate := m.nativeExecutableValidator
@@ -55,39 +57,46 @@ func (m *SystemdManager) verifyTemporaryBinding(ctx context.Context, v control.T
 	if err = CheckNativeBindingSources(service, v.Unit, v.LaunchFile, v.DropIns); err != nil {
 		return nil, err
 	}
-	out, err := m.runner.Run(ctx, m.config.SystemctlPath, "--version")
-	if err != nil {
-		return nil, err
-	}
-	version, err := SupportedSystemdPlacementVersion(out)
-	if err != nil {
-		return nil, err
-	}
-	if version != v.SystemdVersion {
-		return nil, ErrLaunchChanged
-	}
-	root, err := m.temporaryProperties(ctx, "-.slice")
-	if err != nil {
-		return nil, err
-	}
-	slice, err := m.temporaryProperties(ctx, "app.slice")
-	if err != nil {
-		return nil, err
-	}
-	if service["Slice"] != "app.slice" {
-		return nil, ErrLaunchChanged
-	}
-	group, err := ResolveAutomaticCgroup(v.Unit, service, slice, root)
-	if err != nil {
-		return nil, err
-	}
-	if group != v.Cgroup {
-		return nil, ErrLaunchChanged
-	}
-	if err = m.cgroups.check(root["ControlGroup"], false); err != nil {
+	if err := m.verifyTemporaryPlacement(ctx, v, service); err != nil {
 		return nil, err
 	}
 	return service, nil
+}
+
+func (m *SystemdManager) verifyTemporaryPlacement(ctx context.Context, v control.TemporaryDiscoveryCandidate, service map[string]string) error {
+	out, err := m.runner.Run(ctx, m.config.SystemctlPath, "--version")
+	if err != nil {
+		return err
+	}
+	version, err := SupportedSystemdPlacementVersion(out)
+	if err != nil {
+		return err
+	}
+	if version != v.SystemdVersion {
+		return ErrLaunchChanged
+	}
+	root, err := m.temporaryProperties(ctx, "-.slice")
+	if err != nil {
+		return err
+	}
+	slice, err := m.temporaryProperties(ctx, temporaryApplicationSlice)
+	if err != nil {
+		return err
+	}
+	if service["Slice"] != temporaryApplicationSlice {
+		return ErrLaunchChanged
+	}
+	group, err := ResolveAutomaticCgroup(v.Unit, service, slice, root)
+	if err != nil {
+		return err
+	}
+	if group != v.Cgroup {
+		return ErrLaunchChanged
+	}
+	if err := m.cgroups.check(root["ControlGroup"], false); err != nil {
+		return err
+	}
+	return nil
 }
 
 // PrepareTemporaryDiscovery proves prior stopped state and release without

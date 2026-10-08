@@ -125,26 +125,12 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 		binding := p.LaunchBinding
 		launchFile = binding.LaunchFile
 		dropIns = binding.DropIns
-		sources, err := readLaunchSources(launchFile, dropIns)
+		unit, err := m.readApplicationLaunch(*binding, validate)
 		if err != nil {
 			return err
 		}
-		if m.nativeExecutableValidator == nil {
-			validate = validateComfyExecutable
-		}
-		unit, err := parseExternalLaunchSources(sources, binding.Runtime)
-		if err != nil {
-			return err
-		}
-		found, err := inspectParsedAutomaticLaunch(unit, sources[0], binding.Runtime, validate)
-		if err != nil {
-			return err
-		}
-		command = found.Command
-		preCommands = found.PreCommands
-		if found.SHA256 != binding.LaunchSHA256 || found.Endpoint != binding.Endpoint {
-			return ErrLaunchChanged
-		}
+		command = unit.execStart
+		preCommands = unit.preCommands
 	}
 	b, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show", "--property=FragmentPath", "--property=DropInPaths", "--property=NeedDaemonReload", "--property=ExecStartPre", "--property=ExecStart", "--", p.Unit)
 	if err != nil {
@@ -166,6 +152,28 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 	return CheckNativeBindingSources(values, p.Unit, launchFile, dropIns)
 }
 
+func (m *SystemdManager) readApplicationLaunch(binding control.LaunchBinding, validate func(string) error) (parsedLaunchUnit, error) {
+	sources, err := readLaunchSources(binding.LaunchFile, binding.DropIns)
+	if err != nil {
+		return parsedLaunchUnit{}, err
+	}
+	if m.nativeExecutableValidator == nil {
+		validate = validateComfyExecutable
+	}
+	unit, err := parseExternalLaunchSources(sources, binding.Runtime)
+	if err != nil {
+		return unit, err
+	}
+	found, err := inspectParsedAutomaticLaunch(unit, sources[0], binding.Runtime, validate)
+	if err != nil {
+		return unit, err
+	}
+	if found.SHA256 != binding.LaunchSHA256 || found.Endpoint != binding.Endpoint {
+		return unit, ErrLaunchChanged
+	}
+	return unit, nil
+}
+
 // ParseUnitProperties parses systemctl show output into key/value pairs,
 // ExecStartPre arrays are printed as one repeated property per command by
 // systemctl. Preserve their order; scalar duplicates remain ambiguous.
@@ -173,22 +181,29 @@ func ParseUnitProperties(out []byte) (map[string]string, error) {
 	values := map[string]string{}
 	for _, line := range strings.Split(string(out), "\n") {
 		if k, v, ok := strings.Cut(line, "="); ok {
-			if previous, exists := values[k]; exists {
-				if k != "ExecStartPre" || strings.TrimSpace(previous) == "" || strings.TrimSpace(v) == "" {
-					return nil, ErrLaunchChanged
-				}
-				v = previous + " " + v
+			if err := addUnitProperty(values, k, v); err != nil {
+				return nil, err
 			}
-			if k == "ExecStartPre" && strings.TrimSpace(v) != "" {
-				commands := loadedPreCommand.FindAllStringSubmatch(v, -1)
-				if len(commands) == 0 || len(commands) > 32 || strings.Trim(loadedPreCommand.ReplaceAllString(v, ""), " ;\t\r\n") != "" {
-					return nil, ErrLaunchChanged
-				}
-			}
-			values[k] = v
 		}
 	}
 	return values, nil
+}
+
+func addUnitProperty(values map[string]string, k, v string) error {
+	if previous, exists := values[k]; exists {
+		if k != "ExecStartPre" || strings.TrimSpace(previous) == "" || strings.TrimSpace(v) == "" {
+			return ErrLaunchChanged
+		}
+		v = previous + " " + v
+	}
+	if k == "ExecStartPre" && strings.TrimSpace(v) != "" {
+		commands := loadedPreCommand.FindAllStringSubmatch(v, -1)
+		if len(commands) == 0 || len(commands) > 32 || strings.Trim(loadedPreCommand.ReplaceAllString(v, ""), " ;\t\r\n") != "" {
+			return ErrLaunchChanged
+		}
+	}
+	values[k] = v
+	return nil
 }
 
 // CheckNativeBinding rejects a loaded unit whose binding does not match the
