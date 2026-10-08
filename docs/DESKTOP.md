@@ -162,8 +162,11 @@ It never uses llama.cpp reload/routed autoload requests, starts applications,
 loads/unloads models, downloads files, scans drives, or writes application or
 supervisor configuration. Unsupported syntax, shell wrappers and escaped launch
 commands receive actionable guidance. External adoption validates the effective
-unit plus ordered contributing file hashes and pre-start commands. Supported
-llama.cpp parallel, continuous-batching, flash-attention and MTP options are
+unit plus ordered contributing file hashes and pre-start commands. Pre-start
+commands are restricted to system `true`/`false` with an optional `--`, or `test`
+with one file predicate (`-e`, `-f`, `-d`, `-r`, `-w`, `-x`, or `-s`) and an absolute,
+clean path; originals are preserved and unsupported commands are refused.
+Supported llama.cpp parallel, continuous-batching, flash-attention and MTP options are
 preserved; generating a managed launch uses its separate restricted format.
 
 ## Upgrade and interrupted activation

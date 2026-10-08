@@ -378,6 +378,22 @@ test('deselect/reselect restores original model IDs and deliberately edited reso
     ]);
 });
 
+test('renaming a configured grouped model survives ID changes, staging and later friendly-name edits', async () => {
+    const original = prepared({draft: {id: 'stable-a', label: 'Old label', app: 'ollama', model: 'a', binding: {unit: 'ollama.service'}}}).profile;
+    const ui = await launch(options([installation('ollama', [{id: 'a'}, {id: 'b'}])], {discover: {request: {...request, catalog: {version: 1, profiles: [original]}}, units: [], applications: [installation('ollama', [{id: 'a'}, {id: 'b'}])]}}));
+    ui.edit(ui.by('Display name'), 'text', 'New label');
+    ui.edit(ui.by('Workload ID (lowercase, stable; required)'), 'text', 'new-id');
+    const checked = () => JSON.parse(ui.calls.filter(call => call.argv[1] === 'validate').at(-1).input).catalog.profiles.map(({id, label}) => ({id, label}));
+    await ui.by('Continue').emit('clicked'); await ui.by('Continue').emit('clicked');
+    assert.deepEqual(checked(), [{id: 'new-id', label: 'New label'}]);
+    await ui.by('Back').emit('clicked'); await ui.by('Continue').emit('clicked');
+    assert.deepEqual(checked(), [{id: 'new-id', label: 'New label'}]);
+    await ui.by('Back').emit('clicked');
+    ui.edit(ui.by('Friendly name'), 'text', 'Latest name');
+    await ui.by('Continue').emit('clicked');
+    assert.deepEqual(checked(), [{id: 'new-id', label: 'Latest name'}]);
+});
+
 test('deselect/reselect restores a single configured model without a duplicate draft', async () => {
     const original = {...prepared({draft: {id: 'stable', label: 'Custom', app: 'ollama', model: 'a', binding: {unit: 'ollama.service'}}}).profile, requiredMiB: 7777, bootPolicy: 'retain', systemdSlice: 'app.slice'};
     const ui = await launch(options([installation('ollama', [{id: 'a'}])], {discover: {request: {...request, catalog: {version: 1, profiles: [original]}}, units: [], applications: [installation('ollama', [{id: 'a'}])]}}));

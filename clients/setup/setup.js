@@ -58,7 +58,7 @@ app.connect('activate', () => {
     const draftEditors = [];
     let request = null; let pending = false; let units = []; let valid = false; const profiles = []; const profileApps = new Map(); const profileRows = new Map();
     const reviewed = new ReviewedConfiguration();
-    const editedLabels = new Map();
+    const editedLabels = new WeakMap();
     const review = new Gtk.Button({label: 'Continue', sensitive: false});
     review.add_css_class('suggested-action');
     const apply = new Gtk.Button({label: 'Finish setup', sensitive: false, visible: false});
@@ -77,10 +77,11 @@ app.connect('activate', () => {
     function addProfile(profile, resetReview = true) {
         if (resetReview) invalidate();
         const current = {...profile};
+        if (editedLabels.has(profile)) editedLabels.set(current, editedLabels.get(profile));
         profiles.push(current);
         const group = createProfileEditor({current, Adw, Gtk, GLib, units, field, invalidate,
             applicationRuntime: profileApps.get(current.id),
-            onLabelEdit: label => editedLabels.set(current.id, label),
+            onLabelEdit: label => editedLabels.set(current, label),
             onRemove: group => { profiles.splice(profiles.indexOf(current), 1); rows.remove(group); invalidate(); },
             onEdit: draft => appendDraft(draft, current, true)});
         rows.append(group); profileRows.set(current, group); return current;
@@ -160,7 +161,8 @@ app.connect('activate', () => {
     function appendDraft(initial, replacing = null, reveal = false) {
         if (drafts.some(draft => draft.id === initial.id)) { status.label = 'This workload already has an open selection. Finish or remove that selection first.'; return; }
         drafts.push(initial);
-        const editor = addDraftEditor({Adw, Gtk, Gio, window, parent: draftRows, initial, detected: discovered, discoveryErrors, command, modelParent: modelPage, temporaryStatus, openSettings: () => { invalidate(); setStep(0); },
+        let editor;
+        editor = addDraftEditor({Adw, Gtk, Gio, window, parent: draftRows, initial, detected: discovered, discoveryErrors, command, modelParent: modelPage, temporaryStatus, openSettings: () => { invalidate(); setStep(0); },
             bind: async (profile, current, finish = false) => {
                 replacing ??= profiles.find(existing => existing.id === initial.id) ?? null;
                 if (replacing && !profiles.includes(replacing)) throw new Error('The original workload was removed. Reopen Manage workloads before editing it.');
@@ -190,7 +192,7 @@ app.connect('activate', () => {
                 }
             },
             changed: value => {
-                if (drafts.find(item => item.id === initial.id)?.label !== value.label) editedLabels.delete(initial.id);
+                if (drafts.find(item => item.id === initial.id)?.label !== value.label) editedLabels.delete(editor?.replacing ?? replacing);
                 invalidate(); drafts = drafts.map(item => item.id === initial.id ? value : item); draftGeneration++; saveDrafts.sensitive = !pending;
             },
             removed: (finished = false) => { if (!finished) invalidate(); drafts = drafts.filter(item => item.id !== initial.id); draftGeneration++; saveDrafts.sensitive = !pending; },
@@ -289,7 +291,10 @@ app.connect('activate', () => {
                 const sameModel = editor.replacing?.nativeModel?.model === profile.nativeModel?.model;
                 const replacingModelKept = result.profiles.some(item => item.nativeModel?.model === editor.replacing?.nativeModel?.model);
                 const previous = editor.staged?.find(existing => existing.nativeModel?.model === profile.nativeModel?.model) ?? (sameModel || (index === 0 && !replacingModelKept) ? editor.replacing : null);
-                return previous ? {...previous, ...profile, label: editedLabels.get(previous.id) ?? (profile.nativeModel?.model !== editor.originalModel ? previous.label : profile.label), id: previous.id, requiredMiB: previous.requiredMiB, bootPolicy: previous.bootPolicy} : profile;
+                if (!previous) return profile;
+                const updated = {...previous, ...profile, label: editedLabels.get(previous) ?? (profile.nativeModel?.model !== editor.originalModel ? previous.label : profile.label), id: previous.id, requiredMiB: previous.requiredMiB, bootPolicy: previous.bootPolicy};
+                if (editedLabels.has(previous)) editedLabels.set(updated, editedLabels.get(previous));
+                return updated;
             }));
             const items = [...profiles.filter(profile => !replaced.has(profile)), ...additions];
             const keys = new Set(); const ids = new Set();
