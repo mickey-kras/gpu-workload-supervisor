@@ -169,7 +169,7 @@ func validateOwnedOptions(app string, o *DraftOwnedLaunch, allowMissingPath bool
 	if o.Port < 1024 {
 		return errors.New("owned launch port must be an unprivileged TCP port")
 	}
-	validModelPath := (allowMissingPath && o.ModelPath == "") || (filepath.IsAbs(o.ModelPath) && filepath.Clean(o.ModelPath) == o.ModelPath)
+	validModelPath := validDraftModelPath(o.ModelPath, allowMissingPath)
 	switch app {
 	case "ollama":
 		if o.ModelPath != "" || o.CtxSize != 0 || o.GPULayers != 0 || o.MaxModelLen != 0 || o.Alias != "" {
@@ -185,6 +185,13 @@ func validateOwnedOptions(app string, o *DraftOwnedLaunch, allowMissingPath bool
 		}
 	}
 	return validateDraftLaunchGrammar(o)
+}
+
+func validDraftModelPath(path string, allowMissing bool) bool {
+	if path == "" {
+		return allowMissing
+	}
+	return filepath.IsAbs(path) && filepath.Clean(path) == path
 }
 
 func validateDraftLaunchGrammar(o *DraftOwnedLaunch) error {

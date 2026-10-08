@@ -124,21 +124,20 @@ func (m *SystemdManager) preflightOwnedWithRemovals(_ context.Context, unitDir s
 			continue
 		}
 		path := filepath.Join(unitDir, name)
-		if sha, ok := adopted[path]; ok {
-			data, err := os.ReadFile(path)
-			if err == nil && fmt.Sprintf("%x", sha256.Sum256(data)) == sha {
-				continue
-			}
-		}
-		if sha, ok := removals[name]; ok {
-			data, err := os.ReadFile(path)
-			if err == nil && fmt.Sprintf("%x", sha256.Sum256(data)) == sha {
-				continue
-			}
+		if matchesUnitDigest(path, adopted[path]) || matchesUnitDigest(path, removals[name]) {
+			continue
 		}
 		return ErrOrphanedOwnedUnit
 	}
 	return nil
+}
+
+func matchesUnitDigest(path, proof string) bool {
+	if proof == "" {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	return err == nil && fmt.Sprintf("%x", sha256.Sum256(data)) == proof
 }
 
 func (m *SystemdManager) preflightWorkloadCgroup(ctx context.Context, unit, group string) error {

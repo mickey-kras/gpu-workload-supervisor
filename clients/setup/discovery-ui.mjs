@@ -194,11 +194,15 @@ function addOwnedEditor({Adw, Gtk, group, draft, initial, command, bind, changed
         fields.model = model;
         model.connect('changed', () => { draft.edit({model: model.text}); changed(draft.snapshot()); });
     }
-    const defaults = {instance: initial.binding?.instance ?? 'local', port: initial.app === 'ollama' ? 11434 : initial.app === 'llama.cpp' ? 8080 : 8000,
+    const defaults = {instance: initial.binding?.instance ?? 'local', port: {ollama: 11434, 'llama.cpp': 8080, vllm: 8000}[initial.app],
         modelPath: initial.reference ?? '', ...initial.binding?.owned};
     const entries = [['instance', 'Instance name'], ['port', 'Launch port'], ...(initial.app === 'ollama' ? [] : [['modelPath', initial.app === 'llama.cpp' ? 'Model file' : 'Model directory']])];
     const advanced = new Adw.ExpanderRow({title: 'Advanced launch options'});
-    const options = initial.app === 'llama.cpp' ? [['ctxSize', 'Context size'], ['gpuLayers', 'GPU layers'], ['alias', 'Served model name']] : initial.app === 'vllm' ? [['maxModelLen', 'Maximum model length'], ['alias', 'Served model name']] : [];
+    const options = {
+        ollama: [],
+        'llama.cpp': [['ctxSize', 'Context size'], ['gpuLayers', 'GPU layers'], ['alias', 'Served model name']],
+        vllm: [['maxModelLen', 'Maximum model length'], ['alias', 'Served model name']],
+    }[initial.app];
     function save() {
         const owned = {};
         for (const [key, field] of Object.entries(fields)) {
