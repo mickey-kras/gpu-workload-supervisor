@@ -79,7 +79,7 @@ require `gpu-mode configure`; setup does not verify them. The backend
 files. See [WORKLOADS.md](WORKLOADS.md). Model identity is checked again before
 GPU admission.
 
-Configured workloads can be renamed or edited. **Edit workload** reopens
+Configured workloads can be renamed or edited. **Edit application** reopens
 the same setup flow and retains the workload identity and unrelated settings. **Remove from supervisor** changes
 only supervisor configuration. Active/referenced workloads cannot be removed;
 finish their work and switch to Idle first. Applications, models, workflows and
