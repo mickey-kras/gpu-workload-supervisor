@@ -45,6 +45,11 @@ func TestTemporarySessionClosesFenceAndBlocksOtherControlPaths(t *testing.T) {
 		"update":  func() error { _, err := s.UpdateState(ctx, state.Version, state); return err },
 		"rotate":  func() error { _, err := s.RotateFenceAndCloseAdmission(ctx, state.Version); return err },
 		"finish":  func() error { _, err := s.FinishTransition(ctx, v.ID, "committed", state.Version, state); return err },
+		"begin": func() error {
+			_, err := s.StartTransition(ctx, state.Version, Transition{ID: "blocked-transition", Target: state, Previous: state, Deadline: time.Now().Add(time.Minute), ConfigurationRevision: snap.Revision})
+			return err
+		},
+		"incarnation": func() error { _, err := s.RotateIncarnation(ctx); return err },
 		"phase": func() error {
 			_, err := s.SetTransitionPhase(ctx, v.ID, state.Version, control.PhaseStable)
 			return err

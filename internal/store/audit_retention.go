@@ -51,6 +51,7 @@ func prunableAudits(ctx context.Context, tx *sql.Tx, cutoff string, limit int) (
  WHERE tr.status <> 'in_progress' AND unixepoch(tr.updated_at)<unixepoch(?)
  AND (tr.lease_incarnation<>state.lease_incarnation OR tr.lease_epoch<>state.lease_epoch)
  AND NOT EXISTS(SELECT 1 FROM transition_work tw JOIN registered_work w ON w.request_id=tw.request_id WHERE tw.transition_id=tr.transition_id AND w.completed_at IS NULL)
+ AND NOT EXISTS(SELECT 1 FROM temporary_discovery_sessions s WHERE s.id=tr.transition_id)
  ORDER BY tr.updated_at,tr.transition_id LIMIT ?`, cutoff, limit)
 	if err != nil {
 		return nil, err

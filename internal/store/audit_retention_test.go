@@ -2,11 +2,13 @@ package store
 
 import (
 	"context"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 func TestAuditRetentionPreservesLiveRelationshipsAndLatestEvidence(t *testing.T) {
@@ -180,4 +182,42 @@ func TestPruneAuditHistoryRollsBackWhenStorageFails(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPruneAuditHistoryRetainsSessionReferencedTransition(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	state, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"session", "plain"} {
+		tr := Transition{ID: id, Fence: state.LeaseFence, Source: state, Target: state, Previous: state, Phase: control.PhaseDraining, Deadline: time.Now()}
+		if err := s.BeginTransition(ctx, tr); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.Exec(`UPDATE transitions SET status='failed',updated_at='2000-01-01T00:00:00Z',lease_epoch=99 WHERE transition_id=?`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	payload, err := json.Marshal(control.TemporaryDiscoverySession{ID: "session", Token: "t", Status: "completed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO temporary_discovery_sessions(id,payload,status) VALUES('session',?,'completed')`, payload); err != nil {
+		t.Fatal(err)
+	}
+	count, err := s.PruneAuditHistory(ctx, s.now().Add(-time.Hour), 10)
+	if err != nil || count != 1 {
+		t.Fatalf("prune with completed session %d: %v", count, err)
+	}
+	assertAuditTransitionIDs(t, s, "transitions", []string{"session"})
+	if _, err := s.db.Exec(`DELETE FROM temporary_discovery_sessions WHERE id='session'`); err != nil {
+		t.Fatal(err)
+	}
+	count, err = s.PruneAuditHistory(ctx, s.now().Add(-time.Hour), 10)
+	if err != nil || count != 1 {
+		t.Fatalf("prune after session cleanup %d: %v", count, err)
+	}
+	assertAuditTransitionIDs(t, s, "transitions", nil)
 }
