@@ -385,8 +385,6 @@ type shortHandoffTimeoutStore struct {
 }
 
 func (s shortHandoffTimeoutStore) AcquireUserExecution(ctx context.Context, shared bool) (*lock.File, error) {
-	// Apply the short deadline only to the handoff gate. The earlier durable
-	// transition and registered-work drain retain the controller's normal budget.
 	handoffCtx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	return s.Store.AcquireUserExecution(handoffCtx, shared)

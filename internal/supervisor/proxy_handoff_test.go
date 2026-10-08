@@ -26,7 +26,6 @@ func (s observedHandoffStore) AcquireUserExecution(ctx context.Context, shared b
 	if !shared {
 		close(s.attempt)
 		if s.handoffTimeout > 0 {
-			// Limit only the handoff wait, after the durable drain has finished.
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, s.handoffTimeout)
 			defer cancel()
