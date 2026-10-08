@@ -19,9 +19,10 @@ sessions, stopping workloads, or enabling services for arbitrary users.
 
 Setup discovers existing systemd user services without adopting them. Add each
 workload explicitly with its stable ID, display label, service, cgroup path,
-loopback health URL, measured VRAM requirement, and login policy. Applications,
-models, and workload service units must already exist. New workloads default to
-stop-to-idle at reconciliation; retain is an explicit choice. Live media unload
+loopback health URL, measured VRAM requirement, and login policy. Applications
+and models must already exist. Adopt existing workload units, or use the backend's
+supervisor-owned launch configuration for supported native model runtimes.
+New workloads default to stop-to-idle at reconciliation; retain is an explicit choice. Live media unload
 remains subject to the backend's fail-closed release restrictions.
 
 Review **Validate and preview**, explicitly confirm a quiescent activation, then
@@ -57,25 +58,32 @@ menu. The packaged setup application is also available in the application list.
 3. Choose a native model, or an explicit model file/folder. ComfyUI skips model
    selection because workflows choose models. File selection does not establish
    compatibility.
-4. **Save drafts** to finish later. Drafts retain application, address/path and
-   model choices, and Advanced launch binding fields. Saved bindings remain
-   unverified; fingerprints are recomputed during verification. Drafts are
-   separate from selectable workloads.
-5. To configure an existing isolated service, open **Advanced launch binding**.
-   Supply its service, cgroup and health URL. Native model bindings also require
-   an instance ID, exact model ID, base URL and loaded service file. Setup reads
-   the file fingerprint and verifies the binding without changing the service.
-6. Select **Verify binding and add for review**, then **Review configuration**.
-   Switch to Idle and finish active jobs before confirming **Apply configuration**.
+4. **Save drafts** to finish later. Drafts retain application, address/path,
+   model and launch choices; they remain separate from selectable workloads.
+5. For Ollama, llama.cpp or vLLM, use **Supervisor-managed launch**. Review the
+   instance name, launch port and model name/file/directory. Additional controlled
+   options are under **Advanced launch options**. Applications and models must
+   already exist; setup does not install or download them.
+6. Select **Preview managed launch and add for review**. This derives a profile,
+   unit identity and content hash; it does not write a unit or start a workload.
+7. Alternatively, use **Advanced launch binding** to adopt an existing isolated
+   service. Supply its service, cgroup and health URL, plus native instance/model
+   identity and launch file where relevant. **Verify binding and add for review**
+   fingerprints the existing file without changing it.
+8. Select **Review configuration**. Switch to Idle and finish active jobs before
+   confirming **Apply configuration**. Apply writes reviewed supervisor-owned
+   units and commits the catalog through the existing activation safeguards.
 
-Each model needs a distinct existing launch unit. Shared-unit presets are not
-offered here; shared Ollama units are catalog-only (see
-[WORKLOADS.md](WORKLOADS.md)) and setup rejects catalogs that contain them —
-apply them with `gpu-mode configure` instead. Setup does not create or rewrite
-launch services. Model identity
-is checked again before GPU admission when switching workloads.
+llama.cpp and vLLM models use distinct units. Ollama models with the same instance
+name and port can share a managed unit. Setup also preserves an adopted shared
+pair unchanged from the accepted catalog. New or edited adopted shared bindings
+require `gpu-mode configure`; setup does not verify them. The backend
+`render-owned` command returns a preview only; Apply creates the managed launch
+files. See [WORKLOADS.md](WORKLOADS.md). Model identity is checked again before
+GPU admission.
 
-Configured workloads can be renamed or edited. **Remove from supervisor** changes
+Configured workloads can be renamed or edited. **Edit managed launch** reopens
+the managed configuration for a new preview and review. **Remove from supervisor** changes
 only supervisor configuration. Active/referenced workloads cannot be removed;
 finish their work and switch to Idle first. Applications, models, workflows and
 external configuration are preserved.
@@ -190,9 +198,11 @@ exact backup/binary pair cannot be verified, repair forward.
 ## Remove and reinstall
 
 Before removing the package, `gpu-setup remove-integration` removes only the
-recorded reconciliation enablement link, without stopping a service. Modified or
-unowned links are preserved. Disable the extension through GNOME Extensions.
-Package removal removes package-owned binaries, extension, launcher, and unit;
+recorded reconciliation and idle-timer enablement links. It stops the recorded
+idle timer before removing either link; it does not stop workload services.
+Modified or unowned integration files are preserved or rejected without deletion.
+Disable the extension through GNOME Extensions.
+Package removal removes package-owned binaries, extension, launcher, and units;
 profiles, workload units, models, state, audit, and backups remain private user
 data. Reinstall the matching release or activate a newer one through setup.
 
