@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
@@ -379,6 +380,18 @@ func TestOwnershipCrashBoundariesPreserveCommittedOwner(t *testing.T) {
 	}
 }
 
+type shortHandoffTimeoutStore struct {
+	*store.Store
+}
+
+func (s shortHandoffTimeoutStore) AcquireUserExecution(ctx context.Context, shared bool) (*lock.File, error) {
+	// Apply the short deadline only to the handoff gate. The earlier durable
+	// transition and registered-work drain retain the controller's normal budget.
+	handoffCtx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+	defer cancel()
+	return s.Store.AcquireUserExecution(handoffCtx, shared)
+}
+
 func TestUserHandoffTimeoutStopsWorkWithoutStartingTarget(t *testing.T) {
 	stateStore := openStore(t)
 	ownershipState(t, stateStore, control.OwnerUser, control.WorkloadText)
@@ -389,7 +402,7 @@ func TestUserHandoffTimeoutStopsWorkWithoutStartingTarget(t *testing.T) {
 	defer gate.Close()
 	runtime := &fakeRuntime{active: control.WorkloadText, mediaReady: true}
 	controller := testController(t, stateStore, runtime)
-	controller.config.DrainTimeout = 10 * time.Millisecond
+	controller.store = shortHandoffTimeoutStore{Store: stateStore}
 	state, err := controller.TransferToSupervisor(context.Background(), control.WorkloadText, "operator")
 	if !errors.Is(err, context.DeadlineExceeded) || state.Owner != control.OwnerUser || state.Health != control.HealthError || state.Admission != control.AdmissionClosed {
 		t.Fatalf("stalled handoff: %#v %v", state, err)
