@@ -282,7 +282,7 @@ app.connect('activate', () => {
         const replacingModelKept = result.profiles.some(item => item.nativeModel?.model === editor.replacing?.nativeModel?.model);
         const previous = editor.staged?.find(existing => existing.nativeModel?.model === profile.nativeModel?.model) ?? (sameModel || (index === 0 && !replacingModelKept) ? editor.replacing : null);
         if (previous) {
-            const updated = {...previous, ...profile, label: editedLabels.get(previous) ?? (profile.nativeModel?.model !== editor.originalModel ? previous.label : profile.label), id: previous.id, requiredMiB: previous.requiredMiB, bootPolicy: previous.bootPolicy};
+            const updated = {...previous, ...profile, label: editedLabels.get(previous) ?? (profile.nativeModel?.model === editor.originalModel ? profile.label : previous.label), id: previous.id, requiredMiB: previous.requiredMiB, bootPolicy: previous.bootPolicy};
             if (editedLabels.has(previous)) editedLabels.set(updated, editedLabels.get(previous));
             return updated;
         }
