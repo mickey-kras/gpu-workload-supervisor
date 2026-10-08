@@ -45,7 +45,7 @@ app.connect('activate', () => {
     settings.add(advanced);
     let discovered = []; let draftRevision = ''; let drafts = []; let draftGeneration = 0;
     const draftEditors = [];
-    let request = null; let pending = false; let units = []; let valid = false; const profiles = [];
+    let request = null; let pending = false; let units = []; let valid = false; const profiles = []; const profileRows = new Map();
     const reviewed = new ReviewedConfiguration();
     const review = new Gtk.Button({label: 'Review configuration', sensitive: false});
     const apply = new Gtk.Button({label: 'Apply configuration', sensitive: false});
@@ -68,23 +68,25 @@ app.connect('activate', () => {
         const current = {...profile};
         profiles.push(current);
         const group = new Adw.PreferencesGroup({title: GLib.markup_escape_text(current.label || 'New workload', -1),
-            description: 'Required: the existing service, its cgroup path and its health URL. Optional identity and resource settings are under Workload details.'});
+            description: current.nativeModel?.owned ? `${current.nativeModel.runtime} - ${current.nativeModel.model}. Supervisor-managed launch; applications and models are preserved.` : 'Required: the existing service, its cgroup path and its health URL. Optional identity and resource settings are under Workload details.'});
         field(group, 'Display name', current.label, text => {
             current.label = text; group.title = GLib.markup_escape_text(text || 'New workload', -1);
         });
+        const details = new Adw.ExpanderRow({title: 'Workload details',
+            subtitle: 'Stable ID, manual service name, VRAM and login behavior', expanded: !current.id});
+        group.add(details);
+        const bindingParent = current.nativeModel?.owned ? details : group;
         const choices = ['', ...new Set([...(current.unit ? [current.unit] : []), ...units]), null];
         let syncingService = false;
         const service = new Adw.ComboRow({title: 'Existing user service', enable_search: true, use_markup: false,
             expression: Gtk.PropertyExpression.new(Gtk.StringObject.$gtype, null, 'string'),
             model: Gtk.StringList.new(['Choose a service…', ...choices.slice(1, -1), 'Enter another service…']),
             selected: current.unit ? choices.indexOf(current.unit) : 0});
-        group.add(service);
-        field(group, 'Cgroup path beneath /sys/fs/cgroup (required)', current.cgroup, text => current.cgroup = text);
-        field(group, 'Loopback health URL (required)', current.healthURL, text => current.healthURL = text);
+        if (current.nativeModel?.owned) service.sensitive = false;
+        if (bindingParent === details) details.add_row(service); else group.add(service);
+        field(bindingParent, 'Cgroup path beneath /sys/fs/cgroup (required)', current.cgroup, text => current.cgroup = text).editable = !current.nativeModel?.owned;
+        field(bindingParent, 'Loopback health URL (required)', current.healthURL, text => current.healthURL = text).editable = !current.nativeModel?.owned;
 
-        const details = new Adw.ExpanderRow({title: 'Workload details',
-            subtitle: 'Stable ID, manual service name, VRAM and login behavior', expanded: !current.id});
-        group.add(details);
         const manualService = field(details, 'Service name (manual entry)', current.unit, text => {
             current.unit = text;
             syncingService = true;
@@ -92,6 +94,7 @@ app.connect('activate', () => {
             service.selected = index < 0 ? choices.length - 1 : index;
             syncingService = false;
         });
+        manualService.editable = !current.nativeModel?.owned;
         service.connect('notify::selected', () => {
             if (syncingService) return;
             const unit = choices[service.selected];
@@ -106,9 +109,9 @@ app.connect('activate', () => {
         if (current.nativeModel) {
             current.nativeModel = {...current.nativeModel};
             for (const [key, title] of [['instance', 'Runtime instance ID'], ['model', 'Exact model ID'], ['endpoint', 'Runtime base URL'], ['launchFile', 'Loaded service file path']])
-                field(details, title, current.nativeModel[key], text => current.nativeModel[key] = text);
+                field(details, title, current.nativeModel[key], text => current.nativeModel[key] = text).editable = !current.nativeModel.owned;
         }
-        field(details, 'Workload ID (lowercase, stable; required)', current.id, text => current.id = text);
+        field(details, 'Workload ID (lowercase, stable; required)', current.id, text => current.id = text).editable = !current.nativeModel?.owned;
         field(details, 'Measured VRAM requirement (MiB; optional)', current.requiredMiB, text => {
             if (text.trim() === '') delete current.requiredMiB;
             else current.requiredMiB = Number(text);
@@ -118,7 +121,13 @@ app.connect('activate', () => {
         details.add_row(retain);
         const remove = new Gtk.Button({label: 'Remove from supervisor'});
         remove.connect('clicked', () => { profiles.splice(profiles.indexOf(current), 1); rows.remove(group); invalidate(); });
-        group.add(remove); rows.append(group);
+        if (current.nativeModel?.owned) {
+            const editLaunch = new Gtk.Button({label: 'Edit managed launch'});
+            editLaunch.connect('clicked', () => appendDraft({id: current.id, label: current.label, app: current.nativeModel.runtime,
+                model: current.nativeModel.model, binding: {instance: current.nativeModel.instance, owned: {...current.nativeModel.owned}}}, current));
+            group.add(editLaunch);
+        }
+        group.add(remove); rows.append(group); profileRows.set(current, group);
     }
     const add = new Gtk.Button({label: 'Add existing service (Advanced)', sensitive: false});
     add.connect('clicked', () => addProfile({adapter: 'systemd', bootPolicy: 'stop-to-idle'}));
@@ -129,13 +138,19 @@ app.connect('activate', () => {
     const applicationGroup = new Adw.PreferencesGroup(); applicationGroup.add(application); box.append(applicationGroup);
     const addApplication = new Gtk.Button({label: 'Add workload', sensitive: false}); box.append(addApplication);
     const saveDrafts = new Gtk.Button({label: 'Save drafts', sensitive: false}); box.append(saveDrafts);
-    function appendDraft(initial) {
+    function appendDraft(initial, replacing = null) {
+        if (drafts.some(draft => draft.id === initial.id)) { status.label = 'This workload already has an open draft. Finish or remove that draft first.'; return; }
         drafts.push(initial);
         draftEditors.push(addDraftEditor({Adw, Gtk, Gio, window, parent: draftRows, initial, detected: discovered, command,
             bind: async (profile, current) => {
-                const candidate = JSON.stringify({...request, catalog: {...request.catalog, profiles: [...profiles, profile]}, confirmQuiesced: false});
+                replacing ??= profiles.find(existing => existing.id === initial.id && existing.nativeModel?.owned) ?? null;
+                if (replacing && !profiles.includes(replacing)) throw new Error('The original workload was removed. Reopen Manage workloads before editing it.');
+                const preserveSettings = () => replacing ? {...profile, requiredMiB: replacing.requiredMiB, bootPolicy: replacing.bootPolicy} : profile;
+                const candidate = JSON.stringify({...request, catalog: {...request.catalog, profiles: [...profiles.filter(existing => existing !== replacing), preserveSettings()]}, confirmQuiesced: false});
+                const owned = profile.nativeModel?.owned;
                 await command(['/usr/bin/gpu-setup', 'verify-bindings'], candidate);
-                if (current()) { addProfile(profile); status.label = 'Launch binding verified. Review and confirm configuration before applying. Model readiness is checked when switching workloads.'; }
+                if (replacing && !profiles.includes(replacing)) throw new Error('The original workload changed during preview. Reopen Manage workloads.');
+                if (current()) { if (replacing) { profiles.splice(profiles.indexOf(replacing), 1); rows.remove(profileRows.get(replacing)); profileRows.delete(replacing); } addProfile(preserveSettings()); status.label = owned ? 'Managed launch preview added. Review and confirm; application, model and lifecycle verification completes during Apply. No application was started.' : 'Launch binding verified. Review and confirm configuration before applying. Model readiness is checked when switching workloads.'; }
             },
             changed: value => { drafts = drafts.map(item => item.id === initial.id ? value : item); draftGeneration++; saveDrafts.sensitive = !pending; },
             removed: () => { drafts = drafts.filter(item => item.id !== initial.id); draftGeneration++; saveDrafts.sensitive = !pending; },
@@ -182,19 +197,20 @@ app.connect('activate', () => {
             if (!pending) {
                 const snapshot = JSON.parse(candidate.request);
                 for (const profile of snapshot.catalog.profiles) {
-                    if (!profile.nativeModel) continue;
+                    if (!profile.nativeModel || profile.nativeModel.owned) continue;
                     const result = JSON.parse(await command(['/usr/bin/gpu-setup', 'fingerprint'], JSON.stringify({binding: profile.nativeModel})));
                     profile.nativeModel.launchSHA256 = result.sha256;
                 }
                 candidate.request = JSON.stringify(snapshot);
             }
             const preview = JSON.parse(await command(['/usr/bin/gpu-setup', 'validate'], candidate.request));
+            const hasOwned = profiles.some(profile => profile.nativeModel?.owned);
             if (!pending) await command(['/usr/bin/gpu-setup', 'verify-bindings'], candidate.request);
             if (!reviewed.accept(candidate)) {
                 status.label = 'Configuration changed during review. Review the updated configuration.';
                 return;
             }
-            status.label = `Review changes:\n${preview.changes.join('\n')}\n\n${profiles.length} workload(s) configured. Confirm below to apply.`;
+            status.label = `Review changes:\n${preview.changes.join('\n')}\n\n${profiles.length} workload(s) configured. Confirm below to apply.${hasOwned ? ' Managed launches require final application/model and lifecycle verification during Apply. No application is started by this review.' : ''}`;
             valid = true; confirm.sensitive = true;
         } catch (error) {
             reportError('Review failed. Correct the fields above or reopen Manage workloads to refresh, then review again.', error);
