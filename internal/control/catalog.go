@@ -40,17 +40,27 @@ func ValidWorkloadID(id Workload) bool {
 	return workloadID.MatchString(string(id)) && id != WorkloadIdle && id != WorkloadUnknown
 }
 
+type LaunchBinding struct {
+	Runtime      string `json:"runtime"`
+	Endpoint     string `json:"endpoint"`
+	LaunchFile   string `json:"launchFile"`
+	LaunchSHA256 string `json:"launchSHA256"`
+}
+
 type WorkloadProfile struct {
-	NativeModel *NativeModel `json:"nativeModel,omitempty"`
-	ID          Workload     `json:"id"`
-	Label       string       `json:"label"`
-	Adapter     string       `json:"adapter"`
-	Unit        string       `json:"unit"`
-	Cgroup      string       `json:"cgroup"`
-	HealthURL   string       `json:"healthURL"`
-	ReleaseURL  string       `json:"releaseURL,omitempty"`
-	RequiredMiB uint64       `json:"requiredMiB,omitempty"`
-	BootPolicy  string       `json:"bootPolicy,omitempty"`
+	LaunchBinding  *LaunchBinding `json:"launchBinding,omitempty"`
+	SystemdSlice   string         `json:"systemdSlice,omitempty"`
+	SystemdVersion uint16         `json:"systemdVersion,omitempty"`
+	NativeModel    *NativeModel   `json:"nativeModel,omitempty"`
+	ID             Workload       `json:"id"`
+	Label          string         `json:"label"`
+	Adapter        string         `json:"adapter"`
+	Unit           string         `json:"unit"`
+	Cgroup         string         `json:"cgroup"`
+	HealthURL      string         `json:"healthURL"`
+	ReleaseURL     string         `json:"releaseURL,omitempty"`
+	RequiredMiB    uint64         `json:"requiredMiB,omitempty"`
+	BootPolicy     string         `json:"bootPolicy,omitempty"`
 }
 type Catalog struct {
 	Version  int               `json:"version"`
@@ -106,6 +116,10 @@ func (c Catalog) Profile(id Workload) (WorkloadProfile, bool) {
 func (c Catalog) Clone() Catalog {
 	c.Profiles = append([]WorkloadProfile(nil), c.Profiles...)
 	for i := range c.Profiles {
+		if c.Profiles[i].LaunchBinding != nil {
+			b := *c.Profiles[i].LaunchBinding
+			c.Profiles[i].LaunchBinding = &b
+		}
 		if c.Profiles[i].NativeModel != nil {
 			n := *c.Profiles[i].NativeModel
 			if n.Owned != nil {
@@ -168,6 +182,21 @@ func (p WorkloadProfile) validate() error {
 }
 
 func (p WorkloadProfile) validateNativeBinding() error {
+	if p.SystemdSlice != "" && (p.SystemdSlice != "app.slice" || (p.SystemdVersion != 252 && p.SystemdVersion != 255 && p.SystemdVersion != 259)) {
+		return errors.New("unsupported automatic systemd slice")
+	}
+	if p.LaunchBinding != nil {
+		b := p.LaunchBinding
+		if p.NativeModel != nil || b.Runtime != "comfyui" || p.Adapter != "systemd" {
+			return errors.New("unsupported application launch binding")
+		}
+		if err := validateLaunchEvidence(b.Endpoint, b.LaunchFile, b.LaunchSHA256); err != nil {
+			return err
+		}
+		if p.HealthURL != b.Endpoint+"/system_stats" {
+			return errors.New("ComfyUI health route must match launch endpoint")
+		}
+	}
 	if p.NativeModel == nil {
 		return nil
 	}

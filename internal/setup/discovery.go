@@ -16,6 +16,7 @@ import (
 )
 
 type Discovery struct {
+	Errors       []string               `json:"errors,omitempty"`
 	Request      Request                `json:"request"`
 	Units        []string               `json:"units"`
 	Pending      bool                   `json:"pending"`
@@ -66,6 +67,8 @@ func (b Backend) Discover(ctx context.Context, home string) (Discovery, error) {
 	var units []string
 	if output, err := b.runCommand(ctx, "/usr/bin/systemctl", "--user", "list-unit-files", "--type=service", "--no-legend", "--no-pager"); err == nil && len(output) <= 1048576 {
 		units = serviceUnits(output)
+	} else {
+		result.Errors = append(result.Errors, "Application services could not be listed. Check your desktop user session and retry.")
 	}
 	result.Units = []string{}
 	b.discoverApplications(ctx, &result, units)

@@ -28,20 +28,24 @@ type ProbeRequest struct {
 	ReferenceKind string `json:"referenceKind,omitempty"`
 }
 type ApplicationCandidate struct {
-	App              string           `json:"app"`
-	ID               string           `json:"id"`
-	Label            string           `json:"label"`
-	Endpoint         string           `json:"endpoint,omitempty"`
-	Reference        string           `json:"reference,omitempty"`
-	ReferenceKind    string           `json:"referenceKind,omitempty"`
-	Unit             string           `json:"unit,omitempty"`
-	Cgroup           string           `json:"cgroup,omitempty"`
-	InstanceStatus   string           `json:"instanceStatus"`
-	InventoryStatus  string           `json:"inventoryStatus"`
-	Version          string           `json:"version,omitempty"`
-	Models           []ModelCandidate `json:"models"`
-	LifecycleControl string           `json:"lifecycleControl"`
-	NextStep         string           `json:"nextStep,omitempty"`
+	Recognized          bool             `json:"recognized"`
+	Location            string           `json:"location,omitempty"`
+	ConfigurationStatus string           `json:"configurationStatus,omitempty"`
+	Binding             *DraftBinding    `json:"binding,omitempty"`
+	App                 string           `json:"app"`
+	ID                  string           `json:"id"`
+	Label               string           `json:"label"`
+	Endpoint            string           `json:"endpoint,omitempty"`
+	Reference           string           `json:"reference,omitempty"`
+	ReferenceKind       string           `json:"referenceKind,omitempty"`
+	Unit                string           `json:"unit,omitempty"`
+	Cgroup              string           `json:"cgroup,omitempty"`
+	InstanceStatus      string           `json:"instanceStatus"`
+	InventoryStatus     string           `json:"inventoryStatus"`
+	Version             string           `json:"version,omitempty"`
+	Models              []ModelCandidate `json:"models"`
+	LifecycleControl    string           `json:"lifecycleControl"`
+	NextStep            string           `json:"nextStep,omitempty"`
 }
 type ModelCandidate struct {
 	ID       string   `json:"id"`
@@ -81,7 +85,7 @@ func (r ProbeRequest) validate() error {
 		return errors.New("reference must be an absolute clean path")
 	}
 	switch r.ReferenceKind {
-	case "application", "configuration", "model-file", "model-directory":
+	case "application", "application-directory", "configuration", "model-file", "model-directory":
 		return nil
 	}
 	return errors.New("unsupported reference kind")
@@ -191,7 +195,7 @@ func probeReference(ctx context.Context, r ProbeRequest, result ApplicationCandi
 		return missingReference(err, result), nil
 	}
 	// Do not resolve links or open devices/FIFOs. A selection is only a candidate.
-	directory := r.ReferenceKind == "model-directory"
+	directory := r.ReferenceKind == "model-directory" || r.ReferenceKind == "application-directory"
 	if (directory && !info.IsDir()) || (!directory && !info.Mode().IsRegular()) {
 		result.InstanceStatus = "invalid"
 		result.NextStep = "Select a regular file or a model directory; symbolic links and special files are not inspected."
@@ -214,7 +218,7 @@ func missingReference(err error, result ApplicationCandidate) ApplicationCandida
 	return result
 }
 func referencedCandidate(r ProbeRequest, directory bool, result ApplicationCandidate) ApplicationCandidate {
-	if r.ReferenceKind == "model-file" || directory {
+	if r.ReferenceKind == "model-file" || (directory && r.ReferenceKind == "model-directory") {
 		source := "file"
 		if directory {
 			source = "directory"

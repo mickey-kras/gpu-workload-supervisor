@@ -18,7 +18,7 @@ test('large discovery stays compact and adopts no service until explicit selecti
     assert.deepEqual(matches, ['worker-9999.service']);
     assert.equal(service.selected, 0);
     ui.edit(service, 'selected', 10000, 'notify::selected');
-    const validating = ui.by('Review configuration').emit('clicked');
+    const validating = ui.by('Finish setup').emit('clicked');
     const sent = JSON.parse(ui.calls.at(-1).input);
     assert.equal(sent.catalog.profiles[0].unit, 'worker-9999.service');
     assert.equal(sent.catalog.profiles[0].cgroup, undefined);
@@ -29,7 +29,7 @@ test('large discovery stays compact and adopts no service until explicit selecti
 
 test('editing invalidates review and requires fresh explicit confirmation', async () => {
     const ui = await launch({profiles: [{id: 'stable', label: 'Existing', unit: 'old.service', cgroup: '/old', healthURL: 'http://localhost:1', custom: 'keep'}]});
-    const reviewing = ui.by('Review configuration').emit('clicked');
+    const reviewing = ui.by('Finish setup').emit('clicked');
     ui.finish(); await reviewing;
     const confirm = ui.widgets.find(widget => widget.children.some(child => child.label?.startsWith('I have paused')));
     ui.edit(confirm, 'active', true, 'toggled');
@@ -37,7 +37,7 @@ test('editing invalidates review and requires fresh explicit confirmation', asyn
     ui.edit(ui.by('Display name'), 'text', 'Renamed', 'changed');
     assert.equal(ui.by('Apply configuration').sensitive, false);
     assert.equal(confirm.active, false);
-    const second = ui.by('Review configuration').emit('clicked');
+    const second = ui.by('Finish setup').emit('clicked');
     ui.finish(); await second;
     await ui.by('Apply configuration').emit('clicked');
     assert.equal(ui.calls.filter(call => call.argv[1] === 'apply').length, 0);
@@ -56,7 +56,7 @@ test('editing invalidates review and requires fresh explicit confirmation', asyn
 test('pending activation reviews and resumes its exact original request', async () => {
     const ui = await launch({pending: true, profiles: [{id: 'stable', label: 'Existing', unit: 'missing.service', opaque: {keep: true}}]});
     assert.equal(ui.by('Add existing service (Advanced)').sensitive, false);
-    const reviewing = ui.by('Review configuration').emit('clicked');
+    const reviewing = ui.by('Finish setup').emit('clicked');
     assert.deepEqual(JSON.parse(ui.calls.at(-1).input), ui.request);
     ui.finish(); await reviewing;
     const confirm = ui.widgets.find(widget => widget.children.some(child => child.label?.startsWith('I have paused')));
@@ -68,7 +68,7 @@ test('pending activation reviews and resumes its exact original request', async 
 
 test('late validation cannot enable applying edited settings', async () => {
     const ui = await launch();
-    const reviewing = ui.by('Review configuration').emit('clicked');
+    const reviewing = ui.by('Finish setup').emit('clicked');
     ui.edit(ui.by('NVIDIA GPU index'), 'text', '3', 'changed');
     ui.finish(); await reviewing;
     const confirm = ui.widgets.find(widget => widget.children.some(child => child.label?.startsWith('I have paused')));
@@ -79,14 +79,14 @@ test('late validation cannot enable applying edited settings', async () => {
 });
 
 
-test('required workload fields stay visible and removing a card removes only that profile', async () => {
+test('technical workload fields stay collapsed and removing a card removes only that profile', async () => {
     const ui = await launch({profiles: [{id: 'keep', unit: 'keep.service', label: 'Keep'}, {id: 'edit', unit: 'edit.service', label: 'Edit'}]});
     const group = ui.by('Edit');
     for (const title of ['Existing user service', 'Cgroup path beneath /sys/fs/cgroup (required)', 'Loopback health URL (required)'])
-        assert.ok(group.children.includes(ui.widgets.filter(widget => widget.title === title)[1]), `required field stays at card top level: ${title}`);
-    assert.equal(group.children.find(widget => widget.title === 'Workload details').expanded, false);
+        assert.ok(group.children.find(widget => widget.title === 'Advanced').children.includes(ui.widgets.filter(widget => widget.title === title)[1]), `technical field stays in Advanced: ${title}`);
+    assert.equal(group.children.find(widget => widget.title === 'Advanced').expanded, false);
     group.children.find(widget => widget.label === 'Remove from supervisor').emit('clicked');
-    const reviewing = ui.by('Review configuration').emit('clicked');
+    const reviewing = ui.by('Finish setup').emit('clicked');
     assert.deepEqual(JSON.parse(ui.calls.at(-1).input).catalog.profiles, [{id: 'keep', unit: 'keep.service', label: 'Keep'}]);
     ui.finish(); await reviewing;
 });
@@ -95,10 +95,10 @@ for (const failure of ['discover', 'validate', 'apply']) {
     test(`${failure} failure cannot enable an unreviewed or repeated apply`, async () => {
         const ui = await launch({fail: failure});
         if (failure === 'discover') {
-            assert.equal(ui.by('Review configuration').sensitive, false);
+            assert.equal(ui.by('Finish setup').sensitive, false);
             assert.equal(ui.by('Add existing service (Advanced)').sensitive, false);
         } else {
-            const reviewing = ui.by('Review configuration').emit('clicked');
+            const reviewing = ui.by('Finish setup').emit('clicked');
             ui.finish(); await reviewing;
             const confirm = ui.widgets.find(widget => widget.children.some(child => child.label?.startsWith('I have paused')));
             if (failure === 'apply') {
@@ -107,7 +107,7 @@ for (const failure of ['discover', 'validate', 'apply']) {
                 assert.equal(confirm.sensitive, false);
                 assert.equal(ui.by('Add existing service (Advanced)').sensitive, false);
                 assert.equal(ui.by('Set up later').sensitive, true, 'failed apply must not trap the user');
-                assert.equal(ui.by('Review configuration').sensitive, true, 'recovery requires a fresh review');
+                assert.equal(ui.by('Finish setup').sensitive, true, 'recovery requires a fresh review');
             }
             await ui.by('Apply configuration').emit('clicked');
             assert.equal(ui.calls.filter(call => call.argv[1] === 'apply').length, failure === 'apply' ? 1 : 0);
@@ -119,7 +119,7 @@ for (const failure of ['discover', 'validate', 'apply']) {
 
 test('apply failure keeps the raw backend error collapsed under the actionable summary', async () => {
     const ui = await launch({fail: 'apply'});
-    const reviewing = ui.by('Review configuration').emit('clicked');
+    const reviewing = ui.by('Finish setup').emit('clicked');
     ui.finish(); await reviewing;
     const confirm = ui.widgets.find(widget => widget.children.some(child => child.label?.startsWith('I have paused')));
     ui.edit(confirm, 'active', true, 'toggled');
@@ -133,7 +133,7 @@ test('apply failure keeps the raw backend error collapsed under the actionable s
 
 test('validation failure names the next action and collapses the raw error', async () => {
     const ui = await launch({fail: 'validate'});
-    const reviewing = ui.by('Review configuration').emit('clicked');
+    const reviewing = ui.by('Finish setup').emit('clicked');
     ui.finish(); await reviewing;
     const details = ui.by('Technical details');
     assert.equal(details.visible, true);
@@ -145,18 +145,18 @@ test('validation failure names the next action and collapses the raw error', asy
 test('invalid numerical input fails before backend validation and can be corrected', async () => {
     const ui = await launch();
     ui.edit(ui.by('NVIDIA GPU index'), 'text', '-1', 'changed');
-    await ui.by('Review configuration').emit('clicked');
+    await ui.by('Finish setup').emit('clicked');
     assert.equal(ui.calls.filter(call => call.argv[1] === 'validate').length, 0);
     assert.equal(ui.by('Apply configuration').sensitive, false);
-    assert.equal(ui.by('Review configuration').sensitive, true);
+    assert.equal(ui.by('Finish setup').sensitive, true);
     ui.edit(ui.by('NVIDIA GPU index'), 'text', '0', 'changed');
     ui.by('Add existing service (Advanced)').emit('clicked');
     const vram = ui.by('Measured VRAM requirement (MiB; optional)');
     ui.edit(vram, 'text', '123.5', 'changed');
-    await ui.by('Review configuration').emit('clicked');
+    await ui.by('Finish setup').emit('clicked');
     assert.equal(ui.calls.filter(call => call.argv[1] === 'validate').length, 0);
     ui.edit(vram, 'text', '', 'changed');
-    const reviewing = ui.by('Review configuration').emit('clicked');
+    const reviewing = ui.by('Finish setup').emit('clicked');
     assert.equal(JSON.parse(ui.calls.at(-1).input).catalog.profiles[0].requiredMiB, undefined);
     ui.finish(); await reviewing;
 });
@@ -164,7 +164,7 @@ test('invalid numerical input fails before backend validation and can be correct
 test('unsupported desktop never discovers or applies workloads', async () => {
     const ui = await launch({version: 'GNOME Shell 49.0'});
     assert.deepEqual(ui.calls.map(call => call.argv[1]), ['--version']);
-    assert.equal(ui.by('Review configuration').sensitive, false);
+    assert.equal(ui.by('Finish setup').sensitive, false);
     assert.equal(ui.by('Add existing service (Advanced)').sensitive, false);
 });
 
@@ -175,16 +175,16 @@ test('manual service names preserve template instances and picker updates the sa
     assert.ok(manual, 'undiscovered services remain configurable');
     const service = ui.by('Existing user service');
     ui.edit(service, 'selected', 2, 'notify::selected');
-    assert.equal(ui.by('Workload details').expanded, true);
+    assert.equal(ui.by('Advanced').expanded, true);
     assert.equal(manual.focused, true);
     ui.edit(manual, 'text', 'worker@model.service', 'changed');
-    const reviewing = ui.by('Review configuration').emit('clicked');
+    const reviewing = ui.by('Finish setup').emit('clicked');
     assert.equal(JSON.parse(ui.calls.at(-1).input).catalog.profiles[0].unit, 'worker@model.service');
     ui.finish(); await reviewing;
     ui.edit(service, 'selected', 1, 'notify::selected');
     assert.equal(manual.text, 'known.service');
     assert.equal(ui.by('Apply configuration').sensitive, false);
-    const second = ui.by('Review configuration').emit('clicked');
+    const second = ui.by('Finish setup').emit('clicked');
     assert.equal(JSON.parse(ui.calls.at(-1).input).catalog.profiles[0].unit, 'known.service');
     ui.finish(); await second;
 });
@@ -192,11 +192,11 @@ test('manual service names preserve template instances and picker updates the sa
 
 test('workload titles escape markup while reviewed labels retain their exact text', async () => {
     const ui = await launch({profiles: [{id: 'literal', label: '<b>GPU & work</b>', unit: 'literal.service'}]});
-    const group = ui.widgets.find(widget => widget.description?.startsWith('Required:'));
+    const group = ui.widgets.find(widget => widget.description?.startsWith('Start and stop'));
     assert.equal(group.title, '&lt;b&gt;GPU &amp; work&lt;/b&gt;');
     ui.edit(ui.by('Display name'), 'text', 'Render < & >');
     assert.equal(group.title, 'Render &lt; &amp; &gt;');
-    const reviewing = ui.by('Review configuration').emit('clicked');
+    const reviewing = ui.by('Finish setup').emit('clicked');
     assert.equal(JSON.parse(ui.calls.at(-1).input).catalog.profiles[0].label, 'Render < & >');
     ui.finish(); await reviewing;
 });
@@ -328,7 +328,7 @@ test('review refreshes configured native launch fingerprints automatically', asy
     const ui = await launch({profiles: [{id: 'text', nativeModel: {runtime: 'ollama', model: 'chosen', launchFile: '/trusted/model.service', launchSHA256: 'old'}}],
         responses: {fingerprint: {sha256: 'new'}}, deferAction: 'none'});
     assert.equal(ui.by('Service file SHA-256'), undefined);
-    await ui.by('Review configuration').emit('clicked');
+    await ui.by('Finish setup').emit('clicked');
     const validation = JSON.parse(ui.calls.find(call => call.argv[1] === 'validate').input);
     assert.equal(validation.catalog.profiles[0].nativeModel.launchSHA256, 'new');
     ui.edit(ui.widgets.find(widget => widget.active === false && widget.sensitive), 'active', true);

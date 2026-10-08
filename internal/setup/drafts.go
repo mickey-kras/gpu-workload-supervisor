@@ -217,7 +217,7 @@ func validateDraftReference(d Draft) error {
 		return errors.New("draft path must be absolute and clean")
 	}
 	switch d.ReferenceKind {
-	case "application", "configuration", "model-file", "model-directory":
+	case "application", "application-directory", "configuration", "model-file", "model-directory":
 		return nil
 	}
 	return errors.New("invalid draft reference kind")

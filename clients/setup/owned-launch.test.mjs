@@ -14,13 +14,13 @@ test('managed launch is previewed without fingerprinting a nonexistent unit or s
     const rendered = JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input);
     assert.deepEqual(rendered.draft.binding, {instance: 'local', owned: {port: 11434}});
     assert.equal(rendered.managerCgroup, undefined);
-    await ui.by('Review configuration').emit('clicked');
+    await ui.by('Finish setup').emit('clicked');
     const reviewed = JSON.parse(ui.calls.at(-1).input);
     assert.deepEqual(reviewed.catalog.profiles[0], owned);
     assert.equal(reviewed.catalog.version, 2);
     assert.ok(ui.calls.filter(call => ['verify-bindings', 'validate'].includes(call.argv[1])).every(call => JSON.parse(call.input).catalog.version === 2));
     assert.ok(!ui.calls.some(call => ['fingerprint', 'apply'].includes(call.argv[1])));
-    assert.ok(ui.widgets.some(widget => widget.label?.includes('verification during Apply')));
+    assert.ok(ui.widgets.some(widget => widget.label?.includes('Allow GPU Workload Supervisor')));
     const confirm = ui.widgets.find(widget => widget.children.some(child => child.label?.startsWith('I have paused')));
     ui.edit(confirm, 'active', true);
     await ui.by('Apply configuration').emit('clicked');
@@ -34,7 +34,7 @@ test('a second Ollama model preserves the shared instance and derived service', 
     const second = {...owned, id: 'ollama-other', label: 'Other', nativeModel: {...owned.nativeModel, model: 'other:latest'}};
     const ui = await launch({profiles: [owned], responses: {drafts: {drafts: [{...draft, model: 'other:latest'}]}, 'render-owned': {profile: second}}, deferAction: 'unused'});
     await ui.by('Preview managed launch and add for review').emit('clicked');
-    await ui.by('Review configuration').emit('clicked');
+    await ui.by('Finish setup').emit('clicked');
     const profiles = JSON.parse(ui.calls.at(-1).input).catalog.profiles;
     assert.equal(profiles.length, 2);
     assert.equal(profiles[0].unit, profiles[1].unit);
@@ -80,10 +80,10 @@ for (const app of ['llama.cpp', 'vllm']) {
 
 test('editing an owned launch replaces its reviewed catalog entry only after preview', async () => {
     const ui = await launch({profiles: [{...owned, requiredMiB: 12000, bootPolicy: 'retain'}], responses: {'render-owned': {profile: {...owned, label: 'Updated'}}}, deferAction: 'unused'});
-    await ui.by('Edit managed launch').emit('clicked');
+    await ui.by('Edit application').emit('clicked');
     ui.edit(ui.by('Model name'), 'text', 'other:latest');
     await ui.by('Preview managed launch and add for review').emit('clicked');
-    await ui.by('Review configuration').emit('clicked');
+    await ui.by('Finish setup').emit('clicked');
     const profiles = JSON.parse(ui.calls.at(-1).input).catalog.profiles;
     assert.equal(profiles.length, 1);
     assert.equal(profiles[0].label, 'Updated');
@@ -97,7 +97,7 @@ test('a saved managed-launch edit reopens and replaces the original stable workl
         binding: {instance: 'local', owned: {port: 11434}}};
     const ui = await launch({profiles: [{...owned, requiredMiB: 12000, bootPolicy: 'retain'}], responses: {drafts: {drafts: [savedEdit]}, 'render-owned': {profile: {...owned, label: 'Updated'}}}, deferAction: 'unused'});
     await ui.by('Preview managed launch and add for review').emit('clicked');
-    await ui.by('Review configuration').emit('clicked');
+    await ui.by('Finish setup').emit('clicked');
     const profiles = JSON.parse(ui.calls.at(-1).input).catalog.profiles;
     assert.equal(profiles.length, 1);
     assert.equal(profiles[0].id, owned.id);
@@ -109,13 +109,13 @@ test('a saved managed-launch edit reopens and replaces the original stable workl
 test('managed launch editing retains resource/login edits made during binding verification', async () => {
     const ui = await launch({profiles: [{...owned, requiredMiB: 12000, bootPolicy: 'retain'}],
         responses: {'render-owned': {profile: owned}}, deferAction: 'verify-bindings'});
-    await ui.by('Edit managed launch').emit('clicked');
+    await ui.by('Edit application').emit('clicked');
     const preview = ui.by('Preview managed launch and add for review').emit('clicked');
     await new Promise(resolve => setImmediate(resolve));
     ui.edit(ui.by('Measured VRAM requirement (MiB; optional)'), 'text', '16000');
     ui.edit(ui.by('Keep this workload running at login if already active'), 'active', false);
     ui.finish(); await preview;
-    const review = ui.by('Review configuration').emit('clicked');
+    const review = ui.by('Finish setup').emit('clicked');
     await new Promise(resolve => setImmediate(resolve));
     ui.finish(); await review;
     const profile = JSON.parse(ui.calls.at(-1).input).catalog.profiles[0];

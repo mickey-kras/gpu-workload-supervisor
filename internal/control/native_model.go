@@ -85,19 +85,28 @@ func (n NativeModel) validate() error {
 	if !ValidInstanceID(n.Instance) || !ValidNativeModelIdentity(n.Runtime, n.Model) {
 		return errors.New("invalid native model identity")
 	}
-	u, err := url.Parse(n.Endpoint)
+	if err := validateLaunchEvidence(n.Endpoint, n.LaunchFile, n.LaunchSHA256); err != nil {
+		return err
+	}
+	return n.validateOwned()
+}
+
+// validateLaunchEvidence is the boundary shared by application and model
+// bindings. Runtime identity and owned-launch rules are checked by their types.
+func validateLaunchEvidence(endpoint, launchFile, launchSHA256 string) error {
+	u, err := url.Parse(endpoint)
 	if err != nil || u.RawQuery != "" || u.Path != "" {
 		return errors.New("native endpoint must be a base URL")
 	}
-	p := WorkloadProfile{HealthURL: n.Endpoint}
+	p := WorkloadProfile{HealthURL: endpoint}
 	if err := p.validateEndpoints(); err != nil {
 		return err
 	}
-	hash, err := hex.DecodeString(n.LaunchSHA256)
-	if err != nil || len(hash) != 32 || !filepath.IsAbs(n.LaunchFile) || filepath.Clean(n.LaunchFile) != n.LaunchFile {
+	hash, err := hex.DecodeString(launchSHA256)
+	if err != nil || len(hash) != 32 || !filepath.IsAbs(launchFile) || filepath.Clean(launchFile) != launchFile {
 		return errors.New("native launch file and SHA256 required")
 	}
-	return n.validateOwned()
+	return nil
 }
 
 // validateOwned enforces the per-runtime owned launch admissibility rules and

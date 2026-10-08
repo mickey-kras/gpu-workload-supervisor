@@ -87,15 +87,39 @@ func verifyOwnedSpecWithValidator(p control.WorkloadProfile, validate func(strin
 }
 
 func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.WorkloadProfile) error {
-	if p.NativeModel == nil {
+	if err := m.verifyAutomaticPlacement(ctx, p); err != nil {
+		return err
+	}
+	if p.NativeModel == nil && p.LaunchBinding == nil {
 		return nil
 	}
 	validate := m.nativeExecutableValidator
 	if validate == nil {
 		validate = validateNativeExecutable
 	}
-	if err := verifyNativeLaunchWithValidator(*p.NativeModel, validate); err != nil {
-		return err
+	launchFile := ""
+	if p.NativeModel != nil {
+		launchFile = p.NativeModel.LaunchFile
+		if err := verifyNativeLaunchWithValidator(*p.NativeModel, validate); err != nil {
+			return err
+		}
+	} else {
+		binding := p.LaunchBinding
+		launchFile = binding.LaunchFile
+		raw, err := readNativeLaunch(launchFile)
+		if err != nil {
+			return err
+		}
+		if m.nativeExecutableValidator == nil {
+			validate = validateComfyExecutable
+		}
+		found, err := inspectAutomaticLaunch(raw, binding.Runtime, validate)
+		if err != nil {
+			return err
+		}
+		if found.SHA256 != binding.LaunchSHA256 || found.Endpoint != binding.Endpoint {
+			return ErrLaunchChanged
+		}
 	}
 	b, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show", "--property=FragmentPath", "--property=DropInPaths", "--property=NeedDaemonReload", "--", p.Unit)
 	if err != nil {
@@ -108,7 +132,7 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 	if values["NeedDaemonReload"] != "no" {
 		return ErrLaunchChanged
 	}
-	return CheckNativeBinding(values, p.Unit, p.NativeModel.LaunchFile)
+	return CheckNativeBinding(values, p.Unit, launchFile)
 }
 
 // ParseUnitProperties parses systemctl show output into key/value pairs,

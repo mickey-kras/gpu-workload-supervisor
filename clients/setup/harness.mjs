@@ -1,7 +1,7 @@
 import {loadGjsModule} from '../gnome/tests/gjs-modules.js';
 
 // Substitute only GI widgets and subprocesses; run the setup's real event handlers.
-export async function launch({units = [], profiles = [], pending = false, fail = null, version = 'GNOME Shell 50.1', responses = {}, filePath = '/models/selected.gguf', fileError = null, deferAction = 'validate'} = {}) {
+export async function launch({units = [], profiles = [], pending = false, fail = null, version = 'GNOME Shell 50.1', responses = {}, filePath = '/models/selected.gguf', fileError = null, deferAction = 'validate', deferOccurrence = null} = {}) {
     const widgets = []; const calls = []; const deferred = [];
     class Widget {
         signals = new Map(); children = []; sensitive = true;
@@ -27,7 +27,11 @@ export async function launch({units = [], profiles = [], pending = false, fail =
         set_child(child) { this.append(child); }
         set_content(child) { this.append(child); }
         add_css_class(name) { this.cssClasses ??= []; this.cssClasses.push(name); }
-        remove(child) { this.children.splice(this.children.indexOf(child), 1); }
+        remove(child) {
+            const index = this.children.indexOf(child);
+            if (index < 0) throw new Error('Cannot remove a widget that is not a direct child');
+            this.children.splice(index, 1);
+        }
         present() { this.presented = true; }
         close() { this.closed = true; }
         grab_focus() { this.focused = true; }
@@ -65,7 +69,7 @@ export async function launch({units = [], profiles = [], pending = false, fail =
             Subprocess: {new(argv) { return {
                 communicate_utf8_async(input, cancel, callback) {
                     calls.push({argv, input});
-                    if (argv[1] === deferAction) deferred.push(() => callback(this, {}));
+                    if (argv[1] === deferAction && (deferOccurrence === null || calls.filter(call => call.argv[1] === deferAction).length === deferOccurrence)) deferred.push(() => callback(this, {}));
                     else callback(this, {});
                 },
                 communicate_utf8_finish() {

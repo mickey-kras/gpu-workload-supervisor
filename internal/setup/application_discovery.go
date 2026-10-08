@@ -21,6 +21,10 @@ func (b Backend) discoverApplications(ctx context.Context, result *Discovery, un
 		}
 		result.Applications = append(result.Applications, found)
 	}
+	if len(units) > 256 {
+		result.Errors = append(result.Errors, "Too many services for bounded application discovery. Choose a supported installation explicitly.")
+		return
+	}
 	for _, unit := range units {
 		if ctx.Err() != nil {
 			return
@@ -46,15 +50,21 @@ func unitRelevant(unit string, profiles []control.WorkloadProfile) bool {
 	return false
 }
 func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit string) {
-	if !unitRelevant(unit, result.Request.Catalog.Profiles) {
+	values, err := b.showAutomatic(ctx, unit)
+	if err != nil {
+		result.Errors = append(result.Errors, "Could not inspect "+unit+": "+err.Error())
 		return
 	}
-	output, err := b.runCommand(ctx, "/usr/bin/systemctl", "--user", "show", unit, "--property=ExecStart,ControlGroup,ActiveState,SubState", "--no-pager")
-	if err != nil || len(output) > 1048576 {
-		return
-	}
-	app := appFromUnit(string(output))
+	app := appFromUnit("ExecStart=" + values["ExecStart"])
 	if app == "" {
+		if unitRelevant(unit, result.Request.Catalog.Profiles) {
+			found := candidate(ProbeRequest{App: applicationHint(unit), Reference: unit, ReferenceKind: "configuration"})
+			found.Unit = unit
+			found.InstanceStatus = "unsupported"
+			found.ConfigurationStatus = "unsupported"
+			found.NextStep = "This launch is not supported. Choose a supported direct application configuration."
+			result.Applications = append(result.Applications, found)
+		}
 		return
 	}
 	found := candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"})
@@ -62,22 +72,79 @@ func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit strin
 	found.ReferenceKind = ""
 	found.Unit = unit
 	found.Label = appLabel(app) + " - " + unit
-	values := unitProperties(string(output))
+	found.Location = values["FragmentPath"]
 	found.Cgroup = values["ControlGroup"]
-	if models := launchModels(app, string(output)); models != nil {
+	found.ConfigurationStatus = "unsupported"
+	if models := launchModels(app, "ExecStart="+values["ExecStart"]); models != nil {
 		found.Models = models
 	}
 	if values["ActiveState"] == "inactive" && values["SubState"] == "dead" {
 		found.InstanceStatus = "not-running"
-		found.NextStep = "This instance is stopped. Select its existing launch configuration or start it separately to read its inventory."
+	}
+	model := ""
+	if app == "ollama" {
+		model = "selection-pending"
+	}
+	profile, err := b.configurationFromMetadata(ctx, app, unit, model, values)
+	if err != nil {
+		found.NextStep = err.Error()
 	} else {
-		found.NextStep = "Select this instance's endpoint or existing launch configuration. Lifecycle control is unverified."
+		found.Recognized = true
+		found.ConfigurationStatus = "ready"
+		endpoint := ""
+		launchFile := ""
+		instance := ""
+		model := ""
+		if profile.NativeModel != nil {
+			endpoint = profile.NativeModel.Endpoint
+			launchFile = profile.NativeModel.LaunchFile
+			instance = profile.NativeModel.Instance
+			model = profile.NativeModel.Model
+		}
+		if profile.LaunchBinding != nil {
+			endpoint = profile.LaunchBinding.Endpoint
+			launchFile = profile.LaunchBinding.LaunchFile
+		}
+		found.Endpoint = endpoint
+		found.Cgroup = profile.Cgroup
+		found.Binding = &DraftBinding{Unit: unit, Cgroup: profile.Cgroup, HealthURL: profile.HealthURL, Instance: instance, Model: model, LaunchFile: launchFile}
+		if app == "ollama" {
+			found.Binding.Model = ""
+			found.ConfigurationStatus = "model-required"
+		}
+		found.NextStep = "Ready to configure. Finish to review and confirm control of this installation."
+		if found.InstanceStatus == "not-running" {
+			found.NextStep = "Installed and stopped. Ready to configure."
+		} else {
+			observed, probeErr := b.probeApplication(ctx, ProbeRequest{App: app, Endpoint: endpoint})
+			if probeErr != nil {
+				found.NextStep = "Application inventory could not be read. Retry or choose an existing model."
+			} else {
+				found.InstanceStatus = observed.InstanceStatus
+				found.InventoryStatus = observed.InventoryStatus
+				if app == "ollama" {
+					found.Models = observed.Models
+				}
+			}
+		}
 	}
 	if app == "comfyui" {
 		found.InventoryStatus = "not-applicable"
 	}
 	result.Units = append(result.Units, unit)
 	result.Applications = append(result.Applications, found)
+}
+func applicationHint(unit string) string {
+	lower := strings.ToLower(unit)
+	for _, app := range []string{"comfyui", "ollama", "vllm"} {
+		if strings.Contains(lower, app) {
+			return app
+		}
+	}
+	if strings.Contains(lower, "llama") {
+		return appLlamaCPP
+	}
+	return ""
 }
 func unitProperties(output string) map[string]string {
 	values := map[string]string{}

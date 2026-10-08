@@ -68,6 +68,80 @@ def prepare_session():
             assert environment.get(key) == expected, f"disposable session mismatch: {key}"
 
 
+def stopped_application():
+    """Configure a recognized launch without executing its application fixture."""
+    unit = HOME / ".config/systemd/user/gws-ci-comfyui.service"
+    application = HOME / "ComfyUI/main.py"
+    started = HOME / "application-started"
+    write(application, f"from pathlib import Path\nPath({str(started)!r}).touch()\n")
+    interpreter = str(pathlib.Path("/usr/bin/python3").resolve())
+    original = ("[Service]\nType=exec\nExecStart=" + interpreter + " " + str(application) +
+                " --listen 127.0.0.1 --port 18188 --disable-auto-launch\n")
+    write(unit, original)
+    run("systemctl", "--user", "daemon-reload")
+    # Activate only infrastructure: no application startup is necessary to
+    # observe the real supported parent slice's placement.
+    run("systemctl", "--user", "start", "app.slice")
+    parent = run("systemctl", "--user", "show", "app.slice",
+                 "--property=ControlGroup", "--value").strip()
+    assert parent.startswith("/user.slice/")
+
+    def stopped():
+        properties = run("systemctl", "--user", "show", unit.name,
+                         "--property=ActiveState,SubState,ControlGroup")
+        actual = dict(line.split("=", 1) for line in properties.splitlines() if "=" in line)
+        assert actual == {"ActiveState": "inactive", "SubState": "dead", "ControlGroup": ""}, actual
+        assert not started.exists(), "setup executed the stopped application"
+
+    stopped()
+    found = json.loads(setup("discover"))
+    installation, = [item for item in found["applications"] if item.get("unit") == unit.name]
+    assert installation["app"] == "comfyui" and installation["recognized"]
+    assert installation["configurationStatus"] == "ready", installation
+    assert installation["inventoryStatus"] == "not-applicable"
+    stopped()
+    draft = {"id": "ci-comfyui", "label": "CI ComfyUI", "app": "comfyui",
+             "binding": {"unit": unit.name}}
+    profile = json.loads(setup("prepare", {"draft": draft}))["profile"]
+    assert profile["unit"] == unit.name
+    assert profile["cgroup"] == parent + "/" + unit.name
+    assert profile["systemdSlice"] == "app.slice"
+    assert profile["healthURL"] == "http://127.0.0.1:18188/system_stats"
+    assert "nativeModel" not in profile, "ComfyUI must not require a model"
+    binding = profile["launchBinding"]
+    assert binding["launchFile"] == str(unit) and binding["launchSHA256"] == digest(unit)
+    stopped()
+    request = found["request"]
+    request["catalog"]["profiles"].append(profile)
+    setup("verify-bindings", request)
+    setup("validate", request)
+    # Advanced overrides use the same backend validation as automatic settings.
+    invalid = copy.deepcopy(request)
+    invalid["catalog"]["profiles"][-1]["healthURL"] = "http://127.0.0.1:18189/system_stats"
+    setup("validate", invalid, "ComfyUI health route must match launch endpoint")
+    stopped()
+    request["confirmQuiesced"] = True
+    setup("apply", request)
+    stopped()
+    configured = json.loads(setup("discover"))["request"]
+    assert configured["catalog"]["profiles"][-1] == profile
+    # A changed external launch invalidates its retained verification evidence.
+    write(unit, original + "# external edit\n")
+    run("systemctl", "--user", "daemon-reload")
+    setup("verify-bindings", configured, "launch")
+    stopped()
+    write(unit, original)
+    run("systemctl", "--user", "daemon-reload")
+    preserved = {path: digest(path) for path in (unit, application)}
+    configured["catalog"]["profiles"] = [item for item in configured["catalog"]["profiles"]
+                                           if item["id"] != profile["id"]]
+    configured["confirmQuiesced"] = True
+    setup("apply", configured)
+    stopped()
+    for path, expected in preserved.items():
+        assert digest(path) == expected, f"removing application changed external file: {path}"
+
+
 
 def main():
     assert os.geteuid() != 0
@@ -177,7 +251,8 @@ def main():
     assert link.is_symlink()
     assert timer_link.is_symlink()
     assert digest(workload) == preserved[workload]
-    print("PASS: packaged setup, real user systemd, interrupted resume, stale preview, backups, removal/reapply")
+    stopped_application()
+    print("PASS: packaged setup, real user systemd, interrupted resume, stale preview, backups, removal/reapply, stopped automatic configuration")
 
 
 if __name__ == "__main__":

@@ -17,20 +17,21 @@ open **GPU Workload Setup** as the desktop account. Package installation install
 files only: there are no maintainer scripts opening user databases, enumerating
 sessions, stopping workloads, or enabling services for arbitrary users.
 
-Setup discovers existing systemd user services without adopting them. Add each
-workload explicitly with its stable ID, display label, service, cgroup path,
-loopback health URL, measured VRAM requirement, and login policy. Applications
-and models must already exist. Adopt existing workload units, or use the backend's
-supervisor-owned launch configuration for supported native model runtimes.
-New workloads default to stop-to-idle at reconciliation; retain is an explicit choice. Live media unload
-remains subject to the backend's fail-closed release restrictions.
+Choose ComfyUI, Ollama, llama.cpp or vLLM. Setup selects one recognized
+installation automatically, or asks you to choose when several exist. Choose a
+model only when the runtime needs it; ComfyUI workflows select their own models.
+Applications and models must already exist.
 
-Review **Validate and preview**, explicitly confirm a quiescent activation, then
-apply. Setup validates the backend catalog and executable configuration. It refuses
-user-owned or edited integration files, stale catalog revisions, live workloads,
-unfinished work/transitions, and ownership/state relocation. It never silently
-stops or starts workloads or changes current ownership. The reconciliation unit is
-enabled for future logins without `--now`; it is a oneshot, not a UI daemon.
+Select **Finish**, review the application and intended start/stop control, then
+confirm after active jobs finish and choose **Apply**. ComfyUI closes when you
+switch to another workload. **Advanced** exposes service, endpoint, launch and
+resource settings for inspection or supported overrides. Automatic and manual
+configuration use the same validation and activation safeguards.
+
+Setup refuses stale configuration, edited integration files, live workloads,
+unfinished transitions and unsafe ownership/state relocation. Discovery and
+preview never start applications or load models. Reconciliation is enabled for
+future logins without `--now`; it is a oneshot, not a UI daemon.
 
 The extension may require logout/login before GNOME discovers a new system-wide
 installation. Enable **GPU Workload Supervisor** in GNOME Extensions afterward.
@@ -42,7 +43,7 @@ The effective account's OS home determines the private profile location:
 do not select runtime configuration. The accepted workload catalog and its opaque
 revision live in SQLite; `catalog.json` is only an owned setup/backup artifact.
 Ordinary controls never adopt edits to that mirror. Setup exposes `discover`,
-`probe`, `fingerprint`, `drafts`, `save-drafts`, `verify-bindings`, `validate`,
+`probe`, `prepare`, `fingerprint`, `drafts`, `save-drafts`, `verify-bindings`, `validate`,
 `apply`, `reconcile` and `remove-integration`; request/response commands use a
 strict versioned JSON protocol over stdin/stdout. The desktop application
 supplies these requests and renders the concrete preview.
@@ -52,27 +53,23 @@ supplies these requests and renders the concrete preview.
 Open **Manage workloads** from GPU Control in GNOME's top-right Quick Settings
 menu. The packaged setup application is also available in the application list.
 
-1. Choose ComfyUI, Ollama, llama.cpp or vLLM and select **Add workload**.
-2. Choose a detected instance. **Refresh discovery** reads its existing inventory;
-   it never starts an application or loads a model.
-3. Choose a native model, or an explicit model file/folder. ComfyUI skips model
-   selection because workflows choose models. File selection does not establish
-   compatibility.
-4. **Save drafts** to finish later. Drafts retain application, address/path,
-   model and launch choices; they remain separate from selectable workloads.
-5. For Ollama, llama.cpp or vLLM, use **Supervisor-managed launch**. Review the
-   instance name, launch port and model name/file/directory. Additional controlled
-   options are under **Advanced launch options**. Applications and models must
-   already exist; setup does not install or download them.
-6. Select **Preview managed launch and add for review**. This derives a profile,
-   unit identity and content hash; it does not write a unit or start a workload.
-7. Alternatively, use **Advanced launch binding** to adopt an existing isolated
-   service. Supply its service, cgroup and health URL, plus native instance/model
-   identity and launch file where relevant. **Verify binding and add for review**
-   fingerprints the existing file without changing it.
-8. Select **Review configuration**. Switch to Idle and finish active jobs before
-   confirming **Apply configuration**. Apply writes reviewed supervisor-owned
-   units and commits the catalog through the existing activation safeguards.
+1. Choose the application and select **Add workload**.
+2. Select an installation or model only when a choice is needed. **Refresh discovery**
+   reads existing metadata and inventory without starting the application.
+3. Select **Finish**. Setup prepares and verifies the configuration internally,
+   then presents its start/stop summary.
+4. Finish active jobs, switch to Idle, confirm the summary and select **Apply**.
+
+**Save drafts** keeps choices for later without making them selectable workloads.
+Missing or unsupported installations offer a location/address fallback and
+explain what evidence is missing. Custom wrappers and ambiguous configuration
+require a supported launch or validated Advanced configuration; setup does not
+guess ownership from a healthy endpoint.
+
+Existing recognized service files are adopted without rewriting their launch
+options. Optional **Advanced** settings also retain the existing managed-launch
+and explicit-binding workflows. Applications, environments and models are never
+installed, updated or downloaded by setup.
 
 llama.cpp and vLLM models use distinct units. Ollama models with the same instance
 name and port can share a managed unit. Setup also preserves an adopted shared
@@ -82,8 +79,8 @@ require `gpu-mode configure`; setup does not verify them. The backend
 files. See [WORKLOADS.md](WORKLOADS.md). Model identity is checked again before
 GPU admission.
 
-Configured workloads can be renamed or edited. **Edit managed launch** reopens
-the managed configuration for a new preview and review. **Remove from supervisor** changes
+Configured workloads can be renamed or edited. **Edit workload** reopens
+the same setup flow and retains the workload identity and unrelated settings. **Remove from supervisor** changes
 only supervisor configuration. Active/referenced workloads cannot be removed;
 finish their work and switch to Idle first. Applications, models, workflows and
 external configuration are preserved.
@@ -103,9 +100,10 @@ Automated widget and protocol tests do not qualify the host installation.
 
 `gpu-setup discover` returns saved setup state plus `applications` candidates for
 ComfyUI, Ollama, llama.cpp and vLLM. It probes four default loopback ports and
-inspects recognizable user-service launch metadata. A service candidate and an
-endpoint candidate are separate observations; discovery does not correlate them
-or verify lifecycle ownership. Existing catalog profiles remain unchanged.
+inspects recognizable user-service launch metadata. Default endpoint observations remain separate from service ownership. A recognized
+service derives its endpoint and launch identity from loaded metadata and its
+unchanged supported launch file. Existing catalog profiles remain unchanged.
+Discovery errors are reported separately from an empty inventory.
 
 For a non-default endpoint or explicit reference:
 
@@ -134,9 +132,23 @@ instances never become successful empty inventories. A verified stopped unit is
 survive either condition. Served identities do not establish a disk inventory or
 distinct physical models. File selection does not establish compatibility.
 
-All candidates have `lifecycleControl: "unverified"`. They cannot activate a
-workload by themselves. Application management and model switching require the
-separate validated catalog/runtime path.
+All candidates retain `lifecycleControl: "unverified"`. `recognized` and
+`configurationStatus` describe preparation evidence, not GPU qualification.
+`gpu-setup prepare` rereads the selected installation and returns a profile;
+`verify-bindings`, review and confirmed Apply still gate activation.
+
+For a stopped ordinary service without a reported ControlGroup, the restricted
+placement contract supports systemd 252, 255 and 259 and requires authoritative
+active manager/app.slice metadata. Escaped names, templates, custom slices and
+unknown versions require explicit qualified evidence. Runtime rechecks placement
+and launch identity; upgrading systemd can require refreshing setup. Source
+inspection and fixture checks do not replace host qualification.
+
+Stopped Ollama may require an existing model name when its native inventory is
+unavailable. Setup does not start it to enumerate models; local model readiness
+is checked by the runtime before admission. Temporary-start setup sessions are
+not implemented; installations needing additional running evidence remain
+blocked. No direct service-start action bypasses ownership safeguards.
 
 Discovery uses fixed GET routes, disables redirects and ambient proxies, limits
 responses to 1 MiB, and bounds each probe to 3 seconds and discovery to 15 seconds.

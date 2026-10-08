@@ -65,13 +65,16 @@ export function profileIDFromModel(app, model) {
 
 export function candidateMessage(candidate) {
     const states = {
-        'not-running': 'Not running. Start the application through your existing controls, then refresh.',
+        'not-running': candidate?.configurationStatus === 'ready' || candidate?.configurationStatus === 'model-required' ? 'Installed and stopped. Ready to configure.' : candidate?.unit ? 'Installed and stopped. More configuration evidence is needed; choose its location or inspect Advanced settings.' : 'Application wasn’t detected at this address. Install it first, or choose its location.',
+        ambiguous: 'More than one installation matches. Choose the installation you want to control.',
+        'discovery-error': 'Discovery failed. Retry to check this installation.',
         unreachable: 'Unable to reach this application. Check its address and refresh.',
         missing: 'Application or selected path is missing. Choose another location.',
         unsupported: 'This setup is not supported. Keep it as a draft or choose another instance.',
         invalid: 'Configuration could not be read. Check the selected address or location.',
-        candidate: 'Application found. Its model inventory and lifecycle are not verified.',
-        available: 'Application responded. Safe model lifecycle control is not verified.',
+        candidate: 'Application found. Choose its installation to check start and stop controls.',
+        available: 'Application responded. Its start and stop controls still need verification.',
     };
+    if (candidate?.configurationStatus === 'ready' && candidate.instanceStatus !== 'not-running') return 'Installation recognized. Ready to configure.';
     return states[candidate?.instanceStatus] ?? 'Choose an application instance or provide its location.';
 }

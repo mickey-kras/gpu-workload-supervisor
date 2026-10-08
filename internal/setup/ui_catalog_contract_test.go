@@ -34,12 +34,13 @@ import {launch} from '../../clients/setup/harness.mjs';
 const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 const ui = await launch({responses: {discover: {request: input.request, units: []},
     drafts: {drafts: [input.draft]}, 'render-owned': {profile: input.profile}}, deferAction: 'unused'});
-await ui.by('Preview managed launch and add for review').emit('clicked');
-await ui.by('Review configuration').emit('clicked');
+await ui.by('Finish').emit('clicked');
+if (ui.calls.some(call => call.argv[1] === 'apply')) throw new Error('Finish silently applied');
 const confirm = ui.widgets.find(widget => widget.children.some(child => child.label?.startsWith('I have paused')));
+if (!confirm?.sensitive) throw new Error('Validated configuration did not reach confirmation');
 ui.edit(confirm, 'active', true);
 await ui.by('Apply configuration').emit('clicked');
-process.stdout.write(JSON.stringify(ui.calls.filter(call => ['verify-bindings', 'validate', 'apply'].includes(call.argv[1])).map(call => JSON.parse(call.input))));
+process.stdout.write(JSON.stringify(ui.calls.filter(call => ['verify-bindings', 'validate', 'apply'].includes(call.argv[1])).map(call => ({action: call.argv[1], request: JSON.parse(call.input)}))));
 `
 	command := exec.CommandContext(t.Context(), "node", "--experimental-vm-modules", "--input-type=module", "-e", script)
 	command.Stdin = bytes.NewReader(input)
@@ -49,14 +50,25 @@ process.stdout.write(JSON.stringify(ui.calls.filter(call => ['verify-bindings', 
 	if err != nil {
 		t.Fatalf("UI fixture failed: %v: %s", err, stderr.String())
 	}
-	var requests []Request
+	var requests []struct {
+		Action  string  `json:"action"`
+		Request Request `json:"request"`
+	}
 	if err := json.Unmarshal(output, &requests); err != nil {
 		t.Fatal(err)
 	}
 	if len(requests) != 4 {
 		t.Fatalf("missing preview/review/apply requests: %d", len(requests))
 	}
-	for _, candidate := range requests {
+	for index, phase := range requests {
+		expectedAction := []string{"verify-bindings", "validate", "verify-bindings", "apply"}[index]
+		if phase.Action != expectedAction {
+			t.Fatalf("activation phase %d = %q, want %q", index, phase.Action, expectedAction)
+		}
+		candidate := phase.Request
+		if candidate.ConfirmQuiesced != (phase.Action == "apply") {
+			t.Fatalf("confirmation on phase %q = %v", phase.Action, candidate.ConfirmQuiesced)
+		}
 		if err := Validate(candidate); err != nil {
 			t.Fatalf("UI emitted a backend-rejected catalog: %v", err)
 		}
