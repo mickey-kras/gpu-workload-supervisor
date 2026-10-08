@@ -93,7 +93,6 @@ app.connect('activate', () => {
     const suspendedApplications = new Map();
     const applicationGroup = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 12});
     applicationPage.append(applicationGroup); applicationPage.remove(settings); applicationPage.append(settings); applicationPage.remove(draftRows); applicationPage.append(draftRows);
-    // Application choice always comes before editing or selecting models.
     const saveDrafts = new Gtk.Button({label: 'Save selections for later', sensitive: false}); advanced.add_row(saveDrafts);
     function setStep(next) {
         step = next;

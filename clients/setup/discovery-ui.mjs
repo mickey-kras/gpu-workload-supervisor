@@ -17,7 +17,6 @@ export function addErrorReporter({Adw, Gtk, parent, status}) {
     };
 }
 
-// The editor owns its draft, native widgets and source-selection generation.
 export function addDraftEditor(options) { return new DraftEditor(options).view(); }
 
 class DraftEditor {

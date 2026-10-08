@@ -89,7 +89,6 @@ def discovered_application(discovery, unit):
 
 
 def stopped_application():
-    """Configure a recognized launch without executing its application fixture."""
     # The service name carries no application keyword; ExecStart proves identity.
     unit = HOME / ".config/systemd/user/gws-ci-image-worker.service"
     drop_in = unit.parent / (unit.name + ".d") / "10-startup.conf"

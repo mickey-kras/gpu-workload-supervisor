@@ -1,4 +1,3 @@
-// Own the consented temporary check, its helper cancellation and durable recovery.
 export class TemporaryDiscovery {
     constructor({Gtk, draft, app, modelGroup, status, temporaryStatus, command, changed, reportError, show, getEvidence}) {
         this.Gtk = Gtk;
