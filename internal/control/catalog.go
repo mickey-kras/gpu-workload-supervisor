@@ -284,6 +284,9 @@ func validateProfileOverlap(p WorkloadProfile, previous []WorkloadProfile) error
 		if ownedEndpointCollision(p, q) {
 			return errors.New("native endpoint belongs to another instance")
 		}
+		if launchBindingCollision(p, q) {
+			return errors.New("launch endpoint belongs to another workload")
+		}
 		if sharedOllamaUnit(p, q) && (p.NativeModel.LaunchFile != q.NativeModel.LaunchFile || p.NativeModel.LaunchSHA256 != q.NativeModel.LaunchSHA256 || !EqualLaunchSources(p.NativeModel.DropIns, q.NativeModel.DropIns)) {
 			return errors.New("shared Ollama unit requires identical launch bindings")
 		}
@@ -305,6 +308,30 @@ func ownedEndpointCollision(p, q WorkloadProfile) bool {
 		return false
 	}
 	return !sharedOllamaUnit(p, q)
+}
+
+// launchBindingCollision extends the endpoint invariant to launch-binding
+// profiles: a distinct unit and cgroup means a distinct workload, so health
+// checks against the shared socket would observe the wrong application.
+func launchBindingCollision(p, q WorkloadProfile) bool {
+	if p.LaunchBinding == nil && q.LaunchBinding == nil {
+		return false
+	}
+	a, b := profileEndpoint(p), profileEndpoint(q)
+	if a == "" || b == "" || nativeEndpointKey(a) != nativeEndpointKey(b) {
+		return false
+	}
+	return p.Unit != q.Unit || p.Cgroup != q.Cgroup
+}
+
+func profileEndpoint(p WorkloadProfile) string {
+	if p.NativeModel != nil {
+		return p.NativeModel.Endpoint
+	}
+	if p.LaunchBinding != nil {
+		return p.LaunchBinding.Endpoint
+	}
+	return ""
 }
 
 // nativeEndpointKey normalizes an endpoint to its socket address for collision
