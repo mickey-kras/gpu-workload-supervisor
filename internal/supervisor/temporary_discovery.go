@@ -8,6 +8,8 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
+const temporaryStoreUnavailable = "temporary discovery store unavailable"
+
 type temporaryDiscoveryStore interface {
 	RecordTemporaryLaunch(context.Context, string, string, control.TemporaryDiscoveryLaunchEvidence) error
 	StartTemporaryDiscovery(context.Context, control.OperatorPrecondition, store.Transition, control.TemporaryDiscoverySession) (control.State, error)
@@ -32,7 +34,7 @@ func (c *Controller) DiscoverNativeTemporary(ctx context.Context, v control.Temp
 	}
 	s, ok := c.store.(temporaryDiscoveryStore)
 	if !ok {
-		return nil, errors.New("temporary discovery store unavailable")
+		return nil, errors.New(temporaryStoreUnavailable)
 	}
 	r, ok := c.runtime.(temporaryDiscoveryRuntime)
 	if !ok {
@@ -55,27 +57,49 @@ func (c *Controller) DiscoverNativeTemporary(ctx context.Context, v control.Temp
 	if err = r.PrepareTemporaryDiscovery(ctx, v); err != nil {
 		return nil, err
 	}
-	current, err := c.store.State(ctx)
+	id, token, err := c.beginTemporaryDiscovery(ctx, s, v, e)
 	if err != nil {
-		return nil, err
-	}
-	id, err := c.id()
-	if err != nil {
-		return nil, err
-	}
-	token, err := c.id()
-	if err != nil {
-		return nil, err
-	}
-	tr := store.Transition{ID: id, Source: current, Target: current, Previous: current, Initiator: "temporary-native-discovery", Phase: control.PhaseDraining, Deadline: c.now().Add(c.config.ActionTimeout), ConfigurationRevision: e.ConfigurationRevision}
-	record := control.TemporaryDiscoverySession{ID: id, Token: token, Candidate: v, PriorStopped: true, Status: "starting"}
-	if _, err = s.StartTemporaryDiscovery(ctx, e, tr, record); err != nil {
 		return nil, err
 	}
 	var result []byte
 	startCtx, cancelStart := context.WithTimeout(ctx, c.config.ActionTimeout)
 	launch, startErr := r.StartTemporaryDiscovery(startCtx, v)
 	cancelStart()
+	startErr = c.recordTemporaryStart(s, id, token, launch, startErr)
+	if startErr == nil {
+		result, err = inspect(ctx, v.Endpoint)
+	} else {
+		err = startErr
+	}
+	cleanupErr := c.cleanupTemporaryDiscovery(context.Background(), id, token)
+	if err != nil || cleanupErr != nil || ctx.Err() != nil {
+		return nil, errors.Join(err, cleanupErr, ctx.Err())
+	}
+	return result, nil
+}
+
+func (c *Controller) beginTemporaryDiscovery(ctx context.Context, s temporaryDiscoveryStore, v control.TemporaryDiscoveryCandidate, e control.OperatorPrecondition) (string, string, error) {
+	current, err := c.store.State(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	id, err := c.id()
+	if err != nil {
+		return "", "", err
+	}
+	token, err := c.id()
+	if err != nil {
+		return "", "", err
+	}
+	tr := store.Transition{ID: id, Source: current, Target: current, Previous: current, Initiator: "temporary-native-discovery", Phase: control.PhaseDraining, Deadline: c.now().Add(c.config.ActionTimeout), ConfigurationRevision: e.ConfigurationRevision}
+	record := control.TemporaryDiscoverySession{ID: id, Token: token, Candidate: v, PriorStopped: true, Status: "starting"}
+	if _, err = s.StartTemporaryDiscovery(ctx, e, tr, record); err != nil {
+		return "", "", err
+	}
+	return id, token, nil
+}
+
+func (c *Controller) recordTemporaryStart(s temporaryDiscoveryStore, id, token string, launch control.TemporaryDiscoveryLaunchEvidence, startErr error) error {
 	recordCtx, cancelRecord := context.WithTimeout(context.Background(), c.config.FinalizeTimeout)
 	persistLaunchErr := s.RecordTemporaryLaunch(recordCtx, id, token, launch)
 	cancelRecord()
@@ -89,17 +113,9 @@ func (c *Controller) DiscoverNativeTemporary(ctx context.Context, v control.Temp
 	updateCtx, cancelUpdate := context.WithTimeout(context.Background(), c.config.FinalizeTimeout)
 	persistErr := s.UpdateTemporaryDiscovery(updateCtx, id, token, launch.InvocationID, status, failureMessage(startErr))
 	cancelUpdate()
-	if startErr == nil && persistErr == nil {
-		result, err = inspect(ctx, v.Endpoint)
-	} else {
-		err = errors.Join(startErr, persistErr)
-	}
-	cleanupErr := c.cleanupTemporaryDiscovery(context.Background(), id, token)
-	if err != nil || cleanupErr != nil || ctx.Err() != nil {
-		return nil, errors.Join(err, cleanupErr, ctx.Err())
-	}
-	return result, nil
+	return errors.Join(startErr, persistErr)
 }
+
 func failureMessage(err error) string {
 	if err != nil {
 		return "temporary discovery failed; inspect service and explicit cleanup status"
@@ -125,7 +141,7 @@ func (c *Controller) CleanupTemporaryDiscovery(ctx context.Context, id, token st
 func (c *Controller) cleanupTemporaryDiscovery(ctx context.Context, id, token string) error {
 	s, ok := c.store.(temporaryDiscoveryStore)
 	if !ok {
-		return errors.New("temporary discovery store unavailable")
+		return errors.New(temporaryStoreUnavailable)
 	}
 	r, ok := c.runtime.(temporaryDiscoveryRuntime)
 	if !ok {
@@ -174,7 +190,7 @@ func (c *Controller) TemporaryDiscoveryEligibility(ctx context.Context) (control
 func (c *Controller) TemporaryDiscoveryStatus(ctx context.Context) (*control.TemporaryDiscoverySession, error) {
 	s, ok := c.store.(temporaryDiscoveryStore)
 	if !ok {
-		return nil, errors.New("temporary discovery store unavailable")
+		return nil, errors.New(temporaryStoreUnavailable)
 	}
 	return s.TemporaryDiscoveryStatus(ctx)
 }

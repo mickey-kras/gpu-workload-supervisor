@@ -10,6 +10,8 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
+const temporaryApplicationSlice = "app.slice"
+
 var ErrTemporaryInvocationChanged = errors.New("temporary discovery invocation changed or start evidence is ambiguous; refusing to stop this service. Inspect the unit and the persisted session evidence, stop it manually if appropriate, then retry explicit cleanup")
 
 func (m *SystemdManager) temporaryProperties(ctx context.Context, unit string) (map[string]string, error) {
@@ -21,7 +23,7 @@ func (m *SystemdManager) temporaryProperties(ctx context.Context, unit string) (
 }
 
 func (m *SystemdManager) verifyTemporaryBinding(ctx context.Context, v control.TemporaryDiscoveryCandidate) (map[string]string, error) {
-	if !automaticUnitName.MatchString(v.Unit) || strings.HasPrefix(v.Unit, control.OwnedUnitFilePrefix) || validateCgroup(v.Cgroup) != nil || v.SystemdSlice != "app.slice" {
+	if !automaticUnitName.MatchString(v.Unit) || strings.HasPrefix(v.Unit, control.OwnedUnitFilePrefix) || validateCgroup(v.Cgroup) != nil || v.SystemdSlice != temporaryApplicationSlice {
 		return nil, ErrLaunchUnsupported
 	}
 	validate := m.nativeExecutableValidator
@@ -77,11 +79,11 @@ func (m *SystemdManager) verifyTemporaryPlacement(ctx context.Context, v control
 	if err != nil {
 		return err
 	}
-	slice, err := m.temporaryProperties(ctx, "app.slice")
+	slice, err := m.temporaryProperties(ctx, temporaryApplicationSlice)
 	if err != nil {
 		return err
 	}
-	if service["Slice"] != "app.slice" {
+	if service["Slice"] != temporaryApplicationSlice {
 		return ErrLaunchChanged
 	}
 	group, err := ResolveAutomaticCgroup(v.Unit, service, slice, root)
