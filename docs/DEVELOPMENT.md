@@ -2,7 +2,10 @@
 
 [Documentation](README.md) | [Repository](../README.md)
 
-Use the Go version declared in [go.mod](../go.mod). From the repository root:
+Use the Go version declared in [go.mod](../go.mod) and Node.js 22 on `PATH`.
+The Go tests invoke a Node harness to check the setup UI serializer against the
+Go validator; Node is a test prerequisite, not a production dependency.
+From the repository root:
 
 ```sh
 go test ./...
