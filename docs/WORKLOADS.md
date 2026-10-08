@@ -2,7 +2,7 @@
 
 [Documentation](README.md) | [Repository](../README.md)
 
-A catalog is a version 1 JSON object containing 1-32 `profiles`:
+An enabled catalog is a version 1 JSON object containing 1-32 `profiles`:
 
 ```json
 {
@@ -21,6 +21,12 @@ A catalog is a version 1 JSON object containing 1-32 `profiles`:
   ]
 }
 ```
+
+Removing the final application through setup writes an explicit disabled catalog,
+such as `{"version":1,"profiles":[],"disabled":true}`, with no configured workloads.
+Empty catalogs without `disabled: true` and disabled catalogs containing profiles
+are invalid. Adding an application clears `disabled` and restores the ordinary
+profile requirements.
 
 IDs contain at most 64 lowercase ASCII letters, digits, underscores and hyphens,
 starting with a letter. `idle` and `unknown` are reserved. Labels contain at most
@@ -112,8 +118,10 @@ both enforce the proxy lifetime lock, including in-flight requests.
 
 Launch-file constraints:
 
-- The launch file must match systemd's fragment, have no drop-ins or pending
-  daemon reload, and use the supported direct-command subset.
+- The launch file must match systemd's fragment with no pending daemon
+  reload, and use the supported direct-command subset. Supported drop-ins
+  are adopted without rewriting and verified by hash; unsupported or
+  ambiguous drop-in configuration is still rejected.
 - Executables and their resolved directory ancestry must be root-owned and not
   group/world writable. User-owned runtime installations are therefore not
   qualified by this adapter.

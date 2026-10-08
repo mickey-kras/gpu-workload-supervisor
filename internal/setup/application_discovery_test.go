@@ -3,7 +3,6 @@ package setup
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 )
@@ -18,14 +17,13 @@ func TestApplicationDiscoveryFiltersServicesByExecutable(t *testing.T) {
 		if strings.Contains(joined, "list-unit-files") {
 			return []byte("ollama.service disabled\nvllm-fake.service enabled\nssh.service enabled\ncustom.service enabled\n"), nil
 		}
-		if strings.Contains(joined, "show ollama.service") {
+		if strings.HasSuffix(joined, "-- ollama.service") {
 			return []byte("ExecStart={ path=/usr/bin/ollama ; argv[]=/usr/bin/ollama serve ; ignore_errors=no ; }\nControlGroup=/user.slice/ollama.service\nActiveState=inactive\nSubState=dead\n"), nil
 		}
-		if strings.Contains(joined, "show vllm-fake.service") {
+		if strings.HasSuffix(joined, "-- vllm-fake.service") {
 			return []byte("ExecStart={ path=/usr/bin/other ; argv[]=/usr/bin/other ; }\nActiveState=active\n"), nil
 		}
-		t.Fatalf("unexpected command %s", joined)
-		return nil, errors.New("unexpected")
+		return []byte("ExecStart={ path=/usr/bin/other ; argv[]=/usr/bin/other ; }"), nil
 	}
 	backend.probeApplication = func(ctx context.Context, r ProbeRequest) (ApplicationCandidate, error) { return candidate(r), nil }
 	got, err := backend.Discover(context.Background(), home)
@@ -35,7 +33,7 @@ func TestApplicationDiscoveryFiltersServicesByExecutable(t *testing.T) {
 	if len(got.Units) != 1 || got.Units[0] != "ollama.service" {
 		t.Fatalf("unrelated services leaked: %v", got.Units)
 	}
-	if len(got.Applications) != 5 {
+	if len(got.Applications) != 6 {
 		t.Fatal(got.Applications)
 	}
 	service := got.Applications[4]
@@ -51,7 +49,7 @@ func TestApplicationDiscoveryFiltersServicesByExecutable(t *testing.T) {
 	}
 }
 func TestServiceIdentityDoesNotExecuteConfiguration(t *testing.T) {
-	for _, input := range []string{"ExecStart={ path=/bin/bash ; argv[]=/bin/bash -c ollama serve ; }", "ExecStart={ path=/usr/bin/python ; argv[]=/usr/bin/python /tmp/main.py ; }", "ExecStart={ path=/usr/bin/not-ollama ; argv[]=/usr/bin/not-ollama ; }"} {
+	for _, input := range []string{"ExecStart={ path=/bin/bash ; argv[]=/bin/bash -c ollama serve ; }", "ExecStart={ path=/usr/bin/python ; argv[]=/usr/bin/python /tmp/main.py ; }", "ExecStart={ path=/usr/bin/not-ollama ; argv[]=/usr/bin/not-ollama ; }", "ExecStart={ path=llama-server ; argv[]=llama-server -m /a ; }", "ExecStart={ path=/usr/bin/llama-server ; argv[]=/usr/bin/other -m /a ; }", "ExecStart={ path=/usr/bin/llama-server ; argv[]=/usr/bin/llama-server -m /a ; } { path=/usr/bin/other ; argv[]=/usr/bin/other x ; }"} {
 		if appFromUnit(input) != "" {
 			t.Fatal("guessed application", input)
 		}

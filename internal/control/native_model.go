@@ -20,13 +20,50 @@ const nativeRuntimeLlamaCPP = "llama.cpp"
 // Ollama profiles may share one unit with sibling profiles bound to different
 // models of the same instance; other runtimes require one unit per model.
 type NativeModel struct {
-	Runtime      string       `json:"runtime"`
-	Instance     string       `json:"instance"`
-	Model        string       `json:"model"`
-	Endpoint     string       `json:"endpoint"`
-	LaunchFile   string       `json:"launchFile"`
-	LaunchSHA256 string       `json:"launchSHA256"`
-	Owned        *OwnedLaunch `json:"owned,omitempty"`
+	Runtime      string         `json:"runtime"`
+	Instance     string         `json:"instance"`
+	Model        string         `json:"model"`
+	Endpoint     string         `json:"endpoint"`
+	LaunchFile   string         `json:"launchFile"`
+	LaunchSHA256 string         `json:"launchSHA256"`
+	DropIns      []LaunchSource `json:"dropIns,omitempty"`
+	Owned        *OwnedLaunch   `json:"owned,omitempty"`
+}
+
+// LaunchSource binds one contributing systemd drop-in in loaded order.
+type LaunchSource struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+}
+
+func ValidateLaunchSources(launchFile string, sources []LaunchSource) error {
+	if len(sources) > 32 {
+		return errors.New("too many launch drop-ins")
+	}
+	seen := map[string]bool{launchFile: true}
+	previous := ""
+	for _, source := range sources {
+		hash, err := hex.DecodeString(source.SHA256)
+		if err != nil || len(hash) != 32 || !filepath.IsAbs(source.Path) || filepath.Clean(source.Path) != source.Path || !strings.HasSuffix(source.Path, ".conf") || !grammarExpressible(source.Path) || seen[source.Path] || (previous != "" && filepath.Base(source.Path) <= previous) {
+			return errors.New("invalid launch drop-in evidence")
+		}
+		seen[source.Path] = true
+		previous = filepath.Base(source.Path)
+	}
+	return nil
+}
+
+// EqualLaunchSources compares the exact ordered contributing file evidence.
+func EqualLaunchSources(a, b []LaunchSource) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // OwnedLaunch is a supervisor-owned launch specification: the supervisor
@@ -85,19 +122,34 @@ func (n NativeModel) validate() error {
 	if !ValidInstanceID(n.Instance) || !ValidNativeModelIdentity(n.Runtime, n.Model) {
 		return errors.New("invalid native model identity")
 	}
-	u, err := url.Parse(n.Endpoint)
+	if err := validateLaunchEvidence(n.Endpoint, n.LaunchFile, n.LaunchSHA256); err != nil {
+		return err
+	}
+	if err := ValidateLaunchSources(n.LaunchFile, n.DropIns); err != nil {
+		return err
+	}
+	if n.Owned != nil && len(n.DropIns) > 0 {
+		return errors.New("owned launch does not accept external drop-ins")
+	}
+	return n.validateOwned()
+}
+
+// validateLaunchEvidence is the boundary shared by application and model
+// bindings. Runtime identity and owned-launch rules are checked by their types.
+func validateLaunchEvidence(endpoint, launchFile, launchSHA256 string) error {
+	u, err := url.Parse(endpoint)
 	if err != nil || u.RawQuery != "" || u.Path != "" {
 		return errors.New("native endpoint must be a base URL")
 	}
-	p := WorkloadProfile{HealthURL: n.Endpoint}
+	p := WorkloadProfile{HealthURL: endpoint}
 	if err := p.validateEndpoints(); err != nil {
 		return err
 	}
-	hash, err := hex.DecodeString(n.LaunchSHA256)
-	if err != nil || len(hash) != 32 || !filepath.IsAbs(n.LaunchFile) || filepath.Clean(n.LaunchFile) != n.LaunchFile {
+	hash, err := hex.DecodeString(launchSHA256)
+	if err != nil || len(hash) != 32 || !filepath.IsAbs(launchFile) || filepath.Clean(launchFile) != launchFile {
 		return errors.New("native launch file and SHA256 required")
 	}
-	return n.validateOwned()
+	return nil
 }
 
 // validateOwned enforces the per-runtime owned launch admissibility rules and
@@ -197,10 +249,11 @@ func LaunchGrammarExpressible(value string) bool {
 
 // grammarExpressible reports whether a value survives the launch grammar's
 // tokenization unchanged: no whitespace (ExecStart splits on strings.Fields),
-// none of the quoting/specifier characters directive parsing rejects, and no
-// control bytes. Values that fail would render units that can never qualify.
+// none of the quoting/specifier characters directive parsing rejects, no
+// semicolon delimiters in loaded command metadata, and no control bytes.
+// Values that fail would render units that can never qualify.
 func grammarExpressible(value string) bool {
-	return !strings.ContainsAny(value, "\\$%\"'`") &&
+	return !strings.ContainsAny(value, "\\$%\"'`;") &&
 		strings.IndexFunc(value, unicode.IsSpace) < 0 &&
 		strings.IndexFunc(value, unicode.IsControl) < 0
 }

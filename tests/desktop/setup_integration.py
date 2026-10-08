@@ -68,6 +68,130 @@ def prepare_session():
             assert environment.get(key) == expected, f"disposable session mismatch: {key}"
 
 
+def discovered_application(discovery, unit):
+    matches = [item for item in discovery["applications"] if item.get("unit") == unit.name]
+    if len(matches) != 1:
+        # These diagnostics contain only the disposable fixture account's sources.
+        diagnostics = {
+            "expectedUnit": unit.name,
+            "matchingCandidates": matches,
+            "applications": discovery["applications"],
+            "errors": discovery.get("errors", []),
+            "discoveredUnits": discovery["units"],
+            "loadedMetadata": run("systemctl", "--user", "show", "--no-pager", "--", unit.name),
+            "effectiveSource": run("systemctl", "--user", "cat", "--no-pager", "--", unit.name),
+            "serviceFiles": run("systemctl", "--user", "list-unit-files", "--type=service",
+                                "--no-legend", "--no-pager"),
+        }
+        raise AssertionError("expected exactly one application candidate: " +
+                             json.dumps(diagnostics, indent=2))
+    return matches[0]
+
+
+def stopped_application():
+    # The service name carries no application keyword; ExecStart proves identity.
+    unit = HOME / ".config/systemd/user/gws-ci-image-worker.service"
+    drop_in = unit.parent / (unit.name + ".d") / "10-startup.conf"
+    drop_in_original = "[Service]\nExecStartPre=/usr/bin/true --\n"
+    application = HOME / "ComfyUI/main.py"
+    started = HOME / "application-started"
+    write(application, f"from pathlib import Path\nPath({str(started)!r}).touch()\n")
+    interpreter = str(pathlib.Path("/usr/bin/python3").resolve())
+    original = ("[Service]\nType=exec\nExecStartPre=/usr/bin/true\nExecStart=" + interpreter + " " + str(application) +
+                " --listen 127.0.0.1 --port 18188 --disable-auto-launch\n")
+    write(unit, original)
+    write(drop_in, drop_in_original)
+    run("systemctl", "--user", "daemon-reload")
+    # Activate only infrastructure: no application startup is necessary to
+    # observe the real supported parent slice's placement.
+    run("systemctl", "--user", "start", "app.slice")
+    parent = run("systemctl", "--user", "show", "app.slice",
+                 "--property=ControlGroup", "--value").strip()
+    assert parent.startswith("/user.slice/")
+
+    def stopped():
+        properties = run("systemctl", "--user", "show", unit.name,
+                         "--property=ActiveState,SubState,ControlGroup")
+        actual = dict(line.split("=", 1) for line in properties.splitlines() if "=" in line)
+        assert actual == {"ActiveState": "inactive", "SubState": "dead", "ControlGroup": ""}, actual
+        assert not started.exists(), "setup executed the stopped application"
+
+    stopped()
+    found = json.loads(setup("discover"))
+    installation = discovered_application(found, unit)
+    assert installation["app"] == "comfyui" and installation["recognized"]
+    assert installation["configurationStatus"] == "ready", installation
+    assert installation["inventoryStatus"] == "not-applicable"
+    stopped()
+    draft = {"id": "ci-comfyui", "label": "CI ComfyUI", "app": "comfyui",
+             "binding": {"unit": unit.name}}
+    profile = json.loads(setup("prepare", {"draft": draft}))["profile"]
+    assert profile["unit"] == unit.name
+    assert profile["cgroup"] == parent + "/" + unit.name
+    assert profile["systemdSlice"] == "app.slice"
+    assert profile["healthURL"] == "http://127.0.0.1:18188/system_stats"
+    assert "nativeModel" not in profile, "ComfyUI must not require a model"
+    binding = profile["launchBinding"]
+    assert binding["launchFile"] == str(unit) and binding["launchSHA256"] == digest(unit)
+    assert binding["dropIns"] == [{"path": str(drop_in), "sha256": digest(drop_in)}], binding
+    # Prepare succeeded against both loaded pre-start commands without running them.
+    loaded_pre = run("systemctl", "--user", "show", unit.name,
+                     "--property=ExecStartPre", "--value")
+    assert loaded_pre.count("path=/usr/bin/true") == 2, loaded_pre
+    assert "argv[]=/usr/bin/true --" in loaded_pre, loaded_pre
+    stopped()
+    request = found["request"]
+    request["catalog"]["profiles"].append(profile)
+    setup("verify-bindings", request)
+    setup("validate", request)
+    # Advanced overrides use the same backend validation as automatic settings.
+    invalid = copy.deepcopy(request)
+    invalid["catalog"]["profiles"][-1]["healthURL"] = "http://127.0.0.1:18189/system_stats"
+    setup("validate", invalid, "ComfyUI health route must match launch endpoint")
+    stopped()
+    request["confirmQuiesced"] = True
+    setup("apply", request)
+    stopped()
+    configured_discovery = json.loads(setup("discover"))
+    retained = discovered_application(configured_discovery, unit)
+    assert retained["recognized"] and retained["configurationStatus"] == "ready", retained
+    assert retained["binding"]["launchFile"] == str(unit), retained
+    configured = configured_discovery["request"]
+    assert configured["catalog"]["profiles"][-1] == profile
+    assert unit.read_text() == original, "setup changed external flags or pre-start hooks"
+    assert drop_in.read_text() == drop_in_original, "setup changed the external drop-in"
+    duplicate = copy.deepcopy(configured)
+    duplicate_profile = copy.deepcopy(profile)
+    duplicate_profile["id"] = "ci-comfyui-duplicate"
+    duplicate["catalog"]["profiles"].append(duplicate_profile)
+    setup("validate", duplicate, "duplicate or overlapping profiles")
+    # A changed external launch invalidates its retained verification evidence.
+    write(unit, original + "# external edit\n")
+    run("systemctl", "--user", "daemon-reload")
+    setup("verify-bindings", configured, "launch")
+    stopped()
+    write(unit, original)
+    run("systemctl", "--user", "daemon-reload")
+    # A changed drop-in also invalidates the recorded binding after manager reload.
+    write(drop_in, drop_in_original + "# external drop-in edit\n")
+    run("systemctl", "--user", "daemon-reload")
+    setup("verify-bindings", configured, "drop-in")
+    stopped()
+    write(drop_in, drop_in_original)
+    run("systemctl", "--user", "daemon-reload")
+    setup("verify-bindings", configured)
+    assert json.loads(setup("prepare", {"draft": draft}))["profile"] == profile
+    stopped()
+    preserved = {path: digest(path) for path in (unit, drop_in, application)}
+    configured["catalog"]["profiles"] = [item for item in configured["catalog"]["profiles"]
+                                           if item["id"] != profile["id"]]
+    configured["confirmQuiesced"] = True
+    setup("apply", configured)
+    stopped()
+    for path, expected in preserved.items():
+        assert digest(path) == expected, f"removing application changed external file: {path}"
+
+
 
 def main():
     assert os.geteuid() != 0
@@ -131,7 +255,12 @@ def main():
     assert before["status"]["workloads"] == [{"id": "idle", "label": "Idle"}, {"id": "ci-workload", "label": "CI workload"}]
     configured = json.loads(setup("discover"))
     assert configured["request"]["catalog"] == request["catalog"]
-    assert not any(app.get("unit") == workload.name for app in configured["applications"])
+    # Existing catalog units remain visible even when their launch is unsupported.
+    retained = discovered_application(configured, workload)
+    assert not retained["recognized"], retained
+    assert retained["app"] == "", retained
+    assert retained["configurationStatus"] == "unsupported", retained
+    assert "not supported" in retained["nextStep"], retained
     current = configured["request"]
     current["confirmQuiesced"] = True
     updated = copy.deepcopy(current)
@@ -177,7 +306,8 @@ def main():
     assert link.is_symlink()
     assert timer_link.is_symlink()
     assert digest(workload) == preserved[workload]
-    print("PASS: packaged setup, real user systemd, interrupted resume, stale preview, backups, removal/reapply")
+    stopped_application()
+    print("PASS: packaged setup, real user systemd, interrupted resume, stale preview, backups, removal/reapply, stopped keywordless automatic configuration preserving external flags/pre-start hooks")
 
 
 if __name__ == "__main__":

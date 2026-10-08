@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -22,6 +24,13 @@ var ErrLaunchUnsupported = errors.New("native launch requires a supported direct
 func qualifyNativeLaunchWithValidator(raw []byte, n control.NativeModel, validate func(string) error) error {
 	unit, err := parseLaunchUnit(raw, n.Runtime)
 	if err != nil {
+		return err
+	}
+	return qualifyParsedLaunch(unit, n, validate)
+}
+
+func qualifyParsedLaunch(unit parsedLaunchUnit, n control.NativeModel, validate func(string) error) error {
+	if err := unit.validatePreCommands(validate); err != nil {
 		return err
 	}
 	args := strings.Fields(unit.execStart)
@@ -43,6 +52,7 @@ func qualifyNativeLaunchWithValidator(raw []byte, n control.NativeModel, validat
 
 type parsedLaunchUnit struct {
 	execStart       string
+	preCommands     []string
 	cloudOff        bool
 	host            string
 	maxLoadedPinned bool
@@ -86,7 +96,7 @@ func (u *parsedLaunchUnit) applyLaunchLine(seen map[string]bool, runtimeName, se
 	if !ok || strings.ContainsAny(value, "\\$%`\"'") {
 		return ErrLaunchUnsupported
 	}
-	if key != "Environment" && seen[section+key] {
+	if key != "Environment" && key != "ExecStartPre" && seen[section+key] {
 		return ErrLaunchUnsupported
 	}
 	seen[section+key] = true
@@ -104,7 +114,15 @@ func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value strin
 		if value != "no" {
 			return ErrLaunchUnsupported
 		}
+	case "[Service]ExecStartPre":
+		if len(u.preCommands) >= 32 || value == "" {
+			return ErrLaunchUnsupported
+		}
+		u.preCommands = append(u.preCommands, value)
 	case "[Service]ExecStart":
+		if strings.Contains(value, ";") {
+			return fmt.Errorf("%w: semicolon delimiter in ExecStart", ErrLaunchUnsupported)
+		}
 		u.execStart = value
 	case "[Service]Environment":
 		if runtimeName != "ollama" {
@@ -115,6 +133,45 @@ func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value strin
 		return ErrLaunchUnsupported
 	}
 	return nil
+}
+
+// Startup preparation is retained verbatim for adopted units and never run
+// during inspection. Only fixed system primitives with a bounded argument
+// grammar are supported: trusting an interpreter or wrapper does not bind the
+// code it can execute. Every accepted executable must also pass the ordinary
+// trust check; expansion and systemd privilege prefixes remain unsupported.
+func (u parsedLaunchUnit) validatePreCommands(validate func(string) error) error {
+	for _, command := range u.preCommands {
+		if strings.ContainsAny(command, ";|&<>\\$%`\"'") {
+			return fmt.Errorf("%w: ExecStartPre command indirection", ErrLaunchUnsupported)
+		}
+		args := strings.Fields(strings.TrimPrefix(command, "-"))
+		if len(args) == 0 || !filepath.IsAbs(args[0]) || validate(args[0]) != nil {
+			return fmt.Errorf("%w: ExecStartPre requires a trusted direct executable", ErrLaunchUnsupported)
+		}
+		if !supportedPreCommand(args) {
+			return fmt.Errorf("%w: ExecStartPre supports only system true/false with optional --, or test with one absolute file predicate", ErrLaunchUnsupported)
+		}
+	}
+	return nil
+}
+
+// Exact system paths avoid accepting a helper merely named test or true.
+// File predicates inspect their operand; they cannot execute it or load code.
+func supportedPreCommand(args []string) bool {
+	switch args[0] {
+	case "/usr/bin/true", "/bin/true", "/usr/bin/false", "/bin/false":
+		return len(args) == 1 || (len(args) == 2 && args[1] == "--")
+	case "/usr/bin/test", "/bin/test":
+		if len(args) != 3 || !filepath.IsAbs(args[2]) || filepath.Clean(args[2]) != args[2] {
+			return false
+		}
+		switch args[1] {
+		case "-e", "-f", "-d", "-r", "-w", "-x", "-s":
+			return true
+		}
+	}
+	return false
 }
 
 func (u *parsedLaunchUnit) applyOllamaEnvironment(value string) error {
@@ -189,20 +246,52 @@ func parseServerCommand(args []string, runtimeName string) (serverFlags, error) 
 func (f *serverFlags) parse(args []string, runtimeName string) (serverFlags, error) {
 	seen := map[string]bool{}
 	for len(args) > 0 {
-		if len(args) < 2 {
-			return *f, ErrLaunchUnsupported
-		}
-		key, value := args[0], args[1]
-		args = args[2:]
+		key := canonicalServerFlag(args[0], runtimeName)
+		args = args[1:]
 		if seen[key] {
-			return *f, ErrLaunchUnsupported
+			return *f, fmt.Errorf("%w: duplicate option %s", ErrLaunchUnsupported, key)
 		}
 		seen[key] = true
+		if runtimeName == runtimeLlamaCPP && (key == "--cont-batching" || key == "--no-cont-batching") {
+			if seen["continuous-batching"] {
+				return *f, ErrLaunchUnsupported
+			}
+			seen["continuous-batching"] = true
+			continue
+		}
+		if len(args) == 0 {
+			return *f, fmt.Errorf("%w: option %s requires a value", ErrLaunchUnsupported, key)
+		}
+		value := args[0]
+		args = args[1:]
 		if err := f.apply(runtimeName, key, value); err != nil {
-			return *f, err
+			return *f, fmt.Errorf("%w: unsupported option or value %s", err, key)
 		}
 	}
 	return *f, nil
+}
+
+func canonicalServerFlag(key, runtimeName string) string {
+	if runtimeName != runtimeLlamaCPP {
+		return key
+	}
+	switch key {
+	case "-m":
+		return "--model"
+	case "-c":
+		return "--ctx-size"
+	case "-ngl":
+		return "--n-gpu-layers"
+	case "-np":
+		return "--parallel"
+	case "-cb":
+		return "--cont-batching"
+	case "-nocb":
+		return "--no-cont-batching"
+	case "-fa":
+		return "--flash-attn"
+	}
+	return key
 }
 
 func (f *serverFlags) apply(runtimeName, key, value string) error {
@@ -221,6 +310,27 @@ func (f *serverFlags) apply(runtimeName, key, value string) error {
 			return ErrLaunchUnsupported
 		}
 		f.alias = value
+	case "--parallel", "--spec-draft-n-max", "--spec-draft-n-min":
+		if runtimeName != runtimeLlamaCPP {
+			return ErrLaunchUnsupported
+		}
+		if key == "--parallel" && value == "-1" {
+			return nil
+		}
+		v, err := strconv.ParseUint(value, 10, 32)
+		if err != nil || (v == 0 && key != "--spec-draft-n-min") {
+			return ErrLaunchUnsupported
+		}
+	case "--flash-attn":
+		if runtimeName != runtimeLlamaCPP || (value != "on" && value != "off" && value != "auto") {
+			return ErrLaunchUnsupported
+		}
+	case "--spec-type":
+		// MTP uses the already bound local model; draft-model and remote sources
+		// require separate identity evidence and remain unsupported.
+		if runtimeName != runtimeLlamaCPP || (value != "none" && value != "draft-mtp") {
+			return ErrLaunchUnsupported
+		}
 	case "--ctx-size", "--n-gpu-layers", "--max-model-len":
 		if (runtimeName == runtimeLlamaCPP) != (key != "--max-model-len") {
 			return ErrLaunchUnsupported
@@ -238,6 +348,40 @@ func validateNativeExecutable(path string) error {
 	resolved, err := validateExecutable(path)
 	if err != nil || filepath.Base(resolved) != filepath.Base(path) {
 		return ErrLaunchUnsupported
+	}
+	return nil
+}
+
+var loadedPreCommand = regexp.MustCompile(`\{ path=([^ ;]+) ; argv\[\]=([^;]+) ; ignore_errors=(yes|no) ;[^}]*\}`)
+
+// CheckLoadedPreCommands binds systemd's loaded startup preparation to the same
+// file whose main command and fingerprint were inspected. Unparsed metadata
+// fails closed instead of silently dropping startup commands.
+func CheckLoadedPreCommands(output string, commands []string) error {
+	matches := loadedPreCommand.FindAllStringSubmatch(output, -1)
+	if len(matches) != len(commands) || strings.Trim(loadedPreCommand.ReplaceAllString(output, ""), " ;\t\r\n") != "" {
+		return ErrLaunchChanged
+	}
+	for i, command := range commands {
+		ignore := strings.HasPrefix(command, "-")
+		args := strings.Fields(strings.TrimPrefix(command, "-"))
+		if len(args) == 0 || matches[i][1] != args[0] || strings.Join(strings.Fields(matches[i][2]), " ") != strings.Join(args, " ") || (matches[i][3] == "yes") != ignore {
+			return ErrLaunchChanged
+		}
+	}
+	return nil
+}
+
+var loadedMainCommand = regexp.MustCompile(`\{ path=([^ ;]+) ; argv\[\]=([^;]+) ;[^}]*\}`)
+
+func CheckLoadedLaunchCommand(output, command string) error {
+	matches := loadedMainCommand.FindAllStringSubmatch(output, -1)
+	args := strings.Fields(command)
+	if len(matches) != 1 || len(args) == 0 || strings.Trim(loadedMainCommand.ReplaceAllString(output, ""), " ;\t\r\n") != "" || matches[0][1] != args[0] || strings.Join(strings.Fields(matches[0][2]), " ") != strings.Join(args, " ") {
+		return ErrLaunchChanged
+	}
+	if strings.Contains(output, "ignore_errors=yes") {
+		return ErrLaunchChanged
 	}
 	return nil
 }

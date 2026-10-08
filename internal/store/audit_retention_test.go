@@ -2,11 +2,13 @@ package store
 
 import (
 	"context"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 func TestAuditRetentionPreservesLiveRelationshipsAndLatestEvidence(t *testing.T) {
@@ -177,6 +179,174 @@ func TestPruneAuditHistoryRollsBackWhenStorageFails(t *testing.T) {
 			if mode != "missing journal" {
 				assertAuditTransitionIDs(t, s, "transitions", []string{tr.ID})
 				assertAuditTransitionIDs(t, s, "transition_events", []string{tr.ID})
+			}
+		})
+	}
+}
+
+func TestPruneAuditHistoryDeletesCompletedSessionWithTransition(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	state, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"session", "plain"} {
+		tr := Transition{ID: id, Fence: state.LeaseFence, Source: state, Target: state, Previous: state, Phase: control.PhaseDraining, Deadline: time.Now()}
+		if err := s.BeginTransition(ctx, tr); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.AppendTransitionEvent(ctx, TransitionEvent{TransitionID: id, Phase: control.PhaseDraining, Kind: "intent", Action: "temporary"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.Exec(`UPDATE transitions SET status='failed',updated_at='2000-01-01T00:00:00Z',lease_epoch=99 WHERE transition_id=?`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	payload, err := json.Marshal(control.TemporaryDiscoverySession{ID: "session", Token: "t", Status: "completed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO temporary_discovery_sessions(id,payload,status) VALUES('session',?,'completed')`, payload); err != nil {
+		t.Fatal(err)
+	}
+	count, err := s.PruneAuditHistory(ctx, s.now().Add(-time.Hour), 10)
+	if err != nil || count != 2 {
+		t.Fatalf("prune with completed session %d: %v", count, err)
+	}
+	assertAuditTransitionIDs(t, s, "transitions", nil)
+	assertAuditTransitionIDs(t, s, "transition_events", nil)
+	if session, err := s.TemporaryDiscoveryStatus(ctx); err != nil || session != nil {
+		t.Fatalf("completed session leaked after audit prune: %+v %v", session, err)
+	}
+	count, err = s.PruneAuditHistory(ctx, s.now().Add(-time.Hour), 10)
+	if err != nil || count != 0 {
+		t.Fatalf("repeat prune %d: %v", count, err)
+	}
+	assertAuditTransitionIDs(t, s, "transitions", nil)
+}
+
+func TestTemporarySessionAuditRetentionHonorsExistingGuards(t *testing.T) {
+	for _, mode := range []string{"starting", "running", "cleanup_required", "current fence", "in progress", "recent update", "unfinished work", "completed work"} {
+		t.Run(mode, func(t *testing.T) {
+			s := testStore(t)
+			ctx := context.Background()
+			state, err := s.State(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tr := Transition{ID: "session", Fence: state.LeaseFence, Source: state, Target: state, Previous: state, Phase: control.PhaseDraining, Deadline: s.now()}
+			if err := s.BeginTransition(ctx, tr); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.AppendTransitionEvent(ctx, TransitionEvent{TransitionID: tr.ID, Phase: control.PhaseDraining, Kind: "intent", Action: "temporary"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.db.Exec(`UPDATE transitions SET status='failed',updated_at='2000-01-01T00:00:00Z',lease_epoch=99 WHERE transition_id=?`, tr.ID); err != nil {
+				t.Fatal(err)
+			}
+			status := "completed"
+			switch mode {
+			case "starting", "running", "cleanup_required":
+				status = mode
+			case "current fence":
+				if _, err := s.db.Exec(`UPDATE transitions SET lease_epoch=? WHERE transition_id=?`, state.LeaseFence.Epoch, tr.ID); err != nil {
+					t.Fatal(err)
+				}
+			case "in progress":
+				if _, err := s.db.Exec(`UPDATE transitions SET status='in_progress' WHERE transition_id=?`, tr.ID); err != nil {
+					t.Fatal(err)
+				}
+			case "recent update":
+				// An old created_at must not override recent completion evidence.
+				if _, err := s.db.Exec(`UPDATE transitions SET created_at='2000-01-01T00:00:00Z',updated_at=? WHERE transition_id=?`, formatTime(s.now()), tr.ID); err != nil {
+					t.Fatal(err)
+				}
+			case "unfinished work", "completed work":
+				if _, err := s.db.Exec(`INSERT INTO registered_work(request_id,lease_incarnation,lease_epoch,registered_at) VALUES('linked','old',1,'2000-01-01T00:00:00Z'); INSERT INTO transition_work VALUES('session','linked')`); err != nil {
+					t.Fatal(err)
+				}
+				if mode == "completed work" {
+					if _, err := s.db.Exec(`UPDATE registered_work SET completed_at='2000-01-02T00:00:00Z' WHERE request_id='linked'`); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			payload, _ := json.Marshal(control.TemporaryDiscoverySession{ID: tr.ID, Token: "t", Status: status})
+			if _, err := s.db.Exec(`INSERT INTO temporary_discovery_sessions(id,payload,status) VALUES(?,?,?)`, tr.ID, payload, status); err != nil {
+				t.Fatal(err)
+			}
+			want := int64(0)
+			if mode == "completed work" {
+				want = 1
+			}
+			if count, err := s.PruneAuditHistory(ctx, s.now().Add(-time.Hour), 1); err != nil || count != want {
+				t.Fatalf("prune %d, want %d: %v", count, want, err)
+			}
+			for _, table := range []string{"transitions", "transition_events", "temporary_discovery_sessions"} {
+				var remaining int64
+				if err := s.db.QueryRow(`SELECT count(*) FROM ` + table).Scan(&remaining); err != nil || remaining != 1-want {
+					t.Fatalf("%s retained %d: %v", table, remaining, err)
+				}
+			}
+			if mode == "unfinished work" || mode == "completed work" {
+				var work, links int64
+				if err := s.db.QueryRow(`SELECT count(*) FROM registered_work`).Scan(&work); err != nil || work != 1 {
+					t.Fatalf("linked work removed: %d %v", work, err)
+				}
+				if err := s.db.QueryRow(`SELECT count(*) FROM transition_work`).Scan(&links); err != nil || links != 1-want {
+					t.Fatalf("work links changed: %d %v", links, err)
+				}
+			}
+			rows, err := s.db.Query(`PRAGMA foreign_key_check`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			if rows.Next() {
+				t.Fatal("prune broke foreign key relationships")
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCompletedSessionPruningRollsBackAllAuditRows(t *testing.T) {
+	for _, blocked := range []string{"temporary_discovery_sessions", "transition_events", "transitions"} {
+		t.Run(blocked, func(t *testing.T) {
+			s := testStore(t)
+			ctx := context.Background()
+			state, err := s.State(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tr := Transition{ID: "session", Fence: state.LeaseFence, Source: state, Target: state, Previous: state, Phase: control.PhaseDraining, Deadline: s.now()}
+			if err := s.BeginTransition(ctx, tr); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.AppendTransitionEvent(ctx, TransitionEvent{TransitionID: tr.ID, Phase: control.PhaseDraining, Kind: "intent", Action: "temporary"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.db.Exec(`UPDATE transitions SET status='failed',updated_at='2000-01-01T00:00:00Z',lease_epoch=99 WHERE transition_id=?`, tr.ID); err != nil {
+				t.Fatal(err)
+			}
+			payload, _ := json.Marshal(control.TemporaryDiscoverySession{ID: tr.ID, Token: "t", Status: "completed"})
+			if _, err := s.db.Exec(`INSERT INTO temporary_discovery_sessions(id,payload,status) VALUES(?,?,'completed')`, tr.ID, payload); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.db.Exec(`CREATE TRIGGER reject_prune BEFORE DELETE ON ` + blocked + ` BEGIN SELECT RAISE(ABORT, 'audit delete unavailable'); END`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.PruneAuditHistory(ctx, s.now().Add(-time.Hour), 1); err == nil {
+				t.Fatal("prune committed despite storage failure")
+			}
+			assertAuditTransitionIDs(t, s, "transitions", []string{tr.ID})
+			assertAuditTransitionIDs(t, s, "transition_events", []string{tr.ID})
+			var stored []byte
+			if err := s.db.QueryRow(`SELECT payload FROM temporary_discovery_sessions WHERE id=?`, tr.ID).Scan(&stored); err != nil || string(stored) != string(payload) {
+				t.Fatalf("failed pruning changed session: %s %v", stored, err)
 			}
 		})
 	}

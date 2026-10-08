@@ -10,6 +10,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
@@ -498,16 +499,23 @@ func TestApplyCarriedSharedPairVerbatim(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(ownedUnitDirectory(home), profile.Unit)); err != nil {
 		t.Fatal("owned unit not written")
 	}
-	// A changed adopted shared pair is still configure-only.
+	// An edited adopted group is accepted after read-only binding verification.
 	s = openStoreAt(t, r.Profile.StatePath)
 	snap, _ = s.Catalog(ctx)
 	r.ExpectedRevision = snap.Revision
 	s.Close()
+	previews := 0
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+		return launchPreflightRuntime{verify: func() error { return nil }, preview: func(map[string]string) error { previews++; return nil }}, nil
+	}
 	changed := shared("beta", "b")
 	changed.Label = "Renamed"
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{shared("alpha", "a"), changed, profile}}
-	if err := backend.Apply(ctx, home, r); err == nil || !strings.Contains(err.Error(), "catalog-only") {
-		t.Fatalf("changed adopted shared pair accepted: %v", err)
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatalf("changed adopted shared pair rejected: %v", err)
+	}
+	if previews != 1 {
+		t.Fatalf("edited adopted pair preview count: %d", previews)
 	}
 }
 

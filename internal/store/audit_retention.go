@@ -51,6 +51,7 @@ func prunableAudits(ctx context.Context, tx *sql.Tx, cutoff string, limit int) (
  WHERE tr.status <> 'in_progress' AND unixepoch(tr.updated_at)<unixepoch(?)
  AND (tr.lease_incarnation<>state.lease_incarnation OR tr.lease_epoch<>state.lease_epoch)
  AND NOT EXISTS(SELECT 1 FROM transition_work tw JOIN registered_work w ON w.request_id=tw.request_id WHERE tw.transition_id=tr.transition_id AND w.completed_at IS NULL)
+ AND NOT EXISTS(SELECT 1 FROM temporary_discovery_sessions s WHERE s.id=tr.transition_id AND s.status <> 'completed')
  ORDER BY tr.updated_at,tr.transition_id LIMIT ?`, cutoff, limit)
 	if err != nil {
 		return nil, err
@@ -73,7 +74,9 @@ func prunableAudits(ctx context.Context, tx *sql.Tx, cutoff string, limit int) (
 }
 
 func deleteTransitionAudit(ctx context.Context, tx *sql.Tx, id string) error {
-	for _, query := range []string{`DELETE FROM transition_events WHERE transition_id=?`, `DELETE FROM transition_work WHERE transition_id=?`, `DELETE FROM transitions WHERE transition_id=?`} {
+	// Completed discovery sessions are audit children; remove them with their
+	// eligible parent in this transaction, preserving unfinished sessions.
+	for _, query := range []string{`DELETE FROM temporary_discovery_sessions WHERE id=? AND status='completed'`, `DELETE FROM transition_events WHERE transition_id=?`, `DELETE FROM transition_work WHERE transition_id=?`, `DELETE FROM transitions WHERE transition_id=?`} {
 		if _, err := tx.ExecContext(ctx, query, id); err != nil {
 			return err
 		}

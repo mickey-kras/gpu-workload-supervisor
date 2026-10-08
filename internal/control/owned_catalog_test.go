@@ -259,10 +259,12 @@ func TestOwnedValuesFitCommandGrammar(t *testing.T) {
 		"dollar model path":      func(o *OwnedLaunch) { o.ModelPath = "/models/$HOME.gguf" },
 		"percent model path":     func(o *OwnedLaunch) { o.ModelPath = "/models/100%.gguf" },
 		"backslash model path":   func(o *OwnedLaunch) { o.ModelPath = "/models/win\\path.gguf" },
+		"semicolon model path":   func(o *OwnedLaunch) { o.ModelPath = "/models/a;b.gguf" },
 		"whitespace alias":       func(o *OwnedLaunch) { o.Alias = "my model" },
 		"quote alias":            func(o *OwnedLaunch) { o.Alias = "mo\"del" },
 		"control alias":          func(o *OwnedLaunch) { o.Alias = "bad\x01alias" },
 		"specifier escape alias": func(o *OwnedLaunch) { o.Alias = "100%%" },
+		"semicolon alias":        func(o *OwnedLaunch) { o.Alias = "a;b" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -403,6 +405,22 @@ func TestSharedUnitRequiresIdenticalLaunchBindings(t *testing.T) {
 		b.NativeModel.LaunchSHA256 = strings.Repeat("1", 64)
 		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{a, b}}).Validate(); err == nil {
 			t.Fatal("divergent hash on shared adopted unit accepted")
+		}
+	})
+	t.Run("adopted drop-in evidence must match", func(t *testing.T) {
+		a, b := adopted("alpha", "a"), adopted("beta", "b")
+		source := LaunchSource{Path: "/etc/systemd/user/ollama.service.d/10-options.conf", SHA256: strings.Repeat("a", 64)}
+		a.NativeModel.DropIns = []LaunchSource{source}
+		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{a, b}}).Validate(); err == nil {
+			t.Fatal("missing shared source accepted")
+		}
+		b.NativeModel.DropIns = []LaunchSource{source}
+		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{a, b}}).Validate(); err != nil {
+			t.Fatal(err)
+		}
+		b.NativeModel.DropIns[0].SHA256 = strings.Repeat("b", 64)
+		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{a, b}}).Validate(); err == nil {
+			t.Fatal("divergent shared source accepted")
 		}
 	})
 	t.Run("adopted identical accepted", func(t *testing.T) {

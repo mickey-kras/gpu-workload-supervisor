@@ -20,7 +20,7 @@ node "$(dirname "${BASH_SOURCE[0]}")/desktop-version.cjs" "$version" "${releases
 for file in extension.js metadata.json model.js contract.js transport.js framing.js dialogs.js; do
   test -s "$root/usr/share/gnome-shell/extensions/gpu-workload-supervisor@local/$file"
 done
-for file in usr/share/gpu-workload-supervisor/setup.js usr/share/gpu-workload-supervisor/review.mjs usr/share/gpu-workload-supervisor/onboarding.mjs usr/share/gpu-workload-supervisor/discovery-ui.mjs usr/share/applications/gpu-workload-supervisor-setup.desktop usr/lib/systemd/user/gpu-workload-supervisor-reconcile.service usr/lib/systemd/user/gpu-workload-supervisor-idle.service usr/lib/systemd/user/gpu-workload-supervisor-idle.timer usr/share/doc/gpu-workload-supervisor/copyright; do
+for file in usr/share/gpu-workload-supervisor/setup.js usr/share/gpu-workload-supervisor/review.mjs usr/share/gpu-workload-supervisor/onboarding.mjs usr/share/gpu-workload-supervisor/discovery-ui.mjs usr/share/gpu-workload-supervisor/discovery-inputs.mjs usr/share/gpu-workload-supervisor/launch-ui.mjs usr/share/gpu-workload-supervisor/temporary-discovery-ui.mjs usr/share/gpu-workload-supervisor/profile-ui.mjs usr/share/applications/gpu-workload-supervisor-setup.desktop usr/lib/systemd/user/gpu-workload-supervisor-reconcile.service usr/lib/systemd/user/gpu-workload-supervisor-idle.service usr/lib/systemd/user/gpu-workload-supervisor-idle.timer usr/share/doc/gpu-workload-supervisor/copyright; do
   test -s "$root/$file"
 done
 # Preserve architecture and dependency paths: multiple dependencies ship a file

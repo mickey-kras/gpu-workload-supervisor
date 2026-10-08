@@ -27,6 +27,9 @@ func (s *Store) CheckOperatorPrecondition(ctx context.Context, e control.Operato
 	})
 }
 func operatorSource(ctx context.Context, tx *sql.Tx, s control.State, e control.OperatorPrecondition) error {
+	if err := temporaryDiscoveryPending(ctx, tx); err != nil {
+		return err
+	}
 	if e.Incarnation == "" || e.Incarnation != s.LeaseFence.Incarnation || e.Version != s.Version {
 		return ErrVersionConflict
 	}

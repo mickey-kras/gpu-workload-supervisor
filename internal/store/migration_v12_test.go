@@ -22,7 +22,7 @@ func TestMigratesV11SeedingSettingsOffAndPreservingRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := migrationRows(t, first.db)
-	if _, err := first.db.ExecContext(ctx, `DROP TABLE operator_settings;
+	if _, err := first.db.ExecContext(ctx, `DROP TABLE temporary_discovery_sessions; DROP TABLE operator_settings;
 		DROP TABLE idle_policy_state;
 		DELETE FROM schema_migrations WHERE version >= 12`); err != nil {
 		t.Fatal(err)

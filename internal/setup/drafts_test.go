@@ -1,9 +1,11 @@
 package setup
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -111,8 +113,10 @@ func TestDraftOwnedRejectsGrammarUnsafeValues(t *testing.T) {
 		"percent in model path":   owned("/models/vision%i.gguf", ""),
 		"dollar in model path":    owned("/models/$vision.gguf", ""),
 		"backslash in model path": owned(`/models/vis\ion.gguf`, ""),
+		"semicolon model path":    owned("/models/a;b.gguf", ""),
 		"space in alias":          owned("/models/vision.gguf", "vision v2"),
 		"backtick in alias":       owned("/models/vision.gguf", "vis`ion"),
+		"semicolon alias":         owned("/models/vision.gguf", "a;b"),
 	} {
 		if err := validateDrafts(1, []Draft{d}); err == nil {
 			t.Fatalf("%s saved", name)
@@ -174,5 +178,84 @@ func TestDraftOwnedRejectsInvalidOllamaModel(t *testing.T) {
 	d := Draft{ID: "vision", Label: "Vision", App: "ollama", Model: "library/vision:latest", Binding: &DraftBinding{Instance: "rig", Owned: &DraftOwnedLaunch{Port: 9100}}}
 	if err := validateDrafts(1, []Draft{d}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDraftModelSelectionsPersistAndRemainOutsideCatalog(t *testing.T) {
+	for _, app := range []string{"ollama", "llama.cpp", "vllm"} {
+		t.Run(app, func(t *testing.T) {
+			home := t.TempDir()
+			// Model choices can include remote identities: discovery/admission determines
+			// whether a selected model is local and ready, rather than draft persistence.
+			choices := []string{"library/vision:latest", "cloud-model:cloud"}
+			if app != "ollama" {
+				choices = []string{"/models/vision.gguf", "organization/remote-model"}
+			}
+			draft := Draft{ID: "models", Label: "My models", App: app, Models: choices}
+			saved, err := SaveDrafts(home, DraftRequest{Version: 1, Drafts: []Draft{draft}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := ReadDrafts(home)
+			if err != nil || !reflect.DeepEqual(reopened, saved) || !reflect.DeepEqual(reopened.Drafts[0].Models, choices) {
+				t.Fatalf("lost model choices: %+v %v", reopened, err)
+			}
+			if _, err := os.Stat(filepath.Join(home, ".config/gpu-workload-supervisor/catalog.json")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("choices entered catalog: %v", err)
+			}
+			if _, err := SaveDrafts(home, DraftRequest{Version: 1, Drafts: []Draft{draft}}); err == nil {
+				t.Fatal("stale group save accepted")
+			}
+		})
+	}
+}
+
+func TestDraftModelSelectionsRejectInvalidAndDuplicateValues(t *testing.T) {
+	tooMany := make([]string, 33)
+	for i := range tooMany {
+		tooMany[i] = strings.Repeat("x", i+1)
+	}
+	for name, models := range map[string][]string{
+		"empty identity": {""}, "whitespace": {"   "}, "control": {"valid\n"}, "too long": {strings.Repeat("x", 1025)},
+		"duplicate": {"first", "first"}, "canonical duplicate": {"first", "first:latest"}, "malformed identity": {"first//second"}, "too many": tooMany,
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			original, err := SaveDrafts(home, DraftRequest{Version: 1, Drafts: []Draft{{ID: "models", Label: "Models", App: "ollama", Models: []string{"first"}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			invalid := Draft{ID: "models", Label: "Models", App: "ollama", Models: models}
+			if _, err := SaveDrafts(home, DraftRequest{Version: 1, ExpectedRevision: original.Revision, Drafts: []Draft{invalid}}); err == nil {
+				t.Fatal("invalid choices saved")
+			}
+			reopened, err := ReadDrafts(home)
+			if err != nil || !reflect.DeepEqual(reopened, original) {
+				t.Fatalf("failed save changed existing choices: %v", err)
+			}
+		})
+	}
+	if err := validateDrafts(1, []Draft{{ID: "models", Label: "Models", App: "comfyui", Models: []string{"first"}}}); err == nil {
+		t.Fatal("ComfyUI accepted model choices")
+	}
+}
+
+func TestDraftModelSelectionsRejectNonScalarJSONAndCorruptStoredChoices(t *testing.T) {
+	for _, raw := range []string{`{"models":[1]}`, `{"models":[{}]}`, `{"models":"first"}`} {
+		var d Draft
+		if err := json.Unmarshal([]byte(raw), &d); err == nil {
+			t.Fatalf("non-scalar model choices accepted: %s", raw)
+		}
+	}
+	home := t.TempDir()
+	if _, err := SaveDrafts(home, DraftRequest{Version: 1}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, ".config/gpu-workload-supervisor/drafts.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"drafts":[{"id":"models","label":"Models","app":"ollama","models":["first","first:latest"]}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadDrafts(home); err == nil {
+		t.Fatal("corrupt stored selections accepted")
 	}
 }

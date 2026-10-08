@@ -358,8 +358,9 @@ func (config *SystemdConfig) prepareWorkloads() error {
 		}
 	}
 	// Headroom is only ever added to a measured requirement; without one it
-	// would be accepted but silently never applied.
-	if config.CapacityHeadroomMiB != 0 && !config.measuresCapacity() {
+	// would be accepted but silently never applied. An explicitly disabled
+	// catalog retains this preference for future measured workloads.
+	if config.CapacityHeadroomMiB != 0 && !config.Catalog.Disabled && !config.measuresCapacity() {
 		return errors.New("capacity headroom requires a measured target requirement")
 	}
 	return nil

@@ -1,6 +1,9 @@
 package control
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNativeModelCatalogBinding(t *testing.T) {
 	c := validCatalog()
@@ -85,5 +88,28 @@ func TestNativeModelRequest(t *testing.T) {
 	}
 	if err := ValidateModelRequest([]byte(`{"model":"a","messages":[]}`), "a"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLaunchSourceEvidenceValidationAndClone(t *testing.T) {
+	a := LaunchSource{Path: "/opt/unit.d/10-first.conf", SHA256: strings.Repeat("a", 64)}
+	b := LaunchSource{Path: "/opt/unit.d/20-second.conf", SHA256: strings.Repeat("b", 64)}
+	if err := ValidateLaunchSources("/opt/unit.service", []LaunchSource{a, b}); err != nil {
+		t.Fatal(err)
+	}
+	for _, sources := range [][]LaunchSource{{b, a}, {a, a}, {{Path: "/opt/unsafe.conf", SHA256: "bad"}}, {{Path: "relative.conf", SHA256: a.SHA256}}, {{Path: "/opt/other.d/10-first.conf", SHA256: a.SHA256}, a}} {
+		if ValidateLaunchSources("/opt/unit.service", sources) == nil {
+			t.Fatal("invalid source evidence accepted", sources)
+		}
+	}
+	c := Catalog{Profiles: []WorkloadProfile{{NativeModel: &NativeModel{DropIns: []LaunchSource{a, b}}}, {LaunchBinding: &LaunchBinding{DropIns: []LaunchSource{a}}}}}
+	clone := c.Clone()
+	clone.Profiles[0].NativeModel.DropIns[0].SHA256 = "changed"
+	clone.Profiles[1].LaunchBinding.DropIns[0].SHA256 = "changed"
+	if c.Profiles[0].NativeModel.DropIns[0] != a || c.Profiles[1].LaunchBinding.DropIns[0] != a {
+		t.Fatal("clone aliases source evidence")
+	}
+	if EqualLaunchSources([]LaunchSource{a, b}, []LaunchSource{b, a}) {
+		t.Fatal("source order ignored")
 	}
 }

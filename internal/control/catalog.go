@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -40,21 +41,35 @@ func ValidWorkloadID(id Workload) bool {
 	return workloadID.MatchString(string(id)) && id != WorkloadIdle && id != WorkloadUnknown
 }
 
+type LaunchBinding struct {
+	Runtime      string         `json:"runtime"`
+	Endpoint     string         `json:"endpoint"`
+	LaunchFile   string         `json:"launchFile"`
+	LaunchSHA256 string         `json:"launchSHA256"`
+	DropIns      []LaunchSource `json:"dropIns,omitempty"`
+}
+
 type WorkloadProfile struct {
-	NativeModel *NativeModel `json:"nativeModel,omitempty"`
-	ID          Workload     `json:"id"`
-	Label       string       `json:"label"`
-	Adapter     string       `json:"adapter"`
-	Unit        string       `json:"unit"`
-	Cgroup      string       `json:"cgroup"`
-	HealthURL   string       `json:"healthURL"`
-	ReleaseURL  string       `json:"releaseURL,omitempty"`
-	RequiredMiB uint64       `json:"requiredMiB,omitempty"`
-	BootPolicy  string       `json:"bootPolicy,omitempty"`
+	LaunchBinding  *LaunchBinding `json:"launchBinding,omitempty"`
+	SystemdSlice   string         `json:"systemdSlice,omitempty"`
+	SystemdVersion uint16         `json:"systemdVersion,omitempty"`
+	NativeModel    *NativeModel   `json:"nativeModel,omitempty"`
+	ID             Workload       `json:"id"`
+	Label          string         `json:"label"`
+	Adapter        string         `json:"adapter"`
+	Unit           string         `json:"unit"`
+	Cgroup         string         `json:"cgroup"`
+	HealthURL      string         `json:"healthURL"`
+	ReleaseURL     string         `json:"releaseURL,omitempty"`
+	RequiredMiB    uint64         `json:"requiredMiB,omitempty"`
+	BootPolicy     string         `json:"bootPolicy,omitempty"`
 }
 type Catalog struct {
 	Version  int               `json:"version"`
 	Profiles []WorkloadProfile `json:"profiles"`
+	// Disabled explicitly represents removing every configured workload.
+	// Unmarked empty catalogs remain invalid so missing configuration fails closed.
+	Disabled bool `json:"disabled,omitempty"`
 }
 type CatalogSnapshot struct {
 	Revision string  `json:"revision"`
@@ -104,10 +119,16 @@ func (c Catalog) Profile(id Workload) (WorkloadProfile, bool) {
 	return WorkloadProfile{}, false
 }
 func (c Catalog) Clone() Catalog {
-	c.Profiles = append([]WorkloadProfile(nil), c.Profiles...)
+	c.Profiles = slices.Clone(c.Profiles)
 	for i := range c.Profiles {
+		if c.Profiles[i].LaunchBinding != nil {
+			b := *c.Profiles[i].LaunchBinding
+			b.DropIns = append([]LaunchSource(nil), b.DropIns...)
+			c.Profiles[i].LaunchBinding = &b
+		}
 		if c.Profiles[i].NativeModel != nil {
 			n := *c.Profiles[i].NativeModel
+			n.DropIns = append([]LaunchSource(nil), n.DropIns...)
 			if n.Owned != nil {
 				o := *n.Owned
 				n.Owned = &o
@@ -120,6 +141,12 @@ func (c Catalog) Clone() Catalog {
 func (c Catalog) Validate() error {
 	if c.Version != 1 && c.Version != 2 {
 		return errors.New("unsupported catalog version")
+	}
+	if c.Disabled {
+		if len(c.Profiles) != 0 {
+			return errors.New("disabled catalog must contain no profiles")
+		}
+		return nil
 	}
 	if len(c.Profiles) < 1 || len(c.Profiles) > 32 {
 		return errors.New("catalog requires 1 to 32 profiles")
@@ -168,6 +195,24 @@ func (p WorkloadProfile) validate() error {
 }
 
 func (p WorkloadProfile) validateNativeBinding() error {
+	if p.SystemdSlice != "" && (p.SystemdSlice != "app.slice" || (p.SystemdVersion != 252 && p.SystemdVersion != 255 && p.SystemdVersion != 259)) {
+		return errors.New("unsupported automatic systemd slice")
+	}
+	if p.LaunchBinding != nil {
+		b := p.LaunchBinding
+		if p.NativeModel != nil || b.Runtime != "comfyui" || p.Adapter != "systemd" {
+			return errors.New("unsupported application launch binding")
+		}
+		if err := validateLaunchEvidence(b.Endpoint, b.LaunchFile, b.LaunchSHA256); err != nil {
+			return err
+		}
+		if err := ValidateLaunchSources(b.LaunchFile, b.DropIns); err != nil {
+			return err
+		}
+		if p.HealthURL != b.Endpoint+"/system_stats" {
+			return errors.New("ComfyUI health route must match launch endpoint")
+		}
+	}
 	if p.NativeModel == nil {
 		return nil
 	}
@@ -249,7 +294,10 @@ func validateProfileOverlap(p WorkloadProfile, previous []WorkloadProfile) error
 		if ownedEndpointCollision(p, q) {
 			return errors.New("native endpoint belongs to another instance")
 		}
-		if sharedOllamaUnit(p, q) && (p.NativeModel.LaunchFile != q.NativeModel.LaunchFile || p.NativeModel.LaunchSHA256 != q.NativeModel.LaunchSHA256) {
+		if launchBindingCollision(p, q) {
+			return errors.New("launch endpoint belongs to another workload")
+		}
+		if sharedOllamaUnit(p, q) && (p.NativeModel.LaunchFile != q.NativeModel.LaunchFile || p.NativeModel.LaunchSHA256 != q.NativeModel.LaunchSHA256 || !EqualLaunchSources(p.NativeModel.DropIns, q.NativeModel.DropIns)) {
 			return errors.New("shared Ollama unit requires identical launch bindings")
 		}
 		if profilesOverlap(p, q) {
@@ -270,6 +318,30 @@ func ownedEndpointCollision(p, q WorkloadProfile) bool {
 		return false
 	}
 	return !sharedOllamaUnit(p, q)
+}
+
+// launchBindingCollision extends the endpoint invariant to launch-binding
+// profiles: a distinct unit and cgroup means a distinct workload, so health
+// checks against the shared socket would observe the wrong application.
+func launchBindingCollision(p, q WorkloadProfile) bool {
+	if p.LaunchBinding == nil && q.LaunchBinding == nil {
+		return false
+	}
+	a, b := profileEndpoint(p), profileEndpoint(q)
+	if a == "" || b == "" || nativeEndpointKey(a) != nativeEndpointKey(b) {
+		return false
+	}
+	return p.Unit != q.Unit || p.Cgroup != q.Cgroup
+}
+
+func profileEndpoint(p WorkloadProfile) string {
+	if p.NativeModel != nil {
+		return p.NativeModel.Endpoint
+	}
+	if p.LaunchBinding != nil {
+		return p.LaunchBinding.Endpoint
+	}
+	return ""
 }
 
 // nativeEndpointKey normalizes an endpoint to its socket address for collision
