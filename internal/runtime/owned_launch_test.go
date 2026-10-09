@@ -36,6 +36,7 @@ func TestRenderOwnedUnitGolden(t *testing.T) {
 	cases := map[string]struct {
 		profile control.WorkloadProfile
 		want    string
+		wantErr error
 	}{
 		"ollama": {
 			profile: ownedRenderProfile("ollama", "chat", &control.OwnedLaunch{Port: 11434}),
@@ -58,10 +59,22 @@ func TestRenderOwnedUnitGolden(t *testing.T) {
 			want: "[Unit]\nDescription=Supervisor-owned vllm launch for vision\n\n[Service]\nType=simple\nRestart=no\n" +
 				"ExecStart=/usr/bin/vllm serve /models/v --host 127.0.0.1 --port 9100 --max-model-len 4096 --served-model-name selected\n",
 		},
+		"external ollama": {
+			profile: control.WorkloadProfile{ID: "chat", NativeModel: &control.NativeModel{
+				Runtime: "ollama", Instance: "external", Model: "selected", Endpoint: "http://127.0.0.1:11434",
+			}},
+			wantErr: ErrOwnedRender,
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			raw, err := RenderOwnedUnit(tc.profile)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) || len(raw) != 0 {
+					t.Fatalf("external unit rendered: raw=%q err=%v", raw, err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
