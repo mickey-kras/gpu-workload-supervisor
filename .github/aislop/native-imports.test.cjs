@@ -12,6 +12,9 @@ const files = [
   'clients/gnome/gpu-workload-supervisor@local/transport.js',
   'clients/gnome/tests/transport.gjs.js',
   'clients/setup/setup.js',
+  'clients/setup/setup-window.mjs',
+  'clients/setup/presentation.mjs',
+  'tests/desktop/setup_native.mjs',
 ];
 const nativeModules = new Set([
   'gi://Adw?version=1', 'gi://Gtk?version=4.0', 'gi://Gio', 'gi://GLib',
@@ -36,7 +39,7 @@ function nativeImports() {
       imports.push(`${line}\n${lines[index + 1]}`);
     });
   }
-  assert.equal(imports.length, 18);
+  assert.equal(imports.length, 26);
   return imports;
 }
 

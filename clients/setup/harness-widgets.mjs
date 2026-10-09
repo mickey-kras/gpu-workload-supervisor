@@ -2,7 +2,7 @@ export function createWidgetClass(widgets) {
     class Widget {
         signals = new Map(); children = []; sensitive = true;
         constructor(properties = {}) {
-            for (const [property, signal] of [['text', 'changed'], ['active', 'toggled'], ['selected', 'notify::selected']]) {
+            for (const [property, signal] of [['label', 'notify::label'], ['text', 'changed'], ['active', 'toggled'], ['selected', 'notify::selected']]) {
                 Object.defineProperty(this, property, {
                     get: () => this[`_${property}`],
                     set: value => {
@@ -24,6 +24,8 @@ export function createWidgetClass(widgets) {
         set_child(child) { this.append(child); }
         set_content(child) { this.append(child); }
         add_css_class(name) { this.cssClasses ??= []; this.cssClasses.push(name); }
+        get_display() { return {}; }
+        remove_css_class(name) { this.cssClasses = this.cssClasses?.filter(item => item !== name); }
         remove(child) {
             const index = this.children.indexOf(child);
             if (index < 0) throw new Error('Cannot remove a widget that is not a direct child');

@@ -1,3 +1,4 @@
+import {applicationHeader} from './presentation.mjs';
 import {TemporaryDiscovery} from './temporary-discovery-ui.mjs';
 import {watchInstanceSelection, addRefreshButton, addFilePickers} from './discovery-inputs.mjs';
 import {addOwnedEditor, addBindingEditor} from './launch-ui.mjs';
@@ -10,7 +11,7 @@ export function addErrorReporter({Adw, Gtk, parent, status}) {
     details.add_row(text);
     if (parent.add) parent.add(details); else parent.append(details);
     return (summary, error) => {
-        status.label = summary;
+        status.label = summary; status.visible = true;
         text.label = error.message;
         details.expanded = false;
         details.visible = true;
@@ -20,7 +21,7 @@ export function addErrorReporter({Adw, Gtk, parent, status}) {
 export function addDraftEditor(options) { return new DraftEditor(options).view(); }
 
 class DraftEditor {
-    constructor({Adw, Gtk, window, parent, initial, detected, discoveryErrors, command, changed, removed, bind, taken, modelParent, temporaryStatus, openSettings}) {
+    constructor({Adw, Gtk, window, parent, initial, detected, discoveryErrors, command, changed, removed, bind, taken, modelParent, temporaryStatus, openSettings, reportProblem}) {
         this.Adw = Adw;
         this.Gtk = Gtk;
         this.window = window;
@@ -35,7 +36,7 @@ class DraftEditor {
         this.taken = taken;
         this.modelParent = modelParent;
         this.temporaryStatus = temporaryStatus;
-        this.openSettings = openSettings;
+        this.openSettings = openSettings; this.reportProblem = reportProblem;
         this.discoveryErrors ??= [];
         this.syncing = false; this.bindingFields = {}; this.ownedFields = {};
         this.installationEvidence = null;
@@ -54,7 +55,8 @@ class DraftEditor {
         this.name.connect('changed', () => { this.draft.edit({label: this.name.text}); this.changed(this.draft.snapshot()); });
         this.status = new this.Gtk.Label({label: 'Choose a detected instance or check an address. Discovery does not start applications or load models.', wrap: true, xalign: 0, selectable: true});
         this.group.add(this.status);
-        this.reportError = addErrorReporter({Adw: this.Adw, Gtk: this.Gtk, parent: this.group, status: this.status});
+        const reportDraftError = addErrorReporter({Adw: this.Adw, Gtk: this.Gtk, parent: this.group, status: this.status});
+        this.reportError = (summary, error) => { reportDraftError(summary, error); this.reportProblem?.(summary, error); };
         this.probeGuidance = null;
         this.instances = this.detected.filter(candidate => candidate.app === this.initial.app);
         this.instance = new this.Adw.ComboRow({title: 'Detected instance', use_markup: false,
@@ -83,13 +85,15 @@ class DraftEditor {
         addressPicker.connect('clicked', () => { this.details.expanded = true; this.endpoint.grab_focus(); });
     }
     buildModels() {
-        this.modelGroup = this.modelParent ? new this.Adw.PreferencesGroup({title: applications.find(app => app.id === this.initial.app).label}) : this.group;
+        this.modelGroup = this.modelParent ? new this.Adw.PreferencesGroup() : this.group;
         if (this.modelParent) {
-            this.modelParent.append(this.modelGroup);
+            this.modelParent.append(this.modelGroup); this.modelGroup.add_css_class('setup-card');
             const modelSettings = new this.Gtk.Button({label: `Application settings for ${applications.find(app => app.id === this.initial.app).label}`, icon_name: 'emblem-system-symbolic', tooltip_text: 'Advanced application settings'});
             modelSettings.update_property([this.Gtk.AccessibleProperty.LABEL], [`Settings for ${applications.find(app => app.id === this.initial.app).label}`]);
             modelSettings.connect('clicked', () => { this.openSettings?.(); this.group.visible = true; this.details.visible = true; this.details.expanded = true; });
-            this.modelGroup.add(modelSettings);
+            const subtitle = !this.draft.needsModel ? new this.Gtk.Label({label: 'Models are selected in your workflows.', wrap: true, xalign: 0}) : null;
+            subtitle?.add_css_class('dim-label');
+            this.modelGroup.add(applicationHeader(this.Gtk, this.initial.app, applications.find(app => app.id === this.initial.app).label, modelSettings, subtitle));
         }
         this.model = null;
         if (this.draft.needsModel) {
@@ -97,7 +101,7 @@ class DraftEditor {
             this.modelGroup.add(this.model);
         } else {
             this.group.add(new this.Gtk.Label({label: 'ComfyUI workflows select models. No model selection is needed here.', wrap: true, xalign: 0}));
-            if (this.modelParent) this.modelGroup.add(new this.Gtk.Label({label: 'Models are selected in your ComfyUI workflows.', wrap: true, xalign: 0}));
+
         }
         this.models = [];
         this.modelChecks = new Map();
@@ -175,6 +179,7 @@ class DraftEditor {
         this.modelChecks.clear();
         for (const item of this.models) {
             const check = new this.Gtk.CheckButton({label: item.label || item.id, active: savedModels.includes(item.id)});
+            check.add_css_class('setup-model-choice');
             check.connect('toggled', () => {
                 if (this.syncing) return;
                 const selected = [...this.modelChecks].filter(([, widget]) => widget.active).map(([id]) => id);
@@ -257,7 +262,7 @@ class DraftEditor {
             } finally { this.finish.sensitive = true; }
         });
         const remove = new this.Gtk.Button({label: 'Remove this application'}); this.group.add(remove);
-        remove.connect('clicked', async () => { this.draft.cancel(); try { await this.temporary.cleanup(); this.parent.remove(this.group); if (this.modelParent && this.draft.needsModel) { this.modelParent.remove(this.modelGroup); } this.removed(); } catch (error) { this.reportError('Temporary cleanup must finish before removing this selection.', error); } });
+        remove.connect('clicked', async () => { this.draft.cancel(); try { await this.temporary.cleanup(); this.parent.remove(this.group); if (this.modelParent) { this.modelParent.remove(this.modelGroup); } this.removed(); } catch (error) { this.reportError('Temporary cleanup must finish before removing this selection.', error); } });
         this.parent.append(this.group);
     }
     initialDiscovery() {

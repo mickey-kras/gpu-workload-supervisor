@@ -17,7 +17,7 @@ export async function loadGjsModule(name, native, globals = {}) {
             }, { context, identifier: url });
         } else {
             module = new vm.SourceTextModule(await readFile(new URL(url), 'utf8'), {
-                context, identifier: url,
+                context, identifier: url, initializeImportMeta: meta => { meta.url = url; },
             });
         }
         cache.set(url, module);

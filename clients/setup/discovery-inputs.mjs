@@ -64,8 +64,16 @@ export function addFilePickers({Gtk, window, group, draft, reference, endpoint, 
         });
     });
     if (!draft.needsModel) return;
+    let chooserGroup = group;
+    if (modelGroup) {
+        const chooser = new Gtk.Expander({label: 'Choose another model…', expanded: false, margin_top: 12});
+        chooser.add_css_class('setup-link');
+        const choices = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 8});
+        chooser.set_child(choices); modelGroup.add(chooser);
+        chooserGroup = {add: child => choices.append(child)};
+    }
     for (const [label, method, kind] of [['Choose model file...', 'open', 'model-file'], ['Choose model folder...', 'select_folder', 'model-directory']]) {
-        const choose = new Gtk.Button({label}); (modelGroup ?? group).add(choose);
+        const choose = new Gtk.Button({label}); chooserGroup.add(choose);
         choose.connect('clicked', () => {
             const dialog = new Gtk.FileDialog({title: label});
             dialog[method](window, null, (source, result) => {

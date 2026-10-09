@@ -48,8 +48,8 @@ test('ComfyUI skips models; Finish setup explicitly activates only the freshly c
     assert.deepEqual(primary(ui).map(widget => widget.label), ['Finish setup']);
     assert.equal(ui.by('Model'), undefined);
     assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
-    assert.ok(ui.widgets.some(widget => widget.label?.includes('one workload at a time')));
-    assert.ok(ui.widgets.some(widget => widget.label?.includes('closes its editor')));
+    assert.ok(ui.widgets.some(widget => widget.label === 'Only one workload runs at a time.'));
+    assert.ok(ui.widgets.some(widget => widget.label === 'ComfyUI closes when switching away.'));
     await ui.by('Finish setup').emit('clicked');
     const applied = JSON.parse(ui.calls.find(call => call.argv[1] === 'apply').input);
     assert.equal(applied.confirmQuiesced, true);
@@ -195,7 +195,7 @@ test('deselecting an existing application reviews only Supervisor removal and pr
 for (const action of ['close', 'defer', 'back']) {
     test(`recovered session ${action} leaves its durable block intact without claiming paused external controls`, async () => {
         const ui = await launch(options([], {'temporary-status': {session: {...session, status: 'cleanup_required'}}}));
-        if (action === 'close') assert.equal(ui.widgets.find(widget => widget.title === 'Manage applications').emit('close-request'), false);
+        if (action === 'close') assert.equal(ui.widgets.find(widget => widget.title === 'GPU Workload Setup').emit('close-request'), false);
         else if (action === 'defer') { await ui.by('Set up later').emit('clicked'); assert.ok(ui.widgets.some(widget => widget.closed)); }
         else { await ui.by('Back').emit('clicked'); await ui.by('Continue').emit('clicked'); }
         assert.equal(ui.calls.some(call => call.argv[1] === 'temporary-cleanup'), false);
@@ -353,7 +353,7 @@ test('window cancellation of a locally authorized temporary check still waits fo
     ui.edit(ui.by('Use Ollama'), 'active', true); await ui.by('Continue').emit('clicked');
     ui.edit(ui.by('I allow this brief start and will keep other application controls paused.'), 'active', true);
     const detecting = ui.by('Start Ollama briefly to list models').emit('clicked');
-    assert.equal(ui.widgets.find(widget => widget.title === 'Manage applications').emit('close-request'), true);
+    assert.equal(ui.widgets.find(widget => widget.title === 'GPU Workload Setup').emit('close-request'), true);
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(ui.widgets.some(widget => widget.closed), false); assert.equal(ui.signals[0].signal, 2);
     ui.finish(); await detecting; await new Promise(resolve => setImmediate(resolve));
@@ -521,5 +521,14 @@ for (const app of ['llama.cpp', 'vllm']) {
         await ui.by('Preview managed launch and add for review').emit('clicked');
         const preview = JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input);
         assert.equal(preview.draft.binding.owned.modelPath, undefined);
+    });
+}
+
+for (const [instanceStatus, expected] of [['unreachable', 'Unreachable · Open settings'], ['discovery-error', 'Detection failed · Open settings'], ['invalid', 'Configuration unreadable · Open settings']]) {
+    test(`compact application card keeps ${instanceStatus} distinct from missing`, async () => {
+        const candidate = {...installation(), recognized: false, instanceStatus};
+        const ui = await launch(options([candidate]));
+        assert.ok(ui.widgets.some(widget => widget.label === expected));
+        assert.equal(ui.calls.some(call => ['prepare', 'apply', 'temporary-discover'].includes(call.argv[1])), false);
     });
 }
