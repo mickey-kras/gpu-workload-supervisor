@@ -111,3 +111,90 @@ func TestDerivedOwnedSetupRequestSizeFailsBeforeEffects(t *testing.T) {
 		t.Fatal("size rejection wrote activation files", err)
 	}
 }
+
+func TestMaximumCatalogFitsSetupEnvelope(t *testing.T) {
+	backend, home, request := fixture(t)
+	// Placement paths have no smaller serialized-size bound. Pad a valid catalog
+	// exactly to its cap while keeping the setup profile/envelope ordinary.
+	raw, err := json.Marshal(request.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Catalog.Profiles[0].Cgroup += strings.Repeat("x", control.MaxCatalogBytes-len(raw))
+	raw, err = json.Marshal(request.Catalog)
+	if err != nil || len(raw) != control.MaxCatalogBytes {
+		t.Fatalf("catalog fixture size=%d: %v", len(raw), err)
+	}
+	if err := request.Catalog.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	s := openStoreAt(t, request.Profile.StatePath)
+	accepted, err := s.ReplaceCatalog(context.Background(), "", request.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := initializeIdleState(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	request.ExpectedRevision = accepted.Revision
+	requestRaw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requestRaw) <= control.MaxCatalogBytes || len(requestRaw) > maxSetupRequestBytes {
+		t.Fatal("fixture does not exercise the envelope allowance", len(requestRaw))
+	}
+	if err := Validate(request); err != nil {
+		t.Fatalf("maximum catalog plus envelope rejected: %v", err)
+	}
+	decoded, err := Decode(strings.NewReader(string(requestRaw)))
+	if err != nil || !reflect.DeepEqual(decoded, request) {
+		t.Fatalf("maximum catalog plus envelope decode: %v", err)
+	}
+	preview, err := backend.Plan(home, decoded)
+	if err != nil || !reflect.DeepEqual(preview.Catalog, request.Catalog) {
+		t.Fatalf("maximum stored catalog preview: %v", err)
+	}
+	if err := backend.Apply(context.Background(), home, decoded); err != nil {
+		t.Fatalf("maximum stored catalog apply: %v", err)
+	}
+	after, err := ReadCatalog(context.Background(), request.Profile.StatePath)
+	if err != nil || !reflect.DeepEqual(after, accepted) {
+		t.Fatalf("maximum catalog changed on reapply: %v", err)
+	}
+}
+
+func TestSetupWholeRequestSizeLimit(t *testing.T) {
+	backend, home, request := fixture(t)
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Profile.SystemctlPath += strings.Repeat("x", maxSetupRequestBytes-len(raw)+1)
+	raw, err = json.Marshal(request)
+	if err != nil || len(raw) != maxSetupRequestBytes+1 {
+		t.Fatalf("whole-request fixture size=%d: %v", len(raw), err)
+	}
+	if err := Validate(request); err == nil {
+		t.Fatal("oversized whole request validated")
+	}
+	if _, err := Decode(strings.NewReader(string(raw))); err == nil {
+		t.Fatal("oversized whole request decoded")
+	}
+	calls := 0
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { calls++; return idleRuntime{}, nil }
+	backend.runCommand = func(context.Context, string, ...string) ([]byte, error) { calls++; return nil, nil }
+	if _, err := backend.Plan(home, request); err == nil {
+		t.Fatal("oversized whole request previewed")
+	}
+	if err := backend.Apply(context.Background(), home, request); err == nil {
+		t.Fatal("oversized whole request applied")
+	}
+	if calls != 0 {
+		t.Fatal("whole-request size rejection reached host effects", calls)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config/gpu-workload-supervisor")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("whole-request size rejection wrote activation files", err)
+	}
+}

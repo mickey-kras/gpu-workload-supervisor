@@ -44,7 +44,9 @@ type Preview struct {
 	Changes []string        `json:"changes"`
 }
 
-const maxSetupRequestBytes = 256 * 1024
+// Reserve a bounded envelope allowance for deployment paths, revision and
+// confirmation fields in addition to a maximum-size catalog.
+const maxSetupRequestBytes = control.MaxCatalogBytes + 64*1024
 
 func Decode(reader io.Reader) (Request, error) {
 	var request Request
@@ -76,7 +78,7 @@ func Validate(request Request) error {
 		return err
 	}
 	if len(encoded) > maxSetupRequestBytes {
-		return errors.New("setup request exceeds 256 KiB")
+		return errors.New("setup request exceeds 320 KiB")
 	}
 	if request.Version != 1 || request.Profile.Version != 1 {
 		return errors.New("unsupported setup/profile version")

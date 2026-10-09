@@ -32,7 +32,8 @@ startup never silently rewrites accepted files. This additive feature needs no
 database
 migration; future schema changes are versioned with their own feature. Catalog
 serialization is bounded at 256 KiB on validation and readback, accommodating
-the supported 32-unit peer graph within the setup request size boundary.
+the supported 32-unit peer graph. Setup requests are capped at 320 KiB, reserving
+64 KiB for the deployment profile and request envelope around a maximum catalog.
 
 A native router remains additive, behind a spike and demonstrated parity for
 readiness, drain, release and capacity. Existing control is retained until that
