@@ -35,6 +35,7 @@ export async function launch({units = [], profiles = [], pending = false, fail =
                 select_folder_finish() { return this.open_finish(); } }, DialogError: {DISMISSED: 1},
             AccessibleProperty: {LABEL: 'label'},
             AccessibleState: {EXPANDED: 'expanded'},
+            AccessibleTristate: {FALSE: 0, TRUE: 1},
             Orientation: {VERTICAL: 1, HORIZONTAL: 0}, PolicyType: {NEVER: 2},
             StringObject,
             StringList: {new: strings => ({get_string: index => strings[index],

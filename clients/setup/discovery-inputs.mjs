@@ -69,10 +69,10 @@ export function addFilePickers({Gtk, window, group, draft, reference, endpoint, 
         const chooser = new Gtk.Button({label: 'Choose another model…', halign: Gtk.Align.START, margin_top: 12});
         chooser.add_css_class('flat'); chooser.add_css_class('setup-link');
         const choices = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 8, visible: false});
-        chooser.update_state([Gtk.AccessibleState.EXPANDED], [false]);
+        chooser.update_state([Gtk.AccessibleState.EXPANDED], [Gtk.AccessibleTristate.FALSE]);
         chooser.connect('clicked', () => {
             choices.visible = !choices.visible;
-            chooser.update_state([Gtk.AccessibleState.EXPANDED], [choices.visible]);
+            chooser.update_state([Gtk.AccessibleState.EXPANDED], [choices.visible ? Gtk.AccessibleTristate.TRUE : Gtk.AccessibleTristate.FALSE]);
         });
         modelGroup.add(chooser); modelGroup.add(choices);
         chooserGroup = {add: child => choices.append(child)};

@@ -91,14 +91,14 @@ test('model chooser disclosure preserves rooted pickers and opens no dialog unti
     const parent = ui.widgets.find(widget => widget.children.includes(choices));
     assert.equal(chooser.widgetType, 'Button');
     assert.ok(parent.children.includes(chooser));
-    assert.equal(chooser.accessibleStates.expanded, false);
+    assert.equal(chooser.accessibleStates.expanded, 0);
     assert.equal(ui.visible(file), false); assert.equal(ui.visible(folder), false);
     const callsBefore = ui.calls.length;
     await ui.click('Choose another model…');
-    assert.equal(chooser.accessibleStates.expanded, true);
+    assert.equal(chooser.accessibleStates.expanded, 1);
     assert.equal(ui.visible(file), true); assert.equal(ui.visible(folder), true);
     await ui.click('Choose another model…');
-    assert.equal(chooser.accessibleStates.expanded, false);
+    assert.equal(chooser.accessibleStates.expanded, 0);
     assert.equal(ui.visible(file), false); assert.equal(ui.visible(folder), false);
     assert.ok(parent.children.includes(choices), 'collapsed choices remain attached to the page');
     assert.equal(ui.calls.length, callsBefore, 'disclosure does not start discovery or change configuration');
