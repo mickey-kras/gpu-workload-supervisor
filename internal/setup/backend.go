@@ -181,11 +181,8 @@ func Apply(ctx context.Context, home string, request Request) error {
 }
 
 func (b Backend) Apply(ctx context.Context, home string, request Request) error {
-	request, err := prepareOwnedBackstopsForActivation(home, request)
+	request, err := prepareValidatedOwnedBackstopsForActivation(home, request)
 	if err != nil {
-		return err
-	}
-	if err := Validate(request); err != nil {
 		return err
 	}
 	if !request.ConfirmQuiesced {

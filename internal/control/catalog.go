@@ -169,6 +169,10 @@ func (c Catalog) Validate() error {
 	if len(c.Profiles) < 1 || len(c.Profiles) > 32 {
 		return errors.New("catalog requires 1 to 32 profiles")
 	}
+	return c.validateProfiles()
+}
+
+func (c Catalog) validateProfiles() error {
 	for i, p := range c.Profiles {
 		if c.Version == 1 && p.NativeModel != nil && p.NativeModel.Owned != nil {
 			return ErrOwnedRequiresV2

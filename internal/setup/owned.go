@@ -170,29 +170,44 @@ func prepareOwnedBackstopsForActivation(home string, request Request) (Request, 
 		return request, err
 	}
 	if present && journal.StatePath == request.Profile.StatePath {
-		for _, retry := range []Request{request, candidate} {
-			matches, err := pendingOwnedRetryUnits(home, journal, retry)
-			if err != nil {
-				return request, err
-			}
-			if matches {
-				return retry, nil
-			}
-		}
-		saved, err := privateRead(filepath.Join(root, "activation.json"))
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return prepareOwnedBackstopsForJournal(home, root, journal, request, candidate)
+	}
+	return candidate, nil
+}
+
+func prepareValidatedOwnedBackstopsForActivation(home string, request Request) (Request, error) {
+	request, err := prepareOwnedBackstopsForActivation(home, request)
+	if err != nil {
+		return request, err
+	}
+	return request, Validate(request)
+}
+
+// Without a maintenance fence, unit proofs precede the saved request check.
+func prepareOwnedBackstopsForJournal(home, root string, journal unitJournal, request, candidate Request) (Request, error) {
+	for _, retry := range []Request{request, candidate} {
+		matches, err := pendingOwnedRetryUnits(home, journal, retry)
+		if err != nil {
 			return request, err
 		}
-		if err == nil {
-			matched, err := selectRecordedActivation(saved, request, candidate)
-			if err == nil {
-				return matched, nil
-			}
-			var progress activation
-			if decodeErr := json.Unmarshal(saved, &progress); decodeErr != nil {
-				return request, decodeErr
-			}
+		if matches {
+			return retry, nil
 		}
+	}
+	saved, err := privateRead(filepath.Join(root, "activation.json"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return request, err
+	}
+	if err != nil {
+		return candidate, nil
+	}
+	matched, err := selectRecordedActivation(saved, request, candidate)
+	if err == nil {
+		return matched, nil
+	}
+	var progress activation
+	if decodeErr := json.Unmarshal(saved, &progress); decodeErr != nil {
+		return request, decodeErr
 	}
 	return candidate, nil
 }
@@ -237,28 +252,38 @@ func pendingOwnedRetryUnits(home string, journal unitJournal, request Request) (
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return false, err
 	}
+	return pendingOwnedRetryPrunedUnits(home, journal, requested, accepted.Catalog)
+}
+
+func pendingOwnedRetryPrunedUnits(home string, journal unitJournal, requested map[string]control.WorkloadProfile, accepted control.Catalog) (bool, error) {
 	for unit := range requested {
 		if _, journaled := journal.Writes[unit]; journaled {
 			continue
 		}
-		raw, fileErr := privateRead(filepath.Join(ownedUnitDirectory(home), unit))
-		if fileErr != nil && !errors.Is(fileErr, os.ErrNotExist) {
-			return false, fileErr
-		}
-		if errors.Is(fileErr, os.ErrNotExist) {
-			continue
-		}
-		prior, found := ownedProfileForUnit(accepted.Catalog, unit)
-		if !found {
-			return false, nil
-		}
-		proof, err := ownedRenderChecked(prior)
-		if err != nil {
+		matches, err := pendingOwnedRetryPrunedUnit(home, unit, accepted)
+		if err != nil || !matches {
 			return false, err
-		}
-		if digest(raw) != digest(proof) {
-			return false, nil
 		}
 	}
 	return true, nil
+}
+
+// A pruned write may be absent or still have the accepted catalog's bytes.
+func pendingOwnedRetryPrunedUnit(home, unit string, accepted control.Catalog) (bool, error) {
+	raw, fileErr := privateRead(filepath.Join(ownedUnitDirectory(home), unit))
+	if fileErr != nil && !errors.Is(fileErr, os.ErrNotExist) {
+		return false, fileErr
+	}
+	if errors.Is(fileErr, os.ErrNotExist) {
+		return true, nil
+	}
+	prior, found := ownedProfileForUnit(accepted, unit)
+	if !found {
+		return false, nil
+	}
+	proof, err := ownedRenderChecked(prior)
+	if err != nil {
+		return false, err
+	}
+	return digest(raw) == digest(proof), nil
 }
