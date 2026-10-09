@@ -220,9 +220,12 @@ app.connect('activate', () => {
         assert(ui.window.get_focus() !== null && ui.window.get_focus() !== firstFocus, 'Tab advances to a different native focus target');
         await capture(ui, 'applications-keyboard-focus');
         const settingsGear = ui.applicationCards.get('ollama').gear;
+        const saveParent = ui.saveDrafts.get_parent();
+        assert(saveParent === ui.applicationPage, 'shared save action is rooted directly in the application page');
         await tabTo(ui, settingsGear);
         const settingsScroll = ui.scroll.get_vadjustment().value;
         await activate(ui, settingsGear, 'Ollama settings');
+        assert(ui.saveDrafts.get_parent() === saveParent && ui.saveDrafts.get_mapped(), 'opening settings shows the shared save action without reparenting');
         assert(ui.scroll.get_vadjustment().value === 0, 'application settings begins at the top');
         assert(!ui.applicationGroup.get_mapped(), 'settings does not leave unrelated application cards in view');
         const installedPicker = widgets(ui.window).find(widget => widget instanceof Gtk.Button && widget.label === 'Choose installed executable…' && widget.get_mapped());
@@ -235,6 +238,7 @@ app.connect('activate', () => {
         await capture(ui, 'application-settings');
         await tabTo(ui, ui.back); run(['xdotool', 'key', 'space']); await delay(150);
         assert(ui.heading.label === 'Choose your applications', 'settings Back restores the originating screen');
+        assert(ui.saveDrafts.get_parent() === saveParent && !ui.saveDrafts.get_mapped(), 'settings Back hides the save action without reparenting');
         assert(ownsFocus(ui, settingsGear), 'settings Back restores the originating gear focus');
         assert(Math.abs(ui.scroll.get_vadjustment().value - settingsScroll) < 1, 'settings Back restores the originating scroll position');
         assert(ui.applicationCards.get('ollama').select.active, 'settings Back retains the selected application');

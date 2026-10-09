@@ -99,7 +99,7 @@ class SetupWindow {
         this.introduction.label = 'Choose your installation. Preview checks do not start applications or download models.';
         this.applicationGroup.visible = false; this.findApplication.visible = false; this.settings.visible = false;
         this.setupSettings.visible = false; this.back.visible = true;
-        if (this.saveDraftsInSettings !== true) { this.advanced.remove(this.saveDrafts); this.applicationPage.append(this.saveDrafts); this.saveDraftsInSettings = true; }
+        this.saveDrafts.visible = true;
         for (const draftEditor of this.draftEditors) draftEditor.group.visible = draftEditor === editor;
         editor.showSettings();
         this.heading.grab_focus(); this.heading.select_region(0, 0);
@@ -109,7 +109,7 @@ class SetupWindow {
         const saved = this.applicationSettings;
         if (!saved) return;
         this.restoreProfileSettings(); this.applicationSettings = null;
-        this.applicationPage.remove(this.saveDrafts); this.advanced.add_row(this.saveDrafts); this.saveDraftsInSettings = false;
+        this.saveDrafts.visible = false;
         for (const editor of this.draftEditors) editor.group.visible = false;
         this.applicationGroup.visible = true; this.findApplication.visible = true;
         this.setStep(saved.step);

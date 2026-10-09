@@ -86,7 +86,7 @@ export function createSettings(ui) {
     ui.advanced.add_row(ui.rows);
     ui.setupSettings = new Gtk.Button({icon_name: 'emblem-system-symbolic', tooltip_text: 'Setup settings'});
     ui.setupSettings.update_property([Gtk.AccessibleProperty.LABEL], ['Setup settings']);
-    ui.setupSettings.connect('clicked', () => { ui.settings.visible = true; ui.advanced.expanded = true; });
+    ui.setupSettings.connect('clicked', () => { ui.settings.visible = true; ui.advanced.expanded = true; ui.saveDrafts.visible = true; });
     ui.headerBar.pack_end(ui.setupSettings);
     ui.changes = new Gtk.Label({label: 'Finish setup to check the current changes.', wrap: true, xalign: 0, selectable: true});
     ui.advanced.add_row(ui.changes);
@@ -105,8 +105,7 @@ export function createSettings(ui) {
     ui.applicationPage.append(ui.settings);
     ui.applicationPage.remove(ui.draftRows);
     ui.applicationPage.append(ui.draftRows);
-    ui.saveDrafts = new Gtk.Button({label: 'Save selections for later', sensitive: false});
-    ui.advanced.add_row(ui.saveDrafts);
+    ui.saveDrafts = new Gtk.Button({label: 'Save selections for later', sensitive: false, visible: false});
 }
 
 export function createApplicationCards(ui) {
@@ -156,6 +155,9 @@ export function createApplicationCards(ui) {
     ui.applicationPage.append(ui.findApplication);
     ui.applicationPage.append(ui.settings);
     ui.applicationPage.append(ui.draftRows);
+    // Keep this shared action rooted in the page. Expander rows wrap non-row
+    // children, so moving the button between native containers is unsafe.
+    ui.applicationPage.append(ui.saveDrafts);
     ui.settings.visible = false;
 }
 

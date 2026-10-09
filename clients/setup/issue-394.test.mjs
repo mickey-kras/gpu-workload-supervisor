@@ -20,9 +20,12 @@ function ownedProfile({draft}) {
 test('beginning gear opens compact settings; Back restores originating scroll, focus and selections', async () => {
     const ui = await launch({responses: {discover: discover([service('one.service')])}});
     const gear = ui.by('Settings for Ollama');
+    const save = ui.by('Save selections for later');
+    const saveParent = ui.widgets.find(widget => widget.children.includes(save));
     const scroll = ui.widgets.find(widget => widget.hscrollbar_policy !== undefined);
     scroll.get_vadjustment().value = 75;
     await ui.click('Settings for Ollama');
+    assert.ok(saveParent.children.includes(save), 'opening settings retains the rooted save action');
     assert.equal(heading(ui).label, 'Ollama settings');
     assert.equal(heading(ui).focused, true);
     assert.equal(scroll.get_vadjustment().value, 0);
@@ -32,6 +35,8 @@ test('beginning gear opens compact settings; Back restores originating scroll, f
     assert.equal(ui.visible(ui.by('Choose installed executable…')), true);
     ui.edit(ui.by('Friendly name'), 'text', 'My models');
     await ui.click('Back');
+    assert.ok(saveParent.children.includes(save), 'Back hides the save action without moving its native parent');
+    assert.equal(ui.visible(save), false);
     assert.equal(heading(ui).label, 'Choose your applications');
     assert.equal(gear.focused, true);
     assert.equal(scroll.get_vadjustment().value, 75);
