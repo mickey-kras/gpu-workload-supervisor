@@ -38,6 +38,13 @@ func InspectAutomaticLaunchSources(path, app string, dropInPaths []string) (Auto
 }
 
 func inspectAutomaticLaunchSourcesWithValidator(path, app string, dropInPaths []string, validate func(string) error) (AutomaticLaunch, error) {
+	return inspectAutomaticLaunchSourcesMode(path, app, dropInPaths, validate, false)
+}
+
+// Cleanup may inspect unchanged source without requiring cache/credential paths
+// to remain usable. Source and command trust are still mandatory; this mode
+// never authorizes execution or admission.
+func inspectAutomaticLaunchSourcesMode(path, app string, dropInPaths []string, validate func(string) error, cleanupEnvironment bool) (AutomaticLaunch, error) {
 	if len(dropInPaths) > 32 {
 		return AutomaticLaunch{}, ErrLaunchUnsupported
 	}
@@ -63,7 +70,7 @@ func inspectAutomaticLaunchSourcesWithValidator(path, app string, dropInPaths []
 	if err := control.ValidateLaunchSources(path, dropIns); err != nil {
 		return AutomaticLaunch{}, err
 	}
-	u, err := parseExternalLaunchSources(sources, app)
+	u, err := parseExternalLaunchSourcesMode(sources, app, cleanupEnvironment)
 	if err != nil {
 		return AutomaticLaunch{}, err
 	}

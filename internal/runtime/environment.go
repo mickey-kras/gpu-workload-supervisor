@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"golang.org/x/sys/unix"
@@ -93,11 +92,17 @@ func (u *parsedLaunchUnit) applySafeEnvironment(runtimeName, assignment string) 
 		u.gpuUUID = value
 		return nil
 	case "HOME", "HF_HOME", "HUGGINGFACE_HUB_CACHE", "TRANSFORMERS_CACHE", "XDG_CACHE_HOME", "TMPDIR", "HF_TOKEN_PATH":
+		if u.cleanupEnvironment {
+			return nil
+		}
 		if err := qualifyEnvironmentPath(value, name == "HF_TOKEN_PATH", false); err != nil {
 			return environmentError(name, "requires an existing absolute clean trusted path without links; inspect ownership and permissions of this setting and its ancestors")
 		}
 		return nil
 	case "PATH":
+		if u.cleanupEnvironment {
+			return nil
+		}
 		for _, path := range strings.Split(value, ":") {
 			if err := qualifyEnvironmentSearchPath(path); err != nil {
 				return environmentError(name, "requires absolute clean root-owned executable directories; aliases must be root-owned and resolve into trusted directories with no group/world writes")
@@ -167,30 +172,9 @@ func qualifyEnvironmentPath(path string, file, rootOnly bool) error {
 }
 
 func qualifyEnvironmentSearchPath(path string) error {
-	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return ErrLaunchUnsupported
-	}
-	resolved, err := filepath.EvalSymlinks(path)
+	resolved, err := resolveTrustedRootPath(path, os.Lstat, os.Readlink)
 	if err != nil {
 		return ErrLaunchUnsupported
-	}
-	prefix := "/"
-	for _, part := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
-		if part == "" {
-			continue
-		}
-		prefix = filepath.Join(prefix, part)
-		info, err := os.Lstat(prefix)
-		if err != nil {
-			return ErrLaunchUnsupported
-		}
-		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !ok || stat.Uid != 0 {
-			return ErrLaunchUnsupported
-		}
-		if info.Mode()&os.ModeSymlink == 0 && info.Mode().Perm()&0022 != 0 {
-			return ErrLaunchUnsupported
-		}
 	}
 	return qualifyEnvironmentPath(resolved, false, true)
 }

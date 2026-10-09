@@ -41,7 +41,7 @@ func (m *SystemdManager) verifyTemporaryBindingMode(ctx context.Context, v contr
 	for i, source := range v.DropIns {
 		paths[i] = source.Path
 	}
-	launch, err := inspectAutomaticLaunchSourcesWithValidator(v.LaunchFile, "ollama", paths, validate)
+	launch, err := inspectAutomaticLaunchSourcesMode(v.LaunchFile, "ollama", paths, validate, !admission)
 	if err != nil {
 		return nil, err
 	}

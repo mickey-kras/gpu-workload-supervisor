@@ -62,29 +62,73 @@ func trustedAncestors(resolved string) error {
 	return nil
 }
 
-// Both the canonical target and the retained command path must be trusted.
-// A root-trusted target does not make a replaceable ancestor alias safe: the
-// unit executes the retained path later, after inspection. Root-owned aliases
-// under root-owned, non-writable directories (including merged-/usr) remain
-// supported, while desktop-owned or writable path components cannot redirect
-// the command between qualification and startup.
+// Qualification follows every link hop, including ancestors hidden inside a
+// link target. Checking just lexical prefixes and the final canonical target
+// would miss replaceable intermediate links. Root-controlled merged-/usr
+// aliases remain supported; errors identify component numbers without paths.
 func trustedOriginalExecutablePath(path string) error {
+	_, err := resolveTrustedRootPath(path, os.Lstat, os.Readlink)
+	return err
+}
+
+func resolveTrustedRootPath(path string, lstat func(string) (os.FileInfo, error), readlink func(string) (string, error)) (string, error) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return "", errors.New("trusted path must be absolute and clean")
+	}
+	pending := append([]string{"/"}, strings.Split(strings.TrimPrefix(path, "/"), "/")...)
 	prefix := "/"
-	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	for i, part := range append([]string{""}, parts...) {
-		prefix = filepath.Join(prefix, part)
-		info, err := os.Lstat(prefix)
+	hops, component := 0, 0
+	for len(pending) > 0 {
+		part := pending[0]
+		pending = pending[1:]
+		if part == "" || part == "." {
+			continue
+		}
+		if part == ".." {
+			prefix = filepath.Dir(prefix)
+			continue
+		}
+		current := filepath.Join(prefix, part)
+		if part == "/" {
+			current = "/"
+		}
+		info, err := lstat(current)
 		if err != nil {
-			return errors.New("original executable path component unavailable; select an existing trusted executable")
+			return "", errors.New("original executable path component unavailable; inspect the selected path and all alias targets")
 		}
 		stat, ok := info.Sys().(*syscall.Stat_t)
 		reason := "not root-owned"
-		if info.Mode()&os.ModeSymlink == 0 && info.Mode().Perm()&0022 != 0 {
+		link := info.Mode()&os.ModeSymlink != 0
+		if !link && info.Mode().Perm()&0022 != 0 {
 			reason = "group or world writable"
 		} else if ok && stat.Uid == 0 {
+			reason = ""
+		}
+		if reason != "" {
+			return "", fmt.Errorf("original executable path component %d is %s; install or select the executable through trusted root-owned directories and aliases", component, reason)
+		}
+		component++
+		if link {
+			hops++
+			if hops > 40 {
+				return "", errors.New("executable alias resolution exceeds the supported hop limit; select a direct trusted target")
+			}
+			target, err := readlink(current)
+			if err != nil || target == "" {
+				return "", errors.New("executable alias target unavailable; select a direct trusted target")
+			}
+			next := strings.Split(strings.TrimPrefix(target, "/"), "/")
+			if filepath.IsAbs(target) {
+				prefix = "/"
+				next = append([]string{"/"}, next...)
+			}
+			pending = append(next, pending...)
 			continue
 		}
-		return fmt.Errorf("original executable path component %d is %s; install or select the executable through trusted root-owned directories and aliases", i, reason)
+		if len(pending) > 0 && !info.IsDir() {
+			return "", errors.New("executable alias ancestry is not a directory; select a direct trusted target")
+		}
+		prefix = current
 	}
-	return nil
+	return prefix, nil
 }

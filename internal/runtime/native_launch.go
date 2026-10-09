@@ -59,14 +59,15 @@ func qualifyParsedLaunch(unit parsedLaunchUnit, n control.NativeModel, validate 
 }
 
 type parsedLaunchUnit struct {
-	execStart         string
-	preCommands       []string
-	cloudOff          bool
-	host              string
-	maxLoadedPinned   bool
-	gpuUUID           string
-	environment       map[string]bool
-	environmentValues map[string]string
+	execStart          string
+	preCommands        []string
+	cloudOff           bool
+	host               string
+	maxLoadedPinned    bool
+	gpuUUID            string
+	environment        map[string]bool
+	environmentValues  map[string]string
+	cleanupEnvironment bool
 }
 
 func parseLaunchUnit(raw []byte, runtimeName string) (parsedLaunchUnit, error) {

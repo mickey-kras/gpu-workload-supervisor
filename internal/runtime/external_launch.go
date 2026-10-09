@@ -89,7 +89,11 @@ type externalLaunchDirectives struct {
 // an adopted service into the owned grammar. Scalars override; command lists
 // append, with explicit empty assignments resetting the list.
 func parseExternalLaunchSources(sources [][]byte, runtimeName string) (parsedLaunchUnit, error) {
-	var unit parsedLaunchUnit
+	return parseExternalLaunchSourcesMode(sources, runtimeName, false)
+}
+
+func parseExternalLaunchSourcesMode(sources [][]byte, runtimeName string, cleanupEnvironment bool) (parsedLaunchUnit, error) {
+	unit := parsedLaunchUnit{cleanupEnvironment: cleanupEnvironment}
 	directives := externalLaunchDirectives{scalars: map[string]string{}, env: map[string]string{}}
 	for _, raw := range sources {
 		if err := directives.readSource(raw); err != nil {

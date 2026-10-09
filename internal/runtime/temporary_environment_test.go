@@ -84,7 +84,7 @@ func TestTemporaryDiscoveryRequiresPhysicalAndLoadedEnvironmentProof(t *testing.
 	}
 }
 func TestTemporaryCleanupStillStopsExactInvocationAfterAdmissionProofFailure(t *testing.T) {
-	for _, mode := range []string{"physical-query-after-start", "loaded-env-after-start"} {
+	for _, mode := range []string{"physical-query-after-start", "loaded-env-after-start", "removed-environment-path"} {
 		t.Run(mode, func(t *testing.T) {
 			m, r, v := temporaryEnvironmentFixture(t)
 			r.failAfterStart = mode == "physical-query-after-start"
@@ -94,6 +94,16 @@ func TestTemporaryCleanupStillStopsExactInvocationAfterAdmissionProofFailure(t *
 			}
 			if mode == "physical-query-after-start" && err == nil {
 				t.Fatal("post-start GPU observation failure ignored")
+			}
+			if mode == "removed-environment-path" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				assignment := strings.Fields(r.base.mutations["Environment"])
+				home := strings.TrimPrefix(assignment[len(assignment)-1], "HOME=")
+				if err := os.Remove(home); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if mode == "loaded-env-after-start" {
 				if err != nil {
