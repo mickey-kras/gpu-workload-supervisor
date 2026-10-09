@@ -45,7 +45,7 @@ export async function launch({units = [], profiles = [], pending = false, fail =
         'gi://GLib': {default: {getenv: () => 'GNOME', uuid_string_random: () => uuidSequence++ ? `unique-id-${uuidSequence}` : 'unique-id',
             markup_escape_text: text => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
         }},
-        'gi://Gio': {default: {FileIcon: class { constructor(properties) { Object.assign(this, properties); } }, File: {new_for_uri: () => ({get_parent: () => ({get_child: name => ({query_exists: () => true})})})}, SubprocessFlags: {STDIN_PIPE: 1, STDOUT_PIPE: 2, STDERR_PIPE: 4},
+        'gi://Gio': {default: {FileIcon: class { constructor(properties) { Object.assign(this, properties); } }, File: {new_for_uri: () => ({get_parent: () => ({get_child: () => ({query_exists: () => true})})})}, SubprocessFlags: {STDIN_PIPE: 1, STDOUT_PIPE: 2, STDERR_PIPE: 4},
             Subprocess: {new(argv) { let requestInput; return {
                 send_signal(signal) { signals.push({argv, signal}); },
                 communicate_utf8_async(input, cancel, callback) {
