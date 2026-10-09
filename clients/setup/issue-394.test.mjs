@@ -215,3 +215,19 @@ test('CSS fixture retains the actual stylesheet passed to the native provider', 
     assert.equal(ui.styleProviders.size, 1);
     assert.ok([...ui.styleProviders][0].data.includes('.setup-card'));
 });
+
+test('an authoritative managed candidate prefills executable and launch options through ordinary model preview', async () => {
+    const binding = {instance: 'installed-vllm-identity', owned: {executable: '/venv/bin/vllm', port: 9003, maxModelLen: 8192, alias: 'local-model'}};
+    const candidate = {app: 'vllm', label: 'vLLM', sourceKind: 'owned', recognized: true, configurationStatus: 'model-required', instanceStatus: 'installed',
+        reference: binding.owned.executable, referenceKind: 'application', binding, models: []};
+    const ui = await launch({deferAction: 'unused', filePath: '/models/existing-vllm', responses: {discover: discover([candidate]), 'render-owned': ownedProfile}});
+    await ui.click('Settings for vLLM');
+    for (const [title, value] of [['Installed executable', binding.owned.executable], ['Instance name', binding.instance], ['Launch port', '9003'], ['Maximum model length', '8192'], ['Served model name', 'local-model']])
+        assert.equal(ui.by(title).text, value);
+    await ui.click('Continue'); await ui.click('Choose another model…'); await ui.click('Choose model folder...'); await ui.click('Continue');
+    const rendered = JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input).draft;
+    assert.deepEqual(rendered.binding, {instance: binding.instance, owned: {...binding.owned, modelPath: '/models/existing-vllm'}});
+    assert.equal(ui.calls.some(call => ['prepare', 'apply', 'temporary-start', 'temporary-discover'].includes(call.argv[1])), false);
+    assert.equal(heading(ui).label, 'Ready to finish');
+    assert.equal(ui.by('Finish setup').sensitive, true);
+});
