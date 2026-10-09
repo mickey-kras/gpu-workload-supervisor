@@ -150,7 +150,7 @@ func (b Backend) TemporaryDiscover(ctx context.Context, home string, r Temporary
 		return result, err
 	}
 	n := profile.NativeModel
-	v := control.TemporaryDiscoveryCandidate{Unit: r.Unit, LaunchFile: n.LaunchFile, LaunchSHA256: n.LaunchSHA256, DropIns: n.DropIns, Endpoint: n.Endpoint, Cgroup: profile.Cgroup, SystemdSlice: "app.slice", SystemdVersion: systemdVersion}
+	v := control.TemporaryDiscoveryCandidate{GPUUUID: n.GPUUUID, Unit: r.Unit, LaunchFile: n.LaunchFile, LaunchSHA256: n.LaunchSHA256, DropIns: n.DropIns, Endpoint: n.Endpoint, Cgroup: profile.Cgroup, SystemdSlice: "app.slice", SystemdVersion: systemdVersion}
 	e := control.OperatorPrecondition{Incarnation: r.Expected.Incarnation, Version: version, Owner: r.Expected.Owner, ConfigurationRevision: r.Expected.ConfigurationRevision}
 	raw, operationErr := c.DiscoverNativeTemporary(ctx, v, e, true, b.temporaryModels)
 	statusCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

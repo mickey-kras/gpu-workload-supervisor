@@ -1,6 +1,9 @@
 import {createWidgetClass} from './harness-widgets.mjs';
 import {loadGjsModule} from '../gnome/tests/gjs-modules.js';
 
+// The native icon constructor returns a property bag in this widget fixture.
+function FileIcon(properties) { return {...properties}; }
+
 // Substitute only GI widgets and subprocesses; run the setup's real event handlers.
 export async function launch({units = [], profiles = [], pending = false, fail = null, version = 'GNOME Shell 50.1', responses = {}, filePath = '/models/selected.gguf', fileError = null, deferAction = 'validate', deferOccurrence = null} = {}) {
     const widgets = []; const calls = []; const deferred = []; const signals = []; let uuidSequence = 0;
@@ -23,7 +26,7 @@ export async function launch({units = [], profiles = [], pending = false, fail =
             ...Object.fromEntries(['Box', 'Label', 'ScrolledWindow', 'Button', 'CheckButton', 'Image', 'Picture', 'Separator', 'Expander'].map(name => [name, class extends Widget { constructor(properties) { super(properties); this.widgetType = name; } }])),
             IconTheme: {get_for_display: () => ({lookup_by_gicon: (icon, size, scale) => ({icon, size, scale})})},
             TextDirection: {NONE: 0}, IconLookupFlags: {FORCE_REGULAR: 1},
-            CssProvider: class { load_from_data() {} }, StyleContext: {add_provider_for_display(display, provider) { styleProviders.add(provider); },
+            CssProvider: class { load_from_data(data) { this.data = data; } }, StyleContext: {add_provider_for_display(display, provider) { styleProviders.add(provider); },
                 remove_provider_for_display(display, provider) { styleProviders.delete(provider); }}, STYLE_PROVIDER_PRIORITY_APPLICATION: 600,
             ContentFit: {CONTAIN: 1},
             Align: {CENTER: 3, START: 1}, AccessibleRole: {PRESENTATION: 1, HEADING: 2},
@@ -47,7 +50,7 @@ export async function launch({units = [], profiles = [], pending = false, fail =
         'gi://GLib': {default: {PRIORITY_DEFAULT_IDLE: 200, SOURCE_REMOVE: false, idle_add(priority, callback) { callback(); return 1; }, getenv: () => 'GNOME', uuid_string_random: () => uuidSequence++ ? `unique-id-${uuidSequence}` : 'unique-id',
             markup_escape_text: text => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
         }},
-        'gi://Gio': {default: {FileIcon: class { constructor(properties) { Object.assign(this, properties); } }, File: {new_for_uri: () => ({get_parent: () => ({get_child: () => ({query_exists: () => true})})})}, SubprocessFlags: {STDIN_PIPE: 1, STDOUT_PIPE: 2, STDERR_PIPE: 4},
+        'gi://Gio': {default: {FileIcon, File: {new_for_uri: () => ({get_parent: () => ({get_child: () => ({query_exists: () => true})})})}, SubprocessFlags: {STDIN_PIPE: 1, STDOUT_PIPE: 2, STDERR_PIPE: 4},
             Subprocess: {new(argv) { let requestInput; return {
                 send_signal(signal) { signals.push({argv, signal}); },
                 communicate_utf8_async(input, cancel, callback) {

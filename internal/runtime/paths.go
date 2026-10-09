@@ -10,8 +10,8 @@ import (
 )
 
 func validateExecutable(path string) (string, error) {
-	if !filepath.IsAbs(path) {
-		return "", errors.New("path must be absolute")
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return "", errors.New("path must be absolute and clean")
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
@@ -32,6 +32,9 @@ func validateExecutable(path string) (string, error) {
 		return "", errors.New("executable target is not root-owned; install this executable through the system package manager or a trusted root-owned location")
 	}
 	if err := trustedAncestors(resolved); err != nil {
+		return "", err
+	}
+	if err := trustedOriginalExecutablePath(path); err != nil {
 		return "", err
 	}
 	return resolved, nil
@@ -55,6 +58,33 @@ func trustedAncestors(resolved string) error {
 		if directory == string(filepath.Separator) {
 			break
 		}
+	}
+	return nil
+}
+
+// Both the canonical target and the retained command path must be trusted.
+// A root-trusted target does not make a replaceable ancestor alias safe: the
+// unit executes the retained path later, after inspection. Root-owned aliases
+// under root-owned, non-writable directories (including merged-/usr) remain
+// supported, while desktop-owned or writable path components cannot redirect
+// the command between qualification and startup.
+func trustedOriginalExecutablePath(path string) error {
+	prefix := "/"
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	for i, part := range append([]string{""}, parts...) {
+		prefix = filepath.Join(prefix, part)
+		info, err := os.Lstat(prefix)
+		if err != nil {
+			return errors.New("original executable path component unavailable; select an existing trusted executable")
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		reason := "not root-owned"
+		if info.Mode()&os.ModeSymlink == 0 && info.Mode().Perm()&0022 != 0 {
+			reason = "group or world writable"
+		} else if ok && stat.Uid == 0 {
+			continue
+		}
+		return fmt.Errorf("original executable path component %d is %s; install or select the executable through trusted root-owned directories and aliases", i, reason)
 	}
 	return nil
 }

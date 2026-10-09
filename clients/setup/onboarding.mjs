@@ -64,6 +64,8 @@ export function profileIDFromModel(app, model) {
 }
 
 export function candidateMessage(candidate) {
+    if (candidate?.configurationStatus === 'inspection-failed') return 'Installation inspection failed. Check its service configuration or choose an installed executable.';
+    if (candidate?.configurationStatus === 'model-missing') return 'Configured model is missing. Choose an existing model or repair the service configuration.';
     const states = {
         'not-running': stoppedCandidateMessage(candidate),
         ambiguous: 'More than one installation matches. Choose the installation you want to control.',
@@ -96,6 +98,6 @@ export function candidateIdentity(candidate) {
 }
 
 export function candidateChoice(candidate) {
-    const status = candidate.configurationStatus === 'model-required' ? 'model needed' : candidate.instanceStatus === 'not-running' && candidate.unit ? 'stopped' : candidate.instanceStatus;
+    const status = {'inspection-failed': 'inspection failed', 'model-missing': 'model missing', 'model-required': 'model needed'}[candidate.configurationStatus] ?? (candidate.instanceStatus === 'not-running' && candidate.unit ? 'stopped' : candidate.instanceStatus);
     return `${candidate.label} · ${candidateIdentity(candidate)}${status ? ` · ${status}` : ''}`;
 }

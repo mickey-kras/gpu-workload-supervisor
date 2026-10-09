@@ -91,7 +91,7 @@ class DraftEditor {
             const modelSettings = new this.Gtk.Button({icon_name: 'emblem-system-symbolic', tooltip_text: 'Advanced application settings'});
             modelSettings.update_property([this.Gtk.AccessibleProperty.LABEL], [`Settings for ${applications.find(app => app.id === this.initial.app).label}`]);
             modelSettings.connect('clicked', () => this.openSettings?.(modelSettings));
-            const subtitle = !this.draft.needsModel ? new this.Gtk.Label({label: 'Models are selected in your workflows.', wrap: true, xalign: 0}) : null;
+            const subtitle = this.draft.needsModel ? null : new this.Gtk.Label({label: 'Models are selected in your workflows.', wrap: true, xalign: 0});
             subtitle?.add_css_class('dim-label'); subtitle?.add_css_class('setup-guidance');
             this.modelGroup.add(applicationHeader(this.Gtk, this.initial.app, applications.find(app => app.id === this.initial.app).label, modelSettings, subtitle));
         }

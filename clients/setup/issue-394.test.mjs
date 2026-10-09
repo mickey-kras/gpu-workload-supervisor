@@ -172,3 +172,46 @@ test('configured application gear opens its own settings; removal and Back do no
     assert.deepEqual(reviewed.catalog.profiles.map(profile => profile.id), ['native']);
     assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
 });
+
+for (const [configurationStatus, expected, choiceStatus] of [
+    ['inspection-failed', 'Inspection failed · Open settings', 'inspection failed'],
+    ['model-missing', 'Configured model missing · Open settings', 'model missing'],
+]) {
+    test(`endpoint-first production discovery preserves ${configurationStatus} service evidence`, async () => {
+        const endpoint = {app: 'ollama', sourceKind: 'endpoint', label: 'Ollama', endpoint: 'http://127.0.0.1:11434', instanceStatus: 'not-running', inventoryStatus: 'not-checked', models: []};
+        const configuration = {...service('selected.service'), recognized: false, configurationStatus};
+        const ui = await launch({responses: {discover: discover([endpoint, configuration])}});
+        assert.ok(ui.widgets.some(widget => widget.label === expected));
+        await ui.click('Settings for Ollama');
+        const choices = ui.by('Detected instance');
+        assert.ok(choices.model.get_string(2).endsWith(choiceStatus));
+        ui.edit(choices, 'selected', 2);
+        assert.ok(ui.widgets.some(widget => widget.selectable && widget.label?.includes(configuration.unit) && widget.label?.includes(configurationStatus === 'model-missing' ? 'Configured model is missing' : 'Installation inspection failed')));
+        assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
+    });
+}
+
+test('removing a configured edit and reopening it uses the newly attached live editor', async () => {
+    const profile = {id: 'native', label: 'Native', adapter: 'systemd', unit: 'native.service', cgroup: '/native', bootPolicy: 'stop-to-idle', nativeModel: {runtime: 'vllm', model: '/model', instance: 'local', endpoint: 'http://127.0.0.1:8000', launchFile: '/native.service'}};
+    const ui = await launch({profiles: [profile]});
+    await ui.click('Settings for vLLM'); await ui.click('Edit application');
+    const oldCard = ui.widgets.find(widget => widget.description?.startsWith('Choose your existing installation'));
+    const parent = ui.widgets.find(widget => widget.children.includes(oldCard));
+    await ui.click('Remove this application');
+    assert.equal(parent.children.includes(oldCard), false);
+    await ui.click('Back'); await ui.click('Settings for vLLM'); await ui.click('Edit application');
+    const newCard = parent.children.find(widget => widget.description?.startsWith('Choose your existing installation'));
+    assert.ok(newCard && newCard !== oldCard, 'new edit belongs to a newly attached editor');
+    assert.equal(ui.visible(newCard), true);
+    assert.equal(oldCard.visible, false);
+    const friendlyName = newCard.children.find(widget => widget.title === 'Friendly name');
+    ui.edit(friendlyName, 'text', 'Live editor'); await ui.click('Save selections for later');
+    assert.equal(JSON.parse(ui.calls.at(-1).input).drafts[0].label, 'Live editor');
+    assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
+});
+
+test('CSS fixture retains the actual stylesheet passed to the native provider', async () => {
+    const ui = await launch();
+    assert.equal(ui.styleProviders.size, 1);
+    assert.ok([...ui.styleProviders][0].data.includes('.setup-card'));
+});

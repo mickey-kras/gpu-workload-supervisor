@@ -5,6 +5,7 @@ import "time"
 // TemporaryDiscoveryCandidate binds a read-only, qualified Ollama installation.
 // It never selects a model or modifies the accepted workload catalog.
 type TemporaryDiscoveryCandidate struct {
+	GPUUUID        string         `json:"gpuUUID,omitempty"`
 	Unit           string         `json:"unit"`
 	LaunchFile     string         `json:"launchFile"`
 	DropIns        []LaunchSource `json:"dropIns,omitempty"`

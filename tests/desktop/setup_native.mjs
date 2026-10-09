@@ -151,6 +151,22 @@ app.connect('activate', () => {
             for (let focus = ui.window.get_focus(); focus; focus = focus.get_parent()) if (focus === target) return true;
             return false;
         }
+        async function waitFor(observe, message) {
+            for (let count = 0; count < 100; count++) {
+                const observed = observe();
+                if (observed) return observed;
+                await delay(30);
+            }
+            throw new Error(message);
+        }
+        function visibleChooser(ui) {
+            const windows = Gtk.Window.get_toplevels();
+            for (let index = 0; index < windows.get_n_items(); index++) {
+                const window = windows.get_item(index);
+                if (window !== ui.window && window.get_transient_for() === ui.window && window.get_mapped()) return window;
+            }
+            return null;
+        }
         async function tabTo(ui, target) {
             for (let count = 0; count < 100; count++) {
                 if (ownsFocus(ui, target)) return;
@@ -232,8 +248,15 @@ app.connect('activate', () => {
         assert(installedPicker, 'installed executable picker is an ordinary visible settings action');
         assert(!widgets(ui.window).some(widget => widget instanceof Adw.ExpanderRow && widget.get_mapped() && widget.expanded), 'advanced launch and adoption forms stay collapsed');
         const selectedBeforeCancel = JSON.stringify(ui.drafts);
-        await tabTo(ui, installedPicker); run(['xdotool', 'key', 'space']); await delay(150);
-        run(['xdotool', 'key', 'Escape']); await delay(150);
+        await tabTo(ui, installedPicker); run(['xdotool', 'key', 'space']);
+        const chooserWindow = await waitFor(() => visibleChooser(ui), 'native executable chooser must open before cancellation');
+        const chooserXid = run(['xdotool', 'search', '--onlyvisible', '--name', chooserWindow.title]).split('\n').at(-1);
+        run(['xdotool', 'windowfocus', chooserXid, 'key', 'Escape']);
+        await waitFor(() => !chooserWindow.get_visible(), 'Escape must dismiss the actual native executable chooser');
+        // Xvfb has no window manager to restore X11 focus when the modal closes.
+        run(['xdotool', 'windowfocus', xid]);
+        await waitFor(() => run(['xdotool', 'getwindowfocus']) === xid, 'keyboard focus must return to setup after native chooser dismissal');
+        assert(ownsFocus(ui, installedPicker), 'cancelled chooser retains its originating native picker focus');
         assert(JSON.stringify(ui.drafts) === selectedBeforeCancel, 'native chooser cancellation preserves application, service and model selections');
         await capture(ui, 'application-settings');
         await tabTo(ui, ui.back); run(['xdotool', 'key', 'space']); await delay(150);

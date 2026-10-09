@@ -84,3 +84,34 @@ func TestStoppedApplicationMissingModelDiffersFromInspectionFailure(t *testing.T
 		t.Fatalf("missing model indistinguishable: %+v", result)
 	}
 }
+
+func TestReferenceSelectionIsolatesUnselectedSameApplicationMetadata(t *testing.T) {
+	b, d, metadata := automaticFixture(t, "ollama")
+	d.Reference = metadata[d.Binding.Unit]["FragmentPath"]
+	d.ReferenceKind = "configuration"
+	d.Binding = nil
+	original := b.runCommand
+	unrelatedPath := "/different/location.service"
+	b.runCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if strings.Contains(strings.Join(args, " "), "list-unit-files") {
+			return []byte("unrelated-ollama.service disabled\nollama.service disabled\n"), nil
+		}
+		if args[len(args)-1] == "unrelated-ollama.service" {
+			return []byte("Id=unrelated-ollama.service\nFragmentPath=" + unrelatedPath + "\nExecStart={ path=/usr/bin/ollama ; argv[]=/usr/bin/ollama serve ; }\nExecStartPre=unparseable preparation metadata\n"), nil
+		}
+		return original(ctx, name, args...)
+	}
+	got, err := b.unitAtReference(context.Background(), d)
+	if err != nil || got != "ollama.service" {
+		t.Fatalf("selected configuration poisoned by unselected same-app metadata: %q %v", got, err)
+	}
+	unrelatedPath = d.Reference
+	if _, err := b.unitAtReference(context.Background(), d); err == nil || !strings.Contains(err.Error(), "ExecStartPre") {
+		t.Fatalf("selected ambiguous metadata was silently ignored: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := b.unitAtReference(ctx, d); err != context.Canceled {
+		t.Fatalf("cancellation became a candidate failure: %v", err)
+	}
+}

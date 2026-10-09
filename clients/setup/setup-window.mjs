@@ -14,7 +14,7 @@ import {addDraftEditor} from './discovery-ui.mjs';
 import {applications} from './onboarding.mjs';
 
 // The caller supplies transport; fixture callers never invoke the production subprocess.
-export function createSetupWindow(options) { return new SetupWindow(options); }
+export function createSetupWindow(options) { const ui = new SetupWindow(options); ui.start(); return ui; }
 
 class SetupWindow {
     constructor({app, command}) {
@@ -47,7 +47,11 @@ class SetupWindow {
         this.review.connect('clicked', this.continueSetup);
         this.apply.connect('clicked', this.activateConfiguration);
         this.window.connect('close-request', this.closeRequested);
+    }
+
+    start() {
         this.window.present(); this.initialized = this.initialize();
+        return this.initialized;
     }
 
     renderSummary(items) {
@@ -72,7 +76,7 @@ class SetupWindow {
             applicationRuntime: this.profileApps.get(current.id),
             onLabelEdit: label => this.editedLabels.set(current, label),
             onRemove: group => { this.profiles.splice(this.profiles.indexOf(current), 1); if (this.applicationSettings?.profileRows?.includes(group)) { this.draftRows.remove(group); this.applicationSettings.profileRows = this.applicationSettings.profileRows.filter(row => row !== group); } else this.rows.remove(group); this.profileRows.delete(current); this.invalidate(); },
-            onEdit: draft => { this.appendDraft(draft, current, true); if (this.applicationSettings) this.openApplicationSettings(this.draftEditors.find(editor => editor.id === draft.id), this.applicationSettings.origin); }});
+            onEdit: draft => { const editor = this.appendDraft(draft, current, true); if (this.applicationSettings && editor) this.openApplicationSettings(editor, this.applicationSettings.origin); }});
         this.rows.append(group); this.profileRows.set(current, group); return current;
     }
 
@@ -143,7 +147,7 @@ class SetupWindow {
     }
 
     appendDraft(initial, replacing = null, reveal = false) {
-        if (this.drafts.some(draft => draft.id === initial.id)) { this.status.label = 'This workload already has an open selection. Finish or remove that selection first.'; return; }
+        if (this.drafts.some(draft => draft.id === initial.id)) { this.status.label = 'This workload already has an open selection. Finish or remove that selection first.'; return this.draftEditors.find(editor => editor.id === initial.id); }
         this.drafts.push(initial);
         let editor;
         editor = addDraftEditor({Adw, Gtk, Gio, window: this.window, parent: this.draftRows, initial, detected: this.discovered, discoveryErrors: this.discoveryErrors, command: this.command, modelParent: this.modelPage, temporaryStatus: this.temporaryStatus, reportProblem: this.reportError, openSettings: origin => this.openApplicationSettings(editor, origin),
@@ -179,9 +183,10 @@ class SetupWindow {
                 if (this.drafts.find(item => item.id === initial.id)?.label !== value.label) this.editedLabels.delete(editor?.replacing ?? replacing);
                 this.invalidate(); this.drafts = this.drafts.map(item => item.id === initial.id ? value : item); this.draftGeneration++; this.saveDrafts.sensitive = !this.pending;
             },
-            removed: (finished = false) => { if (!finished) { this.invalidate(); } this.drafts = this.drafts.filter(item => item.id !== initial.id); this.draftGeneration++; this.saveDrafts.sensitive = !this.pending; },
+            removed: (finished = false) => { if (!finished) { this.invalidate(); } editor.group.visible = false; editor.modelGroup.visible = false; this.drafts = this.drafts.filter(item => item.id !== initial.id); this.draftEditors = this.draftEditors.filter(item => item !== editor); this.draftGeneration++; this.saveDrafts.sensitive = !this.pending; },
             taken: () => this.profiles.map(profile => profile.id)});
         editor.group.visible = reveal; editor.replacing = replacing; this.draftEditors.push(editor);
+        return editor;
     }
 
     async cancelEditors() {
@@ -333,11 +338,14 @@ class SetupWindow {
     detectionMessage(known, candidates) {
         const states = {'unreachable': 'Address unreachable · Installation unverified', 'inspection-failed': 'Inspection failed · Open settings', 'discovery-error': 'Detection failed · Open settings', 'missing': 'Location missing · Open settings', 'invalid': 'Configuration unreadable · Open settings', 'unsupported': 'Unsupported · Open settings'};
         if (known.length > 1) return 'Choose an installation in settings.';
-        if (!known.length) return states[candidates[0]?.instanceStatus] ?? (candidates[0]?.instanceStatus === 'not-running' ? 'Default address unavailable · Installation unverified' : 'Not detected');
-        const state = states[known[0].instanceStatus];
+        const selected = known[0] ?? candidates.find(candidate => candidate.sourceKind === 'configuration' || candidate.unit) ?? candidates[0];
+        if (selected?.configurationStatus === 'inspection-failed') return 'Inspection failed · Open settings';
+        if (selected?.configurationStatus === 'model-missing') return 'Configured model missing · Open settings';
+        if (!known.length) return states[selected?.instanceStatus] ?? (selected?.instanceStatus === 'not-running' && !selected.unit ? 'Default address unavailable · Installation unverified' : 'Not detected');
+        const state = states[selected.instanceStatus];
         if (state) return state;
-        if (known[0].configurationStatus === 'model-required') return 'Installed · Choose an existing model';
-        return known[0].instanceStatus === 'not-running' ? 'Installed and stopped. Ready to configure.' : known[0].instanceStatus === 'installed' ? 'Installed · Preview a managed launch' : 'Detected';
+        if (selected.configurationStatus === 'model-required') return 'Installed · Choose an existing model';
+        return selected.instanceStatus === 'not-running' ? 'Installed and stopped. Ready to configure.' : selected.instanceStatus === 'installed' ? 'Installed · Preview a managed launch' : 'Detected';
     }
 
     invalidate() {

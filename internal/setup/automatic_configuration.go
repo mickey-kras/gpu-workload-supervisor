@@ -296,8 +296,17 @@ func (b Backend) inspectReferenceUnit(ctx context.Context, d Draft, unit string,
 		return cancelErr
 	}
 	if err != nil {
+		if values != nil {
+			selection.inspected = true
+		}
 		if appFromUnit("ExecStart="+values["ExecStart"]) == d.App {
-			return err
+			matches, matchErr := b.referenceMatches(ctx, d, values)
+			if matchErr != nil {
+				return matchErr
+			}
+			if matches {
+				return err
+			}
 		}
 		if selection.firstInspectionError == nil {
 			selection.firstInspectionError = err
