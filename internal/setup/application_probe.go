@@ -199,6 +199,10 @@ func probeFailure(result ApplicationCandidate, err error) ApplicationCandidate {
 }
 func mustPort(endpoint string) string { u, _ := url.Parse(endpoint); return u.Port() }
 func probeReference(ctx context.Context, r ProbeRequest, result ApplicationCandidate) (ApplicationCandidate, error) {
+	return probeReferenceWithExecutableValidator(ctx, r, result, gpuruntime.ValidateSelectedNativeExecutable)
+}
+
+func probeReferenceWithExecutableValidator(ctx context.Context, r ProbeRequest, result ApplicationCandidate, validateExecutable func(string, string) error) (ApplicationCandidate, error) {
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
@@ -206,15 +210,18 @@ func probeReference(ctx context.Context, r ProbeRequest, result ApplicationCandi
 	if err != nil {
 		return missingReference(err, result), nil
 	}
+	// Native application selections delegate all alias and target checks to the
+	// executable trust validator, which qualifies every resolution hop. Generic
+	// references retain the no-symlink rule and never open their contents.
+	if r.ReferenceKind == "application" && r.App != "comfyui" {
+		return probeSelectedExecutable(r, result, validateExecutable)
+	}
 	// Do not resolve links or open devices/FIFOs. A selection is only a candidate.
 	directory := r.ReferenceKind == referenceModelDirectory || r.ReferenceKind == "application-directory"
 	if (directory && !info.IsDir()) || (!directory && !info.Mode().IsRegular()) {
 		result.InstanceStatus = "invalid"
 		result.NextStep = "Select a regular file or a model directory; symbolic links and special files are not inspected."
 		return result, nil
-	}
-	if r.ReferenceKind == "application" && r.App != "comfyui" {
-		return probeSelectedExecutable(r, result, gpuruntime.ValidateSelectedNativeExecutable)
 	}
 	if r.App == "comfyui" {
 		result.InventoryStatus = "not-applicable"

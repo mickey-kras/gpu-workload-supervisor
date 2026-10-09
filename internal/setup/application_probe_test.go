@@ -221,3 +221,56 @@ func TestProbeReferenceTypesAndSymlinks(t *testing.T) {
 		t.Fatal("unknown reference accepted")
 	}
 }
+
+func TestApplicationAliasSelectionDefersToExecutableTrust(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "ollama")
+	aliasDir := filepath.Join(dir, "aliases")
+	alias := filepath.Join(aliasDir, "ollama")
+	if err := os.WriteFile(target, []byte("not executed"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(aliasDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
+	r := ProbeRequest{App: "ollama", Reference: alias, ReferenceKind: "application"}
+	// Simulate an authoritative trusted-alias verdict without requiring a
+	// root-owned fixture. Production uses the full executable trust validator.
+	calls := 0
+	validated := func(app, path string) error {
+		calls++
+		if app != "ollama" || path != alias {
+			t.Fatal("selected application identity changed before trust validation")
+		}
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatal("alias did not reach executable validation")
+		}
+		return nil
+	}
+	got, err := probeReferenceWithExecutableValidator(context.Background(), r, candidate(r), validated)
+	if err != nil || calls != 1 || !got.Recognized || got.SourceKind != "owned" || got.InstanceStatus != "installed" || got.Binding == nil || got.Binding.Owned.Executable != alias || got.LifecycleControl != "unverified" {
+		t.Fatalf("qualified alias rejected or changed: %+v %v calls=%d", got, err, calls)
+	}
+	// The actual validator refuses this writable/unprivileged alias fixture.
+	got, err = Probe(context.Background(), r)
+	if err != nil || got.Recognized || got.Binding != nil || got.InstanceStatus != "inspection-failed" || strings.Contains(got.NextStep, alias) {
+		t.Fatalf("unsafe executable alias admitted or disclosed: %+v %v", got, err)
+	}
+	for _, kind := range []string{"configuration", "model-file", "application-directory", "model-directory"} {
+		r.ReferenceKind = kind
+		got, err := probeReferenceWithExecutableValidator(context.Background(), r, candidate(r), validated)
+		if err != nil || got.InstanceStatus != "invalid" || got.Binding != nil || calls != 1 {
+			t.Fatalf("generic alias reached executable validator: %s %+v %v calls=%d", kind, got, err, calls)
+		}
+	}
+	r.ReferenceKind = "application"
+	r.Reference = filepath.Join(dir, "missing")
+	got, err = probeReferenceWithExecutableValidator(context.Background(), r, candidate(r), validated)
+	if err != nil || got.InstanceStatus != "missing" || calls != 1 {
+		t.Fatalf("missing selection behavior changed: %+v %v calls=%d", got, err, calls)
+	}
+}
