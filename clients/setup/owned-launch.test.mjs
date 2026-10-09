@@ -79,7 +79,7 @@ for (const app of ['llama.cpp', 'vllm']) {
 }
 
 test('editing an owned launch replaces its reviewed catalog entry only after preview', async () => {
-    const ui = await launch({profiles: [{...owned, requiredMiB: 12000, bootPolicy: 'retain'}], responses: {'render-owned': {profile: {...owned, label: 'Updated'}}}, deferAction: 'unused'});
+    const ui = await launch({profiles: [{...owned, nativeModel: {...owned.nativeModel, owned: {...owned.nativeModel.owned, conflicts: 'gws-owned-media.service'}}, requiredMiB: 12000, bootPolicy: 'retain'}], responses: {'render-owned': {profile: {...owned, label: 'Updated'}}}, deferAction: 'unused'});
     await ui.by('Edit application').emit('clicked');
     ui.edit(ui.by('Model name'), 'text', 'other:latest');
     await ui.by('Preview managed launch and add for review').emit('clicked');
@@ -90,6 +90,7 @@ test('editing an owned launch replaces its reviewed catalog entry only after pre
     assert.equal(profiles[0].requiredMiB, 12000);
     assert.equal(profiles[0].bootPolicy, 'retain');
     assert.equal(JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input).draft.id, owned.id);
+    assert.equal(JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input).draft.binding.owned.conflicts, undefined);
 });
 
 test('a saved managed-launch edit reopens and replaces the original stable workload', async () => {

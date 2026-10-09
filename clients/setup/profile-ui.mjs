@@ -1,3 +1,10 @@
+// Peer dependencies belong to the derived catalog spec, never to editable drafts.
+export function editableOwnedLaunch(launch) {
+    const owned = {...launch};
+    delete owned.conflicts;
+    return owned;
+}
+
 export function createProfileEditor({current, Adw, Gtk, GLib, units, field, invalidate, applicationRuntime, onRemove, onEdit, onLabelEdit}) {
     const group = new Adw.PreferencesGroup({title: GLib.markup_escape_text(current.label || 'New workload', -1),
         description: current.nativeModel ? `${current.nativeModel.runtime} · ${current.nativeModel.model}. Applications and model files are preserved.` : 'Start and stop this installation from GPU Control. Applications and files are preserved.'});
@@ -63,7 +70,7 @@ export function createProfileEditor({current, Adw, Gtk, GLib, units, field, inva
     if (runtime) {
         const editLaunch = new Gtk.Button({label: 'Edit application'});
         editLaunch.connect('clicked', () => onEdit({id: current.id, label: current.label, app: runtime,
-            model: current.nativeModel?.model, endpoint: current.nativeModel?.endpoint ?? current.launchBinding?.endpoint, binding: current.nativeModel?.owned ? {instance: current.nativeModel.instance, owned: {...current.nativeModel.owned}} : {unit: current.unit, cgroup: current.cgroup, healthURL: current.healthURL, instance: current.nativeModel?.instance, model: current.nativeModel?.model, launchFile: current.nativeModel?.launchFile ?? current.launchBinding?.launchFile}}));
+            model: current.nativeModel?.model, endpoint: current.nativeModel?.endpoint ?? current.launchBinding?.endpoint, binding: current.nativeModel?.owned ? {instance: current.nativeModel.instance, owned: editableOwnedLaunch(current.nativeModel.owned)} : {unit: current.unit, cgroup: current.cgroup, healthURL: current.healthURL, instance: current.nativeModel?.instance, model: current.nativeModel?.model, launchFile: current.nativeModel?.launchFile ?? current.launchBinding?.launchFile}}));
         group.add(editLaunch);
     }
     group.add(remove); group.visible = false; return group;
