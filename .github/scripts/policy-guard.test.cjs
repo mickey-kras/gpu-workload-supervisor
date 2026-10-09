@@ -17,6 +17,8 @@ function files() {
     '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
     'release-version.json', '.github/scripts/policy-release.cjs',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
+    '.github/scripts/eslint.config.cjs', '.github/semgrep-tests/maintainability.go',
+    '.github/scripts/check-go-directives.go', '.github/scripts/check-go-directives_test.go',
     '.github/aislop/package.json', '.github/aislop/package-lock.json',
     '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
     'sonar-project.properties', '.goreleaser.yaml', '.testcoverage.yml',
@@ -27,6 +29,71 @@ function files() {
 
 test('current governance workflows satisfy the trusted guard', () => {
   assert.deepEqual(inspect(files()), []);
+});
+
+test('maintainability gates cannot be removed, skipped or weakened', () => {
+  for (const name of ['Go cognitive complexity', 'Test Go suppression guard', 'JavaScript maintainability', 'Test setup shared-literal rule']) {
+    for (const mutation of ['missing', 'conditional', 'advisory', 'command']) {
+      const candidate = files();
+      const path = '.github/workflows/ci.yml';
+      const workflow = YAML.parse(candidate[path]);
+      const steps = workflow.jobs.checks.steps;
+      const index = steps.findIndex(step => step.name === name);
+      if (mutation === 'missing') steps.splice(index, 1);
+      else if (mutation === 'conditional') steps[index].if = false;
+      else if (mutation === 'advisory') steps[index]['continue-on-error'] = true;
+      else steps[index].run = 'echo skipped';
+      candidate[path] = YAML.stringify(workflow);
+      assert.ok(inspect(candidate).some(error => error.includes(name) || error.includes('may ignore')));
+    }
+  }
+  const candidate = files();
+  candidate['.github/workflows/ci.yml'] = candidate['.github/workflows/ci.yml'].replace('-over 15', '-over 16');
+  assert.ok(inspect(candidate).some(error => error.includes('Go cognitive complexity')));
+});
+
+test('Go directive rejection cannot be removed or changed to allow suppressions', () => {
+  const candidate = files();
+  candidate['.github/workflows/ci.yml'] = candidate['.github/workflows/ci.yml']
+    .replace('          go run .github/scripts/check-go-directives.go .\n', '');
+  assert.ok(inspect(candidate).some(error => error.includes('Go cognitive complexity')));
+  for (const mutation of [
+    undefined,
+    'package main\nfunc main() {}\n',
+    files()['.github/scripts/check-go-directives.go']
+      .replace('excludedGoPaths.MatchString(adjusted.Filename)', 'false'),
+  ]) {
+    const changed = files();
+    if (mutation === undefined) delete changed['.github/scripts/check-go-directives.go'];
+    else changed['.github/scripts/check-go-directives.go'] = mutation;
+    assert.ok(inspect(changed).some(error => error.includes('Go suppression guard')));
+  }
+});
+
+test('PR JavaScript config cannot remove rules, add ignores or execute in the trusted guard', () => {
+  for (const mutate of [
+    source => source.replace("'error'", "'off'"),
+    source => source.replace("ignores: [", "ignores: ['clients/setup/**',"),
+    source => source + '\nthrow new Error("must not run");\n',
+  ]) {
+    const candidate = files();
+    candidate['.github/scripts/eslint.config.cjs'] = mutate(candidate['.github/scripts/eslint.config.cjs']);
+    assert.ok(inspect(candidate).some(error => error.includes('JavaScript maintainability policy')));
+  }
+});
+
+test('setup shared-literal policy cannot ignore production files or allow inlined literals', () => {
+  for (const mutate of [
+    rule => { rule.paths.exclude.push('application_discovery.go'); },
+    rule => { rule.patterns[0]['pattern-either'].pop(); },
+    rule => { rule.severity = 'WARNING'; },
+  ]) {
+    const candidate = files();
+    const config = YAML.parse(candidate['.semgrep.yml']);
+    mutate(config.rules.find(rule => rule.id === 'go.setup-shared-literals'));
+    candidate['.semgrep.yml'] = YAML.stringify(config);
+    assert.ok(inspect(candidate).some(error => error.includes('Setup shared-literal policy')));
+  }
 });
 
 test('GoReleaser cannot revert to optional signature verification', () => {

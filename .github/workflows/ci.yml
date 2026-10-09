@@ -73,6 +73,12 @@ jobs:
           go test -race -count=1 -timeout=10m -tags=systemd_integration -run '^TestSystemd' -v ./internal/supervisor
       - name: Go vet
         run: go vet ./...
+      - name: Go cognitive complexity
+        run: |
+          go run .github/scripts/check-go-directives.go .
+          go run github.com/uudashr/gocognit/cmd/gocognit@v1.3.0 -over 15 -test=false -ignore '(^|/)(\.github|docs|node_modules)/' .
+      - name: Test Go suppression guard
+        run: go test .github/scripts/check-go-directives.go .github/scripts/check-go-directives_test.go
       - name: Go vulnerability audit
         uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
         with:
@@ -95,6 +101,8 @@ jobs:
           npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund
           npm audit --prefix .github/scripts --audit-level=moderate
           node --test .github/scripts/*.test.cjs
+      - name: JavaScript maintainability
+        run: .github/scripts/node_modules/.bin/eslint --config .github/scripts/eslint.config.cjs --max-warnings 0 .
       - name: Gitleaks
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
         env:
@@ -106,6 +114,11 @@ jobs:
           docker pull "$SEMGREP_IMAGE"
           docker run --rm -v "${PWD}:/src" -w /src "$SEMGREP_IMAGE" \
             semgrep scan --config .semgrep.yml --exclude .semgrep.yml --error
+      - name: Test setup shared-literal rule
+        run: |
+          docker run --rm -v "${PWD}:/src" -w /src \
+            semgrep/semgrep:1.172.0@sha256:65dcd4408adda7c183a6b4550cb1e9b19f7f627a6fbb7e0559bd466bedc44d7b \
+            semgrep --test --config .semgrep.yml .github/semgrep-tests/maintainability.go
       - name: Trivy filesystem report
         id: trivy_report
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

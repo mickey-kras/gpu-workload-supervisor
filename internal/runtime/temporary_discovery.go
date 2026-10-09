@@ -48,39 +48,51 @@ func (m *SystemdManager) verifyTemporaryBindingMode(ctx context.Context, v contr
 	if launch.SHA256 != v.LaunchSHA256 || launch.Endpoint != v.Endpoint || !control.EqualLaunchSources(launch.DropIns, v.DropIns) {
 		return nil, ErrLaunchChanged
 	}
-	if admission {
-		if launch.GPUUUID != v.GPUUUID {
-			return nil, ErrLaunchChanged
-		}
-		if err := m.verifyProfileGPU(ctx, control.WorkloadProfile{NativeModel: &control.NativeModel{GPUUUID: v.GPUUUID}}); err != nil {
-			return nil, err
-		}
+	if err := m.verifyTemporaryAdmissionGPU(ctx, v, launch, admission); err != nil {
+		return nil, err
 	}
 	service, err := m.temporaryProperties(ctx, v.Unit)
 	if err != nil {
 		return nil, err
 	}
-	if admission {
-		if err := CheckLoadedEnvironment(service["Environment"], launch.Environment); err != nil {
-			return nil, err
-		}
-	}
-	if err := CheckLoadedLaunchCommand(service["ExecStart"], launch.Command); err != nil {
-		return nil, err
-	}
-	if err := CheckLoadedPreCommands(service["ExecStartPre"], launch.PreCommands); err != nil {
-		return nil, err
-	}
-	if service["NeedDaemonReload"] != "no" {
-		return nil, ErrLaunchChanged
-	}
-	if err = CheckNativeBindingSources(service, v.Unit, v.LaunchFile, v.DropIns); err != nil {
+	if err := checkTemporaryLoadedLaunch(service, v, launch, admission); err != nil {
 		return nil, err
 	}
 	if err := m.verifyTemporaryPlacement(ctx, v, service); err != nil {
 		return nil, err
 	}
 	return service, nil
+}
+
+func checkTemporaryLoadedLaunch(service map[string]string, v control.TemporaryDiscoveryCandidate, launch AutomaticLaunch, admission bool) error {
+	if admission {
+		if err := CheckLoadedEnvironment(service["Environment"], launch.Environment); err != nil {
+			return err
+		}
+	}
+	if err := CheckLoadedLaunchCommand(service["ExecStart"], launch.Command); err != nil {
+		return err
+	}
+	if err := CheckLoadedPreCommands(service["ExecStartPre"], launch.PreCommands); err != nil {
+		return err
+	}
+	if service["NeedDaemonReload"] != "no" {
+		return ErrLaunchChanged
+	}
+	if err := CheckNativeBindingSources(service, v.Unit, v.LaunchFile, v.DropIns); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *SystemdManager) verifyTemporaryAdmissionGPU(ctx context.Context, v control.TemporaryDiscoveryCandidate, launch AutomaticLaunch, admission bool) error {
+	if !admission {
+		return nil
+	}
+	if launch.GPUUUID != v.GPUUUID {
+		return ErrLaunchChanged
+	}
+	return m.verifyProfileGPU(ctx, control.WorkloadProfile{NativeModel: &control.NativeModel{GPUUUID: v.GPUUUID}})
 }
 
 func (m *SystemdManager) verifyTemporaryPlacement(ctx context.Context, v control.TemporaryDiscoveryCandidate, service map[string]string) error {

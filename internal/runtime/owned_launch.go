@@ -46,16 +46,7 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 		b.WriteString("Environment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=127.0.0.1:" + strconv.Itoa(int(n.Owned.Port)) + "\nEnvironment=OLLAMA_MAX_LOADED_MODELS=1\n")
 		execStart = executable + " serve"
 	case "llama.cpp":
-		execStart = executable + " -m " + n.Owned.ModelPath + " --host 127.0.0.1 --port " + strconv.Itoa(int(n.Owned.Port))
-		if n.Owned.CtxSize != 0 {
-			execStart += " --ctx-size " + strconv.FormatUint(uint64(n.Owned.CtxSize), 10)
-		}
-		if n.Owned.GPULayers != 0 {
-			execStart += " --n-gpu-layers " + strconv.FormatUint(uint64(n.Owned.GPULayers), 10)
-		}
-		if n.Owned.Alias != "" {
-			execStart += " --alias " + n.Owned.Alias
-		}
+		execStart = renderOwnedLlamaCommand(executable, *n.Owned)
 	case "vllm":
 		execStart = executable + " serve " + n.Owned.ModelPath + " --host 127.0.0.1 --port " + strconv.Itoa(int(n.Owned.Port))
 		if n.Owned.MaxModelLen != 0 {
@@ -69,6 +60,20 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 	}
 	b.WriteString("ExecStart=" + execStart + "\n")
 	return []byte(b.String()), nil
+}
+
+func renderOwnedLlamaCommand(executable string, owned control.OwnedLaunch) string {
+	execStart := executable + " -m " + owned.ModelPath + " --host 127.0.0.1 --port " + strconv.Itoa(int(owned.Port))
+	if owned.CtxSize != 0 {
+		execStart += " --ctx-size " + strconv.FormatUint(uint64(owned.CtxSize), 10)
+	}
+	if owned.GPULayers != 0 {
+		execStart += " --n-gpu-layers " + strconv.FormatUint(uint64(owned.GPULayers), 10)
+	}
+	if owned.Alias != "" {
+		execStart += " --alias " + owned.Alias
+	}
+	return execStart
 }
 
 // OwnedCgroup derives the workload cgroup from the systemd manager root.

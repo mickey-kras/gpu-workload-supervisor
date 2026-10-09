@@ -258,23 +258,24 @@ func (c *Controller) pollUntil(ctx context.Context, deadline time.Time, probe fu
 		if verifyCtx.Err() != nil || !c.now().Before(deadline) {
 			// The parent may have been canceled between the probe and this
 			// branch; caller cancellation is not a verification timeout.
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			return errors.Join(ErrVerifyTimeout, lastErr)
+			return verificationTimeoutError(ctx, lastErr)
 		}
 		if lastErr == nil || errors.Is(lastErr, gpuruntime.ErrUnloadUnverified) {
 			return lastErr
 		}
 		select {
 		case <-verifyCtx.Done():
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return errors.Join(ErrVerifyTimeout, lastErr)
+			return verificationTimeoutError(ctx, lastErr)
 		case <-ticker.C:
 		}
 	}
+}
+
+func verificationTimeoutError(ctx context.Context, lastErr error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return errors.Join(ErrVerifyTimeout, lastErr)
 }
 
 func (c *Controller) checkReady(ctx context.Context, target control.Workload) error {
