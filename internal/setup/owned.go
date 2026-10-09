@@ -50,6 +50,9 @@ func OwnedProfile(d Draft, managerCgroup, home string) (control.WorkloadProfile,
 	if d.Binding == nil || d.Binding.Owned == nil {
 		return control.WorkloadProfile{}, nil, errors.New("draft has no owned launch spec")
 	}
+	if d.ReferenceKind == "application" && d.Reference != d.Binding.Owned.Executable {
+		return control.WorkloadProfile{}, nil, errors.New("selected application does not match the owned executable; select it again")
+	}
 	if err := validateDraftOwned(d.App, d.Binding.Owned); err != nil {
 		return control.WorkloadProfile{}, nil, err
 	}
@@ -61,6 +64,7 @@ func OwnedProfile(d Draft, managerCgroup, home string) (control.WorkloadProfile,
 		return control.WorkloadProfile{}, nil, errors.New("owned drafts require an instance")
 	}
 	owned := control.OwnedLaunch{
+		Executable:  d.Binding.Owned.Executable,
 		ModelPath:   d.Binding.Owned.ModelPath,
 		Port:        d.Binding.Owned.Port,
 		CtxSize:     d.Binding.Owned.CtxSize,

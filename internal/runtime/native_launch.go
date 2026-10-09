@@ -19,6 +19,8 @@ const (
 	flagParallel    = "--parallel"
 )
 
+var ErrModelUnavailable = errors.New("configured local model is unavailable")
+
 var ErrLaunchUnsupported = errors.New("native launch requires a supported direct local command")
 
 // qualifyNativeLaunchWithValidator accepts a deliberately small systemd subset,
@@ -41,7 +43,10 @@ func qualifyParsedLaunch(unit parsedLaunchUnit, n control.NativeModel, validate 
 		return ErrLaunchUnsupported
 	}
 	if err := validate(args[0]); err != nil {
-		return ErrLaunchUnsupported
+		return fmt.Errorf("%w: executable: %w", ErrLaunchUnsupported, err)
+	}
+	if unit.gpuUUID != n.GPUUUID {
+		return fmt.Errorf("%w: CUDA_VISIBLE_DEVICES does not match recorded physical GPU evidence; refresh the binding", ErrLaunchUnsupported)
 	}
 	endpoint, err := url.Parse(n.Endpoint)
 	if err != nil {
@@ -54,11 +59,15 @@ func qualifyParsedLaunch(unit parsedLaunchUnit, n control.NativeModel, validate 
 }
 
 type parsedLaunchUnit struct {
-	execStart       string
-	preCommands     []string
-	cloudOff        bool
-	host            string
-	maxLoadedPinned bool
+	execStart          string
+	preCommands        []string
+	cloudOff           bool
+	host               string
+	maxLoadedPinned    bool
+	gpuUUID            string
+	environment        map[string]bool
+	environmentValues  map[string]string
+	cleanupEnvironment bool
 }
 
 func parseLaunchUnit(raw []byte, runtimeName string) (parsedLaunchUnit, error) {
@@ -128,10 +137,7 @@ func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value strin
 		}
 		u.execStart = value
 	case "[Service]Environment":
-		if runtimeName != "ollama" {
-			return ErrLaunchUnsupported
-		}
-		return u.applyOllamaEnvironment(value)
+		return u.applySafeEnvironment(runtimeName, value)
 	default:
 		return ErrLaunchUnsupported
 	}
@@ -206,8 +212,14 @@ func qualifyServerLaunch(args []string, n control.NativeModel, endpoint *url.URL
 		return ErrLaunchUnsupported
 	}
 	info, err := os.Stat(flags.model)
-	if err != nil || (n.Runtime == runtimeLlamaCPP && !info.Mode().IsRegular()) || (n.Runtime == "vllm" && !info.IsDir()) {
-		return ErrLaunchUnsupported
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w: select an existing local model file or directory and refresh its launch configuration", ErrModelUnavailable)
+	}
+	if err != nil {
+		return fmt.Errorf("%w: model metadata could not be inspected; check access to the configured local model", ErrLaunchUnsupported)
+	}
+	if (n.Runtime == runtimeLlamaCPP && !info.Mode().IsRegular()) || (n.Runtime == "vllm" && !info.IsDir()) {
+		return fmt.Errorf("%w: model has the wrong file or directory type; select a compatible local model", ErrModelUnavailable)
 	}
 	alias := flags.alias
 	if alias == "" {
@@ -362,8 +374,11 @@ func validateLlamaNumericOption(runtimeName, key, value string) error {
 
 func validateNativeExecutable(path string) error {
 	resolved, err := validateExecutable(path)
-	if err != nil || filepath.Base(resolved) != filepath.Base(path) {
-		return ErrLaunchUnsupported
+	if err != nil {
+		return fmt.Errorf("%w: executable trust: %w", ErrLaunchUnsupported, err)
+	}
+	if filepath.Base(resolved) != filepath.Base(path) {
+		return fmt.Errorf("%w: executable symlink changes application identity; select its trusted direct target", ErrLaunchUnsupported)
 	}
 	return nil
 }
@@ -400,4 +415,11 @@ func CheckLoadedLaunchCommand(output, command string) error {
 		return ErrLaunchChanged
 	}
 	return nil
+}
+
+func ValidateSelectedNativeExecutable(app, path string) error {
+	if !control.ValidOwnedExecutable(app, path) {
+		return fmt.Errorf("%w: selected application must be a supported direct executable", ErrLaunchUnsupported)
+	}
+	return validateNativeExecutable(path)
 }

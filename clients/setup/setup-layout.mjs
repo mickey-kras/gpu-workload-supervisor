@@ -86,7 +86,7 @@ export function createSettings(ui) {
     ui.advanced.add_row(ui.rows);
     ui.setupSettings = new Gtk.Button({icon_name: 'emblem-system-symbolic', tooltip_text: 'Setup settings'});
     ui.setupSettings.update_property([Gtk.AccessibleProperty.LABEL], ['Setup settings']);
-    ui.setupSettings.connect('clicked', () => { ui.settings.visible = true; ui.advanced.expanded = true; });
+    ui.setupSettings.connect('clicked', () => { ui.settings.visible = true; ui.advanced.expanded = true; ui.saveDrafts.visible = true; });
     ui.headerBar.pack_end(ui.setupSettings);
     ui.changes = new Gtk.Label({label: 'Finish setup to check the current changes.', wrap: true, xalign: 0, selectable: true});
     ui.advanced.add_row(ui.changes);
@@ -105,8 +105,7 @@ export function createSettings(ui) {
     ui.applicationPage.append(ui.settings);
     ui.applicationPage.remove(ui.draftRows);
     ui.applicationPage.append(ui.draftRows);
-    ui.saveDrafts = new Gtk.Button({label: 'Save selections for later', sensitive: false});
-    ui.advanced.add_row(ui.saveDrafts);
+    ui.saveDrafts = new Gtk.Button({label: 'Save selections for later', sensitive: false, visible: false});
 }
 
 export function createApplicationCards(ui) {
@@ -121,15 +120,17 @@ export function createApplicationCards(ui) {
         gear.connect('clicked', () => {
             if (!select.active) select.active = true;
             const editor = ui.draftEditors.find(editor => editor.app === choice.id && ui.drafts.some(draft => draft.id === editor.id));
-            ui.settings.visible = true; ui.advanced.expanded = true;
-            if (editor) editor.showSettings();
-            else {
-                for (const existing of ui.profiles.filter(profile => ui.runtimeOf(profile) === choice.id)) ui.profileRows.get(existing).visible = !ui.profileRows.get(existing).visible;
-            }
+            if (editor) ui.openApplicationSettings(editor, gear);
+            else ui.openApplicationSettings({app: choice.id, showSettings: () => {
+                const rows = ui.profiles.filter(profile => ui.runtimeOf(profile) === choice.id).map(profile => ui.profileRows.get(profile));
+                ui.applicationSettings.profileRows = rows;
+                for (const row of rows) { ui.rows.remove(row); ui.draftRows.append(row); row.visible = true; }
+            }}, gear);
         });
         select.connect('toggled', () => {
             if (select.active) ui.selectApplication(choice);
             else {
+                ui.restoreProfileSettings();
                 const appDrafts = ui.drafts.filter(draft => draft.app === choice.id);
                 ui.suspendedApplications.set(choice.id, {
                     profiles: ui.profiles.filter(profile => ui.runtimeOf(profile) === choice.id).map(profile => ({profile, row: ui.profileRows.get(profile)})),
@@ -154,6 +155,9 @@ export function createApplicationCards(ui) {
     ui.applicationPage.append(ui.findApplication);
     ui.applicationPage.append(ui.settings);
     ui.applicationPage.append(ui.draftRows);
+    // Keep this shared action rooted in the page. Expander rows wrap non-row
+    // children, so moving the button between native containers is unsafe.
+    ui.applicationPage.append(ui.saveDrafts);
     ui.settings.visible = false;
 }
 

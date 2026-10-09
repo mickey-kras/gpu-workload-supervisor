@@ -42,6 +42,7 @@ func ValidWorkloadID(id Workload) bool {
 }
 
 type LaunchBinding struct {
+	GPUUUID      string         `json:"gpuUUID,omitempty"`
 	Runtime      string         `json:"runtime"`
 	Endpoint     string         `json:"endpoint"`
 	LaunchFile   string         `json:"launchFile"`
@@ -213,6 +214,9 @@ func (p WorkloadProfile) validateNativeBinding() error {
 func (p WorkloadProfile) validateApplicationBinding() error {
 	if p.LaunchBinding != nil {
 		b := p.LaunchBinding
+		if b.GPUUUID != "" && !ValidGPUUUID(b.GPUUUID) {
+			return errors.New("invalid physical GPU UUID evidence")
+		}
 		if p.NativeModel != nil || b.Runtime != "comfyui" || p.Adapter != "systemd" {
 			return errors.New("unsupported application launch binding")
 		}
@@ -304,7 +308,7 @@ func validateProfileOverlap(p WorkloadProfile, previous []WorkloadProfile) error
 		if launchBindingCollision(p, q) {
 			return errors.New("launch endpoint belongs to another workload")
 		}
-		if sharedOllamaUnit(p, q) && (p.NativeModel.LaunchFile != q.NativeModel.LaunchFile || p.NativeModel.LaunchSHA256 != q.NativeModel.LaunchSHA256 || !EqualLaunchSources(p.NativeModel.DropIns, q.NativeModel.DropIns)) {
+		if sharedOllamaUnit(p, q) && (p.NativeModel.GPUUUID != q.NativeModel.GPUUUID || !equalOwnedLaunch(p.NativeModel.Owned, q.NativeModel.Owned) || p.NativeModel.LaunchFile != q.NativeModel.LaunchFile || p.NativeModel.LaunchSHA256 != q.NativeModel.LaunchSHA256 || !EqualLaunchSources(p.NativeModel.DropIns, q.NativeModel.DropIns)) {
 			return errors.New("shared Ollama unit requires identical launch bindings")
 		}
 		if profilesOverlap(p, q) {
@@ -375,7 +379,7 @@ func validateNativeOverlap(a, b *NativeModel) error {
 	if a == nil || b == nil {
 		return nil
 	}
-	if a.Instance == b.Instance && (a.Runtime != b.Runtime || nativeEndpointKey(a.Endpoint) != nativeEndpointKey(b.Endpoint)) {
+	if a.Instance == b.Instance && (a.GPUUUID != b.GPUUUID || a.Runtime != b.Runtime || nativeEndpointKey(a.Endpoint) != nativeEndpointKey(b.Endpoint)) {
 		return errors.New("inconsistent native runtime instance")
 	}
 	if nativeEndpointKey(a.Endpoint) == nativeEndpointKey(b.Endpoint) && a.Instance != b.Instance {
@@ -413,4 +417,11 @@ func sharedOllamaUnit(p, q WorkloadProfile) bool {
 	return a.Runtime == "ollama" && b.Runtime == "ollama" &&
 		a.Instance == b.Instance && a.Endpoint == b.Endpoint && a.ComparisonModel() != b.ComparisonModel() &&
 		p.Unit == q.Unit && p.Cgroup == q.Cgroup
+}
+
+func equalOwnedLaunch(a, b *OwnedLaunch) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
 }

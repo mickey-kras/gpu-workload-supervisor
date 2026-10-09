@@ -3,6 +3,7 @@
 import json
 import pathlib
 import sys
+import time
 
 import pyatspi
 from gi.repository import GLib
@@ -21,16 +22,8 @@ def visit(node, result):
         pass
 
 
-def main():
-    tree = []
-    visit(pyatspi.Registry.getDesktop(0), tree)
-    pathlib.Path(sys.argv[1]).write_text(json.dumps(tree, indent=2) + '\n')
+def validate_tree(tree, screen, expected_focus, disclosure=None):
     visible = [node for node in tree if node['showing']]
-    screen = sys.argv[2]
-    if screen == 'diagnostic':
-        print('DIAGNOSTIC: focused AT-SPI nodes:', [node for node in visible if node['focused']])
-        return
-    expected_focus = sys.argv[3]
     def present(name, role=None):
         return any(node['name'] == name and (role is None or node['role'] == role)
                    for node in visible)
@@ -51,13 +44,56 @@ def main():
             assert present(workload), f'missing review workload: {workload}'
     else:
         raise AssertionError(f'unknown screen: {screen}')
-    if len(sys.argv) > 4:
-        expanded = sys.argv[4] == 'open'
+    if disclosure is not None:
+        expanded = disclosure == 'open'
         assert any(node['name'] == 'Choose another model…' and node['role'] == 'push button' and node['expanded'] == expanded for node in visible), 'model chooser accessible expansion state'
         for picker in ('Choose model file...', 'Choose model folder...'):
             assert present(picker, 'push button') == expanded, f'picker visibility: {picker}'
     assert any(node['focused'] and node['name'] == expected_focus for node in visible), (expected_focus, [node for node in visible if node['focused']])
-    print(f'PASS: AT-SPI {screen} content and focused {expected_focus}')
+
+
+def observe_until_ready(sample, validate, advance, timeout=3.0, clock=time.monotonic):
+    """Observe complete content and focus together within a fixed deadline."""
+    deadline = clock() + timeout
+    attempts = 0
+    while True:
+        tree = sample()
+        attempts += 1
+        try:
+            validate(tree)
+        except AssertionError as error:
+            if clock() >= deadline:
+                raise AssertionError(f'AT-SPI tree did not become ready: {error}') from error
+        else:
+            if clock() > deadline:
+                raise AssertionError('AT-SPI complete observation arrived after deadline')
+            return attempts
+        advance()
+
+
+def main():
+    output = pathlib.Path(sys.argv[1])
+    screen = sys.argv[2]
+    def sample():
+        tree = []
+        visit(pyatspi.Registry.getDesktop(0), tree)
+        # Retain the latest actual tree even when readiness never arrives.
+        output.write_text(json.dumps(tree, indent=2) + '\n')
+        return tree
+    if screen == 'diagnostic':
+        print('DIAGNOSTIC: focused AT-SPI nodes:', [node for node in sample() if node['showing'] and node['focused']])
+        return
+    expected_focus = sys.argv[3]
+    disclosure = sys.argv[4] if len(sys.argv) > 4 else None
+    def advance():
+        context = GLib.MainContext.default()
+        for _ in range(100):
+            if not context.pending():
+                break
+            context.iteration(False)
+        time.sleep(0.03)
+    attempts = observe_until_ready(sample, lambda tree: validate_tree(tree, screen, expected_focus, disclosure), advance)
+    print(f'PASS: AT-SPI {screen} content and focused {expected_focus} ({attempts} observations)')
 
 
 if __name__ == '__main__':

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -356,5 +357,53 @@ func TestExternalStartupPreparationRejectsInterpretersInUnitAndDropIn(t *testing
 				}
 			}
 		}
+	}
+}
+
+func TestBoundPublicInspectionRetainsDropInTrustDiagnostics(t *testing.T) {
+	for _, mode := range []string{"writable-file", "writable-directory", "content-drift"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			base := filepath.Join(dir, "bound.service")
+			dropDir := filepath.Join(dir, "private-options")
+			drop := filepath.Join(dropDir, "private-option.conf")
+			if err := os.Mkdir(dropDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			raw := []byte("[Service]\nExecStart=/usr/bin/true x\n")
+			conf := []byte("[Service]\nLimitNOFILE=1024\n")
+			if err := os.WriteFile(base, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(drop, conf, 0600); err != nil {
+				t.Fatal(err)
+			}
+			binding := control.NativeModel{Runtime: "llama.cpp", DropIns: []control.LaunchSource{{Path: drop, SHA256: fmt.Sprintf("%x", sha256.Sum256(conf))}}}
+			switch mode {
+			case "writable-file":
+				if err := os.Chmod(drop, 0664); err != nil {
+					t.Fatal(err)
+				}
+			case "writable-directory":
+				if err := os.Chmod(dropDir, 0775); err != nil {
+					t.Fatal(err)
+				}
+			case "content-drift":
+				if err := os.WriteFile(drop, []byte("[Service]\nLimitNOFILE=2048\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := InspectQualifiedNativeLaunch(base, binding)
+			if err == nil || !errors.Is(err, ErrLaunchChanged) || !strings.Contains(err.Error(), "contributing drop-in 1") || strings.Contains(err.Error(), dropDir) || strings.Contains(err.Error(), "private-option") {
+				t.Fatalf("bound drop-in failure lost classification or disclosed path: %v", err)
+			}
+			if mode == "content-drift" {
+				if !strings.Contains(err.Error(), "content digest changed") || !strings.Contains(err.Error(), "refresh") {
+					t.Fatal("content drift lost remediation", err)
+				}
+			} else if !strings.Contains(err.Error(), "component") || !strings.Contains(err.Error(), "write permission") || !strings.Contains(err.Error(), "remove only") {
+				t.Fatal("drop-in trust failure lost component, reason or targeted remediation", err)
+			}
+		})
 	}
 }

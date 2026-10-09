@@ -15,7 +15,7 @@ const temporaryApplicationSlice = "app.slice"
 var ErrTemporaryInvocationChanged = errors.New("temporary discovery invocation changed or start evidence is ambiguous; refusing to stop this service. Inspect the unit and the persisted session evidence, stop it manually if appropriate, then retry explicit cleanup")
 
 func (m *SystemdManager) temporaryProperties(ctx context.Context, unit string) (map[string]string, error) {
-	out, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show", "--property=Id,LoadState,ActiveState,SubState,ControlGroup,Slice,FragmentPath,DropInPaths,NeedDaemonReload,InvocationID,ActiveEnterTimestampMonotonic,ExecStart,ExecStartPre", "--no-pager", "--", unit)
+	out, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show", "--property=Id,LoadState,ActiveState,SubState,ControlGroup,Slice,FragmentPath,DropInPaths,NeedDaemonReload,InvocationID,ActiveEnterTimestampMonotonic,ExecStart,ExecStartPre,Environment", "--no-pager", "--", unit)
 	if err != nil {
 		return nil, SafeError("temporary discovery unit observation failed", err)
 	}
@@ -23,6 +23,13 @@ func (m *SystemdManager) temporaryProperties(ctx context.Context, unit string) (
 }
 
 func (m *SystemdManager) verifyTemporaryBinding(ctx context.Context, v control.TemporaryDiscoveryCandidate) (map[string]string, error) {
+	return m.verifyTemporaryBindingMode(ctx, v, true)
+}
+
+// Cleanup checks exact invocation ownership and cgroup release even when GPU
+// observation or newly qualified environment settings are no longer available.
+// Those admission proofs cannot be used to obstruct stopping our invocation.
+func (m *SystemdManager) verifyTemporaryBindingMode(ctx context.Context, v control.TemporaryDiscoveryCandidate, admission bool) (map[string]string, error) {
 	if !automaticUnitName.MatchString(v.Unit) || strings.HasPrefix(v.Unit, control.OwnedUnitFilePrefix) || validateCgroup(v.Cgroup) != nil || v.SystemdSlice != temporaryApplicationSlice {
 		return nil, ErrLaunchUnsupported
 	}
@@ -34,16 +41,29 @@ func (m *SystemdManager) verifyTemporaryBinding(ctx context.Context, v control.T
 	for i, source := range v.DropIns {
 		paths[i] = source.Path
 	}
-	launch, err := inspectAutomaticLaunchSourcesWithValidator(v.LaunchFile, "ollama", paths, validate)
+	launch, err := inspectAutomaticLaunchSourcesMode(v.LaunchFile, "ollama", paths, validate, !admission)
 	if err != nil {
 		return nil, err
 	}
 	if launch.SHA256 != v.LaunchSHA256 || launch.Endpoint != v.Endpoint || !control.EqualLaunchSources(launch.DropIns, v.DropIns) {
 		return nil, ErrLaunchChanged
 	}
+	if admission {
+		if launch.GPUUUID != v.GPUUUID {
+			return nil, ErrLaunchChanged
+		}
+		if err := m.verifyProfileGPU(ctx, control.WorkloadProfile{NativeModel: &control.NativeModel{GPUUUID: v.GPUUUID}}); err != nil {
+			return nil, err
+		}
+	}
 	service, err := m.temporaryProperties(ctx, v.Unit)
 	if err != nil {
 		return nil, err
+	}
+	if admission {
+		if err := CheckLoadedEnvironment(service["Environment"], launch.Environment); err != nil {
+			return nil, err
+		}
 	}
 	if err := CheckLoadedLaunchCommand(service["ExecStart"], launch.Command); err != nil {
 		return nil, err
@@ -138,7 +158,7 @@ func (m *SystemdManager) StartTemporaryDiscovery(ctx context.Context, v control.
 
 	observeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	props, err := m.verifyTemporaryBinding(observeCtx, v)
+	props, err := m.verifyTemporaryBindingMode(observeCtx, v, false)
 	if err != nil {
 		return evidence, err
 	}
@@ -148,6 +168,11 @@ func (m *SystemdManager) StartTemporaryDiscovery(ctx context.Context, v control.
 	}
 	evidence.InvocationID = id
 	evidence.ActivationTimestamp = props["ActiveEnterTimestampMonotonic"]
+	// Retain independently verified invocation evidence before the extra
+	// admission checks, so a GPU/env observation failure can still be cleaned up.
+	if _, err := m.verifyTemporaryBinding(observeCtx, v); err != nil {
+		return evidence, errors.Join(startErr, err)
+	}
 	return evidence, startErr
 }
 func validInvocationID(id string) bool {
@@ -165,7 +190,7 @@ func validInvocationID(id string) bool {
 // StopTemporaryDiscovery refuses an unknown or replaced invocation. A stopped
 // service can be finalized read-only after exact binding and release checks.
 func (m *SystemdManager) StopTemporaryDiscovery(ctx context.Context, v control.TemporaryDiscoveryCandidate, invocation string) error {
-	props, err := m.verifyTemporaryBinding(ctx, v)
+	props, err := m.verifyTemporaryBindingMode(ctx, v, false)
 	if err != nil {
 		return err
 	}
@@ -181,7 +206,7 @@ func (m *SystemdManager) StopTemporaryDiscovery(ctx context.Context, v control.T
 	if err = m.runSystemctl(ctx, "stop", v.Unit); err != nil {
 		return err
 	}
-	props, err = m.verifyTemporaryBinding(ctx, v)
+	props, err = m.verifyTemporaryBindingMode(ctx, v, false)
 	if err != nil {
 		return err
 	}

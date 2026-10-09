@@ -20,6 +20,7 @@ const nativeRuntimeLlamaCPP = "llama.cpp"
 // Ollama profiles may share one unit with sibling profiles bound to different
 // models of the same instance; other runtimes require one unit per model.
 type NativeModel struct {
+	GPUUUID      string         `json:"gpuUUID,omitempty"`
 	Runtime      string         `json:"runtime"`
 	Instance     string         `json:"instance"`
 	Model        string         `json:"model"`
@@ -71,6 +72,7 @@ func EqualLaunchSources(a, b []LaunchSource) bool {
 // imported file. ModelPath is the llama.cpp GGUF file or vLLM model
 // directory and stays empty for Ollama; Alias defaults to ModelPath.
 type OwnedLaunch struct {
+	Executable  string `json:"executable,omitempty"`
 	ModelPath   string `json:"modelPath,omitempty"`
 	Port        uint16 `json:"port"`
 	CtxSize     uint32 `json:"ctxSize,omitempty"`
@@ -131,6 +133,9 @@ func (n NativeModel) validate() error {
 	if n.Owned != nil && len(n.DropIns) > 0 {
 		return errors.New("owned launch does not accept external drop-ins")
 	}
+	if n.GPUUUID != "" && !ValidGPUUUID(n.GPUUUID) {
+		return errors.New("invalid physical GPU UUID evidence")
+	}
 	return n.validateOwned()
 }
 
@@ -159,6 +164,9 @@ func (n NativeModel) validateOwned() error {
 	o := n.Owned
 	if o == nil {
 		return nil
+	}
+	if o.Executable != "" && !ValidOwnedExecutable(n.Runtime, o.Executable) {
+		return errors.New("owned executable must be a supported absolute direct path")
 	}
 	if o.Port < 1024 {
 		return errors.New("owned launch port must be an unprivileged TCP port")
@@ -278,4 +286,29 @@ func ValidateModelRequest(body []byte, model string) error {
 		return errors.New("native model mismatch")
 	}
 	return nil
+}
+
+// ValidOwnedExecutable binds an explicit supported executable without allowing
+// command arguments or an interpreter in the executable field.
+func ValidOwnedExecutable(app, path string) bool {
+	expected := map[string]string{"ollama": "ollama", "llama.cpp": "llama-server", "vllm": "vllm"}[app]
+	return expected != "" && filepath.IsAbs(path) && filepath.Clean(path) == path && LaunchGrammarExpressible(path) && filepath.Base(path) == expected
+}
+
+func ValidGPUUUID(value string) bool {
+	if len(value) != 40 || !strings.HasPrefix(value, "GPU-") {
+		return false
+	}
+	for i, c := range value[4:] {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return false
+			}
+			continue
+		}
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return false
+		}
+	}
+	return true
 }

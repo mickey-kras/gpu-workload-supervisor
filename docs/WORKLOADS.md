@@ -133,6 +133,24 @@ Launch-file constraints:
 - Ollama requires `serve`, explicit `OLLAMA_NO_CLOUD=1` and matching
   `OLLAMA_HOST`; the selected model must be local before preloading.
 
+Adopted `Environment=` assignments support literal values, including quotes
+around a whole assignment. HOME, cache, temporary-directory and token-path
+settings require existing trusted paths; token contents are never read.
+PATH requires trusted root-owned directories. Unsupported expansion, environment
+files and unqualified variables remain rejected with value-free diagnostics.
+Setup preserves the source files and checks their effective loaded assignments.
+
+`CUDA_VISIBLE_DEVICES` supports one full physical GPU UUID, recorded as
+`gpuUUID` in the binding and checked against the configured NVIDIA GPU at
+preflight, startup, readiness and release. Numeric indices, UUID prefixes,
+multiple devices and MIG mappings remain unsupported. Setup never removes or
+rewrites the setting to make adoption pass.
+
+Supervisor-managed native launches may specify an absolute `owned.executable`
+path. It must identify the selected runtime and pass the same executable trust
+checks; omitting it retains the standard `/usr/bin` location. Model selection,
+side-effect-free preview and explicit activation confirmation are still required.
+
 Readiness requires native health plus exactly the selected model identity;
 Ollama checks its loaded model list. A native proxy accepts only supported
 inference routes with the exact JSON `model`, rejects lifetime overrides,

@@ -280,9 +280,9 @@ test('model-screen gear opens the same application settings and invalidates read
     const ui = await launch(options([installation('ollama', [{id: 'a'}, {id: 'b'}])]));
     ui.edit(ui.by('Use Ollama'), 'active', true); await ui.by('Continue').emit('clicked');
     ui.by('Settings for Ollama').emit('clicked');
-    assert.equal(heading(ui).label, 'Choose your applications');
+    assert.equal(heading(ui).label, 'Ollama settings');
     assert.equal(ui.by('Advanced').visible, true);
-    assert.equal(ui.by('Advanced').expanded, true);
+    assert.equal(ui.by('Advanced').expanded, false);
     assert.equal(ui.by('Finish setup').sensitive, false);
 });
 
@@ -553,7 +553,7 @@ for (const app of ['llama.cpp', 'vllm']) {
     });
 }
 
-for (const [instanceStatus, expected] of [['unreachable', 'Unreachable · Open settings'], ['discovery-error', 'Detection failed · Open settings'], ['invalid', 'Configuration unreadable · Open settings']]) {
+for (const [instanceStatus, expected] of [['unreachable', 'Address unreachable · Installation unverified'], ['discovery-error', 'Detection failed · Open settings'], ['invalid', 'Configuration unreadable · Open settings']]) {
     test(`compact application card keeps ${instanceStatus} distinct from missing`, async () => {
         const candidate = {...installation(), recognized: false, instanceStatus};
         const ui = await launch(options([candidate]));

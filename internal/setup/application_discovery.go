@@ -2,6 +2,8 @@ package setup
 
 import (
 	"context"
+	"errors"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -50,9 +52,21 @@ func unitRelevant(unit string, profiles []control.WorkloadProfile) bool {
 	return false
 }
 func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit string) {
-	values, err := b.showAutomatic(ctx, unit)
+	values, err := b.showApplicationCandidate(ctx, unit)
 	if err != nil {
-		result.Errors = append(result.Errors, "Could not inspect "+unit+": "+err.Error())
+		app := appFromUnit("ExecStart=" + values["ExecStart"])
+		if app == "" && !unitRelevant(unit, result.Request.Catalog.Profiles) {
+			return
+		}
+		if app == "" {
+			app = candidateApplicationHint(unit, result.Request.Catalog.Profiles)
+		}
+		found := candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"})
+		found.Unit = unit
+		found.InstanceStatus = "inspection-failed"
+		found.ConfigurationStatus = "inspection-failed"
+		found.NextStep = "Could not inspect this application: " + err.Error()
+		result.Applications = append(result.Applications, found)
 		return
 	}
 	app := appFromUnit("ExecStart=" + values["ExecStart"])
@@ -81,6 +95,11 @@ func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit strin
 	profile, err := b.configurationFromMetadata(ctx, app, unit, model, values)
 	if err != nil {
 		found.NextStep = err.Error()
+		found.ConfigurationStatus = "inspection-failed"
+		if errors.Is(err, gpuruntime.ErrModelUnavailable) {
+			found.ConfigurationStatus = "model-missing"
+			found.InventoryStatus = "missing"
+		}
 	} else {
 		b.recognizeUnit(ctx, &found, app, unit, profile)
 	}
@@ -92,7 +111,7 @@ func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit strin
 }
 func addUnsupportedUnit(result *Discovery, unit string) {
 	if unitRelevant(unit, result.Request.Catalog.Profiles) {
-		found := candidate(ProbeRequest{App: applicationHint(unit), Reference: unit, ReferenceKind: "configuration"})
+		found := candidate(ProbeRequest{App: candidateApplicationHint(unit, result.Request.Catalog.Profiles), Reference: unit, ReferenceKind: "configuration"})
 		found.Unit = unit
 		found.InstanceStatus = "unsupported"
 		found.ConfigurationStatus = "unsupported"
@@ -266,4 +285,18 @@ func consumeAliasFlags(fields []string, i int, aliases *[]string) int {
 		}
 	}
 	return i
+}
+
+func candidateApplicationHint(unit string, profiles []control.WorkloadProfile) string {
+	for _, p := range profiles {
+		if p.Unit == unit {
+			if p.NativeModel != nil {
+				return p.NativeModel.Runtime
+			}
+			if p.LaunchBinding != nil {
+				return p.LaunchBinding.Runtime
+			}
+		}
+	}
+	return applicationHint(unit)
 }

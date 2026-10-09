@@ -67,6 +67,23 @@ explain what evidence is missing. Custom wrappers and ambiguous configuration
 require a supported launch or validated Advanced configuration; setup does not
 guess ownership from a healthy endpoint.
 
+An application's gear opens its settings at the beginning of the view. **Back**
+returns to the originating screen and gear while keeping selections. Candidate
+choices identify the service or address and its status; the selected candidate's
+full identity is also available in selectable text. An unreachable default
+address does not establish an installation. Installed/stopped services, missing
+locations, missing model choices and inspection failures have separate guidance;
+optional **Technical details** retain the backend cause.
+
+For installed Ollama, llama.cpp or vLLM without an existing supported service,
+choose **Choose installed executable…** in the application's settings, then
+**Continue** to choose an existing model name, file or directory. The next
+**Continue** validates the executable and model and previews a Supervisor-managed
+launch. **Finish setup** explicitly permits Supervisor to start and stop it; the
+preview does not start it. **Advanced** separates managed launch options from
+adopting an already configured external service. Cancelling a file chooser keeps
+the previous selection. ComfyUI continues to use its existing service configuration.
+
 Existing recognized service files and supported drop-ins are adopted without
 rewriting their launch options. Optional gear settings retain the managed-launch
 and explicit-binding workflows. Applications, environments and models are never
@@ -117,8 +134,11 @@ printf '%s' '{"app":"llama.cpp","reference":"/models/model.gguf","referenceKind"
 `endpoint` or `reference`. `referenceKind` accepts `application`, `configuration`,
 `model-file`, `model-directory`. Endpoint values are loopback HTTP(S) origins,
 without credentials, path, query or fragment. References must be absolute clean
-paths; only regular files and directories are accepted. File contents are not
-executed or inspected, and directories are not enumerated.
+paths. Ollama, llama.cpp and vLLM `application` selections permit executable
+aliases only when the target and every link hop pass executable trust checks.
+Configuration, model, directory and ComfyUI references accept only regular files
+or directories and reject symbolic links. File contents are not executed or
+inspected, and directories are not enumerated.
 
 | Application | Read-only observations |
 | --- | --- |

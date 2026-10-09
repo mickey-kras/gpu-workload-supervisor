@@ -182,7 +182,7 @@ func TestDiscoveryReportsReadFailureAndRecognizedStoppedInstallation(t *testing.
 		t.Fatal(result)
 	}
 	b.discoverUnit(context.Background(), &result, "missing.service")
-	if len(result.Errors) != 1 {
+	if len(result.Errors) != 0 {
 		t.Fatal(result)
 	}
 	b, d, _ := automaticFixture(t, "ollama")

@@ -34,12 +34,19 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 	var b strings.Builder
 	b.WriteString("[Unit]\nDescription=Supervisor-owned " + n.Runtime + " launch for " + subject + "\n\n[Service]\nType=simple\nRestart=no\n")
 	var execStart string
+	executable := n.Owned.Executable
+	if executable == "" {
+		executable = ownedBinaryDirectory + "/" + map[string]string{"ollama": "ollama", "llama.cpp": "llama-server", "vllm": "vllm"}[n.Runtime]
+	}
+	if !control.ValidOwnedExecutable(n.Runtime, executable) {
+		return nil, fmt.Errorf("%w: unsupported executable", ErrOwnedRender)
+	}
 	switch n.Runtime {
 	case "ollama":
 		b.WriteString("Environment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=127.0.0.1:" + strconv.Itoa(int(n.Owned.Port)) + "\nEnvironment=OLLAMA_MAX_LOADED_MODELS=1\n")
-		execStart = ownedBinaryDirectory + "/ollama serve"
+		execStart = executable + " serve"
 	case "llama.cpp":
-		execStart = ownedBinaryDirectory + "/llama-server -m " + n.Owned.ModelPath + " --host 127.0.0.1 --port " + strconv.Itoa(int(n.Owned.Port))
+		execStart = executable + " -m " + n.Owned.ModelPath + " --host 127.0.0.1 --port " + strconv.Itoa(int(n.Owned.Port))
 		if n.Owned.CtxSize != 0 {
 			execStart += " --ctx-size " + strconv.FormatUint(uint64(n.Owned.CtxSize), 10)
 		}
@@ -50,7 +57,7 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 			execStart += " --alias " + n.Owned.Alias
 		}
 	case "vllm":
-		execStart = ownedBinaryDirectory + "/vllm serve " + n.Owned.ModelPath + " --host 127.0.0.1 --port " + strconv.Itoa(int(n.Owned.Port))
+		execStart = executable + " serve " + n.Owned.ModelPath + " --host 127.0.0.1 --port " + strconv.Itoa(int(n.Owned.Port))
 		if n.Owned.MaxModelLen != 0 {
 			execStart += " --max-model-len " + strconv.FormatUint(uint64(n.Owned.MaxModelLen), 10)
 		}

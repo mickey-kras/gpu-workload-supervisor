@@ -159,8 +159,8 @@ test('failed systemd discovery remains distinct from missing installations and s
     const ui = await launch({responses: {discover: {request, units: [], applications: [], errors: ['Service manager unavailable']}}});
     assert.ok(ui.widgets.some(widget => widget.label?.includes('Some installations could not be checked')));
     ui.selectApplication(ui.applicationIndex ?? 0);
-    assert.ok(ui.widgets.some(widget => widget.label?.startsWith('Installation discovery failed.')));
-    assert.ok(!ui.widgets.some(widget => widget.label?.includes('wasn’t detected')));
+    assert.ok(ui.widgets.some(widget => widget.label === 'Not detected'));
+    assert.ok(!ui.widgets.some(widget => widget.label === 'Detection failed · Open settings'), 'global manager errors are reported separately from app evidence');
     assert.ok(ui.by('Choose application location…'));
     assert.equal(ui.by('Finish setup').sensitive, false);
     assert.ok(ui.widgets.some(widget => widget.title === 'Technical details' && widget.visible && !widget.expanded));

@@ -151,6 +151,22 @@ app.connect('activate', () => {
             for (let focus = ui.window.get_focus(); focus; focus = focus.get_parent()) if (focus === target) return true;
             return false;
         }
+        async function waitFor(observe, message) {
+            for (let count = 0; count < 100; count++) {
+                const observed = observe();
+                if (observed) return observed;
+                await delay(30);
+            }
+            throw new Error(message);
+        }
+        function visibleChooser(ui) {
+            const windows = Gtk.Window.get_toplevels();
+            for (let index = 0; index < windows.get_n_items(); index++) {
+                const window = windows.get_item(index);
+                if (window !== ui.window && window.get_transient_for() === ui.window && window.get_mapped()) return window;
+            }
+            return null;
+        }
         async function tabTo(ui, target) {
             for (let count = 0; count < 100; count++) {
                 if (ownsFocus(ui, target)) return;
@@ -219,6 +235,38 @@ app.connect('activate', () => {
         run(['xdotool', 'key', 'Tab']); await delay(50);
         assert(ui.window.get_focus() !== null && ui.window.get_focus() !== firstFocus, 'Tab advances to a different native focus target');
         await capture(ui, 'applications-keyboard-focus');
+        const settingsGear = ui.applicationCards.get('ollama').gear;
+        const saveParent = ui.saveDrafts.get_parent();
+        assert(saveParent === ui.applicationPage, 'shared save action is rooted directly in the application page');
+        await tabTo(ui, settingsGear);
+        const settingsScroll = ui.scroll.get_vadjustment().value;
+        await activate(ui, settingsGear, 'Ollama settings');
+        assert(ui.saveDrafts.get_parent() === saveParent && ui.saveDrafts.get_mapped(), 'opening settings shows the shared save action without reparenting');
+        assert(ui.scroll.get_vadjustment().value === 0, 'application settings begins at the top');
+        assert(!ui.applicationGroup.get_mapped(), 'settings does not leave unrelated application cards in view');
+        const installedPicker = widgets(ui.window).find(widget => widget instanceof Gtk.Button && widget.label === 'Choose installed executable…' && widget.get_mapped());
+        assert(installedPicker, 'installed executable picker is an ordinary visible settings action');
+        assert(!widgets(ui.window).some(widget => widget instanceof Adw.ExpanderRow && widget.get_mapped() && widget.expanded), 'advanced launch and adoption forms stay collapsed');
+        const selectedBeforeCancel = JSON.stringify(ui.drafts);
+        await tabTo(ui, installedPicker); run(['xdotool', 'key', 'space']);
+        const chooserWindow = await waitFor(() => visibleChooser(ui), 'native executable chooser must open before cancellation');
+        const chooserXid = run(['xdotool', 'search', '--onlyvisible', '--name', chooserWindow.title]).split('\n').at(-1);
+        run(['xdotool', 'windowfocus', chooserXid, 'key', 'Escape']);
+        await waitFor(() => !chooserWindow.get_visible(), 'Escape must dismiss the actual native executable chooser');
+        // Xvfb has no window manager to restore X11 focus when the modal closes.
+        run(['xdotool', 'windowfocus', xid]);
+        await waitFor(() => run(['xdotool', 'getwindowfocus']) === xid, 'keyboard focus must return to setup after native chooser dismissal');
+        assert(ownsFocus(ui, installedPicker), 'cancelled chooser retains its originating native picker focus');
+        assert(JSON.stringify(ui.drafts) === selectedBeforeCancel, 'native chooser cancellation preserves application, service and model selections');
+        await capture(ui, 'application-settings');
+        await tabTo(ui, ui.back); run(['xdotool', 'key', 'space']); await delay(150);
+        assert(ui.heading.label === 'Choose your applications', 'settings Back restores the originating screen');
+        assert(ui.saveDrafts.get_parent() === saveParent && !ui.saveDrafts.get_mapped(), 'settings Back hides the save action without reparenting');
+        assert(ownsFocus(ui, settingsGear), 'settings Back restores the originating gear focus');
+        assert(Math.abs(ui.scroll.get_vadjustment().value - settingsScroll) < 1, 'settings Back restores the originating scroll position');
+        assert(ui.applicationCards.get('ollama').select.active, 'settings Back retains the selected application');
+        assert(JSON.stringify(ui.drafts) === selectedBeforeCancel, 'settings Back retains the selected service and model');
+        await capture(ui, 'application-settings-return');
         ui.applicationCards.get('comfyui').select.active = true;
         ui.applicationCards.get('ollama').select.active = true;
         await capture(ui, 'applications-selected');

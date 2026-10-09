@@ -18,7 +18,9 @@ const loopbackHTTPPrefix = "http://"
 // AutomaticLaunch is evidence read from a supported direct launch. Inspection
 // never rewrites the existing file or runs its command.
 type AutomaticLaunch struct {
+	Environment                      map[string]string
 	Endpoint, Model, SHA256, Command string
+	GPUUUID                          string
 	PreCommands                      []string
 	DropIns                          []control.LaunchSource
 }
@@ -36,12 +38,19 @@ func InspectAutomaticLaunchSources(path, app string, dropInPaths []string) (Auto
 }
 
 func inspectAutomaticLaunchSourcesWithValidator(path, app string, dropInPaths []string, validate func(string) error) (AutomaticLaunch, error) {
+	return inspectAutomaticLaunchSourcesMode(path, app, dropInPaths, validate, false)
+}
+
+// Cleanup may inspect unchanged source without requiring cache/credential paths
+// to remain usable. Source and command trust are still mandatory; this mode
+// never authorizes execution or admission.
+func inspectAutomaticLaunchSourcesMode(path, app string, dropInPaths []string, validate func(string) error, cleanupEnvironment bool) (AutomaticLaunch, error) {
 	if len(dropInPaths) > 32 {
 		return AutomaticLaunch{}, ErrLaunchUnsupported
 	}
 	raw, err := readLaunchSource(path)
 	if err != nil {
-		return AutomaticLaunch{}, fmt.Errorf("%w: launch source %s unreadable or untrusted", err, path)
+		return AutomaticLaunch{}, fmt.Errorf("launch source: %w", err)
 	}
 	sources := [][]byte{raw}
 	seen := map[string]bool{path: true}
@@ -53,7 +62,7 @@ func inspectAutomaticLaunchSourcesWithValidator(path, app string, dropInPaths []
 		seen[path] = true
 		raw, err := readLaunchSource(path)
 		if err != nil {
-			return AutomaticLaunch{}, fmt.Errorf("%w: drop-in %s unreadable or untrusted", err, path)
+			return AutomaticLaunch{}, fmt.Errorf("contributing drop-in: %w", err)
 		}
 		sources = append(sources, raw)
 		dropIns = append(dropIns, control.LaunchSource{Path: path, SHA256: fmt.Sprintf("%x", sha256.Sum256(raw))})
@@ -61,7 +70,7 @@ func inspectAutomaticLaunchSourcesWithValidator(path, app string, dropInPaths []
 	if err := control.ValidateLaunchSources(path, dropIns); err != nil {
 		return AutomaticLaunch{}, err
 	}
-	u, err := parseExternalLaunchSources(sources, app)
+	u, err := parseExternalLaunchSourcesMode(sources, app, cleanupEnvironment)
 	if err != nil {
 		return AutomaticLaunch{}, err
 	}
@@ -86,11 +95,14 @@ func inspectParsedAutomaticLaunch(u parsedLaunchUnit, raw []byte, app string, va
 		return AutomaticLaunch{}, err
 	}
 	args := strings.Fields(u.execStart)
-	if len(args) < 2 || !filepath.IsAbs(args[0]) || validate(args[0]) != nil {
+	if len(args) < 2 || !filepath.IsAbs(args[0]) {
 		return AutomaticLaunch{}, ErrLaunchUnsupported
 	}
+	if err := validate(args[0]); err != nil {
+		return AutomaticLaunch{}, fmt.Errorf("%w: executable: %w", ErrLaunchUnsupported, err)
+	}
 	var err error
-	result := AutomaticLaunch{Command: u.execStart, PreCommands: u.preCommands, SHA256: fmt.Sprintf("%x", sha256.Sum256(raw))}
+	result := AutomaticLaunch{Environment: u.environmentValues, GPUUUID: u.gpuUUID, Command: u.execStart, PreCommands: u.preCommands, SHA256: fmt.Sprintf("%x", sha256.Sum256(raw))}
 	if app == "comfyui" {
 		result.Endpoint, err = comfyLaunchEndpoint(args)
 		if err != nil {
@@ -103,7 +115,7 @@ func inspectParsedAutomaticLaunch(u parsedLaunchUnit, raw []byte, app string, va
 	}
 	if app == "ollama" {
 		result.Endpoint = loopbackHTTPPrefix + u.host
-		if err := qualifyParsedLaunch(u, control.NativeModel{Runtime: app, Endpoint: result.Endpoint}, validate); err != nil {
+		if err := qualifyParsedLaunch(u, control.NativeModel{GPUUUID: u.gpuUUID, Runtime: app, Endpoint: result.Endpoint}, validate); err != nil {
 			return AutomaticLaunch{}, err
 		}
 		return result, nil
@@ -117,7 +129,7 @@ func inspectParsedAutomaticLaunch(u parsedLaunchUnit, raw []byte, app string, va
 	if result.Model == "" {
 		result.Model = f.model
 	}
-	err = qualifyParsedLaunch(u, control.NativeModel{Runtime: app, Model: result.Model, Endpoint: result.Endpoint}, validate)
+	err = qualifyParsedLaunch(u, control.NativeModel{GPUUUID: u.gpuUUID, Runtime: app, Model: result.Model, Endpoint: result.Endpoint}, validate)
 	return result, err
 }
 
@@ -172,7 +184,7 @@ func comfyLaunchAddress(args []string) (string, string, error) {
 func validateComfyExecutable(path string) error {
 	resolved, err := validateExecutable(path)
 	if err != nil {
-		return ErrLaunchUnsupported
+		return fmt.Errorf("%w: interpreter trust: %w", ErrLaunchUnsupported, err)
 	}
 	base, target := filepath.Base(path), filepath.Base(resolved)
 	if base == target {
@@ -206,7 +218,7 @@ func validateComfyScript(path string) error {
 		next, err := unix.Openat(fd, part, flags, 0)
 		unix.Close(fd)
 		if err != nil {
-			return ErrLaunchUnsupported
+			return fmt.Errorf("%w: application script component %d cannot be opened without following links; inspect this component for missing access or symbolic links", ErrLaunchUnsupported, i+1)
 		}
 		fd = next
 		var stat unix.Stat_t
@@ -216,7 +228,7 @@ func validateComfyScript(path string) error {
 		}
 		if !trustedComfyComponent(stat, i, len(parts)) {
 			unix.Close(fd)
-			return ErrLaunchUnsupported
+			return fmt.Errorf("%w: application script trust: %w", ErrLaunchUnsupported, sourceComponentError(stat, i, len(parts)))
 		}
 	}
 	unix.Close(fd)

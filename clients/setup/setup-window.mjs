@@ -11,9 +11,10 @@ import {createShell, createSettings, createApplicationCards, createFooter} from 
 import {ReviewedConfiguration} from './review.mjs';
 import {createProfileEditor} from './profile-ui.mjs';
 import {addDraftEditor} from './discovery-ui.mjs';
+import {applications} from './onboarding.mjs';
 
 // The caller supplies transport; fixture callers never invoke the production subprocess.
-export function createSetupWindow(options) { return new SetupWindow(options); }
+export function createSetupWindow(options) { const ui = new SetupWindow(options); ui.start(); return ui; }
 
 class SetupWindow {
     constructor({app, command}) {
@@ -46,7 +47,11 @@ class SetupWindow {
         this.review.connect('clicked', this.continueSetup);
         this.apply.connect('clicked', this.activateConfiguration);
         this.window.connect('close-request', this.closeRequested);
+    }
+
+    start() {
         this.window.present(); this.initialized = this.initialize();
+        return this.initialized;
     }
 
     renderSummary(items) {
@@ -70,12 +75,13 @@ class SetupWindow {
         const group = createProfileEditor({current, Adw, Gtk, GLib, units: this.units, field: this.field, invalidate: this.invalidate,
             applicationRuntime: this.profileApps.get(current.id),
             onLabelEdit: label => this.editedLabels.set(current, label),
-            onRemove: group => { this.profiles.splice(this.profiles.indexOf(current), 1); this.rows.remove(group); this.invalidate(); },
-            onEdit: draft => this.appendDraft(draft, current, true)});
+            onRemove: group => { this.profiles.splice(this.profiles.indexOf(current), 1); if (this.applicationSettings?.profileRows?.includes(group)) { this.draftRows.remove(group); this.applicationSettings.profileRows = this.applicationSettings.profileRows.filter(row => row !== group); } else this.rows.remove(group); this.profileRows.delete(current); this.invalidate(); },
+            onEdit: draft => { const editor = this.appendDraft(draft, current, true); if (this.applicationSettings && editor) this.openApplicationSettings(editor, this.applicationSettings.origin); }});
         this.rows.append(group); this.profileRows.set(current, group); return current;
     }
 
     setStep(next) {
+        if (next !== 0 && this.applicationSettings) this.closeApplicationSettings(false);
         this.step = next;
         this.box.spacing = this.step === 2 ? 10 : 14;
         this.heading.label = ['Choose your applications', 'Choose models', 'Ready to finish'][this.step];
@@ -85,6 +91,43 @@ class SetupWindow {
         this.setupSettings.visible = this.step === 0; this.back.visible = this.step > 0; this.later.visible = this.step === 0; this.status.visible = this.step === 2 || this.pending; this.apply.visible = this.step === 2; this.review.visible = this.step !== 2;
         this.review.label = 'Continue';
         this.heading.grab_focus(); this.heading.select_region(0, 0);
+        this.scroll.get_vadjustment().value = 0;
+    }
+
+    openApplicationSettings(editor, origin) {
+        this.invalidate();
+        if (!this.applicationSettings) this.applicationSettings = {step: this.step, origin, scroll: this.scroll.get_vadjustment().value};
+        this.restoreProfileSettings();
+        this.setStep(0);
+        this.heading.label = `${applications.find(app => app.id === editor.app).label} settings`;
+        this.introduction.label = 'Choose your installation. Preview checks do not start applications or download models.';
+        this.applicationGroup.visible = false; this.findApplication.visible = false; this.settings.visible = false;
+        this.setupSettings.visible = false; this.back.visible = true;
+        this.saveDrafts.visible = true;
+        for (const draftEditor of this.draftEditors) draftEditor.group.visible = draftEditor === editor;
+        editor.showSettings();
+        this.heading.grab_focus(); this.heading.select_region(0, 0);
+    }
+
+    closeApplicationSettings(restoreFocus = true) {
+        const saved = this.applicationSettings;
+        if (!saved) return;
+        this.restoreProfileSettings(); this.applicationSettings = null;
+        this.saveDrafts.visible = false;
+        for (const editor of this.draftEditors) editor.group.visible = false;
+        this.applicationGroup.visible = true; this.findApplication.visible = true;
+        this.setStep(saved.step);
+        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            if (this.closed) return GLib.SOURCE_REMOVE;
+            if (restoreFocus) saved.origin.grab_focus();
+            this.scroll.get_vadjustment().value = saved.scroll;
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    restoreProfileSettings() {
+        for (const row of this.applicationSettings?.profileRows ?? []) { this.draftRows.remove(row); this.rows.append(row); row.visible = false; }
+        if (this.applicationSettings) this.applicationSettings.profileRows = [];
     }
 
     selectApplication(choice) {
@@ -104,10 +147,10 @@ class SetupWindow {
     }
 
     appendDraft(initial, replacing = null, reveal = false) {
-        if (this.drafts.some(draft => draft.id === initial.id)) { this.status.label = 'This workload already has an open selection. Finish or remove that selection first.'; return; }
+        if (this.drafts.some(draft => draft.id === initial.id)) { this.status.label = 'This workload already has an open selection. Finish or remove that selection first.'; return this.draftEditors.find(editor => editor.id === initial.id); }
         this.drafts.push(initial);
         let editor;
-        editor = addDraftEditor({Adw, Gtk, Gio, window: this.window, parent: this.draftRows, initial, detected: this.discovered, discoveryErrors: this.discoveryErrors, command: this.command, modelParent: this.modelPage, temporaryStatus: this.temporaryStatus, reportProblem: this.reportError, openSettings: () => { this.invalidate(); this.setStep(0); this.settings.visible = true; this.advanced.expanded = true; },
+        editor = addDraftEditor({Adw, Gtk, Gio, window: this.window, parent: this.draftRows, initial, detected: this.discovered, discoveryErrors: this.discoveryErrors, command: this.command, modelParent: this.modelPage, temporaryStatus: this.temporaryStatus, reportProblem: this.reportError, openSettings: origin => this.openApplicationSettings(editor, origin),
             bind: async (profile, current, finish = false) => {
                 replacing ??= this.profiles.find(existing => existing.id === initial.id) ?? null;
                 if (replacing && !this.profiles.includes(replacing)) throw new Error('The original workload was removed. Reopen Manage workloads before editing it.');
@@ -140,9 +183,10 @@ class SetupWindow {
                 if (this.drafts.find(item => item.id === initial.id)?.label !== value.label) this.editedLabels.delete(editor?.replacing ?? replacing);
                 this.invalidate(); this.drafts = this.drafts.map(item => item.id === initial.id ? value : item); this.draftGeneration++; this.saveDrafts.sensitive = !this.pending;
             },
-            removed: (finished = false) => { if (!finished) { this.invalidate(); } this.drafts = this.drafts.filter(item => item.id !== initial.id); this.draftGeneration++; this.saveDrafts.sensitive = !this.pending; },
+            removed: (finished = false) => { if (!finished) { this.invalidate(); } editor.group.visible = false; editor.modelGroup.visible = false; this.drafts = this.drafts.filter(item => item.id !== initial.id); this.draftEditors = this.draftEditors.filter(item => item !== editor); this.draftGeneration++; this.saveDrafts.sensitive = !this.pending; },
             taken: () => this.profiles.map(profile => profile.id)});
         editor.group.visible = reveal; editor.replacing = replacing; this.draftEditors.push(editor);
+        return editor;
     }
 
     async cancelEditors() {
@@ -206,6 +250,7 @@ class SetupWindow {
 
     async continueSetup() {
         if (!this.request || this.closed) return;
+        this.closeApplicationSettings(false);
         if (this.draftEditors.some(editor => editor.temporaryActive()) || (this.temporaryStatus?.session && this.temporaryStatus.session.status !== 'completed')) { this.status.label = 'Restore the stopped application before continuing.'; this.status.visible = true; return; }
         const editors = this.draftEditors.filter(editor => this.drafts.some(draft => draft.id === editor.id));
         if (this.step === 0 && editors.some(editor => editor.needsModelDecision())) { this.setStep(1); return; }
@@ -291,13 +336,16 @@ class SetupWindow {
     }
 
     detectionMessage(known, candidates) {
-        const states = {'unreachable': 'Unreachable · Open settings', 'discovery-error': 'Detection failed · Open settings', 'missing': 'Location missing · Open settings', 'invalid': 'Configuration unreadable · Open settings', 'unsupported': 'Unsupported · Open settings'};
-        if (this.discoveryErrors.length && !known.length) return 'Detection failed · Open settings';
+        const states = {'unreachable': 'Address unreachable · Installation unverified', 'inspection-failed': 'Inspection failed · Open settings', 'discovery-error': 'Detection failed · Open settings', 'missing': 'Location missing · Open settings', 'invalid': 'Configuration unreadable · Open settings', 'unsupported': 'Unsupported · Open settings'};
         if (known.length > 1) return 'Choose an installation in settings.';
-        if (!known.length) return states[candidates[0]?.instanceStatus] ?? 'Not detected';
-        const state = states[known[0].instanceStatus];
+        const selected = known[0] ?? candidates.find(candidate => candidate.sourceKind === 'configuration' || candidate.unit) ?? candidates[0];
+        if (selected?.configurationStatus === 'inspection-failed') return 'Inspection failed · Open settings';
+        if (selected?.configurationStatus === 'model-missing') return 'Configured model missing · Open settings';
+        if (!known.length) return states[selected?.instanceStatus] ?? (selected?.instanceStatus === 'not-running' && !selected.unit ? 'Default address unavailable · Installation unverified' : 'Not detected');
+        const state = states[selected.instanceStatus];
         if (state) return state;
-        return known[0].instanceStatus === 'not-running' ? 'Installed and stopped. Ready to configure.' : 'Detected';
+        if (selected.configurationStatus === 'model-required') return 'Installed · Choose an existing model';
+        return selected.instanceStatus === 'not-running' ? 'Installed and stopped. Ready to configure.' : selected.instanceStatus === 'installed' ? 'Installed · Preview a managed launch' : 'Detected';
     }
 
     invalidate() {
@@ -345,7 +393,7 @@ class SetupWindow {
 
     async goBack() {
         this.invalidate();
-        try { await this.cancelEditors(); this.setStep(this.step === 2 && this.draftEditors.some(editor => this.drafts.some(draft => draft.id === editor.id) && editor.needsModelDecision()) ? 1 : 0); }
+        try { await this.cancelEditors(); if (this.applicationSettings) this.closeApplicationSettings(); else this.setStep(this.step === 2 && this.draftEditors.some(editor => this.drafts.some(draft => draft.id === editor.id) && editor.needsModelDecision()) ? 1 : 0); }
         catch (error) { this.reportError('Temporary application cleanup must finish before going back. Retry cleanup.', error); }
     }
 

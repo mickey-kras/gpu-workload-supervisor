@@ -188,6 +188,7 @@ func TestTemporarySetupTransportsOrderedExternalSources(t *testing.T) {
 	b.inspectAutomatic = func(path, app string) (gpuruntime.AutomaticLaunch, error) {
 		launch, err := original(path, app)
 		launch.DropIns = []control.LaunchSource{drop}
+		launch.GPUUUID = "GPU-01234567-89ab-cdef-0123-456789abcdef"
 		return launch, err
 	}
 	status, err := b.TemporaryStatus(context.Background(), home)
@@ -195,7 +196,7 @@ func TestTemporarySetupTransportsOrderedExternalSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := b.TemporaryDiscover(context.Background(), home, TemporaryDiscoveryRequest{Unit: "ollama.service", Expected: *status.Expected, Consent: true, ExternalControlPaused: true})
-	if err != nil || result.Error != "" || result.Session == nil || !control.EqualLaunchSources(runtime.candidate.DropIns, []control.LaunchSource{drop}) || !control.EqualLaunchSources(result.Session.Candidate.DropIns, []control.LaunchSource{drop}) {
+	if err != nil || result.Error != "" || result.Session == nil || runtime.candidate.GPUUUID != "GPU-01234567-89ab-cdef-0123-456789abcdef" || result.Session.Candidate.GPUUUID != runtime.candidate.GPUUUID || !control.EqualLaunchSources(runtime.candidate.DropIns, []control.LaunchSource{drop}) || !control.EqualLaunchSources(result.Session.Candidate.DropIns, []control.LaunchSource{drop}) {
 		t.Fatalf("lost source binding %+v %+v %v", runtime.candidate, result, err)
 	}
 }
