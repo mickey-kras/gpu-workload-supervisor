@@ -237,7 +237,7 @@ func pendingOwnedRetryUnits(home string, journal unitJournal, request Request) (
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return false, err
 	}
-	for unit, p := range requested {
+	for unit := range requested {
 		if _, journaled := journal.Writes[unit]; journaled {
 			continue
 		}
@@ -245,18 +245,18 @@ func pendingOwnedRetryUnits(home string, journal unitJournal, request Request) (
 		if fileErr != nil && !errors.Is(fileErr, os.ErrNotExist) {
 			return false, fileErr
 		}
+		if errors.Is(fileErr, os.ErrNotExist) {
+			continue
+		}
 		prior, found := ownedProfileForUnit(accepted.Catalog, unit)
 		if !found {
-			if accepted.Revision == "" && errors.Is(fileErr, os.ErrNotExist) {
-				continue
-			}
 			return false, nil
 		}
 		proof, err := ownedRenderChecked(prior)
 		if err != nil {
 			return false, err
 		}
-		if digest(proof) != p.NativeModel.LaunchSHA256 || (fileErr == nil && digest(raw) != digest(proof)) {
+		if digest(raw) != digest(proof) {
 			return false, nil
 		}
 	}

@@ -16,7 +16,7 @@ import (
 )
 
 func TestLegacyOwnedPrunedJournalAfterActualAbort(t *testing.T) {
-	for _, scenario := range []string{"fresh", "incremental"} {
+	for _, scenario := range []string{"fresh", "incremental-unchanged", "incremental-add", "incremental-edits-both"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := context.Background()
 			backend, home, request := fixture(t)
@@ -26,10 +26,16 @@ func TestLegacyOwnedPrunedJournalAfterActualAbort(t *testing.T) {
 			z.NativeModel.Instance = "z"
 			prior := control.CatalogSnapshot{}
 			oldRawA := rawA
-			if scenario == "incremental" {
+			if scenario != "fresh" {
 				s := openStoreAt(t, request.Profile.StatePath)
 				var err error
-				prior, err = s.ReplaceCatalog(ctx, "", control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a, z}})
+				priorProfiles := []control.WorkloadProfile{a, z}
+				priorFiles := map[string][]byte{a.Unit: rawA, z.Unit: rawZ}
+				if scenario == "incremental-add" {
+					priorProfiles = []control.WorkloadProfile{a}
+					delete(priorFiles, z.Unit)
+				}
+				prior, err = s.ReplaceCatalog(ctx, "", control.Catalog{Version: 2, Profiles: priorProfiles})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -40,12 +46,16 @@ func TestLegacyOwnedPrunedJournalAfterActualAbort(t *testing.T) {
 				if err := os.MkdirAll(ownedUnitDirectory(home), 0700); err != nil {
 					t.Fatal(err)
 				}
-				for unit, raw := range map[string][]byte{a.Unit: rawA, z.Unit: rawZ} {
+				for unit, raw := range priorFiles {
 					if err := os.WriteFile(filepath.Join(ownedUnitDirectory(home), unit), raw, 0600); err != nil {
 						t.Fatal(err)
 					}
 				}
 				a, rawA = ownedFixtureProfile(t, home, "a", 9300)
+				if scenario == "incremental-edits-both" {
+					z, rawZ = ownedFixtureProfile(t, home, "z", 9400)
+					z.NativeModel.Instance = "z"
+				}
 				request.ExpectedRevision = prior.Revision
 			}
 			request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a, z}}
@@ -64,7 +74,7 @@ func TestLegacyOwnedPrunedJournalAfterActualAbort(t *testing.T) {
 			originalWrite, originalStat := ownedAtomicWrite, ownedStat
 			t.Cleanup(func() { ownedAtomicWrite, ownedStat = originalWrite, originalStat })
 			injected := errors.New("injected unit write failure")
-			if scenario == "fresh" {
+			if scenario != "incremental-unchanged" {
 				ownedAtomicWrite = func(path string, raw []byte) error {
 					if path == filepath.Join(ownedUnitDirectory(home), z.Unit) {
 						return injected
@@ -74,10 +84,10 @@ func TestLegacyOwnedPrunedJournalAfterActualAbort(t *testing.T) {
 			}
 			writeErr := backend.applyOwnedUnitWrites(ctx, home, plan, journal)
 			ownedAtomicWrite = originalWrite
-			if scenario == "fresh" && !errors.Is(writeErr, injected) {
+			if scenario != "incremental-unchanged" && !errors.Is(writeErr, injected) {
 				t.Fatalf("write failure: %v", writeErr)
 			}
-			if scenario == "incremental" && writeErr != nil {
+			if scenario == "incremental-unchanged" && writeErr != nil {
 				t.Fatal(writeErr)
 			}
 			if !plan.written[a.Unit] || plan.written[z.Unit] {
@@ -281,7 +291,7 @@ func TestDerivedOwnedOriginalRequestAfterActualPrecommitFailure(t *testing.T) {
 }
 
 func TestLegacyOwnedPrunedJournalOmittedPeerProofGuards(t *testing.T) {
-	for _, scenario := range []string{"changed-spec", "new-unit", "foreign-file"} {
+	for _, scenario := range []string{"changed-spec", "new-unit", "foreign-file", "foreign-new-file"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := context.Background()
 			backend, home, request := fixture(t)
@@ -316,17 +326,24 @@ func TestLegacyOwnedPrunedJournalOmittedPeerProofGuards(t *testing.T) {
 				t.Fatal(err)
 			}
 			foreign := []byte("foreign unjournaled content")
+			foreignPath := filepath.Join(ownedUnitDirectory(home), z.Unit)
 			switch scenario {
 			case "changed-spec":
 				changed, _ := ownedFixtureProfile(t, home, "z", 9400)
 				changed.NativeModel.Instance = "z"
 				request.Catalog.Profiles[1] = changed
-			case "new-unit":
+			case "new-unit", "foreign-new-file":
 				added, _ := ownedFixtureProfile(t, home, "extra", 9400)
 				added.NativeModel.Instance = "extra"
 				request.Catalog.Profiles = append(request.Catalog.Profiles, added)
+				if scenario == "foreign-new-file" {
+					foreignPath = filepath.Join(ownedUnitDirectory(home), added.Unit)
+					if err := os.WriteFile(foreignPath, foreign, 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
 			case "foreign-file":
-				if err := os.WriteFile(filepath.Join(ownedUnitDirectory(home), z.Unit), foreign, 0600); err != nil {
+				if err := os.WriteFile(foreignPath, foreign, 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -334,17 +351,23 @@ func TestLegacyOwnedPrunedJournalOmittedPeerProofGuards(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if prepared.Catalog.Profiles[0].NativeModel.Owned.Conflicts == "" {
-				t.Fatal("unproven omitted unit suppressed derivation")
+			if !strings.HasPrefix(scenario, "foreign-") {
+				if !reflect.DeepEqual(prepared, request) {
+					t.Fatal("proven unwritten peer changed retry renders")
+				}
+				return
 			}
-			if scenario == "foreign-file" {
+			if prepared.Catalog.Profiles[0].NativeModel.Owned.Conflicts == "" {
+				t.Fatal("foreign omitted unit suppressed derivation")
+			}
+			if strings.HasPrefix(scenario, "foreign-") {
 				if _, err := backend.Plan(home, request); !errors.Is(err, ErrOwnedUnitCollision) {
 					t.Fatalf("foreign omitted file preview: %v", err)
 				}
 				if err := backend.Apply(ctx, home, request); !errors.Is(err, ErrOwnedUnitCollision) {
 					t.Fatalf("foreign omitted file apply: %v", err)
 				}
-				raw, err := os.ReadFile(filepath.Join(ownedUnitDirectory(home), z.Unit))
+				raw, err := os.ReadFile(foreignPath)
 				if err != nil || string(raw) != string(foreign) {
 					t.Fatalf("foreign omitted file changed: %v", err)
 				}
