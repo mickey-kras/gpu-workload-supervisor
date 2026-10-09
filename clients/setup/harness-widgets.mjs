@@ -14,6 +14,7 @@ export function createWidgetClass(widgets) {
             Object.assign(this, properties); widgets.push(this);
         }
         update_property(properties, values) { this.accessibleProperties = Object.fromEntries(properties.map((property, index) => [property, values[index]])); }
+        update_state(states, values) { this.accessibleStates = Object.fromEntries(states.map((state, index) => [state, values[index]])); }
         connect(signal, fn) { this.signals.set(signal, fn); }
         emit(signal) { return this.signals.get(signal)?.(this); }
         append(child) { this.children.push(child); }

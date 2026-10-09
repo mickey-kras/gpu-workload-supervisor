@@ -80,6 +80,34 @@ test('Ollama is selected once; several existing models become separately named w
     assert.equal(checked.catalog.profiles.length, 1);
 });
 
+test('model chooser disclosure preserves rooted pickers and opens no dialog until a picker is activated', async () => {
+    const ui = await launch(options([installation('ollama', [{id: 'a'}, {id: 'b'}])]));
+    ui.edit(ui.by('Use Ollama'), 'active', true);
+    await ui.click('Continue');
+    const chooser = ui.by('Choose another model…');
+    const file = ui.by('Choose model file...');
+    const folder = ui.by('Choose model folder...');
+    const choices = ui.widgets.find(widget => widget.children.includes(file));
+    const parent = ui.widgets.find(widget => widget.children.includes(choices));
+    assert.equal(chooser.widgetType, 'Button');
+    assert.ok(parent.children.includes(chooser));
+    assert.equal(chooser.accessibleStates.expanded, false);
+    assert.equal(ui.visible(file), false); assert.equal(ui.visible(folder), false);
+    const callsBefore = ui.calls.length;
+    await ui.click('Choose another model…');
+    assert.equal(chooser.accessibleStates.expanded, true);
+    assert.equal(ui.visible(file), true); assert.equal(ui.visible(folder), true);
+    await ui.click('Choose another model…');
+    assert.equal(chooser.accessibleStates.expanded, false);
+    assert.equal(ui.visible(file), false); assert.equal(ui.visible(folder), false);
+    assert.ok(parent.children.includes(choices), 'collapsed choices remain attached to the page');
+    assert.equal(ui.calls.length, callsBefore, 'disclosure does not start discovery or change configuration');
+    await ui.click('Choose another model…');
+    await ui.click('Choose model file...');
+    assert.ok(ui.widgets.some(widget => widget.label === '/models/selected.gguf'));
+    assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
+});
+
 test('Back permits changing application without duplicate drafts or applying saved selections', async () => {
     const ui = await launch(options([installation(), installation('ollama', [{id: 'a'}, {id: 'b'}])]));
     ui.edit(ui.by('Use Ollama'), 'active', true);

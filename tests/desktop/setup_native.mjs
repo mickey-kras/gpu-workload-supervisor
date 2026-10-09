@@ -142,8 +142,10 @@ app.connect('activate', () => {
             style.set_color_scheme(originalScheme); await delay(30);
             lifetime.push({state, retained: true, darkAfterClose, appearanceUnchanged: true});
         }
-        async function inspect(screen, name, focus) {
-            await runAsync(['/usr/bin/python3', 'tests/desktop/setup_accessibility.py', `${output}/accessibility-${name}.json`, screen, focus]);
+        async function inspect(screen, name, focus, disclosure = null) {
+            const argv = ['/usr/bin/python3', 'tests/desktop/setup_accessibility.py', `${output}/accessibility-${name}.json`, screen, focus];
+            if (disclosure) argv.push(disclosure);
+            await runAsync(argv);
         }
         function ownsFocus(ui, target) {
             for (let focus = ui.window.get_focus(); focus; focus = focus.get_parent()) if (focus === target) return true;
@@ -230,6 +232,15 @@ app.connect('activate', () => {
             await tabTo(ui, model); run(['xdotool', 'key', 'space']); await delay(40);
             assert(model.active, 'keyboard selects an existing model');
         }
+        const chooser = widgets(ui.window).find(widget => widget instanceof Gtk.Button && widget.label === 'Choose another model…' && widget.get_mapped());
+        assert(chooser, 'native model chooser disclosure exists');
+        await tabTo(ui, chooser);
+        await inspect('models', 'models-chooser-closed', 'Choose another model…', 'closed');
+        run(['xdotool', 'key', 'space']); await delay(80);
+        await inspect('models', 'models-chooser-open', 'Choose another model…', 'open');
+        await capture(ui, 'models-chooser-open');
+        run(['xdotool', 'key', 'space']); await delay(80);
+        await inspect('models', 'models-chooser-recollapsed', 'Choose another model…', 'closed');
         await tabTo(ui, ui.review);
         await inspect('models', 'models-continue', 'Continue');
         await capture(ui, 'models');
@@ -256,6 +267,7 @@ app.connect('activate', () => {
             adwaita: `${Adw.get_major_version()}.${Adw.get_minor_version()}.${Adw.get_micro_version()}`};
         GLib.file_set_contents(`${output}/report.json`, JSON.stringify(report, null, 2));
         if (theme === 'highcontrast') assert(style.high_contrast, 'native high contrast preference must be active');
+        assert(criticalLogs.length === 0, `native GTK criticals: ${JSON.stringify(criticalLogs)}`);
         print(`PASS ${theme} ${width}x${height} scale ${report.scale}`);
     })().catch(error => { failed = true; printerr(`${error.message}\n${error.stack}`); }).finally(() => { app.release(); app.quit(); });
 });

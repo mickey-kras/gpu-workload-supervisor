@@ -13,7 +13,8 @@ def visit(node, result):
         states = node.getState()
         result.append({'name': node.name, 'role': node.getRoleName(),
                        'focused': states.contains(pyatspi.STATE_FOCUSED),
-                       'showing': states.contains(pyatspi.STATE_SHOWING)})
+                       'showing': states.contains(pyatspi.STATE_SHOWING),
+                       'expanded': states.contains(pyatspi.STATE_EXPANDED)})
         for child in node:
             visit(child, result)
     except (GLib.Error, RuntimeError):
@@ -50,6 +51,11 @@ def main():
             assert present(workload), f'missing review workload: {workload}'
     else:
         raise AssertionError(f'unknown screen: {screen}')
+    if len(sys.argv) > 4:
+        expanded = sys.argv[4] == 'open'
+        assert any(node['name'] == 'Choose another model…' and node['role'] == 'push button' and node['expanded'] == expanded for node in visible), 'model chooser accessible expansion state'
+        for picker in ('Choose model file...', 'Choose model folder...'):
+            assert present(picker, 'push button') == expanded, f'picker visibility: {picker}'
     assert any(node['focused'] and node['name'] == expected_focus for node in visible), (expected_focus, [node for node in visible if node['focused']])
     print(f'PASS: AT-SPI {screen} content and focused {expected_focus}')
 
