@@ -3,7 +3,7 @@ import Gtk from 'gi://Gtk?version=4.0';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Gio from 'gi://Gio';
 
-const icons = {'comfyui': 'comfyui.svg', 'llama.cpp': 'llama-cpp.svg', 'ollama': 'ollama.svg', 'vllm': 'vllm.png'};
+const icons = {'comfyui': 'comfyui.png', 'llama.cpp': 'llama-cpp.svg', 'ollama': 'ollama.svg', 'vllm': 'vllm.png'};
 
 // Surface and border colors follow Adwaita, including its high-contrast palette.
 // Ubuntu's orange is local to the setup journey, not a system theme override.
