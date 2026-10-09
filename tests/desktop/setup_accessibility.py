@@ -71,29 +71,46 @@ def observe_until_ready(sample, validate, advance, timeout=3.0, clock=time.monot
         advance()
 
 
-def main():
+def main() -> None:
     output = pathlib.Path(sys.argv[1])
     screen = sys.argv[2]
-    def sample():
+    desktop = None
+    listener_registered = False
+    def tree_changed(_event: object) -> None:
+        # Readiness is decided from complete snapshots, not individual events.
+        pass
+    def sample() -> list[dict[str, str | bool]]:
+        nonlocal desktop, listener_registered
+        if desktop is None:
+            # RegisterEvent synchronizes with the registry before libatspi creates
+            # its desktop singleton and records the registry's unique-name alias.
+            # Do this inside the first sample so initialization uses the deadline.
+            listener_registered = True
+            pyatspi.Registry.registerEventListener(tree_changed, 'object:children-changed')
+            desktop = pyatspi.Registry.getDesktop(0)
         tree = []
-        visit(pyatspi.Registry.getDesktop(0), tree)
+        visit(desktop, tree)
         # Retain the latest actual tree even when readiness never arrives.
         output.write_text(json.dumps(tree, indent=2) + '\n')
         return tree
-    if screen == 'diagnostic':
-        print('DIAGNOSTIC: focused AT-SPI nodes:', [node for node in sample() if node['showing'] and node['focused']])
-        return
-    expected_focus = sys.argv[3]
-    disclosure = sys.argv[4] if len(sys.argv) > 4 else None
-    def advance():
-        context = GLib.MainContext.default()
-        for _ in range(100):
-            if not context.pending():
-                break
-            context.iteration(False)
-        time.sleep(0.03)
-    attempts = observe_until_ready(sample, lambda tree: validate_tree(tree, screen, expected_focus, disclosure), advance)
-    print(f'PASS: AT-SPI {screen} content and focused {expected_focus} ({attempts} observations)')
+    try:
+        if screen == 'diagnostic':
+            print('DIAGNOSTIC: focused AT-SPI nodes:', [node for node in sample() if node['showing'] and node['focused']])
+            return
+        expected_focus = sys.argv[3]
+        disclosure = sys.argv[4] if len(sys.argv) > 4 else None
+        def advance():
+            context = GLib.MainContext.default()
+            for _ in range(100):
+                if not context.pending():
+                    break
+                context.iteration(False)
+            time.sleep(0.03)
+        attempts = observe_until_ready(sample, lambda tree: validate_tree(tree, screen, expected_focus, disclosure), advance)
+        print(f'PASS: AT-SPI {screen} content and focused {expected_focus} ({attempts} observations)')
+    finally:
+        if listener_registered:
+            pyatspi.Registry.deregisterEventListener(tree_changed, 'object:children-changed')
 
 
 if __name__ == '__main__':
