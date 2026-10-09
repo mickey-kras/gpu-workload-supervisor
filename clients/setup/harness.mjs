@@ -42,7 +42,7 @@ export async function launch({units = [], profiles = [], pending = false, fail =
                 evaluate: item => type === StringObject.$gtype && expression === null && item instanceof StringObject && property in item ? [true, item[property]] : [false, null],
             })},
         }},
-        'gi://GLib': {default: {getenv: () => 'GNOME', uuid_string_random: () => uuidSequence++ ? `unique-id-${uuidSequence}` : 'unique-id',
+        'gi://GLib': {default: {PRIORITY_DEFAULT_IDLE: 200, SOURCE_REMOVE: false, idle_add(priority, callback) { callback(); return 1; }, getenv: () => 'GNOME', uuid_string_random: () => uuidSequence++ ? `unique-id-${uuidSequence}` : 'unique-id',
             markup_escape_text: text => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
         }},
         'gi://Gio': {default: {FileIcon: class { constructor(properties) { Object.assign(this, properties); } }, File: {new_for_uri: () => ({get_parent: () => ({get_child: () => ({query_exists: () => true})})})}, SubprocessFlags: {STDIN_PIPE: 1, STDOUT_PIPE: 2, STDERR_PIPE: 4},

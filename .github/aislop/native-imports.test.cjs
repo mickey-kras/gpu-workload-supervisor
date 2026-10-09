@@ -40,7 +40,7 @@ function nativeImports() {
       imports.push(`${line}\n${lines[index + 1]}`);
     });
   }
-  assert.equal(imports.length, 28);
+  assert.equal(imports.length, 29);
   return imports;
 }
 

@@ -10,6 +10,23 @@ import GLib from 'gi://GLib';
 import {createSetupWindow} from '../../clients/setup/setup-window.mjs';
 
 const [output, theme = 'light', width = '620', height = '670'] = ARGV;
+const criticalLogs = [];
+// Preserve native messages and add the synchronous JS origin of GTK criticals.
+// This catches GI calls made during widget construction, before a frame exists.
+GLib.log_set_writer_func((level, fields) => {
+    const decoded = Object.fromEntries(Object.entries(fields).map(([key, value]) => [key,
+        typeof value === 'string' ? value : new TextDecoder().decode(value)]));
+    const critical = Boolean(level & GLib.LogLevelFlags.LEVEL_CRITICAL);
+    const severity = critical ? 'CRITICAL' : (level & GLib.LogLevelFlags.LEVEL_WARNING) ? 'WARNING' : 'LOG';
+    printerr(`${decoded.GLIB_DOMAIN || 'GLib'}-${severity}: ${decoded.MESSAGE || JSON.stringify(decoded)}`);
+    if (critical) {
+        const entry = {fields: decoded, stack: new Error('Native critical origin').stack};
+        criticalLogs.push(entry);
+        printerr(entry.stack);
+        GLib.file_set_contents(`${output}/native-criticals.json`, JSON.stringify(criticalLogs, null, 2));
+    }
+    return GLib.LogWriterOutput.HANDLED;
+});
 function assert(condition, message) { if (!condition) throw new Error(message); }
 const delay = ms => new Promise(resolve => GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => { resolve(); return GLib.SOURCE_REMOVE; }));
 function widgets(root) {
@@ -88,12 +105,14 @@ app.connect('activate', () => {
             // and screenshot pixels measure the complete native window at scale.
             const startup = {expectedLogicalWindow: {width: Number(width), height: Number(height)},
                 contentAllocation: {width: actualWidth, height: actualHeight},
+                headingSelection: ui.heading.get_selection_bounds(),
                 surfaceLogical: {width: surface.get_width(), height: surface.get_height()},
                 x11Pixels: {width: Number(x11.WIDTH), height: Number(x11.HEIGHT)}, scale,
                 minimumHorizontal: ui.window.measure(Gtk.Orientation.HORIZONTAL, -1),
                 minimumVertical: ui.window.measure(Gtk.Orientation.VERTICAL, actualWidth)};
             GLib.file_set_contents(`${output}/startup-${nextMode}-geometry.json`, JSON.stringify(startup, null, 2));
             run(['import', '-window', startupXid, `${output}/startup-${nextMode}.png`]);
+            assert(!startup.headingSelection[0], `initial heading must not select its text: ${JSON.stringify(startup.headingSelection)}`);
             assert(Number(x11.WIDTH) === Number(width) * scale, `native window width mismatch: geometry=${JSON.stringify(startup)}`);
             assert(Number(x11.HEIGHT) === Number(height) * scale, `native window height mismatch: geometry=${JSON.stringify(startup)}`);
             const appImages = widgets(ui.window).filter(widget => widget.has_css_class('setup-icon-tile')).flatMap(tile => widgets(tile).filter(widget => widget instanceof Gtk.Image || widget instanceof Gtk.Picture));
@@ -149,10 +168,12 @@ app.connect('activate', () => {
             const focus = ui.window.get_focus();
             const diagnostics = {expectedHeading: heading, actualHeading: ui.heading.label,
                 headingFocusable: ui.heading.get_focusable(), headingMapped: ui.heading.get_mapped(),
+                headingSelection: ui.heading.get_selection_bounds(),
                 currentFocus: focus ? {widget: focus.constructor.name, label: focus.label ?? null, name: focus.get_name()} : null};
             GLib.file_set_contents(`${output}/transition-${transition}-focus.json`, JSON.stringify(diagnostics, null, 2));
             await runAsync(['/usr/bin/python3', 'tests/desktop/setup_accessibility.py', `${output}/accessibility-transition-${transition}.json`, 'diagnostic']);
             assert(ownsFocus(ui, ui.heading), `screen transition focuses its heading: ${JSON.stringify(diagnostics)}`);
+            assert(!diagnostics.headingSelection[0], `transition heading must not select its text: ${JSON.stringify(diagnostics)}`);
         }
         async function capture(ui, name) {
             await delay(180);
@@ -170,6 +191,17 @@ app.connect('activate', () => {
             geometry.push({screen: name, actions: rectangles});
             const xid = run(['xdotool', 'search', '--onlyvisible', '--name', ui.window.title]).split('\n').at(-1);
             run(['import', '-window', xid, `${output}/${name}.png`]);
+            if (name === 'review' && Number(width) === 620 && Number(height) === 670) {
+                const adjustment = ui.scroll.get_vadjustment();
+                const [located, bounds] = ui.heading.compute_bounds(ui.scroll);
+                const layout = {contentUpper: adjustment.upper, viewportSize: adjustment.page_size,
+                    scrollValue: adjustment.value, heading: {located, x: bounds.get_x(), y: bounds.get_y(), width: bounds.get_width(), height: bounds.get_height()},
+                    viewport: {width: ui.scroll.get_width(), height: ui.scroll.get_height()}};
+                GLib.file_set_contents(`${output}/review-viewport.json`, JSON.stringify(layout, null, 2));
+                assert(adjustment.upper <= adjustment.page_size + 1, `reference review content must fit without scrolling: ${JSON.stringify(layout)}`);
+                assert(located && layout.heading.x >= 0 && layout.heading.y >= 0 && layout.heading.x + layout.heading.width <= layout.viewport.width && layout.heading.y + layout.heading.height <= layout.viewport.height,
+                    `reference review heading remains visible after keyboard navigation: ${JSON.stringify(layout)}`);
+            }
             return xid;
         }
         let ui = await open('stopped');
@@ -219,7 +251,7 @@ app.connect('activate', () => {
             await capture(ui, `applications-${state}`); await closeAndVerify(ui, state);
         }
         const report = {theme, width: Number(width), height: Number(height), scale: Number(GLib.getenv('GDK_SCALE') || 1),
-            dark: style.dark, highContrast: style.high_contrast, calls, geometry, lifetime,
+            dark: style.dark, highContrast: style.high_contrast, calls, geometry, lifetime, criticalLogs,
             gtk: `${Gtk.get_major_version()}.${Gtk.get_minor_version()}.${Gtk.get_micro_version()}`,
             adwaita: `${Adw.get_major_version()}.${Adw.get_minor_version()}.${Adw.get_micro_version()}`};
         GLib.file_set_contents(`${output}/report.json`, JSON.stringify(report, null, 2));

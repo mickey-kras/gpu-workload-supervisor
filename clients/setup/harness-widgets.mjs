@@ -33,7 +33,7 @@ export function createWidgetClass(widgets) {
             if (index < 0) throw new Error('Cannot remove a widget that is not a direct child');
             this.children.splice(index, 1);
         }
-        present() { this.presented = true; }
+        present() { this.presented = true; this.emit('map'); }
         close() {
             if (this.emit('close-request') === true) return;
             this.closed = true; this.emit('unrealize');

@@ -54,7 +54,7 @@ class SetupWindow {
         this.summaryCards.length = 0;
         for (const profile of items) {
             const appID = this.runtimeOf(profile);
-            const card = roundedCard(Gtk);
+            const card = roundedCard(Gtk); card.add_css_class('setup-summary-card');
             if (appID) card.append(applicationHeader(Gtk, appID, profile.label || profile.id));
             else card.append(new Gtk.Label({label: profile.label || profile.id, wrap: true, xalign: 0}));
             this.summary.append(card); this.summaryCards.push(card);
@@ -77,6 +77,7 @@ class SetupWindow {
 
     setStep(next) {
         this.step = next;
+        this.box.spacing = this.step === 2 ? 10 : 14;
         this.heading.label = ['Choose your applications', 'Choose models', 'Ready to finish'][this.step];
         this.introduction.label = ['Use applications already installed on this computer.', 'Each selected model appears as a separate workload in GPU Control.', 'Supervisor will switch between these workloads.'][this.step];
         this.applicationPage.visible = this.step === 0; this.modelPage.visible = this.step === 1; this.finishPage.visible = this.step === 2;

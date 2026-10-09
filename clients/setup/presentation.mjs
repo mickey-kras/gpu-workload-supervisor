@@ -16,12 +16,13 @@ export function installSetupStyle(window) {
         .setup-window.setup-dark:not(.setup-high-contrast) .setup-link { color: #ff854b; }
         .setup-heading { font-size: 28px; font-weight: 800; }
         .setup-introduction { font-size: 16px; }
+        .setup-card.setup-summary-card { padding-top: 8px; padding-bottom: 8px; }
         .setup-card { background: @card_bg_color; color: @card_fg_color; border: 1px solid alpha(@window_fg_color, .12); border-radius: 12px; padding: 12px 16px; }
         .setup-high-contrast .setup-card { border-color: @window_fg_color; }
         .setup-icon-tile { background: #17191b; border-radius: 10px; padding: 6px; min-width: 44px; min-height: 44px; }
         .setup-app-name { font-size: 18px; font-weight: 700; }
-        .setup-detection { font-size: 14px; opacity: .8; }
-        .setup-high-contrast .setup-detection { opacity: 1; }
+        .setup-detection, .setup-guidance { font-size: 14px; opacity: .8; }
+        .setup-high-contrast .setup-detection, .setup-high-contrast .setup-guidance { opacity: 1; }
         .setup-model-choice { background: alpha(@window_fg_color, .04); border: 1px solid alpha(@window_fg_color, .08); border-radius: 9px; padding: 12px 16px; font-size: 16px; }
         .setup-high-contrast .setup-model-choice { border-color: @window_fg_color; }
         .setup-link { color: #c64600; text-decoration: underline; padding: 4px 0; }

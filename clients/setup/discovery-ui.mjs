@@ -92,7 +92,7 @@ class DraftEditor {
             modelSettings.update_property([this.Gtk.AccessibleProperty.LABEL], [`Settings for ${applications.find(app => app.id === this.initial.app).label}`]);
             modelSettings.connect('clicked', () => { this.openSettings?.(); this.group.visible = true; this.details.visible = true; this.details.expanded = true; });
             const subtitle = !this.draft.needsModel ? new this.Gtk.Label({label: 'Models are selected in your workflows.', wrap: true, xalign: 0}) : null;
-            subtitle?.add_css_class('dim-label');
+            subtitle?.add_css_class('dim-label'); subtitle?.add_css_class('setup-guidance');
             this.modelGroup.add(applicationHeader(this.Gtk, this.initial.app, applications.find(app => app.id === this.initial.app).label, modelSettings, subtitle));
         }
         this.model = null;

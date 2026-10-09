@@ -2,6 +2,8 @@
 import Adw from 'gi://Adw?version=1';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Gtk from 'gi://Gtk?version=4.0';
+// aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
+import GLib from 'gi://GLib';
 import {installSetupStyle, applicationHeader, roundedCard, linkButton} from './presentation.mjs';
 import {applications} from './onboarding.mjs';
 import {addErrorReporter} from './discovery-ui.mjs';
@@ -38,6 +40,12 @@ export function createShell(ui) {
     ui.window.set_content(ui.toolbar);
     ui.heading = new Gtk.Label({label: 'Choose your applications', xalign: 0, wrap: true, focusable: true, selectable: true,
         accessible_role: Gtk.AccessibleRole.HEADING});
+    ui.window.connect('map', () => {
+        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            if (!ui.closed) ui.heading.select_region(0, 0);
+            return GLib.SOURCE_REMOVE;
+        });
+    });
     ui.heading.add_css_class('title-1');
     ui.heading.add_css_class('setup-heading');
     ui.box.append(ui.heading);
@@ -53,15 +61,15 @@ export function createShell(ui) {
     ui.box.append(ui.applicationPage);
     ui.modelPage = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 18, visible: false});
     ui.box.append(ui.modelPage);
-    ui.finishPage = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 18, visible: false});
+    ui.finishPage = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 10, visible: false});
     ui.box.append(ui.finishPage);
     ui.summary = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 10});
     ui.finishPage.append(ui.summary);
-    ui.explanations = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 10, margin_top: 12});
-    ui.explanations.append(new Gtk.Separator({orientation: Gtk.Orientation.HORIZONTAL, margin_bottom: 8}));
+    ui.explanations = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 8, margin_top: 6});
+    ui.explanations.append(new Gtk.Separator({orientation: Gtk.Orientation.HORIZONTAL, margin_bottom: 6}));
     for (const [icon, text] of [['media-playback-start-symbolic', 'Only one workload runs at a time.'], ['media-playback-stop-symbolic', 'ComfyUI closes when switching away.'], ['security-high-symbolic', 'Your applications and models stay unchanged.']]) {
         const row = new Gtk.Box({orientation: Gtk.Orientation.HORIZONTAL, spacing: 16});
-        row.append(new Gtk.Image({icon_name: icon, pixel_size: 28}));
+        row.append(new Gtk.Image({icon_name: icon, pixel_size: 24}));
         const label = new Gtk.Label({label: text, wrap: true, xalign: 0}); label.add_css_class('setup-explanation'); row.append(label); ui.explanations.append(row);
     }
     ui.finishPage.append(ui.explanations);
