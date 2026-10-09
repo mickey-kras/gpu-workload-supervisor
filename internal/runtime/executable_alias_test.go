@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,6 +40,19 @@ func TestExecutableRejectsReplaceableOriginalAncestorBeforeStart(t *testing.T) {
 	}
 	r := &identityRunner{}
 	m := &SystemdManager{config: SystemdConfig{Catalog: &control.Catalog{Profiles: []control.WorkloadProfile{p}}}, runner: r}
+	requireTrustFailure := func(phase string, err error) {
+		t.Helper()
+		if err == nil || !errors.Is(err, ErrLaunchUnsupported) || !strings.Contains(err.Error(), "executable trust") || strings.Contains(err.Error(), attacker) || strings.Contains(err.Error(), selected) {
+			t.Fatalf("%s lost public trust refusal or disclosed selected path: %v", phase, err)
+		}
+		reason := strings.Contains(err.Error(), "original executable path component")
+		if phase == "after-alias-swap" {
+			reason = reason || strings.Contains(err.Error(), "executable ancestor component") || strings.Contains(err.Error(), "executable target is not root-owned")
+		}
+		if !reason {
+			t.Fatalf("%s lost phase-appropriate executable trust reason: %v", phase, err)
+		}
+	}
 	for _, phase := range []string{"trusted-target", "after-alias-swap"} {
 		if phase == "after-alias-swap" {
 			replacement := filepath.Join(attacker, "replacement")
@@ -55,12 +69,8 @@ func TestExecutableRejectsReplaceableOriginalAncestorBeforeStart(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if err := qualifyParsedLaunch(u, control.NativeModel{Runtime: "llama.cpp"}, validateNativeExecutable); err == nil || !strings.Contains(err.Error(), "executable ancestor component") && !strings.Contains(err.Error(), "original executable path component") {
-			t.Fatalf("%s qualified retained alias: %v", phase, err)
-		}
-		if err := m.Start(context.Background(), p.ID); err == nil || !strings.Contains(err.Error(), "executable ancestor component") && !strings.Contains(err.Error(), "original executable path component") {
-			t.Fatal("started replaceable executable alias")
-		}
+		requireTrustFailure(phase, qualifyParsedLaunch(u, control.NativeModel{Runtime: "llama.cpp"}, validateNativeExecutable))
+		requireTrustFailure(phase, m.Start(context.Background(), p.ID))
 		if len(r.calls) != 0 {
 			t.Fatalf("%s contacted systemd before executable proof: %v", phase, r.calls)
 		}

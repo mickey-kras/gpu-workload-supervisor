@@ -25,7 +25,7 @@ func TestTrustedPathRejectsHiddenAliasTargetsAndPreservesTrustedAliases(t *testi
 		"/": {mode: os.ModeDir | 0755}, "/trusted": {mode: os.ModeDir | 0755}, "/usr": {mode: os.ModeDir | 0755}, "/usr/bin": {mode: os.ModeDir | 0755}, "/usr/bin/ollama": {mode: 0755},
 		"/trusted/alias": {mode: os.ModeSymlink | 0777}, "/tmp": {mode: os.ModeDir | 0777}, "/tmp/second": {mode: os.ModeSymlink | 0777},
 		"/bin": {mode: os.ModeSymlink | 0777}, "/trusted/relative": {mode: os.ModeSymlink | 0777}, "/trusted/loop": {mode: os.ModeSymlink | 0777},
-		"/trusted/non-root": {mode: os.ModeSymlink | 0777, uid: 1000}, "/trusted/alias2": {mode: os.ModeSymlink | 0777},
+		"/trusted/non-root": {mode: os.ModeSymlink | 0777, uid: 1000}, "/usr/bin/user-owned": {mode: 0755, uid: 1000}, "/trusted/alias2": {mode: os.ModeSymlink | 0777},
 	}
 	targets := map[string]string{"/trusted/alias": "/tmp/second", "/tmp/second": "/usr/bin", "/bin": "usr/bin", "/trusted/relative": "../usr/bin", "/trusted/loop": "loop", "/trusted/non-root": "/usr/bin", "/trusted/alias2": "/trusted/alias"}
 	lstat := func(path string) (os.FileInfo, error) {
@@ -42,7 +42,7 @@ func TestTrustedPathRejectsHiddenAliasTargetsAndPreservesTrustedAliases(t *testi
 		}
 		return value, nil
 	}
-	for _, path := range []string{"/trusted/alias/ollama", "/trusted/alias2/ollama", "/trusted/non-root/ollama", "/trusted/loop/ollama", "/trusted/missing/ollama", "relative", "/usr/bin/ollama/child"} {
+	for _, path := range []string{"/trusted/alias/ollama", "/trusted/alias2/ollama", "/trusted/non-root/ollama", "/usr/bin/user-owned", "/trusted/loop/ollama", "/trusted/missing/ollama", "relative", "/usr/bin/ollama/child"} {
 		if _, err := resolveTrustedRootPath(path, lstat, readlink); err == nil {
 			t.Fatalf("untrusted or unresolvable alias chain accepted: %s", path)
 		}
