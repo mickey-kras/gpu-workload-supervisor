@@ -63,7 +63,10 @@ export async function launch({units = [], profiles = [], pending = false, fail =
     };
     await loadGjsModule('../../setup/setup.js', native);
     await new Promise(resolve => setImmediate(resolve));
-    const by = label => widgets.find(widget => widget.label === label || widget.title === label || widget.accessibleProperties?.label === label);
+    const by = label => {
+        const matches = widgets.filter(widget => widget.label === label || widget.title === label || widget.accessibleProperties?.label === label);
+        return matches.find(visible) ?? matches[0];
+    };
     const visible = widget => {
         if (!widget || widget.visible === false) return false;
         const parent = widgets.find(candidate => candidate.children.includes(widget));
@@ -79,7 +82,7 @@ export async function launch({units = [], profiles = [], pending = false, fail =
     return {widgets, calls, signals, request, appearance, styleProviders, by, visible, click, selectApplication(index) {
         const label = ['ComfyUI', 'Ollama', 'llama.cpp', 'vLLM'][index];
         by(`Use ${label}`).active = true;
-        by(`Configure ${label}`).emit('clicked');
+        by(`Settings for ${label}`).emit('clicked');
     }, finish: () => deferred.shift()(),
         edit(widget, property, value) { widget[property] = value; }};
 }

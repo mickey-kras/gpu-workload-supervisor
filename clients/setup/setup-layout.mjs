@@ -18,13 +18,14 @@ export function createShell(ui) {
     };
     const appearanceSignals = [ui.appearance.connect('notify::dark', ui.updateAppearance),
         ui.appearance.connect('notify::high-contrast', ui.updateAppearance)];
-    let subscribed = true;
-    ui.window.connect('destroy', () => {
-        if (!subscribed) return;
-        subscribed = false;
+    let active = true;
+    ui.releasePresentation = () => {
+        if (!active) return;
         for (const id of appearanceSignals) ui.appearance.disconnect(id);
         removeStyle();
-    });
+        active = false;
+    };
+    ui.window.connect('destroy', ui.releasePresentation);
     ui.updateAppearance();
     ui.toolbar = new Adw.ToolbarView();
     ui.headerBar = new Adw.HeaderBar();
@@ -105,7 +106,7 @@ export function createApplicationCards(ui) {
         const detection = new Gtk.Label({label: 'Checking installation…', wrap: true, xalign: 0}); detection.add_css_class('dim-label'); detection.add_css_class('setup-detection');
         const select = new Gtk.CheckButton({active: false, sensitive: false, valign: Gtk.Align.CENTER});
         select.update_property([Gtk.AccessibleProperty.LABEL], [`Use ${choice.label}`]); card.append(select);
-        const gear = new Gtk.Button({label: `Configure ${choice.label}`, icon_name: 'emblem-system-symbolic', tooltip_text: `Settings for ${choice.label}`, sensitive: false});
+        const gear = new Gtk.Button({icon_name: 'emblem-system-symbolic', tooltip_text: `Settings for ${choice.label}`, sensitive: false});
         const header = applicationHeader(Gtk, choice.id, choice.label, gear, detection); header.hexpand = true; card.append(header);
         gear.update_property([Gtk.AccessibleProperty.LABEL], [`Settings for ${choice.label}`]);
         gear.connect('clicked', () => {

@@ -38,7 +38,8 @@ def main():
     elif screen == 'models':
         for model in ('Example small', 'Example large'):
             assert present(model, 'check box'), f'missing model choice: {model}'
-        assert present('Application settings for ComfyUI') or present('Settings for ComfyUI'), 'missing ComfyUI model guidance/settings'
+        for application in ('ComfyUI', 'Ollama'):
+            assert present(f'Settings for {application}', 'push button'), f'missing model settings: {application}'
         assert present('Continue', 'push button') and present('Back', 'push button'), 'missing model navigation'
     elif screen == 'review':
         assert present('Finish setup', 'push button') and present('Back', 'push button'), 'missing review actions'

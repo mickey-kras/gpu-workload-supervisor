@@ -70,6 +70,7 @@ if (theme === 'highcontrast') {
 const app = new Adw.Application({application_id: 'local.GPUWorkload.NativeFixture'});
 let failed = false;
 app.connect('activate', () => {
+    app.hold(); // Keep the event loop alive while retained closed windows are tested.
     (async () => {
         const style = Adw.StyleManager.get_default();
         style.set_color_scheme(theme === 'dark' ? Adw.ColorScheme.FORCE_DARK : Adw.ColorScheme.FORCE_LIGHT);
@@ -108,6 +109,20 @@ app.connect('activate', () => {
             return ui;
         }
         const geometry = [];
+        const retainedClosed = [];
+        const lifetime = [];
+        async function closeAndVerify(ui, state) {
+            retainedClosed.push(ui); // Prevent disposal from masking signal reference cycles.
+            ui.window.close(); await delay(80);
+            assert(!ui.window.get_visible(), 'permanent close hides the retained native window');
+            const darkAfterClose = ui.window.has_css_class('setup-dark');
+            const originalScheme = style.color_scheme;
+            style.set_color_scheme(darkAfterClose ? Adw.ColorScheme.FORCE_LIGHT : Adw.ColorScheme.FORCE_DARK);
+            await delay(80);
+            assert(ui.window.has_css_class('setup-dark') === darkAfterClose, 'closed retained window must not receive appearance updates');
+            style.set_color_scheme(originalScheme); await delay(30);
+            lifetime.push({state, retained: true, darkAfterClose, appearanceUnchanged: true});
+        }
         async function inspect(screen, name, focus) {
             await runAsync(['/usr/bin/python3', 'tests/desktop/setup_accessibility.py', `${output}/accessibility-${name}.json`, screen, focus]);
         }
@@ -188,20 +203,20 @@ app.connect('activate', () => {
         await inspect('review', 'review-back', 'Back');
         await activate(ui, ui.back, 'Choose models');
         await inspect('models', 'models-return', 'Choose models');
-        ui.window.destroy();
+        await closeAndVerify(ui, 'stopped');
         for (const state of ['missing', 'error']) {
             ui = await open(state);
             assert(!widgets(ui.window).some(widget => widget instanceof Adw.ExpanderRow && widget.visible && widget.expanded), `${state}: technical detail remains collapsed`);
-            await capture(ui, `applications-${state}`); ui.window.destroy();
+            await capture(ui, `applications-${state}`); await closeAndVerify(ui, state);
         }
         const report = {theme, width: Number(width), height: Number(height), scale: Number(GLib.getenv('GDK_SCALE') || 1),
-            dark: style.dark, highContrast: style.high_contrast, calls, geometry,
+            dark: style.dark, highContrast: style.high_contrast, calls, geometry, lifetime,
             gtk: `${Gtk.get_major_version()}.${Gtk.get_minor_version()}.${Gtk.get_micro_version()}`,
             adwaita: `${Adw.get_major_version()}.${Adw.get_minor_version()}.${Adw.get_micro_version()}`};
         GLib.file_set_contents(`${output}/report.json`, JSON.stringify(report, null, 2));
         if (theme === 'highcontrast') assert(style.high_contrast, 'native high contrast preference must be active');
         print(`PASS ${theme} ${width}x${height} scale ${report.scale}`);
-    })().catch(error => { failed = true; printerr(`${error.message}\n${error.stack}`); }).finally(() => app.quit());
+    })().catch(error => { failed = true; printerr(`${error.message}\n${error.stack}`); }).finally(() => { app.release(); app.quit(); });
 });
 app.run([]);
 if (failed) imports.system.exit(1);

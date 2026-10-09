@@ -64,7 +64,7 @@ class DraftEditor {
         this.group.add(this.instance);
         this.details = new this.Adw.ExpanderRow({title: 'Advanced', subtitle: 'Inspect or override technical configuration'});
         if (!this.modelParent) {
-            const gear = new this.Gtk.Button({label: `Settings for ${applications.find(app => app.id === this.initial.app).label}`, icon_name: 'emblem-system-symbolic', tooltip_text: 'Advanced application settings'});
+            const gear = new this.Gtk.Button({icon_name: 'emblem-system-symbolic', tooltip_text: 'Advanced application settings'});
             gear.update_property([this.Gtk.AccessibleProperty.LABEL], [`Advanced settings for ${applications.find(app => app.id === this.initial.app).label}`]);
             gear.connect('clicked', () => { this.details.visible = !this.details.visible; this.details.expanded = this.details.visible; });
             this.group.add(gear);
@@ -88,7 +88,7 @@ class DraftEditor {
         this.modelGroup = this.modelParent ? new this.Adw.PreferencesGroup() : this.group;
         if (this.modelParent) {
             this.modelParent.append(this.modelGroup); this.modelGroup.add_css_class('setup-card');
-            const modelSettings = new this.Gtk.Button({label: `Application settings for ${applications.find(app => app.id === this.initial.app).label}`, icon_name: 'emblem-system-symbolic', tooltip_text: 'Advanced application settings'});
+            const modelSettings = new this.Gtk.Button({icon_name: 'emblem-system-symbolic', tooltip_text: 'Advanced application settings'});
             modelSettings.update_property([this.Gtk.AccessibleProperty.LABEL], [`Settings for ${applications.find(app => app.id === this.initial.app).label}`]);
             modelSettings.connect('clicked', () => { this.openSettings?.(); this.group.visible = true; this.details.visible = true; this.details.expanded = true; });
             const subtitle = !this.draft.needsModel ? new this.Gtk.Label({label: 'Models are selected in your workflows.', wrap: true, xalign: 0}) : null;

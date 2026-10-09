@@ -25,8 +25,9 @@ test('application cards precede configuration, labeled gears and one primary act
     assert.equal(heading(ui).label, 'Choose your applications');
     for (const label of ['ComfyUI', 'Ollama', 'llama.cpp', 'vLLM']) {
         assert.equal(ui.by(`Use ${label}`).active, false);
-        assert.equal(ui.by(`Configure ${label}`).accessibleProperties.label, `Settings for ${label}`);
-        assert.ok(ui.by(`Configure ${label}`).tooltip_text);
+        assert.equal(ui.by(`Settings for ${label}`).accessibleProperties.label, `Settings for ${label}`);
+        assert.ok(ui.by(`Settings for ${label}`).tooltip_text);
+        assert.equal(ui.by(`Settings for ${label}`).label, undefined, 'icon-only gears keep explicit accessible names');
     }
     assert.equal(ui.by('Application'), undefined);
     assert.equal(ui.by('Add workload'), undefined);
@@ -184,7 +185,7 @@ test('reopening a durable temporary session requires explicit stopped-state rest
 test('deselecting an existing application reviews only Supervisor removal and preserves its files', async () => {
     const profile = prepared({draft: {id: 'comfyui', label: 'ComfyUI', app: 'comfyui', binding: {unit: 'comfyui.service'}}}).profile;
     const ui = await launch({...options([installation()]), profiles: [profile], responses: {discover: {request: {...request, catalog: {version: 1, profiles: [profile]}}, units: [], applications: [installation()]}}});
-    ui.by('Configure ComfyUI').emit('clicked');
+    ui.by('Settings for ComfyUI').emit('clicked');
     ui.edit(ui.by('Use ComfyUI'), 'active', false);
     await ui.by('Continue').emit('clicked');
     assert.deepEqual(JSON.parse(ui.calls.find(call => call.argv[1] === 'validate').input).catalog.profiles, []);
@@ -250,7 +251,7 @@ test('failed discovery refresh retains editable selections and reports the techn
 test('model-screen gear opens the same application settings and invalidates ready confirmation', async () => {
     const ui = await launch(options([installation('ollama', [{id: 'a'}, {id: 'b'}])]));
     ui.edit(ui.by('Use Ollama'), 'active', true); await ui.by('Continue').emit('clicked');
-    ui.by('Application settings for Ollama').emit('clicked');
+    ui.by('Settings for Ollama').emit('clicked');
     assert.equal(heading(ui).label, 'Choose your applications');
     assert.equal(ui.by('Advanced').visible, true);
     assert.equal(ui.by('Advanced').expanded, true);
@@ -270,7 +271,7 @@ test('helper subprocess failure rechecks durable status before allowing review',
 test('post-install selection adds a model beneath the existing runtime while retaining stable ID and resources', async () => {
     const original = {...prepared({draft: {id: 'stable', label: 'Ollama', app: 'ollama', model: 'a', binding: {unit: 'ollama.service'}}}).profile, requiredMiB: 9000, bootPolicy: 'retain', systemdSlice: 'app.slice'};
     const ui = await launch(options([installation('ollama', [{id: 'b', label: 'B'}, {id: 'a', label: 'A'}])], {discover: {request: {...request, catalog: {version: 1, profiles: [original]}}, units: [], applications: [installation('ollama', [{id: 'b', label: 'B'}, {id: 'a', label: 'A'}])]}}));
-    ui.by('Configure Ollama').emit('clicked'); ui.by('Edit application').emit('clicked');
+    ui.by('Settings for Ollama').emit('clicked'); ui.by('Edit application').emit('clicked');
     await ui.by('Continue').emit('clicked'); ui.edit(ui.by('B'), 'active', true);
     await ui.by('Continue').emit('clicked');
     const checked = JSON.parse(ui.calls.find(call => call.argv[1] === 'validate').input).catalog.profiles;
@@ -304,7 +305,7 @@ test('legacy ComfyUI is selected without a new draft and remains removable from 
 test('removing an existing profile during batch preparation cannot replace a different profile', async () => {
     const original = prepared({draft: {id: 'stable', label: 'ComfyUI', app: 'comfyui', binding: {unit: 'comfyui.service'}}}).profile;
     const ui = await launch({...options([installation()], {discover: {request: {...request, catalog: {version: 1, profiles: [original]}}, units: [], applications: [installation()]}}), deferAction: 'prepare'});
-    ui.by('Configure ComfyUI').emit('clicked'); ui.by('Edit application').emit('clicked');
+    ui.by('Settings for ComfyUI').emit('clicked'); ui.by('Edit application').emit('clicked');
     const checking = ui.by('Continue').emit('clicked');
     ui.by('Remove from supervisor').emit('clicked'); ui.finish(); await checking;
     assert.equal(ui.calls.some(call => call.argv[1] === 'validate'), false);
@@ -415,7 +416,7 @@ test('changing installations discards the previous multi-model selection before 
     const ui = await launch(options(twoInstallations())); ui.selectApplication(1);
     ui.edit(ui.by('Detected instance'), 'selected', 1);
     await ui.by('Continue').emit('clicked'); ui.edit(ui.by('a1'), 'active', true); ui.edit(ui.by('a2'), 'active', true);
-    ui.by('Application settings for Ollama').emit('clicked'); ui.edit(ui.by('Detected instance'), 'selected', 2);
+    ui.by('Settings for Ollama').emit('clicked'); ui.edit(ui.by('Detected instance'), 'selected', 2);
     await ui.by('Continue').emit('clicked');
     assert.equal(ui.by('b1').active, false); assert.equal(ui.by('b2').active, false);
     await ui.by('Continue').emit('clicked'); assert.equal(ui.calls.some(call => call.argv[1] === 'prepare'), false);
@@ -428,7 +429,7 @@ for (const source of ['address', 'application location', 'model file']) {
     test(`changing ${source} clears old grouped model choices`, async () => {
         const ui = await launch({...options([installation('ollama', [{id: 'a'}, {id: 'b'}])]), filePath: '/new/source'}); ui.selectApplication(1);
         await ui.by('Continue').emit('clicked'); ui.edit(ui.by('a'), 'active', true); ui.edit(ui.by('b'), 'active', true);
-        ui.by('Application settings for Ollama').emit('clicked');
+        ui.by('Settings for Ollama').emit('clicked');
         if (source === 'address') ui.edit(ui.by('Application address'), 'text', 'http://127.0.0.1:9900');
         else ui.by(source === 'application location' ? 'Choose application location…' : 'Choose model file...').emit('clicked');
         await ui.by('Save selections for later').emit('clicked');
@@ -453,7 +454,7 @@ for (const selected of [['a', 'b'], []]) {
 test('manual owned-model edits replace grouped selections and synchronize the visible inventory checks', async () => {
     const ui = await launch(options([installation('ollama', [{id: 'a'}, {id: 'b'}])], {'render-owned': prepared})); ui.selectApplication(1);
     await ui.by('Continue').emit('clicked'); ui.edit(ui.by('a'), 'active', true); ui.edit(ui.by('b'), 'active', true);
-    ui.by('Application settings for Ollama').emit('clicked'); ui.edit(ui.by('Model name'), 'text', 'c');
+    ui.by('Settings for Ollama').emit('clicked'); ui.edit(ui.by('Model name'), 'text', 'c');
     await ui.by('Save selections for later').emit('clicked');
     const saved = JSON.parse(ui.calls.at(-1).input).drafts[0]; assert.equal(saved.models, undefined); assert.equal(saved.model, 'c');
     assert.equal(ui.by('a').active, false); assert.equal(ui.by('b').active, false);
@@ -493,7 +494,7 @@ test('a new temporary attempt cannot inherit a completed record when its helper 
 test('manual lifecycle service changes invalidate selections until a model is chosen for the new source', async () => {
     const ui = await launch(options([installation('ollama', [{id: 'a'}, {id: 'b'}])])); ui.selectApplication(1);
     await ui.by('Continue').emit('clicked'); ui.edit(ui.by('a'), 'active', true); ui.edit(ui.by('b'), 'active', true);
-    ui.by('Application settings for Ollama').emit('clicked'); ui.edit(ui.by('Existing user service'), 'text', 'new.service');
+    ui.by('Settings for Ollama').emit('clicked'); ui.edit(ui.by('Existing user service'), 'text', 'new.service');
     await ui.by('Save selections for later').emit('clicked');
     assert.equal(JSON.parse(ui.calls.at(-1).input).drafts[0].models, undefined);
     await ui.by('Continue').emit('clicked'); await ui.by('Continue').emit('clicked');
@@ -507,7 +508,7 @@ for (const app of ['llama.cpp', 'vllm']) {
         const oldPath = app === 'llama.cpp' ? '/models/old.gguf' : '/models/old';
         const draft = {id: 'draft-saved', label: app, app, reference: oldPath, referenceKind: app === 'llama.cpp' ? 'model-file' : 'model-directory', binding: {instance: 'local', owned: {port: 9000, modelPath: oldPath}}};
         const ui = await launch({...options([], {drafts: {drafts: [draft]}}), filePath: '/new/application'});
-        ui.by(`Configure ${app === 'vllm' ? 'vLLM' : 'llama.cpp'}`).emit('clicked');
+        ui.by(`Settings for ${app === 'vllm' ? 'vLLM' : 'llama.cpp'}`).emit('clicked');
         ui.by('Choose application location…').emit('clicked');
         const modelField = ui.by(app === 'llama.cpp' ? 'Model file' : 'Model directory');
         assert.equal(modelField.text, '');
@@ -552,7 +553,7 @@ for (const saved of [false, true]) {
         const initial = {id: 'saved-choice', app: 'comfyui', label: 'ComfyUI'};
         const ui = await launch(options([installation()], saved ? {drafts: {drafts: [initial]}} : {}));
         assert.equal(ui.visible(ui.by('Save selections for later')), false);
-        await ui.click('Configure ComfyUI');
+        await ui.click('Settings for ComfyUI');
         assert.equal(ui.visible(ui.by('Friendly name')), true);
         assert.equal(ui.visible(ui.by('Save selections for later')), true);
         ui.edit(ui.by('Friendly name'), 'text', 'My workflow editor');
@@ -600,4 +601,21 @@ test('closing setup releases display styling and singleton appearance subscripti
     assert.equal(ui.appearance.handlers.size, 0);
     assert.equal(ui.styleProviders.size, 0);
     assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
+});
+
+
+test('failed temporary cleanup vetoes closing and keeps appearance resources active', async () => {
+    const blocked = {...session, status: 'cleanup_required'};
+    const ui = await launch(temporary({'temporary-discover': {session: blocked, models: [], error: 'stop failed'},
+        'temporary-cleanup': {session: blocked, error: 'cleanup refused'}}));
+    ui.edit(ui.by('Use Ollama'), 'active', true); await ui.click('Continue');
+    ui.edit(ui.by('I allow this brief start and will keep other application controls paused.'), 'active', true);
+    await ui.click('Start Ollama briefly to list models');
+    const window = ui.widgets.find(widget => widget.widgetType === 'ApplicationWindow');
+    window.close();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.notEqual(window.closed, true);
+    assert.equal(ui.appearance.handlers.size, 2);
+    assert.equal(ui.styleProviders.size, 1);
+    assert.ok(ui.widgets.some(widget => widget.label?.includes('cleanup must finish before closing')));
 });

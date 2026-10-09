@@ -338,7 +338,7 @@ class SetupWindow {
     }
 
     async postponeSetup() {
-        try { await this.cancelEditors(); this.closed = true; this.window.close(); }
+        try { await this.cancelEditors(); this.closed = true; this.releasePresentation(); this.window.close(); }
         catch (error) { this.reportError('Temporary application cleanup must finish before closing setup. Keep external application controls paused and retry.', error); }
     }
 
@@ -370,7 +370,7 @@ class SetupWindow {
         if (this.draftEditors.some(editor => editor.temporaryActive())) {
             this.later.emit('clicked'); return true;
         }
-        this.closed = true; this.draftEditors.forEach(editor => editor.cancel()); return false;
+        this.closed = true; this.draftEditors.forEach(editor => editor.cancel()); this.releasePresentation(); return false;
     }
 
     async initialize() {
