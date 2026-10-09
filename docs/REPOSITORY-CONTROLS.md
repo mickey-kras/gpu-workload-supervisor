@@ -24,6 +24,19 @@ through Tailscale using the `tag:github-sonar` identity and enforces its quality
 gate. Repository Advanced Security settings should keep the dependency graph,
 Dependabot alerts, code scanning, code quality, and secret scanning enabled.
 
+The shared CI workflow also rejects Go cognitive complexity above 15 with
+gocognit and uses SonarSource's ESLint plugin to reject nested JavaScript
+conditionals, nested template literals, functions nested more than four levels,
+and unenclosed multiline blocks. A focused Semgrep rule requires shared constants
+for the `ExecStart=` directive and `inspection-failed` status in setup code.
+These checks run on PRs and main, with the existing Sonar production/test scope.
+They cover the maintainability findings that previously escaped PR validation;
+gocognit is a separate implementation
+and these checks do not replace SonarQube's full main-only quality gate.
+The literal rule covers these two known shared values, not arbitrary duplicate
+strings. Intentional updates to the pinned gocognit command, ESLint configuration
+or focused Semgrep rule also require updating their trusted policy controls.
+
 The release App needs Contents write and Pull requests write for PR branch
 updates and version bumps. The workflow uses accessible ruleset reads and an
 owner-reviewed settings attestation; it does not request Administration read. The

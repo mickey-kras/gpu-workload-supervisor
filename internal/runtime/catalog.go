@@ -46,17 +46,17 @@ func (m *SystemdManager) ReleasedFor(ctx context.Context, target control.Workloa
 		if p.ID == target {
 			continue
 		}
-		if m.sharedUnitProfile(p) {
-			if err := m.releasedSharedOllama(ctx, p, target, loadedByUnit); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := m.releasedUnit(ctx, p.Unit, p.Cgroup, p.Adapter == control.AdapterMediaUnload); err != nil {
+		if err := m.releasedProfile(ctx, p, target, loadedByUnit); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+func (m *SystemdManager) releasedProfile(ctx context.Context, p control.WorkloadProfile, target control.Workload, loadedByUnit map[string]map[string]bool) error {
+	if m.sharedUnitProfile(p) {
+		return m.releasedSharedOllama(ctx, p, target, loadedByUnit)
+	}
+	return m.releasedUnit(ctx, p.Unit, p.Cgroup, p.Adapter == control.AdapterMediaUnload)
 }
 func (m *SystemdManager) Healthy(ctx context.Context, id control.Workload) error {
 	ctx, cancel := context.WithTimeout(ctx, m.config.HealthTimeout)

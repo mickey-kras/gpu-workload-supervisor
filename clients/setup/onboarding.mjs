@@ -92,12 +92,17 @@ function stoppedCandidateMessage(candidate) {
 // A service and an endpoint are separate candidates unless discovery established
 // their binding. Keep their complete identities available even when GTK elides a row.
 export function candidateIdentity(candidate) {
-    const kind = candidate.unit ? 'Service' : candidate.sourceKind === 'owned' || candidate.referenceKind === 'application' ? 'Executable' : candidate.endpoint ? 'Address' : candidate.referenceKind === 'configuration' ? 'Configuration' : 'Location';
+    let kind = 'Location';
+    if (candidate.unit) kind = 'Service';
+    else if (candidate.sourceKind === 'owned' || candidate.referenceKind === 'application') kind = 'Executable';
+    else if (candidate.endpoint) kind = 'Address';
+    else if (candidate.referenceKind === 'configuration') kind = 'Configuration';
     const identities = [candidate.unit, candidate.location, candidate.reference, candidate.endpoint].filter(Boolean);
     return `${kind}: ${[...new Set(identities)].join(' · ') || candidate.id || candidate.label}`;
 }
 
 export function candidateChoice(candidate) {
     const status = {'inspection-failed': 'inspection failed', 'model-missing': 'model missing', 'model-required': 'model needed'}[candidate.configurationStatus] ?? (candidate.instanceStatus === 'not-running' && candidate.unit ? 'stopped' : candidate.instanceStatus);
-    return `${candidate.label} · ${candidateIdentity(candidate)}${status ? ` · ${status}` : ''}`;
+    const statusSuffix = status ? ` · ${status}` : '';
+    return `${candidate.label} · ${candidateIdentity(candidate)}${statusSuffix}`;
 }

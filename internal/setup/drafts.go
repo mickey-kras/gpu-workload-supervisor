@@ -192,6 +192,13 @@ func validateOwnedOptions(app string, o *DraftOwnedLaunch, allowMissingPath bool
 	if o.Port < 1024 {
 		return errors.New("owned launch port must be an unprivileged TCP port")
 	}
+	if err := validateOwnedRuntimeOptions(app, o, allowMissingPath); err != nil {
+		return err
+	}
+	return validateDraftLaunchGrammar(o)
+}
+
+func validateOwnedRuntimeOptions(app string, o *DraftOwnedLaunch, allowMissingPath bool) error {
 	validModelPath := validDraftModelPath(o.ModelPath, allowMissingPath)
 	switch app {
 	case "ollama":
@@ -207,7 +214,7 @@ func validateOwnedOptions(app string, o *DraftOwnedLaunch, allowMissingPath bool
 			return errors.New("vllm owned launches require an absolute model directory")
 		}
 	}
-	return validateDraftLaunchGrammar(o)
+	return nil
 }
 
 func validDraftModelPath(path string, allowMissing bool) bool {

@@ -122,8 +122,8 @@ func (b Backend) showApplicationCandidate(ctx context.Context, unit string) (map
 	// metadata is ambiguous; strict validation then reports this candidate.
 	supported := ""
 	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(line, "ExecStart=") && appFromUnit(line) != "" {
-			supported = strings.TrimPrefix(line, "ExecStart=")
+		if strings.HasPrefix(line, execStartPropertyPrefix) && appFromUnit(line) != "" {
+			supported = strings.TrimPrefix(line, execStartPropertyPrefix)
 			break
 		}
 	}
@@ -149,7 +149,7 @@ func (b Backend) configurationFromMetadata(ctx context.Context, app, unit, model
 	if values["NeedDaemonReload"] != "no" {
 		return p, errors.New("installation has changed or uses unsupported overrides; reload its supported direct launch and retry")
 	}
-	if appFromUnit("ExecStart="+values["ExecStart"]) != app {
+	if appFromUnit(execStartPropertyPrefix+values["ExecStart"]) != app {
 		return p, errors.New("installation launch does not match the selected application")
 	}
 	launch, err := b.inspectAutomaticMetadata(values, app)
@@ -296,25 +296,10 @@ func (b Backend) inspectReferenceUnit(ctx context.Context, d Draft, unit string,
 		return cancelErr
 	}
 	if err != nil {
-		if values != nil {
-			selection.inspected = true
-		}
-		if appFromUnit("ExecStart="+values["ExecStart"]) == d.App {
-			matches, matchErr := b.referenceMatches(ctx, d, values)
-			if matchErr != nil {
-				return matchErr
-			}
-			if matches {
-				return err
-			}
-		}
-		if selection.firstInspectionError == nil {
-			selection.firstInspectionError = err
-		}
-		return nil
+		return b.inspectFailedReferenceUnit(ctx, d, values, selection, err)
 	}
 	selection.inspected = true
-	if appFromUnit("ExecStart="+values["ExecStart"]) != d.App {
+	if appFromUnit(execStartPropertyPrefix+values["ExecStart"]) != d.App {
 		return nil
 	}
 	match, err := b.referenceMatches(ctx, d, values)
@@ -326,6 +311,25 @@ func (b Backend) inspectReferenceUnit(ctx context.Context, d Draft, unit string,
 			return errors.New("multiple installations use this location; choose the installation explicitly")
 		}
 		selection.selected = unit
+	}
+	return nil
+}
+
+func (b Backend) inspectFailedReferenceUnit(ctx context.Context, d Draft, values map[string]string, selection *referenceSelection, inspectionErr error) error {
+	if values != nil {
+		selection.inspected = true
+	}
+	if appFromUnit(execStartPropertyPrefix+values["ExecStart"]) == d.App {
+		matches, matchErr := b.referenceMatches(ctx, d, values)
+		if matchErr != nil {
+			return matchErr
+		}
+		if matches {
+			return inspectionErr
+		}
+	}
+	if selection.firstInspectionError == nil {
+		selection.firstInspectionError = inspectionErr
 	}
 	return nil
 }

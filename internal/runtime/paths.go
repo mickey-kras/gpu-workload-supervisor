@@ -81,47 +81,28 @@ func resolveTrustedRootPath(path string, lstat func(string) (os.FileInfo, error)
 	for len(pending) > 0 {
 		part := pending[0]
 		pending = pending[1:]
-		if part == "" || part == "." {
+		current := filepath.Join(prefix, part)
+		switch part {
+		case "", ".":
 			continue
-		}
-		if part == ".." {
+		case "..":
 			prefix = filepath.Dir(prefix)
 			continue
-		}
-		current := filepath.Join(prefix, part)
-		if part == "/" {
+		case "/":
 			current = "/"
 		}
-		info, err := lstat(current)
+		info, err := trustedRootPathComponent(current, component, lstat)
 		if err != nil {
-			return "", errors.New("original executable path component unavailable; inspect the selected path and all alias targets")
-		}
-		stat, ok := info.Sys().(*syscall.Stat_t)
-		reason := "not root-owned"
-		link := info.Mode()&os.ModeSymlink != 0
-		if !link && info.Mode().Perm()&0022 != 0 {
-			reason = "group or world writable"
-		} else if ok && stat.Uid == 0 {
-			reason = ""
-		}
-		if reason != "" {
-			return "", fmt.Errorf("original executable path component %d is %s; install or select the executable through trusted root-owned directories and aliases", component, reason)
+			return "", err
 		}
 		component++
-		if link {
+		if info.Mode()&os.ModeSymlink != 0 {
 			hops++
-			if hops > 40 {
-				return "", errors.New("executable alias resolution exceeds the supported hop limit; select a direct trusted target")
+			next, nextPrefix, err := trustedRootLinkTarget(current, prefix, hops, readlink)
+			if err != nil {
+				return "", err
 			}
-			target, err := readlink(current)
-			if err != nil || target == "" {
-				return "", errors.New("executable alias target unavailable; select a direct trusted target")
-			}
-			next := strings.Split(strings.TrimPrefix(target, "/"), "/")
-			if filepath.IsAbs(target) {
-				prefix = "/"
-				next = append([]string{"/"}, next...)
-			}
+			prefix = nextPrefix
 			pending = append(next, pending...)
 			continue
 		}
@@ -131,4 +112,39 @@ func resolveTrustedRootPath(path string, lstat func(string) (os.FileInfo, error)
 		prefix = current
 	}
 	return prefix, nil
+}
+
+func trustedRootPathComponent(current string, component int, lstat func(string) (os.FileInfo, error)) (os.FileInfo, error) {
+	info, err := lstat(current)
+	if err != nil {
+		return nil, errors.New("original executable path component unavailable; inspect the selected path and all alias targets")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	reason := "not root-owned"
+	link := info.Mode()&os.ModeSymlink != 0
+	if !link && info.Mode().Perm()&0022 != 0 {
+		reason = "group or world writable"
+	} else if ok && stat.Uid == 0 {
+		reason = ""
+	}
+	if reason != "" {
+		return nil, fmt.Errorf("original executable path component %d is %s; install or select the executable through trusted root-owned directories and aliases", component, reason)
+	}
+	return info, nil
+}
+
+func trustedRootLinkTarget(current, prefix string, hops int, readlink func(string) (string, error)) ([]string, string, error) {
+	if hops > 40 {
+		return nil, "", errors.New("executable alias resolution exceeds the supported hop limit; select a direct trusted target")
+	}
+	target, err := readlink(current)
+	if err != nil || target == "" {
+		return nil, "", errors.New("executable alias target unavailable; select a direct trusted target")
+	}
+	next := strings.Split(strings.TrimPrefix(target, "/"), "/")
+	if filepath.IsAbs(target) {
+		prefix = "/"
+		next = append([]string{"/"}, next...)
+	}
+	return next, prefix, nil
 }

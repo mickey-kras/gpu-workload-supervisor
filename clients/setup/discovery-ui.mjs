@@ -233,7 +233,13 @@ class DraftEditor {
     connectInputs() {
         watchInstanceSelection({instance: this.instance, instances: this.instances, draft: this.draft, endpoint: this.endpoint, reference: this.reference, clearBinding: () => this.clearBinding(), clearModels: () => this.clearModels(), show: (candidate) => this.show(candidate),
             getBindingFields: () => this.bindingFields, setSync: value => this.syncing = value, selectOwnedBinding: binding => {
-                for (const [key, field] of Object.entries(this.ownedFields)) if (typeof field !== 'function') field.text = String(key === 'instance' ? binding.instance ?? '' : key === 'model' ? '' : binding.owned[key] ?? '');
+                for (const [key, field] of Object.entries(this.ownedFields)) {
+                    if (typeof field === 'function') continue;
+                    let value = '';
+                    if (key === 'instance') value = binding.instance ?? '';
+                    else if (key !== 'model') value = binding.owned[key] ?? '';
+                    field.text = String(value);
+                }
                 this.ownedFields.selectLaunch();
             },
             setProbeGuidance: guidance => this.probeGuidance = guidance, clearOwnedReference: () => this.clearOwnedReference(), selectOwnedReference: (path, kind) => this.selectOwnedReference(path, kind)});

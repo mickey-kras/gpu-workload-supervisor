@@ -20,26 +20,11 @@ func environmentAssignments(value string) ([]string, error) {
 	var assignments []string
 	for len(strings.TrimSpace(value)) > 0 {
 		value = strings.TrimSpace(value)
-		assignment := ""
-		if value[0] == '\'' || value[0] == '"' {
-			quote := value[0]
-			value = value[1:]
-			end := strings.IndexByte(value, quote)
-			if end < 0 {
-				return nil, environmentError(environmentHint(value), "unterminated whole-assignment quote")
-			}
-			assignment, value = value[:end], value[end+1:]
-			if value != "" && value[0] != ' ' && value[0] != '\t' {
-				return nil, environmentError(environmentHint(assignment), "quoted fragments are unsupported")
-			}
-		} else {
-			end := strings.IndexAny(value, " \t")
-			if end < 0 {
-				assignment, value = value, ""
-			} else {
-				assignment, value = value[:end], value[end:]
-			}
+		assignment, remaining, err := nextEnvironmentAssignment(value)
+		if err != nil {
+			return nil, err
 		}
+		value = remaining
 		name, _, ok := strings.Cut(assignment, "=")
 		if !ok || !environmentName.MatchString(name) {
 			return nil, environmentError("", "expected NAME=value")
@@ -51,6 +36,30 @@ func environmentAssignments(value string) ([]string, error) {
 	}
 	return assignments, nil
 }
+func nextEnvironmentAssignment(value string) (string, string, error) {
+	assignment := ""
+	if value[0] == '\'' || value[0] == '"' {
+		quote := value[0]
+		value = value[1:]
+		end := strings.IndexByte(value, quote)
+		if end < 0 {
+			return "", "", environmentError(environmentHint(value), "unterminated whole-assignment quote")
+		}
+		assignment, value = value[:end], value[end+1:]
+		if value != "" && value[0] != ' ' && value[0] != '\t' {
+			return "", "", environmentError(environmentHint(assignment), "quoted fragments are unsupported")
+		}
+	} else {
+		end := strings.IndexAny(value, " \t")
+		if end < 0 {
+			assignment, value = value, ""
+		} else {
+			assignment, value = value[:end], value[end:]
+		}
+	}
+	return assignment, value, nil
+}
+
 func environmentHint(value string) string {
 	name, _, ok := strings.Cut(strings.TrimLeft(value, "\"'"), "=")
 	if !ok {
@@ -84,6 +93,10 @@ func (u *parsedLaunchUnit) applySafeEnvironment(runtimeName, assignment string) 
 		u.environmentValues = map[string]string{}
 	}
 	u.environmentValues[name] = value
+	return u.qualifyEnvironmentValue(runtimeName, name, value, assignment)
+}
+
+func (u *parsedLaunchUnit) qualifyEnvironmentValue(runtimeName, name, value, assignment string) error {
 	switch name {
 	case "CUDA_VISIBLE_DEVICES":
 		if !control.ValidGPUUUID(value) {
@@ -103,12 +116,7 @@ func (u *parsedLaunchUnit) applySafeEnvironment(runtimeName, assignment string) 
 		if u.cleanupEnvironment {
 			return nil
 		}
-		for _, path := range strings.Split(value, ":") {
-			if err := qualifyEnvironmentSearchPath(path); err != nil {
-				return environmentError(name, "requires absolute clean root-owned executable directories; aliases must be root-owned and resolve into trusted directories with no group/world writes")
-			}
-		}
-		return nil
+		return qualifyEnvironmentSearchPaths(name, value)
 	default:
 		if runtimeName == "ollama" && strings.HasPrefix(name, "OLLAMA_") {
 			if err := u.applyOllamaEnvironment(assignment); err == nil {
@@ -119,21 +127,26 @@ func (u *parsedLaunchUnit) applySafeEnvironment(runtimeName, assignment string) 
 	}
 }
 
+func qualifyEnvironmentSearchPaths(name, value string) error {
+	for _, path := range strings.Split(value, ":") {
+		if err := qualifyEnvironmentSearchPath(path); err != nil {
+			return environmentError(name, "requires absolute clean root-owned executable directories; aliases must be root-owned and resolve into trusted directories with no group/world writes")
+		}
+	}
+	return nil
+}
+
 // Descriptor-relative metadata inspection does not read credentials or follow
 // symlinks. The source principal policy remains unchanged for all path parts.
 func qualifyEnvironmentPath(path string, file, rootOnly bool) error {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.ContainsAny(path, launchExpansionCharacters) {
 		return ErrLaunchUnsupported
 	}
-	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	fd, err := openEnvironmentRoot()
 	if err != nil {
-		return ErrLaunchUnsupported
+		return err
 	}
 	defer func() { unix.Close(fd) }()
-	var rootStat unix.Stat_t
-	if unix.Fstat(fd, &rootStat) != nil || rootStat.Uid != 0 || rootStat.Mode&0022 != 0 {
-		return ErrLaunchUnsupported
-	}
 	if file && path == "/" {
 		return ErrLaunchUnsupported
 	}
@@ -153,20 +166,40 @@ func qualifyEnvironmentPath(path string, file, rootOnly bool) error {
 		}
 		unix.Close(fd)
 		fd = next
-		var stat unix.Stat_t
-		if unix.Fstat(fd, &stat) != nil {
+		if err := qualifyEnvironmentComponent(fd, i, len(parts), leaf && file, rootOnly); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func openEnvironmentRoot() (int, error) {
+	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return -1, ErrLaunchUnsupported
+	}
+	var stat unix.Stat_t
+	if unix.Fstat(fd, &stat) != nil || stat.Uid != 0 || stat.Mode&0022 != 0 {
+		unix.Close(fd)
+		return -1, ErrLaunchUnsupported
+	}
+	return fd, nil
+}
+
+func qualifyEnvironmentComponent(fd, index, count int, file, rootOnly bool) error {
+	var stat unix.Stat_t
+	if unix.Fstat(fd, &stat) != nil {
+		return ErrLaunchUnsupported
+	}
+	if rootOnly {
+		if stat.Uid != 0 || stat.Mode&0022 != 0 {
 			return ErrLaunchUnsupported
 		}
-		if rootOnly {
-			if stat.Uid != 0 || stat.Mode&0022 != 0 {
-				return ErrLaunchUnsupported
-			}
-		} else if !trustedLaunchSourceComponent(stat, i, len(parts)+1) {
-			return ErrLaunchUnsupported
-		}
-		if leaf && file && (stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Mode&0444 == 0) {
-			return ErrLaunchUnsupported
-		}
+	} else if !trustedLaunchSourceComponent(stat, index, count+1) {
+		return ErrLaunchUnsupported
+	}
+	if file && (stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Mode&0444 == 0) {
+		return ErrLaunchUnsupported
 	}
 	return nil
 }

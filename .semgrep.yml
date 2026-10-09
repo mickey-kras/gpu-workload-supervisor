@@ -1,4 +1,20 @@
 rules:
+  - id: go.setup-shared-literals
+    message: Use a named constant for the shared ExecStart directive or inspection-failed status.
+    languages: [go]
+    severity: ERROR
+    paths:
+      include:
+        - /internal/setup/*.go
+      exclude:
+        - '*_test.go'
+    options:
+      constant_propagation: false
+    patterns:
+      - pattern-either:
+          - pattern: '"ExecStart="'
+          - pattern: '"inspection-failed"'
+      - pattern-not-inside: const $NAME = $VALUE
   - id: go.exec-shell
     message: Do not execute shell commands with untrusted input.
     languages: [go]

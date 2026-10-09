@@ -14,6 +14,7 @@ const REQUIRED_FILES = [
   'release-version.json', '.github/scripts/policy-release.cjs',
   '.github/scripts/pr-branch-updater.cjs', 'sonar-project.properties',
   '.github/scripts/package.json', '.github/scripts/package-lock.json',
+  '.github/scripts/eslint.config.cjs', '.github/semgrep-tests/maintainability.go',
   '.github/aislop/package.json', '.github/aislop/package-lock.json',
   '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
   '.goreleaser.yaml', '.testcoverage.yml',
@@ -159,6 +160,20 @@ function inspectCi(files, workflows, failures, checks) {
     'go run github.com/vladopajic/go-test-coverage/v2@v2.19.0 --config=.testcoverage.yml',
   ]);
   step(ci, 'checks', 'Go vet', { run: ['go vet ./...'] });
+  step(ci, 'checks', 'Go cognitive complexity');
+  exactRun(ci, 'checks', 'Go cognitive complexity', [
+    "go run github.com/uudashr/gocognit/cmd/gocognit@v1.3.0 -over 15 -test=false -ignore '(^|/)(\\.github|docs|node_modules)/' .",
+  ]);
+  step(ci, 'checks', 'JavaScript maintainability');
+  exactRun(ci, 'checks', 'JavaScript maintainability', [
+    '.github/scripts/node_modules/.bin/eslint --config .github/scripts/eslint.config.cjs --max-warnings 0 .',
+  ]);
+  step(ci, 'checks', 'Test setup shared-literal rule');
+  exactRun(ci, 'checks', 'Test setup shared-literal rule', [
+    'docker run --rm -v "${PWD}:/src" -w /src \\',
+    'semgrep/semgrep:1.172.0@sha256:65dcd4408adda7c183a6b4550cb1e9b19f7f627a6fbb7e0559bd466bedc44d7b \\',
+    'semgrep --test --config .semgrep.yml .github/semgrep-tests/maintainability.go',
+  ]);
   inspectGoReleaser({ files, workflows, failures, checks, path: ci, jobId: 'checks', builds: [
     ['Validate GoReleaser configuration', 'check'], ['Build snapshot artifacts', 'release --snapshot --clean'],
   ] });
@@ -273,6 +288,12 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
 }
 
 function inspectScannerConfigs(files, failures) {
+  // Validate PR config bytes as data; the trusted guard must never execute it.
+  const eslintConfig = files['.github/scripts/eslint.config.cjs'] || '';
+  if (createHash('sha256').update(eslintConfig).digest('hex') !==
+      '72d5ad0cda934ad013c3b1ddb62bf6aa1b5a65caa457f18c5f6725ea93e48f31') {
+    failures.push('JavaScript maintainability policy was changed');
+  }
   try {
     const raw = files['.github/dependency-review-config.yml'];
     const config = YAML.parse(raw, { uniqueKeys: true });
@@ -304,6 +325,18 @@ function inspectScannerConfigs(files, failures) {
     const shell = rules.find(rule => rule.id === 'go.exec-shell');
     const tls = rules.find(rule => rule.id === 'go.tls-insecure');
     const injection = rules.find(rule => rule.id === 'github-actions.shell-injection');
+    const sharedLiterals = rules.find(rule => rule.id === 'go.setup-shared-literals');
+    if (JSON.stringify(sharedLiterals) !== JSON.stringify({
+      id: 'go.setup-shared-literals',
+      message: 'Use a named constant for the shared ExecStart directive or inspection-failed status.',
+      languages: ['go'], severity: 'ERROR',
+      paths: { include: ['/internal/setup/*.go'], exclude: ['*_test.go'] },
+      options: { constant_propagation: false },
+      patterns: [
+        { 'pattern-either': [{ pattern: '"ExecStart="' }, { pattern: '"inspection-failed"' }] },
+        { 'pattern-not-inside': 'const $NAME = $VALUE' },
+      ],
+    })) failures.push('Setup shared-literal policy was weakened');
     if (shell?.severity !== 'ERROR' || shell.pattern !== 'exec.Command("sh", "-c", ...)' ||
         tls?.severity !== 'ERROR' || tls.pattern !== 'tls.Config{..., InsecureSkipVerify: true, ...}' ||
         injection?.severity !== 'ERROR' || injection.patterns?.length !== 3 ||

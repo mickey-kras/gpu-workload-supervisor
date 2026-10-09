@@ -56,7 +56,7 @@ func TrustedDirectory(path string) error {
 			return err
 		}
 		uid := info.Sys().(*syscall.Stat_t).Uid
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || (info.Mode().Perm()&0022 != 0 && !(current != path && uid == 0 && info.Mode()&os.ModeSticky != 0)) || (uid != 0 && uid != uint32(os.Geteuid())) || (current == path && uid != uint32(os.Geteuid())) {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || (info.Mode().Perm()&0022 != 0 && !trustedStickyAncestor(info, current != path, uid)) || (uid != 0 && uid != uint32(os.Geteuid())) || (current == path && uid != uint32(os.Geteuid())) {
 			return fmt.Errorf("untrusted directory %s", current)
 		}
 		if current == "/" {
@@ -65,6 +65,10 @@ func TrustedDirectory(path string) error {
 	}
 	return nil
 }
+func trustedStickyAncestor(info os.FileInfo, ancestor bool, uid uint32) bool {
+	return ancestor && uid == 0 && info.Mode()&os.ModeSticky != 0
+}
+
 func digest(data []byte) string { hash := sha256.Sum256(data); return hex.EncodeToString(hash[:]) }
 func privateRead(path string) ([]byte, error) {
 	file, err := deployment.OpenPrivate(path)

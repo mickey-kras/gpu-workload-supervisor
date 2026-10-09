@@ -75,7 +75,17 @@ class SetupWindow {
         const group = createProfileEditor({current, Adw, Gtk, GLib, units: this.units, field: this.field, invalidate: this.invalidate,
             applicationRuntime: this.profileApps.get(current.id),
             onLabelEdit: label => this.editedLabels.set(current, label),
-            onRemove: group => { this.profiles.splice(this.profiles.indexOf(current), 1); if (this.applicationSettings?.profileRows?.includes(group)) { this.draftRows.remove(group); this.applicationSettings.profileRows = this.applicationSettings.profileRows.filter(row => row !== group); } else this.rows.remove(group); this.profileRows.delete(current); this.invalidate(); },
+            onRemove: group => {
+                this.profiles.splice(this.profiles.indexOf(current), 1);
+                if (this.applicationSettings?.profileRows?.includes(group)) {
+                    this.draftRows.remove(group);
+                    this.applicationSettings.profileRows = this.applicationSettings.profileRows.filter(row => row !== group);
+                } else {
+                    this.rows.remove(group);
+                }
+                this.profileRows.delete(current);
+                this.invalidate();
+            },
             onEdit: draft => { const editor = this.appendDraft(draft, current, true); if (this.applicationSettings && editor) this.openApplicationSettings(editor, this.applicationSettings.origin); }});
         this.rows.append(group); this.profileRows.set(current, group); return current;
     }
@@ -345,7 +355,9 @@ class SetupWindow {
         const state = states[selected.instanceStatus];
         if (state) return state;
         if (selected.configurationStatus === 'model-required') return 'Installed · Choose an existing model';
-        return selected.instanceStatus === 'not-running' ? 'Installed and stopped. Ready to configure.' : selected.instanceStatus === 'installed' ? 'Installed · Preview a managed launch' : 'Detected';
+        if (selected.instanceStatus === 'not-running') return 'Installed and stopped. Ready to configure.';
+        if (selected.instanceStatus === 'installed') return 'Installed · Preview a managed launch';
+        return 'Detected';
     }
 
     invalidate() {
