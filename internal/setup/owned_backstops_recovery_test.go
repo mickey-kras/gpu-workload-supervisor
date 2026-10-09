@@ -289,7 +289,7 @@ func TestLegacyOwnedPrefenceJournalProofGuards(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if scenario == "matching-writes" {
+			if scenario == "matching-writes" || scenario == "missing-unit" {
 				if !reflect.DeepEqual(prepared, request) {
 					t.Fatal("matching legacy writes derived dependencies")
 				}

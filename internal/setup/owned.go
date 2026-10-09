@@ -147,9 +147,7 @@ func prepareOwnedBackstops(request Request) (Request, error) {
 	return request, nil
 }
 
-// An interrupted activation is an immutable transaction, including legacy unit
-// hashes. Defer new dependencies until that exact activation has completed;
-// otherwise recovery's equality and file-proof guards reject the original retry.
+// Preserve recorded activation renders during recovery.
 func prepareOwnedBackstopsForActivation(home string, request Request) (Request, error) {
 	candidate, err := prepareOwnedBackstops(request)
 	if err != nil {
@@ -161,66 +159,106 @@ func prepareOwnedBackstopsForActivation(home string, request Request) (Request, 
 		return request, err
 	}
 	if marker.Maintenance {
-		if err := requireMatchingActivation(root, request); err != nil {
+		saved, err := privateRead(filepath.Join(root, "activation.json"))
+		if err != nil {
 			return request, err
 		}
-		return request, nil
+		return selectRecordedActivation(saved, request, candidate)
 	}
 	journal, present, err := readOwnedUnitJournal(root)
 	if err != nil {
 		return request, err
 	}
 	if present && journal.StatePath == request.Profile.StatePath {
-		// Unit writes precede activation.json and the maintenance fence. The
-		// pending journal can therefore be the only proof of a legacy retry,
-		// or coexist with a stale record from a previous completed activation.
-		// Matching its complete write set only postpones dependency derivation;
-		// it does not establish full-request identity or bypass recovery guards.
-		if pendingOwnedWritesMatch(journal, request) {
-			return request, nil
+		for _, retry := range []Request{request, candidate} {
+			matches, err := pendingOwnedRetryUnits(home, journal, retry)
+			if err != nil {
+				return request, err
+			}
+			if matches {
+				return retry, nil
+			}
 		}
-		// A crash after the maintenance fence clears can still leave the
-		// committed journal unfinished. Preserve an exact original retry then
-		// too. A stale activation record must not block a different new plan.
 		saved, err := privateRead(filepath.Join(root, "activation.json"))
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return request, err
 		}
 		if err == nil {
-			var progress activation
-			if err := json.Unmarshal(saved, &progress); err != nil {
-				return request, err
+			matched, err := selectRecordedActivation(saved, request, candidate)
+			if err == nil {
+				return matched, nil
 			}
-			original, _ := json.Marshal(progress.Request)
-			requested, _ := json.Marshal(request)
-			if digest(original) == digest(requested) {
-				return request, nil
+			var progress activation
+			if decodeErr := json.Unmarshal(saved, &progress); decodeErr != nil {
+				return request, decodeErr
 			}
 		}
 	}
 	return candidate, nil
 }
 
-// planOwnedUnitWrites journals every unique requested owned unit, including
-// unchanged units, before any filesystem effects. The caller has already
-// verified each incoming spec/fingerprint through prepareOwnedBackstops.
-func pendingOwnedWritesMatch(journal unitJournal, request Request) bool {
-	if journal.Phase != ownedJournalPending || len(journal.Writes) == 0 {
-		return false
+// Both forms must pass the existing serialized-request equality contract.
+func selectRecordedActivation(saved []byte, request, candidate Request) (Request, error) {
+	var progress activation
+	if err := json.Unmarshal(saved, &progress); err != nil {
+		return request, err
 	}
-	writes := map[string]string{}
+	recorded, _ := json.Marshal(progress.Request)
+	for _, retry := range []Request{request, candidate} {
+		encoded, _ := json.Marshal(retry)
+		if digest(recorded) == digest(encoded) {
+			return retry, nil
+		}
+	}
+	return request, errors.New("interrupted activation must resume its original request")
+}
+
+// Pruned journals omit units whose writes never landed.
+func pendingOwnedRetryUnits(home string, journal unitJournal, request Request) (bool, error) {
+	if journal.Phase != ownedJournalPending || len(journal.Writes) == 0 {
+		return false, nil
+	}
+	requested := map[string]control.WorkloadProfile{}
 	for _, p := range request.Catalog.Profiles {
 		if p.NativeModel != nil && p.NativeModel.Owned != nil {
-			writes[p.Unit] = p.NativeModel.LaunchSHA256
+			requested[p.Unit] = p
 		}
 	}
-	if len(writes) != len(journal.Writes) {
-		return false
-	}
-	for unit, hash := range writes {
-		if journal.Writes[unit] != hash {
-			return false
+	for unit, hash := range journal.Writes {
+		p, found := requested[unit]
+		if !found || p.NativeModel.LaunchSHA256 != hash {
+			return false, nil
 		}
 	}
-	return true
+	if len(requested) == len(journal.Writes) {
+		return true, nil
+	}
+	accepted, err := ReadCatalog(context.Background(), request.Profile.StatePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	for unit, p := range requested {
+		if _, journaled := journal.Writes[unit]; journaled {
+			continue
+		}
+		raw, fileErr := privateRead(filepath.Join(ownedUnitDirectory(home), unit))
+		if fileErr != nil && !errors.Is(fileErr, os.ErrNotExist) {
+			return false, fileErr
+		}
+		prior, found := ownedProfileForUnit(accepted.Catalog, unit)
+		if !found {
+			if accepted.Revision == "" && errors.Is(fileErr, os.ErrNotExist) {
+				continue
+			}
+			return false, nil
+		}
+		proof, err := ownedRenderChecked(prior)
+		if err != nil {
+			return false, err
+		}
+		if digest(proof) != p.NativeModel.LaunchSHA256 || (fileErr == nil && digest(raw) != digest(proof)) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
