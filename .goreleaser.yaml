@@ -64,6 +64,7 @@ nfpms:
       - gjs
       - gir1.2-gtk-4.0
       - gir1.2-adw-1
+      - librsvg2-common
       - gnome-shell (>= 50)
       - gnome-shell (<< 51)
       - systemd
@@ -84,6 +85,15 @@ nfpms:
         dst: /usr/share/gpu-workload-supervisor/discovery-ui.mjs
       - src: clients/setup/review.mjs
         dst: /usr/share/gpu-workload-supervisor/review.mjs
+      - src: clients/setup/setup-layout.mjs
+        dst: /usr/share/gpu-workload-supervisor/setup-layout.mjs
+      - src: clients/setup/setup-window.mjs
+        dst: /usr/share/gpu-workload-supervisor/setup-window.mjs
+      - src: clients/setup/presentation.mjs
+        dst: /usr/share/gpu-workload-supervisor/presentation.mjs
+      - src: clients/setup/icons/
+        dst: /usr/share/gpu-workload-supervisor/icons/
+        type: tree
       - src: clients/setup/setup.js
         dst: /usr/share/gpu-workload-supervisor/setup.js
       - src: clients/setup/gpu-workload-supervisor-setup.desktop

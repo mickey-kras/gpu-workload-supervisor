@@ -107,7 +107,7 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 const ui = await launch({responses: {discover: {request: input.request, units: [], applications: [{app: input.draft.app,
     label: 'Other address', instanceStatus: 'not-running', endpoint: 'http://127.0.0.1:9100'}]},
     drafts: {drafts: [input.draft]}}, deferAction: 'unused'});
-ui.by('Configure ' + (input.draft.app === 'vllm' ? 'vLLM' : input.draft.app === 'ollama' ? 'Ollama' : 'llama.cpp')).emit('clicked');
+ui.by('Settings for ' + (input.draft.app === 'vllm' ? 'vLLM' : input.draft.app === 'ollama' ? 'Ollama' : 'llama.cpp')).emit('clicked');
 if (input.selection === 'detected') ui.edit(ui.by('Detected instance'), 'selected', 1);
 else ui.edit(ui.by('Application address'), 'text', 'http://127.0.0.1:9100');
 await ui.by('Save selections for later').emit('clicked');

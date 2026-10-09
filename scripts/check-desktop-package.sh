@@ -4,6 +4,7 @@ package="${1:?usage: check-desktop-package.sh package.deb}"
 test "$(dpkg-deb --field "$package" Package)" = gpu-workload-supervisor
 case "$(dpkg-deb --field "$package" Architecture)" in amd64|arm64) ;; *) exit 1;; esac
 depends="$(dpkg-deb --field "$package" Depends)"
+[[ "$depends" == *'librsvg2-common'* ]]
 [[ "$depends" == *'gnome-shell (>= 50)'* && "$depends" == *'gnome-shell (<< 51)'* ]]
 root="$(mktemp -d)"
 trap 'rm -rf "$root"' EXIT
@@ -20,7 +21,7 @@ node "$(dirname "${BASH_SOURCE[0]}")/desktop-version.cjs" "$version" "${releases
 for file in extension.js metadata.json model.js contract.js transport.js framing.js dialogs.js; do
   test -s "$root/usr/share/gnome-shell/extensions/gpu-workload-supervisor@local/$file"
 done
-for file in usr/share/gpu-workload-supervisor/setup.js usr/share/gpu-workload-supervisor/review.mjs usr/share/gpu-workload-supervisor/onboarding.mjs usr/share/gpu-workload-supervisor/discovery-ui.mjs usr/share/gpu-workload-supervisor/discovery-inputs.mjs usr/share/gpu-workload-supervisor/launch-ui.mjs usr/share/gpu-workload-supervisor/temporary-discovery-ui.mjs usr/share/gpu-workload-supervisor/profile-ui.mjs usr/share/applications/gpu-workload-supervisor-setup.desktop usr/lib/systemd/user/gpu-workload-supervisor-reconcile.service usr/lib/systemd/user/gpu-workload-supervisor-idle.service usr/lib/systemd/user/gpu-workload-supervisor-idle.timer usr/share/doc/gpu-workload-supervisor/copyright; do
+for file in usr/share/gpu-workload-supervisor/setup-layout.mjs usr/share/gpu-workload-supervisor/setup-window.mjs usr/share/gpu-workload-supervisor/presentation.mjs usr/share/gpu-workload-supervisor/icons/comfyui.png usr/share/gpu-workload-supervisor/icons/llama-cpp.svg usr/share/gpu-workload-supervisor/icons/ollama.svg usr/share/gpu-workload-supervisor/icons/vllm.png usr/share/gpu-workload-supervisor/icons/LICENSES.md usr/share/gpu-workload-supervisor/setup.js usr/share/gpu-workload-supervisor/review.mjs usr/share/gpu-workload-supervisor/onboarding.mjs usr/share/gpu-workload-supervisor/discovery-ui.mjs usr/share/gpu-workload-supervisor/discovery-inputs.mjs usr/share/gpu-workload-supervisor/launch-ui.mjs usr/share/gpu-workload-supervisor/temporary-discovery-ui.mjs usr/share/gpu-workload-supervisor/profile-ui.mjs usr/share/applications/gpu-workload-supervisor-setup.desktop usr/lib/systemd/user/gpu-workload-supervisor-reconcile.service usr/lib/systemd/user/gpu-workload-supervisor-idle.service usr/lib/systemd/user/gpu-workload-supervisor-idle.timer usr/share/doc/gpu-workload-supervisor/copyright; do
   test -s "$root/$file"
 done
 # Preserve architecture and dependency paths: multiple dependencies ship a file

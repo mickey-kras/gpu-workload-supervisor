@@ -20,7 +20,7 @@ test('managed launch is previewed without fingerprinting a nonexistent unit or s
     assert.equal(reviewed.catalog.version, 2);
     assert.ok(ui.calls.filter(call => ['verify-bindings', 'validate'].includes(call.argv[1])).every(call => JSON.parse(call.input).catalog.version === 2));
     assert.ok(!ui.calls.some(call => ['fingerprint', 'apply'].includes(call.argv[1])));
-    assert.ok(ui.widgets.some(widget => widget.label?.includes('Allow GPU Workload Supervisor')));
+    assert.ok(ui.widgets.some(widget => widget.label?.includes('Finish setup allows Supervisor to start and stop')));
 
 
     await ui.by('Finish setup').emit('clicked');

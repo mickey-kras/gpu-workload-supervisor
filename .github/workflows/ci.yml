@@ -20,6 +20,20 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Install native setup fixture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y gjs gir1.2-gtk-4.0 gir1.2-adw-1 xvfb xauth dbus-x11 xdotool imagemagick python3-pyatspi at-spi2-core gsettings-desktop-schemas librsvg2-common
+      - name: Native GTK setup, accessibility and screenshot matrix
+        run: python3 tests/desktop/setup_native.py --output native-setup-evidence
+      - name: Upload native setup evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: native-setup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: native-setup-evidence/
+          if-no-files-found: error
+          retention-days: 14
       - id: go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
