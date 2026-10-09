@@ -9,6 +9,7 @@ import json
 import os
 import pathlib
 import subprocess
+import sys
 
 
 def main():
@@ -17,6 +18,7 @@ def main():
     parser.add_argument('--quick', action='store_true', help='Run the representative light 620x670 case only')
     args = parser.parse_args()
     root = pathlib.Path(__file__).resolve().parents[2]
+    subprocess.run([sys.executable, str(root / 'tests/desktop/test_setup_accessibility.py')], check=True)
     output = args.output.resolve()
     cases = [('light', 620, 670, 1)] if args.quick else [
         (theme, width, height, scale)
