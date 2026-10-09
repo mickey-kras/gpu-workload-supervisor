@@ -26,19 +26,20 @@ def model_tree(focus=True):
 
 
 class ReadinessTests(unittest.TestCase):
-    def observe(self, samples, output):
+    def observe(self, samples, output, advance_seconds=1, sample_seconds=0, timeout=2):
         observed = []
+        ticks = [0]
         def sample():
             tree = samples[min(len(observed), len(samples) - 1)]
             observed.append(tree)
             output.write_text(json.dumps(tree))
+            ticks[0] += sample_seconds
             return tree
-        ticks = [0]
         def advance():
-            ticks[0] += 1
+            ticks[0] += advance_seconds
         attempts = accessibility.observe_until_ready(sample,
             lambda tree: accessibility.validate_tree(tree, 'models', 'Continue'),
-            advance, timeout=2, clock=lambda: ticks[0])
+            advance, timeout=timeout, clock=lambda: ticks[0])
         return attempts, observed
 
     def test_incomplete_initial_tree_requires_complete_content_and_focus(self):
@@ -65,6 +66,22 @@ class ReadinessTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, 'Continue'):
                 self.observe([unfocused], output)
             self.assertEqual(json.loads(output.read_text()), unfocused)
+
+    def test_complete_snapshot_after_blocking_sample_misses_deadline(self):
+        complete = model_tree()
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory) / 'snapshot.json'
+            with self.assertRaisesRegex(AssertionError, 'after deadline'):
+                self.observe([complete], output, sample_seconds=4, timeout=3)
+            self.assertEqual(json.loads(output.read_text()), complete)
+
+    def test_complete_snapshot_after_slow_advance_misses_deadline(self):
+        complete = model_tree()
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory) / 'snapshot.json'
+            with self.assertRaisesRegex(AssertionError, 'after deadline'):
+                self.observe([model_tree(focus=False), complete], output, advance_seconds=4, timeout=3)
+            self.assertEqual(json.loads(output.read_text()), complete)
 
 
 if __name__ == '__main__':

@@ -61,10 +61,13 @@ def observe_until_ready(sample, validate, advance, timeout=3.0, clock=time.monot
         attempts += 1
         try:
             validate(tree)
-            return attempts
         except AssertionError as error:
             if clock() >= deadline:
                 raise AssertionError(f'AT-SPI tree did not become ready: {error}') from error
+        else:
+            if clock() > deadline:
+                raise AssertionError('AT-SPI complete observation arrived after deadline')
+            return attempts
         advance()
 
 
