@@ -203,6 +203,11 @@ func TestNearLimitLegacyOwnedCatalogUpgradesOnlyOnApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Accepted integration files carry the transaction's exact byte ownership
+	// proof; a manually written catalog without this manifest is foreign.
+	if err := writeJSON(filepath.Join(root, manifestName), ownership{Version: 1, Files: map[string]string{"catalog.json": digest(legacyFile)}}); err != nil {
+		t.Fatal(err)
+	}
 	for unit, raw := range legacyUnits {
 		if err := os.WriteFile(filepath.Join(ownedUnitDirectory(home), unit), raw, 0600); err != nil {
 			t.Fatal(err)
