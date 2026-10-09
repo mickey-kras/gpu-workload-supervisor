@@ -134,8 +134,11 @@ printf '%s' '{"app":"llama.cpp","reference":"/models/model.gguf","referenceKind"
 `endpoint` or `reference`. `referenceKind` accepts `application`, `configuration`,
 `model-file`, `model-directory`. Endpoint values are loopback HTTP(S) origins,
 without credentials, path, query or fragment. References must be absolute clean
-paths; only regular files and directories are accepted. File contents are not
-executed or inspected, and directories are not enumerated.
+paths. Ollama, llama.cpp and vLLM `application` selections permit executable
+aliases only when the target and every link hop pass executable trust checks.
+Configuration, model, directory and ComfyUI references accept only regular files
+or directories and reject symbolic links. File contents are not executed or
+inspected, and directories are not enumerated.
 
 | Application | Read-only observations |
 | --- | --- |
