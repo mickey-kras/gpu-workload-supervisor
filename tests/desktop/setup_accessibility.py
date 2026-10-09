@@ -4,6 +4,7 @@ import json
 import pathlib
 import sys
 import time
+from collections.abc import Callable
 
 import pyatspi
 from gi.repository import GLib
@@ -71,46 +72,68 @@ def observe_until_ready(sample, validate, advance, timeout=3.0, clock=time.monot
         advance()
 
 
+def sample_in_main_context(sample: Callable[[], list[dict[str, str | bool]]]) -> list[dict[str, str | bool]]:
+    """Acquire and traverse native proxies within a GLib dispatch callback."""
+    tree: list[dict[str, str | bool]] = []
+    error: BaseException | None = None
+    completed = False
+    def inspect() -> bool:
+        nonlocal tree, error, completed
+        try:
+            # libatspi's synchronous external RPC path otherwise dispatches
+            # pending D-Bus messages when g_main_depth() is zero, including while
+            # desktop proxies are being initialized. Avoid that inline dispatch.
+            tree = sample()
+        except BaseException as caught:
+            # GLib logs callback exceptions instead of propagating them to main.
+            error = caught
+        finally:
+            completed = True
+        return GLib.SOURCE_REMOVE
+    context = GLib.MainContext.default()
+    source = GLib.idle_add(inspect)
+    try:
+        while not completed:
+            context.iteration(True)
+    finally:
+        if not completed:
+            GLib.source_remove(source)
+    if error is not None:
+        raise error
+    return tree
+
+
 def main() -> None:
     output = pathlib.Path(sys.argv[1])
     screen = sys.argv[2]
     desktop = None
-    listener_registered = False
-    def tree_changed(_event: object) -> None:
-        # Readiness is decided from complete snapshots, not individual events.
-        pass
-    def sample() -> list[dict[str, str | bool]]:
-        nonlocal desktop, listener_registered
+    def read_tree() -> list[dict[str, str | bool]]:
+        nonlocal desktop
         if desktop is None:
-            # RegisterEvent synchronizes with the registry before libatspi creates
-            # its desktop singleton and records the registry's unique-name alias.
-            # Do this inside the first sample so initialization uses the deadline.
-            listener_registered = True
-            pyatspi.Registry.registerEventListener(tree_changed, 'object:children-changed')
             desktop = pyatspi.Registry.getDesktop(0)
-        tree = []
+        tree: list[dict[str, str | bool]] = []
         visit(desktop, tree)
         # Retain the latest actual tree even when readiness never arrives.
         output.write_text(json.dumps(tree, indent=2) + '\n')
         return tree
-    try:
-        if screen == 'diagnostic':
-            print('DIAGNOSTIC: focused AT-SPI nodes:', [node for node in sample() if node['showing'] and node['focused']])
-            return
-        expected_focus = sys.argv[3]
-        disclosure = sys.argv[4] if len(sys.argv) > 4 else None
-        def advance():
-            context = GLib.MainContext.default()
-            for _ in range(100):
-                if not context.pending():
-                    break
-                context.iteration(False)
-            time.sleep(0.03)
-        attempts = observe_until_ready(sample, lambda tree: validate_tree(tree, screen, expected_focus, disclosure), advance)
-        print(f'PASS: AT-SPI {screen} content and focused {expected_focus} ({attempts} observations)')
-    finally:
-        if listener_registered:
-            pyatspi.Registry.deregisterEventListener(tree_changed, 'object:children-changed')
+    def sample() -> list[dict[str, str | bool]]:
+        # observe_until_ready starts its deadline before this callback is queued,
+        # so desktop initialization and traversal consume the same fixed budget.
+        return sample_in_main_context(read_tree)
+    if screen == 'diagnostic':
+        print('DIAGNOSTIC: focused AT-SPI nodes:', [node for node in sample() if node['showing'] and node['focused']])
+        return
+    expected_focus = sys.argv[3]
+    disclosure = sys.argv[4] if len(sys.argv) > 4 else None
+    def advance():
+        context = GLib.MainContext.default()
+        for _ in range(100):
+            if not context.pending():
+                break
+            context.iteration(False)
+        time.sleep(0.03)
+    attempts = observe_until_ready(sample, lambda tree: validate_tree(tree, screen, expected_focus, disclosure), advance)
+    print(f'PASS: AT-SPI {screen} content and focused {expected_focus} ({attempts} observations)')
 
 
 if __name__ == '__main__':
