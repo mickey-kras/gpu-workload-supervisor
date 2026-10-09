@@ -77,14 +77,21 @@ type CatalogSnapshot struct {
 	Catalog  Catalog `json:"catalog"`
 }
 
+// MaxCatalogBytes accommodates the bounded 32-profile catalog including the
+// per-owned-unit peer graph. The same limit guards file, database and struct
+// inputs so a successfully stored catalog can always be read back.
+const MaxCatalogBytes = 256 * 1024
+
+var ErrCatalogTooLarge = errors.New("catalog exceeds 256 KiB")
+
 func DecodeCatalog(r io.Reader) (Catalog, error) {
 	var c Catalog
-	raw, err := io.ReadAll(io.LimitReader(r, 65537))
+	raw, err := io.ReadAll(io.LimitReader(r, MaxCatalogBytes+1))
 	if err != nil {
 		return c, err
 	}
-	if len(raw) > 65536 {
-		return c, errors.New("catalog exceeds 64 KiB")
+	if len(raw) > MaxCatalogBytes {
+		return c, ErrCatalogTooLarge
 	}
 	return DecodeCatalogBytes(raw)
 }
@@ -94,6 +101,9 @@ func DecodeCatalog(r io.Reader) (Catalog, error) {
 // rejection, a single JSON value, and full validation.
 func DecodeCatalogBytes(raw []byte) (Catalog, error) {
 	var c Catalog
+	if len(raw) > MaxCatalogBytes {
+		return c, ErrCatalogTooLarge
+	}
 	if err := strictjson.Check(json.NewDecoder(bytes.NewReader(raw))); err != nil {
 		if errors.Is(err, strictjson.ErrDuplicateKey) {
 			return c, errors.New("duplicate catalog key")
@@ -140,6 +150,13 @@ func (c Catalog) Clone() Catalog {
 	return c
 }
 func (c Catalog) Validate() error {
+	encoded, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > MaxCatalogBytes {
+		return ErrCatalogTooLarge
+	}
 	if c.Version != 1 && c.Version != 2 {
 		return errors.New("unsupported catalog version")
 	}

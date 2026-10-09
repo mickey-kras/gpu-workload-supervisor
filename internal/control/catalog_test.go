@@ -179,3 +179,29 @@ func TestCatalogSharedOllamaUnit(t *testing.T) {
 		})
 	}
 }
+
+func TestCatalogSerializationSizeBoundary(t *testing.T) {
+	c := validCatalog()
+	raw, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	atLimit := string(raw) + strings.Repeat(" ", MaxCatalogBytes-len(raw))
+	if _, err := DecodeCatalog(strings.NewReader(atLimit)); err != nil {
+		t.Fatalf("at-limit stream: %v", err)
+	}
+	if _, err := DecodeCatalogBytes([]byte(atLimit)); err != nil {
+		t.Fatalf("at-limit bytes: %v", err)
+	}
+	aboveLimit := atLimit + " "
+	if _, err := DecodeCatalog(strings.NewReader(aboveLimit)); !errors.Is(err, ErrCatalogTooLarge) {
+		t.Fatalf("oversized stream: %v", err)
+	}
+	if _, err := DecodeCatalogBytes([]byte(aboveLimit)); !errors.Is(err, ErrCatalogTooLarge) {
+		t.Fatalf("oversized bytes: %v", err)
+	}
+	c.Profiles[0].Label = strings.Repeat("x", MaxCatalogBytes)
+	if err := c.Validate(); !errors.Is(err, ErrCatalogTooLarge) {
+		t.Fatalf("oversized struct: %v", err)
+	}
+}

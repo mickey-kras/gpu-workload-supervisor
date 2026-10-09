@@ -120,6 +120,13 @@ func TestSetupOwnedBackstopsSharedAndExternalUnits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !reflect.DeepEqual(decoded, request) {
+		t.Fatal("decode changed original request")
+	}
+	decoded, err = prepareOwnedBackstops(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if decoded.Catalog.Profiles[0].NativeModel.Owned.Conflicts != media.Unit || decoded.Catalog.Profiles[3].NativeModel.Owned.Conflicts != media.Unit || decoded.Catalog.Profiles[2].NativeModel.Owned.Conflicts != chat.Unit {
 		t.Fatal("shared/foreign dependencies", decoded.Catalog)
 	}

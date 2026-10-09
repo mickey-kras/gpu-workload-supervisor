@@ -673,9 +673,11 @@ func TestSystemdOwnedBackstopsNormalRapidSwitchingAndFailure(t *testing.T) {
 		t.Fatalf("backstop reopened failed transition: %#v %v", state, err)
 	}
 	snapshot, err := f.manager.Observe(ctx)
-	if err != nil || snapshot.AnyActive() {
-		t.Fatalf("failure restarted old work: %#v %v", snapshot, err)
+	if err != nil || snapshot.Workloads[control.WorkloadMedia].Active || !snapshot.Workloads[control.WorkloadText].Active {
+		t.Fatalf("failure changed stopped source or failed target: %#v %v", snapshot, err)
 	}
+	// A health-failed target may remain active under closed admission. The
+	// backstop must not change that existing failure policy or restart source work.
 	for _, unit := range f.units {
 		if restarted := systemdCommand(t, "show", "--property=NRestarts", "--value", unit); restarted != "0" {
 			t.Fatalf("owned unit restarted automatically: %s %s", unit, restarted)

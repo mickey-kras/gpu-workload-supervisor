@@ -2,13 +2,16 @@ package setup
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 )
 
@@ -142,4 +145,50 @@ func prepareOwnedBackstops(request Request) (Request, error) {
 		p.NativeModel.LaunchSHA256 = digest(raw)
 	}
 	return request, nil
+}
+
+// An interrupted activation is an immutable transaction, including legacy unit
+// hashes. Defer new dependencies until that exact activation has completed;
+// otherwise recovery's equality and file-proof guards reject the original retry.
+func prepareOwnedBackstopsForActivation(home string, request Request) (Request, error) {
+	candidate, err := prepareOwnedBackstops(request)
+	if err != nil {
+		return request, err
+	}
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	marker, err := deployment.Read(request.Profile.StatePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return request, err
+	}
+	if marker.Maintenance {
+		if err := requireMatchingActivation(root, request); err != nil {
+			return request, err
+		}
+		return request, nil
+	}
+	journal, present, err := readOwnedUnitJournal(root)
+	if err != nil {
+		return request, err
+	}
+	if present && journal.StatePath == request.Profile.StatePath {
+		// A crash after the maintenance fence clears can still leave the
+		// committed journal unfinished. Preserve an exact original retry then
+		// too. A stale activation record must not block a different new plan.
+		saved, err := privateRead(filepath.Join(root, "activation.json"))
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return request, err
+		}
+		if err == nil {
+			var progress activation
+			if err := json.Unmarshal(saved, &progress); err != nil {
+				return request, err
+			}
+			original, _ := json.Marshal(progress.Request)
+			requested, _ := json.Marshal(request)
+			if digest(original) == digest(requested) {
+				return request, nil
+			}
+		}
+	}
+	return candidate, nil
 }

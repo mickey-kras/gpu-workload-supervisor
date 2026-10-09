@@ -21,13 +21,18 @@ render/spec/fingerprint chain. As with optional owned executable paths, absent
 metadata retains exact legacy version-2 unit bytes and fingerprints. Readers
 that do not recognize the field reject it through strict JSON decoding. Setup
 preview derives and displays replacement owned-unit writes; explicit Apply
-upgrades legacy units through the existing rollback/recovery journal. Removing a peer or replacing it with a separately qualified adopted binding
+upgrades legacy units through the existing rollback/recovery journal. Removing
+a peer or replacing it with a separately qualified adopted binding
 recomputes the remaining owned dependencies. An already guarded owned file does
 not qualify as adopted unchanged: dependency directives remain outside the strict
 external launch grammar, and setup does not strip them from external files.
-Runtime startup
-never silently rewrites accepted files. This additive feature needs no database
-migration; future schema changes are versioned with their own feature.
+Pending activations retain their original unit hashes through exact replay;
+the upgrade is offered in a later preview after recovery completes. Runtime
+startup never silently rewrites accepted files. This additive feature needs no
+database
+migration; future schema changes are versioned with their own feature. Catalog
+serialization is bounded at 256 KiB on validation and readback, accommodating
+the supported 32-unit peer graph within the setup request size boundary.
 
 A native router remains additive, behind a spike and demonstrated parity for
 readiness, drain, release and capacity. Existing control is retained until that

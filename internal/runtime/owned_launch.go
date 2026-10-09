@@ -19,8 +19,8 @@ var ownedBinaryDirectory = "/usr/bin"
 
 // RenderOwnedUnit deterministically renders the static systemd user unit the
 // supervisor owns for an owned launch profile. The output deliberately uses
-// only the adopt grammar subset so one verifier covers both provenances, and
-// carries no [Install] section so nothing auto-starts at login.
+// the direct launch grammar plus exactly derived owned dependency directives.
+// It carries no [Install] section so nothing auto-starts at login.
 func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 	n := p.NativeModel
 	if n == nil || n.Owned == nil {

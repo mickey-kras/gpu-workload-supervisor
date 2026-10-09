@@ -24,7 +24,7 @@ func (b Backend) VerifyBindings(ctx context.Context, request Request) error {
 }
 
 func (b Backend) verifyBindings(ctx context.Context, home string, request Request) error {
-	request, err := prepareOwnedBackstops(request)
+	request, err := prepareOwnedBackstopsForActivation(home, request)
 	if err != nil {
 		return err
 	}
