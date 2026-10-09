@@ -78,7 +78,7 @@ func Validate(request Request) error {
 		return err
 	}
 	if len(encoded) > maxSetupRequestBytes {
-		return errors.New("setup request exceeds 320 KiB")
+		return errors.New("setup request exceeds 416 KiB")
 	}
 	if request.Version != 1 || request.Profile.Version != 1 {
 		return errors.New("unsupported setup/profile version")

@@ -31,9 +31,12 @@ the upgrade is offered in a later preview after recovery completes. Runtime
 startup never silently rewrites accepted files. This additive feature needs no
 database
 migration; future schema changes are versioned with their own feature. Catalog
-serialization is bounded at 256 KiB on validation and readback, accommodating
-the supported 32-unit peer graph. Setup requests are capped at 320 KiB, reserving
-64 KiB for the deployment profile and request envelope around a maximum catalog.
+canonical input is bounded at 256 KiB excluding derived owned conflicts. A
+separate 96 KiB allowance accommodates the supported 32-unit peer graph, with
+the full serialization bounded at 352 KiB on validation and readback. Other
+fields cannot consume this derived allowance. Setup requests are capped at
+416 KiB, reserving 64 KiB for the deployment profile and request envelope around
+a maximum catalog.
 
 A native router remains additive, behind a spike and demonstrated parity for
 readiness, drain, release and capacity. Existing control is retained until that

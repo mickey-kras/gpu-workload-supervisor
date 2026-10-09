@@ -34,7 +34,9 @@ starting with a letter. `idle` and `unknown` are reserved. Labels contain at mos
 control characters and bidirectional override/isolation characters. Unit names and cgroups must be unique;
 cgroups must be absolute, clean, non-root and non-overlapping. Endpoints must use
 HTTP(S) on loopback without credentials or fragments. Unknown fields, duplicate
-JSON keys, trailing values and files larger than 256 KiB are rejected.
+JSON keys, trailing values and files larger than 352 KiB are rejected. Canonical
+catalog data excluding derived owned conflicts remains capped at 256 KiB;
+only the valid owned peer graph may use the additional 96 KiB allowance.
 
 The `systemd` adapter stops the unit and verifies its recursive cgroup is empty.
 The compatibility `media-unload` adapter also requires `releaseURL`; HTTP unload

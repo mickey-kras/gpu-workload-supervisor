@@ -200,8 +200,22 @@ func TestCatalogSerializationSizeBoundary(t *testing.T) {
 	if _, err := DecodeCatalogBytes([]byte(aboveLimit)); !errors.Is(err, ErrCatalogTooLarge) {
 		t.Fatalf("oversized bytes: %v", err)
 	}
-	c.Profiles[0].Label = strings.Repeat("x", MaxCatalogBytes)
+	c.Profiles[0].Cgroup += strings.Repeat("x", MaxCatalogInputBytes-len(raw))
+	if err := c.Validate(); err != nil {
+		t.Fatalf("at-limit canonical input: %v", err)
+	}
+	c.Profiles[0].Cgroup += "x"
 	if err := c.Validate(); !errors.Is(err, ErrCatalogTooLarge) {
 		t.Fatalf("oversized struct: %v", err)
+	}
+	oversized, err := json.Marshal(c)
+	if err != nil || len(oversized) != MaxCatalogInputBytes+1 || len(oversized) >= MaxCatalogBytes {
+		t.Fatalf("input-budget fixture size=%d: %v", len(oversized), err)
+	}
+	if _, err := DecodeCatalog(strings.NewReader(string(oversized))); !errors.Is(err, ErrCatalogTooLarge) {
+		t.Fatalf("oversized canonical stream: %v", err)
+	}
+	if _, err := DecodeCatalogBytes(oversized); !errors.Is(err, ErrCatalogTooLarge) {
+		t.Fatalf("oversized canonical bytes: %v", err)
 	}
 }

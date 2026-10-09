@@ -77,12 +77,18 @@ type CatalogSnapshot struct {
 	Catalog  Catalog `json:"catalog"`
 }
 
-// MaxCatalogBytes accommodates the bounded 32-profile catalog including the
-// per-owned-unit peer graph. The same limit guards file, database and struct
-// inputs so a successfully stored catalog can always be read back.
-const MaxCatalogBytes = 256 * 1024
+// MaxCatalogInputBytes bounds canonical catalog data excluding derived owned
+// conflicts. The separate allowance fits 32 profiles with 31 peers each,
+// including 89-byte owned Ollama unit names, spaces and JSON field overhead.
+const MaxCatalogInputBytes = 256 * 1024
+const MaxOwnedConflictBytes = 96 * 1024
 
-var ErrCatalogTooLarge = errors.New("catalog exceeds 256 KiB")
+// MaxCatalogBytes is the full wire/storage bound, including derived conflicts.
+// Validation also enforces the input budget so other fields cannot consume the
+// reserved allowance. File and database readers share the full bound.
+const MaxCatalogBytes = MaxCatalogInputBytes + MaxOwnedConflictBytes
+
+var ErrCatalogTooLarge = errors.New("catalog exceeds 256 KiB input or 352 KiB total")
 
 func DecodeCatalog(r io.Reader) (Catalog, error) {
 	var c Catalog
@@ -150,12 +156,8 @@ func (c Catalog) Clone() Catalog {
 	return c
 }
 func (c Catalog) Validate() error {
-	encoded, err := json.Marshal(c)
-	if err != nil {
+	if err := c.validateSize(); err != nil {
 		return err
-	}
-	if len(encoded) > MaxCatalogBytes {
-		return ErrCatalogTooLarge
 	}
 	if c.Version != 1 && c.Version != 2 {
 		return errors.New("unsupported catalog version")
@@ -170,6 +172,31 @@ func (c Catalog) Validate() error {
 		return errors.New("catalog requires 1 to 32 profiles")
 	}
 	return c.validateProfiles()
+}
+
+func (c Catalog) validateSize() error {
+	encoded, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > MaxCatalogBytes {
+		return ErrCatalogTooLarge
+	}
+	base := c.Clone()
+	for i := range base.Profiles {
+		n := base.Profiles[i].NativeModel
+		if n != nil && n.Owned != nil {
+			n.Owned.Conflicts = ""
+		}
+	}
+	encoded, err = json.Marshal(base)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > MaxCatalogInputBytes {
+		return ErrCatalogTooLarge
+	}
+	return nil
 }
 
 func (c Catalog) validateProfiles() error {
