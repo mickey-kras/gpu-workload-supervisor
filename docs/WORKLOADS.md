@@ -151,6 +151,10 @@ path. It must identify the selected runtime and pass the same executable trust
 checks; omitting it retains the standard `/usr/bin` location. Model selection,
 side-effect-free preview and explicit activation confirmation are still required.
 
+Supervisor-owned Ollama units set `OLLAMA_MAX_LOADED_MODELS=1`. This limits the
+loaded model count, not memory used by parallel requests to the same model;
+eviction, admission, readiness and release checks still apply.
+
 Readiness requires native health plus exactly the selected model identity;
 Ollama checks its loaded model list. A native proxy accepts only supported
 inference routes with the exact JSON `model`, rejects lifetime overrides,
