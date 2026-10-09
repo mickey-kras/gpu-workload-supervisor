@@ -69,10 +69,13 @@ func readLaunchSources(path string, dropIns []control.LaunchSource) ([][]byte, e
 		return nil, fmt.Errorf("launch source: %w", err)
 	}
 	sources := [][]byte{raw}
-	for _, source := range dropIns {
+	for i, source := range dropIns {
 		raw, err := readLaunchSource(source.Path)
-		if err != nil || fmt.Sprintf("%x", sha256.Sum256(raw)) != source.SHA256 {
-			return nil, fmt.Errorf("%w: contributing drop-in changed, unreadable or untrusted; inspect this drop-in and refresh the binding", ErrLaunchChanged)
+		if err != nil {
+			return nil, fmt.Errorf("contributing drop-in %d: %w", i+1, err)
+		}
+		if fmt.Sprintf("%x", sha256.Sum256(raw)) != source.SHA256 {
+			return nil, fmt.Errorf("%w: contributing drop-in %d content digest changed; review this drop-in and refresh the binding", ErrLaunchChanged, i+1)
 		}
 		sources = append(sources, raw)
 	}
