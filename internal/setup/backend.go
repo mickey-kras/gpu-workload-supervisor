@@ -49,6 +49,10 @@ func Decode(reader io.Reader) (Request, error) {
 	if err := strictjson.DecodeLimited(reader, 262144, &request); err != nil {
 		return request, err
 	}
+	request, err := prepareOwnedBackstops(request)
+	if err != nil {
+		return request, err
+	}
 	return request, Validate(request)
 }
 func Validate(request Request) error {
@@ -81,6 +85,10 @@ func Plan(home string, request Request) (Preview, error) {
 }
 
 func (b Backend) Plan(home string, request Request) (Preview, error) {
+	request, err := prepareOwnedBackstops(request)
+	if err != nil {
+		return Preview{}, err
+	}
 	if err := Validate(request); err != nil {
 		return Preview{}, err
 	}
@@ -149,6 +157,10 @@ func Apply(ctx context.Context, home string, request Request) error {
 }
 
 func (b Backend) Apply(ctx context.Context, home string, request Request) error {
+	request, err := prepareOwnedBackstops(request)
+	if err != nil {
+		return err
+	}
 	if err := Validate(request); err != nil {
 		return err
 	}

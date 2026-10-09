@@ -3,6 +3,7 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -32,7 +33,12 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 		subject = "instance " + n.Instance
 	}
 	var b strings.Builder
-	b.WriteString("[Unit]\nDescription=Supervisor-owned " + n.Runtime + " launch for " + subject + "\n\n[Service]\nType=simple\nRestart=no\n")
+	if !control.ValidOwnedConflicts(p.Unit, n.Owned.Conflicts) {
+		return nil, fmt.Errorf("%w: invalid owned conflicts", ErrOwnedRender)
+	}
+	b.WriteString("[Unit]\nDescription=Supervisor-owned " + n.Runtime + " launch for " + subject + "\n")
+	b.WriteString(ownedDependencies(p.Unit, n.Owned.Conflicts))
+	b.WriteString("\n[Service]\nType=simple\nRestart=no\n")
 	var execStart string
 	executable := n.Owned.Executable
 	if executable == "" {
@@ -102,4 +108,49 @@ func QualifyOwnedUnit(p control.WorkloadProfile) error {
 		return err
 	}
 	return renderMustQualify(raw, *p.NativeModel)
+}
+
+// A total lexical order gives every conflicting pair one ordering edge and no
+// cycles. systemd orders stopping before starting with either edge direction.
+func ownedDependencies(unit, peers string) string {
+	if peers == "" {
+		return ""
+	}
+	lines := "Conflicts=" + peers + "\n"
+	before := []string{}
+	for _, peer := range strings.Fields(peers) {
+		if peer < unit {
+			before = append(before, peer)
+		}
+	}
+	if len(before) > 0 {
+		lines += "After=" + strings.Join(before, " ") + "\n"
+	}
+	return lines
+}
+
+// Keep the adopted grammar unchanged. Only an owned spec may contribute these
+// exact generated dependency lines; duplicate, extra, moved or changed lines
+// are left to the strict parser to reject.
+func parseOwnedLaunchUnit(raw []byte, n control.NativeModel) (parsedLaunchUnit, error) {
+	if n.Owned == nil {
+		return parseLaunchUnit(raw, n.Runtime)
+	}
+	unit := control.OwnedUnitName(n.Runtime, n.Instance, "")
+	if n.Runtime != "ollama" {
+		unit = filepath.Base(n.LaunchFile)
+	}
+	if !control.ValidOwnedConflicts(unit, n.Owned.Conflicts) {
+		return parsedLaunchUnit{}, ErrLaunchUnsupported
+	}
+	dependencies := ownedDependencies(unit, n.Owned.Conflicts)
+	if dependencies != "" {
+		// Match the renderer's placement directly after Description in [Unit].
+		lines := strings.SplitN(string(raw), "\n", 3)
+		if len(lines) != 3 || lines[0] != "[Unit]" || !strings.HasPrefix(lines[1], "Description=") || !strings.HasPrefix(lines[2], dependencies) {
+			return parsedLaunchUnit{}, ErrLaunchUnsupported
+		}
+		raw = []byte(lines[0] + "\n" + lines[1] + "\n" + strings.TrimPrefix(lines[2], dependencies))
+	}
+	return parseLaunchUnit(raw, n.Runtime)
 }

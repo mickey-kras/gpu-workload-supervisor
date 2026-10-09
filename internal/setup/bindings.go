@@ -24,6 +24,10 @@ func (b Backend) VerifyBindings(ctx context.Context, request Request) error {
 }
 
 func (b Backend) verifyBindings(ctx context.Context, home string, request Request) error {
+	request, err := prepareOwnedBackstops(request)
+	if err != nil {
+		return err
+	}
 	if err := Validate(request); err != nil {
 		return err
 	}

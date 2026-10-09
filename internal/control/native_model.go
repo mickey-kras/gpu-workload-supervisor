@@ -72,6 +72,9 @@ func EqualLaunchSources(a, b []LaunchSource) bool {
 // imported file. ModelPath is the llama.cpp GGUF file or vLLM model
 // directory and stays empty for Ollama; Alias defaults to ModelPath.
 type OwnedLaunch struct {
+	// Conflicts is setup-derived, sorted distinct owned peer units. Empty keeps
+	// legacy unit bytes/fingerprints; setup Apply upgrades the peer relationships.
+	Conflicts   string `json:"conflicts,omitempty"`
 	Executable  string `json:"executable,omitempty"`
 	ModelPath   string `json:"modelPath,omitempty"`
 	Port        uint16 `json:"port"`

@@ -116,3 +116,30 @@ func ownedProfileModel(d Draft, owned control.OwnedLaunch) string {
 	}
 	return owned.ModelPath
 }
+
+// prepareOwnedBackstops upgrades only the candidate catalog, after proving the
+// incoming spec/fingerprint. Accepted catalogs/files remain untouched until the
+// existing owned-unit transaction applies the reviewed writes.
+func prepareOwnedBackstops(request Request) (Request, error) {
+	request.Catalog = request.Catalog.Clone()
+	for _, p := range request.Catalog.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Owned != nil {
+			if _, err := ownedRenderChecked(p); err != nil {
+				return request, err
+			}
+		}
+	}
+	for i := range request.Catalog.Profiles {
+		p := &request.Catalog.Profiles[i]
+		if p.NativeModel == nil || p.NativeModel.Owned == nil {
+			continue
+		}
+		p.NativeModel.Owned.Conflicts = request.Catalog.OwnedConflictUnits(*p)
+		raw, err := gpuruntime.RenderOwnedUnit(*p)
+		if err != nil {
+			return request, err
+		}
+		p.NativeModel.LaunchSHA256 = digest(raw)
+	}
+	return request, nil
+}

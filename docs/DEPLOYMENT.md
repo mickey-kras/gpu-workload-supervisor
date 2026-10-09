@@ -97,6 +97,14 @@ Profiles sharing one Ollama unit are the exception: the unit keeps running
 across model switches, so their release evidence is the daemon's loaded-model
 list, with cgroup emptiness required once the shared unit is dead.
 
+Supervisor-owned launches keep `Restart=no`. Setup preview and explicit Apply
+add catalog-derived `Conflicts=` and acyclic `After=` between distinct owned
+units; existing owned catalogs retain their recorded unit bytes until Apply.
+Adopted units and drop-ins are preserved. A manual opposing start may interrupt
+work: these dependencies provide no authorization, admission/drain or GPU-release
+proof, and arbitrary external units remain outside the guarantee. No custom
+`StartLimit*` policy is added. See [orchestrator decisions](ORCHESTRATOR-DECISION.md).
+
 ## Verify workload release
 
 The `systemd` catalog adapter verifies both units are `inactive/dead` and their
@@ -192,6 +200,12 @@ are still required for supervised requests. Every command sharing a state store
 pins the same durably accepted catalog.
 
 ## Qualify the host
+
+The owned-backstop cases use generated dependencies with disposable sleep
+services to check manual opposing starts and completed-stop-before-start ordering
+in both directions, rapid controller switching and latched failures. They also
+check that manual starts do not resolve durable admitted work. They do not prove
+GPU-driver release for a native runtime.
 
 The tagged suite (`go test -race -count=1 -timeout=10m -tags=systemd_integration
 -run '^TestSystemd' -v ./internal/supervisor`) uses isolated real user-systemd

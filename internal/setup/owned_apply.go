@@ -112,6 +112,10 @@ func (b Backend) plannedOwnedUnitRemovals(home string, request Request, snapshot
 	}
 	var removals []string
 	for _, e := range entries {
+		if p, ok := ownedProfileForUnit(request.Catalog, e.unit); ok && p.NativeModel.Owned != nil {
+			// A changed rendering is a write, not a removal.
+			continue
+		}
 		if ownedUnitStillReferenced(request.Catalog, e.path, e.proof) {
 			continue
 		}

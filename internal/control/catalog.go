@@ -163,7 +163,7 @@ func (c Catalog) Validate() error {
 			return err
 		}
 	}
-	return nil
+	return c.validateOwnedConflicts()
 }
 
 // ValidWorkloadLabel is shared with local presentation protocols.
@@ -424,4 +424,60 @@ func equalOwnedLaunch(a, b *OwnedLaunch) bool {
 		return a == nil && b == nil
 	}
 	return *a == *b
+}
+
+// OwnedConflictUnits returns the unique owned units that must exclude p's unit.
+// Profiles sharing an Ollama unit exclude other units, never one another.
+func (c Catalog) OwnedConflictUnits(p WorkloadProfile) string {
+	units := map[string]bool{}
+	for _, q := range c.Profiles {
+		if q.NativeModel != nil && q.NativeModel.Owned != nil && q.Unit != p.Unit {
+			units[q.Unit] = true
+		}
+	}
+	names := make([]string, 0, len(units))
+	for unit := range units {
+		names = append(names, unit)
+	}
+	slices.Sort(names)
+	return strings.Join(names, " ")
+}
+
+func (c Catalog) validateOwnedConflicts() error {
+	enabled := false
+	for _, p := range c.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Owned != nil && p.NativeModel.Owned.Conflicts != "" {
+			enabled = true
+		}
+	}
+	for _, p := range c.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Owned != nil {
+			peers := p.NativeModel.Owned.Conflicts
+			// Old catalogs remain valid without rewriting their bound files.
+			if enabled && peers != c.OwnedConflictUnits(p) {
+				return errors.New("owned conflicts must match the catalog's distinct owned units")
+			}
+		}
+	}
+	return nil
+}
+
+// ValidOwnedConflicts bounds the renderer's dependency grammar, including when
+// rendering a pending setup profile before full catalog validation.
+func ValidOwnedConflicts(unit, peers string) bool {
+	if peers == "" {
+		return true
+	}
+	names := strings.Split(peers, " ")
+	if len(names) > 31 {
+		return false
+	}
+	previous := ""
+	for _, name := range names {
+		if !unitName.MatchString(name) || !strings.HasPrefix(name, OwnedUnitFilePrefix) || name == unit || name <= previous {
+			return false
+		}
+		previous = name
+	}
+	return true
 }

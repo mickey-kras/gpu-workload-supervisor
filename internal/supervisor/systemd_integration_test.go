@@ -46,6 +46,10 @@ func systemdCommand(t *testing.T, args ...string) string {
 }
 
 func newSystemdFixture(t *testing.T) *systemdFixture {
+	return newSystemdFixtureWithBackstops(t, false)
+}
+
+func newSystemdFixtureWithBackstops(t *testing.T, backstops bool) *systemdFixture {
 	t.Helper()
 	anchor := systemdCommand(t, "show", "--property=ControlGroup", "--value", "--", "-.slice")
 	if !strings.HasPrefix(anchor, "/") || strings.ContainsAny(anchor, "\r\n") {
@@ -76,8 +80,33 @@ func newSystemdFixture(t *testing.T) *systemdFixture {
 	})
 	for _, kind := range []string{"text", "media"} {
 		unit := prefix + "-" + kind + ".service"
+		if backstops {
+			unit = control.OwnedUnitName("llama.cpp", "fixture", control.Workload(prefix+"-"+kind))
+		}
 		f.units = append(f.units, unit)
+	}
+	for i, unit := range f.units {
 		data := "[Unit]\nDescription=Isolated workload qualification fixture\n[Service]\nType=exec\nExecStart=/usr/bin/sleep infinity\nKillMode=control-group\nTimeoutStopSec=2\n"
+		if backstops {
+			// Use the production dependency render with disposable sleep work.
+			// These fixture-only commands do not qualify a native GPU runtime.
+			other := f.units[1-i]
+			p := control.WorkloadProfile{ID: control.Workload(prefix + "-" + []string{"text", "media"}[i]), Unit: unit,
+				NativeModel: &control.NativeModel{Runtime: "llama.cpp", Instance: "fixture", LaunchFile: filepath.Join(unitDir, unit),
+					Owned: &control.OwnedLaunch{ModelPath: "/fixture.gguf", Port: 9100, Conflicts: other}}}
+			rendered, err := gpuruntime.RenderOwnedUnit(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			head, _, _ := strings.Cut(string(rendered), "ExecStart=")
+			script := filepath.Join(unitDir, fmt.Sprintf("events-%d.sh", i))
+			events := filepath.Join(unitDir, "events")
+			scriptData := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = stop ]; then sleep 0.1; fi\necho \"$1 %d\" >> '%s'\n", i, events)
+			if err := os.WriteFile(script, []byte(scriptData), 0700); err != nil {
+				t.Fatal(err)
+			}
+			data = head + "ExecStart=/usr/bin/sleep infinity\nExecStartPre=" + script + " start\nExecStopPost=" + script + " stop\nKillMode=control-group\nTimeoutStopSec=2\n"
+		}
 		path := filepath.Join(unitDir, unit)
 		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
 			t.Fatal(err)
@@ -106,8 +135,14 @@ func newSystemdFixture(t *testing.T) *systemdFixture {
 		{ID: control.WorkloadMedia, Label: "media", Adapter: "systemd", Unit: f.units[1], Cgroup: groups[1], HealthURL: health.URL},
 	}}
 	f.catalog = catalog
+	ownedScan := ""
+	if backstops {
+		// Dependency semantics use generic sleep profiles, not native GPU launches.
+		// Keep their isolated links out of the production ownership inventory.
+		ownedScan = filepath.Join(f.unitDir, "empty-owned-inventory")
+	}
 	f.manager, err = gpuruntime.NewSystemdManager(gpuruntime.SystemdConfig{
-		Catalog: &catalog, SystemctlPath: executable, HealthTimeout: time.Second,
+		Catalog: &catalog, SystemctlPath: executable, HealthTimeout: time.Second, OwnedUnitDir: ownedScan,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -551,4 +586,102 @@ func TestSystemdPreflightAllowsFailedRemovedCgroupRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.assertState(state, control.OwnerSupervisor, control.WorkloadIdle)
+}
+
+func (f *systemdFixture) clearEvents() {
+	f.t.Helper()
+	if err := os.WriteFile(filepath.Join(f.unitDir, "events"), nil, 0600); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func (f *systemdFixture) events() string {
+	f.t.Helper()
+	raw, err := os.ReadFile(filepath.Join(f.unitDir, "events"))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func TestSystemdOwnedBackstopsOpposingStartOrdersStopAndPreservesDurableWork(t *testing.T) {
+	for source := 0; source < 2; source++ {
+		t.Run(fmt.Sprintf("direction-%d", source), func(t *testing.T) {
+			f := newSystemdFixtureWithBackstops(t, true)
+			ctx := context.Background()
+			if _, err := f.controller.Reconcile(ctx); err != nil {
+				t.Fatal(err)
+			}
+			workload := []control.Workload{control.WorkloadText, control.WorkloadMedia}[source]
+			before, err := f.controller.Switch(ctx, workload, "qualification")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.store.AdmitWorkToken(ctx, "interrupted", "", workload, before.LeaseFence); err != nil {
+				t.Fatal(err)
+			}
+			f.clearEvents()
+			systemdCommand(t, "start", f.units[1-source])
+			want := fmt.Sprintf("stop %d\nstart %d\n", source, 1-source)
+			if got := f.events(); got != want {
+				t.Fatalf("opposing start did not wait for stop completion: %q want %q", got, want)
+			}
+			snapshot, err := f.manager.Observe(ctx)
+			if err != nil || snapshot.Workloads[workload].Active || !snapshot.Workloads[[]control.Workload{control.WorkloadMedia, control.WorkloadText}[source]].Active {
+				t.Fatalf("conflict left wrong units active: %#v %v", snapshot, err)
+			}
+			after, err := f.store.State(ctx)
+			if err != nil || after != before {
+				t.Fatalf("systemd start changed durable authorization: %#v %v", after, err)
+			}
+			// systemd cannot drain or resolve the interrupted admitted work.
+			unfinished, err := f.store.PendingWork(ctx)
+			if err != nil || unfinished != 1 {
+				t.Fatalf("manual start resolved durable work: %v %v", unfinished, err)
+			}
+			state, err := f.controller.Reconcile(ctx)
+			if err == nil || state.Admission != control.AdmissionClosed || state.Health != control.HealthError {
+				t.Fatalf("runtime drift bypassed admission latch: %#v %v", state, err)
+			}
+		})
+	}
+}
+
+func TestSystemdOwnedBackstopsNormalRapidSwitchingAndFailure(t *testing.T) {
+	f := newSystemdFixtureWithBackstops(t, true)
+	ctx := context.Background()
+	if _, err := f.controller.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Several immediate switches stay below the manager's default start limit;
+	// the renderer adds no feature-specific throttling to ordinary handoffs.
+	for i := 0; i < 3; i++ {
+		for _, workload := range []control.Workload{control.WorkloadText, control.WorkloadMedia} {
+			state, err := f.controller.Switch(ctx, workload, "rapid qualification")
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.assertState(state, control.OwnerSupervisor, workload)
+		}
+	}
+	if _, err := f.controller.TransferToUser(ctx, control.WorkloadMedia, "failure qualification"); err != nil {
+		t.Fatal(err)
+	}
+	f.controller.runtime = &qualificationFault{SystemdManager: f.manager, failure: "health"}
+	state, err := f.controller.SwitchUser(ctx, control.WorkloadText, "failed qualification")
+	if err == nil || state.Admission != control.AdmissionClosed || state.Health != control.HealthError {
+		t.Fatalf("backstop reopened failed transition: %#v %v", state, err)
+	}
+	snapshot, err := f.manager.Observe(ctx)
+	if err != nil || snapshot.AnyActive() {
+		t.Fatalf("failure restarted old work: %#v %v", snapshot, err)
+	}
+	for _, unit := range f.units {
+		if restarted := systemdCommand(t, "show", "--property=NRestarts", "--value", unit); restarted != "0" {
+			t.Fatalf("owned unit restarted automatically: %s %s", unit, restarted)
+		}
+	}
+	if _, err := f.controller.SwitchUser(ctx, control.WorkloadMedia, "latched"); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("failure did not require explicit recovery: %v", err)
+	}
 }
