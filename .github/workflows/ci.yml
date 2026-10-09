@@ -23,7 +23,28 @@ jobs:
       - name: Install native setup fixture dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y gjs gir1.2-gtk-4.0 gir1.2-adw-1 xvfb xauth dbus-x11 xdotool imagemagick python3-pyatspi at-spi2-core gsettings-desktop-schemas librsvg2-common
+          sudo apt-get install --no-install-recommends -y gjs gir1.2-gtk-4.0 gir1.2-adw-1 xvfb xauth dbus-x11 xdotool imagemagick python3-pyatspi at-spi2-core gsettings-desktop-schemas librsvg2-common gdb
+      # Temporary evidence-only C backtrace; the normal native matrix stays required.
+      - name: Diagnose native GTK critical with a C backtrace
+        continue-on-error: true
+        run: |
+          mkdir -p native-setup-diagnostic
+          export GDK_BACKEND=x11 GSK_RENDERER=cairo GDK_SCALE=1 XDG_CURRENT_DESKTOP=GNOME
+          export GSETTINGS_BACKEND=memory GTK_A11Y=atspi G_DEBUG=fatal-criticals
+          export DEBUGINFOD_URLS=https://debuginfod.ubuntu.com
+          xvfb-run -a -s '-screen 0 1600x1600x24' dbus-run-session -- \
+            gdb --batch -ex 'set pagination off' -ex 'set debuginfod enabled on' \
+            -ex run -ex 'thread apply all bt full' -ex 'info sharedlibrary' --args \
+            gjs -m tests/desktop/setup_native.mjs "$PWD/native-setup-diagnostic" light 620 670 \
+            2>&1 | tee native-setup-diagnostic/c-backtrace.log
+      - name: Upload native GTK diagnostic backtrace
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: native-setup-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: native-setup-diagnostic/
+          if-no-files-found: error
+          retention-days: 14
       - name: Native GTK setup, accessibility and screenshot matrix
         run: python3 tests/desktop/setup_native.py --output native-setup-evidence
       - name: Upload native setup evidence
