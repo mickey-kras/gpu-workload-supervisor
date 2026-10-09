@@ -8,8 +8,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+// Keep this identical to the pinned gocognit command's -ignore expression.
+var excludedGoPaths = regexp.MustCompile(`(^|/)(\.github|docs|node_modules)/`)
 
 // Match gocognit v1.3.0's parseDirective on function doc comments. Parsing
 // comments also preserves its handling of carriage returns without mistaking
@@ -36,12 +40,22 @@ func checkDirectives(root string) error {
 		}
 		for _, declaration := range file.Decls {
 			function, ok := declaration.(*ast.FuncDecl)
-			if !ok || function.Doc == nil {
+			if !ok {
+				continue
+			}
+			physical := positions.PositionFor(function.Pos(), false)
+			adjusted := positions.Position(function.Pos())
+			// gocognit filters its adjusted diagnostic filename. Both Go line
+			// directive forms can otherwise disguise production as excluded code.
+			if adjusted.Filename != physical.Filename && excludedGoPaths.MatchString(adjusted.Filename) {
+				return fmt.Errorf("%s: function position remaps production into an excluded Go path", physical)
+			}
+			if function.Doc == nil {
 				continue
 			}
 			for _, comment := range function.Doc.List {
 				if comment.Text == "//gocognit:ignore" {
-					return fmt.Errorf("%s: gocognit function suppressions are forbidden", positions.Position(comment.Pos()))
+					return fmt.Errorf("%s: gocognit function suppressions are forbidden", positions.PositionFor(comment.Pos(), false))
 				}
 			}
 		}

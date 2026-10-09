@@ -295,7 +295,7 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
 
 function inspectScannerConfigs(files, failures) {
   if (createHash('sha256').update(files['.github/scripts/check-go-directives.go'] || '').digest('hex') !==
-      'da0aae21ea3c19bc309c36f069560fa08bab833b5e304d45393c1d23b022d803') {
+      'f356bcb0bd9546d4ee133001335740bfb41623e4671554606895e6ab1a305489') {
     failures.push('Go suppression guard was changed');
   }
   // Validate PR config bytes as data; the trusted guard must never execute it.

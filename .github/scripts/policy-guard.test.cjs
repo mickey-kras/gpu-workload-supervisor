@@ -57,7 +57,12 @@ test('Go directive rejection cannot be removed or changed to allow suppressions'
   candidate['.github/workflows/ci.yml'] = candidate['.github/workflows/ci.yml']
     .replace('          go run .github/scripts/check-go-directives.go .\n', '');
   assert.ok(inspect(candidate).some(error => error.includes('Go cognitive complexity')));
-  for (const mutation of [undefined, 'package main\nfunc main() {}\n']) {
+  for (const mutation of [
+    undefined,
+    'package main\nfunc main() {}\n',
+    files()['.github/scripts/check-go-directives.go']
+      .replace('excludedGoPaths.MatchString(adjusted.Filename)', 'false'),
+  ]) {
     const changed = files();
     if (mutation === undefined) delete changed['.github/scripts/check-go-directives.go'];
     else changed['.github/scripts/check-go-directives.go'] = mutation;

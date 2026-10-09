@@ -71,3 +71,42 @@ func TestInvalidProductionGoFailsClosed(t *testing.T) {
 		t.Fatal("invalid production source was accepted")
 	}
 }
+
+func TestRejectProductionPositionsRemappedIntoExcludedScope(t *testing.T) {
+	function := "func tooComplex(value bool) int { n := 0;" +
+		strings.Repeat("if value { n++ };", 16) + "return n }\n"
+	for _, directive := range []string{
+		"//line docs/fixture.go:1\n",
+		"//line .github/fixture.go:1:2\n",
+		"//line node_modules/fixture.go:1\r\n",
+		"/*line docs/fixture.go:1*/",
+		"/*line .github/fixture.go:1:2*/",
+		"/*line node_modules/fixture.go:1*/",
+		"//line docs/fixture.go:1\n// nosemgrep\n",
+	} {
+		t.Run(directive, func(t *testing.T) {
+			root := t.TempDir()
+			writeGoFixture(t, root, "internal/setup/fixture.go", "package fixture\n"+directive+function)
+			err := checkDirectives(root)
+			if err == nil || !strings.Contains(err.Error(), "remaps production into an excluded Go path") {
+				t.Fatalf("disguised production function was accepted: %v", err)
+			}
+			if !strings.Contains(err.Error(), "internal/setup/fixture.go:") {
+				t.Fatalf("diagnostic lost the physical source location: %v", err)
+			}
+		})
+	}
+}
+
+func TestLineDirectivesThatRetainAnalyzedScope(t *testing.T) {
+	root := t.TempDir()
+	writeGoFixture(t, root, "internal/setup/safe.go", `package fixture
+//line generated.go:100
+func mapped() {}
+/*line generated.go:200:2*/func blockMapped() {}
+const quoted = "//line docs/fixture.go:1"
+`)
+	if err := checkDirectives(root); err != nil {
+		t.Fatal(err)
+	}
+}

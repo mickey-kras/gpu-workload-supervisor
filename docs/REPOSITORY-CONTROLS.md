@@ -36,7 +36,9 @@ and these checks do not replace SonarQube's full main-only quality gate.
 The literal rule covers these two known shared values, not arbitrary duplicate
 strings. The Go gate also rejects gocognit's function ignore directive in
 production source using parsed function doc comments, including carriage-return
-variants. Semgrep suppression comments cannot disable this check. This follows
+variants. Parsed function positions also prevent Go line directives from
+disguising production functions as excluded paths. Semgrep suppression comments
+cannot disable these checks. This follows
 the pinned analyzer's directive syntax; an analyzer upgrade must review any
 changes to that syntax. Intentional updates to the pinned gocognit command,
 directive guard, ESLint configuration
