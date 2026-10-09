@@ -168,6 +168,7 @@ func TestDerivedOwnedOriginalRequestAfterActualPrecommitFailure(t *testing.T) {
 			z, _ := ownedFixtureProfile(t, home, "z", 9200)
 			z.NativeModel.Instance = "z"
 			request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a, z}}
+			var priorCatalog control.Catalog
 			if scenario == "incremental-peer-add" {
 				initial := request
 				initial.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a}}
@@ -179,6 +180,7 @@ func TestDerivedOwnedOriginalRequestAfterActualPrecommitFailure(t *testing.T) {
 					t.Fatal(err)
 				}
 				request.ExpectedRevision = accepted.Revision
+				priorCatalog = accepted.Catalog.Clone()
 			}
 			if scenario == "shared-ollama" {
 				profiles := []control.WorkloadProfile{z}
@@ -249,9 +251,15 @@ func TestDerivedOwnedOriginalRequestAfterActualPrecommitFailure(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(decoded, request) {
 				t.Fatalf("decode changed reviewed request: %v", err)
 			}
+			candidateSeen, priorSeen := 0, 0
+			applying := false
 			backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
-				if !reflect.DeepEqual(got.Catalog, candidate.Catalog) {
-					t.Fatal("retry selected a different recorded catalog")
+				if reflect.DeepEqual(got.Catalog, candidate.Catalog) {
+					candidateSeen++
+				} else if applying && scenario == "incremental-peer-add" && reflect.DeepEqual(got.Catalog, priorCatalog) {
+					priorSeen++
+				} else {
+					t.Fatal("retry selected an unexpected runtime catalog")
 				}
 				return launchPreflightRuntime{verify: func() error { return nil }, preview: func(map[string]string) error { return nil }}, nil
 			}
@@ -262,8 +270,16 @@ func TestDerivedOwnedOriginalRequestAfterActualPrecommitFailure(t *testing.T) {
 			if err := backend.verifyBindings(ctx, home, decoded); err != nil {
 				t.Fatal(err)
 			}
+			candidateSeen, priorSeen = 0, 0
+			applying = true
 			if err := backend.Apply(ctx, home, decoded); err != nil {
 				t.Fatalf("reviewed request retry apply: %v", err)
+			}
+			if candidateSeen == 0 {
+				t.Fatal("apply did not verify the recorded candidate catalog")
+			}
+			if scenario == "incremental-peer-add" && priorSeen == 0 {
+				t.Fatal("apply did not verify release of the accepted prior catalog")
 			}
 			accepted, err := ReadCatalog(ctx, request.Profile.StatePath)
 			if err != nil || !reflect.DeepEqual(accepted.Catalog, candidate.Catalog) {
