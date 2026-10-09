@@ -132,6 +132,7 @@ class SamplingTests(unittest.TestCase):
             ticks[0] += 1
         with patch.object(accessibility, 'pyatspi', native), patch.object(accessibility, 'GLib', context.glib()), \
                 patch.object(accessibility, 'observe_until_ready', observe), \
+                patch.object(accessibility.time, 'monotonic', lambda: ticks[0]), \
                 patch.object(accessibility.time, 'sleep', sleep), \
                 patch.object(sys, 'argv', ['setup_accessibility.py', str(output), screen, 'Continue']), \
                 contextlib.redirect_stdout(io.StringIO()):
@@ -151,7 +152,7 @@ class SamplingTests(unittest.TestCase):
     def test_outside_callback_reproduces_persistent_empty_desktop(self):
         # Removing callback dispatch exercises the same main/acquisition/traversal
         # path but simulates the vulnerable g_main_depth() == 0 RPC condition.
-        with patch.object(accessibility, 'sample_in_main_context', lambda sample: sample()), \
+        with patch.object(accessibility, 'sample_in_main_context', lambda sample, _deadline, clock: sample()), \
                 tempfile.TemporaryDirectory() as directory:
             output = pathlib.Path(directory) / 'snapshot.json'
             with self.assertRaisesRegex(AssertionError, 'missing model choice: Example small'):
@@ -192,7 +193,7 @@ class SamplingTests(unittest.TestCase):
                     raise error
                 with patch.object(accessibility, 'GLib', context.glib()), \
                         self.assertRaises(type(error)) as caught:
-                    accessibility.sample_in_main_context(sample)
+                    accessibility.sample_in_main_context(sample, 3, clock=lambda: 0)
                 self.assertIs(caught.exception, error)
                 self.assertEqual(context.sources, {})
 
@@ -201,15 +202,49 @@ class SamplingTests(unittest.TestCase):
         with patch.object(accessibility, 'GLib', context.glib()), \
                 patch.object(context, 'iteration', side_effect=RuntimeError('dispatch failed')), \
                 self.assertRaisesRegex(RuntimeError, 'dispatch failed'):
-            accessibility.sample_in_main_context(lambda: model_tree())
+            accessibility.sample_in_main_context(lambda: model_tree(), 3, clock=lambda: 0)
         self.assertEqual(context.sources, {})
+
+    def test_competing_source_cannot_extend_shared_observation_deadline(self):
+        context = MainContextFixture()
+        ticks = [0.0]
+        acquired: list[float] = []
+        dispatch_modes: list[bool] = []
+        competing_sources: list[int] = []
+        def competitor() -> bool:
+            ticks[0] += 0.5
+            return True
+        original_iteration = context.iteration
+        def iteration(may_block: bool) -> bool:
+            dispatch_modes.append(may_block)
+            return original_iteration(may_block)
+        def sample(deadline: float) -> list[dict[str, str | bool]]:
+            if acquired:
+                competing_sources.append(context.idle_add(competitor))
+            def acquire() -> list[dict[str, str | bool]]:
+                acquired.append(ticks[0])
+                # The first incomplete observation consumes two seconds. The
+                # next queued observation has only the remaining second.
+                ticks[0] += 2
+                return model_tree(focus=False)
+            return accessibility.sample_in_main_context(acquire, deadline, clock=lambda: ticks[0])
+        with patch.object(accessibility, 'GLib', context.glib()), \
+                patch.object(context, 'iteration', iteration), \
+                self.assertRaisesRegex(AssertionError, 'queued observation reached deadline'):
+            accessibility.observe_until_ready(sample,
+                lambda tree: accessibility.validate_tree(tree, 'models', 'Continue'),
+                lambda: None, timeout=3, clock=lambda: ticks[0])
+        self.assertEqual(ticks[0], 3)
+        self.assertEqual(acquired, [0])
+        self.assertEqual(dispatch_modes, [False] * 3)
+        self.assertEqual(list(context.sources), competing_sources)
 
 
 class ReadinessTests(unittest.TestCase):
     def observe(self, samples, output, advance_seconds=1, sample_seconds=0, timeout=2):
         observed = []
         ticks = [0]
-        def sample():
+        def sample(_deadline):
             tree = samples[min(len(observed), len(samples) - 1)]
             observed.append(tree)
             output.write_text(json.dumps(tree))
