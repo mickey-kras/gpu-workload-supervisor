@@ -171,6 +171,14 @@ func prepareOwnedBackstopsForActivation(home string, request Request) (Request, 
 		return request, err
 	}
 	if present && journal.StatePath == request.Profile.StatePath {
+		// Unit writes precede activation.json and the maintenance fence. The
+		// pending journal can therefore be the only proof of a legacy retry,
+		// or coexist with a stale record from a previous completed activation.
+		// Matching its complete write set only postpones dependency derivation;
+		// it does not establish full-request identity or bypass recovery guards.
+		if pendingOwnedWritesMatch(journal, request) {
+			return request, nil
+		}
 		// A crash after the maintenance fence clears can still leave the
 		// committed journal unfinished. Preserve an exact original retry then
 		// too. A stale activation record must not block a different new plan.
@@ -191,4 +199,28 @@ func prepareOwnedBackstopsForActivation(home string, request Request) (Request, 
 		}
 	}
 	return candidate, nil
+}
+
+// planOwnedUnitWrites journals every unique requested owned unit, including
+// unchanged units, before any filesystem effects. The caller has already
+// verified each incoming spec/fingerprint through prepareOwnedBackstops.
+func pendingOwnedWritesMatch(journal unitJournal, request Request) bool {
+	if journal.Phase != ownedJournalPending || len(journal.Writes) == 0 {
+		return false
+	}
+	writes := map[string]string{}
+	for _, p := range request.Catalog.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Owned != nil {
+			writes[p.Unit] = p.NativeModel.LaunchSHA256
+		}
+	}
+	if len(writes) != len(journal.Writes) {
+		return false
+	}
+	for unit, hash := range writes {
+		if journal.Writes[unit] != hash {
+			return false
+		}
+	}
+	return true
 }
