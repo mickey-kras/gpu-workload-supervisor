@@ -15,6 +15,7 @@ const REQUIRED_FILES = [
   '.github/scripts/pr-branch-updater.cjs', 'sonar-project.properties',
   '.github/scripts/package.json', '.github/scripts/package-lock.json',
   '.github/scripts/eslint.config.cjs', '.github/semgrep-tests/maintainability.go',
+  '.github/scripts/check-go-directives.go', '.github/scripts/check-go-directives_test.go',
   '.github/aislop/package.json', '.github/aislop/package-lock.json',
   '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
   '.goreleaser.yaml', '.testcoverage.yml',
@@ -162,7 +163,12 @@ function inspectCi(files, workflows, failures, checks) {
   step(ci, 'checks', 'Go vet', { run: ['go vet ./...'] });
   step(ci, 'checks', 'Go cognitive complexity');
   exactRun(ci, 'checks', 'Go cognitive complexity', [
+    'go run .github/scripts/check-go-directives.go .',
     "go run github.com/uudashr/gocognit/cmd/gocognit@v1.3.0 -over 15 -test=false -ignore '(^|/)(\\.github|docs|node_modules)/' .",
+  ]);
+  step(ci, 'checks', 'Test Go suppression guard');
+  exactRun(ci, 'checks', 'Test Go suppression guard', [
+    'go test .github/scripts/check-go-directives.go .github/scripts/check-go-directives_test.go',
   ]);
   step(ci, 'checks', 'JavaScript maintainability');
   exactRun(ci, 'checks', 'JavaScript maintainability', [
@@ -288,6 +294,10 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
 }
 
 function inspectScannerConfigs(files, failures) {
+  if (createHash('sha256').update(files['.github/scripts/check-go-directives.go'] || '').digest('hex') !==
+      'da0aae21ea3c19bc309c36f069560fa08bab833b5e304d45393c1d23b022d803') {
+    failures.push('Go suppression guard was changed');
+  }
   // Validate PR config bytes as data; the trusted guard must never execute it.
   const eslintConfig = files['.github/scripts/eslint.config.cjs'] || '';
   if (createHash('sha256').update(eslintConfig).digest('hex') !==

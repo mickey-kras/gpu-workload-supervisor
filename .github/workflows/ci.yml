@@ -74,7 +74,11 @@ jobs:
       - name: Go vet
         run: go vet ./...
       - name: Go cognitive complexity
-        run: go run github.com/uudashr/gocognit/cmd/gocognit@v1.3.0 -over 15 -test=false -ignore '(^|/)(\.github|docs|node_modules)/' .
+        run: |
+          go run .github/scripts/check-go-directives.go .
+          go run github.com/uudashr/gocognit/cmd/gocognit@v1.3.0 -over 15 -test=false -ignore '(^|/)(\.github|docs|node_modules)/' .
+      - name: Test Go suppression guard
+        run: go test .github/scripts/check-go-directives.go .github/scripts/check-go-directives_test.go
       - name: Go vulnerability audit
         uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
         with:

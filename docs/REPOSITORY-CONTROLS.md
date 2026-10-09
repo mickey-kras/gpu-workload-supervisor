@@ -34,7 +34,12 @@ They cover the maintainability findings that previously escaped PR validation;
 gocognit is a separate implementation
 and these checks do not replace SonarQube's full main-only quality gate.
 The literal rule covers these two known shared values, not arbitrary duplicate
-strings. Intentional updates to the pinned gocognit command, ESLint configuration
+strings. The Go gate also rejects gocognit's function ignore directive in
+production source using parsed function doc comments, including carriage-return
+variants. Semgrep suppression comments cannot disable this check. This follows
+the pinned analyzer's directive syntax; an analyzer upgrade must review any
+changes to that syntax. Intentional updates to the pinned gocognit command,
+directive guard, ESLint configuration
 or focused Semgrep rule also require updating their trusted policy controls.
 
 The release App needs Contents write and Pull requests write for PR branch

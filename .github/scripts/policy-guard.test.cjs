@@ -18,6 +18,7 @@ function files() {
     'release-version.json', '.github/scripts/policy-release.cjs',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
     '.github/scripts/eslint.config.cjs', '.github/semgrep-tests/maintainability.go',
+    '.github/scripts/check-go-directives.go', '.github/scripts/check-go-directives_test.go',
     '.github/aislop/package.json', '.github/aislop/package-lock.json',
     '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
     'sonar-project.properties', '.goreleaser.yaml', '.testcoverage.yml',
@@ -31,7 +32,7 @@ test('current governance workflows satisfy the trusted guard', () => {
 });
 
 test('maintainability gates cannot be removed, skipped or weakened', () => {
-  for (const name of ['Go cognitive complexity', 'JavaScript maintainability', 'Test setup shared-literal rule']) {
+  for (const name of ['Go cognitive complexity', 'Test Go suppression guard', 'JavaScript maintainability', 'Test setup shared-literal rule']) {
     for (const mutation of ['missing', 'conditional', 'advisory', 'command']) {
       const candidate = files();
       const path = '.github/workflows/ci.yml';
@@ -49,6 +50,19 @@ test('maintainability gates cannot be removed, skipped or weakened', () => {
   const candidate = files();
   candidate['.github/workflows/ci.yml'] = candidate['.github/workflows/ci.yml'].replace('-over 15', '-over 16');
   assert.ok(inspect(candidate).some(error => error.includes('Go cognitive complexity')));
+});
+
+test('Go directive rejection cannot be removed or changed to allow suppressions', () => {
+  const candidate = files();
+  candidate['.github/workflows/ci.yml'] = candidate['.github/workflows/ci.yml']
+    .replace('          go run .github/scripts/check-go-directives.go .\n', '');
+  assert.ok(inspect(candidate).some(error => error.includes('Go cognitive complexity')));
+  for (const mutation of [undefined, 'package main\nfunc main() {}\n']) {
+    const changed = files();
+    if (mutation === undefined) delete changed['.github/scripts/check-go-directives.go'];
+    else changed['.github/scripts/check-go-directives.go'] = mutation;
+    assert.ok(inspect(changed).some(error => error.includes('Go suppression guard')));
+  }
 });
 
 test('PR JavaScript config cannot remove rules, add ignores or execute in the trusted guard', () => {
