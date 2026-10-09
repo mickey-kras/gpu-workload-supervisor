@@ -27,7 +27,7 @@ var ErrLaunchUnsupported = errors.New("native launch requires a supported direct
 // not general unit syntax. Unsupported indirection remains unavailable rather
 // than guessed.
 func qualifyNativeLaunchWithValidator(raw []byte, n control.NativeModel, validate func(string) error) error {
-	unit, err := parseLaunchUnit(raw, n.Runtime)
+	unit, err := parseOwnedLaunchUnit(raw, n)
 	if err != nil {
 		return err
 	}

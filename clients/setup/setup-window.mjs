@@ -9,7 +9,7 @@ import GLib from 'gi://GLib';
 import {applicationHeader, roundedCard} from './presentation.mjs';
 import {createShell, createSettings, createApplicationCards, createFooter} from './setup-layout.mjs';
 import {ReviewedConfiguration} from './review.mjs';
-import {createProfileEditor} from './profile-ui.mjs';
+import {createProfileEditor, editableOwnedLaunch} from './profile-ui.mjs';
 import {addDraftEditor} from './discovery-ui.mjs';
 import {applications} from './onboarding.mjs';
 
@@ -329,7 +329,7 @@ class SetupWindow {
             if (current && recognizedOllama[0].models?.length > 1) {
                 const related = existingOllama.filter(profile => profile.unit === current.unit);
                 this.appendDraft({id: current.id, app: 'ollama', label: current.label, model: current.nativeModel.model, models: related.map(profile => profile.nativeModel.model), endpoint: current.nativeModel.endpoint,
-                    binding: current.nativeModel.owned ? {instance: current.nativeModel.instance, owned: {...current.nativeModel.owned}} : {unit: current.unit, cgroup: current.cgroup, healthURL: current.healthURL, instance: current.nativeModel.instance, model: current.nativeModel.model, launchFile: current.nativeModel.launchFile}}, current);
+                    binding: current.nativeModel.owned ? {instance: current.nativeModel.instance, owned: editableOwnedLaunch(current.nativeModel.owned)} : {unit: current.unit, cgroup: current.cgroup, healthURL: current.healthURL, instance: current.nativeModel.instance, model: current.nativeModel.model, launchFile: current.nativeModel.launchFile}}, current);
                 this.draftEditors.at(-1).staged = related;
             }
         }

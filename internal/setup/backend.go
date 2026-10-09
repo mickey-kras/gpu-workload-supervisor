@@ -44,14 +44,42 @@ type Preview struct {
 	Changes []string        `json:"changes"`
 }
 
+// Reserve a bounded envelope allowance for deployment paths, revision and
+// confirmation fields in addition to a maximum-size catalog.
+const maxSetupRequestBytes = control.MaxCatalogBytes + 64*1024
+
 func Decode(reader io.Reader) (Request, error) {
 	var request Request
-	if err := strictjson.DecodeLimited(reader, 262144, &request); err != nil {
+	if err := strictjson.DecodeLimited(reader, maxSetupRequestBytes, &request); err != nil {
 		return request, err
 	}
-	return request, Validate(request)
+	// Decoding preserves the original request for interrupted activations.
+	// Only pending peer edits need a derived clone to validate the new graph;
+	// its final size is checked by the home-aware preview/apply path.
+	for _, p := range request.Catalog.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Owned != nil {
+			if _, err := ownedRenderChecked(p); err != nil {
+				return request, err
+			}
+		}
+	}
+	if err := Validate(request); err == nil {
+		return request, nil
+	}
+	candidate, err := prepareOwnedBackstops(request)
+	if err != nil {
+		return request, err
+	}
+	return request, Validate(candidate)
 }
 func Validate(request Request) error {
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > maxSetupRequestBytes {
+		return errors.New("setup request exceeds 416 KiB")
+	}
 	if request.Version != 1 || request.Profile.Version != 1 {
 		return errors.New("unsupported setup/profile version")
 	}
@@ -81,6 +109,10 @@ func Plan(home string, request Request) (Preview, error) {
 }
 
 func (b Backend) Plan(home string, request Request) (Preview, error) {
+	request, err := prepareOwnedBackstopsForActivation(home, request)
+	if err != nil {
+		return Preview{}, err
+	}
 	if err := Validate(request); err != nil {
 		return Preview{}, err
 	}
@@ -149,7 +181,8 @@ func Apply(ctx context.Context, home string, request Request) error {
 }
 
 func (b Backend) Apply(ctx context.Context, home string, request Request) error {
-	if err := Validate(request); err != nil {
+	request, err := prepareValidatedOwnedBackstopsForActivation(home, request)
+	if err != nil {
 		return err
 	}
 	if !request.ConfirmQuiesced {

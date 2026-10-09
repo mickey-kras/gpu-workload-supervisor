@@ -24,7 +24,8 @@ func (b Backend) VerifyBindings(ctx context.Context, request Request) error {
 }
 
 func (b Backend) verifyBindings(ctx context.Context, home string, request Request) error {
-	if err := Validate(request); err != nil {
+	request, err := prepareValidatedOwnedBackstopsForActivation(home, request)
+	if err != nil {
 		return err
 	}
 	var accepted control.CatalogSnapshot

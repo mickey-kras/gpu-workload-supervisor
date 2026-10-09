@@ -77,14 +77,27 @@ type CatalogSnapshot struct {
 	Catalog  Catalog `json:"catalog"`
 }
 
+// MaxCatalogInputBytes bounds canonical catalog data excluding derived owned
+// conflicts. The separate allowance fits 32 profiles with 31 peers each,
+// including 89-byte owned Ollama unit names, spaces and JSON field overhead.
+const MaxCatalogInputBytes = 256 * 1024
+const MaxOwnedConflictBytes = 96 * 1024
+
+// MaxCatalogBytes is the full wire/storage bound, including derived conflicts.
+// Validation also enforces the input budget so other fields cannot consume the
+// reserved allowance. File and database readers share the full bound.
+const MaxCatalogBytes = MaxCatalogInputBytes + MaxOwnedConflictBytes
+
+var ErrCatalogTooLarge = errors.New("catalog exceeds 256 KiB input or 352 KiB total")
+
 func DecodeCatalog(r io.Reader) (Catalog, error) {
 	var c Catalog
-	raw, err := io.ReadAll(io.LimitReader(r, 65537))
+	raw, err := io.ReadAll(io.LimitReader(r, MaxCatalogBytes+1))
 	if err != nil {
 		return c, err
 	}
-	if len(raw) > 65536 {
-		return c, errors.New("catalog exceeds 64 KiB")
+	if len(raw) > MaxCatalogBytes {
+		return c, ErrCatalogTooLarge
 	}
 	return DecodeCatalogBytes(raw)
 }
@@ -94,6 +107,9 @@ func DecodeCatalog(r io.Reader) (Catalog, error) {
 // rejection, a single JSON value, and full validation.
 func DecodeCatalogBytes(raw []byte) (Catalog, error) {
 	var c Catalog
+	if len(raw) > MaxCatalogBytes {
+		return c, ErrCatalogTooLarge
+	}
 	if err := strictjson.Check(json.NewDecoder(bytes.NewReader(raw))); err != nil {
 		if errors.Is(err, strictjson.ErrDuplicateKey) {
 			return c, errors.New("duplicate catalog key")
@@ -140,6 +156,9 @@ func (c Catalog) Clone() Catalog {
 	return c
 }
 func (c Catalog) Validate() error {
+	if err := c.validateSize(); err != nil {
+		return err
+	}
 	if c.Version != 1 && c.Version != 2 {
 		return errors.New("unsupported catalog version")
 	}
@@ -152,6 +171,35 @@ func (c Catalog) Validate() error {
 	if len(c.Profiles) < 1 || len(c.Profiles) > 32 {
 		return errors.New("catalog requires 1 to 32 profiles")
 	}
+	return c.validateProfiles()
+}
+
+func (c Catalog) validateSize() error {
+	encoded, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > MaxCatalogBytes {
+		return ErrCatalogTooLarge
+	}
+	base := c.Clone()
+	for i := range base.Profiles {
+		n := base.Profiles[i].NativeModel
+		if n != nil && n.Owned != nil {
+			n.Owned.Conflicts = ""
+		}
+	}
+	encoded, err = json.Marshal(base)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > MaxCatalogInputBytes {
+		return ErrCatalogTooLarge
+	}
+	return nil
+}
+
+func (c Catalog) validateProfiles() error {
 	for i, p := range c.Profiles {
 		if c.Version == 1 && p.NativeModel != nil && p.NativeModel.Owned != nil {
 			return ErrOwnedRequiresV2
@@ -163,7 +211,7 @@ func (c Catalog) Validate() error {
 			return err
 		}
 	}
-	return nil
+	return c.validateOwnedConflicts()
 }
 
 // ValidWorkloadLabel is shared with local presentation protocols.
@@ -424,4 +472,60 @@ func equalOwnedLaunch(a, b *OwnedLaunch) bool {
 		return a == nil && b == nil
 	}
 	return *a == *b
+}
+
+// OwnedConflictUnits returns the unique owned units that must exclude p's unit.
+// Profiles sharing an Ollama unit exclude other units, never one another.
+func (c Catalog) OwnedConflictUnits(p WorkloadProfile) string {
+	units := map[string]bool{}
+	for _, q := range c.Profiles {
+		if q.NativeModel != nil && q.NativeModel.Owned != nil && q.Unit != p.Unit {
+			units[q.Unit] = true
+		}
+	}
+	names := make([]string, 0, len(units))
+	for unit := range units {
+		names = append(names, unit)
+	}
+	slices.Sort(names)
+	return strings.Join(names, " ")
+}
+
+func (c Catalog) validateOwnedConflicts() error {
+	enabled := false
+	for _, p := range c.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Owned != nil && p.NativeModel.Owned.Conflicts != "" {
+			enabled = true
+		}
+	}
+	for _, p := range c.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Owned != nil {
+			peers := p.NativeModel.Owned.Conflicts
+			// Old catalogs remain valid without rewriting their bound files.
+			if enabled && peers != c.OwnedConflictUnits(p) {
+				return errors.New("owned conflicts must match the catalog's distinct owned units")
+			}
+		}
+	}
+	return nil
+}
+
+// ValidOwnedConflicts bounds the renderer's dependency grammar, including when
+// rendering a pending setup profile before full catalog validation.
+func ValidOwnedConflicts(unit, peers string) bool {
+	if peers == "" {
+		return true
+	}
+	names := strings.Split(peers, " ")
+	if len(names) > 31 {
+		return false
+	}
+	previous := ""
+	for _, name := range names {
+		if !unitName.MatchString(name) || !strings.HasPrefix(name, OwnedUnitFilePrefix) || name == unit || name <= previous {
+			return false
+		}
+		previous = name
+	}
+	return true
 }

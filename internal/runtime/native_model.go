@@ -32,7 +32,7 @@ func inspectQualifiedNativeLaunch(path string, binding control.NativeModel, vali
 	}
 	var unit parsedLaunchUnit
 	if binding.Owned != nil {
-		unit, err = parseLaunchUnit(sources[0], binding.Runtime)
+		unit, err = parseOwnedLaunchUnit(sources[0], binding)
 	} else {
 		unit, err = parseExternalLaunchSources(sources, binding.Runtime)
 	}
@@ -63,7 +63,7 @@ func readVerifiedNativeLaunch(n control.NativeModel, validate func(string) error
 		return unit, ErrLaunchChanged
 	}
 	if n.Owned != nil {
-		unit, err = parseLaunchUnit(sources[0], n.Runtime)
+		unit, err = parseOwnedLaunchUnit(sources[0], n)
 	} else {
 		unit, err = parseExternalLaunchSources(sources, n.Runtime)
 	}
