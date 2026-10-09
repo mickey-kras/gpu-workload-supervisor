@@ -64,6 +64,7 @@ nfpms:
       - gjs
       - gir1.2-gtk-4.0
       - gir1.2-adw-1
+      - librsvg2-common
       - gnome-shell (>= 50)
       - gnome-shell (<< 51)
       - systemd

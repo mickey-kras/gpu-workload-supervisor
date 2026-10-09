@@ -9,15 +9,22 @@ import {addErrorReporter} from './discovery-ui.mjs';
 export function createShell(ui) {
     ui.window = new Adw.ApplicationWindow({application: ui.app, title: 'GPU Workload Setup',
         default_width: 620, default_height: 670});
-    installSetupStyle(ui.window);
+    const removeStyle = installSetupStyle(ui.window);
     ui.appearance = Adw.StyleManager.get_default();
     ui.updateAppearance = () => {
         for (const [name, enabled] of [['setup-dark', ui.appearance.dark], ['setup-high-contrast', ui.appearance.high_contrast]]) {
             if (enabled) ui.window.add_css_class(name); else ui.window.remove_css_class(name);
         }
     };
-    ui.appearance.connect('notify::dark', ui.updateAppearance);
-    ui.appearance.connect('notify::high-contrast', ui.updateAppearance);
+    const appearanceSignals = [ui.appearance.connect('notify::dark', ui.updateAppearance),
+        ui.appearance.connect('notify::high-contrast', ui.updateAppearance)];
+    let subscribed = true;
+    ui.window.connect('destroy', () => {
+        if (!subscribed) return;
+        subscribed = false;
+        for (const id of appearanceSignals) ui.appearance.disconnect(id);
+        removeStyle();
+    });
     ui.updateAppearance();
     ui.toolbar = new Adw.ToolbarView();
     ui.headerBar = new Adw.HeaderBar();

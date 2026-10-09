@@ -79,15 +79,32 @@ app.connect('activate', () => {
             ui.window.set_default_size(Number(width), Number(height));
             await ui.initialized; await delay(250);
             const actualWidth = ui.window.get_width(), actualHeight = ui.window.get_height();
-            const startup = {expected: {width: Number(width), height: Number(height)},
-                actual: {width: actualWidth, height: actualHeight},
+            const startupXid = run(['xdotool', 'search', '--onlyvisible', '--name', ui.window.title]).split('\n').at(-1);
+            const x11 = Object.fromEntries(run(['xdotool', 'getwindowgeometry', '--shell', startupXid]).split('\n').map(line => line.split('=')));
+            const scale = Number(GLib.getenv('GDK_SCALE') || 1);
+            const surface = ui.window.get_surface();
+            // GtkWidget allocation excludes CSD shadows; X11 drawable dimensions
+            // and screenshot pixels measure the complete native window at scale.
+            const startup = {expectedLogicalWindow: {width: Number(width), height: Number(height)},
+                contentAllocation: {width: actualWidth, height: actualHeight},
+                surfaceLogical: {width: surface.get_width(), height: surface.get_height()},
+                x11Pixels: {width: Number(x11.WIDTH), height: Number(x11.HEIGHT)}, scale,
                 minimumHorizontal: ui.window.measure(Gtk.Orientation.HORIZONTAL, -1),
                 minimumVertical: ui.window.measure(Gtk.Orientation.VERTICAL, actualWidth)};
             GLib.file_set_contents(`${output}/startup-${nextMode}-geometry.json`, JSON.stringify(startup, null, 2));
-            const startupXid = run(['xdotool', 'search', '--onlyvisible', '--name', ui.window.title]).split('\n').at(-1);
             run(['import', '-window', startupXid, `${output}/startup-${nextMode}.png`]);
-            assert(actualWidth === Number(width), `window width exceeds supported size: expected ${width}, actual ${actualWidth}; geometry=${JSON.stringify(startup)}`);
-            assert(actualHeight === Number(height), `window height exceeds supported size: expected ${height}, actual ${actualHeight}; geometry=${JSON.stringify(startup)}`);
+            assert(Number(x11.WIDTH) === Number(width) * scale, `native window width mismatch: geometry=${JSON.stringify(startup)}`);
+            assert(Number(x11.HEIGHT) === Number(height) * scale, `native window height mismatch: geometry=${JSON.stringify(startup)}`);
+            const appImages = widgets(ui.window).filter(widget => widget.has_css_class('setup-icon-tile')).flatMap(tile => widgets(tile).filter(widget => widget instanceof Gtk.Image || widget instanceof Gtk.Picture));
+            assert(appImages.length >= 4, 'all four application icons are rendered');
+            startup.icons = appImages.map(image => ({widget: image.constructor.name,
+                width: image.get_width(), height: image.get_height(),
+                intrinsicWidth: image.paintable?.get_intrinsic_width(), intrinsicHeight: image.paintable?.get_intrinsic_height()}));
+            GLib.file_set_contents(`${output}/startup-${nextMode}-geometry.json`, JSON.stringify(startup, null, 2));
+            for (const icon of startup.icons) {
+                assert(icon.intrinsicWidth > 0 && icon.intrinsicWidth <= 44 && icon.intrinsicHeight > 0 && icon.intrinsicHeight <= 44, `application icon paintable must fit its 44px tile: ${JSON.stringify(icon)}`);
+                assert(icon.width === 44 && icon.height === 44, `application icon must display in a 44px square: ${JSON.stringify(icon)}`);
+            }
             return ui;
         }
         const geometry = [];
@@ -146,6 +163,7 @@ app.connect('activate', () => {
         await capture(ui, 'applications-keyboard-focus');
         ui.applicationCards.get('comfyui').select.active = true;
         ui.applicationCards.get('ollama').select.active = true;
+        await capture(ui, 'applications-selected');
         await tabTo(ui, ui.review);
         await inspect('applications', 'applications-continue', 'Continue');
         await activate(ui, ui.review, 'Choose models');

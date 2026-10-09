@@ -34,7 +34,7 @@ export function createWidgetClass(widgets) {
             this.children.splice(index, 1);
         }
         present() { this.presented = true; }
-        close() { this.closed = true; }
+        close() { this.closed = true; this.emit('destroy'); }
         grab_focus() { this.focused = true; }
         run() { this.emit('activate'); }
     }

@@ -20,7 +20,8 @@ export function installSetupStyle(window) {
         .setup-high-contrast .setup-card { border-color: @window_fg_color; }
         .setup-icon-tile { background: #17191b; border-radius: 10px; padding: 6px; min-width: 44px; min-height: 44px; }
         .setup-app-name { font-size: 18px; font-weight: 700; }
-        .setup-detection { font-size: 14px; }
+        .setup-detection { font-size: 14px; opacity: .8; }
+        .setup-high-contrast .setup-detection { opacity: 1; }
         .setup-model-choice { background: alpha(@window_fg_color, .04); border: 1px solid alpha(@window_fg_color, .08); border-radius: 9px; padding: 12px 16px; font-size: 16px; }
         .setup-high-contrast .setup-model-choice { border-color: @window_fg_color; }
         .setup-link { color: #c64600; text-decoration: underline; padding: 4px 0; }
@@ -30,6 +31,7 @@ export function installSetupStyle(window) {
     `, -1);
     Gtk.StyleContext.add_provider_for_display(window.get_display(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
     window.add_css_class('setup-window');
+    return () => Gtk.StyleContext.remove_provider_for_display(window.get_display(), provider);
 }
 
 export function roundedCard(Gtk, orientation = Gtk.Orientation.VERTICAL, spacing = 10) {
@@ -44,7 +46,9 @@ export function applicationIcon(Gtk, appID) {
     const source = Gio.File.new_for_uri(import.meta.url).get_parent().get_child(`icons/${icons[appID]}`);
     if (!source.query_exists(null)) throw new Error(`Application icon is missing: ${icons[appID]}`);
     const icon = new Gio.FileIcon({file: source});
-    const image = new Gtk.Image({accessible_role: Gtk.AccessibleRole.PRESENTATION});
+    const image = new Gtk.Picture({width_request: 44, height_request: 44, can_shrink: true,
+        content_fit: Gtk.ContentFit.CONTAIN, halign: Gtk.Align.CENTER, valign: Gtk.Align.CENTER,
+        accessible_role: Gtk.AccessibleRole.PRESENTATION});
     const updateIcon = () => {
         // File images retain their intrinsic dimensions; icon lookup fixes the logical size.
         image.paintable = Gtk.IconTheme.get_for_display(image.get_display()).lookup_by_gicon(

@@ -23,7 +23,7 @@ jobs:
       - name: Install native setup fixture dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y gjs gir1.2-gtk-4.0 gir1.2-adw-1 xvfb xauth dbus-x11 xdotool imagemagick python3-pyatspi at-spi2-core gsettings-desktop-schemas
+          sudo apt-get install --no-install-recommends -y gjs gir1.2-gtk-4.0 gir1.2-adw-1 xvfb xauth dbus-x11 xdotool imagemagick python3-pyatspi at-spi2-core gsettings-desktop-schemas librsvg2-common
       - name: Native GTK setup, accessibility and screenshot matrix
         run: python3 tests/desktop/setup_native.py --output native-setup-evidence
       - name: Upload native setup evidence

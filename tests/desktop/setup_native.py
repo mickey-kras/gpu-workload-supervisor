@@ -40,6 +40,7 @@ def main():
         print(log, end='')
         assert result.returncode == 0, f'native fixture failed: {case}'
         assert 'Theme parser error' not in log and 'CSS parser error' not in log, 'GTK stylesheet parse error'
+        assert 'Failed to load' not in log and 'Unrecognized image file format' not in log, 'native icon load failure'
         report = json.loads((case / 'report.json').read_text())
         for image in case.glob('*.png'):
             size = subprocess.check_output(['identify', '-format', '%w %h', str(image)], text=True)

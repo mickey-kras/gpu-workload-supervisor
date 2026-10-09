@@ -4,6 +4,7 @@ package="${1:?usage: check-desktop-package.sh package.deb}"
 test "$(dpkg-deb --field "$package" Package)" = gpu-workload-supervisor
 case "$(dpkg-deb --field "$package" Architecture)" in amd64|arm64) ;; *) exit 1;; esac
 depends="$(dpkg-deb --field "$package" Depends)"
+[[ "$depends" == *'librsvg2-common'* ]]
 [[ "$depends" == *'gnome-shell (>= 50)'* && "$depends" == *'gnome-shell (<< 51)'* ]]
 root="$(mktemp -d)"
 trap 'rm -rf "$root"' EXIT

@@ -561,3 +561,43 @@ for (const saved of [false, true]) {
         assert.equal(ui.calls.some(call => ['apply', 'temporary-discover'].includes(call.argv[1])), false);
     });
 }
+
+test('global settings gear is hidden on model and confirmation pages; Back restores it with invalidated review', async () => {
+    const ui = await launch(options([installation('ollama', [{id: 'a', label: 'Model A'}, {id: 'b', label: 'Model B'}])]));
+    assert.equal(ui.visible(ui.by('Use Ollama')), true);
+    ui.edit(ui.by('Use Ollama'), 'active', true);
+    await ui.click('Continue');
+    assert.equal(heading(ui).label, 'Choose models');
+    assert.equal(ui.visible(ui.by('Setup settings')), false);
+    await assert.rejects(ui.click('Setup settings'), /not actionable/);
+    assert.equal(ui.visible(ui.by('Model A')), true);
+    ui.edit(ui.by('Model A'), 'active', true);
+    await ui.click('Continue');
+    assert.equal(heading(ui).label, 'Ready to finish');
+    assert.equal(ui.visible(ui.by('Setup settings')), false);
+    await assert.rejects(ui.click('Setup settings'), /not actionable/);
+    assert.equal(ui.by('Finish setup').sensitive, true);
+    await ui.click('Back');
+    assert.equal(ui.by('Finish setup').sensitive, false);
+    await ui.click('Back');
+    assert.equal(heading(ui).label, 'Choose your applications');
+    await ui.click('Setup settings');
+    assert.equal(ui.visible(ui.by('NVIDIA GPU index')), true);
+    ui.edit(ui.by('NVIDIA GPU index'), 'text', '3');
+    assert.equal(ui.by('Finish setup').sensitive, false);
+    assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
+});
+
+
+test('closing setup releases display styling and singleton appearance subscriptions', async () => {
+    const ui = await launch(options([]));
+    assert.equal(ui.appearance.handlers.size, 2);
+    assert.equal(ui.styleProviders.size, 1);
+    ui.widgets.find(widget => widget.widgetType === 'ApplicationWindow').emit('unrealize');
+    assert.equal(ui.appearance.handlers.size, 2, 'a window can be hidden and realized again before disposal');
+    assert.equal(ui.styleProviders.size, 1);
+    await ui.click('Set up later');
+    assert.equal(ui.appearance.handlers.size, 0);
+    assert.equal(ui.styleProviders.size, 0);
+    assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
+});

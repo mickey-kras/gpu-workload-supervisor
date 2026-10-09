@@ -12,13 +12,20 @@ export async function launch({units = [], profiles = [], pending = false, fail =
         static $gtype = 'GtkStringObject';
         constructor(string) { this.string = string; }
     }
+    const appearance = {dark: true, high_contrast: false, handlers: new Map(),
+        connect(signal, fn) { const id = this.handlers.size + 1; this.handlers.set(id, {signal, fn}); return id; },
+        disconnect(id) { this.handlers.delete(id); },
+    };
+    const styleProviders = new Set();
     const native = {
-        'gi://Adw?version=1': {default: {StyleManager: {get_default: () => ({dark: true, high_contrast: false, connect() {}})}, ...Object.fromEntries(['Application', 'ApplicationWindow', 'HeaderBar', 'ToolbarView', 'PreferencesGroup', 'EntryRow', 'ComboRow', 'ExpanderRow'].map(name => [name, class extends Widget { constructor(properties) { super(properties); this.widgetType = name; } }]))}},
+        'gi://Adw?version=1': {default: {StyleManager: {get_default: () => appearance}, ...Object.fromEntries(['Application', 'ApplicationWindow', 'HeaderBar', 'ToolbarView', 'PreferencesGroup', 'EntryRow', 'ComboRow', 'ExpanderRow'].map(name => [name, class extends Widget { constructor(properties) { super(properties); this.widgetType = name; } }]))}},
         'gi://Gtk?version=4.0': {default: {
-            ...Object.fromEntries(['Box', 'Label', 'ScrolledWindow', 'Button', 'CheckButton', 'Image', 'Separator', 'Expander'].map(name => [name, class extends Widget { constructor(properties) { super(properties); this.widgetType = name; } }])),
+            ...Object.fromEntries(['Box', 'Label', 'ScrolledWindow', 'Button', 'CheckButton', 'Image', 'Picture', 'Separator', 'Expander'].map(name => [name, class extends Widget { constructor(properties) { super(properties); this.widgetType = name; } }])),
             IconTheme: {get_for_display: () => ({lookup_by_gicon: (icon, size, scale) => ({icon, size, scale})})},
             TextDirection: {NONE: 0}, IconLookupFlags: {FORCE_REGULAR: 1},
-            CssProvider: class { load_from_data() {} }, StyleContext: {add_provider_for_display() {}}, STYLE_PROVIDER_PRIORITY_APPLICATION: 600,
+            CssProvider: class { load_from_data() {} }, StyleContext: {add_provider_for_display(display, provider) { styleProviders.add(provider); },
+                remove_provider_for_display(display, provider) { styleProviders.delete(provider); }}, STYLE_PROVIDER_PRIORITY_APPLICATION: 600,
+            ContentFit: {CONTAIN: 1},
             Align: {CENTER: 3, START: 1}, AccessibleRole: {PRESENTATION: 1},
             FileDialog: class { open(window, cancel, callback) { callback(this, {}); } select_folder(window, cancel, callback) { callback(this, {}); }
                 open_finish() {
@@ -69,7 +76,7 @@ export async function launch({units = [], profiles = [], pending = false, fail =
         if (!visible(widget) || !widget.sensitive) throw new Error(`Control is not actionable: ${label}`);
         await widget.emit('clicked');
     };
-    return {widgets, calls, signals, request, by, visible, click, selectApplication(index) {
+    return {widgets, calls, signals, request, appearance, styleProviders, by, visible, click, selectApplication(index) {
         const label = ['ComfyUI', 'Ollama', 'llama.cpp', 'vLLM'][index];
         by(`Use ${label}`).active = true;
         by(`Configure ${label}`).emit('clicked');
