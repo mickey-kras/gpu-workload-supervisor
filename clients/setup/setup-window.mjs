@@ -83,7 +83,7 @@ class SetupWindow {
         this.draftRows.visible = this.step === 0;
         this.setupSettings.visible = this.step === 0; this.back.visible = this.step > 0; this.later.visible = this.step === 0; this.status.visible = this.step === 2 || this.pending; this.apply.visible = this.step === 2; this.review.visible = this.step !== 2;
         this.review.label = 'Continue';
-        this.heading.grab_focus();
+        this.heading.grab_focus(); this.heading.select_region(0, 0);
     }
 
     selectApplication(choice) {

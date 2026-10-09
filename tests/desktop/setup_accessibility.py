@@ -26,6 +26,9 @@ def main():
     pathlib.Path(sys.argv[1]).write_text(json.dumps(tree, indent=2) + '\n')
     visible = [node for node in tree if node['showing']]
     screen = sys.argv[2]
+    if screen == 'diagnostic':
+        print('DIAGNOSTIC: focused AT-SPI nodes:', [node for node in visible if node['focused']])
+        return
     expected_focus = sys.argv[3]
     def present(name, role=None):
         return any(node['name'] == name and (role is None or node['role'] == role)

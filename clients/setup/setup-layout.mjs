@@ -36,7 +36,8 @@ export function createShell(ui) {
     ui.scroll.set_child(ui.box);
     ui.toolbar.set_content(ui.scroll);
     ui.window.set_content(ui.toolbar);
-    ui.heading = new Gtk.Label({label: 'Choose your applications', xalign: 0, wrap: true, focusable: true});
+    ui.heading = new Gtk.Label({label: 'Choose your applications', xalign: 0, wrap: true, focusable: true, selectable: true,
+        accessible_role: Gtk.AccessibleRole.HEADING});
     ui.heading.add_css_class('title-1');
     ui.heading.add_css_class('setup-heading');
     ui.box.append(ui.heading);

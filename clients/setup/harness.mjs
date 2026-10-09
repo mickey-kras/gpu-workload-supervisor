@@ -26,7 +26,7 @@ export async function launch({units = [], profiles = [], pending = false, fail =
             CssProvider: class { load_from_data() {} }, StyleContext: {add_provider_for_display(display, provider) { styleProviders.add(provider); },
                 remove_provider_for_display(display, provider) { styleProviders.delete(provider); }}, STYLE_PROVIDER_PRIORITY_APPLICATION: 600,
             ContentFit: {CONTAIN: 1},
-            Align: {CENTER: 3, START: 1}, AccessibleRole: {PRESENTATION: 1},
+            Align: {CENTER: 3, START: 1}, AccessibleRole: {PRESENTATION: 1, HEADING: 2},
             FileDialog: class { open(window, cancel, callback) { callback(this, {}); } select_folder(window, cancel, callback) { callback(this, {}); }
                 open_finish() {
                     if (fileError) throw fileError;
@@ -45,7 +45,7 @@ export async function launch({units = [], profiles = [], pending = false, fail =
         'gi://GLib': {default: {getenv: () => 'GNOME', uuid_string_random: () => uuidSequence++ ? `unique-id-${uuidSequence}` : 'unique-id',
             markup_escape_text: text => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
         }},
-        'gi://Gio': {default: {FileIcon: class { constructor(properties) { Object.assign(this, properties); } }, File: {new_for_uri: () => ({get_parent: () => ({get_child: name => ({get_path: () => '/setup/' + name, query_exists: () => true})})})}, SubprocessFlags: {STDIN_PIPE: 1, STDOUT_PIPE: 2, STDERR_PIPE: 4},
+        'gi://Gio': {default: {FileIcon: class { constructor(properties) { Object.assign(this, properties); } }, File: {new_for_uri: () => ({get_parent: () => ({get_child: name => ({query_exists: () => true})})})}, SubprocessFlags: {STDIN_PIPE: 1, STDOUT_PIPE: 2, STDERR_PIPE: 4},
             Subprocess: {new(argv) { let requestInput; return {
                 send_signal(signal) { signals.push({argv, signal}); },
                 communicate_utf8_async(input, cancel, callback) {

@@ -143,7 +143,16 @@ app.connect('activate', () => {
             for (let count = 0; count < 100 && ui.heading.label !== heading; count++) await delay(20);
             assert(ui.heading.label === heading, `keyboard activation must reach ${heading}`);
             await delay(80);
-            assert(ownsFocus(ui, ui.heading), 'screen transition focuses its heading');
+            const transition = heading.toLowerCase().replaceAll(' ', '-');
+            const transitionXid = run(['xdotool', 'search', '--onlyvisible', '--name', ui.window.title]).split('\n').at(-1);
+            run(['import', '-window', transitionXid, `${output}/transition-${transition}.png`]);
+            const focus = ui.window.get_focus();
+            const diagnostics = {expectedHeading: heading, actualHeading: ui.heading.label,
+                headingFocusable: ui.heading.get_focusable(), headingMapped: ui.heading.get_mapped(),
+                currentFocus: focus ? {widget: focus.constructor.name, label: focus.label ?? null, name: focus.get_name()} : null};
+            GLib.file_set_contents(`${output}/transition-${transition}-focus.json`, JSON.stringify(diagnostics, null, 2));
+            await runAsync(['/usr/bin/python3', 'tests/desktop/setup_accessibility.py', `${output}/accessibility-transition-${transition}.json`, 'diagnostic']);
+            assert(ownsFocus(ui, ui.heading), `screen transition focuses its heading: ${JSON.stringify(diagnostics)}`);
         }
         async function capture(ui, name) {
             await delay(180);
