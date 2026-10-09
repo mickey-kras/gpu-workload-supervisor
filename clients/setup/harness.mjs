@@ -3,6 +3,7 @@ import {loadGjsModule} from '../gnome/tests/gjs-modules.js';
 
 // The native icon constructor returns a property bag in this widget fixture.
 function FileIcon(properties) { return {...properties}; }
+function fileAtURI() { return {get_parent: () => ({get_child: () => ({query_exists: () => true})})}; }
 
 // Substitute only GI widgets and subprocesses; run the setup's real event handlers.
 export async function launch({units = [], profiles = [], pending = false, fail = null, version = 'GNOME Shell 50.1', responses = {}, filePath = '/models/selected.gguf', fileError = null, deferAction = 'validate', deferOccurrence = null} = {}) {
@@ -50,7 +51,7 @@ export async function launch({units = [], profiles = [], pending = false, fail =
         'gi://GLib': {default: {PRIORITY_DEFAULT_IDLE: 200, SOURCE_REMOVE: false, idle_add(priority, callback) { callback(); return 1; }, getenv: () => 'GNOME', uuid_string_random: () => uuidSequence++ ? `unique-id-${uuidSequence}` : 'unique-id',
             markup_escape_text: text => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
         }},
-        'gi://Gio': {default: {FileIcon, File: {new_for_uri: () => ({get_parent: () => ({get_child: () => ({query_exists: () => true})})})}, SubprocessFlags: {STDIN_PIPE: 1, STDOUT_PIPE: 2, STDERR_PIPE: 4},
+        'gi://Gio': {default: {FileIcon, File: {new_for_uri: fileAtURI}, SubprocessFlags: {STDIN_PIPE: 1, STDOUT_PIPE: 2, STDERR_PIPE: 4},
             Subprocess: {new(argv) { let requestInput; return {
                 send_signal(signal) { signals.push({argv, signal}); },
                 communicate_utf8_async(input, cancel, callback) {

@@ -72,13 +72,7 @@ func OwnedProfile(d Draft, managerCgroup, home string) (control.WorkloadProfile,
 		MaxModelLen: d.Binding.Owned.MaxModelLen,
 		Alias:       d.Binding.Owned.Alias,
 	}
-	model := d.Model
-	if d.App != "ollama" {
-		model = owned.Alias
-		if model == "" {
-			model = owned.ModelPath
-		}
-	}
+	model := ownedProfileModel(d, owned)
 	id := control.Workload(d.ID)
 	unit := control.OwnedUnitName(d.App, d.Binding.Instance, id)
 	endpoint := "http://127.0.0.1:" + strconv.Itoa(int(owned.Port))
@@ -111,4 +105,14 @@ func OwnedProfile(d Draft, managerCgroup, home string) (control.WorkloadProfile,
 		return control.WorkloadProfile{}, nil, fmt.Errorf("owned profile synthesis: %w", err)
 	}
 	return profile, raw, nil
+}
+
+func ownedProfileModel(d Draft, owned control.OwnedLaunch) string {
+	if d.App == "ollama" {
+		return d.Model
+	}
+	if owned.Alias != "" {
+		return owned.Alias
+	}
+	return owned.ModelPath
 }

@@ -11,6 +11,9 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
+const execStartPropertyPrefix = "ExecStart="
+const inspectionFailedStatus = "inspection-failed"
+
 func (b Backend) discoverApplications(ctx context.Context, result *Discovery, units []string) {
 	// Only these four local default origins are probed. Non-default instances use
 	// an explicit endpoint selection; no port, process, or filesystem scanning.
@@ -54,22 +57,10 @@ func unitRelevant(unit string, profiles []control.WorkloadProfile) bool {
 func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit string) {
 	values, err := b.showApplicationCandidate(ctx, unit)
 	if err != nil {
-		app := appFromUnit("ExecStart=" + values["ExecStart"])
-		if app == "" && !unitRelevant(unit, result.Request.Catalog.Profiles) {
-			return
-		}
-		if app == "" {
-			app = candidateApplicationHint(unit, result.Request.Catalog.Profiles)
-		}
-		found := candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"})
-		found.Unit = unit
-		found.InstanceStatus = "inspection-failed"
-		found.ConfigurationStatus = "inspection-failed"
-		found.NextStep = "Could not inspect this application: " + err.Error()
-		result.Applications = append(result.Applications, found)
+		addFailedUnitInspection(result, unit, values, err)
 		return
 	}
-	app := appFromUnit("ExecStart=" + values["ExecStart"])
+	app := appFromUnit(execStartPropertyPrefix + values["ExecStart"])
 	if app == "" {
 		addUnsupportedUnit(result, unit)
 		return
@@ -82,7 +73,7 @@ func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit strin
 	found.Location = values["FragmentPath"]
 	found.Cgroup = values["ControlGroup"]
 	found.ConfigurationStatus = "unsupported"
-	if models := launchModels(app, "ExecStart="+values["ExecStart"]); models != nil {
+	if models := launchModels(app, execStartPropertyPrefix+values["ExecStart"]); models != nil {
 		found.Models = models
 	}
 	if values["ActiveState"] == "inactive" && values["SubState"] == "dead" {
@@ -95,7 +86,7 @@ func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit strin
 	profile, err := b.configurationFromMetadata(ctx, app, unit, model, values)
 	if err != nil {
 		found.NextStep = err.Error()
-		found.ConfigurationStatus = "inspection-failed"
+		found.ConfigurationStatus = inspectionFailedStatus
 		if errors.Is(err, gpuruntime.ErrModelUnavailable) {
 			found.ConfigurationStatus = "model-missing"
 			found.InventoryStatus = "missing"
@@ -109,6 +100,22 @@ func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit strin
 	result.Units = append(result.Units, unit)
 	result.Applications = append(result.Applications, found)
 }
+func addFailedUnitInspection(result *Discovery, unit string, values map[string]string, err error) {
+	app := appFromUnit(execStartPropertyPrefix + values["ExecStart"])
+	if app == "" && !unitRelevant(unit, result.Request.Catalog.Profiles) {
+		return
+	}
+	if app == "" {
+		app = candidateApplicationHint(unit, result.Request.Catalog.Profiles)
+	}
+	found := candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"})
+	found.Unit = unit
+	found.InstanceStatus = inspectionFailedStatus
+	found.ConfigurationStatus = inspectionFailedStatus
+	found.NextStep = "Could not inspect this application: " + err.Error()
+	result.Applications = append(result.Applications, found)
+}
+
 func addUnsupportedUnit(result *Discovery, unit string) {
 	if unitRelevant(unit, result.Request.Catalog.Profiles) {
 		found := candidate(ProbeRequest{App: candidateApplicationHint(unit, result.Request.Catalog.Profiles), Reference: unit, ReferenceKind: "configuration"})

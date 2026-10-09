@@ -111,35 +111,12 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 	if validate == nil {
 		validate = validateNativeExecutable
 	}
-	launchFile := ""
-	command := ""
-	var preCommands []string
-	var environment map[string]string
-	var dropIns []control.LaunchSource
-	if p.NativeModel != nil {
-		launchFile = p.NativeModel.LaunchFile
-		dropIns = p.NativeModel.DropIns
-		launch, err := readVerifiedNativeLaunch(*p.NativeModel, validate)
-		if err != nil {
-			return err
-		}
-		command = launch.execStart
-		preCommands = launch.preCommands
-		environment = launch.environmentValues
-	} else {
-		binding := p.LaunchBinding
-		launchFile = binding.LaunchFile
-		dropIns = binding.DropIns
-		unit, err := m.readApplicationLaunch(*binding, validate)
-		if err != nil {
-			return err
-		}
-		command = unit.execStart
-		preCommands = unit.preCommands
-		environment = unit.environmentValues
+	launch, launchFile, dropIns, err := m.readProfileLaunch(p, validate)
+	if err != nil {
+		return err
 	}
 	args := []string{"--user", "show", "--property=FragmentPath", "--property=DropInPaths", "--property=NeedDaemonReload", "--property=ExecStartPre", "--property=ExecStart"}
-	for name := range environment {
+	for name := range launch.environmentValues {
 		if !strings.HasPrefix(name, "OLLAMA_") {
 			args = append(args, "--property=Environment")
 			break
@@ -154,19 +131,29 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 	if err != nil {
 		return err
 	}
-	if err := CheckLoadedEnvironment(values["Environment"], environment); err != nil {
+	if err := CheckLoadedEnvironment(values["Environment"], launch.environmentValues); err != nil {
 		return err
 	}
 	if values["NeedDaemonReload"] != "no" {
 		return ErrLaunchChanged
 	}
-	if err := CheckLoadedLaunchCommand(values["ExecStart"], command); err != nil {
+	if err := CheckLoadedLaunchCommand(values["ExecStart"], launch.execStart); err != nil {
 		return err
 	}
-	if err := CheckLoadedPreCommands(values["ExecStartPre"], preCommands); err != nil {
+	if err := CheckLoadedPreCommands(values["ExecStartPre"], launch.preCommands); err != nil {
 		return err
 	}
 	return CheckNativeBindingSources(values, p.Unit, launchFile, dropIns)
+}
+
+func (m *SystemdManager) readProfileLaunch(p control.WorkloadProfile, validate func(string) error) (parsedLaunchUnit, string, []control.LaunchSource, error) {
+	if p.NativeModel != nil {
+		launch, err := readVerifiedNativeLaunch(*p.NativeModel, validate)
+		return launch, p.NativeModel.LaunchFile, p.NativeModel.DropIns, err
+	}
+	binding := p.LaunchBinding
+	launch, err := m.readApplicationLaunch(*binding, validate)
+	return launch, binding.LaunchFile, binding.DropIns, err
 }
 
 func (m *SystemdManager) readApplicationLaunch(binding control.LaunchBinding, validate func(string) error) (parsedLaunchUnit, error) {

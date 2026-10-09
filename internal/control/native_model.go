@@ -174,7 +174,17 @@ func (n NativeModel) validateOwned() error {
 	if endpoint := "http://127.0.0.1:" + strconv.Itoa(int(o.Port)); n.Endpoint != endpoint {
 		return errors.New("owned launch endpoint must match the rendered loopback binding")
 	}
-	switch n.Runtime {
+	if err := o.validateRuntimeOptions(n.Runtime); err != nil {
+		return err
+	}
+	if n.Runtime == nativeRuntimeLlamaCPP || n.Runtime == "vllm" {
+		return n.validateOwnedModel()
+	}
+	return nil
+}
+
+func (o OwnedLaunch) validateRuntimeOptions(runtime string) error {
+	switch runtime {
 	case "ollama":
 		if o.ModelPath != "" || o.CtxSize != 0 || o.GPULayers != 0 || o.MaxModelLen != 0 || o.Alias != "" {
 			return errors.New("ollama owned launches accept only a port")
@@ -187,9 +197,6 @@ func (n NativeModel) validateOwned() error {
 		if o.CtxSize != 0 || o.GPULayers != 0 {
 			return errors.New("ctx-size and gpu-layers are llama.cpp owned launch fields")
 		}
-	}
-	if n.Runtime == nativeRuntimeLlamaCPP || n.Runtime == "vllm" {
-		return n.validateOwnedModel()
 	}
 	return nil
 }
@@ -306,9 +313,13 @@ func ValidGPUUUID(value string) bool {
 			}
 			continue
 		}
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+		if !isHexDigit(c) {
 			return false
 		}
 	}
 	return true
+}
+
+func isHexDigit(c rune) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }

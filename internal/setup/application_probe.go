@@ -232,8 +232,8 @@ func probeReferenceWithExecutableValidator(ctx context.Context, r ProbeRequest, 
 }
 func probeSelectedExecutable(r ProbeRequest, result ApplicationCandidate, validate func(string, string) error) (ApplicationCandidate, error) {
 	if err := validate(r.App, r.Reference); err != nil {
-		result.InstanceStatus = "inspection-failed"
-		result.ConfigurationStatus = "inspection-failed"
+		result.InstanceStatus = inspectionFailedStatus
+		result.ConfigurationStatus = inspectionFailedStatus
 		result.NextStep = err.Error()
 		return result, nil
 	}
@@ -251,7 +251,7 @@ func missingReference(err error, result ApplicationCandidate) ApplicationCandida
 	result.InstanceStatus = "missing"
 	result.NextStep = "Select an existing file or directory."
 	if !errors.Is(err, os.ErrNotExist) {
-		result.InstanceStatus = "inspection-failed"
+		result.InstanceStatus = inspectionFailedStatus
 		result.NextStep = "Check access to the selected reference."
 	}
 	return result
