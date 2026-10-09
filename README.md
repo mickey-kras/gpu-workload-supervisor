@@ -9,7 +9,7 @@
 
 GPU Workload Supervisor switches between catalog-configured workloads that share one GPU. It stops and verifies the outgoing workload before starting the next, and blocks new requests when a transition or recovery fails. Use it when the workloads cannot safely run at once.
 
-It provides four executables: `gpu-mode` (controller and workload transitions), `gpu-workload-proxy` (execution admission proxy), `gpu-operator` (one-request local operator backend), and `gpu-setup` (guided setup and catalog commit). You supply the runtime services, health endpoints and deployment configuration.
+It provides four executables: `gpu-mode` (controller and workload transitions), `gpu-workload-proxy` (execution admission proxy), `gpu-operator` (one-request local operator backend), and `gpu-setup` (guided setup and catalog commit). Setup can adopt supported existing services or preview managed launches for installed native runtimes, with explicit confirmation before activation.
 
 Use this project independently of the memory stack. It does not require Memory Router, its agent integrations, or Hindsight.
 

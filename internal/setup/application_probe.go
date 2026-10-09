@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/httptransport"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
@@ -28,6 +29,7 @@ type ProbeRequest struct {
 	ReferenceKind string `json:"referenceKind,omitempty"`
 }
 type ApplicationCandidate struct {
+	SourceKind          string           `json:"sourceKind"`
 	Recognized          bool             `json:"recognized"`
 	Location            string           `json:"location,omitempty"`
 	ConfigurationStatus string           `json:"configurationStatus,omitempty"`
@@ -113,7 +115,14 @@ func DecodeProbe(reader io.Reader) (ProbeRequest, error) {
 }
 func candidate(r ProbeRequest) ApplicationCandidate {
 	sum := sha256.Sum256([]byte(r.App + "\x00" + r.Endpoint + "\x00" + r.Reference + "\x00" + r.ReferenceKind))
-	return ApplicationCandidate{App: r.App, ID: hex.EncodeToString(sum[:12]), Label: appLabel(r.App), Endpoint: r.Endpoint, Reference: r.Reference, ReferenceKind: r.ReferenceKind, InstanceStatus: "candidate", InventoryStatus: "unknown", Models: []ModelCandidate{}, LifecycleControl: "unverified", NextStep: "Verify lifecycle control before using this workload."}
+	sourceKind := "endpoint"
+	if r.Reference != "" {
+		sourceKind = "reference"
+		if r.ReferenceKind == "configuration" {
+			sourceKind = "configuration"
+		}
+	}
+	return ApplicationCandidate{SourceKind: sourceKind, App: r.App, ID: hex.EncodeToString(sum[:12]), Label: appLabel(r.App), Endpoint: r.Endpoint, Reference: r.Reference, ReferenceKind: r.ReferenceKind, InstanceStatus: "candidate", InventoryStatus: "unknown", Models: []ModelCandidate{}, LifecycleControl: "unverified", NextStep: "Verify lifecycle control before using this workload."}
 }
 
 // Probe never starts a process or reads model contents. HTTP routes are fixed
@@ -204,6 +213,9 @@ func probeReference(ctx context.Context, r ProbeRequest, result ApplicationCandi
 		result.NextStep = "Select a regular file or a model directory; symbolic links and special files are not inspected."
 		return result, nil
 	}
+	if r.ReferenceKind == "application" && r.App != "comfyui" {
+		return probeSelectedExecutable(r, result, gpuruntime.ValidateSelectedNativeExecutable)
+	}
 	if r.App == "comfyui" {
 		result.InventoryStatus = "not-applicable"
 		result.NextStep = "ComfyUI workflows select models. Select its application or configuration."
@@ -211,11 +223,28 @@ func probeReference(ctx context.Context, r ProbeRequest, result ApplicationCandi
 	}
 	return referencedCandidate(r, directory, result), nil
 }
+func probeSelectedExecutable(r ProbeRequest, result ApplicationCandidate, validate func(string, string) error) (ApplicationCandidate, error) {
+	if err := validate(r.App, r.Reference); err != nil {
+		result.InstanceStatus = "inspection-failed"
+		result.ConfigurationStatus = "inspection-failed"
+		result.NextStep = err.Error()
+		return result, nil
+	}
+	ports := map[string]uint16{"ollama": 11434, appLlamaCPP: 8080, "vllm": 8000}
+	result.SourceKind = "owned"
+	result.Recognized = true
+	result.InstanceStatus = "installed"
+	result.ConfigurationStatus = "model-required"
+	result.Binding = &DraftBinding{Instance: "instance-" + result.ID, Owned: &DraftOwnedLaunch{Executable: r.Reference, Port: ports[r.App]}}
+	result.NextStep = "Supported executable installed. Select an existing local model, then review creation of a supervisor-owned launch. Nothing has been started."
+	return result, nil
+}
+
 func missingReference(err error, result ApplicationCandidate) ApplicationCandidate {
 	result.InstanceStatus = "missing"
 	result.NextStep = "Select an existing file or directory."
 	if !errors.Is(err, os.ErrNotExist) {
-		result.InstanceStatus = "unreachable"
+		result.InstanceStatus = "inspection-failed"
 		result.NextStep = "Check access to the selected reference."
 	}
 	return result

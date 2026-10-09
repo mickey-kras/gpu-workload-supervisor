@@ -30,7 +30,7 @@ export async function launch({units = [], profiles = [], pending = false, fail =
             FileDialog: class { open(window, cancel, callback) { callback(this, {}); } select_folder(window, cancel, callback) { callback(this, {}); }
                 open_finish() {
                     if (fileError) throw fileError;
-                    return {get_path: () => filePath};
+                    return {get_path: () => typeof filePath === 'function' ? filePath() : filePath};
                 }
                 select_folder_finish() { return this.open_finish(); } }, DialogError: {DISMISSED: 1},
             AccessibleProperty: {LABEL: 'label'},

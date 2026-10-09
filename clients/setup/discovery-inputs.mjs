@@ -1,4 +1,4 @@
-export function watchInstanceSelection({instance, instances, draft, endpoint, reference, clearBinding, clearModels, show, getBindingFields, setSync, setProbeGuidance, clearOwnedReference, selectOwnedReference}) {
+export function watchInstanceSelection({instance, instances, draft, endpoint, reference, clearBinding, clearModels, show, getBindingFields, setSync, setProbeGuidance, clearOwnedReference, selectOwnedReference, selectOwnedBinding}) {
     instance.connect('notify::selected', () => {
         const selected = instances[instance.selected - 1];
         if (!selected) return;
@@ -14,12 +14,13 @@ export function watchInstanceSelection({instance, instances, draft, endpoint, re
         setSync(true);
         for (const key of ['unit', 'cgroup']) if (selected[key]) getBindingFields()[key].text = selected[key];
         setSync(false);
-        if (!draft.snapshot().binding?.owned) {
+        if (selected.binding || !draft.snapshot().binding?.owned) {
             const binding = selected.binding ?? {unit: selected.unit ?? '', cgroup: selected.cgroup ?? ''};
             draft.edit({binding: {...binding}, model: binding.model ?? ''});
             setSync(true);
             for (const [key, field] of Object.entries(getBindingFields())) field.text = binding[key] ?? '';
             setSync(false);
+            if (binding.owned) selectOwnedBinding(binding);
         }
         show(selected);
     });
@@ -44,8 +45,26 @@ export function addRefreshButton({Gtk, group, draft, status, command, show, repo
     });
 }
 
-export function addFilePickers({Gtk, window, group, draft, reference, endpoint, status, changed, clearBinding, clearModels, clearOwnedReference, setSync, selectedReference, modelGroup}) {
-    const location = new Gtk.Button({label: 'Choose application location…'}); group.add(location);
+export function addFilePickers({Gtk, window, group, advancedGroup = group, draft, reference, endpoint, status, changed, clearBinding, clearModels, clearOwnedReference, setSync, selectedReference, selectedExecutable, modelGroup}) {
+    if (draft.needsModel) {
+        const executable = new Gtk.Button({label: 'Choose installed executable…'}); group.add(executable);
+        executable.connect('clicked', () => {
+            const dialog = new Gtk.FileDialog({title: 'Choose installed application executable'});
+            dialog.open(window, null, (source, result) => {
+                try {
+                    const path = source.open_finish(result)?.get_path();
+                    if (!path) return;
+                    clearBinding(); clearModels(); clearOwnedReference();
+                    draft.reference(path, 'application');
+                    setSync(true); endpoint.text = ''; setSync(false);
+                    selectedExecutable(path); changed(draft.snapshot());
+                } catch (error) {
+                    if (!error.matches?.(Gtk.DialogError, Gtk.DialogError.DISMISSED)) status.label = `File selection failed: ${error.message}`;
+                }
+            });
+        });
+    }
+    const location = new Gtk.Button({label: 'Choose application location…'}); (draft.needsModel ? advancedGroup : group).add(location);
     location.connect('clicked', () => {
         const dialog = new Gtk.FileDialog({title: 'Choose existing application folder'});
         dialog.select_folder(window, null, (source, result) => {

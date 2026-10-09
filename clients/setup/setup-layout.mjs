@@ -121,15 +121,17 @@ export function createApplicationCards(ui) {
         gear.connect('clicked', () => {
             if (!select.active) select.active = true;
             const editor = ui.draftEditors.find(editor => editor.app === choice.id && ui.drafts.some(draft => draft.id === editor.id));
-            ui.settings.visible = true; ui.advanced.expanded = true;
-            if (editor) editor.showSettings();
-            else {
-                for (const existing of ui.profiles.filter(profile => ui.runtimeOf(profile) === choice.id)) ui.profileRows.get(existing).visible = !ui.profileRows.get(existing).visible;
-            }
+            if (editor) ui.openApplicationSettings(editor, gear);
+            else ui.openApplicationSettings({app: choice.id, showSettings: () => {
+                const rows = ui.profiles.filter(profile => ui.runtimeOf(profile) === choice.id).map(profile => ui.profileRows.get(profile));
+                ui.applicationSettings.profileRows = rows;
+                for (const row of rows) { ui.rows.remove(row); ui.draftRows.append(row); row.visible = true; }
+            }}, gear);
         });
         select.connect('toggled', () => {
             if (select.active) ui.selectApplication(choice);
             else {
+                ui.restoreProfileSettings();
                 const appDrafts = ui.drafts.filter(draft => draft.app === choice.id);
                 ui.suspendedApplications.set(choice.id, {
                     profiles: ui.profiles.filter(profile => ui.runtimeOf(profile) === choice.id).map(profile => ({profile, row: ui.profileRows.get(profile)})),

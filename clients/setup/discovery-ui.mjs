@@ -2,7 +2,7 @@ import {applicationHeader} from './presentation.mjs';
 import {TemporaryDiscovery} from './temporary-discovery-ui.mjs';
 import {watchInstanceSelection, addRefreshButton, addFilePickers} from './discovery-inputs.mjs';
 import {addOwnedEditor, addBindingEditor} from './launch-ui.mjs';
-import {ApplicationDraft, applications, candidateMessage, profileIDFromModel} from './onboarding.mjs';
+import {ApplicationDraft, applications, candidateMessage, candidateIdentity, candidateChoice, profileIDFromModel} from './onboarding.mjs';
 
 // Backend error detail stays available but collapsed behind the actionable summary.
 export function addErrorReporter({Adw, Gtk, parent, status}) {
@@ -60,7 +60,7 @@ class DraftEditor {
         this.probeGuidance = null;
         this.instances = this.detected.filter(candidate => candidate.app === this.initial.app);
         this.instance = new this.Adw.ComboRow({title: 'Detected instance', use_markup: false,
-            model: this.Gtk.StringList.new(['Choose an instance...', ...this.instances.map(candidate => `${candidate.label}${candidate.location ? ' · ' + candidate.location : ''}`)]), selected: 0});
+            model: this.Gtk.StringList.new(['Choose an instance...', ...this.instances.map(candidateChoice)]), selected: 0});
         this.group.add(this.instance);
         this.details = new this.Adw.ExpanderRow({title: 'Advanced', subtitle: 'Inspect or override technical configuration'});
         if (!this.modelParent) {
@@ -90,7 +90,7 @@ class DraftEditor {
             this.modelParent.append(this.modelGroup); this.modelGroup.add_css_class('setup-card');
             const modelSettings = new this.Gtk.Button({icon_name: 'emblem-system-symbolic', tooltip_text: 'Advanced application settings'});
             modelSettings.update_property([this.Gtk.AccessibleProperty.LABEL], [`Settings for ${applications.find(app => app.id === this.initial.app).label}`]);
-            modelSettings.connect('clicked', () => { this.openSettings?.(); this.group.visible = true; this.details.visible = true; this.details.expanded = true; });
+            modelSettings.connect('clicked', () => this.openSettings?.(modelSettings));
             const subtitle = !this.draft.needsModel ? new this.Gtk.Label({label: 'Models are selected in your workflows.', wrap: true, xalign: 0}) : null;
             subtitle?.add_css_class('dim-label'); subtitle?.add_css_class('setup-guidance');
             this.modelGroup.add(applicationHeader(this.Gtk, this.initial.app, applications.find(app => app.id === this.initial.app).label, modelSettings, subtitle));
@@ -109,7 +109,7 @@ class DraftEditor {
         if (this.modelParent && this.draft.needsModel) this.modelGroup.add(this.selectionBox);
         this.modelName = null;
         if (this.initial.app === 'ollama') {
-            this.modelName = new this.Adw.EntryRow({title: 'Existing model name', text: this.initial.model ?? '', visible: false});
+            this.modelName = new this.Adw.EntryRow({title: 'Existing model name', text: this.initial.model ?? '', visible: Boolean(this.initial.binding?.owned?.executable)});
             this.modelGroup.add(this.modelName);
             this.modelName.connect('changed', () => {
                 if (this.syncing) return;
@@ -225,17 +225,20 @@ class DraftEditor {
             candidate = {...candidate, recognized: this.installationEvidence.recognized,
                 configurationStatus: this.installationEvidence.configurationStatus, unit: this.installationEvidence.unit};
         }
-        this.status.label = [candidateMessage(candidate), candidate.nextStep].filter(Boolean).join('\n');
+        this.status.label = [candidateIdentity(candidate), candidateMessage(candidate), candidate.nextStep].filter(Boolean).join('\n');
         this.temporary.showAvailability(candidate);
         if (this.model) this.showModels(candidate);
         this.changed(this.draft.snapshot());
     }
     connectInputs() {
         watchInstanceSelection({instance: this.instance, instances: this.instances, draft: this.draft, endpoint: this.endpoint, reference: this.reference, clearBinding: () => this.clearBinding(), clearModels: () => this.clearModels(), show: (candidate) => this.show(candidate),
-            getBindingFields: () => this.bindingFields, setSync: value => this.syncing = value,
+            getBindingFields: () => this.bindingFields, setSync: value => this.syncing = value, selectOwnedBinding: binding => {
+                for (const [key, field] of Object.entries(this.ownedFields)) if (typeof field !== 'function') field.text = String(key === 'instance' ? binding.instance ?? '' : key === 'model' ? '' : binding.owned[key] ?? '');
+                this.ownedFields.selectLaunch();
+            },
             setProbeGuidance: guidance => this.probeGuidance = guidance, clearOwnedReference: () => this.clearOwnedReference(), selectOwnedReference: (path, kind) => this.selectOwnedReference(path, kind)});
         addRefreshButton({Gtk: this.Gtk, group: this.group, draft: this.draft, status: this.status, command: this.command, show: (candidate) => this.show(candidate), reportError: this.reportError, guidance: () => this.probeGuidance});
-        addFilePickers({Gtk: this.Gtk, window: this.window, group: {add: child => this.details.add_row(child)}, draft: this.draft, reference: this.reference, endpoint: this.endpoint, status: this.status, changed: this.changed, clearBinding: () => this.clearBinding(), clearModels: () => this.clearModels(), clearOwnedReference: () => this.clearOwnedReference(), setSync: value => this.syncing = value, selectedReference: (path, kind) => this.selectOwnedReference(path, kind), modelGroup: this.modelParent ? this.modelGroup : null});
+        addFilePickers({Gtk: this.Gtk, window: this.window, group: this.group, advancedGroup: {add: child => this.details.add_row(child)}, draft: this.draft, reference: this.reference, endpoint: this.endpoint, status: this.status, changed: this.changed, clearBinding: () => this.clearBinding(), clearModels: () => this.clearModels(), clearOwnedReference: () => this.clearOwnedReference(), setSync: value => this.syncing = value, selectedReference: (path, kind) => this.selectOwnedReference(path, kind), selectedExecutable: path => this.selectExecutable(path), modelGroup: this.modelParent ? this.modelGroup : null});
         if (this.draft.needsModel) this.ownedFields = addOwnedEditor({Adw: this.Adw, Gtk: this.Gtk, group: this.details, draftGroup: this.group, draft: this.draft, initial: this.initial, command: this.command, bind: this.bind, changed: this.changed, taken: this.taken, status: this.status, reportError: this.reportError, parent: this.parent, removed: this.removed, modelChanged: (id) => this.syncModelChoices(id)});
         this.bindingFields = addBindingEditor({Adw: this.Adw, Gtk: this.Gtk, group: this.details, draftGroup: this.group, draft: this.draft, initial: this.initial, status: this.status, parent: this.parent, removed: this.removed, bind: this.bind, command: this.command, changed: this.changed, taken: this.taken, reportError: this.reportError, isSyncing: () => this.syncing, modelChanged: (id) => this.syncModelChoices(id)});
     }
@@ -273,8 +276,6 @@ class DraftEditor {
         } else if (this.initial.binding?.unit) {
             const selected = this.instances.find(candidate => candidate.unit === this.initial.binding.unit);
             if (selected) this.show(selected);
-        } else if (this.discoveryErrors.length && !recognized.length) {
-            this.reportError('Installation discovery failed. Choose its location, or reopen setup to retry.', new Error(this.discoveryErrors.join('\n')));
         } else if (!recognized.length && this.instances.length) {
             this.show(this.instances.find(candidate => candidate.unit) ?? this.instances[0]);
         } else if (!this.instances.length) {
@@ -284,12 +285,20 @@ class DraftEditor {
     view() {
         return {
             app: this.initial.app, id: this.initial.id, originalModel: this.initial.model ?? this.initial.binding?.owned?.modelPath, group: this.group, modelGroup: this.modelGroup, finish: this.finish,
-            showSettings: () => { this.group.visible = !this.group.visible; this.details.visible = this.group.visible; this.details.expanded = this.group.visible; },
+            showSettings: () => { this.group.visible = true; this.details.visible = true; this.details.expanded = false; this.instance.grab_focus(); },
             cancel: () => { this.draft.cancel(); return this.temporary.cancel(); },
             temporaryActive: () => this.temporary.active(),
             needsModelDecision: () => this.draft.needsModel && (this.models.length > 1 || this.draft.snapshot().models?.length > 1 || this.draft.snapshot().models?.length === 0 || !(this.draft.snapshot().model || this.draft.snapshot().binding?.owned?.modelPath)),
             prepare: () => this.prepare(),
         };
+    }
+    selectExecutable(path) {
+        this.installationEvidence = null;
+        this.ownedFields.executable.text = path;
+        this.ownedFields.selectLaunch();
+        this.reference.label = path;
+        this.status.label = 'Executable selected. Choose an existing model, then Continue to validate and preview a Supervisor-managed launch. Nothing starts during preview.';
+        if (this.modelName) this.modelName.visible = true;
     }
     selectedModels(input) {
         if (!this.draft.needsModel) return [''];

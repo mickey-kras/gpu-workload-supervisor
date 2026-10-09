@@ -38,6 +38,11 @@ func (m *SystemdManager) ReleasedFor(ctx context.Context, target control.Workloa
 	}
 	loadedByUnit := map[string]map[string]bool{}
 	for _, p := range m.config.Catalog.Profiles {
+		if profileGPUUUID(p) != "" {
+			if err := m.verifyNativeBinding(ctx, p); err != nil {
+				return err
+			}
+		}
 		if p.ID == target {
 			continue
 		}

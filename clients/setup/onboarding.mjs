@@ -68,8 +68,10 @@ export function candidateMessage(candidate) {
         'not-running': stoppedCandidateMessage(candidate),
         ambiguous: 'More than one installation matches. Choose the installation you want to control.',
         'discovery-error': 'Discovery failed. Retry to check this installation.',
-        unreachable: 'Unable to reach this application. Check its address and refresh.',
-        missing: 'Application or selected path is missing. Choose another location.',
+        'inspection-failed': 'Installation inspection failed. Check its service configuration or choose an installed executable.',
+        installed: 'Installed executable found. Choose an existing model to preview a Supervisor-managed launch.',
+        unreachable: 'Address unreachable. An address alone does not verify an installed application. Check its address or choose its executable.',
+        missing: candidate?.referenceKind?.startsWith('model-') ? 'Selected model is missing. Choose another model.' : 'Application location is missing. Choose its installed location.',
         unsupported: 'This setup is not supported. Save the selection for later or choose another instance.',
         invalid: 'Configuration could not be read. Check the selected address or location.',
         candidate: 'Application found. Choose its installation to check start and stop controls.',
@@ -82,5 +84,18 @@ export function candidateMessage(candidate) {
 function stoppedCandidateMessage(candidate) {
     if (candidate?.configurationStatus === 'ready' || candidate?.configurationStatus === 'model-required') return 'Installed and stopped. Ready to configure.';
     if (candidate?.unit) return 'Installed and stopped. More configuration evidence is needed; choose its location or inspect Advanced settings.';
-    return 'Application wasn’t detected at this address. Install it first, or choose its location.';
+    return 'Default address is not responding. Installation is unverified; choose its installed location.';
+}
+
+// A service and an endpoint are separate candidates unless discovery established
+// their binding. Keep their complete identities available even when GTK elides a row.
+export function candidateIdentity(candidate) {
+    const kind = candidate.unit ? 'Service' : candidate.sourceKind === 'owned' || candidate.referenceKind === 'application' ? 'Executable' : candidate.endpoint ? 'Address' : candidate.referenceKind === 'configuration' ? 'Configuration' : 'Location';
+    const identities = [candidate.unit, candidate.location, candidate.reference, candidate.endpoint].filter(Boolean);
+    return `${kind}: ${[...new Set(identities)].join(' · ') || candidate.id || candidate.label}`;
+}
+
+export function candidateChoice(candidate) {
+    const status = candidate.configurationStatus === 'model-required' ? 'model needed' : candidate.instanceStatus === 'not-running' && candidate.unit ? 'stopped' : candidate.instanceStatus;
+    return `${candidate.label} · ${candidateIdentity(candidate)}${status ? ` · ${status}` : ''}`;
 }

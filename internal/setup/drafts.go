@@ -23,6 +23,7 @@ type DraftBinding struct {
 
 // DraftOwnedLaunch mirrors control.OwnedLaunch for the draft surface.
 type DraftOwnedLaunch struct {
+	Executable  string `json:"executable,omitempty"`
 	ModelPath   string `json:"modelPath,omitempty"`
 	Port        uint16 `json:"port"`
 	CtxSize     uint32 `json:"ctxSize,omitempty"`
@@ -184,6 +185,9 @@ func validateOwnedOptions(app string, o *DraftOwnedLaunch, allowMissingPath bool
 	}
 	if app != "ollama" && app != appLlamaCPP && app != "vllm" {
 		return errors.New("owned launches are only supported for native model runtimes")
+	}
+	if o.Executable != "" && !control.ValidOwnedExecutable(app, o.Executable) {
+		return errors.New("owned executable must be a supported absolute direct path")
 	}
 	if o.Port < 1024 {
 		return errors.New("owned launch port must be an unprivileged TCP port")

@@ -85,7 +85,11 @@ func TestProbeReferencesDoNotReadOrWriteModels(t *testing.T) {
 	}
 	for _, ref := range []struct{ path, kind string }{{file, "model-file"}, {dir, "model-directory"}, {file, "configuration"}, {file, "application"}} {
 		got, err := Probe(context.Background(), ProbeRequest{App: "llama.cpp", Reference: ref.path, ReferenceKind: ref.kind})
-		if err != nil || got.InstanceStatus != "candidate" || got.LifecycleControl != "unverified" {
+		status := "candidate"
+		if ref.kind == "application" {
+			status = "inspection-failed"
+		}
+		if err != nil || got.InstanceStatus != status || got.LifecycleControl != "unverified" {
 			t.Fatalf("%+v %v", got, err)
 		}
 	}

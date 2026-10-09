@@ -98,6 +98,9 @@ func verifyOwnedSpecWithValidator(p control.WorkloadProfile, validate func(strin
 }
 
 func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.WorkloadProfile) error {
+	if err := m.verifyProfileGPU(ctx, p); err != nil {
+		return err
+	}
 	if err := m.verifyAutomaticPlacement(ctx, p); err != nil {
 		return err
 	}
@@ -111,6 +114,7 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 	launchFile := ""
 	command := ""
 	var preCommands []string
+	var environment map[string]string
 	var dropIns []control.LaunchSource
 	if p.NativeModel != nil {
 		launchFile = p.NativeModel.LaunchFile
@@ -121,6 +125,7 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 		}
 		command = launch.execStart
 		preCommands = launch.preCommands
+		environment = launch.environmentValues
 	} else {
 		binding := p.LaunchBinding
 		launchFile = binding.LaunchFile
@@ -131,13 +136,25 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 		}
 		command = unit.execStart
 		preCommands = unit.preCommands
+		environment = unit.environmentValues
 	}
-	b, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show", "--property=FragmentPath", "--property=DropInPaths", "--property=NeedDaemonReload", "--property=ExecStartPre", "--property=ExecStart", "--", p.Unit)
+	args := []string{"--user", "show", "--property=FragmentPath", "--property=DropInPaths", "--property=NeedDaemonReload", "--property=ExecStartPre", "--property=ExecStart"}
+	for name := range environment {
+		if !strings.HasPrefix(name, "OLLAMA_") {
+			args = append(args, "--property=Environment")
+			break
+		}
+	}
+	args = append(args, "--", p.Unit)
+	b, err := m.runner.Run(ctx, m.config.SystemctlPath, args...)
 	if err != nil {
 		return ErrLaunchChanged
 	}
 	values, err := ParseUnitProperties(b)
 	if err != nil {
+		return err
+	}
+	if err := CheckLoadedEnvironment(values["Environment"], environment); err != nil {
 		return err
 	}
 	if values["NeedDaemonReload"] != "no" {
@@ -168,7 +185,7 @@ func (m *SystemdManager) readApplicationLaunch(binding control.LaunchBinding, va
 	if err != nil {
 		return unit, err
 	}
-	if found.SHA256 != binding.LaunchSHA256 || found.Endpoint != binding.Endpoint {
+	if found.SHA256 != binding.LaunchSHA256 || found.Endpoint != binding.Endpoint || unit.gpuUUID != binding.GPUUUID {
 		return unit, ErrLaunchChanged
 	}
 	return unit, nil

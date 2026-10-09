@@ -91,15 +91,51 @@ func validatePreparedInstallation(d Draft, found control.WorkloadProfile) error 
 	return nil
 }
 
-func (b Backend) showAutomatic(ctx context.Context, unit string) (map[string]string, error) {
-	out, err := b.runCommand(ctx, automaticSystemctlPath, "--user", "show", "--property=Id,LoadState,ExecStart,ExecStartPre,ControlGroup,ActiveState,SubState,FragmentPath,DropInPaths,NeedDaemonReload,Slice", "--no-pager", "--", unit)
+func (b Backend) showAutomaticRaw(ctx context.Context, unit string) ([]byte, error) {
+	out, err := b.runCommand(ctx, automaticSystemctlPath, "--user", "show", "--property=Id,LoadState,ExecStart,ExecStartPre,Environment,ControlGroup,ActiveState,SubState,FragmentPath,DropInPaths,NeedDaemonReload,Slice", "--no-pager", "--", unit)
 	if err != nil {
 		return nil, fmt.Errorf("could not inspect installation %s: %w", unit, err)
 	}
 	if len(out) > commandOutputLimit {
 		return nil, errors.New("systemd installation metadata exceeds supported limit")
 	}
+	return out, nil
+}
+
+func (b Backend) showAutomatic(ctx context.Context, unit string) (map[string]string, error) {
+	out, err := b.showAutomaticRaw(ctx, unit)
+	if err != nil {
+		return nil, err
+	}
 	return gpuruntime.ParseUnitProperties(out)
+}
+
+// Candidate classification precedes native-binding validation. Unrelated units
+// may legitimately contain preparation metadata outside our supported subset.
+func (b Backend) showApplicationCandidate(ctx context.Context, unit string) (map[string]string, error) {
+	out, err := b.showAutomaticRaw(ctx, unit)
+	if err != nil {
+		return nil, err
+	}
+	evidence := unitProperties(string(out))
+	// Keep any supported executable evidence when duplicate main-command
+	// metadata is ambiguous; strict validation then reports this candidate.
+	supported := ""
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "ExecStart=") && appFromUnit(line) != "" {
+			supported = strings.TrimPrefix(line, "ExecStart=")
+			break
+		}
+	}
+	if supported == "" {
+		return evidence, nil
+	}
+	evidence["ExecStart"] = supported
+	values, err := gpuruntime.ParseUnitProperties(out)
+	if err != nil {
+		return evidence, errors.New("supported application has ambiguous or unsupported loaded metadata; inspect ExecStartPre and reload its direct launch before retrying")
+	}
+	return values, nil
 }
 func (b Backend) automaticConfiguration(ctx context.Context, app, unit, model string) (control.WorkloadProfile, error) {
 	values, err := b.showAutomatic(ctx, unit)
@@ -119,6 +155,9 @@ func (b Backend) configurationFromMetadata(ctx context.Context, app, unit, model
 	launch, err := b.inspectAutomaticMetadata(values, app)
 	if err != nil {
 		return p, fmt.Errorf("unsupported existing launch; choose a supported direct local configuration: %w", err)
+	}
+	if err := gpuruntime.CheckLoadedEnvironment(values["Environment"], launch.Environment); err != nil {
+		return p, err
 	}
 	if err := gpuruntime.CheckNativeBindingSources(values, unit, values["FragmentPath"], launch.DropIns); err != nil {
 		return p, errors.New("loaded drop-in configuration differs from inspected source files")
@@ -181,7 +220,7 @@ func (b Backend) resolveInstallationPlacement(ctx context.Context, unit string, 
 func bindInstallationLaunch(p *control.WorkloadProfile, values map[string]string, launch gpuruntime.AutomaticLaunch, app, unit, model string) error {
 	if app == "comfyui" {
 		p.HealthURL = launch.Endpoint + "/system_stats"
-		p.LaunchBinding = &control.LaunchBinding{Runtime: app, Endpoint: launch.Endpoint, LaunchFile: values["FragmentPath"], LaunchSHA256: launch.SHA256, DropIns: launch.DropIns}
+		p.LaunchBinding = &control.LaunchBinding{GPUUUID: launch.GPUUUID, Runtime: app, Endpoint: launch.Endpoint, LaunchFile: values["FragmentPath"], LaunchSHA256: launch.SHA256, DropIns: launch.DropIns}
 	} else {
 		if app != "ollama" {
 			model = launch.Model
@@ -193,7 +232,7 @@ func bindInstallationLaunch(p *control.WorkloadProfile, values map[string]string
 		if app == "ollama" {
 			p.HealthURL = launch.Endpoint + "/api/tags"
 		}
-		p.NativeModel = &control.NativeModel{Runtime: app, Instance: "instance-" + candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"}).ID, Model: model, Endpoint: launch.Endpoint, LaunchFile: values["FragmentPath"], LaunchSHA256: launch.SHA256, DropIns: launch.DropIns}
+		p.NativeModel = &control.NativeModel{GPUUUID: launch.GPUUUID, Runtime: app, Instance: "instance-" + candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"}).ID, Model: model, Endpoint: launch.Endpoint, LaunchFile: values["FragmentPath"], LaunchSHA256: launch.SHA256, DropIns: launch.DropIns}
 	}
 	return nil
 }
@@ -252,11 +291,14 @@ func (b Backend) inspectReferenceUnit(ctx context.Context, d Draft, unit string,
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	values, err := b.showAutomatic(ctx, unit)
+	values, err := b.showApplicationCandidate(ctx, unit)
 	if cancelErr := referenceCancellationError(ctx, err); cancelErr != nil {
 		return cancelErr
 	}
 	if err != nil {
+		if appFromUnit("ExecStart="+values["ExecStart"]) == d.App {
+			return err
+		}
 		if selection.firstInspectionError == nil {
 			selection.firstInspectionError = err
 		}

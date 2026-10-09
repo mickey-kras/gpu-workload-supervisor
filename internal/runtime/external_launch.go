@@ -38,7 +38,7 @@ func readLaunchSource(path string) ([]byte, error) {
 		next, err := unix.Openat(fd, part, flags, 0)
 		unix.Close(fd)
 		if err != nil {
-			return nil, ErrLaunchChanged
+			return nil, fmt.Errorf("%w: launch source component %d cannot be opened without following links; inspect this component for missing access, symbolic links or special files", ErrLaunchChanged, i+1)
 		}
 		fd = next
 		var stat unix.Stat_t
@@ -48,7 +48,7 @@ func readLaunchSource(path string) ([]byte, error) {
 		}
 		if !trustedLaunchSourceComponent(stat, i, len(parts)) {
 			unix.Close(fd)
-			return nil, ErrLaunchChanged
+			return nil, sourceComponentError(stat, i, len(parts))
 		}
 	}
 	file := os.NewFile(uintptr(fd), path)
@@ -66,13 +66,13 @@ func readLaunchSources(path string, dropIns []control.LaunchSource) ([][]byte, e
 	}
 	raw, err := readLaunchSource(path)
 	if err != nil {
-		return nil, fmt.Errorf("%w: launch source %s unreadable or untrusted", err, path)
+		return nil, fmt.Errorf("launch source: %w", err)
 	}
 	sources := [][]byte{raw}
 	for _, source := range dropIns {
 		raw, err := readLaunchSource(source.Path)
 		if err != nil || fmt.Sprintf("%x", sha256.Sum256(raw)) != source.SHA256 {
-			return nil, fmt.Errorf("%w: drop-in %s changed, unreadable or untrusted", ErrLaunchChanged, source.Path)
+			return nil, fmt.Errorf("%w: contributing drop-in changed, unreadable or untrusted; inspect this drop-in and refresh the binding", ErrLaunchChanged)
 		}
 		sources = append(sources, raw)
 	}
@@ -180,14 +180,18 @@ func (d *externalLaunchDirectives) applyEnvironment(value string) error {
 		d.envOrder = nil
 		return nil
 	}
-	name, _, ok := strings.Cut(value, "=")
-	if !ok || strings.ContainsAny(value, launchExpansionCharacters) {
-		return fmt.Errorf("%w: unsupported Environment assignment", ErrLaunchUnsupported)
+	assignments, err := environmentAssignments(value)
+	if err != nil {
+		return err
 	}
-	if _, exists := d.env[name]; !exists {
-		d.envOrder = append(d.envOrder, name)
+	for _, assignment := range assignments {
+		name, _, _ := strings.Cut(assignment, "=")
+		if _, exists := d.env[name]; !exists {
+			d.envOrder = append(d.envOrder, name)
+		}
+		d.env[name] = assignment
 	}
-	d.env[name] = value
+
 	return nil
 }
 
@@ -302,4 +306,15 @@ func CheckNativeBindingSources(values map[string]string, unit, launchFile string
 		}
 	}
 	return nil
+}
+
+func sourceComponentError(stat unix.Stat_t, index, count int) error {
+	reason := "ownership is outside root or the desktop account"
+	if stat.Mode&0022 != 0 {
+		reason = "group or world write permission permits replacement"
+	}
+	if index == count-1 && (stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Mode&0444 == 0 || stat.Size > 1<<20) {
+		reason = "source is not a readable regular file within the size limit"
+	}
+	return fmt.Errorf("%w: launch source component %d: %s; inspect this component, restore its intended ownership or remove only its unintended write permission, then retry", ErrLaunchChanged, index+1, reason)
 }

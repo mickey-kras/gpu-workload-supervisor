@@ -28,6 +28,7 @@ export function createWidgetClass(widgets) {
         add_css_class(name) { this.cssClasses ??= []; this.cssClasses.push(name); }
         get_display() { return {}; }
         get_scale_factor() { return 1; }
+        get_vadjustment() { this.adjustment ??= {value: 0}; return this.adjustment; }
         remove_css_class(name) { this.cssClasses = this.cssClasses?.filter(item => item !== name); }
         remove(child) {
             const index = this.children.indexOf(child);
