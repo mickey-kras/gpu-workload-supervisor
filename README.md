@@ -46,3 +46,5 @@ Then [reconcile at boot](docs/OPERATIONS.md#boot-and-explicit-recovery), configu
 
 [MIT license](LICENSE).
 
+
+<!-- ci probe: no-op change to verify PR gates flag GO-2026-6617/6613 on go1.27.1; closed unmerged -->
