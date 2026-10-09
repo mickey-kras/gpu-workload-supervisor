@@ -84,6 +84,8 @@ nfpms:
         dst: /usr/share/gpu-workload-supervisor/discovery-ui.mjs
       - src: clients/setup/review.mjs
         dst: /usr/share/gpu-workload-supervisor/review.mjs
+      - src: clients/setup/setup-layout.mjs
+        dst: /usr/share/gpu-workload-supervisor/setup-layout.mjs
       - src: clients/setup/setup-window.mjs
         dst: /usr/share/gpu-workload-supervisor/setup-window.mjs
       - src: clients/setup/presentation.mjs

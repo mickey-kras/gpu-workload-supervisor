@@ -13,6 +13,7 @@ const files = [
   'clients/gnome/tests/transport.gjs.js',
   'clients/setup/setup.js',
   'clients/setup/setup-window.mjs',
+  'clients/setup/setup-layout.mjs',
   'clients/setup/presentation.mjs',
   'tests/desktop/setup_native.mjs',
 ];
@@ -39,7 +40,7 @@ function nativeImports() {
       imports.push(`${line}\n${lines[index + 1]}`);
     });
   }
-  assert.equal(imports.length, 26);
+  assert.equal(imports.length, 28);
   return imports;
 }
 

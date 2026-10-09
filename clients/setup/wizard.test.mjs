@@ -532,3 +532,32 @@ for (const [instanceStatus, expected] of [['unreachable', 'Unreachable · Open s
         assert.equal(ui.calls.some(call => ['prepare', 'apply', 'temporary-discover'].includes(call.argv[1])), false);
     });
 }
+
+
+test('fresh setup exposes global technical settings through an accessible gear without selecting an application', async () => {
+    const ui = await launch(options([]));
+    for (const label of ['State database path', 'NVIDIA GPU index', 'Add existing service (Advanced)', 'Save selections for later']) assert.equal(ui.visible(ui.by(label)), false, `${label} starts behind settings`);
+    assert.equal(ui.visible(ui.by('Setup settings')), true);
+    await ui.click('Setup settings');
+    for (const label of ['State database path', 'NVIDIA GPU index', 'Add existing service (Advanced)', 'Save selections for later']) assert.equal(ui.visible(ui.by(label)), true, `${label} can be reached through the visible gear`);
+    assert.equal(ui.widgets.filter(widget => widget.accessibleProperties?.label?.startsWith('Use ') && widget.active).length, 0);
+    ui.edit(ui.by('NVIDIA GPU index'), 'text', '3');
+    await ui.click('Continue');
+    assert.equal(JSON.parse(ui.calls.find(call => call.argv[1] === 'validate').input).profile.gpuIndex, 3);
+    assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
+});
+
+for (const saved of [false, true]) {
+    test(`${saved ? 'recovered draft' : 'fresh selection'} settings make draft saving reachable through visible ancestry`, async () => {
+        const initial = {id: 'saved-choice', app: 'comfyui', label: 'ComfyUI'};
+        const ui = await launch(options([installation()], saved ? {drafts: {drafts: [initial]}} : {}));
+        assert.equal(ui.visible(ui.by('Save selections for later')), false);
+        await ui.click('Configure ComfyUI');
+        assert.equal(ui.visible(ui.by('Friendly name')), true);
+        assert.equal(ui.visible(ui.by('Save selections for later')), true);
+        ui.edit(ui.by('Friendly name'), 'text', 'My workflow editor');
+        await ui.click('Save selections for later');
+        assert.equal(JSON.parse(ui.calls.at(-1).input).drafts[0].label, 'My workflow editor');
+        assert.equal(ui.calls.some(call => ['apply', 'temporary-discover'].includes(call.argv[1])), false);
+    });
+}

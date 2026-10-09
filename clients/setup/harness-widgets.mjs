@@ -19,12 +19,14 @@ export function createWidgetClass(widgets) {
         append(child) { this.children.push(child); }
         add(child) { this.append(child); }
         add_row(child) { this.append(child); }
+        pack_end(child) { this.append(child); }
         add_top_bar(child) { this.append(child); }
         add_bottom_bar(child) { this.append(child); }
         set_child(child) { this.append(child); }
         set_content(child) { this.append(child); }
         add_css_class(name) { this.cssClasses ??= []; this.cssClasses.push(name); }
         get_display() { return {}; }
+        get_scale_factor() { return 1; }
         remove_css_class(name) { this.cssClasses = this.cssClasses?.filter(item => item !== name); }
         remove(child) {
             const index = this.children.indexOf(child);

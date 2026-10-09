@@ -41,8 +41,17 @@ export function roundedCard(Gtk, orientation = Gtk.Orientation.VERTICAL, spacing
 export function applicationIcon(Gtk, appID) {
     const tile = new Gtk.Box({valign: Gtk.Align.CENTER});
     tile.add_css_class('setup-icon-tile');
-    const path = Gio.File.new_for_uri(import.meta.url).get_parent().get_child(`icons/${icons[appID]}`).get_path();
-    const image = new Gtk.Image({file: path, pixel_size: 44, accessible_role: Gtk.AccessibleRole.PRESENTATION});
+    const source = Gio.File.new_for_uri(import.meta.url).get_parent().get_child(`icons/${icons[appID]}`);
+    if (!source.query_exists(null)) throw new Error(`Application icon is missing: ${icons[appID]}`);
+    const icon = new Gio.FileIcon({file: source});
+    const image = new Gtk.Image({accessible_role: Gtk.AccessibleRole.PRESENTATION});
+    const updateIcon = () => {
+        // File images retain their intrinsic dimensions; icon lookup fixes the logical size.
+        image.paintable = Gtk.IconTheme.get_for_display(image.get_display()).lookup_by_gicon(
+            icon, 44, image.get_scale_factor(), Gtk.TextDirection.NONE, Gtk.IconLookupFlags.FORCE_REGULAR);
+    };
+    image.connect('notify::scale-factor', updateIcon);
+    updateIcon();
     tile.append(image);
     return tile;
 }

@@ -78,17 +78,55 @@ app.connect('activate', () => {
             const ui = createSetupWindow({app, command});
             ui.window.set_default_size(Number(width), Number(height));
             await ui.initialized; await delay(250);
-            assert(ui.window.get_width() === Number(width), 'window width exceeds supported size');
-            assert(ui.window.get_height() === Number(height), 'window height exceeds supported size');
+            const actualWidth = ui.window.get_width(), actualHeight = ui.window.get_height();
+            const startup = {expected: {width: Number(width), height: Number(height)},
+                actual: {width: actualWidth, height: actualHeight},
+                minimumHorizontal: ui.window.measure(Gtk.Orientation.HORIZONTAL, -1),
+                minimumVertical: ui.window.measure(Gtk.Orientation.VERTICAL, actualWidth)};
+            GLib.file_set_contents(`${output}/startup-${nextMode}-geometry.json`, JSON.stringify(startup, null, 2));
+            const startupXid = run(['xdotool', 'search', '--onlyvisible', '--name', ui.window.title]).split('\n').at(-1);
+            run(['import', '-window', startupXid, `${output}/startup-${nextMode}.png`]);
+            assert(actualWidth === Number(width), `window width exceeds supported size: expected ${width}, actual ${actualWidth}; geometry=${JSON.stringify(startup)}`);
+            assert(actualHeight === Number(height), `window height exceeds supported size: expected ${height}, actual ${actualHeight}; geometry=${JSON.stringify(startup)}`);
             return ui;
+        }
+        const geometry = [];
+        async function inspect(screen, name, focus) {
+            await runAsync(['/usr/bin/python3', 'tests/desktop/setup_accessibility.py', `${output}/accessibility-${name}.json`, screen, focus]);
+        }
+        function ownsFocus(ui, target) {
+            for (let focus = ui.window.get_focus(); focus; focus = focus.get_parent()) if (focus === target) return true;
+            return false;
+        }
+        async function tabTo(ui, target) {
+            for (let count = 0; count < 100; count++) {
+                if (ownsFocus(ui, target)) return;
+                run(['xdotool', 'key', 'Tab']); await delay(20);
+            }
+            throw new Error(`keyboard cannot reach ${target.label}`);
+        }
+        async function activate(ui, target, heading) {
+            await tabTo(ui, target);
+            run(['xdotool', 'key', 'space']);
+            for (let count = 0; count < 100 && ui.heading.label !== heading; count++) await delay(20);
+            assert(ui.heading.label === heading, `keyboard activation must reach ${heading}`);
+            await delay(80);
+            assert(ownsFocus(ui, ui.heading), 'screen transition focuses its heading');
         }
         async function capture(ui, name) {
             await delay(180);
-            const primary = ui.apply.visible ? ui.apply : ui.review;
-            const [located, bounds] = primary.compute_bounds(ui.window);
-            assert(located && bounds.get_x() >= 0 && bounds.get_y() >= 0 &&
-                bounds.get_x() + bounds.get_width() <= ui.window.get_width() &&
-                bounds.get_y() + bounds.get_height() <= ui.window.get_height(), 'primary action must fit the visible window');
+            const footer = [ui.review, ui.apply, ui.back, ...widgets(ui.window).filter(widget => widget instanceof Gtk.Button && widget.label === 'Set up later')].filter(widget => widget.get_mapped());
+            const rectangles = footer.map(widget => {
+                const [located, bounds] = widget.compute_bounds(ui.window);
+                const rect = {label: widget.label, x: bounds.get_x(), y: bounds.get_y(), width: bounds.get_width(), height: bounds.get_height()};
+                assert(located && rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= ui.window.get_width() && rect.y + rect.height <= ui.window.get_height(), 'footer action must fit visible window');
+                return rect;
+            });
+            for (let a = 0; a < rectangles.length; a++) for (let b = a + 1; b < rectangles.length; b++) {
+                const left = rectangles[a], right = rectangles[b];
+                assert(left.x + left.width <= right.x || right.x + right.width <= left.x || left.y + left.height <= right.y || right.y + right.height <= left.y, 'footer actions must not overlap');
+            }
+            geometry.push({screen: name, actions: rectangles});
             const xid = run(['xdotool', 'search', '--onlyvisible', '--name', ui.window.title]).split('\n').at(-1);
             run(['import', '-window', xid, `${output}/${name}.png`]);
             return xid;
@@ -106,22 +144,32 @@ app.connect('activate', () => {
         run(['xdotool', 'key', 'Tab']); await delay(50);
         assert(ui.window.get_focus() !== null && ui.window.get_focus() !== firstFocus, 'Tab advances to a different native focus target');
         await capture(ui, 'applications-keyboard-focus');
-        await runAsync(['/usr/bin/python3', 'tests/desktop/setup_accessibility.py', `${output}/accessibility.json`]);
         ui.applicationCards.get('comfyui').select.active = true;
         ui.applicationCards.get('ollama').select.active = true;
-        await ui.continueSetup(); await delay(100);
-        assert(ui.heading.label === 'Choose models', 'Continue reaches models screen');
-        const model = byLabel(ui.window, 'Example small');
-        assert(model && model.get_mapped(), 'native model choice is visible'); model.active = true;
-        byLabel(ui.window, 'Example large').active = true;
+        await tabTo(ui, ui.review);
+        await inspect('applications', 'applications-continue', 'Continue');
+        await activate(ui, ui.review, 'Choose models');
+        await inspect('models', 'models-arrival', 'Choose models');
+        for (const label of ['Example small', 'Example large']) {
+            const model = byLabel(ui.window, label);
+            assert(model && model.get_mapped(), 'native model choice is visible');
+            await tabTo(ui, model); run(['xdotool', 'key', 'space']); await delay(40);
+            assert(model.active, 'keyboard selects an existing model');
+        }
+        await tabTo(ui, ui.review);
+        await inspect('models', 'models-continue', 'Continue');
         await capture(ui, 'models');
-        await ui.continueSetup(); await delay(100);
-        assert(ui.heading.label === 'Ready to finish', 'Continue reaches review screen');
+        await activate(ui, ui.review, 'Ready to finish');
+        await inspect('review', 'review-arrival', 'Ready to finish');
         assert(ui.apply.sensitive, 'review unlocks final confirmation');
         assert(calls.filter(action => action === 'prepare').length === 3, 'review prepares three selected workloads');
+        await tabTo(ui, ui.apply);
+        await inspect('review', 'review-finish', 'Finish setup');
         await capture(ui, 'review');
-        ui.back.emit('clicked'); await delay(100);
-        assert(ui.heading.label === 'Choose models', 'Back returns to model decision');
+        await tabTo(ui, ui.back);
+        await inspect('review', 'review-back', 'Back');
+        await activate(ui, ui.back, 'Choose models');
+        await inspect('models', 'models-return', 'Choose models');
         ui.window.destroy();
         for (const state of ['missing', 'error']) {
             ui = await open(state);
@@ -129,13 +177,13 @@ app.connect('activate', () => {
             await capture(ui, `applications-${state}`); ui.window.destroy();
         }
         const report = {theme, width: Number(width), height: Number(height), scale: Number(GLib.getenv('GDK_SCALE') || 1),
-            dark: style.dark, highContrast: style.high_contrast, calls,
+            dark: style.dark, highContrast: style.high_contrast, calls, geometry,
             gtk: `${Gtk.get_major_version()}.${Gtk.get_minor_version()}.${Gtk.get_micro_version()}`,
             adwaita: `${Adw.get_major_version()}.${Adw.get_minor_version()}.${Adw.get_micro_version()}`};
         GLib.file_set_contents(`${output}/report.json`, JSON.stringify(report, null, 2));
         if (theme === 'highcontrast') assert(style.high_contrast, 'native high contrast preference must be active');
         print(`PASS ${theme} ${width}x${height} scale ${report.scale}`);
-    })().catch(error => { failed = true; printerr(error.stack); }).finally(() => app.quit());
+    })().catch(error => { failed = true; printerr(`${error.message}\n${error.stack}`); }).finally(() => app.quit());
 });
 app.run([]);
 if (failed) imports.system.exit(1);

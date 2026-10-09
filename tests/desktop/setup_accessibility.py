@@ -25,13 +25,29 @@ def main():
     visit(pyatspi.Registry.getDesktop(0), tree)
     pathlib.Path(sys.argv[1]).write_text(json.dumps(tree, indent=2) + '\n')
     visible = [node for node in tree if node['showing']]
-    for application in ('ComfyUI', 'Ollama', 'llama.cpp', 'vLLM'):
-        assert any(node['name'] == f'Use {application}' and node['role'] == 'check box'
-                   for node in visible), f'missing accessible selection: {application}'
-        assert any(node['name'] == f'Settings for {application}' and node['role'] == 'push button'
-                   for node in visible), f'missing accessible settings: {application}'
-    assert any(node['focused'] for node in visible), 'keyboard focus absent from AT-SPI'
-    print('PASS: AT-SPI application selections, settings labels and keyboard focus')
+    screen = sys.argv[2]
+    expected_focus = sys.argv[3]
+    def present(name, role=None):
+        return any(node['name'] == name and (role is None or node['role'] == role)
+                   for node in visible)
+    if screen == 'applications':
+        for application in ('ComfyUI', 'Ollama', 'llama.cpp', 'vLLM'):
+            assert present(f'Use {application}', 'check box'), f'missing selection: {application}'
+            assert present(f'Settings for {application}', 'push button'), f'missing settings: {application}'
+        assert present('Continue', 'push button'), 'missing Continue action'
+    elif screen == 'models':
+        for model in ('Example small', 'Example large'):
+            assert present(model, 'check box'), f'missing model choice: {model}'
+        assert present('Application settings for ComfyUI') or present('Settings for ComfyUI'), 'missing ComfyUI model guidance/settings'
+        assert present('Continue', 'push button') and present('Back', 'push button'), 'missing model navigation'
+    elif screen == 'review':
+        assert present('Finish setup', 'push button') and present('Back', 'push button'), 'missing review actions'
+        for workload in ('ComfyUI', 'Ollama - Example small', 'Ollama - Example large'):
+            assert present(workload), f'missing review workload: {workload}'
+    else:
+        raise AssertionError(f'unknown screen: {screen}')
+    assert any(node['focused'] and node['name'] == expected_focus for node in visible), (expected_focus, [node for node in visible if node['focused']])
+    print(f'PASS: AT-SPI {screen} content and focused {expected_focus}')
 
 
 if __name__ == '__main__':
