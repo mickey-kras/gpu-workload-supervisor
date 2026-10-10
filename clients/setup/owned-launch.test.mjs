@@ -14,7 +14,7 @@ test('managed launch is previewed without fingerprinting a nonexistent unit or s
     const rendered = JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input);
     assert.deepEqual(rendered.draft.binding, {instance: 'local', owned: {port: 11434}});
     assert.equal(rendered.managerCgroup, undefined);
-    await ui.by('Continue').emit('clicked');
+    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
     const reviewed = JSON.parse(ui.calls.at(-1).input);
     assert.deepEqual(reviewed.catalog.profiles[0], owned);
     assert.equal(reviewed.catalog.version, 2);
@@ -34,7 +34,7 @@ test('a second Ollama model preserves the shared instance and derived service', 
     const second = {...owned, id: 'ollama-other', label: 'Other', nativeModel: {...owned.nativeModel, model: 'other:latest'}};
     const ui = await launch({profiles: [owned], responses: {drafts: {drafts: [{...draft, model: 'other:latest'}]}, 'render-owned': {profile: second}}, deferAction: 'unused'});
     await ui.by('Preview managed launch and add for review').emit('clicked');
-    await ui.by('Continue').emit('clicked');
+    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
     const profiles = JSON.parse(ui.calls.at(-1).input).catalog.profiles;
     assert.equal(profiles.length, 2);
     assert.equal(profiles[0].unit, profiles[1].unit);
@@ -44,7 +44,7 @@ test('a second Ollama model preserves the shared instance and derived service', 
 test('stale managed launch result cannot promote an edited draft', async () => {
     const ui = await launch({responses: {drafts: {drafts: [draft]}, 'render-owned': {profile: owned}}, deferAction: 'render-owned'});
     const preview = ui.by('Preview managed launch and add for review').emit('clicked');
-    ui.edit(ui.by('Friendly name'), 'text', 'Changed');
+    ui.edit(ui.by('Installation display name'), 'text', 'Changed');
     ui.finish(); await preview;
     assert.ok(!ui.calls.some(call => call.argv[1] === 'validate'));
     assert.ok(ui.widgets.some(widget => widget.label?.includes('Draft changed during preview')));
@@ -64,7 +64,7 @@ test('failed managed launch keeps an editable draft and collapsed error details'
     assert.equal(ui.by('Preview managed launch and add for review').sensitive, true);
     await ui.by('Save selections for later').emit('clicked');
     assert.equal(JSON.parse(ui.calls.at(-1).input).drafts[0].id, draft.id);
-    assert.ok(ui.widgets.some(widget => widget.title === 'Technical details' && widget.visible && !widget.expanded));
+    assert.ok(ui.widgets.some(widget => (widget.title === 'Technical details' && widget.visible && !widget.expanded) || (widget.accessibleProperties?.label === 'View details' && widget.visible)));
     assert.ok(!ui.calls.some(call => call.argv[1] === 'apply'));
 });
 
@@ -83,7 +83,7 @@ test('editing an owned launch replaces its reviewed catalog entry only after pre
     await ui.by('Edit application').emit('clicked');
     ui.edit(ui.by('Model name'), 'text', 'other:latest');
     await ui.by('Preview managed launch and add for review').emit('clicked');
-    await ui.by('Continue').emit('clicked');
+    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
     const profiles = JSON.parse(ui.calls.at(-1).input).catalog.profiles;
     assert.equal(profiles.length, 1);
     assert.equal(profiles[0].label, 'Updated');
@@ -98,7 +98,7 @@ test('a saved managed-launch edit reopens and replaces the original stable workl
         binding: {instance: 'local', owned: {port: 11434}}};
     const ui = await launch({profiles: [{...owned, requiredMiB: 12000, bootPolicy: 'retain'}], responses: {drafts: {drafts: [savedEdit]}, 'render-owned': {profile: {...owned, label: 'Updated'}}}, deferAction: 'unused'});
     await ui.by('Preview managed launch and add for review').emit('clicked');
-    await ui.by('Continue').emit('clicked');
+    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
     const profiles = JSON.parse(ui.calls.at(-1).input).catalog.profiles;
     assert.equal(profiles.length, 1);
     assert.equal(profiles[0].id, owned.id);
@@ -116,7 +116,7 @@ test('managed launch editing retains resource/login edits made during binding ve
     ui.edit(ui.by('Measured VRAM requirement (MiB; optional)'), 'text', '16000');
     ui.edit(ui.by('Keep this workload running at login if already active'), 'active', false);
     ui.finish(); await preview;
-    const review = ui.by('Continue').emit('clicked');
+    const review = (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
     await new Promise(resolve => setImmediate(resolve));
     ui.finish(); await review;
     const profile = JSON.parse(ui.calls.at(-1).input).catalog.profiles[0];
@@ -184,7 +184,7 @@ for (const app of ['llama.cpp', 'vllm']) {
 test('changing an Ollama native inventory choice preserves saved managed options on reopen', async () => {
     const initial = {...draft, endpoint: 'http://127.0.0.1:11434', binding: {instance: 'custom', owned: {port: 12345}}};
     const ui = await launch({responses: {drafts: {drafts: [initial]}, probe: {app: 'ollama', instanceStatus: 'available', inventoryStatus: 'available', models: [{id: 'other:latest'}]}}, deferAction: 'unused'});
-    await ui.by('Refresh discovery').emit('clicked');
+    await ui.by('Check again').emit('clicked');
     ui.edit(ui.by('Model'), 'selected', 1);
     assert.equal(ui.by('Model name').text, 'other:latest');
     await ui.by('Save selections for later').emit('clicked');

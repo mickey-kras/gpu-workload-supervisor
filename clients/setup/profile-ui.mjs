@@ -1,3 +1,5 @@
+import {wrappedCheckButton} from './presentation.mjs';
+
 // Peer dependencies belong to the derived catalog spec, never to editable drafts.
 export function editableOwnedLaunch(launch) {
     const owned = {...launch};
@@ -61,7 +63,7 @@ export function createProfileEditor({current, Adw, Gtk, GLib, units, field, inva
         if (text.trim() === '') delete current.requiredMiB;
         else current.requiredMiB = Number(text);
     });
-    const retain = new Gtk.CheckButton({label: 'Keep this workload running at login if already active', active: current.bootPolicy === 'retain'});
+    const retain = wrappedCheckButton(Gtk, 'Keep this workload running at login if already active', {active: current.bootPolicy === 'retain'});
     retain.connect('toggled', () => { current.bootPolicy = retain.active ? 'retain' : 'stop-to-idle'; invalidate(); });
     details.add_row(retain);
     const remove = new Gtk.Button({label: 'Remove from supervisor'});

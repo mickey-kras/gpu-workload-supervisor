@@ -21,12 +21,18 @@ export function createWidgetClass(widgets) {
         add(child) { this.append(child); }
         add_row(child) { this.append(child); }
         pack_end(child) { this.append(child); }
+        pack_start(child) { this.append(child); }
+        set_title_widget(child) {
+            if (this.titleWidget) this.remove(this.titleWidget);
+            this.titleWidget = child;
+            if (child) this.append(child);
+        }
         add_top_bar(child) { this.append(child); }
         add_bottom_bar(child) { this.append(child); }
         set_child(child) { this.append(child); }
         set_content(child) { this.append(child); }
         add_css_class(name) { this.cssClasses ??= []; this.cssClasses.push(name); }
-        get_display() { return {}; }
+        get_display() { return {get_clipboard: () => ({set_content: provider => { this.clipboard = provider.value.text; }})}; }
         get_scale_factor() { return 1; }
         get_vadjustment() { this.adjustment ??= {value: 0}; return this.adjustment; }
         remove_css_class(name) { this.cssClasses = this.cssClasses?.filter(item => item !== name); }

@@ -16,6 +16,8 @@ def visit(node, result):
         result.append({'name': node.name, 'role': node.getRoleName(),
                        'focused': states.contains(pyatspi.STATE_FOCUSED),
                        'showing': states.contains(pyatspi.STATE_SHOWING),
+                       'enabled': states.contains(pyatspi.STATE_ENABLED),
+                       'sensitive': states.contains(pyatspi.STATE_SENSITIVE),
                        'expanded': states.contains(pyatspi.STATE_EXPANDED)})
         for child in node:
             visit(child, result)
@@ -23,7 +25,7 @@ def visit(node, result):
         pass
 
 
-def validate_tree(tree, screen, expected_focus, disclosure=None):
+def validate_tree(tree, screen, expected_focus, disclosure=None, contract=None):
     visible = [node for node in tree if node['showing']]
     def present(name, role=None):
         return any(node['name'] == name and (role is None or node['role'] == role)
@@ -43,9 +45,27 @@ def validate_tree(tree, screen, expected_focus, disclosure=None):
         assert present('Finish setup', 'push button') and present('Back', 'push button'), 'missing review actions'
         for workload in ('ComfyUI', 'Ollama - Example small', 'Ollama - Example large'):
             assert present(workload), f'missing review workload: {workload}'
+    elif screen == 'settings':
+        assert contract, 'settings observation requires an independent content contract'
+        for expected in contract.get('required', []):
+            matching = [node for node in visible if node['name'] == expected['name']
+                        and ('role' not in expected or node['role'] == expected['role'])]
+            assert matching, f'missing settings content: {expected}'
+            # GTK4 maps GtkAccessibleState.DISABLED (GtkWidget:sensitive) to
+            # AT-SPI SENSITIVE. ENABLED is a separate raw state and need not be
+            # present on an operable GTK control. Keep both in the evidence.
+            # https://docs.gtk.org/gtk4/enum.AccessibleState.html
+            # https://docs.gtk.org/atspi2/enum.StateType.html
+            assert 'enabled' not in expected, 'action availability contracts must specify sensitive, not enabled'
+            if 'sensitive' in expected:
+                assert any(node['sensitive'] == expected['sensitive'] for node in matching), f'wrong action availability: {expected}'
+        for name in contract.get('absent', []):
+            assert not present(name), f'unrelated settings content visible: {name}'
+        for fragment in contract.get('requiredContains', []):
+            assert any(fragment in node['name'] for node in visible), f'missing settings text: {fragment}'
     else:
         raise AssertionError(f'unknown screen: {screen}')
-    if disclosure is not None:
+    if disclosure is not None and screen == 'models':
         expanded = disclosure == 'open'
         assert any(node['name'] == 'Choose another model…' and node['role'] == 'push button' and node['expanded'] == expanded for node in visible), 'model chooser accessible expansion state'
         for picker in ('Choose model file...', 'Choose model folder...'):
@@ -131,6 +151,7 @@ def main() -> None:
         return
     expected_focus = sys.argv[3]
     disclosure = sys.argv[4] if len(sys.argv) > 4 else None
+    contract = json.loads(pathlib.Path(disclosure).read_text()) if screen == 'settings' else None
     def advance():
         context = GLib.MainContext.default()
         for _ in range(100):
@@ -138,7 +159,7 @@ def main() -> None:
                 break
             context.iteration(False)
         time.sleep(0.03)
-    attempts = observe_until_ready(sample, lambda tree: validate_tree(tree, screen, expected_focus, disclosure), advance)
+    attempts = observe_until_ready(sample, lambda tree: validate_tree(tree, screen, expected_focus, disclosure, contract), advance)
     print(f'PASS: AT-SPI {screen} content and focused {expected_focus} ({attempts} observations)')
 
 
