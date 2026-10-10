@@ -38,22 +38,6 @@ func (b Backend) discoverApplications(ctx context.Context, result *Discovery, un
 	}
 }
 
-// unitRelevant retains existing profile units under arbitrary names without
-// assuming that their unit identity establishes any of the supported applications.
-func unitRelevant(unit string, profiles []control.WorkloadProfile) bool {
-	lower := strings.ToLower(unit)
-	for _, name := range []string{"comfyui", "ollama", "llama", "vllm"} {
-		if strings.Contains(lower, name) {
-			return true
-		}
-	}
-	for _, profile := range profiles {
-		if profile.Unit == unit {
-			return true
-		}
-	}
-	return false
-}
 func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit string) {
 	values, err := b.showApplicationCandidate(ctx, unit)
 	if err != nil {
@@ -102,11 +86,11 @@ func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit strin
 }
 func addFailedUnitInspection(result *Discovery, unit string, values map[string]string, err error) {
 	app := appFromUnit(execStartPropertyPrefix + values["ExecStart"])
-	if app == "" && !unitRelevant(unit, result.Request.Catalog.Profiles) {
-		return
+	if app == "" {
+		app = catalogApplicationIdentity(unit, result.Request.Catalog.Profiles)
 	}
 	if app == "" {
-		app = candidateApplicationHint(unit, result.Request.Catalog.Profiles)
+		return
 	}
 	found := candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"})
 	found.Unit = unit
@@ -117,14 +101,16 @@ func addFailedUnitInspection(result *Discovery, unit string, values map[string]s
 }
 
 func addUnsupportedUnit(result *Discovery, unit string) {
-	if unitRelevant(unit, result.Request.Catalog.Profiles) {
-		found := candidate(ProbeRequest{App: candidateApplicationHint(unit, result.Request.Catalog.Profiles), Reference: unit, ReferenceKind: "configuration"})
-		found.Unit = unit
-		found.InstanceStatus = "unsupported"
-		found.ConfigurationStatus = "unsupported"
-		found.NextStep = "This launch is not supported. Choose a supported direct application configuration."
-		result.Applications = append(result.Applications, found)
+	app := catalogApplicationIdentity(unit, result.Request.Catalog.Profiles)
+	if app == "" {
+		return
 	}
+	found := candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"})
+	found.Unit = unit
+	found.InstanceStatus = "unsupported"
+	found.ConfigurationStatus = "unsupported"
+	found.NextStep = "This launch is not supported. Choose a supported direct application configuration."
+	result.Applications = append(result.Applications, found)
 }
 
 func (b Backend) recognizeUnit(ctx context.Context, found *ApplicationCandidate, app, unit string, profile control.WorkloadProfile) {
@@ -172,18 +158,6 @@ func (b Backend) discoverUnitInventory(ctx context.Context, found *ApplicationCa
 	}
 }
 
-func applicationHint(unit string) string {
-	lower := strings.ToLower(unit)
-	for _, app := range []string{"comfyui", "ollama", "vllm"} {
-		if strings.Contains(lower, app) {
-			return app
-		}
-	}
-	if strings.Contains(lower, "llama") {
-		return appLlamaCPP
-	}
-	return ""
-}
 func unitProperties(output string) map[string]string {
 	values := map[string]string{}
 	for _, line := range strings.Split(output, "\n") {
@@ -294,7 +268,9 @@ func consumeAliasFlags(fields []string, i int, aliases *[]string) int {
 	return i
 }
 
-func candidateApplicationHint(unit string, profiles []control.WorkloadProfile) string {
+// Existing catalog bindings retain application identity when inspection fails.
+// A service name alone cannot identify an application or its helper services.
+func catalogApplicationIdentity(unit string, profiles []control.WorkloadProfile) string {
 	for _, p := range profiles {
 		if p.Unit == unit {
 			if p.NativeModel != nil {
@@ -303,7 +279,10 @@ func candidateApplicationHint(unit string, profiles []control.WorkloadProfile) s
 			if p.LaunchBinding != nil {
 				return p.LaunchBinding.Runtime
 			}
+			if p.Adapter == "comfyui" {
+				return "comfyui"
+			}
 		}
 	}
-	return applicationHint(unit)
+	return ""
 }

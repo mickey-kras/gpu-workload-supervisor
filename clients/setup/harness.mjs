@@ -48,6 +48,8 @@ export async function launch({units = [], profiles = [], pending = false, fail =
                 evaluate: item => type === StringObject.$gtype && expression === null && item instanceof StringObject && property in item ? [true, item[property]] : [false, null],
             })},
         }},
+        'gi://Pango': {default: {WrapMode: {WORD_CHAR: 2}}},
+        'gi://GObject': {default: {TYPE_STRING: 'string', Value: class { init(type) { this.type = type; } set_string(text) { this.text = text; } }}},
         'gi://GLib': {default: {PRIORITY_DEFAULT_IDLE: 200, SOURCE_REMOVE: false, idle_add(priority, callback) { callback(); return 1; }, getenv: () => 'GNOME', uuid_string_random: () => uuidSequence++ ? `unique-id-${uuidSequence}` : 'unique-id',
             markup_escape_text: text => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
         }},

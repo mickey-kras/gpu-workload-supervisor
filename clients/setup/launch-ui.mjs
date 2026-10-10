@@ -3,8 +3,7 @@ import {applications, profileIDFromModel} from './onboarding.mjs';
 export function addOwnedEditor({Adw, Gtk, group, draftGroup, draft, initial, command, bind, changed, taken, status, reportError, parent, removed, modelChanged}) {
     const launch = new Adw.PreferencesGroup({title: 'Supervisor-managed launch',
         description: initial.app === 'ollama' ? 'Models with the same instance name and port share one Ollama service.' : 'Create a service for this model using the installed application. Applications and model files are preserved.'});
-    const launchDisclosure = new Adw.ExpanderRow({title: 'Supervisor-managed launch', subtitle: 'Preview a new service for an installed executable'});
-    group.add_row(launchDisclosure); launchDisclosure.add_row(launch);
+    group.add(launch);
     const fields = {};
     if (initial.app === 'ollama') {
         const model = new Adw.EntryRow({title: 'Model name', text: initial.model ?? ''});
@@ -70,8 +69,7 @@ export function addOwnedEditor({Adw, Gtk, group, draftGroup, draft, initial, com
 
 export function addBindingEditor({Adw, Gtk, group, draftGroup, draft, initial, status, parent, removed, bind, command, changed, taken, reportError, isSyncing, modelChanged}) {
     const binding = new Adw.PreferencesGroup({title: 'Existing service', description: 'Adopt an existing isolated service and its loaded configuration. This does not create a new launch. Saved fields remain unverified.'});
-    const adoption = new Adw.ExpanderRow({title: 'Existing service', subtitle: 'Adopt a service you already configured'});
-    group.add_row(adoption); adoption.add_row(binding);
+    group.add(binding);
     const fields = {};
     for (const [key, title] of [['unit', 'Existing user service'], ['cgroup', 'Cgroup path'], ['healthURL', 'Loopback health URL'], ...(draft.needsModel ? [['instance', 'Runtime instance ID'], ['model', 'Exact model ID'], ['launchFile', 'Loaded service file path'], ['launchSHA256', 'Service file SHA-256']] : [])]) {
         const row = new Adw.EntryRow({title, text: initial.binding?.[key] ?? (key === 'model' ? initial.model ?? '' : ''), editable: key !== 'launchSHA256'});
@@ -122,3 +120,4 @@ export function addBindingEditor({Adw, Gtk, group, draftGroup, draft, initial, s
     });
     return fields;
 }
+

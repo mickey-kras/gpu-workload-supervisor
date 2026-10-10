@@ -6,6 +6,7 @@ import Gtk from 'gi://Gtk?version=4.0';
 import GLib from 'gi://GLib';
 import {installSetupStyle, applicationHeader, roundedCard, linkButton} from './presentation.mjs';
 import {applications} from './onboarding.mjs';
+import {editableOwnedLaunch} from './profile-ui.mjs';
 import {addErrorReporter} from './discovery-ui.mjs';
 
 export function createShell(ui) {
@@ -32,6 +33,9 @@ export function createShell(ui) {
     ui.toolbar = new Adw.ToolbarView();
     ui.headerBar = new Adw.HeaderBar();
     ui.toolbar.add_top_bar(ui.headerBar);
+    ui.settingsTitle = new Gtk.Label({wrap: true, focusable: true, selectable: true, accessible_role: Gtk.AccessibleRole.HEADING}); ui.settingsTitle.add_css_class('title');
+    ui.settingsBack = new Gtk.Button({icon_name: 'go-previous-symbolic', visible: false, tooltip_text: 'Back'});
+    ui.settingsBack.update_property([Gtk.AccessibleProperty.LABEL], ['Back']); ui.settingsBack.connect('clicked', ui.goBack); ui.headerBar.pack_start(ui.settingsBack);
     ui.box = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 14,
         margin_start: 28, margin_end: 28, margin_top: 20, margin_bottom: 12});
     ui.scroll = new Gtk.ScrolledWindow({vexpand: true, hscrollbar_policy: Gtk.PolicyType.NEVER});
@@ -121,11 +125,16 @@ export function createApplicationCards(ui) {
             if (!select.active) select.active = true;
             const editor = ui.draftEditors.find(editor => editor.app === choice.id && ui.drafts.some(draft => draft.id === editor.id));
             if (editor) ui.openApplicationSettings(editor, gear);
-            else ui.openApplicationSettings({app: choice.id, showSettings: () => {
-                const rows = ui.profiles.filter(profile => ui.runtimeOf(profile) === choice.id).map(profile => ui.profileRows.get(profile));
-                ui.applicationSettings.profileRows = rows;
-                for (const row of rows) { ui.rows.remove(row); ui.draftRows.append(row); row.visible = true; }
-            }}, gear);
+            else {
+                const current = ui.profiles.find(profile => ui.runtimeOf(profile) === choice.id);
+                if (!current) return;
+                const binding = current.nativeModel?.owned ? {instance: current.nativeModel.instance, owned: editableOwnedLaunch(current.nativeModel.owned)} : {
+                    unit: current.unit, cgroup: current.cgroup, healthURL: current.healthURL, instance: current.nativeModel?.instance,
+                    model: current.nativeModel?.model, launchFile: current.nativeModel?.launchFile ?? current.launchBinding?.launchFile};
+                const editor = ui.appendDraft({id: current.id, app: choice.id, label: current.label, model: current.nativeModel?.model,
+                    endpoint: current.nativeModel?.endpoint ?? current.launchBinding?.endpoint, binding}, current);
+                if (editor) ui.openApplicationSettings(editor, gear);
+            }
         });
         select.connect('toggled', () => {
             if (select.active) ui.selectApplication(choice);
@@ -180,3 +189,4 @@ export function createFooter(ui) {
     ui.toolbar.add_bottom_bar(ui.footer);
     ui.back.connect('clicked', ui.goBack);
 }
+

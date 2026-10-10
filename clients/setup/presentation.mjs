@@ -27,6 +27,9 @@ export function installSetupStyle(window) {
         .setup-high-contrast .setup-model-choice { border-color: @window_fg_color; }
         .setup-link { color: #c64600; text-decoration: underline; padding: 4px 0; }
         .setup-footer button { padding: 12px 24px; min-width: 72px; }
+        .setup-state { background: alpha(@window_fg_color, .08); border: 1px solid alpha(@window_fg_color, .12); border-radius: 8px; padding: 8px; }
+        .setup-warning { border-color: @warning_color; background: alpha(@warning_color, .08); }
+        .setup-status:not(.setup-warning) { background: transparent; border-color: transparent; }
         .setup-notice { font-size: 14px; }
         .setup-explanation { font-size: 15px; }
     `, -1);

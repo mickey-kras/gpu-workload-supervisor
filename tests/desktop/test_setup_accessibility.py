@@ -24,7 +24,7 @@ def model_tree(focus=True):
     content = [('Example small', 'check box'), ('Example large', 'check box'),
                ('Settings for ComfyUI', 'push button'), ('Settings for Ollama', 'push button'),
                ('Continue', 'push button'), ('Back', 'push button')]
-    return [{'name': name, 'role': role, 'showing': True, 'focused': focus and name == 'Continue', 'expanded': False}
+    return [{'name': name, 'role': role, 'showing': True, 'focused': focus and name == 'Continue', 'expanded': False, 'enabled': True}
             for name, role in content]
 
 
@@ -38,7 +38,7 @@ class AccessibleFixture:
 
     def getState(self) -> types.SimpleNamespace:
         self.on_access()
-        return types.SimpleNamespace(contains=lambda state: self.node[state])
+        return types.SimpleNamespace(contains=lambda state: self.node.get(state, False))
 
     def getRoleName(self) -> str:
         self.on_access()
@@ -117,27 +117,38 @@ class RegistryFixture:
 
 class SamplingTests(unittest.TestCase):
     def run_main(self, content: list[dict[str, str | bool]], output: pathlib.Path,
-                 startup_seconds: float = 0, screen: str = 'models') -> RegistryFixture:
+                 startup_seconds: float = 0, screen: str = 'models', contract: pathlib.Path | None = None) -> RegistryFixture:
         ticks = [0.0]
         context = MainContextFixture()
         registry = RegistryFixture(content, ticks, context, startup_seconds)
         self.registry = registry
         self.context = context
         native = types.SimpleNamespace(Registry=registry,
-            STATE_FOCUSED='focused', STATE_SHOWING='showing', STATE_EXPANDED='expanded')
+            STATE_FOCUSED='focused', STATE_SHOWING='showing', STATE_EXPANDED='expanded', STATE_ENABLED='enabled')
         original_observe = accessibility.observe_until_ready
         def observe(sample, validate, advance):
             return original_observe(sample, validate, advance, clock=lambda: ticks[0])
         def sleep(_seconds: float) -> None:
             ticks[0] += 1
+        argv = ['setup_accessibility.py', str(output), screen, 'Continue']
+        if contract is not None:
+            argv.append(str(contract))
         with patch.object(accessibility, 'pyatspi', native), patch.object(accessibility, 'GLib', context.glib()), \
                 patch.object(accessibility, 'observe_until_ready', observe), \
                 patch.object(accessibility.time, 'monotonic', lambda: ticks[0]), \
                 patch.object(accessibility.time, 'sleep', sleep), \
-                patch.object(sys, 'argv', ['setup_accessibility.py', str(output), screen, 'Continue']), \
+                patch.object(sys, 'argv', argv), \
                 contextlib.redirect_stdout(io.StringIO()):
             accessibility.main()
         return registry
+
+    def test_settings_contract_cli_does_not_trigger_model_disclosure_checks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory) / 'snapshot.json'
+            contract = pathlib.Path(directory) / 'contract.json'
+            contract.write_text(json.dumps({'required': [{'name': 'Example small'}, {'name': 'Continue', 'enabled': True}],
+                                            'requiredContains': ['Example']}))
+            self.run_main(model_tree(), output, screen='settings', contract=contract)
 
     def test_native_sampling_runs_inside_main_context_callback(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -297,6 +308,52 @@ class ReadinessTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, 'after deadline'):
                 self.observe([model_tree(focus=False), complete], output, advance_seconds=4, timeout=3)
             self.assertEqual(json.loads(output.read_text()), complete)
+
+
+class SettingsContractTests(unittest.TestCase):
+    def setUp(self):
+        self.identity = 'Service: comfyui-production-long-installation.service · /home/example/.config/systemd/user/comfyui-production-long-installation.service · http://127.0.0.1:8188'
+        self.tree = [{'name': name, 'role': role, 'showing': True, 'focused': name == 'ComfyUI', 'enabled': enabled}
+                     for name, role, enabled in [('ComfyUI', 'label', True), (self.identity, 'label', True),
+                                                 ('Use installation', 'push button', False), ('Cancel', 'push button', True)]]
+        self.contract = {'required': [{'name': self.identity}, {'name': 'Use installation', 'role': 'push button', 'enabled': False}],
+                         'absent': ['Display name', 'Measured VRAM requirement (MiB; optional)']}
+
+    def validate(self, tree=None):
+        accessibility.validate_tree(self.tree if tree is None else tree, 'settings', 'ComfyUI', contract=self.contract)
+
+    def test_full_identity_and_disabled_action_are_required_together(self):
+        self.validate()
+        self.tree[1]['name'] = 'Service: comfyui-production…'
+        with self.assertRaisesRegex(AssertionError, 'missing settings content'):
+            self.validate()
+
+    def test_enabled_unsafe_action_fails(self):
+        self.tree[2]['enabled'] = True
+        with self.assertRaisesRegex(AssertionError, 'wrong action availability'):
+            self.validate()
+
+    def test_hidden_or_unrelated_content_cannot_satisfy_contract(self):
+        self.tree[1]['showing'] = False
+        with self.assertRaisesRegex(AssertionError, 'missing settings content'):
+            self.validate()
+        self.tree[1]['showing'] = True
+        self.tree.append({'name': 'Display name', 'role': 'entry', 'showing': True, 'focused': False})
+        with self.assertRaisesRegex(AssertionError, 'unrelated settings content visible'):
+            self.validate()
+
+    def test_contract_does_not_replace_focus_requirement(self):
+        self.tree[0]['focused'] = False
+        with self.assertRaises(AssertionError):
+            self.validate()
+
+    def test_required_diagnostic_fragment_must_be_showing(self):
+        self.contract['requiredContains'] = ['Untrusted path:']
+        with self.assertRaisesRegex(AssertionError, 'missing settings text'):
+            self.validate()
+        self.tree.append({'name': 'Untrusted path: /home/example/shared/ComfyUI/main.py', 'role': 'label',
+                          'showing': True, 'focused': False})
+        self.validate()
 
 
 if __name__ == '__main__':

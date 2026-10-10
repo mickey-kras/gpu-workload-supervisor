@@ -1,5 +1,6 @@
-export function watchInstanceSelection({instance, instances, draft, endpoint, reference, clearBinding, clearModels, show, getBindingFields, setSync, setProbeGuidance, clearOwnedReference, selectOwnedReference, selectOwnedBinding}) {
+export function watchInstanceSelection({instance, instances, draft, endpoint, reference, clearBinding, clearModels, show, getBindingFields, setSync, setProbeGuidance, clearOwnedReference, selectOwnedReference, selectOwnedBinding, isSyncing = () => false}) {
     instance.connect('notify::selected', () => {
+        if (isSyncing()) return;
         const selected = instances[instance.selected - 1];
         if (!selected) return;
         clearBinding(); clearModels();
@@ -26,26 +27,32 @@ export function watchInstanceSelection({instance, instances, draft, endpoint, re
     });
 }
 
-export function addRefreshButton({Gtk, group, draft, status, command, show, reportError, guidance}) {
-    const refresh = new Gtk.Button({label: 'Refresh discovery'}); group.add(refresh);
+export function addRefreshButton({Gtk, group, draft, status, command, show, reportError, guidance, checking = () => {}, inspectService = async () => null}) {
+    const refresh = new Gtk.Button({label: 'Check again', visible: false}); group.add(refresh);
     refresh.connect('clicked', async () => {
         const target = draft.snapshot();
         if (!target.endpoint && !target.reference) {
             status.label = guidance() ?? 'Choose a detected instance, enter the application address, or select a model file or folder before refreshing.';
             return;
         }
-        const probe = draft.begin(); refresh.sensitive = false;
+        const probe = draft.begin(); refresh.sensitive = false; checking(true);
         status.label = 'Checking application without starting it...';
         try {
-            const candidate = JSON.parse(await command(['/usr/bin/gpu-setup', 'probe'], JSON.stringify(probe.request)));
+            const service = target.binding?.unit ? await inspectService(target) : null;
+            let candidate = JSON.parse(await command(['/usr/bin/gpu-setup', 'probe'], JSON.stringify(probe.request)));
+            if (service) {
+                const inventory = candidate.inventoryStatus === 'available' ? {models: candidate.models, inventoryStatus: candidate.inventoryStatus} : {};
+                candidate = {...candidate, ...service, ...inventory};
+            }
             if (draft.accept(probe, candidate)) show(candidate);
         } catch (error) {
             if (probe.generation === draft.generation) reportError('Discovery failed. Check the address or location, then retry.', error);
-        } finally { refresh.sensitive = true; }
+        } finally { refresh.sensitive = true; checking(false); }
     });
+    return refresh;
 }
 
-export function addFilePickers({Gtk, window, group, advancedGroup = group, draft, reference, endpoint, status, changed, clearBinding, clearModels, clearOwnedReference, setSync, selectedReference, selectedExecutable, modelGroup}) {
+export function addFilePickers({Gtk, window, group, advancedGroup = group, draft, reference, endpoint, status, changed, clearBinding, clearModels, clearOwnedReference, setSync, selectedReference, selectedExecutable, modelGroup, selectionChanged = () => {}}) {
     if (draft.needsModel) {
         const executable = new Gtk.Button({label: 'Choose installed executable…'}); group.add(executable);
         executable.connect('clicked', () => {
@@ -54,7 +61,7 @@ export function addFilePickers({Gtk, window, group, advancedGroup = group, draft
                 try {
                     const path = source.open_finish(result)?.get_path();
                     if (!path) return;
-                    clearBinding(); clearModels(); clearOwnedReference();
+                    selectionChanged(); clearBinding(); clearModels(); clearOwnedReference();
                     draft.reference(path, 'application');
                     setSync(true); endpoint.text = ''; setSync(false);
                     selectedExecutable(path); changed(draft.snapshot());
@@ -71,7 +78,7 @@ export function addFilePickers({Gtk, window, group, advancedGroup = group, draft
             try {
                 const path = source.select_folder_finish(result)?.get_path();
                 if (!path) return;
-                clearBinding(); clearModels();
+                selectionChanged(); clearBinding(); clearModels();
                 draft.reference(path, 'application-directory'); reference.label = path;
                 clearOwnedReference();
                 setSync(true); endpoint.text = ''; setSync(false);
@@ -105,7 +112,7 @@ export function addFilePickers({Gtk, window, group, advancedGroup = group, draft
                     const file = source[`${method}_finish`](result);
                     const path = file?.get_path();
                     if (!path) return;
-                    clearBinding(); clearModels();
+                    selectionChanged(); clearBinding(); clearModels();
                     draft.reference(path, kind); reference.label = path;
                     selectedReference(path, kind);
                     setSync(true); endpoint.text = ''; setSync(false);
@@ -118,3 +125,4 @@ export function addFilePickers({Gtk, window, group, advancedGroup = group, draft
         });
     }
 }
+
