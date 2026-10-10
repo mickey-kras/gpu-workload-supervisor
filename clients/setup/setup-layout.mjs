@@ -33,7 +33,7 @@ export function createShell(ui) {
     ui.toolbar = new Adw.ToolbarView();
     ui.headerBar = new Adw.HeaderBar();
     ui.toolbar.add_top_bar(ui.headerBar);
-    ui.settingsTitle = new Gtk.Label({wrap: true, focusable: true, selectable: true, accessible_role: Gtk.AccessibleRole.HEADING}); ui.settingsTitle.add_css_class('title');
+    ui.settingsTitle = new Gtk.Label({wrap: true, focusable: true, accessible_role: Gtk.AccessibleRole.HEADING}); ui.settingsTitle.add_css_class('title');
     ui.settingsBack = new Gtk.Button({icon_name: 'go-previous-symbolic', visible: false, tooltip_text: 'Back'});
     ui.settingsBack.update_property([Gtk.AccessibleProperty.LABEL], ['Back']); ui.settingsBack.connect('clicked', ui.goBack); ui.headerBar.pack_start(ui.settingsBack);
     ui.box = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 14,

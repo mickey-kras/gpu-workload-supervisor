@@ -50,7 +50,7 @@ def main():
         # issue state so an accidentally skipped path cannot produce a green run.
         required = {'settings-rechecked-ready', 'settings-stopped', 'settings-installation-long-identity', 'installation-selection', 'application-settings', 'settings-advanced-edited',
                     'settings-resource-checks', 'settings-launch-details', 'settings-draft-cancelled',
-                    'configuration-checking', 'settings-stale-check', 'temporary-without-consent',
+                    'configuration-checking', 'settings-stale-check', 'settings-stale-endpoint-check', 'temporary-without-consent',
                     'temporary-checking', 'temporary-cleanup-required', 'temporary-close-blocked',
                     'temporary-cleanup-complete', 'temporary-cancelled-restored'}
         required.update(f'settings-{state}' for state in

@@ -123,7 +123,7 @@ class SetupWindow {
         this.saveDrafts.visible = false; this.later.visible = true; this.later.label = 'Cancel';
         for (const draftEditor of this.draftEditors) draftEditor.group.visible = draftEditor === editor;
         editor.showSettings(editor.replacing);
-        this.settingsTitle.grab_focus(); this.settingsTitle.select_region(0, 0);
+        this.settingsTitle.grab_focus();
     }
 
     closeApplicationSettings(restoreFocus = true) {
@@ -154,7 +154,7 @@ class SetupWindow {
         this.status.visible = false;
         if (previous !== page) {
             this.scroll.get_vadjustment().value = this.applicationSettings.scrolls.get(page) ?? 0;
-            this.settingsTitle.grab_focus(); this.settingsTitle.select_region(0, 0);
+            this.settingsTitle.grab_focus();
         }
     }
 

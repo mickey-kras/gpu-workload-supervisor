@@ -22,7 +22,7 @@ export class InstallationSettings {
         const heading = new Gtk.Label({label: 'Installation', xalign: 0}); heading.add_css_class('heading'); main.append(heading);
         this.identity = new Gtk.Label({label: 'No installation selected', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true, hexpand: true});
         this.identity.add_css_class('dim-label');
-        this.state = new Gtk.Label({label: 'Unverified', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0}); this.state.add_css_class('dim-label');
+        this.state = new Gtk.Label({label: 'Unverified', xalign: 0}); this.state.add_css_class('dim-label');
         const card = roundedCard(Gtk, Gtk.Orientation.HORIZONTAL, 12);
         const header = applicationHeader(Gtk, app, this.appLabel, null, this.identity); header.hexpand = true; card.append(header);
         this.state.valign = Gtk.Align.CENTER; this.state.add_css_class('setup-state'); card.append(this.state); main.append(card);
@@ -104,12 +104,14 @@ export class InstallationSettings {
         this.notify();
     }
     problem(summary, error) {
-        this.ready = false; this.noticeTitle.label = 'Configuration needs attention'; this.noticeIcon.icon_name = 'dialog-warning-symbolic'; this.notice.add_css_class('setup-warning'); this.status.label = summary; this.viewDetails.visible = true;
+        this.ready = false; this.noticeTitle.label = 'Configuration needs attention'; this.noticeIcon.icon_name = 'dialog-warning-symbolic';
+        this.noticeIcon.remove_css_class('success'); this.noticeIcon.add_css_class('warning');
+        this.notice.add_css_class('setup-warning'); this.status.label = summary; this.viewDetails.visible = true;
         this.diagnosticSummary.label = 'Configuration needs attention'; this.diagnostic.label = error.message;
         this.notify();
     }
     checking(busy) { this.busy = busy; if (busy) this.diagnosticSummary.label = 'Checking configuration…'; this.notify(); }
-    invalidate() { this.ready = false; this.status.label = 'Configuration changed. Check again before using this installation.'; this.viewDetails.visible = true; this.notify(); }
+    invalidate() { this.problem('Configuration changed. Check again before using this installation.', new Error('The installation settings have changed and require validation.')); }
 }
 
 export function installationChoiceLabel(Gtk, identity) {

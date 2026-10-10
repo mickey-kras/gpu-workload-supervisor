@@ -31,7 +31,7 @@ export function addRefreshButton({Gtk, group, draft, status, command, show, repo
     const refresh = new Gtk.Button({label: 'Check again', visible: false}); group.add(refresh);
     refresh.connect('clicked', async () => {
         const target = draft.snapshot();
-        if (!target.endpoint && !target.reference) {
+        if (!target.endpoint && !target.reference && !target.binding?.unit) {
             status.label = guidance() ?? 'Choose a detected instance, enter the application address, or select a model file or folder before refreshing.';
             return;
         }
@@ -39,9 +39,11 @@ export function addRefreshButton({Gtk, group, draft, status, command, show, repo
         status.label = 'Checking application without starting it...';
         try {
             const service = target.binding?.unit ? await inspectService(target) : null;
-            let candidate = JSON.parse(await command(['/usr/bin/gpu-setup', 'probe'], JSON.stringify(probe.request)));
+            let candidate = service;
+            if (target.endpoint || target.reference) candidate = JSON.parse(await command(['/usr/bin/gpu-setup', 'probe'], JSON.stringify(probe.request)));
+            if (!candidate) throw new Error('The selected service could not be inspected. Choose another installation or retry.');
             if (service) {
-                const inventory = candidate.inventoryStatus === 'available' ? {models: candidate.models, inventoryStatus: candidate.inventoryStatus} : {};
+                const inventory = candidate.inventoryStatus === 'available' && target.endpoint === service.endpoint ? {models: candidate.models, inventoryStatus: candidate.inventoryStatus} : {};
                 candidate = {...candidate, ...service, ...inventory};
             }
             if (draft.accept(probe, candidate)) show(candidate);

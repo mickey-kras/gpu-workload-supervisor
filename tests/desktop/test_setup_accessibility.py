@@ -24,7 +24,7 @@ def model_tree(focus=True):
     content = [('Example small', 'check box'), ('Example large', 'check box'),
                ('Settings for ComfyUI', 'push button'), ('Settings for Ollama', 'push button'),
                ('Continue', 'push button'), ('Back', 'push button')]
-    return [{'name': name, 'role': role, 'showing': True, 'focused': focus and name == 'Continue', 'expanded': False, 'enabled': True}
+    return [{'name': name, 'role': role, 'showing': True, 'focused': focus and name == 'Continue', 'expanded': False, 'enabled': True, 'sensitive': True}
             for name, role in content]
 
 
@@ -124,7 +124,7 @@ class SamplingTests(unittest.TestCase):
         self.registry = registry
         self.context = context
         native = types.SimpleNamespace(Registry=registry,
-            STATE_FOCUSED='focused', STATE_SHOWING='showing', STATE_EXPANDED='expanded', STATE_ENABLED='enabled')
+            STATE_FOCUSED='focused', STATE_SHOWING='showing', STATE_EXPANDED='expanded', STATE_ENABLED='enabled', STATE_SENSITIVE='sensitive')
         original_observe = accessibility.observe_until_ready
         def observe(sample, validate, advance):
             return original_observe(sample, validate, advance, clock=lambda: ticks[0])
@@ -146,9 +146,23 @@ class SamplingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = pathlib.Path(directory) / 'snapshot.json'
             contract = pathlib.Path(directory) / 'contract.json'
-            contract.write_text(json.dumps({'required': [{'name': 'Example small'}, {'name': 'Continue', 'enabled': True}],
+            contract.write_text(json.dumps({'required': [{'name': 'Example small'}, {'name': 'Continue', 'sensitive': True}],
                                             'requiredContains': ['Example']}))
             self.run_main(model_tree(), output, screen='settings', contract=contract)
+
+    def test_sampling_retains_distinct_enabled_and_sensitive_states(self):
+        content = model_tree()
+        content[0].update(enabled=False, sensitive=True)
+        content[1].update(enabled=True, sensitive=False)
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory) / 'snapshot.json'
+            self.run_main(content, output, screen='diagnostic')
+            sampled = json.loads(output.read_text())[1:]
+            self.assertEqual(sampled, content)
+            self.assertFalse(sampled[0]['enabled'])
+            self.assertTrue(sampled[0]['sensitive'])
+            self.assertTrue(sampled[1]['enabled'])
+            self.assertFalse(sampled[1]['sensitive'])
 
     def test_native_sampling_runs_inside_main_context_callback(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -313,10 +327,10 @@ class ReadinessTests(unittest.TestCase):
 class SettingsContractTests(unittest.TestCase):
     def setUp(self):
         self.identity = 'Service: comfyui-production-long-installation.service · /home/example/.config/systemd/user/comfyui-production-long-installation.service · http://127.0.0.1:8188'
-        self.tree = [{'name': name, 'role': role, 'showing': True, 'focused': name == 'ComfyUI', 'enabled': enabled}
-                     for name, role, enabled in [('ComfyUI', 'label', True), (self.identity, 'label', True),
+        self.tree = [{'name': name, 'role': role, 'showing': True, 'focused': name == 'ComfyUI', 'enabled': False, 'sensitive': sensitive}
+                     for name, role, sensitive in [('ComfyUI', 'label', True), (self.identity, 'label', True),
                                                  ('Use installation', 'push button', False), ('Cancel', 'push button', True)]]
-        self.contract = {'required': [{'name': self.identity}, {'name': 'Use installation', 'role': 'push button', 'enabled': False}],
+        self.contract = {'required': [{'name': self.identity}, {'name': 'Use installation', 'role': 'push button', 'sensitive': False}],
                          'absent': ['Display name', 'Measured VRAM requirement (MiB; optional)']}
 
     def validate(self, tree=None):
@@ -328,9 +342,26 @@ class SettingsContractTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'missing settings content'):
             self.validate()
 
-    def test_enabled_unsafe_action_fails(self):
-        self.tree[2]['enabled'] = True
+    def test_sensitive_unsafe_action_fails(self):
+        self.tree[2]['sensitive'] = True
         with self.assertRaisesRegex(AssertionError, 'wrong action availability'):
+            self.validate()
+
+    def test_sensitive_action_passes_without_enabled_state(self):
+        self.tree[2].update(enabled=False, sensitive=True)
+        self.contract['required'][1]['sensitive'] = True
+        self.validate()
+
+    def test_insensitive_action_does_not_become_operable_from_enabled_state(self):
+        self.tree[2].update(enabled=True, sensitive=False)
+        self.validate()
+        self.contract['required'][1]['sensitive'] = True
+        with self.assertRaisesRegex(AssertionError, 'wrong action availability'):
+            self.validate()
+
+    def test_contract_cannot_silently_keep_using_enabled_for_availability(self):
+        self.contract['required'][1] = {'name': 'Use installation', 'enabled': False}
+        with self.assertRaisesRegex(AssertionError, 'must specify sensitive'):
             self.validate()
 
     def test_hidden_or_unrelated_content_cannot_satisfy_contract(self):

@@ -116,9 +116,6 @@ class DraftEditor {
         if (this.draft.needsModel) {
             this.model = new this.Adw.ComboRow({title: 'Model', use_markup: false, model: this.Gtk.StringList.new([this.initial.model || 'Check an instance to list models']), selected: 0});
             this.modelGroup.add(this.model);
-        } else {
-            // ComfyUI's main page already explains where models are chosen.
-
         }
         this.models = [];
         this.modelChecks = new Map();
@@ -244,7 +241,7 @@ class DraftEditor {
                 configurationStatus: this.installationEvidence.configurationStatus, unit: this.installationEvidence.unit};
         }
         this.settings.candidate(candidate);
-        this.syncing = true; this.health.text = this.draft.snapshot().binding?.healthURL ?? ''; this.syncing = false;
+        this.syncing = true; this.health.text = this.draft.snapshot().binding?.healthURL ?? ''; this.health.editable = !this.draft.snapshot().binding?.owned; this.syncing = false;
         this.temporary.showAvailability(candidate);
         if (this.model) this.showModels(candidate);
         this.changed(this.draft.snapshot());
@@ -263,7 +260,6 @@ class DraftEditor {
             },
             setProbeGuidance: guidance => this.probeGuidance = guidance, clearOwnedReference: () => this.clearOwnedReference(), selectOwnedReference: (path, kind) => this.selectOwnedReference(path, kind)});
         this.refresh = addRefreshButton({Gtk: this.Gtk, group: {add: child => this.settings.pages.get('configuration').append(child)}, draft: this.draft, status: this.status, command: this.command, show: (candidate) => this.show(candidate), reportError: this.reportError, guidance: () => this.probeGuidance, checking: busy => this.settings.checking(busy), inspectService: async input => {
-            if (!input.binding?.unit) return null;
             const discovery = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'discover']));
             return discovery.applications?.find(candidate => candidate.app === input.app && candidate.unit === input.binding.unit) ?? null;
         }});
@@ -334,7 +330,11 @@ class DraftEditor {
         return {
             app: this.initial.app, id: this.initial.id, originalModel: this.initial.model ?? this.initial.binding?.owned?.modelPath, group: this.group, modelGroup: this.modelGroup, finish: this.finish,
             showSettings: profile => {
-                this.syncing = true; this.capacity.text = String(this.overrides.requiredMiB ?? profile?.requiredMiB ?? ''); this.retain.active = (this.overrides.bootPolicy ?? profile?.bootPolicy) === 'retain'; this.syncing = false;
+                this.syncing = true;
+                const required = Object.hasOwn(this.overrides, 'requiredMiB') ? this.overrides.requiredMiB : profile?.requiredMiB;
+                this.capacity.text = String(required ?? ''); this.retain.active = (this.overrides.bootPolicy ?? profile?.bootPolicy) === 'retain'; this.syncing = false;
+                this.health.editable = !this.draft.snapshot().binding?.owned;
+                if (!this.health.editable && profile?.healthURL) { this.syncing = true; this.health.text = profile.healthURL; this.syncing = false; }
                 this.session = this.capture(); this.group.visible = true; this.settings.history = []; this.settings.show(); this.settings.change.grab_focus();
             },
             settingsAction: () => {

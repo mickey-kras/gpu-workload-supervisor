@@ -61,7 +61,8 @@ const commandRecords = [];
 const longUnit = 'comfyui-production-rendering-installation-with-long-service-identity.service';
 const longLocation = `/home/example/.config/systemd/user/${longUnit}`;
 const longEndpoint = 'http://127.0.0.1:18188';
-const longIdentity = `Service: ${longUnit} · ${longLocation} · ${longEndpoint}`;
+const serviceIdentity = `Service: ${longUnit} · ${longLocation}`;
+const longIdentity = `${serviceIdentity} · ${longEndpoint}`;
 const diagnosticEvidence = 'ExecStart: /home/example/Applications/ComfyUI-production-rendering-environment/bin/python /home/example/Applications/ComfyUI-production-rendering-environment/main.py --listen 127.0.0.1 --port 18188';
 
 const candidate = {app: 'ollama', label: 'Ollama', unit: 'example-model.service',
@@ -76,8 +77,10 @@ function stateCandidate(state) {
         binding: {...comfy.binding, unit: longUnit, launchFile: longLocation, healthURL: `${longEndpoint}/system_stats`},
         evidence: [diagnosticEvidence], nextStep: 'Inspect the existing service. Its files have not been changed.'};
     if (state === 'running') result.instanceStatus = 'available';
+    // Failed service parsing cannot supply endpoint or verified launch binding.
+    if (['inspection-failed', 'unsupported-home'].includes(state)) Object.assign(result, {endpoint: undefined, binding: undefined, cgroup: undefined});
     if (state === 'inspection-failed') Object.assign(result, {recognized: false, configurationStatus: 'inspection-failed', instanceStatus: 'inspection-failed'});
-    if (state === 'unsupported-home') Object.assign(result, {recognized: false, configurationStatus: 'unsupported', instanceStatus: 'unsupported', nextStep: 'HOME uses an unsupported expansion or whitespace. Choose a trusted installation path.'});
+    if (state === 'unsupported-home') Object.assign(result, {recognized: false, configurationStatus: 'unsupported', instanceStatus: 'unsupported', reference: longUnit, referenceKind: 'configuration', nextStep: 'HOME uses an unsupported expansion or whitespace. Choose a trusted installation path.'});
     if (state === 'unsupported-trust') Object.assign(result, {recognized: false, configurationStatus: 'unsupported', instanceStatus: 'unsupported',
         evidence: ['Untrusted path: /home/example/shared-applications/ComfyUI/main.py is writable by another user.', diagnosticEvidence]});
     if (state === 'missing-location') Object.assign(result, {recognized: false, configurationStatus: 'missing', instanceStatus: 'missing'});
@@ -279,10 +282,19 @@ app.connect('activate', () => {
         }
         async function settingsTree(ui, name, focus, required, absent = [], requiredContains = []) {
             const contract = `${output}/contract-${name}.json`;
+            const sensitivity = required.filter(expected => 'sensitive' in expected).map(expected => {
+                const widget = named(ui, expected.name);
+                const actual = {name: expected.name, expected: expected.sensitive,
+                    propertySensitive: widget.get_sensitive(), effectiveSensitive: widget.is_sensitive()};
+                return actual;
+            });
+            GLib.file_set_contents(`${output}/gtk-availability-${name}.json`, JSON.stringify(sensitivity, null, 2));
+            for (const actual of sensitivity)
+                assert(actual.effectiveSensitive === actual.expected, `wrong production GTK action sensitivity: ${JSON.stringify(actual)}`);
             GLib.file_set_contents(contract, JSON.stringify({required, absent, requiredContains}));
             await runAsync(['/usr/bin/python3', 'tests/desktop/setup_accessibility.py', `${output}/accessibility-${name}.json`, 'settings', focus, contract]);
         }
-        function button(name, enabled = true) { return {name, role: 'push button', enabled}; }
+        function button(name, sensitive = true) { return {name, role: 'push button', sensitive}; }
         function wrapping(ui, label) {
             const native = widgets(ui.window).find(widget => widget instanceof Gtk.Label && widget.get_mapped() && widget.label === label);
             assert(native?.wrap && native.lines === -1 && native.ellipsize === 0, `identity/diagnostic must wrap fully without ellipsis: ${label}`);
@@ -380,7 +392,7 @@ app.connect('activate', () => {
             const gear = ui.applicationCards.get('comfyui').gear;
             await activate(ui, gear, 'ComfyUI');
             const ready = state === 'ready' || state === 'running';
-            const identity = state === 'unreachable' ? `Address: ${longEndpoint}` : longIdentity;
+            const identity = state === 'unreachable' ? `Address: ${longEndpoint}` : ['inspection-failed', 'unsupported-home'].includes(state) ? serviceIdentity : longIdentity;
             wrapping(ui, identity);
             assert(ui.settingsTitle.get_mapped() && !ui.heading.get_mapped() && ui.settingsBack.get_mapped(), 'settings uses the visible centered header title and native header Back');
             const notice = widgets(ui.window).filter(widget => widget.get_mapped() && widget.has_css_class('setup-status'));
@@ -419,14 +431,13 @@ app.connect('activate', () => {
                 }));
                 assert(copied.includes(state === 'unreachable' ? longEndpoint : longUnit) && copied.includes(state === 'unreachable' ? 'Address unreachable.' : diagnosticEvidence), 'Copy details retains full installation identity and diagnostics');
                 if (state === 'unsupported-home') {
+                    const probesBeforeRepair = calls.filter(action => action === 'probe').length;
                     deferDiscovery = true;
                     await tabTo(ui, ui.review); run(['xdotool', 'key', 'space']);
                     await waitFor(() => installationReply, 'service reinspection starts for repaired HOME');
-                    const metadataReply = installationReply;
-                    metadataReply(stateCandidate('ready'));
-                    await waitFor(() => installationReply && installationReply !== metadataReply, 'fresh service metadata is followed by endpoint inventory probe');
-                    installationReply({app: 'comfyui', instanceStatus: 'available', inventoryStatus: 'not-applicable'});
-                    await waitFor(() => ui.review.sensitive, 'repaired configuration inspection completes');
+                    installationReply(stateCandidate('ready'));
+                    await waitFor(() => ui.review.sensitive, 'unit-only repaired configuration inspection completes');
+                    assert(calls.filter(action => action === 'probe').length === probesBeforeRepair, 'relative service reference cannot fabricate a path or endpoint probe target');
                     await tabTo(ui, ui.settingsBack); run(['xdotool', 'key', 'space']); await delay(80);
                     assert(ui.heading.label === 'ComfyUI' && ui.review.sensitive, 'fresh service metadata restores ready installation after unsupported HOME is repaired');
                     await capture(ui, 'settings-rechecked-ready');
@@ -470,6 +481,7 @@ app.connect('activate', () => {
         ui = await open('inspection-failed');
         await activate(ui, ui.applicationCards.get('comfyui').gear, 'ComfyUI');
         await activate(ui, named(ui, 'View details'), 'Configuration details');
+        const probesBeforeStale = calls.filter(action => action === 'probe').length;
         deferDiscovery = true;
         await tabTo(ui, ui.review); run(['xdotool', 'key', 'space']);
         await waitFor(() => installationReply, 'Check again rechecks selected installation metadata');
@@ -483,16 +495,32 @@ app.connect('activate', () => {
         const address = widgets(ui.window).find(widget => widget instanceof Adw.EntryRow && widget.title === 'Application address' && widget.get_mapped());
         assert(address, 'changed target is a native entry');
         await tabTo(ui, address); run(['xdotool', 'key', 'ctrl+a']); run(['xdotool', 'type', '--clearmodifiers', 'http://127.0.0.1:19999']); await delay(60);
-        const staleMetadataReply = installationReply;
-        staleMetadataReply(stateCandidate('ready'));
-        await waitFor(() => installationReply && installationReply !== staleMetadataReply, 'stale metadata path completes its original inventory probe');
-        installationReply({app: 'comfyui', instanceStatus: 'available', inventoryStatus: 'not-applicable'});
-        await waitFor(() => ui.review.sensitive, 'stale inspection ends without authorizing changed draft');
+        installationReply(stateCandidate('ready'));
+        await waitFor(() => ui.review.sensitive, 'stale unit-only inspection ends without authorizing changed draft');
+        assert(calls.filter(action => action === 'probe').length === probesBeforeStale, 'unit-only stale inspection retains its original target type');
         assert(ui.drafts.at(-1).endpoint === 'http://127.0.0.1:19999', 'late successful inspection cannot overwrite edited address');
         await tabTo(ui, ui.review); run(['xdotool', 'key', 'space']); await delay(100);
         assert(ui.heading.label === 'ComfyUI' && !ui.review.sensitive, 'stale check cannot authorize the changed installation');
         await capture(ui, 'settings-stale-check');
         await closeAndVerify(ui, 'stale-check');
+
+        ui = await open('unreachable');
+        await activate(ui, ui.applicationCards.get('comfyui').gear, 'ComfyUI');
+        await activate(ui, named(ui, 'View details'), 'Configuration details');
+        await tabTo(ui, ui.review); run(['xdotool', 'key', 'space']);
+        await waitFor(() => installationReply, 'endpoint-only Check again probes its current address');
+        assert(!ui.review.is_sensitive(), 'endpoint probe disables configuration action');
+        await tabTo(ui, ui.settingsBack); run(['xdotool', 'key', 'space']); await delay(80);
+        await activate(ui, named(ui, 'Change installation…'), 'Change installation');
+        const changedAddress = widgets(ui.window).find(widget => widget instanceof Adw.EntryRow && widget.title === 'Application address' && widget.get_mapped());
+        await tabTo(ui, changedAddress); run(['xdotool', 'key', 'ctrl+a']); run(['xdotool', 'type', '--clearmodifiers', 'http://127.0.0.1:19998']); await delay(60);
+        installationReply(stateCandidate('ready'));
+        await waitFor(() => ui.review.is_sensitive(), 'stale endpoint probe completes without committing its result');
+        assert(ui.drafts.at(-1).endpoint === 'http://127.0.0.1:19998', 'late endpoint probe cannot overwrite edited address');
+        await tabTo(ui, ui.review); run(['xdotool', 'key', 'space']); await delay(80);
+        assert(ui.heading.label === 'ComfyUI' && !ui.review.is_sensitive(), 'stale endpoint probe cannot authorize the changed installation');
+        await capture(ui, 'settings-stale-endpoint-check');
+        await closeAndVerify(ui, 'stale-endpoint-check');
 
         ui = await open('temporary');
         ui.applicationCards.get('ollama').select.active = true;

@@ -17,6 +17,7 @@ def visit(node, result):
                        'focused': states.contains(pyatspi.STATE_FOCUSED),
                        'showing': states.contains(pyatspi.STATE_SHOWING),
                        'enabled': states.contains(pyatspi.STATE_ENABLED),
+                       'sensitive': states.contains(pyatspi.STATE_SENSITIVE),
                        'expanded': states.contains(pyatspi.STATE_EXPANDED)})
         for child in node:
             visit(child, result)
@@ -50,8 +51,14 @@ def validate_tree(tree, screen, expected_focus, disclosure=None, contract=None):
             matching = [node for node in visible if node['name'] == expected['name']
                         and ('role' not in expected or node['role'] == expected['role'])]
             assert matching, f'missing settings content: {expected}'
-            if 'enabled' in expected:
-                assert any(node['enabled'] == expected['enabled'] for node in matching), f'wrong action availability: {expected}'
+            # GTK4 maps GtkAccessibleState.DISABLED (GtkWidget:sensitive) to
+            # AT-SPI SENSITIVE. ENABLED is a separate raw state and need not be
+            # present on an operable GTK control. Keep both in the evidence.
+            # https://docs.gtk.org/gtk4/enum.AccessibleState.html
+            # https://docs.gtk.org/atspi2/enum.StateType.html
+            assert 'enabled' not in expected, 'action availability contracts must specify sensitive, not enabled'
+            if 'sensitive' in expected:
+                assert any(node['sensitive'] == expected['sensitive'] for node in matching), f'wrong action availability: {expected}'
         for name in contract.get('absent', []):
             assert not present(name), f'unrelated settings content visible: {name}'
         for fragment in contract.get('requiredContains', []):
