@@ -14,6 +14,7 @@ export function installSetupStyle(window) {
         .setup-window.setup-high-contrast button.suggested-action:not(:disabled), .setup-window.setup-high-contrast checkbutton check:checked:not(:disabled) { background: @accent_bg_color; color: @accent_fg_color; }
         .setup-window.setup-high-contrast .setup-link { color: @accent_color; }
         .setup-window.setup-dark:not(.setup-high-contrast) .setup-link { color: #ff854b; }
+        .setup-page-title { caret-color: transparent; }
         .setup-heading { font-size: 28px; font-weight: 800; }
         .setup-introduction { font-size: 16px; }
         .setup-card.setup-summary-card { padding-top: 8px; padding-bottom: 8px; }
