@@ -258,8 +258,9 @@ class DraftEditor {
         for (const key of ['unit', 'cgroup', 'healthURL', 'instance', 'launchFile']) {
             if (!this.bindingEdits.has(key)) binding[key] = candidate.binding[key];
         }
-        const endpoint = this.endpointEdited ? input.endpoint : candidate.endpoint;
         const reference = input.referenceKind === 'configuration' && input.reference === candidate.unit ? undefined : input.reference;
+        let endpoint = this.endpointEdited ? input.endpoint : candidate.endpoint;
+        if (reference) endpoint = undefined;
         this.draft.edit({binding, endpoint, reference, referenceKind: reference ? input.referenceKind : undefined});
         this.reference.label = reference ?? 'No file or folder selected';
         this.syncing = true;

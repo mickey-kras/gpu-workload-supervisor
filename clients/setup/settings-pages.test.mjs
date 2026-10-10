@@ -201,12 +201,20 @@ test('repairing a relative service reference prepares the authoritative endpoint
 });
 
 test('reconciling service metadata preserves an explicitly selected configuration file', async () => {
-    const saved = {id: 'saved-images', app: 'comfyui', label: 'ComfyUI', endpoint: ready.endpoint,
+    const saved = {id: 'saved-images', app: 'comfyui', label: 'ComfyUI',
         reference: ready.location, referenceKind: 'configuration', binding: ready.binding};
-    const ui = await launch(options(ready, {drafts: {drafts: [saved]}}));
-    await ui.click('Settings for ComfyUI'); await ui.click('Use installation');
+    const broken = {...ready, endpoint: undefined, recognized: false, configurationStatus: 'inspection-failed'};
+    let discoveries = 0;
+    const ui = await launch(options(broken, {drafts: {drafts: [saved]}, discover: () => ({request, units: [], applications: [discoveries++ ? ready : broken]}),
+        prepare: ({draft}) => {
+            assert.equal(draft.endpoint, undefined);
+            assert.equal(draft.reference, ready.location); assert.equal(draft.referenceKind, 'configuration');
+            return {profile};
+        }}));
+    await ui.click('Settings for ComfyUI'); await ui.click('View details'); await ui.click('Check again'); await ui.click('Back'); await ui.click('Use installation');
     const prepared = JSON.parse(ui.calls.find(call => call.argv[1] === 'prepare').input).draft;
     assert.equal(prepared.reference, ready.location); assert.equal(prepared.referenceKind, 'configuration');
+    assert.equal(prepared.endpoint, undefined); assert.equal(ui.by('Finish setup').sensitive, true);
 });
 
 for (const value of ['abc', 'Infinity', '-1', '1.5', '9007199254740992']) {
