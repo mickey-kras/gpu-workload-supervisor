@@ -89,7 +89,7 @@ func addFailedUnitInspection(result *Discovery, unit string, values map[string]s
 	if app == "" {
 		app = catalogApplicationIdentity(unit, result.Request.Catalog.Profiles)
 	}
-	if app == "" {
+	if app == "" && !catalogContainsUnit(unit, result.Request.Catalog.Profiles) {
 		return
 	}
 	found := candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"})
@@ -102,7 +102,7 @@ func addFailedUnitInspection(result *Discovery, unit string, values map[string]s
 
 func addUnsupportedUnit(result *Discovery, unit string) {
 	app := catalogApplicationIdentity(unit, result.Request.Catalog.Profiles)
-	if app == "" {
+	if app == "" && !catalogContainsUnit(unit, result.Request.Catalog.Profiles) {
 		return
 	}
 	found := candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"})
@@ -285,4 +285,15 @@ func catalogApplicationIdentity(unit string, profiles []control.WorkloadProfile)
 		}
 	}
 	return ""
+}
+
+// A configured generic workload keeps its diagnostic candidate without
+// claiming that its unit name or adapter identifies a supported application.
+func catalogContainsUnit(unit string, profiles []control.WorkloadProfile) bool {
+	for _, profile := range profiles {
+		if profile.Unit == unit {
+			return true
+		}
+	}
+	return false
 }

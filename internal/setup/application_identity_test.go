@@ -111,7 +111,7 @@ func TestUnreachableNativeAddressDoesNotEstablishMissingExecutable(t *testing.T)
 }
 
 func TestDiscoveryRetainsHistoricalComfyAdapterWithoutInferringSystemdRuntime(t *testing.T) {
-	for _, tc := range []struct{ adapter, unit string }{{"comfyui", "custom-worker.service"}, {"systemd", "comfyui-worker.service"}} {
+	for _, tc := range []struct{ adapter, unit, app string }{{"comfyui", "custom-worker.service", "comfyui"}, {"systemd", "comfyui-worker.service", ""}} {
 		t.Run(tc.adapter, func(t *testing.T) {
 			p := control.WorkloadProfile{Adapter: tc.adapter, Unit: tc.unit}
 			result := Discovery{Request: Request{Catalog: control.Catalog{Profiles: []control.WorkloadProfile{p}}}}
@@ -119,18 +119,44 @@ func TestDiscoveryRetainsHistoricalComfyAdapterWithoutInferringSystemdRuntime(t 
 				return nil, errors.New("user bus unavailable")
 			}}
 			b.discoverUnit(context.Background(), &result, p.Unit)
-			if tc.adapter == "systemd" {
-				if len(result.Applications) != 0 {
-					t.Fatalf("generic saved adapter established application identity: %+v", result)
-				}
-				return
-			}
 			if len(result.Applications) != 1 {
 				t.Fatalf("historical application was lost: %+v", result)
 			}
 			found := result.Applications[0]
-			if found.App != "comfyui" || found.ConfigurationStatus != inspectionFailedStatus || found.Recognized || found.Binding != nil {
+			if found.App != tc.app || found.ConfigurationStatus != inspectionFailedStatus || found.Recognized || found.Binding != nil {
 				t.Fatalf("historical adapter became launch evidence: %+v", found)
+			}
+		})
+	}
+}
+
+func TestDiscoveryRetainsConfiguredGenericUnitWithoutApplicationEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		err    error
+	}{
+		{"unsupported", nil},
+		{inspectionFailedStatus, errors.New("user bus unavailable")},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			p := control.WorkloadProfile{ID: "ci-workload", Label: "CI workload", Adapter: "systemd", Unit: "gws-ci-workload.service"}
+			result := Discovery{Request: Request{Catalog: control.Catalog{Profiles: []control.WorkloadProfile{p}}}}
+			b := Backend{runCommand: func(context.Context, string, ...string) ([]byte, error) {
+				return []byte("ExecStart={ path=/usr/bin/sleep ; argv[]=/usr/bin/sleep infinity ; }\n"), tc.err
+			}, inspectAutomatic: func(string, string) (gpuruntime.AutomaticLaunch, error) {
+				t.Fatal("generic configured source was inspected as an application")
+				return gpuruntime.AutomaticLaunch{}, nil
+			}}
+			b.discoverUnit(context.Background(), &result, p.Unit)
+			if len(result.Applications) != 1 {
+				t.Fatalf("configured workload diagnostic was lost: %+v", result)
+			}
+			found := result.Applications[0]
+			if found.Unit != p.Unit || found.App != "" || found.ConfigurationStatus != tc.status || found.Recognized || found.Binding != nil || len(found.Models) != 0 {
+				t.Fatalf("generic workload acquired application evidence: %+v", found)
+			}
+			if len(result.Units) != 0 || result.Request.Catalog.Profiles[0] != p {
+				t.Fatalf("generic workload changed discovery or catalog bindings: %+v", result)
 			}
 		})
 	}
