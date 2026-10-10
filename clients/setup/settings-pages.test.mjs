@@ -184,6 +184,61 @@ test('a relative configuration reference remains a unit reinspection target', as
     assert.equal(ui.by('Finish setup').sensitive, false);
 });
 
+test('repairing a relative service reference prepares the authoritative endpoint without a filesystem reference', async () => {
+    const broken = {app: 'comfyui', label: 'ComfyUI', unit: ready.unit, reference: ready.unit, referenceKind: 'configuration',
+        recognized: false, configurationStatus: 'inspection-failed', instanceStatus: 'candidate'};
+    let discoveries = 0;
+    const ui = await launch(options(broken, {discover: () => ({request, units: [], applications: [discoveries++ ? ready : broken]}), prepare: ({draft}) => {
+        assert.equal(draft.reference, undefined); assert.equal(draft.referenceKind, undefined);
+        assert.equal(draft.endpoint, ready.endpoint); assert.equal(draft.binding.unit, ready.unit);
+        return {profile};
+    }}));
+    await ui.click('Settings for ComfyUI'); await ui.click('View details'); await ui.click('Check again'); await ui.click('Back');
+    assert.equal(ui.by('Use installation').sensitive, true); await ui.click('Use installation');
+    assert.equal(ui.calls.filter(call => call.argv[1] === 'prepare').length, 1);
+    assert.equal(ui.by('Finish setup').sensitive, true);
+    assert.equal(ui.calls.some(call => call.argv[1] === 'probe'), false);
+});
+
+test('reconciling service metadata preserves an explicitly selected configuration file', async () => {
+    const saved = {id: 'saved-images', app: 'comfyui', label: 'ComfyUI', endpoint: ready.endpoint,
+        reference: ready.location, referenceKind: 'configuration', binding: ready.binding};
+    const ui = await launch(options(ready, {drafts: {drafts: [saved]}}));
+    await ui.click('Settings for ComfyUI'); await ui.click('Use installation');
+    const prepared = JSON.parse(ui.calls.find(call => call.argv[1] === 'prepare').input).draft;
+    assert.equal(prepared.reference, ready.location); assert.equal(prepared.referenceKind, 'configuration');
+});
+
+for (const value of ['abc', 'Infinity', '-1', '1.5', '9007199254740992']) {
+    test(`saving selections rejects invalid VRAM requirement ${value} without losing the field`, async () => {
+        const ui = await launch(options()); await ui.click('Settings for ComfyUI'); await ui.click('Advanced settings'); await ui.click('Resource checks');
+        ui.edit(ui.by('Measured VRAM requirement (MiB; optional)'), 'text', value);
+        await ui.click('Done'); await ui.click('Launch details'); await ui.click('Save selections for later');
+        assert.equal(ui.calls.some(call => call.argv[1] === 'save-drafts'), false);
+        assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('Selections were not saved. Check the VRAM requirements')));
+        await ui.click('Done'); await ui.click('Resource checks');
+        assert.equal(ui.by('Measured VRAM requirement (MiB; optional)').text, value);
+        ui.edit(ui.by('Measured VRAM requirement (MiB; optional)'), 'text', '12000');
+        await ui.click('Done'); await ui.click('Launch details'); await ui.click('Save selections for later');
+        assert.equal(JSON.parse(ui.calls.at(-1).input).drafts[0].requiredMiB, 12000);
+    });
+}
+
+test('a saved Ollama model stays reviewable when service discovery leaves the model selection open', async () => {
+    const candidate = {app: 'ollama', label: 'Ollama', unit: 'ollama.service', endpoint: 'http://127.0.0.1:11434', recognized: true,
+        configurationStatus: 'model-required', instanceStatus: 'available', inventoryStatus: 'available', models: [{id: 'existing:latest'}],
+        binding: {unit: 'ollama.service', cgroup: '/ollama', healthURL: 'http://127.0.0.1:11434/api/tags', model: ''}};
+    const saved = {id: 'existing-model', app: 'ollama', label: 'Ollama', model: 'existing:latest', endpoint: candidate.endpoint,
+        binding: {...candidate.binding, model: 'existing:latest'}};
+    const ui = await launch(options(candidate, {drafts: {drafts: [saved]}, prepare: {profile: {...profile, id: saved.id, unit: candidate.unit,
+        healthURL: candidate.binding.healthURL, nativeModel: {runtime: 'ollama', model: saved.model}}}}));
+    await ui.click('Settings for Ollama'); assert.equal(ui.by('Use installation').sensitive, true);
+    await ui.click('Use installation');
+    const prepared = JSON.parse(ui.calls.find(call => call.argv[1] === 'prepare').input).draft;
+    assert.equal(prepared.model, saved.model); assert.equal(prepared.binding.model, saved.model);
+    assert.equal(ui.by('Finish setup').sensitive, true);
+});
+
 test('health edits in Launch details stay synchronized with the General field', async () => {
     const ui = await launch(options()); await ui.click('Settings for ComfyUI'); await ui.click('Advanced settings'); await ui.click('Launch details');
     ui.edit(ui.by('Loopback health URL'), 'text', 'http://127.0.0.1:8188/custom-health');

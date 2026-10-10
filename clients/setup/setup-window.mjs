@@ -414,10 +414,12 @@ class SetupWindow {
         let saved = false;
         this.saveDrafts.sensitive = false;
         try {
+            if (this.drafts.some(draft => !Number.isSafeInteger(draft.requiredMiB ?? 0) || (draft.requiredMiB ?? 0) < 0))
+                throw new Error('VRAM requirements must be nonnegative whole numbers within the supported numeric range.');
             const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'save-drafts'], JSON.stringify({version: 1, expectedRevision: this.draftRevision, drafts: this.drafts})));
             this.draftRevision = result.revision; saved = true;
             this.status.label = 'Selections saved. Saved applications still need a check before they can run. They are not selectable in GPU Control until safe start and stop control is set up and checked.';
-        } catch (error) { this.reportError('Selections were not saved. Reopen Manage workloads to refresh before retrying.', error); }
+        } catch (error) { this.reportError('Selections were not saved. Check the VRAM requirements or reopen Manage workloads to refresh before retrying.', error); }
         finally { this.saveDrafts.sensitive = !this.pending && (!saved || generation !== this.draftGeneration); }
     }
 

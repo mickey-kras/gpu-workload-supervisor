@@ -424,12 +424,32 @@ app.connect('activate', () => {
                 await capture(ui, `configuration-${state}`);
                 ui.scroll.get_vadjustment().value = ui.scroll.get_vadjustment().upper;
                 await capture(ui, `configuration-${state}-bottom`);
-                await tabTo(ui, named(ui, 'Copy details')); run(['xdotool', 'key', 'space']);
+                const copyButton = named(ui, 'Copy details');
+                await tabTo(ui, copyButton);
                 const clipboard = ui.window.get_display().get_clipboard();
+                let copyActivated = false;
+                let clipboardChanges = 0;
+                const activationSignal = copyButton.connect('clicked', () => { copyActivated = true; });
+                const clipboardSignal = clipboard.connect('changed', () => { clipboardChanges++; });
+                try {
+                    run(['xdotool', 'key', 'space']);
+                    // xdotool queues an X11 event while this GJS callback owns
+                    // the main context. Wait for native activation and clipboard
+                    // change before reading; an immediate async read can finish
+                    // with the preceding installation's clipboard contents.
+                    await waitFor(() => copyActivated && clipboardChanges > 0, 'keyboard Copy details must activate and update the actual native clipboard');
+                } finally {
+                    copyButton.disconnect(activationSignal);
+                    clipboard.disconnect(clipboardSignal);
+                }
                 const copied = await new Promise((resolve, reject) => clipboard.read_text_async(null, (source, result) => {
                     try { resolve(source.read_text_finish(result)); } catch (error) { reject(error); }
                 }));
-                assert(copied.includes(state === 'unreachable' ? longEndpoint : longUnit) && copied.includes(state === 'unreachable' ? 'Address unreachable.' : diagnosticEvidence), 'Copy details retains full installation identity and diagnostics');
+                const expectedFragments = [identity, 'Configuration needs attention', state === 'unreachable' ?
+                    'Address unreachable. An address alone does not verify an installed application. Check its address or choose its executable.' : diagnosticEvidence];
+                const copyEvidence = {state, copyActivated, clipboardChanges, expectedFragments, actual: copied};
+                GLib.file_set_contents(`${output}/clipboard-${state}.json`, JSON.stringify(copyEvidence, null, 2));
+                assert(typeof copied === 'string' && expectedFragments.every(fragment => copied.includes(fragment)), `Copy details retains full installation identity and diagnostics: ${JSON.stringify(copyEvidence)}`);
                 if (state === 'unsupported-home') {
                     const probesBeforeRepair = calls.filter(action => action === 'probe').length;
                     deferDiscovery = true;

@@ -244,7 +244,7 @@ class DraftEditor {
         this.installationEvidence = candidate.recognized ? candidate : null;
         this.reconcileService(candidate);
         this.settings.candidate(candidate);
-        const mismatch = [...this.bindingEdits].some(key => candidate.binding && this.draft.snapshot().binding?.[key] !== candidate.binding[key]);
+        const mismatch = [...this.bindingEdits].some(key => key !== 'model' && candidate.binding && this.draft.snapshot().binding?.[key] !== candidate.binding[key]);
         if (mismatch) this.settings.problem('An override does not match this installation.', new Error('Keep the override or restore the current service settings before reviewing. Your service has not been changed.'));
         this.syncing = true; this.health.text = this.draft.snapshot().binding?.healthURL ?? ''; this.health.editable = !this.draft.snapshot().binding?.owned; this.syncing = false;
         this.temporary.showAvailability(candidate);
@@ -259,7 +259,9 @@ class DraftEditor {
             if (!this.bindingEdits.has(key)) binding[key] = candidate.binding[key];
         }
         const endpoint = this.endpointEdited ? input.endpoint : candidate.endpoint;
-        this.draft.edit({binding, endpoint});
+        const reference = input.referenceKind === 'configuration' && input.reference === candidate.unit ? undefined : input.reference;
+        this.draft.edit({binding, endpoint, reference, referenceKind: reference ? input.referenceKind : undefined});
+        this.reference.label = reference ?? 'No file or folder selected';
         this.syncing = true;
         this.endpoint.text = endpoint ?? '';
         for (const [key, field] of Object.entries(this.bindingFields)) field.text = binding[key] ?? '';
