@@ -178,12 +178,31 @@ for (const available of [false, undefined]) {
 test('temporary cleanup failure is reported, blocks Continue, and retry uses the durable token', async () => {
     const ui = await launch(temporary({'temporary-discover': {session: {...session, status: 'cleanup_required'}, models: [], error: 'stop failed'}, 'temporary-cleanup': {session}}));
     ui.edit(ui.by('Use Ollama'), 'active', true); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    ui.edit(ui.by('I allow this brief start and will keep other application controls paused.'), 'active', true);
+    const consent = ui.by('I allow this brief start and will keep other application controls paused.');
+    assert.equal(consent.children[0].wrap, true); assert.equal(consent.children[0].wrap_mode, 2);
+    assert.equal(consent.accessibleProperties.label, consent.children[0].label);
+    ui.edit(consent, 'active', true);
     await ui.by('Start Ollama briefly to list models').emit('clicked');
     assert.ok(ui.widgets.some(widget => widget.label?.includes('stop failed')));
     await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); assert.equal(ui.by('Finish setup').sensitive, false);
     await ui.by('Retry Ollama cleanup').emit('clicked');
     assert.deepEqual(JSON.parse(ui.calls.find(call => call.argv[1] === 'temporary-cleanup').input), {id: session.id, token: session.token, externalControlPaused: true});
+    assert.equal(ui.widgets.filter(widget => ui.visible(widget) && widget.label === 'Previous stopped state restored.').length, 2);
+    assert.equal(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('cleanup needs attention')), false);
+});
+
+test('restored cleanup retains the refresh failure instead of claiming model-check status is current', async () => {
+    const incomplete = {...session, status: 'cleanup_required'};
+    const ui = await launch(temporary({'temporary-discover': {session: incomplete, error: 'stop failed'}, 'temporary-cleanup': {session},
+        'temporary-status': (_input, calls) => {
+            if (calls.some(call => call.argv[1] === 'temporary-cleanup')) throw new Error('status unavailable');
+            return calls.some(call => call.argv[1] === 'temporary-discover') ? {available: false, session: incomplete} : {available: true, expected};
+        }}));
+    ui.edit(ui.by('Use Ollama'), 'active', true); await ui.by('Continue').emit('clicked');
+    ui.edit(ui.by('I allow this brief start and will keep other application controls paused.'), 'active', true);
+    await ui.by('Start Ollama briefly to list models').emit('clicked'); await ui.by('Retry Ollama cleanup').emit('clicked');
+    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('model-check status could not be refreshed')));
+    assert.equal(ui.widgets.some(widget => ui.visible(widget) && widget.label === 'Previous stopped state restored.'), false);
 });
 
 test('cancelling an in-flight temporary check waits for cleanup and never imports late inventory', async () => {

@@ -35,7 +35,10 @@ function widgets(root) {
     for (let child = root.get_first_child(); child; child = child.get_next_sibling()) found.push(...widgets(child));
     return found;
 }
-function byLabel(root, label) { return widgets(root).find(widget => widget instanceof Gtk.CheckButton && widget.label === label); }
+function byLabel(root, label) {
+    return widgets(root).find(widget => widget instanceof Gtk.CheckButton &&
+        (widget.label === label || widgets(widget).some(child => child instanceof Gtk.Label && child.label === label)));
+}
 function run(argv) {
     const process = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
     const [, stdout, stderr] = process.communicate_utf8(null, null);
@@ -61,6 +64,7 @@ const commandRecords = [];
 const longUnit = 'comfyui-production-rendering-installation-with-long-service-identity.service';
 const longLocation = `/home/example/.config/systemd/user/${longUnit}`;
 const longEndpoint = 'http://127.0.0.1:18188';
+const temporaryConsentLabel = 'I allow this brief start and will keep other application controls paused.';
 const serviceIdentity = `Service: ${longUnit} · ${longLocation}`;
 const longIdentity = `${serviceIdentity} · ${longEndpoint}`;
 const diagnosticEvidence = 'ExecStart: /home/example/Applications/ComfyUI-production-rendering-environment/bin/python /home/example/Applications/ComfyUI-production-rendering-environment/main.py --listen 127.0.0.1 --port 18188';
@@ -283,7 +287,8 @@ app.connect('activate', () => {
         async function settingsTree(ui, name, focus, required, absent = [], requiredContains = []) {
             const contract = `${output}/contract-${name}.json`;
             const sensitivity = required.filter(expected => 'sensitive' in expected).map(expected => {
-                const widget = named(ui, expected.name);
+                const widget = expected.role === 'check box' ? byLabel(ui.window, expected.name) : named(ui, expected.name);
+                assert(widget?.get_mapped(), `missing mapped native action for sensitivity: ${expected.name}`);
                 const actual = {name: expected.name, expected: expected.sensitive,
                     propertySensitive: widget.get_sensitive(), effectiveSensitive: widget.is_sensitive()};
                 return actual;
@@ -545,10 +550,11 @@ app.connect('activate', () => {
         ui = await open('temporary');
         ui.applicationCards.get('ollama').select.active = true;
         await activate(ui, ui.review, 'Choose models');
-        const consent = byLabel(ui.window, 'I allow this brief start and will keep other application controls paused.');
+        const consent = byLabel(ui.window, temporaryConsentLabel);
         const start = named(ui, 'Start Ollama briefly to list models');
         assert(consent?.get_mapped() && !start.sensitive, 'temporary model detection requires native explicit consent');
-        await settingsTree(ui, 'temporary-without-consent', 'Choose models', [button('Start Ollama briefly to list models', false), {name: consent.label, role: 'check box'}]);
+        wrapping(ui, temporaryConsentLabel);
+        await settingsTree(ui, 'temporary-without-consent', 'Choose models', [button('Start Ollama briefly to list models', false), {name: temporaryConsentLabel, role: 'check box', sensitive: true}]);
         await capture(ui, 'temporary-without-consent');
         await tabTo(ui, consent); run(['xdotool', 'key', 'space']); await delay(60);
         assert(start.sensitive, 'native consent enables temporary detection');
@@ -576,7 +582,8 @@ app.connect('activate', () => {
         ui = await open('temporary');
         ui.applicationCards.get('ollama').select.active = true;
         await activate(ui, ui.review, 'Choose models');
-        const cancelConsent = byLabel(ui.window, 'I allow this brief start and will keep other application controls paused.');
+        const cancelConsent = byLabel(ui.window, temporaryConsentLabel);
+        assert(cancelConsent?.get_mapped() && cancelConsent.is_sensitive(), 'cancel-path consent is the actual sensitive native checkbox');
         await tabTo(ui, cancelConsent); run(['xdotool', 'key', 'space']); await delay(30);
         await tabTo(ui, named(ui, 'Start Ollama briefly to list models')); run(['xdotool', 'key', 'space']);
         await waitFor(() => temporaryReply, 'cancel-path temporary check begins');

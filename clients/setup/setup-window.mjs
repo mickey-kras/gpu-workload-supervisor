@@ -6,7 +6,7 @@ import Gtk from 'gi://Gtk?version=4.0';
 import Gio from 'gi://Gio';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import GLib from 'gi://GLib';
-import {applicationHeader, roundedCard} from './presentation.mjs';
+import {applicationHeader, roundedCard, wrappedCheckButton} from './presentation.mjs';
 import {createShell, createSettings, createApplicationCards, createFooter} from './setup-layout.mjs';
 import {ReviewedConfiguration} from './review.mjs';
 import {createProfileEditor, editableOwnedLaunch} from './profile-ui.mjs';
@@ -183,7 +183,7 @@ class SetupWindow {
         if (this.drafts.some(draft => draft.id === initial.id)) { this.status.label = 'This workload already has an open selection. Finish or remove that selection first.'; return this.draftEditors.find(editor => editor.id === initial.id); }
         this.drafts.push(initial);
         let editor;
-        editor = addDraftEditor({Adw, Gtk, Gio, window: this.window, parent: this.draftRows, initial, detected: this.discovered, discoveryErrors: this.discoveryErrors, command: this.command, modelParent: this.modelPage, temporaryStatus: this.temporaryStatus, reportProblem: this.reportError, navigateSettings: state => this.navigateApplicationSettings(editor, state), saveSelections: () => this.saveDraftSelections(), openSettings: origin => this.openApplicationSettings(editor, origin),
+        editor = addDraftEditor({Adw, Gtk, Gio, window: this.window, parent: this.draftRows, initial, detected: this.discovered, discoveryErrors: this.discoveryErrors, command: this.command, modelParent: this.modelPage, temporaryStatus: this.temporaryStatus, reportProblem: this.reportError, reportStatus: message => { this.status.label = message; this.reportError.clear(); }, navigateSettings: state => this.navigateApplicationSettings(editor, state), saveSelections: () => this.saveDraftSelections(), openSettings: origin => this.openApplicationSettings(editor, origin),
             bind: async (profile, current, finish = false) => {
                 replacing ??= this.profiles.find(existing => existing.id === initial.id) ?? null;
                 if (replacing && !this.profiles.includes(replacing)) throw new Error('The original workload was removed. Reopen Manage workloads before editing it.');
@@ -321,7 +321,7 @@ class SetupWindow {
 
     addRecoveryCleanup() {
         if (!this.temporaryStatus.session || this.temporaryStatus.session.status === 'completed') return;
-        const cleanupConsent = new Gtk.CheckButton({label: 'I have paused external application controls and finished any resumed work.'});
+        const cleanupConsent = wrappedCheckButton(Gtk, 'I have paused external application controls and finished any resumed work.', {});
         const retryCleanup = new Gtk.Button({label: 'Restore stopped application', sensitive: false});
         cleanupConsent.connect('toggled', () => { retryCleanup.sensitive = cleanupConsent.active; });
         this.applicationPage.append(new Gtk.Label({label: 'An earlier temporary model check still blocks setup. Restoring its stopped state will stop this application. Finish resumed work and pause external application controls before restoring it. Leaving setup keeps the recovery record for next time.', wrap: true, xalign: 0}));

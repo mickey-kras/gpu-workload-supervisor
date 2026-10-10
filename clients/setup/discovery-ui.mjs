@@ -1,4 +1,4 @@
-import {applicationHeader} from './presentation.mjs';
+import {applicationHeader, wrappedCheckButton} from './presentation.mjs';
 import {InstallationSettings, installationChoiceLabel} from './settings-pages.mjs';
 import {TemporaryDiscovery} from './temporary-discovery-ui.mjs';
 import {watchInstanceSelection, addRefreshButton, addFilePickers} from './discovery-inputs.mjs';
@@ -11,18 +11,20 @@ export function addErrorReporter({Adw, Gtk, parent, status}) {
     const text = new Gtk.Label({wrap: true, xalign: 0, selectable: true});
     details.add_row(text);
     if (parent.add) parent.add(details); else parent.append(details);
-    return (summary, error) => {
+    const report = (summary, error) => {
         status.label = summary; status.visible = true;
         text.label = error.message;
         details.expanded = false;
         details.visible = true;
     };
+    report.clear = () => { details.visible = false; };
+    return report;
 }
 
 export function addDraftEditor(options) { return new DraftEditor(options).view(); }
 
 class DraftEditor {
-    constructor({Adw, Gtk, window, parent, initial, detected, discoveryErrors, command, changed, removed, bind, taken, modelParent, temporaryStatus, openSettings, reportProblem, navigateSettings, saveSelections}) {
+    constructor({Adw, Gtk, window, parent, initial, detected, discoveryErrors, command, changed, removed, bind, taken, modelParent, temporaryStatus, openSettings, reportProblem, reportStatus, navigateSettings, saveSelections}) {
         this.Adw = Adw;
         this.Gtk = Gtk;
         this.window = window;
@@ -45,7 +47,7 @@ class DraftEditor {
         this.installationEvidence = null;
         this.buildBasics(); this.connectAddress(); this.buildModels();
         this.connectModelPicker();
-        this.temporary = new TemporaryDiscovery({Gtk, draft: this.draft, app: initial.app, modelGroup: this.modelGroup, status: this.modelStatus ?? this.status, temporaryStatus, command, changed, reportError: this.reportError, show: candidate => this.show(candidate), getEvidence: () => this.installationEvidence});
+        this.temporary = new TemporaryDiscovery({Gtk, draft: this.draft, app: initial.app, modelGroup: this.modelGroup, status: this.modelStatus ?? this.status, temporaryStatus, command, changed, reportError: this.reportError, restored: reportStatus, show: candidate => this.show(candidate), getEvidence: () => this.installationEvidence});
         this.connectInputs(); this.buildResources(); this.addActions(); this.initialDiscovery();
     }
     buildBasics() {
@@ -199,7 +201,7 @@ class DraftEditor {
         for (const check of this.modelChecks.values()) this.selectionBox.remove(check);
         this.modelChecks.clear();
         for (const item of this.models) {
-            const check = new this.Gtk.CheckButton({label: item.label || item.id, active: savedModels.includes(item.id)});
+            const check = wrappedCheckButton(this.Gtk, item.label || item.id, {active: savedModels.includes(item.id)});
             check.add_css_class('setup-model-choice');
             check.connect('toggled', () => {
                 if (this.syncing) return;
@@ -244,7 +246,9 @@ class DraftEditor {
         this.installationEvidence = candidate.recognized ? candidate : null;
         this.reconcileService(candidate);
         this.settings.candidate(candidate);
-        const mismatch = [...this.bindingEdits].some(key => key !== 'model' && candidate.binding && this.draft.snapshot().binding?.[key] !== candidate.binding[key]);
+        const input = this.draft.snapshot();
+        const mismatch = (this.endpointEdited && input.endpoint !== candidate.endpoint) ||
+            [...this.bindingEdits].some(key => key !== 'model' && candidate.binding && input.binding?.[key] !== candidate.binding[key]);
         if (mismatch) this.settings.problem('An override does not match this installation.', new Error('Keep the override or restore the current service settings before reviewing. Your service has not been changed.'));
         this.syncing = true; this.health.text = this.draft.snapshot().binding?.healthURL ?? ''; this.health.editable = !this.draft.snapshot().binding?.owned; this.syncing = false;
         this.temporary.showAvailability(candidate);
@@ -302,7 +306,7 @@ class DraftEditor {
             this.overrides.requiredMiB = this.capacity.text.trim() === '' ? undefined : Number(this.capacity.text);
             this.draft.edit({requiredMiB: this.overrides.requiredMiB ?? 0}); this.changed(this.draft.snapshot());
         });
-        this.retain = new this.Gtk.CheckButton({label: 'Keep this workload running at login if already active'});
+        this.retain = wrappedCheckButton(this.Gtk, 'Keep this workload running at login if already active', {});
         this.settings.resources.add(this.retain);
         this.retain.connect('toggled', () => {
             if (this.syncing) return;
@@ -359,7 +363,8 @@ class DraftEditor {
             showSettings: profile => {
                 this.syncing = true;
                 const required = Object.hasOwn(this.overrides, 'requiredMiB') ? this.overrides.requiredMiB : profile?.requiredMiB;
-                this.capacity.text = String(required ?? ''); this.retain.active = (this.overrides.bootPolicy ?? profile?.bootPolicy) === 'retain'; this.syncing = false;
+                if (!Number.isNaN(required)) this.capacity.text = String(required ?? '');
+                this.retain.active = (this.overrides.bootPolicy ?? profile?.bootPolicy) === 'retain'; this.syncing = false;
                 this.health.editable = !this.draft.snapshot().binding?.owned;
                 if (!this.health.editable && profile?.healthURL) { this.syncing = true; this.health.text = profile.healthURL; this.syncing = false; }
                 this.session = this.capture(); this.group.visible = true; this.settings.history = []; this.settings.show(); this.settings.change.grab_focus();
@@ -390,7 +395,10 @@ class DraftEditor {
     }
     capture() {
         const fields = [this.name, this.endpoint, this.health, ...Object.values(this.bindingFields), ...Object.values(this.ownedFields)].filter(field => typeof field !== 'function');
-        return {input: JSON.parse(JSON.stringify(this.draft.snapshot())), candidate: this.lastCandidate, evidence: this.installationEvidence, ready: this.settings.ready && !this.settings.busy, bindingEdits: [...this.bindingEdits], endpointEdited: this.endpointEdited, selection: this.instance.selected, fields: fields.map(field => [field, field.text]), capacity: this.capacity.text, retain: this.retain.active, overrides: {...this.overrides}};
+        const current = this.draft.snapshot();
+        const input = JSON.parse(JSON.stringify(current));
+        if (Object.hasOwn(current, 'requiredMiB')) input.requiredMiB = current.requiredMiB;
+        return {input, candidate: this.lastCandidate, evidence: this.installationEvidence, ready: this.settings.ready && !this.settings.busy, bindingEdits: [...this.bindingEdits], endpointEdited: this.endpointEdited, selection: this.instance.selected, fields: fields.map(field => [field, field.text]), capacity: this.capacity.text, retain: this.retain.active, overrides: {...this.overrides}};
     }
     restore(snapshot) {
         if (!snapshot) return;

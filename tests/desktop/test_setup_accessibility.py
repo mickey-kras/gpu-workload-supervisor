@@ -364,6 +364,19 @@ class SettingsContractTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'must specify sensitive'):
             self.validate()
 
+    def test_wrapped_checkbox_label_cannot_replace_checkbox_role_or_sensitivity(self):
+        consent = 'I allow this brief start and will keep other application controls paused.'
+        self.contract['required'].append({'name': consent, 'role': 'check box', 'sensitive': True})
+        self.tree.extend([{'name': consent, 'role': 'check box', 'showing': True, 'focused': False, 'sensitive': False},
+                          {'name': consent, 'role': 'label', 'showing': True, 'focused': False, 'sensitive': True}])
+        with self.assertRaisesRegex(AssertionError, 'wrong action availability'):
+            self.validate()
+        self.tree[-2]['sensitive'] = True
+        self.validate()
+        self.tree[-2]['showing'] = False
+        with self.assertRaisesRegex(AssertionError, 'missing settings content'):
+            self.validate()
+
     def test_hidden_or_unrelated_content_cannot_satisfy_contract(self):
         self.tree[1]['showing'] = False
         with self.assertRaisesRegex(AssertionError, 'missing settings content'):

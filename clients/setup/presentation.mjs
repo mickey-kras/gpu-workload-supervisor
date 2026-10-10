@@ -81,3 +81,10 @@ export function linkButton(Gtk, label) {
     button.add_css_class('flat'); button.add_css_class('setup-link');
     return button;
 }
+
+export function wrappedCheckButton(Gtk, label, properties) {
+    const button = new Gtk.CheckButton(properties);
+    button.set_child(new Gtk.Label({label, wrap: true, wrap_mode: 2, xalign: 0, hexpand: true}));
+    button.update_property([Gtk.AccessibleProperty.LABEL], [label]);
+    return button;
+}

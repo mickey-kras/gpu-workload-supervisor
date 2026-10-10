@@ -1,5 +1,7 @@
+import {wrappedCheckButton} from './presentation.mjs';
+
 export class TemporaryDiscovery {
-    constructor({Gtk, draft, app, modelGroup, status, temporaryStatus, command, changed, reportError, show, getEvidence}) {
+    constructor({Gtk, draft, app, modelGroup, status, temporaryStatus, command, changed, reportError, restored, show, getEvidence}) {
         this.Gtk = Gtk;
         this.draft = draft;
         this.app = app;
@@ -9,11 +11,12 @@ export class TemporaryDiscovery {
         this.command = command;
         this.changed = changed;
         this.reportError = reportError;
+        this.restored = restored;
         this.show = show;
         this.getEvidence = getEvidence;
         this.temporaryPromise = null; this.temporarySession = null;
         this.temporaryOperation = {};
-        this.temporaryConsent = new this.Gtk.CheckButton({label: 'I allow this brief start and will keep other application controls paused.', visible: false});
+        this.temporaryConsent = wrappedCheckButton(Gtk, 'I allow this brief start and will keep other application controls paused.', {visible: false});
         this.temporaryStart = new this.Gtk.Button({label: 'Start Ollama briefly to list models', visible: false, sensitive: false});
         this.temporaryCancel = new this.Gtk.Button({label: 'Cancel model detection', visible: false});
         this.temporaryExplanation = new this.Gtk.Label({label: 'Listing models requires a brief start only if you cannot provide an existing model name. This may use GPU memory. Do not start applications or use their external controls during this check. Setup restores the previous stopped state and reports any cleanup failure.', wrap: true, xalign: 0, visible: false});
@@ -29,7 +32,8 @@ export class TemporaryDiscovery {
         try {
             const refreshed = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'temporary-status']));
             Object.assign(this.temporaryStatus, refreshed, {session: refreshed.session ?? this.temporarySession});
-        } catch (error) { this.reportError('The stopped state was restored, but model-check status could not be refreshed. Reopen setup before another temporary check.', error); }
+            return true;
+        } catch (error) { this.reportError('The stopped state was restored, but model-check status could not be refreshed. Reopen setup before another temporary check.', error); return false; }
     }
     async cleanupTemporary() {
         if (this.temporaryPromise !== null) { this.temporaryOperation.cancel?.(); await this.temporaryPromise; }
@@ -39,7 +43,10 @@ export class TemporaryDiscovery {
             const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'temporary-cleanup'], JSON.stringify({id: this.temporarySession.id, token: this.temporarySession.token, externalControlPaused: true})));
             this.temporarySession = result.session;
             if (result.error || this.temporarySession?.status !== 'completed') throw new Error(result.error || 'Temporary application cleanup needs attention.');
-            await this.refreshTemporaryStatus();
+            if (await this.refreshTemporaryStatus()) {
+                this.status.label = 'Previous stopped state restored.';
+                this.restored(this.status.label);
+            }
         } catch (error) { this.reportError('Ollama cleanup needs attention. Keep external controls paused and retry cleanup before leaving setup.', error); throw error; }
     }
     async cancelDetection() {

@@ -76,7 +76,7 @@ test('advanced pages keep common fields separate and resource overrides survive 
     assert.equal(title(ui).label, 'Resource checks');
     const capacity = ui.widgets.find(widget => widget.title === 'Measured VRAM requirement (MiB; optional)' && ui.visible(widget));
     assert.equal(capacity.text, '8000'); ui.edit(capacity, 'text', '12345');
-    const retain = ui.widgets.find(widget => widget.label === 'Keep this workload running at login if already active' && ui.visible(widget));
+    const retain = ui.widgets.find(widget => widget.accessibleProperties?.label === 'Keep this workload running at login if already active' && ui.visible(widget));
     ui.edit(retain, 'active', false); await ui.click('Done'); await ui.click('Review changes');
     const reviewed = JSON.parse(ui.calls.find(call => call.argv[1] === 'validate').input).catalog.profiles[0];
     assert.equal(reviewed.requiredMiB, 12345); assert.equal(reviewed.bootPolicy, 'stop-to-idle'); assert.equal(reviewed.systemdSlice, 'app.slice');
@@ -146,6 +146,18 @@ test('manual service changes invalidate readiness and show the entered identity'
     assert.equal(ui.by('Use installation').sensitive, false);
     assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('other.service')));
     assert.equal(ui.visible(ui.by('Ready for setup')), false);
+});
+
+test('a saved endpoint override remains editable without inheriting readiness from its service', async () => {
+    const saved = {id: 'saved-images', app: 'comfyui', label: 'ComfyUI', endpoint: 'http://127.0.0.1:9999', binding: ready.binding};
+    const ui = await launch(options(ready, {drafts: {drafts: [saved]}}));
+    await ui.click('Settings for ComfyUI');
+    assert.equal(ui.by('Use installation').sensitive, false);
+    assert.equal(ui.visible(ui.by('Ready for setup')), false);
+    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label === 'An override does not match this installation.'));
+    await ui.click('Change installation…');
+    assert.equal(ui.by('Application address').text, saved.endpoint);
+    assert.equal(ui.calls.some(call => ['probe', 'prepare', 'apply'].includes(call.argv[1])), false);
 });
 
 test('Cancel cannot resurrect old ready evidence after preserving and reopening an edited endpoint', async () => {
@@ -231,6 +243,19 @@ for (const value of ['abc', 'Infinity', '-1', '1.5', '9007199254740992']) {
         assert.equal(JSON.parse(ui.calls.at(-1).input).drafts[0].requiredMiB, 12000);
     });
 }
+
+test('invalid resource input survives preserved edits and Cancel without becoming a savable null', async () => {
+    const ui = await launch(options()); await ui.click('Settings for ComfyUI'); await ui.click('Advanced settings'); await ui.click('Resource checks');
+    ui.edit(ui.by('Measured VRAM requirement (MiB; optional)'), 'text', 'abc');
+    await ui.click('Done'); await ui.click('Launch details'); await ui.click('Save selections for later');
+    await ui.click('Back'); await ui.click('Back'); await ui.click('Back');
+    await ui.click('Settings for ComfyUI'); await ui.click('Cancel'); await ui.click('Settings for ComfyUI');
+    await ui.click('Advanced settings'); await ui.click('Resource checks');
+    assert.equal(ui.by('Measured VRAM requirement (MiB; optional)').text, 'abc');
+    await ui.click('Done'); await ui.click('Launch details'); await ui.click('Save selections for later');
+    assert.equal(ui.calls.some(call => call.argv[1] === 'save-drafts'), false);
+    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('Selections were not saved. Check the VRAM requirements')));
+});
 
 test('a saved Ollama model stays reviewable when service discovery leaves the model selection open', async () => {
     const candidate = {app: 'ollama', label: 'Ollama', unit: 'ollama.service', endpoint: 'http://127.0.0.1:11434', recognized: true,
