@@ -576,7 +576,8 @@ app.connect('activate', () => {
         cleanupFails = false;
         await tabTo(ui, start); run(['xdotool', 'key', 'space']);
         await waitFor(() => !ui.draftEditors.some(editor => editor.temporaryActive()), 'retry restores stopped state and clears cleanup block');
-        assert(!consent.active && !start.sensitive, 'temporary cleanup resets consent');
+        assert(start.label === 'Start Ollama briefly to list models' && !start.is_sensitive() && !consent.active,
+            'completed temporary cleanup restores the start action and resets consent');
         await capture(ui, 'temporary-cleanup-complete');
         await closeAndVerify(ui, 'temporary-cleanup');
         ui = await open('temporary');
@@ -589,7 +590,10 @@ app.connect('activate', () => {
         await waitFor(() => temporaryReply, 'cancel-path temporary check begins');
         await tabTo(ui, named(ui, 'Cancel model detection')); run(['xdotool', 'key', 'space']);
         await waitFor(() => temporaryReply === null && !ui.draftEditors.some(editor => editor.temporaryActive()), 'native cancellation waits for stopped-state restoration');
-        assert(!cancelConsent.active && !ui.drafts.at(-1).model, 'cancelled detection resets consent and cannot accept a late model inventory');
+        const cancelledStart = named(ui, 'Start Ollama briefly to list models');
+        assert(cancelledStart.label === 'Start Ollama briefly to list models' && !cancelledStart.is_sensitive() &&
+            !cancelConsent.active && !ui.drafts.at(-1).model,
+            'cancelled detection restores the start action, resets consent and cannot accept a late model inventory');
         await capture(ui, 'temporary-cancelled-restored');
         await closeAndVerify(ui, 'temporary-cancelled');
         const report = {theme, width: Number(width), height: Number(height), scale: Number(GLib.getenv('GDK_SCALE') || 1),

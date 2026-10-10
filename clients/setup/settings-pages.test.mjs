@@ -28,6 +28,21 @@ test('ready settings have one review action and keep activation explicit', async
     assert.equal(JSON.parse(ui.calls.at(-1).input).confirmQuiesced, true);
 });
 
+test('application discovery guidance leads to the address control without checking or activating it', async () => {
+    const ui = await launch(options()); await ui.click('Cannot find your application?');
+    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('Open an application’s settings (gear)')));
+    await ui.click('Settings for ComfyUI'); await ui.click('Change installation…'); await ui.click('Choose application address…');
+    assert.equal(ui.by('Application address').focused, true);
+    assert.equal(ui.calls.some(call => ['probe', 'prepare', 'apply'].includes(call.argv[1])), false);
+});
+
+test('setup database edits are included in the reviewed configuration', async () => {
+    const ui = await launch(options()); await ui.click('Setup settings');
+    ui.edit(ui.by('State database path'), 'text', '/selected/state.db'); await ui.click('Continue');
+    assert.equal(JSON.parse(ui.calls.find(call => call.argv[1] === 'validate').input).profile.statePath, '/selected/state.db');
+    assert.equal(ui.by('Finish setup').sensitive, true);
+});
+
 test('details preserve diagnostics, copy them, and recheck repaired service metadata', async () => {
     const broken = {...ready, recognized: false, configurationStatus: 'inspection-failed', nextStep: 'Environment variable HOME: expansion, escapes or whitespace are unsupported; use one literal whole assignment.'};
     let discoveries = 0;

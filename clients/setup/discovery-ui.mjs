@@ -58,7 +58,10 @@ class DraftEditor {
         this.name = new this.Adw.EntryRow({title: 'Display name', text: this.initial.label});
         this.name.update_property([this.Gtk.AccessibleProperty.LABEL], ['Installation display name']);
         this.settings.general.add(this.name);
-        this.name.connect('changed', () => { if (this.syncing) return; this.draft.edit({label: this.name.text}); this.changed(this.draft.snapshot()); });
+        this.name.connect('changed', () => {
+            if (this.syncing) return;
+            this.draft.edit({label: this.name.text}); this.changed(this.draft.snapshot());
+        });
         this.status = this.settings.status;
         this.reportError = (summary, error) => {
             this.settings.problem(summary, error);
@@ -92,7 +95,9 @@ class DraftEditor {
             if (this.syncing) return;
             const input = this.draft.snapshot();
             this.bindingEdits.add('healthURL'); this.draft.edit({binding: {...input.binding, healthURL: this.health.text}});
-            this.syncing = true; if (this.bindingFields.healthURL) this.bindingFields.healthURL.text = this.health.text; this.syncing = false;
+            this.syncing = true;
+            if (this.bindingFields.healthURL) this.bindingFields.healthURL.text = this.health.text;
+            this.syncing = false;
             this.installationEvidence = null; this.settings.invalidate(); this.changed(this.draft.snapshot());
         });
         this.reference = new this.Gtk.Label({label: this.initial.reference ?? 'No file or folder selected', wrap: true, xalign: 0, selectable: true}); this.settings.selection.add(this.reference);

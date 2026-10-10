@@ -2,6 +2,8 @@
 import Gtk from 'gi://Gtk?version=4.0';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Gio from 'gi://Gio';
+// aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
+import Pango from 'gi://Pango';
 
 const icons = {'comfyui': 'comfyui.png', 'llama.cpp': 'llama-cpp.svg', 'ollama': 'ollama.svg', 'vllm': 'vllm.png'};
 
@@ -84,7 +86,7 @@ export function linkButton(Gtk, label) {
 
 export function wrappedCheckButton(Gtk, label, properties) {
     const button = new Gtk.CheckButton(properties);
-    button.set_child(new Gtk.Label({label, wrap: true, wrap_mode: 2, xalign: 0, hexpand: true}));
+    button.set_child(new Gtk.Label({label, wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, hexpand: true}));
     button.update_property([Gtk.AccessibleProperty.LABEL], [label]);
     return button;
 }

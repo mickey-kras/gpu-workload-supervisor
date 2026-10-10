@@ -139,7 +139,6 @@ export function createApplicationCards(ui) {
         select.connect('toggled', () => {
             if (select.active) ui.selectApplication(choice);
             else {
-                ui.restoreProfileSettings();
                 const appDrafts = ui.drafts.filter(draft => draft.app === choice.id);
                 ui.suspendedApplications.set(choice.id, {
                     profiles: ui.profiles.filter(profile => ui.runtimeOf(profile) === choice.id).map(profile => ({profile, row: ui.profileRows.get(profile)})),

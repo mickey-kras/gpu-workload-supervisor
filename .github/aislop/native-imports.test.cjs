@@ -41,7 +41,7 @@ function nativeImports() {
       imports.push(`${line}\n${lines[index + 1]}`);
     });
   }
-  assert.equal(imports.length, 32);
+  assert.equal(imports.length, 33);
   return imports;
 }
 

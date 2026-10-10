@@ -81,12 +81,7 @@ class SetupWindow {
             onLabelEdit: label => this.editedLabels.set(current, label),
             onRemove: group => {
                 this.profiles.splice(this.profiles.indexOf(current), 1);
-                if (this.applicationSettings?.profileRows?.includes(group)) {
-                    this.draftRows.remove(group);
-                    this.applicationSettings.profileRows = this.applicationSettings.profileRows.filter(row => row !== group);
-                } else {
-                    this.rows.remove(group);
-                }
+                this.rows.remove(group);
                 this.profileRows.delete(current);
                 this.invalidate();
             },
@@ -111,7 +106,6 @@ class SetupWindow {
     openApplicationSettings(editor, origin) {
         this.invalidate();
         if (!this.applicationSettings) this.applicationSettings = {step: this.step, origin, scroll: this.scroll.get_vadjustment().value};
-        this.restoreProfileSettings();
         this.setStep(0);
         this.applicationSettings.editor = editor;
         this.heading.label = applications.find(app => app.id === editor.app).label;
@@ -129,7 +123,7 @@ class SetupWindow {
     closeApplicationSettings(restoreFocus = true) {
         const saved = this.applicationSettings;
         if (!saved) return;
-        this.restoreProfileSettings(); this.applicationSettings = null;
+        this.applicationSettings = null;
         this.saveDrafts.visible = false; this.introduction.visible = true; this.heading.visible = true; this.settingsBack.visible = false; this.settingsTitle.visible = false; this.headerBar.set_title_widget(null); this.later.label = 'Set up later';
         for (const editor of this.draftEditors) editor.group.visible = false;
         this.applicationGroup.visible = true; this.findApplication.visible = true;
@@ -156,11 +150,6 @@ class SetupWindow {
             this.scroll.get_vadjustment().value = this.applicationSettings.scrolls.get(page) ?? 0;
             this.settingsTitle.grab_focus(); this.settingsTitle.select_region(0, 0);
         }
-    }
-
-    restoreProfileSettings() {
-        for (const row of this.applicationSettings?.profileRows ?? []) { this.draftRows.remove(row); this.rows.append(row); row.visible = false; }
-        if (this.applicationSettings) this.applicationSettings.profileRows = [];
     }
 
     selectApplication(choice) {

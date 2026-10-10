@@ -9,7 +9,10 @@ export function addOwnedEditor({Adw, Gtk, group, draftGroup, draft, initial, com
         const model = new Adw.EntryRow({title: 'Model name', text: initial.model ?? ''});
         launch.add(model);
         fields.model = model;
-        model.connect('changed', () => { if (isSyncing()) return; draft.edit({model: model.text, models: undefined}); modelChanged(model.text); edited(); changed(draft.snapshot()); });
+        model.connect('changed', () => {
+            if (isSyncing()) return;
+            draft.edit({model: model.text, models: undefined}); modelChanged(model.text); edited(); changed(draft.snapshot());
+        });
     }
     const expectedModelReference = initial.app === 'llama.cpp' ? 'model-file' : 'model-directory';
     const defaults = {executable: initial.referenceKind === 'application' ? initial.reference ?? '' : '', instance: initial.binding?.instance ?? 'local', port: {ollama: 11434, 'llama.cpp': 8080, vllm: 8000}[initial.app],

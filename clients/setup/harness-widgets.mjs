@@ -22,7 +22,11 @@ export function createWidgetClass(widgets) {
         add_row(child) { this.append(child); }
         pack_end(child) { this.append(child); }
         pack_start(child) { this.append(child); }
-        set_title_widget(child) { if (this.titleWidget) this.remove(this.titleWidget); this.titleWidget = child; if (child) this.append(child); }
+        set_title_widget(child) {
+            if (this.titleWidget) this.remove(this.titleWidget);
+            this.titleWidget = child;
+            if (child) this.append(child);
+        }
         add_top_bar(child) { this.append(child); }
         add_bottom_bar(child) { this.append(child); }
         set_child(child) { this.append(child); }

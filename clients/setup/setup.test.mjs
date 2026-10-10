@@ -51,6 +51,36 @@ test('editing invalidates review and requires fresh explicit confirmation', asyn
     assert.equal(applied.confirmQuiesced, true);
 });
 
+test('manual profile edits retain lifecycle fields and native or application binding metadata through review', async () => {
+    const native = {id: 'text', label: 'Text', unit: 'ollama.service', cgroup: '/old', healthURL: 'http://127.0.0.1:11434/old',
+        nativeModel: {runtime: 'ollama', instance: 'old', model: 'old', endpoint: 'http://127.0.0.1:11434', launchFile: '/old/ollama.service'}};
+    const images = {id: 'images', label: 'Images', unit: 'images.service', launchBinding: {runtime: 'comfyui', endpoint: 'http://127.0.0.1:8188', launchFile: '/old/images.service'}};
+    const ui = await launch({profiles: [native, images], deferAction: 'unused'});
+    const nativeFields = ui.by('Text').children.find(widget => widget.title === 'Advanced').children;
+    for (const [title, value] of [['Cgroup path beneath /sys/fs/cgroup (required)', '/ollama'], ['Loopback health URL (required)', 'http://127.0.0.1:11434/api/tags'],
+        ['Runtime instance ID', 'selected'], ['Exact model ID', 'existing:latest'], ['Runtime base URL', 'http://127.0.0.1:11435'], ['Loaded service file path', '/selected/ollama.service']])
+        ui.edit(nativeFields.find(widget => widget.title === title), 'text', value);
+    const imageFields = ui.by('Images').children.find(widget => widget.title === 'Advanced').children;
+    ui.edit(imageFields.find(widget => widget.title === 'Application address'), 'text', 'http://127.0.0.1:8189');
+    ui.edit(imageFields.find(widget => widget.title === 'Loaded service file path'), 'text', '/selected/images.service');
+    await ui.by('Continue').emit('clicked');
+    const checked = JSON.parse(ui.calls.find(call => call.argv[1] === 'validate').input).catalog.profiles;
+    assert.equal(checked[0].cgroup, '/ollama'); assert.equal(checked[0].healthURL, 'http://127.0.0.1:11434/api/tags');
+    assert.deepEqual(checked[0].nativeModel, {...native.nativeModel, instance: 'selected', model: 'existing:latest', endpoint: 'http://127.0.0.1:11435', launchFile: '/selected/ollama.service'});
+    assert.deepEqual(checked[1].launchBinding, {...images.launchBinding, endpoint: 'http://127.0.0.1:8189', launchFile: '/selected/images.service'});
+    assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
+});
+
+test('repeated editing of the same configured application keeps one draft and preserves the original profile', async () => {
+    const existing = {id: 'images', label: 'Images', unit: 'images.service', launchBinding: {runtime: 'comfyui'}};
+    const ui = await launch({profiles: [existing], deferAction: 'unused'});
+    await ui.by('Edit application').emit('clicked'); await ui.by('Edit application').emit('clicked');
+    assert.ok(ui.widgets.some(widget => widget.label?.includes('already has an open selection')));
+    await ui.click('Setup settings'); await ui.click('Save selections for later');
+    assert.deepEqual(JSON.parse(ui.calls.at(-1).input).drafts.map(draft => draft.id), ['images']);
+    assert.equal(ui.calls.some(call => ['prepare', 'apply'].includes(call.argv[1])), false);
+});
+
 test('pending activation reviews and resumes its exact original request', async () => {
     const ui = await launch({pending: true, profiles: [{id: 'stable', label: 'Existing', unit: 'missing.service', opaque: {keep: true}}]});
     assert.equal(ui.by('Add existing service (Advanced)').sensitive, false);

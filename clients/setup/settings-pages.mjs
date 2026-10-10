@@ -112,7 +112,11 @@ export class InstallationSettings {
         this.diagnosticSummary.label = 'Configuration needs attention'; this.diagnostic.label = error.message;
         this.notify();
     }
-    checking(busy) { this.busy = busy; if (busy) this.diagnosticSummary.label = 'Checking configuration…'; this.notify(); }
+    checking(busy) {
+        this.busy = busy;
+        if (busy) this.diagnosticSummary.label = 'Checking configuration…';
+        this.notify();
+    }
     invalidate() { this.problem('Configuration changed. Check again before using this installation.', new Error('The installation settings have changed and require validation.')); }
 }
 
