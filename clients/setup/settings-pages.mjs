@@ -1,6 +1,8 @@
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import GObject from 'gi://GObject';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
+import Gdk from 'gi://Gdk?version=4.0';
+// aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Pango from 'gi://Pango';
 import {applicationHeader, linkButton, roundedCard} from './presentation.mjs';
 import {applications, candidateChoice, candidateIdentity, candidateMessage} from './onboarding.mjs';
@@ -55,7 +57,7 @@ export class InstallationSettings {
         copy.connect('clicked', () => {
             const value = new GObject.Value(); value.init(GObject.TYPE_STRING);
             value.set_string([this.diagnosticIdentity.label, this.diagnosticSummary.label, this.diagnostic.label].filter(Boolean).join('\n\n'));
-            window.get_display().get_clipboard().set_value(value);
+            window.get_display().get_clipboard().set_content(Gdk.ContentProvider.new_for_value(value));
         });
         this.pages.get('configuration').append(new Gtk.Label({label: 'Your service has not been changed.', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0}));
     }

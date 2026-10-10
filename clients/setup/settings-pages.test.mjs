@@ -119,3 +119,96 @@ test('a real unit-only HOME inspection failure can be checked again without inve
     assert.equal(ui.by('Use installation').sensitive, true);
     assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes(ready.endpoint)));
 });
+
+for (const value of ['12000', '']) {
+    test(`saved resource overrides survive reopening with ${value || 'an explicitly cleared'} VRAM requirement`, async () => {
+        const ui = await launch(options()); await ui.click('Settings for ComfyUI'); await ui.click('Advanced settings'); await ui.click('Resource checks');
+        ui.edit(ui.by('Measured VRAM requirement (MiB; optional)'), 'text', '8000');
+        ui.edit(ui.by('Measured VRAM requirement (MiB; optional)'), 'text', value);
+        ui.edit(ui.by('Keep this workload running at login if already active'), 'active', true);
+        await ui.click('Done'); await ui.click('Launch details'); await ui.click('Save selections for later');
+        const drafts = JSON.parse(ui.calls.at(-1).input).drafts;
+        assert.equal(drafts[0].requiredMiB, Number(value)); assert.equal(drafts[0].bootPolicy, 'retain');
+        const reopened = await launch(options(ready, {drafts: {drafts}}));
+        await reopened.click('Settings for ComfyUI'); await reopened.click('Advanced settings'); await reopened.click('Resource checks');
+        assert.equal(reopened.by('Measured VRAM requirement (MiB; optional)').text, value);
+        assert.equal(reopened.by('Keep this workload running at login if already active').active, true);
+        await reopened.click('Done'); await reopened.click('Review changes');
+        const checked = JSON.parse(reopened.calls.find(call => call.argv[1] === 'validate').input).catalog.profiles[0];
+        assert.equal(checked.requiredMiB, value === '' ? undefined : Number(value)); assert.equal(checked.bootPolicy, 'retain');
+    });
+}
+
+test('manual service changes invalidate readiness and show the entered identity', async () => {
+    const ui = await launch(options()); await ui.click('Settings for ComfyUI'); await ui.click('Advanced settings'); await ui.click('Launch details');
+    ui.edit(ui.by('Existing user service'), 'text', 'other.service');
+    await ui.click('Back'); await ui.click('Back');
+    assert.equal(ui.by('Use installation').sensitive, false);
+    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('other.service')));
+    assert.equal(ui.visible(ui.by('Ready for setup')), false);
+});
+
+test('Cancel cannot resurrect old ready evidence after preserving and reopening an edited endpoint', async () => {
+    const ui = await launch(options()); await ui.click('Settings for ComfyUI'); await ui.click('Advanced settings');
+    ui.edit(ui.by('Health endpoint'), 'text', 'http://127.0.0.1:8188/unsupported');
+    await ui.click('Back'); await ui.click('Back'); await ui.click('Settings for ComfyUI');
+    assert.equal(ui.by('Use installation').sensitive, false); await ui.click('Cancel'); await ui.click('Settings for ComfyUI');
+    assert.equal(ui.by('Use installation').sensitive, false);
+    assert.equal(ui.calls.some(call => ['probe', 'prepare', 'apply'].includes(call.argv[1])), false);
+    await ui.click('Advanced settings');
+    assert.equal(ui.by('Health endpoint').text, 'http://127.0.0.1:8188/unsupported');
+});
+
+test('reinspection reconciles unchanged defaults with fresh same-unit endpoint metadata', async () => {
+    const updated = {...ready, endpoint: 'http://127.0.0.1:9000', binding: {...ready.binding, healthURL: 'http://127.0.0.1:9000/system_stats'}};
+    let discoveries = 0;
+    const ui = await launch(options(ready, {discover: () => ({request, units: [], applications: [discoveries++ ? updated : ready]}), probe: {app: 'comfyui', instanceStatus: 'available', inventoryStatus: 'available', models: []}}));
+    await ui.click('Settings for ComfyUI'); await ui.click('Advanced settings');
+    ui.edit(ui.by('Health endpoint'), 'text', ready.binding.healthURL);
+    await ui.click('Back');
+    // Rechecking an address is read-only, including when the running service changed its port.
+    ui.by('Check again').emit('clicked'); await new Promise(resolve => setImmediate(resolve));
+    await ui.click('Advanced settings');
+    assert.equal(ui.by('Health endpoint').text, updated.binding.healthURL);
+    await ui.click('Back'); await ui.click('Use installation');
+    const prepared = JSON.parse(ui.calls.find(call => call.argv[1] === 'prepare').input).draft;
+    assert.equal(prepared.endpoint, updated.endpoint); assert.equal(prepared.binding.healthURL, updated.binding.healthURL);
+});
+
+test('a relative configuration reference remains a unit reinspection target', async () => {
+    const broken = {app: 'comfyui', label: 'ComfyUI', unit: ready.unit, reference: ready.unit, referenceKind: 'configuration',
+        recognized: false, configurationStatus: 'inspection-failed', instanceStatus: 'candidate'};
+    const ui = await launch(options(broken)); await ui.click('Settings for ComfyUI'); await ui.click('View details'); await ui.click('Check again');
+    assert.equal(ui.calls.filter(call => call.argv[1] === 'discover').length, 2);
+    assert.equal(ui.calls.some(call => call.argv[1] === 'probe'), false);
+    assert.equal(ui.by('Finish setup').sensitive, false);
+});
+
+test('health edits in Launch details stay synchronized with the General field', async () => {
+    const ui = await launch(options()); await ui.click('Settings for ComfyUI'); await ui.click('Advanced settings'); await ui.click('Launch details');
+    ui.edit(ui.by('Loopback health URL'), 'text', 'http://127.0.0.1:8188/custom-health');
+    await ui.click('Done'); assert.equal(ui.by('Health endpoint').text, 'http://127.0.0.1:8188/custom-health');
+    ui.edit(ui.by('Health endpoint'), 'text', 'http://127.0.0.1:8188/changed');
+    await ui.click('Launch details'); assert.equal(ui.by('Loopback health URL').text, 'http://127.0.0.1:8188/changed');
+});
+
+test('owned launch edits invalidate readiness while Cancel restores the checked original', async () => {
+    const binding = {instance: 'local', owned: {executable: '/installed/ollama', port: 11434}};
+    const candidate = {app: 'ollama', label: 'Ollama', recognized: true, sourceKind: 'owned', configurationStatus: 'model-required', instanceStatus: 'installed',
+        reference: '/installed/ollama', referenceKind: 'application', binding, models: []};
+    const ui = await launch(options(candidate)); await ui.click('Settings for Ollama'); await ui.click('Advanced settings'); await ui.click('Launch details');
+    ui.edit(ui.by('Launch port'), 'text', '12345'); await ui.click('Done'); await ui.click('Back');
+    assert.equal(ui.by('Use installation').sensitive, false);
+    await ui.click('Cancel'); await ui.click('Settings for Ollama');
+    assert.equal(ui.by('Use installation').sensitive, true);
+    await ui.click('Advanced settings'); await ui.click('Launch details');
+    assert.equal(ui.by('Launch port').text, '11434');
+});
+
+test('checking an empty installation selection keeps visible guidance and blocks review', async () => {
+    const ui = await launch(options(ready, {discover: {request, units: [], applications: []}}));
+    await ui.click('Settings for ComfyUI'); await ui.click('View details'); await ui.click('Check again');
+    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('Choose a detected instance')));
+    assert.equal(ui.calls.some(call => ['probe', 'prepare'].includes(call.argv[1])), false);
+    await ui.click('Back'); assert.equal(ui.by('Use installation').sensitive, false);
+});

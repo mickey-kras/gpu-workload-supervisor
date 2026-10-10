@@ -20,7 +20,7 @@ const files = [
 ];
 const nativeModules = new Set([
   'gi://Adw?version=1', 'gi://Gtk?version=4.0', 'gi://Gio', 'gi://GLib',
-  'gi://GObject', 'gi://Pango', 'gi://Clutter', 'gi://St',
+  'gi://GObject', 'gi://Gdk?version=4.0', 'gi://Pango', 'gi://Clutter', 'gi://St',
   'resource:///org/gnome/shell/extensions/extension.js',
   'resource:///org/gnome/shell/ui/main.js',
   'resource:///org/gnome/shell/ui/popupMenu.js',
@@ -41,7 +41,7 @@ function nativeImports() {
       imports.push(`${line}\n${lines[index + 1]}`);
     });
   }
-  assert.equal(imports.length, 31);
+  assert.equal(imports.length, 32);
   return imports;
 }
 

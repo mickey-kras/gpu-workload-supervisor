@@ -3,7 +3,7 @@ import {InstallationSettings, installationChoiceLabel} from './settings-pages.mj
 import {TemporaryDiscovery} from './temporary-discovery-ui.mjs';
 import {watchInstanceSelection, addRefreshButton, addFilePickers} from './discovery-inputs.mjs';
 import {addOwnedEditor, addBindingEditor} from './launch-ui.mjs';
-import {ApplicationDraft, applications, candidateChoice, profileIDFromModel} from './onboarding.mjs';
+import {ApplicationDraft, applications, candidateChoice, candidateIdentity, profileIDFromModel} from './onboarding.mjs';
 
 // Backend error detail stays available but collapsed behind the actionable summary.
 export function addErrorReporter({Adw, Gtk, parent, status}) {
@@ -39,7 +39,9 @@ class DraftEditor {
         this.temporaryStatus = temporaryStatus;
         this.openSettings = openSettings; this.reportProblem = reportProblem; this.navigateSettings = navigateSettings; this.saveSelections = saveSelections;
         this.discoveryErrors ??= [];
-        this.syncing = false; this.bindingFields = {}; this.ownedFields = {}; this.overrides = {};
+        this.syncing = false; this.bindingFields = {}; this.ownedFields = {}; this.overrides = {}; this.bindingEdits = new Set();
+        if (Object.hasOwn(initial, 'requiredMiB')) this.overrides.requiredMiB = initial.requiredMiB || undefined;
+        if (Object.hasOwn(initial, 'bootPolicy')) this.overrides.bootPolicy = initial.bootPolicy || undefined;
         this.installationEvidence = null;
         this.buildBasics(); this.connectAddress(); this.buildModels();
         this.connectModelPicker();
@@ -63,6 +65,11 @@ class DraftEditor {
         };
         this.probeGuidance = null;
         this.instances = this.detected.filter(candidate => candidate.app === this.initial.app);
+        const original = this.instances.find(candidate => candidate.unit === this.initial.binding?.unit);
+        for (const [key, value] of Object.entries(this.initial.binding ?? {})) {
+            if (value && value !== original?.binding?.[key]) this.bindingEdits.add(key);
+        }
+        this.endpointEdited = Boolean(this.initial.endpoint && this.initial.endpoint !== original?.endpoint);
         // The index remains the shared selection controller. The visible picker
         // uses wrapped, accessible rows instead of an elided combo popup.
         this.instance = new this.Adw.ComboRow({title: 'Detected instance', visible: false, use_markup: false,
@@ -73,7 +80,7 @@ class DraftEditor {
             const identity = candidateChoice(candidate);
             button.set_child(installationChoiceLabel(this.Gtk, identity));
             button.update_property([this.Gtk.AccessibleProperty.LABEL], [identity]);
-            button.connect('clicked', () => { this.instance.selected = index + 1; this.settings.back(); });
+            button.connect('clicked', () => { this.syncing = true; this.instance.selected = 0; this.syncing = false; this.instance.selected = index + 1; this.settings.back(); });
             this.settings.selection.add(button);
         }
         this.details = this.settings.launch;
@@ -82,7 +89,7 @@ class DraftEditor {
         this.health.connect('changed', () => {
             if (this.syncing) return;
             const input = this.draft.snapshot();
-            this.draft.edit({binding: {...input.binding, healthURL: this.health.text}});
+            this.bindingEdits.add('healthURL'); this.draft.edit({binding: {...input.binding, healthURL: this.health.text}});
             this.syncing = true; if (this.bindingFields.healthURL) this.bindingFields.healthURL.text = this.health.text; this.syncing = false;
             this.installationEvidence = null; this.settings.invalidate(); this.changed(this.draft.snapshot());
         });
@@ -91,7 +98,7 @@ class DraftEditor {
     connectAddress() {
         this.endpoint.connect('changed', () => {
             if (this.syncing) return;
-            this.resetSelection(); this.installationEvidence = null; this.draft.endpoint(this.endpoint.text); this.reference.label = 'No file or folder selected';
+            this.resetSelection(); this.endpointEdited = true; this.draft.endpoint(this.endpoint.text); this.reference.label = 'No file or folder selected';
             this.clearBinding(); this.clearModels();
             this.clearOwnedReference();
             this.installationEvidence = null; this.settings.invalidate(); this.changed(this.draft.snapshot());
@@ -233,22 +240,35 @@ class DraftEditor {
         return 'Check this installation to list models';
     }
     show(candidate) {
-        const input = this.draft.snapshot();
         this.lastCandidate = candidate;
-        if (candidate.recognized) this.installationEvidence = candidate;
-        else if (!candidate.configurationStatus && candidate.instanceStatus === 'not-running' && candidate.inventoryStatus === 'not-checked' && this.installationEvidence && this.installationEvidence.unit === input.binding?.unit && this.installationEvidence.endpoint === input.endpoint) {
-            candidate = {...candidate, recognized: this.installationEvidence.recognized,
-                configurationStatus: this.installationEvidence.configurationStatus, unit: this.installationEvidence.unit};
-        }
+        this.installationEvidence = candidate.recognized ? candidate : null;
+        this.reconcileService(candidate);
         this.settings.candidate(candidate);
+        const mismatch = [...this.bindingEdits].some(key => candidate.binding && this.draft.snapshot().binding?.[key] !== candidate.binding[key]);
+        if (mismatch) this.settings.problem('An override does not match this installation.', new Error('Keep the override or restore the current service settings before reviewing. Your service has not been changed.'));
         this.syncing = true; this.health.text = this.draft.snapshot().binding?.healthURL ?? ''; this.health.editable = !this.draft.snapshot().binding?.owned; this.syncing = false;
         this.temporary.showAvailability(candidate);
         if (this.model) this.showModels(candidate);
         this.changed(this.draft.snapshot());
     }
+    reconcileService(candidate) {
+        const input = this.draft.snapshot();
+        if (!candidate.recognized || !candidate.binding || candidate.unit !== input.binding?.unit || input.binding?.owned) return;
+        const binding = {...input.binding};
+        for (const key of ['unit', 'cgroup', 'healthURL', 'instance', 'launchFile']) {
+            if (!this.bindingEdits.has(key)) binding[key] = candidate.binding[key];
+        }
+        const endpoint = this.endpointEdited ? input.endpoint : candidate.endpoint;
+        this.draft.edit({binding, endpoint});
+        this.syncing = true;
+        this.endpoint.text = endpoint ?? '';
+        for (const [key, field] of Object.entries(this.bindingFields)) field.text = binding[key] ?? '';
+        this.syncing = false;
+    }
     connectInputs() {
-        watchInstanceSelection({isSyncing: () => this.syncing, instance: this.instance, instances: this.instances, draft: this.draft, endpoint: this.endpoint, reference: this.reference, clearBinding: () => this.clearBinding(), clearModels: () => this.clearModels(), show: (candidate) => this.show(candidate),
+        watchInstanceSelection({beforeSelection: () => { this.bindingEdits.clear(); this.endpointEdited = false; }, isSyncing: () => this.syncing, instance: this.instance, instances: this.instances, draft: this.draft, endpoint: this.endpoint, reference: this.reference, clearBinding: () => this.clearBinding(), clearModels: () => this.clearModels(), show: (candidate) => this.show(candidate),
             getBindingFields: () => this.bindingFields, setSync: value => this.syncing = value, selectOwnedBinding: binding => {
+                this.syncing = true;
                 for (const [key, field] of Object.entries(this.ownedFields)) {
                     if (typeof field === 'function') continue;
                     let value = '';
@@ -256,7 +276,7 @@ class DraftEditor {
                     else if (key !== 'model') value = binding.owned[key] ?? '';
                     field.text = String(value);
                 }
-                this.ownedFields.selectLaunch();
+                this.syncing = false; this.ownedFields.selectLaunch();
             },
             setProbeGuidance: guidance => this.probeGuidance = guidance, clearOwnedReference: () => this.clearOwnedReference(), selectOwnedReference: (path, kind) => this.selectOwnedReference(path, kind)});
         this.refresh = addRefreshButton({Gtk: this.Gtk, group: {add: child => this.settings.pages.get('configuration').append(child)}, draft: this.draft, status: this.status, command: this.command, show: (candidate) => this.show(candidate), reportError: this.reportError, guidance: () => this.probeGuidance, checking: busy => this.settings.checking(busy), inspectService: async input => {
@@ -264,8 +284,12 @@ class DraftEditor {
             return discovery.applications?.find(candidate => candidate.app === input.app && candidate.unit === input.binding.unit) ?? null;
         }});
         addFilePickers({Gtk: this.Gtk, window: this.window, group: this.settings.selection, advancedGroup: this.settings.selection, draft: this.draft, reference: this.reference, endpoint: this.endpoint, status: this.status, changed: this.changed, clearBinding: () => this.clearBinding(), clearModels: () => this.clearModels(), clearOwnedReference: () => this.clearOwnedReference(), setSync: value => this.syncing = value, selectedReference: (path, kind) => this.selectOwnedReference(path, kind), selectedExecutable: path => this.selectExecutable(path), modelGroup: this.modelParent ? this.modelGroup : null, selectionChanged: () => this.resetSelection()});
-        if (this.draft.needsModel) this.ownedFields = addOwnedEditor({Adw: this.Adw, Gtk: this.Gtk, group: this.details, draftGroup: this.group, draft: this.draft, initial: this.initial, command: this.command, bind: this.bind, changed: this.changed, taken: this.taken, status: this.status, reportError: this.reportError, parent: this.parent, removed: this.removed, modelChanged: (id) => this.syncModelChoices(id)});
-        this.bindingFields = addBindingEditor({Adw: this.Adw, Gtk: this.Gtk, group: this.details, draftGroup: this.group, draft: this.draft, initial: this.initial, status: this.status, parent: this.parent, removed: this.removed, bind: this.bind, command: this.command, changed: this.changed, taken: this.taken, reportError: this.reportError, isSyncing: () => this.syncing, modelChanged: (id) => this.syncModelChoices(id)});
+        if (this.draft.needsModel) this.ownedFields = addOwnedEditor({Adw: this.Adw, Gtk: this.Gtk, group: this.details, draftGroup: this.group, draft: this.draft, initial: this.initial, command: this.command, bind: this.bind, changed: this.changed, taken: this.taken, status: this.status, isSyncing: () => this.syncing, edited: () => { this.installationEvidence = null; this.settings.invalidate(); }, reportError: this.reportError, parent: this.parent, removed: this.removed, modelChanged: (id) => this.syncModelChoices(id)});
+        this.bindingFields = addBindingEditor({Adw: this.Adw, Gtk: this.Gtk, group: this.details, draftGroup: this.group, draft: this.draft, initial: this.initial, status: this.status, parent: this.parent, removed: this.removed, bind: this.bind, command: this.command, changed: this.changed, taken: this.taken, reportError: this.reportError, isSyncing: () => this.syncing, edited: key => {
+                this.bindingEdits.add(key); this.installationEvidence = null; this.settings.invalidate();
+                this.syncing = true; this.health.text = this.draft.snapshot().binding?.healthURL ?? ''; this.syncing = false;
+                this.settings.identity.label = candidateIdentity({...this.draft.snapshot(), ...this.draft.snapshot().binding});
+            }, modelChanged: (id) => this.syncModelChoices(id)});
     }
     buildResources() {
         this.capacity = new this.Adw.EntryRow({title: 'Measured VRAM requirement (MiB; optional)', text: ''});
@@ -273,13 +297,13 @@ class DraftEditor {
         this.capacity.connect('changed', () => {
             if (this.syncing) return;
             this.overrides.requiredMiB = this.capacity.text.trim() === '' ? undefined : Number(this.capacity.text);
-            this.draft.cancel(); this.changed(this.draft.snapshot());
+            this.draft.edit({requiredMiB: this.overrides.requiredMiB ?? 0}); this.changed(this.draft.snapshot());
         });
         this.retain = new this.Gtk.CheckButton({label: 'Keep this workload running at login if already active'});
         this.settings.resources.add(this.retain);
         this.retain.connect('toggled', () => {
             if (this.syncing) return;
-            this.overrides.bootPolicy = this.retain.active ? 'retain' : 'stop-to-idle'; this.draft.cancel(); this.changed(this.draft.snapshot());
+            this.overrides.bootPolicy = this.retain.active ? 'retain' : 'stop-to-idle'; this.draft.edit({bootPolicy: this.overrides.bootPolicy}); this.changed(this.draft.snapshot());
         });
     }
     addActions() {
@@ -352,7 +376,7 @@ class DraftEditor {
             prepare: () => this.prepare(),
         };
     }
-    resetSelection() { this.syncing = true; this.instance.selected = 0; this.syncing = false; this.installationEvidence = null; this.settings.invalidate(); }
+    resetSelection() { this.syncing = true; this.instance.selected = 0; this.syncing = false; this.installationEvidence = null; this.bindingEdits.clear(); this.settings.invalidate(); }
     selectExecutable(path) {
         this.installationEvidence = null;
         this.ownedFields.executable.text = path;
@@ -363,7 +387,7 @@ class DraftEditor {
     }
     capture() {
         const fields = [this.name, this.endpoint, this.health, ...Object.values(this.bindingFields), ...Object.values(this.ownedFields)].filter(field => typeof field !== 'function');
-        return {input: JSON.parse(JSON.stringify(this.draft.snapshot())), candidate: this.lastCandidate, evidence: this.installationEvidence, selection: this.instance.selected, fields: fields.map(field => [field, field.text]), capacity: this.capacity.text, retain: this.retain.active, overrides: {...this.overrides}};
+        return {input: JSON.parse(JSON.stringify(this.draft.snapshot())), candidate: this.lastCandidate, evidence: this.installationEvidence, ready: this.settings.ready && !this.settings.busy, bindingEdits: [...this.bindingEdits], endpointEdited: this.endpointEdited, selection: this.instance.selected, fields: fields.map(field => [field, field.text]), capacity: this.capacity.text, retain: this.retain.active, overrides: {...this.overrides}};
     }
     restore(snapshot) {
         if (!snapshot) return;
@@ -371,10 +395,11 @@ class DraftEditor {
         for (const [field, text] of snapshot.fields) field.text = text;
         this.capacity.text = snapshot.capacity; this.retain.active = snapshot.retain;
         this.syncing = false;
-        this.syncing = true; this.instance.selected = snapshot.selection; this.syncing = false; this.draft.input = snapshot.input; this.draft.cancel(); this.installationEvidence = snapshot.evidence; this.overrides = snapshot.overrides;
+        this.syncing = true; this.instance.selected = snapshot.selection; this.syncing = false; this.draft.input = snapshot.input; this.draft.cancel(); this.installationEvidence = snapshot.evidence; this.bindingEdits = new Set(snapshot.bindingEdits); this.endpointEdited = snapshot.endpointEdited; this.overrides = snapshot.overrides;
         this.changed(this.draft.snapshot());
         const selected = snapshot.candidate;
-        if (selected) this.show(selected); else this.settings.invalidate();
+        if (selected) this.show(selected);
+        if (!selected || !snapshot.ready) this.settings.invalidate();
     }
     selectedModels(input) {
         if (!this.draft.needsModel) return [''];

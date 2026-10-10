@@ -28,7 +28,7 @@ export function createWidgetClass(widgets) {
         set_child(child) { this.append(child); }
         set_content(child) { this.append(child); }
         add_css_class(name) { this.cssClasses ??= []; this.cssClasses.push(name); }
-        get_display() { return {get_clipboard: () => ({set_value: value => { this.clipboard = value.text; }})}; }
+        get_display() { return {get_clipboard: () => ({set_content: provider => { this.clipboard = provider.value.text; }})}; }
         get_scale_factor() { return 1; }
         get_vadjustment() { this.adjustment ??= {value: 0}; return this.adjustment; }
         remove_css_class(name) { this.cssClasses = this.cssClasses?.filter(item => item !== name); }

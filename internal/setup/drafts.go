@@ -36,7 +36,6 @@ type Draft struct {
 	ID            string        `json:"id"`
 	Label         string        `json:"label"`
 	App           string        `json:"app"`
-	// Resource checks preserve explicit zero or empty choices through draft saves.
 	RequiredMiB   *uint64       `json:"requiredMiB,omitempty"`
 	BootPolicy    *string       `json:"bootPolicy,omitempty"`
 	Endpoint      string        `json:"endpoint,omitempty"`

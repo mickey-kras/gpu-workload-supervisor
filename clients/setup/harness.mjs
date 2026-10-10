@@ -49,6 +49,7 @@ export async function launch({units = [], profiles = [], pending = false, fail =
             })},
         }},
         'gi://Pango': {default: {WrapMode: {WORD_CHAR: 2}}},
+        'gi://Gdk?version=4.0': {default: {ContentProvider: {new_for_value: value => ({value})}}},
         'gi://GObject': {default: {TYPE_STRING: 'string', Value: class { init(type) { this.type = type; } set_string(text) { this.text = text; } }}},
         'gi://GLib': {default: {PRIORITY_DEFAULT_IDLE: 200, SOURCE_REMOVE: false, idle_add(priority, callback) { callback(); return 1; }, getenv: () => 'GNOME', uuid_string_random: () => uuidSequence++ ? `unique-id-${uuidSequence}` : 'unique-id',
             markup_escape_text: text => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),

@@ -257,7 +257,7 @@ test('promoted binding prefills a friendly label and stable ID; application re-s
     ui.selectApplication(1);
     assert.equal(ui.calls.filter(call => call.argv[1] === 'verify-bindings').length, count);
     await ui.by('Save selections for later').emit('clicked');
-    assert.ok(JSON.parse(ui.calls.at(-1).input).drafts.every(draft => draft.id === first.id));
+    assert.deepEqual(JSON.parse(ui.calls.at(-1).input).drafts.map(draft => draft.id), [first.id]);
 });
 
 test('failed verification keeps draft and supports retry; removing draft never applies', async () => {
@@ -267,7 +267,7 @@ test('failed verification keeps draft and supports retry; removing draft never a
     assert.equal(ui.by('Verify binding and add for review').sensitive, true);
     await ui.by('Remove this application').emit('clicked');
     await ui.by('Save selections for later').emit('clicked');
-    assert.ok(JSON.parse(ui.calls.at(-1).input).drafts.every(draft => draft.id === first.id));
+    assert.deepEqual(JSON.parse(ui.calls.at(-1).input).drafts, []);
 });
 
 test('late binding cannot promote removed draft', async () => {
@@ -278,7 +278,7 @@ test('late binding cannot promote removed draft', async () => {
     ui.finish(); await binding;
     assert.equal(ui.widgets.filter(widget => widget.title === 'Display name' && widget.accessibleProperties?.label !== 'Installation display name').length, 0);
     await ui.by('Save selections for later').emit('clicked');
-    assert.ok(JSON.parse(ui.calls.at(-1).input).drafts.every(draft => draft.id === first.id));
+    assert.deepEqual(JSON.parse(ui.calls.at(-1).input).drafts, []);
 });
 
 test('choosing a model folder stores a directory reference instead of an endpoint', async () => {

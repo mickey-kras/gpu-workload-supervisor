@@ -1,9 +1,9 @@
-export function watchInstanceSelection({instance, instances, draft, endpoint, reference, clearBinding, clearModels, show, getBindingFields, setSync, setProbeGuidance, clearOwnedReference, selectOwnedReference, selectOwnedBinding, isSyncing = () => false}) {
+export function watchInstanceSelection({instance, instances, draft, endpoint, reference, clearBinding, clearModels, show, getBindingFields, setSync, setProbeGuidance, clearOwnedReference, selectOwnedReference, selectOwnedBinding, isSyncing, beforeSelection}) {
     instance.connect('notify::selected', () => {
         if (isSyncing()) return;
         const selected = instances[instance.selected - 1];
         if (!selected) return;
-        clearBinding(); clearModels();
+        beforeSelection(); clearBinding(); clearModels();
         draft.edit({endpoint: undefined, reference: undefined, referenceKind: undefined, model: '', models: undefined});
         clearOwnedReference();
         setSync(true); endpoint.text = ''; setSync(false);
@@ -27,12 +27,12 @@ export function watchInstanceSelection({instance, instances, draft, endpoint, re
     });
 }
 
-export function addRefreshButton({Gtk, group, draft, status, command, show, reportError, guidance, checking = () => {}, inspectService = async () => null}) {
+export function addRefreshButton({Gtk, group, draft, status, command, show, reportError, guidance, checking, inspectService}) {
     const refresh = new Gtk.Button({label: 'Check again', visible: false}); group.add(refresh);
     refresh.connect('clicked', async () => {
         const target = draft.snapshot();
         if (!target.endpoint && !target.reference && !target.binding?.unit) {
-            status.label = guidance() ?? 'Choose a detected instance, enter the application address, or select a model file or folder before refreshing.';
+            reportError('Choose an installation before checking again.', new Error(guidance() ?? 'Choose a detected instance, enter the application address, or select a model file or folder before refreshing.'));
             return;
         }
         const probe = draft.begin(); refresh.sensitive = false; checking(true);
@@ -40,7 +40,7 @@ export function addRefreshButton({Gtk, group, draft, status, command, show, repo
         try {
             const service = target.binding?.unit ? await inspectService(target) : null;
             let candidate = service;
-            if (target.endpoint || target.reference) candidate = JSON.parse(await command(['/usr/bin/gpu-setup', 'probe'], JSON.stringify(probe.request)));
+            if (target.endpoint || (target.reference && !target.binding?.unit)) candidate = JSON.parse(await command(['/usr/bin/gpu-setup', 'probe'], JSON.stringify(probe.request)));
             if (!candidate) throw new Error('The selected service could not be inspected. Choose another installation or retry.');
             if (service) {
                 const inventory = candidate.inventoryStatus === 'available' && target.endpoint === service.endpoint ? {models: candidate.models, inventoryStatus: candidate.inventoryStatus} : {};
@@ -54,7 +54,7 @@ export function addRefreshButton({Gtk, group, draft, status, command, show, repo
     return refresh;
 }
 
-export function addFilePickers({Gtk, window, group, advancedGroup = group, draft, reference, endpoint, status, changed, clearBinding, clearModels, clearOwnedReference, setSync, selectedReference, selectedExecutable, modelGroup, selectionChanged = () => {}}) {
+export function addFilePickers({Gtk, window, group, advancedGroup = group, draft, reference, endpoint, status, changed, clearBinding, clearModels, clearOwnedReference, setSync, selectedReference, selectedExecutable, modelGroup, selectionChanged}) {
     if (draft.needsModel) {
         const executable = new Gtk.Button({label: 'Choose installed executable…'}); group.add(executable);
         executable.connect('clicked', () => {
