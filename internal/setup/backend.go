@@ -143,11 +143,12 @@ func (b Backend) Plan(home string, request Request) (Preview, error) {
 // Backend holds the host interactions setup performs. Tests inject fakes
 // instead of touching the real runtime, unit manager, or package binaries.
 type Backend struct {
-	temporaryProfile func() (Profile, error)
-	makeRuntime      func(Request) (gpuruntime.Manager, error)
-	runCommand       func(ctx context.Context, name string, args ...string) ([]byte, error)
-	probeApplication func(ctx context.Context, request ProbeRequest) (ApplicationCandidate, error)
-	inspectAutomatic func(string, string) (gpuruntime.AutomaticLaunch, error)
+	temporaryProfile    func() (Profile, error)
+	makeRuntime         func(Request) (gpuruntime.Manager, error)
+	runCommand          func(ctx context.Context, name string, args ...string) ([]byte, error)
+	probeApplication    func(ctx context.Context, request ProbeRequest) (ApplicationCandidate, error)
+	discoverExecutables func(context.Context) []ApplicationCandidate
+	inspectAutomatic    func(string, string) (gpuruntime.AutomaticLaunch, error)
 	// qualifyOwned renders and qualifies an owned profile against the host
 	// before anything becomes durable; nil selects the runtime default.
 	qualifyOwned     func(control.WorkloadProfile) error
@@ -156,7 +157,7 @@ type Backend struct {
 }
 
 func SystemBackend() Backend {
-	return Backend{makeRuntime: runtimeFor, runCommand: boundedCommand, probeApplication: Probe, binaryDirectory: "/usr/bin"}
+	return Backend{makeRuntime: runtimeFor, runCommand: boundedCommand, probeApplication: Probe, discoverExecutables: installedExecutables, binaryDirectory: "/usr/bin"}
 }
 
 func runtimeFor(request Request) (gpuruntime.Manager, error) {

@@ -89,6 +89,9 @@ function stateCandidate(state) {
         evidence: ['Untrusted path: /home/example/shared-applications/ComfyUI/main.py is writable by another user.', diagnosticEvidence]});
     if (state === 'missing-location') Object.assign(result, {recognized: false, configurationStatus: 'missing', instanceStatus: 'missing'});
     if (state === 'unreachable') Object.assign(result, {unit: undefined, location: undefined, binding: undefined, recognized: false, configurationStatus: 'unverified', instanceStatus: 'unreachable'});
+    if (state === 'recognized-unreachable') result.instanceStatus = 'unreachable';
+    if (state === 'invalid-contradictory') result.instanceStatus = 'invalid';
+    if (state === 'gpu-unresolved') Object.assign(result, {recognized: false, binding: undefined, configurationStatus: 'gpu-unresolved', nextStep: 'CUDA_VISIBLE_DEVICES GPU identity is unresolved. Review the service GPU visibility settings before choosing the selected GPU’s full UUID. The external service is unchanged.'});
     return result;
 }
 async function command(argv, input, operation) {
@@ -97,7 +100,7 @@ async function command(argv, input, operation) {
     assert(!['apply', 'render-owned', 'temporary-start'].includes(action), `unexpected mutation: ${action}`);
     if (action === '--version') return 'GNOME Shell 50.1';
     if (action === 'discover') {
-        const discovery = {request: {profile: {statePath: '/example/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: []}}, units: [], applications: mode === 'missing' ? [] : mode === 'temporary' ? [{...candidate, configurationStatus: 'model-required', models: []}] : ['ready', 'running', 'missing-location', 'unreachable', 'unsupported-trust', 'unsupported-home', 'inspection-failed'].includes(mode) ? [stateCandidate(mode)] : [comfy, candidate], errors: mode === 'error' ? ['Example discovery unavailable.'] : []};
+        const discovery = {request: {profile: {statePath: '/example/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: []}}, units: [], applications: mode === 'missing' ? [] : mode === 'temporary' ? [{...candidate, configurationStatus: 'model-required', models: []}] : mode === 'mixed-unresolved' ? [comfy, {...candidate, recognized: false, binding: undefined, instanceStatus: 'invalid', configurationStatus: 'unsupported', models: []}] : ['ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed'].includes(mode) ? [stateCandidate(mode)] : [comfy, candidate], errors: mode === 'error' ? ['Example discovery unavailable.'] : []};
         if (deferDiscovery) {
             deferDiscovery = false;
             return await new Promise(resolve => { installationReply = result => { installationReply = null; resolve(JSON.stringify({...discovery, applications: [result]})); }; });
@@ -391,12 +394,12 @@ app.connect('activate', () => {
             assert(!widgets(ui.window).some(widget => widget instanceof Adw.ExpanderRow && widget.visible && widget.expanded), `${state}: technical detail remains collapsed`);
             await capture(ui, `applications-${state}`); await closeAndVerify(ui, state);
         }
-        const settingsStates = ['ready', 'running', 'missing-location', 'unreachable', 'unsupported-trust', 'unsupported-home', 'inspection-failed'];
+        const settingsStates = ['ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed'];
         for (const state of settingsStates) {
             ui = await open(state);
             const gear = ui.applicationCards.get('comfyui').gear;
             await activate(ui, gear, 'ComfyUI');
-            const ready = state === 'ready' || state === 'running';
+            const ready = ['ready', 'running', 'recognized-unreachable'].includes(state);
             const identity = state === 'unreachable' ? `Address: ${longEndpoint}` : ['inspection-failed', 'unsupported-home'].includes(state) ? serviceIdentity : longIdentity;
             wrapping(ui, identity);
             assert(ui.settingsTitle.get_mapped() && !ui.heading.get_mapped() && ui.settingsBack.get_mapped(), 'settings uses the visible centered header title and native header Back');
@@ -407,7 +410,7 @@ app.connect('activate', () => {
             if (!ready) assert(widgets(notice[0]).includes(named(ui, 'View details')), 'View details belongs to the warning card');
             await settingsTree(ui, `settings-${state}`, 'ComfyUI', [{name: identity}, button('Use installation', ready), button('Cancel')],
                 ['Display name', 'Health endpoint', 'Measured VRAM requirement (MiB; optional)', 'Copy details'],
-                ready ? ['Ready for setup', 'GPU operation has not been tested.'] : state === 'unsupported-home' ? ['HOME uses an unsupported format.'] : []);
+                ready ? ['Ready for setup', 'GPU operation has not been tested.'] : state === 'unsupported-home' ? ['HOME uses an unsupported format.'] : state === 'gpu-unresolved' ? ['Needs setup', 'GPU identity needs setup. Review'] : ['Needs setup']);
             await capture(ui, `settings-${state}`);
             if (state === 'ready') {
                 await capture(ui, 'settings-stopped');
@@ -451,7 +454,7 @@ app.connect('activate', () => {
                     try { resolve(source.read_text_finish(result)); } catch (error) { reject(error); }
                 }));
                 const expectedFragments = [identity, 'Configuration needs attention', state === 'unreachable' ?
-                    'Address unreachable. An address alone does not verify an installed application. Check its address or choose its executable.' : diagnosticEvidence];
+                    'Address unreachable. An address alone does not verify an installed application. Choose a detected installation or its executable to preview a managed launch.' : diagnosticEvidence];
                 const copyEvidence = {state, copyActivated, clipboardChanges, expectedFragments, actual: copied};
                 GLib.file_set_contents(`${output}/clipboard-${state}.json`, JSON.stringify(copyEvidence, null, 2));
                 assert(typeof copied === 'string' && expectedFragments.every(fragment => copied.includes(fragment)), `Copy details retains full installation identity and diagnostics: ${JSON.stringify(copyEvidence)}`);
@@ -470,6 +473,33 @@ app.connect('activate', () => {
             }
             await closeAndVerify(ui, state);
         }
+        ui = await open('mixed-unresolved');
+        for (const appID of ['comfyui', 'ollama']) {
+            const select = ui.applicationCards.get(appID).select;
+            await tabTo(ui, select); run(['xdotool', 'key', 'space']); await delay(40);
+            assert(select.active, 'keyboard checkbox records included application intent');
+        }
+        const unresolvedGear = ui.applicationCards.get('ollama').gear;
+        await activate(ui, unresolvedGear, 'Ollama');
+        await settingsTree(ui, 'included-unresolved-settings', 'Ollama', [button('Use installation', false), button('View details'), button('Cancel')], [], ['Needs setup']);
+        await capture(ui, 'included-unresolved-settings');
+        await activate(ui, named(ui, 'View details'), 'Configuration details');
+        await settingsTree(ui, 'included-unresolved-details', 'Configuration details', [button('Copy details'), button('Check again'), button('Cancel')]);
+        await tabTo(ui, ui.later); run(['xdotool', 'key', 'space']); await delay(80);
+        assert(ui.applicationCards.get('ollama').select.active && ownsFocus(ui, unresolvedGear), 'Cancel preserves include intent and returns keyboard focus');
+        await activate(ui, ui.applicationCards.get('comfyui').gear, 'ComfyUI');
+        await activate(ui, ui.review, 'Choose models');
+        await tabTo(ui, ui.review); run(['xdotool', 'key', 'space']); await delay(100);
+        assert(ui.heading.label === 'Choose models' && !ui.apply.sensitive, 'included unresolved model/configuration blocks confirmation');
+        await capture(ui, 'included-unresolved-blocked');
+        await activate(ui, ui.back, 'Choose your applications');
+        const unresolvedSelect = ui.applicationCards.get('ollama').select;
+        await tabTo(ui, unresolvedSelect); run(['xdotool', 'key', 'space']); await delay(50);
+        assert(!unresolvedSelect.active && ui.applicationCards.get('comfyui').select.active, 'keyboard deselection retains valid application');
+        await activate(ui, ui.review, 'Ready to finish');
+        await settingsTree(ui, 'included-valid-rest-review', 'Ready to finish', [button('Finish setup'), button('Back')], ['Ollama']);
+        await capture(ui, 'included-valid-rest-review');
+        await closeAndVerify(ui, 'mixed-unresolved');
         ui = await open('ready');
         await activate(ui, ui.applicationCards.get('comfyui').gear, 'ComfyUI');
         const beforeDraft = JSON.stringify(ui.drafts);

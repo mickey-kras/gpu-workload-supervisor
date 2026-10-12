@@ -193,7 +193,7 @@ func probeFailure(result ApplicationCandidate, err error) ApplicationCandidate {
 	if errors.As(err, &network) {
 		result.InstanceStatus = "unreachable"
 		result.InventoryStatus = "unknown"
-		result.NextStep = "The application is unreachable. Start it separately or select an existing configuration; saved references are unchanged."
+		result.NextStep = "The address is unreachable and does not verify an installation. Choose a detected installation or its installed executable to preview a managed launch; saved references are unchanged."
 	}
 	return result
 }

@@ -113,7 +113,7 @@ func parseExternalLaunchSourcesMode(sources [][]byte, runtimeName string, cleanu
 	unit.preCommands = directives.pre
 	for _, name := range directives.envOrder {
 		if err := unit.applyDirective(runtimeName, "[Service]", "Environment", directives.env[name]); err != nil {
-			return unit, fmt.Errorf("%w: unsupported Environment variable %s", err, name)
+			return unit, err
 		}
 	}
 	for directive, value := range directives.scalars {

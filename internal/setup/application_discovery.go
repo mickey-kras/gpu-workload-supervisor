@@ -15,6 +15,7 @@ const execStartPropertyPrefix = "ExecStart="
 const inspectionFailedStatus = "inspection-failed"
 
 func (b Backend) discoverApplications(ctx context.Context, result *Discovery, units []string) {
+	defer b.discoverInstalledExecutables(ctx, result)
 	// Only these four local default origins are probed. Non-default instances use
 	// an explicit endpoint selection; no port, process, or filesystem scanning.
 	for _, r := range []ProbeRequest{{App: "comfyui", Endpoint: "http://127.0.0.1:8188"}, {App: "ollama", Endpoint: "http://127.0.0.1:11434"}, {App: appLlamaCPP, Endpoint: "http://127.0.0.1:8080"}, {App: "vllm", Endpoint: "http://127.0.0.1:8000"}} {
@@ -35,6 +36,26 @@ func (b Backend) discoverApplications(ctx context.Context, result *Discovery, un
 			return
 		}
 		b.discoverUnit(ctx, result, unit)
+	}
+}
+
+func (b Backend) discoverInstalledExecutables(ctx context.Context, result *Discovery) {
+	if b.discoverExecutables == nil || ctx.Err() != nil {
+		return
+	}
+	for _, found := range b.discoverExecutables(ctx) {
+		// Prefer an already recognized service binding to a second launch of the
+		// same application. Endpoint observations never establish installation.
+		hasService := false
+		for _, existing := range result.Applications {
+			if existing.App == found.App && existing.Unit != "" && existing.Recognized {
+				hasService = true
+				break
+			}
+		}
+		if !hasService {
+			result.Applications = append(result.Applications, found)
+		}
 	}
 }
 
@@ -71,6 +92,9 @@ func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit strin
 	if err != nil {
 		found.NextStep = err.Error()
 		found.ConfigurationStatus = inspectionFailedStatus
+		if errors.Is(err, gpuruntime.ErrGPUIdentityUnresolved) {
+			found.ConfigurationStatus = "gpu-unresolved"
+		}
 		if errors.Is(err, gpuruntime.ErrModelUnavailable) {
 			found.ConfigurationStatus = "model-missing"
 			found.InventoryStatus = "missing"

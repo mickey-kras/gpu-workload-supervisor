@@ -385,6 +385,7 @@ class DraftEditor {
             showProblem: this.reportError,
             cancel: () => { this.draft.cancel(); return this.temporary.cancel(); },
             temporaryActive: () => this.temporary.active(),
+            checking: () => this.settings.busy,
             needsModelDecision: () => this.draft.needsModel && (this.models.length > 1 || this.draft.snapshot().models?.length > 1 || this.draft.snapshot().models?.length === 0 || !(this.draft.snapshot().model || this.draft.snapshot().binding?.owned?.modelPath)),
             prepare: () => this.prepare(),
         };
@@ -434,6 +435,7 @@ class DraftEditor {
         return value;
     }
     async prepare() {
+        if (this.settings.busy) throw new Error('Wait for the installation check to finish before continuing.');
         if (this.temporary.blocked()) throw new Error('Finish temporary application cleanup before continuing.');
         const input = this.draft.snapshot();
         const generation = this.draft.generation;

@@ -8,6 +8,33 @@ import (
 	"strings"
 )
 
+// ErrGPUIdentityUnresolved distinguishes a discovered numeric CUDA selection
+// from an invalid installation. Metadata inspection cannot establish its CUDA
+// ordinal-to-physical-UUID mapping, and must not start a runtime to infer it.
+var ErrGPUIdentityUnresolved error = unresolvedGPUIdentityError{}
+
+type unresolvedGPUIdentityError struct{}
+
+func (unresolvedGPUIdentityError) Error() string {
+	return "CUDA_VISIBLE_DEVICES GPU identity is unresolved; review and approve a change to the external service using the configured GPU's full UUID, then reload systemd and refresh the binding"
+}
+
+func (unresolvedGPUIdentityError) Unwrap() error { return ErrLaunchUnsupported }
+
+func (u *parsedLaunchUnit) applyGPUVisibility(value string) error {
+	// Numeric CUDA ordinals are not nvidia-smi physical indices, even when
+	// inventory reports one device. Preserve the assignment without inferring
+	// a mapping or rewriting it to make adoption pass.
+	if value != "" && strings.Trim(value, "0123456789") == "" {
+		return ErrGPUIdentityUnresolved
+	}
+	if !control.ValidGPUUUID(value) {
+		return environmentError("CUDA_VISIBLE_DEVICES", "select one full physical GPU UUID; prefixes, lists and MIG mappings are unsupported")
+	}
+	u.gpuUUID = value
+	return nil
+}
+
 func (m *SystemdManager) verifyProfileGPU(ctx context.Context, p control.WorkloadProfile) error {
 	uuid := profileGPUUUID(p)
 	if uuid == "" {

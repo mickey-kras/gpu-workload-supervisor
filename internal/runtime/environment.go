@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"golang.org/x/sys/unix"
 )
 
@@ -99,11 +98,7 @@ func (u *parsedLaunchUnit) applySafeEnvironment(runtimeName, assignment string) 
 func (u *parsedLaunchUnit) qualifyEnvironmentValue(runtimeName, name, value, assignment string) error {
 	switch name {
 	case "CUDA_VISIBLE_DEVICES":
-		if !control.ValidGPUUUID(value) {
-			return environmentError(name, "only one full physical GPU UUID is supported; numeric indices, UUID prefixes, lists and MIG mappings cannot prove the configured GPU identity. Select its full UUID and review the configured GPU")
-		}
-		u.gpuUUID = value
-		return nil
+		return u.applyGPUVisibility(value)
 	case "HOME", "HF_HOME", "HUGGINGFACE_HUB_CACHE", "TRANSFORMERS_CACHE", "XDG_CACHE_HOME", "TMPDIR", "HF_TOKEN_PATH":
 		if u.cleanupEnvironment {
 			return nil
