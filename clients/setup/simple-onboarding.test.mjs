@@ -28,11 +28,11 @@ for (const [index, app] of ['comfyui', 'ollama', 'llama.cpp', 'vllm'].entries())
         assert.ok(ui.widgets.some(widget => widget.label?.includes('Installed and stopped. Ready to configure.')));
         if (app === 'comfyui') assert.equal(ui.by('Model'), undefined);
         else assert.equal(ui.by('Model').visible, false, 'existing launch model needs no new decision');
-        const draftAdvanced = ui.by('Advanced');
-        assert.notEqual(draftAdvanced.expanded, true);
-        assert.ok(draftAdvanced.children.some(widget => widget.title === 'Existing service'));
+        assert.equal(ui.visible(ui.by('Existing service')), false);
+        ui.by(`Settings for ${['ComfyUI', 'Ollama', 'llama.cpp', 'vLLM'][index]}`).emit('clicked');
+        assert.equal(ui.visible(ui.by('Advanced settings')), true);
         assert.equal(ui.calls.filter(call => call.argv[1] === 'apply').length, 0);
-        await ui.by('Check application').emit('clicked');
+        await ui.by('Use installation').emit('clicked');
         const input = JSON.parse(ui.calls.find(call => call.argv[1] === 'prepare').input);
         assert.equal(input.draft.binding.unit, `${app}.service`);
         assert.ok(ui.calls.some(call => call.argv[1] === 'validate'));
@@ -65,8 +65,8 @@ for (const cancel of ['edit', 'remove', 'close']) {
     test(`late prepared installation cannot be added after ${cancel}`, async () => {
         const ui = await launch({deferAction: 'prepare', responses: {discover: {request, units: [], applications: [installation('comfyui')]}, prepare: {profile: profileFor('comfyui')}}});
         ui.selectApplication(ui.applicationIndex ?? 0);
-        const preparing = ui.by('Check application').emit('clicked');
-        if (cancel === 'edit') ui.edit(ui.by('Friendly name'), 'text', 'Changed');
+        const preparing = ui.by('Use installation').emit('clicked');
+        if (cancel === 'edit') ui.edit(ui.by('Installation display name'), 'text', 'Changed');
         else if (cancel === 'remove') ui.by('Remove this application').emit('clicked');
         else ui.widgets.find(widget => widget.title === 'GPU Workload Setup').emit('close-request');
         ui.finish(); await preparing;
@@ -78,9 +78,10 @@ for (const cancel of ['edit', 'remove', 'close']) {
 test('preparation errors keep the draft, show collapsed detail and allow retry', async () => {
     const ui = await launch({fail: 'prepare', responses: {discover: {request, units: [], applications: [installation('comfyui')]}}});
     ui.selectApplication(ui.applicationIndex ?? 0);
-    await ui.by('Check application').emit('clicked');
-    assert.equal(ui.by('Check application').sensitive, true);
-    assert.ok(ui.widgets.some(widget => widget.title === 'Technical details' && widget.visible && !widget.expanded));
+    await ui.by('Use installation').emit('clicked');
+    assert.equal(ui.by('Use installation').sensitive, false);
+    assert.equal(ui.visible(ui.by('View details')), true);
+    assert.ok(ui.widgets.some(widget => (widget.title === 'Technical details' && widget.visible && !widget.expanded) || (widget.accessibleProperties?.label === 'View details' && widget.visible)));
     await ui.by('Save selections for later').emit('clicked');
     assert.equal(JSON.parse(ui.calls.at(-1).input).drafts[0].binding.unit, 'comfyui.service');
     assert.ok(!ui.calls.some(call => call.argv[1] === 'apply'));
@@ -104,7 +105,7 @@ test('stopped Ollama asks only for its existing model name when inventory cannot
     assert.equal(ui.by('Existing model name').visible, true);
     assert.equal(ui.by('Model').visible, false);
     ui.edit(ui.by('Existing model name'), 'text', 'existing');
-    await ui.by('Check application').emit('clicked');
+    await ui.by('Use installation').emit('clicked');
     assert.equal(JSON.parse(ui.calls.find(call => call.argv[1] === 'prepare').input).draft.model, 'existing');
     assert.ok(!ui.calls.some(call => call.argv[1] === 'apply'));
 });
@@ -113,12 +114,12 @@ test('failed automatic review retains draft and retry replaces the staged profil
     const ui = await launch({deferAction: 'unused', responses: {discover: {request: structuredClone(request), units: [], applications: [installation('comfyui')]}, prepare: {profile: profileFor('comfyui')}}});
     ui.selectApplication(ui.applicationIndex ?? 0);
     ui.edit(ui.by('NVIDIA GPU index'), 'text', '-1');
-    await ui.by('Check application').emit('clicked');
+    await ui.by('Use installation').emit('clicked');
     assert.equal(ui.by('Finish setup').sensitive, false);
     await ui.by('Save selections for later').emit('clicked');
     assert.equal(JSON.parse(ui.calls.at(-1).input).drafts.length, 1);
     ui.edit(ui.by('NVIDIA GPU index'), 'text', '0');
-    await ui.by('Check application').emit('clicked');
+    await ui.by('Use installation').emit('clicked');
     const validations = ui.calls.filter(call => call.argv[1] === 'validate');
     assert.equal(JSON.parse(validations.at(-1).input).catalog.profiles.length, 1);
     assert.ok(!ui.calls.some(call => call.argv[1] === 'apply'));
@@ -133,7 +134,7 @@ test('ordinary application edit preserves stable ID, cgroup evidence, resources 
     assert.equal(saved.id, 'stable-id');
     assert.equal(saved.binding.unit, 'comfyui.service');
     assert.equal(saved.binding.launchSHA256, undefined, 'saved drafts do not carry proof');
-    await ui.by('Check application').emit('clicked');
+    await ui.by('Use installation').emit('clicked');
     const reviewed = JSON.parse(ui.calls.filter(call => call.argv[1] === 'validate').at(-1).input).catalog.profiles;
     assert.equal(reviewed.length, 1);
     assert.equal(reviewed[0].id, 'stable-id');
@@ -147,7 +148,7 @@ test('ordinary Finish of a managed edit retains owned launch options through the
     const owned = {...profileFor('ollama'), nativeModel: {...profileFor('ollama').nativeModel, owned: {port: 11434}}};
     const ui = await launch({profiles: [owned], deferAction: 'unused', responses: {'render-owned': {profile: owned}}});
     ui.by('Edit application').emit('clicked');
-    await ui.by('Check application').emit('clicked');
+    await ui.by('Use installation').emit('clicked');
     const rendered = JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input);
     assert.deepEqual(rendered.draft.binding.owned, {port: 11434});
     assert.ok(!ui.calls.some(call => call.argv[1] === 'prepare'));
@@ -163,7 +164,7 @@ test('failed systemd discovery remains distinct from missing installations and s
     assert.ok(!ui.widgets.some(widget => widget.label === 'Detection failed · Open settings'), 'global manager errors are reported separately from app evidence');
     assert.ok(ui.by('Choose application location…'));
     assert.equal(ui.by('Finish setup').sensitive, false);
-    assert.ok(ui.widgets.some(widget => widget.title === 'Technical details' && widget.visible && !widget.expanded));
+    assert.ok(ui.widgets.some(widget => (widget.title === 'Technical details' && widget.visible && !widget.expanded) || (widget.accessibleProperties?.label === 'View details' && widget.visible)));
 });
 
 for (const phase of ['validate', 'final verification']) {
@@ -176,12 +177,12 @@ for (const phase of ['validate', 'final verification']) {
                     responses: {discover: {request: {...request, catalog: {version: 1, profiles: existing ? [original] : []}}, units: [], applications: [installation('comfyui')]}, prepare: {profile: prepared}}});
                 if (existing) ui.by('Edit application').emit('clicked');
                 else ui.selectApplication(ui.applicationIndex ?? 0);
-                const finishing = ui.by('Check application').emit('clicked');
+                const finishing = ui.by('Use installation').emit('clicked');
                 await new Promise(resolve => setImmediate(resolve));
-                assert.equal(ui.widgets.filter(widget => widget.title === 'Display name').length, existing ? 1 : 0, 'a pending draft is never staged in the editable catalog');
+                assert.equal(ui.widgets.filter(widget => widget.title === 'Display name' && widget.accessibleProperties?.label !== 'Installation display name').length, existing ? 1 : 0, 'a pending draft is never staged in the editable catalog');
                 if (existing) assert.equal(ui.by('Display name').text, 'Original');
                 if (action === 'remove') ui.by('Remove this application').emit('clicked');
-                else if (action === 'edit') ui.edit(ui.by('Friendly name'), 'text', 'Updated draft');
+                else if (action === 'edit') ui.edit(ui.by('Installation display name'), 'text', 'Updated draft');
                 else ui.widgets.find(widget => widget.title === 'GPU Workload Setup').emit('close-request');
                 ui.finish(); await finishing;
 
@@ -190,7 +191,7 @@ for (const phase of ['validate', 'final verification']) {
 
                 await ui.by('Finish setup').emit('clicked');
                 assert.ok(!ui.calls.some(call => call.argv[1] === 'apply'));
-                assert.equal(ui.widgets.filter(widget => widget.title === 'Display name').length, existing ? 1 : 0);
+                assert.equal(ui.widgets.filter(widget => widget.title === 'Display name' && widget.accessibleProperties?.label !== 'Installation display name').length, existing ? 1 : 0);
                 if (existing) assert.equal(ui.by('Display name').text, 'Original');
             });
         }
@@ -202,7 +203,7 @@ test('inventory refresh preserves stopped Ollama lifecycle identity and ordinary
     const ui = await launch({responses: {discover: {request, units: [], applications: [candidate]}, probe: {app: 'ollama', instanceStatus: 'not-running', inventoryStatus: 'not-checked', models: []}}});
     ui.applicationIndex = 1; ui.selectApplication(ui.applicationIndex ?? 0);
     assert.equal(ui.by('Existing model name').visible, true);
-    await ui.by('Refresh discovery').emit('clicked');
+    await ui.by('Check again').emit('clicked');
     assert.equal(ui.by('Existing model name').visible, true);
     assert.ok(ui.widgets.some(widget => widget.label?.includes('Installed and stopped. Ready to configure.')));
     ui.edit(ui.by('Existing model name'), 'text', 'existing');
@@ -218,7 +219,7 @@ for (const advanced of ['existing service', 'managed launch']) {
         const draft = {id: 'advanced-draft', app: 'ollama', label: 'Existing model', model: 'existing', endpoint: prepared.nativeModel.endpoint,
             binding: advanced === 'managed launch' ? {instance: 'local', owned: {port: 11434}} : {unit: prepared.unit, cgroup: prepared.cgroup, healthURL: prepared.healthURL, instance: 'local', model: 'existing', launchFile: prepared.nativeModel.launchFile}};
         const ui = await launch({deferAction: 'unused', responses: {drafts: {drafts: [draft]}, 'render-owned': {profile: {...prepared, nativeModel: {...prepared.nativeModel, owned: {port: 11434}}}}, fingerprint: {sha256: 'checked'}}});
-        const card = ui.widgets.find(widget => widget.description?.startsWith('Choose your existing installation'));
+        const card = ui.widgets.find(widget => widget.children.some(child => child.children.includes(ui.by('Change installation…'))));
         const parent = ui.widgets.find(widget => widget.children.includes(card));
         assert.ok(parent);
         const action = advanced === 'managed launch' ? 'Preview managed launch and add for review' : 'Verify binding and add for review';
@@ -226,7 +227,7 @@ for (const advanced of ['existing service', 'managed launch']) {
         assert.equal(parent.children.includes(card), false, 'completion removes the direct child draft, including its nested Advanced rows');
         await ui.by('Save selections for later').emit('clicked');
         assert.deepEqual(JSON.parse(ui.calls.at(-1).input).drafts, []);
-        assert.equal(ui.widgets.filter(widget => widget.title === 'Display name').length, 1);
+        assert.equal(ui.widgets.filter(widget => widget.title === 'Display name' && widget.accessibleProperties?.label !== 'Installation display name').length, 1);
         assert.ok(!ui.calls.some(call => call.argv[1] === 'apply'));
     });
 }

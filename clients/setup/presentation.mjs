@@ -2,6 +2,8 @@
 import Gtk from 'gi://Gtk?version=4.0';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Gio from 'gi://Gio';
+// aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
+import Pango from 'gi://Pango';
 
 const icons = {'comfyui': 'comfyui.png', 'llama.cpp': 'llama-cpp.svg', 'ollama': 'ollama.svg', 'vllm': 'vllm.png'};
 
@@ -14,6 +16,7 @@ export function installSetupStyle(window) {
         .setup-window.setup-high-contrast button.suggested-action:not(:disabled), .setup-window.setup-high-contrast checkbutton check:checked:not(:disabled) { background: @accent_bg_color; color: @accent_fg_color; }
         .setup-window.setup-high-contrast .setup-link { color: @accent_color; }
         .setup-window.setup-dark:not(.setup-high-contrast) .setup-link { color: #ff854b; }
+        .setup-page-title { caret-color: transparent; }
         .setup-heading { font-size: 28px; font-weight: 800; }
         .setup-introduction { font-size: 16px; }
         .setup-card.setup-summary-card { padding-top: 8px; padding-bottom: 8px; }
@@ -27,6 +30,9 @@ export function installSetupStyle(window) {
         .setup-high-contrast .setup-model-choice { border-color: @window_fg_color; }
         .setup-link { color: #c64600; text-decoration: underline; padding: 4px 0; }
         .setup-footer button { padding: 12px 24px; min-width: 72px; }
+        .setup-state { background: alpha(@window_fg_color, .08); border: 1px solid alpha(@window_fg_color, .12); border-radius: 8px; padding: 8px; }
+        .setup-warning { border-color: @warning_color; background: alpha(@warning_color, .08); }
+        .setup-status:not(.setup-warning) { background: transparent; border-color: transparent; }
         .setup-notice { font-size: 14px; }
         .setup-explanation { font-size: 15px; }
     `, -1);
@@ -75,5 +81,12 @@ export function applicationHeader(Gtk, appID, name, gear, subtitle = null) {
 export function linkButton(Gtk, label) {
     const button = new Gtk.Button({label, halign: Gtk.Align.START});
     button.add_css_class('flat'); button.add_css_class('setup-link');
+    return button;
+}
+
+export function wrappedCheckButton(Gtk, label, properties) {
+    const button = new Gtk.CheckButton(properties);
+    button.set_child(new Gtk.Label({label, wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, hexpand: true}));
+    button.update_property([Gtk.AccessibleProperty.LABEL], [label]);
     return button;
 }

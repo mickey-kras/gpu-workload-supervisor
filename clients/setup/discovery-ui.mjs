@@ -1,8 +1,9 @@
-import {applicationHeader} from './presentation.mjs';
+import {applicationHeader, wrappedCheckButton} from './presentation.mjs';
+import {InstallationSettings, installationChoiceLabel} from './settings-pages.mjs';
 import {TemporaryDiscovery} from './temporary-discovery-ui.mjs';
 import {watchInstanceSelection, addRefreshButton, addFilePickers} from './discovery-inputs.mjs';
 import {addOwnedEditor, addBindingEditor} from './launch-ui.mjs';
-import {ApplicationDraft, applications, candidateMessage, candidateIdentity, candidateChoice, profileIDFromModel} from './onboarding.mjs';
+import {ApplicationDraft, applications, candidateChoice, candidateIdentity, profileIDFromModel} from './onboarding.mjs';
 
 // Backend error detail stays available but collapsed behind the actionable summary.
 export function addErrorReporter({Adw, Gtk, parent, status}) {
@@ -10,18 +11,20 @@ export function addErrorReporter({Adw, Gtk, parent, status}) {
     const text = new Gtk.Label({wrap: true, xalign: 0, selectable: true});
     details.add_row(text);
     if (parent.add) parent.add(details); else parent.append(details);
-    return (summary, error) => {
+    const report = (summary, error) => {
         status.label = summary; status.visible = true;
         text.label = error.message;
         details.expanded = false;
         details.visible = true;
     };
+    report.clear = () => { details.visible = false; };
+    return report;
 }
 
 export function addDraftEditor(options) { return new DraftEditor(options).view(); }
 
 class DraftEditor {
-    constructor({Adw, Gtk, window, parent, initial, detected, discoveryErrors, command, changed, removed, bind, taken, modelParent, temporaryStatus, openSettings, reportProblem}) {
+    constructor({Adw, Gtk, window, parent, initial, detected, discoveryErrors, command, changed, removed, bind, taken, modelParent, temporaryStatus, openSettings, reportProblem, reportStatus, navigateSettings, saveSelections}) {
         this.Adw = Adw;
         this.Gtk = Gtk;
         this.window = window;
@@ -36,56 +39,82 @@ class DraftEditor {
         this.taken = taken;
         this.modelParent = modelParent;
         this.temporaryStatus = temporaryStatus;
-        this.openSettings = openSettings; this.reportProblem = reportProblem;
+        this.openSettings = openSettings; this.reportProblem = reportProblem; this.navigateSettings = navigateSettings; this.saveSelections = saveSelections;
         this.discoveryErrors ??= [];
-        this.syncing = false; this.bindingFields = {}; this.ownedFields = {};
+        this.syncing = false; this.bindingFields = {}; this.ownedFields = {}; this.overrides = {}; this.bindingEdits = new Set();
+        if (Object.hasOwn(initial, 'requiredMiB')) this.overrides.requiredMiB = initial.requiredMiB || undefined;
+        if (Object.hasOwn(initial, 'bootPolicy')) this.overrides.bootPolicy = initial.bootPolicy || undefined;
         this.installationEvidence = null;
         this.buildBasics(); this.connectAddress(); this.buildModels();
         this.connectModelPicker();
-        this.temporary = new TemporaryDiscovery({Gtk, draft: this.draft, app: initial.app, modelGroup: this.modelGroup, status: this.status, temporaryStatus, command, changed, reportError: this.reportError, show: candidate => this.show(candidate), getEvidence: () => this.installationEvidence});
-        this.connectInputs(); this.addActions(); this.initialDiscovery();
+        this.temporary = new TemporaryDiscovery({Gtk, draft: this.draft, app: initial.app, modelGroup: this.modelGroup, status: this.modelStatus ?? this.status, temporaryStatus, command, changed, reportError: this.reportError, restored: reportStatus, show: candidate => this.show(candidate), getEvidence: () => this.installationEvidence});
+        this.connectInputs(); this.buildResources(); this.addActions(); this.initialDiscovery();
     }
     buildBasics() {
         this.draft = new ApplicationDraft(this.initial.app);
         this.draft.edit(this.initial);
-        this.group = new this.Adw.PreferencesGroup({title: applications.find(app => app.id === this.initial.app).label,
-            description: 'Choose your existing installation, then Finish. Applications and files are preserved.'});
-        this.name = new this.Adw.EntryRow({title: 'Friendly name', text: this.initial.label});
-        this.group.add(this.name);
-        this.name.connect('changed', () => { this.draft.edit({label: this.name.text}); this.changed(this.draft.snapshot()); });
-        this.status = new this.Gtk.Label({label: 'Choose a detected instance or check an address. Discovery does not start applications or load models.', wrap: true, xalign: 0, selectable: true});
-        this.group.add(this.status);
-        const reportDraftError = addErrorReporter({Adw: this.Adw, Gtk: this.Gtk, parent: this.group, status: this.status});
-        this.reportError = (summary, error) => { reportDraftError(summary, error); this.reportProblem?.(summary, error); };
+        this.settings = new InstallationSettings({Adw: this.Adw, Gtk: this.Gtk, app: this.initial.app, window: this.window, navigate: this.navigateSettings});
+        this.group = this.settings.root;
+        this.name = new this.Adw.EntryRow({title: 'Display name', text: this.initial.label});
+        this.name.update_property([this.Gtk.AccessibleProperty.LABEL], ['Installation display name']);
+        this.settings.general.add(this.name);
+        this.name.connect('changed', () => {
+            if (this.syncing) return;
+            this.draft.edit({label: this.name.text}); this.changed(this.draft.snapshot());
+        });
+        this.status = this.settings.status;
+        this.reportError = (summary, error) => {
+            this.settings.problem(summary, error);
+            if (this.modelStatus) this.modelStatus.label = summary;
+            if (!this.group.visible) this.reportProblem?.(summary, error);
+        };
         this.probeGuidance = null;
         this.instances = this.detected.filter(candidate => candidate.app === this.initial.app);
-        this.instance = new this.Adw.ComboRow({title: 'Detected instance', use_markup: false,
-            model: this.Gtk.StringList.new(['Choose an instance...', ...this.instances.map(candidateChoice)]), selected: 0});
-        this.group.add(this.instance);
-        this.details = new this.Adw.ExpanderRow({title: 'Advanced', subtitle: 'Inspect or override technical configuration'});
-        if (!this.modelParent) {
-            const gear = new this.Gtk.Button({icon_name: 'emblem-system-symbolic', tooltip_text: 'Advanced application settings'});
-            gear.update_property([this.Gtk.AccessibleProperty.LABEL], [`Advanced settings for ${applications.find(app => app.id === this.initial.app).label}`]);
-            gear.connect('clicked', () => { this.details.visible = !this.details.visible; this.details.expanded = this.details.visible; });
-            this.group.add(gear);
+        const original = this.instances.find(candidate => candidate.unit === this.initial.binding?.unit);
+        for (const [key, value] of Object.entries(this.initial.binding ?? {})) {
+            if (value && value !== original?.binding?.[key]) this.bindingEdits.add(key);
         }
-        this.details.visible = !this.modelParent; this.group.add(this.details);
-        this.endpoint = new this.Adw.EntryRow({title: 'Application address', text: this.initial.endpoint ?? ''}); this.details.add_row(this.endpoint);
-        this.reference = new this.Gtk.Label({label: this.initial.reference ?? 'No file or folder selected', wrap: true, xalign: 0, selectable: true}); this.details.add_row(this.reference);
+        this.endpointEdited = Boolean(this.initial.endpoint && this.initial.endpoint !== original?.endpoint);
+        // The index remains the shared selection controller. The visible picker
+        // uses wrapped, accessible rows instead of an elided combo popup.
+        this.instance = new this.Adw.ComboRow({title: 'Detected instance', visible: false, use_markup: false,
+            model: this.Gtk.StringList.new(['Choose an instance...', ...this.instances.map(candidateChoice)]), selected: 0});
+        this.settings.selection.add(this.instance);
+        for (const [index, candidate] of this.instances.entries()) {
+            const button = new this.Gtk.Button({hexpand: true});
+            const identity = candidateChoice(candidate);
+            button.set_child(installationChoiceLabel(this.Gtk, identity));
+            button.update_property([this.Gtk.AccessibleProperty.LABEL], [identity]);
+            button.connect('clicked', () => { this.syncing = true; this.instance.selected = 0; this.syncing = false; this.instance.selected = index + 1; this.settings.back(); });
+            this.settings.selection.add(button);
+        }
+        this.details = this.settings.launch;
+        this.endpoint = new this.Adw.EntryRow({title: 'Application address', text: this.initial.endpoint ?? ''}); this.settings.selection.add(this.endpoint);
+        this.health = new this.Adw.EntryRow({title: 'Health endpoint', text: this.initial.binding?.healthURL ?? ''}); this.settings.general.add(this.health);
+        this.health.connect('changed', () => {
+            if (this.syncing) return;
+            const input = this.draft.snapshot();
+            this.bindingEdits.add('healthURL'); this.draft.edit({binding: {...input.binding, healthURL: this.health.text}});
+            this.syncing = true;
+            if (this.bindingFields.healthURL) this.bindingFields.healthURL.text = this.health.text;
+            this.syncing = false;
+            this.installationEvidence = null; this.settings.invalidate(); this.changed(this.draft.snapshot());
+        });
+        this.reference = new this.Gtk.Label({label: this.initial.reference ?? 'No file or folder selected', wrap: true, xalign: 0, selectable: true}); this.settings.selection.add(this.reference);
     }
     connectAddress() {
         this.endpoint.connect('changed', () => {
             if (this.syncing) return;
-            this.draft.endpoint(this.endpoint.text); this.reference.label = 'No file or folder selected';
+            this.resetSelection(); this.endpointEdited = true; this.draft.endpoint(this.endpoint.text); this.reference.label = 'No file or folder selected';
             this.clearBinding(); this.clearModels();
             this.clearOwnedReference();
-            this.changed(this.draft.snapshot());
+            this.installationEvidence = null; this.settings.invalidate(); this.changed(this.draft.snapshot());
         });
-        const addressPicker = new this.Gtk.Button({label: 'Choose application address…'}); this.details.add_row(addressPicker);
-        addressPicker.connect('clicked', () => { this.details.expanded = true; this.endpoint.grab_focus(); });
+        const addressPicker = new this.Gtk.Button({label: 'Choose application address…'}); this.settings.selection.add(addressPicker);
+        addressPicker.connect('clicked', () => { this.endpoint.grab_focus(); });
     }
     buildModels() {
-        this.modelGroup = this.modelParent ? new this.Adw.PreferencesGroup() : this.group;
+        this.modelGroup = this.modelParent ? new this.Adw.PreferencesGroup() : this.settings.selection;
         if (this.modelParent) {
             this.modelParent.append(this.modelGroup); this.modelGroup.add_css_class('setup-card');
             const modelSettings = new this.Gtk.Button({icon_name: 'emblem-system-symbolic', tooltip_text: 'Advanced application settings'});
@@ -95,13 +124,12 @@ class DraftEditor {
             subtitle?.add_css_class('dim-label'); subtitle?.add_css_class('setup-guidance');
             this.modelGroup.add(applicationHeader(this.Gtk, this.initial.app, applications.find(app => app.id === this.initial.app).label, modelSettings, subtitle));
         }
+        this.modelStatus = new this.Gtk.Label({wrap: true, xalign: 0, selectable: true});
+        if (this.draft.needsModel) this.modelGroup.add(this.modelStatus);
         this.model = null;
         if (this.draft.needsModel) {
             this.model = new this.Adw.ComboRow({title: 'Model', use_markup: false, model: this.Gtk.StringList.new([this.initial.model || 'Check an instance to list models']), selected: 0});
             this.modelGroup.add(this.model);
-        } else {
-            this.group.add(new this.Gtk.Label({label: 'ComfyUI workflows select models. No model selection is needed here.', wrap: true, xalign: 0}));
-
         }
         this.models = [];
         this.modelChecks = new Map();
@@ -178,7 +206,7 @@ class DraftEditor {
         for (const check of this.modelChecks.values()) this.selectionBox.remove(check);
         this.modelChecks.clear();
         for (const item of this.models) {
-            const check = new this.Gtk.CheckButton({label: item.label || item.id, active: savedModels.includes(item.id)});
+            const check = wrappedCheckButton(this.Gtk, item.label || item.id, {active: savedModels.includes(item.id)});
             check.add_css_class('setup-model-choice');
             check.connect('toggled', () => {
                 if (this.syncing) return;
@@ -219,20 +247,40 @@ class DraftEditor {
         return 'Check this installation to list models';
     }
     show(candidate) {
+        this.lastCandidate = candidate;
+        this.installationEvidence = candidate.recognized ? candidate : null;
+        this.reconcileService(candidate);
+        this.settings.candidate(candidate);
         const input = this.draft.snapshot();
-        if (candidate.recognized) this.installationEvidence = candidate;
-        else if (this.installationEvidence && this.installationEvidence.unit === input.binding?.unit && this.installationEvidence.endpoint === input.endpoint) {
-            candidate = {...candidate, recognized: this.installationEvidence.recognized,
-                configurationStatus: this.installationEvidence.configurationStatus, unit: this.installationEvidence.unit};
-        }
-        this.status.label = [candidateIdentity(candidate), candidateMessage(candidate), candidate.nextStep].filter(Boolean).join('\n');
+        const mismatch = (this.endpointEdited && input.endpoint !== candidate.endpoint) ||
+            [...this.bindingEdits].some(key => key !== 'model' && candidate.binding && input.binding?.[key] !== candidate.binding[key]);
+        if (mismatch) this.settings.problem('An override does not match this installation.', new Error('Keep the override or restore the current service settings before reviewing. Your service has not been changed.'));
+        this.syncing = true; this.health.text = this.draft.snapshot().binding?.healthURL ?? ''; this.health.editable = !this.draft.snapshot().binding?.owned; this.syncing = false;
         this.temporary.showAvailability(candidate);
         if (this.model) this.showModels(candidate);
         this.changed(this.draft.snapshot());
     }
+    reconcileService(candidate) {
+        const input = this.draft.snapshot();
+        if (!candidate.recognized || !candidate.binding || candidate.unit !== input.binding?.unit || input.binding?.owned) return;
+        const binding = {...input.binding};
+        for (const key of ['unit', 'cgroup', 'healthURL', 'instance', 'launchFile']) {
+            if (!this.bindingEdits.has(key)) binding[key] = candidate.binding[key];
+        }
+        const reference = input.referenceKind === 'configuration' && input.reference === candidate.unit ? undefined : input.reference;
+        let endpoint = this.endpointEdited ? input.endpoint : candidate.endpoint;
+        if (reference) endpoint = undefined;
+        this.draft.edit({binding, endpoint, reference, referenceKind: reference ? input.referenceKind : undefined});
+        this.reference.label = reference ?? 'No file or folder selected';
+        this.syncing = true;
+        this.endpoint.text = endpoint ?? '';
+        for (const [key, field] of Object.entries(this.bindingFields)) field.text = binding[key] ?? '';
+        this.syncing = false;
+    }
     connectInputs() {
-        watchInstanceSelection({instance: this.instance, instances: this.instances, draft: this.draft, endpoint: this.endpoint, reference: this.reference, clearBinding: () => this.clearBinding(), clearModels: () => this.clearModels(), show: (candidate) => this.show(candidate),
+        watchInstanceSelection({beforeSelection: () => { this.bindingEdits.clear(); this.endpointEdited = false; }, isSyncing: () => this.syncing, instance: this.instance, instances: this.instances, draft: this.draft, endpoint: this.endpoint, reference: this.reference, clearBinding: () => this.clearBinding(), clearModels: () => this.clearModels(), show: (candidate) => this.show(candidate),
             getBindingFields: () => this.bindingFields, setSync: value => this.syncing = value, selectOwnedBinding: binding => {
+                this.syncing = true;
                 for (const [key, field] of Object.entries(this.ownedFields)) {
                     if (typeof field === 'function') continue;
                     let value = '';
@@ -240,16 +288,39 @@ class DraftEditor {
                     else if (key !== 'model') value = binding.owned[key] ?? '';
                     field.text = String(value);
                 }
-                this.ownedFields.selectLaunch();
+                this.syncing = false; this.ownedFields.selectLaunch();
             },
             setProbeGuidance: guidance => this.probeGuidance = guidance, clearOwnedReference: () => this.clearOwnedReference(), selectOwnedReference: (path, kind) => this.selectOwnedReference(path, kind)});
-        addRefreshButton({Gtk: this.Gtk, group: this.group, draft: this.draft, status: this.status, command: this.command, show: (candidate) => this.show(candidate), reportError: this.reportError, guidance: () => this.probeGuidance});
-        addFilePickers({Gtk: this.Gtk, window: this.window, group: this.group, advancedGroup: {add: child => this.details.add_row(child)}, draft: this.draft, reference: this.reference, endpoint: this.endpoint, status: this.status, changed: this.changed, clearBinding: () => this.clearBinding(), clearModels: () => this.clearModels(), clearOwnedReference: () => this.clearOwnedReference(), setSync: value => this.syncing = value, selectedReference: (path, kind) => this.selectOwnedReference(path, kind), selectedExecutable: path => this.selectExecutable(path), modelGroup: this.modelParent ? this.modelGroup : null});
-        if (this.draft.needsModel) this.ownedFields = addOwnedEditor({Adw: this.Adw, Gtk: this.Gtk, group: this.details, draftGroup: this.group, draft: this.draft, initial: this.initial, command: this.command, bind: this.bind, changed: this.changed, taken: this.taken, status: this.status, reportError: this.reportError, parent: this.parent, removed: this.removed, modelChanged: (id) => this.syncModelChoices(id)});
-        this.bindingFields = addBindingEditor({Adw: this.Adw, Gtk: this.Gtk, group: this.details, draftGroup: this.group, draft: this.draft, initial: this.initial, status: this.status, parent: this.parent, removed: this.removed, bind: this.bind, command: this.command, changed: this.changed, taken: this.taken, reportError: this.reportError, isSyncing: () => this.syncing, modelChanged: (id) => this.syncModelChoices(id)});
+        this.refresh = addRefreshButton({Gtk: this.Gtk, group: {add: child => this.settings.pages.get('configuration').append(child)}, draft: this.draft, status: this.status, command: this.command, show: (candidate) => this.show(candidate), reportError: this.reportError, guidance: () => this.probeGuidance, checking: busy => this.settings.checking(busy), inspectService: async input => {
+            const discovery = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'discover']));
+            return discovery.applications?.find(candidate => candidate.app === input.app && candidate.unit === input.binding.unit) ?? null;
+        }});
+        addFilePickers({Gtk: this.Gtk, window: this.window, group: this.settings.selection, advancedGroup: this.settings.selection, draft: this.draft, reference: this.reference, endpoint: this.endpoint, status: this.status, changed: this.changed, clearBinding: () => this.clearBinding(), clearModels: () => this.clearModels(), clearOwnedReference: () => this.clearOwnedReference(), setSync: value => this.syncing = value, selectedReference: (path, kind) => this.selectOwnedReference(path, kind), selectedExecutable: path => this.selectExecutable(path), modelGroup: this.modelParent ? this.modelGroup : null, selectionChanged: () => this.resetSelection()});
+        if (this.draft.needsModel) this.ownedFields = addOwnedEditor({Adw: this.Adw, Gtk: this.Gtk, group: this.details, draftGroup: this.group, draft: this.draft, initial: this.initial, command: this.command, bind: this.bind, changed: this.changed, taken: this.taken, status: this.status, isSyncing: () => this.syncing, edited: () => { this.installationEvidence = null; this.settings.invalidate(); }, reportError: this.reportError, parent: this.parent, removed: this.removed, modelChanged: (id) => this.syncModelChoices(id)});
+        this.bindingFields = addBindingEditor({Adw: this.Adw, Gtk: this.Gtk, group: this.details, draftGroup: this.group, draft: this.draft, initial: this.initial, status: this.status, parent: this.parent, removed: this.removed, bind: this.bind, command: this.command, changed: this.changed, taken: this.taken, reportError: this.reportError, isSyncing: () => this.syncing, edited: key => {
+                this.bindingEdits.add(key); this.installationEvidence = null; this.settings.invalidate();
+                this.syncing = true; this.health.text = this.draft.snapshot().binding?.healthURL ?? ''; this.syncing = false;
+                this.settings.identity.label = candidateIdentity({...this.draft.snapshot(), ...this.draft.snapshot().binding});
+            }, modelChanged: (id) => this.syncModelChoices(id)});
+    }
+    buildResources() {
+        this.capacity = new this.Adw.EntryRow({title: 'Measured VRAM requirement (MiB; optional)', text: ''});
+        this.settings.resources.add(this.capacity);
+        this.capacity.connect('changed', () => {
+            if (this.syncing) return;
+            this.overrides.requiredMiB = this.capacity.text.trim() === '' ? undefined : Number(this.capacity.text);
+            this.draft.edit({requiredMiB: this.overrides.requiredMiB ?? 0}); this.changed(this.draft.snapshot());
+        });
+        this.retain = wrappedCheckButton(this.Gtk, 'Keep this workload running at login if already active', {});
+        this.settings.resources.add(this.retain);
+        this.retain.connect('toggled', () => {
+            if (this.syncing) return;
+            this.overrides.bootPolicy = this.retain.active ? 'retain' : 'stop-to-idle'; this.draft.edit({bootPolicy: this.overrides.bootPolicy}); this.changed(this.draft.snapshot());
+        });
     }
     addActions() {
-        this.finish = new this.Gtk.Button({label: 'Check application'}); this.details.add_row(this.finish);
+        const save = new this.Gtk.Button({label: 'Save selections for later'}); this.details.add(save); save.connect('clicked', () => this.saveSelections());
+        this.finish = new this.Gtk.Button({label: 'Use installation', visible: false}); this.group.append(this.finish);
         // Advanced checks reuse the safeguarded preparation path; the wizard owns activation.
         this.finish.connect('clicked', async () => {
             const input = this.draft.snapshot();
@@ -258,8 +329,9 @@ class DraftEditor {
             if (input.id.startsWith('draft-') && proposed && !this.taken().includes(proposed)) input.id = proposed;
             if (input.model && input.label === appLabel) input.label = `${appLabel} - ${input.model}`;
             const generation = this.draft.generation;
-            this.finish.sensitive = false;
+            this.finish.sensitive = false; this.settings.checking(true);
             try {
+                if (this.temporary.blocked()) throw new Error('Finish temporary application cleanup before continuing.');
                 const action = input.binding?.owned ? 'render-owned' : 'prepare';
                 const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', action], JSON.stringify({draft: input})));
                 if (generation !== this.draft.generation) return;
@@ -268,9 +340,9 @@ class DraftEditor {
                 this.draft.cancel(); this.parent.remove(this.group); this.removed(true);
             } catch (error) {
                 if (generation === this.draft.generation) this.reportError('Setup could not finish. Check the installation or Advanced settings, then retry.', error);
-            } finally { this.finish.sensitive = true; }
+            } finally { this.finish.sensitive = true; this.settings.checking(false); }
         });
-        const remove = new this.Gtk.Button({label: 'Remove this application'}); this.group.add(remove);
+        const remove = new this.Gtk.Button({label: 'Remove this application'}); this.details.add(remove);
         remove.connect('clicked', async () => { this.draft.cancel(); try { await this.temporary.cleanup(); this.parent.remove(this.group); if (this.modelParent) { this.modelParent.remove(this.modelGroup); } this.removed(); } catch (error) { this.reportError('Temporary cleanup must finish before removing this selection.', error); } });
         this.parent.append(this.group);
     }
@@ -281,23 +353,43 @@ class DraftEditor {
             this.instance.visible = false;
         } else if (this.initial.binding?.unit) {
             const selected = this.instances.find(candidate => candidate.unit === this.initial.binding.unit);
-            if (selected) this.show(selected);
+            if (selected) { this.syncing = true; this.instance.selected = this.instances.indexOf(selected) + 1; this.syncing = false; this.show(selected); }
+            else this.show({app: this.initial.app, label: this.initial.label, unit: this.initial.binding.unit, endpoint: this.initial.endpoint, recognized: false, configurationStatus: 'unverified', instanceStatus: 'candidate'});
         } else if (!recognized.length && this.instances.length) {
-            this.show(this.instances.find(candidate => candidate.unit) ?? this.instances[0]);
+            const selected = this.instances.find(candidate => candidate.unit) ?? this.instances[0];
+            this.instance.selected = this.instances.indexOf(selected) + 1;
         } else if (!this.instances.length) {
-            this.status.label = `${applications.find(app => app.id === this.initial.app).label} wasn’t detected. Install it first, or choose its location. Supported detection uses recognized user services; custom launch wrappers need Advanced settings.`;
+            this.settings.problem('Installation not detected', new Error(`${applications.find(app => app.id === this.initial.app).label} wasn’t detected. Install it first, or choose its location. Supported detection uses recognized user services; custom launch wrappers need Advanced settings.`));
         }
     }
     view() {
         return {
             app: this.initial.app, id: this.initial.id, originalModel: this.initial.model ?? this.initial.binding?.owned?.modelPath, group: this.group, modelGroup: this.modelGroup, finish: this.finish,
-            showSettings: () => { this.group.visible = true; this.details.visible = true; this.details.expanded = false; this.instance.grab_focus(); },
+            showSettings: profile => {
+                this.syncing = true;
+                const required = Object.hasOwn(this.overrides, 'requiredMiB') ? this.overrides.requiredMiB : profile?.requiredMiB;
+                if (!Number.isNaN(required)) this.capacity.text = String(required ?? '');
+                this.retain.active = (this.overrides.bootPolicy ?? profile?.bootPolicy) === 'retain'; this.syncing = false;
+                this.health.editable = !this.draft.snapshot().binding?.owned;
+                if (!this.health.editable && profile?.healthURL) { this.syncing = true; this.health.text = profile.healthURL; this.syncing = false; }
+                this.session = this.capture(); this.group.visible = true; this.settings.history = []; this.settings.show(); this.settings.change.grab_focus();
+            },
+            settingsAction: () => {
+                if (this.settings.page === 'configuration') return this.refresh.emit('clicked');
+                if (['selection', 'resources', 'launch'].includes(this.settings.page)) return this.settings.back();
+                return this.finish.emit('clicked');
+            },
+            settingsBack: () => this.settings.back(),
+            cancelSettings: async () => { this.draft.cancel(); await this.temporary.cancel(); this.restore(this.session); },
+            settingsOverrides: () => this.overrides,
+            showProblem: this.reportError,
             cancel: () => { this.draft.cancel(); return this.temporary.cancel(); },
             temporaryActive: () => this.temporary.active(),
             needsModelDecision: () => this.draft.needsModel && (this.models.length > 1 || this.draft.snapshot().models?.length > 1 || this.draft.snapshot().models?.length === 0 || !(this.draft.snapshot().model || this.draft.snapshot().binding?.owned?.modelPath)),
             prepare: () => this.prepare(),
         };
     }
+    resetSelection() { this.syncing = true; this.instance.selected = 0; this.syncing = false; this.installationEvidence = null; this.bindingEdits.clear(); this.settings.invalidate(); }
     selectExecutable(path) {
         this.installationEvidence = null;
         this.ownedFields.executable.text = path;
@@ -305,6 +397,25 @@ class DraftEditor {
         this.reference.label = path;
         this.status.label = 'Executable selected. Choose an existing model, then Continue to validate and preview a Supervisor-managed launch. Nothing starts during preview.';
         if (this.modelName) this.modelName.visible = true;
+    }
+    capture() {
+        const fields = [this.name, this.endpoint, this.health, ...Object.values(this.bindingFields), ...Object.values(this.ownedFields)].filter(field => typeof field !== 'function');
+        const current = this.draft.snapshot();
+        const input = JSON.parse(JSON.stringify(current));
+        if (Object.hasOwn(current, 'requiredMiB')) input.requiredMiB = current.requiredMiB;
+        return {input, candidate: this.lastCandidate, evidence: this.installationEvidence, ready: this.settings.ready && !this.settings.busy, bindingEdits: [...this.bindingEdits], endpointEdited: this.endpointEdited, selection: this.instance.selected, fields: fields.map(field => [field, field.text]), capacity: this.capacity.text, retain: this.retain.active, overrides: {...this.overrides}};
+    }
+    restore(snapshot) {
+        if (!snapshot) return;
+        this.syncing = true;
+        for (const [field, text] of snapshot.fields) field.text = text;
+        this.capacity.text = snapshot.capacity; this.retain.active = snapshot.retain;
+        this.syncing = false;
+        this.syncing = true; this.instance.selected = snapshot.selection; this.syncing = false; this.draft.input = snapshot.input; this.draft.cancel(); this.installationEvidence = snapshot.evidence; this.bindingEdits = new Set(snapshot.bindingEdits); this.endpointEdited = snapshot.endpointEdited; this.overrides = snapshot.overrides;
+        this.changed(this.draft.snapshot());
+        const selected = snapshot.candidate;
+        if (selected) this.show(selected);
+        if (!selected || !snapshot.ready) this.settings.invalidate();
     }
     selectedModels(input) {
         if (!this.draft.needsModel) return [''];
@@ -338,3 +449,4 @@ class DraftEditor {
         return {profiles: prepared, current: () => generation === this.draft.generation};
     }
 }
+

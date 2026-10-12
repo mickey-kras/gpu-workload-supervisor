@@ -36,6 +36,8 @@ type Draft struct {
 	ID            string        `json:"id"`
 	Label         string        `json:"label"`
 	App           string        `json:"app"`
+	RequiredMiB   *uint64       `json:"requiredMiB,omitempty"`
+	BootPolicy    *string       `json:"bootPolicy,omitempty"`
 	Endpoint      string        `json:"endpoint,omitempty"`
 	Reference     string        `json:"reference,omitempty"`
 	ReferenceKind string        `json:"referenceKind,omitempty"`
@@ -135,10 +137,23 @@ func validateDraft(d Draft, ids map[string]bool) error {
 	if len(d.Endpoint) > 2048 || len(d.Reference) > 4096 || len(d.Model) > 1024 {
 		return errors.New("draft value too long")
 	}
+	if err := validateDraftResourceChecks(d); err != nil {
+		return err
+	}
 	if err := validateDraftReference(d); err != nil {
 		return err
 	}
 	return validateDraftModels(d)
+}
+
+func validateDraftResourceChecks(d Draft) error {
+	if d.RequiredMiB != nil && *d.RequiredMiB > 9007199254740991 {
+		return errors.New("draft VRAM requirement must be a nonnegative safe integer")
+	}
+	if d.BootPolicy != nil && *d.BootPolicy != "" && *d.BootPolicy != "stop-to-idle" && *d.BootPolicy != "retain" {
+		return errors.New("invalid draft boot policy")
+	}
+	return nil
 }
 
 func validateDraftModels(d Draft) error {

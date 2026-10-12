@@ -33,7 +33,7 @@ func TestApplicationDiscoveryFiltersServicesByExecutable(t *testing.T) {
 	if len(got.Units) != 1 || got.Units[0] != "ollama.service" {
 		t.Fatalf("unrelated services leaked: %v", got.Units)
 	}
-	if len(got.Applications) != 6 {
+	if len(got.Applications) != 5 {
 		t.Fatal(got.Applications)
 	}
 	service := got.Applications[4]

@@ -4,7 +4,7 @@ import {launch} from './harness.mjs';
 
 const request = {profile: {statePath: '/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: []}, expectedRevision: 7};
 const discover = applications => ({request: structuredClone(request), units: [], applications});
-const heading = ui => ui.widgets.find(widget => widget.cssClasses?.includes('title-1'));
+const heading = ui => ui.widgets.find(widget => widget.cssClasses?.includes('title') && ui.visible(widget)) ?? ui.widgets.find(widget => widget.cssClasses?.includes('title-1'));
 function service(unit) {
     return {app: 'ollama', label: 'Ollama', sourceKind: 'configuration', unit, location: '/same/location.conf', endpoint: 'http://127.0.0.1:11434',
         recognized: true, instanceStatus: 'not-running', configurationStatus: 'model-required', models: [],
@@ -26,15 +26,16 @@ test('beginning gear opens compact settings; Back restores originating scroll, f
     scroll.get_vadjustment().value = 75;
     await ui.click('Settings for Ollama');
     assert.ok(saveParent.children.includes(save), 'opening settings retains the rooted save action');
-    assert.equal(heading(ui).label, 'Ollama settings');
+    assert.equal(heading(ui).label, 'Ollama');
     assert.equal(heading(ui).focused, true);
     assert.equal(scroll.get_vadjustment().value, 0);
     assert.equal(ui.visible(ui.by('Use ComfyUI')), false);
     assert.equal(ui.visible(ui.by('Installed executable')), false);
     assert.equal(ui.visible(ui.by('Existing user service')), false);
-    assert.equal(ui.visible(ui.by('Choose installed executable…')), true);
-    ui.edit(ui.by('Friendly name'), 'text', 'My models');
-    await ui.click('Back');
+    assert.equal(ui.visible(ui.by('Choose installed executable…')), false);
+    await ui.click('Advanced settings');
+    ui.edit(ui.by('Installation display name'), 'text', 'My models');
+    await ui.click('Back'); await ui.click('Back');
     assert.ok(saveParent.children.includes(save), 'Back hides the save action without moving its native parent');
     assert.equal(ui.visible(save), false);
     assert.equal(heading(ui).label, 'Choose your applications');
@@ -42,8 +43,8 @@ test('beginning gear opens compact settings; Back restores originating scroll, f
     assert.equal(scroll.get_vadjustment().value, 75);
     assert.equal(ui.by('Use Ollama').active, true);
     await ui.click('Settings for Ollama');
-    assert.equal(ui.by('Friendly name').text, 'My models');
-    await ui.click('Save selections for later');
+    assert.equal(ui.by('Installation display name').text, 'My models');
+    await ui.click('Advanced settings'); await ui.click('Launch details'); await ui.click('Save selections for later');
     assert.equal(JSON.parse(ui.calls.at(-1).input).drafts[0].label, 'My models');
     assert.equal(ui.calls.some(call => ['render-owned', 'apply', 'temporary-start'].includes(call.argv[1])), false);
 });
@@ -60,7 +61,7 @@ test('identical candidate labels retain complete distinct identities and authori
     assert.ok(choices.model.get_string(3).includes('Address:'));
     ui.edit(choices, 'selected', 2);
     assert.ok(ui.widgets.some(widget => widget.selectable && widget.label?.includes(second.unit)));
-    await ui.click('Save selections for later');
+    await ui.click('Advanced settings'); await ui.click('Launch details'); await ui.click('Save selections for later');
     const saved = JSON.parse(ui.calls.at(-1).input).drafts[0];
     assert.deepEqual(saved.binding, second.binding);
     assert.equal(saved.endpoint, second.endpoint);
@@ -83,9 +84,9 @@ for (const app of ['ollama', 'vllm', 'llama.cpp']) {
         const paths = [executable, app === 'llama.cpp' ? '/models/existing.gguf' : '/models/existing'];
         const ui = await launch({deferAction: 'unused', filePath: () => paths.shift(), responses: {discover: discover([]), 'render-owned': ownedProfile}});
         const label = {ollama: 'Ollama', vllm: 'vLLM', 'llama.cpp': 'llama.cpp'}[app];
-        await ui.click(`Settings for ${label}`); await ui.click('Choose installed executable…');
+        await ui.click(`Settings for ${label}`); await ui.click('Change installation…'); await ui.click('Choose installed executable…');
         assert.equal(ui.calls.some(call => call.argv[1] === 'render-owned'), false);
-        await ui.click('Continue');
+        await ui.click('Back'); await ui.click('Advanced settings'); await ui.click('Review changes');
         assert.equal(heading(ui).label, 'Choose models');
         if (app === 'ollama') ui.edit(ui.by('Existing model name'), 'text', 'existing:latest');
         else {
@@ -114,7 +115,7 @@ for (const app of ['ollama', 'vllm', 'llama.cpp']) {
 test('cancelled executable picker preserves the selected service and model', async () => {
     const selected = {...service('existing.service'), configurationStatus: 'ready', models: [{id: 'existing:latest'}], binding: {...service('existing.service').binding, model: 'existing:latest'}};
     const ui = await launch({fileError: {message: 'dismissed', matches: () => true}, responses: {discover: discover([selected])}});
-    await ui.click('Settings for Ollama'); await ui.click('Choose installed executable…'); await ui.click('Save selections for later');
+    await ui.click('Settings for Ollama'); await ui.click('Change installation…'); await ui.click('Choose installed executable…'); await ui.click('Back'); await ui.click('Advanced settings'); await ui.click('Launch details'); await ui.click('Save selections for later');
     const saved = JSON.parse(ui.calls.at(-1).input).drafts[0];
     assert.equal(saved.model, 'existing:latest');
     assert.deepEqual(saved.binding, selected.binding);
@@ -123,12 +124,12 @@ test('cancelled executable picker preserves the selected service and model', asy
 
 test('failed executable validation retains selections without authorizing startup', async () => {
     const ui = await launch({fail: 'render-owned', deferAction: 'unused', filePath: '/installed/ollama', responses: {discover: discover([])}});
-    await ui.click('Settings for Ollama'); await ui.click('Choose installed executable…'); await ui.click('Continue');
+    await ui.click('Settings for Ollama'); await ui.click('Change installation…'); await ui.click('Choose installed executable…'); await ui.click('Back'); await ui.click('Advanced settings'); await ui.click('Review changes');
     ui.edit(ui.by('Existing model name'), 'text', 'existing:latest'); await ui.click('Continue');
     assert.equal(ui.by('Finish setup').sensitive, false);
     assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
-    assert.ok(ui.widgets.some(widget => widget.title === 'Technical details' && widget.visible && !widget.expanded));
-    await ui.click('Back'); await ui.click('Settings for Ollama'); await ui.click('Save selections for later');
+    assert.ok(ui.widgets.some(widget => (widget.title === 'Technical details' && widget.visible && !widget.expanded) || (widget.accessibleProperties?.label === 'View details' && widget.visible)));
+    await ui.click('Back'); await ui.click('Settings for Ollama'); await ui.click('Advanced settings'); await ui.click('Launch details'); await ui.click('Save selections for later');
     const saved = JSON.parse(ui.calls.at(-1).input).drafts[0];
     assert.equal(saved.binding.owned.executable, '/installed/ollama');
     assert.equal(saved.model, 'existing:latest');
@@ -139,7 +140,7 @@ test('selecting a recognized external service replaces a previous owned-launch d
     const ui = await launch({responses: {discover: discover([selected]), drafts: {drafts: [{id: 'draft-one', label: 'Ollama', app: 'ollama', reference: '/installed/ollama', referenceKind: 'application', binding: {instance: 'local', owned: {executable: '/installed/ollama', port: 12345}}}]}}});
     await ui.click('Settings for Ollama');
     ui.edit(ui.by('Detected instance'), 'selected', 1);
-    await ui.click('Save selections for later');
+    await ui.click('Advanced settings'); await ui.click('Launch details'); await ui.click('Save selections for later');
     assert.deepEqual(JSON.parse(ui.calls.at(-1).input).drafts[0].binding, selected.binding);
 });
 
@@ -165,9 +166,9 @@ test('configured application gear opens its own settings; removal and Back do no
     ];
     const ui = await launch({deferAction: 'unused', profiles, responses: {fingerprint: {sha256: 'fresh'}}});
     await ui.click('Settings for ComfyUI');
-    assert.equal(heading(ui).label, 'ComfyUI settings');
-    assert.equal(ui.visible(ui.by('Display name')), true);
-    await ui.click('Remove from supervisor'); await ui.click('Back'); await ui.click('Continue');
+    assert.equal(heading(ui).label, 'ComfyUI');
+    assert.equal(ui.visible(ui.by('Installation display name')), false);
+    await ui.click('Cancel'); ui.edit(ui.by('Use ComfyUI'), 'active', false); await ui.click('Continue');
     const reviewed = JSON.parse(ui.calls.find(call => call.argv[1] === 'validate').input);
     assert.deepEqual(reviewed.catalog.profiles.map(profile => profile.id), ['native']);
     assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
@@ -186,7 +187,7 @@ for (const [configurationStatus, expected, choiceStatus] of [
         const choices = ui.by('Detected instance');
         assert.ok(choices.model.get_string(2).endsWith(choiceStatus));
         ui.edit(choices, 'selected', 2);
-        assert.ok(ui.widgets.some(widget => widget.selectable && widget.label?.includes(configuration.unit) && widget.label?.includes(configurationStatus === 'model-missing' ? 'Configured model is missing' : 'Installation inspection failed')));
+        assert.ok(ui.widgets.some(widget => widget.selectable && widget.label?.includes(configurationStatus === 'model-missing' ? 'Configured model is missing' : 'Installation inspection failed')));
         assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
     });
 }
@@ -194,18 +195,18 @@ for (const [configurationStatus, expected, choiceStatus] of [
 test('removing a configured edit and reopening it uses the newly attached live editor', async () => {
     const profile = {id: 'native', label: 'Native', adapter: 'systemd', unit: 'native.service', cgroup: '/native', bootPolicy: 'stop-to-idle', nativeModel: {runtime: 'vllm', model: '/model', instance: 'local', endpoint: 'http://127.0.0.1:8000', launchFile: '/native.service'}};
     const ui = await launch({profiles: [profile]});
-    await ui.click('Settings for vLLM'); await ui.click('Edit application');
-    const oldCard = ui.widgets.find(widget => widget.description?.startsWith('Choose your existing installation'));
+    await ui.click('Settings for vLLM');
+    const oldCard = ui.widgets.find(widget => widget.children.some(child => child.children.includes(ui.by('Change installation…'))));
     const parent = ui.widgets.find(widget => widget.children.includes(oldCard));
-    await ui.click('Remove this application');
+    await ui.click('Advanced settings'); await ui.click('Launch details'); await ui.click('Remove this application');
     assert.equal(parent.children.includes(oldCard), false);
-    await ui.click('Back'); await ui.click('Settings for vLLM'); await ui.click('Edit application');
-    const newCard = parent.children.find(widget => widget.description?.startsWith('Choose your existing installation'));
+    await ui.click('Cancel'); await ui.click('Settings for vLLM');
+    const newCard = parent.children.find(widget => widget !== oldCard);
     assert.ok(newCard && newCard !== oldCard, 'new edit belongs to a newly attached editor');
     assert.equal(ui.visible(newCard), true);
     assert.equal(oldCard.visible, false);
-    const friendlyName = newCard.children.find(widget => widget.title === 'Friendly name');
-    ui.edit(friendlyName, 'text', 'Live editor'); await ui.click('Save selections for later');
+    const friendlyName = ui.by('Installation display name');
+    ui.edit(friendlyName, 'text', 'Live editor'); await ui.click('Advanced settings'); await ui.click('Launch details'); await ui.click('Save selections for later');
     assert.equal(JSON.parse(ui.calls.at(-1).input).drafts[0].label, 'Live editor');
     assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
 });
@@ -224,7 +225,7 @@ test('an authoritative managed candidate prefills executable and launch options 
     await ui.click('Settings for vLLM');
     for (const [title, value] of [['Installed executable', binding.owned.executable], ['Instance name', binding.instance], ['Launch port', '9003'], ['Maximum model length', '8192'], ['Served model name', 'local-model']])
         assert.equal(ui.by(title).text, value);
-    await ui.click('Continue'); await ui.click('Choose another model…'); await ui.click('Choose model folder...'); await ui.click('Continue');
+    await ui.click('Use installation'); await ui.click('Choose another model…'); await ui.click('Choose model folder...'); await ui.click('Continue');
     const rendered = JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input).draft;
     assert.deepEqual(rendered.binding, {instance: binding.instance, owned: {...binding.owned, modelPath: '/models/existing-vllm'}});
     assert.equal(ui.calls.some(call => ['prepare', 'apply', 'temporary-start', 'temporary-discover'].includes(call.argv[1])), false);
