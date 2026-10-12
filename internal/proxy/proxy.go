@@ -41,34 +41,40 @@ type Route struct {
 }
 
 type Config struct {
-	Upstream          *url.URL
-	Workload          control.Workload
-	ExecutionRoutes   []Route
-	ReadOnlyRoutes    []Route
-	PassthroughRoutes []Route
-	CompletionPath    string
-	RequestIDHeader   string
-	JobIDHeader       string
-	FenceIDHeader     string
-	FenceEpochHeader  string
-	Transport         http.RoundTripper
+	IngressMode          string
+	ExecutionCredential  string
+	CompletionCredential string
+	Upstream             *url.URL
+	Workload             control.Workload
+	ExecutionRoutes      []Route
+	ReadOnlyRoutes       []Route
+	PassthroughRoutes    []Route
+	CompletionPath       string
+	RequestIDHeader      string
+	JobIDHeader          string
+	FenceIDHeader        string
+	FenceEpochHeader     string
+	Transport            http.RoundTripper
 }
 
 type Handler struct {
-	nativeModel       *control.NativeModel
-	catalogRevision   string
-	store             StateStore
-	catalog           CatalogStore
-	proxy             *httputil.ReverseProxy
-	workload          control.Workload
-	executionRoutes   map[string]struct{}
-	readOnlyRoutes    map[string]struct{}
-	passthroughRoutes map[string]struct{}
-	completionPath    string
-	requestIDHeader   string
-	jobIDHeader       string
-	fenceIDHeader     string
-	fenceEpochHeader  string
+	ingressMode          string
+	executionCredential  string
+	completionCredential string
+	nativeModel          *control.NativeModel
+	catalogRevision      string
+	store                StateStore
+	catalog              CatalogStore
+	proxy                *httputil.ReverseProxy
+	workload             control.Workload
+	executionRoutes      map[string]struct{}
+	readOnlyRoutes       map[string]struct{}
+	passthroughRoutes    map[string]struct{}
+	completionPath       string
+	requestIDHeader      string
+	jobIDHeader          string
+	fenceIDHeader        string
+	fenceEpochHeader     string
 }
 
 type registrationTransport struct {
@@ -124,20 +130,29 @@ func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (
 	if reverseProxy.Transport == nil {
 		reverseProxy.Transport = httptransport.NewDirect()
 	}
-	reverseProxy.ModifyResponse = func(response *http.Response) error {
-		response.Header.Del(DefaultRegistrationTokenHeader)
-		return nil
+	if config.IngressMode == IngressAdapter {
+		reverseProxy.Transport = ingressTransport{base: reverseProxy.Transport}
 	}
-	return &Handler{
+	handler := &Handler{
+		ingressMode: config.IngressMode, executionCredential: config.ExecutionCredential, completionCredential: config.CompletionCredential,
 		store: stateStore, catalog: catalog, proxy: reverseProxy, workload: config.Workload, nativeModel: native, catalogRevision: revision,
 		executionRoutes: executionRoutes, readOnlyRoutes: readOnlyRoutes, passthroughRoutes: passthroughRoutes,
 		completionPath: completionPath, requestIDHeader: config.RequestIDHeader,
 		jobIDHeader: config.JobIDHeader, fenceIDHeader: config.FenceIDHeader,
 		fenceEpochHeader: config.FenceEpochHeader,
-	}, nil
+	}
+	reverseProxy.ModifyResponse = func(response *http.Response) error {
+		response.Header.Del(DefaultRegistrationTokenHeader)
+		handler.protectIngressResponse(response)
+		return nil
+	}
+	return handler, nil
 }
 
 func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, map[string]struct{}, string, error) {
+	if err := validateIngress(config); err != nil {
+		return nil, nil, nil, "", err
+	}
 	if config.Upstream == nil || config.Upstream.Scheme == "" || config.Upstream.Host == "" {
 		return nil, nil, nil, "", errors.New("absolute upstream URL is required")
 	}
@@ -282,6 +297,9 @@ func reservedTransportHeader(header string) bool {
 }
 
 func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	if !h.authorizeIngress(response, request) {
+		return
+	}
 	if request.Method == http.MethodPost && request.URL.Path == h.completionPath {
 		h.finish(response, request)
 		return
@@ -370,6 +388,7 @@ func (h *Handler) execute(response http.ResponseWriter, request *http.Request) {
 	proxy.ModifyResponse = func(upstreamResponse *http.Response) error {
 		upstreamResponse.Header.Set(DefaultRegistrationTokenHeader, token)
 		h.observeNativeTerminal(upstreamResponse, request.URL.Path, requestID, fence, token)
+		h.protectIngressResponse(upstreamResponse)
 		return nil
 	}
 	proxy.ServeHTTP(response, forwarded)
@@ -436,6 +455,11 @@ func (h *Handler) readFence(request *http.Request) (control.Fence, error) {
 func (h *Handler) withoutControlHeaders(request *http.Request) *http.Request {
 	clone := request.Clone(request.Context())
 	clone.Header = request.Header.Clone()
+	if h.ingressMode == IngressAdapter {
+		clone = clone.WithContext(ingressTrailerContext(request))
+		stripIngressHeaders(clone.Header, false)
+		stripIngressHeaders(clone.Trailer, true)
+	}
 	clone.Header.Del(DefaultRegistrationTokenHeader)
 	clone.Header.Del(h.requestIDHeader)
 	clone.Header.Del(h.fenceIDHeader)

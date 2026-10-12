@@ -15,6 +15,13 @@ See [startup and recovery](docs/OPERATIONS.md) and [restoration](docs/RESTORING.
 A transition must record its intent before causing a runtime side effect.
 
 Do not log credentials, workload payloads, or untrusted runtime output.
+The execution proxy defaults to trusted local callers. Opt-in adapter ingress
+separates gateway execution credentials from trusted terminal-adapter completion
+credentials and hides registration tokens from client response metadata. It does
+not replace remote requester authentication, CSRF/policy, host identity isolation,
+or direct runtime bypass prevention. Trusted backends must not echo credentials or
+registration tokens in response bodies or logs; see
+[adapter ingress](docs/EXECUTION-PROXY.md#trusted-adapter-ingress).
 Host service permissions and access to the SQLite state file are deployment
 controls and must be reviewed for each runtime integration. The service UID and
 its private state directory are trusted: processes running as that UID can replace

@@ -40,7 +40,7 @@ The proxy removes caller-supplied lease control headers before forwarding. For a
 
 ## Report completion
 
-Work is registered before forwarding and remains active after submission. The proxy also returns the registration token to the caller in `X-Workload-Registration-Token`. Either the upstream or the caller can report terminal work: retain the token, request ID, and registered fence from the same admission, then send them to the configurable completion path:
+Work is registered before forwarding and remains active after submission. In default `trusted` ingress mode, the proxy also returns the registration token to the caller in `X-Workload-Registration-Token`. Either the trusted upstream or trusted caller can report terminal work: retain the token, request ID, and registered fence from the same admission, then send them to the configurable completion path:
 
 ```json
 {
@@ -67,6 +67,42 @@ All unclassified routes fail closed, including GET, HEAD and OPTIONS. Configure 
 The listener is restricted to loopback because explicit user ownership bypasses supervisor lease registration. Any process that can write the state directory can drive user-mode execution; processes running as the service UID are fully trusted (see [SECURITY.md](../SECURITY.md)). External exposure and requester authentication belong to the deployment boundary.
 
 The proxy is content-blind. Content inspection and domain policy belong to the caller.
+
+## Trusted adapter ingress
+
+Opt in with `-ingress-mode adapter -execution-credential-file /PRIVATE/execution.key
+-completion-credential-file /PRIVATE/completion.key`. Both files must be absolute,
+clean paths to private regular files owned by the proxy UID, without symlinks or
+group/other permissions, under trusted directories. Generate each credential
+independently from 32 bytes of cryptographic randomness, encoded as 64 lowercase
+hexadecimal characters (one final newline is allowed). Files are read once at
+startup with a bounded read. Missing, malformed, equal or unsafe credentials reject
+startup; credential files with `trusted` mode are rejected too. Rotate by replacing
+the files privately and restarting the proxy; registrations retain their tuples.
+
+The authenticated deployment gateway supplies `X-Workload-Execution-Credential`
+on every execution, read-only and passthrough request. Only the trusted terminal
+adapter supplies `X-Workload-Completion-Credential` on completion POSTs. Wrong,
+missing, duplicated or combined credentials return HTTP 401 before body parsing,
+state access or forwarding. Completion still requires the original registration
+tuple and verified terminal evidence. The execution credential cannot complete
+work, even if the client obtains that tuple.
+
+Adapter mode removes ingress credentials and Authorization/Proxy-Authorization
+from upstream request headers and trailers. It forwards admitted correlation to
+the trusted backend but suppresses registration tokens and credentials in client
+response headers, informational responses and trailers. Upstream URL credentials
+are disallowed. Trusted backends/adapters must not echo tokens in bodies or logs;
+the content-blind proxy does not inspect arbitrary response payloads. Native
+terminal observation remains internal to the proxy and keeps its existing rules.
+
+This is a local adapter prerequisite, not a remote authentication gateway. Keep
+the listener on loopback. The gateway must independently authenticate requesters,
+enforce identity, CSRF/policy and appropriate request limits, and keep its execution
+credential from clients. The terminal credential belongs only to the trusted
+adapter. Separately prevent direct runtime bypass and isolate host service
+identities; a credential does not establish those controls or qualify deployment.
+Idle policy stays Off until its separate evidence and host qualification exist.
 
 ## Connection limits
 
