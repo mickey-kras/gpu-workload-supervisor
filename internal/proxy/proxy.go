@@ -131,7 +131,7 @@ func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (
 		reverseProxy.Transport = httptransport.NewDirect()
 	}
 	if config.IngressMode == IngressAdapter {
-		reverseProxy.Transport = ingressTransport{base: reverseProxy.Transport}
+		reverseProxy.Transport = ingressTransport{base: reverseProxy.Transport, executionCredential: config.ExecutionCredential, completionCredential: config.CompletionCredential}
 	}
 	handler := &Handler{
 		ingressMode: config.IngressMode, executionCredential: config.ExecutionCredential, completionCredential: config.CompletionCredential,
@@ -143,7 +143,7 @@ func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (
 	}
 	reverseProxy.ModifyResponse = func(response *http.Response) error {
 		response.Header.Del(DefaultRegistrationTokenHeader)
-		handler.protectIngressResponse(response)
+		handler.protectIngressResponse(response, "")
 		return nil
 	}
 	return handler, nil
@@ -388,7 +388,7 @@ func (h *Handler) execute(response http.ResponseWriter, request *http.Request) {
 	proxy.ModifyResponse = func(upstreamResponse *http.Response) error {
 		upstreamResponse.Header.Set(DefaultRegistrationTokenHeader, token)
 		h.observeNativeTerminal(upstreamResponse, request.URL.Path, requestID, fence, token)
-		h.protectIngressResponse(upstreamResponse)
+		h.protectIngressResponse(upstreamResponse, token)
 		return nil
 	}
 	proxy.ServeHTTP(response, forwarded)

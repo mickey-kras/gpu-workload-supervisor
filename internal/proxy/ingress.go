@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/textproto"
+	"slices"
 	"strings"
 )
 
@@ -104,32 +105,65 @@ func stripIngressHeaders(header http.Header, registration bool) {
 	}
 }
 
-func (h *Handler) protectIngressResponse(response *http.Response) {
+func stripIngressResponseMetadata(header http.Header, secrets []string) {
+	stripIngressHeaders(header, true)
+	for name, values := range header {
+		values = slices.DeleteFunc(values, func(value string) bool { return containsIngressSecret(value, secrets, false) })
+		if len(values) == 0 || containsIngressSecret(name, secrets, true) {
+			delete(header, name)
+		} else {
+			header[name] = values
+		}
+	}
+}
+
+func containsIngressSecret(value string, secrets []string, fieldName bool) bool {
+	if fieldName {
+		value = strings.ToLower(value)
+	}
+	for _, secret := range secrets {
+		if fieldName {
+			secret = strings.ToLower(secret)
+		}
+		if secret != "" && strings.Contains(value, secret) {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *Handler) protectIngressResponse(response *http.Response, token string) {
 	if h.ingressMode != IngressAdapter {
 		return
 	}
-	stripIngressHeaders(response.Header, true)
-	stripIngressHeaders(response.Trailer, true)
+	secrets := []string{token, h.executionCredential, h.completionCredential}
+	stripIngressResponseMetadata(response.Header, secrets)
+	stripIngressResponseMetadata(response.Trailer, secrets)
 	// Upgrade bodies must keep their bidirectional interface. HTTP trailers do
 	// not exist after a protocol switch; ordinary streaming trailers arrive on Read.
 	if response.Body != nil && response.StatusCode != http.StatusSwitchingProtocols {
-		response.Body = &ingressResponseBody{ReadCloser: response.Body, response: response}
+		response.Body = &ingressResponseBody{ReadCloser: response.Body, response: response, secrets: secrets}
 	}
 }
 
 type ingressResponseBody struct {
 	io.ReadCloser
 	response *http.Response
+	secrets  []string
 }
 
 type ingressTrailerKey struct{}
 
-type ingressTransport struct{ base http.RoundTripper }
+type ingressTransport struct {
+	base                                      http.RoundTripper
+	executionCredential, completionCredential string
+}
 
 func (transport ingressTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	secrets := []string{request.Header.Get(DefaultRegistrationTokenHeader), transport.executionCredential, transport.completionCredential}
 	trace := &httptrace.ClientTrace{Got1xxResponse: func(_ int, header textproto.MIMEHeader) error {
 		// WithClientTrace runs this hook before the existing ReverseProxy hook.
-		stripIngressHeaders(http.Header(header), true)
+		stripIngressResponseMetadata(http.Header(header), secrets)
 		return nil
 	}}
 	forwarded := request.Clone(httptrace.WithClientTrace(request.Context(), trace))
@@ -165,6 +199,6 @@ func (body *ingressRequestBody) Read(buffer []byte) (int, error) {
 
 func (body *ingressResponseBody) Read(buffer []byte) (int, error) {
 	n, err := body.ReadCloser.Read(buffer)
-	stripIngressHeaders(body.response.Trailer, true)
+	stripIngressResponseMetadata(body.response.Trailer, body.secrets)
 	return n, err
 }
