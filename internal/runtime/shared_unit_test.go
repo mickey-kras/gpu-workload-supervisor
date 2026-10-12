@@ -433,6 +433,12 @@ func (p *capacityProbeRunner) Run(ctx context.Context, name string, args ...stri
 func TestOllamaLoadedModelsRejectsBadPayloads(t *testing.T) {
 	for _, body := range []string{
 		"not json",
+		`{}`,
+		`null`,
+		`{"models":null}`,
+		`{"models":{}}`,
+		`{"models":[{"name":"foreign:latest","name":"m:latest","model":"m:latest"}]}`,
+		`{"models":[{"name":"foreign:latest","model":"foreign:latest"}],"models":[]}`,
 		`{"models":[{"name":"","model":""}]}`,
 		`{"models":[{"name":"","model":"m:latest"}]}`,
 		`{"models":[{"name":"m:latest","model":""}]}`,

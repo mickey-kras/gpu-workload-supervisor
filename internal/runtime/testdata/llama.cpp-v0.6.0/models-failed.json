@@ -1,0 +1,14 @@
+{
+  "object": "list",
+  "data": [{
+    "id": "selected",
+    "aliases": [],
+    "tags": [],
+    "object": "model",
+    "owned_by": "llamacpp",
+    "created": 0,
+    "status": {"value": "unloaded", "args": [], "failed": true, "exit_code": 1},
+    "source": "models_dir",
+    "can_remove": false
+  }]
+}

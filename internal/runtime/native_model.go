@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 	"io"
 	"net/http"
 	"strings"
@@ -263,10 +264,8 @@ func (m *SystemdManager) fetchModelList(ctx context.Context, n control.NativeMod
 
 type modelListPayload struct {
 	Data []struct {
-		ID     string `json:"id"`
-		Status *struct {
-			Value string `json:"value"`
-		} `json:"status"`
+		ID     string          `json:"id"`
+		Status json.RawMessage `json:"status"`
 	} `json:"data"`
 	Models []struct {
 		Name  string `json:"name"`
@@ -275,14 +274,22 @@ type modelListPayload struct {
 }
 
 func verifyModelList(b []byte, n control.NativeModel) error {
-	var payload modelListPayload
-	if json.Unmarshal(b, &payload) != nil {
+	payload, err := decodeModelList(b)
+	if err != nil {
 		return ErrModelIdentity
 	}
 	if n.Runtime == "ollama" {
 		return verifyOllamaModelList(payload, n.ComparisonModel())
 	}
 	return verifyServerModelList(payload, n.Model)
+}
+
+func decodeModelList(b []byte) (modelListPayload, error) {
+	var payload modelListPayload
+	if strictjson.Check(json.NewDecoder(bytes.NewReader(b))) != nil || json.Unmarshal(b, &payload) != nil {
+		return payload, ErrModelIdentity
+	}
+	return payload, nil
 }
 
 func verifyOllamaModelList(payload modelListPayload, model string) error {
@@ -293,8 +300,32 @@ func verifyOllamaModelList(payload modelListPayload, model string) error {
 }
 
 func verifyServerModelList(payload modelListPayload, model string) error {
-	if len(payload.Data) != 1 || payload.Data[0].ID != model || (payload.Data[0].Status != nil && payload.Data[0].Status.Value != "loaded") {
+	if len(payload.Data) != 1 || payload.Data[0].ID != model {
 		return ErrModelIdentity
+	}
+	raw := payload.Data[0].Status
+	if len(raw) == 0 {
+		return nil
+	}
+	var status struct {
+		Value    string          `json:"value"`
+		Failed   json.RawMessage `json:"failed"`
+		ExitCode json.RawMessage `json:"exit_code"`
+	}
+	if json.Unmarshal(raw, &status) != nil || status.Value != "loaded" {
+		return ErrModelIdentity
+	}
+	if len(status.Failed) != 0 {
+		var failed bool
+		if bytes.Equal(status.Failed, []byte("null")) || json.Unmarshal(status.Failed, &failed) != nil || failed {
+			return ErrModelIdentity
+		}
+	}
+	if len(status.ExitCode) != 0 {
+		var exitCode int
+		if bytes.Equal(status.ExitCode, []byte("null")) || json.Unmarshal(status.ExitCode, &exitCode) != nil || exitCode != 0 {
+			return ErrModelIdentity
+		}
 	}
 	return nil
 }

@@ -7,16 +7,180 @@ import (
 	"errors"
 	"fmt"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 )
+
+func TestNativeOllamaVersionedPSReplay(t *testing.T) {
+	loaded, err := os.ReadFile("testdata/ollama-v0.40.3/api-ps-loaded.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty, err := os.ReadFile("testdata/ollama-v0.40.3/api-ps-empty.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		body      string
+		ready     bool
+		listValid bool
+	}{
+		{"loaded", string(loaded), true, true},
+		{"empty", string(empty), false, true},
+		{"wrong-tag", strings.ReplaceAll(string(loaded), "selected:latest", "selected:other"), false, true},
+		{"wrong-case", strings.ReplaceAll(string(loaded), "selected:latest", "Selected:latest"), false, true},
+		{"contradictory", `{"models":[{"name":"selected:latest","model":"other:latest"}]}`, false, true},
+		{"multiple", `{"models":[{"name":"selected:latest","model":"selected:latest"},{"name":"other:latest","model":"other:latest"}]}`, false, true},
+		{"missing", `{}`, false, false},
+		{"null", `{"models":null}`, false, false},
+		{"object", `{"models":{}}`, false, false},
+		{"wrong-type", `{"models":[{"name":17,"model":"selected:latest"}]}`, false, false},
+		{"duplicate-key", `{"models":[{"name":"other:latest","name":"selected:latest","model":"selected:latest"}]}`, false, false},
+		{"unsupported-data", `{"data":[{"id":"selected"}]}`, false, false},
+		{"trailing", string(loaded) + ` {}`, false, false},
+		{"invalid", `{"models":[`, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/api/ps" {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				fmt.Fprint(w, tc.body)
+			}))
+			defer s.Close()
+			m := &SystemdManager{client: s.Client()}
+			n := control.NativeModel{Runtime: "ollama", Model: "selected", Endpoint: s.URL}
+			if err := m.nativeReady(context.Background(), n); (err == nil) != tc.ready {
+				t.Fatalf("ready = %v, err = %v", tc.ready, err)
+			}
+			body, err := m.fetchModelList(context.Background(), n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			models, err := ollamaLoadedModels(body)
+			if (err == nil) != tc.listValid {
+				t.Fatalf("listValid = %v, err = %v", tc.listValid, err)
+			}
+			if tc.ready && !models["selected:latest"] {
+				t.Fatal("selected model missing from loaded list")
+			}
+		})
+	}
+}
+
+func TestNativeLlamaVersionedModelsReplay(t *testing.T) {
+	loaded, err := os.ReadFile("testdata/llama.cpp-v0.6.0/models-loaded.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := os.ReadFile("testdata/llama.cpp-v0.6.0/models-failed.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		body  string
+		ready bool
+	}{
+		{"loaded", string(loaded), true},
+		{"failed", string(failed), false},
+		{"wrong-id-with-selected-alias", strings.Replace(strings.Replace(string(loaded), `"id": "selected"`, `"id": "other"`, 1), `"selected-alias"`, `"selected"`, 1), false},
+		{"wrong-case", strings.Replace(string(loaded), `"id": "selected"`, `"id": "Selected"`, 1), false},
+		{"multiple", `{"data":[{"id":"selected","status":{"value":"loaded"}},{"id":"other","status":{"value":"loaded"}}]}`, false},
+		{"loading", strings.Replace(string(loaded), `"value": "loaded"`, `"value": "loading"`, 1), false},
+		{"unloaded", strings.Replace(string(loaded), `"value": "loaded"`, `"value": "unloaded"`, 1), false},
+		{"downloading", strings.Replace(string(loaded), `"value": "loaded"`, `"value": "downloading"`, 1), false},
+		{"downloaded", strings.Replace(string(loaded), `"value": "loaded"`, `"value": "downloaded"`, 1), false},
+		{"sleeping", strings.Replace(string(loaded), `"value": "loaded"`, `"value": "sleeping"`, 1), false},
+		{"unknown-status", strings.Replace(string(loaded), `"value": "loaded"`, `"value": "ready"`, 1), false},
+		{"loaded-but-failed", `{"data":[{"id":"selected","status":{"value":"loaded","failed":true}}]}`, false},
+		{"loaded-with-exit-code", `{"data":[{"id":"selected","status":{"value":"loaded","exit_code":1}}]}`, false},
+		{"loaded-with-zero-exit", `{"data":[{"id":"selected","status":{"value":"loaded","failed":false,"exit_code":0}}]}`, true},
+		{"null-status", `{"data":[{"id":"selected","status":null}]}`, false},
+		{"string-status", `{"data":[{"id":"selected","status":"loaded"}]}`, false},
+		{"empty-status", `{"data":[{"id":"selected","status":{}}]}`, false},
+		{"wrong-failed-type", `{"data":[{"id":"selected","status":{"value":"loaded","failed":"false"}}]}`, false},
+		{"null-failed", `{"data":[{"id":"selected","status":{"value":"loaded","failed":null}}]}`, false},
+		{"wrong-exit-type", `{"data":[{"id":"selected","status":{"value":"loaded","exit_code":"0"}}]}`, false},
+		{"null-exit", `{"data":[{"id":"selected","status":{"value":"loaded","exit_code":null}}]}`, false},
+		{"duplicate-id", `{"data":[{"id":"other","id":"selected"}]}`, false},
+		{"duplicate-status", `{"data":[{"id":"selected","status":{"value":"unloaded","value":"loaded"}}]}`, false},
+		{"missing", `{}`, false},
+		{"null-data", `{"data":null}`, false},
+		{"empty-data", `{"data":[]}`, false},
+		{"object-data", `{"data":{}}`, false},
+		{"unsupported-models", `{"models":[{"name":"selected"}]}`, false},
+		{"invalid", `{"data":[`, false},
+		{"trailing", string(loaded) + ` {}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/models" {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				fmt.Fprint(w, tc.body)
+			}))
+			defer s.Close()
+			resp, err := s.Client().Get(s.URL + "/models")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := verifyModelList(body, control.NativeModel{Runtime: "llama.cpp", Model: "selected"}); (err == nil) != tc.ready {
+				t.Fatalf("ready = %v, err = %v", tc.ready, err)
+			}
+		})
+	}
+}
+
+func TestNativeDirectServerReadinessPaths(t *testing.T) {
+	for _, family := range []string{"llama.cpp", "vllm"} {
+		t.Run(family, func(t *testing.T) {
+			var mu sync.Mutex
+			var paths []string
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				paths = append(paths, r.URL.Path)
+				mu.Unlock()
+				switch r.URL.Path {
+				case "/health":
+					fmt.Fprint(w, `{"status":"ok"}`)
+				case "/v1/models":
+					fmt.Fprint(w, `{"data":[{"id":"selected"}]}`)
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer s.Close()
+			m := &SystemdManager{client: s.Client()}
+			if err := m.nativeReady(context.Background(), control.NativeModel{Runtime: family, Model: "selected", Endpoint: s.URL}); err != nil {
+				t.Fatal(err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if strings.Join(paths, ",") != "/health,/v1/models" {
+				t.Fatalf("paths = %v", paths)
+			}
+		})
+	}
+}
 
 func TestNativeIdentityRejectsHealthyWrongModel(t *testing.T) {
 	for _, family := range []string{"ollama", "llama.cpp", "vllm"} {
