@@ -366,8 +366,8 @@ class SetupWindow {
         const selected = known[0] ?? candidates.find(candidate => candidate.sourceKind === 'configuration' || candidate.unit) ?? candidates[0];
         if (selected?.configurationStatus === 'inspection-failed') return 'Inspection failed · Open settings';
         if (selected?.configurationStatus === 'model-missing') return 'Configured model missing · Open settings';
+        if (selected?.configurationStatus === 'gpu-unresolved') return 'GPU identity needs setup · Open settings';
         if (!known.length) return states[selected?.instanceStatus] ?? (selected?.instanceStatus === 'not-running' && !selected.unit ? 'Default address unavailable · Installation unverified' : 'Not detected');
-        if (selected.configurationStatus === 'gpu-unresolved') return 'GPU identity needs setup · Open settings';
         if (selected.instanceStatus === 'unreachable') return 'Installed · Address unreachable · Ready to configure';
         const state = states[selected.instanceStatus];
         if (state) return state;

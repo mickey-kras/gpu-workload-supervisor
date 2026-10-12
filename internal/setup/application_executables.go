@@ -51,7 +51,7 @@ func inspectInstalledExecutables(ctx context.Context, requests []ProbeRequest, s
 		if _, err := stat(request.Reference); os.IsNotExist(err) {
 			continue
 		}
-		result, _ := probeSelectedExecutable(request, candidate(request), validate)
+		result := probeSelectedExecutable(request, candidate(request), validate)
 		if result.Recognized {
 			// Trusted aliases, including /bin -> /usr/bin, are one installation.
 			key, err := resolve(request.Reference)

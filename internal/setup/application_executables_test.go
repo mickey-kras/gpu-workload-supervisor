@@ -84,7 +84,7 @@ func TestExecutableDiscoveryKeepsEndpointObservationSeparateAndPrefersRecognized
 		}
 		b := Backend{discoverExecutables: func(context.Context) []ApplicationCandidate {
 			request := ProbeRequest{App: "ollama", Reference: "/usr/bin/ollama", ReferenceKind: "application"}
-			found, _ := probeSelectedExecutable(request, candidate(request), func(string, string) error { return nil })
+			found := probeSelectedExecutable(request, candidate(request), func(string, string) error { return nil })
 			return []ApplicationCandidate{found}
 		}}
 		b.discoverInstalledExecutables(context.Background(), &result)

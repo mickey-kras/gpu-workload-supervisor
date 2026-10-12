@@ -121,7 +121,10 @@ for (const app of ['ollama', 'vllm']) {
 }
 
 test('unresolved GPU identity has review guidance and remains a Needs setup installation', async () => {
-    const ui = await launch(options([{...installation, recognized: false, binding: undefined, configurationStatus: 'gpu-unresolved'}]));
+    const unresolved = {...installation, sourceKind: 'configuration', recognized: false, binding: undefined, configurationStatus: 'gpu-unresolved', instanceStatus: 'not-running'};
+    const endpoint = {app: 'comfyui', sourceKind: 'endpoint', instanceStatus: 'unreachable', recognized: false, endpoint: installation.endpoint, models: []};
+    const ui = await launch(options([endpoint, unresolved]));
+    assert.equal(ui.visible(ui.by('GPU identity needs setup · Open settings')), true);
     await ui.click('Settings for ComfyUI');
     assert.equal(ui.by('Use installation').sensitive, false);
     assert.equal(ui.visible(ui.by('Needs setup')), true);
