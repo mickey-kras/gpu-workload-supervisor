@@ -108,8 +108,9 @@ func stripIngressHeaders(header http.Header, registration bool) {
 func stripIngressResponseMetadata(header http.Header, secrets []string) {
 	stripIngressHeaders(header, true)
 	for name, values := range header {
-		values = slices.DeleteFunc(values, func(value string) bool { return containsIngressSecret(value, secrets, false) })
-		if len(values) == 0 || containsIngressSecret(name, secrets, true) {
+		populated := len(values) > 0
+		values = slices.DeleteFunc(values, func(value string) bool { return containsIngressSecret(value, secrets) })
+		if populated && len(values) == 0 || containsIngressSecret(name, secrets) {
 			delete(header, name)
 		} else {
 			header[name] = values
@@ -117,14 +118,10 @@ func stripIngressResponseMetadata(header http.Header, secrets []string) {
 	}
 }
 
-func containsIngressSecret(value string, secrets []string, fieldName bool) bool {
-	if fieldName {
-		value = strings.ToLower(value)
-	}
+func containsIngressSecret(value string, secrets []string) bool {
+	value = strings.ToLower(value)
 	for _, secret := range secrets {
-		if fieldName {
-			secret = strings.ToLower(secret)
-		}
+		secret = strings.ToLower(secret)
 		if secret != "" && strings.Contains(value, secret) {
 			return true
 		}

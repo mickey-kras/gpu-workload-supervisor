@@ -23,8 +23,10 @@ func TestAdapterScrubsReflectedSecretsFromResponseMetadata(t *testing.T) {
 			t.Error("upstream correlation lost")
 		}
 		for _, secret := range secrets {
-			w.Header().Add("X-Debug", "prefix="+secret+";suffix")
-			w.Header().Add("Set-Cookie", "session="+secret+"; Path=/")
+			for _, reflected := range []string{secret, strings.ToUpper(secret), strings.ToUpper(secret[:len(secret)/2]) + secret[len(secret)/2:]} {
+				w.Header().Add("X-Debug", "prefix="+reflected+";suffix")
+				w.Header().Add("Set-Cookie", "session="+reflected+"; Path=/")
+			}
 		}
 		w.Header().Add("X-Debug", "safe")
 		w.Header().Set("X-Debug-"+secrets[0], "secret-in-name")
@@ -33,7 +35,9 @@ func TestAdapterScrubsReflectedSecretsFromResponseMetadata(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = io.WriteString(w, "accepted")
 		for _, secret := range secrets {
-			w.Header().Add("X-Late-Debug", "prefix="+secret+";suffix")
+			for _, reflected := range []string{secret, strings.ToUpper(secret), strings.ToUpper(secret[:len(secret)/2]) + secret[len(secret)/2:]} {
+				w.Header().Add("X-Late-Debug", "prefix="+reflected+";suffix")
+			}
 		}
 		w.Header().Add("X-Late-Debug", "safe")
 	}))
@@ -54,6 +58,9 @@ func TestAdapterScrubsReflectedSecretsFromResponseMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
+	if _, declared := response.Trailer["X-Late-Debug"]; !declared {
+		t.Fatal("safe trailer declaration missing before EOF")
+	}
 	_, err = io.ReadAll(response.Body)
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +82,7 @@ func assertNoReflectedSecrets(t *testing.T, header http.Header, secrets []string
 		}
 		for _, value := range values {
 			for _, secret := range secrets {
-				if strings.Contains(value, secret) {
+				if strings.Contains(strings.ToLower(value), strings.ToLower(secret)) {
 					t.Errorf("secret reflected under %s", name)
 				}
 			}

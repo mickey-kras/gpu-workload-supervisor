@@ -92,9 +92,11 @@ Adapter mode removes ingress credentials and Authorization/Proxy-Authorization
 from upstream request headers and trailers. It forwards admitted correlation to
 the trusted backend but suppresses registration tokens and credentials in client
 response headers, informational responses and trailers. Upstream URL credentials
-are disallowed. Metadata values containing either ingress credential or the
-admitted registration token are dropped, including reflections under unrelated
-header names. Trusted backends/adapters must not echo tokens in bodies or logs;
+are disallowed. Metadata names and values containing either known ingress
+credential or the admitted registration token are dropped using case-insensitive
+substring matching, including reflections under unrelated header names. This
+covers case normalization of hexadecimal credentials and UUID tokens; it does not
+decode other transformations. Trusted backends/adapters must not echo tokens in bodies or logs;
 the content-blind proxy does not inspect arbitrary response payloads. Native
 terminal observation remains internal to the proxy and keeps its existing rules.
 
