@@ -65,6 +65,9 @@ func run() error {
 	fenceIDHeader := flags.String("fence-id-header", workloadproxy.DefaultFenceIDHeader, "lease incarnation header")
 	fenceEpochHeader := flags.String("fence-epoch-header", workloadproxy.DefaultFenceEpochHeader, "lease epoch header")
 	completionPath := flags.String("completion-path", workloadproxy.DefaultCompletionPath, "local terminal work endpoint path")
+	ingressMode := flags.String("ingress-mode", workloadproxy.IngressTrusted, "local ingress trust mode: trusted or adapter")
+	executionCredentialFile := flags.String("execution-credential-file", "", "private absolute credential file for adapter execution ingress")
+	completionCredentialFile := flags.String("completion-credential-file", "", "private absolute credential file for trusted terminal adapter callbacks")
 	readHeaderTimeout := flags.Duration("read-header-timeout", 10*time.Second, "HTTP header read timeout")
 	idleTimeout := flags.Duration("idle-timeout", 2*time.Minute, "HTTP idle timeout")
 	shutdownTimeout := flags.Duration("shutdown-timeout", 30*time.Second, "graceful shutdown timeout")
@@ -115,6 +118,9 @@ func run() error {
 		CompletionPath: *completionPath, RequestIDHeader: *requestIDHeader,
 		JobIDHeader: *jobIDHeader, FenceIDHeader: *fenceIDHeader,
 		FenceEpochHeader: *fenceEpochHeader,
+	}
+	if err := configureIngress(&proxyConfig, *ingressMode, *executionCredentialFile, *completionCredentialFile); err != nil {
+		return err
 	}
 	return serveProxy(proxyConfig, proxyServerSettings{
 		statePath: *statePath, listen: *listen,

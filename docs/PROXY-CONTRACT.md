@@ -82,15 +82,20 @@ The callback contract uses the configured completion path (default
 HTTP 200, 202, error responses, streaming EOF, transport failures and cancellation
 never automatically finish registrations. A callback succeeds with HTTP 204.
 Missing/forged tokens and mismatched registered fences/workloads are rejected.
-A duplicate terminal callback returns HTTP 404 and cannot change the first outcome;
-an unknown request also returns 404, so it is not independent proof of completion.
+A duplicate callback with the original matching tuple returns HTTP 204 for either
+valid outcome; the first stored outcome remains unchanged. An unknown request
+returns 404; callback responses are not independent proof of terminal execution.
 Completion uses the originally registered fence, including when the current fence
 has rotated during draining. Old tokens cannot complete a later reuse of the ID.
 
-The token is a completion capability, not proof that execution ended. The upstream
-receives it and HTTP responses received from upstream return it to the caller. Only trusted
-parties with verified terminal evidence may use it. Protect callback access at the
-deployment boundary; never expose it or its tokens to untrusted clients or logs.
+The token is a completion capability, not proof that execution ended. In default
+`trusted` ingress mode, upstream HTTP responses return it to the trusted caller.
+Opt-in [adapter ingress](EXECUTION-PROXY.md#trusted-adapter-ingress) instead suppresses
+it from client response metadata and requires separate execution/completion
+credentials. Only the trusted terminal adapter holds completion authority. The
+upstream receives the tuple in both modes and must not expose it through bodies
+or logs. Independently protect requester authentication and direct runtime bypass
+at the deployment boundary; adapter credentials do not replace those controls.
 Legacy tokenless registrations accept completion with the original registered
 request ID and fence, even after the current fence rotates. Rotation only lifts
 the pruning protection for completed legacy rows; it does not revoke unfinished
