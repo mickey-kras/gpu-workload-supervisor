@@ -401,9 +401,7 @@ class DraftEditor {
     }
     capture() {
         const fields = [this.name, this.endpoint, this.health, ...Object.values(this.bindingFields), ...Object.values(this.ownedFields)].filter(field => typeof field !== 'function');
-        const current = this.draft.snapshot();
-        const input = JSON.parse(JSON.stringify(current));
-        if (Object.hasOwn(current, 'requiredMiB')) input.requiredMiB = current.requiredMiB;
+        const input = this.draft.snapshot();
         return {input, candidate: this.lastCandidate, evidence: this.installationEvidence, ready: this.settings.ready && !this.settings.busy, bindingEdits: [...this.bindingEdits], endpointEdited: this.endpointEdited, selection: this.instance.selected, fields: fields.map(field => [field, field.text]), capacity: this.capacity.text, retain: this.retain.active, overrides: {...this.overrides}};
     }
     restore(snapshot) {
