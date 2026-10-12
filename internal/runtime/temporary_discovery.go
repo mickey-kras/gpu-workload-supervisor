@@ -15,7 +15,7 @@ const temporaryApplicationSlice = "app.slice"
 var ErrTemporaryInvocationChanged = errors.New("temporary discovery invocation changed or start evidence is ambiguous; refusing to stop this service. Inspect the unit and the persisted session evidence, stop it manually if appropriate, then retry explicit cleanup")
 
 func (m *SystemdManager) temporaryProperties(ctx context.Context, unit string) (map[string]string, error) {
-	out, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show", "--property=Id,LoadState,ActiveState,SubState,ControlGroup,Slice,FragmentPath,DropInPaths,NeedDaemonReload,InvocationID,ActiveEnterTimestampMonotonic,ExecStart,ExecStartPre,Environment", "--no-pager", "--", unit)
+	out, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show", "--property=Id,LoadState,ActiveState,SubState,ControlGroup,Slice,FragmentPath,DropInPaths,NeedDaemonReload,InvocationID,ActiveEnterTimestampMonotonic,ExecStart,ExecStartPre,Environment,WorkingDirectory", "--no-pager", "--", unit)
 	if err != nil {
 		return nil, SafeError("temporary discovery unit observation failed", err)
 	}
@@ -65,6 +65,9 @@ func (m *SystemdManager) verifyTemporaryBindingMode(ctx context.Context, v contr
 }
 
 func checkTemporaryLoadedLaunch(service map[string]string, v control.TemporaryDiscoveryCandidate, launch AutomaticLaunch, admission bool) error {
+	if err := CheckLoadedAccountHomeDirectory(service["WorkingDirectory"], launch.HomeWorkingDirectory); err != nil {
+		return err
+	}
 	if admission {
 		if err := CheckLoadedEnvironment(service["Environment"], launch.Environment); err != nil {
 			return err

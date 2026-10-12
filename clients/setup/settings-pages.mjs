@@ -5,7 +5,7 @@ import Gdk from 'gi://Gdk?version=4.0';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Pango from 'gi://Pango';
 import {applicationHeader, linkButton, roundedCard} from './presentation.mjs';
-import {applications, candidateChoice, candidateIdentity, candidateMessage, candidateReady} from './onboarding.mjs';
+import {applications, candidateChoice, candidateDiagnostics, candidateIdentity, candidateMessage, candidateReady} from './onboarding.mjs';
 
 // Settings share the wizard's scroller and fixed footer. Each optional section
 // has its own page, so long service identities never compete with entry fields.
@@ -94,13 +94,15 @@ export class InstallationSettings {
         this.noticeIcon.remove_css_class(this.ready ? 'warning' : 'success'); this.noticeIcon.add_css_class(this.ready ? 'success' : 'warning');
         if (this.ready) this.notice.remove_css_class('setup-warning'); else this.notice.add_css_class('setup-warning');
         this.status.label = candidateMessage(candidate);
-        if (/HOME.*(unsupported|expansion|whitespace)/i.test(candidate.nextStep ?? '')) this.status.label = 'HOME uses an unsupported format.';
+        const diagnostics = candidateDiagnostics(candidate);
+        if (!diagnostics.length && /HOME.*(unsupported|expansion|whitespace)/i.test(candidate.nextStep ?? '')) this.status.label = 'HOME uses an unsupported format.';
         if (this.ready) this.status.label = 'GPU operation has not been tested.';
         this.diagnosticIdentity.label = candidateChoice(candidate);
         this.diagnosticSummary.label = this.ready ? 'Configuration details' : 'Configuration needs attention';
         let evidence = candidate.evidence ?? [];
         if (!Array.isArray(evidence)) evidence = [String(evidence)];
-        this.diagnostic.label = [candidateMessage(candidate), ...evidence, candidate.nextStep].filter(Boolean).join('\n');
+        const problems = diagnostics.length ? diagnostics.map((item, index) => `${index + 1}. ${item}`) : [candidate.nextStep];
+        this.diagnostic.label = [candidateMessage(candidate), ...evidence, ...problems].filter(Boolean).join('\n\n');
         this.viewDetails.visible = !this.ready;
         this.ownership.label = candidate.binding?.owned ? 'Supervisor manages this launch. Applications and model files are preserved.' : 'External service files are preserved.';
         this.notify();

@@ -3,7 +3,6 @@ package runtime
 import (
 	"crypto/sha256"
 	"fmt"
-	"golang.org/x/sys/unix"
 	"net"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"golang.org/x/sys/unix"
 )
 
 const loopbackHTTPPrefix = "http://"
@@ -18,6 +18,7 @@ const loopbackHTTPPrefix = "http://"
 // AutomaticLaunch is evidence read from a supported direct launch. Inspection
 // never rewrites the existing file or runs its command.
 type AutomaticLaunch struct {
+	HomeWorkingDirectory             string
 	Environment                      map[string]string
 	Endpoint, Model, SHA256, Command string
 	GPUUUID                          string
@@ -45,38 +46,70 @@ func inspectAutomaticLaunchSourcesWithValidator(path, app string, dropInPaths []
 // to remain usable. Source and command trust are still mandatory; this mode
 // never authorizes execution or admission.
 func inspectAutomaticLaunchSourcesMode(path, app string, dropInPaths []string, validate func(string) error, cleanupEnvironment bool) (AutomaticLaunch, error) {
-	if len(dropInPaths) > 32 {
-		return AutomaticLaunch{}, ErrLaunchUnsupported
-	}
-	raw, err := readLaunchSource(path)
+	sources, dropIns, err := readAutomaticLaunchSources(path, dropInPaths)
 	if err != nil {
-		return AutomaticLaunch{}, fmt.Errorf("launch source: %w", err)
-	}
-	sources := [][]byte{raw}
-	seen := map[string]bool{path: true}
-	var dropIns []control.LaunchSource
-	for _, path := range dropInPaths {
-		if seen[path] || !strings.HasSuffix(path, ".conf") || !control.LaunchGrammarExpressible(path) {
-			return AutomaticLaunch{}, ErrLaunchUnsupported
-		}
-		seen[path] = true
-		raw, err := readLaunchSource(path)
-		if err != nil {
-			return AutomaticLaunch{}, fmt.Errorf("contributing drop-in: %w", err)
-		}
-		sources = append(sources, raw)
-		dropIns = append(dropIns, control.LaunchSource{Path: path, SHA256: fmt.Sprintf("%x", sha256.Sum256(raw))})
-	}
-	if err := control.ValidateLaunchSources(path, dropIns); err != nil {
 		return AutomaticLaunch{}, err
 	}
 	u, err := parseExternalLaunchSourcesMode(sources, app, cleanupEnvironment)
 	if err != nil {
-		return AutomaticLaunch{}, err
+		var problems launchProblems
+		problems.add(err)
+		// Validate independent command evidence without deriving a binding from a
+		// partially valid environment or directive set.
+		if app != "ollama" && u.execStart != "" {
+			_, independentErr := inspectParsedAutomaticLaunch(u, sources[0], app, validate)
+			problems.add(independentErr)
+		} else {
+			problems.add(u.validatePreCommands(validate))
+			args := strings.Fields(u.execStart)
+			if len(args) >= 2 && filepath.IsAbs(args[0]) {
+				problems.add(validate(args[0]))
+			}
+		}
+		problems.add(fmt.Errorf("%w: dependent loaded-state and binding checks were not completed because launch validation failed", ErrLaunchUnsupported))
+		return AutomaticLaunch{}, problems.err()
 	}
 	result, err := inspectParsedAutomaticLaunch(u, sources[0], app, validate)
+	if err != nil {
+		return AutomaticLaunch{}, err
+	}
 	result.DropIns = dropIns
 	return result, err
+}
+
+func readAutomaticLaunchSources(path string, dropInPaths []string) ([][]byte, []control.LaunchSource, error) {
+	if len(dropInPaths) > 32 {
+		return nil, nil, ErrLaunchUnsupported
+	}
+	var sourceProblems launchProblems
+	raw, err := readLaunchSource(path)
+	if err != nil {
+		sourceProblems.add(fmt.Errorf("launch source: %w", err))
+	}
+	sources := [][]byte{raw}
+	seen := map[string]bool{path: true}
+	var dropIns []control.LaunchSource
+	for i, path := range dropInPaths {
+		if seen[path] || !strings.HasSuffix(path, ".conf") || !control.LaunchGrammarExpressible(path) {
+			sourceProblems.add(fmt.Errorf("%w: contributing drop-in %d path or duplicate source is unsupported", ErrLaunchUnsupported, i+1))
+			continue
+		}
+		seen[path] = true
+		raw, err := readLaunchSource(path)
+		if err != nil {
+			sourceProblems.add(fmt.Errorf("contributing drop-in %d: %w", i+1, err))
+			continue
+		}
+		sources = append(sources, raw)
+		dropIns = append(dropIns, control.LaunchSource{Path: path, SHA256: fmt.Sprintf("%x", sha256.Sum256(raw))})
+	}
+	if err := sourceProblems.err(); err != nil {
+		return nil, nil, err
+	}
+	if err := control.ValidateLaunchSources(path, dropIns); err != nil {
+		return nil, nil, err
+	}
+	return sources, dropIns, nil
 }
 
 func inspectAutomaticLaunch(raw []byte, app string, validate func(string) error) (AutomaticLaunch, error) {
@@ -91,46 +124,41 @@ func inspectAutomaticLaunch(raw []byte, app string, validate func(string) error)
 }
 
 func inspectParsedAutomaticLaunch(u parsedLaunchUnit, raw []byte, app string, validate func(string) error) (AutomaticLaunch, error) {
-	if err := u.validatePreCommands(validate); err != nil {
-		return AutomaticLaunch{}, err
-	}
+	var problems launchProblems
+	problems.add(u.validatePreCommands(validate))
 	args := strings.Fields(u.execStart)
 	if len(args) < 2 || !filepath.IsAbs(args[0]) {
-		return AutomaticLaunch{}, ErrLaunchUnsupported
+		problems.add(fmt.Errorf("%w: ExecStart requires an absolute direct command", ErrLaunchUnsupported))
+		return AutomaticLaunch{}, problems.err()
 	}
 	if err := validate(args[0]); err != nil {
-		return AutomaticLaunch{}, fmt.Errorf("%w: executable: %w", ErrLaunchUnsupported, err)
+		problems.add(fmt.Errorf("%w: executable: %w", ErrLaunchUnsupported, err))
 	}
-	var err error
-	result := AutomaticLaunch{Environment: u.environmentValues, GPUUUID: u.gpuUUID, Command: u.execStart, PreCommands: u.preCommands, SHA256: fmt.Sprintf("%x", sha256.Sum256(raw))}
+	result := AutomaticLaunch{HomeWorkingDirectory: u.homeWorkingDirectory, Environment: u.environmentValues, GPUUUID: u.gpuUUID, Command: u.execStart, PreCommands: u.preCommands, SHA256: fmt.Sprintf("%x", sha256.Sum256(raw))}
 	if app == "comfyui" {
-		result.Endpoint, err = comfyLaunchEndpoint(args)
-		if err != nil {
-			return result, err
-		}
-		if err := validateComfyScript(args[1]); err != nil {
-			return AutomaticLaunch{}, err
-		}
-		return result, nil
-	}
-	if app == "ollama" {
+		endpoint, err := comfyLaunchEndpoint(args)
+		result.Endpoint = endpoint
+		problems.add(err)
+		problems.add(validateComfyScript(args[1]))
+	} else if app == "ollama" {
 		result.Endpoint = loopbackHTTPPrefix + u.host
-		if err := qualifyParsedLaunch(u, control.NativeModel{GPUUUID: u.gpuUUID, Runtime: app, Endpoint: result.Endpoint}, validate); err != nil {
-			return AutomaticLaunch{}, err
+		problems.add(qualifyParsedMainCommand(u, control.NativeModel{GPUUUID: u.gpuUUID, Runtime: app, Endpoint: result.Endpoint}, func(string) error { return nil }))
+	} else {
+		f, err := parseServerCommand(args, app)
+		problems.add(err)
+		if err == nil {
+			result.Endpoint = loopbackHTTPPrefix + net.JoinHostPort(f.bindHost, f.port)
+			result.Model = f.alias
+			if result.Model == "" {
+				result.Model = f.model
+			}
+			problems.add(qualifyParsedMainCommand(u, control.NativeModel{GPUUUID: u.gpuUUID, Runtime: app, Model: result.Model, Endpoint: result.Endpoint}, func(string) error { return nil }))
 		}
-		return result, nil
 	}
-	f, err := parseServerCommand(args, app)
-	if err != nil {
+	if err := problems.err(); err != nil {
 		return AutomaticLaunch{}, err
 	}
-	result.Endpoint = loopbackHTTPPrefix + net.JoinHostPort(f.bindHost, f.port)
-	result.Model = f.alias
-	if result.Model == "" {
-		result.Model = f.model
-	}
-	err = qualifyParsedLaunch(u, control.NativeModel{GPUUUID: u.gpuUUID, Runtime: app, Model: result.Model, Endpoint: result.Endpoint}, validate)
-	return result, err
+	return result, nil
 }
 
 func comfyLaunchEndpoint(args []string) (string, error) {

@@ -38,6 +38,11 @@ func qualifyParsedLaunch(unit parsedLaunchUnit, n control.NativeModel, validate 
 	if err := unit.validatePreCommands(validate); err != nil {
 		return err
 	}
+	return qualifyParsedMainCommand(unit, n, validate)
+}
+
+// Main-command checks are independent of startup preparation validation.
+func qualifyParsedMainCommand(unit parsedLaunchUnit, n control.NativeModel, validate func(string) error) error {
 	args := strings.Fields(unit.execStart)
 	if len(args) < 2 || !filepath.IsAbs(args[0]) {
 		return ErrLaunchUnsupported
@@ -59,15 +64,16 @@ func qualifyParsedLaunch(unit parsedLaunchUnit, n control.NativeModel, validate 
 }
 
 type parsedLaunchUnit struct {
-	execStart          string
-	preCommands        []string
-	cloudOff           bool
-	host               string
-	maxLoadedPinned    bool
-	gpuUUID            string
-	environment        map[string]bool
-	environmentValues  map[string]string
-	cleanupEnvironment bool
+	homeWorkingDirectory string
+	execStart            string
+	preCommands          []string
+	cloudOff             bool
+	host                 string
+	maxLoadedPinned      bool
+	gpuUUID              string
+	environment          map[string]bool
+	environmentValues    map[string]string
+	cleanupEnvironment   bool
 }
 
 func parseLaunchUnit(raw []byte, runtimeName string) (parsedLaunchUnit, error) {
@@ -150,19 +156,22 @@ func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value strin
 // code it can execute. Every accepted executable must also pass the ordinary
 // trust check; expansion and systemd privilege prefixes remain unsupported.
 func (u parsedLaunchUnit) validatePreCommands(validate func(string) error) error {
+	var problems launchProblems
 	for _, command := range u.preCommands {
 		if strings.ContainsAny(command, ";|&<>\\$%`\"'") {
-			return fmt.Errorf("%w: ExecStartPre command indirection", ErrLaunchUnsupported)
+			problems.add(fmt.Errorf("%w: ExecStartPre command indirection", ErrLaunchUnsupported))
+			continue
 		}
 		args := strings.Fields(strings.TrimPrefix(command, "-"))
 		if len(args) == 0 || !filepath.IsAbs(args[0]) || validate(args[0]) != nil {
-			return fmt.Errorf("%w: ExecStartPre requires a trusted direct executable", ErrLaunchUnsupported)
+			problems.add(fmt.Errorf("%w: ExecStartPre requires a trusted direct executable", ErrLaunchUnsupported))
+			continue
 		}
 		if !supportedPreCommand(args) {
-			return fmt.Errorf("%w: ExecStartPre supports only system true/false with optional --, or test with one absolute file predicate", ErrLaunchUnsupported)
+			problems.add(fmt.Errorf("%w: ExecStartPre supports only system true/false with optional --, or test with one absolute file predicate", ErrLaunchUnsupported))
 		}
 	}
-	return nil
+	return problems.err()
 }
 
 // Exact system paths avoid accepting a helper merely named test or true.
@@ -264,7 +273,7 @@ func (f *serverFlags) parse(args []string, runtimeName string) (serverFlags, err
 		key := canonicalServerFlag(args[0], runtimeName)
 		args = args[1:]
 		if seen[key] {
-			return *f, fmt.Errorf("%w: duplicate option %s", ErrLaunchUnsupported, key)
+			return *f, fmt.Errorf("%w: duplicate option %s", ErrLaunchUnsupported, diagnosticServerFlag(key))
 		}
 		seen[key] = true
 		if runtimeName == runtimeLlamaCPP && (key == "--cont-batching" || key == "--no-cont-batching") {
@@ -275,15 +284,23 @@ func (f *serverFlags) parse(args []string, runtimeName string) (serverFlags, err
 			continue
 		}
 		if len(args) == 0 {
-			return *f, fmt.Errorf("%w: option %s requires a value", ErrLaunchUnsupported, key)
+			return *f, fmt.Errorf("%w: option %s requires a value", ErrLaunchUnsupported, diagnosticServerFlag(key))
 		}
 		value := args[0]
 		args = args[1:]
 		if err := f.apply(runtimeName, key, value); err != nil {
-			return *f, fmt.Errorf("%w: unsupported option or value %s", err, key)
+			return *f, fmt.Errorf("%w: unsupported option or value %s", err, diagnosticServerFlag(key))
 		}
 	}
 	return *f, nil
+}
+
+func diagnosticServerFlag(key string) string {
+	switch key {
+	case "--host", "--port", "--model", "--alias", "--served-model-name", flagParallel, "--spec-draft-n-max", "--spec-draft-n-min", "--flash-attn", "--spec-type", "--ctx-size", "--n-gpu-layers", "--max-model-len", "--cont-batching", "--no-cont-batching":
+		return key
+	}
+	return "(unqualified option)"
 }
 
 func canonicalServerFlag(key, runtimeName string) string {

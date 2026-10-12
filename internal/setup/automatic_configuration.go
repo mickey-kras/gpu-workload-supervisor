@@ -92,7 +92,7 @@ func validatePreparedInstallation(d Draft, found control.WorkloadProfile) error 
 }
 
 func (b Backend) showAutomaticRaw(ctx context.Context, unit string) ([]byte, error) {
-	out, err := b.runCommand(ctx, automaticSystemctlPath, "--user", "show", "--property=Id,LoadState,ExecStart,ExecStartPre,Environment,ControlGroup,ActiveState,SubState,FragmentPath,DropInPaths,NeedDaemonReload,Slice", "--no-pager", "--", unit)
+	out, err := b.runCommand(ctx, automaticSystemctlPath, "--user", "show", "--property=Id,LoadState,ExecStart,ExecStartPre,Environment,ControlGroup,ActiveState,SubState,FragmentPath,DropInPaths,NeedDaemonReload,Slice,WorkingDirectory", "--no-pager", "--", unit)
 	if err != nil {
 		return nil, fmt.Errorf("could not inspect installation %s: %w", unit, err)
 	}
@@ -146,31 +146,34 @@ func (b Backend) automaticConfiguration(ctx context.Context, app, unit, model st
 }
 func (b Backend) configurationFromMetadata(ctx context.Context, app, unit, model string, values map[string]string) (control.WorkloadProfile, error) {
 	p := control.WorkloadProfile{Adapter: "systemd", Unit: unit}
+	var problems []error
 	if values["NeedDaemonReload"] != "no" {
-		return p, errors.New("installation has changed or uses unsupported overrides; reload its supported direct launch and retry")
+		problems = append(problems, errors.New("installation has changed or uses unsupported overrides; reload its supported direct launch and retry"))
 	}
 	if appFromUnit(execStartPropertyPrefix+values["ExecStart"]) != app {
-		return p, errors.New("installation launch does not match the selected application")
+		problems = append(problems, errors.New("installation launch does not match the selected application"))
+		return p, gpuruntime.CombineLaunchErrors(problems...)
 	}
 	launch, err := b.inspectAutomaticMetadata(values, app)
 	if err != nil {
-		if errors.Is(err, gpuruntime.ErrGPUIdentityUnresolved) {
-			return p, gpuruntime.ErrGPUIdentityUnresolved
-		}
-		return p, fmt.Errorf("unsupported existing launch; choose a supported direct local configuration: %w", err)
+		problems = append(problems, fmt.Errorf("unsupported existing launch; choose a supported direct local configuration: %w", err))
+		return p, gpuruntime.CombineLaunchErrors(problems...)
 	}
-	if err := gpuruntime.CheckLoadedEnvironment(values["Environment"], launch.Environment); err != nil {
-		return p, err
-	}
+	problems = append(problems,
+		gpuruntime.CheckLoadedAccountHomeDirectory(values["WorkingDirectory"], launch.HomeWorkingDirectory),
+		gpuruntime.CheckLoadedEnvironment(values["Environment"], launch.Environment))
 	if err := gpuruntime.CheckNativeBindingSources(values, unit, values["FragmentPath"], launch.DropIns); err != nil {
-		return p, errors.New("loaded drop-in configuration differs from inspected source files")
+		problems = append(problems, errors.New("loaded drop-in configuration differs from inspected source files"))
 	}
 	args := execArguments.FindAllStringSubmatch(values["ExecStart"], -1)
 	if len(args) != 1 || strings.Join(strings.Fields(args[0][1]), " ") != strings.Join(strings.Fields(launch.Command), " ") {
-		return p, errors.New("loaded launch configuration differs from its file; reload and retry")
+		problems = append(problems, errors.New("loaded launch configuration differs from its file; reload and retry"))
 	}
 	if err := gpuruntime.CheckLoadedPreCommands(values["ExecStartPre"], launch.PreCommands); err != nil {
-		return p, errors.New("loaded startup preparation differs from its file; reload and retry")
+		problems = append(problems, errors.New("loaded startup preparation differs from its file; reload and retry"))
+	}
+	if err := gpuruntime.CombineLaunchErrors(problems...); err != nil {
+		return p, err
 	}
 	if err := b.resolveInstallationPlacement(ctx, unit, values, &p); err != nil {
 		return p, err

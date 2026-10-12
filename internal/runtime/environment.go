@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -70,6 +71,9 @@ func environmentHint(value string) string {
 	return ""
 }
 func environmentError(name, reason string) error {
+	if len(name) > 64 || !environmentName.MatchString(name) {
+		name = ""
+	}
 	if name != "" {
 		name = " variable " + name
 	}
@@ -224,22 +228,34 @@ func CheckLoadedEnvironment(output string, expected map[string]string) error {
 		return err
 	}
 	observed := map[string]string{}
+	var problems launchProblems
 	for _, assignment := range assignments {
 		name, value, _ := strings.Cut(assignment, "=")
 		if _, ok := observed[name]; ok {
-			return environmentError(name, "loaded metadata is ambiguous; reload and retry")
+			problems.add(environmentError(name, "loaded metadata is ambiguous; reload and retry"))
 		}
 		observed[name] = value
 	}
-	for name, value := range expected {
-		if observed[name] != value {
-			return environmentError(name, "loaded setting differs from inspected source; reload and refresh the binding")
+	names := sortedEnvironmentKeys(expected)
+	for _, name := range names {
+		if observed[name] != expected[name] {
+			problems.add(environmentError(name, "loaded setting differs from inspected source; reload and refresh the binding"))
 		}
 	}
-	for name := range observed {
+	names = sortedEnvironmentKeys(observed)
+	for _, name := range names {
 		if _, ok := expected[name]; !ok {
-			return environmentError(name, "loaded setting has no inspected source; reload and refresh the binding")
+			problems.add(environmentError(name, "loaded setting has no inspected source; reload and refresh the binding"))
 		}
 	}
-	return nil
+	return problems.err()
+}
+
+func sortedEnvironmentKeys(values map[string]string) []string {
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }

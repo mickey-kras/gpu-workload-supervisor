@@ -25,8 +25,8 @@ func TestNumericCUDAVisibilityPrepareAndDiscoveryPreserveExternalService(t *test
 	// assumption that a management inventory index is a CUDA ordinal.
 	b.inspectAutomatic = nil
 	_, err := b.Prepare(context.Background(), PrepareRequest{Draft: draft})
-	if !errors.Is(err, gpuruntime.ErrGPUIdentityUnresolved) || err.Error() != gpuruntime.ErrGPUIdentityUnresolved.Error() {
-		t.Fatalf("prepare lost or nested unresolved identity explanation: %v", err)
+	if !errors.Is(err, gpuruntime.ErrGPUIdentityUnresolved) || strings.Count(err.Error(), gpuruntime.ErrGPUIdentityUnresolved.Error()) != 1 {
+		t.Fatalf("prepare lost or duplicated unresolved identity explanation: %v", err)
 	}
 	result := Discovery{}
 	b.discoverUnit(context.Background(), &result, draft.Binding.Unit)

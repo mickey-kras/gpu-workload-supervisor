@@ -11,7 +11,7 @@ import {createShell, createSettings, createApplicationCards, createFooter} from 
 import {ReviewedConfiguration} from './review.mjs';
 import {createProfileEditor, editableOwnedLaunch} from './profile-ui.mjs';
 import {addDraftEditor} from './discovery-ui.mjs';
-import {applications} from './onboarding.mjs';
+import {applications, candidateDiagnostics} from './onboarding.mjs';
 
 // The caller supplies transport; fixture callers never invoke the production subprocess.
 export function createSetupWindow(options) { const ui = new SetupWindow(options); ui.start(); return ui; }
@@ -364,6 +364,7 @@ class SetupWindow {
         const states = {'unreachable': 'Address unreachable · Installation unverified', 'inspection-failed': 'Inspection failed · Open settings', 'discovery-error': 'Detection failed · Open settings', 'missing': 'Location missing · Open settings', 'invalid': 'Configuration unreadable · Open settings', 'unsupported': 'Unsupported · Open settings'};
         if (known.length > 1) return 'Choose an installation in settings.';
         const selected = known[0] ?? candidates.find(candidate => candidate.sourceKind === 'configuration' || candidate.unit) ?? candidates[0];
+        if (candidateDiagnostics(selected).length > 1) return 'Configuration needs attention · Open settings';
         if (selected?.configurationStatus === 'inspection-failed') return 'Inspection failed · Open settings';
         if (selected?.configurationStatus === 'model-missing') return 'Configured model missing · Open settings';
         if (selected?.configurationStatus === 'gpu-unresolved') return 'GPU identity needs setup · Open settings';

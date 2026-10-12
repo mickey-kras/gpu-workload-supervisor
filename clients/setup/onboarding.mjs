@@ -63,7 +63,14 @@ export function profileIDFromModel(app, model) {
     return /^[a-z][a-z0-9_-]{0,63}$/.test(slug) && slug !== 'idle' && slug !== 'unknown' ? slug : null;
 }
 
+export function candidateDiagnostics(candidate) {
+    return [...new Set((Array.isArray(candidate?.diagnostics) ? candidate.diagnostics : [])
+        .filter(value => typeof value === 'string' && value.trim()))];
+}
+
 export function candidateMessage(candidate) {
+    const diagnostics = candidateDiagnostics(candidate);
+    if (diagnostics.length > 1) return 'Several configuration checks need attention. Open View details to review the reported problems, then check again.';
     if (candidate?.configurationStatus === 'gpu-unresolved') return 'GPU identity needs setup. Review this service’s GPU visibility settings before choosing a full GPU UUID, reloading the service configuration, and checking again.';
     if (candidate?.configurationStatus === 'inspection-failed') return 'Installation inspection failed. Check its service configuration or choose an installed executable.';
     if (candidate?.configurationStatus === 'model-missing') return 'Configured model is missing. Choose an existing model or repair the service configuration.';

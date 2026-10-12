@@ -116,20 +116,16 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 	if err != nil {
 		return err
 	}
-	args := []string{"--user", "show", "--property=FragmentPath", "--property=DropInPaths", "--property=NeedDaemonReload", "--property=ExecStartPre", "--property=ExecStart"}
-	for name := range launch.environmentValues {
-		if !strings.HasPrefix(name, "OLLAMA_") {
-			args = append(args, "--property=Environment")
-			break
-		}
-	}
-	args = append(args, "--", p.Unit)
+	args := nativeBindingShowArguments(p.Unit, launch)
 	b, err := m.runner.Run(ctx, m.config.SystemctlPath, args...)
 	if err != nil {
 		return ErrLaunchChanged
 	}
 	values, err := ParseUnitProperties(b)
 	if err != nil {
+		return err
+	}
+	if err := CheckLoadedAccountHomeDirectory(values["WorkingDirectory"], launch.homeWorkingDirectory); err != nil {
 		return err
 	}
 	if err := CheckLoadedEnvironment(values["Environment"], launch.environmentValues); err != nil {
@@ -145,6 +141,21 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 		return err
 	}
 	return CheckNativeBindingSources(values, p.Unit, launchFile, dropIns)
+}
+
+func nativeBindingShowArguments(unit string, launch parsedLaunchUnit) []string {
+	args := []string{"--user", "show", "--property=FragmentPath", "--property=DropInPaths", "--property=NeedDaemonReload", "--property=ExecStartPre", "--property=ExecStart"}
+	if launch.homeWorkingDirectory != "" {
+		args = append(args, "--property=WorkingDirectory")
+	}
+	for name := range launch.environmentValues {
+		if !strings.HasPrefix(name, "OLLAMA_") {
+			args = append(args, "--property=Environment")
+			break
+		}
+	}
+	args = append(args, "--", unit)
+	return args
 }
 
 func (m *SystemdManager) readProfileLaunch(p control.WorkloadProfile, validate func(string) error) (parsedLaunchUnit, string, []control.LaunchSource, error) {

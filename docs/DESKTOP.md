@@ -74,7 +74,18 @@ full identity is also available in wrapped selectable text. **Use installation**
 checks and reviews the selection; only **Finish setup** activates it. An unreachable default
 address does not establish an installation. Installed/stopped services, missing
 locations, missing model choices and inspection failures have separate guidance;
-**View details** opens a separate Configuration details page with the wrapped backend cause, **Copy details**, and **Check again**.
+**View details** opens a separate Configuration details page with the reported
+configuration problems, **Copy details**, and **Check again**. Independent launch
+checks report multiple blockers in one inspection; checks that depend on invalid
+or unreadable evidence still require another inspection after repair. A blocked
+installation cannot be activated. Discovery does not start applications or change
+service files.
+
+Supported external launches can use `%h` at the beginning of path tokens in
+`ExecStart`, `Environment` and `WorkingDirectory`. It resolves from the desktop
+account's home directory and must agree with systemd's loaded configuration.
+Other expansion syntax remains unsupported, and expanded paths still undergo
+the same ownership, permission and symbolic-link checks as literal paths.
 
 For installed Ollama, llama.cpp or vLLM without an existing supported service,
 open **Change installation…** and choose **Choose installed executable…**.
