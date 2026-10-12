@@ -62,9 +62,9 @@ func TestTemporaryDiscoveryInspectionRefusesUpgradeAndCorruption(t *testing.T) {
 			}
 			switch mode {
 			case "v12":
-				exec(`DROP TABLE temporary_discovery_sessions; DELETE FROM schema_migrations WHERE version=13`)
+				exec(`DROP TABLE comfyui_attempts; DROP TABLE temporary_discovery_sessions; DELETE FROM schema_migrations WHERE version>=13`)
 			case "v11":
-				exec(`DROP TABLE temporary_discovery_sessions; DROP TABLE operator_settings; DROP TABLE idle_policy_state; DELETE FROM schema_migrations WHERE version>=12`)
+				exec(`DROP TABLE comfyui_attempts; DROP TABLE temporary_discovery_sessions; DROP TABLE operator_settings; DROP TABLE idle_policy_state; DELETE FROM schema_migrations WHERE version>=12`)
 			case "future":
 				exec(`INSERT INTO schema_migrations(version,applied_at) VALUES(999,'2026-10-08T00:00:00Z')`)
 			case "missing-version":

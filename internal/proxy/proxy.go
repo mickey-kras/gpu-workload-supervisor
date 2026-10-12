@@ -41,6 +41,7 @@ type Route struct {
 }
 
 type Config struct {
+	ComfyUIContract      string
 	IngressMode          string
 	ExecutionCredential  string
 	CompletionCredential string
@@ -58,6 +59,7 @@ type Config struct {
 }
 
 type Handler struct {
+	comfyUI              *comfyUIAdapter
 	ingressMode          string
 	executionCredential  string
 	completionCredential string
@@ -145,6 +147,9 @@ func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (
 		response.Header.Del(DefaultRegistrationTokenHeader)
 		handler.protectIngressResponse(response, "")
 		return nil
+	}
+	if err := handler.configureComfyUI(config); err != nil {
+		return nil, err
 	}
 	return handler, nil
 }
@@ -311,7 +316,7 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 		writeError(response, http.StatusBadRequest, "path_not_canonical")
 		return
 	}
-	if h.nativeModel != nil && (request.URL.RawQuery != "" || request.Header.Get("Content-Encoding") != "") {
+	if (h.nativeModel != nil || h.comfyUI != nil) && (request.URL.RawQuery != "" || request.Header.Get("Content-Encoding") != "") {
 		writeError(response, http.StatusBadRequest, "native_request_invalid")
 		return
 	}
@@ -366,6 +371,10 @@ func (h *Handler) execute(response http.ResponseWriter, request *http.Request) {
 		writeError(response, http.StatusBadRequest, "fence_invalid")
 		return
 	}
+	if h.comfyUI != nil {
+		h.executeComfyUI(response, request, requestID, fence)
+		return
+	}
 	jobID := ""
 	if h.jobIDHeader != "" {
 		jobID = strings.TrimSpace(request.Header.Get(h.jobIDHeader))
@@ -416,6 +425,10 @@ func (h *Handler) executeUser(response http.ResponseWriter, request *http.Reques
 	}
 	if state.ActiveWorkload != h.workload || state.DesiredWorkload != h.workload {
 		writeError(response, http.StatusConflict, "workload_mismatch")
+		return
+	}
+	if h.comfyUI != nil {
+		h.executeComfyUIUser(response, request)
 		return
 	}
 	h.proxy.ServeHTTP(response, h.withoutControlHeaders(request))
