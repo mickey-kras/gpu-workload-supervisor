@@ -46,7 +46,7 @@ class SetupWindow {
         createShell(this); createSettings(this); createApplicationCards(this); createFooter(this);
         this.review.connect('clicked', () => {
             const editor = this.applicationSettings?.editor;
-            if (!editor || (['main', 'advanced'].includes(this.applicationSettings.page) && editor.needsModelDecision())) return this.continueSetup();
+            if (!editor || (['main', 'advanced'].includes(this.applicationSettings.page) && (editor.needsModelDecision() || this.drafts.some(draft => draft.id !== editor.id)))) return this.continueSetup();
             return editor.settingsAction();
         });
         this.apply.connect('clicked', this.activateConfiguration);
@@ -192,6 +192,8 @@ class SetupWindow {
                     this.addProfile(prepared, !finish);
                 };
                 if (finish) {
+                    if (this.drafts.some(draft => draft.id !== initial.id)) throw new Error('Other included applications still need a check. Return to setup and Continue to check every selected installation.');
+                    if (this.draftEditors.some(item => item.temporaryActive()) || (this.temporaryStatus?.session && this.temporaryStatus.session.status !== 'completed')) throw new Error('Finish temporary application cleanup before continuing.');
                     const items = [...this.profiles.filter(existing => existing !== replacing), prepared];
                     if (!await this.reviewConfiguration({items, current, commit}))
                         throw new Error('The configuration needs another check before confirmation. Your draft is kept.');
@@ -275,6 +277,7 @@ class SetupWindow {
         this.closeApplicationSettings(false);
         if (this.draftEditors.some(editor => editor.temporaryActive()) || (this.temporaryStatus?.session && this.temporaryStatus.session.status !== 'completed')) { this.status.label = 'Restore the stopped application before continuing.'; this.status.visible = true; return; }
         const editors = this.draftEditors.filter(editor => this.drafts.some(draft => draft.id === editor.id));
+        if (editors.some(editor => editor.checking())) { this.status.label = 'Wait for the installation check to finish before continuing.'; this.status.visible = true; return; }
         if (this.step === 0 && editors.some(editor => editor.needsModelDecision())) { this.setStep(1); return; }
         this.review.sensitive = false;
         const generation = this.draftGeneration;
@@ -363,7 +366,9 @@ class SetupWindow {
         const selected = known[0] ?? candidates.find(candidate => candidate.sourceKind === 'configuration' || candidate.unit) ?? candidates[0];
         if (selected?.configurationStatus === 'inspection-failed') return 'Inspection failed · Open settings';
         if (selected?.configurationStatus === 'model-missing') return 'Configured model missing · Open settings';
+        if (selected?.configurationStatus === 'gpu-unresolved') return 'GPU identity needs setup · Open settings';
         if (!known.length) return states[selected?.instanceStatus] ?? (selected?.instanceStatus === 'not-running' && !selected.unit ? 'Default address unavailable · Installation unverified' : 'Not detected');
+        if (selected.instanceStatus === 'unreachable') return 'Installed · Address unreachable · Ready to configure';
         const state = states[selected.instanceStatus];
         if (state) return state;
         if (selected.configurationStatus === 'model-required') return 'Installed · Choose an existing model';

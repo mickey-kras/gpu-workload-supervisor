@@ -193,7 +193,7 @@ func probeFailure(result ApplicationCandidate, err error) ApplicationCandidate {
 	if errors.As(err, &network) {
 		result.InstanceStatus = "unreachable"
 		result.InventoryStatus = "unknown"
-		result.NextStep = "The application is unreachable. Start it separately or select an existing configuration; saved references are unchanged."
+		result.NextStep = "The address is unreachable and does not verify an installation. Choose a detected installation or its installed executable to preview a managed launch; saved references are unchanged."
 	}
 	return result
 }
@@ -214,7 +214,7 @@ func probeReferenceWithExecutableValidator(ctx context.Context, r ProbeRequest, 
 	// executable trust validator, which qualifies every resolution hop. Generic
 	// references retain the no-symlink rule and never open their contents.
 	if r.ReferenceKind == "application" && r.App != "comfyui" {
-		return probeSelectedExecutable(r, result, validateExecutable)
+		return probeSelectedExecutable(r, result, validateExecutable), nil
 	}
 	// Do not resolve links or open devices/FIFOs. A selection is only a candidate.
 	directory := r.ReferenceKind == referenceModelDirectory || r.ReferenceKind == "application-directory"
@@ -230,12 +230,14 @@ func probeReferenceWithExecutableValidator(ctx context.Context, r ProbeRequest, 
 	}
 	return referencedCandidate(r, directory, result), nil
 }
-func probeSelectedExecutable(r ProbeRequest, result ApplicationCandidate, validate func(string, string) error) (ApplicationCandidate, error) {
+
+// Qualification failures are inspectable candidate states, not probe errors.
+func probeSelectedExecutable(r ProbeRequest, result ApplicationCandidate, validate func(string, string) error) ApplicationCandidate {
 	if err := validate(r.App, r.Reference); err != nil {
 		result.InstanceStatus = inspectionFailedStatus
 		result.ConfigurationStatus = inspectionFailedStatus
 		result.NextStep = err.Error()
-		return result, nil
+		return result
 	}
 	ports := map[string]uint16{"ollama": 11434, appLlamaCPP: 8080, "vllm": 8000}
 	result.SourceKind = "owned"
@@ -244,7 +246,7 @@ func probeSelectedExecutable(r ProbeRequest, result ApplicationCandidate, valida
 	result.ConfigurationStatus = "model-required"
 	result.Binding = &DraftBinding{Instance: "instance-" + result.ID, Owned: &DraftOwnedLaunch{Executable: r.Reference, Port: ports[r.App]}}
 	result.NextStep = "Supported executable installed. Select an existing local model, then review creation of a supervisor-owned launch. Nothing has been started."
-	return result, nil
+	return result
 }
 
 func missingReference(err error, result ApplicationCandidate) ApplicationCandidate {

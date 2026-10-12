@@ -5,7 +5,7 @@ import Gdk from 'gi://Gdk?version=4.0';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Pango from 'gi://Pango';
 import {applicationHeader, linkButton, roundedCard} from './presentation.mjs';
-import {applications, candidateChoice, candidateIdentity, candidateMessage} from './onboarding.mjs';
+import {applications, candidateChoice, candidateIdentity, candidateMessage, candidateReady} from './onboarding.mjs';
 
 // Settings share the wizard's scroller and fixed footer. Each optional section
 // has its own page, so long service identities never compete with entry fields.
@@ -88,8 +88,8 @@ export class InstallationSettings {
         this.identity.label = candidateIdentity(candidate);
         this.state.label = candidate.instanceStatus === 'not-running' && candidate.unit ? 'Stopped' : 'Unverified';
         if (candidate.instanceStatus === 'available') this.state.label = 'Reachable';
-        this.ready = Boolean(candidate.recognized && ['ready', 'model-required'].includes(candidate.configurationStatus));
-        this.noticeTitle.label = this.ready ? 'Ready for setup' : 'Configuration needs attention';
+        this.ready = candidateReady(candidate);
+        this.noticeTitle.label = this.ready ? 'Ready for setup' : 'Needs setup';
         this.noticeIcon.icon_name = this.ready ? 'emblem-ok-symbolic' : 'dialog-warning-symbolic';
         this.noticeIcon.remove_css_class(this.ready ? 'warning' : 'success'); this.noticeIcon.add_css_class(this.ready ? 'success' : 'warning');
         if (this.ready) this.notice.remove_css_class('setup-warning'); else this.notice.add_css_class('setup-warning');

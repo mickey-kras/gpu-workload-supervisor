@@ -45,14 +45,14 @@ func TestDiscoveryClassifiesBeforeStrictBindingMetadata(t *testing.T) {
 
 func TestExecutableReferenceCreatesOnlyOwnedDraftEvidence(t *testing.T) {
 	r := ProbeRequest{App: "ollama", Reference: "/opt/trusted/ollama", ReferenceKind: "application"}
-	selected, err := probeSelectedExecutable(r, candidate(r), func(app, path string) error {
+	selected := probeSelectedExecutable(r, candidate(r), func(app, path string) error {
 		if app != "ollama" || path != r.Reference {
 			t.Fatal("wrong executable inspected")
 		}
 		return nil
 	})
-	if err != nil || !selected.Recognized || selected.SourceKind != "owned" || selected.InstanceStatus != "installed" || selected.Binding.Owned.Executable != r.Reference || selected.Binding.Owned.Port != 11434 || selected.LifecycleControl != "unverified" {
-		t.Fatalf("owned candidate contract: %+v %v", selected, err)
+	if !selected.Recognized || selected.SourceKind != "owned" || selected.InstanceStatus != "installed" || selected.Binding.Owned.Executable != r.Reference || selected.Binding.Owned.Port != 11434 || selected.LifecycleControl != "unverified" {
+		t.Fatalf("owned candidate contract: %+v", selected)
 	}
 	// /usr/bin/true is trusted but its name does not establish a supported app.
 	got, err := Probe(context.Background(), ProbeRequest{App: "ollama", Reference: "/usr/bin/true", ReferenceKind: "application"})

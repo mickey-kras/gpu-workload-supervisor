@@ -154,6 +154,9 @@ func (b Backend) configurationFromMetadata(ctx context.Context, app, unit, model
 	}
 	launch, err := b.inspectAutomaticMetadata(values, app)
 	if err != nil {
+		if errors.Is(err, gpuruntime.ErrGPUIdentityUnresolved) {
+			return p, gpuruntime.ErrGPUIdentityUnresolved
+		}
 		return p, fmt.Errorf("unsupported existing launch; choose a supported direct local configuration: %w", err)
 	}
 	if err := gpuruntime.CheckLoadedEnvironment(values["Environment"], launch.Environment); err != nil {

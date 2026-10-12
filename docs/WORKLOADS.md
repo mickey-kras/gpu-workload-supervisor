@@ -148,6 +148,25 @@ preflight, startup, readiness and release. Numeric indices, UUID prefixes,
 multiple devices and MIG mappings remain unsupported. Setup never removes or
 rewrites the setting to make adoption pass.
 
+Numeric CUDA visibility has an explicit unsupported disposition: a discovered
+installation remains installed, but its GPU identity is unresolved and adoption
+is blocked. NVIDIA inventory indices are not CUDA logical ordinals. Even one
+inventory device at index zero and no `CUDA_DEVICE_ORDER` in filtered unit
+metadata do not establish the application's ordering, inherited environment,
+environment-file overrides or CUDA-visible device mapping. Metadata-only setup
+has no authoritative same-context CUDA enumeration evidence and never starts a
+runtime to infer that mapping. Adding an ordering setting alone does not qualify
+the numeric selection. To adopt this installation, review and approve a change
+to use the configured GPU's full UUID in its external service, reload the user
+systemd manager and refresh the binding; setup preserves the original files and
+settings.
+
+The [NVIDIA CUDA environment-variable reference](https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/environment-variables.html)
+defines CUDA ordering and visibility; the [NVIDIA management reference](https://docs.nvidia.com/deploy/nvidia-smi/index.html)
+defines management indices. The [systemd execution environment reference](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html)
+describes additional environment sources; the unit's `Environment` property
+must not be treated as a complete process-environment snapshot.
+
 Supervisor-managed native launches may specify an absolute `owned.executable`
 path. It must identify the selected runtime and pass the same executable trust
 checks; omitting it retains the standard `/usr/bin` location. Model selection,

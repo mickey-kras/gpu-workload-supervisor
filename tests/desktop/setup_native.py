@@ -53,10 +53,11 @@ def main():
                     'configuration-checking', 'settings-stale-check', 'settings-stale-endpoint-check', 'temporary-without-consent',
                     'temporary-checking', 'temporary-cleanup-required', 'temporary-close-blocked',
                     'temporary-cleanup-complete', 'temporary-cancelled-restored'}
+        required.update(('included-unresolved-settings', 'included-unresolved-blocked', 'included-valid-rest-review'))
         required.update(f'settings-{state}' for state in
-                        ('ready', 'running', 'missing-location', 'unreachable', 'unsupported-trust', 'unsupported-home', 'inspection-failed'))
+                        ('ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed'))
         required.update(f'configuration-{state}' for state in
-                        ('missing-location', 'unreachable', 'unsupported-trust', 'unsupported-home', 'inspection-failed'))
+                        ('missing-location', 'unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed'))
         assert required <= set(report['screenshots']), ('missing native state evidence', required - set(report['screenshots']))
         for name in required:
             assert (case / f'{name}.png').is_file(), ('missing native screenshot', name)

@@ -64,6 +64,7 @@ export function profileIDFromModel(app, model) {
 }
 
 export function candidateMessage(candidate) {
+    if (candidate?.configurationStatus === 'gpu-unresolved') return 'GPU identity needs setup. Review this service’s GPU visibility settings before choosing a full GPU UUID, reloading the service configuration, and checking again.';
     if (candidate?.configurationStatus === 'inspection-failed') return 'Installation inspection failed. Check its service configuration or choose an installed executable.';
     if (candidate?.configurationStatus === 'model-missing') return 'Configured model is missing. Choose an existing model or repair the service configuration.';
     const states = {
@@ -72,15 +73,20 @@ export function candidateMessage(candidate) {
         'discovery-error': 'Discovery failed. Retry to check this installation.',
         'inspection-failed': 'Installation inspection failed. Check its service configuration or choose an installed executable.',
         installed: 'Installed executable found. Choose an existing model to preview a Supervisor-managed launch.',
-        unreachable: 'Address unreachable. An address alone does not verify an installed application. Check its address or choose its executable.',
+        unreachable: candidate?.recognized ? 'Installation recognized. Its address is unreachable; configuration can be checked without starting it.' : 'Address unreachable. An address alone does not verify an installed application. Choose a detected installation or its executable to preview a managed launch.',
         missing: candidate?.referenceKind?.startsWith('model-') ? 'Selected model is missing. Choose another model.' : 'Application location is missing. Choose its installed location.',
         unsupported: 'This setup is not supported. Save the selection for later or choose another instance.',
         invalid: 'Configuration could not be read. Check the selected address or location.',
         candidate: 'Application found. Choose its installation to check start and stop controls.',
         available: 'Application responded. Its start and stop controls still need a check.',
     };
-    if (candidate?.configurationStatus === 'ready' && candidate.instanceStatus !== 'not-running') return 'Installation recognized. Ready to configure.';
+    if (candidateReady(candidate) && candidate.instanceStatus !== 'not-running') return candidate.instanceStatus === 'unreachable' ? states.unreachable : 'Installation recognized. Ready to configure.';
     return states[candidate?.instanceStatus] ?? 'Choose an application instance or provide its location.';
+}
+
+export function candidateReady(candidate) {
+    return Boolean(candidate?.recognized && candidate.binding && ['ready', 'model-required'].includes(candidate.configurationStatus) &&
+        !['invalid', 'missing', 'unsupported', 'inspection-failed', 'discovery-error', 'ambiguous'].includes(candidate.instanceStatus));
 }
 
 function stoppedCandidateMessage(candidate) {
