@@ -289,7 +289,48 @@ func decodeModelList(b []byte) (modelListPayload, error) {
 	if strictjson.Check(json.NewDecoder(bytes.NewReader(b))) != nil || json.Unmarshal(b, &payload) != nil {
 		return payload, ErrModelIdentity
 	}
+	fields, err := modelObjectFields(b, "data", "models")
+	if err != nil || checkModelEntryFields(fields["data"], "id", "status") != nil || checkModelEntryFields(fields["models"], "name", "model") != nil {
+		return payload, ErrModelIdentity
+	}
 	return payload, nil
+}
+
+func modelObjectFields(raw []byte, names ...string) (map[string]json.RawMessage, error) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return nil, ErrModelIdentity
+	}
+	for key := range fields {
+		for _, name := range names {
+			if key != name && strings.EqualFold(key, name) {
+				return nil, ErrModelIdentity
+			}
+		}
+	}
+	return fields, nil
+}
+
+func checkModelEntryFields(raw []byte, names ...string) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	var entries []json.RawMessage
+	if json.Unmarshal(raw, &entries) != nil {
+		return ErrModelIdentity
+	}
+	for _, entry := range entries {
+		fields, err := modelObjectFields(entry, names...)
+		if err != nil {
+			return err
+		}
+		if status := fields["status"]; len(status) != 0 {
+			if _, err := modelObjectFields(status, "value", "failed", "exit_code"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func verifyOllamaModelList(payload modelListPayload, model string) error {
