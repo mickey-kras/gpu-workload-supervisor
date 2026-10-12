@@ -2,7 +2,7 @@
 
 [Documentation](README.md) | [Repository](../README.md)
 
-An enabled catalog is a version 1 JSON object containing 1-32 `profiles`:
+An enabled catalog is a supported-version JSON object containing 1-32 `profiles`:
 
 ```json
 {
@@ -21,6 +21,23 @@ An enabled catalog is a version 1 JSON object containing 1-32 `profiles`:
   ]
 }
 ```
+
+Catalog versions advance per feature, rather than bundling unrelated additions
+into one schema change:
+
+| Version | Feature boundary | Status |
+| --- | --- | --- |
+| 1 | Existing workload profiles and native model bindings | Supported |
+| 2 | Adds owned native launch specifications | Supported |
+| 3 | Planned llama.cpp router binding fields | Not yet supported |
+| Later | Subsequent features receive separate version changes | Not yet supported |
+
+Existing v1 and v2 catalogs remain valid under their current rules; no migration
+or version bump is required for unchanged profiles. Owned launch specifications
+require v2. Unsupported versions (including planned v3), unknown fields and
+fields outside their supported version are rejected; a planned version does not
+enable its feature. Catalog versions are separate from database schema versions
+and upstream runtime/API versions.
 
 Removing the final application through setup writes an explicit disabled catalog,
 such as `{"version":1,"profiles":[],"disabled":true}`, with no configured workloads.
@@ -115,6 +132,14 @@ cross-runtime admission after a shared-unit unload relies on the `requiredMiB`
 capacity probe, not `/api/ps` alone. llama.cpp and vLLM still need one unit per
 model.
 
+Version-tagged, sanitized source-derived `/api/ps` and llama.cpp `/models`
+examples are replayed in the native HTTP tests; provenance and synthetic
+mutations are recorded in [the fixture notes](../internal/runtime/testdata/README.md).
+Native llama.cpp readiness continues to query `/health` and `/v1/models`;
+`/models` replay is test-only parser coverage. Parsing exact identity and status
+does not establish router lifecycle safety, fencing, admission or GPU release,
+and adds no router binding support.
+
 Stop workload proxies before applying a catalog change; setup and CLI configure
 both enforce the proxy lifetime lock, including in-flight requests.
 
@@ -195,3 +220,4 @@ native API ports bypasses proxy enforcement and must remain outside the
 managed execution path.
 Real GPU/systemd/runtime qualification is still required on the deployment host;
 HTTP and lifecycle fixtures are not hardware qualification.
+

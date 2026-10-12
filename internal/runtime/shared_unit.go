@@ -29,8 +29,8 @@ func (m *SystemdManager) sharedUnitProfile(p control.WorkloadProfile) bool {
 }
 
 func ollamaLoadedModels(b []byte) (map[string]bool, error) {
-	var payload modelListPayload
-	if err := json.Unmarshal(b, &payload); err != nil {
+	payload, err := decodeModelList(b)
+	if err != nil || payload.Models == nil {
 		return nil, ErrModelIdentity
 	}
 	loaded := map[string]bool{}

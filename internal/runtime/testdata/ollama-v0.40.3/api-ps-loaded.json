@@ -1,0 +1,10 @@
+{
+  "models": [{
+    "name": "selected:latest",
+    "model": "selected:latest",
+    "size": 1048576,
+    "digest": "sanitized-digest",
+    "expires_at": "2030-01-01T00:00:00Z",
+    "size_vram": 1048576
+  }]
+}

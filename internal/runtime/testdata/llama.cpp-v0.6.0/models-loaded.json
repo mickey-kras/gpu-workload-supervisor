@@ -1,0 +1,14 @@
+{
+  "object": "list",
+  "data": [{
+    "id": "selected",
+    "aliases": ["selected-alias"],
+    "tags": [],
+    "object": "model",
+    "owned_by": "llamacpp",
+    "created": 0,
+    "status": {"value": "loaded", "args": []},
+    "source": "models_dir",
+    "can_remove": false
+  }]
+}
