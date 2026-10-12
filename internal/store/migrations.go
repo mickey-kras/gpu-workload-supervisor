@@ -171,7 +171,17 @@ CREATE TABLE temporary_discovery_sessions (
 CREATE UNIQUE INDEX idx_temporary_discovery_active ON temporary_discovery_sessions((1)) WHERE status != 'completed';
 `
 
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13}
+// v14 adds metadata only; old registrations have no inferred runtime identity.
+const schemaV14 = `
+CREATE TABLE comfyui_attempts (
+ request_id TEXT PRIMARY KEY REFERENCES registered_work(request_id) ON DELETE CASCADE,
+ attempt_id TEXT NOT NULL UNIQUE,
+ prompt_id TEXT NOT NULL UNIQUE,
+ upstream TEXT NOT NULL,
+ contract TEXT NOT NULL);
+`
+
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14}
 
 func (s *Store) initialize(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)

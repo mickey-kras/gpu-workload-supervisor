@@ -43,14 +43,18 @@ func temporaryV12Fixture(t *testing.T) (Backend, string, Request, Profile, *sql.
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	if _, err = db.ExecContext(ctx, `DROP TABLE temporary_discovery_sessions; DELETE FROM schema_migrations WHERE version=13; UPDATE control_state SET version=version+1`); err != nil {
+	if _, err = db.ExecContext(ctx, `DROP TABLE comfyui_attempts; DROP TABLE temporary_discovery_sessions; DELETE FROM schema_migrations WHERE version>=13; UPDATE control_state SET version=version+1`); err != nil {
 		t.Fatal(err)
 	}
-	// schemaV13 creates only the session table and its partial unique index.
-	// Dropping the table also drops that index, exactly restoring v12's schema.
+	// v13 adds temporary sessions and v14 adds ComfyUI correlation metadata.
+	// Dropping both tables also removes their indexes, restoring genuine v12.
 	var sessionObjects int
-	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE name IN ('temporary_discovery_sessions','idx_temporary_discovery_active')`).Scan(&sessionObjects); err != nil || sessionObjects != 0 {
-		t.Fatalf("v13 session schema survived fixture downgrade: %d %v", sessionObjects, err)
+	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE tbl_name IN ('temporary_discovery_sessions','comfyui_attempts')`).Scan(&sessionObjects); err != nil || sessionObjects != 0 {
+		t.Fatalf("post-v12 schema survived fixture downgrade: %d %v", sessionObjects, err)
+	}
+	var schema int
+	if err = db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&schema); err != nil || schema != 12 {
+		t.Fatalf("fixture is not v12: %d %v", schema, err)
 	}
 	request.Profile = p
 	snapshot, err := ReadCatalog(ctx, p.StatePath)
@@ -162,7 +166,7 @@ func TestTemporarySchemaUpgradeStillRequiresBackedUpNormalActivation(t *testing.
 		t.Fatal("normal activation migrated before taking the v12 backup")
 	}
 	var schema int
-	if err = db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&schema); err != nil || schema != 13 {
+	if err = db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&schema); err != nil || schema != 14 {
 		t.Fatalf("normal activation did not migrate: %d %v", schema, err)
 	}
 	status, err := b.TemporaryStatus(ctx, home)
@@ -207,12 +211,21 @@ func TestTemporaryCurrentStatusUsesReadOnlyEligibilityAndPendingSession(t *testi
 	}
 }
 func TestTemporaryReadOnlyStatusPreservesCorruptStateErrors(t *testing.T) {
-	for _, schema := range []int{12, 13} {
+	for _, schema := range []int{12, 13, 14} {
 		t.Run(fmt.Sprint(schema), func(t *testing.T) {
 			b, home, _, p, db := temporaryV12Fixture(t)
 			ctx := context.Background()
 			if schema == 13 {
 				if _, err := db.ExecContext(ctx, `CREATE TABLE temporary_discovery_sessions(id TEXT PRIMARY KEY,payload BLOB,status TEXT); INSERT INTO schema_migrations(version,applied_at) VALUES(13,'2026-10-08T00:00:00Z')`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if schema == 14 {
+				current, err := store.Open(ctx, p.StatePath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := current.Close(); err != nil {
 					t.Fatal(err)
 				}
 			}

@@ -221,3 +221,12 @@ managed execution path.
 Real GPU/systemd/runtime qualification is still required on the deployment host;
 HTTP and lifecycle fixtures are not hardware qualification.
 
+## ComfyUI execution completion
+
+A non-native configured workload can opt into the proxy's
+[qualified ComfyUI asynchronous adapter](PROXY-CONTRACT.md#opt-in-comfyui-asynchronous-execution).
+This adds durable enqueue/completion correlation without a catalog version change,
+launch discovery, graph storage, scheduler or automatic idle setting. Existing
+systemd workload lifecycle, readiness, drain and GPU release verification still
+apply. Trusted ingress, gateway graph validation and direct-runtime isolation must
+be qualified separately on the deployment host.

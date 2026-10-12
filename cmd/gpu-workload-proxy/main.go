@@ -68,6 +68,7 @@ func run() error {
 	ingressMode := flags.String("ingress-mode", workloadproxy.IngressTrusted, "local ingress trust mode: trusted or adapter")
 	executionCredentialFile := flags.String("execution-credential-file", "", "private absolute credential file for adapter execution ingress")
 	completionCredentialFile := flags.String("completion-credential-file", "", "private absolute credential file for trusted terminal adapter callbacks")
+	comfyUIContract := flags.String("comfyui-contract", "", "explicit deployment-qualified ComfyUI source contract; requires adapter ingress")
 	readHeaderTimeout := flags.Duration("read-header-timeout", 10*time.Second, "HTTP header read timeout")
 	idleTimeout := flags.Duration("idle-timeout", 2*time.Minute, "HTTP idle timeout")
 	shutdownTimeout := flags.Duration("shutdown-timeout", 30*time.Second, "graceful shutdown timeout")
@@ -113,7 +114,8 @@ func run() error {
 		return errors.New("completion path must be canonical and absolute")
 	}
 	proxyConfig := workloadproxy.Config{
-		Upstream: upstream, Workload: workload,
+		ComfyUIContract: *comfyUIContract,
+		Upstream:        upstream, Workload: workload,
 		ExecutionRoutes: routes, ReadOnlyRoutes: readOnlyRoutes, PassthroughRoutes: passthroughRoutes,
 		CompletionPath: *completionPath, RequestIDHeader: *requestIDHeader,
 		JobIDHeader: *jobIDHeader, FenceIDHeader: *fenceIDHeader,
@@ -176,6 +178,11 @@ func serveProxy(proxyConfig workloadproxy.Config, settings proxyServerSettings) 
 	}
 	maintenanceCtx, stopMaintenance := context.WithCancel(ctx)
 	maintenanceDone := make(chan struct{})
+	comfyUIDone := make(chan struct{})
+	go func() {
+		defer close(comfyUIDone)
+		handler.RunComfyUIReconciler(maintenanceCtx, func(err error) { log.Printf("ComfyUI completion unresolved: %v", err) })
+	}()
 	go func() {
 		defer close(maintenanceDone)
 		maintainCompletedWork(maintenanceCtx, stateStore, settings.completedWorkRetention, time.Hour, func(err error) {
@@ -185,6 +192,7 @@ func serveProxy(proxyConfig workloadproxy.Config, settings proxyServerSettings) 
 	defer func() {
 		stopMaintenance()
 		<-maintenanceDone
+		<-comfyUIDone
 	}()
 	result := make(chan error, 1)
 	go func() {
