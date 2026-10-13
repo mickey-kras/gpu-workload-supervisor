@@ -83,7 +83,9 @@ service files.
 
 Supported external launches can use `%h` at the beginning of path tokens in
 `ExecStart`, `Environment` and `WorkingDirectory`. It resolves from the desktop
-account's home directory and must agree with systemd's loaded configuration.
+account's unique effective-UID record in trusted root-owned local `/etc/passwd`
+and must agree with systemd's loaded configuration. Missing local records,
+including NSS-only accounts, are unsupported; ambient `HOME` is never a fallback.
 Other expansion syntax remains unsupported, and expanded paths still undergo
 the same ownership, permission and symbolic-link checks as literal paths.
 

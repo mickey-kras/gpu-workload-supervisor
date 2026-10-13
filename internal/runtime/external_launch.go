@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/user"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -23,6 +22,10 @@ const launchExpansionCharacters = "\\$%`\"'"
 // readLaunchSource opens every path component without following symlinks. Only
 // root or the desktop principal may write source files or replace ancestors.
 func readLaunchSource(path string) ([]byte, error) {
+	return readTrustedLaunchSource(path, false)
+}
+
+func readTrustedLaunchSource(path string, rootOnly bool) ([]byte, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return nil, ErrLaunchChanged
 	}
@@ -48,10 +51,11 @@ func readLaunchSource(path string) ([]byte, error) {
 			unix.Close(fd)
 			return nil, ErrLaunchChanged
 		}
-		if !trustedLaunchSourceComponent(stat, i, len(parts)) {
+		if err := qualifyLaunchSourceTrust(stat, i, len(parts), rootOnly); err != nil {
 			unix.Close(fd)
-			return nil, sourceComponentError(stat, i, len(parts))
+			return nil, err
 		}
+
 	}
 	file := os.NewFile(uintptr(fd), path)
 	defer file.Close()
@@ -60,6 +64,16 @@ func readLaunchSource(path string) ([]byte, error) {
 		return nil, ErrLaunchChanged
 	}
 	return raw, nil
+}
+
+func qualifyLaunchSourceTrust(stat unix.Stat_t, index, count int, rootOnly bool) error {
+	if rootOnly && (stat.Uid != 0 || stat.Mode&0022 != 0) {
+		return ErrLaunchChanged
+	}
+	if !trustedLaunchSourceComponent(stat, index, count) {
+		return sourceComponentError(stat, index, count)
+	}
+	return nil
 }
 
 func readLaunchSources(path string, dropIns []control.LaunchSource) ([][]byte, error) {
@@ -85,6 +99,7 @@ func readLaunchSources(path string, dropIns []control.LaunchSource) ([][]byte, e
 }
 
 type externalLaunchDirectives struct {
+	accountHome           *accountHomeSnapshot
 	scalars               map[string]string
 	starts, pre, envOrder []string
 	env                   map[string]string
@@ -98,8 +113,13 @@ func parseExternalLaunchSources(sources [][]byte, runtimeName string) (parsedLau
 }
 
 func parseExternalLaunchSourcesMode(sources [][]byte, runtimeName string, cleanupEnvironment bool) (parsedLaunchUnit, error) {
-	unit := parsedLaunchUnit{cleanupEnvironment: cleanupEnvironment}
-	directives := externalLaunchDirectives{scalars: map[string]string{}, env: map[string]string{}}
+	return parseExternalLaunchSourcesWithAccountHome(sources, runtimeName, cleanupEnvironment, localAccountHome)
+}
+
+func parseExternalLaunchSourcesWithAccountHome(sources [][]byte, runtimeName string, cleanupEnvironment bool, readHome func() (string, error)) (parsedLaunchUnit, error) {
+	snapshot := &accountHomeSnapshot{read: readHome}
+	unit := parsedLaunchUnit{cleanupEnvironment: cleanupEnvironment, accountHome: snapshot}
+	directives := externalLaunchDirectives{scalars: map[string]string{}, env: map[string]string{}, accountHome: snapshot}
 	var problems launchProblems
 	for _, raw := range sources {
 		problems.add(directives.readSource(raw))
@@ -189,7 +209,7 @@ func (d *externalLaunchDirectives) applyEnvironment(value string) error {
 			break
 		}
 		value = remaining
-		assignments, err := externalEnvironmentAssignments(assignment)
+		assignments, err := externalEnvironmentAssignments(assignment, d.accountHome)
 		if err != nil {
 			problems.add(err)
 			continue
@@ -205,9 +225,9 @@ func (d *externalLaunchDirectives) applyEnvironment(value string) error {
 	return problems.err()
 }
 
-func externalEnvironmentAssignments(assignment string) ([]string, error) {
+func externalEnvironmentAssignments(assignment string, snapshot *accountHomeSnapshot) ([]string, error) {
 	if strings.Contains(assignment, "%") {
-		expanded, err := expandAccountHome(assignment)
+		expanded, err := snapshot.expand(assignment)
 		if err != nil {
 			return nil, err
 		}
@@ -358,12 +378,15 @@ func sourceComponentError(stat unix.Stat_t, index, count int) error {
 }
 
 // expandAccountHome recognizes only %h at the beginning of a path token. The
-// account database, never HOME or unit environment, supplies the user-manager
-// identity. Every expanded value still passes the ordinary literal validators.
+// trusted local passwd record supplies the user-manager identity, never HOME. Every expanded value still passes the ordinary literal validators.
 func expandAccountHome(value string) (string, error) {
-	account, err := user.LookupId(strconv.Itoa(os.Geteuid()))
-	if err != nil || !filepath.IsAbs(account.HomeDir) || filepath.Clean(account.HomeDir) != account.HomeDir || strings.ContainsAny(account.HomeDir, launchExpansionCharacters+" ;\t\r\n") {
-		return "", fmt.Errorf("%w: OS account home cannot be qualified for %%h", ErrLaunchUnsupported)
+	snapshot := accountHomeSnapshot{read: localAccountHome}
+	return snapshot.expand(value)
+}
+
+func expandAccountHomePath(value, home string) (string, error) {
+	if !filepath.IsAbs(home) || filepath.Clean(home) != home || strings.ContainsAny(home, launchExpansionCharacters+" ;\t\r\n") {
+		return "", fmt.Errorf("%w: local account home cannot be qualified for %%h", ErrLaunchUnsupported)
 	}
 	var result strings.Builder
 	for i := 0; i < len(value); i++ {
@@ -374,7 +397,7 @@ func expandAccountHome(value string) (string, error) {
 		if i+1 >= len(value) || value[i+1] != 'h' || (i > 0 && !strings.ContainsRune(" \t=:\"'", rune(value[i-1]))) || (i+2 < len(value) && !strings.ContainsRune("/ \t\"'", rune(value[i+2]))) {
 			return "", fmt.Errorf("%w: only the OS account home %%h path specifier is supported", ErrLaunchUnsupported)
 		}
-		result.WriteString(account.HomeDir)
+		result.WriteString(home)
 		i++
 	}
 	return result.String(), nil
@@ -402,7 +425,7 @@ func (unit *parsedLaunchUnit) applyEffectiveCommands(d externalLaunchDirectives)
 	}
 	command := d.starts[0]
 	if strings.Contains(command, "%") {
-		expanded, err := expandAccountHome(command)
+		expanded, err := unit.accountHome.expand(command)
 		if err != nil {
 			problems.add(err)
 			return problems.err()
@@ -418,7 +441,7 @@ func (unit *parsedLaunchUnit) applyEffectiveCommands(d externalLaunchDirectives)
 }
 
 func (unit *parsedLaunchUnit) qualifyAccountHomeWorkingDirectory(value string) (string, error) {
-	expanded, err := expandAccountHome(value)
+	expanded, err := unit.accountHome.expand(value)
 	if err != nil {
 		return "", err
 	}

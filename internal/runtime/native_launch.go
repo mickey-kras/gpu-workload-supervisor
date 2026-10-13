@@ -64,6 +64,7 @@ func qualifyParsedMainCommand(unit parsedLaunchUnit, n control.NativeModel, vali
 }
 
 type parsedLaunchUnit struct {
+	accountHome          *accountHomeSnapshot
 	homeWorkingDirectory string
 	execStart            string
 	preCommands          []string
