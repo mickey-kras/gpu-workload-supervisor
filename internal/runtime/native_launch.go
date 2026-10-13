@@ -15,8 +15,17 @@ import (
 )
 
 const (
-	runtimeLlamaCPP = "llama.cpp"
-	flagParallel    = "--parallel"
+	runtimeLlamaCPP    = "llama.cpp"
+	flagParallel       = "--parallel"
+	flagContBatching   = "--cont-batching"
+	flagNoContBatching = "--no-cont-batching"
+	flagFlashAttn      = "--flash-attn"
+	flagSpecDraftNMin  = "--spec-draft-n-min"
+	flagAlias          = "--alias"
+	flagCtxSize        = "--ctx-size"
+	flagModel          = "--model"
+	flagMaxModelLen    = "--max-model-len"
+	flagNGPULayers     = "--n-gpu-layers"
 )
 
 var ErrModelUnavailable = errors.New("configured local model is unavailable")
@@ -277,7 +286,7 @@ func (f *serverFlags) parse(args []string, runtimeName string) (serverFlags, err
 			return *f, fmt.Errorf("%w: duplicate option %s", ErrLaunchUnsupported, diagnosticServerFlag(key))
 		}
 		seen[key] = true
-		if runtimeName == runtimeLlamaCPP && (key == "--cont-batching" || key == "--no-cont-batching") {
+		if runtimeName == runtimeLlamaCPP && (key == flagContBatching || key == flagNoContBatching) {
 			if seen["continuous-batching"] {
 				return *f, ErrLaunchUnsupported
 			}
@@ -298,7 +307,7 @@ func (f *serverFlags) parse(args []string, runtimeName string) (serverFlags, err
 
 func diagnosticServerFlag(key string) string {
 	switch key {
-	case "--host", "--port", "--model", "--alias", "--served-model-name", flagParallel, "--spec-draft-n-max", "--spec-draft-n-min", "--flash-attn", "--spec-type", "--ctx-size", "--n-gpu-layers", "--max-model-len", "--cont-batching", "--no-cont-batching":
+	case "--host", "--port", flagModel, flagAlias, "--served-model-name", flagParallel, "--spec-draft-n-max", flagSpecDraftNMin, flagFlashAttn, "--spec-type", flagCtxSize, flagNGPULayers, flagMaxModelLen, flagContBatching, flagNoContBatching:
 		return key
 	}
 	return "(unqualified option)"
@@ -310,19 +319,19 @@ func canonicalServerFlag(key, runtimeName string) string {
 	}
 	switch key {
 	case "-m":
-		return "--model"
+		return flagModel
 	case "-c":
-		return "--ctx-size"
+		return flagCtxSize
 	case "-ngl":
-		return "--n-gpu-layers"
+		return flagNGPULayers
 	case "-np":
 		return flagParallel
 	case "-cb":
-		return "--cont-batching"
+		return flagContBatching
 	case "-nocb":
-		return "--no-cont-batching"
+		return flagNoContBatching
 	case "-fa":
-		return "--flash-attn"
+		return flagFlashAttn
 	}
 	return key
 }
@@ -333,13 +342,13 @@ func (f *serverFlags) apply(runtimeName, key, value string) error {
 		f.bindHost = value
 	case "--port":
 		f.port = value
-	case "--model", "-m":
+	case flagModel, "-m":
 		if runtimeName != runtimeLlamaCPP || f.model != "" {
 			return ErrLaunchUnsupported
 		}
 		f.model = value
-	case "--alias", "--served-model-name":
-		if f.alias != "" || (key == "--alias") != (runtimeName == runtimeLlamaCPP) {
+	case flagAlias, "--served-model-name":
+		if f.alias != "" || (key == flagAlias) != (runtimeName == runtimeLlamaCPP) {
 			return ErrLaunchUnsupported
 		}
 		f.alias = value
@@ -351,9 +360,9 @@ func (f *serverFlags) apply(runtimeName, key, value string) error {
 
 func validateServerOption(runtimeName, key, value string) error {
 	switch key {
-	case flagParallel, "--spec-draft-n-max", "--spec-draft-n-min":
+	case flagParallel, "--spec-draft-n-max", flagSpecDraftNMin:
 		return validateLlamaNumericOption(runtimeName, key, value)
-	case "--flash-attn":
+	case flagFlashAttn:
 		if runtimeName != runtimeLlamaCPP || (value != "on" && value != "off" && value != "auto") {
 			return ErrLaunchUnsupported
 		}
@@ -363,8 +372,8 @@ func validateServerOption(runtimeName, key, value string) error {
 		if runtimeName != runtimeLlamaCPP || (value != "none" && value != "draft-mtp") {
 			return ErrLaunchUnsupported
 		}
-	case "--ctx-size", "--n-gpu-layers", "--max-model-len":
-		if (runtimeName == runtimeLlamaCPP) != (key != "--max-model-len") {
+	case flagCtxSize, flagNGPULayers, flagMaxModelLen:
+		if (runtimeName == runtimeLlamaCPP) != (key != flagMaxModelLen) {
 			return ErrLaunchUnsupported
 		}
 		if v, err := strconv.ParseUint(value, 10, 32); err != nil || v == 0 {
@@ -384,7 +393,7 @@ func validateLlamaNumericOption(runtimeName, key, value string) error {
 		return nil
 	}
 	v, err := strconv.ParseUint(value, 10, 32)
-	if err != nil || (v == 0 && key != "--spec-draft-n-min") {
+	if err != nil || (v == 0 && key != flagSpecDraftNMin) {
 		return ErrLaunchUnsupported
 	}
 	return nil

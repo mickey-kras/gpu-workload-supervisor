@@ -99,10 +99,7 @@ export class InstallationSettings {
         if (this.ready) this.status.label = 'GPU operation has not been tested.';
         this.diagnosticIdentity.label = candidateChoice(candidate);
         this.diagnosticSummary.label = this.ready ? 'Configuration details' : 'Configuration needs attention';
-        let evidence = candidate.evidence ?? [];
-        if (!Array.isArray(evidence)) evidence = [String(evidence)];
-        const problems = diagnostics.length ? diagnostics.map((item, index) => `${index + 1}. ${item}`) : [candidate.nextStep];
-        this.diagnostic.label = [candidateMessage(candidate), ...evidence, ...problems].filter(Boolean).join('\n\n');
+        this.diagnostic.label = diagnosticDetails(candidate, diagnostics);
         this.viewDetails.visible = !this.ready;
         this.ownership.label = candidate.binding?.owned ? 'Supervisor manages this launch. Applications and model files are preserved.' : 'External service files are preserved.';
         this.notify();
@@ -124,4 +121,11 @@ export class InstallationSettings {
 
 export function installationChoiceLabel(Gtk, identity) {
     return new Gtk.Label({label: identity, wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, hexpand: true});
+}
+
+function diagnosticDetails(candidate, diagnostics) {
+    let evidence = candidate.evidence ?? [];
+    if (!Array.isArray(evidence)) evidence = [String(evidence)];
+    const problems = diagnostics.length ? diagnostics.map((item, index) => `${index + 1}. ${item}`) : [candidate.nextStep];
+    return [candidateMessage(candidate), ...evidence, ...problems].filter(Boolean).join('\n\n');
 }
