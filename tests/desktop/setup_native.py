@@ -53,6 +53,7 @@ def main():
                     'configuration-checking', 'settings-stale-check', 'settings-stale-endpoint-check', 'temporary-without-consent',
                     'temporary-checking', 'temporary-cleanup-required', 'temporary-close-blocked',
                     'temporary-cleanup-complete', 'temporary-cancelled-restored'}
+        required.update(('diagnostic-export', 'settings-installed-blocked', 'correction-without-selection', 'correction-selected-preview'))
         required.update(('included-unresolved-settings', 'included-unresolved-blocked', 'included-valid-rest-review'))
         required.update(f'settings-{state}' for state in
                         ('ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed'))

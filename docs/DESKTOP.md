@@ -275,3 +275,42 @@ resolution and configured package installation, cross-version managed upgrade,
 and complete rollback/fence rotation still require deployment qualification.
 Use the [pinned candidate qualification checklist](SETUP-QUALIFICATION.md);
 successful automated checks do not close host acceptance.
+
+### Installed applications that need correction
+
+Setup distinguishes installation evidence from qualification. Detection inspects
+known executable names in standard directories, at most 32 clean absolute PATH
+directories, `~/.local/bin`, fixed `/opt/ollama`, `/opt/llama.cpp`, `/opt/vllm`
+locations and their `bin` directories, and saved explicit executable selections.
+It never traverses your home or starts discovered programs. For another location,
+choose the installed executable directly or choose its folder; folder inspection
+checks only the application filename directly in that folder and its `bin` folder.
+An unreachable default address does not mean the application is absent.
+
+An installed application can remain blocked from adoption. Open its settings and
+View details for every reported blocker. User-installed runtimes must satisfy the
+existing root-owned executable, interpreter, library and path guarantees. Ask an
+administrator to install a trusted package in a protected location, preserve the
+original application and models, and then select the trusted executable or update
+the external service. Setup does not copy programs, change permissions/ownership,
+remove arguments or rewrite external units to make them qualify.
+
+For numeric GPU visibility, the details page offers an explicit full physical GPU
+UUID choice from read-only trusted live NVIDIA inventory. No default is chosen;
+NVIDIA inventory indices are never treated as CUDA ordinals. If inventory is
+unavailable, inspect physical identity with your administrator. A selected UUID
+and a reported restart-policy blocker can produce a narrowly scoped drop-in
+proposal, including `Restart=no`. Review its consequences: automatic crash
+recovery will be disabled. Copy reviewed override copies the proposal only; it
+applies nothing and starts nothing. Have the external service administrator add
+only the reviewed assignments in a drop-in, preserve all other settings, reload
+the desktop user systemd manager, and Check again. Other trust, environment,
+model or source blockers still need correction. Fresh qualification alone unlocks
+Use installation. Temporary inventory retains its separate explicit startup
+consent and cleanup safeguards.
+
+Copy diagnostic report on the application page produces one bounded shareable
+report across discovered installations, with application, installed/qualified
+states and blocker categories. It excludes paths, service identities, models,
+GPU UUIDs, endpoint values and raw errors. Local Copy details and Copy reviewed
+override contain concrete local information; review those before sharing them.

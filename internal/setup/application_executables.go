@@ -38,20 +38,30 @@ func executableDiscoveryPaths(path string) []ProbeRequest {
 }
 
 func installedExecutables(ctx context.Context) []ApplicationCandidate {
-	return inspectInstalledExecutables(ctx, executableDiscoveryPaths(os.Getenv("PATH")), os.Lstat, gpuruntime.ValidateSelectedNativeExecutable, filepath.EvalSymlinks)
+	home, _ := os.UserHomeDir()
+	requests := executableDiscoveryPaths(os.Getenv("PATH"))
+	requests = append(requests, relevantExecutablePaths(home)...)
+	return inspectInstalledExecutables(ctx, requests, os.Lstat, gpuruntime.ValidateSelectedNativeExecutable, filepath.EvalSymlinks)
 }
 
 func inspectInstalledExecutables(ctx context.Context, requests []ProbeRequest, stat func(string) (os.FileInfo, error), validate func(string, string) error, resolve func(string) (string, error)) []ApplicationCandidate {
 	seen := map[string]bool{}
+	inspected := map[string]bool{}
 	var found []ApplicationCandidate
 	for _, request := range requests {
 		if ctx.Err() != nil {
 			break
 		}
-		if _, err := stat(request.Reference); os.IsNotExist(err) {
+		if inspected[request.Reference] {
+			continue
+		}
+		inspected[request.Reference] = true
+		_, statErr := stat(request.Reference)
+		if os.IsNotExist(statErr) {
 			continue
 		}
 		result := probeSelectedExecutable(request, candidate(request), validate)
+		result.Installed = statErr == nil
 		if result.Recognized {
 			// Trusted aliases, including /bin -> /usr/bin, are one installation.
 			key, err := resolve(request.Reference)
@@ -66,4 +76,50 @@ func inspectInstalledExecutables(ctx context.Context, requests []ProbeRequest, s
 		found = append(found, result)
 	}
 	return found
+}
+
+// Relevant roots have fixed names. An arbitrary installation uses explicit selection.
+func relevantExecutablePaths(home string) []ProbeRequest {
+	paths := []ProbeRequest{}
+	if filepath.IsAbs(home) && filepath.Clean(home) == home {
+		for _, app := range []string{"ollama", appLlamaCPP, "vllm"} {
+			name := app
+			if app == appLlamaCPP {
+				name = "llama-server"
+			}
+			paths = append(paths, ProbeRequest{App: app, Reference: filepath.Join(home, ".local/bin", name), ReferenceKind: "application"})
+		}
+		paths = append(paths, savedExecutablePaths(home)...)
+	}
+	for _, app := range []string{"ollama", appLlamaCPP, "vllm"} {
+		name := app
+		if app == appLlamaCPP {
+			name = "llama-server"
+		}
+		for _, dir := range []string{filepath.Join("/opt", app), filepath.Join("/opt", app, "bin")} {
+			paths = append(paths, ProbeRequest{App: app, Reference: filepath.Join(dir, name), ReferenceKind: "application"})
+		}
+	}
+	return paths
+}
+
+func savedExecutablePaths(home string) []ProbeRequest {
+	saved, err := ReadDrafts(home)
+	if err != nil {
+		return nil
+	}
+	var paths []ProbeRequest
+	for _, draft := range saved.Drafts {
+		path := ""
+		if draft.ReferenceKind == "application" && draft.App != "comfyui" {
+			path = draft.Reference
+		}
+		if draft.Binding != nil && draft.Binding.Owned != nil {
+			path = draft.Binding.Owned.Executable
+		}
+		if path != "" {
+			paths = append(paths, ProbeRequest{App: draft.App, Reference: path, ReferenceKind: "application"})
+		}
+	}
+	return paths
 }

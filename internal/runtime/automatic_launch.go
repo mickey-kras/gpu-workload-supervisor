@@ -19,6 +19,8 @@ const loopbackHTTPPrefix = "http://"
 // never rewrites the existing file or runs its command.
 type AutomaticLaunch struct {
 	HomeWorkingDirectory             string
+	WorkingDirectory                 string
+	LoadedProperties                 map[string]string
 	Environment                      map[string]string
 	Endpoint, Model, SHA256, Command string
 	GPUUUID                          string
@@ -134,9 +136,9 @@ func inspectParsedAutomaticLaunch(u parsedLaunchUnit, raw []byte, app string, va
 	if err := validate(args[0]); err != nil {
 		problems.add(fmt.Errorf("%w: executable: %w", ErrLaunchUnsupported, err))
 	}
-	result := AutomaticLaunch{HomeWorkingDirectory: u.homeWorkingDirectory, Environment: u.environmentValues, GPUUUID: u.gpuUUID, Command: u.execStart, PreCommands: u.preCommands, SHA256: fmt.Sprintf("%x", sha256.Sum256(raw))}
+	result := AutomaticLaunch{HomeWorkingDirectory: u.homeWorkingDirectory, WorkingDirectory: u.workingDirectory, LoadedProperties: u.loadedProperties, Environment: u.environmentValues, GPUUUID: u.gpuUUID, Command: u.execStart, PreCommands: u.preCommands, SHA256: fmt.Sprintf("%x", sha256.Sum256(raw))}
 	if app == "comfyui" {
-		endpoint, err := comfyLaunchEndpoint(args)
+		endpoint, err := comfyLaunchEndpointMode(args, u.cleanupEnvironment)
 		result.Endpoint = endpoint
 		problems.add(err)
 		problems.add(validateComfyScript(args[1]))
@@ -161,7 +163,9 @@ func inspectParsedAutomaticLaunch(u parsedLaunchUnit, raw []byte, app string, va
 	return result, nil
 }
 
-func comfyLaunchEndpoint(args []string) (string, error) {
+func comfyLaunchEndpoint(args []string) (string, error) { return comfyLaunchEndpointMode(args, false) }
+
+func comfyLaunchEndpointMode(args []string, cleanup bool) (string, error) {
 	executable := filepath.Base(args[0])
 	if executable != "python" && executable != "python3" && !strings.HasPrefix(executable, "python3.") {
 		return "", ErrLaunchUnsupported
@@ -169,7 +173,7 @@ func comfyLaunchEndpoint(args []string) (string, error) {
 	if !filepath.IsAbs(args[1]) || filepath.Base(args[1]) != "main.py" || !strings.EqualFold(filepath.Base(filepath.Dir(args[1])), "ComfyUI") {
 		return "", ErrLaunchUnsupported
 	}
-	host, port, err := comfyLaunchAddress(args[2:])
+	host, port, err := comfyLaunchAddressMode(args[2:], cleanup)
 	if err != nil {
 		return "", err
 	}
@@ -182,31 +186,112 @@ func comfyLaunchEndpoint(args []string) (string, error) {
 }
 
 func comfyLaunchAddress(args []string) (string, string, error) {
+	return comfyLaunchAddressMode(args, false)
+}
+
+func comfyLaunchAddressMode(args []string, cleanup bool) (string, string, error) {
 	host, port := "127.0.0.1", "8188"
+	if len(args) > 256 {
+		return "", "", fmt.Errorf("%w: ComfyUI argument count exceeds supported limit", ErrLaunchUnsupported)
+	}
+	var problems launchProblems
 	seen := map[string]bool{}
 	for i := 0; i < len(args); i++ {
 		key := args[i]
-		if seen[key] {
-			return "", "", ErrLaunchUnsupported
+		if seen[key] && key != "--extra-model-paths-config" {
+			return "", "", comfyDuplicateOption(key)
 		}
 		seen[key] = true
-		switch key {
-		case "--listen", "--port":
-			if i+1 >= len(args) {
-				return "", "", ErrLaunchUnsupported
+		consumed, err := qualifyComfyOption(key, args[i+1:], cleanup)
+		if err != nil {
+			problems.add(err)
+			if consumed == 0 {
+				return "", "", problems.err()
 			}
-			i++
-			if key == "--listen" {
-				host = args[i]
-			} else {
-				port = args[i]
-			}
-		case "--disable-auto-launch":
-		default:
-			return "", "", ErrLaunchUnsupported
 		}
+		switch key {
+		case "--listen":
+			host = args[i+1]
+		case "--port":
+			port = args[i+1]
+		}
+		i += consumed
+	}
+	if err := problems.err(); err != nil {
+		return "", "", err
 	}
 	return host, port, nil
+}
+
+func comfyDuplicateOption(key string) error {
+	switch key {
+	case "--listen", "--port", "--disable-auto-launch", "--enable-manager", "--output-directory", "--temp-directory", "--user-directory":
+		return comfyOptionError(key, "is repeated; use one unambiguous assignment")
+	default:
+		return comfyUnsupportedOption(key)
+	}
+}
+
+func qualifyComfyOption(key string, values []string, cleanup bool) (int, error) {
+	switch key {
+	case "--listen", "--port":
+		if len(values) == 0 || strings.HasPrefix(values[0], "--") {
+			return 0, comfyOptionError(key, "requires an explicit value")
+		}
+		return 1, nil
+	case "--output-directory", "--temp-directory", "--user-directory":
+		if len(values) == 0 || strings.HasPrefix(values[0], "--") {
+			return 0, comfyOptionError(key, "requires an existing trusted absolute directory")
+		}
+		if err := qualifyComfyOptionPath(values[0], false, cleanup); err != nil {
+			return 1, comfyOptionError(key, "requires an existing absolute clean trusted directory without links; inspect this setting and its ancestors")
+		}
+		return 1, nil
+	case "--extra-model-paths-config":
+		return qualifyComfyConfigurationFiles(values, cleanup)
+	case "--disable-auto-launch", "--enable-manager":
+		return 0, nil
+	default:
+		return 0, comfyUnsupportedOption(key)
+	}
+}
+
+func qualifyComfyConfigurationFiles(values []string, cleanup bool) (int, error) {
+	count := 0
+	for _, value := range values {
+		if strings.HasPrefix(value, "--") {
+			break
+		}
+		count++
+	}
+	if count == 0 {
+		return 0, comfyOptionError("--extra-model-paths-config", "requires at least one trusted configuration file")
+	}
+	if count > 32 {
+		return count, comfyOptionError("--extra-model-paths-config", "configuration file count exceeds supported limit; paths were not inspected")
+	}
+	var problems launchProblems
+	for _, value := range values[:count] {
+		if err := qualifyComfyOptionPath(value, true, cleanup); err != nil {
+			problems.add(comfyOptionError("--extra-model-paths-config", "requires existing absolute clean trusted regular configuration files without links; inspect this setting and its ancestors"))
+		}
+	}
+	return count, problems.err()
+}
+
+func comfyOptionError(key, reason string) error {
+	return fmt.Errorf("%w: ComfyUI option %s %s", ErrLaunchUnsupported, key, reason)
+}
+
+func comfyUnsupportedOption(key string) error {
+	// Only static upstream option names are safe diagnostic labels. Unknown
+	// tokens can contain credentials or private paths and are never echoed.
+	switch key {
+	case "--base-directory", "--input-directory", "--auto-launch", "--cuda-device", "--default-device", "--disable-all-custom-nodes", "--whitelist-custom-nodes", "--enable-manager-legacy-ui", "--disable-manager-ui", "--front-end-version", "--front-end-root", "--models-directory", "--database-url", "--tls-keyfile", "--tls-certfile":
+		return comfyOptionError(key, "is not qualified; retain the existing arguments and review a supported direct configuration")
+	default:
+		return fmt.Errorf("%w: unrecognized ComfyUI option or positional argument; review the supported direct options", ErrLaunchUnsupported)
+	}
 }
 
 func validateComfyExecutable(path string) error {
@@ -272,4 +357,14 @@ func trustedComfyComponent(stat unix.Stat_t, index, count int) bool {
 	}
 	leaf := index == count-1
 	return trustedOwner && !writable && (!leaf || (stat.Mode&unix.S_IFMT == unix.S_IFREG && stat.Mode&0444 != 0))
+}
+
+func qualifyComfyOptionPath(path string, file, cleanup bool) error {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.ContainsAny(path, launchExpansionCharacters) {
+		return ErrLaunchUnsupported
+	}
+	if cleanup {
+		return nil
+	}
+	return qualifyEnvironmentPath(path, file, false)
 }

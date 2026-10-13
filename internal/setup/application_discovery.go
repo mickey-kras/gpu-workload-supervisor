@@ -29,9 +29,24 @@ func (b Backend) discoverApplications(ctx context.Context, result *Discovery, un
 	}
 	if len(units) > 256 {
 		result.Errors = append(result.Errors, "Too many services for bounded application discovery. Choose a supported installation explicitly.")
-		return
+		units = units[:256]
+	}
+	// Explicit configured selections remain inspectable despite unrelated inventory.
+	selected := []string{}
+	seen := map[string]bool{}
+	for _, profile := range result.Request.Catalog.Profiles {
+		if selectedUnitName.MatchString(profile.Unit) && !seen[profile.Unit] {
+			selected = append(selected, profile.Unit)
+			seen[profile.Unit] = true
+		}
 	}
 	for _, unit := range units {
+		if !seen[unit] {
+			selected = append(selected, unit)
+			seen[unit] = true
+		}
+	}
+	for _, unit := range selected {
 		if ctx.Err() != nil {
 			return
 		}

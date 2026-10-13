@@ -20,7 +20,7 @@ import (
 func TestExternalLaunchAppliesResetAppendAndScalarOverrides(t *testing.T) {
 	sources := [][]byte{
 		[]byte("[Unit]\nDescription=Old\n[Service]\nType=forking\nRestart=always\nExecStart=/bin/sh -c unsupported\nExecStartPre=/usr/bin/false\nEnvironment=OLLAMA_NO_CLOUD=0\nEnvironment=OLLAMA_HOST=127.0.0.1:1\n"),
-		[]byte("[Service]\nType=exec\nRestart=no\nExecStart=\nExecStart=/usr/bin/ollama serve\nExecStartPre=\nExecStartPre=/usr/bin/true\nEnvironment=\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=127.0.0.1:8080\nWorkingDirectory=/opt/models\nLimitNOFILE=65536\nKillMode=control-group\n"),
+		[]byte("[Service]\nType=exec\nRestart=no\nExecStart=\nExecStart=/usr/bin/ollama serve\nExecStartPre=\nExecStartPre=/usr/bin/true\nEnvironment=\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=127.0.0.1:8080\nWorkingDirectory=/opt\nLimitNOFILE=65536\nKillMode=control-group\n"),
 		[]byte("[Service]\nExecStartPre=-/usr/bin/test \\\n# skipped continuation comment\n-f /opt/models/a.gguf\nEnvironment=OLLAMA_HOST=127.0.0.1:9000\nTimeoutStartSec=120\n"),
 	}
 	unit, err := parseExternalLaunchSources(sources, "ollama")
@@ -98,7 +98,8 @@ func TestAdoptedDropInLaunchStartStopIdentityAndDrift(t *testing.T) {
 	}
 	p.NativeModel.DropIns = launch.DropIns
 	m.config.Catalog.Profiles[2] = p
-	runner.outputs[cmd] = []byte("FragmentPath=" + p.NativeModel.LaunchFile + "\nDropInPaths=" + drop + "\nNeedDaemonReload=no\nExecStart={ path=" + strings.Fields(command)[0] + " ; argv[]=" + command + " ; ignore_errors=no ; }\nExecStartPre={ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; }\nExecStartPre={ path=/usr/bin/test ; argv[]=/usr/bin/test -f " + model + " ; ignore_errors=no ; }\n")
+	cmd = strings.Replace(cmd, " -- ", " --property=WorkingDirectory -- ", 1)
+	runner.outputs[cmd] = []byte("WorkingDirectory=/opt\nFragmentPath=" + p.NativeModel.LaunchFile + "\nDropInPaths=" + drop + "\nNeedDaemonReload=no\nExecStart={ path=" + strings.Fields(command)[0] + " ; argv[]=" + command + " ; ignore_errors=no ; }\nExecStartPre={ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; }\nExecStartPre={ path=/usr/bin/test ; argv[]=/usr/bin/test -f " + model + " ; ignore_errors=no ; }\n")
 	ctx := context.Background()
 	if err := m.Start(ctx, p.ID); err != nil {
 		t.Fatal(err)
@@ -147,7 +148,7 @@ func TestAdoptionPreservesCompatibleDirectivesAndRejectsUnsafeAlternatives(t *te
 	}{
 		{"[Unit]\nDescription=A server\nDocumentation=https://example.invalid/help\nAfter=network.target another.service\nBefore=shutdown.target\n[Install]\nWantedBy=default.target", true},
 		{"[Unit]\nAfter=bad@%i.service", false},
-		{"[Service]\nWorkingDirectory=/opt/models", true}, {"[Service]\nWorkingDirectory=relative", false},
+		{"[Service]\nWorkingDirectory=/opt", true}, {"[Service]\nWorkingDirectory=relative", false},
 		{"[Service]\nTimeoutStartSec=120\nTimeoutStopSec=30\nRestartSec=5", true}, {"[Service]\nTimeoutStartSec=infinity", false}, {"[Service]\nTimeoutStopSec=0", false},
 		{"[Service]\nLimitNOFILE=65536\nLimitMEMLOCK=infinity", true}, {"[Service]\nLimitNOFILE=0", false}, {"[Service]\nLimitMEMLOCK=bad", false},
 		{"[Service]\nStandardOutput=journal\nStandardError=inherit", true}, {"[Service]\nStandardOutput=null\nStandardError=null", true}, {"[Service]\nStandardOutput=file:/tmp/log", false},
@@ -174,7 +175,7 @@ func TestAdoptionPreservesCompatibleDirectivesAndRejectsUnsafeAlternatives(t *te
 			}
 		})
 	}
-	if err := qualifyFixtureLaunch([]byte(good+"WorkingDirectory=/opt/models\n"), n); err == nil {
+	if err := qualifyFixtureLaunch([]byte(good+"WorkingDirectory=/opt\n"), n); err == nil {
 		t.Fatal("owned grammar silently expanded to external directives")
 	}
 }

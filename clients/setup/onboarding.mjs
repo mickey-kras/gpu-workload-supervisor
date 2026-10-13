@@ -72,6 +72,7 @@ export function candidateMessage(candidate) {
     const diagnostics = candidateDiagnostics(candidate);
     if (diagnostics.length > 1) return 'Several configuration checks need attention. Open View details to review the reported problems, then check again.';
     if (candidate?.configurationStatus === 'gpu-unresolved') return 'GPU identity needs setup. Review this service’s GPU visibility settings before choosing a full GPU UUID, reloading the service configuration, and checking again.';
+    if (candidate?.installed && !candidate?.recognized) return 'Installation found, but qualification is blocked. Open View details for every blocker and the supported correction path.';
     if (candidate?.configurationStatus === 'inspection-failed') return 'Installation inspection failed. Check its service configuration or choose an installed executable.';
     if (candidate?.configurationStatus === 'model-missing') return 'Configured model is missing. Choose an existing model or repair the service configuration.';
     const states = {
@@ -118,4 +119,36 @@ export function candidateChoice(candidate) {
     const status = {'inspection-failed': 'inspection failed', 'model-missing': 'model missing', 'model-required': 'model needed'}[candidate.configurationStatus] ?? (candidate.instanceStatus === 'not-running' && candidate.unit ? 'stopped' : candidate.instanceStatus);
     const statusSuffix = status ? ` · ${status}` : '';
     return `${candidate.label} · ${candidateIdentity(candidate)}${statusSuffix}`;
+}
+
+// Shareable diagnostics contain only allowlisted states/codes, never local identities.
+export function diagnosticReport(candidates, errors = []) {
+    const states = new Set(['candidate', 'available', 'installed', 'not-running', 'unreachable', 'missing', 'unsupported', 'invalid', 'inspection-failed', 'discovery-error', 'ambiguous']);
+    const configuration = new Set(['ready', 'model-required', 'model-missing', 'gpu-unresolved', 'inspection-failed', 'unsupported']);
+    const report = (Array.isArray(candidates) ? candidates : []).slice(0, 256).filter(item => applications.some(app => app.id === item?.app)).map(item => ({
+        application: item.app, installed: Boolean(item.installed || item.recognized), qualified: candidateReady(item),
+        state: states.has(item.instanceStatus) ? item.instanceStatus : 'unknown',
+        configuration: configuration.has(item.configurationStatus) ? item.configurationStatus : 'unknown',
+        blockers: candidateDiagnostics(item).slice(0, 32).map(blockerCode),
+    }));
+    return JSON.stringify({version: 1, installations: report, discoveryErrorCount: Math.min(Array.isArray(errors) ? errors.length : 0, 256), truncated: (candidates?.length ?? 0) > 256}, null, 2);
+}
+function blockerCode(message) {
+    if (/CUDA_VISIBLE_DEVICES|GPU identity|GPU UUID/.test(message)) return 'gpu-identity';
+    if (/Restart/.test(message)) return 'restart-policy';
+    if (/WorkingDirectory|working directory/.test(message)) return 'working-directory';
+    if (/Environment|environment variable/.test(message)) return 'environment';
+    if (/executable|ownership|owner|writable|trusted|symlink|symbolic link/i.test(message)) return 'execution-trust';
+    if (/model/.test(message)) return 'model';
+    if (/loaded|reload|drop-in/.test(message)) return 'loaded-configuration';
+    return 'launch-configuration';
+}
+
+export function correctionPreview(candidate, uuid = '') {
+    const diagnostics = candidateDiagnostics(candidate).join('\n');
+    const gpu = candidate?.configurationStatus === 'gpu-unresolved' || /CUDA_VISIBLE_DEVICES|GPU identity/.test(diagnostics);
+    const restart = /Restart/.test(diagnostics);
+    const validUUID = /^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(uuid);
+    if (!candidate?.unit || (!gpu && !restart) || (gpu && !validUUID)) return '';
+    return ['[Service]', ...(gpu ? [`Environment="CUDA_VISIBLE_DEVICES=${uuid}"`] : []), ...(restart ? ['Restart=no'] : [])].join('\n') + '\n';
 }

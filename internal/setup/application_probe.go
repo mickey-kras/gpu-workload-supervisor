@@ -30,6 +30,7 @@ type ProbeRequest struct {
 }
 type ApplicationCandidate struct {
 	SourceKind          string           `json:"sourceKind"`
+	Installed           bool             `json:"installed,omitempty"`
 	Recognized          bool             `json:"recognized"`
 	Location            string           `json:"location,omitempty"`
 	ConfigurationStatus string           `json:"configurationStatus,omitempty"`
@@ -217,6 +218,9 @@ func probeReferenceWithExecutableValidator(ctx context.Context, r ProbeRequest, 
 	if r.ReferenceKind == "application" && r.App != "comfyui" {
 		return probeSelectedExecutable(r, result, validateExecutable), nil
 	}
+	if r.ReferenceKind == "application-directory" && r.App != "comfyui" && info.IsDir() {
+		return probeExecutableDirectory(ctx, r, validateExecutable), nil
+	}
 	// Do not resolve links or open devices/FIFOs. A selection is only a candidate.
 	directory := r.ReferenceKind == referenceModelDirectory || r.ReferenceKind == "application-directory"
 	if (directory && !info.IsDir()) || (!directory && !info.Mode().IsRegular()) {
@@ -234,6 +238,7 @@ func probeReferenceWithExecutableValidator(ctx context.Context, r ProbeRequest, 
 
 // Qualification failures are inspectable candidate states, not probe errors.
 func probeSelectedExecutable(r ProbeRequest, result ApplicationCandidate, validate func(string, string) error) ApplicationCandidate {
+	result.Installed = true
 	if err := validate(r.App, r.Reference); err != nil {
 		result.InstanceStatus = inspectionFailedStatus
 		result.ConfigurationStatus = inspectionFailedStatus
@@ -306,4 +311,28 @@ func (p applicationHTTP) get(ctx context.Context, path string, destination inter
 		return err
 	}
 	return ctx.Err()
+}
+
+// Folder fallback inspects exactly two known names, never directory contents.
+func probeExecutableDirectory(ctx context.Context, r ProbeRequest, validate func(string, string) error) ApplicationCandidate {
+	name := r.App
+	if r.App == appLlamaCPP {
+		name = "llama-server"
+	}
+	requests := []ProbeRequest{}
+	for _, directory := range []string{r.Reference, filepath.Join(r.Reference, "bin")} {
+		requests = append(requests, ProbeRequest{App: r.App, Reference: filepath.Join(directory, name), ReferenceKind: "application"})
+	}
+	found := inspectInstalledExecutables(ctx, requests, os.Lstat, validate, filepath.EvalSymlinks)
+	for _, item := range found {
+		if item.Recognized {
+			return item
+		}
+	}
+	if len(found) > 0 {
+		return found[0]
+	}
+	result := candidate(r)
+	result.NextStep = "No supported executable found directly in this folder or its bin folder. Choose the installed executable itself; this does not mean the application is absent."
+	return result
 }

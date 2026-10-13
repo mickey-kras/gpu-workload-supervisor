@@ -111,6 +111,8 @@ func (u *parsedLaunchUnit) qualifyEnvironmentValue(runtimeName, name, value, ass
 			return environmentError(name, "requires an existing absolute clean trusted path without links; inspect ownership and permissions of this setting and its ancestors")
 		}
 		return nil
+	case "LD_LIBRARY_PATH":
+		return environmentError(name, "dynamic library search and transitive loader bindings are not qualified; use a reviewed root-owned runtime installation with its normal trusted loader configuration, then reload and refresh the binding")
 	case "PATH":
 		if u.cleanupEnvironment {
 			return nil

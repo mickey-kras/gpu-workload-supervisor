@@ -5,7 +5,11 @@ import Gtk from 'gi://Gtk?version=4.0';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import GLib from 'gi://GLib';
 import {installSetupStyle, applicationHeader, roundedCard, linkButton} from './presentation.mjs';
-import {applications} from './onboarding.mjs';
+import {applications, diagnosticReport} from './onboarding.mjs';
+// aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
+import GObject from 'gi://GObject';
+// aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
+import Gdk from 'gi://Gdk?version=4.0';
 import {editableOwnedLaunch} from './profile-ui.mjs';
 import {addErrorReporter} from './discovery-ui.mjs';
 
@@ -161,6 +165,15 @@ export function createApplicationCards(ui) {
     ui.applicationPage.remove(ui.settings);
     ui.applicationPage.remove(ui.draftRows);
     ui.applicationPage.append(ui.findApplication);
+    const exportReport = linkButton(Gtk, 'Copy diagnostic report');
+    exportReport.connect('clicked', () => {
+        const current = new Map((ui.discovered ?? []).map(candidate => [candidate.id, candidate]));
+        for (const editor of ui.draftEditors) { const candidate = editor.latestCandidate(); if (candidate?.id) current.set(candidate.id, candidate); }
+        const value = new GObject.Value(); value.init(GObject.TYPE_STRING); value.set_string(diagnosticReport([...current.values()], ui.discoveryErrors));
+        ui.window.get_display().get_clipboard().set_content(Gdk.ContentProvider.new_for_value(value));
+        ui.status.label = 'Diagnostic report copied. Local paths, models, GPU UUIDs and error values are excluded.';
+    });
+    ui.applicationPage.append(exportReport);
     ui.applicationPage.append(ui.settings);
     ui.applicationPage.append(ui.draftRows);
     // Keep this shared action rooted in the page. Expander rows wrap non-row

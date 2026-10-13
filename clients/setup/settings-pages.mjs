@@ -5,14 +5,14 @@ import Gdk from 'gi://Gdk?version=4.0';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Pango from 'gi://Pango';
 import {applicationHeader, linkButton, roundedCard} from './presentation.mjs';
-import {applications, candidateChoice, candidateDiagnostics, candidateIdentity, candidateMessage, candidateReady} from './onboarding.mjs';
+import {applications, candidateChoice, candidateDiagnostics, candidateIdentity, candidateMessage, candidateReady, correctionPreview} from './onboarding.mjs';
 
 // Settings share the wizard's scroller and fixed footer. Each optional section
 // has its own page, so long service identities never compete with entry fields.
 export class InstallationSettings {
-    constructor({Adw, Gtk, app, window, navigate}) {
+    constructor({Adw, Gtk, app, window, gpuUUIDs = [], gpuInventoryStatus, navigate}) {
         this.Gtk = Gtk; this.navigate = navigate;
-        this.busy = false;
+        this.busy = false; this.gpuInventoryStatus = gpuInventoryStatus;
         this.appLabel = applications.find(item => item.id === app).label;
         this.root = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 18});
         this.pages = new Map(); this.history = []; this.page = 'main'; this.ready = false;
@@ -59,6 +59,18 @@ export class InstallationSettings {
             value.set_string([this.diagnosticIdentity.label, this.diagnosticSummary.label, this.diagnostic.label].filter(Boolean).join('\n\n'));
             window.get_display().get_clipboard().set_content(Gdk.ContentProvider.new_for_value(value));
         });
+        this.repairUUIDs = gpuUUIDs.filter(uuid => /^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(uuid)).slice(0, 32);
+        this.repair = new Adw.PreferencesGroup({title: 'Review external service correction'}); this.pages.get('configuration').append(this.repair);
+        this.gpu = new Adw.ComboRow({title: 'Physical GPU UUID (explicit selection required)', selected: 0, model: Gtk.StringList.new(['Choose a full physical GPU UUID…', ...this.repairUUIDs])}); this.repair.add(this.gpu);
+        this.preview = new Gtk.Label({wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.preview.add_css_class('monospace'); this.repair.add(this.preview);
+        this.copyOverride = new Gtk.Button({label: 'Copy reviewed override', sensitive: false}); this.repair.add(this.copyOverride);
+        this.copyOverride.connect('clicked', () => {
+            const value = new GObject.Value(); value.init(GObject.TYPE_STRING); value.set_string(this.overrideText);
+            window.get_display().get_clipboard().set_content(Gdk.ContentProvider.new_for_value(value));
+        });
+        this.gpu.connect('notify::selected', () => this.updateCorrection());
+        this.repairInstructions = new Gtk.Label({label: 'Not applied. Review these assignments, preserve other settings, add them in an external service drop-in, reload your user systemd manager, then Check again. Restart=no disables automatic crash recovery. Other blockers remain.', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.repair.add(this.repairInstructions);
+        this.trustGuidance = new Gtk.Label({label: 'Ask an administrator to install a trusted package in a protected root-owned location, preserving the original application and models. Choose the trusted executable or update the external service, then Check again. Executable, interpreter, libraries and execution paths must qualify; setup never changes ownership or permissions.', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.repair.add(this.trustGuidance);
         this.pages.get('configuration').append(new Gtk.Label({label: 'Your service has not been changed.', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0}));
     }
     navigation(label, target) {
@@ -85,6 +97,7 @@ export class InstallationSettings {
         this.navigate?.({title: titles[this.page], page: this.page, ready: this.ready && !this.busy, busy: this.busy});
     }
     candidate(candidate) {
+        this.currentCandidate = candidate; this.gpu.selected = 0; this.updateCorrection();
         this.identity.label = candidateIdentity(candidate);
         this.state.label = candidate.instanceStatus === 'not-running' && candidate.unit ? 'Stopped' : 'Unverified';
         if (candidate.instanceStatus === 'available') this.state.label = 'Reachable';
@@ -104,7 +117,29 @@ export class InstallationSettings {
         this.ownership.label = candidate.binding?.owned ? 'Supervisor manages this launch. Applications and model files are preserved.' : 'External service files are preserved.';
         this.notify();
     }
+    updateCorrection() {
+        const candidate = this.currentCandidate;
+        const messages = candidateDiagnostics(candidate).join('\n');
+        const needsGPU = candidate?.configurationStatus === 'gpu-unresolved' || /CUDA_VISIBLE_DEVICES|GPU identity/.test(messages);
+        this.gpu.visible = Boolean(candidate?.unit && needsGPU);
+        this.overrideText = correctionPreview(candidate, this.repairUUIDs[this.gpu.selected - 1] ?? '');
+        let guidance = 'No service override is proposed for these blockers.';
+        if (needsGPU) {
+            const reason = {untrusted: 'GPU inventory executable did not pass trust checks.', invalid: 'GPU inventory was incomplete or invalid.', unavailable: 'GPU inventory query was unavailable.'}[this.gpuInventoryStatus] ?? 'Trusted GPU inventory unavailable.';
+            guidance = this.repairUUIDs.length ? 'Choose a full physical GPU UUID. NVIDIA indices do not establish CUDA ordinal mappings.' : `${reason} Inspect physical identity before correcting visibility; no index mapping is assumed.`;
+        }
+        this.preview.label = this.overrideText || guidance;
+        this.copyOverride.sensitive = Boolean(this.overrideText);
+        const trust = /executable|ownership|owner|writable|trusted|symlink|symbolic link|library|interpreter/i.test(messages);
+        const correction = Boolean(candidate?.unit && (needsGPU || /Restart/.test(messages)));
+        this.trustGuidance.visible = trust;
+        this.repairInstructions.visible = correction;
+        this.preview.visible = correction;
+        this.copyOverride.visible = correction;
+        this.repair.visible = !candidateReady(candidate) && (correction || trust);
+    }
     problem(summary, error) {
+        this.currentCandidate = null; this.updateCorrection();
         this.ready = false; this.noticeTitle.label = 'Configuration needs attention'; this.noticeIcon.icon_name = 'dialog-warning-symbolic';
         this.noticeIcon.remove_css_class('success'); this.noticeIcon.add_css_class('warning');
         this.notice.add_css_class('setup-warning'); this.status.label = summary; this.viewDetails.visible = true;

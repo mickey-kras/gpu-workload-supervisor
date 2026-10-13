@@ -247,7 +247,7 @@ func TestTemporaryDiscoveryPreservesQualifiedDropInAndRefusesSourceDrift(t *test
 		t.Run(mode, func(t *testing.T) {
 			m, r, v := temporaryManagerFixture(t)
 			path := filepath.Join(filepath.Dir(v.LaunchFile), "10-options.conf")
-			raw := []byte("[Service]\nWorkingDirectory=/opt/models\nLimitNOFILE=65536\nExecStartPre=/usr/bin/true\n")
+			raw := []byte("[Service]\nWorkingDirectory=/opt\nLimitNOFILE=65536\nExecStartPre=/usr/bin/true\n")
 			if err := os.WriteFile(path, raw, 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -256,7 +256,7 @@ func TestTemporaryDiscoveryPreservesQualifiedDropInAndRefusesSourceDrift(t *test
 				t.Fatal(err)
 			}
 			v.DropIns = launch.DropIns
-			r.mutations = map[string]string{"DropInPaths": path, "ExecStartPre": "{ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; }"}
+			r.mutations = map[string]string{"WorkingDirectory": "/opt", "DropInPaths": path, "ExecStartPre": "{ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; }"}
 			if mode == "unqualified" {
 				os.WriteFile(path, []byte("[Service]\nEnvironmentFile=/tmp/injected\n"), 0600)
 				if _, err := m.StartTemporaryDiscovery(context.Background(), v); err == nil || r.starts != 0 {
