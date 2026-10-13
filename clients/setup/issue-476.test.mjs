@@ -94,3 +94,23 @@ test('native-style inherited endpoint keeps reinspection busy until its read-onl
     assert.equal(ui.by('Copy reviewed override').sensitive, false);
     assert.equal(ui.calls.some(call => ['apply', 'temporary-discover'].includes(call.argv[1])), false);
 });
+
+test('one diagnostic export uses freshly rechecked installation evidence and keeps other applications', async () => {
+    const repaired = {...blocked, recognized: true, diagnostics: [], configurationStatus: 'ready', binding: {unit: blocked.unit, cgroup: '/service', healthURL: 'http://127.0.0.1:8188/system_stats'}};
+    const other = {id: 'other-address', app: 'ollama', label: 'Ollama', endpoint: 'http://127.0.0.1:11434', recognized: false, instanceStatus: 'unreachable', configurationStatus: 'unverified'};
+    let discoveries = 0;
+    const ui = await launch({deferAction: 'unused', responses: {discover: () => ({request, units: [], applications: [discoveries++ ? repaired : blocked, other]})}});
+    const window = ui.widgets.find(widget => widget.title === 'GPU Workload Setup');
+    await ui.click('Copy diagnostic report');
+    assert.equal(JSON.parse(window.clipboard).installations.find(item => item.application === 'comfyui').qualified, false);
+    await ui.click('Settings for ComfyUI'); await ui.click('View details');
+    await ui.click('Check again'); await ui.click('Back'); await ui.click('Back');
+    await ui.click('Copy diagnostic report');
+    const report = JSON.parse(window.clipboard);
+    assert.equal(report.installations.length, 2);
+    assert.equal(report.installations.find(item => item.application === 'comfyui').qualified, true);
+    assert.equal(report.installations.find(item => item.application === 'comfyui').configuration, 'ready');
+    assert.equal(report.installations.find(item => item.application === 'ollama').state, 'unreachable');
+    assert.equal(/private|secret|127\.0\.0\.1/.test(window.clipboard), false);
+    assert.equal(ui.calls.some(call => ['apply', 'prepare', 'temporary-discover'].includes(call.argv[1])), false);
+});
