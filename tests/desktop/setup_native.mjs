@@ -255,6 +255,36 @@ app.connect('activate', () => {
             assert(ownsFocus(ui, activeHeading), `screen transition focuses its visible heading: ${JSON.stringify(diagnostics)}`);
             assert(!diagnostics.headingSelection[0], `transition heading must not select its text: ${JSON.stringify(diagnostics)}`);
         }
+        async function refreshCorrection(ui, gpuChoice, expectedChoices) {
+            const discoveries = calls.filter(action => action === 'discover').length;
+            await tabTo(ui, named(ui, 'Check again'));
+            run(['xdotool', 'key', 'space']);
+            await waitFor(() => calls.filter(action => action === 'discover').length > discoveries &&
+                !ui.draftEditors.some(editor => editor.checking()) && gpuChoice.model.get_n_items() === expectedChoices,
+                'in-place configuration reinspection must finish and update the actual UUID inventory');
+            assert(ui.settingsTitle.get_mapped() && ui.settingsTitle.label === 'Configuration details', 'reinspection preserves the configuration page');
+        }
+        async function captureCorrection(ui, name, gpuChoice) {
+            const group = widgets(ui.window).find(widget => widget instanceof Adw.PreferencesGroup && widget.title === 'Review external service correction');
+            const preview = widgets(group).find(widget => widget instanceof Gtk.Label && widget.has_css_class('monospace'));
+            const copy = named(ui, 'Copy reviewed override');
+            assert(group && preview && gpuChoice, 'correction evidence requires the actual picker, preview and copy controls');
+            const adjustment = ui.scroll.get_vadjustment();
+            const [located, target] = gpuChoice.compute_bounds(ui.scroll);
+            assert(located, 'native GPU picker has viewport-relative geometry');
+            adjustment.value = Math.max(adjustment.lower, Math.min(adjustment.upper - adjustment.page_size, adjustment.value + target.get_y() - 12));
+            await delay(180);
+            const viewport = {width: ui.scroll.get_width(), height: ui.scroll.get_height()};
+            const correction = [gpuChoice, preview, copy].map((widget, index) => {
+                const [found, bounds] = widget.compute_bounds(ui.scroll);
+                const rect = {control: ['gpu-picker', 'override-preview', 'copy-override'][index], x: bounds.get_x(), y: bounds.get_y(), width: bounds.get_width(), height: bounds.get_height()};
+                assert(widget.get_mapped() && found && rect.width > 0 && rect.height > 0 && rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= viewport.width && rect.y + rect.height <= viewport.height,
+                    `${name}: correction control must be fully visible above the fixed footer: ${JSON.stringify(rect)}`);
+                return rect;
+            });
+            geometry.push({screen: name, correction, viewport, scrollValue: adjustment.value});
+            await capture(ui, name);
+        }
         async function capture(ui, name) {
             await delay(180);
             const footer = [ui.review, ui.apply, ui.back, ui.later].filter(widget => widget.get_mapped());
@@ -411,19 +441,19 @@ app.connect('activate', () => {
         await capture(ui, 'settings-installed-blocked');
         await activate(ui, named(ui, 'View details'), 'Configuration details');
         assert(!named(ui, 'Copy reviewed override').sensitive, 'GPU correction requires explicit UUID selection');
-        await capture(ui, 'correction-without-selection');
         const gpuChoice = widgets(ui.window).find(widget => widget instanceof Adw.ComboRow && widget.title === 'Physical GPU UUID (explicit selection required)');
         assert(gpuChoice && gpuChoice.selected === 0, 'native UUID chooser has no default selection');
+        await captureCorrection(ui, 'correction-without-selection', gpuChoice);
         repairInventory = [repairUUID];
-        await activate(ui, named(ui, 'Check again'), 'Configuration details');
+        await refreshCorrection(ui, gpuChoice, 2);
         assert(gpuChoice.model.get_n_items() === 2 && gpuChoice.selected === 0, 'fresh trusted inventory updates native UUID choices without a default');
         gpuChoice.selected = 1; await delay(80);
         assert(named(ui, 'Copy reviewed override').sensitive && ui.review.label === 'Check again', 'reviewed correction enables copying; configuration action remains reinspection');
-        await capture(ui, 'correction-selected-preview');
+        await captureCorrection(ui, 'correction-selected-preview', gpuChoice);
         repairInventory = [];
-        await activate(ui, named(ui, 'Check again'), 'Configuration details');
+        await refreshCorrection(ui, gpuChoice, 1);
         assert(gpuChoice.selected === 0 && gpuChoice.model.get_n_items() === 1 && !named(ui, 'Copy reviewed override').sensitive, 'disappeared UUID retires the reviewed native proposal');
-        await capture(ui, 'correction-inventory-disappeared');
+        await captureCorrection(ui, 'correction-inventory-disappeared', gpuChoice);
         await closeAndVerify(ui, 'installed-blocked');
         const settingsStates = ['ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed'];
         for (const state of settingsStates) {
