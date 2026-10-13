@@ -24,7 +24,7 @@ export function addErrorReporter({Adw, Gtk, parent, status}) {
 export function addDraftEditor(options) { return new DraftEditor(options).view(); }
 
 class DraftEditor {
-    constructor({Adw, Gtk, window, parent, initial, detected, discoveryErrors, command, changed, removed, bind, taken, modelParent, temporaryStatus, openSettings, reportProblem, reportStatus, navigateSettings, saveSelections}) {
+    constructor({Adw, Gtk, window, parent, initial, detected, gpuUUIDs, gpuInventoryStatus, discoveryErrors, command, changed, removed, bind, taken, modelParent, temporaryStatus, openSettings, reportProblem, reportStatus, navigateSettings, saveSelections}) {
         this.Adw = Adw;
         this.Gtk = Gtk;
         this.window = window;
@@ -45,15 +45,15 @@ class DraftEditor {
         if (Object.hasOwn(initial, 'requiredMiB')) this.overrides.requiredMiB = initial.requiredMiB || undefined;
         if (Object.hasOwn(initial, 'bootPolicy')) this.overrides.bootPolicy = initial.bootPolicy || undefined;
         this.installationEvidence = null;
-        this.buildBasics(); this.connectAddress(); this.buildModels();
+        this.buildBasics(gpuUUIDs, gpuInventoryStatus); this.connectAddress(); this.buildModels();
         this.connectModelPicker();
         this.temporary = new TemporaryDiscovery({Gtk, draft: this.draft, app: initial.app, modelGroup: this.modelGroup, status: this.modelStatus ?? this.status, temporaryStatus, command, changed, reportError: this.reportError, restored: reportStatus, show: candidate => this.show(candidate), getEvidence: () => this.installationEvidence});
         this.connectInputs(); this.buildResources(); this.addActions(); this.initialDiscovery();
     }
-    buildBasics() {
+    buildBasics(gpuUUIDs, gpuInventoryStatus) {
         this.draft = new ApplicationDraft(this.initial.app);
         this.draft.edit(this.initial);
-        this.settings = new InstallationSettings({Adw: this.Adw, Gtk: this.Gtk, app: this.initial.app, window: this.window, navigate: this.navigateSettings});
+        this.settings = new InstallationSettings({Adw: this.Adw, Gtk: this.Gtk, app: this.initial.app, window: this.window, gpuUUIDs, gpuInventoryStatus, navigate: this.navigateSettings});
         this.group = this.settings.root;
         this.name = new this.Adw.EntryRow({title: 'Display name', text: this.initial.label});
         this.name.update_property([this.Gtk.AccessibleProperty.LABEL], ['Installation display name']);
@@ -248,6 +248,9 @@ class DraftEditor {
     }
     show(candidate) {
         this.lastCandidate = candidate;
+        if (candidate.binding?.owned && this.draft.snapshot().referenceKind === 'application-directory') {
+            this.draft.reference(candidate.reference, 'application'); this.selectExecutable(candidate.reference);
+        }
         this.installationEvidence = candidate.recognized ? candidate : null;
         this.reconcileService(candidate);
         this.settings.candidate(candidate);
@@ -293,6 +296,7 @@ class DraftEditor {
             setProbeGuidance: guidance => this.probeGuidance = guidance, clearOwnedReference: () => this.clearOwnedReference(), selectOwnedReference: (path, kind) => this.selectOwnedReference(path, kind)});
         this.refresh = addRefreshButton({Gtk: this.Gtk, group: {add: child => this.settings.pages.get('configuration').append(child)}, draft: this.draft, status: this.status, command: this.command, show: (candidate) => this.show(candidate), reportError: this.reportError, guidance: () => this.probeGuidance, checking: busy => this.settings.checking(busy), inspectService: async input => {
             const discovery = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'discover']));
+            this.settings.updateGPUInventory(discovery.gpuUUIDs ?? [], discovery.gpuInventoryStatus);
             return discovery.applications?.find(candidate => candidate.app === input.app && candidate.unit === input.binding.unit) ?? null;
         }});
         addFilePickers({Gtk: this.Gtk, window: this.window, group: this.settings.selection, advancedGroup: this.settings.selection, draft: this.draft, reference: this.reference, endpoint: this.endpoint, status: this.status, changed: this.changed, clearBinding: () => this.clearBinding(), clearModels: () => this.clearModels(), clearOwnedReference: () => this.clearOwnedReference(), setSync: value => this.syncing = value, selectedReference: (path, kind) => this.selectOwnedReference(path, kind), selectedExecutable: path => this.selectExecutable(path), modelGroup: this.modelParent ? this.modelGroup : null, selectionChanged: () => this.resetSelection()});
@@ -356,7 +360,7 @@ class DraftEditor {
             if (selected) { this.syncing = true; this.instance.selected = this.instances.indexOf(selected) + 1; this.syncing = false; this.show(selected); }
             else this.show({app: this.initial.app, label: this.initial.label, unit: this.initial.binding.unit, endpoint: this.initial.endpoint, recognized: false, configurationStatus: 'unverified', instanceStatus: 'candidate'});
         } else if (!recognized.length && this.instances.length) {
-            const selected = this.instances.find(candidate => candidate.unit) ?? this.instances[0];
+            const selected = this.instances.find(candidate => candidate.unit || candidate.installed) ?? this.instances[0];
             this.instance.selected = this.instances.indexOf(selected) + 1;
         } else if (!this.instances.length) {
             this.settings.problem('Installation not detected', new Error(`${applications.find(app => app.id === this.initial.app).label} wasn’t detected. Install it first, or choose its location. Supported detection uses recognized user services; custom launch wrappers need Advanced settings.`));
@@ -364,6 +368,7 @@ class DraftEditor {
     }
     view() {
         return {
+            latestCandidate: () => this.lastCandidate,
             app: this.initial.app, id: this.initial.id, originalModel: this.initial.model ?? this.initial.binding?.owned?.modelPath, group: this.group, modelGroup: this.modelGroup, finish: this.finish,
             showSettings: profile => {
                 this.syncing = true;

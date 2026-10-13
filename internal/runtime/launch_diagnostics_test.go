@@ -82,7 +82,8 @@ func TestAccountHomeExpansionUsesAccountDatabaseAndRejectsOtherSyntax(t *testing
 }
 
 func TestEffectiveWorkingDirectoryResetClearsSpecifierBinding(t *testing.T) {
-	unit, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nExecStart=/usr/bin/true x\nWorkingDirectory=%h\n"), []byte("[Service]\nWorkingDirectory=/opt\n")}, "llama.cpp")
+	workingDirectory := t.TempDir()
+	unit, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nExecStart=/usr/bin/true x\nWorkingDirectory=%h\n"), []byte("[Service]\nWorkingDirectory=" + workingDirectory + "\n")}, "llama.cpp")
 	if err != nil || unit.homeWorkingDirectory != "" {
 		t.Fatalf("stale specifier binding: %+v %v", unit, err)
 	}
@@ -155,9 +156,10 @@ func TestQuotedEnvironmentWhitespaceCannotInventAssignments(t *testing.T) {
 }
 
 func TestExternalExpansionUsesOnlyEffectiveCommandsAndScalars(t *testing.T) {
+	workingDirectory := t.TempDir()
 	sources := [][]byte{
 		[]byte("[Service]\nExecStart=%u/unsupported\nWorkingDirectory=%u/unsupported\n"),
-		[]byte("[Service]\nExecStart=\nExecStart=/usr/bin/ollama serve\nWorkingDirectory=/opt\nEnvironment=OLLAMA_NO_CLOUD=1 OLLAMA_HOST=127.0.0.1:11434\n"),
+		[]byte("[Service]\nExecStart=\nExecStart=/usr/bin/ollama serve\nWorkingDirectory=" + workingDirectory + "\nEnvironment=OLLAMA_NO_CLOUD=1 OLLAMA_HOST=127.0.0.1:11434\n"),
 	}
 	unit, err := parseExternalLaunchSources(sources, "ollama")
 	if err != nil || unit.execStart != "/usr/bin/ollama serve" || unit.homeWorkingDirectory != "" {

@@ -92,7 +92,7 @@ func validatePreparedInstallation(d Draft, found control.WorkloadProfile) error 
 }
 
 func (b Backend) showAutomaticRaw(ctx context.Context, unit string) ([]byte, error) {
-	out, err := b.runCommand(ctx, automaticSystemctlPath, "--user", "show", "--property=Id,LoadState,ExecStart,ExecStartPre,Environment,ControlGroup,ActiveState,SubState,FragmentPath,DropInPaths,NeedDaemonReload,Slice,WorkingDirectory", "--no-pager", "--", unit)
+	out, err := b.runCommand(ctx, automaticSystemctlPath, "--user", "show", "--property=Id,LoadState,ExecStart,ExecStartPre,Environment,ControlGroup,ActiveState,SubState,FragmentPath,DropInPaths,NeedDaemonReload,Slice,WorkingDirectory,Wants,KillSignal,NoNewPrivileges,PrivateTmp,ProtectHome,ProtectSystem", "--no-pager", "--", unit)
 	if err != nil {
 		return nil, fmt.Errorf("could not inspect installation %s: %w", unit, err)
 	}
@@ -161,6 +161,7 @@ func (b Backend) configurationFromMetadata(ctx context.Context, app, unit, model
 	}
 	problems = append(problems,
 		gpuruntime.CheckLoadedAccountHomeDirectory(values["WorkingDirectory"], launch.HomeWorkingDirectory),
+		gpuruntime.CheckLoadedLaunchProperties(values, launch.LoadedProperties),
 		gpuruntime.CheckLoadedEnvironment(values["Environment"], launch.Environment))
 	if err := gpuruntime.CheckNativeBindingSources(values, unit, values["FragmentPath"], launch.DropIns); err != nil {
 		problems = append(problems, errors.New("loaded drop-in configuration differs from inspected source files"))

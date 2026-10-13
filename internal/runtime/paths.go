@@ -148,3 +148,10 @@ func trustedRootLinkTarget(current, prefix string, hops int, readlink func(strin
 	}
 	return next, prefix, nil
 }
+
+// ValidateGPUInventoryExecutable enforces the ordinary root-owned executable
+// trust boundary before setup runs its fixed read-only GPU inventory command.
+func ValidateGPUInventoryExecutable(path string) error {
+	_, err := validateExecutable(path)
+	return err
+}

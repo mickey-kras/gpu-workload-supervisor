@@ -13,15 +13,20 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 )
 
+const gpuInventoryExecutable = "/usr/bin/nvidia-smi"
+
 type Discovery struct {
-	Errors       []string               `json:"errors,omitempty"`
-	Request      Request                `json:"request"`
-	Units        []string               `json:"units"`
-	Pending      bool                   `json:"pending"`
-	Applications []ApplicationCandidate `json:"applications"`
-	OwnedUnits   []OwnedUnitStatus      `json:"ownedUnits"`
+	GPUInventoryStatus string                 `json:"gpuInventoryStatus"`
+	GPUUUIDs           []string               `json:"gpuUUIDs,omitempty"`
+	Errors             []string               `json:"errors,omitempty"`
+	Request            Request                `json:"request"`
+	Units              []string               `json:"units"`
+	Pending            bool                   `json:"pending"`
+	Applications       []ApplicationCandidate `json:"applications"`
+	OwnedUnits         []OwnedUnitStatus      `json:"ownedUnits"`
 }
 
 // OwnedUnitStatus reports one supervisor-owned unit file so the UI can offer
@@ -39,7 +44,7 @@ func Discover(ctx context.Context, home string) (Discovery, error) {
 func (b Backend) Discover(ctx context.Context, home string) (Discovery, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	result := Discovery{Request: Request{Version: 1, Profile: Profile{Version: 1, StatePath: deployment.DefaultStatePath(), SystemctlPath: "/usr/bin/systemctl", NvidiaSMIPath: "/usr/bin/nvidia-smi"}, Catalog: control.Catalog{Version: 1}}}
+	result := Discovery{Request: Request{Version: 1, Profile: Profile{Version: 1, StatePath: deployment.DefaultStatePath(), SystemctlPath: "/usr/bin/systemctl", NvidiaSMIPath: gpuInventoryExecutable}, Catalog: control.Catalog{Version: 1}}}
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
 	if data, err := privateRead(filepath.Join(root, "activation.json")); err == nil {
 		// A pending activation is resumed verbatim; changing it could discard the
@@ -71,7 +76,8 @@ func (b Backend) Discover(ctx context.Context, home string) (Discovery, error) {
 		result.Errors = append(result.Errors, "Application services could not be listed. Check your desktop user session and retry.")
 	}
 	result.Units = []string{}
-	b.discoverApplications(ctx, &result, units)
+	b.discoverApplications(ctx, &result, units, home)
+	b.discoverGPUInventory(ctx, &result)
 	owned, err := discoverOwnedUnits(home, result.Request.Catalog)
 	if err != nil {
 		return result, err
@@ -169,4 +175,41 @@ func discoveredOwnedUnitStatus(home, name string, data []byte, managed, adopted 
 		status.State = "managed"
 	}
 	return status
+}
+
+// Inventory is identity evidence only. No CUDA ordinal mapping is inferred.
+func physicalGPUInventory(output []byte) []string {
+	if len(output) > 4096 {
+		return nil
+	}
+	var uuids []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		uuid := strings.TrimSpace(line)
+		if !control.ValidGPUUUID(uuid) || seen[uuid] || len(uuids) >= 32 {
+			return nil
+		}
+		seen[uuid] = true
+		uuids = append(uuids, uuid)
+	}
+	return uuids
+}
+
+func (b Backend) discoverGPUInventory(ctx context.Context, result *Discovery) {
+	result.GPUUUIDs, result.GPUInventoryStatus = inspectGPUInventory(ctx, b.runCommand, gpuruntime.ValidateGPUInventoryExecutable)
+}
+
+func inspectGPUInventory(ctx context.Context, run func(context.Context, string, ...string) ([]byte, error), validate func(string) error) ([]string, string) {
+	if run == nil || validate(gpuInventoryExecutable) != nil {
+		return nil, "untrusted"
+	}
+	output, err := run(ctx, gpuInventoryExecutable, "--query-gpu=uuid", "--format=csv,noheader")
+	if err != nil {
+		return nil, "unavailable"
+	}
+	uuids := physicalGPUInventory(output)
+	if len(uuids) == 0 {
+		return nil, "invalid"
+	}
+	return uuids, "available"
 }

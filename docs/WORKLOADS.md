@@ -152,7 +152,7 @@ Launch-file constraints:
 - Executables and their resolved directory ancestry must be root-owned and not
   group/world writable. User-owned runtime installations are therefore not
   qualified by this adapter.
-- Shell wrappers, hooks, environment files, downloads, automatic restart,
+- Shell wrappers, hooks, environment files, download/provisioning launch commands, automatic restart,
   command substitution, and unrecognized options are rejected.
 - No application/model files are rewritten or installed.
 - llama.cpp requires an existing local model file; vLLM requires an existing
@@ -166,6 +166,46 @@ settings require existing trusted paths; token contents are never read.
 PATH requires trusted root-owned directories. Unsupported expansion, environment
 files and unqualified variables remain rejected with value-free diagnostics.
 Setup preserves the source files and checks their effective loaded assignments.
+
+Literal and `%h` `WorkingDirectory=` settings use the same existing-directory
+trust checks: descriptor-relative inspection rejects symbolic links, foreign
+owners and group/world write permissions. Their exact effective loaded paths
+must match inspection during setup, start and temporary discovery. Cleanup may
+skip directory availability after admission, while retaining source, command,
+loaded-property and invocation checks.
+
+Existing services may retain `Wants=network-online.target`, `KillSignal=SIGINT`,
+`NoNewPrivileges=true`, `PrivateTmp=true` or `false`, `ProtectHome=read-only`,
+and `ProtectSystem=strict`. Setup and execution check their effective loaded
+properties against the preserved sources. `Wants=` uses systemd's additive dependency behavior; empty assignments do not
+remove earlier dependencies. Other dependency targets remain unsupported. These
+settings qualify compatible syntax and preserve isolation settings; they do not
+prove the application can run within that sandbox. `Restart=on-failure` remains
+unsupported because automatic restarts can bypass controller admission.
+
+ComfyUI direct commands may retain `--output-directory`, `--temp-directory`,
+`--user-directory`, `--extra-model-paths-config` and `--enable-manager`. Directory
+options require existing trusted directories. Each explicit configuration file
+requires an existing trusted readable regular file without symbolic links;
+multiple files and repeated configuration options are preserved (at most 256
+arguments and 32 configuration files per option). Cleanup skips availability
+checks for these paths while retaining the command syntax and source checks. Configuration
+qualification checks the file's metadata, without parsing YAML or certifying
+referenced model or custom-node content. Manager qualification preserves the
+argument under the existing trusted desktop-principal script model; inspection
+never imports or runs plugins. It does not certify manager downloads, scheduled
+installations, plugin behavior or model safety. Protect management endpoints
+and direct runtime access as part of deployment qualification. Exact original
+arguments and source fingerprints remain bound and checked before execution.
+The upstream [ComfyUI command definitions](https://github.com/Comfy-Org/ComfyUI/blob/master/comfy/cli_args.py)
+and [startup handling](https://github.com/Comfy-Org/ComfyUI/blob/master/main.py)
+describe these options; the supervisor preserves their behavior.
+
+`LD_LIBRARY_PATH` remains unsupported: directory ownership alone does not prove
+dynamic-loader resolution and transitive library bindings. Use a reviewed
+root-owned runtime installation with its normal trusted loader configuration,
+then reload and refresh the binding. Removing that one setting alone does not
+qualify an otherwise unsupported installation.
 
 `CUDA_VISIBLE_DEVICES` supports one full physical GPU UUID, recorded as
 `gpuUUID` in the binding and checked against the configured NVIDIA GPU at

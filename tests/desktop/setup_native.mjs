@@ -76,6 +76,8 @@ const candidate = {app: 'ollama', label: 'Ollama', unit: 'example-model.service'
     binding: {unit: 'example-model.service', cgroup: '/example/model', healthURL: 'http://127.0.0.1:11434/api/tags', launchFile: '/example/model.service'}};
 const comfy = {...candidate, app: 'comfyui', label: 'ComfyUI', unit: 'example-image.service', models: [],
     binding: {...candidate.binding, unit: 'example-image.service', model: ''}};
+const repairUUID = 'GPU-01234567-89ab-cdef-0123-456789abcdef';
+let repairInventory = [];
 function stateCandidate(state) {
     const result = {...comfy, unit: longUnit, location: longLocation, endpoint: longEndpoint,
         binding: {...comfy.binding, unit: longUnit, launchFile: longLocation, healthURL: `${longEndpoint}/system_stats`},
@@ -92,6 +94,7 @@ function stateCandidate(state) {
     if (state === 'recognized-unreachable') result.instanceStatus = 'unreachable';
     if (state === 'invalid-contradictory') result.instanceStatus = 'invalid';
     if (state === 'gpu-unresolved') Object.assign(result, {recognized: false, binding: undefined, configurationStatus: 'gpu-unresolved', nextStep: 'CUDA_VISIBLE_DEVICES GPU identity is unresolved. Review the service GPU visibility settings before choosing the selected GPU’s full UUID. The external service is unchanged.'});
+    if (state === 'installed-blocked') Object.assign(result, {installed: true, recognized: false, endpoint: undefined, cgroup: undefined, binding: undefined, configurationStatus: 'gpu-unresolved', diagnostics: ['CUDA_VISIBLE_DEVICES requires a full GPU UUID.', 'Restart policy is unsupported.', 'Executable /private-runtime-secret is not root-owned.']});
     return result;
 }
 async function command(argv, input, operation) {
@@ -100,7 +103,7 @@ async function command(argv, input, operation) {
     assert(!['apply', 'render-owned', 'temporary-start'].includes(action), `unexpected mutation: ${action}`);
     if (action === '--version') return 'GNOME Shell 50.1';
     if (action === 'discover') {
-        const discovery = {request: {profile: {statePath: '/example/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: []}}, units: [], applications: mode === 'missing' ? [] : mode === 'temporary' ? [{...candidate, configurationStatus: 'model-required', models: []}] : mode === 'mixed-unresolved' ? [comfy, {...candidate, recognized: false, binding: undefined, instanceStatus: 'invalid', configurationStatus: 'unsupported', models: []}] : ['ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed'].includes(mode) ? [stateCandidate(mode)] : [comfy, candidate], errors: mode === 'error' ? ['Example discovery unavailable.'] : []};
+        const discovery = {gpuUUIDs: mode === 'installed-blocked' ? repairInventory : [repairUUID], gpuInventoryStatus: mode === 'installed-blocked' && !repairInventory.length ? 'unavailable' : 'available', request: {profile: {statePath: '/example/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: []}}, units: [], applications: mode === 'missing' ? [] : mode === 'temporary' ? [{...candidate, configurationStatus: 'model-required', models: []}] : mode === 'mixed-unresolved' ? [comfy, {...candidate, recognized: false, binding: undefined, instanceStatus: 'invalid', configurationStatus: 'unsupported', models: []}] : ['ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed', 'installed-blocked'].includes(mode) ? [stateCandidate(mode)] : [comfy, candidate], errors: mode === 'error' ? ['Example discovery unavailable.'] : []};
         if (deferDiscovery) {
             deferDiscovery = false;
             return await new Promise(resolve => { installationReply = result => { installationReply = null; resolve(JSON.stringify({...discovery, applications: [result]})); }; });
@@ -252,6 +255,47 @@ app.connect('activate', () => {
             assert(ownsFocus(ui, activeHeading), `screen transition focuses its visible heading: ${JSON.stringify(diagnostics)}`);
             assert(!diagnostics.headingSelection[0], `transition heading must not select its text: ${JSON.stringify(diagnostics)}`);
         }
+        async function refreshCorrection(ui, gpuChoice, expectedChoices) {
+            const discoveries = calls.filter(action => action === 'discover').length;
+            await tabTo(ui, named(ui, 'Check again'));
+            run(['xdotool', 'key', 'space']);
+            try {
+                await waitFor(() => calls.filter(action => action === 'discover').length > discoveries &&
+                    !ui.draftEditors.some(editor => editor.checking()) && gpuChoice.model.get_n_items() === expectedChoices,
+                    'in-place configuration reinspection must finish and update the actual UUID inventory');
+            } catch (error) {
+                const evidence = {expectedChoices, discoveriesBefore: discoveries,
+                    discoveriesNow: calls.filter(action => action === 'discover').length,
+                    choicesNow: gpuChoice.model.get_n_items(), selected: gpuChoice.selected,
+                    checking: ui.draftEditors.slice(0, 32).map(editor => ({app: editor.app, checking: editor.checking()})),
+                    actions: calls.slice(-12), pendingEndpointProbe: Boolean(installationReply),
+                    drafts: ui.drafts.slice(0, 32).map(draft => ({app: draft.app, hasUnit: Boolean(draft.binding?.unit), hasEndpoint: Boolean(draft.endpoint), hasReference: Boolean(draft.reference)}))};
+                GLib.file_set_contents(`${output}/correction-refresh-timeout-${expectedChoices}.json`, JSON.stringify(evidence, null, 2));
+                throw new Error(`${error.message}: ${JSON.stringify(evidence)}`);
+            }
+            assert(ui.settingsTitle.get_mapped() && ui.settingsTitle.label === 'Configuration details', 'reinspection preserves the configuration page');
+        }
+        async function captureCorrection(ui, name, gpuChoice) {
+            const group = widgets(ui.window).find(widget => widget instanceof Adw.PreferencesGroup && widget.title === 'Review external service correction');
+            const preview = widgets(group).find(widget => widget instanceof Gtk.Label && widget.has_css_class('monospace'));
+            const copy = named(ui, 'Copy reviewed override');
+            assert(group && preview && gpuChoice, 'correction evidence requires the actual picker, preview and copy controls');
+            const adjustment = ui.scroll.get_vadjustment();
+            const [located, target] = gpuChoice.compute_bounds(ui.scroll);
+            assert(located, 'native GPU picker has viewport-relative geometry');
+            adjustment.value = Math.max(adjustment.lower, Math.min(adjustment.upper - adjustment.page_size, adjustment.value + target.get_y() - 12));
+            await delay(180);
+            const viewport = {width: ui.scroll.get_width(), height: ui.scroll.get_height()};
+            const correction = [gpuChoice, preview, copy].map((widget, index) => {
+                const [found, bounds] = widget.compute_bounds(ui.scroll);
+                const rect = {control: ['gpu-picker', 'override-preview', 'copy-override'][index], x: bounds.get_x(), y: bounds.get_y(), width: bounds.get_width(), height: bounds.get_height()};
+                assert(widget.get_mapped() && found && rect.width > 0 && rect.height > 0 && rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= viewport.width && rect.y + rect.height <= viewport.height,
+                    `${name}: correction control must be fully visible above the fixed footer: ${JSON.stringify(rect)}`);
+                return rect;
+            });
+            geometry.push({screen: name, correction, viewport, scrollValue: adjustment.value});
+            await capture(ui, name);
+        }
         async function capture(ui, name) {
             await delay(180);
             const footer = [ui.review, ui.apply, ui.back, ui.later].filter(widget => widget.get_mapped());
@@ -394,6 +438,34 @@ app.connect('activate', () => {
             assert(!widgets(ui.window).some(widget => widget instanceof Adw.ExpanderRow && widget.visible && widget.expanded), `${state}: technical detail remains collapsed`);
             await capture(ui, `applications-${state}`); await closeAndVerify(ui, state);
         }
+        ui = await open('installed-blocked');
+        named(ui, 'Copy diagnostic report').emit('clicked'); await delay(80);
+        const shareable = await new Promise((resolve, reject) => ui.window.get_display().get_clipboard().read_text_async(null, (source, result) => {
+            try { resolve(source.read_text_finish(result)); } catch (error) { reject(error); }
+        }));
+        const exported = JSON.parse(shareable);
+        assert(exported.installations[0].installed && !exported.installations[0].qualified, 'native export distinguishes installed from qualified');
+        assert(!shareable.includes('private-runtime-secret') && !shareable.includes(longUnit) && !shareable.includes(repairUUID), 'native export removes host identities and raw errors');
+        await capture(ui, 'diagnostic-export');
+        await activate(ui, ui.applicationCards.get('comfyui').gear, 'ComfyUI');
+        assert(!ui.review.sensitive, 'installed blocked candidate cannot be used');
+        await capture(ui, 'settings-installed-blocked');
+        await activate(ui, named(ui, 'View details'), 'Configuration details');
+        assert(!named(ui, 'Copy reviewed override').sensitive, 'GPU correction requires explicit UUID selection');
+        const gpuChoice = widgets(ui.window).find(widget => widget instanceof Adw.ComboRow && widget.title === 'Physical GPU UUID (explicit selection required)');
+        assert(gpuChoice && gpuChoice.selected === 0, 'native UUID chooser has no default selection');
+        await captureCorrection(ui, 'correction-without-selection', gpuChoice);
+        repairInventory = [repairUUID];
+        await refreshCorrection(ui, gpuChoice, 2);
+        assert(gpuChoice.model.get_n_items() === 2 && gpuChoice.selected === 0, 'fresh trusted inventory updates native UUID choices without a default');
+        gpuChoice.selected = 1; await delay(80);
+        assert(named(ui, 'Copy reviewed override').sensitive && ui.review.label === 'Check again', 'reviewed correction enables copying; configuration action remains reinspection');
+        await captureCorrection(ui, 'correction-selected-preview', gpuChoice);
+        repairInventory = [];
+        await refreshCorrection(ui, gpuChoice, 1);
+        assert(gpuChoice.selected === 0 && gpuChoice.model.get_n_items() === 1 && !named(ui, 'Copy reviewed override').sensitive, 'disappeared UUID retires the reviewed native proposal');
+        await captureCorrection(ui, 'correction-inventory-disappeared', gpuChoice);
+        await closeAndVerify(ui, 'installed-blocked');
         const settingsStates = ['ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed'];
         for (const state of settingsStates) {
             ui = await open(state);

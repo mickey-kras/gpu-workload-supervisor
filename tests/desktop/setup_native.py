@@ -53,6 +53,7 @@ def main():
                     'configuration-checking', 'settings-stale-check', 'settings-stale-endpoint-check', 'temporary-without-consent',
                     'temporary-checking', 'temporary-cleanup-required', 'temporary-close-blocked',
                     'temporary-cleanup-complete', 'temporary-cancelled-restored'}
+        required.update(('diagnostic-export', 'settings-installed-blocked', 'correction-without-selection', 'correction-selected-preview', 'correction-inventory-disappeared'))
         required.update(('included-unresolved-settings', 'included-unresolved-blocked', 'included-valid-rest-review'))
         required.update(f'settings-{state}' for state in
                         ('ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed'))
@@ -61,6 +62,12 @@ def main():
         assert required <= set(report['screenshots']), ('missing native state evidence', required - set(report['screenshots']))
         for name in required:
             assert (case / f'{name}.png').is_file(), ('missing native screenshot', name)
+        for name in ('correction-without-selection', 'correction-selected-preview', 'correction-inventory-disappeared'):
+            evidence = next((item for item in report['geometry'] if item['screen'] == name and 'correction' in item), None)
+            assert evidence and {item['control'] for item in evidence['correction']} == {'gpu-picker', 'override-preview', 'copy-override'}, ('missing visible correction evidence', name)
+            viewport = evidence['viewport']
+            for item in evidence['correction']:
+                assert item['x'] >= 0 and item['y'] >= 0 and item['width'] > 0 and item['height'] > 0 and item['x'] + item['width'] <= viewport['width'] and item['y'] + item['height'] <= viewport['height'], ('correction control clipped', name, item)
         assert not report['criticalLogs'], 'native GTK criticals'
         assert 'No GNOME Shell' in report['scope'], 'fixture evidence scope must remain explicit'
         for image in case.glob('*.png'):

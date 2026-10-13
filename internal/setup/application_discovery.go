@@ -14,8 +14,8 @@ import (
 const execStartPropertyPrefix = "ExecStart="
 const inspectionFailedStatus = "inspection-failed"
 
-func (b Backend) discoverApplications(ctx context.Context, result *Discovery, units []string) {
-	defer b.discoverInstalledExecutables(ctx, result)
+func (b Backend) discoverApplications(ctx context.Context, result *Discovery, units []string, home string) {
+	defer b.discoverInstalledExecutables(ctx, result, home)
 	// Only these four local default origins are probed. Non-default instances use
 	// an explicit endpoint selection; no port, process, or filesystem scanning.
 	for _, r := range []ProbeRequest{{App: "comfyui", Endpoint: "http://127.0.0.1:8188"}, {App: "ollama", Endpoint: "http://127.0.0.1:11434"}, {App: appLlamaCPP, Endpoint: "http://127.0.0.1:8080"}, {App: "vllm", Endpoint: "http://127.0.0.1:8000"}} {
@@ -29,9 +29,24 @@ func (b Backend) discoverApplications(ctx context.Context, result *Discovery, un
 	}
 	if len(units) > 256 {
 		result.Errors = append(result.Errors, "Too many services for bounded application discovery. Choose a supported installation explicitly.")
-		return
+		units = units[:256]
+	}
+	// Explicit configured selections remain inspectable despite unrelated inventory.
+	selected := []string{}
+	seen := map[string]bool{}
+	for _, profile := range result.Request.Catalog.Profiles {
+		if selectedUnitName.MatchString(profile.Unit) && !seen[profile.Unit] {
+			selected = append(selected, profile.Unit)
+			seen[profile.Unit] = true
+		}
 	}
 	for _, unit := range units {
+		if !seen[unit] {
+			selected = append(selected, unit)
+			seen[unit] = true
+		}
+	}
+	for _, unit := range selected {
 		if ctx.Err() != nil {
 			return
 		}
@@ -39,11 +54,11 @@ func (b Backend) discoverApplications(ctx context.Context, result *Discovery, un
 	}
 }
 
-func (b Backend) discoverInstalledExecutables(ctx context.Context, result *Discovery) {
+func (b Backend) discoverInstalledExecutables(ctx context.Context, result *Discovery, home string) {
 	if b.discoverExecutables == nil || ctx.Err() != nil {
 		return
 	}
-	for _, found := range b.discoverExecutables(ctx) {
+	for _, found := range b.discoverExecutables(ctx, home) {
 		// Prefer an already recognized service binding to a second launch of the
 		// same application. Endpoint observations never establish installation.
 		hasService := false

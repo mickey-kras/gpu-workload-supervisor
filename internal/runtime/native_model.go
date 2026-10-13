@@ -125,7 +125,7 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 	if err != nil {
 		return err
 	}
-	if err := CheckLoadedAccountHomeDirectory(values["WorkingDirectory"], launch.homeWorkingDirectory); err != nil {
+	if err := CheckLoadedLaunchProperties(values, launch.loadedProperties); err != nil {
 		return err
 	}
 	if err := CheckLoadedEnvironment(values["Environment"], launch.environmentValues); err != nil {
@@ -145,8 +145,10 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 
 func nativeBindingShowArguments(unit string, launch parsedLaunchUnit) []string {
 	args := []string{"--user", "show", "--property=FragmentPath", "--property=DropInPaths", "--property=NeedDaemonReload", "--property=ExecStartPre", "--property=ExecStart"}
-	if launch.homeWorkingDirectory != "" {
-		args = append(args, "--property=WorkingDirectory")
+	for _, key := range []string{"WorkingDirectory", "Wants", "KillSignal", "NoNewPrivileges", "PrivateTmp", "ProtectHome", "ProtectSystem"} {
+		if _, configured := launch.loadedProperties[key]; configured {
+			args = append(args, "--property="+key)
+		}
 	}
 	for name := range launch.environmentValues {
 		if !strings.HasPrefix(name, "OLLAMA_") {

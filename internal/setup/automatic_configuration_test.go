@@ -191,7 +191,7 @@ func TestDiscoveryReportsReadFailureAndRecognizedStoppedInstallation(t *testing.
 		t.Fatal(result)
 	}
 	result = Discovery{}
-	b.discoverApplications(context.Background(), &result, make([]string, 257))
+	b.discoverApplications(context.Background(), &result, make([]string, 257), t.TempDir())
 	if len(result.Errors) != 1 {
 		t.Fatal(result)
 	}
@@ -233,7 +233,7 @@ func TestDiscoveryRecognizesKeywordlessDirectApplications(t *testing.T) {
 				return oldRun(ctx, exe, args...)
 			}
 			result := Discovery{}
-			b.discoverApplications(context.Background(), &result, []string{unit})
+			b.discoverApplications(context.Background(), &result, []string{unit}, t.TempDir())
 			if len(result.Units) != 1 || result.Units[0] != unit || len(result.Applications) != 5 || !result.Applications[4].Recognized {
 				t.Fatalf("keywordless direct service excluded: %+v", result)
 			}

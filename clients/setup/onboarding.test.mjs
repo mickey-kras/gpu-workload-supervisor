@@ -66,7 +66,7 @@ test('profile ID derivation stays linear on pathological dash runs', () => {
 });
 
 test('stopped and unreachable instances never report no models', () => {
-    assert.match(candidateMessage({instanceStatus: 'not-running', unit: 'installed.service'}), /Installed and stopped/);
+    assert.match(candidateMessage({instanceStatus: 'not-running', unit: 'installed.service'}), /Service found and stopped/);
     assert.match(candidateMessage({instanceStatus: 'unreachable'}), /Address unreachable/);
     assert.match(candidateMessage({instanceStatus: 'available', inventoryStatus: 'available'}), /need a check/i);
 });

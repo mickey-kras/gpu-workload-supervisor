@@ -182,8 +182,26 @@ func (d *externalLaunchDirectives) applyLine(section, line string) error {
 		d.pre = appendLaunchAssignment(d.pre, value)
 	case "[Service]Environment":
 		return d.applyEnvironment(value)
+	case "[Unit]Wants":
+		return d.applyWants(value)
 	default:
 		d.scalars[section+key] = value
+	}
+	return nil
+}
+
+// Dependencies accumulate across sources; empty assignments cannot remove an
+// earlier dependency. The supported set has one member, so retain a canonical
+// constant-size representation rather than concatenating duplicate lines.
+func (d *externalLaunchDirectives) applyWants(value string) error {
+	if _, exists := d.scalars["[Unit]Wants"]; !exists {
+		d.scalars["[Unit]Wants"] = ""
+	}
+	for _, name := range strings.Fields(value) {
+		if name != "network-online.target" {
+			return fmt.Errorf("%w: incompatible directive Wants", ErrLaunchUnsupported)
+		}
+		d.scalars["[Unit]Wants"] = "network-online.target"
 	}
 	return nil
 }
@@ -252,14 +270,14 @@ func (unit *parsedLaunchUnit) applyExternalScalar(runtimeName, directive, value 
 	if !environmentName.MatchString(key) || len(key) > 64 {
 		return fmt.Errorf("%w: unrecognized directive", ErrLaunchUnsupported)
 	}
-	if directive == "[Service]WorkingDirectory" && strings.Contains(value, "%") {
-		expanded, err := unit.qualifyAccountHomeWorkingDirectory(value)
-		if err != nil {
-			return err
-		}
-		value = expanded
+	value, err := unit.qualifyExternalWorkingDirectory(directive, value)
+	if err != nil {
+		return err
 	}
 	if accepted, err := externalDirective(section, key, value); accepted || err != nil {
+		if err == nil {
+			unit.recordLoadedProperty(key, value)
+		}
 		return err
 	}
 	if strings.ContainsAny(value, launchExpansionCharacters) {
@@ -286,6 +304,12 @@ var orderingUnit = regexp.MustCompile(`^[A-Za-z0-9_.:-]+\.(service|target|socket
 func externalDirective(section, key, value string) (bool, error) {
 	unsupported := func() (bool, error) {
 		return true, fmt.Errorf("%w: incompatible directive %s", ErrLaunchUnsupported, key)
+	}
+	if accepted, valid := compatibleIsolationDirective(section, key, value); accepted {
+		if !valid {
+			return unsupported()
+		}
+		return true, nil
 	}
 	switch section + key {
 	case "[Unit]Description", "[Unit]Documentation", "[Install]WantedBy":
@@ -452,4 +476,58 @@ func (unit *parsedLaunchUnit) qualifyAccountHomeWorkingDirectory(value string) (
 		}
 	}
 	return expanded, nil
+}
+
+func (unit *parsedLaunchUnit) qualifyExternalWorkingDirectory(directive, value string) (string, error) {
+	if directive != "[Service]WorkingDirectory" {
+		return value, nil
+	}
+	if strings.Contains(value, "%") {
+		expanded, err := unit.qualifyAccountHomeWorkingDirectory(value)
+		if err != nil {
+			return "", err
+		}
+		value = expanded
+	}
+	if !unit.cleanupEnvironment {
+		if err := qualifyEnvironmentPath(value, false, false); err != nil {
+			return "", fmt.Errorf("%w: WorkingDirectory requires an existing absolute clean trusted directory without links; inspect ownership and permissions of this setting and its ancestors", ErrLaunchUnsupported)
+		}
+	}
+	unit.workingDirectory = value
+	return value, nil
+}
+
+func (unit *parsedLaunchUnit) recordLoadedProperty(key, value string) {
+	canonical, ok := qualifiedLoadedProperty(key, value)
+	if !ok {
+		return
+	}
+	if unit.loadedProperties == nil {
+		unit.loadedProperties = map[string]string{}
+	}
+	unit.loadedProperties[key] = canonical
+}
+
+func compatibleIsolationDirective(section, key, value string) (bool, bool) {
+	switch section + key {
+	case "[Unit]Wants":
+		for _, name := range strings.Fields(value) {
+			if name != "network-online.target" {
+				return true, false
+			}
+		}
+		return true, true
+	case "[Service]KillSignal":
+		return true, value == "SIGINT"
+	case "[Service]NoNewPrivileges":
+		return true, value == "true"
+	case "[Service]PrivateTmp":
+		return true, value == "true" || value == "false"
+	case "[Service]ProtectHome":
+		return true, value == "read-only"
+	case "[Service]ProtectSystem":
+		return true, value == "strict"
+	}
+	return false, false
 }

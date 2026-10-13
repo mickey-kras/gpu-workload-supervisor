@@ -172,7 +172,7 @@ class SetupWindow {
         if (this.drafts.some(draft => draft.id === initial.id)) { this.status.label = 'This workload already has an open selection. Finish or remove that selection first.'; return this.draftEditors.find(editor => editor.id === initial.id); }
         this.drafts.push(initial);
         let editor;
-        editor = addDraftEditor({Adw, Gtk, Gio, window: this.window, parent: this.draftRows, initial, detected: this.discovered, discoveryErrors: this.discoveryErrors, command: this.command, modelParent: this.modelPage, temporaryStatus: this.temporaryStatus, reportProblem: this.reportError, reportStatus: message => { this.status.label = message; this.reportError.clear(); }, navigateSettings: state => this.navigateApplicationSettings(editor, state), saveSelections: () => this.saveDraftSelections(), openSettings: origin => this.openApplicationSettings(editor, origin),
+        editor = addDraftEditor({Adw, Gtk, Gio, window: this.window, parent: this.draftRows, initial, detected: this.discovered, gpuUUIDs: this.gpuUUIDs, gpuInventoryStatus: this.gpuInventoryStatus, discoveryErrors: this.discoveryErrors, command: this.command, modelParent: this.modelPage, temporaryStatus: this.temporaryStatus, reportProblem: this.reportError, reportStatus: message => { this.status.label = message; this.reportError.clear(); }, navigateSettings: state => this.navigateApplicationSettings(editor, state), saveSelections: () => this.saveDraftSelections(), openSettings: origin => this.openApplicationSettings(editor, origin),
             bind: async (profile, current, finish = false) => {
                 replacing ??= this.profiles.find(existing => existing.id === initial.id) ?? null;
                 if (replacing && !this.profiles.includes(replacing)) throw new Error('The original workload was removed. Reopen Manage workloads before editing it.');
@@ -363,11 +363,11 @@ class SetupWindow {
     detectionMessage(known, candidates) {
         const states = {'unreachable': 'Address unreachable · Installation unverified', 'inspection-failed': 'Inspection failed · Open settings', 'discovery-error': 'Detection failed · Open settings', 'missing': 'Location missing · Open settings', 'invalid': 'Configuration unreadable · Open settings', 'unsupported': 'Unsupported · Open settings'};
         if (known.length > 1) return 'Choose an installation in settings.';
-        const selected = known[0] ?? candidates.find(candidate => candidate.sourceKind === 'configuration' || candidate.unit) ?? candidates[0];
+        const selected = known[0] ?? candidates.find(candidate => candidate.sourceKind === 'configuration' || candidate.unit) ?? candidates.find(candidate => candidate.installed) ?? candidates[0];
         if (candidateDiagnostics(selected).length > 1) return 'Configuration needs attention · Open settings';
-        if (selected?.configurationStatus === 'inspection-failed') return 'Inspection failed · Open settings';
-        if (selected?.configurationStatus === 'model-missing') return 'Configured model missing · Open settings';
-        if (selected?.configurationStatus === 'gpu-unresolved') return 'GPU identity needs setup · Open settings';
+        if (selected?.installed && !selected?.recognized) return 'Installed · Qualification blocked · Open settings';
+        const configuration = {'inspection-failed': 'Inspection failed · Open settings', 'model-missing': 'Configured model missing · Open settings', 'gpu-unresolved': 'GPU identity needs setup · Open settings'}[selected?.configurationStatus];
+        if (configuration) return configuration;
         if (!known.length) return states[selected?.instanceStatus] ?? (selected?.instanceStatus === 'not-running' && !selected.unit ? 'Default address unavailable · Installation unverified' : 'Not detected');
         if (selected.instanceStatus === 'unreachable') return 'Installed · Address unreachable · Ready to configure';
         const state = states[selected.instanceStatus];
@@ -468,7 +468,7 @@ class SetupWindow {
             if (!/\b50(?:\.|\s|$)/.test(version) || !GLib.getenv('XDG_CURRENT_DESKTOP')?.includes('GNOME'))
                 throw new Error('This package requires a GNOME Shell 50 desktop session.');
             const discovery = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'discover']));
-            this.request = discovery.request; this.units = discovery.units; this.pending = Boolean(discovery.pending); this.discovered = discovery.applications ?? []; this.discoveryErrors = discovery.errors ?? [];
+            this.request = discovery.request; this.units = discovery.units; this.pending = Boolean(discovery.pending); this.discovered = discovery.applications ?? []; this.gpuUUIDs = discovery.gpuUUIDs ?? []; this.gpuInventoryStatus = discovery.gpuInventoryStatus; this.discoveryErrors = discovery.errors ?? [];
             if (!this.pending) {
                 this.temporaryStatus = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'temporary-status']));
                 const saved = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'drafts']));
