@@ -115,9 +115,10 @@ export class InstallationSettings {
         this.ownership.label = candidate.binding?.owned ? 'Supervisor manages this launch. Applications and model files are preserved.' : 'External service files are preserved.';
         this.notify();
     }
-    updateGPUInventory(uuids = [], status) {
+    updateGPUInventory(uuids, status) {
         this.gpuInventoryStatus = status;
-        this.repairUUIDs = uuids.filter(uuid => /^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(uuid)).slice(0, 32);
+        const inventoryUUIDs = uuids === undefined ? [] : uuids;
+        this.repairUUIDs = inventoryUUIDs.filter(uuid => /^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(uuid)).slice(0, 32);
         this.gpu.model = this.Gtk.StringList.new(['Choose a full physical GPU UUID…', ...this.repairUUIDs]);
         this.gpu.selected = 0;
         this.updateCorrection();

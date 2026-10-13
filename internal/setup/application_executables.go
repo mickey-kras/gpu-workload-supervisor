@@ -9,6 +9,8 @@ import (
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 )
 
+const llamaServerExecutable = "llama-server"
+
 // Only known executable names at standard locations and a bounded number of
 // explicit PATH directories are inspected. No directories are scanned and no
 // executable is run. Qualification is shared with explicit executable selection.
@@ -29,7 +31,7 @@ func executableDiscoveryPaths(path string) []ProbeRequest {
 		for _, app := range []string{"ollama", appLlamaCPP, "vllm"} {
 			name := app
 			if app == appLlamaCPP {
-				name = "llama-server"
+				name = llamaServerExecutable
 			}
 			requests = append(requests, ProbeRequest{App: app, Reference: filepath.Join(directory, name), ReferenceKind: "application"})
 		}
@@ -86,7 +88,7 @@ func relevantExecutablePaths(home string) []ProbeRequest {
 		for _, app := range []string{"ollama", appLlamaCPP, "vllm"} {
 			name := app
 			if app == appLlamaCPP {
-				name = "llama-server"
+				name = llamaServerExecutable
 			}
 			paths = append(paths, ProbeRequest{App: app, Reference: filepath.Join(home, ".local/bin", name), ReferenceKind: "application"})
 		}
@@ -95,7 +97,7 @@ func relevantExecutablePaths(home string) []ProbeRequest {
 	for _, app := range []string{"ollama", appLlamaCPP, "vllm"} {
 		name := app
 		if app == appLlamaCPP {
-			name = "llama-server"
+			name = llamaServerExecutable
 		}
 		for _, dir := range []string{filepath.Join("/opt", app), filepath.Join("/opt", app, "bin")} {
 			paths = append(paths, ProbeRequest{App: app, Reference: filepath.Join(dir, name), ReferenceKind: "application"})
