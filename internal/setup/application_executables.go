@@ -37,8 +37,7 @@ func executableDiscoveryPaths(path string) []ProbeRequest {
 	return requests
 }
 
-func installedExecutables(ctx context.Context) []ApplicationCandidate {
-	home, _ := os.UserHomeDir()
+func installedExecutables(ctx context.Context, home string) []ApplicationCandidate {
 	requests := executableDiscoveryPaths(os.Getenv("PATH"))
 	requests = append(requests, relevantExecutablePaths(home)...)
 	return inspectInstalledExecutables(ctx, requests, os.Lstat, gpuruntime.ValidateSelectedNativeExecutable, filepath.EvalSymlinks)
@@ -46,16 +45,18 @@ func installedExecutables(ctx context.Context) []ApplicationCandidate {
 
 func inspectInstalledExecutables(ctx context.Context, requests []ProbeRequest, stat func(string) (os.FileInfo, error), validate func(string, string) error, resolve func(string) (string, error)) []ApplicationCandidate {
 	seen := map[string]bool{}
-	inspected := map[string]bool{}
+	type installationSelection struct{ app, reference string }
+	inspected := map[installationSelection]bool{}
 	var found []ApplicationCandidate
 	for _, request := range requests {
 		if ctx.Err() != nil {
 			break
 		}
-		if inspected[request.Reference] {
+		selection := installationSelection{app: request.App, reference: request.Reference}
+		if inspected[selection] {
 			continue
 		}
-		inspected[request.Reference] = true
+		inspected[selection] = true
 		_, statErr := stat(request.Reference)
 		if os.IsNotExist(statErr) {
 			continue

@@ -82,12 +82,12 @@ func TestExecutableDiscoveryKeepsEndpointObservationSeparateAndPrefersRecognized
 		if hasService {
 			result.Applications = append(result.Applications, ApplicationCandidate{App: "ollama", Unit: "existing.service", Recognized: true})
 		}
-		b := Backend{discoverExecutables: func(context.Context) []ApplicationCandidate {
+		b := Backend{discoverExecutables: func(context.Context, string) []ApplicationCandidate {
 			request := ProbeRequest{App: "ollama", Reference: "/usr/bin/ollama", ReferenceKind: "application"}
 			found := probeSelectedExecutable(request, candidate(request), func(string, string) error { return nil })
 			return []ApplicationCandidate{found}
 		}}
-		b.discoverInstalledExecutables(context.Background(), &result)
+		b.discoverInstalledExecutables(context.Background(), &result, t.TempDir())
 		if len(result.Applications) != 2 || result.Applications[0].Recognized || result.Applications[0].Binding != nil || !result.Applications[1].Recognized {
 			t.Fatalf("endpoint/installation identities conflated: %+v", result.Applications)
 		}
@@ -222,5 +222,90 @@ func TestSavedExecutableSelectionIsRediscoveredWithoutHomeScan(t *testing.T) {
 	}
 	if count != 1 || len(paths) != 10 {
 		t.Fatalf("saved explicit reference omitted/unbounded: %+v", paths)
+	}
+}
+
+func TestStoppedServiceWithMissingExecutableDoesNotClaimInstalled(t *testing.T) {
+	b, draft, _ := automaticFixture(t, "ollama")
+	b.inspectAutomatic = func(string, string) (gpuruntime.AutomaticLaunch, error) {
+		return gpuruntime.AutomaticLaunch{}, errors.New("executable is missing")
+	}
+	result := Discovery{}
+	b.discoverUnit(context.Background(), &result, draft.Binding.Unit)
+	if len(result.Applications) != 1 {
+		t.Fatal(result.Applications)
+	}
+	found := result.Applications[0]
+	if found.Installed || found.Recognized || found.Binding != nil || found.ConfigurationStatus != inspectionFailedStatus {
+		t.Fatalf("service metadata falsely claimed installed: %+v", found)
+	}
+}
+
+func TestExecutableDiscoveryUsesExplicitAccountHomeDespiteAmbientHOME(t *testing.T) {
+	home := t.TempDir()
+	alternate := t.TempDir()
+	t.Setenv("HOME", alternate)
+	for _, root := range []string{home, alternate} {
+		if err := os.MkdirAll(filepath.Join(root, ".local/bin"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".local/bin/vllm"), nil, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	selected := filepath.Join(home, "custom/ollama")
+	if err := os.MkdirAll(filepath.Dir(selected), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(selected, nil, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SaveDrafts(home, DraftRequest{Version: 1, Drafts: []Draft{{ID: "custom", Label: "Custom", App: "ollama", Reference: selected, ReferenceKind: "application"}}}); err != nil {
+		t.Fatal(err)
+	}
+	found := installedExecutables(context.Background(), home)
+	expected := map[string]bool{filepath.Join(home, ".local/bin/vllm"): false, selected: false}
+	for _, candidate := range found {
+		if strings.HasPrefix(candidate.Reference, alternate+string(os.PathSeparator)) {
+			t.Fatal("ambient HOME affected discovery", candidate.Reference)
+		}
+		if _, ok := expected[candidate.Reference]; ok {
+			expected[candidate.Reference] = true
+		}
+	}
+	for path, present := range expected {
+		if !present {
+			t.Fatal("explicit account installation omitted", path)
+		}
+	}
+	t.Setenv("HOME", "")
+	if got := installedExecutables(context.Background(), home); len(got) != len(found) {
+		t.Fatalf("unset HOME changed explicit account discovery: %d != %d", len(got), len(found))
+	}
+}
+
+func TestWrongApplicationSelectionCannotHideCorrectExecutableAtSamePath(t *testing.T) {
+	path := "/custom/bin/llama-server"
+	requests := []ProbeRequest{
+		{App: "vllm", Reference: path, ReferenceKind: "application"},
+		{App: appLlamaCPP, Reference: path, ReferenceKind: "application"},
+		{App: appLlamaCPP, Reference: path, ReferenceKind: "application"},
+	}
+	calls := 0
+	found := inspectInstalledExecutables(context.Background(), requests, func(string) (os.FileInfo, error) { return nil, nil }, func(app, reference string) error {
+		calls++
+		if reference != path {
+			t.Fatal(reference)
+		}
+		if app != appLlamaCPP {
+			return errors.New("selected application does not match executable")
+		}
+		return nil
+	}, func(reference string) (string, error) { return reference, nil })
+	if calls != 2 || len(found) != 2 {
+		t.Fatalf("different app hidden or same app repeated: calls=%d candidates=%+v", calls, found)
+	}
+	if found[0].Recognized || found[0].Binding != nil || !found[1].Recognized || found[1].App != appLlamaCPP || found[1].Binding == nil {
+		t.Fatalf("invalid app request suppressed qualification: %+v", found)
 	}
 }

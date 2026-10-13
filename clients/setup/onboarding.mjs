@@ -99,7 +99,7 @@ export function candidateReady(candidate) {
 
 function stoppedCandidateMessage(candidate) {
     if (candidate?.configurationStatus === 'ready' || candidate?.configurationStatus === 'model-required') return 'Installed and stopped. Ready to configure.';
-    if (candidate?.unit) return 'Installed and stopped. More configuration evidence is needed; choose its location or inspect Advanced settings.';
+    if (candidate?.unit) return 'Service found and stopped. Configuration remains unqualified; inspect its blockers or choose the installed executable.';
     return 'Default address is not responding. Installation is unverified; choose its installed location.';
 }
 

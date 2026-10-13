@@ -183,11 +183,25 @@ func (d *externalLaunchDirectives) applyLine(section, line string) error {
 	case "[Service]Environment":
 		return d.applyEnvironment(value)
 	case "[Unit]Wants":
-		// Dependencies accumulate across sources; an empty assignment cannot
-		// remove an earlier dependency (systemd.unit).
-		d.scalars[section+key] = strings.TrimSpace(d.scalars[section+key] + " " + value)
+		return d.applyWants(value)
 	default:
 		d.scalars[section+key] = value
+	}
+	return nil
+}
+
+// Dependencies accumulate across sources; empty assignments cannot remove an
+// earlier dependency. The supported set has one member, so retain a canonical
+// constant-size representation rather than concatenating duplicate lines.
+func (d *externalLaunchDirectives) applyWants(value string) error {
+	if _, exists := d.scalars["[Unit]Wants"]; !exists {
+		d.scalars["[Unit]Wants"] = ""
+	}
+	for _, name := range strings.Fields(value) {
+		if name != "network-online.target" {
+			return fmt.Errorf("%w: incompatible directive Wants", ErrLaunchUnsupported)
+		}
+		d.scalars["[Unit]Wants"] = "network-online.target"
 	}
 	return nil
 }

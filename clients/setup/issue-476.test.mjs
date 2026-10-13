@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {launch} from './harness.mjs';
-import {diagnosticReport, correctionPreview} from './onboarding.mjs';
+import {diagnosticReport, correctionPreview, candidateMessage} from './onboarding.mjs';
 const uuid = 'GPU-01234567-89ab-cdef-0123-456789abcdef';
 const blocked = {id: 'blocked', app: 'comfyui', label: 'ComfyUI', installed: true, recognized: false, unit: 'private-secret.service', location: '/private-path-secret', instanceStatus: 'not-running', configurationStatus: 'gpu-unresolved', diagnostics: ['CUDA_VISIBLE_DEVICES needs a full GPU UUID.', 'Restart policy is unsupported.', 'Executable /private-exec-secret is not root-owned.']};
 const request = {profile: {statePath: '/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: []}};
@@ -18,6 +18,9 @@ test('service metadata alone never claims an observed installation', () => {
     const report = JSON.parse(diagnosticReport([{...blocked, installed: false, configurationStatus: 'model-missing'}]));
     assert.equal(report.installations[0].installed, false);
     assert.equal(report.installations[0].qualified, false);
+    const message = candidateMessage({unit: 'only-metadata.service', instanceStatus: 'not-running', installed: false, recognized: false});
+    assert.match(message, /Service found and stopped/);
+    assert.equal(message.includes('Installed'), false);
 });
 test('reviewed override requires explicit full UUID and never invents a numeric mapping', () => {
     assert.equal(correctionPreview(blocked), '');
@@ -46,4 +49,31 @@ test('native handlers detect blocked installation, select UUID, copy preview and
     assert.equal(ui.calls.some(call => ['apply', 'temporary-discover'].includes(call.argv[1])), false);
     await ui.click('Check again'); await ui.click('Back');
     assert.equal(ui.by('Use installation').sensitive, true);
+});
+
+test('Check again refreshes available UUIDs and drops a disappeared explicit selection', async () => {
+    let count = 0;
+    const inventories = [[], [uuid], []];
+    const ui = await launch({deferAction: 'unused', responses: {discover: () => {
+        const gpuUUIDs = inventories[Math.min(count++, 2)];
+        return {request, units: [], gpuUUIDs, gpuInventoryStatus: gpuUUIDs.length ? 'available' : 'unavailable', applications: [blocked]};
+    }}});
+    await ui.click('Settings for ComfyUI'); await ui.click('View details');
+    const choice = ui.by('Physical GPU UUID (explicit selection required)');
+    assert.equal(choice.model.get_n_items(), 1);
+    assert.equal(ui.by('Copy reviewed override').sensitive, false);
+    await ui.click('Check again');
+    assert.equal(choice.model.get_n_items(), 2);
+    assert.equal(choice.selected, 0);
+    assert.equal(ui.by('Copy reviewed override').sensitive, false);
+    ui.edit(choice, 'selected', 1);
+    assert.equal(ui.by('Copy reviewed override').sensitive, true);
+    await ui.click('Check again');
+    assert.equal(choice.model.get_n_items(), 1);
+    assert.equal(choice.selected, 0);
+    assert.equal(ui.by('Copy reviewed override').sensitive, false);
+    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('GPU inventory query was unavailable.')));
+    await ui.click('Back');
+    assert.equal(ui.by('Use installation').sensitive, false);
+    assert.equal(ui.calls.some(call => ['apply', 'temporary-discover'].includes(call.argv[1])), false);
 });

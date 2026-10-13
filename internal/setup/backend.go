@@ -147,7 +147,7 @@ type Backend struct {
 	makeRuntime         func(Request) (gpuruntime.Manager, error)
 	runCommand          func(ctx context.Context, name string, args ...string) ([]byte, error)
 	probeApplication    func(ctx context.Context, request ProbeRequest) (ApplicationCandidate, error)
-	discoverExecutables func(context.Context) []ApplicationCandidate
+	discoverExecutables func(context.Context, string) []ApplicationCandidate
 	inspectAutomatic    func(string, string) (gpuruntime.AutomaticLaunch, error)
 	// qualifyOwned renders and qualifies an owned profile against the host
 	// before anything becomes durable; nil selects the runtime default.

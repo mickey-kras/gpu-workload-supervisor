@@ -76,7 +76,7 @@ func (b Backend) Discover(ctx context.Context, home string) (Discovery, error) {
 		result.Errors = append(result.Errors, "Application services could not be listed. Check your desktop user session and retry.")
 	}
 	result.Units = []string{}
-	b.discoverApplications(ctx, &result, units)
+	b.discoverApplications(ctx, &result, units, home)
 	b.discoverGPUInventory(ctx, &result)
 	owned, err := discoverOwnedUnits(home, result.Request.Catalog)
 	if err != nil {

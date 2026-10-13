@@ -77,6 +77,7 @@ const candidate = {app: 'ollama', label: 'Ollama', unit: 'example-model.service'
 const comfy = {...candidate, app: 'comfyui', label: 'ComfyUI', unit: 'example-image.service', models: [],
     binding: {...candidate.binding, unit: 'example-image.service', model: ''}};
 const repairUUID = 'GPU-01234567-89ab-cdef-0123-456789abcdef';
+let repairInventory = [];
 function stateCandidate(state) {
     const result = {...comfy, unit: longUnit, location: longLocation, endpoint: longEndpoint,
         binding: {...comfy.binding, unit: longUnit, launchFile: longLocation, healthURL: `${longEndpoint}/system_stats`},
@@ -102,7 +103,7 @@ async function command(argv, input, operation) {
     assert(!['apply', 'render-owned', 'temporary-start'].includes(action), `unexpected mutation: ${action}`);
     if (action === '--version') return 'GNOME Shell 50.1';
     if (action === 'discover') {
-        const discovery = {gpuUUIDs: [repairUUID], request: {profile: {statePath: '/example/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: []}}, units: [], applications: mode === 'missing' ? [] : mode === 'temporary' ? [{...candidate, configurationStatus: 'model-required', models: []}] : mode === 'mixed-unresolved' ? [comfy, {...candidate, recognized: false, binding: undefined, instanceStatus: 'invalid', configurationStatus: 'unsupported', models: []}] : ['ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed', 'installed-blocked'].includes(mode) ? [stateCandidate(mode)] : [comfy, candidate], errors: mode === 'error' ? ['Example discovery unavailable.'] : []};
+        const discovery = {gpuUUIDs: mode === 'installed-blocked' ? repairInventory : [repairUUID], gpuInventoryStatus: mode === 'installed-blocked' && !repairInventory.length ? 'unavailable' : 'available', request: {profile: {statePath: '/example/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: []}}, units: [], applications: mode === 'missing' ? [] : mode === 'temporary' ? [{...candidate, configurationStatus: 'model-required', models: []}] : mode === 'mixed-unresolved' ? [comfy, {...candidate, recognized: false, binding: undefined, instanceStatus: 'invalid', configurationStatus: 'unsupported', models: []}] : ['ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed', 'installed-blocked'].includes(mode) ? [stateCandidate(mode)] : [comfy, candidate], errors: mode === 'error' ? ['Example discovery unavailable.'] : []};
         if (deferDiscovery) {
             deferDiscovery = false;
             return await new Promise(resolve => { installationReply = result => { installationReply = null; resolve(JSON.stringify({...discovery, applications: [result]})); }; });
@@ -413,9 +414,16 @@ app.connect('activate', () => {
         await capture(ui, 'correction-without-selection');
         const gpuChoice = widgets(ui.window).find(widget => widget instanceof Adw.ComboRow && widget.title === 'Physical GPU UUID (explicit selection required)');
         assert(gpuChoice && gpuChoice.selected === 0, 'native UUID chooser has no default selection');
+        repairInventory = [repairUUID];
+        await activate(ui, named(ui, 'Check again'), 'Configuration details');
+        assert(gpuChoice.model.get_n_items() === 2 && gpuChoice.selected === 0, 'fresh trusted inventory updates native UUID choices without a default');
         gpuChoice.selected = 1; await delay(80);
         assert(named(ui, 'Copy reviewed override').sensitive && ui.review.label === 'Check again', 'reviewed correction enables copying; configuration action remains reinspection');
         await capture(ui, 'correction-selected-preview');
+        repairInventory = [];
+        await activate(ui, named(ui, 'Check again'), 'Configuration details');
+        assert(gpuChoice.selected === 0 && gpuChoice.model.get_n_items() === 1 && !named(ui, 'Copy reviewed override').sensitive, 'disappeared UUID retires the reviewed native proposal');
+        await capture(ui, 'correction-inventory-disappeared');
         await closeAndVerify(ui, 'installed-blocked');
         const settingsStates = ['ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed'];
         for (const state of settingsStates) {

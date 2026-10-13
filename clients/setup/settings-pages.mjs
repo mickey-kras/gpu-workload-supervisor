@@ -55,23 +55,21 @@ export class InstallationSettings {
         const detailCard = roundedCard(Gtk); detailCard.append(this.diagnostic); this.pages.get('configuration').append(detailCard);
         const copy = new Gtk.Button({label: 'Copy details', halign: Gtk.Align.END}); this.pages.get('configuration').append(copy);
         copy.connect('clicked', () => {
-            const value = new GObject.Value(); value.init(GObject.TYPE_STRING);
-            value.set_string([this.diagnosticIdentity.label, this.diagnosticSummary.label, this.diagnostic.label].filter(Boolean).join('\n\n'));
-            window.get_display().get_clipboard().set_content(Gdk.ContentProvider.new_for_value(value));
+            copySetupText(window, [this.diagnosticIdentity.label, this.diagnosticSummary.label, this.diagnostic.label].filter(Boolean).join('\n\n'));
         });
-        this.repairUUIDs = gpuUUIDs.filter(uuid => /^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(uuid)).slice(0, 32);
+        this.repairUUIDs = [];
         this.repair = new Adw.PreferencesGroup({title: 'Review external service correction'}); this.pages.get('configuration').append(this.repair);
         this.gpu = new Adw.ComboRow({title: 'Physical GPU UUID (explicit selection required)', selected: 0, model: Gtk.StringList.new(['Choose a full physical GPU UUID…', ...this.repairUUIDs])}); this.repair.add(this.gpu);
         this.preview = new Gtk.Label({wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.preview.add_css_class('monospace'); this.repair.add(this.preview);
         this.copyOverride = new Gtk.Button({label: 'Copy reviewed override', sensitive: false}); this.repair.add(this.copyOverride);
         this.copyOverride.connect('clicked', () => {
-            const value = new GObject.Value(); value.init(GObject.TYPE_STRING); value.set_string(this.overrideText);
-            window.get_display().get_clipboard().set_content(Gdk.ContentProvider.new_for_value(value));
+            copySetupText(window, this.overrideText);
         });
         this.gpu.connect('notify::selected', () => this.updateCorrection());
         this.repairInstructions = new Gtk.Label({label: 'Not applied. Review these assignments, preserve other settings, add them in an external service drop-in, reload your user systemd manager, then Check again. Restart=no disables automatic crash recovery. Other blockers remain.', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.repair.add(this.repairInstructions);
         this.trustGuidance = new Gtk.Label({label: 'Ask an administrator to install a trusted package in a protected root-owned location, preserving the original application and models. Choose the trusted executable or update the external service, then Check again. Executable, interpreter, libraries and execution paths must qualify; setup never changes ownership or permissions.', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.repair.add(this.trustGuidance);
         this.pages.get('configuration').append(new Gtk.Label({label: 'Your service has not been changed.', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0}));
+        this.updateGPUInventory(gpuUUIDs, gpuInventoryStatus);
     }
     navigation(label, target) {
         const button = new this.Gtk.Button({hexpand: true});
@@ -116,6 +114,13 @@ export class InstallationSettings {
         this.viewDetails.visible = !this.ready;
         this.ownership.label = candidate.binding?.owned ? 'Supervisor manages this launch. Applications and model files are preserved.' : 'External service files are preserved.';
         this.notify();
+    }
+    updateGPUInventory(uuids = [], status) {
+        this.gpuInventoryStatus = status;
+        this.repairUUIDs = uuids.filter(uuid => /^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(uuid)).slice(0, 32);
+        this.gpu.model = this.Gtk.StringList.new(['Choose a full physical GPU UUID…', ...this.repairUUIDs]);
+        this.gpu.selected = 0;
+        this.updateCorrection();
     }
     updateCorrection() {
         const candidate = this.currentCandidate;
@@ -163,4 +168,9 @@ function diagnosticDetails(candidate, diagnostics) {
     if (!Array.isArray(evidence)) evidence = [String(evidence)];
     const problems = diagnostics.length ? diagnostics.map((item, index) => `${index + 1}. ${item}`) : [candidate.nextStep];
     return [candidateMessage(candidate), ...evidence, ...problems].filter(Boolean).join('\n\n');
+}
+
+export function copySetupText(window, text) {
+    const value = new GObject.Value(); value.init(GObject.TYPE_STRING); value.set_string(text);
+    window.get_display().get_clipboard().set_content(Gdk.ContentProvider.new_for_value(value));
 }

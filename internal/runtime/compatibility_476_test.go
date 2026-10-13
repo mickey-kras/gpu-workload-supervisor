@@ -165,3 +165,25 @@ func TestComfyIndependentPathFailuresAreAggregatedAndCleanupSkipsAvailability(t 
 		t.Fatal("unbounded configuration inspection", err)
 	}
 }
+
+func TestWantsDuplicatesHaveBoundedRepresentationAndUnsafeDependenciesStayRejected(t *testing.T) {
+	// Exercise a valid source near the 1MiB limit, then repeated contributing
+	// sources. Duplicate dependencies must not grow retained parser state.
+	raw := []byte("[Unit]\n" + strings.Repeat("Wants=network-online.target\n", 30000))
+	directives := externalLaunchDirectives{scalars: map[string]string{}}
+	for source := 0; source < 33; source++ {
+		if err := directives.readSource(raw); err != nil {
+			t.Fatal(err)
+		}
+		if len(directives.scalars) != 1 || directives.scalars["[Unit]Wants"] != "network-online.target" {
+			t.Fatal("duplicate dependencies grew accumulated state")
+		}
+	}
+	valid := []byte("[Unit]\nWants=\nWants=network-online.target\n[Service]\nExecStart=/usr/bin/true x\n")
+	for _, unsafe := range []string{"[Unit]\nWants=other-runtime.service\n", "[Unit]\nWants=network-online.target other-runtime.service\n"} {
+		_, err := parseExternalLaunchSources([][]byte{[]byte(unsafe), raw, valid}, "comfyui")
+		if !errors.Is(err, ErrLaunchUnsupported) || !strings.Contains(err.Error(), "Wants") || strings.Contains(err.Error(), "other-runtime") {
+			t.Fatal("earlier unsafe dependency erased or disclosed", err)
+		}
+	}
+}
