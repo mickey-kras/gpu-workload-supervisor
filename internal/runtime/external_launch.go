@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -21,6 +22,10 @@ const launchExpansionCharacters = "\\$%`\"'"
 // readLaunchSource opens every path component without following symlinks. Only
 // root or the desktop principal may write source files or replace ancestors.
 func readLaunchSource(path string) ([]byte, error) {
+	return readTrustedLaunchSource(path, false)
+}
+
+func readTrustedLaunchSource(path string, rootOnly bool) ([]byte, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return nil, ErrLaunchChanged
 	}
@@ -46,10 +51,11 @@ func readLaunchSource(path string) ([]byte, error) {
 			unix.Close(fd)
 			return nil, ErrLaunchChanged
 		}
-		if !trustedLaunchSourceComponent(stat, i, len(parts)) {
+		if err := qualifyLaunchSourceTrust(stat, i, len(parts), rootOnly); err != nil {
 			unix.Close(fd)
-			return nil, sourceComponentError(stat, i, len(parts))
+			return nil, err
 		}
+
 	}
 	file := os.NewFile(uintptr(fd), path)
 	defer file.Close()
@@ -58,6 +64,16 @@ func readLaunchSource(path string) ([]byte, error) {
 		return nil, ErrLaunchChanged
 	}
 	return raw, nil
+}
+
+func qualifyLaunchSourceTrust(stat unix.Stat_t, index, count int, rootOnly bool) error {
+	if rootOnly && (stat.Uid != 0 || stat.Mode&0022 != 0) {
+		return ErrLaunchChanged
+	}
+	if !trustedLaunchSourceComponent(stat, index, count) {
+		return sourceComponentError(stat, index, count)
+	}
+	return nil
 }
 
 func readLaunchSources(path string, dropIns []control.LaunchSource) ([][]byte, error) {
@@ -83,6 +99,7 @@ func readLaunchSources(path string, dropIns []control.LaunchSource) ([][]byte, e
 }
 
 type externalLaunchDirectives struct {
+	accountHome           *accountHomeSnapshot
 	scalars               map[string]string
 	starts, pre, envOrder []string
 	env                   map[string]string
@@ -96,32 +113,30 @@ func parseExternalLaunchSources(sources [][]byte, runtimeName string) (parsedLau
 }
 
 func parseExternalLaunchSourcesMode(sources [][]byte, runtimeName string, cleanupEnvironment bool) (parsedLaunchUnit, error) {
-	unit := parsedLaunchUnit{cleanupEnvironment: cleanupEnvironment}
-	directives := externalLaunchDirectives{scalars: map[string]string{}, env: map[string]string{}}
+	return parseExternalLaunchSourcesWithAccountHome(sources, runtimeName, cleanupEnvironment, localAccountHome)
+}
+
+func parseExternalLaunchSourcesWithAccountHome(sources [][]byte, runtimeName string, cleanupEnvironment bool, readHome func() (string, error)) (parsedLaunchUnit, error) {
+	snapshot := &accountHomeSnapshot{read: readHome}
+	unit := parsedLaunchUnit{cleanupEnvironment: cleanupEnvironment, accountHome: snapshot}
+	directives := externalLaunchDirectives{scalars: map[string]string{}, env: map[string]string{}, accountHome: snapshot}
+	var problems launchProblems
 	for _, raw := range sources {
-		if err := directives.readSource(raw); err != nil {
-			return unit, err
-		}
+		problems.add(directives.readSource(raw))
 	}
-	if len(directives.starts) != 1 || len(directives.pre) > 32 {
-		return unit, fmt.Errorf("%w: effective ExecStart or ExecStartPre command count", ErrLaunchUnsupported)
-	}
-	if strings.ContainsAny(directives.starts[0], launchExpansionCharacters+";") {
-		return unit, fmt.Errorf("%w: expansion, quoting or semicolon delimiter in ExecStart", ErrLaunchUnsupported)
-	}
-	unit.execStart = directives.starts[0]
-	unit.preCommands = directives.pre
+	problems.add(unit.applyEffectiveCommands(directives))
 	for _, name := range directives.envOrder {
-		if err := unit.applyDirective(runtimeName, "[Service]", "Environment", directives.env[name]); err != nil {
-			return unit, err
-		}
+		problems.add(unit.applyDirective(runtimeName, "[Service]", "Environment", directives.env[name]))
 	}
-	for directive, value := range directives.scalars {
-		if err := unit.applyExternalScalar(runtimeName, directive, value); err != nil {
-			return unit, err
-		}
+	keys := make([]string, 0, len(directives.scalars))
+	for directive := range directives.scalars {
+		keys = append(keys, directive)
 	}
-	return unit, nil
+	sort.Strings(keys)
+	for _, directive := range keys {
+		problems.add(unit.applyExternalScalar(runtimeName, directive, directives.scalars[directive]))
+	}
+	return unit, problems.err()
 }
 
 func (d *externalLaunchDirectives) readSource(raw []byte) error {
@@ -129,6 +144,7 @@ func (d *externalLaunchDirectives) readSource(raw []byte) error {
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	scanner.Buffer(make([]byte, 4096), 1<<20)
 	pending := ""
+	var problems launchProblems
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
@@ -144,14 +160,12 @@ func (d *externalLaunchDirectives) readSource(raw []byte) error {
 			section = header
 			continue
 		}
-		if err := d.applyLine(section, line); err != nil {
-			return err
-		}
+		problems.add(d.applyLine(section, line))
 	}
 	if scanner.Err() != nil || pending != "" {
-		return ErrLaunchUnsupported
+		problems.add(ErrLaunchUnsupported)
 	}
-	return nil
+	return problems.err()
 }
 
 func (d *externalLaunchDirectives) applyLine(section, line string) error {
@@ -187,19 +201,46 @@ func (d *externalLaunchDirectives) applyEnvironment(value string) error {
 		d.envOrder = nil
 		return nil
 	}
-	assignments, err := environmentAssignments(value)
-	if err != nil {
-		return err
-	}
-	for _, assignment := range assignments {
-		name, _, _ := strings.Cut(assignment, "=")
-		if _, exists := d.env[name]; !exists {
-			d.envOrder = append(d.envOrder, name)
+	var problems launchProblems
+	for len(strings.TrimSpace(value)) > 0 {
+		assignment, remaining, err := nextEnvironmentAssignment(strings.TrimSpace(value))
+		if err != nil {
+			problems.add(err)
+			break
 		}
-		d.env[name] = assignment
+		value = remaining
+		assignments, err := externalEnvironmentAssignments(assignment, d.accountHome)
+		if err != nil {
+			problems.add(err)
+			continue
+		}
+		for _, assignment := range assignments {
+			name, _, _ := strings.Cut(assignment, "=")
+			if _, exists := d.env[name]; !exists {
+				d.envOrder = append(d.envOrder, name)
+			}
+			d.env[name] = assignment
+		}
 	}
+	return problems.err()
+}
 
-	return nil
+func externalEnvironmentAssignments(assignment string, snapshot *accountHomeSnapshot) ([]string, error) {
+	if strings.Contains(assignment, "%") {
+		expanded, err := snapshot.expand(assignment)
+		if err != nil {
+			return nil, err
+		}
+		assignment = expanded
+	}
+	name, _, ok := strings.Cut(assignment, "=")
+	if !ok || !environmentName.MatchString(name) {
+		return nil, environmentError("", "expected NAME=value")
+	}
+	if strings.ContainsAny(assignment, launchExpansionCharacters+"\r\n\t ") {
+		return nil, environmentError(name, "expansion, escapes or whitespace are unsupported; use one literal whole assignment")
+	}
+	return []string{assignment}, nil
 }
 
 func (unit *parsedLaunchUnit) applyExternalScalar(runtimeName, directive, value string) error {
@@ -208,6 +249,16 @@ func (unit *parsedLaunchUnit) applyExternalScalar(runtimeName, directive, value 
 		return fmt.Errorf("%w: directive outside supported section", ErrLaunchUnsupported)
 	}
 	section, key := directive[:end+1], directive[end+1:]
+	if !environmentName.MatchString(key) || len(key) > 64 {
+		return fmt.Errorf("%w: unrecognized directive", ErrLaunchUnsupported)
+	}
+	if directive == "[Service]WorkingDirectory" && strings.Contains(value, "%") {
+		expanded, err := unit.qualifyAccountHomeWorkingDirectory(value)
+		if err != nil {
+			return err
+		}
+		value = expanded
+	}
 	if accepted, err := externalDirective(section, key, value); accepted || err != nil {
 		return err
 	}
@@ -324,4 +375,81 @@ func sourceComponentError(stat unix.Stat_t, index, count int) error {
 		reason = "source is not a readable regular file within the size limit"
 	}
 	return fmt.Errorf("%w: launch source component %d: %s; inspect this component, restore its intended ownership or remove only its unintended write permission, then retry", ErrLaunchChanged, index+1, reason)
+}
+
+// expandAccountHome recognizes only %h at the beginning of a path token. The
+// trusted local passwd record supplies the user-manager identity, never HOME. Every expanded value still passes the ordinary literal validators.
+func expandAccountHome(value string) (string, error) {
+	snapshot := accountHomeSnapshot{read: localAccountHome}
+	return snapshot.expand(value)
+}
+
+func expandAccountHomePath(value, home string) (string, error) {
+	if !filepath.IsAbs(home) || filepath.Clean(home) != home || strings.ContainsAny(home, launchExpansionCharacters+" ;\t\r\n") {
+		return "", fmt.Errorf("%w: local account home cannot be qualified for %%h", ErrLaunchUnsupported)
+	}
+	var result strings.Builder
+	for i := 0; i < len(value); i++ {
+		if value[i] != '%' {
+			result.WriteByte(value[i])
+			continue
+		}
+		if i+1 >= len(value) || value[i+1] != 'h' || (i > 0 && !strings.ContainsRune(" \t=:\"'", rune(value[i-1]))) || (i+2 < len(value) && !strings.ContainsRune("/ \t\"'", rune(value[i+2]))) {
+			return "", fmt.Errorf("%w: only the OS account home %%h path specifier is supported", ErrLaunchUnsupported)
+		}
+		result.WriteString(home)
+		i++
+	}
+	return result.String(), nil
+}
+
+// CheckLoadedAccountHomeDirectory binds %h WorkingDirectory to systemd's
+// resolved property; empty means this launch did not request that specifier.
+func CheckLoadedAccountHomeDirectory(observed, expected string) error {
+	if expected != "" && observed != expected {
+		return fmt.Errorf("%w: loaded WorkingDirectory differs from OS account home expansion; reload and refresh the binding", ErrLaunchChanged)
+	}
+	return nil
+}
+
+func (unit *parsedLaunchUnit) applyEffectiveCommands(d externalLaunchDirectives) error {
+	var problems launchProblems
+	if len(d.pre) > 32 {
+		problems.add(fmt.Errorf("%w: effective ExecStartPre command count exceeds supported limit; preparation paths were not inspected", ErrLaunchUnsupported))
+	} else {
+		unit.preCommands = d.pre
+	}
+	if len(d.starts) != 1 {
+		problems.add(fmt.Errorf("%w: effective ExecStart command count", ErrLaunchUnsupported))
+		return problems.err()
+	}
+	command := d.starts[0]
+	if strings.Contains(command, "%") {
+		expanded, err := unit.accountHome.expand(command)
+		if err != nil {
+			problems.add(err)
+			return problems.err()
+		}
+		command = expanded
+	}
+	if strings.ContainsAny(command, launchExpansionCharacters+";") {
+		problems.add(fmt.Errorf("%w: expansion, quoting or semicolon delimiter in ExecStart", ErrLaunchUnsupported))
+	} else {
+		unit.execStart = command
+	}
+	return problems.err()
+}
+
+func (unit *parsedLaunchUnit) qualifyAccountHomeWorkingDirectory(value string) (string, error) {
+	expanded, err := unit.accountHome.expand(value)
+	if err != nil {
+		return "", err
+	}
+	unit.homeWorkingDirectory = expanded
+	if !unit.cleanupEnvironment {
+		if err := qualifyEnvironmentPath(expanded, false, false); err != nil {
+			return "", fmt.Errorf("%w: WorkingDirectory requires an existing trusted account-home path without links", ErrLaunchUnsupported)
+		}
+	}
+	return expanded, nil
 }

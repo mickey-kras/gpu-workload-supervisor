@@ -91,13 +91,15 @@ func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit strin
 	profile, err := b.configurationFromMetadata(ctx, app, unit, model, values)
 	if err != nil {
 		found.NextStep = err.Error()
+		found.Diagnostics = gpuruntime.LaunchDiagnostics(err)
 		found.ConfigurationStatus = inspectionFailedStatus
-		if errors.Is(err, gpuruntime.ErrGPUIdentityUnresolved) {
-			found.ConfigurationStatus = "gpu-unresolved"
-		}
 		if errors.Is(err, gpuruntime.ErrModelUnavailable) {
 			found.ConfigurationStatus = "model-missing"
 			found.InventoryStatus = "missing"
+		}
+		if errors.Is(err, gpuruntime.ErrGPUIdentityUnresolved) {
+			found.ConfigurationStatus = "gpu-unresolved"
+			found.NextStep = gpuruntime.ErrGPUIdentityUnresolved.Error()
 		}
 	} else {
 		b.recognizeUnit(ctx, &found, app, unit, profile)
@@ -121,6 +123,7 @@ func addFailedUnitInspection(result *Discovery, unit string, values map[string]s
 	found.InstanceStatus = inspectionFailedStatus
 	found.ConfigurationStatus = inspectionFailedStatus
 	found.NextStep = "Could not inspect this application: " + err.Error()
+	found.Diagnostics = gpuruntime.LaunchDiagnostics(err)
 	result.Applications = append(result.Applications, found)
 }
 

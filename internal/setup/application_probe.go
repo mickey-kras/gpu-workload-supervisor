@@ -47,6 +47,7 @@ type ApplicationCandidate struct {
 	Version             string           `json:"version,omitempty"`
 	Models              []ModelCandidate `json:"models"`
 	LifecycleControl    string           `json:"lifecycleControl"`
+	Diagnostics         []string         `json:"diagnostics,omitempty"`
 	NextStep            string           `json:"nextStep,omitempty"`
 }
 type ModelCandidate struct {
@@ -237,6 +238,7 @@ func probeSelectedExecutable(r ProbeRequest, result ApplicationCandidate, valida
 		result.InstanceStatus = inspectionFailedStatus
 		result.ConfigurationStatus = inspectionFailedStatus
 		result.NextStep = err.Error()
+		result.Diagnostics = gpuruntime.LaunchDiagnostics(err)
 		return result
 	}
 	ports := map[string]uint16{"ollama": 11434, appLlamaCPP: 8080, "vllm": 8000}

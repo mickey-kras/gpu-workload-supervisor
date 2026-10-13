@@ -31,8 +31,8 @@ func TestNumericCUDAVisibilityRemainsUnresolvedWithOneInventoryGPU(t *testing.T)
 		validated = true
 		return nil
 	})
-	if !errors.Is(err, ErrGPUIdentityUnresolved) || !errors.Is(err, ErrLaunchUnsupported) || validated {
-		t.Fatalf("numeric inspection executed validation or lost unresolved disposition: %v", err)
+	if !errors.Is(err, ErrGPUIdentityUnresolved) || !errors.Is(err, ErrLaunchUnsupported) || !validated {
+		t.Fatalf("numeric inspection skipped independent validation or lost unresolved disposition: %v", err)
 	}
 	if !strings.Contains(err.Error(), "full UUID") || !strings.Contains(err.Error(), "refresh") || strings.Count(err.Error(), "CUDA_VISIBLE_DEVICES") != 1 {
 		t.Fatalf("numeric refusal is not one actionable explanation: %v", err)

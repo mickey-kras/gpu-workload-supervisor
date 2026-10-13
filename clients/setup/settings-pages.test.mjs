@@ -79,6 +79,33 @@ test('selection exposes full identities and Cancel restores installation, draft 
     assert.equal(saved.label, 'ComfyUI'); assert.equal(saved.binding, undefined);
 });
 
+test('multiple setup blockers remain visible and copyable until a fresh check succeeds', async () => {
+    const diagnostics = ['Environment variable HOME: unsupported path.', 'CUDA_VISIBLE_DEVICES needs a full GPU UUID.', 'Restart policy is unsupported.'];
+    const broken = {...ready, recognized: false, configurationStatus: 'gpu-unresolved', diagnostics,
+        nextStep: diagnostics.join('; ')};
+    let discoveries = 0;
+    const ui = await launch(options(broken, {discover: () => ({request, units: [], applications: [discoveries++ ? ready : broken]})}));
+    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label === 'Configuration needs attention · Open settings'));
+    await ui.click('Settings for ComfyUI');
+    assert.equal(ui.by('Use installation').sensitive, false);
+    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.startsWith('Several configuration checks')));
+    assert.equal(ui.widgets.some(widget => ui.visible(widget) && widget.label === 'HOME uses an unsupported format.'), false);
+    await ui.click('View details');
+    await ui.click('Copy details');
+    const copied = ui.widgets.find(widget => widget.title === 'GPU Workload Setup').clipboard;
+    for (const [index, message] of diagnostics.entries()) {
+        assert.ok(copied.includes(`${index + 1}. ${message}`));
+        assert.equal(copied.split(message).length - 1, 1);
+    }
+    await ui.click('Check again');
+    await ui.click('Copy details');
+    const refreshed = ui.widgets.find(widget => widget.title === 'GPU Workload Setup').clipboard;
+    for (const message of diagnostics) assert.equal(refreshed.includes(message), false);
+    await ui.click('Back');
+    assert.equal(ui.by('Use installation').sensitive, true);
+    assert.equal(ui.calls.some(call => ['prepare', 'apply'].includes(call.argv[1])), false);
+});
+
 test('advanced pages keep common fields separate and resource overrides survive review', async () => {
     const existing = {...profile, requiredMiB: 8000, bootPolicy: 'retain', systemdSlice: 'app.slice'};
     const ui = await launch(options(ready, {discover: {request: {...request, catalog: {version: 1, profiles: [existing]}}, units: [], applications: [ready]}}));
