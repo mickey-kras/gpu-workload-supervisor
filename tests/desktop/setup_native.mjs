@@ -367,10 +367,35 @@ app.connect('activate', () => {
         }
         // Smaller work areas retain a visible scrollbar and keyboard access to
         // the last application action; merely enlarging the default cannot pass.
-        await tabTo(ui, reportButton); await delay(80);
-        const [reportLocated, reportBounds] = reportButton.compute_bounds(ui.scroll);
-        assert(reportLocated && reportBounds.get_y() >= 0 && reportBounds.get_y() + reportBounds.get_height() <= ui.scroll.get_height(),
-            'Copy diagnostic report must scroll fully into the viewport at every tested size/scale');
+        await tabTo(ui, reportButton);
+        // Native focus scrolling is animated. Focus arriving is not proof that
+        // allocation has settled; observe complete visibility without moving
+        // the adjustment ourselves or relaxing the visible bounds.
+        const reportSamples = [];
+        const sampleReport = () => {
+            const [located, bounds] = reportButton.compute_bounds(ui.scroll);
+            const adjustment = ui.scroll.get_vadjustment();
+            const sample = {located, focused: ownsFocus(ui, reportButton), mapped: reportButton.get_mapped(),
+                x: bounds?.get_x() ?? null, y: bounds?.get_y() ?? null,
+                width: bounds?.get_width() ?? null, height: bounds?.get_height() ?? null,
+                viewportWidth: ui.scroll.get_width(), viewportHeight: ui.scroll.get_height(),
+                adjustment: {value: adjustment.value, lower: adjustment.lower, upper: adjustment.upper, pageSize: adjustment.page_size}};
+            reportSamples.push(sample);
+            return sample.located && sample.focused && sample.mapped && sample.x >= 0 && sample.y >= 0 &&
+                sample.x + sample.width <= sample.viewportWidth && sample.y + sample.height <= sample.viewportHeight;
+        };
+        const reportEvidence = () => {
+            GLib.file_set_contents(`${output}/application-report-reachability.json`, JSON.stringify({samples: reportSamples}, null, 2));
+            const reportXid = run(['xdotool', 'search', '--onlyvisible', '--name', ui.window.title]).split('\n').at(-1);
+            run(['import', '-window', reportXid, `${output}/application-report-reachability.png`]);
+        };
+        try {
+            await waitFor(sampleReport, 'Copy diagnostic report must scroll fully into the viewport at every tested size/scale');
+        } catch (error) {
+            reportEvidence(); throw error;
+        }
+        reportEvidence();
+        const [, reportBounds] = reportButton.compute_bounds(ui.scroll);
         geometry.push({screen: 'application-report-reachable', viewportBottom: scrollBounds.get_y() + scrollBounds.get_height(),
             footerTop: footerBounds.get_y(), reportY: reportBounds.get_y(), reportHeight: reportBounds.get_height(),
             scrollValue: ui.scroll.get_vadjustment().value});
