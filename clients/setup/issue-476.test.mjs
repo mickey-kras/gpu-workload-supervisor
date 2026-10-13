@@ -114,3 +114,19 @@ test('one diagnostic export uses freshly rechecked installation evidence and kee
     assert.equal(/private|secret|127\.0\.0\.1/.test(window.clipboard), false);
     assert.equal(ui.calls.some(call => ['apply', 'prepare', 'temporary-discover'].includes(call.argv[1])), false);
 });
+
+test('RestartSec blockers never propose or classify a Restart policy correction', async () => {
+    const interval = {...blocked, configurationStatus: 'inspection-failed', diagnostics: ['existing launch is unsupported: incompatible directive RestartSec']};
+    assert.equal(correctionPreview(interval), '');
+    assert.deepEqual(JSON.parse(diagnosticReport([interval])).installations[0].blockers, ['launch-configuration']);
+    const mixed = {...interval, configurationStatus: 'gpu-unresolved', diagnostics: [...interval.diagnostics, 'CUDA_VISIBLE_DEVICES requires a full GPU UUID.']};
+    assert.equal(correctionPreview(mixed, uuid), `[Service]\nEnvironment="CUDA_VISIBLE_DEVICES=${uuid}"\n`);
+    const policy = {...interval, diagnostics: ['existing launch is unsupported: unsupported directive or value Restart']};
+    assert.equal(correctionPreview(policy), '[Service]\nRestart=no\n');
+    assert.deepEqual(JSON.parse(diagnosticReport([policy])).installations[0].blockers, ['restart-policy']);
+    const ui = await launch({deferAction: 'unused', responses: {discover: {request, units: [], gpuUUIDs: [uuid], applications: [interval]}}});
+    await ui.click('Settings for ComfyUI'); await ui.click('View details');
+    assert.equal(ui.by('Copy reviewed override').sensitive, false);
+    assert.equal(ui.visible(ui.by('Copy reviewed override')), false);
+    assert.equal(ui.calls.some(call => ['apply', 'prepare', 'temporary-discover'].includes(call.argv[1])), false);
+});

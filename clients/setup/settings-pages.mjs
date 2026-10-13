@@ -136,7 +136,7 @@ export class InstallationSettings {
         this.preview.label = this.overrideText || guidance;
         this.copyOverride.sensitive = Boolean(this.overrideText);
         const trust = /executable|ownership|owner|writable|trusted|symlink|symbolic link|library|interpreter/i.test(messages);
-        const correction = Boolean(candidate?.unit && (needsGPU || /Restart/.test(messages)));
+        const correction = Boolean(candidate?.unit && (needsGPU || /\bRestart\b/.test(messages)));
         this.trustGuidance.visible = trust;
         this.repairInstructions.visible = correction;
         this.preview.visible = correction;

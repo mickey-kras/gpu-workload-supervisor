@@ -135,7 +135,7 @@ export function diagnosticReport(candidates, errors = []) {
 }
 function blockerCode(message) {
     if (/CUDA_VISIBLE_DEVICES|GPU identity|GPU UUID/.test(message)) return 'gpu-identity';
-    if (/Restart/.test(message)) return 'restart-policy';
+    if (/\bRestart\b/.test(message)) return 'restart-policy';
     if (/WorkingDirectory|working directory/.test(message)) return 'working-directory';
     if (/Environment|environment variable/.test(message)) return 'environment';
     if (/executable|ownership|owner|writable|trusted|symlink|symbolic link/i.test(message)) return 'execution-trust';
@@ -147,7 +147,7 @@ function blockerCode(message) {
 export function correctionPreview(candidate, uuid = '') {
     const diagnostics = candidateDiagnostics(candidate).join('\n');
     const gpu = candidate?.configurationStatus === 'gpu-unresolved' || /CUDA_VISIBLE_DEVICES|GPU identity/.test(diagnostics);
-    const restart = /Restart/.test(diagnostics);
+    const restart = /\bRestart\b/.test(diagnostics);
     const validUUID = /^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(uuid);
     if (!candidate?.unit || (!gpu && !restart) || (gpu && !validUUID)) return '';
     return ['[Service]', ...(gpu ? [`Environment="CUDA_VISIBLE_DEVICES=${uuid}"`] : []), ...(restart ? ['Restart=no'] : [])].join('\n') + '\n';
