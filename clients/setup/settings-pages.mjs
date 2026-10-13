@@ -55,7 +55,7 @@ export class InstallationSettings {
         const detailCard = roundedCard(Gtk); detailCard.append(this.diagnostic); this.pages.get('configuration').append(detailCard);
         const copy = new Gtk.Button({label: 'Copy details', halign: Gtk.Align.END}); this.pages.get('configuration').append(copy);
         copy.connect('clicked', () => {
-            copySetupText(window, [this.diagnosticIdentity.label, this.diagnosticSummary.label, this.diagnostic.label].filter(Boolean).join('\n\n'));
+            copySetupText(window, [this.diagnosticIdentity.label, this.diagnosticSummary.label, this.rawDiagnostic ?? this.diagnostic.label].filter(Boolean).join('\n\n'));
         });
         this.repairUUIDs = [];
         this.repair = new Adw.PreferencesGroup({title: 'Review external service correction'}); this.pages.get('configuration').append(this.repair);
@@ -110,7 +110,8 @@ export class InstallationSettings {
         if (this.ready) this.status.label = 'GPU operation has not been tested.';
         this.diagnosticIdentity.label = candidateChoice(candidate);
         this.diagnosticSummary.label = this.ready ? 'Configuration details' : 'Configuration needs attention';
-        this.diagnostic.label = diagnosticDetails(candidate, diagnostics);
+        this.rawDiagnostic = diagnosticDetails(candidate, diagnostics);
+        this.diagnostic.label = diagnosticDetails(candidate, diagnostics, true);
         this.viewDetails.visible = !this.ready;
         this.ownership.label = candidate.binding?.owned ? 'Supervisor manages this launch. Applications and model files are preserved.' : 'External service files are preserved.';
         this.notify();
@@ -149,7 +150,7 @@ export class InstallationSettings {
         this.ready = false; this.noticeTitle.label = 'Configuration needs attention'; this.noticeIcon.icon_name = 'dialog-warning-symbolic';
         this.noticeIcon.remove_css_class('success'); this.noticeIcon.add_css_class('warning');
         this.notice.add_css_class('setup-warning'); this.status.label = summary; this.viewDetails.visible = true;
-        this.diagnosticSummary.label = 'Configuration needs attention'; this.diagnostic.label = error.message;
+        this.diagnosticSummary.label = 'Configuration needs attention'; this.rawDiagnostic = error.message; this.diagnostic.label = conciseDiagnostic(error.message);
         this.notify();
     }
     checking(busy) {
@@ -164,11 +165,23 @@ export function installationChoiceLabel(Gtk, identity) {
     return new Gtk.Label({label: identity, wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, hexpand: true});
 }
 
-function diagnosticDetails(candidate, diagnostics) {
+function conciseDiagnostic(message) {
+    // Presentation only: qualification and clipboard retain the original report.
+    return message.replace(/\b(?:native launch requires a supported direct local command|existing launch is unsupported):\s*/gi, '');
+}
+
+function diagnosticDetails(candidate, diagnostics, concise = false) {
     let evidence = candidate.evidence ?? [];
     if (!Array.isArray(evidence)) evidence = [String(evidence)];
-    const problems = diagnostics.length ? diagnostics.map((item, index) => `${index + 1}. ${item}`) : [candidate.nextStep];
-    return [candidateMessage(candidate), ...evidence, ...problems].filter(Boolean).join('\n\n');
+    const messages = concise ? [...new Set(diagnostics.map(conciseDiagnostic))] : diagnostics;
+    const summary = candidateMessage(candidate);
+    const nextStep = concise && candidate.nextStep ? conciseDiagnostic(candidate.nextStep) : candidate.nextStep;
+    const problems = messages.length ? messages.map((item, index) => `${index + 1}. ${item}`) : [nextStep];
+    // A backend next step already explains the unreachable address. Keep that
+    // full guidance once instead of adding a second version of the same advice.
+    const redundantAddress = concise && candidate.instanceStatus === 'unreachable' && !candidate.recognized && !messages.length &&
+        /\bunreachable\b/i.test(nextStep ?? '') && /installation/i.test(nextStep ?? '');
+    return [...new Set([redundantAddress ? null : summary, ...evidence, ...problems].filter(Boolean))].join('\n\n');
 }
 
 export function copySetupText(window, text) {

@@ -10,7 +10,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import {createSetupWindow} from '../../clients/setup/setup-window.mjs';
 
-const [output, theme = 'light', width = '620', height = '670'] = ARGV;
+const [output, theme = 'light', width = '620', height = '740'] = ARGV;
 const criticalLogs = [];
 // Preserve native messages and add the synchronous JS origin of GTK criticals.
 // This catches GI calls made during widget construction, before a frame exists.
@@ -355,6 +355,26 @@ app.connect('activate', () => {
             geometry.push({screen: ui.heading.label, text: label, x: bounds.get_x(), y: bounds.get_y(), width: bounds.get_width(), height: bounds.get_height(), wrapped: true});
         }
         let ui = await open('stopped');
+        const reportButton = named(ui, 'Copy diagnostic report');
+        const [scrollLocated, scrollBounds] = ui.scroll.compute_bounds(ui.window);
+        const [footerLocated, footerBounds] = ui.footer.compute_bounds(ui.window);
+        assert(scrollLocated && footerLocated && scrollBounds.get_y() + scrollBounds.get_height() <= footerBounds.get_y(),
+            'ToolbarView must allocate the viewport entirely above the footer');
+        if (Number(width) === 620 && Number(height) === 740) {
+            const [located, bounds] = reportButton.compute_bounds(ui.scroll);
+            assert(located && bounds.get_y() >= 0 && bounds.get_y() + bounds.get_height() <= ui.scroll.get_height(),
+                'default window shows the complete Copy diagnostic report action without scrolling');
+        }
+        // Smaller work areas retain a visible scrollbar and keyboard access to
+        // the last application action; merely enlarging the default cannot pass.
+        await tabTo(ui, reportButton); await delay(80);
+        const [reportLocated, reportBounds] = reportButton.compute_bounds(ui.scroll);
+        assert(reportLocated && reportBounds.get_y() >= 0 && reportBounds.get_y() + reportBounds.get_height() <= ui.scroll.get_height(),
+            'Copy diagnostic report must scroll fully into the viewport at every tested size/scale');
+        geometry.push({screen: 'application-report-reachable', viewportBottom: scrollBounds.get_y() + scrollBounds.get_height(),
+            footerTop: footerBounds.get_y(), reportY: reportBounds.get_y(), reportHeight: reportBounds.get_height(),
+            scrollValue: ui.scroll.get_vadjustment().value});
+        ui.scroll.get_vadjustment().value = 0; ui.heading.grab_focus(); await delay(80);
         assert(ui.applicationCards.size === 4, 'all application cards exist');
         for (const card of ui.applicationCards.values()) {
             assert(card.select instanceof Gtk.CheckButton, 'selection is a native checkbox');

@@ -13,6 +13,43 @@ function options(candidate = ready, responses = {}) {
 }
 const title = ui => ui.widgets.find(widget => widget.cssClasses?.includes('title') && ui.visible(widget));
 
+test('configuration details shorten repeated launch wrappers but copy every original blocker', async () => {
+    const prefix = 'native launch requires a supported direct local command: ';
+    const diagnostics = [prefix + 'Environment variable PATH: requires trusted executable directories.',
+        prefix + 'executable: ' + prefix + 'interpreter trust: executable target is writable.'];
+    const broken = {...ready, recognized: false, configurationStatus: 'inspection-failed', diagnostics};
+    const ui = await launch(options(broken));
+    await ui.click('Settings for ComfyUI');
+    assert.equal(ui.by('Use installation').sensitive, false);
+    await ui.click('View details');
+    const detail = ui.widgets.find(widget => ui.visible(widget) && widget.cssClasses?.includes('monospace') && widget.label?.includes('interpreter trust:'));
+    assert.ok(detail.label.includes('1. Environment variable PATH: requires trusted executable directories.'));
+    assert.ok(detail.label.includes('2. executable: interpreter trust: executable target is writable.'));
+    assert.ok(!detail.label.includes(prefix)); assert.ok(!detail.label.includes('Open View details'));
+    assert.equal(ui.by('Check again').sensitive, true);
+    await ui.click('Copy details');
+    const copied = ui.widgets.find(widget => widget.title === 'GPU Workload Setup').clipboard;
+    for (const diagnostic of diagnostics) assert.ok(copied.includes(diagnostic));
+    assert.equal(ui.calls.some(call => ['prepare', 'apply'].includes(call.argv[1])), false);
+});
+
+for (const [app, label, port] of [['ollama', 'Ollama', 11434], ['vllm', 'vLLM', 8000]]) {
+    test(`${app}: unresolved gear reaches installed executable chooser and shows unreachable guidance once`, async () => {
+        const nextStep = 'The address is unreachable and does not verify an installation. Choose a detected installation or its installed executable to preview a managed launch; saved references are unchanged.';
+        const candidate = {app, label, endpoint: `http://127.0.0.1:${port}`, recognized: false, instanceStatus: 'unreachable', configurationStatus: 'unverified', nextStep};
+        const ui = await launch(options(candidate));
+        await ui.click(`Settings for ${label}`); await ui.click('View details');
+        const detail = ui.widgets.find(widget => ui.visible(widget) && widget.cssClasses?.includes('monospace') && widget.label?.includes('saved references'));
+        assert.equal(detail.label, nextStep);
+        await ui.click('Copy details');
+        assert.ok(ui.widgets.find(widget => widget.title === 'GPU Workload Setup').clipboard.includes(nextStep));
+        await ui.click('Back'); await ui.click('Change installation…');
+        assert.equal(ui.visible(ui.by('Choose installed executable…')), true);
+        assert.equal(ui.by('Choose installed executable…').sensitive, true);
+        assert.equal(ui.calls.some(call => ['prepare', 'apply'].includes(call.argv[1])), false);
+    });
+}
+
 test('ready settings have one review action and keep activation explicit', async () => {
     const ui = await launch(options()); await ui.click('Settings for ComfyUI');
     assert.equal(title(ui).label, 'ComfyUI');

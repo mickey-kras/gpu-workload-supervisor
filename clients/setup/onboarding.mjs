@@ -70,9 +70,9 @@ export function candidateDiagnostics(candidate) {
 
 export function candidateMessage(candidate) {
     const diagnostics = candidateDiagnostics(candidate);
-    if (diagnostics.length > 1) return 'Several configuration checks need attention. Open View details to review the reported problems, then check again.';
+    if (diagnostics.length > 1) return 'Several configuration checks need attention. Review the reported problems, then check again.';
     if (candidate?.configurationStatus === 'gpu-unresolved') return 'GPU identity needs setup. Review this service’s GPU visibility settings before choosing a full GPU UUID, reloading the service configuration, and checking again.';
-    if (candidate?.installed && !candidate?.recognized) return 'Installation found, but qualification is blocked. Open View details for every blocker and the supported correction path.';
+    if (candidate?.installed && !candidate?.recognized) return 'Installation found, but qualification is blocked. Review the blockers and supported correction path.';
     if (candidate?.configurationStatus === 'inspection-failed') return 'Installation inspection failed. Check its service configuration or choose an installed executable.';
     if (candidate?.configurationStatus === 'model-missing') return 'Configured model is missing. Choose an existing model or repair the service configuration.';
     const states = {
