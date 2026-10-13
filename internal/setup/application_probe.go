@@ -61,8 +61,9 @@ type ModelCandidate struct {
 }
 
 const (
-	appLlamaCPP             = "llama.cpp"
-	referenceModelDirectory = "model-directory"
+	appLlamaCPP                   = "llama.cpp"
+	referenceModelDirectory       = "model-directory"
+	referenceApplicationDirectory = "application-directory"
 )
 
 func appLabel(app string) string {
@@ -92,7 +93,7 @@ func (r ProbeRequest) validate() error {
 		return errors.New("reference must be an absolute clean path")
 	}
 	switch r.ReferenceKind {
-	case "application", "application-directory", "configuration", "model-file", referenceModelDirectory:
+	case "application", referenceApplicationDirectory, "configuration", "model-file", referenceModelDirectory:
 		return nil
 	}
 	return errors.New("unsupported reference kind")
@@ -218,11 +219,11 @@ func probeReferenceWithExecutableValidator(ctx context.Context, r ProbeRequest, 
 	if r.ReferenceKind == "application" && r.App != "comfyui" {
 		return probeSelectedExecutable(r, result, validateExecutable), nil
 	}
-	if r.ReferenceKind == "application-directory" && r.App != "comfyui" && info.IsDir() {
+	if r.ReferenceKind == referenceApplicationDirectory && r.App != "comfyui" && info.IsDir() {
 		return probeExecutableDirectory(ctx, r, validateExecutable), nil
 	}
 	// Do not resolve links or open devices/FIFOs. A selection is only a candidate.
-	directory := r.ReferenceKind == referenceModelDirectory || r.ReferenceKind == "application-directory"
+	directory := r.ReferenceKind == referenceModelDirectory || r.ReferenceKind == referenceApplicationDirectory
 	if (directory && !info.IsDir()) || (!directory && !info.Mode().IsRegular()) {
 		result.InstanceStatus = "invalid"
 		result.NextStep = "Select a regular file or a model directory; symbolic links and special files are not inspected."
@@ -317,7 +318,7 @@ func (p applicationHTTP) get(ctx context.Context, path string, destination inter
 func probeExecutableDirectory(ctx context.Context, r ProbeRequest, validate func(string, string) error) ApplicationCandidate {
 	name := r.App
 	if r.App == appLlamaCPP {
-		name = "llama-server"
+		name = llamaServerExecutable
 	}
 	requests := []ProbeRequest{}
 	for _, directory := range []string{r.Reference, filepath.Join(r.Reference, "bin")} {

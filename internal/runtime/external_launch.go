@@ -17,7 +17,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const launchExpansionCharacters = "\\$%`\"'"
+const (
+	launchExpansionCharacters = "\\$%`\"'"
+	unitWantsDirective        = "[Unit]Wants"
+	networkOnlineTarget       = "network-online.target"
+)
 
 // readLaunchSource opens every path component without following symlinks. Only
 // root or the desktop principal may write source files or replace ancestors.
@@ -182,7 +186,7 @@ func (d *externalLaunchDirectives) applyLine(section, line string) error {
 		d.pre = appendLaunchAssignment(d.pre, value)
 	case "[Service]Environment":
 		return d.applyEnvironment(value)
-	case "[Unit]Wants":
+	case unitWantsDirective:
 		return d.applyWants(value)
 	default:
 		d.scalars[section+key] = value
@@ -194,14 +198,14 @@ func (d *externalLaunchDirectives) applyLine(section, line string) error {
 // earlier dependency. The supported set has one member, so retain a canonical
 // constant-size representation rather than concatenating duplicate lines.
 func (d *externalLaunchDirectives) applyWants(value string) error {
-	if _, exists := d.scalars["[Unit]Wants"]; !exists {
-		d.scalars["[Unit]Wants"] = ""
+	if _, exists := d.scalars[unitWantsDirective]; !exists {
+		d.scalars[unitWantsDirective] = ""
 	}
 	for _, name := range strings.Fields(value) {
-		if name != "network-online.target" {
+		if name != networkOnlineTarget {
 			return fmt.Errorf("%w: incompatible directive Wants", ErrLaunchUnsupported)
 		}
-		d.scalars["[Unit]Wants"] = "network-online.target"
+		d.scalars[unitWantsDirective] = networkOnlineTarget
 	}
 	return nil
 }
@@ -511,9 +515,9 @@ func (unit *parsedLaunchUnit) recordLoadedProperty(key, value string) {
 
 func compatibleIsolationDirective(section, key, value string) (bool, bool) {
 	switch section + key {
-	case "[Unit]Wants":
+	case unitWantsDirective:
 		for _, name := range strings.Fields(value) {
-			if name != "network-online.target" {
+			if name != networkOnlineTarget {
 				return true, false
 			}
 		}

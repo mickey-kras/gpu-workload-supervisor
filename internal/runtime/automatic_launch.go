@@ -13,7 +13,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const loopbackHTTPPrefix = "http://"
+const (
+	loopbackHTTPPrefix        = "http://"
+	flagExtraModelPathsConfig = "--extra-model-paths-config"
+	flagListen                = "--listen"
+	flagPort                  = "--port"
+)
 
 // AutomaticLaunch is evidence read from a supported direct launch. Inspection
 // never rewrites the existing file or runs its command.
@@ -198,7 +203,7 @@ func comfyLaunchAddressMode(args []string, cleanup bool) (string, string, error)
 	seen := map[string]bool{}
 	for i := 0; i < len(args); i++ {
 		key := args[i]
-		if seen[key] && key != "--extra-model-paths-config" {
+		if seen[key] && key != flagExtraModelPathsConfig {
 			return "", "", comfyDuplicateOption(key)
 		}
 		seen[key] = true
@@ -210,9 +215,9 @@ func comfyLaunchAddressMode(args []string, cleanup bool) (string, string, error)
 			}
 		}
 		switch key {
-		case "--listen":
+		case flagListen:
 			host = args[i+1]
-		case "--port":
+		case flagPort:
 			port = args[i+1]
 		}
 		i += consumed
@@ -225,7 +230,7 @@ func comfyLaunchAddressMode(args []string, cleanup bool) (string, string, error)
 
 func comfyDuplicateOption(key string) error {
 	switch key {
-	case "--listen", "--port", "--disable-auto-launch", "--enable-manager", "--output-directory", "--temp-directory", "--user-directory":
+	case flagListen, flagPort, "--disable-auto-launch", "--enable-manager", "--output-directory", "--temp-directory", "--user-directory":
 		return comfyOptionError(key, "is repeated; use one unambiguous assignment")
 	default:
 		return comfyUnsupportedOption(key)
@@ -234,7 +239,7 @@ func comfyDuplicateOption(key string) error {
 
 func qualifyComfyOption(key string, values []string, cleanup bool) (int, error) {
 	switch key {
-	case "--listen", "--port":
+	case flagListen, flagPort:
 		if len(values) == 0 || strings.HasPrefix(values[0], "--") {
 			return 0, comfyOptionError(key, "requires an explicit value")
 		}
@@ -247,7 +252,7 @@ func qualifyComfyOption(key string, values []string, cleanup bool) (int, error) 
 			return 1, comfyOptionError(key, "requires an existing absolute clean trusted directory without links; inspect this setting and its ancestors")
 		}
 		return 1, nil
-	case "--extra-model-paths-config":
+	case flagExtraModelPathsConfig:
 		return qualifyComfyConfigurationFiles(values, cleanup)
 	case "--disable-auto-launch", "--enable-manager":
 		return 0, nil
@@ -265,15 +270,15 @@ func qualifyComfyConfigurationFiles(values []string, cleanup bool) (int, error) 
 		count++
 	}
 	if count == 0 {
-		return 0, comfyOptionError("--extra-model-paths-config", "requires at least one trusted configuration file")
+		return 0, comfyOptionError(flagExtraModelPathsConfig, "requires at least one trusted configuration file")
 	}
 	if count > 32 {
-		return count, comfyOptionError("--extra-model-paths-config", "configuration file count exceeds supported limit; paths were not inspected")
+		return count, comfyOptionError(flagExtraModelPathsConfig, "configuration file count exceeds supported limit; paths were not inspected")
 	}
 	var problems launchProblems
 	for _, value := range values[:count] {
 		if err := qualifyComfyOptionPath(value, true, cleanup); err != nil {
-			problems.add(comfyOptionError("--extra-model-paths-config", "requires existing absolute clean trusted regular configuration files without links; inspect this setting and its ancestors"))
+			problems.add(comfyOptionError(flagExtraModelPathsConfig, "requires existing absolute clean trusted regular configuration files without links; inspect this setting and its ancestors"))
 		}
 	}
 	return count, problems.err()
