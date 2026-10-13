@@ -94,7 +94,7 @@ function stateCandidate(state) {
     if (state === 'recognized-unreachable') result.instanceStatus = 'unreachable';
     if (state === 'invalid-contradictory') result.instanceStatus = 'invalid';
     if (state === 'gpu-unresolved') Object.assign(result, {recognized: false, binding: undefined, configurationStatus: 'gpu-unresolved', nextStep: 'CUDA_VISIBLE_DEVICES GPU identity is unresolved. Review the service GPU visibility settings before choosing the selected GPU’s full UUID. The external service is unchanged.'});
-    if (state === 'installed-blocked') Object.assign(result, {installed: true, recognized: false, binding: undefined, configurationStatus: 'gpu-unresolved', diagnostics: ['CUDA_VISIBLE_DEVICES requires a full GPU UUID.', 'Restart policy is unsupported.', 'Executable /private-runtime-secret is not root-owned.']});
+    if (state === 'installed-blocked') Object.assign(result, {installed: true, recognized: false, endpoint: undefined, cgroup: undefined, binding: undefined, configurationStatus: 'gpu-unresolved', diagnostics: ['CUDA_VISIBLE_DEVICES requires a full GPU UUID.', 'Restart policy is unsupported.', 'Executable /private-runtime-secret is not root-owned.']});
     return result;
 }
 async function command(argv, input, operation) {
@@ -259,9 +259,20 @@ app.connect('activate', () => {
             const discoveries = calls.filter(action => action === 'discover').length;
             await tabTo(ui, named(ui, 'Check again'));
             run(['xdotool', 'key', 'space']);
-            await waitFor(() => calls.filter(action => action === 'discover').length > discoveries &&
-                !ui.draftEditors.some(editor => editor.checking()) && gpuChoice.model.get_n_items() === expectedChoices,
-                'in-place configuration reinspection must finish and update the actual UUID inventory');
+            try {
+                await waitFor(() => calls.filter(action => action === 'discover').length > discoveries &&
+                    !ui.draftEditors.some(editor => editor.checking()) && gpuChoice.model.get_n_items() === expectedChoices,
+                    'in-place configuration reinspection must finish and update the actual UUID inventory');
+            } catch (error) {
+                const evidence = {expectedChoices, discoveriesBefore: discoveries,
+                    discoveriesNow: calls.filter(action => action === 'discover').length,
+                    choicesNow: gpuChoice.model.get_n_items(), selected: gpuChoice.selected,
+                    checking: ui.draftEditors.slice(0, 32).map(editor => ({app: editor.app, checking: editor.checking()})),
+                    actions: calls.slice(-12), pendingEndpointProbe: Boolean(installationReply),
+                    drafts: ui.drafts.slice(0, 32).map(draft => ({app: draft.app, hasUnit: Boolean(draft.binding?.unit), hasEndpoint: Boolean(draft.endpoint), hasReference: Boolean(draft.reference)}))};
+                GLib.file_set_contents(`${output}/correction-refresh-timeout-${expectedChoices}.json`, JSON.stringify(evidence, null, 2));
+                throw new Error(`${error.message}: ${JSON.stringify(evidence)}`);
+            }
             assert(ui.settingsTitle.get_mapped() && ui.settingsTitle.label === 'Configuration details', 'reinspection preserves the configuration page');
         }
         async function captureCorrection(ui, name, gpuChoice) {

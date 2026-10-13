@@ -77,3 +77,20 @@ test('Check again refreshes available UUIDs and drops a disappeared explicit sel
     assert.equal(ui.by('Use installation').sensitive, false);
     assert.equal(ui.calls.some(call => ['apply', 'temporary-discover'].includes(call.argv[1])), false);
 });
+
+test('native-style inherited endpoint keeps reinspection busy until its read-only probe completes', async () => {
+    const native = {...blocked, id: undefined, endpoint: 'http://127.0.0.1:18188', cgroup: '/example/model', inventoryStatus: 'available', models: [], evidence: ['Example command evidence'], nextStep: 'Inspect the existing service. Its files have not been changed.'};
+    let discoveries = 0;
+    const ui = await launch({deferAction: 'probe', responses: {discover: () => ({request, units: [], gpuUUIDs: discoveries++ ? [uuid] : [], applications: [native]}), probe: {app: 'comfyui', instanceStatus: 'unreachable', inventoryStatus: 'unknown'}}});
+    await ui.click('Settings for ComfyUI'); await ui.click('View details');
+    const checking = ui.click('Check again');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(ui.calls.filter(call => call.argv[1] === 'discover').length, 2);
+    assert.equal(ui.calls.filter(call => call.argv[1] === 'probe').length, 1);
+    assert.equal(ui.by('Physical GPU UUID (explicit selection required)').model.get_n_items(), 2);
+    assert.equal(ui.by('Check again').sensitive, false);
+    ui.finish(); await checking;
+    assert.equal(ui.by('Check again').sensitive, true);
+    assert.equal(ui.by('Copy reviewed override').sensitive, false);
+    assert.equal(ui.calls.some(call => ['apply', 'temporary-discover'].includes(call.argv[1])), false);
+});
