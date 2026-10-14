@@ -226,7 +226,7 @@ func TestUnclassifiedMutatingRoutesFailClosed(t *testing.T) {
 		request := httptest.NewRequest(http.MethodPost, "http://proxy.test"+target, nil)
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
-		if response.Code != http.StatusMethodNotAllowed && response.Code != http.StatusBadRequest {
+		if response.Code != http.StatusNotFound && response.Code != http.StatusBadRequest {
 			t.Fatalf("%s status = %d", target, response.Code)
 		}
 	}
@@ -536,7 +536,7 @@ func TestUnknownReadMethodsFailClosed(t *testing.T) {
 			handler := testHandler(t, &fakeStore{state: admittedState(control.OwnerSupervisor)}, upstream.URL)
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, httptest.NewRequest(method, "/unknown", nil))
-			if response.Code != http.StatusMethodNotAllowed || calls != 0 {
+			if response.Code != http.StatusNotFound || calls != 0 {
 				t.Fatalf("unclassified %s: status %d, upstream calls %d", method, response.Code, calls)
 			}
 		})

@@ -111,7 +111,8 @@ function inspectUpdates(files, failures) {
               (entry['pull-request-branch-name'] &&
                 Object.keys(entry['pull-request-branch-name']).every(key => key === 'separator') &&
                 entry['pull-request-branch-name'].separator === '/')) &&
-            !entry.ignore?.some(rule => /^\*+$/.test(rule['dependency-name']) &&
+            // Wildcard patch/minor exclusions can erase required dependency coverage.
+            !entry.ignore?.some(rule => /\*/.test(rule['dependency-name']) &&
               (!Array.isArray(rule['update-types']) || rule['update-types'].some(type =>
                 ['version-update:semver-patch', 'version-update:semver-minor'].includes(type)))) &&
             ['daily', 'weekly', 'monthly', 'cron'].includes(entry.schedule?.interval) &&

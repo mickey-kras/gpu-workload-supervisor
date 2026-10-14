@@ -67,7 +67,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	isCompletion := r.Method == http.MethodPost && r.URL.Path == s.completionPath
 	switch s.admit(isCompletion) {
 	case admissionStopping:
-		http.Error(w, "proxy is shutting down", http.StatusServiceUnavailable)
+		writeError(w, http.StatusServiceUnavailable, "proxy_shutting_down")
 		return
 	case admissionFull:
 		capacityUnavailable(w)
@@ -122,9 +122,7 @@ func (s *Server) admit(isCompletion bool) admissionResult {
 
 func capacityUnavailable(w http.ResponseWriter) {
 	w.Header().Set("Retry-After", "1")
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusServiceUnavailable)
-	_, _ = w.Write([]byte("{\"error\":\"proxy_capacity_exceeded\"}\n"))
+	writeError(w, http.StatusServiceUnavailable, "proxy_capacity_exceeded")
 }
 
 func (s *Server) closeHijacked() error {

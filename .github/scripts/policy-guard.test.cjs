@@ -957,6 +957,8 @@ test('privileged Dependabot workflow rejects workspace replacement and execution
 test('Dependabot wildcard ignores cannot disable required patch or minor updates', () => {
   for (const ignore of [{ 'dependency-name': '*' },
     { 'dependency-name': '**' }, { 'dependency-name': '***' },
+    { 'dependency-name': '*/*', 'update-types': ['version-update:semver-patch', 'version-update:semver-minor'] },
+    { 'dependency-name': 'actions/*', 'update-types': ['version-update:semver-minor'] },
     { 'dependency-name': '*', 'update-types': ['version-update:semver-minor'] },
     { 'dependency-name': '*', 'update-types': ['version-update:semver-patch'] }]) {
     const candidate = files({ serial: false });
@@ -966,12 +968,18 @@ test('Dependabot wildcard ignores cannot disable required patch or minor updates
     candidate[path] = YAML.stringify(config);
     assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'));
   }
-  const candidate = files({ serial: false });
-  const path = '.github/dependabot.yml';
-  const config = YAML.parse(candidate[path]);
-  for (const entry of config.updates) entry.ignore = [{ 'dependency-name': '*', 'update-types': ['version-update:semver-major'] }];
-  candidate[path] = YAML.stringify(config);
-  assert.deepEqual(inspectActivated(candidate), []);
+  for (const ignore of [
+    { 'dependency-name': '*', 'update-types': ['version-update:semver-major'] },
+    { 'dependency-name': '*/*', 'update-types': ['version-update:semver-major'] },
+    { 'dependency-name': 'actions/checkout', 'update-types': ['version-update:semver-minor'] },
+  ]) {
+    const candidate = files({ serial: false });
+    const path = '.github/dependabot.yml';
+    const config = YAML.parse(candidate[path]);
+    for (const entry of config.updates) entry.ignore = [ignore];
+    candidate[path] = YAML.stringify(config);
+    assert.deepEqual(inspectActivated(candidate), []);
+  }
 });
 
 test('reverted live PR files cannot exempt a protected change at the inspected event head', async () => {

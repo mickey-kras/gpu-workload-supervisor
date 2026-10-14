@@ -119,15 +119,17 @@ func TestProxyCapacityReservesCompletionAndRecovers(t *testing.T) {
 	go func() { defer close(ordinaryDone); request(http.MethodPost, "/execute") }()
 	<-ordinaryStarted
 	busy := request(http.MethodGet, "/monitor")
-	if busy.Code != http.StatusServiceUnavailable || busy.Header().Get("Retry-After") != "1" ||
-		!strings.Contains(busy.Body.String(), "proxy_capacity_exceeded") {
+	assertProxyError(t, busy, http.StatusServiceUnavailable, "proxy_capacity_exceeded")
+	if busy.Header().Get("Retry-After") != "1" {
 		t.Fatalf("ordinary saturation response: %d %q", busy.Code, busy.Body.String())
 	}
 	completionDone := make(chan struct{})
 	go func() { defer close(completionDone); request(http.MethodPost, "/finish") }()
 	<-completionStarted
-	if got := request(http.MethodPost, "/finish"); got.Code != http.StatusServiceUnavailable {
-		t.Fatalf("completion saturation status = %d", got.Code)
+	full := request(http.MethodPost, "/finish")
+	assertProxyError(t, full, http.StatusServiceUnavailable, "proxy_capacity_exceeded")
+	if full.Header().Get("Retry-After") != "1" {
+		t.Fatalf("completion saturation headers = %v", full.Header())
 	}
 	if got := request(http.MethodGet, "/finish"); got.Code != http.StatusServiceUnavailable {
 		t.Fatalf("non-completion method bypassed ordinary cap: %d", got.Code)
@@ -263,16 +265,19 @@ func TestShutdownClosesHijackedConnectionAndReleasesLifetimeLock(t *testing.T) {
 	exclusive.Close()
 }
 
-func TestStoppingServerRejectsNewRequests(t *testing.T) {
-	tracked := NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}), 0, 0, "")
-	tracked.stop()
-	response := httptest.NewRecorder()
-	tracked.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/monitor", nil))
-	if response.Code != http.StatusServiceUnavailable ||
-		!strings.Contains(response.Body.String(), "proxy is shutting down") {
-		t.Fatalf("request during shutdown: %d %q", response.Code, response.Body.String())
+func TestShutdownRejectionUsesJSONWithoutRetryAfter(t *testing.T) {
+	for _, route := range []struct{ method, path string }{{"GET", "/monitor"}, {"POST", "/finish"}} {
+		t.Run(route.method, func(t *testing.T) {
+			calls := 0
+			server := NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }), 1, 1, "/finish")
+			server.stop()
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, httptest.NewRequest(route.method, route.path, nil))
+			assertProxyError(t, response, http.StatusServiceUnavailable, "proxy_shutting_down")
+			if calls != 0 || response.Header().Get("Retry-After") != "" {
+				t.Fatalf("calls=%d headers=%v", calls, response.Header())
+			}
+		})
 	}
 }
 
