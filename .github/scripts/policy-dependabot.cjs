@@ -129,12 +129,13 @@ function inspectUpdates(files, failures) {
               (entry['pull-request-branch-name'] &&
                 Object.keys(entry['pull-request-branch-name']).every(key => key === 'separator') &&
                 entry['pull-request-branch-name'].separator === '/')) &&
-            // Wildcards permit only explicit major exclusions, without version ranges.
-            !entry.ignore?.some(rule => /\*/.test(rule['dependency-name']) &&
-              (Object.keys(rule).some(key => !['dependency-name', 'update-types', 'versions'].includes(key)) ||
-                (Object.hasOwn(rule, 'versions') && (!Array.isArray(rule.versions) || rule.versions.length !== 0)) ||
-                !Array.isArray(rule['update-types']) || rule['update-types'].length === 0 ||
-                rule['update-types'].some(type => type !== 'version-update:semver-major'))) &&
+            // Preserve every dependency's patch/minor coverage, including exact names.
+            !entry.ignore?.some(rule => !rule || typeof rule !== 'object' || Array.isArray(rule) ||
+              typeof rule['dependency-name'] !== 'string' || !rule['dependency-name'].trim() ||
+              Object.keys(rule).some(key => !['dependency-name', 'update-types', 'versions'].includes(key)) ||
+              (Object.hasOwn(rule, 'versions') && (!Array.isArray(rule.versions) || rule.versions.length !== 0)) ||
+              !Array.isArray(rule['update-types']) || rule['update-types'].length === 0 ||
+              rule['update-types'].some(type => type !== 'version-update:semver-major')) &&
             supportedSchedule(entry.schedule)))) {
       failures.push('Dependabot lost required update coverage');
     }

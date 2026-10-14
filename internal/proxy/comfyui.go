@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -110,10 +111,13 @@ func (h *Handler) RunComfyUIReconciler(ctx context.Context, report func(error)) 
 	}
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	diagnostics := comfyUIDiagnostics{}
 	for {
-		if err := h.comfyUI.reconcile(ctx); err != nil && ctx.Err() == nil {
-			report(err)
-		}
+		h.comfyUI.reconcileWithDiagnostics(ctx, func(id, reason string) {
+			if ctx.Err() == nil {
+				diagnostics.observe(id, reason, report)
+			}
+		})
 		select {
 		case <-ctx.Done():
 			return
@@ -127,7 +131,68 @@ func (h *Handler) RunComfyUIReconciler(ctx context.Context, report func(error)) 
 type ComfyUIUnresolvedError struct{ AttemptID, Reason string }
 
 func (e *ComfyUIUnresolvedError) Error() string {
+	if e.AttemptID == "" {
+		return "ComfyUI reconciliation unresolved: " + e.Reason
+	}
 	return "ComfyUI attempt " + e.AttemptID + " unresolved: " + e.Reason
+}
+
+type ComfyUIRecovery struct{ AttemptID string }
+
+func (e *ComfyUIRecovery) Error() string {
+	if e.AttemptID == "" {
+		return "ComfyUI reconciliation pass recovered"
+	}
+	return "ComfyUI attempt " + e.AttemptID + " reconciliation recovered"
+}
+
+const comfyUIDiagnosticLimit = store.MaxComfyUIAttempts + 1
+
+type comfyUIDiagnosticState struct {
+	identity [sha256.Size]byte
+	reason   string
+}
+
+type comfyUIDiagnostics struct {
+	states [comfyUIDiagnosticLimit]comfyUIDiagnosticState
+	next   int
+}
+
+func (d *comfyUIDiagnostics) observe(id, reason string, report func(error)) {
+	identity := sha256.Sum256([]byte(id))
+	free := -1
+	for i := range d.states {
+		state := &d.states[i]
+		if state.reason == "" {
+			if free < 0 {
+				free = i
+			}
+			continue
+		}
+		if state.identity != identity {
+			continue
+		}
+		if state.reason == reason {
+			return
+		}
+		state.reason = reason
+		if reason == "" {
+			report(&ComfyUIRecovery{AttemptID: id})
+		} else {
+			report(&ComfyUIUnresolvedError{AttemptID: id, Reason: reason})
+		}
+		return
+	}
+	if reason == "" {
+		return
+	}
+	slot := d.next
+	if free >= 0 {
+		slot = free
+	}
+	d.states[slot] = comfyUIDiagnosticState{identity: identity, reason: reason}
+	d.next = (slot + 1) % len(d.states)
+	report(&ComfyUIUnresolvedError{AttemptID: id, Reason: reason})
 }
 
 func decodeComfyUI(raw []byte) (map[string]json.RawMessage, error) {
@@ -370,28 +435,45 @@ func (a *comfyUIAdapter) reconcileAttempt(ctx context.Context, attempt store.Com
 // reconcile is one bounded pass; it only polls, including after restart. A
 // caller invokes it serially and reports its typed unresolved errors.
 func (a *comfyUIAdapter) reconcile(ctx context.Context) error {
+	return a.reconcileWithDiagnostics(ctx, func(string, string) {})
+}
+
+func (a *comfyUIAdapter) reconcileWithDiagnostics(ctx context.Context, observe func(string, string)) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	attempts, err := a.store.PendingComfyUIAttempts(ctx, a.workload, a.upstream.String(), ComfyUIContract, a.cursor, 64)
 	if err != nil {
+		observe("", "pending_metadata_unavailable")
 		return fmt.Errorf("ComfyUI pending metadata unavailable: %w", err)
 	}
 	if len(attempts) == 0 {
 		a.cursor = ""
-		return nil
 	}
 	var errs []error
 	for _, attempt := range attempts {
 		if ctx.Err() != nil {
-			errs = append(errs, ctx.Err())
 			break
 		}
 		a.cursor = attempt.AttemptID
 		attemptCtx, stop := context.WithTimeout(ctx, 2*time.Second)
-		if err := a.reconcileAttempt(attemptCtx, attempt); err != nil {
-			errs = append(errs, err)
-		}
+		err := a.reconcileAttempt(attemptCtx, attempt)
 		stop()
+		reason := ""
+		if err != nil {
+			errs = append(errs, err)
+			reason = "reconciliation_failed"
+			var unresolved *ComfyUIUnresolvedError
+			if errors.As(err, &unresolved) {
+				reason = unresolved.Reason
+			}
+		}
+		observe(attempt.AttemptID, reason)
+	}
+	if ctx.Err() != nil {
+		errs = append(errs, ctx.Err())
+		observe("", "reconciliation_timeout")
+	} else {
+		observe("", "")
 	}
 	return errors.Join(errs...)
 }

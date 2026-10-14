@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -202,7 +203,14 @@ func serveProxy(proxyConfig workloadproxy.Config, settings proxyServerSettings) 
 	comfyUIDone := make(chan struct{})
 	go func() {
 		defer close(comfyUIDone)
-		handler.RunComfyUIReconciler(maintenanceCtx, func(err error) { log.Printf("ComfyUI completion unresolved: %v", err) })
+		handler.RunComfyUIReconciler(maintenanceCtx, func(err error) {
+			var recovered *workloadproxy.ComfyUIRecovery
+			if errors.As(err, &recovered) {
+				slog.InfoContext(maintenanceCtx, "ComfyUI reconciliation recovered", "attempt_id", recovered.AttemptID)
+				return
+			}
+			log.Printf("ComfyUI completion unresolved: %v", err)
+		})
 	}()
 	go func() {
 		defer close(maintenanceDone)
