@@ -29,33 +29,22 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: .github/aislop/package-lock.json
-      - run: npm ci --prefix .github/aislop --ignore-scripts
+      - run: npm ci --prefix .github/aislop --ignore-scripts --no-audit --no-fund
       - name: Test native runtime import annotations
         run: node --test .github/aislop/native-imports.test.cjs
       - name: Aislop automation quality gate
         run: .github/aislop/node_modules/.bin/aislop ci --human .
       - name: Aislop Go quality gate
-        run: .github/aislop/node_modules/.bin/aislop ci --human internal
-      - name: Aislop Go SARIF
         if: always()
+        id: go_scan
         run: .github/aislop/node_modules/.bin/aislop ci --sarif internal > aislop.sarif
       - name: Aislop findings gate
         if: always()
-        run: |
-          node - <<'NODE'
-          const fs = require('node:fs');
-          const runs = JSON.parse(fs.readFileSync('aislop.sarif', 'utf8')).runs;
-          const findings = runs.flatMap(run => run.results || [])
-            .filter(result => result.ruleId !== 'security/dependency-audit-skipped');
-          if (findings.length) {
-            console.error('Aislop findings:', [...new Set(findings.map(result => result.ruleId))].join(', '));
-            process.exitCode = 1;
-          }
-          NODE
+        run: python3 .github/scripts/check-scan-reports.py aislop aislop.sarif
       - name: Upload Aislop SARIF
         if: >-
           ${{
-            !cancelled() &&
+            !cancelled() && steps.go_scan.outcome != 'skipped' &&
             (github.event_name != 'pull_request' ||
               github.event.pull_request.head.repo.full_name == github.repository)
           }}

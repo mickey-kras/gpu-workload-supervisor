@@ -43,6 +43,32 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Require current quality coverage outputs
+        env:
+          GO_COVERAGE_ID: ${{ needs.quality.outputs.go-coverage-id }}
+          JAVASCRIPT_COVERAGE_ID: ${{ needs.quality.outputs.javascript-coverage-id }}
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          import re
+
+          if any(not re.fullmatch(r'[1-9][0-9]*', os.environ[key]) for key in ('GO_COVERAGE_ID', 'JAVASCRIPT_COVERAGE_ID')):
+              raise SystemExit('Missing successful quality coverage outputs; re-run all jobs')
+          PYTHON
+      - name: Download Go quality coverage
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          artifact-ids: ${{ needs.quality.outputs.go-coverage-id }}
+          path: go-quality-coverage/
+      - name: Download JavaScript quality coverage
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          artifact-ids: ${{ needs.quality.outputs.javascript-coverage-id }}
+          path: javascript-quality-coverage/
+      - name: Validate and restore quality coverage
+        run: |
+          python3 .github/scripts/quality-coverage.py restore go go-quality-coverage
+          python3 .github/scripts/quality-coverage.py restore javascript javascript-quality-coverage
       - name: Mask configured SonarQube endpoint
         env:
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
@@ -53,21 +79,6 @@ jobs:
           audience: ${{ secrets.TAILSCALE_AUDIENCE }}
           tags: tag:github-sonar
           use-cache: 'true'
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Generate Go coverage
-        run: go test -coverprofile=coverage.out ./...
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: clients/gnome/package-lock.json
-      - name: Generate JavaScript coverage
-        run: |
-          npm ci --prefix clients/gnome --ignore-scripts --no-audit --no-fund
-          npm run coverage --prefix clients/gnome
       - name: Mask advertised SonarQube endpoint
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

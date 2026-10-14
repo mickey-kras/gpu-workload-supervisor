@@ -48,7 +48,15 @@ function files({ serial = true } = {}) {
   // Legacy mutation tests still exercise the original command controls in a
   // serial fixture; the actual parallel workflow is separately checked below.
   const path = '.github/workflows/ci.yml';
-  const source = result[path];
+  let source = result[path];
+  if (serial && YAML.parse(source).on.workflow_call?.outputs) {
+    const { normalizeCiReuse } = require('./policy-ci-reuse.cjs');
+    const paths = ['ci', 'main', 'aislop'].map(name => `.github/workflows/${name}.yml`);
+    const workflows = Object.fromEntries(paths.map(path => [path, YAML.parse(result[path])]));
+    const normalized = normalizeCiReuse(result, workflows, []);
+    for (const path of paths) result[path] = YAML.stringify(normalized[path]);
+    source = result[path];
+  }
   if (serial && YAML.parse(source).jobs.native) {
     const jobsIndex = source.indexOf('jobs:\n');
     const sections = source.slice(jobsIndex + 6).split(/^  [a-z]+:\n/m).slice(1);
