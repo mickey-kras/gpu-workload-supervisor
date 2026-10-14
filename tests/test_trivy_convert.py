@@ -1,4 +1,3 @@
-"""Check the installed Trivy converter without fetching a vulnerability database."""
 import json
 from pathlib import Path
 import shutil

@@ -1,4 +1,3 @@
-"""Exercise coverage identity checks and scanner failure handling."""
 import importlib.util
 import json
 import os
