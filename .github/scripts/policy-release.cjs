@@ -1,11 +1,60 @@
 const { createHash } = require('node:crypto');
+const { isDeepStrictEqual } = require('node:util');
 
 const VALIDATION_SCRIPT = [
-  "await require('./.github/scripts/release-validation.cjs').verifyMain({",
+  "const { readFileSync } = require('node:fs');",
+  "const { createHash } = require('node:crypto');",
+  "const { createRequire } = require('node:module');",
+  "const { resolve } = require('node:path');",
+  "const { compileFunction } = require('node:vm');",
+  "const filename = resolve('.github/scripts/release-validation.cjs');",
+  'const source = readFileSync(filename);',
+  "if (createHash('sha256').update(source).digest('hex') !==",
+  "    'da0aa5baa3644818864a925255c719bab9de011c7bdfe443f45637aebd4e7af8') {",
+  "  throw new Error('Release validation verifier bytes changed in the workspace');", '}',
+  'const validated = { exports: {} };',
+  "compileFunction(source.toString('utf8'), ['require', 'module', 'exports'], { filename })(",
+  '  createRequire(filename), validated, validated.exports,', ');',
+  'await validated.exports.verifyMain({',
   '  github, context, core, version: process.env.VERSION,', '});', '',
 ].join('\n');
 
-function inspectValidationReuse(files, releaseJobs, failures, checks) {
+const HARDEN = { uses: 'step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed',
+  with: { 'egress-policy': 'audit' } };
+const CHECKOUT = { uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+  with: { ref: '${{ github.sha }}', 'persist-credentials': false } };
+const NODE = { uses: 'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020',
+  with: { 'node-version': 22 } };
+const GO = { uses: 'actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e',
+  with: { 'go-version-file': 'go.mod', cache: true } };
+const INSTALL = { name: 'Install release tools',
+  run: 'npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund' };
+const verificationStep = name => ({ name,
+  uses: 'actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3',
+  env: { VERSION: '${{ needs.entry.outputs.version }}' }, with: { script: VALIDATION_SCRIPT } });
+
+function inspectVerificationWorkspace(workflow, failures) {
+  const jobs = workflow.jobs;
+  const validation = jobs.validation;
+  const publish = jobs.publish;
+  const sameSteps = isDeepStrictEqual;
+  const allowed = ['name', 'needs', 'runs-on', 'timeout-minutes', 'permissions', 'steps'];
+  const publishCheckout = { ...CHECKOUT, with: { 'fetch-depth': 0, ...CHECKOUT.with } };
+  const beforePublish = publish.steps?.findIndex(step =>
+    step.name === 'Verify main and successful validation at this commit');
+  if (Object.hasOwn(workflow, 'env') || Object.hasOwn(workflow, 'defaults') ||
+      Object.keys(validation).some(key => !allowed.includes(key)) ||
+      ['env', 'defaults', 'container', 'services'].some(key => Object.hasOwn(publish, key)) ||
+      !sameSteps(validation.steps, [HARDEN, CHECKOUT, NODE, INSTALL,
+        verificationStep('Verify exact-commit main validation')]) ||
+      !sameSteps(publish.steps?.slice(0, beforePublish + 1), [HARDEN, publishCheckout, GO, INSTALL,
+        verificationStep('Verify main and successful validation at this commit')])) {
+    failures.push('Release validation workspace or runtime inputs were changed');
+  }
+}
+
+function inspectValidationReuse(files, workflow, failures, checks) {
+  const releaseJobs = workflow?.jobs;
   const path = '.github/workflows/release.yml';
   const validation = releaseJobs?.validation;
   const verification = releaseJobs?.publish?.steps?.find(step =>
@@ -28,6 +77,7 @@ function inspectValidationReuse(files, releaseJobs, failures, checks) {
     }
     return;
   }
+  inspectVerificationWorkspace(workflow, failures);
   if (['quality', 'aislop', 'codeql'].some(id => Object.hasOwn(releaseJobs, id)) ||
       validation.needs !== 'entry' || Object.hasOwn(validation, 'if') ||
       validation['runs-on'] !== 'ubuntu-latest' ||
@@ -71,7 +121,7 @@ function inspectReleaseEntry(files, workflows, failures, checks) {
       releaseJobs?.entry?.outputs?.version !== '${{ steps.version.outputs.version }}') {
     failures.push(`${release} lost dispatch version selection`);
   }
-  inspectValidationReuse(files, releaseJobs, failures, checks);
+  inspectValidationReuse(files, workflows[release], failures, checks);
   step(release, 'entry', 'Require dispatch from main', {
     uses: 'actions/github-script',
     withValues: { script: [
@@ -166,4 +216,4 @@ function inspectReleasePublish(files, workflows, failures, checks, inspectGoRele
   });
 }
 
-module.exports = { inspectReleaseEntry, inspectReleasePublish };
+module.exports = { inspectReleaseEntry, inspectReleasePublish, VALIDATION_SCRIPT };

@@ -1,6 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { verifyCandidate, verifyMain } = require('./release-validation.cjs');
+const { VALIDATION_SCRIPT } = require('./policy-release.cjs');
+const { mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, rmSync } = require('node:fs');
+const { tmpdir } = require('node:os');
+const { join, resolve } = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 const SHA = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
@@ -261,4 +266,64 @@ test('invalid dispatch context and API failures cannot authorize release', async
     throw Object.assign(new Error('Forbidden'), { status: 403 });
   };
   await assert.rejects(verifyMain(forbidden), /Forbidden/);
+});
+
+test('protected runtime wrapper executes approved verifier bytes against real behavior', async () => {
+  const input = fixture();
+  for (const job of input.state.jobs) {
+    job.started_at = new Date(Date.now() - 3600000).toISOString();
+    job.completed_at = new Date(Date.now() - 60000).toISOString();
+  }
+  const previous = process.env.VERSION;
+  process.env.VERSION = VERSION;
+  try {
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    await new AsyncFunction('require', 'github', 'context', 'core', VALIDATION_SCRIPT)(
+      require, input.github, input.context, input.core,
+    );
+    assert.equal(input.state.reads.length, 2);
+    assert.match(input.state.logs.at(-1), /Reusing main run 456 attempt 1/);
+  } finally {
+    if (previous === undefined) delete process.env.VERSION;
+    else process.env.VERSION = previous;
+  }
+});
+
+test('overwritten workspace verifier cannot turn the protected runtime gate into a no-op', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'release-verifier-'));
+  try {
+    const scripts = join(dir, '.github', 'scripts'); mkdirSync(scripts, { recursive: true });
+    const filename = join(scripts, 'release-validation.cjs');
+    writeFileSync(filename, 'module.exports = { verifyMain: async () => {} };\n');
+    const source = `const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+new AsyncFunction('require', 'github', 'context', 'core', ${JSON.stringify(VALIDATION_SCRIPT)})(
+  require, {}, {}, {},
+).catch(error => { console.error(error.message); process.exitCode = 1; });`;
+    assert.throws(() => execFileSync(process.execPath, ['-e', source], { cwd: dir, stdio: 'pipe' }),
+      error => error.stderr.toString().includes('verifier bytes changed in the workspace'));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('runtime gate executes captured bytes even if workspace changes after hash verification', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'release-verifier-race-'));
+  try {
+    const scripts = join(dir, '.github', 'scripts'); mkdirSync(scripts, { recursive: true });
+    for (const name of ['release-validation.cjs', 'release-follow-up.cjs']) {
+      writeFileSync(join(scripts, name), readFileSync(join(__dirname, name)));
+    }
+    symlinkSync(resolve(__dirname, 'node_modules'), join(scripts, 'node_modules'), 'dir');
+    const source = `const fs = require('node:fs'); const vm = require('node:vm');
+const guardedRequire = name => name === 'node:vm' ? {
+  compileFunction(...args) {
+    fs.writeFileSync('.github/scripts/release-validation.cjs', 'module.exports = { verifyMain: async () => {} };');
+    return vm.compileFunction(...args);
+  }
+} : require(name);
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+new AsyncFunction('require', 'github', 'context', 'core', ${JSON.stringify(VALIDATION_SCRIPT)})(
+  guardedRequire, {}, {}, {},
+).catch(error => { console.error(error.message); process.exitCode = 1; });`;
+    assert.throws(() => execFileSync(process.execPath, ['-e', source], { cwd: dir, stdio: 'pipe' }),
+      error => error.stderr.toString().includes('Release requires dispatch from main'));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
