@@ -10,6 +10,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -359,7 +360,30 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 		h.proxy.ServeHTTP(response, h.withoutControlHeaders(request))
 		return
 	}
+	methods := h.allowedMethods(request.URL.Path)
+	if len(methods) == 0 {
+		writeError(response, http.StatusNotFound, "route_not_allowed")
+		return
+	}
+	response.Header().Set("Allow", strings.Join(methods, ", "))
 	writeError(response, http.StatusMethodNotAllowed, "route_not_allowed")
+}
+
+func (h *Handler) allowedMethods(requestPath string) []string {
+	var methods []string
+	if requestPath == h.completionPath {
+		methods = append(methods, http.MethodPost)
+	}
+	for _, routes := range []map[string]struct{}{h.executionRoutes, h.readOnlyRoutes, h.passthroughRoutes} {
+		for key := range routes {
+			method, routePath, _ := strings.Cut(key, " ")
+			if routePath == requestPath {
+				methods = append(methods, method)
+			}
+		}
+	}
+	slices.Sort(methods)
+	return methods
 }
 
 func (h *Handler) execute(response http.ResponseWriter, request *http.Request) {
@@ -558,6 +582,9 @@ func routeSet(routes []Route, required bool) (map[string]struct{}, error) {
 		method := strings.ToUpper(strings.TrimSpace(route.Method))
 		if method == "" || !CanonicalPath(route.Path) {
 			return nil, errors.New("routes require a method and canonical absolute path")
+		}
+		if _, err := http.NewRequest(method, "/", nil); err != nil {
+			return nil, errors.New("route method must be an HTTP token")
 		}
 		result[method+" "+route.Path] = struct{}{}
 	}
