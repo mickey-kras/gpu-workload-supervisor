@@ -779,3 +779,248 @@ test('composite setup retains step order, commands and rejects ambiguous YAML', 
   candidate[path] += '\nruns: {}\n';
   assert.ok(inspectActivated(candidate).some(error => error.includes('changed verified GoReleaser installer')));
 });
+
+test('Dependabot contracts permit comments, logging and renewed immutable action pins', () => {
+  const candidate = files({ serial: false });
+  const source = '.github/scripts/dependabot-auto-merge.cjs';
+  candidate[source] = '// Reviewed explanatory comment\n' + candidate[source].replace(
+    'const repository =', "core.info('Starting evaluation');\n  const repository =");
+  for (const name of ['dependabot-auto-merge', 'dependabot-auto-merge-refresh']) {
+    const path = `.github/workflows/${name}.yml`;
+    candidate[path] = candidate[path].replaceAll(/@[a-f0-9]{40}/g, '@' + 'a'.repeat(40));
+  }
+  candidate['.github/workflows/dependabot-auto-merge.yml'] =
+    candidate['.github/workflows/dependabot-auto-merge.yml'].replace(
+      '25dd0e34f4fe68f24cc83900b1fe3fe149efef98', 'b'.repeat(40));
+  assert.deepEqual(inspectActivated(candidate), []);
+});
+
+test('Dependabot queue, trusted inputs and refresh controls cannot be bypassed', () => {
+  for (const mutate of [
+    w => { w.jobs['enable-auto-merge'].steps.at(-1).with.script = 'return;'; },
+    w => { w.jobs['enable-auto-merge'].steps.at(-1).if = false; },
+    w => { w.jobs['enable-auto-merge'].steps.at(-1).env.GH_TOKEN = ''; },
+    w => { w.jobs['enable-auto-merge'].steps[1].with['persist-credentials'] = true; },
+    w => { w.jobs['enable-auto-merge'].steps[2].with.ref = 'main'; },
+    w => { w.jobs['enable-auto-merge'].steps[2].with.repository = 'other/metadata'; },
+    w => { w.concurrency['cancel-in-progress'] = true; },
+    w => { delete w.permissions.actions; },
+    w => { w.jobs['enable-auto-merge'].permissions = { contents: 'read' }; },
+    w => { w.jobs['enable-auto-merge'].steps.at(-1).with.script += '\nconsole.log(\"extra queue code\");'; },
+  ]) {
+    const candidate = files({ serial: false });
+    const path = '.github/workflows/dependabot-auto-merge.yml';
+    const workflow = YAML.parse(candidate[path]); mutate(workflow);
+    candidate[path] = YAML.stringify(workflow);
+    assert.notDeepEqual(inspectActivated(candidate), []);
+  }
+  for (const mutate of [w => { w.jobs.refresh.if = false; },
+    w => { delete w.on.schedule; }, w => { w.on.schedule = []; },
+    w => { w.jobs.refresh.uses = './.github/workflows/main.yml'; }]) {
+    const candidate = files({ serial: false });
+    const path = '.github/workflows/dependabot-auto-merge-refresh.yml';
+    const workflow = YAML.parse(candidate[path]); mutate(workflow);
+    candidate[path] = YAML.stringify(workflow);
+    assert.notDeepEqual(inspectActivated(candidate), []);
+  }
+});
+
+test('selected Dependabot source safeguard removals fail without whole-file registration', () => {
+  for (const [before, after] of [
+    ['const MINIMUM_SCORE = 75;', 'const MINIMUM_SCORE = 0;'],
+    ['const dependencies = metadata(pull, repository, metadataPath);', 'const dependencies = [];'],
+    ['if (!eligible(commits, dependencies)) {', 'if (false) {'],
+    ["['--disable-auto']", "['--auto']"],
+    ['current.head.sha !== pull.head.sha', 'false'],
+    ["'--match-head-commit', pull.head.sha", "'--match-head-commit', current.head.sha"],
+    ['await ensureMainRun({ github, context, core, branch, mainWorkflow });', ''],
+  ]) {
+    const candidate = files({ serial: false });
+    const path = '.github/scripts/dependabot-auto-merge.cjs';
+    assert.ok(candidate[path].includes(before));
+    candidate[path] = candidate[path].replace(before, after);
+    assert.ok(inspectActivated(candidate).some(message => message.includes('Dependabot source lost safety contract')));
+  }
+  const candidate = files({ serial: false });
+  candidate['.github/scripts/dependabot-auto-merge.cjs'] = 'module.exports = { run: async () => {} };';
+  assert.notDeepEqual(inspectActivated(candidate), []);
+});
+
+function authorFixture({ association = 'OWNER', bot = false, changed = true } = {}) {
+  const context = { repo: { owner: 'owner', repo: 'repo' }, payload: { pull_request: {
+    number: 1, base: { sha: 'a'.repeat(40) }, head: { sha: 'b'.repeat(40) },
+  } } };
+  const reads = [];
+  const github = { rest: {
+    repos: { getContent: async params => {
+      reads.push(params);
+      return { data: { type: 'file', sha: (changed && params.ref === context.payload.pull_request.head.sha ? 'd' : 'c').repeat(40) } };
+    } },
+    pulls: { get: async () => ({ data: {
+      author_association: association, user: { login: bot ? 'dependabot[bot]' : 'maintainer', type: bot ? 'Bot' : 'User' },
+    } }) },
+  } };
+  return { github, context, reads };
+}
+
+test('automation source changes require a trusted human at immutable event refs', async () => {
+  const { verifyDependabotAuthor } = require('./policy-guard.cjs');
+  for (const association of ['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR', 'NONE']) {
+    for (const bot of [false, true]) {
+      const { github, context, reads } = authorFixture({ association, bot });
+      if (!bot && ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(association)) {
+        await verifyDependabotAuthor(github, context);
+      } else await assert.rejects(verifyDependabotAuthor(github, context), /trusted human author/);
+      assert.deepEqual(reads.map(read => read.ref), ['a', 'b', 'a', 'b'].map(value => value.repeat(40)));
+    }
+  }
+  const { github, context } = authorFixture({ changed: false });
+  github.rest.pulls.get = async () => { throw new Error('No source author restriction for action pin updates'); };
+  await verifyDependabotAuthor(github, context);
+});
+
+test('Dependabot configuration must retain active coverage of every required ecosystem and directory', () => {
+  for (const mutate of [config => { config.updates = []; },
+    config => { config.updates.pop(); },
+    config => { config.updates[0]['open-pull-requests-limit'] = 0; },
+    config => { delete config.updates[0].schedule; },
+    config => { for (const entry of config.updates) entry['target-branch'] = 'maintenance'; },
+    config => { for (const entry of config.updates) entry['exclude-paths'] = ['**']; },
+    config => { for (const entry of config.updates) entry['pull-request-branch-name'] = { separator: '-' }; },
+    config => { for (const entry of config.updates) entry['pull-request-branch-name'] = { separator: '/', prefix: 'deps' }; },
+    config => { for (const entry of config.updates) entry['pull-request-branch-name'] = { separator: '/', template: 'deps/update' }; },
+    config => { for (const entry of config.updates) entry.allow = [{ 'dependency-name': 'unused-dependency' }]; }]) {
+    const candidate = files({ serial: false });
+    const path = '.github/dependabot.yml';
+    const config = YAML.parse(candidate[path]); mutate(config);
+    candidate[path] = YAML.stringify(config);
+    assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'));
+  }
+});
+
+
+test('Dependabot retains PR reevaluation and merge recovery activities', () => {
+  const required = ['opened', 'synchronize', 'reopened', 'ready_for_review', 'closed'];
+  for (const types of [undefined, ['opened'], ['closed'], ...required.map(removed =>
+    required.filter(activity => activity !== removed))]) {
+    const candidate = files({ serial: false });
+    const path = '.github/workflows/dependabot-auto-merge.yml';
+    const workflow = YAML.parse(candidate[path]);
+    workflow.on.pull_request_target.types = types;
+    candidate[path] = YAML.stringify(workflow);
+    assert.ok(inspectActivated(candidate).includes('Dependabot lost required PR activities'), String(types));
+  }
+});
+
+test('Dependabot cannot queue before either required checkout', () => {
+  for (const name of ['Read trusted automation', 'Read pinned Dependabot metadata action']) {
+    const candidate = files({ serial: false });
+    const path = '.github/workflows/dependabot-auto-merge.yml';
+    const workflow = YAML.parse(candidate[path]);
+    const steps = workflow.jobs['enable-auto-merge'].steps;
+    const queue = steps.pop();
+    steps.splice(steps.findIndex(step => step.name === name), 0, queue);
+    candidate[path] = YAML.stringify(workflow);
+    assert.ok(inspectActivated(candidate).includes(`Dependabot checkout must precede queue: ${name}`));
+  }
+});
+
+
+test('privileged Dependabot workflow rejects workspace replacement and execution overrides', () => {
+  for (const mutate of [
+    w => { w.jobs['enable-auto-merge'].steps.splice(3, 0, {
+      uses: 'actions/checkout@' + 'a'.repeat(40), with: { repository: 'attacker/repo', path: 'automation' },
+    }); },
+    w => { w.jobs['enable-auto-merge'].steps.splice(3, 0, { run: 'echo overwritten > automation/.github/scripts/dependabot-auto-merge.cjs' }); },
+    w => { w.jobs['enable-auto-merge'].steps[1].with.repository = 'attacker/repo'; },
+    w => { w.jobs['enable-auto-merge'].steps[1].with.path = 'untrusted'; },
+    w => { w.jobs['enable-auto-merge'].steps[1].env = { NODE_OPTIONS: '--require /tmp/override.cjs' }; },
+    w => { w.jobs['enable-auto-merge'].steps.at(-1).env.NODE_OPTIONS = '--require /tmp/override.cjs'; },
+    w => { w.jobs['enable-auto-merge'].steps.at(-1).with['github-token'] = '${{ secrets.OTHER_TOKEN }}'; },
+    w => { w.env = { NODE_OPTIONS: '--require /tmp/override.cjs' }; },
+    w => { w.jobs['enable-auto-merge'].env = { NODE_OPTIONS: '--require /tmp/override.cjs' }; },
+    w => { w.defaults = { run: { 'working-directory': 'untrusted' } }; },
+    w => { w.jobs['enable-auto-merge'].defaults = { run: { 'working-directory': 'untrusted' } }; },
+    w => { w.jobs.extra = { 'runs-on': 'ubuntu-latest', steps: [{ run: 'true' }] }; },
+    w => { w.on.pull_request_target.branches = ['unused-branch']; },
+    w => { w.on.pull_request_target['branches-ignore'] = ['main']; },
+    w => { w.on.pull_request_target.paths = ['unused/**']; },
+  ]) {
+    const candidate = files({ serial: false });
+    const path = '.github/workflows/dependabot-auto-merge.yml';
+    const workflow = YAML.parse(candidate[path]); mutate(workflow);
+    candidate[path] = YAML.stringify(workflow);
+    assert.notDeepEqual(inspectActivated(candidate), [], String(mutate));
+  }
+});
+
+test('Dependabot wildcard ignores cannot disable required patch or minor updates', () => {
+  for (const ignore of [{ 'dependency-name': '*' },
+    { 'dependency-name': '**' }, { 'dependency-name': '***' },
+    { 'dependency-name': '*', 'update-types': ['version-update:semver-minor'] },
+    { 'dependency-name': '*', 'update-types': ['version-update:semver-patch'] }]) {
+    const candidate = files({ serial: false });
+    const path = '.github/dependabot.yml';
+    const config = YAML.parse(candidate[path]);
+    for (const entry of config.updates) entry.ignore = [ignore];
+    candidate[path] = YAML.stringify(config);
+    assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'));
+  }
+  const candidate = files({ serial: false });
+  const path = '.github/dependabot.yml';
+  const config = YAML.parse(candidate[path]);
+  for (const entry of config.updates) entry.ignore = [{ 'dependency-name': '*', 'update-types': ['version-update:semver-major'] }];
+  candidate[path] = YAML.stringify(config);
+  assert.deepEqual(inspectActivated(candidate), []);
+});
+
+test('reverted live PR files cannot exempt a protected change at the inspected event head', async () => {
+  const { run } = require('./policy-guard.cjs');
+  const { github, context } = authorFixture({ association: 'NONE' });
+  // The live PR has reverted to B; the queued event still inspects A.
+  github.paginate = async () => [{ filename: 'README.md' }];
+  github.rest.pulls.get = async () => ({ data: { head: { sha: 'reverted-live-head' },
+    author_association: 'NONE', user: { login: 'outsider', type: 'User' } } });
+  await assert.rejects(run({ github, context }), /trusted human author/);
+});
+
+test('protected source identity reads fail closed and detect deletion or rename', async () => {
+  const { verifyDependabotAuthor } = require('./policy-guard.cjs');
+  for (const failure of ['deleted', 'invalid', 'unavailable']) {
+    const { github, context } = authorFixture({ association: 'NONE' });
+    github.rest.repos.getContent = async params => {
+      if (params.ref === context.payload.pull_request.head.sha) {
+        if (failure === 'invalid') return { data: {} };
+        const error = new Error(failure); error.status = failure === 'deleted' ? 404 : 500; throw error;
+      }
+      return { data: { type: 'file', sha: 'c'.repeat(40) } };
+    };
+    await assert.rejects(verifyDependabotAuthor(github, context),
+      failure === 'deleted' ? /trusted human author/ : failure === 'invalid' ? /Cannot identify/ : /unavailable/);
+  }
+});
+
+
+test('immutable source author check covers the guard and rejects mutable or non-file identities', async () => {
+  const { verifyDependabotAuthor } = require('./policy-guard.cjs');
+  const { github, context } = authorFixture({ association: 'NONE', changed: false });
+  const read = github.rest.repos.getContent;
+  github.rest.repos.getContent = async params => params.path.endsWith('/policy-guard.cjs') &&
+    params.ref === context.payload.pull_request.head.sha ?
+    { data: { type: 'file', sha: 'd'.repeat(40) } } : read(params);
+  await assert.rejects(verifyDependabotAuthor(github, context), /trusted human author/);
+  github.rest.repos.getContent = async () => ({ data: { type: 'symlink', sha: 'a'.repeat(40) } });
+  await assert.rejects(verifyDependabotAuthor(github, context), /Cannot identify/);
+  context.payload.pull_request.head.sha = 'main';
+  await assert.rejects(verifyDependabotAuthor(github, context), /Immutable PR source refs/);
+});
+
+
+test('Dependabot explicit default branch separator retains required coverage', () => {
+  const candidate = files({ serial: false });
+  const path = '.github/dependabot.yml';
+  const config = YAML.parse(candidate[path]);
+  for (const entry of config.updates) entry['pull-request-branch-name'] = { separator: '/' };
+  candidate[path] = YAML.stringify(config);
+  assert.deepEqual(inspectActivated(candidate), []);
+});
