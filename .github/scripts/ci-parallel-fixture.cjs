@@ -3,7 +3,15 @@ const YAML = require('yaml');
 const { REQUIRED_JOBS, STEP_JOBS, AGGREGATE_RUN } = require('./policy-ci-parallel.cjs');
 
 function parallelFixture() {
-  const workflow = YAML.parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
+  let workflow = YAML.parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
+  if (workflow.on.workflow_call?.inputs) {
+    const path = '.github/workflows/ci.yml';
+    const pr = '.github/workflows/pr-validation.yml';
+    const { normalizeScopedValidation } = require('./policy-pr-scope.cjs');
+    const files = { '.github/scripts/pr-validation-scope.cjs': readFileSync('.github/scripts/pr-validation-scope.cjs', 'utf8') };
+    workflow = normalizeScopedValidation(files, { [path]: workflow,
+      [pr]: YAML.parse(readFileSync(pr, 'utf8')) }, [], AGGREGATE_RUN + '\n')[path];
+  }
   // Legacy graph mutation tests use the independent 508 contract after reuse.
   if (workflow.on.workflow_call?.outputs) {
     workflow.on.workflow_call = null;

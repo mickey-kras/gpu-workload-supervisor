@@ -2,10 +2,16 @@ const { readFileSync } = require('node:fs');
 const YAML = require('yaml');
 
 function reuseFixture() {
-  const files = {};
-  for (const name of ['ci', 'aislop', 'main']) {
+  let files = {};
+  for (const name of ['ci', 'aislop', 'main', 'pr-validation']) {
     const path = `.github/workflows/${name}.yml`;
     files[path] = YAML.parse(readFileSync(path, 'utf8'));
+  }
+  if (files['.github/workflows/ci.yml'].on.workflow_call?.inputs) {
+    const { normalizeScopedValidation } = require('./policy-pr-scope.cjs');
+    const { AGGREGATE_RUN } = require('./policy-ci-parallel.cjs');
+    files = normalizeScopedValidation({ '.github/scripts/pr-validation-scope.cjs':
+      readFileSync('.github/scripts/pr-validation-scope.cjs', 'utf8') }, files, [], AGGREGATE_RUN + '\n');
   }
   const ci = files['.github/workflows/ci.yml'];
   if (ci.on.workflow_call?.outputs) return files;

@@ -7,14 +7,20 @@ observed results pass; record host details privately.
 
 ## Pin the candidate
 
-Use the successful PR validation run's `candidate-<built-commit>-<run>-<attempt>`
-artifact. Retain its artifact ID/digest, run URL, `candidate-manifest.json` and
+Use a successful full-validation PR or main run's
+`candidate-<built-commit>-<run>-<attempt>` artifact. Retain its artifact ID/digest,
+run URL, `candidate-manifest.json` and
 `checksums.txt`. The manifest distinguishes the tested merge commit from the PR
 head and base. Verify every payload before installing:
 
 ```sh
 sha256sum --check checksums.txt
 ```
+
+Documentation-only PR validation still qualifies packaged docs and payloads,
+but intentionally omits native and selected Go tests and produces no fully
+CI-tested candidate. Its intermediate package payload is not a
+host-qualification candidate.
 
 Test exactly that payload; a later build or changed PR head needs qualification
 again. This is a snapshot candidate, not a published release. Current activation
