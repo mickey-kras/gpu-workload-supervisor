@@ -1,4 +1,5 @@
 const { createHash } = require('node:crypto');
+const { sameActionSteps } = require('./policy-action-pins.cjs');
 
 const REQUIRED_JOBS = ['native', 'go', 'frontend', 'scans', 'package'];
 const AGGREGATE_RUN = `python3 - <<'PYTHON'
@@ -208,9 +209,9 @@ function inspectParallelCi(workflow, failures) {
     for (const [index, expected] of sequence.entries()) {
       const step = steps[index];
       if (typeof expected !== 'string') {
-        requireValue(same(step, expected), `${id} setup action ${index}`);
+        requireValue(sameActionSteps([step], [expected]), `${id} setup action ${index}`);
       } else if (ACTION_STEPS[expected]) {
-        requireValue(same(step, ACTION_STEPS[expected]), `${id} action ${expected}`);
+        requireValue(sameActionSteps([step], [ACTION_STEPS[expected]]), `${id} action ${expected}`);
       } else {
         const metadata = step && Object.fromEntries(Object.entries(step).filter(([key]) => key !== 'run'));
         const options = { name: expected };

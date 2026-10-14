@@ -1,24 +1,19 @@
 const { createHash } = require('node:crypto');
+const { canonical, normalizeWorkflowActionPins } = require('./policy-action-pins.cjs');
 
 const CI = '.github/workflows/ci.yml';
 const AISLOP = '.github/workflows/aislop.yml';
 const MAIN = '.github/workflows/main.yml';
 
 const REUSE_HASHES = {
-  ".github/workflows/ci.yml": "7e2c96f9ede5169db7a1e9fc1a3ced7c962eaac9d3fb9f8023c345f05c33a7d4",
-  ".github/workflows/aislop.yml": "6608535656f99956a014e72c97d0f076fb99c923c2e4dbe9827b51b16d9ae068",
-  ".github/workflows/main.yml": "fc881c487f8bfb039078c5fa3d96ad6a8db893b2143216c4ea73eb99cf89390a"
+  ".github/workflows/ci.yml": "2197ef20c3c2c0897dffb80a74df788feddac6ecc744315e2873e9def2413e1d",
+  ".github/workflows/aislop.yml": "9b90546484fb17549a120cf47eb7ffd8b625aef2437568f393cb6e7ef51edc26",
+  ".github/workflows/main.yml": "aeab59c43ceddc085498cd0ffcd5990fd5543b1f8a0b4c1fa995d07f18ddba6d"
 };
 const HELPER_HASHES = {
   ".github/scripts/quality-coverage.py": "96c047e6c876af769edbb141e2230861b665d368d27579244a2f8f356d141c65",
   ".github/scripts/check-scan-reports.py": "140cdb3f9330dab071fd687e88c053bc83513e1d3d5fc045250297eb60595cc6"
 };
-
-function canonical(value) {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.entries(value).sort().map(([key, item]) => [key, canonical(item)]));
-}
 
 function protectedControls(path, workflow) {
   const controls = { permissions: workflow?.permissions, env: workflow?.env, defaults: workflow?.defaults };
@@ -28,7 +23,7 @@ function protectedControls(path, workflow) {
 }
 
 function fingerprint(path, workflow) {
-  return createHash('sha256').update(JSON.stringify(canonical(protectedControls(path, workflow)))).digest('hex');
+  return createHash('sha256').update(JSON.stringify(canonical(protectedControls(path, normalizeWorkflowActionPins(workflow))))).digest('hex');
 }
 
 function normalizeCiReuse(files, workflows, failures) {

@@ -1,5 +1,6 @@
 const { createHash } = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
+const { normalizeActionSteps } = require('./policy-action-pins.cjs');
 
 const FULL_IF = "${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}";
 const GO_STEPS = ['Tests, race detector, and coverage', 'Upstream connection reuse benchmark',
@@ -72,7 +73,8 @@ function normalizeScopedValidation(files, workflows, failures, aggregateScript) 
     return workflows;
   }
   const requireValue = (ok, label) => { if (!ok) failures.push(`Path-aware validation lost ${label}`); };
-  requireValue(isDeepStrictEqual(classifier, CLASSIFIER_JOB), 'trusted read-only classifier sequence');
+  requireValue(isDeepStrictEqual(classifier && { ...classifier, steps: normalizeActionSteps(classifier.steps) },
+    { ...CLASSIFIER_JOB, steps: normalizeActionSteps(CLASSIFIER_JOB.steps) }), 'trusted read-only classifier sequence');
   requireValue(!Object.hasOwn(pr, 'env') && !Object.hasOwn(pr, 'defaults'), 'trusted classifier environment');
   requireValue(isDeepStrictEqual(pr.jobs.quality, SCOPED_QUALITY), 'full-fallback quality input');
   requireValue(isDeepStrictEqual(input, SCOPE_INPUT), 'default-full reusable input');
