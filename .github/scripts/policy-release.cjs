@@ -1,5 +1,5 @@
 const { createHash } = require('node:crypto');
-const { isDeepStrictEqual } = require('node:util');
+const { sameActionSteps } = require('./policy-action-pins.cjs');
 
 const VALIDATION_SCRIPT = [
   "const { readFileSync } = require('node:fs');",
@@ -46,7 +46,7 @@ function inspectVerificationWorkspace(workflow, failures) {
   const jobs = workflow.jobs;
   const validation = jobs.validation;
   const publish = jobs.publish;
-  const sameSteps = isDeepStrictEqual;
+  const sameSteps = sameActionSteps;
   const allowed = ['name', 'needs', 'runs-on', 'timeout-minutes', 'permissions', 'steps'];
   const publishCheckout = { ...CHECKOUT, with: { 'fetch-depth': 0, ...CHECKOUT.with } };
   const beforePublish = publish.steps?.findIndex(step =>
