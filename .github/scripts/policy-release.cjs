@@ -1,14 +1,146 @@
+const { createHash } = require('node:crypto');
+const { isDeepStrictEqual } = require('node:util');
+
+const VALIDATION_SCRIPT = [
+  "const { readFileSync } = require('node:fs');",
+  "const { createHash } = require('node:crypto');",
+  "const { resolve } = require('node:path');",
+  "const { compileFunction } = require('node:vm');",
+  "const filename = resolve('.github/scripts/release-validation.cjs');",
+  'const source = readFileSync(filename);',
+  "if (createHash('sha256').update(source).digest('hex') !==",
+  "    '2ab673a761d632d643901cfdd9294d45135910691481693bcb15b2f20fc75c1b') {",
+  "  throw new Error('Release validation verifier bytes changed in the workspace');", '}',
+  "const publicationFilename = resolve('.github/scripts/release-publication.cjs');",
+  'const publicationSource = readFileSync(publicationFilename);',
+  "if (createHash('sha256').update(publicationSource).digest('hex') !==",
+  "    '124d6832b052c0f3309755c1874acf303bbef264cf24077e1831dacc51838462') {",
+  "  throw new Error('Release publication helper bytes changed in the workspace');", '}',
+  'const publication = { exports: {} };',
+  "const noImports = () => { throw new Error('Unexpected publication helper dependency'); };",
+  "compileFunction(publicationSource.toString('utf8'), ['require', 'module', 'exports'],",
+  '  { filename: publicationFilename })(noImports, publication, publication.exports);',
+  'const closedRequire = name => {',
+  "  if (name !== './release-publication.cjs') throw new Error('Unexpected validation dependency');",
+  '  return publication.exports;', '};',
+  'const validated = { exports: {} };',
+  "compileFunction(source.toString('utf8'), ['require', 'module', 'exports'], { filename })(",
+  '  closedRequire, validated, validated.exports,', ');',
+  'await validated.exports.verifyMain({',
+  '  github, context, core, version: process.env.VERSION,', '});', '',
+].join('\n');
+
+const HARDEN = { uses: 'step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed',
+  with: { 'egress-policy': 'audit' } };
+const CHECKOUT = { uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+  with: { ref: '${{ github.sha }}', 'persist-credentials': false } };
+const GO = { uses: 'actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e',
+  with: { 'go-version-file': 'go.mod', cache: true } };
+const INSTALL = { name: 'Install release tools',
+  run: 'npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund' };
+const verificationStep = name => ({ name,
+  uses: 'actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3',
+  env: { VERSION: '${{ needs.entry.outputs.version }}' }, with: { script: VALIDATION_SCRIPT } });
+
+function inspectVerificationWorkspace(workflow, failures) {
+  const jobs = workflow.jobs;
+  const validation = jobs.validation;
+  const publish = jobs.publish;
+  const sameSteps = isDeepStrictEqual;
+  const allowed = ['name', 'needs', 'runs-on', 'timeout-minutes', 'permissions', 'steps'];
+  const publishCheckout = { ...CHECKOUT, with: { 'fetch-depth': 0, ...CHECKOUT.with } };
+  const beforePublish = publish.steps?.findIndex(step =>
+    step.name === 'Verify main and successful validation at this commit');
+  if (Object.hasOwn(workflow, 'env') || Object.hasOwn(workflow, 'defaults') ||
+      Object.keys(validation).some(key => !allowed.includes(key)) ||
+      publish['runs-on'] !== 'ubuntu-latest' ||
+      ['env', 'defaults', 'container', 'services'].some(key => Object.hasOwn(publish, key)) ||
+      !sameSteps(validation.steps, [HARDEN, CHECKOUT,
+        verificationStep('Verify exact-commit main validation')]) ||
+      !sameSteps(publish.steps?.slice(0, beforePublish + 1), [HARDEN, publishCheckout, GO, INSTALL,
+        verificationStep('Verify main and successful validation at this commit')])) {
+    failures.push('Release validation workspace or runtime inputs were changed');
+  }
+}
+
+function inspectValidationReuse(files, workflow, failures, checks) {
+  const releaseJobs = workflow?.jobs;
+  const path = '.github/workflows/release.yml';
+  const validation = releaseJobs?.validation;
+  const verification = releaseJobs?.publish?.steps?.find(step =>
+    step.name === 'Verify main and successful validation at this commit');
+  const digest = content => createHash('sha256').update(content || '').digest('hex');
+  if (digest(files['.github/scripts/release-validation.cjs']) !==
+      '2ab673a761d632d643901cfdd9294d45135910691481693bcb15b2f20fc75c1b') {
+    failures.push('Release validation verifier was changed');
+  }
+  if (digest(files['.github/scripts/release-publication.cjs']) !==
+      '124d6832b052c0f3309755c1874acf303bbef264cf24077e1831dacc51838462') {
+    failures.push('Release publication helper was changed');
+  }
+  if (!validation) {
+    for (const id of ['quality', 'aislop', 'codeql']) {
+      checks.job(path, id, `./.github/workflows/${id === 'quality' ? 'ci' : id}.yml`);
+      if (releaseJobs?.[id]?.needs !== 'entry') failures.push(`${path} lost legacy release ${id} ordering`);
+    }
+    const legacyStep = { name: 'Verify main and successful validation at this commit',
+      uses: 'actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3',
+      env: { VERSION: '${{ needs.entry.outputs.version }}' },
+      with: { script: verification?.with?.script } };
+    const publish = releaseJobs?.publish;
+    const legacyCheckout = { uses: CHECKOUT.uses, with: { 'fetch-depth': 0, 'persist-credentials': false } };
+    const prefix = publish?.steps?.slice(0, publish.steps.indexOf(verification) + 1);
+    if (JSON.stringify(publish?.needs) !== '["entry","quality","aislop","codeql"]' ||
+        digest(verification?.with?.script) !==
+        'c6eb1c8ff3d93b28e068a4348b7d3b46b869efdd930f4c3e91b8f1c7a9415a47' ||
+        !isDeepStrictEqual(verification, legacyStep) ||
+        !isDeepStrictEqual(prefix, [HARDEN, legacyCheckout, GO, INSTALL, legacyStep]) ||
+        Object.hasOwn(workflow, 'env') || Object.hasOwn(workflow, 'defaults') ||
+        publish?.['runs-on'] !== 'ubuntu-latest' ||
+        ['env', 'defaults', 'container', 'services'].some(key => Object.hasOwn(publish || {}, key))) {
+      failures.push(`${path} lost legacy exact-commit release validation`);
+    }
+    return;
+  }
+  inspectVerificationWorkspace(workflow, failures);
+  if (['quality', 'aislop', 'codeql'].some(id => Object.hasOwn(releaseJobs, id)) ||
+      validation.needs !== 'entry' || Object.hasOwn(validation, 'if') ||
+      validation['runs-on'] !== 'ubuntu-latest' ||
+      validation['timeout-minutes'] !== 75 ||
+      JSON.stringify(validation.permissions) !== '{"contents":"read","actions":"read"}' ||
+      JSON.stringify(releaseJobs?.publish?.needs) !== '["entry","validation"]') {
+    failures.push(`${path} lost exact-commit main validation ordering or permissions`);
+  }
+  const checkout = validation.steps?.find(step => step.uses?.startsWith('actions/checkout@'));
+  if (checkout?.with?.ref !== '${{ github.sha }}' || checkout.with['persist-credentials'] !== false ||
+      Object.hasOwn(checkout, 'if')) {
+    failures.push(`${path} lost exact-dispatch validation checkout`);
+  }
+  checks.step(path, 'validation', 'Verify exact-commit main validation', {
+    uses: 'actions/github-script', withValues: { script: VALIDATION_SCRIPT },
+  });
+  checks.step(path, 'publish', 'Verify main and successful validation at this commit', {
+    uses: 'actions/github-script', withValues: { script: VALIDATION_SCRIPT },
+  });
+  for (const step of [verification, validation.steps?.find(step =>
+    step.name === 'Verify exact-commit main validation')]) {
+    if (step?.env?.VERSION !== '${{ needs.entry.outputs.version }}' ||
+        Object.hasOwn(step?.with || {}, 'github-token')) {
+      failures.push(`${path} changed release validation version or read token`);
+    }
+  }
+}
+
 function inspectReleaseEntry(files, workflows, failures, checks) {
   const { event, step } = checks;
   const release = '.github/workflows/release.yml';
   event(release, 'workflow_dispatch');
   const releaseJobs = workflows[release]?.jobs;
   if (workflows[release]?.on?.workflow_dispatch?.inputs ||
-      releaseJobs?.entry?.outputs?.version !== '${{ steps.version.outputs.version }}' ||
-      !['quality', 'aislop', 'codeql'].every(id => releaseJobs?.[id]?.needs === 'entry') ||
-      JSON.stringify(releaseJobs?.publish?.needs) !== '["entry","quality","aislop","codeql"]') {
+      releaseJobs?.entry?.outputs?.version !== '${{ steps.version.outputs.version }}') {
     failures.push(`${release} lost dispatch version selection`);
   }
+  inspectValidationReuse(files, workflows[release], failures, checks);
   step(release, 'entry', 'Require dispatch from main', {
     uses: 'actions/github-script',
     withValues: { script: [
@@ -103,4 +235,4 @@ function inspectReleasePublish(files, workflows, failures, checks, inspectGoRele
   });
 }
 
-module.exports = { inspectReleaseEntry, inspectReleasePublish };
+module.exports = { inspectReleaseEntry, inspectReleasePublish, VALIDATION_SCRIPT };

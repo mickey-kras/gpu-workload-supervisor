@@ -21,6 +21,7 @@ runInNewContext(readFileSync('.github/scripts/policy-guard.cjs', 'utf8'), {
 const inspect = candidate => Object.keys(YAML.parse(candidate['.github/workflows/ci.yml'] || '')?.jobs || {}).length === 1 ?
   Array.from(commandModule.exports.inspect(candidate)) : inspectActivated(candidate);
 const YAML = require('yaml');
+const { VALIDATION_SCRIPT } = require('./policy-release.cjs');
 
 function files({ serial = true } = {}) {
   const result = {};
@@ -34,6 +35,7 @@ function files({ serial = true } = {}) {
     '.github/scripts/dependabot-auto-merge.cjs', '.github/scripts/pr-branch-updater.cjs',
     '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
     'release-version.json', '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs',
+    '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
     '.github/scripts/eslint.config.cjs', '.github/semgrep-tests/maintainability.go',
     '.github/scripts/check-go-directives.go', '.github/scripts/check-go-directives_test.go',
@@ -93,6 +95,128 @@ test('activated policy rejects returning to a serial or single-checks graph', ()
     }
     candidate[path] = YAML.stringify(workflow);
     assert.ok(inspectActivated(candidate).includes('Parallel CI lost required job set'), downgrade);
+  }
+});
+
+function reusableRelease(candidate) {
+  const path = '.github/workflows/release.yml';
+  const workflow = YAML.parse(candidate[path]);
+  for (const id of ['quality', 'aislop', 'codeql']) delete workflow.jobs[id];
+  const script = VALIDATION_SCRIPT;
+  const verify = { name: 'Verify exact-commit main validation',
+    uses: 'actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3',
+    env: { VERSION: '${{ needs.entry.outputs.version }}' }, with: { script } };
+  const entrySteps = workflow.jobs.entry.steps;
+  const harden = entrySteps.find(step => step.uses?.startsWith('step-security/harden-runner@'));
+  workflow.jobs.validation = { needs: 'entry', 'runs-on': 'ubuntu-latest', 'timeout-minutes': 75,
+    permissions: { contents: 'read', actions: 'read' }, steps: [
+      structuredClone(harden),
+      { uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+        with: { ref: '${{ github.sha }}', 'persist-credentials': false } },
+      verify,
+    ] };
+  workflow.jobs.publish.needs = ['entry', 'validation'];
+  const publishVerify = workflow.jobs.publish.steps.find(step =>
+    step.name === 'Verify main and successful validation at this commit');
+  publishVerify.with.script = script;
+  workflow.jobs.publish.steps.find(step => step.uses?.startsWith('actions/checkout@')).with.ref = '${{ github.sha }}';
+  return { path, workflow, verify, publishVerify };
+}
+
+test('release validation policy accepts strict reuse alongside the retained legacy route', () => {
+  const candidate = files({ serial: false }); const { path, workflow } = reusableRelease(candidate);
+  candidate[path] = YAML.stringify(workflow);
+  assert.deepEqual(inspect(candidate), []);
+});
+
+test('release validation reuse cannot skip or weaken its exact-commit gate', () => {
+  for (const mutate of [
+    state => { state.workflow.jobs.publish.needs = ['entry']; },
+    state => { state.workflow.jobs.validation.needs = []; },
+    state => { state.workflow.jobs.validation.if = false; },
+    state => { state.workflow.jobs.validation.permissions.actions = 'write'; },
+    state => { state.workflow.jobs.validation['timeout-minutes'] = 10; },
+    state => { state.workflow.jobs.publish['runs-on'] = 'self-hosted'; },
+    state => { state.workflow.jobs.validation.steps[1].with.ref = 'main'; },
+    state => { state.workflow.jobs.validation.steps.splice(2, 0, { run: 'npm install semver' }); },
+    state => { state.verify.if = false; },
+    state => { state.verify.with.script = 'console.log("validation skipped")'; },
+    state => { state.verify.env.VERSION = '0.1.0'; },
+    state => { state.verify.with['github-token'] = '${{ secrets.WRITE_TOKEN }}'; },
+    state => { state.publishVerify.with.script = 'return;'; },
+    state => { state.publishVerify.if = false; },
+  ]) {
+    const candidate = files({ serial: false }); const state = reusableRelease(candidate); mutate(state);
+    candidate[state.path] = YAML.stringify(state.workflow);
+    assert.notDeepEqual(inspect(candidate), []);
+  }
+});
+
+test('release verifier bytes are protected even before switching to reuse', () => {
+  const candidate = files({ serial: false }); candidate['.github/scripts/release-validation.cjs'] += '\nreturn;\n';
+  assert.ok(inspect(candidate).some(error => error.includes('verifier was changed')));
+  const missing = files({ serial: false }); delete missing['.github/scripts/release-validation.cjs'];
+  assert.notDeepEqual(inspect(missing), []);
+  const helper = files({ serial: false }); helper['.github/scripts/release-publication.cjs'] = 'process.exit(0);';
+  assert.ok(inspect(helper).some(error => error.includes('publication helper was changed')));
+});
+
+test('verification jobs reject workspace writes and runtime or wrapper input overrides', () => {
+  for (const mutate of [
+    state => { state.workflow.jobs.validation.steps.splice(2, 0, {
+      run: "printf 'module.exports = { verifyMain: async () => {} };' > .github/scripts/release-validation.cjs",
+    }); },
+    state => { state.workflow.jobs.publish.steps.splice(4, 0, {
+      run: "printf 'module.exports = { verifyMain: async () => {} };' > .github/scripts/release-validation.cjs",
+    }); },
+    state => { state.workflow.env = { NODE_OPTIONS: '--require ./malicious.cjs' }; },
+    state => { state.workflow.jobs.validation.env = { NODE_OPTIONS: '--require ./malicious.cjs' }; },
+    state => { state.workflow.jobs.publish.env = { NODE_OPTIONS: '--require ./malicious.cjs' }; },
+    state => { state.verify.env.NODE_OPTIONS = '--require ./malicious.cjs'; },
+    state => { state.verify.with['github-token'] = '${{ secrets.WRITE_TOKEN }}'; },
+    state => { state.workflow.jobs.validation.steps[1].env = { NODE_OPTIONS: '--require ./malicious.cjs' }; },
+    state => { state.workflow.jobs.publish.steps[3].env = { NODE_OPTIONS: '--require ./malicious.cjs' }; },
+    state => { state.workflow.jobs.validation.defaults = { run: { 'working-directory': 'other' } }; },
+  ]) {
+    const candidate = files({ serial: false }); const state = reusableRelease(candidate); mutate(state);
+    candidate[state.path] = YAML.stringify(state.workflow);
+    assert.ok(inspect(candidate).some(error => error.includes('workspace or runtime inputs')));
+  }
+});
+
+test('legacy release gates cannot be weakened during staged validation adoption', () => {
+  for (const mutate of [
+    jobs => { jobs.quality.if = false; },
+    jobs => { jobs.aislop.uses = './.github/workflows/ci.yml'; },
+    jobs => { jobs.codeql.needs = []; },
+    jobs => { jobs.publish.steps.find(step => step.name ===
+      'Verify main and successful validation at this commit').with.script = 'return;'; },
+  ]) {
+    const candidate = files({ serial: false }); const path = '.github/workflows/release.yml';
+    const workflow = YAML.parse(candidate[path]); mutate(workflow.jobs);
+    candidate[path] = YAML.stringify(workflow);
+    assert.notDeepEqual(inspect(candidate), []);
+  }
+});
+
+test('legacy verification requires the pinned action and exact runtime inputs and setup', () => {
+  for (const mutate of [
+    (workflow, gate) => { gate.uses = 'actions/checkout@' + 'a'.repeat(40); },
+    (workflow, gate) => { gate.uses = 'actions/github-script@' + 'a'.repeat(40); },
+    (workflow, gate) => { gate.with['github-token'] = '${{ secrets.WRITE_TOKEN }}'; },
+    (workflow, gate) => { gate.env.NODE_OPTIONS = '--require ./malicious.cjs'; },
+    (workflow, gate) => { gate.env.VERSION = '0.1.0'; },
+    workflow => { workflow.env = { NODE_OPTIONS: '--require ./malicious.cjs' }; },
+    workflow => { workflow.jobs.publish.env = { NODE_OPTIONS: '--require ./malicious.cjs' }; },
+    workflow => { workflow.jobs.publish['runs-on'] = 'self-hosted'; },
+    workflow => { workflow.jobs.publish.steps.splice(4, 0, { run: 'overwrite runtime' }); },
+    workflow => { workflow.jobs.publish.steps[1].with.repository = 'attacker/repo'; },
+  ]) {
+    const candidate = files({ serial: false }); const path = '.github/workflows/release.yml';
+    const workflow = YAML.parse(candidate[path]); const gate = workflow.jobs.publish.steps.find(step =>
+      step.name === 'Verify main and successful validation at this commit');
+    mutate(workflow, gate); candidate[path] = YAML.stringify(workflow);
+    assert.ok(inspect(candidate).some(error => error.includes('legacy exact-commit release validation')));
   }
 });
 

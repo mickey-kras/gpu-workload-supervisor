@@ -13,6 +13,7 @@ const REQUIRED_FILES = [
   '.github/scripts/policy-guard.cjs', '.github/scripts/dependabot-auto-merge.cjs',
   '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
   'release-version.json', '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs',
+  '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
   '.github/scripts/pr-branch-updater.cjs', 'sonar-project.properties',
   '.github/scripts/package.json', '.github/scripts/package-lock.json',
   '.github/scripts/eslint.config.cjs', '.github/semgrep-tests/maintainability.go',
