@@ -166,9 +166,8 @@ func (b Backend) configurationFromMetadata(ctx context.Context, app, unit, model
 	if err := gpuruntime.CheckNativeBindingSources(values, unit, values["FragmentPath"], launch.DropIns); err != nil {
 		problems = append(problems, errors.New("loaded drop-in configuration differs from inspected source files"))
 	}
-	args := execArguments.FindAllStringSubmatch(values["ExecStart"], -1)
-	if len(args) != 1 || strings.Join(strings.Fields(args[0][1]), " ") != strings.Join(strings.Fields(launch.Command), " ") {
-		problems = append(problems, errors.New("loaded launch configuration differs from its file; reload and retry"))
+	if err := gpuruntime.CheckLoadedLaunchCommand(values["ExecStart"], launch.Command); err != nil {
+		problems = append(problems, fmt.Errorf("loaded launch configuration differs from its file; reload and retry: %w", err))
 	}
 	if err := gpuruntime.CheckLoadedPreCommands(values["ExecStartPre"], launch.PreCommands); err != nil {
 		problems = append(problems, errors.New("loaded startup preparation differs from its file; reload and retry"))

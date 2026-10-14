@@ -81,7 +81,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return err
 	}
 	switch args[0] {
-	case cmdTemporaryDiscover, "temporary-status", "temporary-cleanup", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "save-drafts", cmdVerifyBindings, "validate", "apply", "render-owned":
+	case cmdTemporaryDiscover, "temporary-status", "temporary-cleanup", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned":
 		if a.euid() == 0 {
 			return errors.New("run guided setup as the desktop account, not root")
 		}
