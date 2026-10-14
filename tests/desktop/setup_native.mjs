@@ -276,7 +276,7 @@ app.connect('activate', () => {
             assert(ui.settingsTitle.get_mapped() && ui.settingsTitle.label === 'Configuration details', 'reinspection preserves the configuration page');
         }
         async function captureCorrection(ui, name, gpuChoice) {
-            const group = widgets(ui.window).find(widget => widget instanceof Adw.PreferencesGroup && widget.title === 'Review external service correction');
+            const group = widgets(ui.window).find(widget => widget instanceof Adw.PreferencesGroup && widget.title === 'Supported recovery');
             const preview = widgets(group).find(widget => widget instanceof Gtk.Label && widget.has_css_class('monospace'));
             const copy = named(ui, 'Copy reviewed override');
             assert(group && preview && gpuChoice, 'correction evidence requires the actual picker, preview and copy controls');

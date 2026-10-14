@@ -5,7 +5,7 @@ import Gdk from 'gi://Gdk?version=4.0';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Pango from 'gi://Pango';
 import {applicationHeader, linkButton, roundedCard} from './presentation.mjs';
-import {applications, candidateChoice, candidateDiagnostics, candidateIdentity, candidateMessage, candidateReady, correctionPreview} from './onboarding.mjs';
+import {applications, candidateChoice, candidateDiagnostics, candidateIdentity, candidateMessage, candidateReady, correctionPreview, recoveryGuidance} from './onboarding.mjs';
 
 // Settings share the wizard's scroller and fixed footer. Each optional section
 // has its own page, so long service identities never compete with entry fields.
@@ -58,7 +58,7 @@ export class InstallationSettings {
             copySetupText(window, [this.diagnosticIdentity.label, this.diagnosticSummary.label, this.rawDiagnostic ?? this.diagnostic.label].filter(Boolean).join('\n\n'));
         });
         this.repairUUIDs = [];
-        this.repair = new Adw.PreferencesGroup({title: 'Review external service correction'}); this.pages.get('configuration').append(this.repair);
+        this.repair = new Adw.PreferencesGroup({title: 'Supported recovery'}); this.pages.get('configuration').append(this.repair);
         this.gpu = new Adw.ComboRow({title: 'Physical GPU UUID (explicit selection required)', selected: 0, model: Gtk.StringList.new(['Choose a full physical GPU UUID…', ...this.repairUUIDs])}); this.repair.add(this.gpu);
         this.preview = new Gtk.Label({wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.preview.add_css_class('monospace'); this.repair.add(this.preview);
         this.copyOverride = new Gtk.Button({label: 'Copy reviewed override', sensitive: false}); this.repair.add(this.copyOverride);
@@ -67,7 +67,7 @@ export class InstallationSettings {
         });
         this.gpu.connect('notify::selected', () => this.updateCorrection());
         this.repairInstructions = new Gtk.Label({label: 'Not applied. Review these assignments, preserve other settings, add them in an external service drop-in, reload your user systemd manager, then Check again. Restart=no disables automatic crash recovery. Other blockers remain.', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.repair.add(this.repairInstructions);
-        this.trustGuidance = new Gtk.Label({label: 'Ask an administrator to install a trusted package in a protected root-owned location, preserving the original application and models. Choose the trusted executable or update the external service, then Check again. Executable, interpreter, libraries and execution paths must qualify; setup never changes ownership or permissions.', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.repair.add(this.trustGuidance);
+        this.trustGuidance = new Gtk.Label({wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.repair.add(this.trustGuidance);
         this.pages.get('configuration').append(new Gtk.Label({label: 'Your service has not been changed.', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0}));
         this.updateGPUInventory(gpuUUIDs, gpuInventoryStatus);
     }
@@ -97,7 +97,8 @@ export class InstallationSettings {
     candidate(candidate) {
         this.currentCandidate = candidate; this.gpu.selected = 0; this.updateCorrection();
         this.identity.label = candidateIdentity(candidate);
-        this.state.label = candidate.instanceStatus === 'not-running' && candidate.unit ? 'Stopped' : 'Unverified';
+        this.state.label = candidate.installed || candidate.instanceStatus === 'installed' ? 'Installed' : 'Unverified';
+        if (candidate.instanceStatus === 'not-running' && candidate.unit) this.state.label = 'Stopped';
         if (candidate.instanceStatus === 'available') this.state.label = 'Reachable';
         this.ready = candidateReady(candidate);
         this.noticeTitle.label = this.ready ? 'Ready for setup' : 'Needs setup';
@@ -137,7 +138,9 @@ export class InstallationSettings {
         }
         this.preview.label = this.overrideText || guidance;
         this.copyOverride.sensitive = Boolean(this.overrideText);
-        const trust = /executable|ownership|owner|writable|trusted|symlink|symbolic link|library|interpreter/i.test(messages);
+        const recovery = recoveryGuidance(candidate);
+        this.trustGuidance.label = recovery.join('\n\n');
+        const trust = recovery.length > 0;
         const correction = Boolean(candidate?.unit && (needsGPU || /\bRestart\b/.test(messages)));
         this.trustGuidance.visible = trust;
         this.repairInstructions.visible = correction;
