@@ -2,6 +2,7 @@ package httptransport
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -12,6 +13,48 @@ import (
 	"testing"
 	"time"
 )
+
+func TestDirectTransportBoundsHeaderWait(t *testing.T) {
+	for _, http2 := range []bool{false, true} {
+		name := "HTTP1"
+		if http2 {
+			name = "HTTP2"
+		}
+		t.Run(name, func(t *testing.T) {
+			upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if http2 && r.ProtoMajor != 2 {
+					t.Errorf("protocol = %s, want HTTP/2", r.Proto)
+				}
+				<-r.Context().Done()
+			}))
+			upstream.EnableHTTP2 = http2
+			upstream.StartTLS()
+			defer upstream.Close()
+			transport := NewDirect()
+			defer transport.CloseIdleConnections()
+			if transport.ResponseHeaderTimeout <= 0 {
+				t.Fatal("default transport leaves response-header waits unbounded")
+			}
+			transport.ResponseHeaderTimeout = 50 * time.Millisecond
+			transport.TLSClientConfig = upstream.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+			client := &http.Client{Transport: transport}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			request, err := http.NewRequestWithContext(ctx, http.MethodGet, upstream.URL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := client.Do(request)
+			if response != nil {
+				response.Body.Close()
+			}
+			var timeout net.Error
+			if !errors.As(err, &timeout) || !timeout.Timeout() || ctx.Err() != nil {
+				t.Fatalf("header wait error = %v, request context = %v", err, ctx.Err())
+			}
+		})
+	}
+}
 
 func TestDirectTransportIgnoresAmbientProxy(t *testing.T) {
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

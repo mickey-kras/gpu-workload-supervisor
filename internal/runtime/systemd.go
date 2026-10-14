@@ -54,9 +54,13 @@ type SystemdManager struct {
 }
 
 func NewSystemdManager(config SystemdConfig) (*SystemdManager, error) {
+	transport := httptransport.NewDirect()
+	// The client bounds complete health and native preload requests. Preserve
+	// that configured budget even when it exceeds the execution header default.
+	transport.ResponseHeaderTimeout = 0
 	client := &http.Client{
 		Timeout:   config.HealthTimeout,
-		Transport: httptransport.NewDirect(),
+		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
