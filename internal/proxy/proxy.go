@@ -12,6 +12,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/httptransport"
@@ -56,6 +57,10 @@ type Config struct {
 	FenceIDHeader        string
 	FenceEpochHeader     string
 	Transport            http.RoundTripper
+	// ResponseHeaderTimeout bounds the header wait after uploading the request.
+	// Zero uses httptransport.DefaultResponseHeaderTimeout. A custom Transport
+	// owns its timeout policy; this field only configures the default transport.
+	ResponseHeaderTimeout time.Duration
 }
 
 type Handler struct {
@@ -109,6 +114,9 @@ func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (
 	if stateStore == nil {
 		return nil, errors.New("state store is required")
 	}
+	if config.ResponseHeaderTimeout < 0 {
+		return nil, errors.New("response header timeout must not be negative")
+	}
 	executionRoutes, readOnlyRoutes, passthroughRoutes, completionPath, err := validateConfig(config)
 	if err != nil {
 		return nil, err
@@ -130,7 +138,11 @@ func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (
 	reverseProxy := httputil.NewSingleHostReverseProxy(config.Upstream)
 	reverseProxy.Transport = config.Transport
 	if reverseProxy.Transport == nil {
-		reverseProxy.Transport = httptransport.NewDirect()
+		transport := httptransport.NewDirect()
+		if config.ResponseHeaderTimeout > 0 {
+			transport.ResponseHeaderTimeout = config.ResponseHeaderTimeout
+		}
+		reverseProxy.Transport = transport
 	}
 	if config.IngressMode == IngressAdapter {
 		reverseProxy.Transport = ingressTransport{base: reverseProxy.Transport, executionCredential: config.ExecutionCredential, completionCredential: config.CompletionCredential}

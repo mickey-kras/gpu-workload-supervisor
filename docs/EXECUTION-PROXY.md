@@ -129,8 +129,16 @@ streams. Keep clients trusted, or enforce workload-appropriate per-client connec
 request-body, and rate limits at an authenticated front proxy before exposing this
 service. The in-process caps do not bound idle connections or bytes per stream.
 
-Upstream dialing is bounded to 30 seconds and TLS handshakes to 10 seconds. Waiting
-for execution response headers or a streaming body has no total deadline; client
+Upstream dialing is bounded to 30 seconds and TLS handshakes to 10 seconds. After
+the request body is fully uploaded, response headers must arrive within 10 minutes
+by default. Set `-upstream-response-header-timeout` to a positive duration, such as
+`20m`, above the longest expected model load or non-streaming inference time for
+the workload. This timeout returns HTTP 502 and releases the ordinary request
+slot when an upstream accepts a request but never sends response headers.
+
+Response bodies, including streaming bodies, have no total deadline. Client
 cancellation and proxy shutdown cancel the upstream request. Health probes retain
 their separate `-health-timeout` budget. A timeout or disconnect never proves work
-finished and does not clear its registration.
+finished or abandoned and does not clear its registration: uncertain backend work
+still requires terminal evidence or explicit reconciliation. Custom transports
+supplied by Go callers own their response-header timeout policy.

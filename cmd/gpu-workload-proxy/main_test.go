@@ -34,6 +34,8 @@ func TestProxyFlagValidation(t *testing.T) {
 	}{
 		{"positional", "unexpected positional", []string{"extra"}},
 		{"invalid retention", "completed-work-retention must be positive", []string{"-completed-work-retention", "0s"}},
+		{"zero response header timeout", "upstream-response-header-timeout must be positive", []string{"-upstream-response-header-timeout", "0s"}},
+		{"negative response header timeout", "upstream-response-header-timeout must be positive", []string{"-upstream-response-header-timeout", "-1s"}},
 		{"invalid ordinary capacity", "max-inflight and max-completion-inflight must be positive", []string{"-max-inflight", "0"}},
 		{"invalid completion capacity", "max-inflight and max-completion-inflight must be positive", []string{"-max-completion-inflight", "0"}},
 		{"public listener", "listen address must be loopback", []string{"-listen", "0.0.0.0:8090"}},
