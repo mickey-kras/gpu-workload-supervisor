@@ -37,6 +37,24 @@ class TrivyConvertTests(unittest.TestCase):
             report.write_text(json.dumps(source))
             self.assertEqual(subprocess.run(command, capture_output=True, cwd=root).returncode, 0)
 
+    def test_git_checkout_filesystem_scan_passes_report_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / 'repository'
+            repository.mkdir()
+            (repository / 'README.md').write_text('Scanner metadata fixture.\n')
+            subprocess.run(['git', 'init', '-q', str(repository)], check=True)
+            subprocess.run(['git', '-C', str(repository), 'add', 'README.md'], check=True)
+            subprocess.run(['git', '-C', str(repository), '-c', 'user.name=fixture',
+                            '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture'], check=True)
+            report = root / 'scan.json'
+            subprocess.run(['trivy', 'fs', '--scanners', 'secret', '--skip-db-update',
+                            '--skip-java-db-update', '--format', 'json', '--output', str(report),
+                            str(repository)], check=True)
+            self.assertEqual(json.loads(report.read_text())['ArtifactType'], 'repository')
+            helper = Path(__file__).resolve().parents[1] / '.github/scripts/check-scan-reports.py'
+            subprocess.run(['python3', str(helper), 'trivy', str(report)], check=True)
+
     def test_missing_and_unreadable_scan_output_cannot_be_converted(self):
         with tempfile.TemporaryDirectory() as directory:
             report = Path(directory) / 'missing.json'

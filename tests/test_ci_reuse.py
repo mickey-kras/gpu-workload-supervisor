@@ -122,13 +122,15 @@ class ScannerReportTests(unittest.TestCase):
         self.report = Path(self.directory.name) / 'report.json'
 
     def test_trivy_empty_scan_and_real_findings_remain_valid_for_cli_enforcement(self):
-        for results in ([], [{'Target': 'package-lock.json', 'Vulnerabilities': [{'Severity': 'HIGH'}]}]):
-            self.report.write_text(json.dumps({'SchemaVersion': 2, 'ArtifactType': 'filesystem',
-                                               'ArtifactName': '.', 'Results': results}))
-            reports.check_trivy(self.report)
+        for artifact_type in ('filesystem', 'repository'):
+            for results in ([], [{'Target': 'package-lock.json', 'Vulnerabilities': [{'Severity': 'HIGH'}]}]):
+                self.report.write_text(json.dumps({'SchemaVersion': 2, 'ArtifactType': artifact_type,
+                                                   'ArtifactName': '.', 'Results': results}))
+                reports.check_trivy(self.report)
 
     def test_trivy_missing_unreadable_and_nonreport_json_fail(self):
-        for content in (None, '', 'not json', '{}', '[]', '{"SchemaVersion": 1}'):
+        for content in (None, '', 'not json', '{}', '[]', '{"SchemaVersion": 1}',
+                        '{"SchemaVersion":2,"ArtifactType":"container_image","ArtifactName":"fixture"}'):
             with self.subTest(content=content):
                 if content is not None:
                     self.report.write_text(content)
