@@ -6,5 +6,7 @@ import (
 )
 
 func main() {
-	operator.Serve(os.Args[1:], os.Stdin, os.Stdout, operator.LoadProfile, operator.DetachSession)
+	if operator.Serve(os.Args[1:], os.Stdin, os.Stdout, operator.LoadProfile, operator.DetachSession) != nil {
+		os.Exit(1)
+	}
 }
