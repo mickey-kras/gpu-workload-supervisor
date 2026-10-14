@@ -60,8 +60,6 @@ func (p Profile) Validate() error {
 	return nil
 }
 
-// ValidateConfiguration checks fields shared by setup previews and activated
-// profiles. Preview release selection is handled when setup plans activation.
 func (p Profile) ValidateConfiguration() error {
 	if p.Version != 1 {
 		return errors.New("unsupported profile version")
