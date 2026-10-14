@@ -70,6 +70,18 @@ function inspectWorkflow(workflows, failures, checks) {
   }
 }
 
+// Policy intentionally supports a bounded daily cron subset, not arbitrary cron syntax.
+function dailyCron(value) {
+  const fields = typeof value === 'string' && value.trim().match(/^(\d{1,2}) +(\d{1,2}) +\* +\* +\*$/);
+  return Boolean(fields && Number(fields[1]) <= 59 && Number(fields[2]) <= 23);
+}
+
+function supportedSchedule(schedule) {
+  if (!schedule || typeof schedule !== 'object' || Array.isArray(schedule)) return false;
+  if (['daily', 'weekly', 'monthly'].includes(schedule.interval)) return Object.keys(schedule).length === 1;
+  return schedule.interval === 'cron' && Object.keys(schedule).length === 2 && dailyCron(schedule.cronjob);
+}
+
 function inspectRecovery(workflows, failures, checks) {
   const workflow = workflows['.github/workflows/dependabot-auto-merge.yml'];
   const refresh = '.github/workflows/dependabot-auto-merge-refresh.yml';
@@ -83,7 +95,10 @@ function inspectRecovery(workflows, failures, checks) {
       Object.keys(recovery?.jobs?.refresh || {}).some(key => !['name', 'uses', 'permissions'].includes(key))) {
     failures.push('Dependabot lost trusted recovery workflow structure');
   }
-  if (!workflows[refresh]?.on?.schedule?.some(item => typeof item.cron === 'string' && item.cron.trim())) {
+  const schedules = recovery?.on?.schedule;
+  if (!Array.isArray(schedules) || !schedules.length || !schedules.every(item =>
+    item && typeof item === 'object' && !Array.isArray(item) &&
+      Object.keys(item).length === 1 && Object.hasOwn(item, 'cron') && dailyCron(item.cron))) {
     failures.push('Dependabot lost scheduled recovery');
   }
   for (const document of [workflow, workflows[refresh]]) {
@@ -120,8 +135,7 @@ function inspectUpdates(files, failures) {
                 (Object.hasOwn(rule, 'versions') && (!Array.isArray(rule.versions) || rule.versions.length !== 0)) ||
                 !Array.isArray(rule['update-types']) || rule['update-types'].length === 0 ||
                 rule['update-types'].some(type => type !== 'version-update:semver-major'))) &&
-            ['daily', 'weekly', 'monthly', 'cron'].includes(entry.schedule?.interval) &&
-            (entry.schedule.interval !== 'cron' || entry.schedule.cronjob?.trim())))) {
+            supportedSchedule(entry.schedule)))) {
       failures.push('Dependabot lost required update coverage');
     }
   } catch (error) {

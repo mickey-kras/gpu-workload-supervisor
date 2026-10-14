@@ -1097,3 +1097,49 @@ test('wildcard ignores require explicit major-only types without version ranges'
     assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'), JSON.stringify(fields));
   }
 });
+
+
+test('Dependabot schedules support only bounded daily cron or simple predefined intervals', () => {
+  const candidate = files({ serial: false });
+  assert.deepEqual(inspectActivated(candidate), [], 'real baseline schedules');
+  const path = '.github/dependabot.yml';
+  const schedules = [
+    { interval: 'cron', cronjob: '0 0 * * *' }, { interval: 'cron', cronjob: '59 23 * * *' },
+    ...['daily', 'weekly', 'monthly'].map(interval => ({ interval })),
+  ];
+  for (const schedule of schedules) {
+    const config = YAML.parse(candidate[path]);
+    for (const entry of config.updates) entry.schedule = schedule;
+    const changed = { ...candidate, [path]: YAML.stringify(config) };
+    assert.deepEqual(inspectActivated(changed), [], JSON.stringify(schedule));
+  }
+  for (const schedule of [null, [], {},
+    ...['61 25 32 13 8', '60 0 * * *', '0 24 * * *', '-1 0 * * *',
+      '0 0 1 * *', '*/5 * * * *', 'every day', 0, null, {}].map(cronjob => ({ interval: 'cron', cronjob })),
+    { interval: 'daily', time: '25:00' }, { interval: 'weekly', day: 'unknown' },
+    { interval: 'monthly', timezone: 'UTC' }, { interval: 'cron', cronjob: '0 0 * * *', timezone: 'UTC' },
+  ]) {
+    const config = YAML.parse(candidate[path]);
+    for (const entry of config.updates) entry.schedule = schedule;
+    const changed = { ...candidate, [path]: YAML.stringify(config) };
+    assert.ok(inspectActivated(changed).includes('Dependabot lost required update coverage'), JSON.stringify(schedule));
+  }
+});
+
+test('Dependabot recovery rejects unsupported, invalid or malformed daily cron schedules', () => {
+  for (const cron of ['0 0 * * *', '59 23 * * *']) {
+    const candidate = files({ serial: false });
+    const path = '.github/workflows/dependabot-auto-merge-refresh.yml';
+    const workflow = YAML.parse(candidate[path]); workflow.on.schedule = [{ cron }];
+    candidate[path] = YAML.stringify(workflow);
+    assert.deepEqual(inspectActivated(candidate), []);
+  }
+  for (const schedule of [[{ cron: '61 25 32 13 8' }], [{ cron: 0 }], [null], [[]], ['0 0 * * *'],
+    [{ cron: '0 0 * * *', timezone: 'UTC' }], [{ cron: '0 0 * * *' }, { cron: 'invalid' }], {}]) {
+    const candidate = files({ serial: false });
+    const path = '.github/workflows/dependabot-auto-merge-refresh.yml';
+    const workflow = YAML.parse(candidate[path]); workflow.on.schedule = schedule;
+    candidate[path] = YAML.stringify(workflow);
+    assert.ok(inspectActivated(candidate).includes('Dependabot lost scheduled recovery'));
+  }
+});
