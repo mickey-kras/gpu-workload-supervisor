@@ -70,6 +70,32 @@ test('recovery mentions systemd reload only for an identified external service',
     assert.match(service, /Check again/);
 });
 
+test('account and other non-runtime ownership failures retain diagnostics without runtime replacement advice', async () => {
+    const account = prefix + '%h requires one valid effective-UID record in trusted root-owned local /etc/passwd; missing or NSS-only accounts are unsupported';
+    for (const diagnostic of [account, 'unfamiliar root-owned configuration failure',
+        prefix + 'ExecStartPre requires a trusted direct executable',
+        prefix + 'selected application must be a supported direct executable',
+        'GPU inventory executable did not pass trust checks.', 'unfamiliar interpreter setting']) {
+        assert.deepEqual(recoveryGuidance({diagnostics: [diagnostic]}), [], diagnostic);
+    }
+    // Match production trust wrappers, including nested automatic-launch wrappers,
+    // rather than generic references to executable paths or root ownership.
+    for (const diagnostic of [
+        'executable trust: executable target is not root-owned; install this executable through the system package manager or a trusted root-owned location',
+        'executable trust: executable ancestor component 3 is group or world writable; inspect that ancestor and install the executable in a trusted root-owned location',
+        'executable trust: original executable path component 2 is not root-owned; install or select the executable through trusted root-owned directories and aliases',
+        'executable: ' + prefix + 'interpreter trust: executable target unavailable; select an existing trusted executable',
+        'executable symlink changes application identity; select its trusted direct target',
+    ]) assert.match(recoveryGuidance({diagnostics: [prefix + diagnostic]})[0], /^Runtime executable:/, diagnostic);
+    const candidate = {app: 'comfyui', label: 'ComfyUI', unit: 'external.service', recognized: false, instanceStatus: 'not-running',
+        configurationStatus: 'inspection-failed', diagnostics: [account]};
+    const ui = await launch({deferAction: 'unused', responses: {discover: {request, units: [], applications: [candidate]}}});
+    await ui.click('Settings for ComfyUI'); await ui.click('View details'); await ui.click('Copy details');
+    assert.ok(ui.widgets.find(widget => widget.title === 'GPU Workload Setup').clipboard.includes(account));
+    assert.equal(ui.widgets.some(widget => ui.visible(widget) && widget.label?.startsWith('Runtime executable:')), false);
+    await ui.click('Back'); assert.equal(ui.by('Use installation').sensitive, false);
+});
+
 test('reinspection clears obsolete data recovery only after fresh configuration evidence', async () => {
     const blocked = {app: 'comfyui', label: 'ComfyUI', unit: 'images.service', recognized: false, instanceStatus: 'not-running',
         configurationStatus: 'inspection-failed', diagnostics: [prefix + 'Environment variable XDG_CACHE_HOME: requires an existing absolute clean trusted path without links.']};

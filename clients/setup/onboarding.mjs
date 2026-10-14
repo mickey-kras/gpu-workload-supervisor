@@ -171,7 +171,7 @@ export function recoveryGuidance(candidate) {
             steps.add('Working directory: choose an existing absolute trusted directory. Inspect the directory and its ancestors for links, ownership and unintended group/world writes; preserve the application and its data.');
         } else if (dataPathFailure(message)) {
             steps.add('Application and data paths: inspect each reported setting and its ancestors. Use existing absolute paths without links, owned by this account or root and protected from other users’ writes. Keep directory settings as directories and configuration/token settings as regular files. Preserve models and application data; repair only the reported unsafe component or select another qualified path.');
-        } else if (/executable|interpreter|root-owned/i.test(message)) {
+        } else if (/(?:^|: )(?:executable|interpreter) trust:|(?:^|: )executable symlink changes application identity;/.test(message)) {
             steps.add('Runtime executable: ask an administrator to install a trusted package in a protected root-owned location, including its interpreter, libraries and executable ancestors. Choose that executable or review the external service command. Preserve the original application and models; setup never changes ownership or permissions.');
         }
     }
