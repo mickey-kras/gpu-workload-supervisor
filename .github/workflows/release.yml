@@ -44,27 +44,62 @@ jobs:
             const { readFileSync } = require('node:fs');
             const { releaseVersion } = require('./.github/scripts/release-follow-up.cjs');
             core.setOutput('version', releaseVersion(readFileSync('release-version.json', 'utf8')));
-  quality:
+  validation:
+    name: verify exact-commit main validation
     needs: entry
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
     permissions:
       contents: read
-      security-events: write
-    uses: ./.github/workflows/ci.yml
-  aislop:
-    needs: entry
-    permissions:
-      contents: read
-      security-events: write
-    uses: ./.github/workflows/aislop.yml
-  codeql:
-    needs: entry
-    permissions:
-      contents: read
-      security-events: write
-    uses: ./.github/workflows/codeql.yml
+      actions: read
+    steps:
+      - uses: step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed # v2.22.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify exact-commit main validation
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          VERSION: ${{ needs.entry.outputs.version }}
+        with:
+          script: |
+            const { readFileSync } = require('node:fs');
+            const { createHash } = require('node:crypto');
+            const { resolve } = require('node:path');
+            const { compileFunction } = require('node:vm');
+            const filename = resolve('.github/scripts/release-validation.cjs');
+            const source = readFileSync(filename);
+            if (createHash('sha256').update(source).digest('hex') !==
+                '2ab673a761d632d643901cfdd9294d45135910691481693bcb15b2f20fc75c1b') {
+              throw new Error('Release validation verifier bytes changed in the workspace');
+            }
+            const publicationFilename = resolve('.github/scripts/release-publication.cjs');
+            const publicationSource = readFileSync(publicationFilename);
+            if (createHash('sha256').update(publicationSource).digest('hex') !==
+                '124d6832b052c0f3309755c1874acf303bbef264cf24077e1831dacc51838462') {
+              throw new Error('Release publication helper bytes changed in the workspace');
+            }
+            const publication = { exports: {} };
+            const noImports = () => { throw new Error('Unexpected publication helper dependency'); };
+            compileFunction(publicationSource.toString('utf8'), ['require', 'module', 'exports'],
+              { filename: publicationFilename })(noImports, publication, publication.exports);
+            const closedRequire = name => {
+              if (name !== './release-publication.cjs') throw new Error('Unexpected validation dependency');
+              return publication.exports;
+            };
+            const validated = { exports: {} };
+            compileFunction(source.toString('utf8'), ['require', 'module', 'exports'], { filename })(
+              closedRequire, validated, validated.exports,
+            );
+            await validated.exports.verifyMain({
+              github, context, core, version: process.env.VERSION,
+            });
   publish:
     name: publish source and binaries v${{ needs.entry.outputs.version }}
-    needs: [entry, quality, aislop, codeql]
+    needs: [entry, validation]
     runs-on: ubuntu-latest
     environment: release-automation
     permissions:
@@ -79,6 +114,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -92,49 +128,37 @@ jobs:
           VERSION: ${{ needs.entry.outputs.version }}
         with:
           script: |
-            const version = process.env.VERSION;
-            if (context.ref !== 'refs/heads/main' ||
-                !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
-              throw new Error('Release requires main and a plain SemVer version');
+            const { readFileSync } = require('node:fs');
+            const { createHash } = require('node:crypto');
+            const { resolve } = require('node:path');
+            const { compileFunction } = require('node:vm');
+            const filename = resolve('.github/scripts/release-validation.cjs');
+            const source = readFileSync(filename);
+            if (createHash('sha256').update(source).digest('hex') !==
+                '2ab673a761d632d643901cfdd9294d45135910691481693bcb15b2f20fc75c1b') {
+              throw new Error('Release validation verifier bytes changed in the workspace');
             }
-            const { data: tip } = await github.rest.repos.getBranch({ ...context.repo, branch: 'main' });
-            if (tip.commit.sha !== context.sha) {
-              const ref = `heads/release/${version}`;
-              try {
-                const { data: candidate } = await github.rest.git.getRef({ ...context.repo, ref });
-                if (candidate.object.sha !== context.sha) throw new Error('Main moved and the prepared branch has another SHA');
-                core.info('Retrying the prepared commit after main advanced');
-              } catch (error) {
-                if (error.status !== 404) throw error;
-                await require('./.github/scripts/release-follow-up.cjs').verifyPublished({
-                  github, context, version,
-                });
-                core.info('Retrying the published commit after branch cleanup');
-              }
+            const publicationFilename = resolve('.github/scripts/release-publication.cjs');
+            const publicationSource = readFileSync(publicationFilename);
+            if (createHash('sha256').update(publicationSource).digest('hex') !==
+                '124d6832b052c0f3309755c1874acf303bbef264cf24077e1831dacc51838462') {
+              throw new Error('Release publication helper bytes changed in the workspace');
             }
-            // The release can be dispatched while main's Sonar job is still running.
-            // Wait for the exact dispatch commit, preserving the successful-main gate.
-            let validated = false;
-            for (let attempt = 0; attempt < 20; attempt++) {
-              const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
-                ...context.repo, workflow_id: 'main.yml', branch: 'main', head_sha: context.sha,
-                status: 'completed', per_page: 100,
-              });
-              const matching = runs.filter(run => ['push', 'workflow_dispatch'].includes(run.event) &&
-                run.head_sha === context.sha);
-              if (matching.some(run => run.conclusion === 'success')) {
-                validated = true;
-                break;
-              }
-              if (matching.some(run => run.conclusion === 'failure')) {
-                throw new Error('Main validation failed for the release commit');
-              }
-              if (attempt < 19) {
-                core.info('Waiting for main validation at the release commit');
-                await new Promise(resolve => setTimeout(resolve, 30000));
-              }
-            }
-            if (!validated) throw new Error('Timed out waiting for successful main validation');
+            const publication = { exports: {} };
+            const noImports = () => { throw new Error('Unexpected publication helper dependency'); };
+            compileFunction(publicationSource.toString('utf8'), ['require', 'module', 'exports'],
+              { filename: publicationFilename })(noImports, publication, publication.exports);
+            const closedRequire = name => {
+              if (name !== './release-publication.cjs') throw new Error('Unexpected validation dependency');
+              return publication.exports;
+            };
+            const validated = { exports: {} };
+            compileFunction(source.toString('utf8'), ['require', 'module', 'exports'], { filename })(
+              closedRequire, validated, validated.exports,
+            );
+            await validated.exports.verifyMain({
+              github, context, core, version: process.env.VERSION,
+            });
       - name: Release App token
         id: app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
