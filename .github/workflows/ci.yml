@@ -8,10 +8,14 @@ permissions:
   security-events: write
 
 jobs:
-  checks:
-    name: checks
+  native:
+    name: native
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 20
     steps:
       - uses: step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed # v2.22.0
         with:
@@ -25,15 +29,28 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y gjs gir1.2-gtk-4.0 gir1.2-adw-1 xvfb xauth dbus-x11 xdotool imagemagick python3-pyatspi at-spi2-core gsettings-desktop-schemas librsvg2-common
       - name: Native GTK setup, accessibility and screenshot matrix
-        run: python3 tests/desktop/setup_native.py --output native-setup-evidence
+        run: python3 tests/desktop/setup_native.py --output native-setup-evidence/shard-${{ matrix.shard }} --shard-index ${{ matrix.shard }} --shard-count 6
       - name: Upload native setup evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: native-setup-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-setup-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: native-setup-evidence/
           if-no-files-found: error
           retention-days: 14
+
+  go:
+    name: go
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed # v2.22.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - id: go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -87,6 +104,24 @@ jobs:
           go-package: ./...
           repo-checkout: false
           cache: false
+
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed # v2.22.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: clients/gnome/package-lock.json
       - name: GNOME contract and lifecycle fixtures
         run: |
           npm ci --prefix clients/gnome --ignore-scripts --no-audit --no-fund
@@ -103,6 +138,24 @@ jobs:
           node --test .github/scripts/*.test.cjs
       - name: JavaScript maintainability
         run: .github/scripts/node_modules/.bin/eslint --config .github/scripts/eslint.config.cjs --max-warnings 0 .
+      - name: Sonar privacy tests
+        run: python3 -m unittest discover -s tests -p test_sonar_privacy.py
+
+      - name: CI shard regressions
+        run: python3 -m unittest discover -s tests/desktop -p test_setup_native_shards.py
+
+  scans:
+    name: scans
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed # v2.22.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - name: Gitleaks
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
         env:
@@ -145,6 +198,36 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: '1'
+
+  package:
+    name: package
+    outputs:
+      payload-id: ${{ steps.payload.outputs.artifact-id }}
+      qualified-attempt: ${{ steps.qualification.outputs.attempt }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed # v2.22.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: clients/gnome/package-lock.json
+      - name: Install native setup fixture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y gjs gir1.2-gtk-4.0 gir1.2-adw-1 xvfb xauth dbus-x11 xdotool imagemagick python3-pyatspi at-spi2-core gsettings-desktop-schemas librsvg2-common
       - name: Install verified GoReleaser
         uses: ./.github/actions/setup-goreleaser
       - name: Validate GoReleaser configuration
@@ -174,9 +257,6 @@ jobs:
             bash scripts/check-desktop-package.sh "${packages[0]}"
           done
 
-      - name: Sonar privacy tests
-        run: python3 -m unittest discover -s tests -p test_sonar_privacy.py
-
       - name: Native desktop transport integration
         run: |
           sudo apt-get update
@@ -195,12 +275,65 @@ jobs:
           test "${#packages[@]}" -eq 1
           sudo timeout 120s bash scripts/check-desktop-deb-lifecycle.sh "${packages[0]}"
 
+      - name: Record qualified package attempt
+        id: qualification
+        run: echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Upload qualified package payload
+        id: payload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: package-payload-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/checksums.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  checks:
+    name: checks
+    if: ${{ always() }}
+    needs: [native, go, frontend, scans, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed # v2.22.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require every CI job to succeed
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import os
+          import re
+
+          required = {'native', 'go', 'frontend', 'scans', 'package'}
+          results = json.loads(os.environ['CI_NEEDS'])
+          if set(results) != required or any(results[job].get('result') != 'success' for job in required):
+              raise SystemExit('Required CI work did not succeed: ' + json.dumps(results, sort_keys=True))
+          outputs = results['package'].get('outputs', {})
+          if any(not re.fullmatch(r'[1-9][0-9]*', outputs.get(key, '')) for key in ('payload-id', 'qualified-attempt')):
+              raise SystemExit('Missing qualified package output; re-run all jobs instead of selecting another artifact')
+          PYTHON
+      - name: Download qualified package payload
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          artifact-ids: ${{ needs.package.outputs.payload-id }}
+          path: dist/
       - name: Prepare CI-tested candidate artifacts
         id: candidate
         shell: bash
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PACKAGE_QUALIFICATION_ATTEMPT: ${{ needs.package.outputs.qualified-attempt }}
         run: |
           set -euo pipefail
           built_commit="$(git rev-parse HEAD)"
@@ -225,6 +358,7 @@ jobs:
               "eventName": os.environ["GITHUB_EVENT_NAME"],
               "runID": os.environ["GITHUB_RUN_ID"],
               "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "packageQualificationAttempt": os.environ["PACKAGE_QUALIFICATION_ATTEMPT"],
               "runURL": os.environ["GITHUB_SERVER_URL"] + "/" + os.environ["GITHUB_REPOSITORY"] + "/actions/runs/" + os.environ["GITHUB_RUN_ID"],
               "qualification": "CI fixture checks; real GPU and GNOME host qualification remains required",
           }

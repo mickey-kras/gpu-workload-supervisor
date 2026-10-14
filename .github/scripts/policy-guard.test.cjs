@@ -1,10 +1,28 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync, readdirSync } = require('node:fs');
-const { inspect } = require('./policy-guard.cjs');
+const { inspect: inspectActivated } = require('./policy-guard.cjs');
+const { runInNewContext } = require('node:vm');
+const parallelPolicy = require('./policy-ci-parallel.cjs');
+
+// These serial fixtures isolate the original command checks. Production and
+// activation regressions below always use the real, strict graph inspector.
+const commandModule = { exports: {} };
+runInNewContext(readFileSync('.github/scripts/policy-guard.cjs', 'utf8'), {
+  module: commandModule, exports: commandModule.exports, Buffer,
+  require: name => name === './policy-ci-parallel.cjs' ? {
+    normalizeParallelCi(workflows, failures) {
+      const jobs = workflows['.github/workflows/ci.yml']?.jobs;
+      return jobs && Object.keys(jobs).length === 1 ? workflows :
+        parallelPolicy.normalizeParallelCi(workflows, failures);
+    },
+  } : require(name),
+});
+const inspect = candidate => Object.keys(YAML.parse(candidate['.github/workflows/ci.yml'] || '')?.jobs || {}).length === 1 ?
+  Array.from(commandModule.exports.inspect(candidate)) : inspectActivated(candidate);
 const YAML = require('yaml');
 
-function files() {
+function files({ serial = true } = {}) {
   const result = {};
   for (const name of readdirSync('.github/workflows')) {
     if (name.endsWith('.yml')) {
@@ -24,6 +42,16 @@ function files() {
     'sonar-project.properties', '.goreleaser.yaml', '.testcoverage.yml',
     '.github/actions/setup-goreleaser/action.yml', '.github/scripts/install-goreleaser.sh',
   ]) result[path] = readFileSync(path, 'utf8');
+  // Legacy mutation tests still exercise the original command controls in a
+  // serial fixture; the actual parallel workflow is separately checked below.
+  const path = '.github/workflows/ci.yml';
+  const source = result[path];
+  if (serial && YAML.parse(source).jobs.native) {
+    const jobsIndex = source.indexOf('jobs:\n');
+    const sections = source.slice(jobsIndex + 6).split(/^  [a-z]+:\n/m).slice(1);
+    const steps = sections.map(section => section.slice(section.indexOf('    steps:\n') + 11)).join('');
+    result[path] = source.slice(0, jobsIndex) + 'jobs:\n  checks:\n    name: checks\n    runs-on: ubuntu-latest\n    steps:\n' + steps;
+  }
   return result;
 }
 
@@ -46,7 +74,26 @@ test('parallel CI preserves all existing trusted command and scanner gates', () 
 });
 
 test('current governance workflows satisfy the trusted guard', () => {
-  assert.deepEqual(inspect(files()), []);
+  assert.deepEqual(inspectActivated(files({ serial: false })), []);
+});
+
+test('activated policy rejects returning to a serial or single-checks graph', () => {
+  for (const downgrade of ['serial', 'quick', 'unqualified-candidate']) {
+    const candidate = files();
+    const path = '.github/workflows/ci.yml';
+    const workflow = YAML.parse(candidate[path]);
+    const steps = workflow.jobs.checks.steps;
+    if (downgrade === 'quick') {
+      steps.find(step => step.name === 'Native GTK setup, accessibility and screenshot matrix').run =
+        'python3 tests/desktop/setup_native.py --quick';
+    } else if (downgrade === 'unqualified-candidate') {
+      const upload = steps.splice(steps.findIndex(step => step.name === 'Upload CI-tested candidate artifacts'), 1)[0];
+      steps.unshift(upload);
+      steps.splice(steps.findIndex(step => step.name === 'Packaged setup lifecycle integration'), 1);
+    }
+    candidate[path] = YAML.stringify(workflow);
+    assert.ok(inspectActivated(candidate).includes('Parallel CI lost required job set'), downgrade);
+  }
 });
 
 test('maintainability gates cannot be removed, skipped or weakened', () => {
