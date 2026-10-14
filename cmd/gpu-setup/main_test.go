@@ -130,6 +130,7 @@ func TestDraftCommands(t *testing.T) {
 	if err := actions.run([]string{"save-drafts"}, strings.NewReader(input), &output); err == nil {
 		t.Fatal("root accepted")
 	}
+	actions.euid = func() int { return 1000 }
 	if err := os.WriteFile(home+"/.config/gpu-workload-supervisor/drafts.json", []byte("invalid"), 0600); err != nil {
 		t.Fatal(err)
 	}
