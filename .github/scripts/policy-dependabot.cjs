@@ -114,13 +114,16 @@ function inspectRecovery(workflows, failures, checks) {
 }
 
 function inspectUpdates(files, failures) {
+  // Exactly one entry per supported single-directory scope; extensions require policy review.
+  const scopes = [['gomod', '/'], ['github-actions', '/'], ['npm', '/.github/aislop'],
+    ['npm', '/.github/scripts'], ['npm', '/clients/gnome']];
   try {
     const config = YAML.parse(files['.github/dependabot.yml'], { uniqueKeys: true });
-    if (config?.version !== 2 || !Array.isArray(config.updates) ||
-        ![['gomod', '/'], ['github-actions', '/'], ['npm', '/.github/aislop'],
-          ['npm', '/.github/scripts'], ['npm', '/clients/gnome']].every(([ecosystem, directory]) =>
+    if (config?.version !== 2 || !Array.isArray(config.updates) || config.updates.length !== scopes.length ||
+        !scopes.every(([ecosystem, directory]) =>
           config.updates.some(entry => entry?.['package-ecosystem'] === ecosystem &&
-            entry.directory === directory &&
+            entry.directory === directory && !Object.hasOwn(entry, 'directories') &&
+            (!Object.hasOwn(entry, 'rebase-strategy') || entry['rebase-strategy'] === 'auto') &&
             (!Object.hasOwn(entry, 'open-pull-requests-limit') ||
               (Number.isInteger(entry['open-pull-requests-limit']) && entry['open-pull-requests-limit'] > 0)) &&
             !Object.hasOwn(entry, 'allow') && !Object.hasOwn(entry, 'target-branch') &&

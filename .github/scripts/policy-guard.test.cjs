@@ -1151,3 +1151,41 @@ test('Dependabot recovery rejects unsupported, invalid or malformed daily cron s
     assert.ok(inspectActivated(candidate).includes('Dependabot lost scheduled recovery'));
   }
 });
+
+
+test('Dependabot scopes occur exactly once and cannot add unknown or overlapping directories', () => {
+  const baseline = files({ serial: false });
+  assert.deepEqual(inspectActivated(baseline), [], 'real five-scope baseline');
+  const path = '.github/dependabot.yml';
+  for (const mutate of [
+    config => { config.updates.push(structuredClone(config.updates[0])); },
+    config => { config.updates[1] = structuredClone(config.updates[0]); },
+    config => { config.updates.push({ ...config.updates[1], directory: '/unused' }); },
+    config => { config.updates[1].directory = '/unused'; },
+    config => { config.updates[1].directory = '/**'; },
+    config => { config.updates[1].directories = ['/.github/aislop']; },
+    config => { config.updates[1].directories = ['/.github/aislop', '/.github/scripts']; },
+    config => { delete config.updates[1].directory; config.updates[1].directories = ['/.github/aislop']; },
+  ]) {
+    const config = YAML.parse(baseline[path]); mutate(config);
+    const candidate = { ...baseline, [path]: YAML.stringify(config) };
+    assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'), String(mutate));
+  }
+});
+
+
+test('Dependabot preserves automatic rebases with default or explicit auto strategy', () => {
+  const baseline = files({ serial: false });
+  assert.deepEqual(inspectActivated(baseline), [], 'current config uses auto');
+  const path = '.github/dependabot.yml';
+  for (const strategy of [undefined, 'auto', 'disabled', null, true, 0, 'AUTO', {}, []]) {
+    const config = YAML.parse(baseline[path]);
+    for (const entry of config.updates) {
+      if (strategy === undefined) delete entry['rebase-strategy'];
+      else entry['rebase-strategy'] = strategy;
+    }
+    const candidate = { ...baseline, [path]: YAML.stringify(config) };
+    if (strategy === undefined || strategy === 'auto') assert.deepEqual(inspectActivated(candidate), []);
+    else assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'), JSON.stringify(strategy));
+  }
+});
