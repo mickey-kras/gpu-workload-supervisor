@@ -328,11 +328,34 @@ type querier interface {
 }
 
 func readState(ctx context.Context, q querier) (control.State, error) {
-	state, err := readControlState(ctx, q)
+	var state control.State
+	var updated string
+	var policyRow policyStateRow
+	// One statement keeps control and policy in the same SQLite snapshot even
+	// when q is a DB rather than a caller-owned transaction.
+	err := q.QueryRowContext(ctx, `SELECT c.owner, c.desired_workload, c.active_workload, c.phase,
+		c.health, c.admission, c.lease_incarnation, c.lease_epoch, c.version, c.updated_at,
+		s.revision, s.idle_timeout_minutes, s.updated_at,
+		p.last_activity_at, p.armed_deadline, p.attestation_at, p.updated_at
+		FROM control_state AS c
+		JOIN operator_settings AS s ON s.singleton = c.singleton
+		JOIN idle_policy_state AS p ON p.singleton = c.singleton
+		WHERE c.singleton = 1`).Scan(
+		&state.Owner, &state.DesiredWorkload, &state.ActiveWorkload, &state.Phase,
+		&state.Health, &state.Admission, &state.LeaseFence.Incarnation,
+		&state.LeaseFence.Epoch, &state.Version, &updated,
+		&policyRow.state.SettingsRevision, &policyRow.state.Policy.TimeoutMinutes, &policyRow.settingsUpdated,
+		&policyRow.lastActivity, &policyRow.armed, &policyRow.attested, &policyRow.stateUpdated)
 	if err != nil {
 		return state, err
 	}
-	policy, err := readPolicyState(ctx, q)
+	if state.UpdatedAt, err = parseTime(updated); err != nil {
+		return state, err
+	}
+	if err := state.Validate(); err != nil {
+		return state, err
+	}
+	policy, err := policyRow.decode()
 	if err != nil {
 		return control.State{}, err
 	}

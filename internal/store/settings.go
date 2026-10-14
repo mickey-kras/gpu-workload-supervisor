@@ -118,40 +118,48 @@ func updateSingleton(ctx context.Context, tx *sql.Tx, query string, args ...any)
 }
 
 func readPolicyState(ctx context.Context, q querier) (control.PolicyState, error) {
-	var state control.PolicyState
-	var settingsUpdated string
-	if err := q.QueryRowContext(ctx, `SELECT revision, idle_timeout_minutes, updated_at
-		FROM operator_settings WHERE singleton = 1`).Scan(
-		&state.SettingsRevision, &state.Policy.TimeoutMinutes, &settingsUpdated); err != nil {
-		return state, err
+	var row policyStateRow
+	// Settings and deadline bookkeeping must come from one committed snapshot.
+	if err := q.QueryRowContext(ctx, `SELECT s.revision, s.idle_timeout_minutes, s.updated_at,
+		p.last_activity_at, p.armed_deadline, p.attestation_at, p.updated_at
+		FROM operator_settings AS s
+		JOIN idle_policy_state AS p ON p.singleton = s.singleton
+		WHERE s.singleton = 1`).Scan(
+		&row.state.SettingsRevision, &row.state.Policy.TimeoutMinutes, &row.settingsUpdated,
+		&row.lastActivity, &row.armed, &row.attested, &row.stateUpdated); err != nil {
+		return row.state, err
 	}
+	return row.decode()
+}
+
+type policyStateRow struct {
+	state                         control.PolicyState
+	settingsUpdated, stateUpdated string
+	lastActivity, armed, attested sql.NullString
+}
+
+func (row policyStateRow) decode() (control.PolicyState, error) {
+	state := row.state
 	if state.SettingsRevision == "" {
 		return state, errors.New("operator settings revision is empty")
 	}
 	if err := state.Policy.Validate(); err != nil {
 		return state, err
 	}
-	var lastActivity, armed, attested sql.NullString
-	var stateUpdated string
-	if err := q.QueryRowContext(ctx, `SELECT last_activity_at, armed_deadline, attestation_at, updated_at
-		FROM idle_policy_state WHERE singleton = 1`).Scan(
-		&lastActivity, &armed, &attested, &stateUpdated); err != nil {
-		return state, err
-	}
 	var err error
-	if state.LastActivityAt, err = parseNullableTime(lastActivity); err != nil {
+	if state.LastActivityAt, err = parseNullableTime(row.lastActivity); err != nil {
 		return state, err
 	}
-	if state.ArmedDeadline, err = parseNullableTime(armed); err != nil {
+	if state.ArmedDeadline, err = parseNullableTime(row.armed); err != nil {
 		return state, err
 	}
-	if state.AttestationAt, err = parseNullableTime(attested); err != nil {
+	if state.AttestationAt, err = parseNullableTime(row.attested); err != nil {
 		return state, err
 	}
-	if _, err := parseTime(settingsUpdated); err != nil {
+	if _, err := parseTime(row.settingsUpdated); err != nil {
 		return state, err
 	}
-	if _, err := parseTime(stateUpdated); err != nil {
+	if _, err := parseTime(row.stateUpdated); err != nil {
 		return state, err
 	}
 	return state, nil
