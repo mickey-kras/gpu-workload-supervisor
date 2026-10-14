@@ -21,8 +21,6 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 )
 
-// Run the real flag parsing and serving path in a separate process so signals
-// cannot cancel another test's service context.
 func TestProxyServiceHelper(t *testing.T) {
 	if os.Getenv("GPU_PROXY_SERVICE_HELPER") != "1" {
 		return
