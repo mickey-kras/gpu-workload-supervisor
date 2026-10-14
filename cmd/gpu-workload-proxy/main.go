@@ -17,6 +17,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/httptransport"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	workloadproxy "github.com/mickey-kras/gpu-workload-supervisor/internal/proxy"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
@@ -70,6 +71,7 @@ func run() error {
 	completionCredentialFile := flags.String("completion-credential-file", "", "private absolute credential file for trusted terminal adapter callbacks")
 	comfyUIContract := flags.String("comfyui-contract", "", "explicit deployment-qualified ComfyUI source contract; requires adapter ingress")
 	readHeaderTimeout := flags.Duration("read-header-timeout", 10*time.Second, "HTTP header read timeout")
+	responseHeaderTimeout := flags.Duration("upstream-response-header-timeout", httptransport.DefaultResponseHeaderTimeout, "positive upstream response header wait after request upload; excludes response body")
 	idleTimeout := flags.Duration("idle-timeout", 2*time.Minute, "HTTP idle timeout")
 	shutdownTimeout := flags.Duration("shutdown-timeout", 30*time.Second, "graceful shutdown timeout")
 	completedWorkRetention := flags.Duration("completed-work-retention", 30*24*time.Hour, "time to keep completed work records")
@@ -89,6 +91,9 @@ func run() error {
 	}
 	if *completedWorkRetention <= 0 {
 		return errors.New("completed-work-retention must be positive")
+	}
+	if *responseHeaderTimeout <= 0 {
+		return errors.New("upstream-response-header-timeout must be positive")
 	}
 	if *maxInflight <= 0 || *maxCompletionInflight <= 0 {
 		return errors.New("max-inflight and max-completion-inflight must be positive")
@@ -119,7 +124,7 @@ func run() error {
 		ExecutionRoutes: routes, ReadOnlyRoutes: readOnlyRoutes, PassthroughRoutes: passthroughRoutes,
 		CompletionPath: *completionPath, RequestIDHeader: *requestIDHeader,
 		JobIDHeader: *jobIDHeader, FenceIDHeader: *fenceIDHeader,
-		FenceEpochHeader: *fenceEpochHeader,
+		FenceEpochHeader: *fenceEpochHeader, ResponseHeaderTimeout: *responseHeaderTimeout,
 	}
 	if err := configureIngress(&proxyConfig, *ingressMode, *executionCredentialFile, *completionCredentialFile); err != nil {
 		return err
