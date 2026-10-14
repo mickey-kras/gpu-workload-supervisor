@@ -166,7 +166,7 @@ func TestTemporarySchemaUpgradeStillRequiresBackedUpNormalActivation(t *testing.
 		t.Fatal("normal activation migrated before taking the v12 backup")
 	}
 	var schema int
-	if err = db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&schema); err != nil || schema != 14 {
+	if err = db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&schema); err != nil || schema != 15 {
 		t.Fatalf("normal activation did not migrate: %d %v", schema, err)
 	}
 	status, err := b.TemporaryStatus(ctx, home)

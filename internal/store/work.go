@@ -188,7 +188,7 @@ func (s *Store) admitWorkTx(ctx context.Context, requestID, jobID string, worklo
 		(request_id, job_id, workload, lease_incarnation, lease_epoch, registered_at, registration_token)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		requestID, nullable(jobID), workload, fence.Incarnation, fence.Epoch, formatTime(s.now()), nullable(binding.token)); err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint") {
+		if isUniqueConstraint(err) {
 			return ErrRequestConflict
 		}
 		return fmt.Errorf("admit work: %w", err)
