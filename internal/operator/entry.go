@@ -10,9 +10,9 @@ import (
 // are native process/account operations; they are never supplied by the request.
 // in and out must implement io.Closer: on I/O timeout the blocked read/write
 // goroutine only unblocks when Close is called.
-func Serve(args []string, in io.Reader, out io.Writer, load func() (Profile, error), detach func() error) {
+func Serve(args []string, in io.Reader, out io.Writer, load func() (Profile, error), detach func() error) (err error) {
 	r := Response{ProtocolVersion: 1, Code: InvalidRequest}
-	defer func() { _ = WriteResponse(out, r, 2*time.Second) }()
+	defer func() { err = WriteResponse(out, r, 2*time.Second) }()
 	if len(args) != 0 {
 		return
 	}
@@ -25,10 +25,10 @@ func Serve(args []string, in io.Reader, out io.Writer, load func() (Profile, err
 	}
 	req, code := Decode(body)
 	r.Code = code
+	r.RequestID = req.RequestID
 	if code != OK {
 		return
 	}
-	r.RequestID = req.RequestID
 	if detach() != nil {
 		r.Code = Unavailable
 		return
@@ -39,4 +39,5 @@ func Serve(args []string, in io.Reader, out io.Writer, load func() (Profile, err
 		return
 	}
 	r = NativeService(profile).Handle(req)
+	return
 }
