@@ -260,7 +260,10 @@ function inspectParallelCi(workflow, failures) {
 function normalizeParallelCi(workflows, failures) {
   const path = '.github/workflows/ci.yml';
   const workflow = workflows[path];
-  if (!workflow?.jobs || Object.keys(workflow.jobs).length === 1) return workflows;
+  if (!workflow?.jobs) {
+    failures.push('Parallel CI lost required job set');
+    return workflows;
+  }
   inspectParallelCi(workflow, failures);
   // Existing command checks still apply to every relocated gate, after graph checks.
   const steps = Object.values(workflow.jobs).flatMap(job => job.steps || []);
