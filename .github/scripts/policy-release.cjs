@@ -30,6 +30,7 @@ function inspectValidationReuse(files, releaseJobs, failures, checks) {
   }
   if (['quality', 'aislop', 'codeql'].some(id => Object.hasOwn(releaseJobs, id)) ||
       validation.needs !== 'entry' || Object.hasOwn(validation, 'if') ||
+      validation['runs-on'] !== 'ubuntu-latest' ||
       validation['timeout-minutes'] !== 75 ||
       JSON.stringify(validation.permissions) !== '{"contents":"read","actions":"read"}' ||
       JSON.stringify(releaseJobs?.publish?.needs) !== '["entry","validation"]') {
@@ -43,6 +44,12 @@ function inspectValidationReuse(files, releaseJobs, failures, checks) {
   checks.step(path, 'validation', 'Verify exact-commit main validation', {
     uses: 'actions/github-script', withValues: { script: VALIDATION_SCRIPT },
   });
+  checks.step(path, 'validation', 'Install release tools', {
+    run: ['npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund'],
+  });
+  checks.exactRun(path, 'validation', 'Install release tools', [
+    'npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund',
+  ]);
   checks.step(path, 'publish', 'Verify main and successful validation at this commit', {
     uses: 'actions/github-script', withValues: { script: VALIDATION_SCRIPT },
   });

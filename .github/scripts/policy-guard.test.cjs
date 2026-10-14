@@ -43,10 +43,11 @@ function reusableRelease(candidate) {
   const verify = { name: 'Verify exact-commit main validation',
     uses: 'actions/github-script@' + 'a'.repeat(40),
     env: { VERSION: '${{ needs.entry.outputs.version }}' }, with: { script } };
-  workflow.jobs.validation = { needs: 'entry', 'timeout-minutes': 75,
+  workflow.jobs.validation = { needs: 'entry', 'runs-on': 'ubuntu-latest', 'timeout-minutes': 75,
     permissions: { contents: 'read', actions: 'read' }, steps: [
       { uses: 'actions/checkout@' + 'a'.repeat(40),
-        with: { ref: '${{ github.sha }}', 'persist-credentials': false } }, verify,
+        with: { ref: '${{ github.sha }}', 'persist-credentials': false } },
+      { name: 'Install release tools', run: 'npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund' }, verify,
     ] };
   workflow.jobs.publish.needs = ['entry', 'validation'];
   const publishVerify = workflow.jobs.publish.steps.find(step =>
@@ -69,6 +70,7 @@ test('release validation reuse cannot skip or weaken its exact-commit gate', () 
     state => { state.workflow.jobs.validation.permissions.actions = 'write'; },
     state => { state.workflow.jobs.validation['timeout-minutes'] = 10; },
     state => { state.workflow.jobs.validation.steps[0].with.ref = 'main'; },
+    state => { state.workflow.jobs.validation.steps[1].run = 'npm install semver'; },
     state => { state.verify.if = false; },
     state => { state.verify.with.script = 'console.log("validation skipped")'; },
     state => { state.verify.env.VERSION = '0.1.0'; },
