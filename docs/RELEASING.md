@@ -20,7 +20,8 @@ checked with `gh attestation verify` on a downloaded asset.
    SonarQube quality gate must pass there.
 2. Confirm the planned version in `release-version.json`, then dispatch `release`
    from `main`. There is no version input; the dispatch snapshot supplies the version.
-3. The workflow confirms that `main` still points to the dispatch SHA, retests it,
+3. The workflow confirms that `main` still points to the dispatch SHA and reuses
+   successful main validation for that exact commit, including SonarQube, then
    freezes `release/X.Y.Z`, builds and attests assets, and creates the immutable `vX.Y.Z`
    tag and release through the release GitHub App. It deletes the release branch
    after successful publication. Re-run the failed job from the original run to
@@ -38,6 +39,26 @@ checked with `gh attestation verify` on a downloaded asset.
 A non-empty `docs/releases/vX.Y.Z.md` becomes the GitHub release notes. The
 file is optional; without one the release uses auto-generated notes. `v0.1.6`
 and `v0.1.7` shipped without notes files.
+
+Release validation waits up to 70 minutes for the exact-commit `main` run,
+including queued time. The wait is bounded separately from workflow timeouts;
+queued or unusually long main runs may need a release retry after completion.
+The latest main run must succeed,
+and every required quality, Aislop, CodeQL and Sonar job must belong to its
+current attempt. A failed-jobs rerun that omits prior successful jobs is
+insufficient: use **Re-run all jobs** on the original main run, then retry the
+release run. This also refreshes validation for a frozen commit after main moves.
+
+All reused job evidence must be at most 24 hours old when the validation and
+publication jobs check it. Age starts at each actual producer job's start,
+including the Go and npm vulnerability audits and scanner jobs; a later
+aggregate job cannot make old scans fresh. The one-day maximum bounds exposure
+to newly published vulnerabilities while allowing same-day release retries.
+It does not guarantee that a vulnerability database is current. Missing,
+failed, stale or mismatched evidence stops the release. Refresh stale evidence
+by rerunning all jobs of the original main run for the same SHA; do not move
+the prepared release branch. Builds, package checks, checksums, provenance and
+immutable-publication checks still run in the release workflow.
 
 The `release-automation` environment, `RELEASE_APP_ID` repository variable, App
 installation with Contents write and Pull requests write, release-branch/tag

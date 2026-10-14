@@ -347,6 +347,7 @@ func TestAdapterNativeCompletionAndUserForwarding(t *testing.T) {
 			request.Header.Set(ExecutionCredentialHeader, executionCredential)
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
+			drainNative(t, handler)
 			if response.Code != http.StatusOK || response.Header().Get(DefaultRegistrationTokenHeader) != "" {
 				t.Fatalf("native execution: %d", response.Code)
 			}

@@ -8,7 +8,7 @@ from pathlib import Path
 def check_trivy(path):
     report = json.loads(path.read_text())
     if not isinstance(report, dict) or report.get('SchemaVersion') != 2 or \
-            report.get('ArtifactType') != 'filesystem' or not isinstance(report.get('ArtifactName'), str) or \
+            report.get('ArtifactType') not in ('filesystem', 'repository') or not isinstance(report.get('ArtifactName'), str) or \
             not report['ArtifactName'] or not isinstance(report.get('Results', []), list):
         raise ValueError('Trivy did not produce a filesystem scan report')
     for result in report.get('Results', []):

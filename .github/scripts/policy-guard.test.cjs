@@ -192,7 +192,7 @@ function reusableRelease(candidate) {
   return { path, workflow, verify, publishVerify };
 }
 
-test('release validation policy accepts strict reuse alongside the retained legacy route', () => {
+test('release validation policy accepts strict reuse at the protected main-validation gate', () => {
   const candidate = files({ serial: false }); const { path, workflow } = reusableRelease(candidate);
   candidate[path] = YAML.stringify(workflow);
   assert.deepEqual(inspect(candidate), []);
@@ -221,7 +221,7 @@ test('release validation reuse cannot skip or weaken its exact-commit gate', () 
   }
 });
 
-test('release verifier bytes are protected even before switching to reuse', () => {
+test('release verifier bytes are protected at the reused main gate', () => {
   const candidate = files({ serial: false }); candidate['.github/scripts/release-validation.cjs'] += '\nreturn;\n';
   assert.ok(inspect(candidate).some(error => error.includes('verifier was changed')));
   const missing = files({ serial: false }); delete missing['.github/scripts/release-validation.cjs'];
@@ -253,40 +253,14 @@ test('verification jobs reject workspace writes and runtime or wrapper input ove
   }
 });
 
-test('legacy release gates cannot be weakened during staged validation adoption', () => {
-  for (const mutate of [
-    jobs => { jobs.quality.if = false; },
-    jobs => { jobs.aislop.uses = './.github/workflows/ci.yml'; },
-    jobs => { jobs.codeql.needs = []; },
-    jobs => { jobs.publish.steps.find(step => step.name ===
-      'Verify main and successful validation at this commit').with.script = 'return;'; },
-  ]) {
-    const candidate = files({ serial: false }); const path = '.github/workflows/release.yml';
-    const workflow = YAML.parse(candidate[path]); mutate(workflow.jobs);
-    candidate[path] = YAML.stringify(workflow);
-    assert.notDeepEqual(inspect(candidate), []);
-  }
-});
-
-test('legacy verification requires the pinned action and exact runtime inputs and setup', () => {
-  for (const mutate of [
-    (workflow, gate) => { gate.uses = 'actions/checkout@' + 'a'.repeat(40); },
-    (workflow, gate) => { gate.uses = 'actions/github-script@' + 'a'.repeat(40); },
-    (workflow, gate) => { gate.with['github-token'] = '${{ secrets.WRITE_TOKEN }}'; },
-    (workflow, gate) => { gate.env.NODE_OPTIONS = '--require ./malicious.cjs'; },
-    (workflow, gate) => { gate.env.VERSION = '0.1.0'; },
-    workflow => { workflow.env = { NODE_OPTIONS: '--require ./malicious.cjs' }; },
-    workflow => { workflow.jobs.publish.env = { NODE_OPTIONS: '--require ./malicious.cjs' }; },
-    workflow => { workflow.jobs.publish['runs-on'] = 'self-hosted'; },
-    workflow => { workflow.jobs.publish.steps.splice(4, 0, { run: 'overwrite runtime' }); },
-    workflow => { workflow.jobs.publish.steps[1].with.repository = 'attacker/repo'; },
-  ]) {
-    const candidate = files({ serial: false }); const path = '.github/workflows/release.yml';
-    const workflow = YAML.parse(candidate[path]); const gate = workflow.jobs.publish.steps.find(step =>
-      step.name === 'Verify main and successful validation at this commit');
-    mutate(workflow, gate); candidate[path] = YAML.stringify(workflow);
-    assert.ok(inspect(candidate).some(error => error.includes('legacy exact-commit release validation')));
-  }
+test('retired duplicate release validation cannot replace the trusted main gate', () => {
+  const candidate = files({ serial: false });
+  const path = '.github/workflows/release.yml';
+  const workflow = YAML.parse(candidate[path]);
+  delete workflow.jobs.validation;
+  workflow.jobs.publish.needs = ['entry', 'quality', 'aislop', 'codeql'];
+  candidate[path] = YAML.stringify(workflow);
+  assert.ok(inspect(candidate).some(error => error.includes('lost exact-commit main validation')));
 });
 
 test('maintainability gates cannot be removed, skipped or weakened', () => {

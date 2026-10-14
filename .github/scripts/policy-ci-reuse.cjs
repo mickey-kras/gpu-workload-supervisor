@@ -11,7 +11,7 @@ const REUSE_HASHES = {
 };
 const HELPER_HASHES = {
   ".github/scripts/quality-coverage.py": "96c047e6c876af769edbb141e2230861b665d368d27579244a2f8f356d141c65",
-  ".github/scripts/check-scan-reports.py": "af5b4d96eb192a77152064997f8de6cbd18166cfc03ddf3e79788527256af089"
+  ".github/scripts/check-scan-reports.py": "140cdb3f9330dab071fd687e88c053bc83513e1d3d5fc045250297eb60595cc6"
 };
 
 function canonical(value) {

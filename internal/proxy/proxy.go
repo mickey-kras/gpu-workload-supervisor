@@ -61,9 +61,17 @@ type Config struct {
 	// Zero uses httptransport.DefaultResponseHeaderTimeout. A custom Transport
 	// owns its timeout policy; this field only configures the default transport.
 	ResponseHeaderTimeout time.Duration
+	// MaxNativeCompletions bounds admitted native requests awaiting proof plus
+	// pending native writes. Zero uses 128. Server caps post-proof HTTP streams.
+	MaxNativeCompletions int
+	// ReportNativeCompletionFailure runs on the persistence worker, outside
+	// response reads and lifecycle locks. It must be concurrency safe and return
+	// promptly. The payload contains no raw errors or request metadata.
+	ReportNativeCompletionFailure func(NativeCompletionFailure)
 }
 
 type Handler struct {
+	nativeFinishes       *nativeFinishes
 	comfyUI              *comfyUIAdapter
 	ingressMode          string
 	executionCredential  string
@@ -114,6 +122,9 @@ func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (
 	if stateStore == nil {
 		return nil, errors.New("state store is required")
 	}
+	if config.MaxNativeCompletions < 0 {
+		return nil, errors.New("native completion limit must not be negative")
+	}
 	if config.ResponseHeaderTimeout < 0 {
 		return nil, errors.New("response header timeout must not be negative")
 	}
@@ -162,6 +173,9 @@ func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (
 	}
 	if err := handler.configureComfyUI(config); err != nil {
 		return nil, err
+	}
+	if native != nil {
+		handler.nativeFinishes = newNativeFinishes(config.MaxNativeCompletions, config.ReportNativeCompletionFailure)
 	}
 	return handler, nil
 }
@@ -387,6 +401,21 @@ func (h *Handler) execute(response http.ResponseWriter, request *http.Request) {
 		h.executeComfyUI(response, request, requestID, fence)
 		return
 	}
+	h.executeRegistered(response, request, requestID, fence)
+}
+
+func (h *Handler) executeRegistered(response http.ResponseWriter, request *http.Request, requestID string, fence control.Fence) {
+	var reservation *nativeFinishReservation
+	if h.nativeFinishes != nil {
+		reservation = h.nativeFinishes.reserve()
+		if reservation == nil {
+			capacityUnavailable(response)
+			return
+		}
+	}
+	// ReverseProxy may return without a response body (e.g. transport failure).
+	// Its producer owns the reservation until verified proof transfers it.
+	defer reservation.release()
 	jobID := ""
 	if h.jobIDHeader != "" {
 		jobID = strings.TrimSpace(request.Header.Get(h.jobIDHeader))
@@ -408,7 +437,7 @@ func (h *Handler) execute(response http.ResponseWriter, request *http.Request) {
 	}
 	proxy.ModifyResponse = func(upstreamResponse *http.Response) error {
 		upstreamResponse.Header.Set(DefaultRegistrationTokenHeader, token)
-		h.observeNativeTerminal(upstreamResponse, request.URL.Path, requestID, fence, token)
+		h.observeNativeTerminal(upstreamResponse, request.URL.Path, requestID, fence, token, reservation)
 		h.protectIngressResponse(upstreamResponse, token)
 		return nil
 	}
