@@ -22,9 +22,13 @@ Configure every route the deployment exposes:
 
 Routes must use canonical absolute paths: no trailing slash except `/`, repeated
 slashes, or dot segments. Noncanonical decoded request paths return HTTP 400 with
-`path_not_canonical`; canonical but unclassified routes return HTTP 405. Neither
-reaches upstream. There are no implicit
-GET, HEAD or OPTIONS routes, wildcard routes, or automatic HEAD classification.
+`path_not_canonical`. After ingress authentication and request validation,
+canonical unknown paths return HTTP 404; recognized paths with an unconfigured
+method return HTTP 405 with an `Allow` header listing the explicitly configured
+methods, including POST for the completion path. Both route rejections use the JSON
+error `route_not_allowed`. Neither invalid paths nor route rejections reach
+upstream. There are no implicit GET, HEAD or OPTIONS routes, wildcard routes, or
+automatic HEAD classification.
 Overlapping classifications are rejected. Explicit non-execution routes remain
 available while execution admission is closed, if the upstream is reachable.
 
