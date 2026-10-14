@@ -20,6 +20,11 @@ function fixture() {
     } };
 }
 
+test('full validation is preserved for main, release and non-documentation PR work', () => {
+  assert.equal(FULL_IF,
+    "${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}");
+});
+
 test('approved PR docs wiring normalizes only expected skips and preserves coverage outputs', () => {
   const input = fixture(); const failures = [];
   const output = normalizeScopedValidation(input.files, input.workflows, failures, 'original aggregate');
