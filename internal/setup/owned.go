@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -18,13 +19,22 @@ import (
 var ErrManagerCgroupMismatch = errors.New("manager cgroup does not match the running user manager")
 
 // ManagerCgroup asks the running user manager for its root control group so
-// owned profiles derive cgroups from the host, not from request input.
+// owned profiles derive cgroups from the host, not from request input. The
+// selected systemctl executable is resolved and trusted before it is invoked.
 func ManagerCgroup(ctx context.Context, systemctl string) (string, error) {
 	return managerCgroup(ctx, SystemBackend().runCommand, systemctl)
 }
 
 func managerCgroup(ctx context.Context, runCommand func(context.Context, string, ...string) ([]byte, error), systemctl string) (string, error) {
-	out, err := runCommand(ctx, systemctl, "--user", "show", "-.slice", "--property=ControlGroup")
+	path, err := exec.LookPath(systemctl)
+	if err != nil {
+		return "", fmt.Errorf("resolve systemctl executable: %w", err)
+	}
+	systemctl, err = gpuruntime.ValidateSystemctlExecutable(path)
+	if err != nil {
+		return "", fmt.Errorf("systemctl executable trust: %w", err)
+	}
+	out, err := runCommand(ctx, systemctl, "--user", "show", "--property=ControlGroup", "--", "-.slice")
 	if err != nil {
 		return "", fmt.Errorf("query manager cgroup: %w", err)
 	}

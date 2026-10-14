@@ -277,22 +277,22 @@ func TestManagerCgroupQueryRequiresConcreteAnswer(t *testing.T) {
 	ok := func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("ControlGroup=/user.slice/user-1000.slice/user@1000.service\n"), nil
 	}
-	got, err := managerCgroup(context.Background(), ok, "systemctl")
+	got, err := managerCgroup(context.Background(), ok, "/usr/bin/true")
 	if err != nil || got != "/user.slice/user-1000.slice/user@1000.service" {
 		t.Fatalf("%q %v", got, err)
 	}
 	empty := func(context.Context, string, ...string) ([]byte, error) { return []byte("ControlGroup=\n"), nil }
-	if _, err := managerCgroup(context.Background(), empty, "systemctl"); !errors.Is(err, ErrManagerCgroupMismatch) {
+	if _, err := managerCgroup(context.Background(), empty, "/usr/bin/true"); !errors.Is(err, ErrManagerCgroupMismatch) {
 		t.Fatalf("empty cgroup accepted: %v", err)
 	}
 	duplicate := func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("ControlGroup=/user.slice/a\nControlGroup=/user.slice/evil\n"), nil
 	}
-	if _, err := managerCgroup(context.Background(), duplicate, "systemctl"); !errors.Is(err, ErrManagerCgroupMismatch) {
+	if _, err := managerCgroup(context.Background(), duplicate, "/usr/bin/true"); !errors.Is(err, ErrManagerCgroupMismatch) {
 		t.Fatalf("duplicate cgroup accepted: %v", err)
 	}
 	broken := func(context.Context, string, ...string) ([]byte, error) { return nil, errors.New("no bus") }
-	if _, err := managerCgroup(context.Background(), broken, "systemctl"); err == nil {
+	if _, err := managerCgroup(context.Background(), broken, "/usr/bin/true"); err == nil {
 		t.Fatal("query failure accepted")
 	}
 }
