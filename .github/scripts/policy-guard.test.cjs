@@ -871,7 +871,7 @@ test('automation source changes require a trusted human at immutable event refs'
       if (!bot && ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(association)) {
         await verifyDependabotAuthor(github, context);
       } else await assert.rejects(verifyDependabotAuthor(github, context), /trusted human author/);
-      assert.deepEqual(reads.map(read => read.ref), ['a', 'b', 'a', 'b', 'a', 'b'].map(value => value.repeat(40)));
+      assert.deepEqual(reads.map(read => read.ref), Array.from({ length: 8 }, () => ['a'.repeat(40), 'b'.repeat(40)]).flat());
     }
   }
   const { github, context } = authorFixture({ changed: false });
@@ -1013,7 +1013,8 @@ test('immutable source author check covers policy modules and rejects mutable or
   const { verifyDependabotAuthor } = require('./policy-guard.cjs');
   const { github, context } = authorFixture({ association: 'NONE', changed: false });
   const read = github.rest.repos.getContent;
-  for (const name of ['policy-guard.cjs', 'policy-dependabot.cjs']) {
+  for (const name of ['policy-guard.cjs', 'policy-dependabot.cjs', 'policy-action-pins.cjs',
+    'policy-release.cjs', 'policy-ci-parallel.cjs', 'policy-pr-scope.cjs', 'policy-ci-reuse.cjs']) {
     github.rest.repos.getContent = async params => params.path.endsWith('/' + name) &&
       params.ref === context.payload.pull_request.head.sha ?
       { data: { type: 'file', sha: 'd'.repeat(40) } } : read(params);
@@ -1055,5 +1056,23 @@ test('Dependabot open PR limits accept defaults or positive integers only', () =
     candidate[path] = YAML.stringify(config);
     if (limit === undefined || limit === 3) assert.deepEqual(inspectActivated(candidate), []);
     else assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'), String(limit));
+  }
+});
+
+
+test('pin normalization helper additions, deletions and read errors cannot bypass source review', async () => {
+  const { verifyDependabotAuthor } = require('./policy-guard.cjs');
+  for (const change of ['added', 'deleted', 'unavailable']) {
+    const { github, context } = authorFixture({ association: 'NONE', changed: false });
+    const read = github.rest.repos.getContent;
+    github.rest.repos.getContent = async params => {
+      const missingRef = change === 'added' ? context.payload.pull_request.base.sha : context.payload.pull_request.head.sha;
+      if (params.path.endsWith('/policy-action-pins.cjs') && params.ref === missingRef) {
+        const error = new Error('helper read failed'); error.status = change === 'unavailable' ? 500 : 404; throw error;
+      }
+      return read(params);
+    };
+    await assert.rejects(verifyDependabotAuthor(github, context),
+      change === 'unavailable' ? /helper read failed/ : /trusted human author/);
   }
 });

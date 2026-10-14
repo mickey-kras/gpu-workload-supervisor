@@ -3,9 +3,12 @@ const { canonical, normalizeActionSteps } = require('./policy-action-pins.cjs');
 
 // Selected accident tripwires, not a proof of arbitrary JavaScript semantics.
 // Trusted code execution, human review and behavioral tests remain the boundary.
+// Include the trusted guard's local policy import graph, including pin normalization.
 const DEPENDABOT_SOURCES = [
   '.github/scripts/dependabot-auto-merge.cjs', '.github/scripts/policy-guard.cjs',
-  '.github/scripts/policy-dependabot.cjs',
+  '.github/scripts/policy-dependabot.cjs', '.github/scripts/policy-action-pins.cjs',
+  '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs',
+  '.github/scripts/policy-pr-scope.cjs', '.github/scripts/policy-ci-reuse.cjs',
 ];
 const compact = source => typeof source === 'string' ? source.replace(/\s+/g, ' ').trim() : '';
 
