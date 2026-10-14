@@ -160,18 +160,42 @@ export function recoveryGuidance(candidate) {
     const messages = diagnostics.length ? diagnostics : [candidate?.nextStep ?? ''];
     const steps = new Set();
     for (const message of messages) {
-        if (/Environment variable PATH:/.test(message)) {
+        const syntax = recoverySyntax(message);
+        if (syntax) {
+            steps.add(syntax);
+        } else if (/Environment variable PATH: requires absolute clean root-owned executable directories/.test(message)) {
             steps.add('PATH: review each directory, including every alias target and ancestor. Use absolute protected root-owned executable directories; do not add user-writable directories. Preserve settings the application requires.');
-        } else if (/LD_LIBRARY_PATH|transitive loader/.test(message)) {
+        } else if (/Environment variable LD_LIBRARY_PATH: dynamic library search and transitive loader bindings are not qualified/.test(message)) {
             steps.add('Runtime libraries: use a reviewed root-owned runtime installation with its normal trusted loader configuration. Simply deleting LD_LIBRARY_PATH does not establish that its libraries are safe or that the application still works.');
-        } else if (/WorkingDirectory|working directory/.test(message)) {
+        } else if (/WorkingDirectory requires an existing (?:absolute clean trusted directory without links|trusted account-home path without links)/.test(message)) {
             steps.add('Working directory: choose an existing absolute trusted directory. Inspect the directory and its ancestors for links, ownership and unintended group/world writes; preserve the application and its data.');
-        } else if (/Environment variable (?:HOME|HF_HOME|HUGGINGFACE_HUB_CACHE|TRANSFORMERS_CACHE|XDG_CACHE_HOME|TMPDIR|HF_TOKEN_PATH):|ComfyUI option --(?:output-directory|temp-directory|user-directory|extra-model-paths-config)|application script (?:trust|component)|launch source component/.test(message)) {
+        } else if (dataPathFailure(message)) {
             steps.add('Application and data paths: inspect each reported setting and its ancestors. Use existing absolute paths without links, owned by this account or root and protected from other users’ writes. Keep directory settings as directories and configuration/token settings as regular files. Preserve models and application data; repair only the reported unsafe component or select another qualified path.');
         } else if (/executable|interpreter|root-owned/i.test(message)) {
             steps.add('Runtime executable: ask an administrator to install a trusted package in a protected root-owned location, including its interpreter, libraries and executable ancestors. Choose that executable or review the external service command. Preserve the original application and models; setup never changes ownership or permissions.');
         }
     }
-    if (steps.size) steps.add('After reviewing changes to an external service, reload the user systemd manager. Choose Check again to inspect fresh evidence; configuration readiness does not prove GPU operation.');
+    if (steps.size) {
+        if (candidate?.unit) steps.add('After reviewing changes to this external service, reload the user systemd manager.');
+        steps.add('Choose Check again to inspect fresh evidence; configuration readiness does not prove GPU operation.');
+    }
     return [...steps];
+}
+
+function recoverySyntax(message) {
+    if (/Environment(?: variable [A-Za-z_][A-Za-z0-9_]*)?: (?:expected NAME=value|expansion, escapes or whitespace|unterminated whole-assignment quote|quoted fragments|duplicate assignment)/.test(message)) {
+        return 'Environment syntax: review the reported assignment. Use one literal NAME=value assignment per setting, with balanced quotes around the whole assignment when needed. Expansion, escapes, whitespace inside values and quoted fragments are unsupported; filesystem permission changes do not repair this syntax.';
+    }
+    if (/ComfyUI option --extra-model-paths-config configuration file count exceeds supported limit/.test(message)) {
+        return 'Configuration-file count: review the launch arguments; each --extra-model-paths-config accepts at most 32 files. Preserve every required model mapping in a supported configuration before changing the command. The reported paths have not been inspected.';
+    }
+    if (/ComfyUI option --[a-z-]+ (?:is repeated;|requires an explicit value|requires an existing trusted absolute directory|requires at least one trusted configuration file)/.test(message)) {
+        return 'Launch argument syntax: review the reported option. Supply its missing directory, file or value, or resolve repeated options into one unambiguous assignment. Preserve the intended application settings, then check again; changing file ownership does not repair argument syntax.';
+    }
+    return '';
+}
+
+function dataPathFailure(message) {
+    const setting = /Environment variable (?:HOME|HF_HOME|HUGGINGFACE_HUB_CACHE|TRANSFORMERS_CACHE|XDG_CACHE_HOME|TMPDIR|HF_TOKEN_PATH):|ComfyUI option --(?:output-directory|temp-directory|user-directory|extra-model-paths-config)/.test(message);
+    return (setting && /requires (?:an )?existing .*without links/.test(message)) || /application script (?:trust|component)|launch source component/.test(message);
 }

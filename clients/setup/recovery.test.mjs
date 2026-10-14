@@ -20,14 +20,54 @@ test('recovery distinguishes account data from protected runtimes without propos
     const runtime = recoveryGuidance({diagnostics: [prefix + 'executable: interpreter trust: executable target is group or world writable.']});
     assert.match(runtime[0], /administrator.*protected root-owned/);
     assert.match(runtime[0], /never changes ownership or permissions/);
-    assert.match(recoveryGuidance({nextStep: prefix + 'Environment variable PATH: requires trusted directories.'})[0], /every alias target and ancestor/);
-    assert.match(recoveryGuidance({diagnostics: [prefix + 'Environment variable LD_LIBRARY_PATH: transitive loader bindings are not qualified.']})[0], /Simply deleting LD_LIBRARY_PATH does not establish/);
+    assert.match(recoveryGuidance({nextStep: prefix + 'Environment variable PATH: requires absolute clean root-owned executable directories; aliases must be root-owned and resolve into trusted directories with no group/world writes'})[0], /every alias target and ancestor/);
+    assert.match(recoveryGuidance({diagnostics: [prefix + 'Environment variable LD_LIBRARY_PATH: dynamic library search and transitive loader bindings are not qualified; use a reviewed root-owned runtime installation with its normal trusted loader configuration, then reload and refresh the binding']})[0], /Simply deleting LD_LIBRARY_PATH does not establish/);
     const workingDirectory = recoveryGuidance({diagnostics: [prefix + 'WorkingDirectory requires an existing absolute clean trusted directory without links; inspect ownership and permissions of this setting and its ancestors']})[0];
     assert.match(workingDirectory, /existing absolute trusted directory/);
     assert.match(workingDirectory, /ancestors/);
     assert.equal(workingDirectory.includes('inside the account home'), false);
     assert.deepEqual(recoveryGuidance({diagnostics: ['CUDA_VISIBLE_DEVICES needs a full GPU UUID.', 'unsupported directive or value Restart', 'ComfyUI option --auto-launch is not qualified.']}), []);
     assert.deepEqual(recoveryGuidance(), []);
+});
+
+test('syntax and cardinality blockers do not prescribe filesystem trust repairs', () => {
+    const cases = [
+        ['Environment variable HOME: expansion, escapes or whitespace are unsupported; use one literal whole assignment', 'Environment syntax:'],
+        ['Environment variable PATH: duplicate assignment', 'Environment syntax:'],
+        ['Environment variable LD_LIBRARY_PATH: unterminated whole-assignment quote', 'Environment syntax:'],
+        ['Environment variable HF_HOME: quoted fragments are unsupported', 'Environment syntax:'],
+        ['Environment: expected NAME=value', 'Environment syntax:'],
+        ['ComfyUI option --output-directory is repeated; use one unambiguous assignment', 'Launch argument syntax:'],
+        ['ComfyUI option --output-directory requires an existing trusted absolute directory', 'Launch argument syntax:'],
+        ['ComfyUI option --port requires an explicit value', 'Launch argument syntax:'],
+        ['ComfyUI option --extra-model-paths-config requires at least one trusted configuration file', 'Launch argument syntax:'],
+        ['ComfyUI option --extra-model-paths-config configuration file count exceeds supported limit; paths were not inspected', 'Configuration-file count:'],
+    ];
+    for (const [message, heading] of cases) {
+        const guidance = recoveryGuidance({diagnostics: [prefix + message]});
+        assert.ok(guidance[0].startsWith(heading), message);
+        assert.equal(guidance.some(step => /Application and data paths:|Runtime executable:|Runtime libraries:|^PATH:/.test(step)), false, message);
+        assert.match(guidance.at(-1), /Check again/);
+    }
+    const tooMany = recoveryGuidance({diagnostics: [cases.at(-1)[0]]}).join('\n');
+    assert.match(tooMany, /at most 32 files/);
+    assert.match(tooMany, /Preserve every required model mapping/);
+    for (const message of ['Environment variable HF_HOME: loaded metadata is ambiguous; reload and retry',
+        'Environment variable PATH: loaded setting differs from inspected source; reload and refresh the binding',
+        'Environment variable LD_LIBRARY_PATH: loaded setting has no inspected source; reload and refresh the binding',
+        'native launch binding changed: loaded WorkingDirectory differs from OS account home expansion; reload and refresh the binding', 'Environment variable HF_HOME: unfamiliar reason']) {
+        assert.deepEqual(recoveryGuidance({diagnostics: [message]}), [], message);
+    }
+});
+
+test('recovery mentions systemd reload only for an identified external service', () => {
+    const candidate = {diagnostics: [prefix + 'executable trust: executable target is not root-owned.']};
+    const executable = recoveryGuidance(candidate).join('\n');
+    assert.match(executable, /Check again/);
+    assert.equal(executable.includes('reload'), false);
+    const service = recoveryGuidance({...candidate, unit: 'external.service'}).join('\n');
+    assert.match(service, /reload the user systemd manager/);
+    assert.match(service, /Check again/);
 });
 
 test('reinspection clears obsolete data recovery only after fresh configuration evidence', async () => {
