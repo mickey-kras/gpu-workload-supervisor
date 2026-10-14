@@ -145,24 +145,36 @@ func parseUpstream(value string) (*url.URL, error) {
 	return upstream, nil
 }
 
+const proxyStartupLockTimeout = 30 * time.Second
+
+func acquireProxyLifetimeLock(ctx context.Context, statePath string, timeout time.Duration) (*lock.File, error) {
+	startupCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	proxyLock, err := lock.AcquireContext(startupCtx, statePath+".proxy.lock", true)
+	if err != nil {
+		return nil, fmt.Errorf("acquire proxy lifetime lock (exclusive maintenance may be active): %w", err)
+	}
+	return proxyLock, nil
+}
+
 func serveProxy(proxyConfig workloadproxy.Config, settings proxyServerSettings) error {
 	// Re-validate at the listen site: run() checks first, but the listener must
 	// never depend on a distant caller for the loopback boundary.
 	if err := validateLoopbackAddress(settings.listen); err != nil {
 		return err
 	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 	// Hold the shared lock until HTTP handlers and native writes finish. Recovery
 	// takes its exclusive counterpart before it can abandon unresolved work.
-	proxyLock, err := lock.AcquireShared(settings.statePath + ".proxy.lock")
+	proxyLock, err := acquireProxyLifetimeLock(ctx, settings.statePath, proxyStartupLockTimeout)
 	if err != nil {
-		return fmt.Errorf("acquire proxy lifetime lock: %w", err)
+		return err
 	}
 	defer proxyLock.Close()
 	if err := deployment.Check(settings.statePath, ""); err != nil {
 		return err
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 	stateStore, err := store.Open(ctx, settings.statePath)
 	if err != nil {
 		return fmt.Errorf("open state store: %w", err)
