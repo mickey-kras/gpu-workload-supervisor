@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestOperatorProcessHelper(t *testing.T) {
@@ -56,14 +58,12 @@ func TestOperatorUndeliveredResponseExitsNonzero(t *testing.T) {
 			if mode == "broken pipe" {
 				r.Close()
 			} else {
-				if err := w.SetWriteDeadline(time.Now().Add(20 * time.Millisecond)); err != nil {
+				capacity, err := unix.FcntlInt(w.Fd(), unix.F_GETPIPE_SZ, 0)
+				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := w.Write(bytes.Repeat([]byte("x"), 1<<20)); !errors.Is(err, os.ErrDeadlineExceeded) {
-					t.Fatalf("fill stdout pipe: %v", err)
-				}
-				if err := w.SetWriteDeadline(time.Time{}); err != nil {
-					t.Fatal(err)
+				if n, err := w.Write(bytes.Repeat([]byte("x"), capacity)); err != nil || n != capacity {
+					t.Fatalf("fill stdout pipe: wrote %d of %d bytes, %v", n, capacity, err)
 				}
 			}
 			cmd := operatorProcess(t)

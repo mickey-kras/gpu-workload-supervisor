@@ -138,11 +138,12 @@ func Decode(body []byte) (Request, Code) {
 	if d.Decode(new(any)) != io.EOF {
 		return Request{}, InvalidRequest
 	}
-	if !token(r.RequestID, 64) {
+	m, ok := fields(body, "protocolVersion", "requestId", "action", "expected", "target", "settings")
+	if !ok || !token(r.RequestID, 64) {
 		return Request{}, InvalidRequest
 	}
 	correlation := Request{RequestID: r.RequestID}
-	if !requestFields(body, r.Action) {
+	if !requestFields(m, r.Action) {
 		return correlation, InvalidRequest
 	}
 	if code := validateRequest(r); code != OK {
@@ -229,11 +230,7 @@ func fields(body []byte, allowed ...string) (map[string]json.RawMessage, bool) {
 	}
 	return m, true
 }
-func requestFields(body []byte, action string) bool {
-	m, ok := fields(body, "protocolVersion", "requestId", "action", "expected", "target", "settings")
-	if !ok {
-		return false
-	}
+func requestFields(m map[string]json.RawMessage, action string) bool {
 	for _, key := range []string{"protocolVersion", "requestId", "action"} {
 		if raw, present := m[key]; !present || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			return false

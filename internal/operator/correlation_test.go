@@ -31,6 +31,10 @@ func TestRejectedRequestCorrelation(t *testing.T) {
 		{"long ID", `{"protocolVersion":1,"requestId":"` + strings.Repeat("r", 65) + `","action":"status"}`, "", InvalidRequest},
 		{"invalid ID unsupported version", `{"protocolVersion":2,"requestId":"bad id","action":"status"}`, "", InvalidRequest},
 		{"duplicate ID", `{"protocolVersion":1,"requestId":"r-1","requestId":"r-2","action":"status"}`, "", InvalidRequest},
+		{"alias ID", `{"protocolVersion":1,"RequestId":"spoofed","action":"status"}`, "", InvalidRequest},
+		{"uppercase ID", `{"protocolVersion":1,"REQUESTID":"spoofed","action":"status"}`, "", InvalidRequest},
+		{"alias after canonical ID", `{"protocolVersion":1,"requestId":"canonical","RequestId":"spoofed","action":"status"}`, "", InvalidRequest},
+		{"alias before canonical ID", `{"protocolVersion":1,"RequestId":"spoofed","requestId":"canonical","action":"status"}`, "", InvalidRequest},
 		{"unknown field", `{"protocolVersion":1,"requestId":"r-1","action":"status","extra":1}`, "", InvalidRequest},
 		{"trailing document", `{"protocolVersion":1,"requestId":"r-1","action":"status"} {}`, "", InvalidRequest},
 	} {
