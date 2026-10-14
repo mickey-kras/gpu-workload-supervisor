@@ -24,6 +24,14 @@ through Tailscale using the `tag:github-sonar` identity and enforces its quality
 gate. Repository Advanced Security settings should keep the dependency graph,
 Dependabot alerts, code scanning, code quality, and secret scanning enabled.
 
+PR validation uses a trusted read-only classifier for a narrow documentation
+route. Only changes confined to `README.md` and Markdown files under `docs/`
+can skip native fixtures and selected Go tests. Security analyses, vulnerability
+audits, frontend checks and package qualification still run. Required status
+checks are always emitted; unknown or incomplete diff evidence receives full
+validation. Main and release execution remain full validation. See
+[Development](DEVELOPMENT.md#pr-validation-scope) for classification and recovery.
+
 The shared CI workflow also rejects Go cognitive complexity above 15 with
 gocognit and uses SonarSource's ESLint plugin to reject nested JavaScript
 conditionals, nested template literals, functions nested more than four levels,

@@ -2,6 +2,11 @@ name: ci
 
 on:
   workflow_call:
+    inputs:
+      validation-mode:
+        type: string
+        required: false
+        default: full
     outputs:
       go-coverage-id:
         description: Successful Go quality coverage artifact
@@ -16,6 +21,7 @@ permissions:
 
 jobs:
   native:
+    if: ${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}
     name: native
     strategy:
       fail-fast: false
@@ -77,16 +83,20 @@ jobs:
           go mod tidy
           git diff --exit-code -- go.mod go.sum
       - name: Tests, race detector, and coverage
+        if: ${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}
         run: |
           go test -race -coverprofile=coverage.out ./...
           go tool cover -func=coverage.out | tee coverage-summary.txt
           awk '$1 == "total:" { coverage=$3+0; found=1 } END { if (!found || coverage < 90) exit 1 }' coverage-summary.txt
       - name: Upstream connection reuse benchmark
+        if: ${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}
         run: go test -run '^$' -bench '^BenchmarkDirectIdleReuse$' -benchtime=20x -count=3 ./internal/httptransport
 
       - name: Package coverage floors
+        if: ${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}
         run: go run github.com/vladopajic/go-test-coverage/v2@v2.19.0 --config=.testcoverage.yml
       - name: Real systemd lifecycle qualification
+        if: ${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}
         run: |
           set -euo pipefail
           qualification_uid="$(id -u)"
@@ -98,8 +108,10 @@ jobs:
           test "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs
           go test -race -count=1 -timeout=10m -tags=systemd_integration -run '^TestSystemd' -v ./internal/supervisor
       - name: Go vet
+        if: ${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}
         run: go vet ./...
       - name: Go cognitive complexity
+        if: ${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}
         run: |
           go run .github/scripts/check-go-directives.go .
           go run github.com/uudashr/gocognit/cmd/gocognit@v1.3.0 -over 15 -test=false -ignore '(^|/)(\.github|docs|node_modules)/' .
@@ -115,8 +127,10 @@ jobs:
           cache: false
 
       - name: Stage go quality coverage
+        if: ${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}
         run: python3 .github/scripts/quality-coverage.py stage go go-quality-coverage
       - name: Upload go quality coverage
+        if: ${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}
         id: coverage
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -340,6 +354,8 @@ jobs:
       - name: Require every CI job to succeed
         env:
           CI_NEEDS: ${{ toJSON(needs) }}
+          CI_EVENT: ${{ github.event_name }}
+          CI_MODE: ${{ inputs.validation-mode }}
         run: |
           python3 - <<'PYTHON'
           import json
@@ -348,7 +364,9 @@ jobs:
 
           required = {'native', 'go', 'frontend', 'scans', 'package'}
           results = json.loads(os.environ['CI_NEEDS'])
-          if set(results) != required or any(results[job].get('result') != 'success' for job in required):
+          docs = os.environ['CI_EVENT'] == 'pull_request' and os.environ['CI_MODE'] == 'docs-only'
+          expected = {job: ('skipped' if docs and job == 'native' else 'success') for job in required}
+          if set(results) != required or any(results[job].get('result') != expected[job] for job in required):
               raise SystemExit('Required CI work did not succeed: ' + json.dumps(results, sort_keys=True))
           outputs = results['package'].get('outputs', {})
           if any(not re.fullmatch(r'[1-9][0-9]*', outputs.get(key, '')) for key in ('payload-id', 'qualified-attempt')):
@@ -360,6 +378,7 @@ jobs:
           artifact-ids: ${{ needs.package.outputs.payload-id }}
           path: dist/
       - name: Prepare CI-tested candidate artifacts
+        if: ${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}
         id: candidate
         shell: bash
         env:
@@ -398,6 +417,7 @@ jobs:
           PYTHON
           (cd candidate-artifacts && sha256sum candidate-manifest.json >> checksums.txt && sha256sum --check checksums.txt)
       - name: Upload CI-tested candidate artifacts
+        if: ${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: candidate-${{ steps.candidate.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}

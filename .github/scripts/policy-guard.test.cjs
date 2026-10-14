@@ -4,6 +4,7 @@ const { readFileSync, readdirSync } = require('node:fs');
 const { inspect: inspectActivated } = require('./policy-guard.cjs');
 const { runInNewContext } = require('node:vm');
 const parallelPolicy = require('./policy-ci-parallel.cjs');
+const scopePolicy = require('./policy-pr-scope.cjs');
 
 // These serial fixtures isolate the original command checks. Production and
 // activation regressions below always use the real, strict graph inspector.
@@ -15,6 +16,12 @@ runInNewContext(readFileSync('.github/scripts/policy-guard.cjs', 'utf8'), {
       const jobs = workflows['.github/workflows/ci.yml']?.jobs;
       return jobs && Object.keys(jobs).length === 1 ? workflows :
         parallelPolicy.normalizeParallelCi(workflows, failures);
+    },
+  } : name === './policy-pr-scope.cjs' ? {
+    normalizeScopedValidation(files, workflows, failures, aggregate) {
+      const jobs = workflows['.github/workflows/ci.yml']?.jobs;
+      return jobs && Object.keys(jobs).length === 1 ? workflows :
+        scopePolicy.normalizeScopedValidation(files, workflows, failures, aggregate);
     },
   } : require(name),
 });
@@ -50,6 +57,13 @@ function files({ serial = true } = {}) {
   // serial fixture; the actual parallel workflow is separately checked below.
   const path = '.github/workflows/ci.yml';
   let source = result[path];
+  if (serial && YAML.parse(source).on.workflow_call?.inputs) {
+    const paths = Object.keys(result).filter(path => path.startsWith('.github/workflows/'));
+    const workflows = Object.fromEntries(paths.map(path => [path, YAML.parse(result[path])]));
+    const normalized = scopePolicy.normalizeScopedValidation(result, workflows, [], parallelPolicy.AGGREGATE_RUN + '\n');
+    for (const changed of [path, '.github/workflows/pr-validation.yml']) result[changed] = YAML.stringify(normalized[changed]);
+    source = result[path];
+  }
   if (serial && YAML.parse(source).on.workflow_call?.outputs) {
     const { normalizeCiReuse } = require('./policy-ci-reuse.cjs');
     const paths = ['ci', 'main', 'aislop'].map(name => `.github/workflows/${name}.yml`);

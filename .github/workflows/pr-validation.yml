@@ -14,8 +14,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  classify:
+    name: classify changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      validation-mode: ${{ steps.scope.outputs.validation-mode }}
+    steps:
+      - uses: step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: Classify changed paths
+        id: scope
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const { readFileSync } = require('node:fs');
+            const { createHash } = require('node:crypto');
+            const { resolve } = require('node:path');
+            const { compileFunction } = require('node:vm');
+            const filename = resolve('.github/scripts/pr-validation-scope.cjs');
+            const source = readFileSync(filename);
+            if (createHash('sha256').update(source).digest('hex') !==
+                'b97a71c8a36ea6ae0ed1498a7a94d29d075effc2e84b112f5eba7417ee97318b') {
+              throw new Error('PR validation classifier bytes changed in the workspace');
+            }
+            const classifier = { exports: {} };
+            const noImports = () => { throw new Error('Unexpected classifier dependency'); };
+            compileFunction(source.toString('utf8'), ['require', 'module', 'exports'], { filename })(
+              noImports, classifier, classifier.exports,
+            );
+            await classifier.exports.run({ github, context, core });
   quality:
+    needs: classify
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/ci.yml
+    with:
+      validation-mode: ${{ needs.classify.result == 'success' && needs.classify.outputs.validation-mode || 'full' }}
   aislop:
     uses: ./.github/workflows/aislop.yml
   codeql:

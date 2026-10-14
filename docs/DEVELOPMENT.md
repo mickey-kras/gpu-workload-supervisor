@@ -24,6 +24,40 @@ go run github.com/vladopajic/go-test-coverage/v2@v2.19.0 --config=.testcoverage.
 
 The optional systemd integration suite, its prerequisites and its coverage limits are documented under [host qualification](DEPLOYMENT.md#qualify-the-host); complete that qualification before enabling execution.
 
+## PR validation scope
+
+Only a complete PR diff confined to `README.md` or Markdown files below `docs/`
+uses the documentation route. Runtime, UI, workflow, policy, configuration,
+dependency and packaging paths, mixed changes and unknown paths use full
+validation. Renames must qualify at both their old and new paths. Deleted files
+need complete diff metadata. Forks use the same read-only classification.
+
+| Work | Documentation route | Full route |
+| --- | --- | --- |
+| Native GTK fixtures | Skipped | Required |
+| Go race tests, coverage, benchmark, systemd qualification, vet and complexity | Skipped | Required |
+| Go formatting, module lock and vulnerability audit | Required | Required |
+| Frontend tests, npm audits and policy tests | Required | Required |
+| Gitleaks, Semgrep, Trivy, Aislop, CodeQL and dependency review | Required | Required |
+| Snapshot packages and desktop payload/lifecycle qualification | Required | Required |
+| Go coverage and fully CI-tested candidate artifacts | Not produced | Produced after their gates succeed |
+
+Documentation ships inside release packages, so its route still builds and
+qualifies packages. It does not promise a one-minute run. `quality / checks`
+accepts only the classifier-authorized native skip; every other producer must
+succeed. Failures and cancellations remain failures. Main and release work run
+full validation regardless of the scope input; Sonar remains main-only.
+
+The classifier checks live PR head/base identity before and after paginated
+file reads. Missing, truncated, changed or failed API evidence selects full
+validation. Its log states `Validation mode: full` with a safe fallback reason.
+If the classifier job itself fails, quality validation also defaults to full.
+Concurrency cancellation stops the remaining quality work.
+Rerun the PR workflow after transient API errors; no label or PR-provided input
+can force the documentation route. The classifier runs protected bytes from the
+trusted base commit. Changes to its allowlist, runtime wrapper or skip wiring
+must first reach the trusted guard through the normal policy review process.
+
 ## Desktop package CI
 
 The required `quality / checks` job also runs native GJS/Gio transport tests,
