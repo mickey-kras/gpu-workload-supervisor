@@ -71,7 +71,12 @@ func TestExistingLaunchRecoveryRequiresFreshSafeSources(t *testing.T) {
 			} else {
 				// CI has no llama-server installation. Substitute only its trust
 				// verdict; this asserts parser/recovery wiring, not runtime trust.
-				found, err = inspectAutomaticLaunchSourcesWithValidator(unit, app, nil, fixtureExecutableValidator)
+				found, err = inspectAutomaticLaunchSourcesWithValidator(unit, app, nil, func(path string) error {
+					if path != trusted {
+						t.Fatal("unexpected runtime reached qualification", path)
+					}
+					return nil
+				})
 			}
 			if err != nil || found.Command != trusted+arguments || found.GPUUUID != uuid || found.Environment["HF_HOME"] != cache {
 				t.Fatal("corrected source was not requalified", found, err)

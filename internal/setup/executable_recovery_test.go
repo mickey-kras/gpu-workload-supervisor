@@ -28,10 +28,16 @@ func TestCustomStoppedExecutableRecoveryKeepsQualificationAndConsentSeparate(t *
 			if blocked.Reference != path || blocked.LifecycleControl != "unverified" || len(blocked.Models) != 0 {
 				t.Fatal("selection lost or runtime operation implied", blocked)
 			}
-			// Positive trust is a boundary fixture: no trusted Ollama/vLLM is
-			// installed in CI. The production rejection above is not overridden.
+			// Select a separate fixture for positive boundary wiring. No trusted
+			// Ollama/vLLM is installed in CI; the validator substitute does not
+			// prove native runtime trust or override the unsafe selection above.
+			replacement := filepath.Join(t.TempDir(), app)
+			if err := os.WriteFile(replacement, raw, 0700); err != nil {
+				t.Fatal(err)
+			}
+			request.Reference = replacement
 			selected, err := probeReferenceWithExecutableValidator(context.Background(), request, candidate(request), func(kind, chosen string) error {
-				if kind != app || chosen != path {
+				if kind != app || chosen != replacement {
 					t.Fatal("selection did not reach the trust boundary unchanged")
 				}
 				return nil
@@ -39,19 +45,21 @@ func TestCustomStoppedExecutableRecoveryKeepsQualificationAndConsentSeparate(t *
 			if err != nil || !selected.Installed || !selected.Recognized || selected.InstanceStatus != "installed" || selected.ConfigurationStatus != "model-required" || selected.LifecycleControl != "unverified" || selected.Endpoint != "" {
 				t.Fatal("installed/configured/reachable states conflated", selected, err)
 			}
-			draft := Draft{ID: "chosen", App: app, Label: "Existing application", Reference: path, ReferenceKind: "application", Binding: selected.Binding, Model: "existing:latest"}
+			draft := Draft{ID: "chosen", App: app, Label: "Existing application", Reference: replacement, ReferenceKind: "application", Binding: selected.Binding, Model: "existing:latest"}
 			if app == "vllm" {
 				draft.Binding.Owned.ModelPath = root
 			}
 			profile, rendered, err := OwnedProfile(draft, "/manager", root)
-			if err != nil || profile.NativeModel.Owned.Executable != path || len(rendered) == 0 {
+			if err != nil || profile.NativeModel.Owned.Executable != replacement || len(rendered) == 0 {
 				t.Fatal("selection failed to reach the managed preview", err)
 			}
 			if _, err := os.Stat(profile.NativeModel.LaunchFile); !os.IsNotExist(err) {
 				t.Fatal("preview created a service before activation consent", err)
 			}
-			if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, raw) {
-				t.Fatal("probe or preview changed the selected application", err)
+			for _, selectedPath := range []string{path, replacement} {
+				if got, err := os.ReadFile(selectedPath); err != nil || !bytes.Equal(got, raw) {
+					t.Fatal("probe or preview changed the selected application", err)
+				}
 			}
 		})
 	}
