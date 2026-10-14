@@ -34,6 +34,7 @@ func TestConfigRejectsInvalidOriginsAndRoutes(t *testing.T) {
 		edit func(*Config)
 	}{
 		{"missing upstream", func(config *Config) { config.Upstream = nil }},
+		{"negative response header timeout", func(config *Config) { config.ResponseHeaderTimeout = -1 }},
 		{"unsupported scheme", func(config *Config) { config.Upstream = &url.URL{Scheme: "file", Host: "localhost"} }},
 		{"public upstream IP", func(config *Config) { config.Upstream = &url.URL{Scheme: "http", Host: "192.0.2.1:8080"} }},
 		{"upstream domain", func(config *Config) { config.Upstream = &url.URL{Scheme: "http", Host: "upstream.internal:8080"} }},
@@ -65,7 +66,7 @@ func TestConfigRejectsInvalidOriginsAndRoutes(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			config := valid
 			test.edit(&config)
-			if _, _, _, _, err := validateConfig(config); err == nil {
+			if _, err := NewWithContext(context.Background(), &fakeStore{}, config); err == nil {
 				t.Fatal("invalid proxy configuration accepted")
 			}
 		})
