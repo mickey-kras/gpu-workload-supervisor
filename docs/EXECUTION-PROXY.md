@@ -82,7 +82,11 @@ Completed registrations and their transition snapshot links are pruned after 30 
 
 ## Route and listener boundary
 
-All unclassified routes fail closed, including GET, HEAD and OPTIONS. Configure each verified read-only method/path with `-read-only-route`; HEAD is not inferred from GET. Required non-execution editing mutations must be explicitly configured as passthrough routes. When upgrading from implicit safe-method forwarding, inventory and configure these routes first. A method or route name alone does not prove that a backend operation is read-only.
+All unclassified routes fail closed, including GET, HEAD and OPTIONS. After
+ingress authentication and request validation, unknown paths return HTTP 404;
+recognized paths with an unconfigured method return HTTP 405 with an `Allow`
+header listing the explicitly configured methods, including POST for the
+completion path. Both return the JSON error `route_not_allowed`. Configure each verified read-only method/path with `-read-only-route`; HEAD is not inferred from GET. Required non-execution editing mutations must be explicitly configured as passthrough routes. When upgrading from implicit safe-method forwarding, inventory and configure these routes first. A method or route name alone does not prove that a backend operation is read-only.
 
 The listener is restricted to loopback because explicit user ownership bypasses supervisor lease registration. Any process that can write the state directory can drive user-mode execution; processes running as the service UID are fully trusted (see [SECURITY.md](../SECURITY.md)). External exposure and requester authentication belong to the deployment boundary.
 
@@ -144,7 +148,13 @@ completion path (`-max-completion-inflight`). Both limits must be positive. Satu
 returns HTTP 503 with `proxy_capacity_exceeded` and `Retry-After: 1` before work
 registration or forwarding. A non-POST request to the completion path uses the
 ordinary limit. Active streams retain their ordinary HTTP slots until the handler
-returns; neither limit imposes a total stream deadline.
+returns; neither limit imposes a total stream deadline. After shutdown begins,
+new requests instead receive HTTP 503 with the JSON error `proxy_shutting_down`
+and no `Retry-After` header: this process is draining, so clients must wait for
+service availability rather than a promised retry interval. Capacity rejections
+use the same JSON error envelope (`{"error":"proxy_capacity_exceeded"}`); their
+`Retry-After: 1` suggests waiting one second before retrying and does not guarantee
+a free slot.
 
 For supervisor-owned native execution, `-max-inflight` also sets a separate cap on
 native reservations. Each reservation starts before work registration and remains
