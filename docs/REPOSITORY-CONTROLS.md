@@ -66,7 +66,13 @@ Work branches match `^(feat|fix|refactor|docs|ci|security)/[a-z0-9]+(-[a-z0-9]+)
 the `branch-policy` check validates the full regex on same-repository PRs.
 Dependabot branches are accepted only for PRs authored by `dependabot[bot]`.
 Same-repository PR branches are updated after main pushes when the release App
-is configured; Dependabot rebases its own branches. Releases follow
+is configured and the PR has auto-merge enabled or the maintained `auto-update`
+label. Maintainers can add this label to opt in without enabling auto-merge;
+remove it and disable auto-merge to opt out. The updater rechecks live eligibility
+on each attempt, skips closed PRs, forks, current branches and conflicts, and
+requires the expected PR head when requesting an update. Dependabot rebases its
+own branches. Required validation against the current base still applies before
+merge, including for PRs that have not opted in to automatic updates. Releases follow
 [RELEASING.md](RELEASING.md): manual dispatch from the validated `main` tip at
 the planned version, immutable `vX.Y.Z` tag, attested assets, and an automatic
 next-patch bump PR.

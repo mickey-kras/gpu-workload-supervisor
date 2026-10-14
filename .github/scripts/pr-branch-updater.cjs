@@ -1,4 +1,5 @@
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const OPT_IN_LABEL = 'auto-update';
 
 function validateContext(context) {
   if (!['push', 'workflow_dispatch'].includes(context.eventName) ||
@@ -13,6 +14,10 @@ async function updatePull({ github, owner, repo, number, sleep, baseBranch }) {
     const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number: number });
     if (pull.state !== 'open' || pull.base.ref !== baseBranch ||
         pull.head.repo?.full_name !== `${owner}/${repo}`) return 'ineligible';
+    // Read live opt-in state on every attempt; list metadata can be stale.
+    if (!pull.auto_merge && !pull.labels?.some(label => label.name === OPT_IN_LABEL)) {
+      return 'not opted in';
+    }
     // PR base metadata can lag behind the branch tip after a merge.
     const { data: main } = await github.rest.git.getRef({ owner, repo, ref: `heads/${baseBranch}` });
     const { data: comparison } = await github.rest.repos.compareCommitsWithBasehead({
