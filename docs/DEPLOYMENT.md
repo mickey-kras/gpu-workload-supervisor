@@ -161,8 +161,20 @@ authorizes a service stop. `restore-state` requires no runtime policy.
 Remove `-release-max-used-mib` (including explicit `=0`; it is rejected) and
 configure cgroup paths in the catalog. Release uses cgroup evidence, never GPU
 memory accounting (running shared Ollama units use the loaded-model list, as
-above). See the [v0.1.5 operator notes](releases/v0.1.5.md) for the
-full migration.
+above). Move legacy per-workload runtime flags to profiles in the accepted
+[catalog](WORKLOADS.md), including unit, cgroup, health endpoint, adapter and
+capacity requirement. Use `adapter: "systemd"` for service-stop behavior. Accept
+the catalog with `configure`; updates require the current
+`-configuration-revision`. Runtime commands pin that durable catalog rather than
+reading edited files. The [v0.1.5 operator notes](releases/v0.1.5.md) describe
+that release only; their per-workload flags are not current migration commands.
+
+Stop workload proxies and wait for their shutdown/drain to finish before changing
+the accepted catalog; setup and `configure` enforce the proxy lifetime lock.
+After acceptance, restart each proxy with the updated deployment configuration.
+A proxy pins the catalog revision at startup and rejects affected new work with
+`configuration_changed` if that revision changes; it does not hot-reload the
+catalog. Keep execution closed until the updated bindings and host are qualified.
 
 ## Check capacity before startup
 
