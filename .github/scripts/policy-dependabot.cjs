@@ -102,7 +102,9 @@ function inspectUpdates(files, failures) {
         ![['gomod', '/'], ['github-actions', '/'], ['npm', '/.github/aislop'],
           ['npm', '/.github/scripts'], ['npm', '/clients/gnome']].every(([ecosystem, directory]) =>
           config.updates.some(entry => entry?.['package-ecosystem'] === ecosystem &&
-            entry.directory === directory && entry['open-pull-requests-limit'] !== 0 &&
+            entry.directory === directory &&
+            (!Object.hasOwn(entry, 'open-pull-requests-limit') ||
+              (Number.isInteger(entry['open-pull-requests-limit']) && entry['open-pull-requests-limit'] > 0)) &&
             !Object.hasOwn(entry, 'allow') && !Object.hasOwn(entry, 'target-branch') &&
             !Object.hasOwn(entry, 'exclude-paths') &&
             (!Object.hasOwn(entry, 'pull-request-branch-name') ||

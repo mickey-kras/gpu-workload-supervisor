@@ -1033,3 +1033,19 @@ test('Dependabot policy module remains a required protected file', () => {
   delete candidate['.github/scripts/policy-dependabot.cjs'];
   assert.ok(inspectActivated(candidate).includes('Missing required file: .github/scripts/policy-dependabot.cjs'));
 });
+
+
+test('Dependabot open PR limits accept defaults or positive integers only', () => {
+  for (const limit of [0, -1, null, '3', 1.5, undefined, 3]) {
+    const candidate = files({ serial: false });
+    const path = '.github/dependabot.yml';
+    const config = YAML.parse(candidate[path]);
+    for (const entry of config.updates) {
+      if (limit === undefined) delete entry['open-pull-requests-limit'];
+      else entry['open-pull-requests-limit'] = limit;
+    }
+    candidate[path] = YAML.stringify(config);
+    if (limit === undefined || limit === 3) assert.deepEqual(inspectActivated(candidate), []);
+    else assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'), String(limit));
+  }
+});
