@@ -15,7 +15,7 @@ function files() {
     '.github/dependabot.yml', '.github/scripts/policy-guard.cjs',
     '.github/scripts/dependabot-auto-merge.cjs', '.github/scripts/pr-branch-updater.cjs',
     '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
-    'release-version.json', '.github/scripts/policy-release.cjs',
+    'release-version.json', '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
     '.github/scripts/eslint.config.cjs', '.github/semgrep-tests/maintainability.go',
     '.github/scripts/check-go-directives.go', '.github/scripts/check-go-directives_test.go',
@@ -26,6 +26,24 @@ function files() {
   ]) result[path] = readFileSync(path, 'utf8');
   return result;
 }
+
+test('parallel CI preserves all existing trusted command and scanner gates', () => {
+  const { parallelFixture } = require('./ci-parallel-fixture.cjs');
+  const candidate = files();
+  const path = '.github/workflows/ci.yml';
+  const workflow = parallelFixture();
+  candidate[path] = YAML.stringify(workflow);
+  assert.deepEqual(inspect(candidate), []);
+  for (const [id, name] of [
+    ['go', 'Tests, race detector, and coverage'], ['go', 'Go cognitive complexity'],
+    ['frontend', 'Test policy automation'], ['scans', 'Semgrep'], ['package', 'Build snapshot artifacts'],
+  ]) {
+    const changed = structuredClone(workflow);
+    changed.jobs[id].steps.find(step => step.name === name).run = 'true';
+    candidate[path] = YAML.stringify(changed);
+    assert.ok(inspect(candidate).some(error => error.includes(name)), name);
+  }
+});
 
 test('current governance workflows satisfy the trusted guard', () => {
   assert.deepEqual(inspect(files()), []);
