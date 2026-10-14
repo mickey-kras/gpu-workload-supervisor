@@ -1230,3 +1230,67 @@ test('Dependabot scopes remain independent of multi-ecosystem inheritance', () =
     assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'));
   }
 });
+
+
+test('Dependabot cooldown supports only absent or integer default-days from 1 through 90', () => {
+  const baseline = files({ serial: false });
+  assert.deepEqual(inspectActivated(baseline), [], 'current cooldowns');
+  const path = '.github/dependabot.yml';
+  for (const cooldown of [undefined, { 'default-days': 1 }, { 'default-days': 90 },
+    null, 7, '7', [], {}, ...[0, -1, 91, 1.5, '7', null].map(days => ({ 'default-days': days })),
+    { 'default-days': 7, 'semver-minor-days': 1 }, { 'default-days': 7, include: ['*'] },
+  ]) {
+    const config = YAML.parse(baseline[path]);
+    for (const entry of config.updates) {
+      if (cooldown === undefined) delete entry.cooldown;
+      else entry.cooldown = cooldown;
+    }
+    const candidate = { ...baseline, [path]: YAML.stringify(config) };
+    if (cooldown === undefined || cooldown?.['default-days'] === 1 || cooldown?.['default-days'] === 90) {
+      assert.deepEqual(inspectActivated(candidate), []);
+    } else assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'), JSON.stringify(cooldown));
+  }
+});
+
+test('Dependabot supports only known top-level and update-entry options', () => {
+  const baseline = files({ serial: false });
+  const path = '.github/dependabot.yml';
+  for (const mutate of [
+    config => { config.registries = {}; }, config => { config.unknown = true; },
+    config => { config.updates[0].unknown = true; },
+    config => { config.updates[0].ignore = null; },
+    config => { config.updates[0].ignore = { 'dependency-name': '*' }; },
+    ...[null, [], '/', {}, { separator: '/', extra: true }].map(name => config => { config.updates[0]['pull-request-branch-name'] = name; }),
+  ]) {
+    const config = YAML.parse(baseline[path]); mutate(config);
+    assert.ok(inspectActivated({ ...baseline, [path]: YAML.stringify(config) }).includes('Dependabot lost required update coverage'));
+  }
+});
+
+test('Dependabot permits absent groups or the exact CodeQL group with either pattern order', () => {
+  const baseline = files({ serial: false });
+  const path = '.github/dependabot.yml';
+  const original = YAML.parse(baseline[path]);
+  const index = original.updates.findIndex(entry => entry['package-ecosystem'] === 'github-actions');
+  for (const groups of [undefined, { codeql: { patterns: ['github/codeql-action/*', 'github/codeql-action'] } }]) {
+    const config = structuredClone(original);
+    if (groups === undefined) delete config.updates[index].groups;
+    else config.updates[index].groups = groups;
+    assert.deepEqual(inspectActivated({ ...baseline, [path]: YAML.stringify(config) }), []);
+  }
+  for (const groups of [null, [], {}, 'codeql', { other: { patterns: ['*'] } },
+    { codeql: null }, { codeql: { patterns: ['github/codeql-action'] } },
+    { codeql: { patterns: ['github/codeql-action', 'github/codeql-action'] } },
+    { codeql: { patterns: ['github/codeql-action', '*'] } },
+    { codeql: { patterns: ['github/codeql-action', 'github/codeql-action/*'], 'update-types': ['major'] } },
+    { codeql: { patterns: ['github/codeql-action', 'github/codeql-action/*'] }, other: {} },
+  ]) {
+    const config = structuredClone(original); config.updates[index].groups = groups;
+    assert.ok(inspectActivated({ ...baseline, [path]: YAML.stringify(config) }).includes('Dependabot lost required update coverage'), JSON.stringify(groups));
+  }
+  for (const [position, entry] of original.updates.entries()) {
+    if (entry['package-ecosystem'] === 'github-actions') continue;
+    const config = structuredClone(original); config.updates[position].groups = original.updates[index].groups;
+    assert.ok(inspectActivated({ ...baseline, [path]: YAML.stringify(config) }).includes('Dependabot lost required update coverage'));
+  }
+});

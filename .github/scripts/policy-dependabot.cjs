@@ -113,36 +113,60 @@ function inspectRecovery(workflows, failures, checks) {
   }
 }
 
+function supportedCooldown(cooldown) {
+  return cooldown && typeof cooldown === 'object' && !Array.isArray(cooldown) &&
+    Object.keys(cooldown).length === 1 && Object.hasOwn(cooldown, 'default-days') &&
+    Number.isInteger(cooldown['default-days']) &&
+    cooldown['default-days'] >= 1 && cooldown['default-days'] <= 90;
+}
+
+function supportedGroups(groups, ecosystem) {
+  if (ecosystem !== 'github-actions' || !groups || typeof groups !== 'object' || Array.isArray(groups)) return false;
+  const group = groups.codeql;
+  return Object.keys(groups).length === 1 && Object.hasOwn(groups, 'codeql') && group && typeof group === 'object' && !Array.isArray(group) &&
+    Object.keys(group).length === 1 && Object.hasOwn(group, 'patterns') && Array.isArray(group.patterns) && group.patterns.length === 2 &&
+    new Set(group.patterns).size === 2 &&
+    group.patterns.every(pattern => ['github/codeql-action', 'github/codeql-action/*'].includes(pattern));
+}
+
+function supportedBranchName(name) {
+  return name && typeof name === 'object' && !Array.isArray(name) &&
+    Object.keys(name).length === 1 && Object.hasOwn(name, 'separator') && name.separator === '/';
+}
+
+function supportedIgnores(ignore) {
+  // Preserve every dependency's patch/minor coverage, including exact names.
+  return Array.isArray(ignore) && ignore.every(rule => rule && typeof rule === 'object' && !Array.isArray(rule) &&
+    typeof rule['dependency-name'] === 'string' && Boolean(rule['dependency-name'].trim()) &&
+    Object.keys(rule).every(key => ['dependency-name', 'update-types', 'versions'].includes(key)) &&
+    (!Object.hasOwn(rule, 'versions') || (Array.isArray(rule.versions) && rule.versions.length === 0)) &&
+    Array.isArray(rule['update-types']) && rule['update-types'].length > 0 &&
+    rule['update-types'].every(type => type === 'version-update:semver-major'));
+}
+
 function inspectUpdates(files, failures) {
-  // Exactly one entry per supported single-directory scope; extensions require policy review.
+  // Intentional compatibility limits: five independent scopes and only the options validated below.
+  // New scopes/options require policy review; this is not the full Dependabot schema.
   const scopes = [['gomod', '/'], ['github-actions', '/'], ['npm', '/.github/aislop'],
     ['npm', '/.github/scripts'], ['npm', '/clients/gnome']];
+  const keys = ['package-ecosystem', 'directory', 'schedule', 'cooldown', 'rebase-strategy',
+    'open-pull-requests-limit', 'groups', 'ignore', 'pull-request-branch-name', 'versioning-strategy'];
   try {
     const config = YAML.parse(files['.github/dependabot.yml'], { uniqueKeys: true });
-    if (config?.version !== 2 || Object.hasOwn(config, 'multi-ecosystem-groups') ||
+    if (config?.version !== 2 || Object.keys(config).some(key => !['version', 'updates'].includes(key)) ||
         !Array.isArray(config.updates) || config.updates.length !== scopes.length ||
         !scopes.every(([ecosystem, directory]) =>
           config.updates.some(entry => entry?.['package-ecosystem'] === ecosystem &&
-            entry.directory === directory && !Object.hasOwn(entry, 'directories') &&
-            !Object.hasOwn(entry, 'multi-ecosystem-group') &&
+            entry.directory === directory && Object.keys(entry).every(key => keys.includes(key)) &&
+            (!Object.hasOwn(entry, 'cooldown') || supportedCooldown(entry.cooldown)) &&
+            (!Object.hasOwn(entry, 'groups') || supportedGroups(entry.groups, ecosystem)) &&
             (!Object.hasOwn(entry, 'rebase-strategy') || entry['rebase-strategy'] === 'auto') &&
             (!Object.hasOwn(entry, 'versioning-strategy') || (ecosystem === 'npm' &&
               ['auto', 'increase', 'increase-if-necessary', 'widen'].includes(entry['versioning-strategy']))) &&
             (!Object.hasOwn(entry, 'open-pull-requests-limit') ||
               (Number.isInteger(entry['open-pull-requests-limit']) && entry['open-pull-requests-limit'] > 0)) &&
-            !Object.hasOwn(entry, 'allow') && !Object.hasOwn(entry, 'target-branch') &&
-            !Object.hasOwn(entry, 'exclude-paths') &&
-            (!Object.hasOwn(entry, 'pull-request-branch-name') ||
-              (entry['pull-request-branch-name'] &&
-                Object.keys(entry['pull-request-branch-name']).every(key => key === 'separator') &&
-                entry['pull-request-branch-name'].separator === '/')) &&
-            // Preserve every dependency's patch/minor coverage, including exact names.
-            !entry.ignore?.some(rule => !rule || typeof rule !== 'object' || Array.isArray(rule) ||
-              typeof rule['dependency-name'] !== 'string' || !rule['dependency-name'].trim() ||
-              Object.keys(rule).some(key => !['dependency-name', 'update-types', 'versions'].includes(key)) ||
-              (Object.hasOwn(rule, 'versions') && (!Array.isArray(rule.versions) || rule.versions.length !== 0)) ||
-              !Array.isArray(rule['update-types']) || rule['update-types'].length === 0 ||
-              rule['update-types'].some(type => type !== 'version-update:semver-major')) &&
+            (!Object.hasOwn(entry, 'pull-request-branch-name') || supportedBranchName(entry['pull-request-branch-name'])) &&
+            (!Object.hasOwn(entry, 'ignore') || supportedIgnores(entry.ignore)) &&
             supportedSchedule(entry.schedule)))) {
       failures.push('Dependabot lost required update coverage');
     }
