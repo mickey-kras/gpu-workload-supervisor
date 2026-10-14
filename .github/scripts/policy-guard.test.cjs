@@ -16,6 +16,7 @@ function files() {
     '.github/scripts/dependabot-auto-merge.cjs', '.github/scripts/pr-branch-updater.cjs',
     '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
     'release-version.json', '.github/scripts/policy-release.cjs',
+    '.github/scripts/release-validation.cjs',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
     '.github/scripts/eslint.config.cjs', '.github/semgrep-tests/maintainability.go',
     '.github/scripts/check-go-directives.go', '.github/scripts/check-go-directives_test.go',
@@ -29,6 +30,78 @@ function files() {
 
 test('current governance workflows satisfy the trusted guard', () => {
   assert.deepEqual(inspect(files()), []);
+});
+
+function reusableRelease(candidate) {
+  const path = '.github/workflows/release.yml';
+  const workflow = YAML.parse(candidate[path]);
+  for (const id of ['quality', 'aislop', 'codeql']) delete workflow.jobs[id];
+  const script = [
+    "await require('./.github/scripts/release-validation.cjs').verifyMain({",
+    '  github, context, core, version: process.env.VERSION,', '});', '',
+  ].join('\n');
+  const verify = { name: 'Verify exact-commit main validation',
+    uses: 'actions/github-script@' + 'a'.repeat(40),
+    env: { VERSION: '${{ needs.entry.outputs.version }}' }, with: { script } };
+  workflow.jobs.validation = { needs: 'entry', 'timeout-minutes': 75,
+    permissions: { contents: 'read', actions: 'read' }, steps: [
+      { uses: 'actions/checkout@' + 'a'.repeat(40),
+        with: { ref: '${{ github.sha }}', 'persist-credentials': false } }, verify,
+    ] };
+  workflow.jobs.publish.needs = ['entry', 'validation'];
+  const publishVerify = workflow.jobs.publish.steps.find(step =>
+    step.name === 'Verify main and successful validation at this commit');
+  publishVerify.with.script = script;
+  return { path, workflow, verify, publishVerify };
+}
+
+test('release validation policy accepts strict reuse alongside the retained legacy route', () => {
+  const candidate = files(); const { path, workflow } = reusableRelease(candidate);
+  candidate[path] = YAML.stringify(workflow);
+  assert.deepEqual(inspect(candidate), []);
+});
+
+test('release validation reuse cannot skip or weaken its exact-commit gate', () => {
+  for (const mutate of [
+    state => { state.workflow.jobs.publish.needs = ['entry']; },
+    state => { state.workflow.jobs.validation.needs = []; },
+    state => { state.workflow.jobs.validation.if = false; },
+    state => { state.workflow.jobs.validation.permissions.actions = 'write'; },
+    state => { state.workflow.jobs.validation['timeout-minutes'] = 10; },
+    state => { state.workflow.jobs.validation.steps[0].with.ref = 'main'; },
+    state => { state.verify.if = false; },
+    state => { state.verify.with.script = 'console.log("validation skipped")'; },
+    state => { state.verify.env.VERSION = '0.1.0'; },
+    state => { state.verify.with['github-token'] = '${{ secrets.WRITE_TOKEN }}'; },
+    state => { state.publishVerify.with.script = 'return;'; },
+    state => { state.publishVerify.if = false; },
+  ]) {
+    const candidate = files(); const state = reusableRelease(candidate); mutate(state);
+    candidate[state.path] = YAML.stringify(state.workflow);
+    assert.notDeepEqual(inspect(candidate), []);
+  }
+});
+
+test('release verifier bytes are protected even before switching to reuse', () => {
+  const candidate = files(); candidate['.github/scripts/release-validation.cjs'] += '\nreturn;\n';
+  assert.ok(inspect(candidate).some(error => error.includes('verifier was changed')));
+  const missing = files(); delete missing['.github/scripts/release-validation.cjs'];
+  assert.notDeepEqual(inspect(missing), []);
+});
+
+test('legacy release gates cannot be weakened during staged validation adoption', () => {
+  for (const mutate of [
+    jobs => { jobs.quality.if = false; },
+    jobs => { jobs.aislop.uses = './.github/workflows/ci.yml'; },
+    jobs => { jobs.codeql.needs = []; },
+    jobs => { jobs.publish.steps.find(step => step.name ===
+      'Verify main and successful validation at this commit').with.script = 'return;'; },
+  ]) {
+    const candidate = files(); const path = '.github/workflows/release.yml';
+    const workflow = YAML.parse(candidate[path]); mutate(workflow.jobs);
+    candidate[path] = YAML.stringify(workflow);
+    assert.notDeepEqual(inspect(candidate), []);
+  }
 });
 
 test('maintainability gates cannot be removed, skipped or weakened', () => {
