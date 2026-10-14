@@ -4,17 +4,28 @@ const { isDeepStrictEqual } = require('node:util');
 const VALIDATION_SCRIPT = [
   "const { readFileSync } = require('node:fs');",
   "const { createHash } = require('node:crypto');",
-  "const { createRequire } = require('node:module');",
   "const { resolve } = require('node:path');",
   "const { compileFunction } = require('node:vm');",
   "const filename = resolve('.github/scripts/release-validation.cjs');",
   'const source = readFileSync(filename);',
   "if (createHash('sha256').update(source).digest('hex') !==",
-  "    'da0aa5baa3644818864a925255c719bab9de011c7bdfe443f45637aebd4e7af8') {",
+  "    '9c04657f811326dd6788c2ae8515bc828dade338b002571989f601919a652f28') {",
   "  throw new Error('Release validation verifier bytes changed in the workspace');", '}',
+  "const publicationFilename = resolve('.github/scripts/release-publication.cjs');",
+  'const publicationSource = readFileSync(publicationFilename);',
+  "if (createHash('sha256').update(publicationSource).digest('hex') !==",
+  "    '124d6832b052c0f3309755c1874acf303bbef264cf24077e1831dacc51838462') {",
+  "  throw new Error('Release publication helper bytes changed in the workspace');", '}',
+  'const publication = { exports: {} };',
+  "const noImports = () => { throw new Error('Unexpected publication helper dependency'); };",
+  "compileFunction(publicationSource.toString('utf8'), ['require', 'module', 'exports'],",
+  '  { filename: publicationFilename })(noImports, publication, publication.exports);',
+  'const closedRequire = name => {',
+  "  if (name !== './release-publication.cjs') throw new Error('Unexpected validation dependency');",
+  '  return publication.exports;', '};',
   'const validated = { exports: {} };',
   "compileFunction(source.toString('utf8'), ['require', 'module', 'exports'], { filename })(",
-  '  createRequire(filename), validated, validated.exports,', ');',
+  '  closedRequire, validated, validated.exports,', ');',
   'await validated.exports.verifyMain({',
   '  github, context, core, version: process.env.VERSION,', '});', '',
 ].join('\n');
@@ -61,8 +72,12 @@ function inspectValidationReuse(files, workflow, failures, checks) {
     step.name === 'Verify main and successful validation at this commit');
   const digest = content => createHash('sha256').update(content || '').digest('hex');
   if (digest(files['.github/scripts/release-validation.cjs']) !==
-      'da0aa5baa3644818864a925255c719bab9de011c7bdfe443f45637aebd4e7af8') {
+      '9c04657f811326dd6788c2ae8515bc828dade338b002571989f601919a652f28') {
     failures.push('Release validation verifier was changed');
+  }
+  if (digest(files['.github/scripts/release-publication.cjs']) !==
+      '124d6832b052c0f3309755c1874acf303bbef264cf24077e1831dacc51838462') {
+    failures.push('Release publication helper was changed');
   }
   if (!validation) {
     for (const id of ['quality', 'aislop', 'codeql']) {

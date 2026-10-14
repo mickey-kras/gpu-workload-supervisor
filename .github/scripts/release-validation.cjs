@@ -1,4 +1,4 @@
-const { verifyPublished } = require('./release-follow-up.cjs');
+const { verifyPublished } = require('./release-publication.cjs');
 
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const WAIT_MS = 70 * 60 * 1000;

@@ -18,6 +18,7 @@ function files() {
     '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
     'release-version.json', '.github/scripts/policy-release.cjs',
     '.github/scripts/release-validation.cjs',
+    '.github/scripts/release-publication.cjs',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
     '.github/scripts/eslint.config.cjs', '.github/semgrep-tests/maintainability.go',
     '.github/scripts/check-go-directives.go', '.github/scripts/check-go-directives_test.go',
@@ -93,6 +94,8 @@ test('release verifier bytes are protected even before switching to reuse', () =
   assert.ok(inspect(candidate).some(error => error.includes('verifier was changed')));
   const missing = files(); delete missing['.github/scripts/release-validation.cjs'];
   assert.notDeepEqual(inspect(missing), []);
+  const helper = files(); helper['.github/scripts/release-publication.cjs'] = 'process.exit(0);';
+  assert.ok(inspect(helper).some(error => error.includes('publication helper was changed')));
 });
 
 test('verification jobs reject workspace writes and runtime or wrapper input overrides', () => {

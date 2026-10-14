@@ -2,6 +2,7 @@ const { execFileSync } = require('node:child_process');
 const { readFileSync } = require('node:fs');
 const { isDeepStrictEqual } = require('node:util');
 const semver = require('semver');
+const { verifyPublished } = require('./release-publication.cjs');
 
 function requireValue(condition, message) {
   if (!condition) throw new Error(message);
@@ -20,26 +21,6 @@ function versionFile(version) {
   return `${JSON.stringify({ version }, null, 2)}\n`;
 }
 
-async function verifyPublished({ github, context, version }) {
-  releaseVersion(versionFile(version));
-  requireValue(/^[a-f0-9]{40}$/.test(context.sha), 'Invalid release commit');
-  const tag = `v${version}`;
-  const { data: ref } = await github.rest.git.getRef({ ...context.repo, ref: `tags/${tag}` });
-  const { data: release } = await github.rest.repos.getReleaseByTag({ ...context.repo, tag });
-  requireValue(release.immutable === true,
-    `Release ${tag} is not verified immutable; preserve its tag and assets, confirm repository release immutability, and reserve an unused version through a normal PR`);
-  const expected = [`gpu-workload-supervisor-${tag}.tar.gz`,
-    `gpu-workload-supervisor_${version}_linux_amd64.tar.gz`,
-    `gpu-workload-supervisor_${version}_linux_arm64.tar.gz`,
-    `gpu-workload-supervisor_${version}_linux_amd64.deb`,
-    `gpu-workload-supervisor_${version}_linux_arm64.deb`, 'SHA256SUMS', 'sbom.cdx.json'];
-  requireValue(ref.object.type === 'commit' && ref.object.sha === context.sha &&
-    release.tag_name === tag && !release.draft && !release.prerelease &&
-    release.assets.length === expected.length &&
-    expected.every(name => release.assets.some(asset => asset.name === name &&
-      asset.state === 'uploaded' && /^sha256:[a-f0-9]{64}$/.test(asset.digest || ''))),
-  'Published release does not match the immutable candidate');
-}
 
 function mergeVersionBump({ repository, number, sha }) {
   execFileSync('gh', ['pr', 'merge', String(number), '--repo', repository,

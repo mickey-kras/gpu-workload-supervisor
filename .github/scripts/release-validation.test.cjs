@@ -293,6 +293,7 @@ test('overwritten workspace verifier cannot turn the protected runtime gate into
   const dir = mkdtempSync(join(tmpdir(), 'release-verifier-'));
   try {
     const scripts = join(dir, '.github', 'scripts'); mkdirSync(scripts, { recursive: true });
+    writeFileSync(join(scripts, 'release-publication.cjs'), readFileSync(join(__dirname, 'release-publication.cjs')));
     const filename = join(scripts, 'release-validation.cjs');
     writeFileSync(filename, 'module.exports = { verifyMain: async () => {} };\n');
     const source = `const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
@@ -308,7 +309,7 @@ test('runtime gate executes captured bytes even if workspace changes after hash 
   const dir = mkdtempSync(join(tmpdir(), 'release-verifier-race-'));
   try {
     const scripts = join(dir, '.github', 'scripts'); mkdirSync(scripts, { recursive: true });
-    for (const name of ['release-validation.cjs', 'release-follow-up.cjs']) {
+    for (const name of ['release-validation.cjs', 'release-publication.cjs']) {
       writeFileSync(join(scripts, name), readFileSync(join(__dirname, name)));
     }
     symlinkSync(resolve(__dirname, 'node_modules'), join(scripts, 'node_modules'), 'dir');
@@ -325,5 +326,33 @@ new AsyncFunction('require', 'github', 'context', 'core', ${JSON.stringify(VALID
 ).catch(error => { console.error(error.message); process.exitCode = 1; });`;
     assert.throws(() => execFileSync(process.execPath, ['-e', source], { cwd: dir, stdio: 'pipe' }),
       error => error.stderr.toString().includes('Release requires dispatch from main'));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the validation trust chain never executes follow-up mutation code or npm semver', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'release-validation-dependency-'));
+  try {
+    const scripts = join(dir, '.github', 'scripts'); mkdirSync(scripts, { recursive: true });
+    for (const name of ['release-validation.cjs', 'release-publication.cjs']) {
+      writeFileSync(join(scripts, name), readFileSync(join(__dirname, name)));
+    }
+    const exit = "require('node:fs').writeFileSync('dependency-executed', 'true'); process.exit(0);";
+    writeFileSync(join(scripts, 'release-follow-up.cjs'),
+      `if (process.env.GITHUB_ACTIONS === 'true' && process.env.VERSION) { ${exit} }`);
+    const npm = join(scripts, 'node_modules', 'semver'); mkdirSync(npm, { recursive: true });
+    writeFileSync(join(npm, 'index.js'), exit);
+    const source = `const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+new AsyncFunction('require', 'github', 'context', 'core', ${JSON.stringify(VALIDATION_SCRIPT)})(
+  require, {}, {}, {},
+).catch(error => { console.error(error.message); process.exitCode = 1; });`;
+    assert.throws(() => execFileSync(process.execPath, ['-e', source], {
+      cwd: dir, stdio: 'pipe', env: { ...process.env, GITHUB_ACTIONS: 'true', VERSION },
+    }), error => error.stderr.toString().includes('Release requires dispatch from main'));
+    assert.throws(() => readFileSync(join(dir, 'dependency-executed')), { code: 'ENOENT' });
+    // A modified helper must fail before its top-level code can exit successfully.
+    writeFileSync(join(scripts, 'release-publication.cjs'), exit);
+    assert.throws(() => execFileSync(process.execPath, ['-e', source], { cwd: dir, stdio: 'pipe' }),
+      error => error.stderr.toString().includes('publication helper bytes changed in the workspace'));
+    assert.throws(() => readFileSync(join(dir, 'dependency-executed')), { code: 'ENOENT' });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
