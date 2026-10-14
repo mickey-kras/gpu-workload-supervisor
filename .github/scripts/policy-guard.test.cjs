@@ -971,7 +971,9 @@ test('Dependabot wildcard ignores cannot disable required patch or minor updates
   for (const ignore of [
     { 'dependency-name': '*', 'update-types': ['version-update:semver-major'] },
     { 'dependency-name': '*/*', 'update-types': ['version-update:semver-major'] },
+    { 'dependency-name': '*', versions: [], 'update-types': ['version-update:semver-major'] },
     { 'dependency-name': 'actions/checkout', 'update-types': ['version-update:semver-minor'] },
+    { 'dependency-name': 'actions/checkout', versions: ['>= 0'], 'update-types': ['version-update:semver-major'] },
   ]) {
     const candidate = files({ serial: false });
     const path = '.github/dependabot.yml';
@@ -1074,5 +1076,24 @@ test('pin normalization helper additions, deletions and read errors cannot bypas
     };
     await assert.rejects(verifyDependabotAuthor(github, context),
       change === 'unavailable' ? /helper read failed/ : /trusted human author/);
+  }
+});
+
+
+test('wildcard ignores require explicit major-only types without version ranges', () => {
+  const invalid = [
+    ...[['>= 0'], null, '>= 0', {}].map(versions => ({
+      versions, 'update-types': ['version-update:semver-major'],
+    })),
+    ...[[], null, 'version-update:semver-major', ['unknown'],
+      ['version-update:semver-major', 'version-update:semver-patch']].map(types => ({ 'update-types': types })),
+  ];
+  for (const fields of invalid) {
+    const candidate = files({ serial: false });
+    const path = '.github/dependabot.yml';
+    const config = YAML.parse(candidate[path]);
+    for (const entry of config.updates) entry.ignore = [{ 'dependency-name': '*', ...fields }];
+    candidate[path] = YAML.stringify(config);
+    assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'), JSON.stringify(fields));
   }
 });

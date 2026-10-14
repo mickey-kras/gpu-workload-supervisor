@@ -114,10 +114,12 @@ function inspectUpdates(files, failures) {
               (entry['pull-request-branch-name'] &&
                 Object.keys(entry['pull-request-branch-name']).every(key => key === 'separator') &&
                 entry['pull-request-branch-name'].separator === '/')) &&
-            // Wildcard patch/minor exclusions can erase required dependency coverage.
+            // Wildcards permit only explicit major exclusions, without version ranges.
             !entry.ignore?.some(rule => /\*/.test(rule['dependency-name']) &&
-              (!Array.isArray(rule['update-types']) || rule['update-types'].some(type =>
-                ['version-update:semver-patch', 'version-update:semver-minor'].includes(type)))) &&
+              (Object.keys(rule).some(key => !['dependency-name', 'update-types', 'versions'].includes(key)) ||
+                (Object.hasOwn(rule, 'versions') && (!Array.isArray(rule.versions) || rule.versions.length !== 0)) ||
+                !Array.isArray(rule['update-types']) || rule['update-types'].length === 0 ||
+                rule['update-types'].some(type => type !== 'version-update:semver-major'))) &&
             ['daily', 'weekly', 'monthly', 'cron'].includes(entry.schedule?.interval) &&
             (entry.schedule.interval !== 'cron' || entry.schedule.cronjob?.trim())))) {
       failures.push('Dependabot lost required update coverage');
