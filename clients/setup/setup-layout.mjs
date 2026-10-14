@@ -12,7 +12,7 @@ import {addErrorReporter} from './discovery-ui.mjs';
 
 export function createShell(ui) {
     ui.window = new Adw.ApplicationWindow({application: ui.app, title: 'GPU Workload Setup',
-        default_width: 620, default_height: 670});
+        default_width: 620, default_height: 740, width_request: 480, height_request: 480});
     const removeStyle = installSetupStyle(ui.window);
     ui.appearance = Adw.StyleManager.get_default();
     ui.updateAppearance = () => {
@@ -31,7 +31,7 @@ export function createShell(ui) {
     };
     ui.window.connect('destroy', ui.releasePresentation);
     ui.updateAppearance();
-    ui.toolbar = new Adw.ToolbarView();
+    ui.toolbar = new Adw.ToolbarView({extend_content_to_top_edge: false, extend_content_to_bottom_edge: false});
     ui.headerBar = new Adw.HeaderBar();
     ui.toolbar.add_top_bar(ui.headerBar);
     ui.settingsTitle = new Gtk.Label({wrap: false, focusable: true, selectable: true, accessible_role: Gtk.AccessibleRole.HEADING}); ui.settingsTitle.add_css_class('title'); ui.settingsTitle.add_css_class('setup-page-title');
@@ -39,7 +39,8 @@ export function createShell(ui) {
     ui.settingsBack.update_property([Gtk.AccessibleProperty.LABEL], ['Back']); ui.settingsBack.connect('clicked', ui.goBack); ui.headerBar.pack_start(ui.settingsBack);
     ui.box = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 14,
         margin_start: 28, margin_end: 28, margin_top: 20, margin_bottom: 12});
-    ui.scroll = new Gtk.ScrolledWindow({vexpand: true, hscrollbar_policy: Gtk.PolicyType.NEVER});
+    ui.scroll = new Gtk.ScrolledWindow({vexpand: true, hscrollbar_policy: Gtk.PolicyType.NEVER,
+        vscrollbar_policy: Gtk.PolicyType.AUTOMATIC, overlay_scrolling: false});
     ui.scroll.set_child(ui.box);
     ui.toolbar.set_content(ui.scroll);
     ui.window.set_content(ui.toolbar);

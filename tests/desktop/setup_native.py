@@ -15,15 +15,15 @@ import sys
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True, type=pathlib.Path)
-    parser.add_argument('--quick', action='store_true', help='Run the representative light 620x670 case only')
+    parser.add_argument('--quick', action='store_true', help='Run the default light 620x740 case only')
     args = parser.parse_args()
     root = pathlib.Path(__file__).resolve().parents[2]
     subprocess.run([sys.executable, str(root / 'tests/desktop/test_setup_accessibility.py')], check=True)
     output = args.output.resolve()
-    cases = [('light', 620, 670, 1)] if args.quick else [
+    cases = [('light', 620, 740, 1)] if args.quick else [
         (theme, width, height, scale)
         for theme in ('light', 'dark', 'highcontrast')
-        for width, height in ((620, 670), (540, 620))
+        for width, height in ((620, 740), (620, 670), (480, 480))
         for scale in (1, 2)
     ]
     reports = []
