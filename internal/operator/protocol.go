@@ -138,11 +138,15 @@ func Decode(body []byte) (Request, Code) {
 	if d.Decode(new(any)) != io.EOF {
 		return Request{}, InvalidRequest
 	}
-	if !requestFields(body, r.Action) {
+	if !token(r.RequestID, 64) {
 		return Request{}, InvalidRequest
 	}
+	correlation := Request{RequestID: r.RequestID}
+	if !requestFields(body, r.Action) {
+		return correlation, InvalidRequest
+	}
 	if code := validateRequest(r); code != OK {
-		return Request{}, code
+		return correlation, code
 	}
 	return r, OK
 }
@@ -150,9 +154,6 @@ func Decode(body []byte) (Request, Code) {
 func validateRequest(r Request) Code {
 	if r.ProtocolVersion != 1 {
 		return UnsupportedVersion
-	}
-	if !token(r.RequestID, 64) {
-		return InvalidRequest
 	}
 	return validateAction(r)
 }
