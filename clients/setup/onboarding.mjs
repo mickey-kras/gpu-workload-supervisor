@@ -152,3 +152,26 @@ export function correctionPreview(candidate, uuid = '') {
     if (!candidate?.unit || (!gpu && !restart) || (gpu && !validUUID)) return '';
     return ['[Service]', ...(gpu ? [`Environment="CUDA_VISIBLE_DEVICES=${uuid}"`] : []), ...(restart ? ['Restart=no'] : [])].join('\n') + '\n';
 }
+
+// Guidance describes supported repairs, never authorizes them or changes the
+// qualification verdict. Data paths and executable paths have different owners.
+export function recoveryGuidance(candidate) {
+    const diagnostics = candidateDiagnostics(candidate);
+    const messages = diagnostics.length ? diagnostics : [candidate?.nextStep ?? ''];
+    const steps = new Set();
+    for (const message of messages) {
+        if (/Environment variable PATH:/.test(message)) {
+            steps.add('PATH: review each directory, including every alias target and ancestor. Use absolute protected root-owned executable directories; do not add user-writable directories. Preserve settings the application requires.');
+        } else if (/LD_LIBRARY_PATH|transitive loader/.test(message)) {
+            steps.add('Runtime libraries: use a reviewed root-owned runtime installation with its normal trusted loader configuration. Simply deleting LD_LIBRARY_PATH does not establish that its libraries are safe or that the application still works.');
+        } else if (/WorkingDirectory|working directory/.test(message)) {
+            steps.add('Working directory: choose an existing directory inside the account home. Inspect the directory and its ancestors for links, ownership and unintended group/world writes; preserve the application and its data.');
+        } else if (/Environment variable (?:HOME|HF_HOME|HUGGINGFACE_HUB_CACHE|TRANSFORMERS_CACHE|XDG_CACHE_HOME|TMPDIR|HF_TOKEN_PATH):|ComfyUI option --(?:output-directory|temp-directory|user-directory|extra-model-paths-config)|application script trust|launch source component/.test(message)) {
+            steps.add('Application and data paths: inspect each reported setting and its ancestors. Use existing absolute paths without links, owned by this account or root and protected from other users’ writes. Keep directory settings as directories and configuration/token settings as regular files. Preserve models and application data; repair only the reported unsafe component or select another qualified path.');
+        } else if (/executable|interpreter|root-owned/i.test(message)) {
+            steps.add('Runtime executable: ask an administrator to install a trusted package in a protected root-owned location, including its interpreter, libraries and executable ancestors. Choose that executable or review the external service command. Preserve the original application and models; setup never changes ownership or permissions.');
+        }
+    }
+    if (steps.size) steps.add('After reviewing changes to an external service, reload the user systemd manager. Choose Check again to inspect fresh evidence; configuration readiness does not prove GPU operation.');
+    return [...steps];
+}
