@@ -141,7 +141,7 @@ type ComfyUIRecovery struct{ AttemptID string }
 
 func (e *ComfyUIRecovery) Error() string {
 	if e.AttemptID == "" {
-		return "ComfyUI pending metadata recovered"
+		return "ComfyUI reconciliation pass recovered"
 	}
 	return "ComfyUI attempt " + e.AttemptID + " reconciliation recovered"
 }
@@ -446,16 +446,12 @@ func (a *comfyUIAdapter) reconcileWithDiagnostics(ctx context.Context, observe f
 		observe("", "pending_metadata_unavailable")
 		return fmt.Errorf("ComfyUI pending metadata unavailable: %w", err)
 	}
-	observe("", "")
 	if len(attempts) == 0 {
 		a.cursor = ""
-		return nil
 	}
 	var errs []error
 	for _, attempt := range attempts {
 		if ctx.Err() != nil {
-			errs = append(errs, ctx.Err())
-			observe(attempt.AttemptID, "reconciliation_timeout")
 			break
 		}
 		a.cursor = attempt.AttemptID
@@ -472,6 +468,12 @@ func (a *comfyUIAdapter) reconcileWithDiagnostics(ctx context.Context, observe f
 			}
 		}
 		observe(attempt.AttemptID, reason)
+	}
+	if ctx.Err() != nil {
+		errs = append(errs, ctx.Err())
+		observe("", "reconciliation_timeout")
+	} else {
+		observe("", "")
 	}
 	return errors.Join(errs...)
 }

@@ -284,3 +284,67 @@ func TestComfyUIDiagnosticsReuseRecoveredSlotBeforeEviction(t *testing.T) {
 		t.Fatal("full diagnostic state did not evict an entry")
 	}
 }
+
+func TestComfyUIDiagnosticsPassTimeoutDoesNotFailUnpolledAttempt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var attempts []store.ComfyUIAttempt
+		for i := range 6 {
+			attempt := comfyUIFixtureAttempt()
+			attempt.AttemptID = fmt.Sprintf("%08d-1111-4111-8111-111111111111", i)
+			attempts = append(attempts, attempt)
+		}
+		stateStore := &comfyUIFakeStore{attempts: attempts}
+		upstream, _ := url.Parse("http://127.0.0.1:8188")
+		healthy := false
+		polls := 0
+		adapter := &comfyUIAdapter{store: stateStore, upstream: upstream, transport: comfyUIRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if strings.HasPrefix(r.URL.Path, "/history/") {
+				polls++
+			}
+			if !healthy {
+				<-r.Context().Done()
+				time.Sleep(time.Millisecond)
+				return nil, r.Context().Err()
+			}
+			if strings.HasPrefix(r.URL.Path, "/history/") {
+				return comfyUIDiagnosticResponse(comfyUIFixtureHistory(attempts[5])), nil
+			}
+			return comfyUIDiagnosticResponse(`{"queue_running":[],"queue_pending":[]}`), nil
+		})}
+		diagnostics := comfyUIDiagnostics{}
+		var reports []error
+		observe := func(id, reason string) {
+			diagnostics.observe(id, reason, func(err error) { reports = append(reports, err) })
+		}
+		if err := adapter.reconcileWithDiagnostics(context.Background(), observe); err == nil {
+			t.Fatal("pass timeout accepted")
+		}
+		if polls != 5 || len(reports) != 6 || adapter.cursor != attempts[4].AttemptID {
+			t.Fatalf("exhausted budget polls=%d reports=%v", polls, reports)
+		}
+		for _, diagnostic := range reports {
+			var unresolved *ComfyUIUnresolvedError
+			if !errors.As(diagnostic, &unresolved) || unresolved.AttemptID == attempts[5].AttemptID {
+				t.Fatalf("unpolled attempt diagnosed: %v", diagnostic)
+			}
+		}
+		var timeout *ComfyUIUnresolvedError
+		if !errors.As(reports[5], &timeout) || timeout.AttemptID != "" || timeout.Reason != "reconciliation_timeout" {
+			t.Fatalf("pass timeout diagnostic: %v", reports[5])
+		}
+		healthy = true
+		if err := adapter.reconcileWithDiagnostics(context.Background(), observe); err != nil {
+			t.Fatal(err)
+		}
+		var recovery *ComfyUIRecovery
+		if polls != 6 || len(stateStore.finished) != 1 || len(reports) != 7 || !errors.As(reports[6], &recovery) || recovery.AttemptID != "" {
+			t.Fatalf("next pass polls=%d completions=%v reports=%v", polls, stateStore.finished, reports)
+		}
+		if err := adapter.reconcileWithDiagnostics(context.Background(), observe); err != nil {
+			t.Fatal(err)
+		}
+		if len(reports) != 7 {
+			t.Fatalf("empty page repeated recovery: %v", reports)
+		}
+	})
+}
