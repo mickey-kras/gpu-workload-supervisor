@@ -34,9 +34,13 @@ function inspectWorkflow(workflows, failures, checks) {
     metadataPath: require('node:path').resolve('metadata-action'),
     mainWorkflow: 'main.yml',
   });`;
+  const concurrency = workflow?.concurrency;
   if (job?.if !== "github.event_name != 'pull_request_target' || github.event.pull_request.user.login == 'dependabot[bot]'" ||
-      workflow?.concurrency?.['cancel-in-progress'] !== false ||
-      workflow?.concurrency?.group !== 'dependabot-auto-merge-${{ github.repository }}') {
+      !concurrency || typeof concurrency !== 'object' || Array.isArray(concurrency) ||
+      Object.keys(concurrency).length !== 2 ||
+      !['group', 'cancel-in-progress'].every(key => Object.hasOwn(concurrency, key)) ||
+      concurrency['cancel-in-progress'] !== false ||
+      concurrency.group !== 'dependabot-auto-merge-${{ github.repository }}') {
     failures.push('Dependabot lost gated queue invocation or serialization');
   }
   const metadata = steps.find(step => step.name === 'Read pinned Dependabot metadata action');
@@ -104,6 +108,9 @@ function inspectRecovery(workflows, failures, checks) {
   }
   for (const document of [workflow, workflows[refresh]]) {
     for (const scope of [document, ...Object.values(document?.jobs || {})]) {
+      if (scope && Object.hasOwn(scope, 'name') && typeof scope.name !== 'string') {
+        failures.push('Dependabot workflow and job names must be strings');
+      }
       if (scope !== document && !Object.hasOwn(scope, 'permissions')) continue;
       const permissions = scope?.permissions;
       if (!permissions || Object.keys(permissions).length !== 3 ||

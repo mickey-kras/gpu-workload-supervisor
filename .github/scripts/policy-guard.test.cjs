@@ -1303,3 +1303,47 @@ test('Dependabot permits absent groups or the exact CodeQL group with either pat
     assert.ok(inspectActivated({ ...baseline, [path]: YAML.stringify(config) }).includes('Dependabot lost required update coverage'));
   }
 });
+
+test('Dependabot concurrency accepts only its supported two-key serialization object', () => {
+  const baseline = files({ serial: false });
+  assert.deepEqual(inspectActivated(baseline), []);
+  const path = '.github/workflows/dependabot-auto-merge.yml';
+  const original = YAML.parse(baseline[path]);
+  for (const concurrency of [
+    { ...original.concurrency, bogus: true }, null, [], 'shared-group', false,
+    { group: original.concurrency.group }, { 'cancel-in-progress': false },
+    { ...original.concurrency, 'cancel-in-progress': 'false' },
+  ]) {
+    const workflow = structuredClone(original); workflow.concurrency = concurrency;
+    const candidate = { ...baseline, [path]: YAML.stringify(workflow) };
+    assert.ok(inspectActivated(candidate).includes('Dependabot lost gated queue invocation or serialization'),
+      JSON.stringify(concurrency));
+  }
+  const workflow = structuredClone(original);
+  workflow.concurrency = { 'cancel-in-progress': false, group: original.concurrency.group };
+  assert.deepEqual(inspectActivated({ ...baseline, [path]: YAML.stringify(workflow) }), []);
+});
+
+test('Dependabot workflow and job names allow omission or string labels only', () => {
+  for (const [file, job] of [['dependabot-auto-merge', 'enable-auto-merge'],
+    ['dependabot-auto-merge-refresh', 'refresh']]) {
+    const baseline = files({ serial: false });
+    const path = `.github/workflows/${file}.yml`;
+    const original = YAML.parse(baseline[path]);
+    for (const target of ['workflow', 'job']) {
+      for (const name of [null, 0, true, {}, []]) {
+        const workflow = structuredClone(original);
+        (target === 'workflow' ? workflow : workflow.jobs[job]).name = name;
+        const candidate = { ...baseline, [path]: YAML.stringify(workflow) };
+        assert.ok(inspectActivated(candidate).includes('Dependabot workflow and job names must be strings'),
+          `${file}/${target}: ${JSON.stringify(name)}`);
+      }
+    }
+    for (const name of [undefined, 'Reviewed display label']) {
+      const workflow = structuredClone(original);
+      if (name === undefined) { delete workflow.name; delete workflow.jobs[job].name; }
+      else { workflow.name = name; workflow.jobs[job].name = name; }
+      assert.deepEqual(inspectActivated({ ...baseline, [path]: YAML.stringify(workflow) }), []);
+    }
+  }
+});
