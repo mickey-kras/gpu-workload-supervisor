@@ -43,7 +43,7 @@ function files({ serial = true } = {}) {
     '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
     'release-version.json', '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs', '.github/scripts/policy-ci-reuse.cjs',
     '.github/scripts/policy-pr-scope.cjs', '.github/scripts/pr-validation-scope.cjs',
-    '.github/scripts/policy-action-pins.cjs',
+    '.github/scripts/policy-action-pins.cjs', '.github/scripts/policy-dependabot.cjs',
     '.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py',
     '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
@@ -871,7 +871,7 @@ test('automation source changes require a trusted human at immutable event refs'
       if (!bot && ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(association)) {
         await verifyDependabotAuthor(github, context);
       } else await assert.rejects(verifyDependabotAuthor(github, context), /trusted human author/);
-      assert.deepEqual(reads.map(read => read.ref), ['a', 'b', 'a', 'b'].map(value => value.repeat(40)));
+      assert.deepEqual(reads.map(read => read.ref), ['a', 'b', 'a', 'b', 'a', 'b'].map(value => value.repeat(40)));
     }
   }
   const { github, context } = authorFixture({ changed: false });
@@ -1001,14 +1001,16 @@ test('protected source identity reads fail closed and detect deletion or rename'
 });
 
 
-test('immutable source author check covers the guard and rejects mutable or non-file identities', async () => {
+test('immutable source author check covers policy modules and rejects mutable or non-file identities', async () => {
   const { verifyDependabotAuthor } = require('./policy-guard.cjs');
   const { github, context } = authorFixture({ association: 'NONE', changed: false });
   const read = github.rest.repos.getContent;
-  github.rest.repos.getContent = async params => params.path.endsWith('/policy-guard.cjs') &&
-    params.ref === context.payload.pull_request.head.sha ?
-    { data: { type: 'file', sha: 'd'.repeat(40) } } : read(params);
-  await assert.rejects(verifyDependabotAuthor(github, context), /trusted human author/);
+  for (const name of ['policy-guard.cjs', 'policy-dependabot.cjs']) {
+    github.rest.repos.getContent = async params => params.path.endsWith('/' + name) &&
+      params.ref === context.payload.pull_request.head.sha ?
+      { data: { type: 'file', sha: 'd'.repeat(40) } } : read(params);
+    await assert.rejects(verifyDependabotAuthor(github, context), /trusted human author/);
+  }
   github.rest.repos.getContent = async () => ({ data: { type: 'symlink', sha: 'a'.repeat(40) } });
   await assert.rejects(verifyDependabotAuthor(github, context), /Cannot identify/);
   context.payload.pull_request.head.sha = 'main';
@@ -1023,4 +1025,11 @@ test('Dependabot explicit default branch separator retains required coverage', (
   for (const entry of config.updates) entry['pull-request-branch-name'] = { separator: '/' };
   candidate[path] = YAML.stringify(config);
   assert.deepEqual(inspectActivated(candidate), []);
+});
+
+
+test('Dependabot policy module remains a required protected file', () => {
+  const candidate = files({ serial: false });
+  delete candidate['.github/scripts/policy-dependabot.cjs'];
+  assert.ok(inspectActivated(candidate).includes('Missing required file: .github/scripts/policy-dependabot.cjs'));
 });
