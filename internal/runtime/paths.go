@@ -155,3 +155,9 @@ func ValidateGPUInventoryExecutable(path string) error {
 	_, err := validateExecutable(path)
 	return err
 }
+
+// ValidateSystemctlExecutable qualifies the selected path and every alias hop,
+// returning the trusted canonical target to invoke without another PATH lookup.
+func ValidateSystemctlExecutable(path string) (string, error) {
+	return validateExecutable(path)
+}
