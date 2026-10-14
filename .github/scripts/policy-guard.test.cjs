@@ -1,11 +1,29 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync, readdirSync } = require('node:fs');
-const { inspect } = require('./policy-guard.cjs');
+const { inspect: inspectActivated } = require('./policy-guard.cjs');
+const { runInNewContext } = require('node:vm');
+const parallelPolicy = require('./policy-ci-parallel.cjs');
+
+// These serial fixtures isolate the original command checks. Production and
+// activation regressions below always use the real, strict graph inspector.
+const commandModule = { exports: {} };
+runInNewContext(readFileSync('.github/scripts/policy-guard.cjs', 'utf8'), {
+  module: commandModule, exports: commandModule.exports, Buffer,
+  require: name => name === './policy-ci-parallel.cjs' ? {
+    normalizeParallelCi(workflows, failures) {
+      const jobs = workflows['.github/workflows/ci.yml']?.jobs;
+      return jobs && Object.keys(jobs).length === 1 ? workflows :
+        parallelPolicy.normalizeParallelCi(workflows, failures);
+    },
+  } : require(name),
+});
+const inspect = candidate => Object.keys(YAML.parse(candidate['.github/workflows/ci.yml'] || '')?.jobs || {}).length === 1 ?
+  Array.from(commandModule.exports.inspect(candidate)) : inspectActivated(candidate);
 const YAML = require('yaml');
 const { VALIDATION_SCRIPT } = require('./policy-release.cjs');
 
-function files() {
+function files({ serial = true } = {}) {
   const result = {};
   for (const name of readdirSync('.github/workflows')) {
     if (name.endsWith('.yml')) {
@@ -16,9 +34,8 @@ function files() {
     '.github/dependabot.yml', '.github/scripts/policy-guard.cjs',
     '.github/scripts/dependabot-auto-merge.cjs', '.github/scripts/pr-branch-updater.cjs',
     '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
-    'release-version.json', '.github/scripts/policy-release.cjs',
-    '.github/scripts/release-validation.cjs',
-    '.github/scripts/release-publication.cjs',
+    'release-version.json', '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs',
+    '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
     '.github/scripts/eslint.config.cjs', '.github/semgrep-tests/maintainability.go',
     '.github/scripts/check-go-directives.go', '.github/scripts/check-go-directives_test.go',
@@ -27,11 +44,58 @@ function files() {
     'sonar-project.properties', '.goreleaser.yaml', '.testcoverage.yml',
     '.github/actions/setup-goreleaser/action.yml', '.github/scripts/install-goreleaser.sh',
   ]) result[path] = readFileSync(path, 'utf8');
+  // Legacy mutation tests still exercise the original command controls in a
+  // serial fixture; the actual parallel workflow is separately checked below.
+  const path = '.github/workflows/ci.yml';
+  const source = result[path];
+  if (serial && YAML.parse(source).jobs.native) {
+    const jobsIndex = source.indexOf('jobs:\n');
+    const sections = source.slice(jobsIndex + 6).split(/^  [a-z]+:\n/m).slice(1);
+    const steps = sections.map(section => section.slice(section.indexOf('    steps:\n') + 11)).join('');
+    result[path] = source.slice(0, jobsIndex) + 'jobs:\n  checks:\n    name: checks\n    runs-on: ubuntu-latest\n    steps:\n' + steps;
+  }
   return result;
 }
 
+test('parallel CI preserves all existing trusted command and scanner gates', () => {
+  const { parallelFixture } = require('./ci-parallel-fixture.cjs');
+  const candidate = files();
+  const path = '.github/workflows/ci.yml';
+  const workflow = parallelFixture();
+  candidate[path] = YAML.stringify(workflow);
+  assert.deepEqual(inspect(candidate), []);
+  for (const [id, name] of [
+    ['go', 'Tests, race detector, and coverage'], ['go', 'Go cognitive complexity'],
+    ['frontend', 'Test policy automation'], ['scans', 'Semgrep'], ['package', 'Build snapshot artifacts'],
+  ]) {
+    const changed = structuredClone(workflow);
+    changed.jobs[id].steps.find(step => step.name === name).run = 'true';
+    candidate[path] = YAML.stringify(changed);
+    assert.ok(inspect(candidate).some(error => error.includes(name)), name);
+  }
+});
+
 test('current governance workflows satisfy the trusted guard', () => {
-  assert.deepEqual(inspect(files()), []);
+  assert.deepEqual(inspectActivated(files({ serial: false })), []);
+});
+
+test('activated policy rejects returning to a serial or single-checks graph', () => {
+  for (const downgrade of ['serial', 'quick', 'unqualified-candidate']) {
+    const candidate = files();
+    const path = '.github/workflows/ci.yml';
+    const workflow = YAML.parse(candidate[path]);
+    const steps = workflow.jobs.checks.steps;
+    if (downgrade === 'quick') {
+      steps.find(step => step.name === 'Native GTK setup, accessibility and screenshot matrix').run =
+        'python3 tests/desktop/setup_native.py --quick';
+    } else if (downgrade === 'unqualified-candidate') {
+      const upload = steps.splice(steps.findIndex(step => step.name === 'Upload CI-tested candidate artifacts'), 1)[0];
+      steps.unshift(upload);
+      steps.splice(steps.findIndex(step => step.name === 'Packaged setup lifecycle integration'), 1);
+    }
+    candidate[path] = YAML.stringify(workflow);
+    assert.ok(inspectActivated(candidate).includes('Parallel CI lost required job set'), downgrade);
+  }
 });
 
 function reusableRelease(candidate) {
@@ -60,7 +124,7 @@ function reusableRelease(candidate) {
 }
 
 test('release validation policy accepts strict reuse alongside the retained legacy route', () => {
-  const candidate = files(); const { path, workflow } = reusableRelease(candidate);
+  const candidate = files({ serial: false }); const { path, workflow } = reusableRelease(candidate);
   candidate[path] = YAML.stringify(workflow);
   assert.deepEqual(inspect(candidate), []);
 });
@@ -72,6 +136,7 @@ test('release validation reuse cannot skip or weaken its exact-commit gate', () 
     state => { state.workflow.jobs.validation.if = false; },
     state => { state.workflow.jobs.validation.permissions.actions = 'write'; },
     state => { state.workflow.jobs.validation['timeout-minutes'] = 10; },
+    state => { state.workflow.jobs.publish['runs-on'] = 'self-hosted'; },
     state => { state.workflow.jobs.validation.steps[1].with.ref = 'main'; },
     state => { state.workflow.jobs.validation.steps.splice(2, 0, { run: 'npm install semver' }); },
     state => { state.verify.if = false; },
@@ -81,18 +146,18 @@ test('release validation reuse cannot skip or weaken its exact-commit gate', () 
     state => { state.publishVerify.with.script = 'return;'; },
     state => { state.publishVerify.if = false; },
   ]) {
-    const candidate = files(); const state = reusableRelease(candidate); mutate(state);
+    const candidate = files({ serial: false }); const state = reusableRelease(candidate); mutate(state);
     candidate[state.path] = YAML.stringify(state.workflow);
     assert.notDeepEqual(inspect(candidate), []);
   }
 });
 
 test('release verifier bytes are protected even before switching to reuse', () => {
-  const candidate = files(); candidate['.github/scripts/release-validation.cjs'] += '\nreturn;\n';
+  const candidate = files({ serial: false }); candidate['.github/scripts/release-validation.cjs'] += '\nreturn;\n';
   assert.ok(inspect(candidate).some(error => error.includes('verifier was changed')));
-  const missing = files(); delete missing['.github/scripts/release-validation.cjs'];
+  const missing = files({ serial: false }); delete missing['.github/scripts/release-validation.cjs'];
   assert.notDeepEqual(inspect(missing), []);
-  const helper = files(); helper['.github/scripts/release-publication.cjs'] = 'process.exit(0);';
+  const helper = files({ serial: false }); helper['.github/scripts/release-publication.cjs'] = 'process.exit(0);';
   assert.ok(inspect(helper).some(error => error.includes('publication helper was changed')));
 });
 
@@ -113,7 +178,7 @@ test('verification jobs reject workspace writes and runtime or wrapper input ove
     state => { state.workflow.jobs.publish.steps[3].env = { NODE_OPTIONS: '--require ./malicious.cjs' }; },
     state => { state.workflow.jobs.validation.defaults = { run: { 'working-directory': 'other' } }; },
   ]) {
-    const candidate = files(); const state = reusableRelease(candidate); mutate(state);
+    const candidate = files({ serial: false }); const state = reusableRelease(candidate); mutate(state);
     candidate[state.path] = YAML.stringify(state.workflow);
     assert.ok(inspect(candidate).some(error => error.includes('workspace or runtime inputs')));
   }
@@ -127,7 +192,7 @@ test('legacy release gates cannot be weakened during staged validation adoption'
     jobs => { jobs.publish.steps.find(step => step.name ===
       'Verify main and successful validation at this commit').with.script = 'return;'; },
   ]) {
-    const candidate = files(); const path = '.github/workflows/release.yml';
+    const candidate = files({ serial: false }); const path = '.github/workflows/release.yml';
     const workflow = YAML.parse(candidate[path]); mutate(workflow.jobs);
     candidate[path] = YAML.stringify(workflow);
     assert.notDeepEqual(inspect(candidate), []);
@@ -147,7 +212,7 @@ test('legacy verification requires the pinned action and exact runtime inputs an
     workflow => { workflow.jobs.publish.steps.splice(4, 0, { run: 'overwrite runtime' }); },
     workflow => { workflow.jobs.publish.steps[1].with.repository = 'attacker/repo'; },
   ]) {
-    const candidate = files(); const path = '.github/workflows/release.yml';
+    const candidate = files({ serial: false }); const path = '.github/workflows/release.yml';
     const workflow = YAML.parse(candidate[path]); const gate = workflow.jobs.publish.steps.find(step =>
       step.name === 'Verify main and successful validation at this commit');
     mutate(workflow, gate); candidate[path] = YAML.stringify(workflow);

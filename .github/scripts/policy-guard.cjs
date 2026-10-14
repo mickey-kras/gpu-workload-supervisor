@@ -1,6 +1,7 @@
 const YAML = require('yaml');
 const { createHash } = require('node:crypto');
 const { inspectReleaseEntry, inspectReleasePublish } = require('./policy-release.cjs');
+const { normalizeParallelCi } = require('./policy-ci-parallel.cjs');
 
 const REQUIRED_FILES = [
   '.github/workflows/pr-validation.yml', '.github/workflows/ci.yml',
@@ -11,9 +12,8 @@ const REQUIRED_FILES = [
   '.github/workflows/dependabot-auto-merge-refresh.yml', '.github/dependabot.yml',
   '.github/scripts/policy-guard.cjs', '.github/scripts/dependabot-auto-merge.cjs',
   '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
-  'release-version.json', '.github/scripts/policy-release.cjs',
-  '.github/scripts/release-validation.cjs',
-  '.github/scripts/release-publication.cjs',
+  'release-version.json', '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs',
+  '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
   '.github/scripts/pr-branch-updater.cjs', 'sonar-project.properties',
   '.github/scripts/package.json', '.github/scripts/package-lock.json',
   '.github/scripts/eslint.config.cjs', '.github/semgrep-tests/maintainability.go',
@@ -394,7 +394,8 @@ function inspect(files) {
   const failures = [];
   const workflows = scanWorkflows(files, failures);
   const checks = createChecks(workflows, failures);
-  inspectCi(files, workflows, failures, checks);
+  const ciWorkflows = normalizeParallelCi(workflows, failures);
+  inspectCi(files, ciWorkflows, failures, createChecks(ciWorkflows, failures));
   inspectAdditionalWorkflows(files, workflows, failures, checks);
   inspectScannerConfigs(files, failures);
   inspectCoverageConfig(files, failures);

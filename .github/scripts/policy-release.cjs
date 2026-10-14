@@ -53,6 +53,7 @@ function inspectVerificationWorkspace(workflow, failures) {
     step.name === 'Verify main and successful validation at this commit');
   if (Object.hasOwn(workflow, 'env') || Object.hasOwn(workflow, 'defaults') ||
       Object.keys(validation).some(key => !allowed.includes(key)) ||
+      publish['runs-on'] !== 'ubuntu-latest' ||
       ['env', 'defaults', 'container', 'services'].some(key => Object.hasOwn(publish, key)) ||
       !sameSteps(validation.steps, [HARDEN, CHECKOUT,
         verificationStep('Verify exact-commit main validation')]) ||
