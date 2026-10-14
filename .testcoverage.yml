@@ -8,7 +8,7 @@ override:
   - path: ^internal/control$
     threshold: 86
   - path: ^internal/store$
-    threshold: 85
+    threshold: 88
   - path: ^cmd/gpu-mode$
     threshold: 93
   - path: ^cmd/gpu-workload-proxy$
