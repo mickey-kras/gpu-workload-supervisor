@@ -23,8 +23,9 @@ function inspectWorkflow(workflows, failures, checks) {
   if (Object.keys(workflow?.on?.pull_request_target || {}).some(key => key !== 'types')) {
     failures.push('Dependabot PR trigger cannot filter required evaluations');
   }
-  if (!Array.isArray(activities) || !['opened', 'synchronize', 'reopened', 'ready_for_review', 'closed']
-    .every(activity => activities.includes(activity))) {
+  const requiredActivities = ['opened', 'synchronize', 'reopened', 'ready_for_review', 'closed'];
+  if (!Array.isArray(activities) || activities.length !== requiredActivities.length ||
+      !requiredActivities.every(activity => activities.includes(activity))) {
     failures.push('Dependabot lost required PR activities');
   }
   const queue = steps.find(step => step.name === 'Queue eligible verified updates');

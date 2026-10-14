@@ -901,8 +901,11 @@ test('Dependabot configuration must retain active coverage of every required eco
 
 test('Dependabot retains PR reevaluation and merge recovery activities', () => {
   const required = ['opened', 'synchronize', 'reopened', 'ready_for_review', 'closed'];
-  for (const types of [undefined, ['opened'], ['closed'], ...required.map(removed =>
-    required.filter(activity => activity !== removed))]) {
+  for (const types of [undefined, null, 'opened', {}, [], ['opened'], ['closed'],
+    [...required, 'auto_merge_enabled'], [...required, 'auto_merge_disabled'],
+    [...required, 'opened'], ['opened', 'opened', 'reopened', 'ready_for_review', 'closed'],
+    [...required.slice(0, -1), null], [...required.slice(0, -1), {}],
+    ...required.map(removed => required.filter(activity => activity !== removed))]) {
     const candidate = files({ serial: false });
     const path = '.github/workflows/dependabot-auto-merge.yml';
     const workflow = YAML.parse(candidate[path]);
@@ -910,6 +913,12 @@ test('Dependabot retains PR reevaluation and merge recovery activities', () => {
     candidate[path] = YAML.stringify(workflow);
     assert.ok(inspectActivated(candidate).includes('Dependabot lost required PR activities'), String(types));
   }
+  const candidate = files({ serial: false });
+  const path = '.github/workflows/dependabot-auto-merge.yml';
+  const workflow = YAML.parse(candidate[path]);
+  workflow.on.pull_request_target.types = required.toReversed();
+  candidate[path] = YAML.stringify(workflow);
+  assert.deepEqual(inspectActivated(candidate), [], 'intended activity order may change');
 });
 
 test('Dependabot cannot queue before either required checkout', () => {
