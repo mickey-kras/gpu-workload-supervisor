@@ -183,7 +183,7 @@ export function recoveryGuidance(candidate) {
 }
 
 function recoverySyntax(message) {
-    if (/Environment(?: variable [A-Za-z_][A-Za-z0-9_]*)?: (?:expected NAME=value|expansion, escapes or whitespace|unterminated whole-assignment quote|quoted fragments|duplicate assignment)/.test(message)) {
+    if (/Environment(?: variable [A-Za-z_]\w*)?: (?:expected NAME=value|expansion, escapes or whitespace|unterminated whole-assignment quote|quoted fragments|duplicate assignment)/.test(message)) {
         return 'Environment syntax: review the reported assignment. Use one literal NAME=value assignment per setting, with balanced quotes around the whole assignment when needed. Expansion, escapes, whitespace inside values and quoted fragments are unsupported; filesystem permission changes do not repair this syntax.';
     }
     if (/ComfyUI option --extra-model-paths-config configuration file count exceeds supported limit/.test(message)) {
