@@ -43,6 +43,7 @@ function files({ serial = true } = {}) {
     '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
     'release-version.json', '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs', '.github/scripts/policy-ci-reuse.cjs',
     '.github/scripts/policy-pr-scope.cjs', '.github/scripts/pr-validation-scope.cjs',
+    '.github/scripts/policy-action-pins.cjs',
     '.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py',
     '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
@@ -367,10 +368,10 @@ test('vulnerability audit cannot restore the Go cache a second time', () => {
   assert.ok(inspect(candidate).some(error => error.includes('Go vulnerability audit')));
 });
 
-test('verified GoReleaser route rejects changed installer or action bytes', () => {
+test('verified GoReleaser route rejects changed installer source or action commands', () => {
   for (const path of ['.github/actions/setup-goreleaser/action.yml', '.github/scripts/install-goreleaser.sh']) {
     const candidate = files();
-    candidate[path] += '\n# changed\n';
+    candidate[path] = path.endsWith('.yml') ? candidate[path].replace('v2.18.2', 'v0.0.0') : candidate[path] + '\n# changed\n';
     assert.ok(inspect(candidate).some(error => error.includes('changed verified GoReleaser installer')));
   }
 });
@@ -700,4 +701,81 @@ test('dependency review cannot override the protected vulnerability configuratio
     candidate[path] = YAML.stringify(workflow);
     assert.ok(inspect(candidate).some(error => error.includes('without overrides')));
   }
+});
+
+test('ordinary immutable action pin refreshes pass across all workflows and composite setup', () => {
+  const candidate = files({ serial: false });
+  let count = 0;
+  for (const path of Object.keys(candidate).filter(path => path.startsWith('.github/workflows/'))) {
+    const workflow = YAML.parse(candidate[path]);
+    for (const job of Object.values(workflow.jobs || {})) {
+      for (const step of job.steps || []) {
+        if (typeof step.uses === 'string' && /@[a-f0-9]{40}$/.test(step.uses)) {
+          step.uses = step.uses.replace(/@[a-f0-9]{40}$/, '@' + 'a'.repeat(40));
+          count++;
+        }
+      }
+    }
+    candidate[path] = YAML.stringify(workflow);
+  }
+  const actionPath = '.github/actions/setup-goreleaser/action.yml';
+  const action = YAML.parse(candidate[actionPath]);
+  action.runs.steps[0].uses = 'sigstore/cosign-installer@' + 'b'.repeat(40);
+  candidate[actionPath] = YAML.stringify(action);
+  assert.ok(count > 40, 'refresh exercises the complete protected action inventory');
+  assert.deepEqual(inspectActivated(candidate), []);
+});
+
+test('every action-aware validator retains identity, immutable pins and execution controls', () => {
+  const targets = [
+    ['.github/workflows/main.yml', workflow => workflow.jobs.sonar.steps.find(step => step.uses?.startsWith('actions/download-artifact@'))],
+    ['.github/workflows/ci.yml', workflow => workflow.jobs.go.steps.find(step => step.uses?.startsWith('actions/setup-node@'))],
+    ['.github/workflows/pr-validation.yml', workflow => workflow.jobs.classify.steps[0]],
+    ['.github/workflows/release.yml', workflow => workflow.jobs.validation.steps[0]],
+    ['.github/actions/setup-goreleaser/action.yml', action => action.runs.steps[0]],
+  ];
+  const mutations = [
+    step => { step.uses = 'attacker/replacement@' + 'a'.repeat(40); },
+    step => { step.uses = step.uses.replace(/@.*/, '@v4'); },
+    step => { step.uses = step.uses.replace(/@.*/, '@abc1234'); },
+    step => { step.uses = step.uses.replace(/@.*/, '@<immutable-sha>'); },
+    step => { step.env = { BASH_ENV: '/tmp/bypass' }; },
+    step => { step.if = false; },
+    step => { step.with = { ...step.with, 'unreviewed-input': true }; },
+    step => { step.run = 'true'; },
+    step => { step['continue-on-error'] = true; },
+  ];
+  for (const [path, select] of targets) {
+    for (const mutate of mutations) {
+      const candidate = files({ serial: false });
+      const workflow = YAML.parse(candidate[path]);
+      mutate(select(workflow));
+      candidate[path] = YAML.stringify(workflow);
+      assert.notDeepEqual(inspectActivated(candidate), [], `${path}: ${mutate}`);
+    }
+  }
+  const candidate = files({ serial: false });
+  delete candidate['.github/scripts/policy-action-pins.cjs'];
+  assert.ok(inspectActivated(candidate).some(error => error.includes('Missing required file: .github/scripts/policy-action-pins.cjs')));
+});
+
+test('composite setup retains step order, commands and rejects ambiguous YAML', () => {
+  const path = '.github/actions/setup-goreleaser/action.yml';
+  for (const mutate of [
+    action => { action.runs.steps[0].uses = { action: 'sigstore/cosign-installer', immutable: true }; },
+    action => { action.runs.steps.reverse(); },
+    action => { action.runs.steps[1].run += ' || true'; },
+    action => { action.runs.steps[1].shell = 'sh'; },
+    action => { action.runs.steps[0].with['cosign-release'] = 'latest'; },
+    action => { action.runs.steps.push({ shell: 'bash', run: 'true' }); },
+  ]) {
+    const candidate = files({ serial: false });
+    const action = YAML.parse(candidate[path]);
+    mutate(action);
+    candidate[path] = YAML.stringify(action);
+    assert.ok(inspectActivated(candidate).some(error => error.includes('changed verified GoReleaser installer')));
+  }
+  const candidate = files({ serial: false });
+  candidate[path] += '\nruns: {}\n';
+  assert.ok(inspectActivated(candidate).some(error => error.includes('changed verified GoReleaser installer')));
 });

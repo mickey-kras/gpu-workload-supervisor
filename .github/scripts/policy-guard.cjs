@@ -4,6 +4,7 @@ const { inspectReleaseEntry, inspectReleasePublish } = require('./policy-release
 const { normalizeParallelCi, AGGREGATE_RUN } = require('./policy-ci-parallel.cjs');
 const { normalizeScopedValidation } = require('./policy-pr-scope.cjs');
 const { normalizeCiReuse } = require('./policy-ci-reuse.cjs');
+const { canonical, normalizeActionSteps } = require('./policy-action-pins.cjs');
 
 const REQUIRED_FILES = [
   '.github/workflows/pr-validation.yml', '.github/workflows/ci.yml',
@@ -16,6 +17,7 @@ const REQUIRED_FILES = [
   '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
   'release-version.json', '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs', '.github/scripts/policy-ci-reuse.cjs',
   '.github/scripts/policy-pr-scope.cjs', '.github/scripts/pr-validation-scope.cjs',
+  '.github/scripts/policy-action-pins.cjs',
   '.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py',
   '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
   '.github/scripts/pr-branch-updater.cjs', 'sonar-project.properties',
@@ -115,8 +117,18 @@ function inspectGoReleaser({ files, workflows, failures, checks, path, jobId, bu
     checks.step(path, jobId, name, { expectedIf });
     checks.exactRun(path, jobId, name, [`goreleaser ${args}`]);
   }
+  const actionPath = '.github/actions/setup-goreleaser/action.yml';
+  try {
+    const doc = YAML.parseDocument(files[actionPath] || '', { uniqueKeys: true });
+    if (doc.errors.length) throw doc.errors[0];
+    const action = doc.toJS();
+    const controls = { ...action, runs: { ...action?.runs, steps: normalizeActionSteps(action?.runs?.steps) } };
+    if (createHash('sha256').update(JSON.stringify(canonical(controls))).digest('hex') !==
+        'c88133b8d7e69681883fe0aa77a141453ace73146561612522b9cd5f485722ac') failures.push(`${actionPath} changed verified GoReleaser installer`);
+  } catch {
+    failures.push(`${actionPath} changed verified GoReleaser installer`);
+  }
   for (const [file, digest] of [
-    ['.github/actions/setup-goreleaser/action.yml', '5265ee0469a1f52be3905b173e81ba6e70aa15c13d57f1986b1aec7cfdd11b9a'],
     ['.github/scripts/install-goreleaser.sh', 'de2e876e51298aec0ec86a42fdb850aaa2f95e3d86cd1fa67a6d5c1febbcc8b0'],
   ]) {
     if (createHash('sha256').update(files[file] || '').digest('hex') !== digest) {
