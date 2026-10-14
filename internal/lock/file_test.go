@@ -1,8 +1,11 @@
 package lock
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,54 +20,95 @@ func TestLockHelper(t *testing.T) {
 		return
 	}
 	path := os.Args[len(os.Args)-1]
+	if os.Getenv("GPU_LOCK_ROLE") == "contender" {
+		unexpected, err := TryAcquire(path)
+		if unexpected != nil {
+			unexpected.Close()
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+			t.Fatalf("expected contention with holder: %v", err)
+		}
+		// An exclusive holder must exclude shared acquisitions too. Checking only
+		// TryAcquire would also accept a holder that accidentally took LOCK_SH.
+		unexpected, err = acquire(path, unix.LOCK_SH|unix.LOCK_NB)
+		if unexpected != nil {
+			unexpected.Close()
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+			t.Fatalf("expected shared acquisition to contend with exclusive holder: %v", err)
+		}
+		fmt.Fprintln(os.Stdout, "contended")
+	}
 	lock, err := acquire(path, unix.LOCK_EX)
 	if err != nil {
-		os.Exit(2)
+		t.Fatal(err)
 	}
 	defer lock.Close()
-	if ready := os.Getenv("GPU_LOCK_READY"); ready != "" {
-		if err := os.WriteFile(ready, nil, 0o600); err != nil {
-			os.Exit(3)
+	fmt.Fprintln(os.Stdout, "acquired")
+	if os.Getenv("GPU_LOCK_ROLE") == "holder" {
+		input := bufio.NewScanner(os.Stdin)
+		if !input.Scan() || input.Text() != "release" {
+			t.Fatalf("expected release command: %q (%v)", input.Text(), input.Err())
 		}
-	}
-	if os.Getenv("GPU_LOCK_HOLD") == "1" {
-		time.Sleep(500 * time.Millisecond)
+		if err := lock.Close(); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintln(os.Stdout, "released")
 	}
 }
 
 func TestAcquireSerializesProcesses(t *testing.T) {
-	directory := t.TempDir()
-	path := filepath.Join(directory, "state.lock")
-	ready := filepath.Join(directory, "ready")
-	first := exec.Command(os.Args[0], "-test.run=TestLockHelper", "--", path)
-	first.Env = append(os.Environ(), "GPU_LOCK_HELPER=1", "GPU_LOCK_HOLD=1", "GPU_LOCK_READY="+ready)
-	if err := first.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer first.Process.Kill()
-	for deadline := time.Now().Add(time.Second); ; {
-		if _, err := os.Stat(ready); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("first process did not acquire lock")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	path := filepath.Join(t.TempDir(), "state.lock")
+	// The deadline bounds hangs; only helper events establish acquisition and contention.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	second := exec.CommandContext(ctx, os.Args[0], "-test.run=TestLockHelper", "--", path)
-	second.Env = append(os.Environ(), "GPU_LOCK_HELPER=1")
-	if err := second.Run(); ctx.Err() != context.DeadlineExceeded {
-		t.Fatalf("second process was not blocked: err=%v context=%v", err, ctx.Err())
+	start := func(role string) (*exec.Cmd, io.WriteCloser, *bufio.Scanner) {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestLockHelper$", "--", path)
+		cmd.Env = append(os.Environ(), "GPU_LOCK_HELPER=1", "GPU_LOCK_ROLE="+role)
+		cmd.Stderr = os.Stderr
+		input, err := cmd.StdinPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { input.Close() })
+		output, err := cmd.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { output.Close() })
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if cmd.ProcessState == nil {
+				cmd.Process.Kill()
+				cmd.Wait()
+			}
+		})
+		return cmd, input, bufio.NewScanner(output)
 	}
-	if err := first.Wait(); err != nil {
+	expect := func(output *bufio.Scanner, event string) {
+		t.Helper()
+		if !output.Scan() || output.Text() != event {
+			t.Fatalf("expected helper event %q: got %q (scan=%v, context=%v)", event, output.Text(), output.Err(), ctx.Err())
+		}
+	}
+	first, release, firstOutput := start("holder")
+	expect(firstOutput, "acquired")
+	second, _, secondOutput := start("contender")
+	// This event requires both exclusive and shared probes to observe contention.
+	expect(secondOutput, "contended")
+	if _, err := fmt.Fprintln(release, "release"); err != nil {
 		t.Fatal(err)
 	}
-	third := exec.Command(os.Args[0], "-test.run=TestLockHelper", "--", path)
-	third.Env = append(os.Environ(), "GPU_LOCK_HELPER=1")
-	if output, err := third.CombinedOutput(); err != nil {
-		t.Fatalf("acquire after release: %v: %s", err, output)
+	expect(firstOutput, "released")
+	expect(secondOutput, "acquired")
+	if err := first.Wait(); err != nil {
+		t.Fatalf("holder: %v", err)
+	}
+	if err := second.Wait(); err != nil {
+		t.Fatalf("contender acquire after release: %v", err)
 	}
 }
 
