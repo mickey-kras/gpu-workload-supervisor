@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
@@ -76,5 +77,57 @@ func TestDefaultCompletionPathRejectsWrongMethodWithAllow(t *testing.T) {
 	assertProxyError(t, response, 405, "route_not_allowed")
 	if got := response.Header().Get("Allow"); got != "POST" {
 		t.Fatalf("Allow = %q, want POST", got)
+	}
+}
+
+func TestRouteConfigurationRejectsInvalidMethodTokens(t *testing.T) {
+	target, _ := url.Parse("http://127.0.0.1:1")
+	for _, method := range []string{"FOO BAR", "GET,POST", "GET\tPOST", "GET\r\nAllow: POST", "GET/POST", "GÉT", "GET\x00POST"} {
+		for _, classification := range []string{"execution", "read-only", "passthrough"} {
+			t.Run(classification+"/"+method, func(t *testing.T) {
+				config := Config{Upstream: target, Workload: control.WorkloadMedia, ExecutionRoutes: []Route{{Method: "POST", Path: "/execute"}}}
+				route := Route{Method: method, Path: "/configured"}
+				switch classification {
+				case "execution":
+					config.ExecutionRoutes = []Route{route}
+				case "read-only":
+					config.ReadOnlyRoutes = []Route{route}
+				case "passthrough":
+					config.PassthroughRoutes = []Route{route}
+				}
+				if _, err := NewWithContext(context.Background(), &fakeStore{}, config); err == nil {
+					t.Fatal("invalid method token accepted")
+				}
+			})
+		}
+	}
+}
+
+func TestCustomRouteMethodPreservesNormalizationAndAllow(t *testing.T) {
+	const method = "CUSTOM!#$%&'*+-.^_`|~0123456789"
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Method != method || r.URL.Path != "/custom%zz" {
+			t.Errorf("upstream method=%q path=%q", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	target, _ := url.Parse(upstream.URL)
+	handler, err := NewWithContext(context.Background(), &fakeStore{}, Config{Upstream: target, Workload: control.WorkloadMedia, ExecutionRoutes: []Route{{Method: "POST", Path: "/execute"}}, PassthroughRoutes: []Route{{Method: " \tcustom!#$%&'*+-.^_`|~0123456789 \n", Path: "/custom%zz"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest("DELETE", "/custom%25zz", nil))
+	assertProxyError(t, response, http.StatusMethodNotAllowed, "route_not_allowed")
+	if got := response.Header().Get("Allow"); got != method {
+		t.Fatalf("Allow=%q, want %q", got, method)
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(method, "/custom%25zz", nil))
+	if response.Code != http.StatusNoContent || calls != 1 {
+		t.Fatalf("status=%d calls=%d", response.Code, calls)
 	}
 }

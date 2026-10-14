@@ -583,6 +583,9 @@ func routeSet(routes []Route, required bool) (map[string]struct{}, error) {
 		if method == "" || !CanonicalPath(route.Path) {
 			return nil, errors.New("routes require a method and canonical absolute path")
 		}
+		if _, err := http.NewRequest(method, "/", nil); err != nil {
+			return nil, errors.New("route method must be an HTTP token")
+		}
 		result[method+" "+route.Path] = struct{}{}
 	}
 	return result, nil
