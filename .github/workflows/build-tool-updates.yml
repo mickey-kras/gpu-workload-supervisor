@@ -1,0 +1,42 @@
+name: build tool updates
+
+on:
+  schedule:
+    - cron: '23 11 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed # v2.22.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test update proposals
+        run: node --test .github/scripts/build-tool-updates.test.cjs
+      - name: Check upstream stable releases
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            await require('./.github/scripts/build-tool-updates.cjs').run({ github, core });
+      - name: Save proposed version changes
+        run: |
+          git rev-parse HEAD > build-tool-updates-base.txt
+          git diff -- .github/actions/setup-goreleaser/action.yml .github/workflows/release.yml scripts/third-party-notices.sh > build-tool-updates.patch
+      - name: Upload reviewable update proposal
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-tool-updates-${{ github.sha }}
+          path: |
+            build-tool-updates.md
+            build-tool-updates-base.txt
+            build-tool-updates.patch
+          if-no-files-found: error
+          retention-days: 30
