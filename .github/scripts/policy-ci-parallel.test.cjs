@@ -107,7 +107,13 @@ test('changing the guard shard command alone cannot silently reduce fixture cove
   assert.notEqual(changed, source);
   const module = { exports: {} };
   runInNewContext(changed, { module, require });
+  const fixtureModule = { exports: {} };
+  runInNewContext(readFileSync('.github/scripts/ci-parallel-fixture.cjs', 'utf8'), {
+    module: fixtureModule,
+    structuredClone,
+    require: name => name === './policy-ci-parallel.cjs' ? module.exports : require(name),
+  });
   const failures = [];
-  module.exports.normalizeParallelCi({ [path]: parallelFixture() }, failures);
+  module.exports.normalizeParallelCi({ [path]: fixtureModule.exports.parallelFixture() }, failures);
   assert.ok(failures.some(failure => failure.includes('GTK shard command')));
 });
