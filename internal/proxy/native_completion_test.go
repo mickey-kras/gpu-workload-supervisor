@@ -26,14 +26,15 @@ func TestOllamaStreamTerminalEvidence(t *testing.T) {
 		chunks   []string
 		terminal bool
 	}{
-		"stream done":               {[]string{"{\"response\":\"a\",\"done\":false}\n", "{\"response\":\"b\",\"done\":false}\n", "{\"done\":true,\"done_reason\":\"stop\"}\n"}, true},
-		"non-stream single object":  {[]string{"{\"response\":\"ab\",\"done\":true}"}, true},
-		"truncated stream":          {[]string{"{\"response\":\"a\",\"done\":false}\n"}, false},
-		"done false at eof":         {[]string{"{\"response\":\"a\",\"done\":false}"}, false},
-		"invalid line kills trust":  {[]string{"not json\n", "{\"done\":true}\n"}, false},
-		"duplicate key kills trust": {[]string{"{\"done\":false,\"done\":true}\n"}, false},
-		"done wrong type":           {[]string{"{\"done\":\"true\"}"}, false},
-		"blank lines ignored":       {[]string{"\n{\"done\":false}\n\n", "{\"done\":true}\n"}, true},
+		"stream done":                         {[]string{"{\"response\":\"a\",\"done\":false}\n", "{\"response\":\"b\",\"done\":false}\n", "{\"done\":true,\"done_reason\":\"stop\"}\n"}, true},
+		"non-stream single object":            {[]string{"{\"response\":\"ab\",\"done\":true}"}, true},
+		"truncated stream":                    {[]string{"{\"response\":\"a\",\"done\":false}\n"}, false},
+		"done false at eof":                   {[]string{"{\"response\":\"a\",\"done\":false}"}, false},
+		"invalid same-chunk line kills trust": {[]string{"not json\n{\"done\":true}\n"}, false},
+		"invalid line kills trust":            {[]string{"not json\n", "{\"done\":true}\n"}, false},
+		"duplicate key kills trust":           {[]string{"{\"done\":false,\"done\":true}\n"}, false},
+		"done wrong type":                     {[]string{"{\"done\":\"true\"}"}, false},
+		"blank lines ignored":                 {[]string{"\n{\"done\":false}\n\n", "{\"done\":true}\n"}, true},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -151,6 +152,7 @@ func newTerminalFixtureWith(t *testing.T, runtime, route string, upstreamHandler
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { drainNative(t, h) })
 	return &terminalFixture{store: s, handler: h, upstream: upstream}
 }
 
@@ -161,6 +163,7 @@ func (f *terminalFixture) execute(t *testing.T, route, body string) *httptest.Re
 	addLeaseHeaders(req, f.store.state.LeaseFence)
 	w := httptest.NewRecorder()
 	f.handler.ServeHTTP(w, req)
+	drainNative(t, f.handler)
 	return w
 }
 
