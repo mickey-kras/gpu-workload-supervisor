@@ -2,16 +2,13 @@ package proxy
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
@@ -21,13 +18,11 @@ import (
 // work stays unfinished for explicit reconciliation.
 const maxObservedResponseBytes = 16 << 20
 
-const observedFinishTimeout = 10 * time.Second
-
 type terminalDetector interface {
 	observe(chunk []byte, eof bool) (terminal bool)
 }
 
-func (h *Handler) observeNativeTerminal(response *http.Response, path, requestID string, fence control.Fence, token string) {
+func (h *Handler) observeNativeTerminal(response *http.Response, path, requestID string, fence control.Fence, token string, reservation *nativeFinishReservation) {
 	if h.nativeModel == nil || response.StatusCode < 200 || response.StatusCode > 299 {
 		return
 	}
@@ -42,17 +37,9 @@ func (h *Handler) observeNativeTerminal(response *http.Response, path, requestID
 		body:     response.Body,
 		detector: detector,
 		onTerminal: func() {
-			h.finishObserved(requestID, fence, token)
+			reservation.submit(h, requestID, fence, token)
 		},
 	}
-}
-
-func (h *Handler) finishObserved(requestID string, fence control.Fence, token string) {
-	ctx, cancel := context.WithTimeout(context.Background(), observedFinishTimeout)
-	defer cancel()
-	// A caller callback or reconciliation may have finished the work first.
-	// A failed finish leaves durable state unchanged and the work unfinished.
-	_ = h.store.FinishWorkToken(ctx, requestID, h.workload, fence, token, store.WorkCompleted)
 }
 
 type observedBody struct {
@@ -128,8 +115,8 @@ func (d *ollamaStreamDetector) observe(chunk []byte, eof bool) bool {
 			break
 		}
 		d.buf.data = rest
-		if d.line(line) {
-			return true
+		if d.line(line) || d.buf.dead {
+			return d.terminal
 		}
 	}
 	if eof && len(bytes.TrimSpace(d.buf.data)) > 0 {
