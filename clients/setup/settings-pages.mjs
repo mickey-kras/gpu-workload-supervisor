@@ -167,7 +167,7 @@ export function installationChoiceLabel(Gtk, identity) {
 
 function conciseDiagnostic(message) {
     // Presentation only: qualification and clipboard retain the original report.
-    return message.replace(/\b(?:native launch requires a supported direct local command|existing launch is unsupported):\s*/gi, '');
+    return message.replaceAll(/\b(?:native launch requires a supported direct local command|existing launch is unsupported):\s*/gi, '');
 }
 
 function diagnosticDetails(candidate, diagnostics, concise = false) {
