@@ -285,12 +285,13 @@ func TestComfyUIDiagnosticsReuseRecoveredSlotBeforeEviction(t *testing.T) {
 	}
 }
 
-func TestComfyUIDiagnosticsPassTimeoutDoesNotFailUnpolledAttempt(t *testing.T) {
+func TestComfyUIDiagnosticsRepeatedPassTimeoutsDoNotFailUnpolledAttempts(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var attempts []store.ComfyUIAttempt
-		for i := range 6 {
+		for i := range 16 {
 			attempt := comfyUIFixtureAttempt()
 			attempt.AttemptID = fmt.Sprintf("%08d-1111-4111-8111-111111111111", i)
+			attempt.PromptID = fmt.Sprintf("%08d-2222-4222-8222-222222222222", i)
 			attempts = append(attempts, attempt)
 		}
 		stateStore := &comfyUIFakeStore{attempts: attempts}
@@ -307,7 +308,7 @@ func TestComfyUIDiagnosticsPassTimeoutDoesNotFailUnpolledAttempt(t *testing.T) {
 				return nil, r.Context().Err()
 			}
 			if strings.HasPrefix(r.URL.Path, "/history/") {
-				return comfyUIDiagnosticResponse(comfyUIFixtureHistory(attempts[5])), nil
+				return comfyUIDiagnosticResponse(comfyUIFixtureHistory(attempts[15])), nil
 			}
 			return comfyUIDiagnosticResponse(`{"queue_running":[],"queue_pending":[]}`), nil
 		})}
@@ -316,34 +317,46 @@ func TestComfyUIDiagnosticsPassTimeoutDoesNotFailUnpolledAttempt(t *testing.T) {
 		observe := func(id, reason string) {
 			diagnostics.observe(id, reason, func(err error) { reports = append(reports, err) })
 		}
-		if err := adapter.reconcileWithDiagnostics(context.Background(), observe); err == nil {
-			t.Fatal("pass timeout accepted")
-		}
-		if polls != 5 || len(reports) != 6 || adapter.cursor != attempts[4].AttemptID {
-			t.Fatalf("exhausted budget polls=%d reports=%v", polls, reports)
-		}
-		for _, diagnostic := range reports {
-			var unresolved *ComfyUIUnresolvedError
-			if !errors.As(diagnostic, &unresolved) || unresolved.AttemptID == attempts[5].AttemptID {
-				t.Fatalf("unpolled attempt diagnosed: %v", diagnostic)
+		for pass := range 3 {
+			if err := adapter.reconcileWithDiagnostics(context.Background(), observe); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("pass %d missing timeout: %v", pass, err)
 			}
-		}
-		var timeout *ComfyUIUnresolvedError
-		if !errors.As(reports[5], &timeout) || timeout.AttemptID != "" || timeout.Reason != "reconciliation_timeout" {
-			t.Fatalf("pass timeout diagnostic: %v", reports[5])
+			completedPolls := 5 * (pass + 1)
+			if polls != completedPolls || len(reports) != completedPolls+1 || adapter.cursor != attempts[completedPolls-1].AttemptID {
+				t.Fatalf("pass=%d polls=%d reports=%v cursor=%s", pass, polls, reports, adapter.cursor)
+			}
+			timeouts := 0
+			for _, diagnostic := range reports {
+				var unresolved *ComfyUIUnresolvedError
+				if !errors.As(diagnostic, &unresolved) {
+					t.Fatalf("premature recovery: %v", diagnostic)
+				}
+				if unresolved.AttemptID == attempts[completedPolls].AttemptID {
+					t.Fatalf("unpolled attempt diagnosed: %v", diagnostic)
+				}
+				if unresolved.AttemptID == "" {
+					timeouts++
+					if unresolved.Reason != "reconciliation_timeout" {
+						t.Fatalf("pass diagnostic: %v", diagnostic)
+					}
+				}
+			}
+			if timeouts != 1 {
+				t.Fatalf("repeated global timeout count=%d", timeouts)
+			}
 		}
 		healthy = true
 		if err := adapter.reconcileWithDiagnostics(context.Background(), observe); err != nil {
 			t.Fatal(err)
 		}
 		var recovery *ComfyUIRecovery
-		if polls != 6 || len(stateStore.finished) != 1 || len(reports) != 7 || !errors.As(reports[6], &recovery) || recovery.AttemptID != "" {
-			t.Fatalf("next pass polls=%d completions=%v reports=%v", polls, stateStore.finished, reports)
+		if polls != 16 || len(stateStore.finished) != 1 || len(reports) != 17 || !errors.As(reports[16], &recovery) || recovery.AttemptID != "" {
+			t.Fatalf("successful pass polls=%d completions=%v reports=%v", polls, stateStore.finished, reports)
 		}
 		if err := adapter.reconcileWithDiagnostics(context.Background(), observe); err != nil {
 			t.Fatal(err)
 		}
-		if len(reports) != 7 {
+		if len(reports) != 17 {
 			t.Fatalf("empty page repeated recovery: %v", reports)
 		}
 	})
