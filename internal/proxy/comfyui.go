@@ -146,7 +146,7 @@ func (e *ComfyUIRecovery) Error() string {
 	return "ComfyUI attempt " + e.AttemptID + " reconciliation recovered"
 }
 
-const comfyUIDiagnosticLimit = 128
+const comfyUIDiagnosticLimit = store.MaxComfyUIAttempts + 1
 
 type comfyUIDiagnosticState struct {
 	identity [sha256.Size]byte

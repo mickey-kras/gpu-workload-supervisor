@@ -361,3 +361,64 @@ func TestComfyUIDiagnosticsRepeatedPassTimeoutsDoNotFailUnpolledAttempts(t *test
 		}
 	})
 }
+
+func TestComfyUIDiagnosticsStableInventoryRemainsSuppressed(t *testing.T) {
+	for _, size := range []int{129, store.MaxComfyUIAttempts} {
+		for _, stale := range []bool{false, true} {
+			t.Run(fmt.Sprintf("attempts_%d_stale_%t", size, stale), func(t *testing.T) {
+				var attempts []store.ComfyUIAttempt
+				for i := range size {
+					attempt := comfyUIFixtureAttempt()
+					attempt.AttemptID = fmt.Sprintf("%08d-1111-4111-8111-111111111111", i)
+					attempt.PromptID = fmt.Sprintf("%08d-2222-4222-8222-222222222222", i)
+					attempts = append(attempts, attempt)
+				}
+				stateStore := &comfyUIDiagnosticInventoryStore{comfyUIFakeStore: comfyUIFakeStore{attempts: attempts}}
+				upstream, _ := url.Parse("http://127.0.0.1:8188")
+				polls := 0
+				adapter := &comfyUIAdapter{store: stateStore, upstream: upstream, transport: comfyUIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+					polls++
+					return nil, io.ErrUnexpectedEOF
+				})}
+				diagnostics := comfyUIDiagnostics{}
+				if stale {
+					for i := range comfyUIDiagnosticLimit {
+						id := fmt.Sprintf("%08d-1111-4111-8111-111111111111", i+100000)
+						diagnostics.observe(id, "history_unavailable", func(error) {})
+					}
+				}
+				reports := 0
+				observe := func(id, reason string) {
+					diagnostics.observe(id, reason, func(err error) {
+						var unresolved *ComfyUIUnresolvedError
+						if !errors.As(err, &unresolved) || unresolved.Reason != "history_unavailable" {
+							t.Fatalf("unexpected inventory diagnostic: %v", err)
+						}
+						reports++
+					})
+				}
+				for cycle := range 3 {
+					for {
+						adapter.reconcileWithDiagnostics(context.Background(), observe)
+						if adapter.cursor == "" {
+							break
+						}
+					}
+					if polls != size*(cycle+1) || reports != size || len(stateStore.finished) != 0 {
+						t.Fatalf("cycle=%d polls=%d reports=%d completed=%d", cycle, polls, reports, len(stateStore.finished))
+					}
+				}
+			})
+		}
+	}
+}
+
+type comfyUIDiagnosticInventoryStore struct{ comfyUIFakeStore }
+
+func (s *comfyUIDiagnosticInventoryStore) PendingComfyUIAttempts(ctx context.Context, w control.Workload, upstream, contract, after string, limit int) ([]store.ComfyUIAttempt, error) {
+	attempts, err := s.comfyUIFakeStore.PendingComfyUIAttempts(ctx, w, upstream, contract, after, limit)
+	if len(attempts) > limit {
+		attempts = attempts[:limit]
+	}
+	return attempts, err
+}
