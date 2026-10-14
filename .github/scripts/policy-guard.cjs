@@ -1,7 +1,8 @@
 const YAML = require('yaml');
 const { createHash } = require('node:crypto');
 const { inspectReleaseEntry, inspectReleasePublish } = require('./policy-release.cjs');
-const { normalizeParallelCi } = require('./policy-ci-parallel.cjs');
+const { normalizeParallelCi, AGGREGATE_RUN } = require('./policy-ci-parallel.cjs');
+const { normalizeScopedValidation } = require('./policy-pr-scope.cjs');
 const { normalizeCiReuse } = require('./policy-ci-reuse.cjs');
 
 const REQUIRED_FILES = [
@@ -14,6 +15,7 @@ const REQUIRED_FILES = [
   '.github/scripts/policy-guard.cjs', '.github/scripts/dependabot-auto-merge.cjs',
   '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
   'release-version.json', '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs', '.github/scripts/policy-ci-reuse.cjs',
+  '.github/scripts/policy-pr-scope.cjs', '.github/scripts/pr-validation-scope.cjs',
   '.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py',
   '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
   '.github/scripts/pr-branch-updater.cjs', 'sonar-project.properties',
@@ -394,7 +396,8 @@ function inspectCoverageConfig(files, failures) {
 
 function inspect(files) {
   const failures = [];
-  const workflows = normalizeCiReuse(files, scanWorkflows(files, failures), failures);
+  const scoped = normalizeScopedValidation(files, scanWorkflows(files, failures), failures, AGGREGATE_RUN + '\n');
+  const workflows = normalizeCiReuse(files, scoped, failures);
   const checks = createChecks(workflows, failures);
   const ciWorkflows = normalizeParallelCi(workflows, failures);
   inspectCi(files, ciWorkflows, failures, createChecks(ciWorkflows, failures));

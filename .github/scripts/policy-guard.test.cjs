@@ -35,6 +35,7 @@ function files({ serial = true } = {}) {
     '.github/scripts/dependabot-auto-merge.cjs', '.github/scripts/pr-branch-updater.cjs',
     '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
     'release-version.json', '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs', '.github/scripts/policy-ci-reuse.cjs',
+    '.github/scripts/policy-pr-scope.cjs', '.github/scripts/pr-validation-scope.cjs',
     '.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py',
     '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
@@ -65,6 +66,58 @@ function files({ serial = true } = {}) {
   }
   return result;
 }
+
+function scopedCandidate() {
+  const controls = require('./policy-pr-scope.cjs');
+  const candidate = files({ serial: false });
+  const ciPath = '.github/workflows/ci.yml';
+  const prPath = '.github/workflows/pr-validation.yml';
+  const ci = YAML.parse(candidate[ciPath]);
+  const pr = YAML.parse(candidate[prPath]);
+  ci.on.workflow_call.inputs = structuredClone(controls.SCOPE_INPUT);
+  ci.jobs.native.if = controls.FULL_IF;
+  for (const [job, names] of [['go', controls.GO_STEPS], ['checks', controls.CANDIDATE_STEPS]]) {
+    for (const name of names) ci.jobs[job].steps.find(step => step.name === name).if = controls.FULL_IF;
+  }
+  const gate = ci.jobs.checks.steps.find(step => step.name === 'Require every CI job to succeed');
+  gate.run = controls.SCOPED_AGGREGATE;
+  gate.env = structuredClone(controls.AGGREGATE_ENV);
+  pr.jobs.classify = structuredClone(controls.CLASSIFIER_JOB);
+  pr.jobs.quality = structuredClone(controls.SCOPED_QUALITY);
+  candidate[ciPath] = YAML.stringify(ci);
+  candidate[prPath] = YAML.stringify(pr);
+  return { candidate, ciPath, prPath, ci, pr };
+}
+
+test('trusted docs routing preserves the full scanner and coverage reuse profile', () => {
+  const { candidate } = scopedCandidate();
+  assert.deepEqual(inspectActivated(candidate), []);
+});
+
+test('docs routing cannot skip audits, packaged documentation, security analyses or full coverage uploads', () => {
+  for (const [job, name] of [
+    ['go', 'Go vulnerability audit'], ['frontend', 'Audit Aislop toolchain'],
+    ['scans', 'Gitleaks'], ['scans', 'Semgrep'], ['scans', 'Convert Trivy SARIF'],
+    ['scans', 'Trivy high and critical gate'], ['package', 'Build snapshot artifacts'],
+    ['frontend', 'Upload javascript quality coverage'],
+  ]) {
+    const state = scopedCandidate();
+    state.ci.jobs[job].steps.find(step => step.name === name).if = false;
+    state.candidate[state.ciPath] = YAML.stringify(state.ci);
+    assert.notDeepEqual(inspectActivated(state.candidate), [], name);
+  }
+  for (const mutate of [
+    state => { state.pr.jobs.classify.steps[1].with.ref = '${{ github.sha }}'; },
+    state => { state.pr.jobs.quality.with['validation-mode'] = 'docs-only'; },
+    state => { state.ci.jobs.go.steps.find(step => step.name === 'Upload go quality coverage').if = false; },
+    state => { state.ci.jobs.checks.steps.find(step => step.name === 'Upload CI-tested candidate artifacts').if = undefined; },
+  ]) {
+    const state = scopedCandidate(); mutate(state);
+    state.candidate[state.ciPath] = YAML.stringify(state.ci);
+    state.candidate[state.prPath] = YAML.stringify(state.pr);
+    assert.notDeepEqual(inspectActivated(state.candidate), []);
+  }
+});
 
 test('approved scanner and coverage reuse preserves every existing quality gate', () => {
   const { reuseFixture } = require('./ci-reuse-fixture.cjs');
