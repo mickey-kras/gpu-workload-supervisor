@@ -28,6 +28,15 @@ func TestLockHelper(t *testing.T) {
 		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
 			t.Fatalf("expected contention with holder: %v", err)
 		}
+		// An exclusive holder must exclude shared acquisitions too. Checking only
+		// TryAcquire would also accept a holder that accidentally took LOCK_SH.
+		unexpected, err = acquire(path, unix.LOCK_SH|unix.LOCK_NB)
+		if unexpected != nil {
+			unexpected.Close()
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+			t.Fatalf("expected shared acquisition to contend with exclusive holder: %v", err)
+		}
 		fmt.Fprintln(os.Stdout, "contended")
 	}
 	lock, err := acquire(path, unix.LOCK_EX)
@@ -88,7 +97,7 @@ func TestAcquireSerializesProcesses(t *testing.T) {
 	first, release, firstOutput := start("holder")
 	expect(firstOutput, "acquired")
 	second, _, secondOutput := start("contender")
-	// This event is emitted only after production TryAcquire observes a held lock.
+	// This event requires both exclusive and shared probes to observe contention.
 	expect(secondOutput, "contended")
 	if _, err := fmt.Fprintln(release, "release"); err != nil {
 		t.Fatal(err)
