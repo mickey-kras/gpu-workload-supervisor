@@ -248,3 +248,39 @@ func TestComfyUIDiagnosticsRecoveryMayRemainPending(t *testing.T) {
 		t.Fatalf("pending recovery: reports=%v completions=%v", reports, stateStore.finished)
 	}
 }
+
+func TestComfyUIDiagnosticsReuseRecoveredSlotBeforeEviction(t *testing.T) {
+	diagnostics := comfyUIDiagnostics{}
+	var reports []error
+	report := func(err error) { reports = append(reports, err) }
+	for i := range comfyUIDiagnosticLimit {
+		diagnostics.observe(fmt.Sprint(i), "history_unavailable", report)
+	}
+	diagnostics.observe("64", "", report)
+	diagnostics.observe("replacement", "history_unavailable", report)
+	before := len(reports)
+	for i := range comfyUIDiagnosticLimit {
+		if i != 64 {
+			diagnostics.observe(fmt.Sprint(i), "history_unavailable", report)
+		}
+	}
+	diagnostics.observe("replacement", "history_unavailable", report)
+	if len(reports) != before {
+		t.Fatalf("active failures evicted despite recovered slot: %v", reports[before:])
+	}
+	diagnostics.observe("overflow", "history_unavailable", report)
+	before = len(reports)
+	diagnostics.observe("overflow", "history_unavailable", report)
+	if len(reports) != before {
+		t.Fatal("newest failure repeated")
+	}
+	for i := range comfyUIDiagnosticLimit {
+		if i != 64 {
+			diagnostics.observe(fmt.Sprint(i), "history_unavailable", report)
+		}
+	}
+	diagnostics.observe("replacement", "history_unavailable", report)
+	if len(reports) == before {
+		t.Fatal("full diagnostic state did not evict an entry")
+	}
+}

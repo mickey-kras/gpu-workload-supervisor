@@ -160,9 +160,16 @@ type comfyUIDiagnostics struct {
 
 func (d *comfyUIDiagnostics) observe(id, reason string, report func(error)) {
 	identity := sha256.Sum256([]byte(id))
+	free := -1
 	for i := range d.states {
 		state := &d.states[i]
-		if state.reason == "" || state.identity != identity {
+		if state.reason == "" {
+			if free < 0 {
+				free = i
+			}
+			continue
+		}
+		if state.identity != identity {
 			continue
 		}
 		if state.reason == reason {
@@ -179,8 +186,12 @@ func (d *comfyUIDiagnostics) observe(id, reason string, report func(error)) {
 	if reason == "" {
 		return
 	}
-	d.states[d.next] = comfyUIDiagnosticState{identity: identity, reason: reason}
-	d.next = (d.next + 1) % len(d.states)
+	slot := d.next
+	if free >= 0 {
+		slot = free
+	}
+	d.states[slot] = comfyUIDiagnosticState{identity: identity, reason: reason}
+	d.next = (slot + 1) % len(d.states)
 	report(&ComfyUIUnresolvedError{AttemptID: id, Reason: reason})
 }
 
