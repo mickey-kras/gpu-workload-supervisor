@@ -34,7 +34,8 @@ function files({ serial = true } = {}) {
     '.github/dependabot.yml', '.github/scripts/policy-guard.cjs',
     '.github/scripts/dependabot-auto-merge.cjs', '.github/scripts/pr-branch-updater.cjs',
     '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
-    'release-version.json', '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs',
+    'release-version.json', '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs', '.github/scripts/policy-ci-reuse.cjs',
+    '.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py',
     '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
     '.github/scripts/eslint.config.cjs', '.github/semgrep-tests/maintainability.go',
@@ -56,6 +57,13 @@ function files({ serial = true } = {}) {
   }
   return result;
 }
+
+test('approved scanner and coverage reuse preserves every existing quality gate', () => {
+  const { reuseFixture } = require('./ci-reuse-fixture.cjs');
+  const candidate = files({ serial: false });
+  for (const [path, workflow] of Object.entries(reuseFixture())) candidate[path] = YAML.stringify(workflow);
+  assert.deepEqual(inspect(candidate), []);
+});
 
 test('parallel CI preserves all existing trusted command and scanner gates', () => {
   const { parallelFixture } = require('./ci-parallel-fixture.cjs');

@@ -4,6 +4,26 @@ const { REQUIRED_JOBS, STEP_JOBS, AGGREGATE_RUN } = require('./policy-ci-paralle
 
 function parallelFixture() {
   const workflow = YAML.parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
+  // Legacy graph mutation tests use the independent 508 contract after reuse.
+  if (workflow.on.workflow_call?.outputs) {
+    workflow.on.workflow_call = null;
+    for (const id of ['go', 'frontend']) {
+      delete workflow.jobs[id].outputs;
+      workflow.jobs[id].steps = workflow.jobs[id].steps.filter(step => !step.name?.includes('quality coverage') && step.name !== 'CI reuse regressions');
+    }
+    const scans = workflow.jobs.scans.steps;
+    const report = scans.find(step => step.name === 'Trivy filesystem report');
+    delete report.env;
+    Object.assign(report.with, { format: 'sarif', output: 'trivy-results.sarif', severity: 'HIGH,CRITICAL' });
+    workflow.jobs.scans.steps = scans.filter(step => !['Trivy conversion regressions', 'Convert Trivy SARIF'].includes(step.name));
+    scans.find(step => step.name === 'Upload Trivy SARIF').if = "${{ !cancelled() && steps.trivy_report.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}";
+    const gate = scans.find(step => step.name === 'Trivy high and critical gate');
+    delete gate.run;
+    gate.uses = 'aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25';
+    gate.with = { 'scan-type': 'fs', 'scan-ref': '.', format: 'table', severity: 'HIGH,CRITICAL', 'ignore-unfixed': true, 'exit-code': '1' };
+    workflow.jobs.package.steps.find(step => step.name === 'Native desktop transport integration').run =
+      'sudo apt-get update\nsudo apt-get install --no-install-recommends -y gjs python3\nsudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT timeout 180s bash scripts/native-desktop-integration.sh --isolated-test-host\n';
+  }
   if (workflow.jobs.native) return workflow;
   const steps = workflow.jobs.checks.steps;
   const common = steps.filter(step => !step.name && !step.id && !step.uses?.startsWith('actions/setup-node@'));
