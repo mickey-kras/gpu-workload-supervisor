@@ -36,7 +36,8 @@ func TestStateAndSettingsValidateAllPolicyFields(t *testing.T) {
 		name, query, want string
 	}{
 		{"revision", `UPDATE operator_settings SET revision = ''`, "operator settings revision is empty"},
-		{"timeout", `UPDATE operator_settings SET idle_timeout_minutes = 1`, "idle timeout must be"},
+		// Inject corrupt storage deliberately; normal writes must obey schema v15.
+		{"timeout", `PRAGMA ignore_check_constraints=ON; UPDATE operator_settings SET idle_timeout_minutes = 1; PRAGMA ignore_check_constraints=OFF`, "idle timeout must be"},
 		{"settings timestamp", `UPDATE operator_settings SET updated_at = 'bad'`, "parsing time"},
 		{"activity", `UPDATE idle_policy_state SET last_activity_at = 'bad'`, "parsing time"},
 		{"deadline", `UPDATE idle_policy_state SET armed_deadline = 'bad'`, "parsing time"},
