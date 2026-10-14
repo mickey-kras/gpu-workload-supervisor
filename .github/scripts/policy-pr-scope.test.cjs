@@ -25,6 +25,17 @@ test('full validation is preserved for main, release and non-documentation PR wo
     "${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}");
 });
 
+test('quality fallback runs after classifier failure while honoring workflow cancellation', () => {
+  assert.equal(SCOPED_QUALITY.if, '${{ !cancelled() }}');
+  assert.equal(SCOPED_QUALITY.with['validation-mode'],
+    "${{ needs.classify.result == 'success' && needs.classify.outputs.validation-mode || 'full' }}");
+  const input = fixture();
+  input.workflows['.github/workflows/pr-validation.yml'].jobs.quality.if = '${{ always() }}';
+  const failures = [];
+  normalizeScopedValidation(input.files, input.workflows, failures, 'original aggregate');
+  assert.ok(failures.some(error => error.includes('full-fallback quality input')));
+});
+
 test('approved PR docs wiring normalizes only expected skips and preserves coverage outputs', () => {
   const input = fixture(); const failures = [];
   const output = normalizeScopedValidation(input.files, input.workflows, failures, 'original aggregate');

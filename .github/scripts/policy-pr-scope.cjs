@@ -37,7 +37,7 @@ const CLASSIFIER_JOB = {
       with: { script: CLASSIFIER_SCRIPT } },
   ],
 };
-const SCOPED_QUALITY = { needs: 'classify', if: '${{ always() }}', uses: './.github/workflows/ci.yml',
+const SCOPED_QUALITY = { needs: 'classify', if: '${{ !cancelled() }}', uses: './.github/workflows/ci.yml',
   with: { 'validation-mode': "${{ needs.classify.result == 'success' && needs.classify.outputs.validation-mode || 'full' }}" } };
 const SCOPED_AGGREGATE = `python3 - <<'PYTHON'
 import json
