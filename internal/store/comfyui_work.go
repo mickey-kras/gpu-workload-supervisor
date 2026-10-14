@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
@@ -66,7 +65,7 @@ func (s *Store) AdmitComfyUIWork(ctx context.Context, attempt ComfyUIAttempt, re
 	if _, err := tx.ExecContext(ctx, `INSERT INTO registered_work
 		(request_id,workload,lease_incarnation,lease_epoch,registered_at,registration_token)
 		VALUES (?,?,?,?,?,?)`, attempt.RequestID, attempt.Workload, attempt.Fence.Incarnation, attempt.Fence.Epoch, formatTime(s.now()), token); err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint") {
+		if isUniqueConstraint(err) {
 			return "", ErrRequestConflict
 		}
 		return "", fmt.Errorf("admit ComfyUI work: %w", err)

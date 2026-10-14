@@ -181,7 +181,18 @@ CREATE TABLE comfyui_attempts (
  contract TEXT NOT NULL);
 `
 
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14}
+const schemaV15 = `
+CREATE TABLE operator_settings_new(
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    revision TEXT NOT NULL,
+    idle_timeout_minutes INTEGER NOT NULL CHECK(typeof(idle_timeout_minutes) = 'integer' AND (idle_timeout_minutes = 0 OR idle_timeout_minutes BETWEEN 5 AND 1440)),
+    updated_at TEXT NOT NULL);
+INSERT INTO operator_settings_new SELECT * FROM operator_settings;
+DROP TABLE operator_settings;
+ALTER TABLE operator_settings_new RENAME TO operator_settings;
+`
+
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15}
 
 func (s *Store) initialize(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -224,6 +235,11 @@ func (s *Store) applyMigrations(ctx context.Context, tx *sql.Tx) error {
 	}
 	for index := current; index < len(migrations); index++ {
 		version := index + 1
+		if version == 15 {
+			if err := validateV15IdleTimeout(ctx, tx); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.ExecContext(ctx, migrations[index]); err != nil {
 			return fmt.Errorf("apply schema v%d: %w", version, err)
 		}
@@ -231,6 +247,18 @@ func (s *Store) applyMigrations(ctx context.Context, tx *sql.Tx) error {
 			VALUES (?, ?)`, version, formatTime(s.now())); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateV15IdleTimeout(ctx context.Context, tx *sql.Tx) error {
+	var invalid int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM operator_settings
+		WHERE NOT (typeof(idle_timeout_minutes) = 'integer' AND (idle_timeout_minutes = 0 OR idle_timeout_minutes BETWEEN 5 AND 1440))`).Scan(&invalid); err != nil {
+		return fmt.Errorf("validate schema v15 idle timeout: %w", err)
+	}
+	if invalid != 0 {
+		return fmt.Errorf("apply schema v15: operator_settings contains %d incompatible idle timeout rows; must be an integer, 0 (off) or between 5 and 1440 minutes", invalid)
 	}
 	return nil
 }
