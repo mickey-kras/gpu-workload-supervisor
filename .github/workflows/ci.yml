@@ -45,7 +45,7 @@ jobs:
         run: python3 tests/desktop/setup_native.py --output native-setup-evidence/shard-${{ matrix.shard }} --shard-index ${{ matrix.shard }} --shard-count 6
       - name: Upload native setup evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-setup-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: native-setup-evidence/
@@ -132,7 +132,7 @@ jobs:
       - name: Upload go quality coverage
         if: ${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}
         id: coverage
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: go-quality-coverage-${{ github.run_id }}-${{ github.run_attempt }}
           path: go-quality-coverage/
@@ -184,7 +184,7 @@ jobs:
         run: python3 .github/scripts/quality-coverage.py stage javascript javascript-quality-coverage
       - name: Upload javascript quality coverage
         id: coverage
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: javascript-quality-coverage-${{ github.run_id }}-${{ github.run_attempt }}
           path: javascript-quality-coverage/
@@ -326,7 +326,7 @@ jobs:
         run: echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
       - name: Upload qualified package payload
         id: payload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: package-payload-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -418,7 +418,7 @@ jobs:
           (cd candidate-artifacts && sha256sum candidate-manifest.json >> checksums.txt && sha256sum --check checksums.txt)
       - name: Upload CI-tested candidate artifacts
         if: ${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: candidate-${{ steps.candidate.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate-artifacts/
