@@ -9,7 +9,7 @@ const VALIDATION_SCRIPT = [
   "const filename = resolve('.github/scripts/release-validation.cjs');",
   'const source = readFileSync(filename);',
   "if (createHash('sha256').update(source).digest('hex') !==",
-  "    '9c04657f811326dd6788c2ae8515bc828dade338b002571989f601919a652f28') {",
+  "    '8d9e598a781a86a4d44611bff6a793c8ab95664e118fa687a07432f297aeea03') {",
   "  throw new Error('Release validation verifier bytes changed in the workspace');", '}',
   "const publicationFilename = resolve('.github/scripts/release-publication.cjs');",
   'const publicationSource = readFileSync(publicationFilename);',
@@ -34,8 +34,6 @@ const HARDEN = { uses: 'step-security/harden-runner@351661ca32ac09a36dc5ee2d536e
   with: { 'egress-policy': 'audit' } };
 const CHECKOUT = { uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
   with: { ref: '${{ github.sha }}', 'persist-credentials': false } };
-const NODE = { uses: 'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020',
-  with: { 'node-version': 22 } };
 const GO = { uses: 'actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e',
   with: { 'go-version-file': 'go.mod', cache: true } };
 const INSTALL = { name: 'Install release tools',
@@ -56,7 +54,7 @@ function inspectVerificationWorkspace(workflow, failures) {
   if (Object.hasOwn(workflow, 'env') || Object.hasOwn(workflow, 'defaults') ||
       Object.keys(validation).some(key => !allowed.includes(key)) ||
       ['env', 'defaults', 'container', 'services'].some(key => Object.hasOwn(publish, key)) ||
-      !sameSteps(validation.steps, [HARDEN, CHECKOUT, NODE, INSTALL,
+      !sameSteps(validation.steps, [HARDEN, CHECKOUT,
         verificationStep('Verify exact-commit main validation')]) ||
       !sameSteps(publish.steps?.slice(0, beforePublish + 1), [HARDEN, publishCheckout, GO, INSTALL,
         verificationStep('Verify main and successful validation at this commit')])) {
@@ -72,7 +70,7 @@ function inspectValidationReuse(files, workflow, failures, checks) {
     step.name === 'Verify main and successful validation at this commit');
   const digest = content => createHash('sha256').update(content || '').digest('hex');
   if (digest(files['.github/scripts/release-validation.cjs']) !==
-      '9c04657f811326dd6788c2ae8515bc828dade338b002571989f601919a652f28') {
+      '8d9e598a781a86a4d44611bff6a793c8ab95664e118fa687a07432f297aeea03') {
     failures.push('Release validation verifier was changed');
   }
   if (digest(files['.github/scripts/release-publication.cjs']) !==
@@ -109,12 +107,6 @@ function inspectValidationReuse(files, workflow, failures, checks) {
   checks.step(path, 'validation', 'Verify exact-commit main validation', {
     uses: 'actions/github-script', withValues: { script: VALIDATION_SCRIPT },
   });
-  checks.step(path, 'validation', 'Install release tools', {
-    run: ['npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund'],
-  });
-  checks.exactRun(path, 'validation', 'Install release tools', [
-    'npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund',
-  ]);
   checks.step(path, 'publish', 'Verify main and successful validation at this commit', {
     uses: 'actions/github-script', withValues: { script: VALIDATION_SCRIPT },
   });

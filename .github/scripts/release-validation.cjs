@@ -37,7 +37,8 @@ async function verifyCandidate({ github, context, core, version }) {
 function trustedRun(run, context, repository, workflow) {
   if (!Number.isInteger(run.id) || !Number.isInteger(run.run_number) ||
       !Number.isInteger(run.run_attempt) || run.run_attempt < 1 ||
-      run.workflow_id !== workflow.id || run.path !== workflow.path ||
+      run.workflow_id !== workflow.id ||
+      ![workflow.path, `${workflow.path}@main`].includes(run.path) ||
       run.repository?.id !== repository.id || run.repository?.full_name !== repository.full_name ||
       run.head_repository?.id !== repository.id ||
       run.head_repository?.full_name !== repository.full_name ||
@@ -45,6 +46,14 @@ function trustedRun(run, context, repository, workflow) {
       !['push', 'workflow_dispatch'].includes(run.event)) {
     throw new Error('Main validation has mismatched workflow, repository, event, branch, SHA or attempt');
   }
+}
+
+async function latestMainRun(github, context, repository, workflow) {
+  const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+    ...context.repo, workflow_id: workflow.id, branch: 'main', head_sha: context.sha, per_page: 100,
+  });
+  for (const run of runs) trustedRun(run, context, repository, workflow);
+  return runs.toSorted((a, b) => b.run_number - a.run_number)[0];
 }
 
 function timestamp(value) {
@@ -98,11 +107,7 @@ async function verifyMain({ github, context, core, version,
   }
   const deadline = now() + WAIT_MS;
   for (;;) {
-    const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
-      ...context.repo, workflow_id: workflow.id, branch: 'main', head_sha: context.sha, per_page: 100,
-    });
-    for (const run of runs) trustedRun(run, context, repository, workflow);
-    const latest = runs.toSorted((a, b) => b.run_number - a.run_number)[0];
+    const latest = await latestMainRun(github, context, repository, workflow);
     if (latest) {
       const { data: run } = await github.rest.actions.getWorkflowRun({ ...context.repo, run_id: latest.id });
       trustedRun(run, context, repository, workflow);
@@ -120,6 +125,12 @@ async function verifyMain({ github, context, core, version,
           throw new Error('Main validation changed while checking its evidence');
         }
         await verifyCandidate({ github, context, core, version });
+        const authorized = await latestMainRun(github, context, repository, workflow);
+        if (authorized?.id !== run.id || authorized.run_attempt !== run.run_attempt ||
+            authorized.status !== 'completed' || authorized.conclusion !== 'success') {
+          throw new Error('Main validation was superseded while checking its evidence');
+        }
+        verifyJobs(jobs, run, now());
         core.info(`Reusing main run ${run.id} attempt ${run.run_attempt} for ${context.sha}`);
         return { run_id: run.id, run_attempt: run.run_attempt };
       }

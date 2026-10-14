@@ -44,14 +44,12 @@ function reusableRelease(candidate) {
     env: { VERSION: '${{ needs.entry.outputs.version }}' }, with: { script } };
   const entrySteps = workflow.jobs.entry.steps;
   const harden = entrySteps.find(step => step.uses?.startsWith('step-security/harden-runner@'));
-  const node = entrySteps.find(step => step.uses?.startsWith('actions/setup-node@'));
   workflow.jobs.validation = { needs: 'entry', 'runs-on': 'ubuntu-latest', 'timeout-minutes': 75,
     permissions: { contents: 'read', actions: 'read' }, steps: [
       structuredClone(harden),
       { uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
         with: { ref: '${{ github.sha }}', 'persist-credentials': false } },
-      structuredClone(node),
-      { name: 'Install release tools', run: 'npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund' }, verify,
+      verify,
     ] };
   workflow.jobs.publish.needs = ['entry', 'validation'];
   const publishVerify = workflow.jobs.publish.steps.find(step =>
@@ -75,7 +73,7 @@ test('release validation reuse cannot skip or weaken its exact-commit gate', () 
     state => { state.workflow.jobs.validation.permissions.actions = 'write'; },
     state => { state.workflow.jobs.validation['timeout-minutes'] = 10; },
     state => { state.workflow.jobs.validation.steps[1].with.ref = 'main'; },
-    state => { state.workflow.jobs.validation.steps[3].run = 'npm install semver'; },
+    state => { state.workflow.jobs.validation.steps.splice(2, 0, { run: 'npm install semver' }); },
     state => { state.verify.if = false; },
     state => { state.verify.with.script = 'console.log("validation skipped")'; },
     state => { state.verify.env.VERSION = '0.1.0'; },
@@ -100,7 +98,7 @@ test('release verifier bytes are protected even before switching to reuse', () =
 
 test('verification jobs reject workspace writes and runtime or wrapper input overrides', () => {
   for (const mutate of [
-    state => { state.workflow.jobs.validation.steps.splice(4, 0, {
+    state => { state.workflow.jobs.validation.steps.splice(2, 0, {
       run: "printf 'module.exports = { verifyMain: async () => {} };' > .github/scripts/release-validation.cjs",
     }); },
     state => { state.workflow.jobs.publish.steps.splice(4, 0, {
@@ -111,7 +109,7 @@ test('verification jobs reject workspace writes and runtime or wrapper input ove
     state => { state.workflow.jobs.publish.env = { NODE_OPTIONS: '--require ./malicious.cjs' }; },
     state => { state.verify.env.NODE_OPTIONS = '--require ./malicious.cjs'; },
     state => { state.verify.with['github-token'] = '${{ secrets.WRITE_TOKEN }}'; },
-    state => { state.workflow.jobs.validation.steps[3].env = { npm_config_ignore_scripts: 'false' }; },
+    state => { state.workflow.jobs.validation.steps[1].env = { NODE_OPTIONS: '--require ./malicious.cjs' }; },
     state => { state.workflow.jobs.publish.steps[3].env = { NODE_OPTIONS: '--require ./malicious.cjs' }; },
     state => { state.workflow.jobs.validation.defaults = { run: { 'working-directory': 'other' } }; },
   ]) {

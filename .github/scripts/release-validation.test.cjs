@@ -129,6 +129,31 @@ test('a newer failing run supersedes an older success', async () => {
   assert.equal(input.state.reads[0].run_id, 789);
 });
 
+test('a new pending or failing run discovered during job inspection supersedes the validated run', async () => {
+  for (const status of ['in_progress', 'completed']) {
+    const input = fixture(); const paginate = input.github.paginate;
+    input.github.paginate = async (method, params) => {
+      const result = await paginate(method, params);
+      if (method === input.github.rest.actions.listJobsForWorkflowRunAttempt) {
+        input.state.runs.push({ ...structuredClone(input.state.run), id: 789, run_number: 8,
+          status, conclusion: status === 'completed' ? 'failure' : null });
+      }
+      return result;
+    };
+    await assert.rejects(verifyMain(input), /superseded/);
+  }
+});
+
+test('workflow run paths support only the exact workflow path or its main qualification', async () => {
+  const allowed = fixture(); allowed.state.run.path += '@main';
+  await verifyMain(allowed);
+  for (const path of ['.github/workflows/main.yml@other', '.github/workflows/main.yml@refs/heads/main',
+    '.github/workflows/main.yml@main-extra', '.github/workflows/main.yaml@main']) {
+    const input = fixture(); input.state.run.path = path;
+    await assert.rejects(verifyMain(input), /mismatched/);
+  }
+});
+
 test('workflow, repository, origin, event, branch, SHA and attempt mismatches fail closed', async () => {
   for (const mutate of [
     run => { run.workflow_id++; }, run => { run.path = '.github/workflows/pr-validation.yml'; },
