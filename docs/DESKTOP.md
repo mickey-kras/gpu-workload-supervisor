@@ -44,9 +44,9 @@ The effective account's OS home determines the private profile location:
 do not select runtime configuration. The accepted workload catalog and its opaque
 revision live in SQLite; `catalog.json` is only an owned setup/backup artifact.
 Ordinary controls never adopt edits to that mirror. Setup exposes `discover`,
-`probe`, `prepare`, `fingerprint`, `drafts`, `save-drafts`, `verify-bindings`, `validate`,
-`apply`, `temporary-status`, `temporary-discover`, `temporary-cleanup`, `reconcile`
-and `remove-integration`; request/response commands use a
+`probe`, `prepare`, `fingerprint`, `render-owned`, `drafts`, `save-drafts`,
+`verify-bindings`, `validate`, `apply`, `temporary-status`, `temporary-discover`, `temporary-cleanup`, `reconcile`,
+`idle-policy-tick` and `remove-integration`; request/response commands use a
 strict versioned JSON protocol over stdin/stdout. The desktop application
 supplies these requests and renders the concrete preview.
 
@@ -146,14 +146,18 @@ printf '%s' '{"app":"llama.cpp","reference":"/models/model.gguf","referenceKind"
 ```
 
 `app` accepts `comfyui`, `ollama`, `llama.cpp`, `vllm`. Select exactly one
-`endpoint` or `reference`. `referenceKind` accepts `application`, `configuration`,
+`endpoint` or `reference`. `referenceKind` accepts `application`,
+`application-directory`, `configuration`,
 `model-file`, `model-directory`. Endpoint values are loopback HTTP(S) origins,
 without credentials, path, query or fragment. References must be absolute clean
 paths. Ollama, llama.cpp and vLLM `application` selections permit executable
 aliases only when the target and every link hop pass executable trust checks.
 Configuration, model, directory and ComfyUI references accept only regular files
 or directories and reject symbolic links. File contents are not executed or
-inspected, and directories are not enumerated.
+inspected. For Ollama, llama.cpp and vLLM, `application-directory` checks only
+known application filenames in
+the selected directory and its `bin` directory; it does not recursively discover
+files.
 
 | Application | Read-only observations |
 | --- | --- |

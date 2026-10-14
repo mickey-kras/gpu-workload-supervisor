@@ -29,6 +29,12 @@ trailing fields/documents are rejected. The 1-64 byte request ID consists of
 ASCII letters, digits, hyphen, underscore or period and is only a correlation
 identifier, never an execution lease.
 
+The backend rejects unknown request fields, and the shipped client rejects
+unknown response fields. Adding fields to an existing action is not automatically
+backward compatible: evolve both peers together with an explicit protocol-version
+change for incompatible shapes. New actions may use their own shapes; older
+backends reject unknown actions with `invalid_request`.
+
 ```json
 {"protocolVersion":1,"requestId":"r1","action":"status"}
 ```
@@ -54,8 +60,9 @@ Mutations copy the complete `expected` object from a fresh successful status:
 {"protocolVersion":1,"requestId":"r2","action":"user-switch","target":"speech","expected":{"incarnation":"opaque","version":"42","owner":"user","configurationRevision":"opaque"}}
 ```
 
-Only `user-switch` accepts a target. `take-control` transfers Supervisor ownership
-to User while preserving the freshly verified current workload. It drains work
+`user-switch` and `activate-workload` accept a `target`; activation excludes
+`idle` (see [Demand activation](#demand-activation)). `take-control` transfers
+Supervisor ownership to User while preserving the freshly verified current workload. It drains work
 and verifies without lifecycle changes, including on failure. `return-control`
 requires User ownership and stops work before committing Supervisor ownership in
 Idle. The store checks incarnation, version, owner and configuration revision in
@@ -137,10 +144,11 @@ Activation uses the mutation-class lifetime.
 ## Inactivity policy tick
 
 `gpu-setup idle-policy-tick` is the oneshot policy evaluation driven by the
-`gpu-workload-supervisor-idle.timer` user timer (every 60 seconds, gated on
-`ConditionPathExists=%h/.config/gpu-workload-supervisor/operator.json`;
-guided setup enables the packaged timer link alongside the reconciliation
-unit, and remove-integration removes both). It reads the persisted
+`gpu-workload-supervisor-idle.timer` user timer every 60 seconds. Its oneshot
+`gpu-workload-supervisor-idle.service` carries
+`ConditionPathExists=%h/.config/gpu-workload-supervisor/operator.json`.
+Guided setup enables the packaged timer link alongside the reconciliation
+unit, and remove-integration removes both. It reads the persisted
 `operator.json` profile — failing loudly when the file is unreadable rather
 than falling back to default paths — and opens the profile's configured state
 path and runtime. (`gpu-mode -state <path> idle-policy-tick` remains the
