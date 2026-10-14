@@ -134,6 +134,27 @@ test('legacy release gates cannot be weakened during staged validation adoption'
   }
 });
 
+test('legacy verification requires the pinned action and exact runtime inputs and setup', () => {
+  for (const mutate of [
+    (workflow, gate) => { gate.uses = 'actions/checkout@' + 'a'.repeat(40); },
+    (workflow, gate) => { gate.uses = 'actions/github-script@' + 'a'.repeat(40); },
+    (workflow, gate) => { gate.with['github-token'] = '${{ secrets.WRITE_TOKEN }}'; },
+    (workflow, gate) => { gate.env.NODE_OPTIONS = '--require ./malicious.cjs'; },
+    (workflow, gate) => { gate.env.VERSION = '0.1.0'; },
+    workflow => { workflow.env = { NODE_OPTIONS: '--require ./malicious.cjs' }; },
+    workflow => { workflow.jobs.publish.env = { NODE_OPTIONS: '--require ./malicious.cjs' }; },
+    workflow => { workflow.jobs.publish['runs-on'] = 'self-hosted'; },
+    workflow => { workflow.jobs.publish.steps.splice(4, 0, { run: 'overwrite runtime' }); },
+    workflow => { workflow.jobs.publish.steps[1].with.repository = 'attacker/repo'; },
+  ]) {
+    const candidate = files(); const path = '.github/workflows/release.yml';
+    const workflow = YAML.parse(candidate[path]); const gate = workflow.jobs.publish.steps.find(step =>
+      step.name === 'Verify main and successful validation at this commit');
+    mutate(workflow, gate); candidate[path] = YAML.stringify(workflow);
+    assert.ok(inspect(candidate).some(error => error.includes('legacy exact-commit release validation')));
+  }
+});
+
 test('maintainability gates cannot be removed, skipped or weakened', () => {
   for (const name of ['Go cognitive complexity', 'Test Go suppression guard', 'JavaScript maintainability', 'Test setup shared-literal rule']) {
     for (const mutation of ['missing', 'conditional', 'advisory', 'command']) {

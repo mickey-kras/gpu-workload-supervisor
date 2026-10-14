@@ -244,6 +244,20 @@ test('reruns need every required job from the successful current attempt', async
   await verifyMain(all);
 });
 
+test('attempt-specific endpoint supplies binding when the optional job attempt field is absent', async () => {
+  const input = fixture(); input.state.run.run_attempt = 2;
+  for (const job of input.state.jobs) delete job.run_attempt;
+  assert.deepEqual(await verifyMain(input), { run_id: 456, run_attempt: 2 });
+  const jobQuery = input.state.queries.find(params => params.attempt_number !== undefined);
+  assert.equal(jobQuery.attempt_number, 2);
+  for (const attempt of [1, 3, null, '2']) {
+    const wrong = fixture(); wrong.state.run.run_attempt = 2;
+    for (const job of wrong.state.jobs) delete job.run_attempt;
+    wrong.state.jobs[0].run_attempt = attempt;
+    await assert.rejects(verifyMain(wrong), /exact-attempt job/);
+  }
+});
+
 test('rerunning main during evidence inspection rejects changing attempt or status', async () => {
   for (const change of ['attempt', 'status']) {
     const input = fixture(); let reads = 0;

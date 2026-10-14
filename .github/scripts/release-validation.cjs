@@ -77,7 +77,8 @@ function verifyJobs(jobs, run, now) {
   for (const [name, steps] of required) {
     const matching = jobs.filter(job => job.name === name);
     const job = matching[0];
-    if (matching.length !== 1 || job.run_id !== run.id || job.run_attempt !== run.run_attempt ||
+    if (matching.length !== 1 || job.run_id !== run.id ||
+        (Object.hasOwn(job, 'run_attempt') && job.run_attempt !== run.run_attempt) ||
         job.head_sha !== run.head_sha || job.status !== 'completed' || job.conclusion !== 'success') {
       throw new Error(`Main validation lacks a successful exact-attempt job: ${name}`);
     }

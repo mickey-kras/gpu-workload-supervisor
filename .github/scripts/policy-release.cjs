@@ -9,7 +9,7 @@ const VALIDATION_SCRIPT = [
   "const filename = resolve('.github/scripts/release-validation.cjs');",
   'const source = readFileSync(filename);',
   "if (createHash('sha256').update(source).digest('hex') !==",
-  "    '8d9e598a781a86a4d44611bff6a793c8ab95664e118fa687a07432f297aeea03') {",
+  "    '2ab673a761d632d643901cfdd9294d45135910691481693bcb15b2f20fc75c1b') {",
   "  throw new Error('Release validation verifier bytes changed in the workspace');", '}',
   "const publicationFilename = resolve('.github/scripts/release-publication.cjs');",
   'const publicationSource = readFileSync(publicationFilename);',
@@ -70,7 +70,7 @@ function inspectValidationReuse(files, workflow, failures, checks) {
     step.name === 'Verify main and successful validation at this commit');
   const digest = content => createHash('sha256').update(content || '').digest('hex');
   if (digest(files['.github/scripts/release-validation.cjs']) !==
-      '8d9e598a781a86a4d44611bff6a793c8ab95664e118fa687a07432f297aeea03') {
+      '2ab673a761d632d643901cfdd9294d45135910691481693bcb15b2f20fc75c1b') {
     failures.push('Release validation verifier was changed');
   }
   if (digest(files['.github/scripts/release-publication.cjs']) !==
@@ -82,10 +82,21 @@ function inspectValidationReuse(files, workflow, failures, checks) {
       checks.job(path, id, `./.github/workflows/${id === 'quality' ? 'ci' : id}.yml`);
       if (releaseJobs?.[id]?.needs !== 'entry') failures.push(`${path} lost legacy release ${id} ordering`);
     }
-    if (JSON.stringify(releaseJobs?.publish?.needs) !== '["entry","quality","aislop","codeql"]' ||
+    const legacyStep = { name: 'Verify main and successful validation at this commit',
+      uses: 'actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3',
+      env: { VERSION: '${{ needs.entry.outputs.version }}' },
+      with: { script: verification?.with?.script } };
+    const publish = releaseJobs?.publish;
+    const legacyCheckout = { uses: CHECKOUT.uses, with: { 'fetch-depth': 0, 'persist-credentials': false } };
+    const prefix = publish?.steps?.slice(0, publish.steps.indexOf(verification) + 1);
+    if (JSON.stringify(publish?.needs) !== '["entry","quality","aislop","codeql"]' ||
         digest(verification?.with?.script) !==
         'c6eb1c8ff3d93b28e068a4348b7d3b46b869efdd930f4c3e91b8f1c7a9415a47' ||
-        Object.hasOwn(verification || {}, 'if')) {
+        !isDeepStrictEqual(verification, legacyStep) ||
+        !isDeepStrictEqual(prefix, [HARDEN, legacyCheckout, GO, INSTALL, legacyStep]) ||
+        Object.hasOwn(workflow, 'env') || Object.hasOwn(workflow, 'defaults') ||
+        publish?.['runs-on'] !== 'ubuntu-latest' ||
+        ['env', 'defaults', 'container', 'services'].some(key => Object.hasOwn(publish || {}, key))) {
       failures.push(`${path} lost legacy exact-commit release validation`);
     }
     return;
