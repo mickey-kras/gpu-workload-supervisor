@@ -119,11 +119,15 @@ function inspectUpdates(files, failures) {
     ['npm', '/.github/scripts'], ['npm', '/clients/gnome']];
   try {
     const config = YAML.parse(files['.github/dependabot.yml'], { uniqueKeys: true });
-    if (config?.version !== 2 || !Array.isArray(config.updates) || config.updates.length !== scopes.length ||
+    if (config?.version !== 2 || Object.hasOwn(config, 'multi-ecosystem-groups') ||
+        !Array.isArray(config.updates) || config.updates.length !== scopes.length ||
         !scopes.every(([ecosystem, directory]) =>
           config.updates.some(entry => entry?.['package-ecosystem'] === ecosystem &&
             entry.directory === directory && !Object.hasOwn(entry, 'directories') &&
+            !Object.hasOwn(entry, 'multi-ecosystem-group') &&
             (!Object.hasOwn(entry, 'rebase-strategy') || entry['rebase-strategy'] === 'auto') &&
+            (!Object.hasOwn(entry, 'versioning-strategy') || (ecosystem === 'npm' &&
+              ['auto', 'increase', 'increase-if-necessary', 'widen'].includes(entry['versioning-strategy']))) &&
             (!Object.hasOwn(entry, 'open-pull-requests-limit') ||
               (Number.isInteger(entry['open-pull-requests-limit']) && entry['open-pull-requests-limit'] > 0)) &&
             !Object.hasOwn(entry, 'allow') && !Object.hasOwn(entry, 'target-branch') &&

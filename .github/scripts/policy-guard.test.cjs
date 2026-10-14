@@ -1189,3 +1189,44 @@ test('Dependabot preserves automatic rebases with default or explicit auto strat
     else assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'), JSON.stringify(strategy));
   }
 });
+
+
+test('each npm scope retains manifest-capable versioning and other ecosystems keep defaults', () => {
+  const baseline = files({ serial: false });
+  assert.deepEqual(inspectActivated(baseline), [], 'current default strategies');
+  const path = '.github/dependabot.yml';
+  const original = YAML.parse(baseline[path]);
+  const supported = ['auto', 'increase', 'increase-if-necessary', 'widen'];
+  for (const [index, entry] of original.updates.entries()) {
+    for (const strategy of [undefined, ...supported, 'lockfile-only', null, 0, {}, ['auto']]) {
+      const config = structuredClone(original);
+      if (strategy !== undefined) config.updates[index]['versioning-strategy'] = strategy;
+      const candidate = { ...baseline, [path]: YAML.stringify(config) };
+      const accepted = strategy === undefined ||
+        (entry['package-ecosystem'] === 'npm' && supported.includes(strategy));
+      if (accepted) assert.deepEqual(inspectActivated(candidate), [], `${entry.directory}: ${strategy}`);
+      else assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'),
+        `${entry['package-ecosystem']}:${entry.directory}: ${JSON.stringify(strategy)}`);
+    }
+  }
+});
+
+
+test('Dependabot scopes remain independent of multi-ecosystem inheritance', () => {
+  const baseline = files({ serial: false });
+  const path = '.github/dependabot.yml';
+  const original = YAML.parse(baseline[path]);
+  assert.ok(original.updates.find(entry => entry['package-ecosystem'] === 'github-actions').groups.codeql);
+  assert.deepEqual(inspectActivated(baseline), [], 'ordinary CodeQL group remains supported');
+  for (const mutate of [
+    config => { config['multi-ecosystem-groups'] = { combined: { schedule: { interval: 'daily' } } }; },
+    config => { config['multi-ecosystem-groups'] = {}; },
+    config => { config['multi-ecosystem-groups'] = null; },
+    config => { config.updates[0]['multi-ecosystem-group'] = 'combined'; },
+    config => { config.updates[0]['multi-ecosystem-group'] = null; },
+  ]) {
+    const config = structuredClone(original); mutate(config);
+    const candidate = { ...baseline, [path]: YAML.stringify(config) };
+    assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'));
+  }
+});
