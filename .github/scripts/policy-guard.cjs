@@ -5,6 +5,7 @@ const { normalizeParallelCi, AGGREGATE_RUN } = require('./policy-ci-parallel.cjs
 const { normalizeScopedValidation } = require('./policy-pr-scope.cjs');
 const { normalizeCiReuse } = require('./policy-ci-reuse.cjs');
 const { canonical, normalizeActionSteps } = require('./policy-action-pins.cjs');
+const { inspectDependabot, verifyDependabotAuthor } = require('./policy-dependabot.cjs');
 
 const REQUIRED_FILES = [
   '.github/workflows/pr-validation.yml', '.github/workflows/ci.yml',
@@ -17,7 +18,7 @@ const REQUIRED_FILES = [
   '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
   'release-version.json', '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs', '.github/scripts/policy-ci-reuse.cjs',
   '.github/scripts/policy-pr-scope.cjs', '.github/scripts/pr-validation-scope.cjs',
-  '.github/scripts/policy-action-pins.cjs',
+  '.github/scripts/policy-action-pins.cjs', '.github/scripts/policy-dependabot.cjs',
   '.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py',
   '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
   '.github/scripts/pr-branch-updater.cjs', 'sonar-project.properties',
@@ -275,15 +276,7 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
   }
   inspectReleaseEntry(files, workflows, failures, checks);
   inspectReleasePublish(files, workflows, failures, checks, inspectGoReleaser);
-  const bot = '.github/workflows/dependabot-auto-merge.yml';
-  event(bot, 'pull_request_target');
-  step(bot, 'enable-auto-merge', 'Queue eligible verified updates', { uses: 'actions/github-script', allowJobIf: true });
-  if (workflows[bot]?.jobs?.['enable-auto-merge']?.if !==
-      "github.event_name != 'pull_request_target' || github.event.pull_request.user.login == 'dependabot[bot]'") {
-    failures.push(`${bot} lost Dependabot-only execution condition`);
-  }
-  const trustedBot = workflows[bot]?.jobs?.['enable-auto-merge']?.steps?.find(s => s.name === 'Read trusted automation');
-  if (trustedBot?.with?.ref !== '${{ github.workflow_sha }}') failures.push(`${bot} lost trusted checkout`);
+  inspectDependabot(files, workflows, failures, checks);
   for (const [path, jobId, name, expected] of [
     ['.github/workflows/codeql.yml', 'analyze', undefined, 'github/codeql-action/analyze'],
     ['.github/workflows/aislop.yml', 'status', 'Aislop Go quality gate', undefined],
@@ -420,6 +413,7 @@ function inspect(files) {
 }
 
 async function run({ github, context }) {
+  await verifyDependabotAuthor(github, context);
   const { owner, repo } = context.repo;
   const sha = context.payload.pull_request.head.sha;
   const { data: commit } = await github.rest.git.getCommit({ owner, repo, commit_sha: sha });
@@ -441,4 +435,4 @@ async function run({ github, context }) {
   if (failures.length) throw new Error(failures.join('\n'));
 }
 
-module.exports = { inspect, run };
+module.exports = { inspect, run, verifyDependabotAuthor };

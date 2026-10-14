@@ -51,3 +51,122 @@ test('grouped CodeQL metadata preserves per-dependency eligibility checks', () =
     assert.equal(eligible(commits, parse([dependencies[0], { ...dependencies[1], ...invalid }])), false);
   }
 });
+
+function orchestration({ eventName = 'workflow_call', numbered = false } = {}) {
+  const state = { pulls: [1], snapshots: {}, calls: [], metadata: [update], runs: [], merged: [] };
+  const snapshot = number => structuredClone({ ...pull, number, head: { ...pull.head, sha: `head-${number}` } });
+  const data = value => ({ data: value });
+  const github = { rest: {
+    repos: { get: async () => data({ default_branch: 'main' }),
+      getBranch: async () => data({ commit: { sha: 'merged-tip' } }), listPullRequestsAssociatedWithCommit() {} },
+    pulls: { list() {}, listCommits() {}, get: async ({ pull_number: number }) => {
+      state.calls.push(['get', number]);
+      const snapshots = state.snapshots[number];
+      return data(snapshots?.length ? snapshots.shift() : snapshot(number));
+    } },
+    actions: { listWorkflowRuns() {}, createWorkflowDispatch: async params => state.calls.push(['dispatch', params]) },
+  }, paginate: async (method, params) => {
+    if (method === github.rest.pulls.list) return state.pulls.map(number => ({ number }));
+    if (method === github.rest.pulls.listCommits) { state.calls.push(['commits', params.pull_number]); return commits; }
+    if (method === github.rest.repos.listPullRequestsAssociatedWithCommit) return state.merged;
+    if (method === github.rest.actions.listWorkflowRuns) return state.runs;
+    throw new Error('Unexpected pagination');
+  } };
+  const input = { github, context: { repo: { owner: 'owner', repo: 'repo' }, eventName,
+    ref: 'refs/heads/main', payload: numbered ? { pull_request: { number: 1 } } : {} },
+  core: { info() {}, warning: text => state.calls.push(['warning', text]),
+    setFailed: text => state.calls.push(['failed', text]) }, metadataPath: '/metadata', mainWorkflow: 'main.yml',
+  metadata: candidate => {
+    state.calls.push(['metadata', candidate.number]);
+    if (state.metadata instanceof Error) throw state.metadata;
+    return state.metadata;
+  }, merge: (repository, number, options) => state.calls.push(['merge', repository, number, options]) };
+  return { state, input, snapshot };
+}
+
+const mergeCalls = state => state.calls.filter(call => call[0] === 'merge');
+const { run, ensureMainRun } = require('./dependabot-auto-merge.cjs');
+
+test('run queues an eligible exact head with squash after revalidation', async () => {
+  const { state, input } = orchestration({ eventName: 'pull_request_target', numbered: true });
+  await run(input);
+  assert.deepEqual(mergeCalls(state), [['merge', 'owner/repo', 1,
+    ['--auto', '--squash', '--match-head-commit', 'head-1']]]);
+  assert.deepEqual(state.calls.map(call => call[0]), ['get', 'commits', 'metadata', 'get', 'merge']);
+});
+
+test('run leaves ineligible updates and changed or newly untrusted heads unqueued', async () => {
+  for (const scenario of ['score', 'head', 'draft']) {
+    const { state, input, snapshot } = orchestration();
+    if (scenario === 'score') state.metadata = [{ ...update, compatScore: 74 }];
+    else {
+      const current = snapshot(1);
+      if (scenario === 'head') current.head.sha = 'new-head';
+      else current.draft = true;
+      state.snapshots[1] = [snapshot(1), current];
+    }
+    await run(input);
+    assert.deepEqual(mergeCalls(state), [], scenario);
+  }
+});
+
+test('run revokes prior bot authorization before metadata failure or ineligibility', async () => {
+  for (const metadata of [new Error('metadata unavailable'), [{ ...update, compatScore: null }]]) {
+    const { state, input, snapshot } = orchestration();
+    const previous = snapshot(1);
+    previous.auto_merge = { enabled_by: { login: 'github-actions[bot]' } };
+    state.snapshots[1] = [previous]; state.metadata = metadata;
+    await run(input);
+    assert.deepEqual(mergeCalls(state), [['merge', 'owner/repo', 1, ['--disable-auto']]]);
+    assert.ok(state.calls.findIndex(call => call[0] === 'merge') <
+      state.calls.findIndex(call => call[0] === 'metadata'));
+    assert.equal(state.calls.some(call => call[0] === 'failed'), metadata instanceof Error);
+  }
+});
+
+test('run preserves human auto-merge decisions', async () => {
+  const { state, input, snapshot } = orchestration();
+  const manual = snapshot(1); manual.auto_merge = { enabled_by: { login: 'maintainer' } };
+  state.snapshots[1] = [structuredClone(manual), manual];
+  await run(input);
+  assert.deepEqual(mergeCalls(state), []);
+});
+
+test('scheduled refresh isolates candidate failures and still recovers main validation', async () => {
+  const { state, input } = orchestration({ eventName: 'schedule' });
+  state.pulls = [1, 2];
+  input.metadata = candidate => { if (candidate.number === 1) throw new Error('unavailable'); return [update]; };
+  state.merged = [{ user: bot, merged_at: 'today', merge_commit_sha: 'merged-tip', base: { ref: 'main' } }];
+  await run(input);
+  assert.deepEqual(mergeCalls(state), [['merge', 'owner/repo', 2,
+    ['--auto', '--squash', '--match-head-commit', 'head-2']]]);
+  const dispatchIndex = state.calls.findIndex(call => call[0] === 'dispatch');
+  assert.deepEqual(state.calls[dispatchIndex][1], { owner: 'owner', repo: 'repo', workflow_id: 'main.yml', ref: 'main' });
+  assert.ok(dispatchIndex < state.calls.findIndex(call => call[0] === 'failed'));
+});
+
+test('main recovery dispatches only missing usable runs for a bot merge at current main', async () => {
+  for (const conclusion of [undefined, null, 'success', 'failure', 'cancelled', 'skipped']) {
+    const { state, input } = orchestration();
+    state.merged = [{ user: bot, merged_at: 'today', merge_commit_sha: 'merged-tip', base: { ref: 'main' } }];
+    if (conclusion !== undefined) state.runs = [{ head_sha: 'merged-tip', event: 'push', conclusion }];
+    await ensureMainRun({ ...input, branch: 'main' });
+    assert.equal(state.calls.some(call => call[0] === 'dispatch'),
+      [undefined, 'cancelled', 'skipped'].includes(conclusion));
+  }
+  for (const mutate of [p => { p.user = { login: 'maintainer', id: 1 }; },
+    p => { p.merge_commit_sha = 'old-tip'; }, p => { p.base.ref = 'other'; }, p => { p.merged_at = null; }]) {
+    const { state, input } = orchestration();
+    const merged = { user: bot, merged_at: 'today', merge_commit_sha: 'merged-tip', base: { ref: 'main' } };
+    mutate(merged); state.merged = [merged];
+    await ensureMainRun({ ...input, branch: 'main' });
+    assert.equal(state.calls.some(call => call[0] === 'dispatch'), false);
+  }
+});
+
+test('refresh rejects a nondefault branch before evaluating candidates', async () => {
+  const { state, input } = orchestration({ eventName: 'workflow_dispatch' });
+  input.context.ref = 'refs/heads/other';
+  await assert.rejects(run(input), /Default branch required/);
+  assert.deepEqual(state.calls, []);
+});

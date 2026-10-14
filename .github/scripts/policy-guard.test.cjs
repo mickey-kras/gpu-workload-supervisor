@@ -43,7 +43,7 @@ function files({ serial = true } = {}) {
     '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
     'release-version.json', '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs', '.github/scripts/policy-ci-reuse.cjs',
     '.github/scripts/policy-pr-scope.cjs', '.github/scripts/pr-validation-scope.cjs',
-    '.github/scripts/policy-action-pins.cjs',
+    '.github/scripts/policy-action-pins.cjs', '.github/scripts/policy-dependabot.cjs',
     '.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py',
     '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
@@ -778,4 +778,572 @@ test('composite setup retains step order, commands and rejects ambiguous YAML', 
   const candidate = files({ serial: false });
   candidate[path] += '\nruns: {}\n';
   assert.ok(inspectActivated(candidate).some(error => error.includes('changed verified GoReleaser installer')));
+});
+
+test('Dependabot contracts permit comments, logging and renewed immutable action pins', () => {
+  const candidate = files({ serial: false });
+  const source = '.github/scripts/dependabot-auto-merge.cjs';
+  candidate[source] = '// Reviewed explanatory comment\n' + candidate[source].replace(
+    'const repository =', "core.info('Starting evaluation');\n  const repository =");
+  for (const name of ['dependabot-auto-merge', 'dependabot-auto-merge-refresh']) {
+    const path = `.github/workflows/${name}.yml`;
+    candidate[path] = candidate[path].replaceAll(/@[a-f0-9]{40}/g, '@' + 'a'.repeat(40));
+  }
+  candidate['.github/workflows/dependabot-auto-merge.yml'] =
+    candidate['.github/workflows/dependabot-auto-merge.yml'].replace(
+      '25dd0e34f4fe68f24cc83900b1fe3fe149efef98', 'b'.repeat(40));
+  assert.deepEqual(inspectActivated(candidate), []);
+});
+
+test('Dependabot queue, trusted inputs and refresh controls cannot be bypassed', () => {
+  for (const mutate of [
+    w => { w.jobs['enable-auto-merge'].steps.at(-1).with.script = 'return;'; },
+    w => { w.jobs['enable-auto-merge'].steps.at(-1).if = false; },
+    w => { w.jobs['enable-auto-merge'].steps.at(-1).env.GH_TOKEN = ''; },
+    w => { w.jobs['enable-auto-merge'].steps[1].with['persist-credentials'] = true; },
+    w => { w.jobs['enable-auto-merge'].steps[2].with.ref = 'main'; },
+    w => { w.jobs['enable-auto-merge'].steps[2].with.repository = 'other/metadata'; },
+    w => { w.concurrency['cancel-in-progress'] = true; },
+    w => { delete w.permissions.actions; },
+    w => { w.jobs['enable-auto-merge'].permissions = { contents: 'read' }; },
+    w => { w.jobs['enable-auto-merge'].steps.at(-1).with.script += '\nconsole.log(\"extra queue code\");'; },
+  ]) {
+    const candidate = files({ serial: false });
+    const path = '.github/workflows/dependabot-auto-merge.yml';
+    const workflow = YAML.parse(candidate[path]); mutate(workflow);
+    candidate[path] = YAML.stringify(workflow);
+    assert.notDeepEqual(inspectActivated(candidate), []);
+  }
+  for (const mutate of [w => { w.jobs.refresh.if = false; },
+    w => { delete w.on.schedule; }, w => { w.on.schedule = []; },
+    w => { w.jobs.refresh.uses = './.github/workflows/main.yml'; }]) {
+    const candidate = files({ serial: false });
+    const path = '.github/workflows/dependabot-auto-merge-refresh.yml';
+    const workflow = YAML.parse(candidate[path]); mutate(workflow);
+    candidate[path] = YAML.stringify(workflow);
+    assert.notDeepEqual(inspectActivated(candidate), []);
+  }
+});
+
+test('selected Dependabot source safeguard removals fail without whole-file registration', () => {
+  for (const [before, after] of [
+    ['const MINIMUM_SCORE = 75;', 'const MINIMUM_SCORE = 0;'],
+    ['const dependencies = metadata(pull, repository, metadataPath);', 'const dependencies = [];'],
+    ['if (!eligible(commits, dependencies)) {', 'if (false) {'],
+    ["['--disable-auto']", "['--auto']"],
+    ['current.head.sha !== pull.head.sha', 'false'],
+    ["'--match-head-commit', pull.head.sha", "'--match-head-commit', current.head.sha"],
+    ['await ensureMainRun({ github, context, core, branch, mainWorkflow });', ''],
+  ]) {
+    const candidate = files({ serial: false });
+    const path = '.github/scripts/dependabot-auto-merge.cjs';
+    assert.ok(candidate[path].includes(before));
+    candidate[path] = candidate[path].replace(before, after);
+    assert.ok(inspectActivated(candidate).some(message => message.includes('Dependabot source lost safety contract')));
+  }
+  const candidate = files({ serial: false });
+  candidate['.github/scripts/dependabot-auto-merge.cjs'] = 'module.exports = { run: async () => {} };';
+  assert.notDeepEqual(inspectActivated(candidate), []);
+});
+
+function authorFixture({ association = 'OWNER', bot = false, changed = true } = {}) {
+  const context = { repo: { owner: 'owner', repo: 'repo' }, payload: { pull_request: {
+    number: 1, base: { sha: 'a'.repeat(40) }, head: { sha: 'b'.repeat(40) },
+  } } };
+  const reads = [];
+  const github = { rest: {
+    repos: { getContent: async params => {
+      reads.push(params);
+      return { data: { type: 'file', sha: (changed && params.ref === context.payload.pull_request.head.sha ? 'd' : 'c').repeat(40) } };
+    } },
+    pulls: { get: async () => ({ data: {
+      author_association: association, user: { login: bot ? 'dependabot[bot]' : 'maintainer', type: bot ? 'Bot' : 'User' },
+    } }) },
+  } };
+  return { github, context, reads };
+}
+
+test('automation source changes require a trusted human at immutable event refs', async () => {
+  const { verifyDependabotAuthor } = require('./policy-guard.cjs');
+  for (const association of ['OWNER', 'MEMBER', 'COLLABORATOR', 'CONTRIBUTOR', 'NONE']) {
+    for (const bot of [false, true]) {
+      const { github, context, reads } = authorFixture({ association, bot });
+      if (!bot && ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(association)) {
+        await verifyDependabotAuthor(github, context);
+      } else await assert.rejects(verifyDependabotAuthor(github, context), /trusted human author/);
+      assert.deepEqual(reads.map(read => read.ref), Array.from({ length: 8 }, () => ['a'.repeat(40), 'b'.repeat(40)]).flat());
+    }
+  }
+  const { github, context } = authorFixture({ changed: false });
+  github.rest.pulls.get = async () => { throw new Error('No source author restriction for action pin updates'); };
+  await verifyDependabotAuthor(github, context);
+});
+
+test('Dependabot configuration must retain active coverage of every required ecosystem and directory', () => {
+  for (const mutate of [config => { config.updates = []; },
+    config => { config.updates.pop(); },
+    config => { config.updates[0]['open-pull-requests-limit'] = 0; },
+    config => { delete config.updates[0].schedule; },
+    config => { for (const entry of config.updates) entry['target-branch'] = 'maintenance'; },
+    config => { for (const entry of config.updates) entry['exclude-paths'] = ['**']; },
+    config => { for (const entry of config.updates) entry['pull-request-branch-name'] = { separator: '-' }; },
+    config => { for (const entry of config.updates) entry['pull-request-branch-name'] = { separator: '/', prefix: 'deps' }; },
+    config => { for (const entry of config.updates) entry['pull-request-branch-name'] = { separator: '/', template: 'deps/update' }; },
+    config => { for (const entry of config.updates) entry.allow = [{ 'dependency-name': 'unused-dependency' }]; }]) {
+    const candidate = files({ serial: false });
+    const path = '.github/dependabot.yml';
+    const config = YAML.parse(candidate[path]); mutate(config);
+    candidate[path] = YAML.stringify(config);
+    assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'));
+  }
+});
+
+
+test('Dependabot retains PR reevaluation and merge recovery activities', () => {
+  const required = ['opened', 'synchronize', 'reopened', 'ready_for_review', 'closed'];
+  for (const types of [undefined, null, 'opened', {}, [], ['opened'], ['closed'],
+    [...required, 'auto_merge_enabled'], [...required, 'auto_merge_disabled'],
+    [...required, 'opened'], ['opened', 'opened', 'reopened', 'ready_for_review', 'closed'],
+    [...required.slice(0, -1), null], [...required.slice(0, -1), {}],
+    ...required.map(removed => required.filter(activity => activity !== removed))]) {
+    const candidate = files({ serial: false });
+    const path = '.github/workflows/dependabot-auto-merge.yml';
+    const workflow = YAML.parse(candidate[path]);
+    workflow.on.pull_request_target.types = types;
+    candidate[path] = YAML.stringify(workflow);
+    assert.ok(inspectActivated(candidate).includes('Dependabot lost required PR activities'), String(types));
+  }
+  const candidate = files({ serial: false });
+  const path = '.github/workflows/dependabot-auto-merge.yml';
+  const workflow = YAML.parse(candidate[path]);
+  workflow.on.pull_request_target.types = required.toReversed();
+  candidate[path] = YAML.stringify(workflow);
+  assert.deepEqual(inspectActivated(candidate), [], 'intended activity order may change');
+});
+
+test('Dependabot cannot queue before either required checkout', () => {
+  for (const name of ['Read trusted automation', 'Read pinned Dependabot metadata action']) {
+    const candidate = files({ serial: false });
+    const path = '.github/workflows/dependabot-auto-merge.yml';
+    const workflow = YAML.parse(candidate[path]);
+    const steps = workflow.jobs['enable-auto-merge'].steps;
+    const queue = steps.pop();
+    steps.splice(steps.findIndex(step => step.name === name), 0, queue);
+    candidate[path] = YAML.stringify(workflow);
+    assert.ok(inspectActivated(candidate).includes(`Dependabot checkout must precede queue: ${name}`));
+  }
+});
+
+
+test('privileged Dependabot workflow rejects workspace replacement and execution overrides', () => {
+  for (const mutate of [
+    w => { w.jobs['enable-auto-merge'].steps.splice(3, 0, {
+      uses: 'actions/checkout@' + 'a'.repeat(40), with: { repository: 'attacker/repo', path: 'automation' },
+    }); },
+    w => { w.jobs['enable-auto-merge'].steps.splice(3, 0, { run: 'echo overwritten > automation/.github/scripts/dependabot-auto-merge.cjs' }); },
+    w => { w.jobs['enable-auto-merge'].steps[1].with.repository = 'attacker/repo'; },
+    w => { w.jobs['enable-auto-merge'].steps[1].with.path = 'untrusted'; },
+    w => { w.jobs['enable-auto-merge'].steps[1].env = { NODE_OPTIONS: '--require /tmp/override.cjs' }; },
+    w => { w.jobs['enable-auto-merge'].steps.at(-1).env.NODE_OPTIONS = '--require /tmp/override.cjs'; },
+    w => { w.jobs['enable-auto-merge'].steps.at(-1).with['github-token'] = '${{ secrets.OTHER_TOKEN }}'; },
+    w => { w.env = { NODE_OPTIONS: '--require /tmp/override.cjs' }; },
+    w => { w.jobs['enable-auto-merge'].env = { NODE_OPTIONS: '--require /tmp/override.cjs' }; },
+    w => { w.defaults = { run: { 'working-directory': 'untrusted' } }; },
+    w => { w.jobs['enable-auto-merge'].defaults = { run: { 'working-directory': 'untrusted' } }; },
+    w => { w.jobs.extra = { 'runs-on': 'ubuntu-latest', steps: [{ run: 'true' }] }; },
+    w => { w.on.pull_request_target.branches = ['unused-branch']; },
+    w => { w.on.pull_request_target['branches-ignore'] = ['main']; },
+    w => { w.on.pull_request_target.paths = ['unused/**']; },
+  ]) {
+    const candidate = files({ serial: false });
+    const path = '.github/workflows/dependabot-auto-merge.yml';
+    const workflow = YAML.parse(candidate[path]); mutate(workflow);
+    candidate[path] = YAML.stringify(workflow);
+    assert.notDeepEqual(inspectActivated(candidate), [], String(mutate));
+  }
+});
+
+test('Dependabot ignores cannot disable required patch or minor updates', () => {
+  for (const ignore of [{ 'dependency-name': '*' },
+    { 'dependency-name': 'aislop' },
+    { 'dependency-name': 'aislop', 'update-types': ['version-update:semver-patch'] },
+    { 'dependency-name': 'aislop', 'update-types': ['version-update:semver-minor'] },
+    { 'dependency-name': 'actions/checkout', versions: ['>= 0'], 'update-types': ['version-update:semver-major'] },
+    ...[undefined, null, 0, '', '   ', [], {}].map(name => ({ 'dependency-name': name, 'update-types': ['version-update:semver-major'] })),
+    null, [],
+    { 'dependency-name': '**' }, { 'dependency-name': '***' },
+    { 'dependency-name': '*/*', 'update-types': ['version-update:semver-patch', 'version-update:semver-minor'] },
+    { 'dependency-name': 'actions/*', 'update-types': ['version-update:semver-minor'] },
+    { 'dependency-name': '*', 'update-types': ['version-update:semver-minor'] },
+    { 'dependency-name': '*', 'update-types': ['version-update:semver-patch'] }]) {
+    const candidate = files({ serial: false });
+    const path = '.github/dependabot.yml';
+    const config = YAML.parse(candidate[path]);
+    for (const entry of config.updates) entry.ignore = [ignore];
+    candidate[path] = YAML.stringify(config);
+    assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'));
+  }
+  for (const ignore of [
+    { 'dependency-name': '*', 'update-types': ['version-update:semver-major'] },
+    { 'dependency-name': '*/*', 'update-types': ['version-update:semver-major'] },
+    { 'dependency-name': '*', versions: [], 'update-types': ['version-update:semver-major'] },
+    { 'dependency-name': 'actions/checkout', versions: [], 'update-types': ['version-update:semver-major'] },
+    { 'dependency-name': 'aislop', 'update-types': ['version-update:semver-major'] },
+  ]) {
+    const candidate = files({ serial: false });
+    const path = '.github/dependabot.yml';
+    const config = YAML.parse(candidate[path]);
+    for (const entry of config.updates) entry.ignore = [ignore];
+    candidate[path] = YAML.stringify(config);
+    assert.deepEqual(inspectActivated(candidate), []);
+  }
+});
+
+test('reverted live PR files cannot exempt a protected change at the inspected event head', async () => {
+  const { run } = require('./policy-guard.cjs');
+  const { github, context } = authorFixture({ association: 'NONE' });
+  // The live PR has reverted to B; the queued event still inspects A.
+  github.paginate = async () => [{ filename: 'README.md' }];
+  github.rest.pulls.get = async () => ({ data: { head: { sha: 'reverted-live-head' },
+    author_association: 'NONE', user: { login: 'outsider', type: 'User' } } });
+  await assert.rejects(run({ github, context }), /trusted human author/);
+});
+
+test('protected source identity reads fail closed and detect deletion or rename', async () => {
+  const { verifyDependabotAuthor } = require('./policy-guard.cjs');
+  for (const failure of ['deleted', 'invalid', 'unavailable']) {
+    const { github, context } = authorFixture({ association: 'NONE' });
+    github.rest.repos.getContent = async params => {
+      if (params.ref === context.payload.pull_request.head.sha) {
+        if (failure === 'invalid') return { data: {} };
+        const error = new Error(failure); error.status = failure === 'deleted' ? 404 : 500; throw error;
+      }
+      return { data: { type: 'file', sha: 'c'.repeat(40) } };
+    };
+    await assert.rejects(verifyDependabotAuthor(github, context),
+      failure === 'deleted' ? /trusted human author/ : failure === 'invalid' ? /Cannot identify/ : /unavailable/);
+  }
+});
+
+
+test('immutable source author check covers policy modules and rejects mutable or non-file identities', async () => {
+  const { verifyDependabotAuthor } = require('./policy-guard.cjs');
+  const { github, context } = authorFixture({ association: 'NONE', changed: false });
+  const read = github.rest.repos.getContent;
+  for (const name of ['policy-guard.cjs', 'policy-dependabot.cjs', 'policy-action-pins.cjs',
+    'policy-release.cjs', 'policy-ci-parallel.cjs', 'policy-pr-scope.cjs', 'policy-ci-reuse.cjs']) {
+    github.rest.repos.getContent = async params => params.path.endsWith('/' + name) &&
+      params.ref === context.payload.pull_request.head.sha ?
+      { data: { type: 'file', sha: 'd'.repeat(40) } } : read(params);
+    await assert.rejects(verifyDependabotAuthor(github, context), /trusted human author/);
+  }
+  github.rest.repos.getContent = async () => ({ data: { type: 'symlink', sha: 'a'.repeat(40) } });
+  await assert.rejects(verifyDependabotAuthor(github, context), /Cannot identify/);
+  context.payload.pull_request.head.sha = 'main';
+  await assert.rejects(verifyDependabotAuthor(github, context), /Immutable PR source refs/);
+});
+
+
+test('Dependabot explicit default branch separator retains required coverage', () => {
+  const candidate = files({ serial: false });
+  const path = '.github/dependabot.yml';
+  const config = YAML.parse(candidate[path]);
+  for (const entry of config.updates) entry['pull-request-branch-name'] = { separator: '/' };
+  candidate[path] = YAML.stringify(config);
+  assert.deepEqual(inspectActivated(candidate), []);
+});
+
+
+test('Dependabot policy module remains a required protected file', () => {
+  const candidate = files({ serial: false });
+  delete candidate['.github/scripts/policy-dependabot.cjs'];
+  assert.ok(inspectActivated(candidate).includes('Missing required file: .github/scripts/policy-dependabot.cjs'));
+});
+
+
+test('Dependabot open PR limits accept defaults or positive integers only', () => {
+  for (const limit of [0, -1, null, '3', 1.5, undefined, 3]) {
+    const candidate = files({ serial: false });
+    const path = '.github/dependabot.yml';
+    const config = YAML.parse(candidate[path]);
+    for (const entry of config.updates) {
+      if (limit === undefined) delete entry['open-pull-requests-limit'];
+      else entry['open-pull-requests-limit'] = limit;
+    }
+    candidate[path] = YAML.stringify(config);
+    if (limit === undefined || limit === 3) assert.deepEqual(inspectActivated(candidate), []);
+    else assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'), String(limit));
+  }
+});
+
+
+test('pin normalization helper additions, deletions and read errors cannot bypass source review', async () => {
+  const { verifyDependabotAuthor } = require('./policy-guard.cjs');
+  for (const change of ['added', 'deleted', 'unavailable']) {
+    const { github, context } = authorFixture({ association: 'NONE', changed: false });
+    const read = github.rest.repos.getContent;
+    github.rest.repos.getContent = async params => {
+      const missingRef = change === 'added' ? context.payload.pull_request.base.sha : context.payload.pull_request.head.sha;
+      if (params.path.endsWith('/policy-action-pins.cjs') && params.ref === missingRef) {
+        const error = new Error('helper read failed'); error.status = change === 'unavailable' ? 500 : 404; throw error;
+      }
+      return read(params);
+    };
+    await assert.rejects(verifyDependabotAuthor(github, context),
+      change === 'unavailable' ? /helper read failed/ : /trusted human author/);
+  }
+});
+
+
+test('ignore rules require explicit major-only types without version ranges', () => {
+  const invalid = [
+    ...[['>= 0'], null, '>= 0', {}].map(versions => ({
+      versions, 'update-types': ['version-update:semver-major'],
+    })),
+    ...[[], null, 'version-update:semver-major', ['unknown'],
+      ['version-update:semver-major', 'version-update:semver-patch']].map(types => ({ 'update-types': types })),
+  ];
+  for (const name of ['*', 'aislop']) {
+    for (const fields of invalid) {
+      const candidate = files({ serial: false });
+      const path = '.github/dependabot.yml';
+      const config = YAML.parse(candidate[path]);
+      for (const entry of config.updates) entry.ignore = [{ 'dependency-name': name, ...fields }];
+      candidate[path] = YAML.stringify(config);
+      assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'), JSON.stringify(fields));
+    }
+  }
+});
+
+
+test('Dependabot schedules support only bounded daily cron or simple predefined intervals', () => {
+  const candidate = files({ serial: false });
+  assert.deepEqual(inspectActivated(candidate), [], 'real baseline schedules');
+  const path = '.github/dependabot.yml';
+  const schedules = [
+    { interval: 'cron', cronjob: '0 0 * * *' }, { interval: 'cron', cronjob: '59 23 * * *' },
+    ...['daily', 'weekly', 'monthly'].map(interval => ({ interval })),
+  ];
+  for (const schedule of schedules) {
+    const config = YAML.parse(candidate[path]);
+    for (const entry of config.updates) entry.schedule = schedule;
+    const changed = { ...candidate, [path]: YAML.stringify(config) };
+    assert.deepEqual(inspectActivated(changed), [], JSON.stringify(schedule));
+  }
+  for (const schedule of [null, [], {},
+    ...['61 25 32 13 8', '60 0 * * *', '0 24 * * *', '-1 0 * * *',
+      '0 0 1 * *', '*/5 * * * *', 'every day', 0, null, {}].map(cronjob => ({ interval: 'cron', cronjob })),
+    { interval: 'daily', time: '25:00' }, { interval: 'weekly', day: 'unknown' },
+    { interval: 'monthly', timezone: 'UTC' }, { interval: 'cron', cronjob: '0 0 * * *', timezone: 'UTC' },
+  ]) {
+    const config = YAML.parse(candidate[path]);
+    for (const entry of config.updates) entry.schedule = schedule;
+    const changed = { ...candidate, [path]: YAML.stringify(config) };
+    assert.ok(inspectActivated(changed).includes('Dependabot lost required update coverage'), JSON.stringify(schedule));
+  }
+});
+
+test('Dependabot recovery rejects unsupported, invalid or malformed daily cron schedules', () => {
+  for (const cron of ['0 0 * * *', '59 23 * * *']) {
+    const candidate = files({ serial: false });
+    const path = '.github/workflows/dependabot-auto-merge-refresh.yml';
+    const workflow = YAML.parse(candidate[path]); workflow.on.schedule = [{ cron }];
+    candidate[path] = YAML.stringify(workflow);
+    assert.deepEqual(inspectActivated(candidate), []);
+  }
+  for (const schedule of [[{ cron: '61 25 32 13 8' }], [{ cron: 0 }], [null], [[]], ['0 0 * * *'],
+    [{ cron: '0 0 * * *', timezone: 'UTC' }], [{ cron: '0 0 * * *' }, { cron: 'invalid' }], {}]) {
+    const candidate = files({ serial: false });
+    const path = '.github/workflows/dependabot-auto-merge-refresh.yml';
+    const workflow = YAML.parse(candidate[path]); workflow.on.schedule = schedule;
+    candidate[path] = YAML.stringify(workflow);
+    assert.ok(inspectActivated(candidate).includes('Dependabot lost scheduled recovery'));
+  }
+});
+
+
+test('Dependabot scopes occur exactly once and cannot add unknown or overlapping directories', () => {
+  const baseline = files({ serial: false });
+  assert.deepEqual(inspectActivated(baseline), [], 'real five-scope baseline');
+  const path = '.github/dependabot.yml';
+  for (const mutate of [
+    config => { config.updates.push(structuredClone(config.updates[0])); },
+    config => { config.updates[1] = structuredClone(config.updates[0]); },
+    config => { config.updates.push({ ...config.updates[1], directory: '/unused' }); },
+    config => { config.updates[1].directory = '/unused'; },
+    config => { config.updates[1].directory = '/**'; },
+    config => { config.updates[1].directories = ['/.github/aislop']; },
+    config => { config.updates[1].directories = ['/.github/aislop', '/.github/scripts']; },
+    config => { delete config.updates[1].directory; config.updates[1].directories = ['/.github/aislop']; },
+  ]) {
+    const config = YAML.parse(baseline[path]); mutate(config);
+    const candidate = { ...baseline, [path]: YAML.stringify(config) };
+    assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'), String(mutate));
+  }
+});
+
+
+test('Dependabot preserves automatic rebases with default or explicit auto strategy', () => {
+  const baseline = files({ serial: false });
+  assert.deepEqual(inspectActivated(baseline), [], 'current config uses auto');
+  const path = '.github/dependabot.yml';
+  for (const strategy of [undefined, 'auto', 'disabled', null, true, 0, 'AUTO', {}, []]) {
+    const config = YAML.parse(baseline[path]);
+    for (const entry of config.updates) {
+      if (strategy === undefined) delete entry['rebase-strategy'];
+      else entry['rebase-strategy'] = strategy;
+    }
+    const candidate = { ...baseline, [path]: YAML.stringify(config) };
+    if (strategy === undefined || strategy === 'auto') assert.deepEqual(inspectActivated(candidate), []);
+    else assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'), JSON.stringify(strategy));
+  }
+});
+
+
+test('each npm scope retains manifest-capable versioning and other ecosystems keep defaults', () => {
+  const baseline = files({ serial: false });
+  assert.deepEqual(inspectActivated(baseline), [], 'current default strategies');
+  const path = '.github/dependabot.yml';
+  const original = YAML.parse(baseline[path]);
+  const supported = ['auto', 'increase', 'increase-if-necessary', 'widen'];
+  for (const [index, entry] of original.updates.entries()) {
+    for (const strategy of [undefined, ...supported, 'lockfile-only', null, 0, {}, ['auto']]) {
+      const config = structuredClone(original);
+      if (strategy !== undefined) config.updates[index]['versioning-strategy'] = strategy;
+      const candidate = { ...baseline, [path]: YAML.stringify(config) };
+      const accepted = strategy === undefined ||
+        (entry['package-ecosystem'] === 'npm' && supported.includes(strategy));
+      if (accepted) assert.deepEqual(inspectActivated(candidate), [], `${entry.directory}: ${strategy}`);
+      else assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'),
+        `${entry['package-ecosystem']}:${entry.directory}: ${JSON.stringify(strategy)}`);
+    }
+  }
+});
+
+
+test('Dependabot scopes remain independent of multi-ecosystem inheritance', () => {
+  const baseline = files({ serial: false });
+  const path = '.github/dependabot.yml';
+  const original = YAML.parse(baseline[path]);
+  assert.ok(original.updates.find(entry => entry['package-ecosystem'] === 'github-actions').groups.codeql);
+  assert.deepEqual(inspectActivated(baseline), [], 'ordinary CodeQL group remains supported');
+  for (const mutate of [
+    config => { config['multi-ecosystem-groups'] = { combined: { schedule: { interval: 'daily' } } }; },
+    config => { config['multi-ecosystem-groups'] = {}; },
+    config => { config['multi-ecosystem-groups'] = null; },
+    config => { config.updates[0]['multi-ecosystem-group'] = 'combined'; },
+    config => { config.updates[0]['multi-ecosystem-group'] = null; },
+  ]) {
+    const config = structuredClone(original); mutate(config);
+    const candidate = { ...baseline, [path]: YAML.stringify(config) };
+    assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'));
+  }
+});
+
+
+test('Dependabot cooldown supports only absent or integer default-days from 1 through 90', () => {
+  const baseline = files({ serial: false });
+  assert.deepEqual(inspectActivated(baseline), [], 'current cooldowns');
+  const path = '.github/dependabot.yml';
+  for (const cooldown of [undefined, { 'default-days': 1 }, { 'default-days': 90 },
+    null, 7, '7', [], {}, ...[0, -1, 91, 1.5, '7', null].map(days => ({ 'default-days': days })),
+    { 'default-days': 7, 'semver-minor-days': 1 }, { 'default-days': 7, include: ['*'] },
+  ]) {
+    const config = YAML.parse(baseline[path]);
+    for (const entry of config.updates) {
+      if (cooldown === undefined) delete entry.cooldown;
+      else entry.cooldown = cooldown;
+    }
+    const candidate = { ...baseline, [path]: YAML.stringify(config) };
+    if (cooldown === undefined || cooldown?.['default-days'] === 1 || cooldown?.['default-days'] === 90) {
+      assert.deepEqual(inspectActivated(candidate), []);
+    } else assert.ok(inspectActivated(candidate).includes('Dependabot lost required update coverage'), JSON.stringify(cooldown));
+  }
+});
+
+test('Dependabot supports only known top-level and update-entry options', () => {
+  const baseline = files({ serial: false });
+  const path = '.github/dependabot.yml';
+  for (const mutate of [
+    config => { config.registries = {}; }, config => { config.unknown = true; },
+    config => { config.updates[0].unknown = true; },
+    config => { config.updates[0].ignore = null; },
+    config => { config.updates[0].ignore = { 'dependency-name': '*' }; },
+    ...[null, [], '/', {}, { separator: '/', extra: true }].map(name => config => { config.updates[0]['pull-request-branch-name'] = name; }),
+  ]) {
+    const config = YAML.parse(baseline[path]); mutate(config);
+    assert.ok(inspectActivated({ ...baseline, [path]: YAML.stringify(config) }).includes('Dependabot lost required update coverage'));
+  }
+});
+
+test('Dependabot permits absent groups or the exact CodeQL group with either pattern order', () => {
+  const baseline = files({ serial: false });
+  const path = '.github/dependabot.yml';
+  const original = YAML.parse(baseline[path]);
+  const index = original.updates.findIndex(entry => entry['package-ecosystem'] === 'github-actions');
+  for (const groups of [undefined, { codeql: { patterns: ['github/codeql-action/*', 'github/codeql-action'] } }]) {
+    const config = structuredClone(original);
+    if (groups === undefined) delete config.updates[index].groups;
+    else config.updates[index].groups = groups;
+    assert.deepEqual(inspectActivated({ ...baseline, [path]: YAML.stringify(config) }), []);
+  }
+  for (const groups of [null, [], {}, 'codeql', { other: { patterns: ['*'] } },
+    { codeql: null }, { codeql: { patterns: ['github/codeql-action'] } },
+    { codeql: { patterns: ['github/codeql-action', 'github/codeql-action'] } },
+    { codeql: { patterns: ['github/codeql-action', '*'] } },
+    { codeql: { patterns: ['github/codeql-action', 'github/codeql-action/*'], 'update-types': ['major'] } },
+    { codeql: { patterns: ['github/codeql-action', 'github/codeql-action/*'] }, other: {} },
+  ]) {
+    const config = structuredClone(original); config.updates[index].groups = groups;
+    assert.ok(inspectActivated({ ...baseline, [path]: YAML.stringify(config) }).includes('Dependabot lost required update coverage'), JSON.stringify(groups));
+  }
+  for (const [position, entry] of original.updates.entries()) {
+    if (entry['package-ecosystem'] === 'github-actions') continue;
+    const config = structuredClone(original); config.updates[position].groups = original.updates[index].groups;
+    assert.ok(inspectActivated({ ...baseline, [path]: YAML.stringify(config) }).includes('Dependabot lost required update coverage'));
+  }
+});
+
+test('Dependabot concurrency accepts only its supported two-key serialization object', () => {
+  const baseline = files({ serial: false });
+  assert.deepEqual(inspectActivated(baseline), []);
+  const path = '.github/workflows/dependabot-auto-merge.yml';
+  const original = YAML.parse(baseline[path]);
+  for (const concurrency of [
+    { ...original.concurrency, bogus: true }, null, [], 'shared-group', false,
+    { group: original.concurrency.group }, { 'cancel-in-progress': false },
+    { ...original.concurrency, 'cancel-in-progress': 'false' },
+  ]) {
+    const workflow = structuredClone(original); workflow.concurrency = concurrency;
+    const candidate = { ...baseline, [path]: YAML.stringify(workflow) };
+    assert.ok(inspectActivated(candidate).includes('Dependabot lost gated queue invocation or serialization'),
+      JSON.stringify(concurrency));
+  }
+  const workflow = structuredClone(original);
+  workflow.concurrency = { 'cancel-in-progress': false, group: original.concurrency.group };
+  assert.deepEqual(inspectActivated({ ...baseline, [path]: YAML.stringify(workflow) }), []);
+});
+
+test('Dependabot workflow and job names allow omission or string labels only', () => {
+  for (const [file, job] of [['dependabot-auto-merge', 'enable-auto-merge'],
+    ['dependabot-auto-merge-refresh', 'refresh']]) {
+    const baseline = files({ serial: false });
+    const path = `.github/workflows/${file}.yml`;
+    const original = YAML.parse(baseline[path]);
+    for (const target of ['workflow', 'job']) {
+      for (const name of [null, 0, true, {}, []]) {
+        const workflow = structuredClone(original);
+        (target === 'workflow' ? workflow : workflow.jobs[job]).name = name;
+        const candidate = { ...baseline, [path]: YAML.stringify(workflow) };
+        assert.ok(inspectActivated(candidate).includes('Dependabot workflow and job names must be strings'),
+          `${file}/${target}: ${JSON.stringify(name)}`);
+      }
+    }
+    for (const name of [undefined, 'Reviewed display label']) {
+      const workflow = structuredClone(original);
+      if (name === undefined) { delete workflow.name; delete workflow.jobs[job].name; }
+      else { workflow.name = name; workflow.jobs[job].name = name; }
+      assert.deepEqual(inspectActivated({ ...baseline, [path]: YAML.stringify(workflow) }), []);
+    }
+  }
 });
