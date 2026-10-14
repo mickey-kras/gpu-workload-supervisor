@@ -51,6 +51,14 @@ owner-reviewed settings attestation; it does not request Administration read. Th
 action. The `RELEASE_APP_PRIVATE_KEY` secret, the `release-automation`
 environment, and repository release immutability are required for publication.
 
+Releases reuse trusted successful main validation for the exact dispatch SHA,
+including every quality, Aislop, CodeQL and Sonar job from the current run
+attempt. Validation waits up to 70 minutes and rejects job evidence older than
+24 hours from its start. The trusted guard protects the verifier bytes, exact-SHA
+checkout, read-only permissions and publication dependencies. Updating this
+verifier requires updating its trusted policy digest through a normal PR.
+See [RELEASING.md](RELEASING.md) for freshness and retry instructions.
+
 The environment variable `RELEASE_SETTINGS_REVIEW` records the owner-reviewed
 numeric App actor ID and the current revisions of five release rulesets. Its
 format is `{ "app_id": 4956768, "immutable_releases": true, "rulesets":
