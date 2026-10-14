@@ -164,3 +164,29 @@ func TestRootRejectedForAllSetupActions(t *testing.T) {
 		}
 	}
 }
+
+func TestAllDesktopCommandsRejectRootBeforeReadingInputOrWritingOutput(t *testing.T) {
+	for _, command := range []string{
+		"discover", "probe", "prepare", "fingerprint", "render-owned", "drafts", "save-drafts", "verify-bindings", "validate", "apply", "temporary-status", "temporary-discover", "temporary-cleanup", "reconcile", "idle-policy-tick", "remove-integration",
+	} {
+		t.Run(command, func(t *testing.T) {
+			a := systemActions()
+			home := t.TempDir()
+			a.home = func() (string, error) { return home, nil }
+			a.euid = func() int { return 0 }
+			input := strings.NewReader("invalid request")
+			var output bytes.Buffer
+			err := a.run([]string{command}, input, &output)
+			if err == nil || err.Error() != "run guided setup as the desktop account, not root" {
+				t.Fatalf("root guard: %v", err)
+			}
+			if input.Len() != len("invalid request") || output.Len() != 0 {
+				t.Fatal("root command consumed input or emitted output")
+			}
+			files, err := os.ReadDir(home)
+			if err != nil || len(files) != 0 {
+				t.Fatalf("root command changed home: %v %v", files, err)
+			}
+		})
+	}
+}

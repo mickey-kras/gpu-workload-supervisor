@@ -80,16 +80,11 @@ func Validate(request Request) error {
 	if len(encoded) > maxSetupRequestBytes {
 		return errors.New("setup request exceeds 416 KiB")
 	}
-	if request.Version != 1 || request.Profile.Version != 1 {
-		return errors.New("unsupported setup/profile version")
+	if request.Version != 1 {
+		return errors.New("unsupported setup version")
 	}
-	if request.Profile.GPUIndex < 0 || request.Profile.StatusTimeoutSeconds < 0 || request.Profile.StatusTimeoutSeconds > 60 || request.Profile.OperationTimeoutSeconds < 0 || request.Profile.OperationTimeoutSeconds > 1800 {
-		return errors.New("invalid GPU index")
-	}
-	for _, path := range []string{request.Profile.StatePath, request.Profile.SystemctlPath, request.Profile.NvidiaSMIPath} {
-		if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-			return errors.New("trusted paths must be absolute and clean")
-		}
+	if err := request.Profile.ValidateConfiguration(); err != nil {
+		return err
 	}
 	return request.Catalog.Validate()
 }

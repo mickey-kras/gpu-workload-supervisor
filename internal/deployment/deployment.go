@@ -51,12 +51,35 @@ type Profile struct {
 }
 
 func (p Profile) Validate() error {
-	if p.Version != 1 || !releaseToken(p.ActivatedRelease) || p.GPUIndex < 0 || p.StatusTimeoutSeconds < 0 || p.StatusTimeoutSeconds > 60 || p.OperationTimeoutSeconds < 0 || p.OperationTimeoutSeconds > 1800 {
-		return errors.New("invalid deployment profile")
+	if err := p.ValidateConfiguration(); err != nil {
+		return err
 	}
-	for _, s := range []string{p.StatePath, p.SystemctlPath, p.NvidiaSMIPath} {
-		if !filepath.IsAbs(s) || filepath.Clean(s) != s || s == "/" {
-			return errors.New("profile requires absolute clean paths")
+	if !releaseToken(p.ActivatedRelease) {
+		return errors.New("invalid activated release")
+	}
+	return nil
+}
+
+// ValidateConfiguration checks fields shared by setup previews and activated
+// profiles. Preview release selection is handled when setup plans activation.
+func (p Profile) ValidateConfiguration() error {
+	if p.Version != 1 {
+		return errors.New("unsupported profile version")
+	}
+	if p.GPUIndex < 0 {
+		return errors.New("invalid GPU index")
+	}
+	if p.StatusTimeoutSeconds < 0 || p.StatusTimeoutSeconds > 60 {
+		return errors.New("status timeout must be between 0 and 60 seconds")
+	}
+	if p.OperationTimeoutSeconds < 0 || p.OperationTimeoutSeconds > 1800 {
+		return errors.New("operation timeout must be between 0 and 1800 seconds")
+	}
+	for _, field := range []struct{ name, path string }{
+		{"statePath", p.StatePath}, {"systemctlPath", p.SystemctlPath}, {"nvidiaSMIPath", p.NvidiaSMIPath},
+	} {
+		if !filepath.IsAbs(field.path) || filepath.Clean(field.path) != field.path || field.path == "/" {
+			return fmt.Errorf("%s requires an absolute clean path other than root", field.name)
 		}
 	}
 	return nil
