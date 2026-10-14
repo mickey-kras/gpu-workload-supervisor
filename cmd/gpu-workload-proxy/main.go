@@ -73,9 +73,9 @@ func run() error {
 	readHeaderTimeout := flags.Duration("read-header-timeout", 10*time.Second, "HTTP header read timeout")
 	responseHeaderTimeout := flags.Duration("upstream-response-header-timeout", httptransport.DefaultResponseHeaderTimeout, "positive upstream response header wait after request upload; excludes response body")
 	idleTimeout := flags.Duration("idle-timeout", 2*time.Minute, "HTTP idle timeout")
-	shutdownTimeout := flags.Duration("shutdown-timeout", 30*time.Second, "graceful shutdown timeout")
+	shutdownTimeout := flags.Duration("shutdown-timeout", 30*time.Second, "separate HTTP and native completion drain budgets; cancellation joins may exceed this duration")
 	completedWorkRetention := flags.Duration("completed-work-retention", 30*24*time.Hour, "time to keep completed work records")
-	maxInflight := flags.Int("max-inflight", 128, "maximum concurrent non-completion proxy requests")
+	maxInflight := flags.Int("max-inflight", 128, "maximum concurrent non-completion HTTP requests and separate native admission/persistence reservations")
 	maxCompletionInflight := flags.Int("max-completion-inflight", 16, "maximum concurrent completion reports, reserved from proxy traffic")
 	var routes routesFlag
 	var readOnlyRoutes routesFlag
@@ -151,7 +151,7 @@ func serveProxy(proxyConfig workloadproxy.Config, settings proxyServerSettings) 
 	if err := validateLoopbackAddress(settings.listen); err != nil {
 		return err
 	}
-	// Hold the shared lock until every in-flight handler has finished. Recovery
+	// Hold the shared lock until HTTP handlers and native writes finish. Recovery
 	// takes its exclusive counterpart before it can abandon unresolved work.
 	proxyLock, err := lock.AcquireShared(settings.statePath + ".proxy.lock")
 	if err != nil {
@@ -168,6 +168,10 @@ func serveProxy(proxyConfig workloadproxy.Config, settings proxyServerSettings) 
 		return fmt.Errorf("open state store: %w", err)
 	}
 	defer stateStore.Close()
+	proxyConfig.MaxNativeCompletions = settings.maxInflight
+	proxyConfig.ReportNativeCompletionFailure = func(failure workloadproxy.NativeCompletionFailure) {
+		log.Printf("native completion write: reason=%s attempts=%d", failure.Reason, failure.Attempts)
+	}
 	handler, err := workloadproxy.NewWithContext(ctx, stateStore, proxyConfig)
 	if err != nil {
 		return err
@@ -209,10 +213,18 @@ func serveProxy(proxyConfig workloadproxy.Config, settings proxyServerSettings) 
 	}()
 	select {
 	case err := <-result:
-		return errors.Join(err, tracked.ShutdownAndDrain(server, settings.shutdownTimeout))
+		return errors.Join(err, shutdownProxy(tracked, server, handler, settings.shutdownTimeout))
 	case <-ctx.Done():
-		return tracked.ShutdownAndDrain(server, settings.shutdownTimeout)
+		return shutdownProxy(tracked, server, handler, settings.shutdownTimeout)
 	}
+}
+
+func shutdownProxy(tracked *workloadproxy.Server, server *http.Server, handler *workloadproxy.Handler, timeout time.Duration) error {
+	err := tracked.ShutdownAndDrain(server, timeout)
+	// Give accepted writes a separate drain budget after HTTP producers stop.
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return errors.Join(err, handler.DrainNativeCompletions(ctx))
 }
 
 func validateLoopbackAddress(address string) error {
