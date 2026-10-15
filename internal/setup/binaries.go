@@ -174,5 +174,8 @@ func writeActivationBackup(destination string, files map[string][]byte) error {
 			return err
 		}
 	}
-	return nil
+	// AtomicWrite syncs each file's immediate directory. Also persist the
+	// owned-units directory entry in the tuple root before originals can be
+	// removed by the successful activation.
+	return syncDirectory(destination)
 }
