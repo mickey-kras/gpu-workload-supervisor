@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -462,25 +463,90 @@ func TestSwitchRejectsConcurrentTransitionBeforeRuntimeEffects(t *testing.T) {
 	}
 }
 
-func TestTimedOutDrainRollsBackWithoutAdmittingWork(t *testing.T) {
-	stateStore := openStore(t)
-	runtime := &fakeRuntime{active: control.WorkloadText}
-	controller := testController(t, stateStore, runtime)
-	current, err := controller.Reconcile(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := stateStore.AdmitWorkToken(context.Background(), "inflight", "job", control.WorkloadText, current.LeaseFence); err != nil {
-		t.Fatal(err)
-	}
-	controller.config.DrainTimeout = time.Nanosecond
-	state, err := controller.Switch(context.Background(), control.WorkloadMedia, "test")
-	if !errors.Is(err, ErrDrainTimeout) || state.Health != control.HealthError ||
-		state.Admission != control.AdmissionClosed || state.ActiveWorkload != control.WorkloadText {
-		t.Fatalf("unsafe timed-out drain = %#v, error = %v", state, err)
-	}
-	if id, err := stateStore.InProgressTransition(context.Background()); err != nil || id != "" {
-		t.Fatalf("timed-out transition remained active: %q, %v", id, err)
+type cancelTransitionDrainStore struct {
+	storeGateway
+	cancel context.CancelFunc
+}
+
+func (s cancelTransitionDrainStore) PendingTransitionWork(ctx context.Context, id string) (int, error) {
+	pending, err := s.storeGateway.PendingTransitionWork(ctx, id)
+	s.cancel()
+	return pending, err
+}
+
+func TestTransitionFailureBeforeRuntimeEffectsKeepsWorkRunning(t *testing.T) {
+	for _, operation := range []string{"switch", "transfer to user"} {
+		for _, failure := range []string{"timeout", "cancellation", "pending query", "unloading phase write"} {
+			t.Run(operation+"/"+failure, func(t *testing.T) {
+				ctx := context.Background()
+				path := filepath.Join(t.TempDir(), "state.db")
+				stateStore := openStoreAt(t, path)
+				current := ownershipState(t, stateStore, control.OwnerSupervisor, control.WorkloadText)
+				runtime := &fakeRuntime{active: control.WorkloadText}
+				controller := testController(t, stateStore, runtime)
+				// A phase write failure follows a successful empty drain. All
+				// other cases retain real admitted work throughout the failure.
+				if failure != "unloading phase write" {
+					if _, err := stateStore.AdmitWorkToken(ctx, "inflight", "job", control.WorkloadText, current.LeaseFence); err != nil {
+						t.Fatal(err)
+					}
+				}
+				wantErr := errors.New("store unavailable")
+				switch failure {
+				case "timeout":
+					controller.config.DrainTimeout = time.Nanosecond
+					wantErr = ErrDrainTimeout
+				case "cancellation":
+					cancelCtx, cancel := context.WithCancel(ctx)
+					defer cancel()
+					ctx = cancelCtx
+					controller.store = cancelTransitionDrainStore{stateStore, cancel}
+					wantErr = context.Canceled
+				case "pending query":
+					controller.store = failingStore{storeGateway: stateStore, pendingErr: wantErr}
+				case "unloading phase write":
+					controller.store = failingStore{storeGateway: stateStore, phaseErr: wantErr}
+				}
+				change := controller.Switch
+				if operation == "transfer to user" {
+					change = controller.TransferToUser
+				}
+				state, err := change(ctx, control.WorkloadMedia, "test")
+				if !errors.Is(err, wantErr) || state.Health != control.HealthError ||
+					state.Admission != control.AdmissionClosed || state.Phase != control.PhaseReconciling ||
+					state.Owner != current.Owner || state.ActiveWorkload != current.ActiveWorkload {
+					t.Fatalf("unsafe failed transition = %#v, error = %v", state, err)
+				}
+				if len(runtime.calls) != 0 || runtime.active != control.WorkloadText {
+					t.Fatalf("failure interrupted admitted work: runtime = %q, calls = %v", runtime.active, runtime.calls)
+				}
+				// Read with a fresh context: caller cancellation must not prevent
+				// durable failed finalization or remove unfinished registrations.
+				persisted, err := stateStore.State(context.Background())
+				if err != nil || persisted != state {
+					t.Fatalf("persisted state = %#v, error = %v", persisted, err)
+				}
+				wantPending := 1
+				if failure == "unloading phase write" {
+					wantPending = 0
+				}
+				if pending, err := stateStore.PendingWork(context.Background()); err != nil || pending != wantPending {
+					t.Fatalf("pending work = %d, error = %v", pending, err)
+				}
+				if id, err := stateStore.InProgressTransition(context.Background()); err != nil || id != "" {
+					t.Fatalf("failed transition remained active: %q, %v", id, err)
+				}
+				db, err := sql.Open("sqlite", path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				var status string
+				if err := db.QueryRow(`SELECT status FROM transitions`).Scan(&status); err != nil || status != "failed" {
+					t.Fatalf("transition status = %q, error = %v", status, err)
+				}
+			})
+		}
 	}
 }
 
