@@ -56,12 +56,12 @@ jobs:
               raise SystemExit('Missing successful quality coverage outputs; re-run all jobs')
           PYTHON
       - name: Download Go quality coverage
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.quality.outputs.go-coverage-id }}
           path: go-quality-coverage/
       - name: Download JavaScript quality coverage
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.quality.outputs.javascript-coverage-id }}
           path: javascript-quality-coverage/
