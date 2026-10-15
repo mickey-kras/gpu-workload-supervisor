@@ -83,7 +83,7 @@ func (c *Controller) reconcileCatalog(ctx context.Context, recovering bool) (con
 	if err != nil {
 		return state, err
 	}
-	snap, err := c.observe(ctx)
+	snap, err := c.observeForReconciliation(ctx, recovering)
 	if err != nil {
 		return c.latchObservationFailure(ctx, state, err)
 	}
@@ -92,6 +92,19 @@ func (c *Controller) reconcileCatalog(ctx context.Context, recovering bool) (con
 		return c.latchObservationFailure(ctx, state, err)
 	}
 	return c.reconcileCatalogTarget(ctx, state, target, recovering)
+}
+
+// Recovery may inspect failed units to choose what to retain, but all later
+// readiness observations and release checks keep their normal strict rules.
+func (c *Controller) observeForReconciliation(ctx context.Context, recovering bool) (gpuruntime.Snapshot, error) {
+	if observer, ok := c.runtime.(interface {
+		ObserveForRecovery(context.Context) (gpuruntime.Snapshot, error)
+	}); recovering && ok {
+		probeCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
+		defer cancel()
+		return observer.ObserveForRecovery(probeCtx)
+	}
+	return c.observe(ctx)
 }
 
 func (c *Controller) retainedCatalogTarget(snap gpuruntime.Snapshot) (control.Workload, error) {
