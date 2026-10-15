@@ -185,10 +185,7 @@ func (b Backend) Apply(ctx context.Context, home string, request Request) error 
 		return errors.New("review preview and explicitly confirm quiescent activation")
 	}
 	work := activationWork{backend: b, home: home, root: filepath.Join(home, ".config/gpu-workload-supervisor"), request: request}
-	if err := mkdirTrusted(work.root); err != nil {
-		return err
-	}
-	if err := mkdirTrusted(filepath.Dir(request.Profile.StatePath)); err != nil {
+	if err := work.prepareDirectories(); err != nil {
 		return err
 	}
 	gate, err := lock.TryAcquire(request.Profile.StatePath + ".lock")
@@ -231,6 +228,13 @@ func (b Backend) Apply(ctx context.Context, home string, request Request) error 
 		}
 	}
 	return work.finishActivation(ctx, plan)
+}
+
+func (work activationWork) prepareDirectories() error {
+	if err := mkdirTrusted(work.root); err != nil {
+		return err
+	}
+	return mkdirTrusted(filepath.Dir(work.request.Profile.StatePath))
 }
 
 // commitOptions carries the durable commit's inputs: the activation context,
