@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
 
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 )
 
@@ -44,7 +46,7 @@ func (b Backend) retainBinaries(root string) error {
 	}
 	return writeJSON(filepath.Join(directory, "manifest.json"), manifest)
 }
-func copyActivation(ctx context.Context, root, destination string, profile []byte) error {
+func copyActivation(ctx context.Context, home, root, destination string, profile []byte, plan unitPlan) error {
 	data, err := privateRead(filepath.Join(root, "activated-binaries/manifest.json"))
 	if err != nil {
 		return errors.New("prior activated binary set missing; repair before upgrade")
@@ -75,6 +77,9 @@ func copyActivation(ctx context.Context, root, destination string, profile []byt
 		return err
 	}
 	files["catalog.json"] = catalog
+	if err := collectActivationUnits(home, accepted.Catalog, plan, files); err != nil {
+		return err
+	}
 	ownershipData, err := privateRead(filepath.Join(root, manifestName))
 	if err != nil {
 		return err
@@ -99,6 +104,42 @@ func copyActivation(ctx context.Context, root, destination string, profile []byt
 	return writeActivationBackup(destination, files)
 }
 
+type ownedUnitBackupManifest struct {
+	Version int               `json:"version"`
+	Hashes  map[string]string `json:"hashes"`
+}
+
+// collectActivationUnits retains the accepted catalog's exact unit bytes. Writes
+// have already run for runtime verification, so their verified pre-write snapshots
+// are authoritative; the current rendering would belong to the new activation.
+func collectActivationUnits(home string, catalog control.Catalog, plan unitPlan, files map[string][]byte) error {
+	entries, err := acceptedOwnedUnitEntries(catalog, home)
+	if err != nil {
+		return err
+	}
+	manifest := ownedUnitBackupManifest{Version: 1, Hashes: map[string]string{}}
+	for _, entry := range entries {
+		data, saved := plan.prior[entry.unit]
+		if !saved {
+			data, err = privateRead(entry.path)
+			if err != nil {
+				return err
+			}
+		}
+		if digest(data) != entry.proof {
+			return fmt.Errorf("prior owned unit checksum mismatch: %s", entry.unit)
+		}
+		manifest.Hashes[entry.unit] = entry.proof
+		files[filepath.Join("owned-units", entry.unit)] = data
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	files["owned-units.json"] = data
+	return nil
+}
+
 func collectActivatedBinaries(root string, manifest binaryManifest, files map[string][]byte) error {
 	for _, name := range binaries {
 		binary, err := privateRead(filepath.Join(root, "activated-binaries", name))
@@ -116,6 +157,11 @@ func collectActivatedBinaries(root string, manifest binaryManifest, files map[st
 func writeActivationBackup(destination string, files map[string][]byte) error {
 	for name, data := range files {
 		path := filepath.Join(destination, name)
+		if filepath.Dir(name) != "." {
+			if err := mkdirTrusted(filepath.Dir(path)); err != nil {
+				return err
+			}
+		}
 		if previous, err := privateRead(path); err == nil {
 			if digest(previous) != digest(data) {
 				return errors.New("backup tuple already exists with different contents")
