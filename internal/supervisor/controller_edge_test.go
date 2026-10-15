@@ -629,8 +629,8 @@ func TestSwitchFailsClosedWhenTransitionJournalCannotProgress(t *testing.T) {
 	}{
 		{"in-progress read", func(s *failingStore) { s.transitionErr = errors.New("journal read failed") }, nil},
 		{"transition insert", func(s *failingStore) { s.startErr = errors.New("journal insert failed") }, nil},
-		{"work snapshot read", func(s *failingStore) { s.pendingErr = errors.New("snapshot failed") }, []string{"stop text", "stop media", "start text"}},
-		{"phase update", func(s *failingStore) { s.phaseErr = errors.New("phase write failed") }, []string{"stop text", "stop media", "start text"}},
+		{"work snapshot read", func(s *failingStore) { s.pendingErr = errors.New("snapshot failed") }, nil},
+		{"phase update", func(s *failingStore) { s.phaseErr = errors.New("phase write failed") }, nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			stateStore := openStore(t)
