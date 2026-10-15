@@ -395,6 +395,28 @@ func requireMatchingActivation(root string, req Request) error {
 	return nil
 }
 
+// verifyAcceptedRuntime runs under the state and proxy gates, before any
+// candidate unit is written. Include removed workloads: their release evidence
+// cannot be recovered from the candidate catalog. An empty revision has no
+// accepted mapping yet; the interrupted initial activation is checked below
+// once its candidate units exist.
+func (work activationWork) verifyAcceptedRuntime(ctx context.Context) error {
+	if !work.existing || work.old.StatePath == "" || work.accepted.Revision == "" {
+		return nil
+	}
+	previous := work.request
+	previous.Profile = work.old
+	previous.Catalog = work.accepted.Catalog
+	manager, err := work.backend.makeRuntime(previous)
+	if err != nil {
+		return err
+	}
+	if err := verifyActivationBindings(ctx, manager, unitPlan{}); err != nil {
+		return err
+	}
+	return manager.ReleasedFor(ctx, control.WorkloadIdle)
+}
+
 func (work activationWork) verifyRuntimes(ctx context.Context, plan unitPlan) (gpuruntime.Manager, error) {
 	manager, err := work.backend.makeRuntime(work.request)
 	if err != nil {
@@ -406,7 +428,7 @@ func (work activationWork) verifyRuntimes(ctx context.Context, plan unitPlan) (g
 	if err := manager.ReleasedFor(ctx, control.WorkloadIdle); err != nil {
 		return nil, fmt.Errorf("configured workloads have not released the GPU: %w", err)
 	}
-	if work.existing && work.old.StatePath != "" {
+	if work.existing && work.old.StatePath != "" && work.accepted.Revision == "" {
 		previous := work.request
 		previous.Profile = work.old
 		previous.Catalog = work.accepted.Catalog

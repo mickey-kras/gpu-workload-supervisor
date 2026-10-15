@@ -210,12 +210,17 @@ func (b Backend) Apply(ctx context.Context, home string, request Request) error 
 	if err := work.verifySharedPairBindings(ctx); err != nil {
 		return err
 	}
-	// Owned unit writes precede the quiescence check so newly rendered units
-	// are loaded when release evidence is gathered; deletes stay post-commit.
+	// Prove the accepted bindings and release while their unit files are still
+	// intact. Same-name edits (including derived Conflicts changes) replace
+	// their fingerprints; the candidate is verified separately after reload.
 	plan, err := b.planOwnedUnits(request, work.accepted, home)
 	if err != nil {
 		return err
 	}
+	if err := work.verifyAcceptedRuntime(ctx); err != nil {
+		return err
+	}
+	// Candidate writes precede candidate verification; deletes stay post-commit.
 	if !plan.empty() {
 		journal := newOwnedUnitJournal(plan, request.Profile.StatePath)
 		if err := writeOwnedUnitJournal(work.root, journal); err != nil {

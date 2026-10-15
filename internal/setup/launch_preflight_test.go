@@ -52,7 +52,17 @@ func TestApplyPreflightsWrittenOwnedAndDriftedAdoptedBeforeCommit(t *testing.T) 
 				}
 			}
 			checks := 0
-			backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+			backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
+				if len(got.Catalog.Profiles) == 1 {
+					// The accepted binding is checked before candidate writes.
+					return launchPreflightRuntime{verify: func() error {
+						data, err := os.ReadFile(external)
+						if err != nil || digest(data) != adopted.NativeModel.LaunchSHA256 {
+							return gpuruntime.ErrLaunchChanged
+						}
+						return nil
+					}}, nil
+				}
 				return launchPreflightRuntime{verify: func() error {
 					checks++
 					data, err := os.ReadFile(filepath.Join(ownedUnitDirectory(home), owned.Unit))
@@ -147,7 +157,17 @@ func TestPreviewAndApplyCarryOnlyAcceptedOwnedRemovalProofs(t *testing.T) {
 			}
 			expected := map[string]string{original.Unit: digest(raw)}
 			checks := 0
-			backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+			backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
+				if _, ok := got.Catalog.Profile(original.ID); ok && got.Catalog.Profiles[0].Unit == original.Unit {
+					// The accepted catalog owns this file and needs no removal exception.
+					return launchPreflightRuntime{verify: func() error {
+						data, err := os.ReadFile(filepath.Join(ownedUnitDirectory(home), original.Unit))
+						if err != nil || digest(data) != digest(raw) {
+							return gpuruntime.ErrLaunchChanged
+						}
+						return nil
+					}}, nil
+				}
 				verify := func(removals map[string]string) error {
 					checks++
 					if !reflect.DeepEqual(removals, expected) {
