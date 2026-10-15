@@ -115,10 +115,10 @@ func TestAcceptanceExistingActivationRejectsUnsafeUpgrade(t *testing.T) {
 				}
 				db.Close()
 			case "old-runtime-invalid", "old-runtime-busy":
-				calls := 0
-				backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
-					calls++
-					if calls == 2 {
+				r.Catalog = r.Catalog.Clone()
+				r.Catalog.Profiles[0].Label = "Edited candidate"
+				backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
+					if got.Catalog.Profiles[0].Label == snapshot.Catalog.Profiles[0].Label {
 						if kind == "old-runtime-invalid" {
 							return nil, errors.New("previous executable invalid")
 						}

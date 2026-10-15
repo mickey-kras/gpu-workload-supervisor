@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 )
 
@@ -20,6 +21,8 @@ type bindingReleaseRuntime struct {
 	idleRuntime
 	catalog    control.Catalog
 	busy       control.Workload
+	busyRead   func() control.Workload
+	preflight  func()
 	bindingErr error
 	releases   *[]control.Catalog
 }
@@ -42,11 +45,14 @@ func (r bindingReleaseRuntime) verifyBindings(uuidOnly bool) error {
 }
 
 func (r bindingReleaseRuntime) Preflight(context.Context) error {
+	if r.preflight != nil {
+		r.preflight()
+	}
 	return r.verifyBindings(false)
 }
 
-func (r bindingReleaseRuntime) PreflightWithOwnedRemovals(context.Context, map[string]string) error {
-	return r.verifyBindings(false)
+func (r bindingReleaseRuntime) PreflightWithOwnedRemovals(ctx context.Context, _ map[string]string) error {
+	return r.Preflight(ctx)
 }
 
 func (r bindingReleaseRuntime) ReleasedFor(context.Context, control.Workload) error {
@@ -56,10 +62,28 @@ func (r bindingReleaseRuntime) ReleasedFor(context.Context, control.Workload) er
 	if r.releases != nil {
 		*r.releases = append(*r.releases, r.catalog)
 	}
-	if _, ok := r.catalog.Profile(r.busy); ok {
+	busy := r.busy
+	if r.busyRead != nil {
+		busy = r.busyRead()
+	}
+	if _, ok := r.catalog.Profile(busy); ok {
 		return errors.New("accepted workload is busy")
 	}
 	return nil
+}
+
+func (r bindingReleaseRuntime) ReleasedForUnchangedLaunches(ctx context.Context, target control.Workload, replaced map[string]bool) error {
+	unchanged := r.catalog.Clone()
+	unchanged.Profiles = nil
+	for _, p := range r.catalog.Profiles {
+		if p.NativeModel != nil && replaced[p.NativeModel.LaunchFile] {
+			continue
+		}
+		unchanged.Profiles = append(unchanged.Profiles, p)
+	}
+	r.catalog = unchanged
+	r.releases = nil // Record the candidate's checks separately from this subset.
+	return r.ReleasedFor(ctx, target)
 }
 
 func uuidOwnedFixture(t *testing.T, home, id string, port uint16) control.WorkloadProfile {
@@ -191,6 +215,56 @@ func TestApplyRejectsUnsafeAcceptedRuntimeBeforeOwnedMutation(t *testing.T) {
 			}
 			if _, present, err := readOwnedUnitJournal(filepath.Join(home, ".config/gpu-workload-supervisor")); err != nil || present {
 				t.Fatalf("rejected activation created journal: %v", err)
+			}
+		})
+	}
+}
+
+func TestApplyRechecksRemovedWorkloadReleaseAfterOwnedWrites(t *testing.T) {
+	for _, stage := range []string{"daemon reload", "transaction quiescence"} {
+		t.Run(stage, func(t *testing.T) {
+			backend, home, request := fixture(t)
+			delegate := fakeOwnedCommandFor(home)
+			backend.runCommand = delegate
+			removed := request.Catalog.Profiles[0]
+			original := uuidOwnedFixture(t, home, "a", 9100)
+			request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{original, removed}}
+			if err := backend.Apply(t.Context(), home, request); err != nil {
+				t.Fatal(err)
+			}
+			request.ExpectedRevision = currentRevision(t, request)
+			request.Catalog.Profiles = []control.WorkloadProfile{uuidOwnedFixture(t, home, "a", 9101)}
+			busy := control.Workload("")
+			backend.runCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+				if stage == "daemon reload" {
+					for _, arg := range args {
+						if arg == "daemon-reload" {
+							busy = removed.ID
+						}
+					}
+				}
+				return delegate(ctx, name, args...)
+			}
+			backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
+				return bindingReleaseRuntime{catalog: got.Catalog, busyRead: func() control.Workload { return busy }, preflight: func() {
+					marker, err := deployment.Read(request.Profile.StatePath)
+					if stage == "transaction quiescence" && err == nil && marker.Maintenance {
+						busy = removed.ID
+					}
+				}}, nil
+			}
+			if err := backend.Apply(t.Context(), home, request); err == nil {
+				t.Fatal("removed workload became busy but activation committed")
+			}
+			if busy != removed.ID {
+				t.Fatal("test did not reach the requested race window")
+			}
+			if currentRevision(t, request) != request.ExpectedRevision {
+				t.Fatal("late busy workload changed committed catalog")
+			}
+			marker, err := deployment.Read(request.Profile.StatePath)
+			if err != nil || marker.Maintenance != (stage == "transaction quiescence") {
+				t.Fatalf("unexpected maintenance fence after late rejection: %+v %v", marker, err)
 			}
 		})
 	}
