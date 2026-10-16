@@ -406,4 +406,3 @@ func TestValidateRestoredDatabaseRejectsUnreadableConnection(t *testing.T) {
 		t.Fatal("closed connection passed restored validation")
 	}
 }
-

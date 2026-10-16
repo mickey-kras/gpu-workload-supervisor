@@ -245,4 +245,3 @@ func TestTemporaryReadOnlyStatusPreservesCorruptStateErrors(t *testing.T) {
 		})
 	}
 }
-

@@ -116,4 +116,3 @@ func TestComfyUIMigrationPreservesLegacyAndDoesNotInventAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-
