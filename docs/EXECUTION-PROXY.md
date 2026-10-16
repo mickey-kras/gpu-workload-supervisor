@@ -88,7 +88,7 @@ recognized paths with an unconfigured method return HTTP 405 with an `Allow`
 header listing the explicitly configured methods, including POST for the
 completion path. Both return the JSON error `route_not_allowed`. Configure each verified read-only method/path with `-read-only-route`; HEAD is not inferred from GET. Required non-execution editing mutations must be explicitly configured as passthrough routes. When upgrading from implicit safe-method forwarding, inventory and configure these routes first. A method or route name alone does not prove that a backend operation is read-only.
 
-The listener is restricted to loopback because explicit user ownership bypasses supervisor lease registration. Any process that can write the state directory can drive user-mode execution; processes running as the service UID are fully trusted (see [SECURITY.md](../SECURITY.md)). External exposure and requester authentication belong to the deployment boundary.
+The listener is restricted to loopback because explicit user ownership bypasses supervisor lease registration. Any process that can write the state directory can drive user-mode execution; processes running as the service UID are fully trusted (see [SECURITY.md](../SECURITY.md)). External exposure belongs to the deployment boundary. Optional [requester ingress](REQUESTER-INGRESS.md) adds local requester/workflow authorization and durable demand; it does not provide host isolation.
 
 The proxy is content-blind. Content inspection and domain policy belong to the caller.
 
@@ -124,8 +124,10 @@ decode other transformations. Trusted backends/adapters must not echo tokens in 
 the content-blind proxy does not inspect arbitrary response payloads. Native
 terminal observation remains internal to the proxy and keeps its existing rules.
 
-This is a local adapter prerequisite, not a remote authentication gateway. Keep
-the listener on loopback. The gateway must independently authenticate requesters,
+This adapter mode is a local prerequisite, not a remote authentication gateway.
+Optional [requester ingress](REQUESTER-INGRESS.md) provides local identity and
+immutable-workflow authorization. Keep the listener on loopback. Without that
+option, the deployment gateway must independently authenticate requesters,
 enforce identity, CSRF/policy and appropriate request limits, and keep its execution
 credential from clients. The terminal credential belongs only to the trusted
 adapter. Separately prevent direct runtime bypass and isolate host service
@@ -201,3 +203,4 @@ budgets are separate, and cancellation is followed by joining active workers.
 Allow for both phases and their cleanup when configuring a service stop grace.
 Forcing process termination before persistence finishes can leave verified work
 unfinished for explicit reconciliation.
+

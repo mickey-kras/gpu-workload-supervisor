@@ -15,6 +15,10 @@ Implementation and remaining qualification for [issue #144](https://github.com/m
 3. Qualify native terminal completion and model lifecycle on the deployment host; fixture coverage is not host acceptance.
 4. Integrate desktop settings/deadline presentation only when backend capability and fresh evidence support it.
 
+Optional authenticated requester/workflow ingress and durable queued/reserved demand
+are implemented in [REQUESTER-INGRESS.md](REQUESTER-INGRESS.md). Production isolation
+qualification remains outstanding; auto-idle stays Off.
+
 ## Activation ingress
 
 The typed local `activate-workload` action implements demand activation; see
@@ -87,3 +91,4 @@ The policy loop consumes one attestation from the orchestration adapter; no othe
 
 - Cases: request at exact timeout, cold activation, activation during active work, mixed workloads, streaming and async completion, long jobs crossing timeout, disconnects, ambiguous completion, adapter outage and stale attestation, restart with pending deadline, ownership transfer with armed deadline, rejected requests, recovery latches.
 - Measure loaded-but-unused vs idle power and activation latency on the deployment host; record in the private qualification record before any savings claim or enabled default.
+

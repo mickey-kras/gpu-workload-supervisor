@@ -43,7 +43,7 @@ func temporaryV12Fixture(t *testing.T) (Backend, string, Request, Profile, *sql.
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	if _, err = db.ExecContext(ctx, `DROP TABLE comfyui_attempts; DROP TABLE temporary_discovery_sessions; DELETE FROM schema_migrations WHERE version>=13; UPDATE control_state SET version=version+1`); err != nil {
+	if _, err = db.ExecContext(ctx, `DROP TABLE broker_demands; DROP TABLE comfyui_attempts; DROP TABLE temporary_discovery_sessions; DELETE FROM schema_migrations WHERE version>=13; UPDATE control_state SET version=version+1`); err != nil {
 		t.Fatal(err)
 	}
 	// v13 adds temporary sessions and v14 adds ComfyUI correlation metadata.
@@ -166,7 +166,7 @@ func TestTemporarySchemaUpgradeStillRequiresBackedUpNormalActivation(t *testing.
 		t.Fatal("normal activation migrated before taking the v12 backup")
 	}
 	var schema int
-	if err = db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&schema); err != nil || schema != 15 {
+	if err = db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&schema); err != nil || schema != 16 {
 		t.Fatalf("normal activation did not migrate: %d %v", schema, err)
 	}
 	status, err := b.TemporaryStatus(ctx, home)
@@ -245,3 +245,4 @@ func TestTemporaryReadOnlyStatusPreservesCorruptStateErrors(t *testing.T) {
 		})
 	}
 }
+

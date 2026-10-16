@@ -70,6 +70,11 @@ func (s *Store) resolveUnfinishedWork(ctx context.Context, tx *sql.Tx, state con
 		state.LeaseFence.Incarnation, state.LeaseFence.Epoch).Scan(&unfenced); err != nil {
 		return 0, err
 	}
+	var reservedUnfenced int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM broker_demands WHERE status='reserved' AND lease_incarnation=? AND lease_epoch>=?`, state.LeaseFence.Incarnation, state.LeaseFence.Epoch).Scan(&reservedUnfenced); err != nil {
+		return 0, err
+	}
+	unfenced += reservedUnfenced
 	if unfenced != 0 {
 		return 0, ErrStaleFence
 	}
@@ -84,6 +89,15 @@ func (s *Store) resolveUnfinishedWork(ctx context.Context, tx *sql.Tx, state con
 	if err != nil {
 		return 0, err
 	}
+	reserved, err := tx.ExecContext(ctx, `UPDATE broker_demands SET status='cancelled',claim=NULL,updated_at=? WHERE status='reserved'`, now)
+	if err != nil {
+		return 0, err
+	}
+	reservedCount, err := reserved.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	count += reservedCount
 	if count == 0 {
 		return 0, ErrNoUnfinishedWork
 	}
@@ -117,6 +131,9 @@ func (s *Store) beginAdmittedWork(ctx context.Context, requestID string, workloa
 		}
 	}()
 	if err := checkAdmissibleState(ctx, tx, workload, fence, revision); err != nil {
+		return nil, err
+	}
+	if err := bindDemand(ctx, tx, requestID, workload); err != nil {
 		return nil, err
 	}
 	admitted = true
@@ -314,8 +331,13 @@ func (s *Store) PruneCompletedWork(ctx context.Context, before time.Time, limit 
 	if err != nil {
 		return 0, err
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM broker_demands WHERE request_id IN (
+ SELECT request_id FROM broker_demands WHERE status='cancelled' AND julianday(updated_at)<julianday(?)
+ ORDER BY updated_at,request_id LIMIT ?)`, cutoff, limit); err != nil {
+		return 0, err
+	}
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, tx.Commit()
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
 	args := make([]any, len(ids))
@@ -325,6 +347,9 @@ func (s *Store) PruneCompletedWork(ctx context.Context, before time.Time, limit 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM transition_work
 		WHERE request_id IN (`+placeholders+`)`, args...); err != nil {
 		return 0, fmt.Errorf("prune terminal transition snapshots: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM broker_demands WHERE status='admitted' AND request_id IN (`+placeholders+`)`, args...); err != nil {
+		return 0, err
 	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM registered_work
 		WHERE request_id IN (`+placeholders+`)`, args...)
