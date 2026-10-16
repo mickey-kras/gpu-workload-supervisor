@@ -54,6 +54,46 @@ The lease incarnation in a SQLite backup may be older than the live database. A 
 
    Failed work and transition history remain available. If it fails, keep all components stopped and resolve the error before retrying.
 
+   If `restore-state` reports unfinished training, keep all components stopped. If the job ID is unknown, use Python 3's standard-library SQLite reader against the restored state path, as the service identity. This read-only query prints only IDs and recovery categories, never training payloads or tokens:
+
+   ```sh
+   python3 - /PRIVATE/DURABLE/STATE/state.db <<'PY'
+   import pathlib
+   import sqlite3
+   import sys
+
+   uri = pathlib.Path(sys.argv[1]).resolve().as_uri() + "?mode=ro"
+   with sqlite3.connect(uri, uri=True) as db:
+       for job_id, category in db.execute("""
+           SELECT id, 'reserved job' FROM training_jobs WHERE finished=0
+           UNION ALL
+           SELECT id, 'preparing claim' FROM training_claims WHERE status='preparing'
+           ORDER BY 1
+       """):
+           print(job_id, category, sep="\t")
+   PY
+   ```
+
+   Explicitly recover each listed ID before continuing. As the service identity, use a text editor to create a private regular file with mode `0600` at `/PRIVATE/DURABLE/STATE/training-job-id.txt`. Save exactly one ID (without the tab and category), followed by one newline; preserve all spaces and do not add quotes or escapes. Paste into the editor, not a terminal input prompt: valid IDs can exceed the terminal's line-length limit.
+
+   Read the file as data and run recovery only if it contains exactly one nonempty line, keeping the variable expansion quoted:
+
+   ```sh
+   if {
+       IFS= read -r training_job_id &&
+       [ -n "$training_job_id" ] &&
+       ! { IFS= read -r extra_line || [ -n "$extra_line" ]; }
+   } < /PRIVATE/DURABLE/STATE/training-job-id.txt; then
+       /PINNED/RELEASE/gpu-mode [runtime flags] -state /PRIVATE/DURABLE/STATE/state.db -training-job "$training_job_id" training-recover
+   else
+       printf '%s\n' 'Expected exactly one nonempty ID line; keep components stopped.' >&2
+   fi
+   ```
+
+   Use the matching runtime configuration and trainer bindings from the restored database's accepted catalog; runtime commands do not accept `-catalog`. A `reserved job` blocks `restore-state`: require successful recovery and verified recursive cgroup/GPU release before retrying it. A `preparing claim` has not reserved GPU work and does not block `restore-state`; recovery records it as `interrupted` without stopping a trainer. Finished jobs and interrupted claims are excluded from the query.
+
+   If the query fails or lists no reserved job despite the unfinished-training error, keep components stopped and investigate the database path/schema rather than guessing an ID or editing state. After successful recovery, retry `restore-state`, then continue with step 4. Do not bypass the unfinished-training guard. [Training recovery](TRAINING.md#commands) never resumes or relaunches training: it preserves a previously persisted terminal outcome, otherwise records `interrupted`; the backup alone does not establish completion. If recovery fails, keep proxies stopped and resolve the runtime/configuration error before retrying.
+
 4. With the proxies still stopped, run the same pinned `gpu-mode` with the complete runtime flags, including the same `-state` path, and the `reconcile` command. It must finish with a stable, healthy state. If it reports a failure, leave the proxies stopped and use `recover` only after checking the runtime state. Start a workload through the controller if needed.
 5. Start the proxies only after successful reconciliation. Clients must obtain the new fence; requests carrying a fence from the backup are rejected.
 

@@ -49,9 +49,12 @@ The adapter reads the version 1 JSON envelope containing `job`, `recipeFile` and
 `terminalFile`. `job` includes ID, completion token, fence, workload, accepted
 catalog revision and recipe SHA256. The adapter must validate this envelope and
 the recipe digest before GPU-backed preparation. Its terminal file is one strict
-JSON object, at most 4096 bytes, with `version: 1`, `id`, `token`, `fence`,
+JSON object, at most 64 KiB (65536 bytes), with `version: 1`, `id`, `token`, `fence`,
 `recipeSHA256`, `invocationId` (systemd's `INVOCATION_ID`) and `outcome`.
 Supported outcomes are `completed`, `failed`, `cancelled` and `interrupted`.
+Job IDs follow the shared request ID contract: at most 8192 UTF-8 bytes and no
+control characters. The terminal limit allows the full ID even when JSON escaping
+expands each ID byte to six bytes, plus the remaining receipt fields.
 Write evidence atomically with private permissions. Never print the token.
 
 `completed` means every requested phase, including evaluation/export, completed.

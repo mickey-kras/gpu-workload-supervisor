@@ -15,10 +15,10 @@ func executeTraining(ctx context.Context, c *supervisor.Controller, command, id 
 	if err := control.ValidateRequestID(id); err != nil {
 		return err
 	}
-	if command == "training-start" || command == "training-status" {
+	if command == trainingStartCommand || command == "training-status" {
 		var job control.TrainingJob
 		var err error
-		if command == "training-start" {
+		if command == trainingStartCommand {
 			job, err = c.StartTraining(ctx, id, target)
 		} else {
 			job, err = c.TrainingStatus(ctx, id)
@@ -42,7 +42,7 @@ func executeTraining(ctx context.Context, c *supervisor.Controller, command, id 
 
 func validateTrainingFlags(command, id string) error {
 	switch command {
-	case "training-start", "training-status", "training-reconcile", "training-recover":
+	case trainingStartCommand, "training-status", "training-reconcile", "training-recover":
 		return control.ValidateRequestID(id)
 	default:
 		if strings.HasPrefix(command, "training-") {
