@@ -821,8 +821,12 @@ func (r *trainingOutputPreflightRuntime) Preflight(ctx context.Context) error {
 }
 
 func TestTrainingContractInvalidDestinationsPrecedeInferenceHandoff(t *testing.T) {
-	for _, kind := range []string{"missing job parent", "missing terminal parent", "unsafe job parent", "unsafe terminal parent", "linked job parent", "linked terminal parent", "job directory", "terminal directory"} {
+	for _, kind := range []string{"missing job parent", "missing terminal parent", "unsafe job parent", "unsafe terminal parent", "linked job parent", "linked terminal parent", "job directory", "terminal directory", "unwritable job parent", "unwritable terminal parent", "unsearchable job parent", "unsearchable terminal parent", "root-owned job parent", "root-owned terminal parent"} {
 		t.Run(kind, func(t *testing.T) {
+			permissionCase := strings.HasPrefix(kind, "unwritable") || strings.HasPrefix(kind, "unsearchable") || strings.HasPrefix(kind, "root-owned")
+			if permissionCase && os.Geteuid() == 0 {
+				t.Skip("requires nonroot credentials to exercise denied output creation")
+			}
 			_, s, r := trainingStartContract(t)
 			ctx := context.Background()
 			snap, err := s.Catalog(ctx)
@@ -839,6 +843,25 @@ func TestTrainingContractInvalidDestinationsPrecedeInferenceHandoff(t *testing.T
 				output = &binding.TerminalFile
 			}
 			switch {
+			case strings.HasPrefix(kind, "root-owned"):
+				// The filesystem root is trusted and searchable but cannot be
+				// written by the supervisor's ordinary user credentials.
+				*output = filepath.Join("/", filepath.Base(dir)+"-training-output.json")
+			case strings.HasPrefix(kind, "unwritable"), strings.HasPrefix(kind, "unsearchable"):
+				parent := filepath.Join(dir, "restricted")
+				if err := os.Mkdir(parent, 0700); err != nil {
+					t.Fatal(err)
+				}
+				// Restore traversal so TempDir cleanup works for the nonroot runner.
+				t.Cleanup(func() { _ = os.Chmod(parent, 0700) })
+				mode := os.FileMode(0500)
+				if strings.HasPrefix(kind, "unsearchable") {
+					mode = 0600
+				}
+				if err := os.Chmod(parent, mode); err != nil {
+					t.Fatal(err)
+				}
+				*output = filepath.Join(parent, "output.json")
 			case strings.HasPrefix(kind, "missing"):
 				*output = filepath.Join(dir, "missing", "output.json")
 			case strings.HasPrefix(kind, "unsafe"):

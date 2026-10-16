@@ -14,6 +14,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
+	"golang.org/x/sys/unix"
 )
 
 // TrainerUnit is intentionally a separate, exact launch grammar. Adapter v1
@@ -108,11 +109,15 @@ func (m *SystemdManager) verifyTrainerBinding(ctx context.Context, p control.Wor
 }
 
 // Output leaves may be absent, but their trusted directories must already
-// exist. Qualification is read-only and also rejects existing non-file leaves.
+// exist and permit creation with the effective user credentials. Qualification
+// is read-only and also rejects existing non-file leaves.
 func qualifyTrainingOutputs(t control.TrainerBinding) error {
 	for _, path := range []string{t.JobFile, t.TerminalFile} {
 		if err := qualifyEnvironmentPath(filepath.Dir(path), false, false); err != nil {
 			return err
+		}
+		if err := unix.Faccessat(unix.AT_FDCWD, filepath.Dir(path), unix.W_OK|unix.X_OK, unix.AT_EACCESS); err != nil {
+			return ErrLaunchUnsupported
 		}
 		if _, err := os.Lstat(path); os.IsNotExist(err) {
 			continue
