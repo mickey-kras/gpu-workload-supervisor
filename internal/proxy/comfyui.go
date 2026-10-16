@@ -70,11 +70,17 @@ func (h *Handler) configureComfyUI(config Config) error {
 func (h *Handler) executeComfyUI(response http.ResponseWriter, request *http.Request, requestID string, fence control.Fence) {
 	body, attemptID, promptID, err := prepareComfyUIPrompt(request.Body)
 	if err != nil {
+		if !h.releaseUnadmittedDemand(response, request) {
+			return
+		}
 		writeError(response, http.StatusBadRequest, "comfyui_request_invalid")
 		return
 	}
 	attempt := store.ComfyUIAttempt{RequestID: requestID, Workload: h.workload, Fence: fence, AttemptID: attemptID, PromptID: promptID, Upstream: h.comfyUI.upstream.String(), Contract: ComfyUIContract}
 	if _, err := h.comfyUI.store.AdmitComfyUIWork(request.Context(), attempt, h.catalogRevision); err != nil {
+		if !h.releaseUnadmittedDemand(response, request) {
+			return
+		}
 		h.writeWorkError(response, err)
 		return
 	}

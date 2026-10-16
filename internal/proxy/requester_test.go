@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -244,5 +245,31 @@ func TestRequesterPolicyCopiedAndCompletionDenied(t *testing.T) {
 	h.ServeHTTP(w, r)
 	if w.Code != 204 || s.queued != 0 || s.reserved != 0 {
 		t.Fatalf("cancel changed admission %d", w.Code)
+	}
+}
+
+func TestRequesterRejectsUndeclaredChunkedTrailers(t *testing.T) {
+	raw := "POST /execute HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n" +
+		RequesterCredentialHeader + ": " + requesterCredential + "\r\n" + WorkflowHeader + ": approved\r\n" +
+		DefaultRequestIDHeader + ": request-1\r\n\r\n2\r\n{}\r\n0\r\nX-Runtime-Override: unapproved\r\n\r\n"
+	request, err := http.ReadRequest(bufio.NewReader(strings.NewReader(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(request.Trailer) != 0 {
+		t.Fatal("fixture declared a trailer before body read")
+	}
+	stateStore := &requesterStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}}
+	handler, err := NewWithContext(context.Background(), stateStore, requesterConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if request.Trailer.Get("X-Runtime-Override") != "unapproved" {
+		t.Fatal("fixture did not parse undeclared trailer")
+	}
+	if response.Code != http.StatusForbidden || stateStore.queued != 0 || len(stateStore.admitted) != 0 {
+		t.Fatalf("status=%d queued=%d admitted=%d", response.Code, stateStore.queued, len(stateStore.admitted))
 	}
 }

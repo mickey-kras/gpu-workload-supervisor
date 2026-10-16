@@ -445,6 +445,9 @@ func (h *Handler) executeRegistered(response http.ResponseWriter, request *http.
 	if h.nativeFinishes != nil {
 		reservation = h.nativeFinishes.reserve()
 		if reservation == nil {
+			if !h.releaseUnadmittedDemand(response, request) {
+				return
+			}
 			capacityUnavailable(response)
 			return
 		}
@@ -458,6 +461,9 @@ func (h *Handler) executeRegistered(response http.ResponseWriter, request *http.
 	}
 	token, err := h.admitExecution(request.Context(), requestID, jobID, fence)
 	if err != nil {
+		if !h.releaseUnadmittedDemand(response, request) {
+			return
+		}
 		h.writeWorkError(response, err)
 		return
 	}

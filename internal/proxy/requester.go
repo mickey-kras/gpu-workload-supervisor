@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const RequesterCredentialHeader = "X-Workload-Requester-Credential"
@@ -142,7 +143,8 @@ func authorizeWorkflowBody(w http.ResponseWriter, r *http.Request, workflow Work
 		return false
 	}
 	digest := sha256.Sum256(body)
-	if hex.EncodeToString(digest[:]) != workflow.BodySHA256 {
+	// Undeclared chunked trailers become visible only after reading to EOF.
+	if len(r.Trailer) != 0 || hex.EncodeToString(digest[:]) != workflow.BodySHA256 {
 		writeError(w, http.StatusForbidden, "workflow_forbidden")
 		return false
 	}
@@ -215,7 +217,7 @@ func (h *Handler) dispatchDemand(w http.ResponseWriter, r *http.Request, demands
 	// The reservation is durable before activation/dispatch. Admission consumes
 	// its claim atomically with the registered work. An ambiguous failure stays
 	// unresolved; neither client disconnect nor process restart permits replay.
-	r = r.WithContext(store.WithDemandClaim(r.Context(), claim))
+	r = r.WithContext(context.WithValue(store.WithDemandClaim(r.Context(), claim), demandReservationKey{}, demandReservation{requestID: demand.RequestID, claim: claim}))
 	r.Header.Set(h.fenceIDHeader, fence.Incarnation)
 	r.Header.Set(h.fenceEpochHeader, strconv.FormatUint(fence.Epoch, 10))
 	if h.comfyUI != nil {
@@ -235,8 +237,7 @@ func (h *Handler) reserveDemand(w http.ResponseWriter, r *http.Request, demands 
 	if state.ActiveWorkload == control.WorkloadIdle {
 		fence, err = h.activateDemand(r.Context(), h.workload, state, h.catalogRevision)
 		if err != nil {
-			if requeueErr := demands.RequeueDemand(r.Context(), demand.RequestID, claim); requeueErr != nil {
-				writeDemandError(w, requeueErr)
+			if !requeueUnadmittedDemand(w, r, demands, demand.RequestID, claim) {
 				return "", control.Fence{}, false
 			}
 			writeError(w, http.StatusConflict, "demand_queued")
@@ -291,4 +292,29 @@ func requesterSecrets(policy *RequesterPolicy) []string {
 		secrets = append(secrets, requester.Credential)
 	}
 	return secrets
+}
+
+// demandReservation is present only while this handler owns a durable claim.
+type demandReservationKey struct{}
+type demandReservation struct{ requestID, claim string }
+
+// releaseUnadmittedDemand runs only on rejection paths before dispatch. The
+// store's atomic claim check preserves admitted work even after an ambiguous
+// admission commit error. Cleanup failures remain visible and fail closed.
+func (h *Handler) releaseUnadmittedDemand(w http.ResponseWriter, r *http.Request) bool {
+	reservation, ok := r.Context().Value(demandReservationKey{}).(demandReservation)
+	if !ok {
+		return true
+	}
+	return requeueUnadmittedDemand(w, r, h.store.(demandStore), reservation.requestID, reservation.claim)
+}
+
+func requeueUnadmittedDemand(w http.ResponseWriter, r *http.Request, demands demandStore, requestID, claim string) bool {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 3*time.Second)
+	defer cancel()
+	if err := demands.RequeueDemand(ctx, requestID, claim); err != nil {
+		writeDemandError(w, err)
+		return false
+	}
+	return true
 }

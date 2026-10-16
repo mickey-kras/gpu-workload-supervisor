@@ -344,6 +344,13 @@ func TestDemandRetentionDeletesExactCompletedBatch(t *testing.T) {
 	if n, err := s.PruneCompletedWork(ctx, *now, 1); err != nil || n != 1 {
 		t.Fatalf("prune=%d %v", n, err)
 	}
+	var remaining int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM broker_demands WHERE status='cancelled'`).Scan(&remaining); err != nil || remaining != 1 {
+		t.Fatalf("cancelled batch exceeded budget: %d %v", remaining, err)
+	}
+	if n, err := s.PruneCompletedWork(ctx, *now, 1); err != nil || n != 1 {
+		t.Fatalf("cancelled prune=%d %v", n, err)
+	}
 	var count int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM broker_demands`).Scan(&count); err != nil {
 		t.Fatal(err)
