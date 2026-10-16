@@ -99,7 +99,7 @@ func TestComfyUIMigrationPreservesLegacyAndDoesNotInventAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.db.Exec(`DROP TABLE comfyui_attempts; DELETE FROM schema_migrations WHERE version>=14`); err != nil {
+	if _, err = s.db.Exec(`DROP TABLE broker_demands; DROP TABLE comfyui_attempts; DELETE FROM schema_migrations WHERE version>=14`); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()

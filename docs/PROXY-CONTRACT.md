@@ -98,8 +98,9 @@ Opt-in [adapter ingress](EXECUTION-PROXY.md#trusted-adapter-ingress) instead sup
 it from client response metadata and requires separate execution/completion
 credentials. Only the trusted terminal adapter holds completion authority. The
 generic upstream receives the tuple in both modes and must not expose it through bodies
-or logs. Independently protect requester authentication and direct runtime bypass
-at the deployment boundary; adapter credentials do not replace those controls.
+or logs. Optional [requester ingress](REQUESTER-INGRESS.md) adds requester/workflow
+authorization before durable demand and admission. Otherwise authenticate at the
+deployment gateway. Direct runtime bypass prevention remains a deployment control.
 Legacy tokenless registrations accept completion with the original registered
 request ID and fence, even after the current fence rotates. Rotation only lifts
 the pruning protection for completed legacy rows; it does not revoke unfinished
@@ -122,8 +123,9 @@ Use a plain loopback runtime root URL with no credentials, query, fragment or
 encoded/base path. Optional monitoring routes are only `GET:/prompt`,
 `GET:/queue` and `GET:/history`. Passthrough, job-ID headers, other execution
 routes and WebSocket submission channels are unsupported. Query-bearing and
-encoded-body requests are rejected. The trusted gateway must authenticate callers
-and validate allowed graphs/custom nodes and input/output locations before
+encoded-body requests are rejected. The trusted gateway (or optional requester
+policy with an approved exact-body digest) must authorize callers and graphs.
+Deployment review must validate custom nodes and input/output locations before
 submitting; JSON-envelope validation in the proxy does not establish graph safety.
 Automation receives a gateway job handle, not raw ComfyUI execution access or
 proxy ingress credentials. Deployment isolation must prevent direct runtime bypass
@@ -209,3 +211,4 @@ Record evidence for all of the following before enabling execution:
   isolation. These are deployment responsibilities, not supervisor features.
 
 Repository evidence: `internal/proxy/contract_integration_test.go`, `internal/supervisor/proxy_handoff_test.go` and `internal/supervisor/orphan_recovery_test.go`; the real-systemd qualification suite covers runtime lifecycle and release behavior, not backend routes or job semantics.
+

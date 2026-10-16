@@ -34,6 +34,9 @@ func ValidIngressCredential(value string) bool {
 }
 
 func validateIngress(config Config) error {
+	if err := validateRequesterPolicy(config); err != nil {
+		return err
+	}
 	switch config.IngressMode {
 	case "", IngressTrusted:
 		if config.ExecutionCredential != "" || config.CompletionCredential != "" {
@@ -74,7 +77,7 @@ func (h *Handler) authorizeIngress(response http.ResponseWriter, request *http.R
 		header, other, credential = CompletionCredentialHeader, ExecutionCredentialHeader, h.completionCredential
 	}
 	values := ingressHeaderValues(request.Header, header)
-	if len(values) != 1 || len(ingressHeaderValues(request.Header, other)) != 0 ||
+	if len(values) != 1 || len(ingressHeaderValues(request.Header, other)) != 0 || len(ingressHeaderValues(request.Header, RequesterCredentialHeader)) != 0 ||
 		subtle.ConstantTimeCompare([]byte(values[0]), []byte(credential)) != 1 {
 		writeError(response, http.StatusUnauthorized, "ingress_unauthorized")
 		return false
@@ -93,7 +96,7 @@ func ingressHeaderValues(header http.Header, name string) []string {
 }
 
 func sensitiveIngressHeader(name string) bool {
-	return strings.EqualFold(name, ExecutionCredentialHeader) || strings.EqualFold(name, CompletionCredentialHeader) ||
+	return requesterHeader(name) || strings.EqualFold(name, ExecutionCredentialHeader) || strings.EqualFold(name, CompletionCredentialHeader) ||
 		strings.EqualFold(name, "Authorization") || strings.EqualFold(name, "Proxy-Authorization")
 }
 
@@ -133,7 +136,7 @@ func (h *Handler) protectIngressResponse(response *http.Response, token string) 
 	if h.ingressMode != IngressAdapter {
 		return
 	}
-	secrets := []string{token, h.executionCredential, h.completionCredential}
+	secrets := append([]string{token, h.executionCredential, h.completionCredential}, requesterSecrets(h.requesterPolicy)...)
 	stripIngressResponseMetadata(response.Header, secrets)
 	stripIngressResponseMetadata(response.Trailer, secrets)
 	// Upgrade bodies must keep their bidirectional interface. HTTP trailers do
@@ -152,12 +155,13 @@ type ingressResponseBody struct {
 type ingressTrailerKey struct{}
 
 type ingressTransport struct {
+	requesterCredentials                      []string
 	base                                      http.RoundTripper
 	executionCredential, completionCredential string
 }
 
 func (transport ingressTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	secrets := []string{request.Header.Get(DefaultRegistrationTokenHeader), transport.executionCredential, transport.completionCredential}
+	secrets := append([]string{request.Header.Get(DefaultRegistrationTokenHeader), transport.executionCredential, transport.completionCredential}, transport.requesterCredentials...)
 	trace := &httptrace.ClientTrace{Got1xxResponse: func(_ int, header textproto.MIMEHeader) error {
 		// WithClientTrace runs this hook before the existing ReverseProxy hook.
 		stripIngressResponseMetadata(http.Header(header), secrets)

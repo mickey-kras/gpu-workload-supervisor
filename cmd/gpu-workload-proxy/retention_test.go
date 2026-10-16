@@ -3,9 +3,15 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
 type retentionPrunerFunc func(context.Context, time.Time, int) (int64, error)
@@ -112,5 +118,41 @@ func TestMaintainCompletedWorkCancelsRunningBatch(t *testing.T) {
 	case err := <-failed:
 		t.Fatalf("cancellation was reported as cleanup failure: %v", err)
 	default:
+	}
+}
+
+func TestPruneExpiredWorkDrainsCancelledDemandBacklog(t *testing.T) {
+	ctx := context.Background()
+	created := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	stateStore, err := store.OpenWithClock(ctx, filepath.Join(t.TempDir(), "state.db"), func() time.Time { return created })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stateStore.Close()
+	for i := 0; i < completedWorkPruneBatch+1; i++ {
+		demand := store.Demand{RequestID: fmt.Sprintf("cancelled-%d", i), Requester: "requester", Workflow: "workflow", BodySHA256: strings.Repeat("a", 64), Workload: control.WorkloadMedia}
+		if err := stateStore.QueueDemand(ctx, demand); err != nil {
+			t.Fatal(err)
+		}
+		if err := stateStore.CancelDemand(ctx, demand); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var batches int
+	var deleted int64
+	pruner := retentionPrunerFunc(func(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+		batches++
+		count, err := stateStore.PruneCompletedWork(ctx, cutoff, limit)
+		deleted += count
+		return count, err
+	})
+	if err := pruneExpiredWork(ctx, pruner, created.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if batches != 2 || deleted != completedWorkPruneBatch+1 {
+		t.Fatalf("batches=%d deleted=%d", batches, deleted)
+	}
+	if remaining, err := stateStore.PruneCompletedWork(ctx, created.Add(time.Hour), completedWorkPruneBatch); err != nil || remaining != 0 {
+		t.Fatalf("backlog remaining=%d %v", remaining, err)
 	}
 }

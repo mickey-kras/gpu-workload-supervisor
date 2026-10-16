@@ -20,6 +20,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/httptransport"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/operator"
 	workloadproxy "github.com/mickey-kras/gpu-workload-supervisor/internal/proxy"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
@@ -70,6 +71,7 @@ func run() error {
 	ingressMode := flags.String("ingress-mode", workloadproxy.IngressTrusted, "local ingress trust mode: trusted or adapter")
 	executionCredentialFile := flags.String("execution-credential-file", "", "private absolute credential file for adapter execution ingress")
 	completionCredentialFile := flags.String("completion-credential-file", "", "private absolute credential file for trusted terminal adapter callbacks")
+	requesterPolicyFile := flags.String("requester-policy-file", "", "private optional requester/workflow policy file; auto-idle remains unavailable")
 	comfyUIContract := flags.String("comfyui-contract", "", "explicit deployment-qualified ComfyUI source contract; requires adapter ingress")
 	readHeaderTimeout := flags.Duration("read-header-timeout", 10*time.Second, "HTTP header read timeout")
 	responseHeaderTimeout := flags.Duration("upstream-response-header-timeout", httptransport.DefaultResponseHeaderTimeout, "positive upstream response header wait after request upload; excludes response body")
@@ -128,6 +130,9 @@ func run() error {
 		FenceEpochHeader: *fenceEpochHeader, ResponseHeaderTimeout: *responseHeaderTimeout,
 	}
 	if err := configureIngress(&proxyConfig, *ingressMode, *executionCredentialFile, *completionCredentialFile); err != nil {
+		return err
+	}
+	if err := configureRequester(&proxyConfig, *requesterPolicyFile, *statePath, operator.LoadProfile); err != nil {
 		return err
 	}
 	return serveProxy(proxyConfig, proxyServerSettings{
