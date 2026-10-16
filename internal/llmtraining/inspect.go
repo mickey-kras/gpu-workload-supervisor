@@ -123,7 +123,8 @@ func inspectConfig(path string, model bool) error {
 	if _, exists := config["quantization_config"]; model && exists {
 		return errors.New("candidate requires original unquantized training weights")
 	}
-	if model && string(config["model_type"]) != `"llama"` {
+	var family string
+	if model && (json.Unmarshal(config["model_type"], &family) != nil || family != "llama") {
 		return errors.New("candidate supports only the llama model family")
 	}
 	return nil

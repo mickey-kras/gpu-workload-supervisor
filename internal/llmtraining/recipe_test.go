@@ -120,6 +120,32 @@ func TestCompileDeterministicCandidate(t *testing.T) {
 	}
 }
 
+func TestCompileModelFamilyUsesDecodedString(t *testing.T) {
+	for _, tc := range []struct {
+		name, config string
+		accepted     bool
+	}{
+		{"escaped llama", `{"model_type":"llam\u0061"}`, true},
+		{"escaped unknown", `{"model_type":"unkn\u006fwn"}`, false},
+		{"case sensitive", `{"model_type":"Llama"}`, false},
+		{"missing", `{}`, false},
+		{"null", `{"model_type":null}`, false},
+		{"number", `{"model_type":1}`, false},
+		{"boolean", `{"model_type":true}`, false},
+		{"object", `{"model_type":{}}`, false},
+		{"array", `{"model_type":["llama"]}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := fixture(t)
+			r.Model.Inventory.Files["config.json"] = writeFixture(t, filepath.Join(r.Model.Inventory.Root, "config.json"), tc.config)
+			_, err := Compile(r, math.MaxUint64, math.MaxUint64)
+			if (err == nil) != tc.accepted {
+				t.Fatalf("model family accepted = %v, want %v: %v", err == nil, tc.accepted, err)
+			}
+		})
+	}
+}
+
 func TestRejectInvalidRecipe(t *testing.T) {
 	for name, change := range map[string]func(*Recipe){
 		"version": func(r *Recipe) { r.Version = 2 }, "adapter": func(r *Recipe) { r.Adapter = "remote" },

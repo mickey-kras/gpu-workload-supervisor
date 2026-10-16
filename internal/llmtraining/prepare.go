@@ -12,7 +12,7 @@ import (
 
 // Prepare writes a private plan without replacing existing files. The config
 // inside it is candidate material, not an executable supervisor adapter recipe.
-func Prepare(recipePath, planPath string) (err error) {
+func Prepare(recipePath, planPath string) error {
 	if !absolute(recipePath) || !absolute(planPath) || recipePath == planPath {
 		return errors.New("candidate recipe and plan require distinct absolute paths")
 	}
@@ -48,6 +48,10 @@ func Prepare(recipePath, planPath string) (err error) {
 	if err != nil {
 		return errors.New("cannot encode candidate plan")
 	}
+	return publishPlan(planPath, append(raw, '\n'))
+}
+
+func publishPlan(planPath string, raw []byte) (err error) {
 	// Stage privately beside the destination, then publish the complete closed
 	// file with a hard link: unlike Rename, Link cannot replace an existing plan.
 	out, err := os.CreateTemp(filepath.Dir(planPath), ".candidate-plan-*")
@@ -59,7 +63,7 @@ func Prepare(recipePath, planPath string) (err error) {
 			err = errors.Join(err, errors.New("candidate plan temporary file cleanup failed"))
 		}
 	}()
-	_, writeErr := out.Write(append(raw, '\n'))
+	_, writeErr := out.Write(raw)
 	closeErr := out.Close()
 	if writeErr != nil || closeErr != nil {
 		return errors.New("candidate plan write failed")
