@@ -1058,7 +1058,12 @@ func TestRollbackFailureRetainsPendingJournal(t *testing.T) {
 	updated, updatedRaw := ownedFixtureProfile(t, home, "vision", 9101)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{updated}}
 	r.ExpectedRevision = currentRevision(t, r)
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{err: errors.New("busy")}, nil }
+	backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
+		if got.Catalog.Profiles[0].NativeModel.LaunchSHA256 == updated.NativeModel.LaunchSHA256 {
+			return idleRuntime{err: errors.New("candidate busy after write")}, nil
+		}
+		return idleRuntime{}, nil
+	}
 	if err := backend.Apply(ctx, home, r); err == nil {
 		t.Fatal("apply succeeded despite rollback fault")
 	}

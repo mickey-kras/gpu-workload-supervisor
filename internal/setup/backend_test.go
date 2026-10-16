@@ -29,6 +29,9 @@ func (r idleRuntime) Healthy(context.Context, control.Workload) error { return r
 func (r idleRuntime) ReleasedFor(context.Context, control.Workload) error {
 	return r.err
 }
+func (r idleRuntime) ReleasedForUnchangedLaunches(context.Context, control.Workload, map[string]bool) error {
+	return r.err
+}
 func (r idleRuntime) Preflight(context.Context) error { return r.err }
 func fixture(t *testing.T) (Backend, string, Request) {
 	t.Helper()

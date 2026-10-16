@@ -201,11 +201,10 @@ func TestDerivedOwnedOriginalRequestAfterActualPrecommitFailure(t *testing.T) {
 				t.Fatal("fixture did not derive dependencies")
 			}
 			injected := errors.New("injected precommit failure")
-			checks := 0
-			backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+			backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
 				return launchPreflightRuntime{verify: func() error {
-					checks++
-					if checks == 2 {
+					marker, err := deployment.Read(request.Profile.StatePath)
+					if err == nil && marker.Maintenance && reflect.DeepEqual(got.Catalog, candidate.Catalog) {
 						return injected
 					}
 					return nil

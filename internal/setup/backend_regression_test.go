@@ -75,8 +75,13 @@ func TestDiscoveryAndOldRuntimeUseCommittedDatabaseCatalog(t *testing.T) {
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
-	if len(checked) < 2 || checked[1] != "changed.service" {
-		t.Fatalf("old mapping not checked: %v", checked)
+	acceptedSeen, candidateSeen := false, false
+	for _, unit := range checked {
+		acceptedSeen = acceptedSeen || unit == "changed.service"
+		candidateSeen = candidateSeen || unit == "text.service"
+	}
+	if !acceptedSeen || !candidateSeen {
+		t.Fatalf("accepted and candidate mappings not both checked: %v", checked)
 	}
 }
 func TestFreshActivationResumesAfterDatabaseCreation(t *testing.T) {

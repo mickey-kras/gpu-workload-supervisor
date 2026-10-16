@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 )
 
@@ -168,10 +169,13 @@ func TestSharedAdoptedGroupPreservesAcceptedCatalogOnDriftOrStaleRevision(t *tes
 			}
 			request.ExpectedRevision = accepted.Revision
 			checks := 0
-			backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+			precommitChecked := false
+			backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
 				return launchPreflightRuntime{verify: func() error {
 					checks++
-					if failure == "carried binding drift" || checks >= 3 {
+					marker, err := deployment.Read(request.Profile.StatePath)
+					precommitChecked = err == nil && marker.Maintenance && reflect.DeepEqual(got.Catalog, request.Catalog)
+					if failure == "carried binding drift" || precommitChecked {
 						return gpuruntime.ErrLaunchChanged
 					}
 					return nil
@@ -196,8 +200,8 @@ func TestSharedAdoptedGroupPreservesAcceptedCatalogOnDriftOrStaleRevision(t *tes
 			if failure == "stale revision" && checks != 0 {
 				t.Fatalf("stale revision reached runtime: %d", checks)
 			}
-			if failure == "precommit drift" && checks != 3 {
-				t.Fatalf("precommit drift checks: %d", checks)
+			if failure == "precommit drift" && !precommitChecked {
+				t.Fatal("drift was not injected at the precommit check")
 			}
 		})
 	}

@@ -41,6 +41,18 @@ func (m *SystemdManager) observe(ctx context.Context, recovering bool) (Snapshot
 	return s, nil
 }
 func (m *SystemdManager) ReleasedFor(ctx context.Context, target control.Workload) error {
+	return m.releasedFor(ctx, target, nil)
+}
+
+// ReleasedForUnchangedLaunches rechecks accepted workloads during setup while
+// retaining the full catalog for shared-unit policy. Only profiles whose exact
+// launch sources were replaced are excluded; setup must separately verify and
+// prove release of the replacement catalog before calling this method.
+func (m *SystemdManager) ReleasedForUnchangedLaunches(ctx context.Context, target control.Workload, replaced map[string]bool) error {
+	return m.releasedFor(ctx, target, replaced)
+}
+
+func (m *SystemdManager) releasedFor(ctx context.Context, target control.Workload, replaced map[string]bool) error {
 	if target != control.WorkloadIdle {
 		if _, ok := m.config.Catalog.Profile(target); !ok {
 			return errors.New("unconfigured release target")
@@ -48,6 +60,9 @@ func (m *SystemdManager) ReleasedFor(ctx context.Context, target control.Workloa
 	}
 	loadedByUnit := map[string]map[string]bool{}
 	for _, p := range m.config.Catalog.Profiles {
+		if launchSourceReplaced(p, replaced) {
+			continue
+		}
 		if profileGPUUUID(p) != "" {
 			if err := m.verifyNativeBinding(ctx, p); err != nil {
 				return err
@@ -62,6 +77,26 @@ func (m *SystemdManager) ReleasedFor(ctx context.Context, target control.Workloa
 	}
 	return nil
 }
+
+func launchSourceReplaced(p control.WorkloadProfile, replaced map[string]bool) bool {
+	var file string
+	var dropIns []control.LaunchSource
+	if p.NativeModel != nil {
+		file, dropIns = p.NativeModel.LaunchFile, p.NativeModel.DropIns
+	} else if p.LaunchBinding != nil {
+		file, dropIns = p.LaunchBinding.LaunchFile, p.LaunchBinding.DropIns
+	}
+	if file != "" && replaced[file] {
+		return true
+	}
+	for _, source := range dropIns {
+		if replaced[source.Path] {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *SystemdManager) releasedProfile(ctx context.Context, p control.WorkloadProfile, target control.Workload, loadedByUnit map[string]map[string]bool) error {
 	if m.sharedUnitProfile(p) {
 		return m.releasedSharedOllama(ctx, p, target, loadedByUnit)

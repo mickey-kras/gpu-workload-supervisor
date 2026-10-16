@@ -395,6 +395,62 @@ func requireMatchingActivation(root string, req Request) error {
 	return nil
 }
 
+// verifyAcceptedRuntime runs under the state and proxy gates, before any
+// candidate unit is written. Include removed workloads: their release evidence
+// cannot be recovered from the candidate catalog. An empty revision has no
+// accepted mapping yet; the interrupted initial activation is checked below
+// once its candidate units exist.
+func (work activationWork) verifyAcceptedRuntime(ctx context.Context) error {
+	if !work.existing || work.old.StatePath == "" || work.accepted.Revision == "" {
+		return nil
+	}
+	previous := work.request
+	previous.Profile = work.old
+	previous.Catalog = work.accepted.Catalog
+	manager, err := work.backend.makeRuntime(previous)
+	if err != nil {
+		return err
+	}
+	if err := verifyActivationBindings(ctx, manager, unitPlan{}); err != nil {
+		return err
+	}
+	return manager.ReleasedFor(ctx, control.WorkloadIdle)
+}
+
+// activationReleaseManager repeats the unchanged accepted workloads' release
+// proof after candidate writes and at the transaction's quiescence gate. Removed
+// workloads remain in that proof even though the candidate cannot observe them.
+type activationReleaseManager struct {
+	gpuruntime.Manager
+	accepted gpuruntime.Manager
+	replaced map[string]bool
+}
+
+func (m activationReleaseManager) PreflightWithOwnedRemovals(ctx context.Context, removals map[string]string) error {
+	if candidate, ok := m.Manager.(interface {
+		PreflightWithOwnedRemovals(context.Context, map[string]string) error
+	}); ok {
+		return candidate.PreflightWithOwnedRemovals(ctx, removals)
+	}
+	return m.Manager.Preflight(ctx)
+}
+
+func (m activationReleaseManager) ReleasedFor(ctx context.Context, target control.Workload) error {
+	if err := m.Manager.ReleasedFor(ctx, target); err != nil {
+		return err
+	}
+	if len(m.replaced) == 0 {
+		return m.accepted.ReleasedFor(ctx, target)
+	}
+	previous, ok := m.accepted.(interface {
+		ReleasedForUnchangedLaunches(context.Context, control.Workload, map[string]bool) error
+	})
+	if !ok {
+		return errors.New("runtime cannot verify accepted release alongside replaced launches")
+	}
+	return previous.ReleasedForUnchangedLaunches(ctx, target, m.replaced)
+}
+
 func (work activationWork) verifyRuntimes(ctx context.Context, plan unitPlan) (gpuruntime.Manager, error) {
 	manager, err := work.backend.makeRuntime(work.request)
 	if err != nil {
@@ -403,24 +459,27 @@ func (work activationWork) verifyRuntimes(ctx context.Context, plan unitPlan) (g
 	if err := verifyActivationBindings(ctx, manager, plan); err != nil {
 		return nil, err
 	}
-	if err := manager.ReleasedFor(ctx, control.WorkloadIdle); err != nil {
-		return nil, fmt.Errorf("configured workloads have not released the GPU: %w", err)
-	}
 	if work.existing && work.old.StatePath != "" {
 		previous := work.request
 		previous.Profile = work.old
 		previous.Catalog = work.accepted.Catalog
+		replaced := map[string]bool{}
 		// Before the first commit, only the recorded setup plan has a mapping.
 		if work.accepted.Revision == "" {
 			previous.Catalog = work.request.Catalog
+		} else {
+			for name := range plan.Writes {
+				replaced[filepath.Join(ownedUnitDirectory(work.home), name)] = true
+			}
 		}
 		oldManager, err := work.backend.makeRuntime(previous)
 		if err != nil {
 			return nil, err
 		}
-		if err := oldManager.ReleasedFor(ctx, control.WorkloadIdle); err != nil {
-			return nil, err
-		}
+		manager = activationReleaseManager{Manager: manager, accepted: oldManager, replaced: replaced}
+	}
+	if err := manager.ReleasedFor(ctx, control.WorkloadIdle); err != nil {
+		return nil, fmt.Errorf("configured workloads have not released the GPU: %w", err)
 	}
 	return manager, nil
 }
