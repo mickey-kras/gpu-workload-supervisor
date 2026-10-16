@@ -54,6 +54,14 @@ The lease incarnation in a SQLite backup may be older than the live database. A 
 
    Failed work and transition history remain available. If it fails, keep all components stopped and resolve the error before retrying.
 
+   If `restore-state` reports unfinished training, keep proxies and controller automation stopped and explicitly recover the recorded job first:
+
+   ```sh
+   /PINNED/RELEASE/gpu-mode [runtime flags] -state /PRIVATE/DURABLE/STATE/state.db -training-job RESTORED-JOB-ID training-recover
+   ```
+
+   Use the matching runtime configuration and trainer bindings from the restored database's accepted catalog; runtime commands do not accept `-catalog`. Replace `RESTORED-JOB-ID` with the unfinished job's recorded ID. Require successful recovery and verified recursive cgroup/GPU release before retrying `restore-state`, then continue with step 4. Do not bypass the unfinished-training guard. [Training recovery](TRAINING.md#commands) never resumes or relaunches training: it preserves a previously persisted terminal outcome, otherwise records `interrupted`; the backup alone does not establish completion. If recovery fails, keep proxies stopped and resolve the runtime/configuration error before retrying.
+
 4. With the proxies still stopped, run the same pinned `gpu-mode` with the complete runtime flags, including the same `-state` path, and the `reconcile` command. It must finish with a stable, healthy state. If it reports a failure, leave the proxies stopped and use `recover` only after checking the runtime state. Start a workload through the controller if needed.
 5. Start the proxies only after successful reconciliation. Clients must obtain the new fence; requests carrying a fence from the backup are rejected.
 
