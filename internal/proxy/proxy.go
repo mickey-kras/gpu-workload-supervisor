@@ -472,11 +472,11 @@ func (h *Handler) executeRegistered(response http.ResponseWriter, request *http.
 	// ReverseProxy strips hop-by-hop headers before calling Transport. Add
 	// admitted correlation metadata afterwards so a client cannot nominate
 	// those headers in Connection to remove them.
-	proxy.Transport = registrationTransport{
+	proxy.Transport = executionTransport{base: registrationTransport{
 		base: proxy.Transport, token: token, requestID: requestID, fence: fence,
 		requestIDHeader: h.requestIDHeader, fenceIDHeader: h.fenceIDHeader,
 		fenceEpochHeader: h.fenceEpochHeader,
-	}
+	}}
 	proxy.ModifyResponse = func(upstreamResponse *http.Response) error {
 		upstreamResponse.Header.Set(DefaultRegistrationTokenHeader, token)
 		h.observeNativeTerminal(upstreamResponse, request.URL.Path, requestID, fence, token, reservation)
@@ -514,7 +514,9 @@ func (h *Handler) executeUser(response http.ResponseWriter, request *http.Reques
 		h.executeComfyUIUser(response, request)
 		return
 	}
-	h.proxy.ServeHTTP(response, h.withoutControlHeaders(request))
+	proxy := *h.proxy
+	proxy.Transport = executionTransport{base: proxy.Transport}
+	proxy.ServeHTTP(response, h.withoutControlHeaders(request))
 }
 
 func (h *Handler) finish(response http.ResponseWriter, request *http.Request) {
