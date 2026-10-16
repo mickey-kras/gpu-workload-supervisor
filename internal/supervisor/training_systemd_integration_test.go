@@ -46,7 +46,7 @@ func TestSystemdTrainingRetainsInvocationUntilExplicitStop(t *testing.T) {
 	gate := filepath.Join(dir, "continue")
 	// The background child deliberately survives its main process. All work is
 	// disposable CPU-only sleep, confined to a unique fixture unit.
-	script := fmt.Sprintf("#!/bin/sh\n/usr/bin/sleep infinity &\nwhile [ ! -f '%s' ]; do /usr/bin/sleep 0.05; done\nprintf '{\"version\":1,\"id\":\"job-one\",\"token\":\"token-one\",\"fence\":{\"incarnation\":\"session-one\",\"epoch\":7},\"recipeSHA256\":\"recipe-one\",\"invocationId\":\"%%s\",\"outcome\":\"completed\"}' \"$INVOCATION_ID\" > '%s'\nexit 0\n", gate, binding.TerminalFile)
+	script := fmt.Sprintf("#!/bin/sh\numask 077\n/usr/bin/sleep infinity &\nwhile [ ! -f '%s' ]; do /usr/bin/sleep 0.05; done\nterminal='%s'\nprintf '{\"version\":1,\"id\":\"job-one\",\"token\":\"token-one\",\"fence\":{\"incarnation\":\"session-one\",\"epoch\":7},\"recipeSHA256\":\"recipe-one\",\"invocationId\":\"%%s\",\"outcome\":\"completed\"}' \"$INVOCATION_ID\" > \"$terminal.tmp\"\n/bin/mv -- \"$terminal.tmp\" \"$terminal\"\nexit 0\n", gate, binding.TerminalFile)
 	if err := os.WriteFile(binding.Executable, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
