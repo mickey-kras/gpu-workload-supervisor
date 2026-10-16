@@ -11,13 +11,23 @@ import (
 )
 
 func (m *SystemdManager) Observe(ctx context.Context) (Snapshot, error) {
+	return m.observe(ctx, false)
+}
+
+// ObserveForRecovery selects workloads that can be retained. A failed unit is
+// not retainable; this observation is never evidence of resource release.
+func (m *SystemdManager) ObserveForRecovery(ctx context.Context) (Snapshot, error) {
+	return m.observe(ctx, true)
+}
+
+func (m *SystemdManager) observe(ctx context.Context, recovering bool) (Snapshot, error) {
 	s := Snapshot{Workloads: map[control.Workload]WorkloadObservation{}}
 	for _, p := range m.config.Catalog.Profiles {
 		st, err := m.unitState(ctx, p.Unit)
 		if err != nil {
 			return Snapshot{}, err
 		}
-		if !(st.active == "active" && st.sub == "running") && !(st.active == "inactive" && st.sub == "dead") {
+		if !(st.active == "active" && st.sub == "running") && !(st.active == "inactive" && st.sub == "dead") && !(recovering && st.active == "failed" && st.sub == "failed") {
 			return Snapshot{}, fmt.Errorf("%s is neither running nor stopped", p.Unit)
 		}
 		active := st.active == "active"
@@ -131,6 +141,9 @@ func (m *SystemdManager) Stop(ctx context.Context, id control.Workload) error {
 	}
 	if st.active == "inactive" && st.sub == "dead" {
 		return nil
+	}
+	if st.active == "failed" && st.sub == "failed" {
+		return m.stopUnit(ctx, p.Unit)
 	}
 	if st.active != "active" || st.sub != "running" {
 		return errors.New("workload cannot unload in current state")

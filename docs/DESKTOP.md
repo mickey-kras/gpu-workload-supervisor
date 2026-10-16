@@ -230,7 +230,10 @@ During activation:
   and proposed committed mappings have released the GPU before snapshotting state.
 - Each activation retains an integrity-checked snapshot under the private
   `backups/activation-*` directory: previous binary checksums, profile, accepted
-  catalog, deployment marker, and state together. Keep it for rollback.
+  catalog, deployment marker, state, and the exact accepted supervisor-owned
+  unit files together. `owned-units.json` records their SHA-256 hashes; the
+  private `owned-units/` directory holds their bytes. Keep the complete tuple
+  for rollback.
 - Reopening setup after an interruption recovers the exact pending request;
   post-commit failures resume forward, and a known committed catalog is never
   rolled back.
@@ -253,8 +256,25 @@ Restore the matching setup metadata to these locations:
 | `manifest.json` | `activated-binaries/manifest.json` |
 | `gpu-mode`, `gpu-workload-proxy`, `gpu-operator`, `gpu-setup` | Corresponding files in `activated-binaries/` |
 
+While all components remain stopped, verify each `owned-units/` file against
+`owned-units.json` and the matching saved catalog's launch fingerprint. Restore
+these files to `~/.config/systemd/user/` with their saved unit filenames and mode
+`0600`, owned by the service identity. Use only plain files from this verified
+private backup. An absent destination can be recreated. Before replacing an
+existing unit, verify that it is a trusted regular file with the exact fingerprint
+recorded by the failed deployment's accepted catalog. Preserve and investigate
+foreign, modified, symlinked, or untrusted files; do not overwrite them. Likewise,
+remove a unit introduced by the failed activation only when that catalog proves
+its current bytes and the restored catalog no longer references it. Never delete
+other user units or drop-ins. Run `systemctl --user daemon-reload` after restoring
+unit files and before reconciliation or restarting any runtime. Verify that each
+restored owned unit resolves to its expected file without unexpected drop-ins.
+Backups from before owned-unit snapshots were supported do not contain these
+files: obtain and verify the exact original bytes separately or repair forward.
+
 While all components remain stopped, remove the failed activation's
-`transaction.json` and `activation.json` from the private configuration
+`transaction.json`, `activation.json`, and any `owned-units-journal.json`
+from the private configuration
 directory; preserve them with the failed deployment for investigation. If the
 exact backup/binary pair cannot be verified, repair forward.
 

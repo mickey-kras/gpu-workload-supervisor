@@ -274,7 +274,7 @@ func (work *activationWork) inspect(ctx context.Context) error {
 	return nil
 }
 
-func (work activationWork) backup(ctx context.Context) error {
+func (work activationWork) backup(ctx context.Context, plan unitPlan) error {
 	if !work.existing || work.marker.Maintenance {
 		return nil
 	}
@@ -293,7 +293,7 @@ func (work activationWork) backup(ctx context.Context) error {
 		return err
 	}
 	if work.old.StatePath != "" {
-		return copyActivation(ctx, work.root, directory, work.oldProfileData)
+		return copyActivation(ctx, work.home, work.root, directory, work.oldProfileData, plan)
 	}
 	return nil
 }
@@ -584,7 +584,7 @@ func (work activationWork) finishActivation(ctx context.Context, plan unitPlan) 
 	if err != nil {
 		return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
 	}
-	if err := work.backup(ctx); err != nil {
+	if err := work.backup(ctx, plan); err != nil {
 		return b.abortOwnedUnitWrites(ctx, home, work.root, request, plan, err)
 	}
 	progress, err := work.enterMaintenance()

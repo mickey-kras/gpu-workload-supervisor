@@ -72,7 +72,10 @@ semantics. Do not edit migration metadata to force an older binary to open state
 
 For a supported rollback, stop and block all components as above, preserve the
 failed deployment's database for investigation, and select the previously verified
-binary/configuration plus its matching pre-upgrade backup. Follow every restore
+binary/configuration plus its matching pre-upgrade backup. Managed setup backups
+also retain accepted owned unit bytes and hashes; restore them and refresh the
+user manager as described in [Desktop restore and rollback](DESKTOP.md#restore-and-rollback),
+protecting modified or foreign unit files. Follow every restore
 step above, including `restore-state`, using a binary verified to support that
 backup and the restore protocol. Do not mix older proxies without the required
 handoff/lifetime locks with a newer controller. Reconcile and verify closed-state
