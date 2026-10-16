@@ -393,7 +393,7 @@ class SetupWindow {
 
     runtimeOf(profile) { return profile.nativeModel?.runtime ?? profile.launchBinding?.runtime ?? this.profileApps.get(profile.id) ?? (profile.adapter === 'comfyui' ? 'comfyui' : undefined); }
 
-    catalogFor(items) { return ({...this.request.catalog, version: items.some(profile => profile.nativeModel?.owned) ? 2 : this.request.catalog.version, profiles: items, disabled: items.length === 0}); }
+    catalogFor(items) { return ({...this.request.catalog, version: items.some(profile => profile.nativeModel?.owned) ? Math.max(2, this.request.catalog.version) : this.request.catalog.version, profiles: items, disabled: items.length === 0}); }
 
     serialize(items = this.profiles) {
         // A pending activation must resume the recorded request without defaults or edits.
