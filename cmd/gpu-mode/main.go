@@ -26,6 +26,7 @@ const (
 	pruneAuditCommand     = "prune-audit"
 	showSettingsCommand   = "show-settings"
 	idlePolicyTickCommand = "idle-policy-tick"
+	trainingStartCommand  = "training-start"
 	localCLIInitiator     = "local-cli"
 )
 
@@ -301,7 +302,7 @@ func restoreState(ctx context.Context, stateStore *store.Store) error {
 
 func validateTarget(command, target string) error {
 	switch command {
-	case "switch", "take-control", "user-switch", "return-control", "recover-user", "training-start":
+	case "switch", "take-control", "user-switch", "return-control", "recover-user", trainingStartCommand:
 		if !control.ValidWorkloadID(control.Workload(target)) && target != "idle" {
 			return fmt.Errorf("%s requires -target with a valid workload ID or idle", command)
 		}
