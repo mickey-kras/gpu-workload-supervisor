@@ -200,13 +200,11 @@ func inspectDataset(dataset Dataset, train map[[32]byte]bool, heldOut bool) (int
 }
 
 func recordDigest(raw []byte) ([32]byte, error) {
-	var record struct {
-		Text string `json:"text"`
-	}
-	if !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 64<<10, &record) != nil || strings.TrimSpace(record.Text) == "" {
+	var record map[string]string
+	if !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 64<<10, &record) != nil || len(record) != 1 || strings.TrimSpace(record["text"]) == "" {
 		return [32]byte{}, errors.New("candidate dataset requires one bounded text object per line")
 	}
-	return sha256.Sum256([]byte(record.Text)), nil
+	return sha256.Sum256([]byte(record["text"])), nil
 }
 
 // Nonblocking opens avoid waiting on FIFOs before checking their type. Reject

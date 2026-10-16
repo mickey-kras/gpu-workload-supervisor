@@ -238,6 +238,23 @@ func TestDatasetsRejectLeakageAndInvalidRecords(t *testing.T) {
 	}
 }
 
+func TestDatasetRequiresExactLowercaseTextKey(t *testing.T) {
+	for _, content := range []string{
+		`{"Text":"heldout"}`,
+		`{"TEXT":"heldout"}`,
+		`{"text":"training example","Text":"apparently distinct"}`,
+		`{"Text":"apparently distinct","text":"training example"}`,
+	} {
+		t.Run(content, func(t *testing.T) {
+			r := fixture(t)
+			r.HeldOut.SHA256 = writeFixture(t, r.HeldOut.Path, content)
+			if _, err := Compile(r, math.MaxUint64, math.MaxUint64); err == nil || err.Error() != "candidate dataset requires one bounded text object per line" {
+				t.Fatal("accepted ambiguous dataset keys or disclosed content", err)
+			}
+		})
+	}
+}
+
 func TestMalformedUTF8IsRejectedWithoutDisclosure(t *testing.T) {
 	r := fixture(t)
 	raw, err := json.Marshal(r)
