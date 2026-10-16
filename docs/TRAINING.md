@@ -62,6 +62,9 @@ no GPU compute processes remain, and checks capacity before releasing admission.
 
 Backend adapters and their environment qualification are separate integrations.
 This contract does not claim checkpoint or resume support for an arbitrary trainer.
+The [LLM candidate preparation tool](LLM-TRAINING-CANDIDATE.md) audits local inputs
+and generates an unqualified Axolotl configuration; it does not implement this
+executable adapter contract or enable a training profile.
 
 ## Commands
 
