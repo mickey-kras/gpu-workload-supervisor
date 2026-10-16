@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -468,5 +469,132 @@ func TestTrainingContractMigrationPreservesV16Demand(t *testing.T) {
 	}
 	if _, err := upgraded.ReserveTraining(ctx, "distinct-job", "trainer", revision); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTrainingContractReservationWriteFailureRollsBack(t *testing.T) {
+	for _, target := range []struct{ table, action string }{{"registered_work", "INSERT"}, {"training_jobs", "INSERT"}, {"idle_policy_state", "UPDATE"}, {"control_state", "UPDATE"}} {
+		t.Run(target.table, func(t *testing.T) {
+			ctx := context.Background()
+			s, _, revision := trainingContractStore(t)
+			before, err := s.State(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			statement := "CREATE TRIGGER reject_training_write BEFORE " + target.action + " ON " + target.table + " BEGIN SELECT RAISE(ABORT, 'injected persistence failure'); END"
+			if _, err := s.db.Exec(statement); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.ReserveTraining(ctx, "job-write-failure", "trainer", revision); err == nil {
+				t.Fatal("failed durable write accepted")
+			}
+			after, err := s.State(ctx)
+			if err != nil || before != after {
+				t.Fatalf("partial authority mutation: %v", err)
+			}
+			if n, err := s.PendingWork(ctx); err != nil || n != 0 {
+				t.Fatalf("partial admission: %d %v", n, err)
+			}
+			if _, err := s.TrainingJob(ctx, "job-write-failure"); !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("partial job: %v", err)
+			}
+			if _, err := s.db.Exec("DROP TRIGGER reject_training_write"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.ReserveTraining(ctx, "job-write-failure", "trainer", revision); err != nil {
+				t.Fatalf("rollback did not preserve retry: %v", err)
+			}
+		})
+	}
+}
+
+func TestTrainingContractFinishWriteFailurePreservesAdmission(t *testing.T) {
+	for _, table := range []string{"training_jobs", "registered_work", "idle_policy_state", "control_state"} {
+		t.Run(table, func(t *testing.T) {
+			ctx := context.Background()
+			s, _, revision := trainingContractStore(t)
+			job, err := s.ReserveTraining(ctx, "job-finish-failure", "trainer", revision)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := s.State(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.db.Exec("CREATE TRIGGER reject_training_write BEFORE UPDATE ON " + table + " BEGIN SELECT RAISE(ABORT, 'injected persistence failure'); END"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.FinishTraining(ctx, job, "interrupted"); err == nil {
+				t.Fatal("failed finalization accepted")
+			}
+			after, err := s.State(ctx)
+			if err != nil || before != after {
+				t.Fatalf("partial authority mutation: %v", err)
+			}
+			if n, err := s.PendingWork(ctx); err != nil || n != 1 {
+				t.Fatalf("lost admission: %d %v", n, err)
+			}
+			saved, err := s.TrainingJob(ctx, job.ID)
+			if err != nil || saved != job {
+				t.Fatalf("partial terminal mutation: %v", err)
+			}
+			if _, err := s.db.Exec("DROP TRIGGER reject_training_write"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.FinishTraining(ctx, job, "interrupted"); err != nil {
+				t.Fatalf("finalization retry: %v", err)
+			}
+			if n, err := s.PendingWork(ctx); err != nil || n != 0 {
+				t.Fatalf("retry did not finalize: %d %v", n, err)
+			}
+		})
+	}
+}
+
+func TestTrainingContractRejectsInvalidAndMissingIdentity(t *testing.T) {
+	ctx := context.Background()
+	s, _, revision := trainingContractStore(t)
+	if _, err := s.ReserveTraining(ctx, "", "trainer", revision); err == nil {
+		t.Fatal("empty job ID accepted")
+	}
+	if err := s.CheckTrainingRequestID(ctx, ""); err == nil {
+		t.Fatal("empty preflight ID accepted")
+	}
+	missing := control.TrainingJob{ID: "absent-job"}
+	if err := s.RecordTrainingLaunch(ctx, missing, strings.Repeat("a", 32)); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing launch: %v", err)
+	}
+	if err := s.RecordTrainingTerminal(ctx, missing, control.TrainingTerminal{}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing receipt: %v", err)
+	}
+	if _, err := s.FinishTraining(ctx, missing, "completed"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing finish: %v", err)
+	}
+	job, err := s.ReserveTraining(ctx, "valid-job", "trainer", revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, invocation := range []string{"", "not-hex", "abcd"} {
+		if err := s.RecordTrainingLaunch(ctx, job, invocation); err == nil {
+			t.Fatal("invalid invocation accepted")
+		}
+	}
+	saved, err := s.TrainingJob(ctx, job.ID)
+	if err != nil || saved != job {
+		t.Fatalf("invalid invocation changed durable job: %v", err)
+	}
+	invocation := strings.Repeat("a", 32)
+	if err := s.RecordTrainingLaunch(ctx, job, invocation); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordTrainingLaunch(ctx, job, strings.Repeat("b", 32)); !errors.Is(err, ErrStaleFence) {
+		t.Fatalf("second invocation replaced first: %v", err)
+	}
+	saved, err = s.TrainingJob(ctx, job.ID)
+	if err != nil || saved.InvocationID != invocation {
+		t.Fatalf("launch identity changed: %v", err)
+	}
+	if n, err := s.PendingWork(ctx); err != nil || n != 1 {
+		t.Fatalf("invalid mutation lost pending admission: %d %v", n, err)
 	}
 }
