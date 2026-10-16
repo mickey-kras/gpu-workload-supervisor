@@ -350,7 +350,9 @@ func (c *Controller) waitReleased(ctx context.Context, deadline time.Time) error
 
 func (c *Controller) fail(transitionID string, state, previous control.State, cause error) (control.State, error) {
 	var rollbackErr error
-	if previous.Owner == control.OwnerSupervisor {
+	// Draining precedes all lifecycle effects. A failed drain (or failure to
+	// enter unloading) must not stop and restart still-admitted work.
+	if previous.Owner == control.OwnerSupervisor && state.Phase != control.PhaseDraining {
 		rollbackCtx, cancelRollback := context.WithTimeout(context.Background(), c.config.CleanupTimeout)
 		rollbackErr = c.rollbackCatalog(rollbackCtx, transitionID, previous)
 		cancelRollback()
