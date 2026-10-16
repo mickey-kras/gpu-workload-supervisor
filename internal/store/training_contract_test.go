@@ -65,7 +65,7 @@ func TestTrainingContractCompetingReservations(t *testing.T) {
 					if i == 1 && !sameID {
 						id = "job-b"
 					}
-					_, err := db.ReserveTraining(context.Background(), id, "trainer", revision)
+					_, err := reserveTrainingFixture(context.Background(), db, id, revision)
 					results <- err
 				}(i, db)
 			}
@@ -102,7 +102,7 @@ func TestTrainingContractCompetingReservations(t *testing.T) {
 func TestTrainingContractDurableIdentityAndNoReplay(t *testing.T) {
 	s, path, revision := trainingContractStore(t)
 	ctx := context.Background()
-	job, err := s.ReserveTraining(ctx, "job-a", "trainer", revision)
+	job, err := reserveTrainingFixture(ctx, s, "job-a", revision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,10 +143,10 @@ func TestTrainingContractDurableIdentityAndNoReplay(t *testing.T) {
 	if _, err = s.FinishTraining(ctx, job, "completed"); !errors.Is(err, ErrStaleFence) {
 		t.Fatalf("repeated completion: %v", err)
 	}
-	if _, err = s.ReserveTraining(ctx, job.ID, "trainer", revision); !errors.Is(err, ErrRequestConflict) {
+	if _, err = reserveTrainingFixture(ctx, s, job.ID, revision); !errors.Is(err, ErrRequestConflict) {
 		t.Fatalf("reused job identity: %v", err)
 	}
-	if _, err = s.ReserveTraining(ctx, "job-b", "trainer", revision); err != nil {
+	if _, err = reserveTrainingFixture(ctx, s, "job-b", revision); err != nil {
 		t.Fatalf("new identity rejected: %v", err)
 	}
 }
@@ -156,7 +156,7 @@ func TestTrainingContractGenericPathsCannotCompleteTraining(t *testing.T) {
 		t.Run(operation, func(t *testing.T) {
 			s, _, revision := trainingContractStore(t)
 			ctx := context.Background()
-			job, err := s.ReserveTraining(ctx, "job-a", "trainer", revision)
+			job, err := reserveTrainingFixture(ctx, s, "job-a", revision)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -197,7 +197,7 @@ func TestTrainingContractGenericPathsCannotCompleteTraining(t *testing.T) {
 func TestTrainingContractRetentionPreservesNonReplay(t *testing.T) {
 	s, _, revision := trainingContractStore(t)
 	ctx := context.Background()
-	job, err := s.ReserveTraining(ctx, "job-a", "trainer", revision)
+	job, err := reserveTrainingFixture(ctx, s, "job-a", revision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestTrainingContractRetentionPreservesNonReplay(t *testing.T) {
 	if _, err = s.PruneCompletedWork(ctx, time.Now().Add(time.Hour), 100); err != nil {
 		t.Fatalf("retention must skip durable training identities: %v", err)
 	}
-	if _, err = s.ReserveTraining(ctx, job.ID, "trainer", revision); !errors.Is(err, ErrRequestConflict) {
+	if _, err = reserveTrainingFixture(ctx, s, job.ID, revision); !errors.Is(err, ErrRequestConflict) {
 		t.Fatalf("retention enabled replay: %v", err)
 	}
 }
@@ -219,7 +219,7 @@ func TestTrainingContractRejectsStaleCatalogAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.ReserveTraining(ctx, "job-a", "trainer", "stale-revision"); !errors.Is(err, ErrVersionConflict) {
+	if _, err = reserveTrainingFixture(ctx, s, "job-a", "stale-revision"); !errors.Is(err, ErrVersionConflict) {
 		t.Fatalf("stale revision: %v", err)
 	}
 	after, err := s.State(ctx)
@@ -229,7 +229,7 @@ func TestTrainingContractRejectsStaleCatalogAtomically(t *testing.T) {
 	if before.Version != after.Version || before.LeaseFence != after.LeaseFence || after.ActiveWorkload != control.WorkloadIdle {
 		t.Fatalf("failed reservation changed state: %+v", after)
 	}
-	job, err := s.ReserveTraining(ctx, "job-a", "trainer", revision)
+	job, err := reserveTrainingFixture(ctx, s, "job-a", revision)
 	if err != nil {
 		t.Fatalf("failed reservation consumed identity: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestTrainingContractRejectsControlStateOutputPaths(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = s.ReserveTraining(ctx, "collision", "trainer", snap.Revision); err == nil {
+			if _, err = reserveTrainingFixture(ctx, s, "collision", snap.Revision); err == nil {
 				t.Fatal("control state output accepted")
 			}
 			after, err := s.State(ctx)
@@ -292,7 +292,7 @@ func TestTrainingContractRejectsControlStateOutputPaths(t *testing.T) {
 func TestTrainingContractTerminalReceiptIsFencedAndDurable(t *testing.T) {
 	s, path, revision := trainingContractStore(t)
 	ctx := context.Background()
-	job, err := s.ReserveTraining(ctx, "receipt-job", "trainer", revision)
+	job, err := reserveTrainingFixture(ctx, s, "receipt-job", revision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +375,7 @@ func TestTrainingContractRejectsCanonicalStateOutputThroughAncestorAlias(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.ReserveTraining(ctx, "alias-job", "trainer", snap.Revision); err == nil {
+	if _, err = reserveTrainingFixture(ctx, s, "alias-job", snap.Revision); err == nil {
 		t.Fatal("canonical state path bypassed output guard")
 	}
 	after, err := s.State(ctx)
@@ -408,7 +408,7 @@ func TestTrainingContractDoesNotClaimDemandIdentity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.ReserveTraining(ctx, d.RequestID, "trainer", revision); !errors.Is(err, ErrRequestConflict) {
+			if _, err := reserveTrainingFixture(ctx, s, d.RequestID, revision); !errors.Is(err, ErrRequestConflict) {
 				t.Fatalf("demand identity claimed: %v", err)
 			}
 			after, err := s.State(ctx)
@@ -448,7 +448,7 @@ func TestTrainingContractMigrationPreservesV16Demand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`DROP TABLE training_jobs; DELETE FROM schema_migrations WHERE version=17`); err != nil {
+	if _, err := s.db.Exec(`DROP TABLE training_claims; DROP TABLE training_jobs; DELETE FROM schema_migrations WHERE version=17`); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
@@ -467,13 +467,13 @@ func TestTrainingContractMigrationPreservesV16Demand(t *testing.T) {
 	if err := upgraded.db.QueryRow(`SELECT claim,status FROM broker_demands WHERE request_id=?`, d.RequestID).Scan(&got, &status); err != nil || got != claim || status != "reserved" {
 		t.Fatalf("demand changed: %s %s %v", got, status, err)
 	}
-	if _, err := upgraded.ReserveTraining(ctx, "distinct-job", "trainer", revision); err != nil {
+	if _, err := reserveTrainingFixture(ctx, upgraded, "distinct-job", revision); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestTrainingContractReservationWriteFailureRollsBack(t *testing.T) {
-	for _, target := range []struct{ table, action string }{{"registered_work", "INSERT"}, {"training_jobs", "INSERT"}, {"idle_policy_state", "UPDATE"}, {"control_state", "UPDATE"}} {
+	for _, target := range []struct{ table, action string }{{"registered_work", "INSERT"}, {"training_jobs", "INSERT"}, {"training_claims", "UPDATE"}, {"idle_policy_state", "UPDATE"}, {"control_state", "UPDATE"}} {
 		t.Run(target.table, func(t *testing.T) {
 			ctx := context.Background()
 			s, _, revision := trainingContractStore(t)
@@ -481,11 +481,15 @@ func TestTrainingContractReservationWriteFailureRollsBack(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			claim, err := s.ClaimTraining(ctx, "job-write-failure", "trainer", revision)
+			if err != nil {
+				t.Fatal(err)
+			}
 			statement := "CREATE TRIGGER reject_training_write BEFORE " + target.action + " ON " + target.table + " BEGIN SELECT RAISE(ABORT, 'injected persistence failure'); END"
 			if _, err := s.db.Exec(statement); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.ReserveTraining(ctx, "job-write-failure", "trainer", revision); err == nil {
+			if _, err := s.ReserveTraining(ctx, claim); err == nil {
 				t.Fatal("failed durable write accepted")
 			}
 			after, err := s.State(ctx)
@@ -495,13 +499,13 @@ func TestTrainingContractReservationWriteFailureRollsBack(t *testing.T) {
 			if n, err := s.PendingWork(ctx); err != nil || n != 0 {
 				t.Fatalf("partial admission: %d %v", n, err)
 			}
-			if _, err := s.TrainingJob(ctx, "job-write-failure"); !errors.Is(err, sql.ErrNoRows) {
+			if saved, err := s.TrainingJob(ctx, "job-write-failure"); err != nil || saved.Status != "preparing" {
 				t.Fatalf("partial job: %v", err)
 			}
 			if _, err := s.db.Exec("DROP TRIGGER reject_training_write"); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := s.ReserveTraining(ctx, "job-write-failure", "trainer", revision); err != nil {
+			if _, err := s.ReserveTraining(ctx, claim); err != nil {
 				t.Fatalf("rollback did not preserve retry: %v", err)
 			}
 		})
@@ -513,7 +517,7 @@ func TestTrainingContractFinishWriteFailurePreservesAdmission(t *testing.T) {
 		t.Run(table, func(t *testing.T) {
 			ctx := context.Background()
 			s, _, revision := trainingContractStore(t)
-			job, err := s.ReserveTraining(ctx, "job-finish-failure", "trainer", revision)
+			job, err := reserveTrainingFixture(ctx, s, "job-finish-failure", revision)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -554,7 +558,7 @@ func TestTrainingContractFinishWriteFailurePreservesAdmission(t *testing.T) {
 func TestTrainingContractRejectsInvalidAndMissingIdentity(t *testing.T) {
 	ctx := context.Background()
 	s, _, revision := trainingContractStore(t)
-	if _, err := s.ReserveTraining(ctx, "", "trainer", revision); err == nil {
+	if _, err := reserveTrainingFixture(ctx, s, "", revision); err == nil {
 		t.Fatal("empty job ID accepted")
 	}
 	if err := s.CheckTrainingRequestID(ctx, ""); err == nil {
@@ -570,7 +574,7 @@ func TestTrainingContractRejectsInvalidAndMissingIdentity(t *testing.T) {
 	if _, err := s.FinishTraining(ctx, missing, "completed"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("missing finish: %v", err)
 	}
-	job, err := s.ReserveTraining(ctx, "valid-job", "trainer", revision)
+	job, err := reserveTrainingFixture(ctx, s, "valid-job", revision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -597,4 +601,12 @@ func TestTrainingContractRejectsInvalidAndMissingIdentity(t *testing.T) {
 	if n, err := s.PendingWork(ctx); err != nil || n != 1 {
 		t.Fatalf("invalid mutation lost pending admission: %d %v", n, err)
 	}
+}
+
+func reserveTrainingFixture(ctx context.Context, s *Store, id, revision string) (control.TrainingJob, error) {
+	claim, err := s.ClaimTraining(ctx, id, "trainer", revision)
+	if err != nil {
+		return claim, err
+	}
+	return s.ReserveTraining(ctx, claim)
 }

@@ -74,8 +74,14 @@ gpu-mode -training-job unique-job-id training-reconcile
 gpu-mode -training-job unique-job-id training-recover
 ```
 
-Start first drains opposing work and verifies idle release, then atomically
-registers the new job and records single-use launch intent. IDs cannot be reused.
+Start validates the catalog and output paths, then durably reserves a unique
+request ID before draining opposing work. This `preparing` claim blocks competing
+requester demand and work registrations but is not GPU admission. After verified
+idle release, the matching claim is consumed atomically with job registration and
+single-use launch intent. IDs cannot be reused, including interrupted preparations.
+A crash during preparation is visible in status. Explicit recovery records it as
+`interrupted` without stopping unrelated inference or launching the trainer. Failed
+handoffs retire the claim when possible; otherwise preparation remains recoverable.
 Routine switches, auto-idle, catalog replacement and generic recovery cannot
 discard the admission. Status redacts the completion token.
 

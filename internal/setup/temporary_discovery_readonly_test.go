@@ -43,13 +43,13 @@ func temporaryV12Fixture(t *testing.T) (Backend, string, Request, Profile, *sql.
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	if _, err = db.ExecContext(ctx, `DROP TABLE training_jobs; DROP TABLE broker_demands; DROP TABLE comfyui_attempts; DROP TABLE temporary_discovery_sessions; DELETE FROM schema_migrations WHERE version>=13; UPDATE control_state SET version=version+1`); err != nil {
+	if _, err = db.ExecContext(ctx, `DROP TABLE training_claims; DROP TABLE training_jobs; DROP TABLE broker_demands; DROP TABLE comfyui_attempts; DROP TABLE temporary_discovery_sessions; DELETE FROM schema_migrations WHERE version>=13; UPDATE control_state SET version=version+1`); err != nil {
 		t.Fatal(err)
 	}
 	// v13 adds temporary sessions, v14 adds ComfyUI correlation metadata,
 	// v16 adds broker demand and v17 adds training jobs. Drop their tables and indexes to restore v12.
 	var sessionObjects int
-	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE tbl_name IN ('temporary_discovery_sessions','comfyui_attempts','training_jobs','broker_demands')`).Scan(&sessionObjects); err != nil || sessionObjects != 0 {
+	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE tbl_name IN ('temporary_discovery_sessions','comfyui_attempts','training_jobs','training_claims','broker_demands')`).Scan(&sessionObjects); err != nil || sessionObjects != 0 {
 		t.Fatalf("post-v12 schema survived fixture downgrade: %d %v", sessionObjects, err)
 	}
 	var schema int

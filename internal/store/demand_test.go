@@ -281,7 +281,7 @@ func TestDemandMigrationPreservesV15State(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`DROP TABLE training_jobs; DROP TABLE broker_demands; DELETE FROM schema_migrations WHERE version>=16`); err != nil {
+	if _, err := s.db.Exec(`DROP TABLE training_claims; DROP TABLE training_jobs; DROP TABLE broker_demands; DELETE FROM schema_migrations WHERE version>=16`); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {

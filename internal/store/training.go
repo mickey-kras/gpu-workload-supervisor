@@ -17,7 +17,8 @@ const schemaV17 = `CREATE TABLE training_jobs (
  id TEXT PRIMARY KEY REFERENCES registered_work(request_id),
  payload BLOB NOT NULL,
  finished INTEGER NOT NULL DEFAULT 0 CHECK(finished IN (0,1))
-); CREATE UNIQUE INDEX one_unfinished_training ON training_jobs(finished) WHERE finished=0;`
+); CREATE UNIQUE INDEX one_unfinished_training ON training_jobs(finished) WHERE finished=0;
+CREATE TABLE training_claims(id TEXT PRIMARY KEY, payload BLOB NOT NULL, status TEXT NOT NULL CHECK(status IN ('preparing','reserved','interrupted')));`
 
 func trainingPending(ctx context.Context, tx *sql.Tx) error {
 	var pending bool
@@ -37,7 +38,7 @@ func (s *Store) TrainingJob(ctx context.Context, id string) (control.TrainingJob
 func readTrainingJob(ctx context.Context, q querier, id string) (control.TrainingJob, error) {
 	var job control.TrainingJob
 	var raw []byte
-	if err := q.QueryRowContext(ctx, `SELECT payload FROM training_jobs WHERE id=?`, id).Scan(&raw); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT payload FROM training_jobs WHERE id=? UNION ALL SELECT payload FROM training_claims WHERE id=? AND status!='reserved' LIMIT 1`, id, id).Scan(&raw); err != nil {
 		return job, err
 	}
 	err := json.Unmarshal(raw, &job)
@@ -46,17 +47,11 @@ func readTrainingJob(ctx context.Context, q querier, id string) (control.Trainin
 
 // ReserveTraining atomically claims the idle GPU and registers all work before
 // any trainer effect. A job identity can never be reused, even after failure.
-func (s *Store) ReserveTraining(ctx context.Context, id string, workload control.Workload, revision string) (control.TrainingJob, error) {
+func (s *Store) ReserveTraining(ctx context.Context, claim control.TrainingJob) (control.TrainingJob, error) {
 	var job control.TrainingJob
-	if err := control.ValidateRequestID(id); err != nil {
-		return job, err
-	}
-	token, err := s.uuid()
-	if err != nil {
-		return job, err
-	}
-	_, err = s.stateTx(ctx, func(tx *sql.Tx, current control.State) (control.State, error) {
-		p, err := s.trainingReservationSource(ctx, tx, current, id, workload, revision)
+	id, workload, revision, token := claim.ID, claim.Workload, claim.CatalogRevision, claim.Token
+	_, err := s.stateTx(ctx, func(tx *sql.Tx, current control.State) (control.State, error) {
+		p, err := s.trainingClaimReservationSource(ctx, tx, current, claim)
 		if err != nil {
 			return current, err
 		}
@@ -78,6 +73,9 @@ func (s *Store) ReserveTraining(ctx context.Context, id string, workload control
 			return current, err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO training_jobs(id,payload) VALUES(?,?)`, id, raw); err != nil {
+			return current, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE training_claims SET status='reserved' WHERE id=?`, id); err != nil {
 			return current, err
 		}
 		if err := s.disarmIdleDeadline(ctx, tx); err != nil {
@@ -190,10 +188,7 @@ func (s *Store) FinishTraining(ctx context.Context, job control.TrainingJob, out
 	})
 }
 
-func (s *Store) trainingReservationSource(ctx context.Context, tx *sql.Tx, current control.State, id string, workload control.Workload, revision string) (control.WorkloadProfile, error) {
-	if err := checkTrainingRequestID(ctx, tx, id); err != nil {
-		return control.WorkloadProfile{}, err
-	}
+func (s *Store) trainingReservationSource(ctx context.Context, tx *sql.Tx, current control.State, workload control.Workload, revision string) (control.WorkloadProfile, error) {
 	if err := temporaryDiscoveryPending(ctx, tx); err != nil {
 		return control.WorkloadProfile{}, err
 	}
@@ -251,11 +246,28 @@ func (s *Store) CheckTrainingRequestID(ctx context.Context, id string) error {
 
 func checkTrainingRequestID(ctx context.Context, q querier, id string) error {
 	var exists bool
-	if err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM broker_demands WHERE request_id=?) OR EXISTS(SELECT 1 FROM registered_work WHERE request_id=?)`, id, id).Scan(&exists); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM broker_demands WHERE request_id=?) OR EXISTS(SELECT 1 FROM registered_work WHERE request_id=?) OR EXISTS(SELECT 1 FROM training_claims WHERE id=?)`, id, id, id).Scan(&exists); err != nil {
 		return err
 	}
 	if exists {
 		return ErrRequestConflict
 	}
 	return nil
+}
+
+// PreflightTraining checks deterministic catalog and destination errors before
+// the controller hands off the GPU. Reservation repeats these checks atomically.
+func (s *Store) PreflightTraining(ctx context.Context, id string, workload control.Workload, revision string) error {
+	if err := s.CheckTrainingRequestID(ctx, id); err != nil {
+		return err
+	}
+	catalog, err := s.Catalog(ctx)
+	if err != nil {
+		return err
+	}
+	p, ok := catalog.Catalog.Profile(workload)
+	if !ok || p.Trainer == nil || catalog.Revision != revision {
+		return ErrVersionConflict
+	}
+	return s.validateTrainingOutputPaths(*p.Trainer)
 }

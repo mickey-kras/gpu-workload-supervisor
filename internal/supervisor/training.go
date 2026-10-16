@@ -9,9 +9,11 @@ import (
 )
 
 type trainingStore interface {
-	CheckTrainingRequestID(context.Context, string) error
+	PreflightTraining(context.Context, string, control.Workload, string) error
 	TrainingJob(context.Context, string) (control.TrainingJob, error)
-	ReserveTraining(context.Context, string, control.Workload, string) (control.TrainingJob, error)
+	ClaimTraining(context.Context, string, control.Workload, string) (control.TrainingJob, error)
+	ReserveTraining(context.Context, control.TrainingJob) (control.TrainingJob, error)
+	AbortTrainingPreparation(context.Context, control.TrainingJob) (control.State, error)
 	RecordTrainingLaunch(context.Context, control.TrainingJob, string) error
 	RecordTrainingTerminal(context.Context, control.TrainingJob, control.TrainingTerminal) error
 	FinishTraining(context.Context, control.TrainingJob, string) (control.State, error)
@@ -54,15 +56,19 @@ func (c *Controller) StartTraining(ctx context.Context, id string, target contro
 	if !ok || p.Trainer == nil {
 		return control.TrainingJob{}, errors.New("target is not a trainer")
 	}
-	if err := s.CheckTrainingRequestID(ctx, id); err != nil {
+	if err := s.PreflightTraining(ctx, id, target, c.config.Catalog.Revision); err != nil {
 		return control.TrainingJob{}, err
+	}
+	claim, err := s.ClaimTraining(ctx, id, target, c.config.Catalog.Revision)
+	if err != nil {
+		return claim, err
 	}
 	if _, err := c.Switch(ctx, control.WorkloadIdle, "training-start"); err != nil {
-		return control.TrainingJob{}, err
+		return claim, c.abortTrainingPreparation(ctx, s, claim, err)
 	}
-	job, err := s.ReserveTraining(ctx, id, target, c.config.Catalog.Revision)
+	job, err := s.ReserveTraining(ctx, claim)
 	if err != nil {
-		return job, err
+		return job, c.abortTrainingPreparation(ctx, s, claim, err)
 	}
 	actionCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
 	invocation, startErr := r.StartTraining(actionCtx, p, job)
@@ -145,6 +151,9 @@ func (c *Controller) trainingOutcome(ctx context.Context, s trainingStore, r tra
 // RecoverTraining explicitly authorizes stopping the configured trainer after
 // a launch/controller crash. It never restarts or resumes training.
 func (c *Controller) RecoverTraining(ctx context.Context, id string) (control.State, error) {
+	if state, handled, err := c.recoverTrainingPreparation(ctx, id); handled || err != nil {
+		return state, err
+	}
 	s, r, p, job, err := c.activeTraining(ctx, id)
 	if err != nil {
 		return control.State{}, err
@@ -169,4 +178,27 @@ func (c *Controller) finishTraining(ctx context.Context, s trainingStore, r trai
 	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.FinalizeTimeout)
 	defer cancel()
 	return s.FinishTraining(finalCtx, job, outcome)
+}
+
+func (c *Controller) abortTrainingPreparation(ctx context.Context, s trainingStore, claim control.TrainingJob, cause error) error {
+	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.FinalizeTimeout)
+	defer cancel()
+	_, err := s.AbortTrainingPreparation(finalCtx, claim)
+	return errors.Join(cause, err)
+}
+
+func (c *Controller) recoverTrainingPreparation(ctx context.Context, id string) (control.State, bool, error) {
+	s, _, err := c.trainingCapabilities()
+	if err != nil {
+		return control.State{}, false, err
+	}
+	job, err := s.TrainingJob(ctx, id)
+	if err != nil {
+		return control.State{}, false, err
+	}
+	if job.Status != "preparing" {
+		return control.State{}, false, nil
+	}
+	state, err := s.AbortTrainingPreparation(ctx, job)
+	return state, true, err
 }

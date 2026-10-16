@@ -190,7 +190,7 @@ func checkDemandCapacity(ctx context.Context, tx *sql.Tx, requestID string) erro
 	if active >= MaxPendingDemands || total >= MaxDemandRecords {
 		return ErrDemandCapacity
 	}
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM registered_work WHERE request_id=?)`, requestID).Scan(&registered); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM registered_work WHERE request_id=?) OR EXISTS(SELECT 1 FROM training_claims WHERE id=?)`, requestID, requestID).Scan(&registered); err != nil {
 		return err
 	}
 	if registered != 0 {

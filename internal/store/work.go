@@ -129,6 +129,9 @@ func (s *Store) beginAdmittedWork(ctx context.Context, requestID string, workloa
 	if err := checkAdmissibleState(ctx, tx, workload, fence, revision); err != nil {
 		return nil, err
 	}
+	if err := rejectTrainingClaim(ctx, tx, requestID); err != nil {
+		return nil, err
+	}
 	if err := bindDemand(ctx, tx, requestID, workload); err != nil {
 		return nil, err
 	}

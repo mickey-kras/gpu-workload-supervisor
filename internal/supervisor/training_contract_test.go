@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -60,7 +61,7 @@ func trainingControllerContract(t *testing.T) (*Controller, *store.Store, *train
 	if _, err = s.UpdateState(ctx, state.Version, state); err != nil {
 		t.Fatal(err)
 	}
-	job, err := s.ReserveTraining(ctx, "job-a", "trainer", snapshot.Revision)
+	job, err := reserveTrainingFixture(ctx, s, "job-a", snapshot.Revision)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,6 +308,11 @@ func TestTrainingContractStartDrainsOpposingWork(t *testing.T) {
 					return
 				}
 				if observed.Admission == control.AdmissionClosed {
+					demand := store.Demand{RequestID: "job-b", Requester: "racer", Workflow: "inference", BodySHA256: strings.Repeat("d", 64), Workload: control.WorkloadText}
+					if err := s.QueueDemand(ctx, demand); !errors.Is(err, store.ErrDemandConflict) {
+						drainResult <- errors.New("broker stole training identity during drain")
+						return
+					}
 					drainResult <- s.FinishWorkToken(ctx, "opposing-request", control.WorkloadText, state.LeaseFence, token, store.WorkCompleted)
 					return
 				}
@@ -495,7 +501,7 @@ func TestTrainingContractRoutineTransitionsWaitForRelease(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			ctx := context.Background()
 			c, s, r := trainingStartContract(t)
-			job, err := s.ReserveTraining(ctx, "job-b", "trainer", c.config.Catalog.Revision)
+			job, err := reserveTrainingFixture(ctx, s, "job-b", c.config.Catalog.Revision)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -622,6 +628,179 @@ func TestTrainingContractIdentityCollisionPrecedesInferenceStop(t *testing.T) {
 			}
 			if len(r.calls) != 0 || len(r.trainingCalls) != 0 {
 				t.Fatalf("rejected request reached runtime: %v %v", r.calls, r.trainingCalls)
+			}
+		})
+	}
+}
+
+func TestTrainingContractOutputCollisionPrecedesInferenceStop(t *testing.T) {
+	for _, suffix := range []string{"", "-wal"} {
+		t.Run("state"+suffix, func(t *testing.T) {
+			_, template, _ := trainingStartContract(t)
+			ctx := context.Background()
+			snap, err := template.Catalog(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "state.db")
+			s := openStoreAt(t, path)
+			catalog := snap.Catalog.Clone()
+			catalog.Profiles[0].Trainer.JobFile = path + suffix
+			catalog.Profiles = append(catalog.Profiles, control.WorkloadProfile{ID: control.WorkloadText, Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/text", HealthURL: "http://localhost:8080/health"})
+			if _, err := s.ReplaceCatalog(ctx, "", catalog); err != nil {
+				t.Fatal(err)
+			}
+			state, err := s.State(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.Owner = control.OwnerSupervisor
+			state.ActiveWorkload = control.WorkloadText
+			state.DesiredWorkload = control.WorkloadText
+			state.Phase = control.PhaseStable
+			state.Health = control.HealthHealthy
+			state.Admission = control.AdmissionOpen
+			before, err := s.UpdateState(ctx, state.Version, state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := &trainingContractRuntime{fakeRuntime: fakeRuntime{active: control.WorkloadText}}
+			c := testController(t, s, r)
+			if _, err := c.StartTraining(ctx, "new-training", "trainer"); err == nil {
+				t.Fatal("output collision accepted")
+			}
+			after, err := s.State(ctx)
+			if err != nil || before != after {
+				t.Fatalf("invalid output changed authority: %v", err)
+			}
+			if len(r.calls) != 0 || len(r.trainingCalls) != 0 {
+				t.Fatalf("invalid output reached runtime: %v %v", r.calls, r.trainingCalls)
+			}
+		})
+	}
+}
+
+func reserveTrainingFixture(ctx context.Context, s *store.Store, id, revision string) (control.TrainingJob, error) {
+	claim, err := s.ClaimTraining(ctx, id, "trainer", revision)
+	if err != nil {
+		return claim, err
+	}
+	return s.ReserveTraining(ctx, claim)
+}
+
+func TestTrainingContractRecoverPreparationDoesNotStopInference(t *testing.T) {
+	_, template, _ := trainingStartContract(t)
+	ctx := context.Background()
+	snap, err := template.Catalog(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "state.db")
+	s := openStoreAt(t, path)
+	catalog := snap.Catalog.Clone()
+	catalog.Profiles = append(catalog.Profiles, control.WorkloadProfile{ID: control.WorkloadText, Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/text", HealthURL: "http://localhost:8080/health"})
+	snap, err = s.ReplaceCatalog(ctx, "", catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Owner = control.OwnerSupervisor
+	state.ActiveWorkload = control.WorkloadText
+	state.DesiredWorkload = control.WorkloadText
+	state.Phase = control.PhaseStable
+	state.Health = control.HealthHealthy
+	state.Admission = control.AdmissionOpen
+	state, err = s.UpdateState(ctx, state.Version, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := s.ClaimTraining(ctx, "prepared-job", "trainer", snap.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := openStoreAt(t, path)
+	r := &trainingContractRuntime{fakeRuntime: fakeRuntime{active: control.WorkloadText}}
+	c := testController(t, reopened, r)
+	status, err := c.TrainingStatus(ctx, claim.ID)
+	if err != nil || status.Status != "preparing" {
+		t.Fatalf("preparation not visible: %v", err)
+	}
+	recovered, err := c.RecoverTraining(ctx, claim.ID)
+	if err != nil || recovered != state {
+		t.Fatalf("preparation recovery changed inference: %v", err)
+	}
+	status, err = c.TrainingStatus(ctx, claim.ID)
+	if err != nil || status.Status != "interrupted" {
+		t.Fatalf("preparation not retired: %v", err)
+	}
+	if _, err := c.StartTraining(ctx, claim.ID, "trainer"); !errors.Is(err, store.ErrRequestConflict) {
+		t.Fatalf("preparation replay: %v", err)
+	}
+	if len(r.calls) != 0 || len(r.trainingCalls) != 0 {
+		t.Fatalf("recovery reached runtime: %v %v", r.calls, r.trainingCalls)
+	}
+}
+
+type trainingReservationFailureStore struct {
+	*store.Store
+	commit   bool
+	abortErr error
+}
+
+func (s *trainingReservationFailureStore) ReserveTraining(ctx context.Context, claim control.TrainingJob) (control.TrainingJob, error) {
+	if s.commit {
+		if _, err := s.Store.ReserveTraining(ctx, claim); err != nil {
+			return control.TrainingJob{}, err
+		}
+	}
+	return control.TrainingJob{}, errors.New("reservation acknowledgement unavailable")
+}
+func (s *trainingReservationFailureStore) AbortTrainingPreparation(ctx context.Context, claim control.TrainingJob) (control.State, error) {
+	if s.abortErr != nil {
+		return control.State{}, s.abortErr
+	}
+	return s.Store.AbortTrainingPreparation(ctx, claim)
+}
+func TestTrainingContractPreparationFailureRemainsRecoverable(t *testing.T) {
+	for _, kind := range []string{"reservation-failed", "reservation-ambiguous", "abort-failed"} {
+		t.Run(kind, func(t *testing.T) {
+			_, s, r := trainingStartContract(t)
+			wrapped := &trainingReservationFailureStore{Store: s, commit: kind == "reservation-ambiguous"}
+			if kind == "abort-failed" {
+				wrapped.abortErr = errors.New("database unavailable")
+			}
+			c := testController(t, wrapped, r)
+			ctx := context.Background()
+			if _, err := c.StartTraining(ctx, "preparation-failure", "trainer"); err == nil {
+				t.Fatal("reservation uncertainty accepted")
+			}
+			job, err := s.TrainingJob(ctx, "preparation-failure")
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := map[string]string{"reservation-failed": "interrupted", "reservation-ambiguous": "launching", "abort-failed": "preparing"}[kind]
+			if job.Status != expected {
+				t.Fatalf("status=%s want=%s", job.Status, expected)
+			}
+			if len(r.trainingCalls) != 0 {
+				t.Fatalf("failed reservation launched: %v", r.trainingCalls)
+			}
+			if kind == "reservation-failed" {
+				return
+			}
+			fresh := testController(t, s, r)
+			if _, err := fresh.RecoverTraining(ctx, job.ID); err != nil {
+				t.Fatal(err)
+			}
+			job, err = s.TrainingJob(ctx, job.ID)
+			if err != nil || job.Status != "interrupted" {
+				t.Fatalf("retry recovery failed: %v", err)
 			}
 		})
 	}
