@@ -87,9 +87,9 @@ Execution dispatch removes `GetBody` and caller-supplied `Idempotency-Key` and
 `X-Idempotency-Key` replay hints and uses a non-rewindable body, including for
 empty execution requests and routes using GET, HEAD, OPTIONS or TRACE. The standard upstream
 transport does not automatically replay execution after an ambiguous connection
-failure. Payload bytes are unchanged; an empty HTTP/1 execution request may use
-chunked framing. Read-only and passthrough routes retain ordinary connection
-reuse and transport behavior. This is not a backend deduplication guarantee:
+failure. Payload bytes are unchanged; known-empty HTTP/1 execution requests
+are sent without chunked framing. Read-only and passthrough routes retain
+ordinary connection reuse and transport behavior. This is not a backend deduplication guarantee:
 clients must not resubmit ambiguous execution under a fresh request ID.
 
 HTTP 200, 202, error responses, streaming EOF, transport failures and cancellation

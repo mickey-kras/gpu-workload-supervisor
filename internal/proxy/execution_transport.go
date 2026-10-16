@@ -16,6 +16,8 @@ func (t executionTransport) RoundTrip(request *http.Request) (*http.Response, er
 	forwarded.Header.Del("X-Idempotency-Key")
 	if forwarded.Body == nil || forwarded.Body == http.NoBody {
 		forwarded.Body = io.NopCloser(http.NoBody)
+		// A known-empty body needs no chunk terminator for upstream to read.
+		forwarded.TransferEncoding = []string{"identity"}
 	}
 	return t.base.RoundTrip(forwarded)
 }

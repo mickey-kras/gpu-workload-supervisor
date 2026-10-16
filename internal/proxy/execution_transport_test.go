@@ -49,6 +49,9 @@ func TestExecutionDoesNotReplayAfterLostResponse(t *testing.T) {
 							w.WriteHeader(http.StatusNoContent)
 							return
 						}
+						if body == "" && (len(r.TransferEncoding) != 0 || r.ContentLength != 0) {
+							t.Errorf("empty execution framing: transfer encoding=%v content length=%d", r.TransferEncoding, r.ContentLength)
+						}
 						if string(got) != body {
 							t.Errorf("upstream body = %q, want %q", got, body)
 						}
@@ -196,6 +199,35 @@ func TestExecutionPreservesCorrelationUsingReplayHeaderName(t *testing.T) {
 	r := httptest.NewRequest("POST", "/execute", nil)
 	addLeaseHeaders(r, stateStore.state.LeaseFence)
 	r.Header.Set("Idempotency-Key", "request-1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("response status=%d", w.Code)
+	}
+}
+
+func TestEmptyExecutionOverHTTP2(t *testing.T) {
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor != 2 {
+			t.Errorf("upstream protocol=%s", r.Proto)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil || len(body) != 0 {
+			t.Errorf("empty body=%q error=%v", body, err)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	upstream.EnableHTTP2 = true
+	upstream.StartTLS()
+	defer upstream.Close()
+	target, _ := url.Parse(upstream.URL)
+	stateStore := &fakeStore{state: admittedState(control.OwnerSupervisor)}
+	h, err := NewWithContext(context.Background(), stateStore, Config{Upstream: target, Workload: control.WorkloadMedia, ExecutionRoutes: []Route{{Method: "POST", Path: "/execute"}}, Transport: upstream.Client().Transport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("POST", "/execute", nil)
+	addLeaseHeaders(r, stateStore.state.LeaseFence)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusAccepted {
