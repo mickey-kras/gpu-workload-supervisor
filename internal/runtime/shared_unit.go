@@ -105,6 +105,9 @@ func (m *SystemdManager) stopSharedOllama(ctx context.Context, p control.Workloa
 	if st.active == "inactive" && st.sub == "dead" {
 		return nil
 	}
+	if st.active == "failed" && st.sub == "failed" {
+		return m.stopUnit(ctx, p.Unit)
+	}
 	if st.active != "active" || st.sub != "running" {
 		return errors.New("workload cannot unload in current state")
 	}
