@@ -79,9 +79,12 @@ registers the new job and records single-use launch intent. IDs cannot be reused
 Routine switches, auto-idle, catalog replacement and generic recovery cannot
 discard the admission. Status redacts the completion token.
 
-Reconcile reads evidence and never starts the trainer. Missing, stale or ambiguous
-evidence keeps the job pending. After a launch/controller crash, `training-recover`
+Reconcile reads evidence and never starts the trainer. A validated terminal outcome
+is durably bound to the job before cleanup. Failed cleanup/finalization can retry
+without losing that outcome; admission remains pending until release is verified.
+Missing, stale or ambiguous evidence keeps the job pending. After a launch/controller crash, `training-recover`
 explicitly stops the configured trainer, verifies release and records
-`interrupted`; it never retries the launch. If stop or release verification fails,
+`interrupted` when no verified terminal outcome was previously persisted; otherwise
+it preserves that outcome. Recovery never retries the launch. If stop or release verification fails,
 the job remains pending and recovery can be retried. Start a new job ID only after
 the prior job is terminal. A resume integration must create a new job and fence.

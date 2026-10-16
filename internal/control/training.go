@@ -46,6 +46,7 @@ func (t TrainerBinding) Validate() error {
 }
 
 type TrainingJob struct {
+	TerminalOutcome string    `json:"terminalOutcome,omitempty"`
 	ID              string    `json:"id"`
 	Token           string    `json:"token"`
 	Workload        Workload  `json:"workload"`

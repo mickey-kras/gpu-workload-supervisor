@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
 const trainerContractGPU = "GPU-11111111-1111-1111-1111-111111111111"
@@ -475,5 +477,22 @@ func TestTrainerContractEnvelopeWriteFailureLeavesNoTemporaryFiles(t *testing.T)
 	}
 	if err := writeTrainingEnvelope(filepath.Join(dir, "missing", "job.json"), []byte("job")); err == nil {
 		t.Fatal("missing parent accepted")
+	}
+}
+
+func TestTrainerContractMalformedTerminalDoesNotExposeKeys(t *testing.T) {
+	m, _, p, job, _ := trainerContractFixture(t)
+	const privateKey = "PRIVATE_TERMINAL_FIELD_SENTINEL"
+	for _, raw := range []string{`{"PRIVATE_TERMINAL_FIELD_SENTINEL":1}`, `{"PRIVATE_TERMINAL_FIELD_SENTINEL":1,"PRIVATE_TERMINAL_FIELD_SENTINEL":2}`} {
+		if err := os.WriteFile(p.Trainer.TerminalFile, []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := m.TrainingTerminal(context.Background(), p, job)
+		if err == nil || strings.Contains(err.Error(), privateKey) {
+			t.Fatalf("unsafe terminal error: %v", err)
+		}
+		if strings.Contains(raw, ":2") && !errors.Is(err, strictjson.ErrDuplicateKey) {
+			t.Fatalf("lost duplicate-key cause: %v", err)
+		}
 	}
 }

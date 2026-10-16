@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -284,5 +285,106 @@ func TestTrainingContractRejectsControlStateOutputPaths(t *testing.T) {
 				t.Fatalf("rejected output admitted work: %d %v", pending, err)
 			}
 		})
+	}
+}
+
+func TestTrainingContractTerminalReceiptIsFencedAndDurable(t *testing.T) {
+	s, path, revision := trainingContractStore(t)
+	ctx := context.Background()
+	job, err := s.ReserveTraining(ctx, "receipt-job", "trainer", revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RecordTrainingLaunch(ctx, job, strings.Repeat("a", 32)); err != nil {
+		t.Fatal(err)
+	}
+	job, err = s.TrainingJob(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := control.TrainingTerminal{Version: 1, ID: job.ID, Token: job.Token, Fence: job.Fence, RecipeSHA256: job.RecipeSHA256, InvocationID: job.InvocationID, Outcome: "completed"}
+	stale := evidence
+	stale.Fence.Epoch--
+	if err = s.RecordTrainingTerminal(ctx, job, stale); !errors.Is(err, ErrStaleFence) {
+		t.Fatalf("stale receipt: %v", err)
+	}
+	if err = s.RecordTrainingTerminal(ctx, job, evidence); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RecordTrainingTerminal(ctx, job, evidence); err != nil {
+		t.Fatalf("identical receipt retry: %v", err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	stored, err := reopened.TrainingJob(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.TerminalOutcome != "completed" || stored.Status != "finishing" {
+		t.Fatal("receipt lost on restart")
+	}
+	evidence.Outcome = "failed"
+	if err = reopened.RecordTrainingTerminal(ctx, job, evidence); !errors.Is(err, ErrStaleFence) {
+		t.Fatalf("receipt overwritten: %v", err)
+	}
+	if _, err = reopened.FinishTraining(ctx, job, "interrupted"); !errors.Is(err, ErrStaleFence) {
+		t.Fatalf("receipt relabeled: %v", err)
+	}
+	if pending, err := reopened.PendingWork(ctx); err != nil || pending != 1 {
+		t.Fatalf("receipt completed admission: %d %v", pending, err)
+	}
+	if _, err = reopened.FinishTraining(ctx, job, "completed"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTrainingContractRejectsCanonicalStateOutputThroughAncestorAlias(t *testing.T) {
+	original, path, _ := trainingContractStore(t)
+	ctx := context.Background()
+	if err := original.Close(); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "alias")
+	parent := filepath.Dir(path)
+	if err := os.Symlink(filepath.Dir(parent), alias); err != nil {
+		t.Fatal(err)
+	}
+	aliased := filepath.Join(alias, filepath.Base(parent), filepath.Base(path))
+	s, err := Open(ctx, aliased)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	snap, err := s.Catalog(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap.Catalog.Profiles[0].Trainer.JobFile = path
+	snap, err = s.ReplaceCatalog(ctx, snap.Revision, snap.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ReserveTraining(ctx, "alias-job", "trainer", snap.Revision); err == nil {
+		t.Fatal("canonical state path bypassed output guard")
+	}
+	after, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Version != after.Version || before.LeaseFence != after.LeaseFence {
+		t.Fatal("rejected alias changed state")
+	}
+	if pending, err := s.PendingWork(ctx); err != nil || pending != 0 {
+		t.Fatalf("rejected alias admitted work: %d %v", pending, err)
 	}
 }

@@ -120,6 +120,25 @@ func (s *Store) RecordTrainingLaunch(ctx context.Context, job control.TrainingJo
 	return err
 }
 
+// RecordTrainingTerminal preserves validated evidence before cleanup destroys
+// systemd's retained invocation. The registered admission remains unfinished.
+func (s *Store) RecordTrainingTerminal(ctx context.Context, job control.TrainingJob, evidence control.TrainingTerminal) error {
+	_, err := s.stateTx(ctx, func(tx *sql.Tx, current control.State) (control.State, error) {
+		stored, err := checkTrainingJob(ctx, tx, current, job)
+		if err != nil {
+			return current, err
+		}
+		if !evidence.Matches(stored) || (stored.TerminalOutcome != "" && stored.TerminalOutcome != evidence.Outcome) {
+			return current, ErrStaleFence
+		}
+		stored.TerminalOutcome = evidence.Outcome
+		stored.Status = "finishing"
+		stored.UpdatedAt = s.now().UTC()
+		return current, writeTrainingJob(ctx, tx, stored, false)
+	})
+	return err
+}
+
 func writeTrainingJob(ctx context.Context, tx *sql.Tx, job control.TrainingJob, finished bool) error {
 	raw, err := json.Marshal(job)
 	if err != nil {
@@ -139,6 +158,9 @@ func (s *Store) FinishTraining(ctx context.Context, job control.TrainingJob, out
 		stored, err := checkTrainingJob(ctx, tx, current, job)
 		if err != nil {
 			return current, err
+		}
+		if stored.TerminalOutcome != "" && stored.TerminalOutcome != outcome {
+			return current, ErrStaleFence
 		}
 		stored.Status = outcome
 		stored.UpdatedAt = s.now().UTC()
@@ -197,7 +219,11 @@ func (s *Store) trainingReservationSource(ctx context.Context, tx *sql.Tx, curre
 }
 
 func (s *Store) validateTrainingOutputPaths(t control.TrainerBinding) error {
-	statePath, err := filepath.Abs(s.statePath)
+	statePath, err := filepath.EvalSymlinks(s.statePath)
+	if err != nil {
+		return err
+	}
+	statePath, err = filepath.Abs(statePath)
 	if err != nil {
 		return err
 	}

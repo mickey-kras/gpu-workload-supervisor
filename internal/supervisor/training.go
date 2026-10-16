@@ -13,6 +13,7 @@ type trainingStore interface {
 	TrainingJob(context.Context, string) (control.TrainingJob, error)
 	ReserveTraining(context.Context, string, control.Workload, string) (control.TrainingJob, error)
 	RecordTrainingLaunch(context.Context, control.TrainingJob, string) error
+	RecordTrainingTerminal(context.Context, control.TrainingJob, control.TrainingTerminal) error
 	FinishTraining(context.Context, control.TrainingJob, string) (control.State, error)
 }
 
@@ -114,16 +115,34 @@ func (c *Controller) ReconcileTraining(ctx context.Context, id string) (control.
 	if err != nil {
 		return control.State{}, err
 	}
+	outcome, err := c.trainingOutcome(ctx, s, r, p, job)
+	if err != nil {
+		return control.State{}, err
+	}
+	return c.finishTraining(ctx, s, r, p, job, outcome)
+}
+
+func (c *Controller) trainingOutcome(ctx context.Context, s trainingStore, r trainingRuntime, p control.WorkloadProfile, job control.TrainingJob) (string, error) {
+	if job.TerminalOutcome != "" {
+		if !control.TrainingTerminalOutcome(job.TerminalOutcome) {
+			return "", store.ErrStaleFence
+		}
+		return job.TerminalOutcome, nil
+	}
 	actionCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
 	evidence, err := r.TrainingTerminal(actionCtx, p, job)
 	cancel()
 	if err != nil {
-		return control.State{}, err
+		return "", err
 	}
 	if !evidence.Matches(job) {
-		return control.State{}, store.ErrStaleFence
+		return "", store.ErrStaleFence
 	}
-	return c.finishTraining(ctx, s, r, p, job, evidence.Outcome)
+	// No cleanup effect is allowed until the receipt is durably committed.
+	if err := s.RecordTrainingTerminal(ctx, job, evidence); err != nil {
+		return "", err
+	}
+	return evidence.Outcome, nil
 }
 
 // RecoverTraining explicitly authorizes stopping the configured trainer after
@@ -133,7 +152,14 @@ func (c *Controller) RecoverTraining(ctx context.Context, id string) (control.St
 	if err != nil {
 		return control.State{}, err
 	}
-	return c.finishTraining(ctx, s, r, p, job, "interrupted")
+	outcome := job.TerminalOutcome
+	if outcome == "" {
+		outcome = "interrupted"
+	}
+	if !control.TrainingTerminalOutcome(outcome) {
+		return control.State{}, store.ErrStaleFence
+	}
+	return c.finishTraining(ctx, s, r, p, job, outcome)
 }
 
 func (c *Controller) finishTraining(ctx context.Context, s trainingStore, r trainingRuntime, p control.WorkloadProfile, job control.TrainingJob, outcome string) (control.State, error) {

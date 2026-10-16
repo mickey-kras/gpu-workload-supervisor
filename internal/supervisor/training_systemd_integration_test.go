@@ -20,6 +20,16 @@ import (
 // Requires a real user manager and unified cgroups. This exercises systemd's
 // finite-job identity/containment contract, not trainer or GPU qualification.
 func TestSystemdTrainingRetainsInvocationUntilExplicitStop(t *testing.T) {
+	// Keep trusted terminal evidence outside CI worktrees with writable ancestors.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(home, "gws-training-contract-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	f := newSystemdFixture(t)
 	command := func(args ...string) string { t.Helper(); return systemdCommand(t, args...) }
 	properties := func(unit string) map[string]string {
@@ -31,7 +41,6 @@ func TestSystemdTrainingRetainsInvocationUntilExplicitStop(t *testing.T) {
 		}
 		return values
 	}
-	dir := f.unitDir
 	unit := fmt.Sprintf("gws-training-contract-%d-%d.service", os.Getpid(), time.Now().UnixNano())
 	binding := &control.TrainerBinding{GPUUUID: "GPU-11111111-1111-1111-1111-111111111111", Executable: filepath.Join(dir, "adapter.sh"), JobFile: filepath.Join(dir, "job.json"), TerminalFile: filepath.Join(dir, "terminal.json")}
 	gate := filepath.Join(dir, "continue")

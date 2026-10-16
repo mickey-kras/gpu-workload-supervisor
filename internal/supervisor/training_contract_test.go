@@ -399,3 +399,159 @@ type trainingStateFailureStore struct{ *store.Store }
 func (s *trainingStateFailureStore) State(context.Context) (control.State, error) {
 	return control.State{}, errors.New("state unavailable")
 }
+
+type trainingFinishFailureStore struct{ *store.Store }
+
+func (s trainingFinishFailureStore) FinishTraining(context.Context, control.TrainingJob, string) (control.State, error) {
+	return control.State{}, errors.New("terminal transaction unavailable")
+}
+
+type trainingReceiptFailureStore struct{ *store.Store }
+
+func (s trainingReceiptFailureStore) RecordTrainingTerminal(context.Context, control.TrainingJob, control.TrainingTerminal) error {
+	return errors.New("receipt transaction unavailable")
+}
+
+func TestTrainingContractTerminalReceiptSurvivesCleanupFailure(t *testing.T) {
+	for _, outcome := range []string{"completed", "failed", "cancelled"} {
+		for _, failure := range []string{"stop", "release", "finalization"} {
+			t.Run(outcome+"/"+failure, func(t *testing.T) {
+				c, s, r, job := trainingControllerContract(t)
+				ctx := context.Background()
+				r.terminal.Outcome = outcome
+				switch failure {
+				case "stop":
+					r.stopErr = context.Canceled
+				case "release":
+					r.releaseErr = errors.New("GPU still allocated")
+				case "finalization":
+					c.store = trainingFinishFailureStore{s}
+				}
+				if _, err := c.ReconcileTraining(ctx, job.ID); err == nil {
+					t.Fatal("failure not reported")
+				}
+				recorded, err := s.TrainingJob(ctx, job.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if recorded.TerminalOutcome != outcome || recorded.Status != "finishing" {
+					t.Fatalf("lost terminal proof: %+v", recorded)
+				}
+				if pending, err := s.PendingWork(ctx); err != nil || pending != 1 {
+					t.Fatalf("premature admission completion: %d %v", pending, err)
+				}
+				// A fresh controller cannot rely on any prior runtime observation. Stopping
+				// a retained service has removed the identity that supported the receipt.
+				r.stopErr = nil
+				r.releaseErr = nil
+				r.terminalErr = errors.New("invocation no longer retained")
+				r.trainingCalls = nil
+				fresh := testController(t, s, r)
+				if failure == "finalization" {
+					_, err = fresh.RecoverTraining(ctx, job.ID)
+				} else {
+					_, err = fresh.ReconcileTraining(ctx, job.ID)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				recorded, err = s.TrainingJob(ctx, job.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if recorded.Status != outcome {
+					t.Fatalf("acknowledged outcome changed to %s", recorded.Status)
+				}
+				for _, call := range r.trainingCalls {
+					if call == "terminal" || call == "launch" {
+						t.Fatalf("retry needed destroyed evidence or replayed: %v", r.trainingCalls)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestTrainingContractReceiptWriteFailurePrecedesCleanup(t *testing.T) {
+	c, s, r, job := trainingControllerContract(t)
+	c.store = trainingReceiptFailureStore{s}
+	if _, err := c.ReconcileTraining(context.Background(), job.ID); err == nil {
+		t.Fatal("receipt failure ignored")
+	}
+	if len(r.calls) != 0 {
+		t.Fatalf("cleanup ran without durable receipt: %v", r.calls)
+	}
+	recorded, err := s.TrainingJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recorded.TerminalOutcome != "" {
+		t.Fatal("failed transaction wrote a receipt")
+	}
+}
+
+func TestTrainingContractRoutineTransitionsWaitForRelease(t *testing.T) {
+	for _, phase := range []string{"launching", "running", "awaiting-release"} {
+		t.Run(phase, func(t *testing.T) {
+			ctx := context.Background()
+			c, s, r := trainingStartContract(t)
+			job, err := s.ReserveTraining(ctx, "job-b", "trainer", c.config.Catalog.Revision)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if phase != "launching" {
+				if err := s.RecordTrainingLaunch(ctx, job, r.invocation); err != nil {
+					t.Fatal(err)
+				}
+				job, err = s.TrainingJob(ctx, job.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			r.terminal = control.TrainingTerminal{Version: 1, ID: job.ID, Token: job.Token, Fence: job.Fence, RecipeSHA256: job.RecipeSHA256, InvocationID: job.InvocationID, Outcome: "completed"}
+			if phase == "awaiting-release" {
+				r.releaseErr = errors.New("GPU allocation remains")
+				if _, err := c.ReconcileTraining(ctx, job.ID); err == nil {
+					t.Fatal("release failure accepted")
+				}
+			}
+			r.calls, r.trainingCalls = nil, nil
+			before, err := s.State(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.Switch(ctx, control.WorkloadIdle, "operator"); !errors.Is(err, store.ErrTrainingPending) {
+				t.Fatalf("switch error=%v", err)
+			}
+			if _, err := c.TransferToUser(ctx, control.WorkloadIdle, "operator"); !errors.Is(err, store.ErrTrainingPending) {
+				t.Fatalf("ownership transfer error=%v", err)
+			}
+			if _, err := c.PolicyIdle(ctx, time.Now(), nil); err == nil {
+				t.Fatal("idle policy displaced training")
+			}
+			after, err := s.State(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after != before {
+				t.Fatal("routine transition changed training state or fence")
+			}
+			if pending, err := s.PendingWork(ctx); err != nil || pending != 1 {
+				t.Fatalf("pending=%d error=%v", pending, err)
+			}
+			if len(r.calls) != 0 || len(r.trainingCalls) != 0 {
+				t.Fatalf("routine transition reached runtime: %v %v", r.calls, r.trainingCalls)
+			}
+			r.releaseErr = nil
+			if _, err := c.RecoverTraining(ctx, job.ID); err != nil {
+				t.Fatal(err)
+			}
+			if pending, err := s.PendingWork(ctx); err != nil || pending != 0 {
+				t.Fatalf("released pending=%d error=%v", pending, err)
+			}
+			if _, err := c.Switch(ctx, control.WorkloadIdle, "operator"); err != nil {
+				t.Fatalf("switch after verified release: %v", err)
+			}
+		})
+	}
+}

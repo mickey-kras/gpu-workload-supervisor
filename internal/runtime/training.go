@@ -174,7 +174,7 @@ func (m *SystemdManager) TrainingTerminal(ctx context.Context, p control.Workloa
 		return evidence, err
 	}
 	if err := strictjson.DecodeLimited(bytes.NewReader(raw), 4096, &evidence); err != nil {
-		return evidence, err
+		return evidence, SafeError("invalid trainer terminal evidence", err)
 	}
 	if !evidence.Matches(job) {
 		return evidence, errors.New("stale or invalid trainer terminal evidence")
