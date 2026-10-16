@@ -161,6 +161,11 @@ func TestReadRecipeRequiresCanonicalKeys(t *testing.T) {
 	}{
 		{"canonical", `"rank":8`, `"rank":8`, true},
 		{"escaped canonical", `"rank":8`, `"r\u0061nk":8`, true},
+		{"explicit zero seed", `"seed":42`, `"seed":0`, true},
+		{"omitted seed", `"seed":42,`, ``, false},
+		{"null seed", `"seed":42`, `"seed":null`, false},
+		{"omitted nested field", `"ramBytes":1,`, ``, false},
+		{"null nested field", `"ramBytes":1`, `"ramBytes":null`, false},
 		{"top alias", `"rank":8`, `"RANK":8`, false},
 		{"top override", `"rank":8`, `"rank":8,"RANK":16`, false},
 		{"budget alias", `"budget":`, `"BUDGET":`, false},
@@ -178,7 +183,7 @@ func TestReadRecipeRequiresCanonicalKeys(t *testing.T) {
 			if (err == nil) != tc.accepted {
 				t.Fatalf("recipe accepted = %v, want %v: %v", err == nil, tc.accepted, err)
 			}
-			if err != nil && (strings.Contains(err.Error(), r.Model.Inventory.Root) || strings.Contains(err.Error(), tc.replacement)) {
+			if err != nil && (strings.Contains(err.Error(), r.Model.Inventory.Root) || (tc.replacement != "" && strings.Contains(err.Error(), tc.replacement))) {
 				t.Fatal("recipe error disclosed input")
 			}
 		})

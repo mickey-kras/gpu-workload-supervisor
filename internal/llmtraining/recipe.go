@@ -99,13 +99,20 @@ func canonicalRecipeKeys(raw []byte, recipe Recipe) bool {
 }
 
 func matchingObjectKeys(supplied, expected json.RawMessage) bool {
-	// Expected nodes come from json.Marshal: scalar and null leaves have no
-	// field names. The typed decoder has already checked their value types.
+	// Every recipe field is required, including scalars whose zero value is valid.
+	if bytes.Equal(bytes.TrimSpace(supplied), []byte("null")) {
+		return false
+	}
+	// Expected nodes come from json.Marshal: scalar leaves have no field names.
+	// The typed decoder has already checked their value types.
 	if len(expected) == 0 || expected[0] != '{' {
 		return true
 	}
 	var got, want map[string]json.RawMessage
 	if json.Unmarshal(expected, &want) != nil || json.Unmarshal(supplied, &got) != nil || got == nil {
+		return false
+	}
+	if len(got) != len(want) {
 		return false
 	}
 	for key, value := range got {
