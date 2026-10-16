@@ -141,6 +141,43 @@ func TestTrainerContractCompletionRequiresFencedAcknowledgement(t *testing.T) {
 	}
 }
 
+func TestTrainerContractCompletionAcceptsMaximumRequestIDs(t *testing.T) {
+	for name, id := range map[string]string{
+		"plain":   strings.Repeat("x", control.MaxRequestIDBytes),
+		"escaped": strings.Repeat("<", control.MaxRequestIDBytes),
+		"UTF-8":   strings.Repeat("é", control.MaxRequestIDBytes/2),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := control.ValidateRequestID(id); err != nil {
+				t.Fatal(err)
+			}
+			m, _, p, job, _ := trainerContractFixture(t)
+			job.ID = id
+			good := trainerContractEvidence(job)
+			raw, err := json.Marshal(good)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(raw) <= 4096 {
+				t.Fatalf("receipt does not exercise the former limit: %d bytes", len(raw))
+			}
+			if name == "escaped" && len(raw) <= 6*control.MaxRequestIDBytes {
+				t.Fatalf("receipt does not exercise six-byte escaping: %d bytes", len(raw))
+			}
+			for _, size := range []int{len(raw), 64 << 10} {
+				body := append([]byte(nil), raw...)
+				body = append(body, []byte(strings.Repeat(" ", size-len(raw)))...)
+				if err := os.WriteFile(p.Trainer.TerminalFile, body, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if result, err := m.TrainingTerminal(context.Background(), p, job); err != nil || result != good {
+					t.Fatalf("valid %d-byte completion: %#v, %v", size, result, err)
+				}
+			}
+		})
+	}
+}
+
 func TestTrainerContractFailureEvidenceAndFileSafety(t *testing.T) {
 	for _, result := range []string{"oom-kill", "exit-code", "signal", "core-dump"} {
 		t.Run(result, func(t *testing.T) {
@@ -152,7 +189,7 @@ func TestTrainerContractFailureEvidenceAndFileSafety(t *testing.T) {
 			}
 		})
 	}
-	for _, kind := range []string{"symlink", "writable", "directory", "oversize", "unknown field", "duplicate field"} {
+	for _, kind := range []string{"symlink", "writable", "directory", "oversize", "unknown field", "duplicate field", "malformed", "trailing value"} {
 		t.Run(kind, func(t *testing.T) {
 			m, _, p, job, _ := trainerContractFixture(t)
 			raw, err := json.Marshal(trainerContractEvidence(job))
@@ -175,13 +212,19 @@ func TestTrainerContractFailureEvidenceAndFileSafety(t *testing.T) {
 				}
 			default:
 				if kind == "oversize" {
-					raw = append(raw, []byte(strings.Repeat(" ", 4097))...)
+					raw = append(raw, []byte(strings.Repeat(" ", (64<<10)+1-len(raw)))...)
 				}
 				if kind == "unknown field" {
 					raw = append([]byte(`{"extra":true,`), raw[1:]...)
 				}
 				if kind == "duplicate field" {
 					raw = append([]byte(`{"version":1,`), raw[1:]...)
+				}
+				if kind == "malformed" {
+					raw = raw[:len(raw)-1]
+				}
+				if kind == "trailing value" {
+					raw = append(raw, []byte(` {}`)...)
 				}
 				if err := os.WriteFile(path, raw, 0600); err != nil {
 					t.Fatal(err)
@@ -409,15 +452,19 @@ func TestTrainerContractStartPreconditionsPreventLaunch(t *testing.T) {
 
 type trainerObservationRunner struct {
 	*fakeRunner
-	command      string
-	observations int
-	failAt       int
+	command           string
+	observations      int
+	failAt            int
+	beforeObservation func(int)
 }
 
 func (r *trainerObservationRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	call := strings.Join(append([]string{name}, args...), " ")
 	if call == r.command {
 		r.observations++
+		if r.beforeObservation != nil {
+			r.beforeObservation(r.observations)
+		}
 		if r.observations == r.failAt {
 			return nil, fmt.Errorf("trainer observation unavailable")
 		}
@@ -507,6 +554,60 @@ func TestTrainerContractMalformedTerminalDoesNotExposeKeys(t *testing.T) {
 		}
 		if strings.Contains(raw, ":2") && !errors.Is(err, strictjson.ErrDuplicateKey) {
 			t.Fatalf("lost duplicate-key cause: %v", err)
+		}
+	}
+}
+
+func TestTrainerContractPreflightQualifiesOutputsWithoutEffects(t *testing.T) {
+	for _, kind := range []string{"missing job parent", "missing terminal parent", "job directory", "terminal directory", "job symlink", "terminal symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			m, r, p, _, _ := trainerContractFixture(t)
+			output := &p.Trainer.JobFile
+			if strings.Contains(kind, "terminal") {
+				output = &p.Trainer.TerminalFile
+			}
+			switch {
+			case strings.HasPrefix(kind, "missing"):
+				*output = filepath.Join(filepath.Dir(*output), "missing", "output.json")
+			case strings.HasSuffix(kind, "directory"):
+				if err := os.Mkdir(*output, 0700); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				if err := os.Symlink(p.Trainer.RecipeFile, *output); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r.calls = nil
+			if err := m.Preflight(context.Background()); !errors.Is(err, ErrLaunchUnsupported) {
+				t.Fatalf("invalid output passed preflight: %v", err)
+			}
+			if len(r.calls) != 0 {
+				t.Fatalf("invalid output reached systemctl or GPU commands: %v", r.calls)
+			}
+		})
+	}
+}
+
+func TestTrainerContractRechecksOutputsImmediatelyBeforeEnvelope(t *testing.T) {
+	m, r, p, job, command := trainerContractFixture(t)
+	r.outputs[command] = []byte(strings.ReplaceAll(strings.ReplaceAll(string(r.outputs[command]), "ActiveState=active", "ActiveState=inactive"), "SubState=exited", "SubState=dead"))
+	r.outputs["/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- training.service"] = stoppedOutput()
+	m.runner = &trainerObservationRunner{fakeRunner: r, command: command, beforeObservation: func(observation int) {
+		if observation == 3 {
+			// Binding verification passed, but the destination changes during the
+			// final stopped-unit observation before envelope creation.
+			if err := os.Mkdir(p.Trainer.JobFile, 0700); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}}
+	if id, err := m.StartTraining(context.Background(), p, job); !errors.Is(err, ErrLaunchUnsupported) || id != "" {
+		t.Fatalf("changed destination accepted: %q %v", id, err)
+	}
+	for _, call := range r.calls {
+		if strings.Contains(call, " --job-mode=fail start ") {
+			t.Fatal("changed destination reached systemctl start")
 		}
 	}
 }
