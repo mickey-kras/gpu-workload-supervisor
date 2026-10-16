@@ -57,6 +57,9 @@ func (m *SystemdManager) verifyProfileGPU(ctx context.Context, p control.Workloa
 }
 
 func profileGPUUUID(p control.WorkloadProfile) string {
+	if p.Trainer != nil {
+		return p.Trainer.GPUUUID
+	}
 	if p.NativeModel != nil {
 		return p.NativeModel.GPUUUID
 	}

@@ -99,6 +99,9 @@ func verifyOwnedSpecWithValidator(p control.WorkloadProfile, validate func(strin
 }
 
 func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.WorkloadProfile) error {
+	if p.Trainer != nil {
+		return m.verifyTrainerBinding(ctx, p)
+	}
 	if err := m.verifyProfileGPU(ctx, p); err != nil {
 		return err
 	}

@@ -30,11 +30,12 @@ into one schema change:
 | 1 | Existing workload profiles and native model bindings | Supported |
 | 2 | Adds owned native launch specifications | Supported |
 | 3 | Planned llama.cpp router binding fields | Not yet supported |
+| 4 | Finite trainer bindings and fenced job lifecycle | Supported |
 | Later | Subsequent features receive separate version changes | Not yet supported |
 
 Existing v1 and v2 catalogs remain valid under their current rules; no migration
 or version bump is required for unchanged profiles. Owned launch specifications
-require v2. Unsupported versions (including planned v3), unknown fields and
+require v2 or v4. Finite trainer bindings require v4; see [Finite training jobs](TRAINING.md). Unsupported versions (including planned v3), unknown fields and
 fields outside their supported version are rejected; a planned version does not
 enable its feature. Catalog versions are separate from database schema versions
 and upstream runtime/API versions.

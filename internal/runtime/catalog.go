@@ -27,7 +27,7 @@ func (m *SystemdManager) observe(ctx context.Context, recovering bool) (Snapshot
 		if err != nil {
 			return Snapshot{}, err
 		}
-		if !(st.active == "active" && st.sub == "running") && !(st.active == "inactive" && st.sub == "dead") && !(recovering && st.active == "failed" && st.sub == "failed") {
+		if !validObservedUnit(st, p.Trainer != nil, recovering) {
 			return Snapshot{}, fmt.Errorf("%s is neither running nor stopped", p.Unit)
 		}
 		active := st.active == "active"
@@ -116,6 +116,9 @@ func (m *SystemdManager) Healthy(ctx context.Context, id control.Workload) error
 	if err := m.verifyNativeBinding(ctx, p); err != nil {
 		return err
 	}
+	if p.Trainer != nil {
+		return nil
+	}
 	if err := m.getHealthy(ctx, p.HealthURL); err != nil {
 		return err
 	}
@@ -154,4 +157,8 @@ func (m *SystemdManager) Stop(ctx context.Context, id control.Workload) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	return m.checkHTTPResponse(req, "media release")
+}
+
+func validObservedUnit(st systemdUnitState, trainer, recovering bool) bool {
+	return !(!(st.active == "active" && st.sub == "running") && !(st.active == "inactive" && st.sub == "dead") && !(trainer && st.active == "active" && st.sub == "exited") && !((recovering || trainer) && st.active == "failed" && st.sub == "failed"))
 }
