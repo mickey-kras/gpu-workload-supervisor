@@ -8,6 +8,40 @@ const owned = {id: 'ollama-qwen-latest', label: 'Qwen', adapter: 'systemd', boot
     nativeModel: {runtime: 'ollama', instance: 'local', model: 'qwen:latest', endpoint: 'http://127.0.0.1:11434',
         launchFile: '/home/user/.config/systemd/user/gws-owned-ollama-local.service', launchSHA256: 'derived-digest', owned: {port: 11434}}};
 
+const trainer = {id: 'trainer', label: 'Trainer', adapter: 'systemd', unit: 'trainer.service', cgroup: '/training/trainer.service',
+    requiredMiB: 1024, bootPolicy: 'stop-to-idle', trainer: {version: 1, gpuUUID: 'GPU-11111111-1111-1111-1111-111111111111',
+        launchFile: '/opt/trainer/unit.service', launchSHA256: 'a'.repeat(64), executable: '/opt/trainer/train', executableSHA256: 'b'.repeat(64),
+        recipeFile: '/opt/trainer/recipe.json', recipeSHA256: 'c'.repeat(64), jobFile: '/opt/trainer/job.json', terminalFile: '/opt/trainer/terminal.json'}};
+
+for (const [version, expectedVersion] of [[1, 2], [2, 2], [4, 4]]) {
+    for (const journey of ['continue', 'managed preview']) {
+        test(`catalog v${version} retains its minimum schema through ${journey}`, async () => {
+            const existing = version === 4 ? [trainer] : [];
+            const catalog = {version, profiles: journey === 'continue' ? [...existing, owned] : existing, extra: {keep: true}};
+            const ui = await launch({deferAction: 'unused', responses: {
+                discover: {request: {profile: {statePath: '/state.db', gpuIndex: 2}, catalog}, units: []},
+                drafts: {drafts: journey === 'managed preview' ? [draft] : []}, 'render-owned': {profile: owned},
+            }});
+            if (journey === 'managed preview') {
+                await ui.by('Preview managed launch and add for review').emit('clicked');
+                assert.equal(ui.calls.at(-1).argv[1], 'verify-bindings');
+            }
+            await ui.by('Continue').emit('clicked');
+            assert.equal(ui.calls.filter(call => call.argv[1] === 'validate').length, 1);
+            await ui.by('Finish setup').emit('clicked');
+            const requests = ui.calls.filter(call => ['verify-bindings', 'validate', 'apply'].includes(call.argv[1]));
+            assert.equal(requests.at(-1).argv[1], 'apply');
+            for (const call of requests) {
+                const reviewed = JSON.parse(call.input).catalog;
+                assert.equal(reviewed.version, expectedVersion, call.argv[1]);
+                assert.deepEqual(reviewed.profiles, [...existing, owned]);
+                assert.deepEqual(reviewed.extra, {keep: true});
+                assert.equal(reviewed.disabled, false);
+            }
+        });
+    }
+}
+
 test('managed launch is previewed without fingerprinting a nonexistent unit or starting apps', async () => {
     const ui = await launch({responses: {drafts: {drafts: [draft]}, 'render-owned': {profile: owned}}, deferAction: 'unused'});
     await ui.by('Preview managed launch and add for review').emit('clicked');
