@@ -241,8 +241,6 @@ func TestTrainingContractStartPersistsIntentAndNeverRetries(t *testing.T) {
 	}
 }
 
-// Runtime receipt decoding for these same boundary IDs is exercised by
-// TestTrainerContractCompletionAcceptsMaximumRequestIDs in internal/runtime.
 func TestTrainingContractMaximumRequestIDsReconcileDurably(t *testing.T) {
 	for name, id := range map[string]string{
 		"plain":   strings.Repeat("x", control.MaxRequestIDBytes),
