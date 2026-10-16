@@ -116,9 +116,6 @@ func (m *SystemdManager) verifyTrainerBinding(ctx context.Context, p control.Wor
 	return m.verifyProfileGPU(ctx, p)
 }
 
-// Output leaves may be absent, but their trusted directories must already
-// exist and permit creation with the effective user credentials. Qualification
-// is read-only and also rejects existing non-file leaves.
 func qualifyTrainingOutputs(t control.TrainerBinding) error {
 	for _, path := range []string{t.JobFile, t.TerminalFile} {
 		if err := qualifyEnvironmentPath(filepath.Dir(path), false, false); err != nil {
