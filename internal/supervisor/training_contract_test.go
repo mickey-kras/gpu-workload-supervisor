@@ -241,6 +241,61 @@ func TestTrainingContractStartPersistsIntentAndNeverRetries(t *testing.T) {
 	}
 }
 
+func TestTrainingContractMaximumRequestIDsReconcileDurably(t *testing.T) {
+	for name, id := range map[string]string{
+		"plain":   strings.Repeat("x", control.MaxRequestIDBytes),
+		"escaped": strings.Repeat("<", control.MaxRequestIDBytes),
+		"UTF-8":   strings.Repeat("é", control.MaxRequestIDBytes/2),
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, s, r := trainingStartContract(t)
+			ctx := context.Background()
+			job, err := c.StartTraining(ctx, id, "trainer")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if job.ID != id || job.Status != "running" {
+				t.Fatal("start did not preserve the accepted request ID")
+			}
+			r.terminal = control.TrainingTerminal{Version: 1, ID: job.ID, Token: job.Token, Fence: job.Fence, RecipeSHA256: job.RecipeSHA256, InvocationID: job.InvocationID, Outcome: "completed"}
+			// Fail cleanup after the receipt is persisted, then reconcile from a
+			// fresh controller without access to the retained invocation.
+			r.stopErr = errors.New("cleanup unavailable")
+			if _, err := c.ReconcileTraining(ctx, id); err == nil {
+				t.Fatal("cleanup failure not reported")
+			}
+			recorded, err := s.TrainingJob(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if recorded.ID != id || recorded.Status != "finishing" || recorded.TerminalOutcome != "completed" {
+				t.Fatal("accepted request ID or completed receipt was not persisted")
+			}
+			if pending, err := s.PendingWork(ctx); err != nil || pending != 1 {
+				t.Fatalf("pending before release=%d, %v", pending, err)
+			}
+			r.stopErr = nil
+			r.terminalErr = errors.New("invocation no longer retained")
+			r.trainingCalls = nil
+			fresh := testController(t, s, r)
+			if _, err := fresh.ReconcileTraining(ctx, id); err != nil {
+				t.Fatal(err)
+			}
+			recorded, err = s.TrainingJob(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if recorded.ID != id || recorded.Status != "completed" || recorded.TerminalOutcome != "completed" {
+				t.Fatal("reconciliation lost the accepted request ID or completed outcome")
+			}
+			if pending, err := s.PendingWork(ctx); err != nil || pending != 0 {
+				t.Fatalf("pending after reconciliation=%d, %v", pending, err)
+			}
+			assertCalls(t, r.trainingCalls, "release")
+		})
+	}
+}
+
 func TestTrainingContractStartRejectsStaleCatalogBeforeEffect(t *testing.T) {
 	c, s, r := trainingStartContract(t)
 	ctx := context.Background()
