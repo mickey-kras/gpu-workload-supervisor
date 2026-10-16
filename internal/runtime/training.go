@@ -88,11 +88,19 @@ func (m *SystemdManager) verifyTrainerBinding(ctx context.Context, p control.Wor
 	if err != nil {
 		return err
 	}
-	if v["LoadState"] != "loaded" || v["NeedDaemonReload"] != "no" || v["Type"] != "exec" || v["Restart"] != "no" || v["KillMode"] != "control-group" || v["RemainAfterExit"] != "yes" {
-		return ErrLaunchChanged
-	}
-	for _, key := range []string{"ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost"} {
-		if v[key] != "" {
+	for key, want := range map[string]string{
+		"LoadState":        "loaded",
+		"NeedDaemonReload": "no",
+		"Type":             "exec",
+		"Restart":          "no",
+		"KillMode":         "control-group",
+		"RemainAfterExit":  "yes",
+		"ExecStartPre":     "",
+		"ExecStartPost":    "",
+		"ExecStop":         "",
+		"ExecStopPost":     "",
+	} {
+		if v[key] != want {
 			return ErrLaunchChanged
 		}
 	}
