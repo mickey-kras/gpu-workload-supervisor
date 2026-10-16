@@ -67,6 +67,9 @@ func (m *SystemdManager) verifyTrainerBinding(ctx context.Context, p control.Wor
 	if t == nil {
 		return ErrLaunchUnsupported
 	}
+	if err := qualifyTrainingOutputs(*t); err != nil {
+		return err
+	}
 	if err := verifyTrainerExecutable(*t); err != nil {
 		return err
 	}
@@ -104,6 +107,25 @@ func (m *SystemdManager) verifyTrainerBinding(ctx context.Context, p control.Wor
 	return m.verifyProfileGPU(ctx, p)
 }
 
+// Output leaves may be absent, but their trusted directories must already
+// exist. Qualification is read-only and also rejects existing non-file leaves.
+func qualifyTrainingOutputs(t control.TrainerBinding) error {
+	for _, path := range []string{t.JobFile, t.TerminalFile} {
+		if err := qualifyEnvironmentPath(filepath.Dir(path), false, false); err != nil {
+			return err
+		}
+		if _, err := os.Lstat(path); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if err := qualifyEnvironmentPath(path, true, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (m *SystemdManager) StartTraining(ctx context.Context, p control.WorkloadProfile, job control.TrainingJob) (string, error) {
 	if err := m.verifyTrainerBinding(ctx, p); err != nil {
 		return "", err
@@ -122,10 +144,8 @@ func (m *SystemdManager) StartTraining(ctx context.Context, p control.WorkloadPr
 		return "", errors.New("trainer is not stopped")
 	}
 	t := p.Trainer
-	if err := qualifyEnvironmentPath(filepath.Dir(t.JobFile), false, false); err != nil {
-		return "", err
-	}
-	if err := qualifyEnvironmentPath(filepath.Dir(t.TerminalFile), false, false); err != nil {
+	// Recheck after the handoff: destinations may have changed since preflight.
+	if err := qualifyTrainingOutputs(*t); err != nil {
 		return "", err
 	}
 	envelope := struct {

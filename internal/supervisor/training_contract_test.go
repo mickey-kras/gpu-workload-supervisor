@@ -2,13 +2,16 @@ package supervisor
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
@@ -801,6 +804,102 @@ func TestTrainingContractPreparationFailureRemainsRecoverable(t *testing.T) {
 			job, err = s.TrainingJob(ctx, job.ID)
 			if err != nil || job.Status != "interrupted" {
 				t.Fatalf("retry recovery failed: %v", err)
+			}
+		})
+	}
+}
+
+// Exercise the real read-only destination qualification while retaining the
+// controller fixture's observable inference and launch effects.
+type trainingOutputPreflightRuntime struct {
+	*trainingContractRuntime
+	manager *gpuruntime.SystemdManager
+}
+
+func (r *trainingOutputPreflightRuntime) Preflight(ctx context.Context) error {
+	return r.manager.Preflight(ctx)
+}
+
+func TestTrainingContractInvalidDestinationsPrecedeInferenceHandoff(t *testing.T) {
+	for _, kind := range []string{"missing job parent", "missing terminal parent", "unsafe job parent", "unsafe terminal parent", "linked job parent", "linked terminal parent", "job directory", "terminal directory"} {
+		t.Run(kind, func(t *testing.T) {
+			_, s, r := trainingStartContract(t)
+			ctx := context.Background()
+			snap, err := s.Catalog(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			catalog := snap.Catalog.Clone()
+			binding := catalog.Profiles[0].Trainer
+			dir := t.TempDir()
+			binding.JobFile = filepath.Join(dir, "job.json")
+			binding.TerminalFile = filepath.Join(dir, "terminal.json")
+			output := &binding.JobFile
+			if strings.Contains(kind, "terminal") {
+				output = &binding.TerminalFile
+			}
+			switch {
+			case strings.HasPrefix(kind, "missing"):
+				*output = filepath.Join(dir, "missing", "output.json")
+			case strings.HasPrefix(kind, "unsafe"):
+				parent := filepath.Join(dir, "unsafe")
+				if err := os.Mkdir(parent, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(parent, 0777); err != nil {
+					t.Fatal(err)
+				}
+				*output = filepath.Join(parent, "output.json")
+			case strings.HasPrefix(kind, "linked"):
+				parent := filepath.Join(dir, "link")
+				if err := os.Symlink(dir, parent); err != nil {
+					t.Fatal(err)
+				}
+				*output = filepath.Join(parent, "output.json")
+			default:
+				if err := os.Mkdir(*output, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			catalog.Profiles = append(catalog.Profiles, control.WorkloadProfile{ID: control.WorkloadText, Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/text", HealthURL: "http://localhost:8080/health"})
+			if _, err := s.ReplaceCatalog(ctx, snap.Revision, catalog); err != nil {
+				t.Fatal(err)
+			}
+			state, err := s.State(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.ActiveWorkload = control.WorkloadText
+			state.DesiredWorkload = control.WorkloadText
+			state.Admission = control.AdmissionOpen
+			before, err := s.UpdateState(ctx, state.Version, state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager, err := gpuruntime.NewSystemdManager(gpuruntime.SystemdConfig{Catalog: &catalog, HealthTimeout: time.Second, SystemctlPath: "/usr/bin/true", NvidiaSMIPath: "/usr/bin/true"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.active = control.WorkloadText
+			c := testController(t, s, &trainingOutputPreflightRuntime{r, manager})
+			if _, err := c.StartTraining(ctx, "invalid-output", "trainer"); !errors.Is(err, gpuruntime.ErrLaunchUnsupported) {
+				t.Fatalf("invalid destination accepted or failed unrelated qualification: %v", err)
+			}
+			after, err := s.State(ctx)
+			if err != nil || before != after || r.active != control.WorkloadText {
+				t.Fatalf("invalid destination changed inference authority: %v", err)
+			}
+			if len(r.calls) != 0 || len(r.trainingCalls) != 0 {
+				t.Fatalf("invalid destination caused runtime effects: %v %v", r.calls, r.trainingCalls)
+			}
+			if _, err := s.TrainingJob(ctx, "invalid-output"); !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("invalid destination left a durable claim or job: %v", err)
+			}
+			if err := s.CheckTrainingRequestID(ctx, "invalid-output"); err != nil {
+				t.Fatalf("invalid destination consumed request identity: %v", err)
+			}
+			if pending, err := s.PendingWork(ctx); err != nil || pending != 0 {
+				t.Fatalf("invalid destination reserved admission: %d %v", pending, err)
 			}
 		})
 	}
