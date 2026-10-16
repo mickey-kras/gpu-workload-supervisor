@@ -12,6 +12,9 @@ gpu-training-candidate -recipe /private/candidate.json -output /private/new-plan
 
 The command reads local inputs and creates one new file with mode `0600`.
 It refuses to replace an existing file. Keep its parent directory private.
+The plan is written to a private temporary file in that directory and published
+only after writing and closing succeed. Publication requires hard-link support
+on the destination filesystem; a failed write leaves no final plan to block retry.
 There is no network access, runtime import, subprocess launch or dataset-content
 logging in the preparation command. Errors omit input values and file contents.
 The command is not installed by the release package.

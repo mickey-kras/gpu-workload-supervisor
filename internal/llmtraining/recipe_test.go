@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"math"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -284,12 +286,22 @@ func TestPreparePrivateNoOverwriteOrExecution(t *testing.T) {
 	if err := Prepare(path, plan); err != nil {
 		t.Fatal(err)
 	}
+	original, err := os.ReadFile(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
 	info, err := os.Stat(plan)
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatal("plan permissions", info, err)
 	}
 	if err := Prepare(path, plan); err == nil {
 		t.Fatal("overwrote prior plan")
+	}
+	if current, err := os.ReadFile(plan); err != nil || string(current) != string(original) {
+		t.Fatal("changed prior plan", err)
+	}
+	if leftovers, err := filepath.Glob(filepath.Join(root, ".candidate-plan-*")); err != nil || len(leftovers) != 0 {
+		t.Fatal("publication left temporary plans", leftovers, err)
 	}
 	for _, pair := range [][2]string{{path, path}, {"relative", plan}, {path, filepath.Join(root, "missing", "plan")}, {path, filepath.Join(r.OutputDirectory, "plan")}, {path, filepath.Join(r.Runtime.Inventory.Root, "plan")}} {
 		if err := Prepare(pair[0], pair[1]); err == nil {
@@ -302,5 +314,63 @@ func TestPreparePrivateNoOverwriteOrExecution(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "new-plan")); !os.IsNotExist(err) {
 		t.Fatal("wrote rejected candidate")
+	}
+}
+
+func TestPrepareWriteFailureAllowsRetry(t *testing.T) {
+	// File-size limits affect the whole process, so inject the real short write
+	// in an isolated test process, without constraining other package tests.
+	if os.Getenv("LLMTRAINING_WRITE_FAILURE_HELPER") != "1" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestPrepareWriteFailureAllowsRetry$")
+		cmd.Env = append(os.Environ(), "LLMTRAINING_WRITE_FAILURE_HELPER=1")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("write failure subprocess: %v\n%s", err, output)
+		}
+		return
+	}
+	r := fixture(t)
+	root := filepath.Dir(r.OutputDirectory)
+	path, plan := filepath.Join(root, "recipe.json"), filepath.Join(root, "plan.json")
+	raw, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFixture(t, path, string(raw))
+	var original unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_FSIZE, &original); err != nil {
+		t.Fatal(err)
+	}
+	signal.Ignore(unix.SIGXFSZ)
+	limited := original
+	limited.Cur = 1
+	if err := unix.Setrlimit(unix.RLIMIT_FSIZE, &limited); err != nil {
+		t.Fatal(err)
+	}
+	prepareErr := Prepare(path, plan)
+	if err := unix.Setrlimit(unix.RLIMIT_FSIZE, &original); err != nil {
+		t.Fatal(err)
+	}
+	if prepareErr == nil {
+		t.Fatal("accepted partial plan write")
+	}
+	if strings.Contains(prepareErr.Error(), root) || strings.Contains(prepareErr.Error(), "training example") {
+		t.Fatal("write failure disclosed private input")
+	}
+	if _, err := os.Lstat(plan); !os.IsNotExist(err) {
+		t.Fatal("failed write left final plan", err)
+	}
+	if leftovers, err := filepath.Glob(filepath.Join(root, ".candidate-plan-*")); err != nil || len(leftovers) != 0 {
+		t.Fatal("failed write left temporary plans", leftovers, err)
+	}
+	if err := Prepare(path, plan); err != nil {
+		t.Fatal("retry failed", err)
+	}
+	var result Plan
+	contents, err := os.ReadFile(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(contents, &result); err != nil || result.Status != "unqualified" {
+		t.Fatal("retry did not publish a complete candidate plan", err)
 	}
 }
