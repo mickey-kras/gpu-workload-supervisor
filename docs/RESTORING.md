@@ -74,10 +74,16 @@ The lease incarnation in a SQLite backup may be older than the live database. A 
    PY
    ```
 
-   Explicitly recover each listed ID before continuing, replacing `RESTORED-JOB-ID` with that ID:
+   Explicitly recover each listed ID before continuing. Run this line by itself, then paste the exact ID only (without the tab and category) when it waits for input and press Enter. Enter the ID as input data, not as part of a shell command; do not add quotes or escapes:
 
    ```sh
-   /PINNED/RELEASE/gpu-mode [runtime flags] -state /PRIVATE/DURABLE/STATE/state.db -training-job RESTORED-JOB-ID training-recover
+   IFS= read -r training_job_id
+   ```
+
+   Then run the recovery command, keeping the variable expansion quoted:
+
+   ```sh
+   /PINNED/RELEASE/gpu-mode [runtime flags] -state /PRIVATE/DURABLE/STATE/state.db -training-job "$training_job_id" training-recover
    ```
 
    Use the matching runtime configuration and trainer bindings from the restored database's accepted catalog; runtime commands do not accept `-catalog`. A `reserved job` blocks `restore-state`: require successful recovery and verified recursive cgroup/GPU release before retrying it. A `preparing claim` has not reserved GPU work and does not block `restore-state`; recovery records it as `interrupted` without stopping a trainer. Finished jobs and interrupted claims are excluded from the query.
