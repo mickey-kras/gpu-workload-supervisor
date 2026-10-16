@@ -125,6 +125,9 @@ func (m *SystemdManager) StartTraining(ctx context.Context, p control.WorkloadPr
 	if err := qualifyEnvironmentPath(filepath.Dir(t.JobFile), false, false); err != nil {
 		return "", err
 	}
+	if err := qualifyEnvironmentPath(filepath.Dir(t.TerminalFile), false, false); err != nil {
+		return "", err
+	}
 	envelope := struct {
 		Version      int                 `json:"version"`
 		Job          control.TrainingJob `json:"job"`

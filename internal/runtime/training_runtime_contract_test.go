@@ -341,7 +341,7 @@ func TestTrainerContractUnavailableBindingFailsClosed(t *testing.T) {
 }
 
 func TestTrainerContractStartPreconditionsPreventLaunch(t *testing.T) {
-	for _, kind := range []string{"binding drift", "existing workload", "capacity", "trainer running", "unsafe job parent", "job path directory"} {
+	for _, kind := range []string{"binding drift", "existing workload", "capacity", "trainer running", "unsafe job parent", "unsafe terminal parent", "job path directory"} {
 		t.Run(kind, func(t *testing.T) {
 			m, r, p, job, command := trainerContractFixture(t)
 			r.outputs[command] = []byte(strings.ReplaceAll(strings.ReplaceAll(string(r.outputs[command]), "ActiveState=active", "ActiveState=inactive"), "SubState=exited", "SubState=dead"))
@@ -376,6 +376,15 @@ func TestTrainerContractStartPreconditionsPreventLaunch(t *testing.T) {
 					t.Fatal(err)
 				}
 				r.outputs[command] = []byte(strings.ReplaceAll(string(r.outputs[command]), old, p.Trainer.JobFile))
+			case "unsafe terminal parent":
+				unsafe := filepath.Join(filepath.Dir(p.Trainer.TerminalFile), "unsafe")
+				if err := os.Mkdir(unsafe, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(unsafe, 0777); err != nil {
+					t.Fatal(err)
+				}
+				p.Trainer.TerminalFile = filepath.Join(unsafe, "terminal.json")
 			case "job path directory":
 				if err := os.Mkdir(p.Trainer.JobFile, 0700); err != nil {
 					t.Fatal(err)
@@ -383,6 +392,11 @@ func TestTrainerContractStartPreconditionsPreventLaunch(t *testing.T) {
 			}
 			if id, err := m.StartTraining(context.Background(), p, job); err == nil || id != "" {
 				t.Fatalf("start precondition ignored: %q %v", id, err)
+			}
+			if kind == "unsafe terminal parent" {
+				if _, err := os.Lstat(p.Trainer.JobFile); !os.IsNotExist(err) {
+					t.Fatalf("unsafe terminal destination caused envelope effect: %v", err)
+				}
 			}
 			for _, call := range r.calls {
 				if strings.Contains(call, " --job-mode=fail start ") {
