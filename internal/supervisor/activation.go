@@ -26,6 +26,9 @@ func (c *Controller) ActivateWorkload(ctx context.Context, target control.Worklo
 	if target == control.WorkloadIdle || target == control.WorkloadUnknown || !c.configuredTarget(target) {
 		return control.State{}, fmt.Errorf("invalid target workload %q", target)
 	}
+	if p, ok := c.config.Catalog.Catalog.Profile(target); ok && p.Trainer != nil {
+		return control.State{}, fmt.Errorf("finite trainer requires training-start")
+	}
 	if err := c.checkCatalog(ctx); err != nil {
 		return control.State{}, err
 	}

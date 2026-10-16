@@ -206,7 +206,9 @@ func (m *SystemdManager) TrainingTerminal(ctx context.Context, p control.Workloa
 	if err != nil {
 		return evidence, err
 	}
-	if err := strictjson.DecodeLimited(bytes.NewReader(raw), 4096, &evidence); err != nil {
+	// Allow the full request ID contract, including up to six JSON bytes per
+	// ID byte, while retaining a bounded strict terminal receipt.
+	if err := strictjson.DecodeLimited(bytes.NewReader(raw), 64<<10, &evidence); err != nil {
 		return evidence, SafeError("invalid trainer terminal evidence", err)
 	}
 	if !evidence.Matches(job) {
