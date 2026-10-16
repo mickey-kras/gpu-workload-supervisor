@@ -12,6 +12,9 @@ import (
 var ErrTemporaryCleanupRequired = errors.New("temporary discovery cleanup is required; inspect the persisted session and explicitly clean up its recorded invocation")
 
 func temporaryDiscoveryPending(ctx context.Context, tx *sql.Tx) error {
+	if err := trainingPending(ctx, tx); err != nil {
+		return err
+	}
 	var pending bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM temporary_discovery_sessions WHERE status != 'completed')`).Scan(&pending); err != nil {
 		return err

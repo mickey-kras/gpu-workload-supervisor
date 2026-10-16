@@ -51,19 +51,20 @@ type LaunchBinding struct {
 }
 
 type WorkloadProfile struct {
-	LaunchBinding  *LaunchBinding `json:"launchBinding,omitempty"`
-	SystemdSlice   string         `json:"systemdSlice,omitempty"`
-	SystemdVersion uint16         `json:"systemdVersion,omitempty"`
-	NativeModel    *NativeModel   `json:"nativeModel,omitempty"`
-	ID             Workload       `json:"id"`
-	Label          string         `json:"label"`
-	Adapter        string         `json:"adapter"`
-	Unit           string         `json:"unit"`
-	Cgroup         string         `json:"cgroup"`
-	HealthURL      string         `json:"healthURL"`
-	ReleaseURL     string         `json:"releaseURL,omitempty"`
-	RequiredMiB    uint64         `json:"requiredMiB,omitempty"`
-	BootPolicy     string         `json:"bootPolicy,omitempty"`
+	Trainer        *TrainerBinding `json:"trainer,omitempty"`
+	LaunchBinding  *LaunchBinding  `json:"launchBinding,omitempty"`
+	SystemdSlice   string          `json:"systemdSlice,omitempty"`
+	SystemdVersion uint16          `json:"systemdVersion,omitempty"`
+	NativeModel    *NativeModel    `json:"nativeModel,omitempty"`
+	ID             Workload        `json:"id"`
+	Label          string          `json:"label"`
+	Adapter        string          `json:"adapter"`
+	Unit           string          `json:"unit"`
+	Cgroup         string          `json:"cgroup"`
+	HealthURL      string          `json:"healthURL"`
+	ReleaseURL     string          `json:"releaseURL,omitempty"`
+	RequiredMiB    uint64          `json:"requiredMiB,omitempty"`
+	BootPolicy     string          `json:"bootPolicy,omitempty"`
 }
 type Catalog struct {
 	Version  int               `json:"version"`
@@ -138,6 +139,10 @@ func (c Catalog) Profile(id Workload) (WorkloadProfile, bool) {
 func (c Catalog) Clone() Catalog {
 	c.Profiles = slices.Clone(c.Profiles)
 	for i := range c.Profiles {
+		if c.Profiles[i].Trainer != nil {
+			t := *c.Profiles[i].Trainer
+			c.Profiles[i].Trainer = &t
+		}
 		if c.Profiles[i].LaunchBinding != nil {
 			b := *c.Profiles[i].LaunchBinding
 			b.DropIns = append([]LaunchSource(nil), b.DropIns...)
@@ -159,7 +164,7 @@ func (c Catalog) Validate() error {
 	if err := c.validateSize(); err != nil {
 		return err
 	}
-	if c.Version != 1 && c.Version != 2 {
+	if c.Version != 1 && c.Version != 2 && c.Version != 4 {
 		return errors.New("unsupported catalog version")
 	}
 	if c.Disabled {
@@ -201,6 +206,9 @@ func (c Catalog) validateSize() error {
 
 func (c Catalog) validateProfiles() error {
 	for i, p := range c.Profiles {
+		if p.Trainer != nil && c.Version != 4 {
+			return errors.New("trainer bindings require catalog version 4")
+		}
 		if c.Version == 1 && p.NativeModel != nil && p.NativeModel.Owned != nil {
 			return ErrOwnedRequiresV2
 		}
@@ -222,6 +230,9 @@ func ValidWorkloadLabel(label string) bool {
 }
 
 func (p WorkloadProfile) validate() error {
+	if p.Trainer != nil {
+		return p.validateTrainerProfile()
+	}
 	if err := p.validateNativeBinding(); err != nil {
 		return err
 	}
@@ -440,6 +451,9 @@ func validateNativeOverlap(a, b *NativeModel) error {
 }
 
 func profilesOverlap(p, q WorkloadProfile) bool {
+	if trainerOutputCollision(p, q) || trainerOutputCollision(q, p) {
+		return true
+	}
 	if p.ID == q.ID {
 		return true
 	}

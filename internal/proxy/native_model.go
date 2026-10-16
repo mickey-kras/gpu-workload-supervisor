@@ -51,7 +51,7 @@ func nativePolicy(ctx context.Context, catalog CatalogStore, config Config) (*co
 // reads the catalog without Validate, so it refuses versions it does not
 // understand rather than misinterpreting them.
 func supportedCatalogVersion(v int) bool {
-	return v == 1 || v == 2
+	return v == 1 || v == 2 || v == 4
 }
 
 func nativeExecutionRoute(runtime string, r Route) bool {

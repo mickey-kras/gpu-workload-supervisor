@@ -44,7 +44,7 @@ func run() error {
 
 type modeExecution struct {
 	catalogPath, catalogRevision                                                              string
-	statePath, resolveReason, target                                                          string
+	statePath, resolveReason, target, trainingJob                                             string
 	auditBatch                                                                                int
 	actionTimeout, drainTimeout, verifyTimeout, cleanupTimeout, finalizeTimeout, pollInterval time.Duration
 }
@@ -69,6 +69,7 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 	target := flags.String("target", "", "required workload ID for ownership commands; idle selects no workload")
 	auditBefore := flags.String("audit-before", "", "prune-audit cutoff (RFC3339); archive first")
 	auditBatch := flags.Int("audit-batch", 256, "maximum audit parents removed by prune-audit (1..1024)")
+	trainingJob := flags.String("training-job", "", "finite training job ID")
 	resolveReason := flags.String("resolve-reason", "", "required audit reason for resolve-work")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
@@ -80,6 +81,9 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 		return err
 	}
 	command := flags.Arg(0)
+	if err := validateTrainingFlags(command, *trainingJob); err != nil {
+		return err
+	}
 	auditCutoff, err := validateAuditFlags(command, *auditBefore, *auditBatch)
 	if err != nil {
 		return err
@@ -99,7 +103,7 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 	}
 	return executeWithState(newRuntime, runtimeConfig, command, auditCutoff, modeExecution{
 		catalogPath: *catalogPath, catalogRevision: *catalogRevision,
-		statePath: *statePath, resolveReason: *resolveReason, target: *target,
+		statePath: *statePath, trainingJob: *trainingJob, resolveReason: *resolveReason, target: *target,
 		auditBatch: *auditBatch, actionTimeout: *actionTimeout, drainTimeout: *drainTimeout,
 		verifyTimeout: *verifyTimeout, cleanupTimeout: *cleanupTimeout,
 		finalizeTimeout: *finalizeTimeout, pollInterval: *pollInterval,
@@ -184,12 +188,7 @@ func executeWithState(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Mana
 	if err != nil {
 		return err
 	}
-	// The oneshot policy tick carries no qualified evidence provider yet, so an
-	// enabled policy fails closed; an Off policy is a clean no-op.
-	if command == idlePolicyTickCommand {
-		return controller.PolicyTick(ctx, nil)
-	}
-	return executeCommand(ctx, controller, command, options.resolveReason, control.Workload(options.target))
+	return executeRuntimeCommand(ctx, controller, command, options)
 }
 
 func validateCommandFlags(flags *flag.FlagSet, target string) error {
@@ -302,7 +301,7 @@ func restoreState(ctx context.Context, stateStore *store.Store) error {
 
 func validateTarget(command, target string) error {
 	switch command {
-	case "switch", "take-control", "user-switch", "return-control", "recover-user":
+	case "switch", "take-control", "user-switch", "return-control", "recover-user", "training-start":
 		if !control.ValidWorkloadID(control.Workload(target)) && target != "idle" {
 			return fmt.Errorf("%s requires -target with a valid workload ID or idle", command)
 		}
@@ -378,4 +377,16 @@ func pinCatalog(snapshot control.CatalogSnapshot) (*control.CatalogSnapshot, err
 		return nil, errors.New("no catalog has been accepted; run configure -catalog first")
 	}
 	return &snapshot, nil
+}
+
+func executeRuntimeCommand(ctx context.Context, controller *supervisor.Controller, command string, options modeExecution) error {
+	// The oneshot policy tick carries no qualified evidence provider yet, so an
+	// enabled policy fails closed; an Off policy is a clean no-op.
+	if command == idlePolicyTickCommand {
+		return controller.PolicyTick(ctx, nil)
+	}
+	if strings.HasPrefix(command, "training-") {
+		return executeTraining(ctx, controller, command, options.trainingJob, control.Workload(options.target))
+	}
+	return executeCommand(ctx, controller, command, options.resolveReason, control.Workload(options.target))
 }

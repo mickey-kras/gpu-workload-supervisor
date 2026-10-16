@@ -98,6 +98,9 @@ func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) e
 	if !ok {
 		return errors.New("unconfigured workload")
 	}
+	if p.Trainer != nil {
+		return errors.New("finite trainer requires an admitted job")
+	}
 	if err := m.verifyNativeBinding(ctx, p); err != nil {
 		return err
 	}
