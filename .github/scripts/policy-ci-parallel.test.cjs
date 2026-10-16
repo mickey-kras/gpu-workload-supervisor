@@ -117,3 +117,16 @@ test('changing the guard shard command alone cannot silently reduce fixture cove
   module.exports.normalizeParallelCi({ [path]: fixtureModule.exports.parallelFixture() }, failures);
   assert.ok(failures.some(failure => failure.includes('GTK shard command')));
 });
+
+
+test('frontend npm cache includes exactly every installed project lockfile', () => {
+  const workflow = parallelFixture();
+  const setup = workflow.jobs.frontend.steps.find(step => step.uses?.startsWith('actions/setup-node@'));
+  const paths = setup.with['cache-dependency-path'].trim().split('\n');
+  assert.deepEqual(paths, ['clients/gnome/package-lock.json', '.github/aislop/package-lock.json', '.github/scripts/package-lock.json']);
+  for (const missing of paths) {
+    mutate(jobs => {
+      jobs.frontend.steps.find(step => step.uses?.startsWith('actions/setup-node@')).with['cache-dependency-path'] = paths.filter(path => path !== missing).join('\n') + '\n';
+    });
+  }
+});

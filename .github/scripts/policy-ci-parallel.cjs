@@ -204,7 +204,13 @@ function inspectParallelCi(workflow, failures) {
     const setup = ['harden', 'checkout'];
     if (id === 'go' || id === 'package') setup.push('go', 'node');
     if (id === 'frontend') setup.push('node');
-    const sequence = [...setup.map(name => SETUP_STEPS[name]), ...names];
+    const sequence = [...setup.map(name => {
+      const step = { ...SETUP_STEPS[name], with: { ...SETUP_STEPS[name].with } };
+      if (id === 'frontend' && name === 'node') {
+        step.with['cache-dependency-path'] = 'clients/gnome/package-lock.json\n.github/aislop/package-lock.json\n.github/scripts/package-lock.json\n';
+      }
+      return step;
+    }), ...names];
     requireValue(steps.length === sequence.length, `${id} complete step sequence`);
     for (const [index, expected] of sequence.entries()) {
       const step = steps[index];
@@ -272,3 +278,4 @@ function normalizeParallelCi(workflows, failures) {
 }
 
 module.exports = { normalizeParallelCi, REQUIRED_JOBS, AGGREGATE_RUN, SHARD_RUN, STEP_JOBS };
+
