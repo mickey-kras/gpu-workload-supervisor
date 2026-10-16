@@ -121,7 +121,7 @@ func (s *Store) idleSource(ctx context.Context, tx *sql.Tx, current control.Stat
 	if running {
 		return ErrPolicyPreempted
 	}
-	pending, err := pendingWorkTx(ctx, tx)
+	pending, err := pendingIdleWorkTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -178,7 +178,7 @@ func (s *Store) armIdleDeadlineTx(ctx context.Context, tx *sql.Tx, expectedSetti
 	// the current activity marker and require no pending work, so a stale
 	// computed deadline is never armed. Mismatch is a clean preemption,
 	// not a latch: the next tick re-verifies from fresh evidence.
-	pending, err := pendingWorkTx(ctx, tx)
+	pending, err := pendingIdleWorkTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -192,4 +192,13 @@ func (s *Store) armIdleDeadlineTx(ctx context.Context, tx *sql.Tx, expectedSetti
 	return updateSingleton(ctx, tx, `UPDATE idle_policy_state
 		SET armed_deadline = ?, attestation_at = ?, updated_at = ?
 		WHERE singleton = 1`, formatTime(deadline), formatTime(attestationAt), formatTime(s.now()))
+}
+
+// Broker arrivals participate only in inactivity checks; they must not prevent
+// their own workload activation or be mistaken for work already dispatched.
+func pendingIdleWorkTx(ctx context.Context, tx *sql.Tx) (int, error) {
+	var pending int
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM registered_work WHERE completed_at IS NULL)
+ OR EXISTS(SELECT 1 FROM broker_demands WHERE status IN ('queued','reserved'))`).Scan(&pending)
+	return pending, err
 }

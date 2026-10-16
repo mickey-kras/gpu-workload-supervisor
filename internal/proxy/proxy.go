@@ -43,6 +43,8 @@ type Route struct {
 }
 
 type Config struct {
+	RequesterPolicy      *RequesterPolicy
+	ActivateDemand       func(context.Context, control.Workload, control.State, string) (control.Fence, error)
 	ComfyUIContract      string
 	IngressMode          string
 	ExecutionCredential  string
@@ -72,6 +74,8 @@ type Config struct {
 }
 
 type Handler struct {
+	requesterPolicy      *RequesterPolicy
+	activateDemand       func(context.Context, control.Workload, control.State, string) (control.Fence, error)
 	nativeFinishes       *nativeFinishes
 	comfyUI              *comfyUIAdapter
 	ingressMode          string
@@ -147,6 +151,9 @@ func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (
 	if err != nil {
 		return nil, err
 	}
+	if err := validateDemandDependencies(stateStore, config); err != nil {
+		return nil, err
+	}
 	reverseProxy := httputil.NewSingleHostReverseProxy(config.Upstream)
 	reverseProxy.Transport = config.Transport
 	if reverseProxy.Transport == nil {
@@ -157,9 +164,10 @@ func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (
 		reverseProxy.Transport = transport
 	}
 	if config.IngressMode == IngressAdapter {
-		reverseProxy.Transport = ingressTransport{base: reverseProxy.Transport, executionCredential: config.ExecutionCredential, completionCredential: config.CompletionCredential}
+		reverseProxy.Transport = ingressTransport{requesterCredentials: requesterSecrets(config.RequesterPolicy), base: reverseProxy.Transport, executionCredential: config.ExecutionCredential, completionCredential: config.CompletionCredential}
 	}
 	handler := &Handler{
+		requesterPolicy: cloneRequesterPolicy(config.RequesterPolicy), activateDemand: config.ActivateDemand,
 		ingressMode: config.IngressMode, executionCredential: config.ExecutionCredential, completionCredential: config.CompletionCredential,
 		store: stateStore, catalog: catalog, proxy: reverseProxy, workload: config.Workload, nativeModel: native, catalogRevision: revision,
 		executionRoutes: executionRoutes, readOnlyRoutes: readOnlyRoutes, passthroughRoutes: passthroughRoutes,
@@ -329,6 +337,10 @@ func reservedTransportHeader(header string) bool {
 }
 
 func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	if h.requesterExecution(request) {
+		h.executeRequester(response, request)
+		return
+	}
 	if !h.authorizeIngress(response, request) {
 		return
 	}
@@ -433,6 +445,9 @@ func (h *Handler) executeRegistered(response http.ResponseWriter, request *http.
 	if h.nativeFinishes != nil {
 		reservation = h.nativeFinishes.reserve()
 		if reservation == nil {
+			if !h.releaseUnadmittedDemand(response, request) {
+				return
+			}
 			capacityUnavailable(response)
 			return
 		}
@@ -446,6 +461,9 @@ func (h *Handler) executeRegistered(response http.ResponseWriter, request *http.
 	}
 	token, err := h.admitExecution(request.Context(), requestID, jobID, fence)
 	if err != nil {
+		if !h.releaseUnadmittedDemand(response, request) {
+			return
+		}
 		h.writeWorkError(response, err)
 		return
 	}

@@ -244,6 +244,11 @@ func (s *Store) rotateIncarnation(ctx context.Context, tx *sql.Tx, state control
 	if err != nil {
 		return control.State{}, err
 	}
+	reserved, err := cancelReservedDemands(ctx, tx, now)
+	if err != nil {
+		return control.State{}, fmt.Errorf("cancel restored demand reservations: %w", err)
+	}
+	abandoned += reserved
 	state.Owner = control.OwnerSupervisor
 	state.DesiredWorkload = control.WorkloadIdle
 	state.LeaseFence = control.Fence{Incarnation: incarnation, Epoch: 1}

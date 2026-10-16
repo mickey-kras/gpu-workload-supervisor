@@ -388,3 +388,85 @@ func TestTrainingContractRejectsCanonicalStateOutputThroughAncestorAlias(t *test
 		t.Fatalf("rejected alias admitted work: %d %v", pending, err)
 	}
 }
+
+func TestTrainingContractDoesNotClaimDemandIdentity(t *testing.T) {
+	for _, reserved := range []bool{false, true} {
+		t.Run(map[bool]string{false: "queued", true: "reserved"}[reserved], func(t *testing.T) {
+			ctx := context.Background()
+			s, _, revision := trainingContractStore(t)
+			d := testDemand()
+			if err := s.QueueDemand(ctx, d); err != nil {
+				t.Fatal(err)
+			}
+			if reserved {
+				if _, err := s.ReserveDemand(ctx, d); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := s.State(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.ReserveTraining(ctx, d.RequestID, "trainer", revision); !errors.Is(err, ErrRequestConflict) {
+				t.Fatalf("demand identity claimed: %v", err)
+			}
+			after, err := s.State(ctx)
+			if err != nil || before != after {
+				t.Fatalf("state changed: %v", err)
+			}
+			if n, err := s.PendingWork(ctx); err != nil || n != 0 {
+				t.Fatalf("unexpected admission: %d %v", n, err)
+			}
+			var status string
+			if err := s.db.QueryRow(`SELECT status FROM broker_demands WHERE request_id=?`, d.RequestID).Scan(&status); err != nil {
+				t.Fatal(err)
+			}
+			want := "queued"
+			if reserved {
+				want = "reserved"
+			}
+			if status != want {
+				t.Fatalf("demand=%s", status)
+			}
+		})
+	}
+}
+
+func TestTrainingContractMigrationPreservesV16Demand(t *testing.T) {
+	ctx := context.Background()
+	s, path, revision := trainingContractStore(t)
+	d := testDemand()
+	if err := s.QueueDemand(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	claim, err := s.ReserveDemand(ctx, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`DROP TABLE training_jobs; DELETE FROM schema_migrations WHERE version=17`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	after, err := upgraded.State(ctx)
+	if err != nil || before != after {
+		t.Fatalf("migration changed state: %v", err)
+	}
+	var got, status string
+	if err := upgraded.db.QueryRow(`SELECT claim,status FROM broker_demands WHERE request_id=?`, d.RequestID).Scan(&got, &status); err != nil || got != claim || status != "reserved" {
+		t.Fatalf("demand changed: %s %s %v", got, status, err)
+	}
+	if _, err := upgraded.ReserveTraining(ctx, "distinct-job", "trainer", revision); err != nil {
+		t.Fatal(err)
+	}
+}

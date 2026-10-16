@@ -13,7 +13,7 @@ import (
 
 var ErrTrainingPending = errors.New("unfinished training job requires training reconciliation or explicit training recovery")
 
-const schemaV16 = `CREATE TABLE training_jobs (
+const schemaV17 = `CREATE TABLE training_jobs (
  id TEXT PRIMARY KEY REFERENCES registered_work(request_id),
  payload BLOB NOT NULL,
  finished INTEGER NOT NULL DEFAULT 0 CHECK(finished IN (0,1))
@@ -56,7 +56,7 @@ func (s *Store) ReserveTraining(ctx context.Context, id string, workload control
 		return job, err
 	}
 	_, err = s.stateTx(ctx, func(tx *sql.Tx, current control.State) (control.State, error) {
-		p, err := s.trainingReservationSource(ctx, tx, current, workload, revision)
+		p, err := s.trainingReservationSource(ctx, tx, current, id, workload, revision)
 		if err != nil {
 			return current, err
 		}
@@ -190,7 +190,10 @@ func (s *Store) FinishTraining(ctx context.Context, job control.TrainingJob, out
 	})
 }
 
-func (s *Store) trainingReservationSource(ctx context.Context, tx *sql.Tx, current control.State, workload control.Workload, revision string) (control.WorkloadProfile, error) {
+func (s *Store) trainingReservationSource(ctx context.Context, tx *sql.Tx, current control.State, id string, workload control.Workload, revision string) (control.WorkloadProfile, error) {
+	if err := rejectTrainingDemandIdentity(ctx, tx, id); err != nil {
+		return control.WorkloadProfile{}, err
+	}
 	if err := temporaryDiscoveryPending(ctx, tx); err != nil {
 		return control.WorkloadProfile{}, err
 	}
@@ -233,6 +236,18 @@ func (s *Store) validateTrainingOutputPaths(t control.TrainerBinding) error {
 				return errors.New("trainer output overlaps control state")
 			}
 		}
+	}
+	return nil
+}
+
+// Training jobs cannot claim an identity already owned by requester demand.
+func rejectTrainingDemandIdentity(ctx context.Context, tx *sql.Tx, id string) error {
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM broker_demands WHERE request_id=?)`, id).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return ErrRequestConflict
 	}
 	return nil
 }

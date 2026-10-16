@@ -192,7 +192,24 @@ DROP TABLE operator_settings;
 ALTER TABLE operator_settings_new RENAME TO operator_settings;
 `
 
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16}
+// Broker demand survives process restarts independently of runtime admission.
+const schemaV16 = `
+CREATE TABLE broker_demands (
+ request_id TEXT PRIMARY KEY,
+ requester TEXT NOT NULL,
+ workflow TEXT NOT NULL,
+ body_sha256 TEXT NOT NULL,
+ workload TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('queued','reserved','admitted','cancelled')),
+ claim TEXT,
+ lease_incarnation TEXT,
+ lease_epoch INTEGER,
+ created_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL);
+CREATE INDEX idx_broker_demands_status ON broker_demands(status);
+`
+
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17}
 
 func (s *Store) initialize(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)

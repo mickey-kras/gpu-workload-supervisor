@@ -303,7 +303,7 @@ func TestOpenRestoredMigratesV8WithoutLosingResolutionAudit(t *testing.T) {
 	if _, err := s.db.ExecContext(ctx, `DROP INDEX idx_transitions_in_progress_order`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.ExecContext(ctx, `DROP INDEX idx_transition_events_transition_sequence; DROP TABLE workload_catalog; DROP TABLE workload_catalog_history; DROP TABLE training_jobs; DROP TABLE comfyui_attempts; DROP TABLE temporary_discovery_sessions; DROP TABLE operator_settings; DROP TABLE idle_policy_state; DELETE FROM schema_migrations WHERE version >= 9`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `DROP INDEX idx_transition_events_transition_sequence; DROP TABLE workload_catalog; DROP TABLE workload_catalog_history; DROP TABLE training_jobs; DROP TABLE broker_demands; DROP TABLE comfyui_attempts; DROP TABLE temporary_discovery_sessions; DROP TABLE operator_settings; DROP TABLE idle_policy_state; DELETE FROM schema_migrations WHERE version >= 9`); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {

@@ -515,6 +515,16 @@ func TestTrainingContractRoutineTransitionsWaitForRelease(t *testing.T) {
 					t.Fatal("release failure accepted")
 				}
 			}
+			// Requester demand is durable intent, not permission to displace training.
+			demand := store.Demand{RequestID: "requester-job", Requester: "test", Workflow: "inference", BodySHA256: strings.Repeat("d", 64), Workload: control.WorkloadText}
+			if err := s.QueueDemand(ctx, demand); err != nil {
+				t.Fatal(err)
+			}
+			claim, err := s.ReserveDemand(ctx, demand)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx = store.WithDemandClaim(ctx, claim)
 			r.calls, r.trainingCalls = nil, nil
 			before, err := s.State(ctx)
 			if err != nil {
