@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -143,6 +144,120 @@ func TestCompileModelFamilyUsesDecodedString(t *testing.T) {
 				t.Fatalf("model family accepted = %v, want %v: %v", err == nil, tc.accepted, err)
 			}
 		})
+	}
+}
+
+func TestReadRecipeRequiresCanonicalKeys(t *testing.T) {
+	r := fixture(t)
+	// Inventory file names are operator-selected paths, not recipe field names.
+	r.Model.Inventory.Files["RANK"] = strings.Repeat("a", 64)
+	raw, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, old, replacement string
+		accepted               bool
+	}{
+		{"canonical", `"rank":8`, `"rank":8`, true},
+		{"escaped canonical", `"rank":8`, `"r\u0061nk":8`, true},
+		{"top alias", `"rank":8`, `"RANK":8`, false},
+		{"top override", `"rank":8`, `"rank":8,"RANK":16`, false},
+		{"budget alias", `"budget":`, `"BUDGET":`, false},
+		{"nested budget alias", `"ramBytes":1`, `"RAMBYTES":1`, false},
+		{"snapshot alias", `"revision":`, `"REVISION":`, false},
+		{"inventory alias", `"inventory":`, `"INVENTORY":`, false},
+		{"inventory root alias", `"root":`, `"ROOT":`, false},
+		{"inventory files alias", `"files":`, `"FILES":`, false},
+		{"dataset alias", `"sha256":`, `"SHA256":`, false},
+		{"runtime alias", `"entrypoint":`, `"ENTRYPOINT":`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := strings.Replace(string(raw), tc.old, tc.replacement, 1)
+			_, err := ReadRecipe(strings.NewReader(input))
+			if (err == nil) != tc.accepted {
+				t.Fatalf("recipe accepted = %v, want %v: %v", err == nil, tc.accepted, err)
+			}
+			if err != nil && (strings.Contains(err.Error(), r.Model.Inventory.Root) || strings.Contains(err.Error(), tc.replacement)) {
+				t.Fatal("recipe error disclosed input")
+			}
+		})
+	}
+}
+
+func TestCompileRejectsInvalidAssetConfigUTF8(t *testing.T) {
+	for _, asset := range []string{"model", "tokenizer"} {
+		t.Run(asset, func(t *testing.T) {
+			r := fixture(t)
+			inventory, name := &r.Model.Inventory, "config.json"
+			if asset == "tokenizer" {
+				inventory, name = &r.Tokenizer.Inventory, "tokenizer_config.json"
+			}
+			invalid := "{\"model_type\":\"llama\",\"private\":\"secret-\xff\"}"
+			inventory.Files[name] = writeFixture(t, filepath.Join(inventory.Root, name), invalid)
+			if _, err := Compile(r, math.MaxUint64, math.MaxUint64); err == nil || strings.Contains(err.Error(), "secret-") || strings.Contains(err.Error(), inventory.Root) {
+				t.Fatal("invalid asset UTF-8 accepted or disclosed", err)
+			}
+		})
+	}
+}
+
+func TestInventoryBoundsAllVisitedEntries(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "nested"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	i := Inventory{Root: root, Files: map[string]string{"nested/file.txt": writeFixture(t, filepath.Join(root, "nested", "file.txt"), "fixture")}}
+	if err := i.Inspect(); err != nil {
+		t.Fatal("normal nested inventory rejected", err)
+	}
+	// The root is excluded; the nested directory and file consume two entries.
+	for n := 0; n < 65536-2; n++ {
+		if err := os.Mkdir(filepath.Join(root, "empty"+strconv.Itoa(n)), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := i.Inspect(); err != nil {
+		t.Fatal("inventory at visited-entry limit rejected", err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "one-too-many"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := i.Inspect(); err == nil || strings.Contains(err.Error(), root) {
+		t.Fatal("excess empty directories accepted or disclosed", err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "wide-overflow"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := i.Inspect(); err == nil {
+		t.Fatal("excess entries in one directory accepted")
+	}
+}
+
+func TestBoundedDirectoryEntries(t *testing.T) {
+	root := t.TempDir()
+	if entries, err := boundedDirectoryEntries(root, 0); err != nil || len(entries) != 0 {
+		t.Fatal("empty directory rejected", err)
+	}
+	for _, name := range []string{"a", "b"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, limit := range []int{0, 1} {
+		if entries, err := boundedDirectoryEntries(root, limit); err == nil || entries != nil || strings.Contains(err.Error(), root) {
+			t.Fatal("directory overflow accepted or disclosed", err)
+		}
+	}
+	if entries, err := boundedDirectoryEntries(root, 2); err != nil || len(entries) != 2 {
+		t.Fatal("directory at limit rejected", err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(root, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := boundedDirectoryEntries(link, 2); err == nil {
+		t.Fatal("directory link followed")
 	}
 }
 

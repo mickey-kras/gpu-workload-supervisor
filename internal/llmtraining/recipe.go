@@ -4,6 +4,7 @@ package llmtraining
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"math"
@@ -81,7 +82,39 @@ func ReadRecipe(r io.Reader) (Recipe, error) {
 	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 8<<20, &recipe) != nil {
 		return Recipe{}, errors.New("invalid candidate recipe JSON")
 	}
+	if !canonicalRecipeKeys(raw, recipe) {
+		return Recipe{}, errors.New("invalid candidate recipe JSON")
+	}
 	return recipe, recipe.Validate()
+}
+
+// Compare against the encoded typed recipe so JSON tags define exact field
+// names. Inventory file maps retain their operator-selected keys in both trees.
+func canonicalRecipeKeys(raw []byte, recipe Recipe) bool {
+	canonical, err := json.Marshal(recipe)
+	if err != nil {
+		return false
+	}
+	return matchingObjectKeys(raw, canonical)
+}
+
+func matchingObjectKeys(supplied, expected json.RawMessage) bool {
+	// Expected nodes come from json.Marshal: scalar and null leaves have no
+	// field names. The typed decoder has already checked their value types.
+	if len(expected) == 0 || expected[0] != '{' {
+		return true
+	}
+	var got, want map[string]json.RawMessage
+	if json.Unmarshal(expected, &want) != nil || json.Unmarshal(supplied, &got) != nil || got == nil {
+		return false
+	}
+	for key, value := range got {
+		next, exists := want[key]
+		if !exists || !matchingObjectKeys(value, next) {
+			return false
+		}
+	}
+	return true
 }
 
 func (r Recipe) Validate() error {

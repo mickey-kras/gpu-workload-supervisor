@@ -48,8 +48,12 @@ The complete typed schema is `internal/llmtraining/recipe.go`.
 | `seed` | 0-2147483647 |
 | `budget` | The complete estimates below |
 
-Inventories reject missing, extra, linked or nonregular files. Inventory matching
-is only a byte comparison at preparation time: it does not prove that bytes
+Inventories reject missing, extra, linked or nonregular files. Each inventory
+permits at most 65536 enumerated entries, including empty directories but
+excluding the root, and declares at most 32768 files. Directory reads stop at the remaining
+entry budget plus one overflow entry; the output directory check reads one entry.
+Inventory matching is only a byte comparison at preparation time: it does not
+prove that bytes
 originate from the declared revision, approve code or installed entry points,
 bind external libraries, or prevent subsequent modification. Include installed
 distribution metadata and entry-point declarations in the runtime inventory.
@@ -95,6 +99,7 @@ sample packing, BF16, SDPA, gradient checkpointing, AdamW, a constant learning
 rate, and LoRA targets `q_proj`/`v_proj`. QLoRA enables Axolotl's NF4 conversion
 with double quantization; LoRA leaves 4-bit and 8-bit loading off. Evaluation and
 checkpoint saving are requested at the final step; automatic resume is off.
+The inspected upstream default also evaluates before training.
 Checkpoints request optimizer/training state (`save_only_model: false`), which
 does not establish checkpoint-stop or resume correctness.
 

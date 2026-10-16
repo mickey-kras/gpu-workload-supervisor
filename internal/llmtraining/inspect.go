@@ -28,30 +28,68 @@ func (i Inventory) Inspect() error {
 		return err
 	}
 	seen := 0
-	err := filepath.WalkDir(i.Root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return errors.New("candidate inventory is unreadable")
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(i.Root, path)
-		if err != nil || !entry.Type().IsRegular() || i.Files[rel] == "" {
-			return errors.New("candidate inventory contains an undeclared or nonregular file")
-		}
-		if err := matchFile(path, i.Files[rel], 1<<40); err != nil {
+	remaining := 65536 // Count entries below the root before descending.
+	directories := []string{i.Root}
+	for len(directories) != 0 {
+		last := len(directories) - 1
+		path := directories[last]
+		directories = directories[:last]
+		entries, err := boundedDirectoryEntries(path, remaining)
+		if err != nil {
 			return err
 		}
-		seen++
-		return nil
-	})
-	if err != nil {
-		return err
+		remaining -= len(entries)
+		children, files, err := i.inspectEntries(path, entries)
+		if err != nil {
+			return err
+		}
+		directories = append(directories, children...)
+		seen += files
 	}
 	if seen != len(i.Files) {
 		return errors.New("candidate inventory files are missing")
 	}
 	return nil
+}
+
+func (i Inventory) inspectEntries(directory string, entries []fs.DirEntry) ([]string, int, error) {
+	var directories []string
+	seen := 0
+	for _, entry := range entries {
+		path := filepath.Join(directory, entry.Name())
+		if entry.IsDir() {
+			directories = append(directories, path)
+			continue
+		}
+		rel, err := filepath.Rel(i.Root, path)
+		if err != nil || !entry.Type().IsRegular() || i.Files[rel] == "" {
+			return nil, 0, errors.New("candidate inventory contains an undeclared or nonregular file")
+		}
+		if err := matchFile(path, i.Files[rel], 1<<40); err != nil {
+			return nil, 0, err
+		}
+		seen++
+	}
+	return directories, seen, nil
+}
+
+// Read at most the remaining global budget plus one overflow witness. Opening
+// only directories without following a leaf link also avoids blocking on FIFOs.
+func boundedDirectoryEntries(path string, remaining int) ([]fs.DirEntry, error) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, errors.New("candidate directory is unreadable")
+	}
+	f := os.NewFile(uintptr(fd), path)
+	entries, readErr := f.ReadDir(remaining + 1)
+	closeErr := f.Close()
+	if (readErr != nil && !errors.Is(readErr, io.EOF)) || closeErr != nil {
+		return nil, errors.New("candidate directory is unreadable")
+	}
+	if len(entries) > remaining {
+		return nil, errors.New("candidate inventory exceeds the entry limit")
+	}
+	return entries, nil
 }
 
 func noLinks(path string) error {
@@ -113,8 +151,9 @@ func inspectConfig(path string, model bool) error {
 		return errors.New("candidate asset configuration is unreadable")
 	}
 	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
 	var config map[string]json.RawMessage
-	if strictjson.DecodeLimited(f, 1<<20, &config) != nil || config == nil {
+	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &config) != nil || config == nil {
 		return errors.New("candidate asset configuration is invalid")
 	}
 	if _, exists := config["auto_map"]; exists {
@@ -134,8 +173,7 @@ func inspectPaths(r Recipe) error {
 	if err := noLinks(r.OutputDirectory); err != nil {
 		return err
 	}
-	entries, err := os.ReadDir(r.OutputDirectory)
-	if err != nil || len(entries) != 0 {
+	if _, err := boundedDirectoryEntries(r.OutputDirectory, 0); err != nil {
 		return errors.New("candidate output directory must exist and be empty")
 	}
 	for _, path := range []string{r.Model.Inventory.Root, r.Tokenizer.Inventory.Root, r.Runtime.Inventory.Root, r.Train.Path, r.HeldOut.Path} {
