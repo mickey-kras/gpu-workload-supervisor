@@ -59,6 +59,11 @@ func (c *Controller) StartTraining(ctx context.Context, id string, target contro
 	if err := s.PreflightTraining(ctx, id, target, c.config.Catalog.Revision); err != nil {
 		return control.TrainingJob{}, err
 	}
+	// Qualify runtime bindings and output destinations before claiming identity
+	// or closing admission for the GPU handoff.
+	if err := c.runAction(ctx, c.runtime.Preflight); err != nil {
+		return control.TrainingJob{}, err
+	}
 	claim, err := s.ClaimTraining(ctx, id, target, c.config.Catalog.Revision)
 	if err != nil {
 		return claim, err

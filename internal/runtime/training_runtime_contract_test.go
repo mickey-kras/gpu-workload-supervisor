@@ -452,15 +452,19 @@ func TestTrainerContractStartPreconditionsPreventLaunch(t *testing.T) {
 
 type trainerObservationRunner struct {
 	*fakeRunner
-	command      string
-	observations int
-	failAt       int
+	command           string
+	observations      int
+	failAt            int
+	beforeObservation func(int)
 }
 
 func (r *trainerObservationRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	call := strings.Join(append([]string{name}, args...), " ")
 	if call == r.command {
 		r.observations++
+		if r.beforeObservation != nil {
+			r.beforeObservation(r.observations)
+		}
 		if r.observations == r.failAt {
 			return nil, fmt.Errorf("trainer observation unavailable")
 		}
@@ -550,6 +554,60 @@ func TestTrainerContractMalformedTerminalDoesNotExposeKeys(t *testing.T) {
 		}
 		if strings.Contains(raw, ":2") && !errors.Is(err, strictjson.ErrDuplicateKey) {
 			t.Fatalf("lost duplicate-key cause: %v", err)
+		}
+	}
+}
+
+func TestTrainerContractPreflightQualifiesOutputsWithoutEffects(t *testing.T) {
+	for _, kind := range []string{"missing job parent", "missing terminal parent", "job directory", "terminal directory", "job symlink", "terminal symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			m, r, p, _, _ := trainerContractFixture(t)
+			output := &p.Trainer.JobFile
+			if strings.Contains(kind, "terminal") {
+				output = &p.Trainer.TerminalFile
+			}
+			switch {
+			case strings.HasPrefix(kind, "missing"):
+				*output = filepath.Join(filepath.Dir(*output), "missing", "output.json")
+			case strings.HasSuffix(kind, "directory"):
+				if err := os.Mkdir(*output, 0700); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				if err := os.Symlink(p.Trainer.RecipeFile, *output); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r.calls = nil
+			if err := m.Preflight(context.Background()); !errors.Is(err, ErrLaunchUnsupported) {
+				t.Fatalf("invalid output passed preflight: %v", err)
+			}
+			if len(r.calls) != 0 {
+				t.Fatalf("invalid output reached systemctl or GPU commands: %v", r.calls)
+			}
+		})
+	}
+}
+
+func TestTrainerContractRechecksOutputsImmediatelyBeforeEnvelope(t *testing.T) {
+	m, r, p, job, command := trainerContractFixture(t)
+	r.outputs[command] = []byte(strings.ReplaceAll(strings.ReplaceAll(string(r.outputs[command]), "ActiveState=active", "ActiveState=inactive"), "SubState=exited", "SubState=dead"))
+	r.outputs["/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- training.service"] = stoppedOutput()
+	m.runner = &trainerObservationRunner{fakeRunner: r, command: command, beforeObservation: func(observation int) {
+		if observation == 3 {
+			// Binding verification passed, but the destination changes during the
+			// final stopped-unit observation before envelope creation.
+			if err := os.Mkdir(p.Trainer.JobFile, 0700); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}}
+	if id, err := m.StartTraining(context.Background(), p, job); !errors.Is(err, ErrLaunchUnsupported) || id != "" {
+		t.Fatalf("changed destination accepted: %q %v", id, err)
+	}
+	for _, call := range r.calls {
+		if strings.Contains(call, " --job-mode=fail start ") {
+			t.Fatal("changed destination reached systemctl start")
 		}
 	}
 }
