@@ -565,3 +565,64 @@ func TestTrainingContractRoutineTransitionsWaitForRelease(t *testing.T) {
 		})
 	}
 }
+
+func TestTrainingContractIdentityCollisionPrecedesInferenceStop(t *testing.T) {
+	for _, kind := range []string{"queued", "reserved", "registered"} {
+		t.Run(kind, func(t *testing.T) {
+			_, s, r := trainingStartContract(t)
+			ctx := context.Background()
+			snap, err := s.Catalog(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			catalog := snap.Catalog.Clone()
+			catalog.Profiles = append(catalog.Profiles, control.WorkloadProfile{ID: control.WorkloadText, Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/text", HealthURL: "http://localhost:8080/health"})
+			if _, err = s.ReplaceCatalog(ctx, snap.Revision, catalog); err != nil {
+				t.Fatal(err)
+			}
+			state, err := s.State(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state.ActiveWorkload = control.WorkloadText
+			state.DesiredWorkload = control.WorkloadText
+			state.Admission = control.AdmissionOpen
+			state, err = s.UpdateState(ctx, state.Version, state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := "existing-request"
+			if kind == "registered" {
+				if _, err := s.AdmitWorkToken(ctx, id, "", control.WorkloadText, state.LeaseFence); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				d := store.Demand{RequestID: id, Requester: "test", Workflow: "inference", BodySHA256: strings.Repeat("d", 64), Workload: control.WorkloadText}
+				if err := s.QueueDemand(ctx, d); err != nil {
+					t.Fatal(err)
+				}
+				if kind == "reserved" {
+					if _, err := s.ReserveDemand(ctx, d); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			before, err := s.State(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.active = control.WorkloadText
+			c := testController(t, s, r)
+			if _, err := c.StartTraining(ctx, id, "trainer"); !errors.Is(err, store.ErrRequestConflict) {
+				t.Fatalf("collision: %v", err)
+			}
+			after, err := s.State(ctx)
+			if err != nil || before != after {
+				t.Fatalf("rejected request changed inference authority: %v", err)
+			}
+			if len(r.calls) != 0 || len(r.trainingCalls) != 0 {
+				t.Fatalf("rejected request reached runtime: %v %v", r.calls, r.trainingCalls)
+			}
+		})
+	}
+}

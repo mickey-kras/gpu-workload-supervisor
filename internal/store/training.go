@@ -191,7 +191,7 @@ func (s *Store) FinishTraining(ctx context.Context, job control.TrainingJob, out
 }
 
 func (s *Store) trainingReservationSource(ctx context.Context, tx *sql.Tx, current control.State, id string, workload control.Workload, revision string) (control.WorkloadProfile, error) {
-	if err := rejectTrainingDemandIdentity(ctx, tx, id); err != nil {
+	if err := checkTrainingRequestID(ctx, tx, id); err != nil {
 		return control.WorkloadProfile{}, err
 	}
 	if err := temporaryDiscoveryPending(ctx, tx); err != nil {
@@ -240,10 +240,18 @@ func (s *Store) validateTrainingOutputPaths(t control.TrainerBinding) error {
 	return nil
 }
 
-// Training jobs cannot claim an identity already owned by requester demand.
-func rejectTrainingDemandIdentity(ctx context.Context, tx *sql.Tx, id string) error {
+// CheckTrainingRequestID rejects existing work and demand identities before
+// controller side effects. Reservation repeats this check in its transaction.
+func (s *Store) CheckTrainingRequestID(ctx context.Context, id string) error {
+	if err := control.ValidateRequestID(id); err != nil {
+		return err
+	}
+	return checkTrainingRequestID(ctx, s.db, id)
+}
+
+func checkTrainingRequestID(ctx context.Context, q querier, id string) error {
 	var exists bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM broker_demands WHERE request_id=?)`, id).Scan(&exists); err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM broker_demands WHERE request_id=?) OR EXISTS(SELECT 1 FROM registered_work WHERE request_id=?)`, id, id).Scan(&exists); err != nil {
 		return err
 	}
 	if exists {

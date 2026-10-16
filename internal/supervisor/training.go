@@ -2,7 +2,6 @@ package supervisor
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
@@ -10,6 +9,7 @@ import (
 )
 
 type trainingStore interface {
+	CheckTrainingRequestID(context.Context, string) error
 	TrainingJob(context.Context, string) (control.TrainingJob, error)
 	ReserveTraining(context.Context, string, control.Workload, string) (control.TrainingJob, error)
 	RecordTrainingLaunch(context.Context, control.TrainingJob, string) error
@@ -54,10 +54,7 @@ func (c *Controller) StartTraining(ctx context.Context, id string, target contro
 	if !ok || p.Trainer == nil {
 		return control.TrainingJob{}, errors.New("target is not a trainer")
 	}
-	if _, err := s.TrainingJob(ctx, id); !errors.Is(err, sql.ErrNoRows) {
-		if err == nil {
-			err = store.ErrRequestConflict
-		}
+	if err := s.CheckTrainingRequestID(ctx, id); err != nil {
 		return control.TrainingJob{}, err
 	}
 	if _, err := c.Switch(ctx, control.WorkloadIdle, "training-start"); err != nil {
