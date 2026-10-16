@@ -54,13 +54,35 @@ The lease incarnation in a SQLite backup may be older than the live database. A 
 
    Failed work and transition history remain available. If it fails, keep all components stopped and resolve the error before retrying.
 
-   If `restore-state` reports unfinished training, keep proxies and controller automation stopped and explicitly recover the recorded job first:
+   If `restore-state` reports unfinished training, keep all components stopped. If the job ID is unknown, use Python 3's standard-library SQLite reader against the restored state path, as the service identity. This read-only query prints only IDs and recovery categories, never training payloads or tokens:
+
+   ```sh
+   python3 - /PRIVATE/DURABLE/STATE/state.db <<'PY'
+   import pathlib
+   import sqlite3
+   import sys
+
+   uri = pathlib.Path(sys.argv[1]).resolve().as_uri() + "?mode=ro"
+   with sqlite3.connect(uri, uri=True) as db:
+       for job_id, category in db.execute("""
+           SELECT id, 'reserved job' FROM training_jobs WHERE finished=0
+           UNION ALL
+           SELECT id, 'preparing claim' FROM training_claims WHERE status='preparing'
+           ORDER BY 1
+       """):
+           print(job_id, category, sep="\t")
+   PY
+   ```
+
+   Explicitly recover each listed ID before continuing, replacing `RESTORED-JOB-ID` with that ID:
 
    ```sh
    /PINNED/RELEASE/gpu-mode [runtime flags] -state /PRIVATE/DURABLE/STATE/state.db -training-job RESTORED-JOB-ID training-recover
    ```
 
-   Use the matching runtime configuration and trainer bindings from the restored database's accepted catalog; runtime commands do not accept `-catalog`. Replace `RESTORED-JOB-ID` with the unfinished job's recorded ID. Require successful recovery and verified recursive cgroup/GPU release before retrying `restore-state`, then continue with step 4. Do not bypass the unfinished-training guard. [Training recovery](TRAINING.md#commands) never resumes or relaunches training: it preserves a previously persisted terminal outcome, otherwise records `interrupted`; the backup alone does not establish completion. If recovery fails, keep proxies stopped and resolve the runtime/configuration error before retrying.
+   Use the matching runtime configuration and trainer bindings from the restored database's accepted catalog; runtime commands do not accept `-catalog`. A `reserved job` blocks `restore-state`: require successful recovery and verified recursive cgroup/GPU release before retrying it. A `preparing claim` has not reserved GPU work and does not block `restore-state`; recovery records it as `interrupted` without stopping a trainer. Finished jobs and interrupted claims are excluded from the query.
+
+   If the query fails or lists no reserved job despite the unfinished-training error, keep components stopped and investigate the database path/schema rather than guessing an ID or editing state. After successful recovery, retry `restore-state`, then continue with step 4. Do not bypass the unfinished-training guard. [Training recovery](TRAINING.md#commands) never resumes or relaunches training: it preserves a previously persisted terminal outcome, otherwise records `interrupted`; the backup alone does not establish completion. If recovery fails, keep proxies stopped and resolve the runtime/configuration error before retrying.
 
 4. With the proxies still stopped, run the same pinned `gpu-mode` with the complete runtime flags, including the same `-state` path, and the `reconcile` command. It must finish with a stable, healthy state. If it reports a failure, leave the proxies stopped and use `recover` only after checking the runtime state. Start a workload through the controller if needed.
 5. Start the proxies only after successful reconciliation. Clients must obtain the new fence; requests carrying a fence from the backup are rejected.
