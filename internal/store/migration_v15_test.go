@@ -122,7 +122,7 @@ func TestV15PopulatedUpgrade(t *testing.T) {
 			if err := db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
 				t.Fatal(err)
 			}
-			wantVersion := 15
+			wantVersion := len(migrations)
 			if invalid {
 				wantVersion = 14
 			}

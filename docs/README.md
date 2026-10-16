@@ -11,6 +11,7 @@ Start with [deployment](DEPLOYMENT.md), [boot reconciliation](OPERATIONS.md#boot
 - [Operations](OPERATIONS.md): boot, switching, ownership, unfinished work and recovery
 - [Execution proxy](EXECUTION-PROXY.md): route configuration, admission and completion
 - [Configured workloads](WORKLOADS.md): catalog profiles, adapters and schema migration
+- [Finite training jobs](TRAINING.md): trainer binding, lifecycle evidence and recovery
 - [Local operator protocol](OPERATOR.md): on-demand `/usr/bin/gpu-operator` request process and shipped GNOME extension contract
 - [Backup, restore and rollback](RESTORING.md)
 - [Security policy](../SECURITY.md)

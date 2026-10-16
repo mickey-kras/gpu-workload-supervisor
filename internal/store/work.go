@@ -208,6 +208,13 @@ func (s *Store) FinishWorkToken(ctx context.Context, requestID string, workload 
 	// A successful finish records activity in the same writer transaction.
 	finished := false
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		var training bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM training_jobs WHERE id=?)`, requestID).Scan(&training); err != nil {
+			return err
+		}
+		if training {
+			return ErrTrainingPending
+		}
 		result, err := tx.ExecContext(ctx, `UPDATE registered_work
 			SET completed_at = ?, completion_outcome = ?
 			WHERE request_id = ? AND completed_at IS NULL
@@ -260,6 +267,7 @@ func validateFinishedWork(requestID string, workload control.Workload, fence con
 const prunableWorkIDs = `SELECT work.request_id FROM registered_work AS work
 	JOIN control_state AS state ON state.singleton = 1
 	WHERE work.completed_at IS NOT NULL
+	  AND NOT EXISTS (SELECT 1 FROM training_jobs WHERE id=work.request_id)
 	  AND (work.registration_token IS NOT NULL OR work.lease_incarnation <> state.lease_incarnation OR work.lease_epoch <> state.lease_epoch)
 	  AND julianday(work.completed_at) < julianday(?)
 	  AND NOT EXISTS (

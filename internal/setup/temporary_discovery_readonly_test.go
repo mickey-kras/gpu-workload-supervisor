@@ -43,13 +43,13 @@ func temporaryV12Fixture(t *testing.T) (Backend, string, Request, Profile, *sql.
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	if _, err = db.ExecContext(ctx, `DROP TABLE comfyui_attempts; DROP TABLE temporary_discovery_sessions; DELETE FROM schema_migrations WHERE version>=13; UPDATE control_state SET version=version+1`); err != nil {
+	if _, err = db.ExecContext(ctx, `DROP TABLE training_jobs; DROP TABLE comfyui_attempts; DROP TABLE temporary_discovery_sessions; DELETE FROM schema_migrations WHERE version>=13; UPDATE control_state SET version=version+1`); err != nil {
 		t.Fatal(err)
 	}
-	// v13 adds temporary sessions and v14 adds ComfyUI correlation metadata.
-	// Dropping both tables also removes their indexes, restoring genuine v12.
+	// v13 adds temporary sessions, v14 adds ComfyUI correlation metadata,
+	// and v16 adds training jobs. Drop their tables and indexes to restore v12.
 	var sessionObjects int
-	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE tbl_name IN ('temporary_discovery_sessions','comfyui_attempts')`).Scan(&sessionObjects); err != nil || sessionObjects != 0 {
+	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE tbl_name IN ('temporary_discovery_sessions','comfyui_attempts','training_jobs')`).Scan(&sessionObjects); err != nil || sessionObjects != 0 {
 		t.Fatalf("post-v12 schema survived fixture downgrade: %d %v", sessionObjects, err)
 	}
 	var schema int
@@ -166,7 +166,7 @@ func TestTemporarySchemaUpgradeStillRequiresBackedUpNormalActivation(t *testing.
 		t.Fatal("normal activation migrated before taking the v12 backup")
 	}
 	var schema int
-	if err = db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&schema); err != nil || schema != 15 {
+	if err = db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&schema); err != nil || schema != 16 {
 		t.Fatalf("normal activation did not migrate: %d %v", schema, err)
 	}
 	status, err := b.TemporaryStatus(ctx, home)

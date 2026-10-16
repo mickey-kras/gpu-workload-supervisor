@@ -26,6 +26,7 @@ var (
 type Clock func() time.Time
 
 type Store struct {
+	statePath         string
 	userExecutionLock string
 	db                *sql.DB
 	now               Clock
@@ -124,7 +125,7 @@ func openWithMode(ctx context.Context, path string, now Clock, uuid func() (stri
 		db.Close()
 		return nil, fmt.Errorf("secure sqlite file: %w", err)
 	}
-	s := &Store{db: db, now: now, uuid: uuid, userExecutionLock: path + ".user-execution.lock"}
+	s := &Store{statePath: path, db: db, now: now, uuid: uuid, userExecutionLock: path + ".user-execution.lock"}
 	if err := s.initialize(ctx); err != nil {
 		db.Close()
 		return nil, err

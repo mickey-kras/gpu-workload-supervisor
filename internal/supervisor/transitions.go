@@ -52,6 +52,9 @@ type transitionOptions struct {
 }
 
 func (c *Controller) transitionConditional(ctx context.Context, target control.Workload, initiator string, options transitionOptions) (control.State, error) {
+	if p, ok := c.config.Catalog.Catalog.Profile(target); ok && p.Trainer != nil {
+		return control.State{}, fmt.Errorf("finite trainer requires training-start")
+	}
 	if !c.configuredTarget(target) {
 		return control.State{}, fmt.Errorf("invalid target workload %q", target)
 	}

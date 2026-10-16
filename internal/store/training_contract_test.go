@@ -1,0 +1,288 @@
+package store
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+)
+
+func trainingContractStore(t *testing.T) (*Store, string, string) {
+	t.Helper()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.db")
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	c := control.Catalog{Version: 4, Profiles: []control.WorkloadProfile{{ID: "trainer", Label: "Trainer", Adapter: "systemd", Unit: "trainer.service", Cgroup: "/training/trainer.service", RequiredMiB: 1024, BootPolicy: "stop-to-idle", Trainer: &control.TrainerBinding{Version: 1, GPUUUID: "GPU-11111111-1111-1111-1111-111111111111", LaunchFile: "/opt/trainer/unit.service", LaunchSHA256: strings.Repeat("a", 64), Executable: "/opt/trainer/train", ExecutableSHA256: strings.Repeat("b", 64), RecipeFile: "/opt/trainer/recipe.json", RecipeSHA256: strings.Repeat("c", 64), JobFile: "/opt/trainer/job.json", TerminalFile: "/opt/trainer/terminal.json"}}}}
+	snap, err := s.ReplaceCatalog(ctx, "", c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Owner = control.OwnerSupervisor
+	state.ActiveWorkload = control.WorkloadIdle
+	state.DesiredWorkload = control.WorkloadIdle
+	state.Phase = control.PhaseStable
+	state.Health = control.HealthHealthy
+	state.Admission = control.AdmissionClosed
+	if _, err = s.UpdateState(ctx, state.Version, state); err != nil {
+		t.Fatal(err)
+	}
+	return s, path, snap.Revision
+}
+
+func TestTrainingContractCompetingReservations(t *testing.T) {
+	for _, sameID := range []bool{false, true} {
+		t.Run(map[bool]string{false: "distinct", true: "duplicate"}[sameID], func(t *testing.T) {
+			s, path, revision := trainingContractStore(t)
+			other, err := Open(context.Background(), path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer other.Close()
+			start := make(chan struct{})
+			results := make(chan error, 2)
+			var wg sync.WaitGroup
+			for i, db := range []*Store{s, other} {
+				wg.Add(1)
+				go func(i int, db *Store) {
+					defer wg.Done()
+					<-start
+					id := "job-a"
+					if i == 1 && !sameID {
+						id = "job-b"
+					}
+					_, err := db.ReserveTraining(context.Background(), id, "trainer", revision)
+					results <- err
+				}(i, db)
+			}
+			close(start)
+			wg.Wait()
+			close(results)
+			success := 0
+			for err := range results {
+				if err == nil {
+					success++
+				}
+			}
+			if success != 1 {
+				t.Fatalf("got %d successful reservations", success)
+			}
+			pending, err := s.PendingWork(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pending != 1 {
+				t.Fatalf("pending work=%d", pending)
+			}
+			state, err := s.State(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.Admission != control.AdmissionClosed || state.ActiveWorkload != "trainer" {
+				t.Fatalf("invalid reserved state: %+v", state)
+			}
+		})
+	}
+}
+
+func TestTrainingContractDurableIdentityAndNoReplay(t *testing.T) {
+	s, path, revision := trainingContractStore(t)
+	ctx := context.Background()
+	job, err := s.ReserveTraining(ctx, "job-a", "trainer", revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RecordTrainingLaunch(ctx, job, strings.Repeat("a", 32)); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	recorded, err := reopened.TrainingJob(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recorded.Status != "running" || recorded.Token != job.Token || recorded.InvocationID != strings.Repeat("a", 32) {
+		t.Fatalf("lost durable identity: %+v", recorded)
+	}
+	if err = reopened.RecordTrainingLaunch(ctx, job, strings.Repeat("b", 32)); !errors.Is(err, ErrStaleFence) {
+		t.Fatalf("duplicate launch: %v", err)
+	}
+	for name, mutate := range map[string]func(*control.TrainingJob){"token": func(j *control.TrainingJob) { j.Token = "old" }, "epoch": func(j *control.TrainingJob) { j.Fence.Epoch-- }, "incarnation": func(j *control.TrainingJob) { j.Fence.Incarnation = "old" }} {
+		t.Run(name, func(t *testing.T) {
+			stale := job
+			mutate(&stale)
+			if _, err := s.FinishTraining(ctx, stale, "completed"); !errors.Is(err, ErrStaleFence) {
+				t.Fatalf("stale completion: %v", err)
+			}
+		})
+	}
+	state, err := s.FinishTraining(ctx, job, "completed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ActiveWorkload != control.WorkloadIdle || state.Admission != control.AdmissionClosed || state.LeaseFence.Epoch <= job.Fence.Epoch {
+		t.Fatalf("invalid completion state: %+v", state)
+	}
+	if _, err = s.FinishTraining(ctx, job, "completed"); !errors.Is(err, ErrStaleFence) {
+		t.Fatalf("repeated completion: %v", err)
+	}
+	if _, err = s.ReserveTraining(ctx, job.ID, "trainer", revision); !errors.Is(err, ErrRequestConflict) {
+		t.Fatalf("reused job identity: %v", err)
+	}
+	if _, err = s.ReserveTraining(ctx, "job-b", "trainer", revision); err != nil {
+		t.Fatalf("new identity rejected: %v", err)
+	}
+}
+
+func TestTrainingContractGenericPathsCannotCompleteTraining(t *testing.T) {
+	for _, operation := range []string{"finish-work", "recover", "rotate-incarnation", "update-state"} {
+		t.Run(operation, func(t *testing.T) {
+			s, _, revision := trainingContractStore(t)
+			ctx := context.Background()
+			job, err := s.ReserveTraining(ctx, "job-a", "trainer", revision)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state, err := s.State(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch operation {
+			case "finish-work":
+				err = s.FinishWorkToken(ctx, job.ID, job.Workload, job.Fence, job.Token, WorkCompleted)
+			case "recover":
+				final := state
+				final.ActiveWorkload = control.WorkloadIdle
+				final.DesiredWorkload = control.WorkloadIdle
+				_, err = s.Recover(ctx, state.Version, final, "generic recovery")
+			case "rotate-incarnation":
+				_, err = s.RotateIncarnation(ctx)
+			case "update-state":
+				next := state
+				next.ActiveWorkload = control.WorkloadIdle
+				next.DesiredWorkload = control.WorkloadIdle
+				_, err = s.UpdateState(ctx, state.Version, next)
+			}
+			if !errors.Is(err, ErrTrainingPending) {
+				t.Fatalf("generic %s must reject pending training, got %v", operation, err)
+			}
+			pending, err := s.PendingWork(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if pending != 1 {
+				t.Fatalf("generic operation completed training: %d", pending)
+			}
+		})
+	}
+}
+
+func TestTrainingContractRetentionPreservesNonReplay(t *testing.T) {
+	s, _, revision := trainingContractStore(t)
+	ctx := context.Background()
+	job, err := s.ReserveTraining(ctx, "job-a", "trainer", revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.FinishTraining(ctx, job, "failed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.PruneCompletedWork(ctx, time.Now().Add(time.Hour), 100); err != nil {
+		t.Fatalf("retention must skip durable training identities: %v", err)
+	}
+	if _, err = s.ReserveTraining(ctx, job.ID, "trainer", revision); !errors.Is(err, ErrRequestConflict) {
+		t.Fatalf("retention enabled replay: %v", err)
+	}
+}
+
+func TestTrainingContractRejectsStaleCatalogAtomically(t *testing.T) {
+	s, _, revision := trainingContractStore(t)
+	ctx := context.Background()
+	before, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ReserveTraining(ctx, "job-a", "trainer", "stale-revision"); !errors.Is(err, ErrVersionConflict) {
+		t.Fatalf("stale revision: %v", err)
+	}
+	after, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Version != after.Version || before.LeaseFence != after.LeaseFence || after.ActiveWorkload != control.WorkloadIdle {
+		t.Fatalf("failed reservation changed state: %+v", after)
+	}
+	job, err := s.ReserveTraining(ctx, "job-a", "trainer", revision)
+	if err != nil {
+		t.Fatalf("failed reservation consumed identity: %v", err)
+	}
+	snap, err := s.Catalog(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := snap.Catalog.Clone()
+	changed.Profiles[0].Trainer.RecipeSHA256 = strings.Repeat("d", 64)
+	if _, err = s.ReplaceCatalog(ctx, revision, changed); err == nil {
+		t.Fatal("live trainer recipe replaced")
+	}
+	if _, err = s.FinishTraining(ctx, job, "running"); err == nil {
+		t.Fatal("nonterminal outcome accepted")
+	}
+	pending, err := s.PendingWork(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending != 1 {
+		t.Fatal("invalid outcome completed work")
+	}
+}
+
+func TestTrainingContractRejectsControlStateOutputPaths(t *testing.T) {
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal", ".lock", ".proxy.lock", ".user-execution.lock", ".deployment.json"} {
+		t.Run("state"+suffix, func(t *testing.T) {
+			s, path, revision := trainingContractStore(t)
+			ctx := context.Background()
+			snap, err := s.Catalog(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			snap.Catalog.Profiles[0].Trainer.JobFile = path + suffix
+			snap, err = s.ReplaceCatalog(ctx, revision, snap.Catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := s.State(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = s.ReserveTraining(ctx, "collision", "trainer", snap.Revision); err == nil {
+				t.Fatal("control state output accepted")
+			}
+			after, err := s.State(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if before.Version != after.Version || before.LeaseFence != after.LeaseFence {
+				t.Fatal("rejected output changed control state")
+			}
+			if pending, err := s.PendingWork(ctx); err != nil || pending != 0 {
+				t.Fatalf("rejected output admitted work: %d %v", pending, err)
+			}
+		})
+	}
+}
