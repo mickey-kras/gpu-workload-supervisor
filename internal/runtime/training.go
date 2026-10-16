@@ -14,6 +14,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
+	"golang.org/x/sys/unix"
 )
 
 // TrainerUnit is intentionally a separate, exact launch grammar. Adapter v1
@@ -67,6 +68,9 @@ func (m *SystemdManager) verifyTrainerBinding(ctx context.Context, p control.Wor
 	if t == nil {
 		return ErrLaunchUnsupported
 	}
+	if err := qualifyTrainingOutputs(*t); err != nil {
+		return err
+	}
 	if err := verifyTrainerExecutable(*t); err != nil {
 		return err
 	}
@@ -84,11 +88,19 @@ func (m *SystemdManager) verifyTrainerBinding(ctx context.Context, p control.Wor
 	if err != nil {
 		return err
 	}
-	if v["LoadState"] != "loaded" || v["NeedDaemonReload"] != "no" || v["Type"] != "exec" || v["Restart"] != "no" || v["KillMode"] != "control-group" || v["RemainAfterExit"] != "yes" {
-		return ErrLaunchChanged
-	}
-	for _, key := range []string{"ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost"} {
-		if v[key] != "" {
+	for key, want := range map[string]string{
+		"LoadState":        "loaded",
+		"NeedDaemonReload": "no",
+		"Type":             "exec",
+		"Restart":          "no",
+		"KillMode":         "control-group",
+		"RemainAfterExit":  "yes",
+		"ExecStartPre":     "",
+		"ExecStartPost":    "",
+		"ExecStop":         "",
+		"ExecStopPost":     "",
+	} {
+		if v[key] != want {
 			return ErrLaunchChanged
 		}
 	}
@@ -102,6 +114,26 @@ func (m *SystemdManager) verifyTrainerBinding(ctx context.Context, p control.Wor
 		return err
 	}
 	return m.verifyProfileGPU(ctx, p)
+}
+
+func qualifyTrainingOutputs(t control.TrainerBinding) error {
+	for _, path := range []string{t.JobFile, t.TerminalFile} {
+		if err := qualifyEnvironmentPath(filepath.Dir(path), false, false); err != nil {
+			return err
+		}
+		if err := unix.Faccessat(unix.AT_FDCWD, filepath.Dir(path), unix.W_OK|unix.X_OK, unix.AT_EACCESS); err != nil {
+			return ErrLaunchUnsupported
+		}
+		if _, err := os.Lstat(path); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if err := qualifyEnvironmentPath(path, true, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *SystemdManager) StartTraining(ctx context.Context, p control.WorkloadProfile, job control.TrainingJob) (string, error) {
@@ -122,10 +154,8 @@ func (m *SystemdManager) StartTraining(ctx context.Context, p control.WorkloadPr
 		return "", errors.New("trainer is not stopped")
 	}
 	t := p.Trainer
-	if err := qualifyEnvironmentPath(filepath.Dir(t.JobFile), false, false); err != nil {
-		return "", err
-	}
-	if err := qualifyEnvironmentPath(filepath.Dir(t.TerminalFile), false, false); err != nil {
+	// Recheck after the handoff: destinations may have changed since preflight.
+	if err := qualifyTrainingOutputs(*t); err != nil {
 		return "", err
 	}
 	envelope := struct {
@@ -176,7 +206,9 @@ func (m *SystemdManager) TrainingTerminal(ctx context.Context, p control.Workloa
 	if err != nil {
 		return evidence, err
 	}
-	if err := strictjson.DecodeLimited(bytes.NewReader(raw), 4096, &evidence); err != nil {
+	// Allow the full request ID contract, including up to six JSON bytes per
+	// ID byte, while retaining a bounded strict terminal receipt.
+	if err := strictjson.DecodeLimited(bytes.NewReader(raw), 64<<10, &evidence); err != nil {
 		return evidence, SafeError("invalid trainer terminal evidence", err)
 	}
 	if !evidence.Matches(job) {
