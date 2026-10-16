@@ -89,11 +89,7 @@ func (s *Store) resolveUnfinishedWork(ctx context.Context, tx *sql.Tx, state con
 	if err != nil {
 		return 0, err
 	}
-	reserved, err := tx.ExecContext(ctx, `UPDATE broker_demands SET status='cancelled',claim=NULL,updated_at=? WHERE status='reserved'`, now)
-	if err != nil {
-		return 0, err
-	}
-	reservedCount, err := reserved.RowsAffected()
+	reservedCount, err := cancelReservedDemands(ctx, tx, now)
 	if err != nil {
 		return 0, err
 	}

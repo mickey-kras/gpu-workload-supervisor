@@ -198,3 +198,13 @@ func checkDemandCapacity(ctx context.Context, tx *sql.Tx, requestID string) erro
 	}
 	return nil
 }
+
+// cancelReservedDemands retires ambiguous reservations only inside verified
+// recovery or restore transactions. Queued requests remain eligible for retry.
+func cancelReservedDemands(ctx context.Context, tx *sql.Tx, now string) (int64, error) {
+	result, err := tx.ExecContext(ctx, `UPDATE broker_demands SET status='cancelled',claim=NULL,updated_at=? WHERE status='reserved'`, now)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

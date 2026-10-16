@@ -74,7 +74,9 @@ Once reserved/admitted, duplicate requests return `demand_conflict` rather than
 replaying execution. A process crash, disconnect or ambiguous dispatch leaves
 evidence unresolved. Verified operator recovery must quiesce proxies, verify
 runtimes stopped and rotate the fence before resolving it. No timer silently
-expires unfinished demand. Existing completed-work retention also removes old
+expires unfinished demand. Backup restoration retires reserved demand and its
+claims atomically with the old lease; queued intent remains available for explicit
+retry or cancellation. Existing completed-work retention also removes old
 cancelled/terminal demand records. Queued and reserved demand together are capped
 at 4096 and retained records at 65536; reaching capacity rejects new work.
 

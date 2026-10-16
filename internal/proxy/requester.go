@@ -7,14 +7,15 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 	"io"
 	"net/http"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
 const RequesterCredentialHeader = "X-Workload-Requester-Credential"
