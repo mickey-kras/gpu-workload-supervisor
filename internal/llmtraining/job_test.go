@@ -117,6 +117,20 @@ func TestPrepareJobRequiresExactEnvelopeKeys(t *testing.T) {
 	}
 }
 
+func TestPrepareJobRejectsInvalidInvocationIdentity(t *testing.T) {
+	for _, invocation := range []string{"", strings.Repeat("0", 32), strings.Repeat("A", 32), strings.Repeat("a", 31), strings.Repeat("a", 33), strings.Repeat("g", 32)} {
+		t.Run(invocation, func(t *testing.T) {
+			_, _, jobPath, planPath := jobFixture(t)
+			if err := PrepareJob(jobPath, planPath, invocation); err == nil {
+				t.Fatal("accepted invalid invocation identity")
+			}
+			if _, err := os.Lstat(planPath); !os.IsNotExist(err) {
+				t.Fatal("invalid invocation published a plan", err)
+			}
+		})
+	}
+}
+
 func TestPrepareJobRejectsChangedInputsAndUnsafePaths(t *testing.T) {
 	for _, name := range []string{"recipe changed", "dataset changed", "job symlink", "recipe symlink", "parent symlink", "public envelope", "public parent", "writable recipe", "output overlap", "terminal overlap", "invalid invocation"} {
 		t.Run(name, func(t *testing.T) {

@@ -42,7 +42,7 @@ type JobPlan struct {
 // Inputs are inspected at a point in time; no files are locked or executed.
 func PrepareJob(jobPath, planPath, invocationID string) error {
 	invocation, err := hex.DecodeString(invocationID)
-	if err != nil || len(invocation) != 16 || !absolute(jobPath) || !absolute(planPath) || jobPath == planPath {
+	if err != nil || len(invocation) != 16 || hex.EncodeToString(invocation) != invocationID || invocationID == "00000000000000000000000000000000" || !absolute(jobPath) || !absolute(planPath) || jobPath == planPath {
 		return errors.New("invalid job preparation paths or invocation identity")
 	}
 	if err := privateJobDirectory(filepath.Dir(jobPath)); err != nil {
