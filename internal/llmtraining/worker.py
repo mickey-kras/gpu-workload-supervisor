@@ -10,24 +10,38 @@ from pathlib import Path
 import sys
 
 SOURCE_REVISION = "1f1eb05a391c43e65c1c5ee7ec6ea1b8a841d5d1"
-BUILTIN_PLUGINS = {
-    "axolotl.integrations.context_parallel:ContextParallelPlugin",
-    "axolotl.integrations.expert_parallel:ExpertParallelPlugin",
+BUILTIN_ENTRY_POINTS = {
+    "axolotl.plugins": {
+        "context-parallel": "axolotl.integrations.context_parallel:ContextParallelPlugin",
+        "expert-parallel": "axolotl.integrations.expert_parallel:ExpertParallelPlugin",
+    },
+    "axolotl.cloud_providers": {
+        "coreweave": "axolotl.integrations.coreweave.cloud:CoreWeaveCloud",
+        "nebius": "axolotl.integrations.nebius.cloud:NebiusCloud",
+        "modal": "axolotl.integrations.modal.cloud:ModalCloud",
+        "baseten": "axolotl.integrations.baseten.cloud:BasetenCloud",
+    },
 }
 
 
 def verify_environment() -> None:
     distribution = importlib.metadata.distribution("axolotl")
     direct_url = json.loads(distribution.read_text("direct_url.json") or "{}")
+    if not isinstance(direct_url, dict):
+        raise ValueError("runtime source is not pinned")
+    vcs_info = direct_url.get("vcs_info")
+    dir_info = direct_url.get("dir_info", {})
     if (
-        direct_url.get("vcs_info", {}).get("commit_id") != SOURCE_REVISION
-        or direct_url.get("dir_info", {}).get("editable", False)
+        not isinstance(vcs_info, dict)
+        or vcs_info.get("commit_id") != SOURCE_REVISION
+        or not isinstance(dir_info, dict)
+        or dir_info.get("editable", False)
     ):
         raise ValueError("runtime source is not pinned")
     for point in importlib.metadata.entry_points():
         if point.group.startswith("axolotl.") and (
-            point.group != "axolotl.plugins"
-            or point.value not in BUILTIN_PLUGINS
+            point.group not in BUILTIN_ENTRY_POINTS
+            or BUILTIN_ENTRY_POINTS[point.group].get(point.name) != point.value
             or point.dist is None
             or point.dist.metadata["Name"].lower() != "axolotl"
         ):

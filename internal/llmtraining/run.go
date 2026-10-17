@@ -114,16 +114,59 @@ func executionRecipe(e jobEnvelope, jobPath, work string) (Recipe, error) {
 }
 
 func trustedRuntime(inventory Inventory) error {
-	return filepath.WalkDir(inventory.Root, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return errors.New("training runtime is unreadable")
+	if err := trustedRuntimeAncestors(inventory.Root); err != nil {
+		return err
+	}
+	remaining := 65536
+	directories := []string{inventory.Root}
+	for len(directories) != 0 {
+		last := len(directories) - 1
+		path := directories[last]
+		directories = directories[:last]
+		entries, err := boundedDirectoryEntries(path, remaining)
+		if err != nil {
+			return err
 		}
+		remaining -= len(entries)
+		for _, entry := range entries {
+			child := filepath.Join(path, entry.Name())
+			var stat unix.Stat_t
+			if unix.Lstat(child, &stat) != nil || !trustedRuntimeComponent(stat, false) {
+				return errors.New("training runtime ownership or permissions are unsafe")
+			}
+			if entry.IsDir() {
+				directories = append(directories, child)
+			}
+		}
+	}
+	return nil
+}
+
+func trustedRuntimeAncestors(root string) error {
+	if !absolute(root) {
+		return errors.New("training runtime path is invalid")
+	}
+	for path := root; ; path = filepath.Dir(path) {
 		var stat unix.Stat_t
-		if unix.Lstat(path, &stat) != nil || (stat.Uid != 0 && stat.Uid != uint32(os.Geteuid())) || stat.Mode&0022 != 0 || (!entry.IsDir() && !entry.Type().IsRegular()) {
-			return errors.New("training runtime ownership or permissions are unsafe")
+		// Like runtime launch-source qualification, only root-owned sticky
+		// ancestors above the immediate parent may be writable (e.g. /tmp).
+		stickyAncestor := path != root && path != filepath.Dir(root) && path != "/"
+		if unix.Lstat(path, &stat) != nil || stat.Mode&unix.S_IFMT != unix.S_IFDIR || !trustedRuntimeComponent(stat, stickyAncestor) {
+			return errors.New("training runtime ancestry is unsafe")
 		}
-		return nil
-	})
+		if path == "/" {
+			return nil
+		}
+	}
+}
+
+func trustedRuntimeComponent(stat unix.Stat_t, stickyAncestor bool) bool {
+	writable := stat.Mode&0022 != 0
+	if stickyAncestor && stat.Uid == 0 && stat.Mode&unix.S_ISVTX != 0 {
+		writable = false
+	}
+	kind := stat.Mode & unix.S_IFMT
+	return (stat.Uid == 0 || stat.Uid == uint32(os.Geteuid())) && !writable && (kind == unix.S_IFDIR || kind == unix.S_IFREG)
 }
 
 func prepareExecution(work string, r Recipe) error {
@@ -168,7 +211,11 @@ func executeWorker(ctx context.Context, r Recipe, work, gpuUUID, phase string) (
 	if err != nil {
 		return receipt, err
 	}
-	if strictjson.DecodeLimited(bytes.NewReader(raw), 4096, &receipt) != nil || receipt.Version != 1 || receipt.Phase != phase || receipt.Step != r.MaxSteps || math.IsNaN(receipt.EvalLoss) || math.IsInf(receipt.EvalLoss, 0) || receipt.EvalLoss < 0 || receipt.Reloaded != (phase == "reload") {
+	if strictjson.DecodeLimited(bytes.NewReader(raw), 4096, &receipt) != nil {
+		return workerReceipt{}, errors.New("training worker acknowledgement is incomplete or invalid")
+	}
+	canonical, err := json.Marshal(receipt)
+	if err != nil || !matchingObjectKeys(raw, canonical) || receipt.Version != 1 || receipt.Phase != phase || receipt.Step != r.MaxSteps || math.IsNaN(receipt.EvalLoss) || math.IsInf(receipt.EvalLoss, 0) || receipt.EvalLoss < 0 || receipt.Reloaded != (phase == "reload") {
 		return workerReceipt{}, errors.New("training worker acknowledgement is incomplete or invalid")
 	}
 	return receipt, nil

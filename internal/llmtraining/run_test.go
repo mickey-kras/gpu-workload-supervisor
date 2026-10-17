@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"golang.org/x/sys/unix"
 )
 
 const executionGPU = "GPU-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -257,5 +258,117 @@ func TestWorkerPythonGuards(t *testing.T) {
 	cmd := exec.Command(python, "-m", "unittest", "discover", "-s", "../../tests/training", "-p", "test_worker.py")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("worker guards failed: %v\n%s", err, output)
+	}
+}
+
+func TestTrustedRuntimeAncestors(t *testing.T) {
+	for _, name := range []string{"private", "writable parent", "writable ancestor", "sticky parent", "linked parent", "writable child", "linked child", "relative", "missing"} {
+		t.Run(name, func(t *testing.T) {
+			base := t.TempDir()
+			parent := filepath.Join(base, "parent")
+			root := filepath.Join(parent, "runtime")
+			if err := os.MkdirAll(filepath.Join(root, "bin"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			child := filepath.Join(root, "bin", "python3")
+			writeFixture(t, child, "harmless runtime fixture")
+			switch name {
+			case "writable parent":
+				if err := os.Chmod(parent, 0777); err != nil {
+					t.Fatal(err)
+				}
+			case "writable ancestor":
+				if err := os.Chmod(base, 0777); err != nil {
+					t.Fatal(err)
+				}
+			case "sticky parent":
+				if err := os.Chmod(parent, os.ModeSticky|0777); err != nil {
+					t.Fatal(err)
+				}
+			case "linked parent":
+				link := filepath.Join(base, "link")
+				if err := os.Symlink(parent, link); err != nil {
+					t.Fatal(err)
+				}
+				root = filepath.Join(link, "runtime")
+			case "writable child":
+				if err := os.Chmod(child, 0666); err != nil {
+					t.Fatal(err)
+				}
+			case "linked child":
+				if err := os.Symlink(child, filepath.Join(root, "link")); err != nil {
+					t.Fatal(err)
+				}
+			case "relative":
+				root = "relative"
+			case "missing":
+				root = filepath.Join(root, "missing")
+			}
+			err := trustedRuntime(Inventory{Root: root})
+			if (err == nil) != (name == "private") {
+				t.Fatalf("unexpected runtime trust result: %v", err)
+			}
+		})
+	}
+}
+
+func TestTrustedRuntimeComponentOwnership(t *testing.T) {
+	foreign := uint32(os.Geteuid()) + 1
+	for _, tc := range []struct {
+		name           string
+		uid            uint32
+		mode           uint32
+		ancestor, want bool
+	}{
+		{"owned directory", uint32(os.Geteuid()), unix.S_IFDIR | 0700, false, true},
+		{"root file", 0, unix.S_IFREG | 0755, false, true},
+		{"foreign directory", foreign, unix.S_IFDIR | 0700, true, false},
+		{"foreign sticky directory", foreign, unix.S_IFDIR | unix.S_ISVTX | 0777, true, false},
+		{"root sticky ancestor", 0, unix.S_IFDIR | unix.S_ISVTX | 0777, true, true},
+		{"root sticky parent", 0, unix.S_IFDIR | unix.S_ISVTX | 0777, false, false},
+		{"writable ancestor", 0, unix.S_IFDIR | 0777, true, false},
+		{"link", 0, unix.S_IFLNK | 0700, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := trustedRuntimeComponent(unix.Stat_t{Uid: tc.uid, Mode: tc.mode}, tc.ancestor); got != tc.want {
+				t.Fatalf("trusted=%v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestExecuteWorkerRequiresCompleteReceipt(t *testing.T) {
+	for _, phase := range []string{"train", "reload"} {
+		for _, field := range []string{"version", "phase", "step", "evalLoss", "reloaded"} {
+			for _, form := range []string{"omitted", "null"} {
+				t.Run(phase+"/"+field+"/"+form, func(t *testing.T) {
+					receipt := map[string]any{"version": 1, "phase": phase, "step": 2, "evalLoss": 0, "reloaded": phase == "reload"}
+					if form == "omitted" {
+						delete(receipt, field)
+					} else {
+						receipt[field] = nil
+					}
+					raw, err := json.Marshal(receipt)
+					if err != nil {
+						t.Fatal(err)
+					}
+					script := "#!/bin/sh\nprintf '%s' '" + string(raw) + "' > \"$7\"\nchmod 600 \"$7\"\n"
+					r, _, jobPath := executionFixture(t, script)
+					if _, err := executeWorker(context.Background(), r, filepath.Dir(jobPath), executionGPU, phase); err == nil {
+						t.Fatal("accepted incomplete or null receipt")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestExecuteWorkerAcceptsZeroLoss(t *testing.T) {
+	r, _, jobPath := executionFixture(t, strings.ReplaceAll(executionScript, `"evalLoss":1.5`, `"evalLoss":0`))
+	for _, phase := range []string{"train", "reload"} {
+		receipt, err := executeWorker(context.Background(), r, filepath.Dir(jobPath), executionGPU, phase)
+		if err != nil || receipt.EvalLoss != 0 {
+			t.Fatalf("zero loss rejected: %v", err)
+		}
 	}
 }

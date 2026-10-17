@@ -7,7 +7,8 @@ The runner ships without an enabled preset. #453 remains open until runtime,
 backend comparison and GPU qualification pass; checkpoint/resume is #454.
 
 The runner accepts the existing strict candidate recipe. Its runtime entrypoint
-must be an inventoried regular executable at `bin/python3`, with packages under
+must be Python 3.12 or newer (the pinned Axolotl minimum), with an inventoried
+regular executable at `bin/python3` and packages under
 `lib/pythonX.Y/site-packages`. Runtime files must belong to root or the execution
 user and must not be group or other writable. Inputs still require complete
 inventories, exact recipe and dataset digests, and resource preflight. The output
@@ -17,9 +18,12 @@ Python runs with `-I -S -B`: no ambient Python path, user site, startup `.pth`
 execution or bytecode writes. The embedded worker adds only the inventoried
 runtime's site-packages. Axolotl's installed `direct_url.json` must identify
 noneditable source commit `1f1eb05a391c43e65c1c5ee7ec6ea1b8a841d5d1`.
-Axolotl entry points are limited to that revision's two bundled context/expert
-parallel plugins; other plugins and model entry points are rejected before
-importing Axolotl. Their presence is not permission to use parallel training.
+Axolotl entry points are limited by owner, group, name and value to that revision's
+two bundled context/expert parallel plugins and four bundled cloud providers
+(CoreWeave, Nebius, Modal and Baseten). The guard inspects this installed metadata
+without importing or using the providers. Other plugins, providers and model
+entry points are rejected before importing Axolotl. Bundled metadata is not
+permission to use parallel training or cloud providers.
 
 This is a byte/inventory boundary, not a complete approved environment lock.
 Python's standard library, OS/native libraries, CUDA and driver compatibility

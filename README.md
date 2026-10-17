@@ -9,7 +9,7 @@
 
 GPU Workload Supervisor switches between catalog-configured workloads that share one GPU. It stops and verifies the outgoing workload before starting the next, and blocks new requests when a transition or recovery fails. Use it when the workloads cannot safely run at once.
 
-It provides four executables: `gpu-mode` (controller and workload transitions), `gpu-workload-proxy` (execution admission proxy), `gpu-operator` (one-request local operator backend), and `gpu-setup` (guided setup and catalog commit). Setup can adopt supported existing services or preview managed launches for installed native runtimes, with explicit confirmation before activation.
+It provides five executables: `gpu-mode` (controller and workload transitions), `gpu-workload-proxy` (execution admission proxy), `gpu-operator` (one-request local operator backend), `gpu-setup` (guided setup and catalog commit), and `gpu-training-runner` (experimental supervised LLM training). Setup can adopt supported existing services or preview managed launches for installed native runtimes, with explicit confirmation before activation. Training presets remain disabled pending qualification.
 
 Use this project independently of the memory stack. It does not require Memory Router, its agent integrations, or Hindsight.
 
@@ -27,7 +27,7 @@ Use this project independently of the memory stack. It does not require Memory R
 
 ## Install
 
-Download the Linux amd64 or arm64 archive from [Releases](https://github.com/mickey-kras/gpu-workload-supervisor/releases), verify it against the release checksum file, and extract the four executables (`gpu-mode`, `gpu-workload-proxy`, `gpu-operator`, `gpu-setup`) into a version-specific directory. A Debian package with the same executables plus the GNOME desktop integration is published per architecture. Use absolute binary paths in commands and services. See [release verification](docs/RELEASING.md) and [backup before upgrading](docs/RESTORING.md#back-up-before-an-upgrade).
+Download the Linux amd64 or arm64 archive from [Releases](https://github.com/mickey-kras/gpu-workload-supervisor/releases), verify it against the release checksum file, and extract the five executables (`gpu-mode`, `gpu-workload-proxy`, `gpu-operator`, `gpu-setup`, `gpu-training-runner`) into a version-specific directory. A Debian package with the same executables plus the GNOME desktop integration is published per architecture. Use absolute binary paths in commands and services. See [release verification](docs/RELEASING.md) and [backup before upgrading](docs/RESTORING.md#back-up-before-an-upgrade).
 
 Requires Linux with user-systemd and cgroup v2. Direct runtime requests bypass the supervisor, so deployment must prevent that bypass.
 
