@@ -1,5 +1,5 @@
-// Package llmtraining prepares local, unqualified Axolotl candidates. It never
-// starts a trainer or establishes runtime, GPU or serving-import qualification.
+// Package llmtraining prepares and runs local, unqualified Axolotl candidates.
+// It does not establish runtime, GPU or serving-import qualification.
 package llmtraining
 
 import (
@@ -192,3 +192,4 @@ func (b Budget) StorageBytes() (uint64, error) {
 	}
 	return total + b.CheckpointBytes*(b.RetainedCheckpoints+1), nil
 }
+
