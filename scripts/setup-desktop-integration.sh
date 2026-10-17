@@ -14,7 +14,7 @@ package=$(realpath "$2")
 repo=$(cd "$(dirname "$0")/.." && pwd)
 unit=gpu-workload-supervisor-reconcile.service
 units=(gpu-workload-supervisor-reconcile.service gpu-workload-supervisor-idle.service gpu-workload-supervisor-idle.timer)
-binaries=(gpu-mode gpu-workload-proxy gpu-operator gpu-setup)
+binaries=(gpu-mode gpu-workload-proxy gpu-operator gpu-setup gpu-training-runner)
 for name in "${binaries[@]}"; do
   test ! -e "/usr/bin/$name" && test ! -L "/usr/bin/$name"
 done

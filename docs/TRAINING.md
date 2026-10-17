@@ -67,7 +67,9 @@ Backend adapters and their environment qualification are separate integrations.
 This contract does not claim checkpoint or resume support for an arbitrary trainer.
 The [LLM candidate preparation tool](LLM-TRAINING-CANDIDATE.md) audits local inputs
 and generates an unqualified Axolotl configuration; it does not implement this
-executable adapter contract or enable a training profile.
+executable adapter contract or enable a training profile. The separate
+[experimental LLM runner](LLM-TRAINING-RUNNER.md) implements that execution
+boundary without qualifying a runtime or enabling a profile.
 
 ## Commands
 

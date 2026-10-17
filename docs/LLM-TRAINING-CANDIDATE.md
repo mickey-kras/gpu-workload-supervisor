@@ -148,11 +148,12 @@ datasets, split and training settings before selecting one supported backend.
 Freeze all runtime bytes and entry points, including Torch, CUDA/kernel and GPU
 architecture compatibility. Record measured RAM, VRAM and storage privately.
 
-Then implement the supervised finite-job adapter, sanitized child environment,
-bounded progress, held-out evaluation, fresh-process reload/inference check,
-adapter provenance and explicit serving-import validation. Emit successful fenced
-terminal evidence only after all required phases pass. Until then, this tool
-creates preparation material only; #453 remains incomplete.
+The [experimental runner](LLM-TRAINING-RUNNER.md) adds the supervised execution
+boundary, sanitized child environment, bounded progress, held-out evaluation,
+fresh-process reload and adapter provenance. It still needs a completely pinned,
+qualified runtime and real model/GPU evidence. Explicit serving-import validation
+remains separate. This preparation tool still creates candidate material only;
+#453 remains incomplete.
 
 ## Inspected upstream API
 

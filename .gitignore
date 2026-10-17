@@ -32,3 +32,6 @@ clients/gnome/coverage/
 
 # local c8 scratch
 coverage/
+
+__pycache__/
+.coverage

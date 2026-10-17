@@ -64,12 +64,21 @@ func publishPlan(planPath string, raw []byte) (err error) {
 		}
 	}()
 	_, writeErr := out.Write(raw)
+	syncErr := out.Sync()
 	closeErr := out.Close()
-	if writeErr != nil || closeErr != nil {
+	if writeErr != nil || syncErr != nil || closeErr != nil {
 		return errors.New("candidate plan write failed")
 	}
 	if os.Link(out.Name(), planPath) != nil {
 		return errors.New("candidate plan cannot be created; destination must not exist")
+	}
+	dir, err := os.Open(filepath.Dir(planPath))
+	if err != nil {
+		return errors.New("candidate plan directory is unreadable")
+	}
+	defer dir.Close()
+	if dir.Sync() != nil {
+		return errors.New("candidate plan directory sync failed")
 	}
 	return nil
 }
