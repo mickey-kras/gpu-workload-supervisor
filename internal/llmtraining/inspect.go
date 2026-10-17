@@ -198,22 +198,25 @@ func inspectConfig(path string, model bool) error {
 	if _, exists := config["auto_map"]; exists {
 		return errors.New("candidate remote-code mappings are unsupported")
 	}
-	if _, exists := config["quantization_config"]; model && exists {
+	if !model {
+		if _, exists := config["fast_tokenizer_files"]; exists {
+			return errors.New("candidate tokenizer filename overrides are unsupported")
+		}
+		return nil
+	}
+	if _, exists := config["quantization_config"]; exists {
 		return errors.New("candidate requires original unquantized training weights")
 	}
-	if _, exists := config["transformers_weights"]; model && exists {
+	if _, exists := config["transformers_weights"]; exists {
 		return errors.New("candidate weight filename overrides are unsupported")
 	}
 	for _, key := range []string{"configuration_files", "attribute_map", "__dict__"} {
-		if _, exists := config[key]; model && exists {
+		if _, exists := config[key]; exists {
 			return errors.New("candidate model configuration indirection is unsupported")
 		}
 	}
-	if _, exists := config["fast_tokenizer_files"]; !model && exists {
-		return errors.New("candidate tokenizer filename overrides are unsupported")
-	}
 	var family string
-	if model && (json.Unmarshal(config["model_type"], &family) != nil || family != "llama") {
+	if json.Unmarshal(config["model_type"], &family) != nil || family != "llama" {
 		return errors.New("candidate supports only the llama model family")
 	}
 	return nil
