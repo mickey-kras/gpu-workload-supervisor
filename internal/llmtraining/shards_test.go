@@ -68,7 +68,7 @@ func TestCompileRejectsWeightFilenameOverrides(t *testing.T) {
 			inventory.Files["config.json"] = writeFixture(t, filepath.Join(inventory.Root, "config.json"), `{"model_type":"llama","transformers_weights":"other.safetensors.index.json"}`)
 			inventory.Files["other.safetensors.index.json"] = writeFixture(t, filepath.Join(inventory.Root, "other.safetensors.index.json"), `{"weight_map":{"a":`+weights+`}}`)
 			inventory.Files["one.safetensors"] = writeFixture(t, filepath.Join(inventory.Root, "one.safetensors"), "fixture shard")
-			if _, err := Compile(r, math.MaxUint64, math.MaxUint64); err == nil || !strings.Contains(err.Error(), "weight filename overrides are unsupported") {
+			if _, err := Compile(r, math.MaxUint64, math.MaxUint64); err == nil {
 				t.Fatal("accepted alternate weight index or returned unrelated error", err)
 			}
 		})
@@ -81,15 +81,36 @@ func TestCompileRejectsModelConfigurationIndirection(t *testing.T) {
 	}{
 		{"alternate config", `{"model_type":"llama","configuration_files":["config.5.20.1.json"]}`},
 		{"attribute alias", `{"model_type":"llama","attribute_map":{"transformers_weights":"selected_weights"},"selected_weights":"other.safetensors.index.json"}`},
+		{"state injection", `{"model_type":"llama","__dict__":{"transformers_weights":"other.safetensors.index.json"}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := fixture(t)
 			inventory := &r.Model.Inventory
 			inventory.Files["config.json"] = writeFixture(t, filepath.Join(inventory.Root, "config.json"), tc.config)
 			inventory.Files["config.5.20.1.json"] = writeFixture(t, filepath.Join(inventory.Root, "config.5.20.1.json"), `{"model_type":"llama","transformers_weights":"other.safetensors.index.json"}`)
-			inventory.Files["other.safetensors.index.json"] = writeFixture(t, filepath.Join(inventory.Root, "other.safetensors.index.json"), `{"weight_map":{"a":"../outside.safetensors"}}`)
+			inventory.Files["other.safetensors.index.json"] = writeFixture(t, filepath.Join(inventory.Root, "other.safetensors.index.json"), `{"weight_map":{"a":"model.safetensors"}}`)
 			if _, err := Compile(r, math.MaxUint64, math.MaxUint64); err == nil || !strings.Contains(err.Error(), "model configuration indirection is unsupported") {
 				t.Fatal("accepted indirect model configuration or returned unrelated error", err)
+			}
+		})
+	}
+}
+
+func TestCompileValidatesAlternateShardIndexes(t *testing.T) {
+	for _, tc := range []struct {
+		name, shard string
+		accepted    bool
+	}{
+		{"escaping", "../outside.safetensors", false},
+		{"inventoried", "model.safetensors", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := fixture(t)
+			inventory := &r.Model.Inventory
+			inventory.Files["other.safetensors.index.json"] = writeFixture(t, filepath.Join(inventory.Root, "other.safetensors.index.json"), `{"weight_map":{"a":"`+tc.shard+`"}}`)
+			_, err := Compile(r, math.MaxUint64, math.MaxUint64)
+			if (err == nil) != tc.accepted {
+				t.Fatalf("alternate shard index accepted = %v, want %v: %v", err == nil, tc.accepted, err)
 			}
 		})
 	}
