@@ -122,7 +122,11 @@ class WorkerTests(unittest.TestCase):
                         third_party.mkdir()
                         (third_party / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {owner}\nVersion: 0.0.0\n")
                         (third_party / "entry_points.txt").write_text(f"[{group}]\n{name} = {value}\n")
-                with patch.object(worker.sys, "path", [directory]), patch.object(
+                discover = worker.importlib.metadata.Distribution.discover
+                with patch.object(worker.sys, "path", [directory, *worker.sys.path]), patch.object(
+                    worker.importlib.metadata.Distribution, "discover",
+                    side_effect=lambda **kwargs: discover(path=[directory], **kwargs),
+                ), patch.object(
                     worker.importlib.metadata.EntryPoint, "load", side_effect=AssertionError("entry points must remain inert")
                 ):
                     if addition is None:

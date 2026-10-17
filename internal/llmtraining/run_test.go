@@ -355,7 +355,7 @@ func TestTrustedRuntimeComponentOwnership(t *testing.T) {
 		{"link", 0, unix.S_IFLNK | 0700, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := trustedRuntimeComponent(unix.Stat_t{Uid: tc.uid, Mode: tc.mode}, tc.ancestor); got != tc.want {
+			if got := trustedExecutionComponent(unix.Stat_t{Uid: tc.uid, Mode: tc.mode}, tc.ancestor); got != tc.want {
 				t.Fatalf("trusted=%v, want %v", got, tc.want)
 			}
 		})
@@ -395,5 +395,83 @@ func TestExecuteWorkerAcceptsZeroLoss(t *testing.T) {
 		if err != nil || receipt.EvalLoss != 0 {
 			t.Fatalf("zero loss rejected: %v", err)
 		}
+	}
+}
+
+func TestRunJobRequiresTrustedWritableRootAncestors(t *testing.T) {
+	for _, destination := range []string{"output", "job", "terminal"} {
+		for _, state := range []string{"private", "world writable", "group writable", "changed during execution"} {
+			t.Run(destination+"/"+state, func(t *testing.T) {
+				r, e, jobPath := executionFixture(t, executionScript)
+				parent := filepath.Join(t.TempDir(), "parent")
+				leaf := filepath.Join(parent, "private")
+				if err := os.MkdirAll(leaf, 0700); err != nil {
+					t.Fatal(err)
+				}
+				switch destination {
+				case "output":
+					r.OutputDirectory = leaf
+				case "job":
+					jobPath = filepath.Join(leaf, "job.json")
+				case "terminal":
+					e.TerminalFile = filepath.Join(leaf, "terminal.json")
+				}
+				marker := filepath.Join(t.TempDir(), "phases")
+				script := strings.Replace(executionScript, "#!/bin/sh\n", "#!/bin/sh\nprintf '%s\\n' \"$5\" >> '"+marker+"'\n", 1)
+				script += "if [ \"$5\" = train ]; then printf x > '" + filepath.Join(r.OutputDirectory, "adapter_model.safetensors") + "'; fi\n"
+				if state == "changed during execution" {
+					script += "if [ \"$5\" = reload ]; then chmod 777 '" + parent + "'; fi\n"
+				}
+				updateExecutionScript(t, r, &e, jobPath, script)
+				switch state {
+				case "world writable":
+					if err := os.Chmod(parent, 0777); err != nil {
+						t.Fatal(err)
+					}
+				case "group writable":
+					if err := os.Chmod(parent, 0770); err != nil {
+						t.Fatal(err)
+					}
+				}
+				err := RunJob(context.Background(), jobPath, executionInvocation, executionGPU)
+				if state == "private" {
+					if err != nil {
+						t.Fatal("trusted writable root rejected", err)
+					}
+					return
+				}
+				if err == nil {
+					t.Fatal("accepted writable root with unsafe ancestor")
+				}
+				if _, err := os.Lstat(e.TerminalFile); !os.IsNotExist(err) {
+					t.Fatal("unsafe ancestry published terminal completion", err)
+				}
+				if _, err := os.Lstat(filepath.Join(r.OutputDirectory, "supervisor-provenance.json")); !os.IsNotExist(err) {
+					t.Fatal("unsafe ancestry published provenance", err)
+				}
+				if state == "changed during execution" {
+					phases, err := os.ReadFile(marker)
+					if err != nil || string(phases) != "train\nreload\n" {
+						t.Fatalf("final validation did not follow both phases: %q, %v", phases, err)
+					}
+				} else if _, err := os.Lstat(marker); !os.IsNotExist(err) {
+					t.Fatal("unsafe writable root executed the worker", err)
+				}
+			})
+		}
+	}
+}
+
+func TestPrivateExecutionDirectoryAllowsRootOwnedStickyAncestor(t *testing.T) {
+	var stat unix.Stat_t
+	if unix.Lstat(os.TempDir(), &stat) != nil || stat.Uid != 0 || stat.Mode&unix.S_ISVTX == 0 {
+		t.Skip("temporary directory is not a root-owned sticky ancestor")
+	}
+	root := filepath.Join(t.TempDir(), "private")
+	if err := os.Mkdir(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := privateExecutionDirectory(root); err != nil {
+		t.Fatal("root-owned sticky ancestor rejected", err)
 	}
 }

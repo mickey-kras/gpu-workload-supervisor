@@ -36,7 +36,7 @@ func RunJob(ctx context.Context, jobPath, invocationID, gpuUUID string) error {
 	if !absolute(jobPath) || !control.ValidGPUUUID(gpuUUID) {
 		return errors.New("invalid training execution identity")
 	}
-	if err := privateJobDirectory(filepath.Dir(jobPath)); err != nil {
+	if err := privateExecutionDirectory(filepath.Dir(jobPath)); err != nil {
 		return err
 	}
 	invocation, err := hex.DecodeString(invocationID)
@@ -47,7 +47,7 @@ func RunJob(ctx context.Context, jobPath, invocationID, gpuUUID string) error {
 	if err != nil {
 		return err
 	}
-	if err := privateJobDirectory(filepath.Dir(e.TerminalFile)); err != nil {
+	if err := privateExecutionDirectory(filepath.Dir(e.TerminalFile)); err != nil {
 		return err
 	}
 	work := filepath.Join(filepath.Dir(jobPath), ".llm-"+invocationID)
@@ -101,7 +101,7 @@ func executionRecipe(e jobEnvelope, jobPath, work string) (Recipe, error) {
 	if r.Runtime.Entrypoint != "bin/python3" {
 		return Recipe{}, errors.New("training runtime requires an inventoried bin/python3")
 	}
-	if err := privateJobDirectory(r.OutputDirectory); err != nil {
+	if err := privateExecutionDirectory(r.OutputDirectory); err != nil {
 		return Recipe{}, err
 	}
 	if r.Model.Inventory.Files["adapter_config.json"] != "" {
@@ -114,7 +114,7 @@ func executionRecipe(e jobEnvelope, jobPath, work string) (Recipe, error) {
 }
 
 func trustedRuntime(inventory Inventory) error {
-	if err := trustedRuntimeAncestors(inventory.Root); err != nil {
+	if err := trustedExecutionAncestors(inventory.Root); err != nil {
 		return err
 	}
 	remaining := 65536
@@ -131,7 +131,7 @@ func trustedRuntime(inventory Inventory) error {
 		for _, entry := range entries {
 			child := filepath.Join(path, entry.Name())
 			var stat unix.Stat_t
-			if unix.Lstat(child, &stat) != nil || !trustedRuntimeComponent(stat, false) {
+			if unix.Lstat(child, &stat) != nil || !trustedExecutionComponent(stat, false) {
 				return errors.New("training runtime ownership or permissions are unsafe")
 			}
 			if entry.IsDir() {
@@ -142,17 +142,26 @@ func trustedRuntime(inventory Inventory) error {
 	return nil
 }
 
-func trustedRuntimeAncestors(root string) error {
+// Execution writes and child imports require a private leaf whose entire path
+// is trusted; a private leaf alone can be replaced through a writable parent.
+func privateExecutionDirectory(path string) error {
+	if err := privateJobDirectory(path); err != nil {
+		return err
+	}
+	return trustedExecutionAncestors(path)
+}
+
+func trustedExecutionAncestors(root string) error {
 	if !absolute(root) {
-		return errors.New("training runtime path is invalid")
+		return errors.New("training execution path is invalid")
 	}
 	for path := root; ; path = filepath.Dir(path) {
 		var stat unix.Stat_t
 		// Like runtime launch-source qualification, only root-owned sticky
 		// ancestors above the immediate parent may be writable (e.g. /tmp).
 		stickyAncestor := path != root && path != filepath.Dir(root) && path != "/"
-		if unix.Lstat(path, &stat) != nil || stat.Mode&unix.S_IFMT != unix.S_IFDIR || !trustedRuntimeComponent(stat, stickyAncestor) {
-			return errors.New("training runtime ancestry is unsafe")
+		if unix.Lstat(path, &stat) != nil || stat.Mode&unix.S_IFMT != unix.S_IFDIR || !trustedExecutionComponent(stat, stickyAncestor) {
+			return errors.New("training execution ancestry is unsafe")
 		}
 		if path == "/" {
 			return nil
@@ -160,7 +169,7 @@ func trustedRuntimeAncestors(root string) error {
 	}
 }
 
-func trustedRuntimeComponent(stat unix.Stat_t, stickyAncestor bool) bool {
+func trustedExecutionComponent(stat unix.Stat_t, stickyAncestor bool) bool {
 	writable := stat.Mode&0022 != 0
 	if stickyAncestor && stat.Uid == 0 && stat.Mode&unix.S_ISVTX != 0 {
 		writable = false
@@ -222,6 +231,11 @@ func executeWorker(ctx context.Context, r Recipe, work, gpuUUID, phase string) (
 }
 
 func unchangedExecutionInputs(jobPath string, expected jobEnvelope, r Recipe) error {
+	for _, path := range []string{filepath.Dir(jobPath), filepath.Dir(expected.TerminalFile), r.OutputDirectory} {
+		if err := privateExecutionDirectory(path); err != nil {
+			return err
+		}
+	}
 	current, err := readLaunchEnvelope(jobPath)
 	if err != nil || current != expected {
 		return errors.New("training job identity changed during execution")
@@ -237,7 +251,7 @@ func unchangedExecutionInputs(jobPath string, expected jobEnvelope, r Recipe) er
 	if _, _, err := inspectDatasets(r.Train, r.HeldOut); err != nil {
 		return err
 	}
-	return privateJobDirectory(r.OutputDirectory)
+	return nil
 }
 
 func adapterDigest(r Recipe) (string, error) {
