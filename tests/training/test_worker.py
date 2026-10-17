@@ -237,14 +237,37 @@ class WorkerTests(unittest.TestCase):
                             worker.reload(config, receipt)
                         self.assertFalse(receipt.exists())
 
+    def test_main_rejects_unsupported_python_before_runtime_preparation(self) -> None:
+        for phase in ("train", "reload"):
+            with self.subTest(phase=phase), patch.object(
+                worker.sys, "version_info", SimpleNamespace(major=3, minor=11)
+            ), patch.object(worker.sys, "path", []) as paths, patch.object(
+                worker, "verify_environment"
+            ) as verify, patch.object(worker, "train") as train, patch.object(worker, "reload") as reload:
+                with self.assertRaisesRegex(ValueError, "Python 3.12 or newer"):
+                    worker.main([phase, "config", "receipt", "progress"])
+                self.assertEqual(paths, [])
+                verify.assert_not_called()
+                train.assert_not_called()
+                reload.assert_not_called()
+
     def test_main_selects_only_the_requested_phase_after_verification(self) -> None:
         for phase in ("train", "reload"):
             previous = os.umask(0o077)
             try:
-                with patch.object(worker.sys, "path", list(worker.sys.path)), patch.object(worker, "verify_environment") as verify, patch.object(worker, phase) as action:
+                with patch.object(
+                    worker.sys, "version_info", SimpleNamespace(major=3, minor=12)
+                ), patch.object(worker.sys, "path", list(worker.sys.path)), patch.object(
+                    worker, "verify_environment"
+                ) as verify, patch.object(worker, "train") as train, patch.object(worker, "reload") as reload:
                     worker.main([phase, "config", "receipt", "progress"])
                     verify.assert_called_once_with()
-                    action.assert_called_once()
+                    if phase == "train":
+                        train.assert_called_once_with(Path("config"), Path("receipt"), Path("progress"))
+                        reload.assert_not_called()
+                    else:
+                        reload.assert_called_once_with(Path("config"), Path("receipt"))
+                        train.assert_not_called()
             finally:
                 os.umask(previous)
 

@@ -137,6 +137,8 @@ def reload(config_path: Path, receipt: Path) -> None:
 def main(args: list[str]) -> None:
     if len(args) != 4 or args[0] not in {"train", "reload"}:
         raise ValueError("invalid worker invocation")
+    if (sys.version_info.major, sys.version_info.minor) < (3, 12):
+        raise ValueError("training runtime requires Python 3.12 or newer")
     os.umask(0o077)
     site = Path(sys.executable).parent.parent / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
     sys.path.insert(0, str(site))
