@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"os/exec"
@@ -518,5 +519,95 @@ func TestPrepareWriteFailureAllowsRetry(t *testing.T) {
 	}
 	if err := json.Unmarshal(contents, &result); err != nil || result.Status != "unqualified" {
 		t.Fatal("retry did not publish a complete candidate plan", err)
+	}
+}
+
+func TestPublishPlanDirectorySyncFailureAllowsRetry(t *testing.T) {
+	root := t.TempDir()
+	plan := filepath.Join(root, "plan.json")
+	raw := []byte(`{"status":"unqualified"}`)
+	called := false
+	err := publishPlanWithDirectorySync(plan, raw, func(directory string) error {
+		called = true
+		contents, err := os.ReadFile(plan)
+		if err != nil || string(contents) != string(raw) || directory != root {
+			t.Fatal("sync did not follow complete publication", err)
+		}
+		return errors.New("injected sync failure at " + directory)
+	})
+	if !called || err == nil || strings.Contains(err.Error(), root) {
+		t.Fatal("sync failure accepted or disclosed private path", err)
+	}
+	if _, err := os.Lstat(plan); !os.IsNotExist(err) {
+		t.Fatal("sync failure left final plan", err)
+	}
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
+		t.Fatal("sync failure left temporary plans", err)
+	}
+	if err := publishPlan(plan, raw); err != nil {
+		t.Fatal("publication retry failed", err)
+	}
+	contents, err := os.ReadFile(plan)
+	if err != nil || string(contents) != string(raw) {
+		t.Fatal("retry did not publish complete plan", err)
+	}
+}
+
+func TestPublishPlanRollbackPreservesOtherDestinations(t *testing.T) {
+	for _, existing := range []bool{true, false} {
+		t.Run(strconv.FormatBool(existing), func(t *testing.T) {
+			root := t.TempDir()
+			plan := filepath.Join(root, "plan.json")
+			if existing {
+				writeFixture(t, plan, "other publication")
+			}
+			called := false
+			err := publishPlanWithDirectorySync(plan, []byte("candidate"), func(directory string) error {
+				called = true
+				replacement := filepath.Join(directory, "replacement")
+				writeFixture(t, replacement, "other publication")
+				if err := os.Rename(replacement, plan); err != nil {
+					t.Fatal(err)
+				}
+				return errors.New("injected sync failure at " + directory)
+			})
+			if err == nil || called == existing || strings.Contains(err.Error(), root) {
+				t.Fatal("publication failure accepted or disclosed private path", err)
+			}
+			contents, readErr := os.ReadFile(plan)
+			if readErr != nil || string(contents) != "other publication" {
+				t.Fatal("publication failure removed another destination", readErr)
+			}
+			if entries, err := os.ReadDir(root); err != nil || len(entries) != 1 {
+				t.Fatal("publication failure left temporary plans", err)
+			}
+		})
+	}
+}
+
+func TestPublishPlanTemporaryCleanupFailureRollsBack(t *testing.T) {
+	root := t.TempDir()
+	plan := filepath.Join(root, "plan.json")
+	err := publishPlanWithDirectorySync(plan, []byte("candidate"), func(directory string) error {
+		staged, err := filepath.Glob(filepath.Join(directory, ".candidate-plan-*"))
+		if err != nil || len(staged) != 1 {
+			t.Fatal("missing staging file", err)
+		}
+		// A nonempty directory supplies a harmless, deterministic cleanup
+		// failure even when these tests run as root.
+		if err := os.Rename(staged[0], filepath.Join(directory, "saved-staging")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(staged[0], 0700); err != nil {
+			t.Fatal(err)
+		}
+		writeFixture(t, filepath.Join(staged[0], "blocker"), "fixture")
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "temporary file cleanup failed") || strings.Contains(err.Error(), root) {
+		t.Fatal("cleanup failure accepted or disclosed private path", err)
+	}
+	if _, err := os.Lstat(plan); !os.IsNotExist(err) {
+		t.Fatal("cleanup failure left final publication", err)
 	}
 }

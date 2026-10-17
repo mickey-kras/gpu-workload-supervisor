@@ -12,7 +12,7 @@ dpkg-deb --extract "$package" "$root"
 dpkg-deb --control "$package" "$root/DEBIAN"
 version="$(dpkg-deb --field "$package" Version)"
 releases=()
-for binary in gpu-mode gpu-workload-proxy gpu-operator gpu-setup; do
+for binary in gpu-mode gpu-workload-proxy gpu-operator gpu-setup gpu-training-runner; do
   test -x "$root/usr/bin/$binary"
   embedded_release="$(go version -m "$root/usr/bin/$binary" | sed -n 's/.*deployment.Release=\([^ " ]*\).*/\1/p')"
   releases+=("$embedded_release")

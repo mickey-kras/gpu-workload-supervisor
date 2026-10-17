@@ -49,11 +49,20 @@ builds:
     goos: [linux]
     goarch: [amd64, arm64]
 
+  - id: gpu-training-runner
+    main: ./cmd/gpu-training-runner
+    binary: gpu-training-runner
+    ldflags:
+      - -s -w -X github.com/mickey-kras/gpu-workload-supervisor/internal/deployment.Release={{ .Version }}
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+
 nfpms:
   - id: desktop
     package_name: gpu-workload-supervisor
     file_name_template: "{{ .ProjectName }}_{{ .Version }}_linux_{{ .Arch }}"
-    ids: [gpu-mode, gpu-workload-proxy, gpu-operator, gpu-setup]
+    ids: [gpu-mode, gpu-workload-proxy, gpu-operator, gpu-setup, gpu-training-runner]
     formats: [deb]
     bindir: /usr/bin
     maintainer: gpu-workload-supervisor maintainers <noreply@github.com>
