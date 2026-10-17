@@ -209,6 +209,9 @@ func inspectConfig(path string, model bool) error {
 			return errors.New("candidate model configuration indirection is unsupported")
 		}
 	}
+	if _, exists := config["fast_tokenizer_files"]; !model && exists {
+		return errors.New("candidate tokenizer filename overrides are unsupported")
+	}
 	var family string
 	if model && (json.Unmarshal(config["model_type"], &family) != nil || family != "llama") {
 		return errors.New("candidate supports only the llama model family")
