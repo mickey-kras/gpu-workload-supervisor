@@ -216,11 +216,10 @@ class WorkerTests(unittest.TestCase):
                 torch.isfinite.return_value.all.return_value.item.return_value = finite
                 model: MagicMock = MagicMock()
                 model.generate.return_value = SimpleNamespace(shape=(1, length))
-                tokens: MagicMock = MagicMock()
-                tokens.to.return_value = tokens
-                tokens.__getitem__.return_value.shape = (1, 1)
+                input_ids = SimpleNamespace(shape=(1, 1))
+                tokens = {"input_ids": input_ids}
                 tokenizer: MagicMock = MagicMock()
-                tokenizer.from_pretrained.return_value.return_value = tokens
+                tokenizer.from_pretrained.return_value.return_value.to.return_value = tokens
                 peft: MagicMock = MagicMock()
                 peft.from_pretrained.return_value = model
                 modules = {
@@ -235,7 +234,8 @@ class WorkerTests(unittest.TestCase):
                         self.assertTrue(json.loads(receipt.read_text())["reloaded"])
                         tokenizer.from_pretrained.assert_called_once_with("saved", local_files_only=True, trust_remote_code=False)
                         self.assertEqual(peft.from_pretrained.call_args.args[1], "saved")
-                        model.generate.assert_called_once_with(max_new_tokens=8, do_sample=False)
+                        model.assert_called_once_with(input_ids=input_ids)
+                        model.generate.assert_called_once_with(input_ids=input_ids, max_new_tokens=8, do_sample=False)
                     else:
                         with self.assertRaises(ValueError):
                             worker.reload(config, receipt)
@@ -278,3 +278,4 @@ class WorkerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
