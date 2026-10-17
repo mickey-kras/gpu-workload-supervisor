@@ -74,3 +74,27 @@ func TestCompileRejectsWeightFilenameOverrides(t *testing.T) {
 		})
 	}
 }
+
+func TestCompileRejectsModelConfigurationIndirection(t *testing.T) {
+	for _, tc := range []struct {
+		name, config string
+	}{
+		{"alternate config", `{"model_type":"llama","configuration_files":["config.5.20.1.json"]}`},
+		{"attribute alias", `{"model_type":"llama","attribute_map":{"transformers_weights":"selected_weights"},"selected_weights":"other.safetensors.index.json"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := fixture(t)
+			inventory := &r.Model.Inventory
+			for name, content := range map[string]string{
+				"config.json":                  tc.config,
+				"config.5.20.1.json":           `{"model_type":"llama","transformers_weights":"other.safetensors.index.json"}`,
+				"other.safetensors.index.json": `{"weight_map":{"a":"../outside.safetensors"}}`,
+			} {
+				inventory.Files[name] = writeFixture(t, filepath.Join(inventory.Root, name), content)
+			}
+			if _, err := Compile(r, math.MaxUint64, math.MaxUint64); err == nil || !strings.Contains(err.Error(), "model configuration indirection is unsupported") {
+				t.Fatal("accepted indirect model configuration or returned unrelated error", err)
+			}
+		})
+	}
+}
