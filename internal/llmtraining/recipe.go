@@ -1,5 +1,4 @@
-// Package llmtraining prepares local, unqualified Axolotl candidates. It never
-// starts a trainer or establishes runtime, GPU or serving-import qualification.
+// Package llmtraining prepares and runs local Axolotl candidates.
 package llmtraining
 
 import (

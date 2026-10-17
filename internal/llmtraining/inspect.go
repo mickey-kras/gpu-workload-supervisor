@@ -139,10 +139,47 @@ func inspectSnapshots(r Recipe) error {
 	if !weights {
 		return errors.New("candidate requires safetensors training weights")
 	}
+	if err := inspectShardIndexes(r.Model.Inventory); err != nil {
+		return err
+	}
 	if err := inspectConfig(filepath.Join(r.Model.Inventory.Root, "config.json"), true); err != nil {
 		return err
 	}
 	return inspectConfig(filepath.Join(r.Tokenizer.Inventory.Root, "tokenizer_config.json"), false)
+}
+
+func inspectShardIndexes(inventory Inventory) error {
+	for name := range inventory.Files {
+		if strings.HasSuffix(name, ".safetensors.index.json") {
+			if err := inspectShardIndex(inventory, name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func inspectShardIndex(inventory Inventory, name string) error {
+	f, err := openRegular(filepath.Join(inventory.Root, name))
+	if err != nil {
+		return errors.New("candidate shard index is unreadable")
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+	var index map[string]json.RawMessage
+	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &index) != nil {
+		return errors.New("candidate shard index is invalid")
+	}
+	var weights map[string]string
+	if json.Unmarshal(index["weight_map"], &weights) != nil || len(weights) == 0 {
+		return errors.New("candidate shard index requires a nonempty weight map")
+	}
+	for _, path := range weights {
+		if !relative(path) || filepath.Ext(path) != ".safetensors" || inventory.Files[path] == "" {
+			return errors.New("candidate shard index must reference inventoried safetensors weights")
+		}
+	}
+	return nil
 }
 
 func inspectConfig(path string, model bool) error {
@@ -161,6 +198,14 @@ func inspectConfig(path string, model bool) error {
 	}
 	if _, exists := config["quantization_config"]; model && exists {
 		return errors.New("candidate requires original unquantized training weights")
+	}
+	if _, exists := config["transformers_weights"]; model && exists {
+		return errors.New("candidate weight filename overrides are unsupported")
+	}
+	for _, key := range []string{"configuration_files", "attribute_map", "__dict__"} {
+		if _, exists := config[key]; model && exists {
+			return errors.New("candidate model configuration indirection is unsupported")
+		}
 	}
 	var family string
 	if model && (json.Unmarshal(config["model_type"], &family) != nil || family != "llama") {
