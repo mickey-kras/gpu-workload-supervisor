@@ -139,7 +139,7 @@ func inspectSnapshots(r Recipe) error {
 	if !weights {
 		return errors.New("candidate requires safetensors training weights")
 	}
-	if err := inspectShardIndex(r.Model.Inventory); err != nil {
+	if err := inspectShardIndexes(r.Model.Inventory); err != nil {
 		return err
 	}
 	if err := inspectConfig(filepath.Join(r.Model.Inventory.Root, "config.json"), true); err != nil {
@@ -148,11 +148,18 @@ func inspectSnapshots(r Recipe) error {
 	return inspectConfig(filepath.Join(r.Tokenizer.Inventory.Root, "tokenizer_config.json"), false)
 }
 
-func inspectShardIndex(inventory Inventory) error {
-	const name = "model.safetensors.index.json"
-	if inventory.Files[name] == "" {
-		return nil
+func inspectShardIndexes(inventory Inventory) error {
+	for name := range inventory.Files {
+		if strings.HasSuffix(name, ".safetensors.index.json") {
+			if err := inspectShardIndex(inventory, name); err != nil {
+				return err
+			}
+		}
 	}
+	return nil
+}
+
+func inspectShardIndex(inventory Inventory, name string) error {
 	f, err := openRegular(filepath.Join(inventory.Root, name))
 	if err != nil {
 		return errors.New("candidate shard index is unreadable")
@@ -195,7 +202,7 @@ func inspectConfig(path string, model bool) error {
 	if _, exists := config["transformers_weights"]; model && exists {
 		return errors.New("candidate weight filename overrides are unsupported")
 	}
-	for _, key := range []string{"configuration_files", "attribute_map"} {
+	for _, key := range []string{"configuration_files", "attribute_map", "__dict__"} {
 		if _, exists := config[key]; model && exists {
 			return errors.New("candidate model configuration indirection is unsupported")
 		}
