@@ -195,6 +195,11 @@ func inspectConfig(path string, model bool) error {
 	if _, exists := config["transformers_weights"]; model && exists {
 		return errors.New("candidate weight filename overrides are unsupported")
 	}
+	for _, key := range []string{"configuration_files", "attribute_map"} {
+		if _, exists := config[key]; model && exists {
+			return errors.New("candidate model configuration indirection is unsupported")
+		}
+	}
 	var family string
 	if model && (json.Unmarshal(config["model_type"], &family) != nil || family != "llama") {
 		return errors.New("candidate supports only the llama model family")
