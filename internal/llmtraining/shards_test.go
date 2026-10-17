@@ -85,13 +85,9 @@ func TestCompileRejectsModelConfigurationIndirection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := fixture(t)
 			inventory := &r.Model.Inventory
-			for name, content := range map[string]string{
-				"config.json":                  tc.config,
-				"config.5.20.1.json":           `{"model_type":"llama","transformers_weights":"other.safetensors.index.json"}`,
-				"other.safetensors.index.json": `{"weight_map":{"a":"../outside.safetensors"}}`,
-			} {
-				inventory.Files[name] = writeFixture(t, filepath.Join(inventory.Root, name), content)
-			}
+			inventory.Files["config.json"] = writeFixture(t, filepath.Join(inventory.Root, "config.json"), tc.config)
+			inventory.Files["config.5.20.1.json"] = writeFixture(t, filepath.Join(inventory.Root, "config.5.20.1.json"), `{"model_type":"llama","transformers_weights":"other.safetensors.index.json"}`)
+			inventory.Files["other.safetensors.index.json"] = writeFixture(t, filepath.Join(inventory.Root, "other.safetensors.index.json"), `{"weight_map":{"a":"../outside.safetensors"}}`)
 			if _, err := Compile(r, math.MaxUint64, math.MaxUint64); err == nil || !strings.Contains(err.Error(), "model configuration indirection is unsupported") {
 				t.Fatal("accepted indirect model configuration or returned unrelated error", err)
 			}
