@@ -108,13 +108,28 @@ func TestRunJobFailureNeverAcknowledgesCompletion(t *testing.T) {
 		"adapter missing":  executionScript,
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, e, jobPath := executionFixture(t, script)
+			r, e, jobPath := executionFixture(t, script)
+			reloadFailure := name == "false reload" || name == "reload failed"
+			marker := filepath.Join(t.TempDir(), "phases")
+			if reloadFailure {
+				// Produce a bounded adapter during training so these failures
+				// exercise reload, after the adapter digest boundary succeeds.
+				script = strings.Replace(script, "#!/bin/sh\n", "#!/bin/sh\nprintf '%s\\n' \"$5\" >> '"+marker+"'\n", 1)
+				script += "if [ \"$5\" = train ]; then printf x > '" + filepath.Join(r.OutputDirectory, "adapter_model.safetensors") + "'; fi\n"
+				updateExecutionScript(t, r, &e, jobPath, script)
+			}
 			err := RunJob(context.Background(), jobPath, executionInvocation, executionGPU)
 			if err == nil || strings.Contains(err.Error(), e.Job.Token) {
 				t.Fatal("accepted incomplete execution or disclosed completion token", err)
 			}
 			if _, err := os.Lstat(e.TerminalFile); !os.IsNotExist(err) {
 				t.Fatal("failed execution published terminal completion", err)
+			}
+			if reloadFailure {
+				phases, err := os.ReadFile(marker)
+				if err != nil || string(phases) != "train\nreload\n" {
+					t.Fatalf("failure did not enter reload: phases=%q, err=%v", phases, err)
+				}
 			}
 		})
 	}
@@ -123,7 +138,9 @@ func TestRunJobFailureNeverAcknowledgesCompletion(t *testing.T) {
 func TestRunJobRejectsUnsafeInputBeforeExecution(t *testing.T) {
 	for _, name := range []string{"invocation", "gpu", "job path", "job permissions", "runtime permissions", "existing execution", "recipe changed", "invalid envelope", "output occupied", "output permissions", "runtime entrypoint", "adapter redirect", "cancelled"} {
 		t.Run(name, func(t *testing.T) {
-			r, e, jobPath := executionFixture(t, executionScript)
+			marker := filepath.Join(t.TempDir(), "worker-started")
+			script := strings.Replace(executionScript, "#!/bin/sh\n", "#!/bin/sh\nprintf started > '"+marker+"'\n", 1)
+			r, e, jobPath := executionFixture(t, script)
 			invocation, gpu := executionInvocation, executionGPU
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -166,6 +183,11 @@ func TestRunJobRejectsUnsafeInputBeforeExecution(t *testing.T) {
 				writeJobFixture(t, jobPath, e)
 			case "runtime entrypoint":
 				r.Runtime.Entrypoint = "axolotl"
+				entrypoint := filepath.Join(r.Runtime.Inventory.Root, r.Runtime.Entrypoint)
+				r.Runtime.Inventory.Files[r.Runtime.Entrypoint] = writeFixture(t, entrypoint, script)
+				if err := os.Chmod(entrypoint, 0700); err != nil {
+					t.Fatal(err)
+				}
 				raw, err := json.Marshal(r)
 				if err != nil {
 					t.Fatal(err)
@@ -177,6 +199,9 @@ func TestRunJobRejectsUnsafeInputBeforeExecution(t *testing.T) {
 			}
 			if err := RunJob(ctx, jobPath, invocation, gpu); err == nil {
 				t.Fatal("accepted unsafe execution")
+			}
+			if _, err := os.Lstat(marker); !os.IsNotExist(err) {
+				t.Fatal("preflight rejection executed the worker", err)
 			}
 		})
 	}
