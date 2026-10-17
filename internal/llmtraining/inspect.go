@@ -18,6 +18,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const safetensorsExtension = ".safetensors"
+
 // Inspect checks a snapshot in time. It neither locks these files against later
 // changes nor approves executable contents or dependencies outside the inventory.
 func (i Inventory) Inspect() error {
@@ -128,13 +130,13 @@ func inspectSnapshots(r Recipe) error {
 	for _, inventory := range []Inventory{r.Model.Inventory, r.Tokenizer.Inventory} {
 		for path := range inventory.Files {
 			ext := filepath.Ext(path)
-			if ext != ".json" && ext != ".safetensors" && ext != ".model" && ext != ".txt" {
+			if ext != ".json" && ext != safetensorsExtension && ext != ".model" && ext != ".txt" {
 				return errors.New("candidate assets must use local training weights and tokenizer data")
 			}
 		}
 	}
 	for path := range r.Model.Inventory.Files {
-		weights = weights || strings.HasSuffix(path, ".safetensors")
+		weights = weights || strings.HasSuffix(path, safetensorsExtension)
 	}
 	if !weights {
 		return errors.New("candidate requires safetensors training weights")
@@ -175,7 +177,7 @@ func inspectShardIndex(inventory Inventory, name string) error {
 		return errors.New("candidate shard index requires a nonempty weight map")
 	}
 	for _, path := range weights {
-		if !relative(path) || filepath.Ext(path) != ".safetensors" || inventory.Files[path] == "" {
+		if !relative(path) || filepath.Ext(path) != safetensorsExtension || inventory.Files[path] == "" {
 			return errors.New("candidate shard index must reference inventoried safetensors weights")
 		}
 	}
