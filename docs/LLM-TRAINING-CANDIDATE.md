@@ -10,6 +10,21 @@ Build `./cmd/gpu-training-candidate`, then run it with two absolute paths:
 gpu-training-candidate -recipe /private/candidate.json -output /private/new-plan.json
 ```
 
+Job-bound preparation accepts the supervisor's finite-job envelope instead of
+`-recipe`:
+
+```sh
+gpu-training-candidate -job-file /private/training/job.json -output /private/new-plan.json
+```
+
+This mode requires the current systemd `INVOCATION_ID`. It checks the launch
+identity and the SHA256 of the original recipe bytes, then repeats candidate
+input and resource checks. The private plan carries the job identity and
+invocation, but never its completion token. It is preparation evidence only:
+it cannot acknowledge completion, approve the runtime or authorize GPU work.
+The invocation value and envelope are checked locally; this does not establish
+that the invocation is live or the fence is still current.
+
 The command reads local inputs and creates one new file with mode `0600`.
 It refuses to replace an existing file. Keep its parent directory private.
 The plan is written to a private temporary file in that directory and published

@@ -28,9 +28,13 @@ func run(args []string) error {
 	flags := flag.NewFlagSet("gpu-training-candidate", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	recipe := flags.String("recipe", "", "absolute local candidate recipe file")
+	job := flags.String("job-file", "", "absolute local supervisor job envelope")
 	output := flags.String("output", "", "new private candidate plan file")
-	if flags.Parse(args) != nil || flags.NArg() != 0 || *recipe == "" || *output == "" {
-		return errors.New("usage: gpu-training-candidate -recipe /path/recipe.json -output /path/new-plan.json")
+	if flags.Parse(args) != nil || flags.NArg() != 0 || (*recipe == "") == (*job == "") || *output == "" {
+		return errors.New("usage: gpu-training-candidate (-recipe /path/recipe.json | -job-file /path/job.json) -output /path/new-plan.json")
+	}
+	if *job != "" {
+		return llmtraining.PrepareJob(*job, *output, os.Getenv("INVOCATION_ID"))
 	}
 	return llmtraining.Prepare(*recipe, *output)
 }
