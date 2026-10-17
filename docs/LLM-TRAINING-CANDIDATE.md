@@ -34,8 +34,11 @@ There is no network access, runtime import, subprocess launch or dataset-content
 logging in the preparation command. Errors omit input values and file contents.
 The command is not installed by the release package.
 
-The plan contains `status: "unqualified"`, input row counts, operator-supplied
+The recipe-mode plan contains `status: "unqualified"`, input row counts, operator-supplied
 resource estimates, a canonical recipe digest and a generated `config` object.
+Job-mode plans nest these fields under `candidate`, including
+`candidate.config` and `candidate.canonicalRecipeSHA256`; the outer
+`recipeSHA256` identifies the original recipe bytes.
 The plan itself is **not** an Axolotl configuration file. Its `config` object is
 JSON-subset YAML targeting the inspected source revision below. A successful
 compile does not demonstrate that Axolotl can load or train this model.
