@@ -192,4 +192,3 @@ func (b Budget) StorageBytes() (uint64, error) {
 	}
 	return total + b.CheckpointBytes*(b.RetainedCheckpoints+1), nil
 }
-
