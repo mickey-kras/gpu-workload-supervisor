@@ -59,3 +59,18 @@ func TestCompileBindsShardIndexToInventory(t *testing.T) {
 		})
 	}
 }
+
+func TestCompileRejectsWeightFilenameOverrides(t *testing.T) {
+	for _, weights := range []string{`"../outside.safetensors"`, `"one.safetensors"`} {
+		t.Run(weights, func(t *testing.T) {
+			r := fixture(t)
+			inventory := &r.Model.Inventory
+			inventory.Files["config.json"] = writeFixture(t, filepath.Join(inventory.Root, "config.json"), `{"model_type":"llama","transformers_weights":"other.safetensors.index.json"}`)
+			inventory.Files["other.safetensors.index.json"] = writeFixture(t, filepath.Join(inventory.Root, "other.safetensors.index.json"), `{"weight_map":{"a":`+weights+`}}`)
+			inventory.Files["one.safetensors"] = writeFixture(t, filepath.Join(inventory.Root, "one.safetensors"), "fixture shard")
+			if _, err := Compile(r, math.MaxUint64, math.MaxUint64); err == nil || !strings.Contains(err.Error(), "weight filename overrides are unsupported") {
+				t.Fatal("accepted alternate weight index or returned unrelated error", err)
+			}
+		})
+	}
+}
