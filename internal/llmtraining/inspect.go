@@ -291,4 +291,3 @@ func openRegular(path string) (*os.File, error) {
 	}
 	return f, nil
 }
-
