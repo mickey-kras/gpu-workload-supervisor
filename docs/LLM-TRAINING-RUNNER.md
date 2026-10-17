@@ -53,10 +53,11 @@ token. A failed phase never publishes successful completion. Systemd failure or
 explicit recovery still supplies the supervisor's failure/interruption handling.
 The supervisor independently verifies cgroup/GPU release and capacity afterward.
 
-Hub/dataset offline modes, telemetry and reporting are disabled and ambient
-credentials are omitted. These settings are not network isolation. Qualify the
-runtime and deployment restrictions before enabling a training profile. This
-runner does not offer serving import, automatic activation or checkpoint resume.
+Hub/dataset offline modes are enabled; telemetry and reporting are disabled,
+and ambient credentials are omitted. These settings are not network isolation.
+Qualify the runtime and deployment restrictions before enabling a training
+profile. This runner does not offer serving import, automatic activation or
+checkpoint resume.
 
 Repository tests use an explicitly identified worker fixture for process,
 environment, receipt, failure and provenance behavior. Python guard tests check

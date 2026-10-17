@@ -109,11 +109,17 @@ func TestRunJobFailureNeverAcknowledgesCompletion(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			r, e, jobPath := executionFixture(t, script)
-			reloadFailure := name == "false reload" || name == "reload failed"
+			wantPhases := ""
+			switch name {
+			case "incomplete steps", "negative loss":
+				wantPhases = "train\n"
+			case "false reload", "reload failed":
+				wantPhases = "train\nreload\n"
+			}
 			marker := filepath.Join(t.TempDir(), "phases")
-			if reloadFailure {
-				// Produce a bounded adapter during training so these failures
-				// exercise reload, after the adapter digest boundary succeeds.
+			if wantPhases != "" {
+				// Receipt failures otherwise have a complete worker result,
+				// including a bounded adapter, so later failures cannot mask them.
 				script = strings.Replace(script, "#!/bin/sh\n", "#!/bin/sh\nprintf '%s\\n' \"$5\" >> '"+marker+"'\n", 1)
 				script += "if [ \"$5\" = train ]; then printf x > '" + filepath.Join(r.OutputDirectory, "adapter_model.safetensors") + "'; fi\n"
 				updateExecutionScript(t, r, &e, jobPath, script)
@@ -125,10 +131,13 @@ func TestRunJobFailureNeverAcknowledgesCompletion(t *testing.T) {
 			if _, err := os.Lstat(e.TerminalFile); !os.IsNotExist(err) {
 				t.Fatal("failed execution published terminal completion", err)
 			}
-			if reloadFailure {
+			if wantPhases != "" {
+				if name != "reload failed" && err.Error() != "training worker acknowledgement is incomplete or invalid" {
+					t.Fatal("invalid receipt failed at a different boundary", err)
+				}
 				phases, err := os.ReadFile(marker)
-				if err != nil || string(phases) != "train\nreload\n" {
-					t.Fatalf("failure did not enter reload: phases=%q, err=%v", phases, err)
+				if err != nil || string(phases) != wantPhases {
+					t.Fatalf("failure reached wrong phases: got=%q, want=%q, err=%v", phases, wantPhases, err)
 				}
 			}
 		})
