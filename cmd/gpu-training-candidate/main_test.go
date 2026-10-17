@@ -9,12 +9,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/llmtraining"
 )
 
 func TestCLIRejectsOverridesWithoutEchoingArguments(t *testing.T) {
-	for _, args := range [][]string{nil, {"-plugin", "SECRET"}, {"-recipe", "SECRET"}, {"-recipe", "SECRET", "-output", "/tmp/plan", "SECRET"}, {"-recipe", "relative", "-output", "/tmp/plan"}} {
+	for _, args := range [][]string{nil, {"-plugin", "SECRET"}, {"-recipe", "SECRET"}, {"-recipe", "SECRET", "-output", "/tmp/plan", "SECRET"}, {"-recipe", "relative", "-output", "/tmp/plan"}, {"-recipe", "SECRET", "-job-file", "SECRET", "-output", "/tmp/plan"}, {"-job-file", "SECRET", "-output", "/tmp/plan"}} {
 		var stderr bytes.Buffer
 		if exitCode(args, &stderr) != 1 || strings.Contains(stderr.String(), "SECRET") {
 			t.Fatal("unexpected diagnostic", stderr.String())
@@ -70,5 +72,35 @@ func TestCLIPreparesPrivateUnqualifiedPlan(t *testing.T) {
 	var plan llmtraining.Plan
 	if err = json.Unmarshal(data, &plan); err != nil || plan.Status != "unqualified" {
 		t.Fatal("invalid plan", err)
+	}
+	// Job preparation consumes the supervisor's launch envelope, but publishes
+	// no completion credential and does not change the original candidate mode.
+	job := struct {
+		Version      int                 `json:"version"`
+		Job          control.TrainingJob `json:"job"`
+		RecipeFile   string              `json:"recipeFile"`
+		TerminalFile string              `json:"terminalFile"`
+	}{1, control.TrainingJob{ID: "job", Token: "private-completion-credential", Workload: "trainer", Fence: control.Fence{Incarnation: "supervisor", Epoch: 1}, CatalogRevision: "revision", RecipeSHA256: write(recipePath, string(raw)), Status: "launching", UpdatedAt: time.Now().UTC()}, recipePath, filepath.Join(root, "terminal.json")}
+	jobRaw, err := json.Marshal(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobPath := filepath.Join(root, "job.json")
+	write(jobPath, string(jobRaw))
+	jobPlanPath := filepath.Join(root, "job-plan.json")
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("INVOCATION_ID", strings.Repeat("a", 32))
+	if exitCode([]string{"-job-file", jobPath, "-output", jobPlanPath}, &stderr) != 0 || stderr.Len() != 0 {
+		t.Fatal(stderr.String())
+	}
+	data, err = os.ReadFile(jobPlanPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var jobPlan llmtraining.JobPlan
+	if err := json.Unmarshal(data, &jobPlan); err != nil || jobPlan.ID != "job" || jobPlan.Candidate.Status != "unqualified" || strings.Contains(string(data), job.Job.Token) {
+		t.Fatal("invalid or sensitive job plan", err)
 	}
 }
