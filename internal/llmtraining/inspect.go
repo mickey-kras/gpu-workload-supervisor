@@ -139,10 +139,40 @@ func inspectSnapshots(r Recipe) error {
 	if !weights {
 		return errors.New("candidate requires safetensors training weights")
 	}
+	if err := inspectShardIndex(r.Model.Inventory); err != nil {
+		return err
+	}
 	if err := inspectConfig(filepath.Join(r.Model.Inventory.Root, "config.json"), true); err != nil {
 		return err
 	}
 	return inspectConfig(filepath.Join(r.Tokenizer.Inventory.Root, "tokenizer_config.json"), false)
+}
+
+func inspectShardIndex(inventory Inventory) error {
+	const name = "model.safetensors.index.json"
+	if inventory.Files[name] == "" {
+		return nil
+	}
+	f, err := openRegular(filepath.Join(inventory.Root, name))
+	if err != nil {
+		return errors.New("candidate shard index is unreadable")
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+	var index map[string]json.RawMessage
+	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &index) != nil {
+		return errors.New("candidate shard index is invalid")
+	}
+	var weights map[string]string
+	if json.Unmarshal(index["weight_map"], &weights) != nil || len(weights) == 0 {
+		return errors.New("candidate shard index requires a nonempty weight map")
+	}
+	for _, path := range weights {
+		if !relative(path) || filepath.Ext(path) != ".safetensors" || inventory.Files[path] == "" {
+			return errors.New("candidate shard index must reference inventoried safetensors weights")
+		}
+	}
+	return nil
 }
 
 func inspectConfig(path string, model bool) error {
@@ -261,3 +291,4 @@ func openRegular(path string) (*os.File, error) {
 	}
 	return f, nil
 }
+
