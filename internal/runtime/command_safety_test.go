@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 func TestCommandErrorsRedactOutputAndKeepCause(t *testing.T) {

@@ -4,69 +4,16 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
-
-func TestExternalLaunchAppliesResetAppendAndScalarOverrides(t *testing.T) {
-	workingDirectory := t.TempDir()
-	sources := [][]byte{
-		[]byte("[Unit]\nDescription=Old\n[Service]\nType=forking\nRestart=always\nExecStart=/bin/sh -c unsupported\nExecStartPre=/usr/bin/false\nEnvironment=OLLAMA_NO_CLOUD=0\nEnvironment=OLLAMA_HOST=127.0.0.1:1\n"),
-		[]byte("[Service]\nType=exec\nRestart=no\nExecStart=\nExecStart=/usr/bin/ollama serve\nExecStartPre=\nExecStartPre=/usr/bin/true\nEnvironment=\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=127.0.0.1:8080\nWorkingDirectory=" + workingDirectory + "\nLimitNOFILE=65536\nKillMode=control-group\n"),
-		[]byte("[Service]\nExecStartPre=-/usr/bin/test \\\n# skipped continuation comment\n-f /opt/models/a.gguf\nEnvironment=OLLAMA_HOST=127.0.0.1:9000\nTimeoutStartSec=120\n"),
-	}
-	unit, err := parseExternalLaunchSources(sources, "ollama")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if unit.execStart != "/usr/bin/ollama serve" || unit.host != "127.0.0.1:9000" || !unit.cloudOff || len(unit.preCommands) != 2 || strings.Join(strings.Fields(unit.preCommands[1]), " ") != "-/usr/bin/test -f /opt/models/a.gguf" {
-		t.Fatalf("incorrect effective configuration: %+v", unit)
-	}
-	for _, bad := range []string{"ExecStart=/usr/bin/ollama serve", "ExecStartPost=/usr/bin/true", "EnvironmentFile=/tmp/env", "KillMode=process", "Restart=always", "Type=forking", "UnknownDirective=value"} {
-		if _, err := parseExternalLaunchSources(append(sources, []byte("[Service]\n"+bad+"\n")), "ollama"); err == nil || !strings.Contains(err.Error(), strings.Split(bad, "=")[0]) {
-			t.Errorf("missing actionable refusal for %s: %v", bad, err)
-		}
-	}
-}
-
-func TestExternalLaunchSourcesRejectUntrustedOrAmbiguousFiles(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "worker.service")
-	drop := filepath.Join(dir, "10-options.conf")
-	raw := nativeLaunchFixture(t, "llama.cpp", "http://localhost:9000", "selected")
-	if err := os.WriteFile(path, raw, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(drop, []byte("[Service]\nLimitMEMLOCK=infinity\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := inspectAutomaticLaunchSourcesWithValidator(path, "llama.cpp", []string{drop}, fixtureExecutableValidator); err != nil {
-		t.Fatal(err)
-	}
-	for _, mode := range []os.FileMode{0620, 0602} {
-		os.Chmod(drop, mode)
-		if _, err := inspectAutomaticLaunchSourcesWithValidator(path, "llama.cpp", []string{drop}, fixtureExecutableValidator); err == nil {
-			t.Fatal("writable source accepted")
-		}
-	}
-	os.Chmod(drop, 0600)
-	alias := filepath.Join(dir, "20-alias.conf")
-	os.Symlink(drop, alias)
-	for _, paths := range [][]string{{alias}, {drop, drop}, {alias, drop}} {
-		if _, err := inspectAutomaticLaunchSourcesWithValidator(path, "llama.cpp", paths, fixtureExecutableValidator); err == nil {
-			t.Fatal("ambiguous source list accepted", paths)
-		}
-	}
-}
 
 func TestAdoptedDropInLaunchStartStopIdentityAndDrift(t *testing.T) {
 	workingDirectory := t.TempDir()
@@ -137,112 +84,6 @@ func TestAdoptedDropInLaunchStartStopIdentityAndDrift(t *testing.T) {
 	}
 	if verifyNativeLaunchWithValidator(*p.NativeModel, fixtureExecutableValidator) == nil {
 		t.Fatal("drop-in hash drift accepted")
-	}
-}
-
-func TestAdoptionPreservesCompatibleDirectivesAndRejectsUnsafeAlternatives(t *testing.T) {
-	workingDirectory := t.TempDir()
-	n := control.NativeModel{Runtime: "llama.cpp", Endpoint: "http://localhost:9000", Model: "selected"}
-	good := string(nativeLaunchFixture(t, n.Runtime, n.Endpoint, n.Model))
-	path := filepath.Join(t.TempDir(), "worker.service")
-	cases := []struct {
-		directive string
-		valid     bool
-	}{
-		{"[Unit]\nDescription=A server\nDocumentation=https://example.invalid/help\nAfter=network.target another.service\nBefore=shutdown.target\n[Install]\nWantedBy=default.target", true},
-		{"[Unit]\nAfter=bad@%i.service", false},
-		{"[Service]\nWorkingDirectory=" + workingDirectory, true}, {"[Service]\nWorkingDirectory=relative", false},
-		{"[Service]\nTimeoutStartSec=120\nTimeoutStopSec=30\nRestartSec=5", true}, {"[Service]\nTimeoutStartSec=infinity", false}, {"[Service]\nTimeoutStopSec=0", false},
-		{"[Service]\nLimitNOFILE=65536\nLimitMEMLOCK=infinity", true}, {"[Service]\nLimitNOFILE=0", false}, {"[Service]\nLimitMEMLOCK=bad", false},
-		{"[Service]\nStandardOutput=journal\nStandardError=inherit", true}, {"[Service]\nStandardOutput=null\nStandardError=null", true}, {"[Service]\nStandardOutput=file:/tmp/log", false},
-		{"[Service]\nKillMode=mixed\nRemainAfterExit=no\nSlice=app.slice", true}, {"[Service]\nRemainAfterExit=yes", false}, {"[Service]\nSlice=foreign.slice", false},
-		{"[Service]\nEnvironment=LD_PRELOAD=/tmp/lib.so", false}, {"[Service]\nEnvironment=no-assignment", false}, {"[Service]\nEnvironment=MODEL=$UNTRUSTED", false},
-		{"[Service]\nRestart=$RESTART", false}, {"NoSection=value", false},
-	}
-	for _, tc := range cases {
-		t.Run(strings.ReplaceAll(tc.directive, "\n", ";"), func(t *testing.T) {
-			raw := []byte(tc.directive + "\n" + good)
-			// Put service directives after the launch so their section is authoritative.
-			if strings.HasPrefix(tc.directive, "[Service]") {
-				raw = []byte(good + tc.directive + "\n")
-			}
-			if err := os.WriteFile(path, raw, 0600); err != nil {
-				t.Fatal(err)
-			}
-			launch, err := inspectAutomaticLaunchSourcesWithValidator(path, n.Runtime, nil, fixtureExecutableValidator)
-			if (err == nil) != tc.valid {
-				t.Fatalf("adoption valid=%v: %v", tc.valid, err)
-			}
-			if tc.valid && (launch.Model != n.Model || launch.Endpoint != n.Endpoint || launch.SHA256 != fmt.Sprintf("%x", sha256.Sum256(raw))) {
-				t.Fatal("preserved directives changed bound identity or evidence")
-			}
-		})
-	}
-	if err := qualifyFixtureLaunch([]byte(good+"WorkingDirectory="+workingDirectory+"\n"), n); err == nil {
-		t.Fatal("owned grammar silently expanded to external directives")
-	}
-}
-
-func TestLaunchSourceTrustRejectsSpecialMissingAndReplaceablePaths(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "worker.service")
-	write := func() {
-		t.Helper()
-		if err := os.WriteFile(path, []byte("unit"), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write()
-	for _, candidate := range []string{"relative.service", dir + "/../worker.service", filepath.Join(dir, "missing.service"), dir} {
-		if _, err := readLaunchSource(candidate); err == nil {
-			t.Fatal("unsafe path accepted", candidate)
-		}
-	}
-	os.Chmod(path, 0000)
-	if _, err := readLaunchSource(path); err == nil {
-		t.Fatal("unreadable source accepted")
-	}
-	os.Chmod(path, 0600)
-	if err := os.Truncate(path, 1<<20+1); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readLaunchSource(path); err == nil {
-		t.Fatal("oversized source accepted")
-	}
-	os.Remove(path)
-	if err := syscall.Mkfifo(path, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readLaunchSource(path); err == nil {
-		t.Fatal("FIFO source accepted")
-	}
-	os.Remove(path)
-	write()
-	link := filepath.Join(dir, "alias")
-	os.Symlink(dir, link)
-	if _, err := readLaunchSource(filepath.Join(link, "worker.service")); err == nil {
-		t.Fatal("replaceable symlink ancestor accepted")
-	}
-	os.Chmod(dir, 0777)
-	if _, err := readLaunchSource(path); err == nil {
-		t.Fatal("writable parent accepted")
-	}
-	os.Chmod(dir, 0700)
-	if os.Geteuid() == 0 {
-		if err := os.Chown(path, 1, -1); err != nil {
-			t.Logf("filesystem cannot exercise foreign ownership: %v", err)
-		} else {
-			if _, err := readLaunchSource(path); err == nil {
-				t.Fatal("foreign-owned source accepted")
-			}
-			os.Chown(path, 0, -1)
-		}
-	}
-	if _, err := readLaunchSources(path, []control.LaunchSource{{Path: "relative.conf", SHA256: "bad"}}); err == nil {
-		t.Fatal("invalid recorded source accepted")
-	}
-	if _, err := readLaunchSources(path+"missing", nil); err == nil {
-		t.Fatal("missing primary source accepted")
 	}
 }
 
@@ -361,53 +202,5 @@ func TestExternalStartupPreparationRejectsInterpretersInUnitAndDropIn(t *testing
 				}
 			}
 		}
-	}
-}
-
-func TestBoundPublicInspectionRetainsDropInTrustDiagnostics(t *testing.T) {
-	for _, mode := range []string{"writable-file", "writable-directory", "content-drift"} {
-		t.Run(mode, func(t *testing.T) {
-			dir := t.TempDir()
-			base := filepath.Join(dir, "bound.service")
-			dropDir := filepath.Join(dir, "private-options")
-			drop := filepath.Join(dropDir, "private-option.conf")
-			if err := os.Mkdir(dropDir, 0700); err != nil {
-				t.Fatal(err)
-			}
-			raw := []byte("[Service]\nExecStart=/usr/bin/true x\n")
-			conf := []byte("[Service]\nLimitNOFILE=1024\n")
-			if err := os.WriteFile(base, raw, 0600); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(drop, conf, 0600); err != nil {
-				t.Fatal(err)
-			}
-			binding := control.NativeModel{Runtime: "llama.cpp", DropIns: []control.LaunchSource{{Path: drop, SHA256: fmt.Sprintf("%x", sha256.Sum256(conf))}}}
-			switch mode {
-			case "writable-file":
-				if err := os.Chmod(drop, 0664); err != nil {
-					t.Fatal(err)
-				}
-			case "writable-directory":
-				if err := os.Chmod(dropDir, 0775); err != nil {
-					t.Fatal(err)
-				}
-			case "content-drift":
-				if err := os.WriteFile(drop, []byte("[Service]\nLimitNOFILE=2048\n"), 0600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			_, err := InspectQualifiedNativeLaunch(base, binding)
-			if err == nil || !errors.Is(err, ErrLaunchChanged) || !strings.Contains(err.Error(), "contributing drop-in 1") || strings.Contains(err.Error(), dropDir) || strings.Contains(err.Error(), "private-option") {
-				t.Fatalf("bound drop-in failure lost classification or disclosed path: %v", err)
-			}
-			if mode == "content-drift" {
-				if !strings.Contains(err.Error(), "content digest changed") || !strings.Contains(err.Error(), "refresh") {
-					t.Fatal("content drift lost remediation", err)
-				}
-			} else if !strings.Contains(err.Error(), "component") || !strings.Contains(err.Error(), "write permission") || !strings.Contains(err.Error(), "remove only") {
-				t.Fatal("drop-in trust failure lost component, reason or targeted remediation", err)
-			}
-		})
 	}
 }

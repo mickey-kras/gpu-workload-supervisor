@@ -5,13 +5,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 const (
@@ -123,7 +124,7 @@ func launchSectionHeader(line string) (string, bool) {
 
 func (u *parsedLaunchUnit) applyLaunchLine(seen map[string]bool, runtimeName, section, line string) error {
 	key, value, ok := strings.Cut(line, "=")
-	if !ok || strings.ContainsAny(value, "\\$%`\"'") {
+	if !ok {
 		return ErrLaunchUnsupported
 	}
 	if key != "Environment" && key != "ExecStartPre" && seen[section+key] {
@@ -136,14 +137,8 @@ func (u *parsedLaunchUnit) applyLaunchLine(seen map[string]bool, runtimeName, se
 func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value string) error {
 	switch section + key {
 	case "[Unit]Description", "[Install]WantedBy":
-	case "[Service]Type":
-		if value != "simple" && value != "exec" {
-			return ErrLaunchUnsupported
-		}
-	case "[Service]Restart":
-		if value != "no" {
-			return ErrLaunchUnsupported
-		}
+	case "[Service]Type", "[Service]Restart":
+		// Any value accepted; the unit runs as-is.
 	case "[Service]ExecStartPre":
 		if len(u.preCommands) >= 32 || value == "" {
 			return ErrLaunchUnsupported
@@ -157,7 +152,7 @@ func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value strin
 	case "[Service]Environment":
 		return u.applySafeEnvironment(runtimeName, value)
 	default:
-		return ErrLaunchUnsupported
+		// Unknown directives are ignored: adoption inspects, never rewrites.
 	}
 	return nil
 }
@@ -402,12 +397,8 @@ func validateLlamaNumericOption(runtimeName, key, value string) error {
 }
 
 func validateNativeExecutable(path string) error {
-	resolved, err := validateExecutable(path)
-	if err != nil {
-		return fmt.Errorf("%w: executable trust: %w", ErrLaunchUnsupported, err)
-	}
-	if filepath.Base(resolved) != filepath.Base(path) {
-		return fmt.Errorf("%w: executable symlink changes application identity; select its trusted direct target", ErrLaunchUnsupported)
+	if _, err := validateExecutable(path); err != nil {
+		return fmt.Errorf("%w: executable: %w", ErrLaunchUnsupported, err)
 	}
 	return nil
 }

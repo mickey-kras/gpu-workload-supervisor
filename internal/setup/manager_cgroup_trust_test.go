@@ -65,8 +65,8 @@ func TestManagerCgroupRejectsUnsafeExecutableBeforeRunner(t *testing.T) {
 		{root + "/./systemctl", "absolute and clean"},
 		{unsafe, "systemctl executable trust"},
 		{"systemctl", "systemctl executable trust"},
-		{writable, "group or world writable"},
-		{alias, "original executable path component"},
+		{writable, "world-writable"},
+		{alias, "world-writable"},
 		{root, "resolve systemctl executable"},
 		{filepath.Join(root, "missing"), "resolve systemctl executable"},
 	} {

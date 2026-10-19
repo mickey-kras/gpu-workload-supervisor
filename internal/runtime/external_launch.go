@@ -23,61 +23,27 @@ const (
 	networkOnlineTarget       = "network-online.target"
 )
 
-// readLaunchSource opens every path component without following symlinks. Only
-// root or the desktop principal may write source files or replace ancestors.
+// readLaunchSource reads a unit or drop-in file after the shared path trust
+// rules pass (owner you/root, not world-writable, symlinks resolved).
 func readLaunchSource(path string) ([]byte, error) {
 	return readTrustedLaunchSource(path, false)
 }
 
 func readTrustedLaunchSource(path string, rootOnly bool) ([]byte, error) {
-	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return nil, ErrLaunchChanged
-	}
-	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	resolved, err := trustPath(path, kindFile)
 	if err != nil {
-		return nil, ErrLaunchChanged
+		return nil, err
 	}
-	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	for i, part := range parts {
-		leaf := i == len(parts)-1
-		flags := unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
-		if !leaf {
-			flags |= unix.O_DIRECTORY
-		}
-		next, err := unix.Openat(fd, part, flags, 0)
-		unix.Close(fd)
-		if err != nil {
-			return nil, fmt.Errorf("%w: launch source component %d cannot be opened without following links; inspect this component for missing access, symbolic links or special files", ErrLaunchChanged, i+1)
-		}
-		fd = next
-		var stat unix.Stat_t
-		if unix.Fstat(fd, &stat) != nil {
-			unix.Close(fd)
-			return nil, ErrLaunchChanged
-		}
-		if err := qualifyLaunchSourceTrust(stat, i, len(parts), rootOnly); err != nil {
-			unix.Close(fd)
-			return nil, err
-		}
-
+	file, err := os.Open(resolved)
+	if err != nil {
+		return nil, err
 	}
-	file := os.NewFile(uintptr(fd), path)
 	defer file.Close()
 	raw, err := io.ReadAll(io.LimitReader(file, 1<<20+1))
 	if err != nil || len(raw) > 1<<20 {
 		return nil, ErrLaunchChanged
 	}
 	return raw, nil
-}
-
-func qualifyLaunchSourceTrust(stat unix.Stat_t, index, count int, rootOnly bool) error {
-	if rootOnly && (stat.Uid != 0 || stat.Mode&0022 != 0) {
-		return ErrLaunchChanged
-	}
-	if !trustedLaunchSourceComponent(stat, index, count) {
-		return sourceComponentError(stat, index, count)
-	}
-	return nil
 }
 
 func readLaunchSources(path string, dropIns []control.LaunchSource) ([][]byte, error) {
@@ -476,7 +442,7 @@ func (unit *parsedLaunchUnit) qualifyAccountHomeWorkingDirectory(value string) (
 	unit.homeWorkingDirectory = expanded
 	if !unit.cleanupEnvironment {
 		if err := qualifyEnvironmentPath(expanded, false, false); err != nil {
-			return "", fmt.Errorf("%w: WorkingDirectory requires an existing trusted account-home path without links", ErrLaunchUnsupported)
+			return "", fmt.Errorf("%w: WorkingDirectory: %w", ErrLaunchUnsupported, err)
 		}
 	}
 	return expanded, nil
@@ -495,7 +461,7 @@ func (unit *parsedLaunchUnit) qualifyExternalWorkingDirectory(directive, value s
 	}
 	if !unit.cleanupEnvironment {
 		if err := qualifyEnvironmentPath(value, false, false); err != nil {
-			return "", fmt.Errorf("%w: WorkingDirectory requires an existing absolute clean trusted directory without links; inspect ownership and permissions of this setting and its ancestors", ErrLaunchUnsupported)
+			return "", fmt.Errorf("%w: WorkingDirectory: %w", ErrLaunchUnsupported, err)
 		}
 	}
 	unit.workingDirectory = value

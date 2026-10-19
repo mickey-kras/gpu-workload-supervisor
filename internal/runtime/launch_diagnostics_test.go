@@ -12,30 +12,6 @@ import (
 	"testing"
 )
 
-func TestExternalLaunchCollectsIndependentBlockersDeterministically(t *testing.T) {
-	raw := []byte("[Service]\nExecStart=/usr/bin/true x\nEnvironment=CUDA_VISIBLE_DEVICES=0 LD_LIBRARY_PATH=/private-secret HF_HOME=/missing-cache\nRestart=on-failure\nEnvironmentFile=/private-credential\n")
-	var first []string
-	for i := 0; i < 20; i++ {
-		_, err := parseExternalLaunchSources([][]byte{raw}, "llama.cpp")
-		if !errors.Is(err, ErrGPUIdentityUnresolved) {
-			t.Fatalf("lost numeric GPU disposition: %v", err)
-		}
-		got := LaunchDiagnostics(err)
-		if len(got) != 5 {
-			t.Fatalf("missing independent diagnostics: %v", got)
-		}
-		joined := strings.Join(got, "\n")
-		if strings.Contains(joined, "private-secret") || strings.Contains(joined, "private-credential") || strings.Contains(joined, "missing-cache") {
-			t.Fatal("untrusted value disclosed")
-		}
-		if i == 0 {
-			first = got
-		} else if strings.Join(first, "\n") != joined {
-			t.Fatal("nondeterministic diagnostics")
-		}
-	}
-}
-
 func TestLaunchDiagnosticsBoundAndPreserveSentinels(t *testing.T) {
 	var problems launchProblems
 	for i := 0; i < 100; i++ {

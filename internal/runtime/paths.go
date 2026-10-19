@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,155 +8,138 @@ import (
 	"syscall"
 )
 
-func validateExecutable(path string) (string, error) {
-	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return "", errors.New("path must be absolute and clean")
-	}
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return "", errors.New("executable target unavailable; select an existing trusted executable")
-	}
-	info, err := os.Stat(resolved)
-	if err != nil {
-		return "", errors.New("executable target unavailable; select an existing trusted executable")
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		return "", errors.New("target must be a regular executable")
-	}
-	if info.Mode().Perm()&0o022 != 0 {
-		return "", errors.New("executable target is group or world writable; remove only the unintended write permission on this file or reinstall it in a trusted location")
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || stat.Uid != 0 {
-		return "", errors.New("executable target is not root-owned; install this executable through the system package manager or a trusted root-owned location")
-	}
-	if err := trustedAncestors(resolved); err != nil {
-		return "", err
-	}
-	if err := trustedOriginalExecutablePath(path); err != nil {
-		return "", err
-	}
-	return resolved, nil
-}
+// Trust model: single-admin host. A path is trusted when, after symlink
+// resolution, every component is owned by the current user or root and not
+// world-writable (sticky bit exempts, e.g. /tmp). Group write by own groups
+// (umask 002) is normal and allowed. Symlinks are followed; broken ones fail.
 
-func trustedAncestors(resolved string) error {
-	for directory := filepath.Dir(resolved); ; directory = filepath.Dir(directory) {
-		info, err := os.Stat(directory)
-		if err != nil {
-			return errors.New("executable ancestor unavailable; inspect access to its parent directories")
-		}
-		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !ok || stat.Uid != 0 || info.Mode().Perm()&0o022 != 0 {
-			reason := "not root-owned"
-			if info.Mode().Perm()&0o022 != 0 {
-				reason = "group or world writable"
-			}
-			depth := len(strings.Split(strings.Trim(directory, "/"), "/"))
-			return fmt.Errorf("executable ancestor component %d is %s; inspect that ancestor and install the executable in a trusted root-owned location", depth, reason)
-		}
-		if directory == string(filepath.Separator) {
-			break
-		}
+type pathKind int
+
+const (
+	kindDir pathKind = iota
+	kindFile
+	kindExec
+)
+
+func trustedComponent(path string, info os.FileInfo) error {
+	if err := trustedOwner(path, info); err != nil {
+		return err
+	}
+	if info.Mode().Perm()&0o002 != 0 && info.Mode()&os.ModeSticky == 0 {
+		return fmt.Errorf("%s: world-writable; remove other-write or choose another path", path)
 	}
 	return nil
 }
 
-// Qualification follows every link hop, including ancestors hidden inside a
-// link target. Checking just lexical prefixes and the final canonical target
-// would miss replaceable intermediate links. Root-controlled merged-/usr
-// aliases remain supported; errors identify component numbers without paths.
-func trustedOriginalExecutablePath(path string) error {
-	_, err := resolveTrustedRootPath(path, os.Lstat, os.Readlink)
-	return err
+func trustedOwner(path string, info os.FileInfo) error {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("%s: cannot inspect ownership", path)
+	}
+	if uid := stat.Uid; uid != 0 && uid != uint32(os.Getuid()) {
+		return fmt.Errorf("%s: owned by uid %d, not by you or root", path, uid)
+	}
+	return nil
 }
 
-func resolveTrustedRootPath(path string, lstat func(string) (os.FileInfo, error), readlink func(string) (string, error)) (string, error) {
-	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return "", errors.New("trusted path must be absolute and clean")
+// trustPath resolves symlinks and checks leaf kind plus owner and
+// world-write on the leaf and every ancestor directory.
+func trustPath(path string, kind pathKind) (string, error) {
+	resolved, err := trustPathCore(path, kind)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", ErrLaunchUnsupported, err)
 	}
-	pending := append([]string{"/"}, strings.Split(strings.TrimPrefix(path, "/"), "/")...)
-	prefix := "/"
-	hops, component := 0, 0
-	for len(pending) > 0 {
-		part := pending[0]
-		pending = pending[1:]
-		current := filepath.Join(prefix, part)
-		switch part {
-		case "", ".":
-			continue
-		case "..":
-			prefix = filepath.Dir(prefix)
-			continue
-		case "/":
-			current = "/"
+	return resolved, nil
+}
+
+func trustPathCore(path string, kind pathKind) (string, error) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return "", fmt.Errorf("%s: path must be absolute and clean", path)
+	}
+	for dir := filepath.Dir(path); ; dir = filepath.Dir(dir) {
+		dirInfo, err := os.Lstat(dir)
+		if err != nil {
+			return "", fmt.Errorf("%s: parent directory unavailable", dir)
 		}
-		info, err := trustedRootPathComponent(current, component, lstat)
+		// Merged-usr aliases (/bin -> usr/bin) are symlinks: link modes are
+		// meaningless, only their owner can retarget them.
+		if dirInfo.Mode()&os.ModeSymlink != 0 {
+			err = trustedOwner(dir, dirInfo)
+		} else {
+			err = trustedComponent(dir, dirInfo)
+		}
 		if err != nil {
 			return "", err
 		}
-		component++
+		if dir == string(filepath.Separator) {
+			break
+		}
+	}
+	current := "/"
+	for _, part := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil {
+			return "", fmt.Errorf("%s: missing or broken link", current)
+		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			hops++
-			next, nextPrefix, err := trustedRootLinkTarget(current, prefix, hops, readlink)
-			if err != nil {
+			if err := trustedOwner(current, info); err != nil {
 				return "", err
 			}
-			prefix = nextPrefix
-			pending = append(next, pending...)
-			continue
 		}
-		if len(pending) > 0 && !info.IsDir() {
-			return "", errors.New("executable alias ancestry is not a directory; select a direct trusted target")
-		}
-		prefix = current
 	}
-	return prefix, nil
-}
-
-func trustedRootPathComponent(current string, component int, lstat func(string) (os.FileInfo, error)) (os.FileInfo, error) {
-	info, err := lstat(current)
+	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return nil, errors.New("original executable path component unavailable; inspect the selected path and all alias targets")
+		return "", fmt.Errorf("%s: missing or broken link", path)
 	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	reason := "not root-owned"
-	link := info.Mode()&os.ModeSymlink != 0
-	if !link && info.Mode().Perm()&0022 != 0 {
-		reason = "group or world writable"
-	} else if ok && stat.Uid == 0 {
-		reason = ""
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("%s: missing or broken link", path)
 	}
-	if reason != "" {
-		return nil, fmt.Errorf("original executable path component %d is %s; install or select the executable through trusted root-owned directories and aliases", component, reason)
+	switch kind {
+	case kindDir:
+		if !info.IsDir() {
+			return "", fmt.Errorf("%s: not a directory", path)
+		}
+	case kindFile:
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("%s: not a regular file", path)
+		}
+	case kindExec:
+		if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+			return "", fmt.Errorf("%s: not an executable file", path)
+		}
 	}
-	return info, nil
+	if err := trustedComponent(resolved, info); err != nil {
+		return "", err
+	}
+	for dir := filepath.Dir(resolved); ; dir = filepath.Dir(dir) {
+		dirInfo, err := os.Stat(dir)
+		if err != nil {
+			return "", fmt.Errorf("%s: parent directory unavailable", dir)
+		}
+		if err := trustedComponent(dir, dirInfo); err != nil {
+			return "", err
+		}
+		if dir == string(filepath.Separator) {
+			break
+		}
+	}
+	return resolved, nil
 }
 
-func trustedRootLinkTarget(current, prefix string, hops int, readlink func(string) (string, error)) ([]string, string, error) {
-	if hops > 40 {
-		return nil, "", errors.New("executable alias resolution exceeds the supported hop limit; select a direct trusted target")
-	}
-	target, err := readlink(current)
-	if err != nil || target == "" {
-		return nil, "", errors.New("executable alias target unavailable; select a direct trusted target")
-	}
-	next := strings.Split(strings.TrimPrefix(target, "/"), "/")
-	if filepath.IsAbs(target) {
-		prefix = "/"
-		next = append([]string{"/"}, next...)
-	}
-	return next, prefix, nil
+func validateExecutable(path string) (string, error) {
+	return trustPath(path, kindExec)
 }
 
-// ValidateGPUInventoryExecutable enforces the ordinary root-owned executable
-// trust boundary before setup runs its fixed read-only GPU inventory command.
+// ValidateGPUInventoryExecutable checks the fixed read-only GPU inventory
+// command before setup runs it.
 func ValidateGPUInventoryExecutable(path string) error {
 	_, err := validateExecutable(path)
 	return err
 }
 
-// ValidateSystemctlExecutable qualifies the selected path and every alias hop,
-// returning the trusted canonical target to invoke without another PATH lookup.
+// ValidateSystemctlExecutable returns the canonical systemctl target to invoke.
 func ValidateSystemctlExecutable(path string) (string, error) {
 	return validateExecutable(path)
 }
