@@ -66,7 +66,7 @@ export class InstallationSettings {
             copySetupText(window, this.overrideText);
         });
         this.gpu.connect('notify::selected', () => this.updateCorrection());
-        this.repairInstructions = new Gtk.Label({label: 'Not applied. Review these assignments, preserve other settings, add them in an external service drop-in, reload your user systemd manager, then Check again. Restart=no disables automatic crash recovery. Other blockers remain.', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.repair.add(this.repairInstructions);
+        this.repairInstructions = new Gtk.Label({label: 'Not applied. Setup never writes to your service. Fix the reported paths, reload, then Check again.', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.repair.add(this.repairInstructions);
         this.trustGuidance = new Gtk.Label({wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.repair.add(this.trustGuidance);
         this.pages.get('configuration').append(new Gtk.Label({label: 'Your service has not been changed.', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0}));
         this.updateGPUInventory(gpuUUIDs, gpuInventoryStatus);

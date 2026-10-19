@@ -297,7 +297,6 @@ CI coverage of the package payload and setup executable is described in
 Real GNOME Shell 50 rendering/session lifecycle, NVIDIA operation, dependency
 resolution and configured package installation, cross-version managed upgrade,
 and complete rollback/fence rotation still require deployment qualification.
-Use the [pinned candidate qualification checklist](SETUP-QUALIFICATION.md);
 successful automated checks do not close host acceptance.
 
 ### Installed applications that need correction

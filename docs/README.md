@@ -26,7 +26,6 @@ Start with [deployment](DEPLOYMENT.md), [boot reconciliation](OPERATIONS.md#boot
 ## Maintain
 
 - [Development and tests](DEVELOPMENT.md)
-- [Repository controls](REPOSITORY-CONTROLS.md): rulesets, required checks, branching and dependency updates
 - [Releasing](RELEASING.md) and [v0.1.5 operator notes](releases/v0.1.5.md)
 - [License](../LICENSE)
 
