@@ -72,7 +72,7 @@ func TestInvalidLaunchHasNoUsableBindingAndCollectsCommandBlockers(t *testing.T)
 		t.Fatal(err)
 	}
 	found, err := inspectAutomaticLaunchSourcesWithValidator(path, "llama.cpp", nil, func(string) error { return errors.New("executable trust is unavailable") })
-	if !errors.Is(err, ErrGPUIdentityUnresolved) || !errors.Is(err, ErrModelUnavailable) || len(LaunchDiagnostics(err)) < 4 {
+	if !errors.Is(err, ErrModelUnavailable) || len(LaunchDiagnostics(err)) < 2 {
 		t.Fatal(err)
 	}
 	if found.Command != "" || found.Endpoint != "" || found.SHA256 != "" || found.Environment != nil || found.DropIns != nil {

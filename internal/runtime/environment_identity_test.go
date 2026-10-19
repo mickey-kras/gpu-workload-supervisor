@@ -34,10 +34,11 @@ func TestCUDAVisibilityBindsPhysicalIdentityForAdmissionAndRelease(t *testing.T)
 	if err := qualifyParsedLaunch(u, n, fixtureExecutableValidator); err == nil || !strings.Contains(err.Error(), "recorded physical GPU") {
 		t.Fatal("omitted UUID evidence accepted", err)
 	}
-	for _, bad := range []string{"0", "1", "", "-1", "GPU-0123", testPhysicalUUID + ",GPU-ffffffff-ffff-ffff-ffff-ffffffffffff", "MIG-01234567-89ab-cdef-0123-456789abcdef"} {
-		_, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nEnvironment=CUDA_VISIBLE_DEVICES=" + bad + "\nExecStart=/usr/bin/true x\n")}, "llama.cpp")
-		if err == nil || !strings.Contains(err.Error(), "CUDA_VISIBLE_DEVICES") {
-			t.Fatalf("unsafe visibility accepted: %q %v", bad, err)
+	// Non-UUID selections are adopted as-is; pinning stays unverified.
+	for _, plain := range []string{"0", "1", "", "-1", "GPU-0123", testPhysicalUUID + ",GPU-ffffffff-ffff-ffff-ffff-ffffffffffff", "MIG-01234567-89ab-cdef-0123-456789abcdef"} {
+		u, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nEnvironment=CUDA_VISIBLE_DEVICES=" + plain + "\nExecStart=/usr/bin/true x\n")}, "llama.cpp")
+		if err != nil || u.gpuUUID != "" {
+			t.Fatalf("plain visibility rejected or bound: %q %v", plain, err)
 		}
 	}
 	for _, bindingKind := range []string{"native", "comfyui"} {

@@ -145,9 +145,14 @@ func qualifyEnvironmentPath(path string, file, rootOnly bool) error {
 		kind = kindFile
 	}
 	if _, err := trustPath(path, kind); err != nil {
-		return environmentError(pathName(path), err.Error())
+		return environmentError(pathName(path), reasonText(err))
 	}
 	return nil
+}
+
+// reasonText strips the sentinel prefix trustPath already added.
+func reasonText(err error) string {
+	return strings.TrimPrefix(err.Error(), ErrLaunchUnsupported.Error()+": ")
 }
 
 func pathName(path string) string {
@@ -159,7 +164,7 @@ func pathName(path string) string {
 
 func qualifyEnvironmentSearchPath(path string) error {
 	if _, err := trustPath(path, kindDir); err != nil {
-		return environmentError(pathName(path), err.Error())
+		return environmentError(pathName(path), reasonText(err))
 	}
 	return nil
 }
