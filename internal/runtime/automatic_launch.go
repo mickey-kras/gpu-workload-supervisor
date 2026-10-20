@@ -66,7 +66,7 @@ func inspectAutomaticLaunchSourcesMode(path, app string, dropInPaths []string, v
 			problems.add(independentErr)
 		} else {
 			problems.add(u.validatePreCommands(validate))
-			args := strings.Fields(u.execStart)
+			args := splitExecWords(u.execStart)
 			if len(args) >= 2 && filepath.IsAbs(args[0]) {
 				problems.add(validate(args[0]))
 			}
@@ -131,7 +131,7 @@ func inspectAutomaticLaunch(raw []byte, app string, validate func(string) error)
 func inspectParsedAutomaticLaunch(u parsedLaunchUnit, raw []byte, app string, validate func(string) error) (AutomaticLaunch, error) {
 	var problems launchProblems
 	problems.add(u.validatePreCommands(validate))
-	args := strings.Fields(u.execStart)
+	args := splitExecWords(u.execStart)
 	if len(args) < 2 || !filepath.IsAbs(args[0]) {
 		problems.add(fmt.Errorf("%w: ExecStart requires an absolute direct command", ErrLaunchUnsupported))
 		return AutomaticLaunch{}, problems.err()
@@ -276,7 +276,7 @@ func qualifyComfyConfigurationFiles(values []string, cleanup bool) (int, error) 
 	var problems launchProblems
 	for _, value := range values[:count] {
 		if err := qualifyComfyOptionPath(value, true, cleanup); err != nil {
-			problems.add(comfyOptionError(flagExtraModelPathsConfig, "requires existing absolute clean trusted regular configuration files without links; inspect this setting and its ancestors"))
+			problems.add(comfyOptionError(flagExtraModelPathsConfig, err.Error()))
 		}
 	}
 	return count, problems.err()

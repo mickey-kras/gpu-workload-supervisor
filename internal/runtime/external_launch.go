@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -259,16 +258,6 @@ func (unit *parsedLaunchUnit) applyExternalScalar(runtimeName, directive, value 
 	return nil
 }
 
-func trustedLaunchSourceComponent(stat unix.Stat_t, index, count int) bool {
-	writable := stat.Mode&0022 != 0
-	if index < count-2 && stat.Uid == 0 && stat.Mode&unix.S_ISVTX != 0 {
-		writable = false
-	}
-	trustedOwner := stat.Uid == 0 || stat.Uid == uint32(os.Geteuid())
-	leaf := index == count-1
-	return trustedOwner && !writable && (!leaf || (stat.Mode&unix.S_IFMT == unix.S_IFREG && stat.Mode&0444 != 0 && stat.Size <= 1<<20))
-}
-
 var orderingUnit = regexp.MustCompile(`^[A-Za-z0-9_.:-]+\.(service|target|socket|slice)$`)
 
 func externalDirective(section, key, value string) (bool, error) {
@@ -358,17 +347,6 @@ func CheckNativeBindingSources(values map[string]string, unit, launchFile string
 		}
 	}
 	return nil
-}
-
-func sourceComponentError(stat unix.Stat_t, index, count int) error {
-	reason := "ownership is outside root or the desktop account"
-	if stat.Mode&0022 != 0 {
-		reason = "group or world write permission permits replacement"
-	}
-	if index == count-1 && (stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Mode&0444 == 0 || stat.Size > 1<<20) {
-		reason = "source is not a readable regular file within the size limit"
-	}
-	return fmt.Errorf("%w: launch source component %d: %s; inspect this component, restore its intended ownership or remove only its unintended write permission, then retry", ErrLaunchChanged, index+1, reason)
 }
 
 // expandAccountHome recognizes only %h at the beginning of a path token. The

@@ -169,7 +169,7 @@ func (u parsedLaunchUnit) validatePreCommands(validate func(string) error) error
 			problems.add(fmt.Errorf("%w: ExecStartPre command indirection", ErrLaunchUnsupported))
 			continue
 		}
-		args := strings.Fields(strings.TrimPrefix(command, "-"))
+		args := splitExecWords(strings.TrimPrefix(command, "-"))
 		if len(args) == 0 || !filepath.IsAbs(args[0]) || validate(args[0]) != nil {
 			problems.add(fmt.Errorf("%w: ExecStartPre requires a trusted direct executable", ErrLaunchUnsupported))
 			continue
@@ -403,6 +403,46 @@ func validateNativeExecutable(path string) error {
 	return nil
 }
 
+// splitExecWords splits an ExecStart line like systemd: whitespace separates
+// words; single/double quotes and backslash escapes group them.
+func splitExecWords(command string) []string {
+	var words []string
+	var current strings.Builder
+	inWord := false
+	quote := byte(0)
+	for i := 0; i < len(command); i++ {
+		c := command[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			} else {
+				current.WriteByte(c)
+			}
+		case c == '\'' || c == '"':
+			quote = c
+			inWord = true
+		case c == ' ' || c == '\t':
+			if inWord {
+				words = append(words, current.String())
+				current.Reset()
+				inWord = false
+			}
+		case c == '\\' && i+1 < len(command):
+			i++
+			current.WriteByte(command[i])
+			inWord = true
+		default:
+			current.WriteByte(c)
+			inWord = true
+		}
+	}
+	if inWord {
+		words = append(words, current.String())
+	}
+	return words
+}
+
 var loadedPreCommand = regexp.MustCompile(`\{ path=([^ ;]+) ; argv\[\]=([^;]+) ; ignore_errors=(yes|no) ;[^}]*\}`)
 
 // CheckLoadedPreCommands binds systemd's loaded startup preparation to the same
@@ -415,8 +455,8 @@ func CheckLoadedPreCommands(output string, commands []string) error {
 	}
 	for i, command := range commands {
 		ignore := strings.HasPrefix(command, "-")
-		args := strings.Fields(strings.TrimPrefix(command, "-"))
-		if len(args) == 0 || matches[i][1] != args[0] || strings.Join(strings.Fields(matches[i][2]), " ") != strings.Join(args, " ") || (matches[i][3] == "yes") != ignore {
+		args := splitExecWords(strings.TrimPrefix(command, "-"))
+		if len(args) == 0 || matches[i][1] != args[0] || strings.Join(splitExecWords(matches[i][2]), " ") != strings.Join(args, " ") || (matches[i][3] == "yes") != ignore {
 			return ErrLaunchChanged
 		}
 	}
@@ -427,8 +467,8 @@ var loadedMainCommand = regexp.MustCompile(`\{ path=([^ ;]+) ; argv\[\]=([^;]+) 
 
 func CheckLoadedLaunchCommand(output, command string) error {
 	matches := loadedMainCommand.FindAllStringSubmatch(output, -1)
-	args := strings.Fields(command)
-	if len(matches) != 1 || len(args) == 0 || strings.Trim(loadedMainCommand.ReplaceAllString(output, ""), " ;\t\r\n") != "" || matches[0][1] != args[0] || strings.Join(strings.Fields(matches[0][2]), " ") != strings.Join(args, " ") {
+	args := splitExecWords(command)
+	if len(matches) != 1 || len(args) == 0 || strings.Trim(loadedMainCommand.ReplaceAllString(output, ""), " ;\t\r\n") != "" || matches[0][1] != args[0] || strings.Join(splitExecWords(matches[0][2]), " ") != strings.Join(args, " ") {
 		return ErrLaunchChanged
 	}
 	if strings.Contains(output, "ignore_errors=yes") {
