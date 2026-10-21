@@ -4,7 +4,8 @@ This is a preparation-only increment for #453. It does not launch training,
 enable a catalog profile, approve a runtime, or make an output eligible for
 serving import. No GPU memory or storage measurements are published.
 
-Build `./cmd/gpu-training-candidate`, then run it with two absolute paths:
+The release archive and Debian package include `gpu-training-candidate`.
+Check its release with `gpu-training-candidate -version`, then run it with two absolute paths:
 
 ```sh
 gpu-training-candidate -recipe /private/candidate.json -output /private/new-plan.json
@@ -32,7 +33,6 @@ only after writing and closing succeed. Publication requires hard-link support
 on the destination filesystem; a failed write leaves no final plan to block retry.
 There is no network access, runtime import, subprocess launch or dataset-content
 logging in the preparation command. Errors omit input values and file contents.
-The command is not installed by the release package.
 
 The recipe-mode plan contains `status: "unqualified"`, input row counts, operator-supplied
 resource estimates, a canonical recipe digest and a generated `config` object.
@@ -122,9 +122,9 @@ Checkpoints request optimizer/training state (`save_only_model: false`), which
 does not establish checkpoint-stop or resume correctness.
 
 Reporting integrations and Hub uploads are disabled in generated configuration.
-This alone is not network containment. A future runner must use a sanitized
-environment, disable telemetry with `AXOLOTL_DO_NOT_TRACK=1`, and bind the complete
-approved runtime. Axolotl may auto-load installed plugin/model-support entry
+This alone is not network containment. The experimental runner uses a sanitized
+environment and disables telemetry with `AXOLOTL_DO_NOT_TRACK=1`; the complete
+runtime still requires qualification. Axolotl may auto-load installed plugin/model-support entry
 points even when `plugins` is empty. This tool does not approve those plugins.
 
 `canonicalRecipeSHA256` hashes the typed recipe re-encoded with Go's JSON encoder,
