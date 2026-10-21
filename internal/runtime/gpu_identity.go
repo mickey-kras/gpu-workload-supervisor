@@ -21,12 +21,16 @@ func (unresolvedGPUIdentityError) Error() string {
 
 func (unresolvedGPUIdentityError) Unwrap() error { return ErrLaunchUnsupported }
 
-// applyGPUVisibility records a full GPU UUID when present. Numeric ordinals,
-// lists and MIG selections are adopted as-is; GPU pinning stays unverified.
 func (u *parsedLaunchUnit) applyGPUVisibility(value string) error {
-	if control.ValidGPUUUID(value) {
-		u.gpuUUID = value
+	// CUDA ordinals are not physical nvidia-smi indices. Discovery must not
+	// infer that mapping or rewrite an external service to qualify it.
+	if value != "" && strings.Trim(value, "0123456789") == "" {
+		return ErrGPUIdentityUnresolved
 	}
+	if !control.ValidGPUUUID(value) {
+		return environmentError("CUDA_VISIBLE_DEVICES", "select one full physical GPU UUID; prefixes, lists and MIG mappings are unsupported")
+	}
+	u.gpuUUID = value
 	return nil
 }
 

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -152,9 +153,30 @@ func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value strin
 	case "[Service]Environment":
 		return u.applySafeEnvironment(runtimeName, value)
 	default:
-		// Unknown directives are ignored: adoption inspects, never rewrites.
+		if section == "[Service]" && unsupportedLaunchDirective(key) {
+			return fmt.Errorf("%w: unsupported operational directive %s", ErrLaunchUnsupported, key)
+		}
+		// Harmless unknown settings need not prevent inspection. Directives that
+		// add code, change the effective environment, or remap inspected paths do.
 	}
 	return nil
+}
+
+func unsupportedLaunchDirective(key string) bool {
+	// Only ExecStart and the bounded ExecStartPre grammar above are inspected.
+	if strings.HasPrefix(key, "Exec") {
+		return true
+	}
+	switch key {
+	case "EnvironmentFile", "UnsetEnvironment", "PassEnvironment", "PAMName":
+		// These can replace or remove recorded GPU/runtime environment values.
+		return true
+	case "RootDirectory", "RootImage", "BindPaths", "BindReadOnlyPaths", "TemporaryFileSystem", "MountImages", "ExtensionImages", "ExtensionDirectories":
+		// A trusted host executable/model path need not name the same file in
+		// the service's filesystem namespace.
+		return true
+	}
+	return false
 }
 
 // Startup preparation is retained verbatim for adopted units and never run
@@ -456,7 +478,7 @@ func CheckLoadedPreCommands(output string, commands []string) error {
 	for i, command := range commands {
 		ignore := strings.HasPrefix(command, "-")
 		args := splitExecWords(strings.TrimPrefix(command, "-"))
-		if len(args) == 0 || matches[i][1] != args[0] || strings.Join(splitExecWords(matches[i][2]), " ") != strings.Join(args, " ") || (matches[i][3] == "yes") != ignore {
+		if len(args) == 0 || matches[i][1] != args[0] || !slices.Equal(splitExecWords(matches[i][2]), args) || (matches[i][3] == "yes") != ignore {
 			return ErrLaunchChanged
 		}
 	}
@@ -468,7 +490,7 @@ var loadedMainCommand = regexp.MustCompile(`\{ path=([^ ;]+) ; argv\[\]=([^;]+) 
 func CheckLoadedLaunchCommand(output, command string) error {
 	matches := loadedMainCommand.FindAllStringSubmatch(output, -1)
 	args := splitExecWords(command)
-	if len(matches) != 1 || len(args) == 0 || strings.Trim(loadedMainCommand.ReplaceAllString(output, ""), " ;\t\r\n") != "" || matches[0][1] != args[0] || strings.Join(splitExecWords(matches[0][2]), " ") != strings.Join(args, " ") {
+	if len(matches) != 1 || len(args) == 0 || strings.Trim(loadedMainCommand.ReplaceAllString(output, ""), " ;\t\r\n") != "" || matches[0][1] != args[0] || !slices.Equal(splitExecWords(matches[0][2]), args) {
 		return ErrLaunchChanged
 	}
 	if strings.Contains(output, "ignore_errors=yes") {

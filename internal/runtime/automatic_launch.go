@@ -201,11 +201,19 @@ func comfyLaunchAddressMode(args []string, cleanup bool) (string, string, error)
 	seen := map[string]bool{}
 	for i := 0; i < len(args); i++ {
 		key := args[i]
+		values := args[i+1:]
+		attached := false
+		if name, value, ok := strings.Cut(key, "="); ok {
+			switch name {
+			case flagListen, flagPort, "--output-directory", "--temp-directory", "--user-directory", flagExtraModelPathsConfig:
+				key, values, attached = name, []string{value}, true
+			}
+		}
 		if seen[key] && key != flagExtraModelPathsConfig {
 			return "", "", comfyDuplicateOption(key)
 		}
 		seen[key] = true
-		consumed, err := qualifyComfyOption(key, args[i+1:], cleanup)
+		consumed, err := qualifyComfyOption(key, values, cleanup)
 		if err != nil {
 			problems.add(err)
 			if consumed == 0 {
@@ -214,11 +222,13 @@ func comfyLaunchAddressMode(args []string, cleanup bool) (string, string, error)
 		}
 		switch key {
 		case flagListen:
-			host = args[i+1]
+			host = values[0]
 		case flagPort:
-			port = args[i+1]
+			port = values[0]
 		}
-		i += consumed
+		if !attached {
+			i += consumed
+		}
 	}
 	if err := problems.err(); err != nil {
 		return "", "", err
@@ -286,9 +296,22 @@ func comfyOptionError(key, reason string) error {
 	return fmt.Errorf("%w: ComfyUI option %s %s", ErrLaunchUnsupported, key, reason)
 }
 
-// comfyUnsupportedOption skips options we do not interpret. The unit runs
-// as-is; only the options we parse for endpoints and paths are validated.
+// Unknown options remain verbatim, but must not bypass endpoint or path
+// qualification. argparse accepts unique long-option abbreviations, which we
+// conservatively reject instead of inferring their meaning across versions.
 func comfyUnsupportedOption(key string) error {
+	name, _, _ := strings.Cut(key, "=")
+	if name == "--" {
+		return fmt.Errorf("%w: ComfyUI end-of-options marker is not supported", ErrLaunchUnsupported)
+	}
+	for _, option := range []string{flagListen, flagPort, "--tls-keyfile", "--tls-certfile", "--output-directory", "--temp-directory", "--user-directory", flagExtraModelPathsConfig} {
+		if name == option || (strings.HasPrefix(name, "--") && len(name) > 2 && strings.HasPrefix(option, name)) {
+			if strings.HasPrefix(option, "--tls-") {
+				return comfyOptionError(option, "changes the endpoint protocol; TLS endpoints are not supported")
+			}
+			return comfyOptionError(option, "requires its supported full option name and value")
+		}
+	}
 	return nil
 }
 

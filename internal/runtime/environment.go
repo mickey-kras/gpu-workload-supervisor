@@ -107,13 +107,19 @@ func (u *parsedLaunchUnit) qualifyEnvironmentValue(runtimeName, name, value, ass
 			return err
 		}
 		return nil
-	case "LD_LIBRARY_PATH":
-		return nil
-	case "PATH":
+	case "PATH", "LD_LIBRARY_PATH", "PYTHONPATH":
 		if u.cleanupEnvironment {
 			return nil
 		}
 		return qualifyEnvironmentSearchPaths(name, value)
+	case "LD_PRELOAD", "LD_AUDIT", "PYTHONHOME", "PYTHONUSERBASE", "PYTHONSTARTUP":
+		// These settings load code or select an interpreter installation through
+		// mechanisms that are not covered by the directory-search checks above.
+		// An empty value disables the override and is safe to retain.
+		if value != "" {
+			return environmentError(name, "nonempty code-loading overrides are unsupported")
+		}
+		return nil
 	default:
 		if runtimeName == "ollama" && strings.HasPrefix(name, "OLLAMA_") {
 			_ = u.applyOllamaEnvironment(assignment)
@@ -123,9 +129,14 @@ func (u *parsedLaunchUnit) qualifyEnvironmentValue(runtimeName, name, value, ass
 }
 
 func qualifyEnvironmentSearchPaths(name, value string) error {
+	// The dynamic linker accepts semicolons as well as colons. Preserve empty
+	// components when splitting because those can enable current-directory lookup.
+	if name == "LD_LIBRARY_PATH" {
+		value = strings.ReplaceAll(value, ";", ":")
+	}
 	for _, path := range strings.Split(value, ":") {
 		if path == "" {
-			continue
+			return environmentError(name, "empty search path components can select the current directory")
 		}
 		if err := qualifyEnvironmentSearchPath(path); err != nil {
 			return err

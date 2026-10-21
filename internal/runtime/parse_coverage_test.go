@@ -652,8 +652,8 @@ func TestIndependentBlockersAndDropInReadFailures(t *testing.T) {
 		t.Fatal("directory option without value accepted")
 	}
 	dirA, dirB := t.TempDir(), t.TempDir()
-	if _, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nExecStart=/usr/bin/true x\nEnvironment=PATH=" + dirA + "::" + dirB + "\n")}, "llama.cpp"); err != nil {
-		t.Fatal("empty PATH entry rejected", err)
+	if _, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nExecStart=/usr/bin/true x\nEnvironment=PATH=" + dirA + "::" + dirB + "\n")}, "llama.cpp"); err == nil {
+		t.Fatal("empty PATH entry accepted")
 	}
 	executable := filepath.Join(t.TempDir(), "llama-server")
 	if err := os.WriteFile(executable, []byte("# fixture\n"), 0755); err != nil {

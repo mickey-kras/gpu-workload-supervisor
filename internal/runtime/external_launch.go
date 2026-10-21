@@ -29,9 +29,9 @@ func readLaunchSource(path string) ([]byte, error) {
 }
 
 func readTrustedLaunchSource(path string, rootOnly bool) ([]byte, error) {
-	resolved, err := trustPath(path, kindFile)
+	resolved, err := trustPathCoreMode(path, kindFile, rootOnly)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrLaunchUnsupported, err)
 	}
 	file, err := os.Open(resolved)
 	if err != nil {
