@@ -175,6 +175,9 @@ func unsupportedOperationalDirective(section, key string) bool {
 		// Dependency and propagation edges can activate or control code outside
 		// the inspected service. Only the qualified Wants case above is allowed.
 		switch key {
+		case "FailureAction", "SuccessAction", "StartLimitAction", "JobTimeoutAction":
+			// These can terminate the user manager, affecting unrelated workloads.
+			return true
 		case "Requires", "Requisite", "BindsTo", "PartOf", "Upholds", "Conflicts", "OnFailure", "OnSuccess", "PropagatesReloadTo", "ReloadPropagatedFrom", "PropagatesStopTo", "StopPropagatedFrom", "RequiresMountsFor", "WantsMountsFor", "JoinsNamespaceOf":
 			return true
 		}
@@ -188,6 +191,12 @@ func unsupportedLaunchDirective(key string) bool {
 		return true
 	}
 	switch key {
+	case "FailureAction", "StartLimitAction":
+		// Legacy [Service] aliases of the manager-wide [Unit] actions.
+		return true
+	case "Sockets":
+		// Socket associations implicitly activate units outside this service.
+		return true
 	case "EnvironmentFile", "UnsetEnvironment", "PassEnvironment", "PAMName":
 		// These can replace or remove recorded GPU/runtime environment values.
 		return true
