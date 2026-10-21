@@ -153,7 +153,8 @@ Launch-file constraints:
 - Executables, scripts, launch sources, validated environment/data paths and
   their traversed directory ancestry must be
   owned by the desktop user or root and not world-writable. Group write is
-  allowed under a single-admin host policy that trusts local group members;
+  allowed only for groups the desktop user belongs to, under a single-admin
+  host policy that trusts members of its own groups;
   these checks do not isolate workloads from group members who can modify them.
   Symlinks are resolved with ownership and permission checks on every
   traversed path; broken links and excessive link chains are rejected.
@@ -176,6 +177,9 @@ separators. Nonempty code-loading overrides such as `LD_PRELOAD`, `LD_AUDIT` and
 `PYTHONHOME` remain unsupported. Other literal variables are preserved without
 certifying their application-specific behavior. Unsupported expansion and
 environment files remain rejected.
+Directory checks do not inspect ownership, permissions or contents of loaded
+modules or libraries. The operator remains responsible for trusted local
+installation and dependency contents.
 Setup preserves the source files and checks their effective loaded assignments.
 
 Literal and `%h` `WorkingDirectory=` settings use the same existing-directory
@@ -220,8 +224,8 @@ and [startup handling](https://github.com/Comfy-Org/ComfyUI/blob/master/main.py)
 describe these options; the supervisor preserves their behavior.
 
 Trusting library-search directories does not certify dynamic-loader resolution,
-transitive dependencies or plugin behavior. Review these for the deployed runtime;
-setup neither loads libraries nor removes required settings to make checks pass.
+transitive dependencies or plugin behavior. Setup neither loads libraries nor
+removes required settings to make checks pass.
 
 `CUDA_VISIBLE_DEVICES` supports one full physical GPU UUID, recorded as
 `gpuUUID` in the binding and checked against the configured NVIDIA GPU at

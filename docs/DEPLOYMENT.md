@@ -201,7 +201,8 @@ Invalid configuration is rejected:
 - The `systemctl` executable, and `nvidia-smi` when configured, must resolve to
   executable files owned by you or root, with no world-writable file or directory
   component. Symlink targets and traversed ancestors are checked. Group write is
-  allowed under the single-admin host policy that trusts local group members.
+  allowed only for groups you belong to, under the single-admin host policy that
+  trusts members of your own groups.
 - Supplying an obsolete flag is an error even for `status` or `restore-state`.
 
 ## Prevent bypasses

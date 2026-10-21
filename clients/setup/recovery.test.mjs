@@ -67,6 +67,15 @@ test('unreadable regular-file launch sources retain path repair guidance', () =>
     assert.match(steps.at(-1), /Check again/);
 });
 
+test('nonmember-group writes require a protected path without forbidding own-group writes', () => {
+    const message = 'existing launch is unsupported: Environment: /home/u/cache: group-writable by gid 1002, a group you are not in';
+    const steps = recoveryGuidance({unit: 'images.service', diagnostics: [message]});
+    assert.match(steps[0], /choose a path protected from write access by groups you do not belong to/);
+    assert.match(steps[0], /Group write is allowed for your own groups/);
+    assert.match(steps.at(-2), /systemctl --user daemon-reload/);
+    assert.match(steps.at(-1), /Check again/);
+});
+
 test('account and other non-runtime ownership failures retain diagnostics without runtime replacement advice', async () => {
     const account = prefix + '%h requires one valid effective-UID record in trusted root-owned local /etc/passwd; missing or NSS-only accounts are unsupported';
     for (const diagnostic of [account, 'unfamiliar root-owned configuration failure',

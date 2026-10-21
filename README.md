@@ -23,6 +23,8 @@ adopts them read-only. It never rewrites your units.
 ## Setup checks
 
 A path passes when it exists, is owned by you or root, and is not world-writable.
+Group write is allowed only for groups you belong to; the single-admin host
+policy trusts members of your own groups.
 Symlinks and their traversed ancestors are checked; broken ones are reported by
 name. Setup preserves supported direct commands and their arguments. It still
 checks endpoint, model, GPU identity, environment and effective loaded settings;

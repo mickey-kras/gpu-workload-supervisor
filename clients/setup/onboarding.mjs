@@ -162,6 +162,8 @@ export function recoveryGuidance(candidate) {
         const syntax = recoverySyntax(message);
         if (syntax) {
             steps.add(syntax);
+        } else if (/group-writable by gid \d+, a group you are not in/.test(message)) {
+            steps.add('Fix the named path: choose a path protected from write access by groups you do not belong to. Group write is allowed for your own groups; setup never changes permissions.');
         } else if (/world-writable|owned by uid|missing or broken link|parent directory unavailable|not a directory|not a (?:readable )?regular file|not an executable|path must be absolute and clean|symlink resolution exceeds/.test(message)) {
             steps.add('Fix the named path: exists, owned by you or root, not world-writable. Setup never changes permissions.');
         } else if (legacyPathFailure(message)) {

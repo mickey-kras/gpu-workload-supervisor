@@ -313,8 +313,9 @@ An unreachable default address does not mean the application is absent.
 An installed application can remain blocked from adoption. Open its settings and
 View details for every reported blocker. Runtime executables, interpreters,
 scripts, search directories and data paths must exist, be owned by you or root,
-and not be world-writable. Group write is allowed on a single-admin host that
-trusts local group members; this provides no isolation from those members.
+and not be world-writable. Group write is allowed only for groups you belong to.
+The single-admin host policy trusts members of your own groups; this provides no
+isolation from those members.
 Symlink targets and every traversed ancestor are checked. Correct the reported
 path or choose a trusted installed location, then Check again. Setup does not copy
 programs, change permissions/ownership, remove arguments or rewrite external units

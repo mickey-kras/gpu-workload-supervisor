@@ -27,8 +27,9 @@ application launch binding. Its `trainer` object contains:
 
 All paths must be distinct, absolute, clean literal paths without shell expansion.
 The adapter and its traversed ancestors must be owned by you or root and not
-world-writable; symlinks are resolved and checked. Group write is allowed under
-the single-admin host policy that trusts local group members. Lifecycle output
+world-writable; symlinks are resolved and checked. Group write is allowed only
+for groups you belong to, under the single-admin host policy that trusts members
+of your own groups. Lifecycle output
 files cannot overlap another trainer binding. The
 job directory must already exist with trusted ownership and permissions. Keep
 external service management paused while a supervisor job is unfinished.
