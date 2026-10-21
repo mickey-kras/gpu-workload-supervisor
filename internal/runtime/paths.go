@@ -158,8 +158,8 @@ func checkResolvedLeaf(resolved string, kind pathKind) error {
 			return fmt.Errorf("%s: not a directory", resolved)
 		}
 	case kindFile:
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("%s: not a regular file", resolved)
+		if !info.Mode().IsRegular() || info.Mode().Perm()&0o444 == 0 {
+			return fmt.Errorf("%s: not a readable regular file", resolved)
 		}
 	case kindExec:
 		if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {

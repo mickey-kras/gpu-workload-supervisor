@@ -200,19 +200,10 @@ func comfyLaunchAddressMode(args []string, cleanup bool) (string, string, error)
 	var problems launchProblems
 	seen := map[string]bool{}
 	for i := 0; i < len(args); i++ {
-		key := args[i]
-		values := args[i+1:]
-		attached := false
-		if name, value, ok := strings.Cut(key, "="); ok {
-			switch name {
-			case flagListen, flagPort, "--output-directory", "--temp-directory", "--user-directory", flagExtraModelPathsConfig:
-				key, values, attached = name, []string{value}, true
-			}
+		key, values, attached := comfyOptionArguments(args[i], args[i+1:])
+		if err := comfyDuplicateOption(key, seen); err != nil {
+			return "", "", err
 		}
-		if seen[key] && key != flagExtraModelPathsConfig {
-			return "", "", comfyDuplicateOption(key)
-		}
-		seen[key] = true
 		consumed, err := qualifyComfyOption(key, values, cleanup)
 		if err != nil {
 			problems.add(err)
@@ -236,13 +227,26 @@ func comfyLaunchAddressMode(args []string, cleanup bool) (string, string, error)
 	return host, port, nil
 }
 
-func comfyDuplicateOption(key string) error {
-	switch key {
-	case flagListen, flagPort, "--disable-auto-launch", "--enable-manager", "--output-directory", "--temp-directory", "--user-directory":
-		return comfyOptionError(key, "is repeated; use one unambiguous assignment")
-	default:
-		return comfyUnsupportedOption(key)
+func comfyOptionArguments(key string, following []string) (string, []string, bool) {
+	name, value, attached := strings.Cut(key, "=")
+	if attached {
+		switch name {
+		case flagListen, flagPort, "--base-directory", "--output-directory", "--temp-directory", "--user-directory", flagExtraModelPathsConfig:
+			return name, []string{value}, true
+		}
 	}
+	return key, following, false
+}
+
+func comfyDuplicateOption(key string, seen map[string]bool) error {
+	switch key {
+	case flagListen, flagPort, "--disable-auto-launch", "--enable-manager", "--base-directory", "--output-directory", "--temp-directory", "--user-directory":
+		if seen[key] {
+			return comfyOptionError(key, "is repeated; use one unambiguous assignment")
+		}
+		seen[key] = true
+	}
+	return nil
 }
 
 func qualifyComfyOption(key string, values []string, cleanup bool) (int, error) {
@@ -252,7 +256,7 @@ func qualifyComfyOption(key string, values []string, cleanup bool) (int, error) 
 			return 0, comfyOptionError(key, "requires an explicit value")
 		}
 		return 1, nil
-	case "--output-directory", "--temp-directory", "--user-directory":
+	case "--base-directory", "--output-directory", "--temp-directory", "--user-directory":
 		if len(values) == 0 || strings.HasPrefix(values[0], "--") {
 			return 0, comfyOptionError(key, "requires an existing trusted absolute directory")
 		}
@@ -304,7 +308,7 @@ func comfyUnsupportedOption(key string) error {
 	if name == "--" {
 		return fmt.Errorf("%w: ComfyUI end-of-options marker is not supported", ErrLaunchUnsupported)
 	}
-	for _, option := range []string{flagListen, flagPort, "--tls-keyfile", "--tls-certfile", "--cuda-device", "--default-device", "--output-directory", "--temp-directory", "--user-directory", flagExtraModelPathsConfig} {
+	for _, option := range []string{flagListen, flagPort, "--tls-keyfile", "--tls-certfile", "--cuda-device", "--default-device", "--base-directory", "--output-directory", "--temp-directory", "--user-directory", flagExtraModelPathsConfig} {
 		if name == option || (strings.HasPrefix(name, "--") && len(name) > 2 && strings.HasPrefix(option, name)) {
 			if strings.HasPrefix(option, "--tls-") {
 				return comfyOptionError(option, "changes the endpoint protocol; TLS endpoints are not supported")

@@ -29,6 +29,21 @@ func TestComfyEqualsOptionsPreserveCommandAndEndpoint(t *testing.T) {
 	}
 }
 
+func TestComfyUninterpretedArgumentsMayRepeat(t *testing.T) {
+	script := comfyScriptFixture(t)
+	for _, options := range []string{
+		"--some-option /data --another-option /data",
+		"--front-end-version latest --unknown-option latest",
+		"--unknown-option=value --unknown-option=value",
+	} {
+		command := "/usr/bin/python3 " + script + " --listen=::1 --port=9000 " + options
+		launch, err := inspectAutomaticLaunch([]byte("[Service]\nExecStart="+command+"\n"), "comfyui", func(string) error { return nil })
+		if err != nil || launch.Endpoint != "http://[::1]:9000" || launch.Command != command {
+			t.Fatalf("repeated uninterpreted arguments rejected or changed: %+v, %v", launch, err)
+		}
+	}
+}
+
 func TestComfyDeviceOptionsCannotOverrideInspectedGPUIdentity(t *testing.T) {
 	script := comfyScriptFixture(t)
 	for _, flags := range []string{"--cuda-device 1", "--cuda-device=1", "--cuda-d 1", "--cuda-d=1", "--default-device 1", "--default-device=1", "--default-d 1", "--default-d=1"} {
@@ -81,5 +96,46 @@ func TestComfyEndpointChangingOptionsCannotBeIgnored(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestComfyBaseDirectoryRequiresTrustedPath(t *testing.T) {
+	script := comfyScriptFixture(t)
+	base := t.TempDir()
+	for _, option := range []string{"--base-directory " + base, "--base-directory=" + base} {
+		t.Run(option, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "external.service")
+			command := "/usr/bin/python3 " + script + " " + option
+			raw := []byte("[Service]\nExecStart=" + command + "\n")
+			if err := os.WriteFile(path, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			launch, err := inspectAutomaticLaunchSourcesWithValidator(path, "comfyui", nil, func(string) error { return nil })
+			if err != nil || launch.Command != command || launch.Endpoint != "http://127.0.0.1:8188" {
+				t.Fatalf("trusted base directory rejected or rewritten: %+v, %v", launch, err)
+			}
+			if err := os.Chmod(base, 0777); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Chmod(base, 0700) })
+			launch, err = inspectAutomaticLaunchSourcesWithValidator(path, "comfyui", nil, func(string) error { return nil })
+			if !errors.Is(err, ErrLaunchUnsupported) || !strings.Contains(err.Error(), "--base-directory") || !strings.Contains(err.Error(), base) || launch.Command != "" || launch.Endpoint != "" {
+				t.Fatalf("unsafe base directory escaped qualification: %+v, %v", launch, err)
+			}
+			if after, err := os.ReadFile(path); err != nil || !bytes.Equal(after, raw) {
+				t.Fatalf("inspection changed external source: %v", err)
+			}
+		})
+	}
+	for _, flags := range [][]string{
+		{"--base-directory"},
+		{"--base-directory="},
+		{"--base-directory", base, "--base-directory=" + base},
+		{"--base-dir", base},
+		{"--base-dir=" + base},
+	} {
+		if endpoint, err := comfyLaunchEndpoint(append([]string{"/usr/bin/python3", script}, flags...)); !errors.Is(err, ErrLaunchUnsupported) {
+			t.Fatalf("unqualified base-directory form yielded %q: %v, %v", endpoint, flags, err)
+		}
 	}
 }

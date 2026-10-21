@@ -138,6 +138,11 @@ func (u *parsedLaunchUnit) applyLaunchLine(seen map[string]bool, runtimeName, se
 func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value string) error {
 	switch section + key {
 	case "[Unit]Description", "[Install]WantedBy":
+	case unitWantsDirective:
+		_, valid := compatibleIsolationDirective(section, key, value)
+		if !valid {
+			return fmt.Errorf("%w: incompatible directive %s", ErrLaunchUnsupported, key)
+		}
 	case "[Service]Type", "[Service]Restart":
 		// Any value accepted; the unit runs as-is.
 	case "[Service]ExecStartPre":
@@ -153,13 +158,28 @@ func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value strin
 	case "[Service]Environment":
 		return u.applySafeEnvironment(runtimeName, value)
 	default:
-		if section == "[Service]" && unsupportedLaunchDirective(key) {
+		if unsupportedOperationalDirective(section, key) {
 			return fmt.Errorf("%w: unsupported operational directive %s", ErrLaunchUnsupported, key)
 		}
 		// Harmless unknown settings need not prevent inspection. Directives that
 		// add code, change the effective environment, or remap inspected paths do.
 	}
 	return nil
+}
+
+func unsupportedOperationalDirective(section, key string) bool {
+	switch section {
+	case "[Service]":
+		return unsupportedLaunchDirective(key)
+	case "[Unit]":
+		// Dependency and propagation edges can activate or control code outside
+		// the inspected service. Only the qualified Wants case above is allowed.
+		switch key {
+		case "Requires", "Requisite", "BindsTo", "PartOf", "Upholds", "Conflicts", "OnFailure", "OnSuccess", "PropagatesReloadTo", "ReloadPropagatedFrom", "PropagatesStopTo", "StopPropagatedFrom", "RequiresMountsFor", "WantsMountsFor", "JoinsNamespaceOf":
+			return true
+		}
+	}
+	return false
 }
 
 func unsupportedLaunchDirective(key string) bool {

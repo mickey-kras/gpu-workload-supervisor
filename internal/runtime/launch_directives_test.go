@@ -94,3 +94,65 @@ func TestLaunchInspectionRetainsHarmlessUnknownSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestLaunchInspectionRejectsUnboundUnitDependencies(t *testing.T) {
+	good := []byte("[Service]\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=localhost:9000\nExecStart=/usr/bin/ollama serve\n")
+	validate := func(string) error { return nil }
+	for _, key := range []string{
+		"Requires", "Requisite", "BindsTo", "PartOf", "Upholds", "Conflicts", "OnFailure", "OnSuccess",
+		"PropagatesReloadTo", "ReloadPropagatedFrom", "PropagatesStopTo", "StopPropagatedFrom", "JoinsNamespaceOf",
+		"RequiresMountsFor", "WantsMountsFor", "Wants",
+	} {
+		t.Run(key, func(t *testing.T) {
+			value := "unbound-gpu.service"
+			if strings.HasSuffix(key, "MountsFor") {
+				value = "/srv/unbound-models"
+			}
+			dependency := []byte("[Unit]\n" + key + "=" + value + "\n")
+			raw := append(append([]byte(nil), dependency...), good...)
+			if _, err := inspectAutomaticLaunch(raw, "ollama", validate); !errors.Is(err, ErrLaunchUnsupported) {
+				t.Fatalf("strict inspection accepted dependency: %v", err)
+			}
+			for _, inDropIn := range []bool{false, true} {
+				dir := t.TempDir()
+				path := filepath.Join(dir, "worker.service")
+				primary := raw
+				var dropPaths []string
+				binding := control.NativeModel{Runtime: "ollama", Endpoint: "http://localhost:9000"}
+				if inDropIn {
+					primary = good
+					drop := filepath.Join(dir, "10-dependency.conf")
+					if err := os.WriteFile(drop, dependency, 0600); err != nil {
+						t.Fatal(err)
+					}
+					dropPaths = []string{drop}
+					binding.DropIns = []control.LaunchSource{{Path: drop, SHA256: fmt.Sprintf("%x", sha256.Sum256(dependency))}}
+				}
+				if err := os.WriteFile(path, primary, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := inspectAutomaticLaunchSourcesWithValidator(path, "ollama", dropPaths, validate); !errors.Is(err, ErrLaunchUnsupported) {
+					t.Errorf("automatic inspection accepted dependency (drop-in=%v): %v", inDropIn, err)
+				}
+				if _, err := inspectQualifiedNativeLaunch(path, binding, validate); !errors.Is(err, ErrLaunchUnsupported) {
+					t.Errorf("binding inspection accepted dependency (drop-in=%v): %v", inDropIn, err)
+				}
+			}
+		})
+	}
+}
+
+func TestLaunchInspectionPreservesQualifiedNetworkDependencyAndOrdering(t *testing.T) {
+	raw := []byte("[Unit]\nDescription=Local model\nWants=network-online.target\nAfter=network-online.target\nBefore=shutdown.target\n[Service]\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=localhost:9000\nExecStart=/usr/bin/ollama serve\n")
+	validate := func(string) error { return nil }
+	if _, err := inspectAutomaticLaunch(raw, "ollama", validate); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "worker.service")
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inspectAutomaticLaunchSourcesWithValidator(path, "ollama", nil, validate); err != nil {
+		t.Fatal(err)
+	}
+}

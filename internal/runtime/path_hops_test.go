@@ -136,3 +136,29 @@ func TestRootOnlyComponentRejectsForeignOwnerAndGroupWrites(t *testing.T) {
 		t.Fatal("group-writable account source accepted")
 	}
 }
+
+func TestTrustRequiresReadableRegularFileTargets(t *testing.T) {
+	dir, file, _ := trustFixture(t)
+	link := filepath.Join(dir, "input-link")
+	if err := os.Symlink(file, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		mode     os.FileMode
+		readable bool
+	}{{0000, false}, {0111, false}, {0400, true}, {0040, true}, {0004, true}} {
+		if err := os.Chmod(file, tc.mode); err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range []string{file, link} {
+			_, err := trustPath(path, kindFile)
+			if !tc.readable {
+				if err == nil || !strings.Contains(err.Error(), file) {
+					t.Fatalf("unreadable target %s with mode %04o accepted or not named: %v", path, tc.mode, err)
+				}
+			} else if err != nil {
+				t.Fatalf("readable target %s with mode %04o rejected: %v", path, tc.mode, err)
+			}
+		}
+	}
+}
