@@ -70,34 +70,32 @@ test('account and other non-runtime ownership failures retain diagnostics withou
     // Match production trust wrappers, including nested automatic-launch wrappers,
     // rather than generic references to executable paths or root ownership.
     for (const diagnostic of [
-        'executable trust: executable target is not root-owned; install this executable through the system package manager or a trusted root-owned location',
-        'executable trust: executable ancestor component 3 is group or world writable; inspect that ancestor and install the executable in a trusted root-owned location',
-        'executable trust: original executable path component 2 is not root-owned; install or select the executable through trusted root-owned directories and aliases',
-        'executable: ' + prefix + 'interpreter trust: executable target unavailable; select an existing trusted executable',
-        'executable symlink changes application identity; select its trusted direct target',
-    ]) assert.match(recoveryGuidance({diagnostics: [prefix + diagnostic]})[0], /^Runtime executable:/, diagnostic);
+        'executable: /opt/x/run: owned by uid 1001, not by you or root',
+        'interpreter: /opt/x/python3: world-writable; remove other-write or choose another path',
+        'application script: /opt/x/main.py: missing or broken link',
+    ]) assert.match(recoveryGuidance({diagnostics: [prefix + diagnostic]})[0], /^Fix the named path:/, diagnostic);
     const candidate = {app: 'comfyui', label: 'ComfyUI', unit: 'external.service', recognized: false, instanceStatus: 'not-running',
         configurationStatus: 'inspection-failed', diagnostics: [account]};
     const ui = await launch({deferAction: 'unused', responses: {discover: {request, units: [], applications: [candidate]}}});
     await ui.click('Settings for ComfyUI'); await ui.click('View details'); await ui.click('Copy details');
     assert.ok(ui.widgets.find(widget => widget.title === 'GPU Workload Setup').clipboard.includes(account));
-    assert.equal(ui.widgets.some(widget => ui.visible(widget) && widget.label?.startsWith('Runtime executable:')), false);
+    assert.equal(ui.widgets.some(widget => ui.visible(widget) && widget.label?.startsWith('Fix the named path')), false);
     await ui.click('Back'); assert.equal(ui.by('Use installation').sensitive, false);
 });
 
 test('reinspection clears obsolete data recovery only after fresh configuration evidence', async () => {
     const blocked = {app: 'comfyui', label: 'ComfyUI', unit: 'images.service', recognized: false, instanceStatus: 'not-running',
-        configurationStatus: 'inspection-failed', diagnostics: [prefix + 'Environment variable XDG_CACHE_HOME: requires an existing absolute clean trusted path without links.']};
+        configurationStatus: 'inspection-failed', diagnostics: [prefix + 'Environment: /home/u/AI/cache: missing or broken link']};
     const repaired = {...blocked, diagnostics: [], recognized: true, configurationStatus: 'ready', binding: {unit: blocked.unit, cgroup: '/images', healthURL: 'http://127.0.0.1:8188/system_stats'}};
     let checked = false;
     const ui = await launch({deferAction: 'unused', responses: {discover: () => ({request, units: [], applications: [checked ? repaired : blocked]})}});
     await ui.click('Settings for ComfyUI'); await ui.click('View details');
-    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('owned by this account or root')));
+    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('Fix the named path')));
     await ui.click('Check again'); await ui.click('Back');
     assert.equal(ui.by('Use installation').sensitive, false);
     checked = true;
     await ui.click('View details'); await ui.click('Check again');
-    assert.equal(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('owned by this account or root')), false);
+    assert.equal(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('Fix the named path')), false);
     await ui.click('Back');
     assert.equal(ui.by('Use installation').sensitive, true);
     assert.equal(ui.calls.some(call => ['apply', 'prepare', 'temporary-discover'].includes(call.argv[1])), false);
@@ -108,7 +106,7 @@ for (const [app, label, port] of [['ollama', 'Ollama', 11434], ['vllm', 'vLLM', 
         const path = `/custom/runtime/${app}`;
         const endpoint = {app, label, instanceStatus: 'unreachable', endpoint: `http://127.0.0.1:${port}`, recognized: false};
         const selected = {app, label, reference: path, referenceKind: 'application', installed: true, recognized: false, instanceStatus: 'inspection-failed',
-            configurationStatus: 'inspection-failed', diagnostics: [prefix + 'executable trust: executable target is not root-owned.'], lifecycleControl: 'unverified'};
+            configurationStatus: 'inspection-failed', diagnostics: [prefix + 'executable: /custom/runtime/' + app + ': owned by uid 1001, not by you or root'], lifecycleControl: 'unverified'};
         const qualified = {...selected, recognized: true, diagnostics: [], instanceStatus: 'installed', configurationStatus: 'model-required', sourceKind: 'owned',
             binding: {instance: 'chosen', owned: {executable: path, port}}};
         let repaired = false;
@@ -121,7 +119,7 @@ for (const [app, label, port] of [['ollama', 'Ollama', 11434], ['vllm', 'vLLM', 
         assert.equal(ui.by('Use installation').sensitive, false);
         assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label === 'Installed'));
         await ui.click('View details');
-        assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('Runtime executable:')));
+        assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('Fix the named path')));
         repaired = true;
         await ui.click('Check again'); await ui.click('Back');
         assert.equal(ui.by('Use installation').sensitive, true);
