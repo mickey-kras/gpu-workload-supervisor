@@ -200,7 +200,9 @@ Invalid configuration is rejected:
 - Every health URL must be a loopback URL.
 - The `systemctl` executable, and `nvidia-smi` when configured, must resolve to
   executable files owned by you or root, with no world-writable file or directory
-  component. Symlink targets and traversed ancestors are checked. Group write is
+  component, except root-owned sticky ancestor directories such as `/tmp`. This
+  exception does not apply to the executable itself. Symlink targets and traversed
+  ancestors are checked. Group write is
   allowed only for groups you belong to, under the single-admin host policy that
   trusts members of your own groups.
 - Supplying an obsolete flag is an error even for `status` or `restore-state`.
