@@ -304,10 +304,13 @@ func comfyUnsupportedOption(key string) error {
 	if name == "--" {
 		return fmt.Errorf("%w: ComfyUI end-of-options marker is not supported", ErrLaunchUnsupported)
 	}
-	for _, option := range []string{flagListen, flagPort, "--tls-keyfile", "--tls-certfile", "--output-directory", "--temp-directory", "--user-directory", flagExtraModelPathsConfig} {
+	for _, option := range []string{flagListen, flagPort, "--tls-keyfile", "--tls-certfile", "--cuda-device", "--default-device", "--output-directory", "--temp-directory", "--user-directory", flagExtraModelPathsConfig} {
 		if name == option || (strings.HasPrefix(name, "--") && len(name) > 2 && strings.HasPrefix(option, name)) {
 			if strings.HasPrefix(option, "--tls-") {
 				return comfyOptionError(option, "changes the endpoint protocol; TLS endpoints are not supported")
+			}
+			if option == "--cuda-device" || option == "--default-device" {
+				return comfyOptionError(option, "overrides CUDA_VISIBLE_DEVICES; use the inspected full physical GPU UUID selection")
 			}
 			return comfyOptionError(option, "requires its supported full option name and value")
 		}

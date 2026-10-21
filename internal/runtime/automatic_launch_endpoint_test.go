@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -25,6 +26,28 @@ func TestComfyEqualsOptionsPreserveCommandAndEndpoint(t *testing.T) {
 	}
 	if _, err := inspectAutomaticLaunch([]byte("[Service]\nExecStart="+command+"\n"), "comfyui", func(string) error { return nil }); err == nil || !strings.Contains(err.Error(), directory) {
 		t.Fatalf("equals path option bypassed qualification: %v", err)
+	}
+}
+
+func TestComfyDeviceOptionsCannotOverrideInspectedGPUIdentity(t *testing.T) {
+	script := comfyScriptFixture(t)
+	for _, flags := range []string{"--cuda-device 1", "--cuda-device=1", "--cuda-d 1", "--cuda-d=1", "--default-device 1", "--default-device=1", "--default-d 1", "--default-d=1"} {
+		t.Run(flags, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "external.service")
+			raw := []byte("[Service]\nExecStart=/usr/bin/python3 " + script + " " + flags + "\nEnvironment=CUDA_VISIBLE_DEVICES=" + testPhysicalUUID + "\n")
+			if err := os.WriteFile(path, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			for _, cleanup := range []bool{false, true} {
+				launch, err := inspectAutomaticLaunchSourcesMode(path, "comfyui", nil, func(string) error { return nil }, cleanup)
+				if !errors.Is(err, ErrLaunchUnsupported) || !strings.Contains(err.Error(), "overrides CUDA_VISIBLE_DEVICES") || launch.Endpoint != "" || launch.GPUUUID != "" || launch.Command != "" || launch.Environment != nil {
+					t.Fatalf("device option escaped GPU qualification (cleanup=%v): %+v, %v", cleanup, launch, err)
+				}
+			}
+			if after, err := os.ReadFile(path); err != nil || !bytes.Equal(after, raw) {
+				t.Fatalf("inspection changed external source: %v", err)
+			}
+		})
 	}
 }
 
