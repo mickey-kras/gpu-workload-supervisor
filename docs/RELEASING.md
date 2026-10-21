@@ -4,13 +4,14 @@
 
 The release workflow publishes the tested source tree, two Linux archives
 (amd64 and arm64), and one Debian package per architecture. Each archive
-contains five executables:
+contains six executables:
 
 - `gpu-mode`: controller; runs and journals workload transitions
 - `gpu-workload-proxy`: execution admission and completion proxy
 - `gpu-operator`: one-request local operator backend
 - `gpu-setup`: guided setup, discovery and catalog commit
 - `gpu-training-runner`: experimental finite-job LLM runner; no preset is enabled
+- `gpu-training-candidate`: unqualified input preparation; not training execution
 
 The Debian package adds the GNOME Shell extension and setup application. The
 workflow also publishes a checksum file covering all archives and the CycloneDX
