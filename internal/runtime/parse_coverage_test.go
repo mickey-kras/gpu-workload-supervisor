@@ -673,3 +673,22 @@ func TestIndependentBlockersAndDropInReadFailures(t *testing.T) {
 		t.Fatal("owned unit without rendered peer dependencies accepted")
 	}
 }
+
+func TestTrustRejectsGroupWriteByForeignGroup(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to chown in sandbox")
+	}
+	file := filepath.Join(t.TempDir(), "foreign-group")
+	if err := os.WriteFile(file, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(file, os.Getuid(), 65534); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(file, 0664); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := trustPath(file, kindFile); err == nil || !strings.Contains(err.Error(), "65534") {
+		t.Fatal("foreign group write accepted or not named", err)
+	}
+}
