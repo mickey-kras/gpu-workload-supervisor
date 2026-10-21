@@ -108,8 +108,8 @@ func TestLaunchInspectionRejectsUnboundUnitEffects(t *testing.T) {
 	good := []byte("[Service]\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=localhost:9000\nExecStart=/usr/bin/ollama serve\n")
 	validate := func(string) error { return nil }
 	for _, key := range []string{
-		"Requires", "Requisite", "BindsTo", "PartOf", "Upholds", "Conflicts", "OnFailure", "OnSuccess",
-		"PropagatesReloadTo", "ReloadPropagatedFrom", "PropagatesStopTo", "StopPropagatedFrom", "JoinsNamespaceOf",
+		"Requires", "RequiresOverridable", "Requisite", "RequisiteOverridable", "BindsTo", "BindTo", "PartOf", "Upholds", "Conflicts", "OnFailure", "OnSuccess",
+		"PropagatesReloadTo", "PropagateReloadTo", "ReloadPropagatedFrom", "PropagateReloadFrom", "PropagatesStopTo", "StopPropagatedFrom", "JoinsNamespaceOf",
 		"RequiresMountsFor", "WantsMountsFor", "Wants",
 		"FailureAction", "SuccessAction", "StartLimitAction", "JobTimeoutAction",
 	} {

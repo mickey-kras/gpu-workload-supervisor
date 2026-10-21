@@ -178,7 +178,7 @@ func unsupportedOperationalDirective(section, key string) bool {
 		case "FailureAction", "SuccessAction", "StartLimitAction", "JobTimeoutAction":
 			// These can terminate the user manager, affecting unrelated workloads.
 			return true
-		case "Requires", "Requisite", "BindsTo", "PartOf", "Upholds", "Conflicts", "OnFailure", "OnSuccess", "PropagatesReloadTo", "ReloadPropagatedFrom", "PropagatesStopTo", "StopPropagatedFrom", "RequiresMountsFor", "WantsMountsFor", "JoinsNamespaceOf":
+		case "Requires", "RequiresOverridable", "Requisite", "RequisiteOverridable", "BindsTo", "BindTo", "PartOf", "Upholds", "Conflicts", "OnFailure", "OnSuccess", "PropagatesReloadTo", "PropagateReloadTo", "ReloadPropagatedFrom", "PropagateReloadFrom", "PropagatesStopTo", "StopPropagatedFrom", "RequiresMountsFor", "WantsMountsFor", "JoinsNamespaceOf":
 			return true
 		}
 	}
