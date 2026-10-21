@@ -56,20 +56,33 @@ func trustPathCore(path string, kind pathKind) (string, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return "", fmt.Errorf("%s: path must be absolute and clean", path)
 	}
+	if err := checkOriginalPath(path); err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("%s: missing or broken link", path)
+	}
+	if err := checkResolvedLeaf(resolved, kind); err != nil {
+		return "", err
+	}
+	if err := checkAncestors(resolved); err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
+// checkOriginalPath checks ancestors of the literal path and the ownership of
+// every symlink component on it. Merged-usr aliases (/bin -> usr/bin) are
+// symlinks: link modes are meaningless, only their owner can retarget them.
+func checkOriginalPath(path string) error {
 	for dir := filepath.Dir(path); ; dir = filepath.Dir(dir) {
-		dirInfo, err := os.Lstat(dir)
+		info, err := os.Lstat(dir)
 		if err != nil {
-			return "", fmt.Errorf("%s: parent directory unavailable", dir)
+			return fmt.Errorf("%s: parent directory unavailable", dir)
 		}
-		// Merged-usr aliases (/bin -> usr/bin) are symlinks: link modes are
-		// meaningless, only their owner can retarget them.
-		if dirInfo.Mode()&os.ModeSymlink != 0 {
-			err = trustedOwner(dir, dirInfo)
-		} else {
-			err = trustedComponent(dir, dirInfo)
-		}
-		if err != nil {
-			return "", err
+		if err := ancestorCheck(dir, info); err != nil {
+			return err
 		}
 		if dir == string(filepath.Separator) {
 			break
@@ -80,52 +93,60 @@ func trustPathCore(path string, kind pathKind) (string, error) {
 		current = filepath.Join(current, part)
 		info, err := os.Lstat(current)
 		if err != nil {
-			return "", fmt.Errorf("%s: missing or broken link", current)
+			return fmt.Errorf("%s: missing or broken link", current)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			if err := trustedOwner(current, info); err != nil {
-				return "", err
+				return err
 			}
 		}
 	}
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return "", fmt.Errorf("%s: missing or broken link", path)
+	return nil
+}
+
+func ancestorCheck(path string, info os.FileInfo) error {
+	if info.Mode()&os.ModeSymlink != 0 {
+		return trustedOwner(path, info)
 	}
+	return trustedComponent(path, info)
+}
+
+func checkResolvedLeaf(resolved string, kind pathKind) error {
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return "", fmt.Errorf("%s: missing or broken link", path)
+		return fmt.Errorf("%s: missing or broken link", resolved)
 	}
 	switch kind {
 	case kindDir:
 		if !info.IsDir() {
-			return "", fmt.Errorf("%s: not a directory", path)
+			return fmt.Errorf("%s: not a directory", resolved)
 		}
 	case kindFile:
 		if !info.Mode().IsRegular() {
-			return "", fmt.Errorf("%s: not a regular file", path)
+			return fmt.Errorf("%s: not a regular file", resolved)
 		}
 	case kindExec:
 		if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-			return "", fmt.Errorf("%s: not an executable file", path)
+			return fmt.Errorf("%s: not an executable file", resolved)
 		}
 	}
-	if err := trustedComponent(resolved, info); err != nil {
-		return "", err
-	}
+	return trustedComponent(resolved, info)
+}
+
+func checkAncestors(resolved string) error {
 	for dir := filepath.Dir(resolved); ; dir = filepath.Dir(dir) {
-		dirInfo, err := os.Stat(dir)
+		info, err := os.Stat(dir)
 		if err != nil {
-			return "", fmt.Errorf("%s: parent directory unavailable", dir)
+			return fmt.Errorf("%s: parent directory unavailable", dir)
 		}
-		if err := trustedComponent(dir, dirInfo); err != nil {
-			return "", err
+		if err := trustedComponent(dir, info); err != nil {
+			return err
 		}
 		if dir == string(filepath.Separator) {
 			break
 		}
 	}
-	return resolved, nil
+	return nil
 }
 
 func validateExecutable(path string) (string, error) {
