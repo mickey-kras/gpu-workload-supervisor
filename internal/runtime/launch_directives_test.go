@@ -26,6 +26,9 @@ func TestLaunchInspectionRejectsUninspectedOperationalDirectives(t *testing.T) {
 		"UnsetEnvironment=CUDA_VISIBLE_DEVICES OLLAMA_HOST OLLAMA_NO_CLOUD",
 		"PassEnvironment=LD_PRELOAD",
 		"PAMName=login",
+		"Sockets=unbound.socket",
+		"FailureAction=exit",
+		"StartLimitAction=exit-force",
 		"ExecCondition=/usr/bin/perl /tmp/unbound.pl",
 		"ExecStartPost=/usr/bin/perl /tmp/unbound.pl",
 		"ExecStop=/usr/bin/perl /tmp/unbound.pl",
@@ -44,7 +47,7 @@ func TestLaunchInspectionRejectsUninspectedOperationalDirectives(t *testing.T) {
 		t.Run(strings.SplitN(directive, "=", 2)[0]+"/"+strings.SplitN(directive, "=", 2)[1], func(t *testing.T) {
 			raw := append(append([]byte(nil), good...), []byte(directive+"\n")...)
 			if _, err := inspectAutomaticLaunch(raw, n.Runtime, validate); !errors.Is(err, ErrLaunchUnsupported) {
-				t.Fatalf("strict inspection accepted operational directive: %v", err)
+				t.Errorf("strict inspection accepted operational directive: %v", err)
 			}
 			for _, inDropIn := range []bool{false, true} {
 				dir := t.TempDir()
@@ -71,6 +74,12 @@ func TestLaunchInspectionRejectsUninspectedOperationalDirectives(t *testing.T) {
 				if _, err := inspectQualifiedNativeLaunch(path, binding, validate); !errors.Is(err, ErrLaunchUnsupported) {
 					t.Errorf("binding inspection accepted directive (drop-in=%v): %v", inDropIn, err)
 				}
+				for _, source := range binding.DropIns {
+					after, err := os.ReadFile(source.Path)
+					if err != nil || fmt.Sprintf("%x", sha256.Sum256(after)) != source.SHA256 {
+						t.Fatal("inspection modified the adopted drop-in", err)
+					}
+				}
 				after, err := os.ReadFile(path)
 				if err != nil || !bytes.Equal(after, primary) {
 					t.Fatal("inspection modified the adopted unit", err)
@@ -95,23 +104,27 @@ func TestLaunchInspectionRetainsHarmlessUnknownSettings(t *testing.T) {
 	}
 }
 
-func TestLaunchInspectionRejectsUnboundUnitDependencies(t *testing.T) {
+func TestLaunchInspectionRejectsUnboundUnitEffects(t *testing.T) {
 	good := []byte("[Service]\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=localhost:9000\nExecStart=/usr/bin/ollama serve\n")
 	validate := func(string) error { return nil }
 	for _, key := range []string{
 		"Requires", "Requisite", "BindsTo", "PartOf", "Upholds", "Conflicts", "OnFailure", "OnSuccess",
 		"PropagatesReloadTo", "ReloadPropagatedFrom", "PropagatesStopTo", "StopPropagatedFrom", "JoinsNamespaceOf",
 		"RequiresMountsFor", "WantsMountsFor", "Wants",
+		"FailureAction", "SuccessAction", "StartLimitAction", "JobTimeoutAction",
 	} {
 		t.Run(key, func(t *testing.T) {
 			value := "unbound-gpu.service"
+			if strings.HasSuffix(key, "Action") {
+				value = "exit-force"
+			}
 			if strings.HasSuffix(key, "MountsFor") {
 				value = "/srv/unbound-models"
 			}
 			dependency := []byte("[Unit]\n" + key + "=" + value + "\n")
 			raw := append(append([]byte(nil), dependency...), good...)
 			if _, err := inspectAutomaticLaunch(raw, "ollama", validate); !errors.Is(err, ErrLaunchUnsupported) {
-				t.Fatalf("strict inspection accepted dependency: %v", err)
+				t.Errorf("strict inspection accepted unit effect: %v", err)
 			}
 			for _, inDropIn := range []bool{false, true} {
 				dir := t.TempDir()
@@ -132,10 +145,20 @@ func TestLaunchInspectionRejectsUnboundUnitDependencies(t *testing.T) {
 					t.Fatal(err)
 				}
 				if _, err := inspectAutomaticLaunchSourcesWithValidator(path, "ollama", dropPaths, validate); !errors.Is(err, ErrLaunchUnsupported) {
-					t.Errorf("automatic inspection accepted dependency (drop-in=%v): %v", inDropIn, err)
+					t.Errorf("automatic inspection accepted unit effect (drop-in=%v): %v", inDropIn, err)
 				}
 				if _, err := inspectQualifiedNativeLaunch(path, binding, validate); !errors.Is(err, ErrLaunchUnsupported) {
-					t.Errorf("binding inspection accepted dependency (drop-in=%v): %v", inDropIn, err)
+					t.Errorf("binding inspection accepted unit effect (drop-in=%v): %v", inDropIn, err)
+				}
+				for _, source := range binding.DropIns {
+					after, err := os.ReadFile(source.Path)
+					if err != nil || fmt.Sprintf("%x", sha256.Sum256(after)) != source.SHA256 {
+						t.Fatal("inspection modified the adopted drop-in", err)
+					}
+				}
+				after, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(after, primary) {
+					t.Fatal("inspection modified the adopted unit", err)
 				}
 			}
 		})
