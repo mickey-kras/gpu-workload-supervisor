@@ -5,13 +5,15 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 const (
@@ -123,7 +125,7 @@ func launchSectionHeader(line string) (string, bool) {
 
 func (u *parsedLaunchUnit) applyLaunchLine(seen map[string]bool, runtimeName, section, line string) error {
 	key, value, ok := strings.Cut(line, "=")
-	if !ok || strings.ContainsAny(value, "\\$%`\"'") {
+	if !ok {
 		return ErrLaunchUnsupported
 	}
 	if key != "Environment" && key != "ExecStartPre" && seen[section+key] {
@@ -136,14 +138,13 @@ func (u *parsedLaunchUnit) applyLaunchLine(seen map[string]bool, runtimeName, se
 func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value string) error {
 	switch section + key {
 	case "[Unit]Description", "[Install]WantedBy":
-	case "[Service]Type":
-		if value != "simple" && value != "exec" {
-			return ErrLaunchUnsupported
+	case unitWantsDirective:
+		_, valid := compatibleIsolationDirective(section, key, value)
+		if !valid {
+			return fmt.Errorf("%w: incompatible directive %s", ErrLaunchUnsupported, key)
 		}
-	case "[Service]Restart":
-		if value != "no" {
-			return ErrLaunchUnsupported
-		}
+	case "[Service]Type", "[Service]Restart":
+		// Any value accepted; the unit runs as-is.
 	case "[Service]ExecStartPre":
 		if len(u.preCommands) >= 32 || value == "" {
 			return ErrLaunchUnsupported
@@ -157,9 +158,45 @@ func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value strin
 	case "[Service]Environment":
 		return u.applySafeEnvironment(runtimeName, value)
 	default:
-		return ErrLaunchUnsupported
+		if unsupportedOperationalDirective(section, key) {
+			return fmt.Errorf("%w: unsupported operational directive %s", ErrLaunchUnsupported, key)
+		}
+		// Harmless unknown settings need not prevent inspection. Directives that
+		// add code, change the effective environment, or remap inspected paths do.
 	}
 	return nil
+}
+
+func unsupportedOperationalDirective(section, key string) bool {
+	switch section {
+	case "[Service]":
+		return unsupportedLaunchDirective(key)
+	case "[Unit]":
+		// Dependency and propagation edges can activate or control code outside
+		// the inspected service. Only the qualified Wants case above is allowed.
+		switch key {
+		case "Requires", "Requisite", "BindsTo", "PartOf", "Upholds", "Conflicts", "OnFailure", "OnSuccess", "PropagatesReloadTo", "ReloadPropagatedFrom", "PropagatesStopTo", "StopPropagatedFrom", "RequiresMountsFor", "WantsMountsFor", "JoinsNamespaceOf":
+			return true
+		}
+	}
+	return false
+}
+
+func unsupportedLaunchDirective(key string) bool {
+	// Only ExecStart and the bounded ExecStartPre grammar above are inspected.
+	if strings.HasPrefix(key, "Exec") {
+		return true
+	}
+	switch key {
+	case "EnvironmentFile", "UnsetEnvironment", "PassEnvironment", "PAMName":
+		// These can replace or remove recorded GPU/runtime environment values.
+		return true
+	case "RootDirectory", "RootImage", "BindPaths", "BindReadOnlyPaths", "TemporaryFileSystem", "MountImages", "ExtensionImages", "ExtensionDirectories":
+		// A trusted host executable/model path need not name the same file in
+		// the service's filesystem namespace.
+		return true
+	}
+	return false
 }
 
 // Startup preparation is retained verbatim for adopted units and never run
@@ -174,7 +211,7 @@ func (u parsedLaunchUnit) validatePreCommands(validate func(string) error) error
 			problems.add(fmt.Errorf("%w: ExecStartPre command indirection", ErrLaunchUnsupported))
 			continue
 		}
-		args := strings.Fields(strings.TrimPrefix(command, "-"))
+		args := splitExecWords(strings.TrimPrefix(command, "-"))
 		if len(args) == 0 || !filepath.IsAbs(args[0]) || validate(args[0]) != nil {
 			problems.add(fmt.Errorf("%w: ExecStartPre requires a trusted direct executable", ErrLaunchUnsupported))
 			continue
@@ -402,14 +439,50 @@ func validateLlamaNumericOption(runtimeName, key, value string) error {
 }
 
 func validateNativeExecutable(path string) error {
-	resolved, err := validateExecutable(path)
-	if err != nil {
-		return fmt.Errorf("%w: executable trust: %w", ErrLaunchUnsupported, err)
-	}
-	if filepath.Base(resolved) != filepath.Base(path) {
-		return fmt.Errorf("%w: executable symlink changes application identity; select its trusted direct target", ErrLaunchUnsupported)
+	if _, err := validateExecutable(path); err != nil {
+		return fmt.Errorf("%w: executable: %w", ErrLaunchUnsupported, err)
 	}
 	return nil
+}
+
+// splitExecWords splits an ExecStart line like systemd: whitespace separates
+// words; single/double quotes and backslash escapes group them.
+func splitExecWords(command string) []string {
+	var words []string
+	var current strings.Builder
+	inWord := false
+	quote := byte(0)
+	for i := 0; i < len(command); i++ {
+		c := command[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			} else {
+				current.WriteByte(c)
+			}
+		case c == '\'' || c == '"':
+			quote = c
+			inWord = true
+		case c == ' ' || c == '\t':
+			if inWord {
+				words = append(words, current.String())
+				current.Reset()
+				inWord = false
+			}
+		case c == '\\' && i+1 < len(command):
+			i++
+			current.WriteByte(command[i])
+			inWord = true
+		default:
+			current.WriteByte(c)
+			inWord = true
+		}
+	}
+	if inWord {
+		words = append(words, current.String())
+	}
+	return words
 }
 
 var loadedPreCommand = regexp.MustCompile(`\{ path=([^ ;]+) ; argv\[\]=([^;]+) ; ignore_errors=(yes|no) ;[^}]*\}`)
@@ -424,8 +497,8 @@ func CheckLoadedPreCommands(output string, commands []string) error {
 	}
 	for i, command := range commands {
 		ignore := strings.HasPrefix(command, "-")
-		args := strings.Fields(strings.TrimPrefix(command, "-"))
-		if len(args) == 0 || matches[i][1] != args[0] || strings.Join(strings.Fields(matches[i][2]), " ") != strings.Join(args, " ") || (matches[i][3] == "yes") != ignore {
+		args := splitExecWords(strings.TrimPrefix(command, "-"))
+		if len(args) == 0 || matches[i][1] != args[0] || !slices.Equal(splitExecWords(matches[i][2]), args) || (matches[i][3] == "yes") != ignore {
 			return ErrLaunchChanged
 		}
 	}
@@ -436,8 +509,8 @@ var loadedMainCommand = regexp.MustCompile(`\{ path=([^ ;]+) ; argv\[\]=([^;]+) 
 
 func CheckLoadedLaunchCommand(output, command string) error {
 	matches := loadedMainCommand.FindAllStringSubmatch(output, -1)
-	args := strings.Fields(command)
-	if len(matches) != 1 || len(args) == 0 || strings.Trim(loadedMainCommand.ReplaceAllString(output, ""), " ;\t\r\n") != "" || matches[0][1] != args[0] || strings.Join(strings.Fields(matches[0][2]), " ") != strings.Join(args, " ") {
+	args := splitExecWords(command)
+	if len(matches) != 1 || len(args) == 0 || strings.Trim(loadedMainCommand.ReplaceAllString(output, ""), " ;\t\r\n") != "" || matches[0][1] != args[0] || !slices.Equal(splitExecWords(matches[0][2]), args) {
 		return ErrLaunchChanged
 	}
 	if strings.Contains(output, "ignore_errors=yes") {

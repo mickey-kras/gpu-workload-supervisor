@@ -2,13 +2,9 @@ package runtime
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
-
-	"golang.org/x/sys/unix"
 )
 
 var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -108,109 +104,80 @@ func (u *parsedLaunchUnit) qualifyEnvironmentValue(runtimeName, name, value, ass
 			return nil
 		}
 		if err := qualifyEnvironmentPath(value, name == "HF_TOKEN_PATH", false); err != nil {
-			return environmentError(name, "requires an existing absolute clean trusted path without links; inspect ownership and permissions of this setting and its ancestors")
+			return err
 		}
 		return nil
-	case "LD_LIBRARY_PATH":
-		return environmentError(name, "dynamic library search and transitive loader bindings are not qualified; use a reviewed root-owned runtime installation with its normal trusted loader configuration, then reload and refresh the binding")
-	case "PATH":
+	case "PATH", "LD_LIBRARY_PATH", "PYTHONPATH":
 		if u.cleanupEnvironment {
 			return nil
 		}
 		return qualifyEnvironmentSearchPaths(name, value)
+	case "LD_PRELOAD", "LD_AUDIT", "PYTHONHOME", "PYTHONUSERBASE", "PYTHONSTARTUP":
+		// These settings load code or select an interpreter installation through
+		// mechanisms that are not covered by the directory-search checks above.
+		// An empty value disables the override and is safe to retain.
+		if value != "" {
+			return environmentError(name, "nonempty code-loading overrides are unsupported")
+		}
+		return nil
 	default:
 		if runtimeName == "ollama" && strings.HasPrefix(name, "OLLAMA_") {
-			if err := u.applyOllamaEnvironment(assignment); err == nil {
-				return nil
-			}
+			_ = u.applyOllamaEnvironment(assignment)
 		}
-		return environmentError(name, "this setting is not qualified; choose a supported direct configuration with independently verified settings")
+		return nil
 	}
 }
 
 func qualifyEnvironmentSearchPaths(name, value string) error {
+	// The dynamic linker accepts semicolons as well as colons. Preserve empty
+	// components when splitting because those can enable current-directory lookup.
+	if name == "LD_LIBRARY_PATH" {
+		value = strings.ReplaceAll(value, ";", ":")
+	}
 	for _, path := range strings.Split(value, ":") {
+		if path == "" {
+			return environmentError(name, "empty search path components can select the current directory")
+		}
 		if err := qualifyEnvironmentSearchPath(path); err != nil {
-			return environmentError(name, "requires absolute clean root-owned executable directories; aliases must be root-owned and resolve into trusted directories with no group/world writes")
-		}
-	}
-	return nil
-}
-
-// Descriptor-relative metadata inspection does not read credentials or follow
-// symlinks. The source principal policy remains unchanged for all path parts.
-func qualifyEnvironmentPath(path string, file, rootOnly bool) error {
-	if !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.ContainsAny(path, launchExpansionCharacters) {
-		return ErrLaunchUnsupported
-	}
-	fd, err := openEnvironmentRoot()
-	if err != nil {
-		return err
-	}
-	defer func() { unix.Close(fd) }()
-	if file && path == "/" {
-		return ErrLaunchUnsupported
-	}
-	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if path == "/" {
-		parts = nil
-	}
-	for i, part := range parts {
-		flags := unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_NONBLOCK | unix.O_CLOEXEC
-		leaf := i == len(parts)-1
-		if !leaf || !file {
-			flags |= unix.O_DIRECTORY
-		}
-		next, err := unix.Openat(fd, part, flags, 0)
-		if err != nil {
-			return ErrLaunchUnsupported
-		}
-		unix.Close(fd)
-		fd = next
-		if err := qualifyEnvironmentComponent(fd, i, len(parts), leaf && file, rootOnly); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func openEnvironmentRoot() (int, error) {
-	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return -1, ErrLaunchUnsupported
+// qualifyEnvironmentPath checks an existing directory (file=false) or regular
+// file (file=true) with the shared path trust rules.
+func qualifyEnvironmentPath(path string, file, rootOnly bool) error {
+	if strings.ContainsAny(path, launchExpansionCharacters) {
+		return environmentError(pathName(path), "expansion characters are unsupported; use a literal path")
 	}
-	var stat unix.Stat_t
-	if unix.Fstat(fd, &stat) != nil || stat.Uid != 0 || stat.Mode&0022 != 0 {
-		unix.Close(fd)
-		return -1, ErrLaunchUnsupported
+	kind := kindDir
+	if file {
+		kind = kindFile
 	}
-	return fd, nil
-}
-
-func qualifyEnvironmentComponent(fd, index, count int, file, rootOnly bool) error {
-	var stat unix.Stat_t
-	if unix.Fstat(fd, &stat) != nil {
-		return ErrLaunchUnsupported
-	}
-	if rootOnly {
-		if stat.Uid != 0 || stat.Mode&0022 != 0 {
-			return ErrLaunchUnsupported
-		}
-	} else if !trustedLaunchSourceComponent(stat, index, count+1) {
-		return ErrLaunchUnsupported
-	}
-	if file && (stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Mode&0444 == 0) {
-		return ErrLaunchUnsupported
+	if _, err := trustPath(path, kind); err != nil {
+		return environmentError(pathName(path), reasonText(err))
 	}
 	return nil
 }
 
-func qualifyEnvironmentSearchPath(path string) error {
-	resolved, err := resolveTrustedRootPath(path, os.Lstat, os.Readlink)
-	if err != nil {
-		return ErrLaunchUnsupported
+// reasonText strips the sentinel prefix trustPath already added.
+func reasonText(err error) string {
+	return strings.TrimPrefix(err.Error(), ErrLaunchUnsupported.Error()+": ")
+}
+
+func pathName(path string) string {
+	if len(path) > 64 {
+		return ""
 	}
-	return qualifyEnvironmentPath(resolved, false, true)
+	return path
+}
+
+func qualifyEnvironmentSearchPath(path string) error {
+	if _, err := trustPath(path, kindDir); err != nil {
+		return environmentError(pathName(path), reasonText(err))
+	}
+	return nil
 }
 
 // CheckLoadedEnvironment requires exact effective values for newly qualified

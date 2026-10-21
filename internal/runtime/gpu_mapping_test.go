@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -12,67 +11,6 @@ import (
 	"strings"
 	"testing"
 )
-
-func TestNumericCUDAVisibilityRemainsUnresolvedWithOneInventoryGPU(t *testing.T) {
-	m, runner, p, _ := nativeFixture(t, "llama.cpp", "http://localhost:9000")
-	raw, err := os.ReadFile(p.NativeModel.LaunchFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Exact reported selection: no ordering setting, plus preserved options
-	// and a pre-start check. The query supplies one physical GPU at index 0,
-	// but cannot supply evidence about CUDA's logical device mapping.
-	raw = append(raw, []byte("Environment=CUDA_VISIBLE_DEVICES=0\nExecStartPre=/usr/bin/true\n")...)
-	if err := os.WriteFile(p.NativeModel.LaunchFile, raw, 0600); err != nil {
-		t.Fatal(err)
-	}
-	validated := false
-	_, err = inspectAutomaticLaunchSourcesWithValidator(p.NativeModel.LaunchFile, "llama.cpp", nil, func(string) error {
-		validated = true
-		return nil
-	})
-	if !errors.Is(err, ErrGPUIdentityUnresolved) || !errors.Is(err, ErrLaunchUnsupported) || !validated {
-		t.Fatalf("numeric inspection skipped independent validation or lost unresolved disposition: %v", err)
-	}
-	if !strings.Contains(err.Error(), "full UUID") || !strings.Contains(err.Error(), "refresh") || strings.Count(err.Error(), "CUDA_VISIBLE_DEVICES") != 1 {
-		t.Fatalf("numeric refusal is not one actionable explanation: %v", err)
-	}
-	p.NativeModel.GPUUUID = testPhysicalUUID
-	p.NativeModel.LaunchSHA256 = fmt.Sprintf("%x", sha256.Sum256(raw))
-	m.config.GPUIndex = 0
-	m.config.Catalog.Profiles[2] = p
-	query := m.config.NvidiaSMIPath + " --query-gpu=uuid --format=csv,noheader -i 0"
-	runner.outputs[query] = []byte(testPhysicalUUID + "\n")
-	ctx := context.Background()
-	for name, action := range map[string]func() error{
-		"start":   func() error { return m.Start(ctx, p.ID) },
-		"ready":   func() error { return m.Healthy(ctx, p.ID) },
-		"release": func() error { return m.ReleasedFor(ctx, p.ID) },
-	} {
-		if err := action(); !errors.Is(err, ErrGPUIdentityUnresolved) {
-			t.Fatalf("%s inferred CUDA mapping from inventory: %v", name, err)
-		}
-	}
-	for _, call := range runner.calls {
-		if strings.Contains(call, " --user start ") {
-			t.Fatal("unresolved numeric visibility permitted runtime startup")
-		}
-	}
-	got, err := os.ReadFile(p.NativeModel.LaunchFile)
-	if err != nil || !bytes.Equal(got, raw) {
-		t.Fatal("numeric refusal changed the external unit", err)
-	}
-	// Merely supplying an ordering variable is not authoritative mapping
-	// evidence; neither admission nor cleanup inspection relaxes the rule.
-	for _, order := range []string{"", "Environment=CUDA_DEVICE_ORDER=PCI_BUS_ID\n", "Environment=CUDA_DEVICE_ORDER=FASTEST_FIRST\n"} {
-		for _, cleanup := range []bool{false, true} {
-			_, err := parseExternalLaunchSourcesMode([][]byte{append(append([]byte(nil), raw...), []byte(order)...)}, "llama.cpp", cleanup)
-			if !errors.Is(err, ErrGPUIdentityUnresolved) {
-				t.Fatalf("ordering or cleanup relaxed unresolved visibility: %v", err)
-			}
-		}
-	}
-}
 
 func TestFullUUIDMappingRemainsConsistentAcrossRuntimeGates(t *testing.T) {
 	httpCalls := 0

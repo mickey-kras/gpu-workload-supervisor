@@ -3,11 +3,12 @@ package runtime
 import (
 	"context"
 	"errors"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 type temporaryUnitRunner struct {

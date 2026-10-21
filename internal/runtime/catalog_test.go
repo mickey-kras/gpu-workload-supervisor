@@ -2,9 +2,10 @@ package runtime
 
 import (
 	"context"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"net/http"
 	"testing"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 func TestCatalogObservesThirdRuntime(t *testing.T) {

@@ -3,11 +3,12 @@ package runtime
 import (
 	"context"
 	"errors"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 func acceptanceCatalog() control.Catalog {

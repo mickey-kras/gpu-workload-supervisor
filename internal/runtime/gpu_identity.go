@@ -22,9 +22,8 @@ func (unresolvedGPUIdentityError) Error() string {
 func (unresolvedGPUIdentityError) Unwrap() error { return ErrLaunchUnsupported }
 
 func (u *parsedLaunchUnit) applyGPUVisibility(value string) error {
-	// Numeric CUDA ordinals are not nvidia-smi physical indices, even when
-	// inventory reports one device. Preserve the assignment without inferring
-	// a mapping or rewriting it to make adoption pass.
+	// CUDA ordinals are not physical nvidia-smi indices. Discovery must not
+	// infer that mapping or rewrite an external service to qualify it.
 	if value != "" && strings.Trim(value, "0123456789") == "" {
 		return ErrGPUIdentityUnresolved
 	}

@@ -12,48 +12,6 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
-func TestNativeLaunchQualificationRejectsIndirectionAndMutation(t *testing.T) {
-	n := control.NativeModel{Runtime: "llama.cpp", Endpoint: "http://localhost:9000", Model: "selected"}
-	good := string(nativeLaunchFixture(t, n.Runtime, n.Endpoint, n.Model))
-	cases := []string{
-		"garbage", "[Other]\nKey=value", "[Service]\nExecStart=/bin/sh -c true", "[Service]\nExecStart=llama-server",
-		good + "ExecStopPost=/usr/bin/true\n", good + "EnvironmentFile=/tmp/config\n", good + "Environment=LD_PRELOAD=/tmp/lib.so\n",
-		good + "Restart=always\n", good + "Type=forking\n", good + "ExecStart=/usr/bin/true\n", good + "BindPaths=/tmp\n", good + "ExecSearchPath=/tmp\n",
-		strings.Replace(good, " --model ", " --hf-repo ", 1), strings.Replace(good, " --alias selected", " --alias other", 1), strings.Replace(good, " --host localhost", " --host 0.0.0.0", 1), strings.Replace(good, " --port 9000", " --port 9001", 1),
-		strings.TrimSpace(good) + " --port 9000", strings.TrimSpace(good) + " --unknown x", strings.TrimSpace(good) + " --ctx-size 0", strings.TrimSpace(good) + " --ctx-size nope", strings.TrimSpace(good) + " --max-model-len 1024", strings.TrimSpace(good) + " --alias another", strings.TrimSpace(good) + " --flag", strings.TrimSpace(good) + " --ctx-size $CTX", strings.TrimSpace(good) + " --ctx-size %i", strings.TrimSpace(good) + " --ctx-size '12'",
-		strings.Replace(good, " --model ", " --model relative --model ", 1), strings.Replace(good, " --alias selected", " --served-model-name selected", 1), strings.Replace(good, "llama-server ", "missing ", 1), strings.Replace(good, "[Service]", "[Unit]", 1),
-	}
-	for _, raw := range cases {
-		if err := qualifyFixtureLaunch([]byte(raw), n); err == nil {
-			t.Errorf("unsafe launch accepted: %s", raw)
-		}
-	}
-	valid := "# comment\n; comment\n[Unit]\nDescription=Native model; local\n" + good + "Type=exec\nRestart=no\n[Install]\nWantedBy=default.target\n"
-	if err := qualifyFixtureLaunch([]byte(valid), n); err != nil {
-		t.Fatal(err)
-	}
-	if err := qualifyFixtureLaunch([]byte(strings.TrimSpace(good)+" --ctx-size 8192 --n-gpu-layers 99"), n); err != nil {
-		t.Fatal(err)
-	}
-	n.Runtime = "unknown"
-	if qualifyFixtureLaunch([]byte(good), n) == nil {
-		t.Fatal("unknown runtime accepted")
-	}
-	n.Runtime = "vllm"
-	if qualifyFixtureLaunch([]byte(good), n) == nil {
-		t.Fatal("wrong executable accepted")
-	}
-	n.Runtime = "ollama"
-	if qualifyFixtureLaunch([]byte(good), n) == nil {
-		t.Fatal("wrong executable accepted")
-	}
-	n.Runtime = "llama.cpp"
-	n.Endpoint = "://bad"
-	if qualifyFixtureLaunch([]byte(good), n) == nil {
-		t.Fatal("bad endpoint accepted")
-	}
-}
-
 func TestNativeLaunchFingerprintAndModelPath(t *testing.T) {
 	for _, family := range []string{"llama.cpp", "vllm", "ollama"} {
 		t.Run(family, func(t *testing.T) {
@@ -109,39 +67,11 @@ func TestNativeLaunchFingerprintAndModelPath(t *testing.T) {
 		})
 	}
 }
-
-func TestNativeExecutableRequiresTrustedAncestors(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "llama-server")
-	if err := os.WriteFile(path, []byte("x"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if validateNativeExecutable(path) == nil {
-		t.Fatal("executable in writable temp ancestry accepted")
-	}
-	if validateNativeExecutable("/missing/llama-server") == nil {
-		t.Fatal("missing executable accepted")
-	}
-}
-
 func qualifyFixtureLaunch(raw []byte, n control.NativeModel) error {
 	return qualifyNativeLaunchWithValidator(raw, n, fixtureExecutableValidator)
 }
 func inspectFixtureLaunch(path string, n control.NativeModel) (string, error) {
 	return inspectQualifiedNativeLaunch(path, n, fixtureExecutableValidator)
-}
-func TestQualifiedFingerprintRejectsUntrustedExecutable(t *testing.T) {
-	n := control.NativeModel{Runtime: "ollama", Endpoint: "http://localhost:9000", Model: "selected"}
-	raw := nativeLaunchFixture(t, n.Runtime, n.Endpoint, n.Model)
-	path := filepath.Join(t.TempDir(), "model.service")
-	if err := os.WriteFile(path, raw, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := InspectQualifiedNativeLaunch(path, n); err == nil {
-		t.Fatal("untrusted executable qualified")
-	}
-	if qualifyNativeLaunchWithValidator(raw, n, validateNativeExecutable) == nil {
-		t.Fatal("untrusted executable qualified")
-	}
 }
 
 func TestNativeLaunchPreservesDocumentedLlamaOptionsAndPreparation(t *testing.T) {

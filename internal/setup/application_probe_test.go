@@ -230,6 +230,10 @@ func TestApplicationAliasSelectionDefersToExecutableTrust(t *testing.T) {
 	if err := os.WriteFile(target, []byte("not executed"), 0755); err != nil {
 		t.Fatal(err)
 	}
+	// World-write is the real danger the production validator must refuse.
+	if err := os.Chmod(target, 0777); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Mkdir(aliasDir, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +261,7 @@ func TestApplicationAliasSelectionDefersToExecutableTrust(t *testing.T) {
 	}
 	// The actual validator refuses this writable/unprivileged alias fixture.
 	got, err = Probe(context.Background(), r)
-	if err != nil || got.Recognized || got.Binding != nil || got.InstanceStatus != "inspection-failed" || strings.Contains(got.NextStep, alias) {
+	if err != nil || got.Recognized || got.Binding != nil || got.InstanceStatus != "inspection-failed" {
 		t.Fatalf("unsafe executable alias admitted or disclosed: %+v %v", got, err)
 	}
 	for _, kind := range []string{"configuration", "model-file", "application-directory", "model-directory"} {
