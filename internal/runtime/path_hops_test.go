@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -160,5 +161,52 @@ func TestTrustRequiresReadableRegularFileTargets(t *testing.T) {
 				t.Fatalf("readable target %s with mode %04o rejected: %v", path, tc.mode, err)
 			}
 		}
+	}
+}
+
+func TestTrustGroupMembershipBoundary(t *testing.T) {
+	_, file, _ := trustFixture(t)
+	if err := os.Chmod(file, 0664); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, err := myGroups()
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignGID := uint32(0)
+	for groups[foreignGID] {
+		foreignGID++
+	}
+	foreign := pathOwnershipInfo{FileInfo: info, stat: syscall.Stat_t{Uid: uint32(os.Getuid()), Gid: foreignGID}}
+	if err := trustedComponent(file, foreign); err == nil || !strings.Contains(err.Error(), fmt.Sprint(foreignGID)) {
+		t.Fatalf("foreign group writer accepted or not named: %v", err)
+	}
+	for gid := range groups {
+		member := pathOwnershipInfo{FileInfo: info, stat: syscall.Stat_t{Uid: uint32(os.Getuid()), Gid: gid}}
+		if err := trustedComponent(file, member); err != nil {
+			t.Fatalf("member group writer %d rejected: %v", gid, err)
+		}
+	}
+}
+
+func TestTrustFailsWhenGroupMembershipUnavailable(t *testing.T) {
+	_, file, _ := trustFixture(t)
+	if err := os.Chmod(file, 0664); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := myGroups
+	t.Cleanup(func() { myGroups = original })
+	unavailable := errors.New("group lookup unavailable")
+	myGroups = func() (map[uint32]bool, error) { return nil, unavailable }
+	if err := trustedComponent(file, info); !errors.Is(err, unavailable) || !strings.Contains(err.Error(), file) {
+		t.Fatalf("group lookup failure suppressed or not named: %v", err)
 	}
 }

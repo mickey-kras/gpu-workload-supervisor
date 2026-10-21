@@ -3,9 +3,11 @@ package runtime
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
@@ -683,6 +685,9 @@ func TestTrustRejectsGroupWriteByForeignGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Chown(file, os.Getuid(), 65534); err != nil {
+		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EINVAL) {
+			t.Skipf("sandbox cannot assign foreign gid 65534: %v; synthetic ownership test covers this boundary", err)
+		}
 		t.Fatal(err)
 	}
 	if err := os.Chmod(file, 0664); err != nil {

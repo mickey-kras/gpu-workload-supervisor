@@ -31,21 +31,28 @@ func trustedComponent(path string, info os.FileInfo) error {
 		return fmt.Errorf("%s: world-writable; remove other-write or choose another path", path)
 	}
 	if info.Mode().Perm()&0o020 != 0 {
+		groups, err := myGroups()
+		if err != nil {
+			return fmt.Errorf("%s: cannot inspect your groups: %w", path, err)
+		}
 		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !ok || !myGroups()[stat.Gid] {
+		if !ok || !groups[stat.Gid] {
 			return fmt.Errorf("%s: group-writable by gid %d, a group you are not in", path, gidOf(info))
 		}
 	}
 	return nil
 }
 
-var myGroups = sync.OnceValue(func() map[uint32]bool {
+var myGroups = sync.OnceValues(func() (map[uint32]bool, error) {
 	groups := map[uint32]bool{uint32(os.Getgid()): true}
-	extra, _ := os.Getgroups()
+	extra, err := os.Getgroups()
+	if err != nil {
+		return nil, err
+	}
 	for _, gid := range extra {
 		groups[uint32(gid)] = true
 	}
-	return groups
+	return groups, nil
 })
 
 func gidOf(info os.FileInfo) uint32 {
