@@ -1,6 +1,6 @@
 module github.com/mickey-kras/gpu-workload-supervisor
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/google/uuid v1.6.0
