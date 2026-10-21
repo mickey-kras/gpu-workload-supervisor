@@ -195,8 +195,8 @@ prove the application can run within that sandbox. Existing `Type=` and
 `Restart=` values, including `Restart=on-failure`, are preserved. Automatic
 restarts can run outside controller admission; account for that in deployment.
 
-ComfyUI direct commands may retain `--output-directory`, `--temp-directory`,
-`--user-directory`, `--extra-model-paths-config` and `--enable-manager`. Directory
+ComfyUI direct commands may retain `--base-directory`, `--output-directory`,
+`--temp-directory`, `--user-directory`, `--extra-model-paths-config` and `--enable-manager`. Directory
 options require existing trusted directories. Each explicit configuration file
 requires an existing trusted readable regular file; symlinks undergo the same
 path checks. Recognized endpoint and path options support `--option=value` as
