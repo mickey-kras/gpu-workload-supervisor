@@ -133,3 +133,33 @@ for (const [app, label, port] of [['ollama', 'Ollama', 11434], ['vllm', 'vLLM', 
         assert.equal(saved.binding.owned.executable, path);
     });
 }
+
+test('production legacy and current backend path failures offer review and reinspection', () => {
+    const messages = [
+        'Environment variable HOME: requires an existing absolute clean trusted path without links; inspect ownership and permissions of this setting and its ancestors',
+        'Environment variable PATH: requires absolute clean root-owned executable directories; aliases must be root-owned and resolve into trusted directories with no group/world writes',
+        'Environment variable LD_LIBRARY_PATH: dynamic library search and transitive loader bindings are not qualified; use a reviewed root-owned runtime installation with its normal trusted loader configuration, then reload and refresh the binding',
+        'WorkingDirectory requires an existing absolute clean trusted directory without links; inspect ownership and permissions of this setting and its ancestors',
+        'ComfyUI option --output-directory requires an existing absolute clean trusted directory without links; inspect this setting and its ancestors',
+        'ComfyUI option --extra-model-paths-config requires existing absolute clean trusted regular configuration files without links; inspect this setting and its ancestors',
+        'executable trust: executable target is not root-owned; install this executable through the system package manager or a trusted root-owned location',
+        'application script component 3 cannot be opened without following links; inspect this component for missing access or symbolic links',
+        'application script trust: launch source component 3: group or world write permission permits replacement; inspect this component',
+        'Environment: /home/u/cache: path must be absolute and clean',
+        'Environment variable PATH: empty search path components can select the current directory',
+        'Environment variable LD_PRELOAD: nonempty code-loading overrides are unsupported',
+        'ComfyUI option --port requires its supported full option name and value',
+    ];
+    for (const message of messages) {
+        for (const evidence of [{diagnostics: [prefix + message]}, {nextStep: prefix + message}]) {
+            const steps = recoveryGuidance({...evidence, unit: 'external.service'});
+            assert.ok(steps.length > 2, message);
+            assert.match(steps.at(-2), /systemctl --user daemon-reload/);
+            assert.match(steps.at(-1), /Check again/);
+        }
+    }
+    const syntax = recoveryGuidance({nextStep: 'Environment variable HOME: quoted fragments are unsupported'}).join('\n');
+    assert.match(syntax, /Environment="HOME=\/home\/alice"/);
+    assert.equal(syntax.includes('whole value'), false);
+    assert.deepEqual(recoveryGuidance({diagnostics: ['unfamiliar reason'], nextStep: messages[0]}), []);
+});

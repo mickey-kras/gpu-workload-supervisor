@@ -38,6 +38,11 @@ test('native handlers detect blocked installation, select UUID, copy preview and
     await ui.click('Settings for ComfyUI');
     assert.equal(ui.by('Use installation').sensitive, false);
     await ui.click('View details');
+    const instructions = ui.widgets.find(widget => ui.visible(widget) && widget.label?.includes('systemctl --user edit SERVICE'));
+    assert.ok(instructions);
+    assert.match(instructions.label, /Save the drop-in, run systemctl --user daemon-reload, then Check again/);
+    assert.match(instructions.label, /Restart=no disables automatic crash recovery/);
+    assert.match(instructions.label, /Copying applies nothing/);
     assert.equal(ui.by('Copy reviewed override').sensitive, false);
     ui.edit(ui.by('Physical GPU UUID (explicit selection required)'), 'selected', 1);
     assert.equal(ui.by('Copy reviewed override').sensitive, true);

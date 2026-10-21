@@ -155,14 +155,17 @@ export function correctionPreview(candidate, uuid = '') {
 
 // Guidance is one line per problem class. Diagnostics already name the path.
 export function recoveryGuidance(candidate) {
-    const diagnostics = candidateDiagnostics(candidate);
+    const reported = candidateDiagnostics(candidate);
+    const diagnostics = reported.length ? reported : [candidate?.nextStep ?? ''];
     const steps = new Set();
     for (const message of diagnostics) {
         const syntax = recoverySyntax(message);
         if (syntax) {
             steps.add(syntax);
-        } else if (/world-writable|owned by uid|missing or broken link|parent directory unavailable|not a directory|not a regular file|not an executable/.test(message)) {
+        } else if (/world-writable|owned by uid|missing or broken link|parent directory unavailable|not a directory|not a regular file|not an executable|path must be absolute and clean|symlink resolution exceeds/.test(message)) {
             steps.add('Fix the named path: exists, owned by you or root, not world-writable. Setup never changes permissions.');
+        } else if (legacyPathFailure(message)) {
+            steps.add('Review the reported path and its ancestors: use an existing trusted installation or data path. Check ownership, permissions and link targets; setup changes no files.');
         }
     }
     if (steps.size) {
@@ -174,14 +177,30 @@ export function recoveryGuidance(candidate) {
 
 function recoverySyntax(message) {
     if (/Environment(?: variable [A-Za-z_]\w*)?: (?:expected NAME=value|expansion, escapes or whitespace|unterminated whole-assignment quote|quoted fragments|duplicate assignment)/.test(message)) {
-        return 'Environment syntax: one literal NAME=value per assignment; quotes only around the whole value.';
+        return 'Environment syntax: one literal NAME=value per assignment; quote the whole assignment, for example Environment="HOME=/home/alice".';
+    }
+    if (/Environment variable (?:PATH|LD_LIBRARY_PATH|PYTHONPATH): empty search path components/.test(message)) {
+        return 'Search paths: use existing trusted absolute directories with no empty entries; an empty entry can select the current directory.';
+    }
+    if (/Environment variable (?:LD_PRELOAD|LD_AUDIT|PYTHONHOME|PYTHONUSERBASE|PYTHONSTARTUP): nonempty code-loading overrides/.test(message)) {
+        return 'Code-loading environment: this nonempty override is unsupported. Review the runtime configuration before choosing a supported direct launch.';
+    }
+    if (/Environment variable LD_LIBRARY_PATH: dynamic library search and transitive loader bindings are not qualified/.test(message)) {
+        return 'Library search: review the runtime and its configured directories. Do not remove a required loader setting merely to pass setup.';
     }
     if (/ComfyUI option --extra-model-paths-config configuration file count exceeds supported limit/.test(message)) {
         return 'Configuration-file count: at most 32 files per --extra-model-paths-config.';
     }
-    if (/ComfyUI option --[a-z-]+ (?:is repeated;|requires an explicit value|requires an existing trusted absolute directory|requires at least one trusted configuration file)/.test(message)) {
+    if (/ComfyUI option --[a-z-]+ (?:is repeated;|requires an explicit value|requires an existing trusted absolute directory|requires at least one trusted configuration file|requires its supported full option name and value)/.test(message)) {
         return 'Launch argument syntax: fix the reported option (missing value, repeated flag, missing path).';
     }
     return '';
+}
+
+function legacyPathFailure(message) {
+    return /Environment variable [A-Za-z_]\w*: requires (?:an existing absolute clean trusted path without links|absolute clean root-owned executable directories)/.test(message) ||
+        /(?:WorkingDirectory|ComfyUI option --[a-z-]+) requires (?:an existing (?:absolute clean trusted directory|trusted account-home path)|existing absolute clean trusted regular configuration files) without links/.test(message) ||
+        /application script trust:.*launch source component \d+: (?:ownership is outside root or the desktop account|group or world write permission permits replacement|source is not a readable regular file)/.test(message) ||
+        /(?:executable|interpreter|application script)(?: trust| target| ancestor| path| alias| component|:).*?(?:not root-owned|group or world writable|group\/world writable|cannot be opened without following links|target unavailable|alias ancestry|alias resolution|alias target unavailable)/.test(message);
 }
 

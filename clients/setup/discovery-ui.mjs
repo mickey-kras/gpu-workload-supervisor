@@ -257,7 +257,7 @@ class DraftEditor {
         const input = this.draft.snapshot();
         const mismatch = (this.endpointEdited && input.endpoint !== candidate.endpoint) ||
             [...this.bindingEdits].some(key => key !== 'model' && candidate.binding && input.binding?.[key] !== candidate.binding[key]);
-        if (mismatch) this.settings.problem('An override does not match this installation.', new Error('Your service has not been changed.'));
+        if (mismatch) this.settings.problem('An override does not match this installation.', new Error('Open Change installation… to correct the saved address or choose the intended installation; edit service settings in Advanced settings → Launch details. Then Check again. Your service has not been changed.'));
         this.syncing = true; this.health.text = this.draft.snapshot().binding?.healthURL ?? ''; this.health.editable = !this.draft.snapshot().binding?.owned; this.syncing = false;
         this.temporary.showAvailability(candidate);
         if (this.model) this.showModels(candidate);

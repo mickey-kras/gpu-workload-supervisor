@@ -15,7 +15,7 @@ Linux with user systemd and cgroup v2.
 ## Install
 
 Release archive or .deb from [Releases](https://github.com/mickey-kras/gpu-workload-supervisor/releases),
-or `go build ./cmd/...`.
+or `go build -o bin/ ./cmd/...`.
 
 Setup detects existing systemd user services for the supported applications and
 adopts them read-only. It never rewrites your units.
@@ -23,8 +23,11 @@ adopts them read-only. It never rewrites your units.
 ## Setup checks
 
 A path passes when it exists, is owned by you or root, and is not world-writable.
-Symlinks are resolved; broken ones are reported by name. Directives, environment
-variables and launch flags in your unit are otherwise adopted as-is.
+Symlinks and their traversed ancestors are checked; broken ones are reported by
+name. Setup preserves supported direct commands and their arguments. It still
+checks endpoint, model, GPU identity, environment and effective loaded settings;
+shell commands, environment files and uninspected operational directives remain
+unsupported. See [launch constraints](docs/WORKLOADS.md).
 
 ## Docs
 

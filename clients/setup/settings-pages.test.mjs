@@ -234,6 +234,10 @@ test('a saved endpoint override remains editable without inheriting readiness fr
     assert.equal(ui.by('Use installation').sensitive, false);
     assert.equal(ui.visible(ui.by('Ready for setup')), false);
     assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label === 'An override does not match this installation.'));
+    await ui.click('View details');
+    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('Open Change installation… to correct the saved address')));
+    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('Then Check again.')));
+    await ui.click('Back');
     await ui.click('Change installation…');
     assert.equal(ui.by('Application address').text, saved.endpoint);
     assert.equal(ui.calls.some(call => ['probe', 'prepare', 'apply'].includes(call.argv[1])), false);
