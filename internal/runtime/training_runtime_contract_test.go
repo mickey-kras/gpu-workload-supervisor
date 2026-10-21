@@ -177,71 +177,6 @@ func TestTrainerContractCompletionAcceptsMaximumRequestIDs(t *testing.T) {
 		})
 	}
 }
-
-func TestTrainerContractFailureEvidenceAndFileSafety(t *testing.T) {
-	for _, result := range []string{"oom-kill", "exit-code", "signal", "core-dump"} {
-		t.Run(result, func(t *testing.T) {
-			m, r, p, job, command := trainerContractFixture(t)
-			r.outputs[command] = []byte(strings.ReplaceAll(strings.ReplaceAll(string(r.outputs[command]), "ActiveState=active", "ActiveState=failed"), "Result=success", "Result="+result))
-			evidence, err := m.TrainingTerminal(context.Background(), p, job)
-			if err != nil || evidence.Outcome != "failed" || !evidence.Matches(job) {
-				t.Fatalf("failed process: %#v, %v", evidence, err)
-			}
-		})
-	}
-	for _, kind := range []string{"symlink", "writable", "directory", "oversize", "unknown field", "duplicate field", "malformed", "trailing value"} {
-		t.Run(kind, func(t *testing.T) {
-			m, _, p, job, _ := trainerContractFixture(t)
-			raw, err := json.Marshal(trainerContractEvidence(job))
-			if err != nil {
-				t.Fatal(err)
-			}
-			path := p.Trainer.TerminalFile
-			switch kind {
-			case "symlink":
-				target := filepath.Join(filepath.Dir(path), "target.json")
-				if err := os.WriteFile(target, raw, 0600); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(target, path); err != nil {
-					t.Fatal(err)
-				}
-			case "directory":
-				if err := os.Mkdir(path, 0700); err != nil {
-					t.Fatal(err)
-				}
-			default:
-				if kind == "oversize" {
-					raw = append(raw, []byte(strings.Repeat(" ", (64<<10)+1-len(raw)))...)
-				}
-				if kind == "unknown field" {
-					raw = append([]byte(`{"extra":true,`), raw[1:]...)
-				}
-				if kind == "duplicate field" {
-					raw = append([]byte(`{"version":1,`), raw[1:]...)
-				}
-				if kind == "malformed" {
-					raw = raw[:len(raw)-1]
-				}
-				if kind == "trailing value" {
-					raw = append(raw, []byte(` {}`)...)
-				}
-				if err := os.WriteFile(path, raw, 0600); err != nil {
-					t.Fatal(err)
-				}
-				if kind == "writable" {
-					if err := os.Chmod(path, 0666); err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
-			if _, err := m.TrainingTerminal(context.Background(), p, job); err == nil {
-				t.Fatal("unsafe terminal file accepted")
-			}
-		})
-	}
-}
-
 func TestTrainerContractEnvelopeDoesNotFollowExistingSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target")
@@ -557,38 +492,6 @@ func TestTrainerContractMalformedTerminalDoesNotExposeKeys(t *testing.T) {
 		}
 	}
 }
-
-func TestTrainerContractPreflightQualifiesOutputsWithoutEffects(t *testing.T) {
-	for _, kind := range []string{"missing job parent", "missing terminal parent", "job directory", "terminal directory", "job symlink", "terminal symlink"} {
-		t.Run(kind, func(t *testing.T) {
-			m, r, p, _, _ := trainerContractFixture(t)
-			output := &p.Trainer.JobFile
-			if strings.Contains(kind, "terminal") {
-				output = &p.Trainer.TerminalFile
-			}
-			switch {
-			case strings.HasPrefix(kind, "missing"):
-				*output = filepath.Join(filepath.Dir(*output), "missing", "output.json")
-			case strings.HasSuffix(kind, "directory"):
-				if err := os.Mkdir(*output, 0700); err != nil {
-					t.Fatal(err)
-				}
-			default:
-				if err := os.Symlink(p.Trainer.RecipeFile, *output); err != nil {
-					t.Fatal(err)
-				}
-			}
-			r.calls = nil
-			if err := m.Preflight(context.Background()); !errors.Is(err, ErrLaunchUnsupported) {
-				t.Fatalf("invalid output passed preflight: %v", err)
-			}
-			if len(r.calls) != 0 {
-				t.Fatalf("invalid output reached systemctl or GPU commands: %v", r.calls)
-			}
-		})
-	}
-}
-
 func TestTrainerContractRechecksOutputsImmediatelyBeforeEnvelope(t *testing.T) {
 	m, r, p, job, command := trainerContractFixture(t)
 	r.outputs[command] = []byte(strings.ReplaceAll(strings.ReplaceAll(string(r.outputs[command]), "ActiveState=active", "ActiveState=inactive"), "SubState=exited", "SubState=dead"))

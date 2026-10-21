@@ -3,9 +3,10 @@ package runtime
 import (
 	"context"
 	"errors"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"strings"
 	"testing"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 func placementEvidence() (map[string]string, map[string]string, map[string]string) {

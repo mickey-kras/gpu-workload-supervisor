@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +17,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 func TestNativeOllamaVersionedPSReplay(t *testing.T) {

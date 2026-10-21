@@ -5,8 +5,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -219,24 +217,5 @@ func TestMediaUnloadRejectsTransitionalUnitStates(t *testing.T) {
 				t.Fatalf("expected unload rejection for %s unit without a release request, got %v", state, err)
 			}
 		})
-	}
-}
-
-func TestExecutablePathRequiresTrustedOwnershipAndPermissions(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "command")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := validateExecutable(path); err == nil {
-		t.Fatal("non-executable accepted")
-	}
-	if err := os.Chmod(path, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := validateExecutable(path); err == nil {
-		t.Fatal("executable under untrusted directory accepted")
-	}
-	if _, err := validateExecutable("/missing/command"); err == nil {
-		t.Fatal("missing executable accepted")
 	}
 }

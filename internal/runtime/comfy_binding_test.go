@@ -2,11 +2,12 @@ package runtime
 
 import (
 	"context"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 func TestComfyLaunchBindingRecheckedBeforeStarting(t *testing.T) {

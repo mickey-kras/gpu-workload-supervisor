@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -23,61 +22,27 @@ const (
 	networkOnlineTarget       = "network-online.target"
 )
 
-// readLaunchSource opens every path component without following symlinks. Only
-// root or the desktop principal may write source files or replace ancestors.
+// readLaunchSource reads a unit or drop-in file after the shared path trust
+// rules pass (owner you/root, not world-writable, symlinks resolved).
 func readLaunchSource(path string) ([]byte, error) {
 	return readTrustedLaunchSource(path, false)
 }
 
 func readTrustedLaunchSource(path string, rootOnly bool) ([]byte, error) {
-	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return nil, ErrLaunchChanged
-	}
-	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	resolved, err := trustPathCoreMode(path, kindFile, rootOnly)
 	if err != nil {
-		return nil, ErrLaunchChanged
+		return nil, fmt.Errorf("%w: %w", ErrLaunchUnsupported, err)
 	}
-	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	for i, part := range parts {
-		leaf := i == len(parts)-1
-		flags := unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
-		if !leaf {
-			flags |= unix.O_DIRECTORY
-		}
-		next, err := unix.Openat(fd, part, flags, 0)
-		unix.Close(fd)
-		if err != nil {
-			return nil, fmt.Errorf("%w: launch source component %d cannot be opened without following links; inspect this component for missing access, symbolic links or special files", ErrLaunchChanged, i+1)
-		}
-		fd = next
-		var stat unix.Stat_t
-		if unix.Fstat(fd, &stat) != nil {
-			unix.Close(fd)
-			return nil, ErrLaunchChanged
-		}
-		if err := qualifyLaunchSourceTrust(stat, i, len(parts), rootOnly); err != nil {
-			unix.Close(fd)
-			return nil, err
-		}
-
+	file, err := os.Open(resolved)
+	if err != nil {
+		return nil, err
 	}
-	file := os.NewFile(uintptr(fd), path)
 	defer file.Close()
 	raw, err := io.ReadAll(io.LimitReader(file, 1<<20+1))
 	if err != nil || len(raw) > 1<<20 {
 		return nil, ErrLaunchChanged
 	}
 	return raw, nil
-}
-
-func qualifyLaunchSourceTrust(stat unix.Stat_t, index, count int, rootOnly bool) error {
-	if rootOnly && (stat.Uid != 0 || stat.Mode&0022 != 0) {
-		return ErrLaunchChanged
-	}
-	if !trustedLaunchSourceComponent(stat, index, count) {
-		return sourceComponentError(stat, index, count)
-	}
-	return nil
 }
 
 func readLaunchSources(path string, dropIns []control.LaunchSource) ([][]byte, error) {
@@ -293,16 +258,6 @@ func (unit *parsedLaunchUnit) applyExternalScalar(runtimeName, directive, value 
 	return nil
 }
 
-func trustedLaunchSourceComponent(stat unix.Stat_t, index, count int) bool {
-	writable := stat.Mode&0022 != 0
-	if index < count-2 && stat.Uid == 0 && stat.Mode&unix.S_ISVTX != 0 {
-		writable = false
-	}
-	trustedOwner := stat.Uid == 0 || stat.Uid == uint32(os.Geteuid())
-	leaf := index == count-1
-	return trustedOwner && !writable && (!leaf || (stat.Mode&unix.S_IFMT == unix.S_IFREG && stat.Mode&0444 != 0 && stat.Size <= 1<<20))
-}
-
 var orderingUnit = regexp.MustCompile(`^[A-Za-z0-9_.:-]+\.(service|target|socket|slice)$`)
 
 func externalDirective(section, key, value string) (bool, error) {
@@ -394,17 +349,6 @@ func CheckNativeBindingSources(values map[string]string, unit, launchFile string
 	return nil
 }
 
-func sourceComponentError(stat unix.Stat_t, index, count int) error {
-	reason := "ownership is outside root or the desktop account"
-	if stat.Mode&0022 != 0 {
-		reason = "group or world write permission permits replacement"
-	}
-	if index == count-1 && (stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Mode&0444 == 0 || stat.Size > 1<<20) {
-		reason = "source is not a readable regular file within the size limit"
-	}
-	return fmt.Errorf("%w: launch source component %d: %s; inspect this component, restore its intended ownership or remove only its unintended write permission, then retry", ErrLaunchChanged, index+1, reason)
-}
-
 // expandAccountHome recognizes only %h at the beginning of a path token. The
 // trusted local passwd record supplies the user-manager identity, never HOME. Every expanded value still passes the ordinary literal validators.
 func expandAccountHome(value string) (string, error) {
@@ -476,7 +420,7 @@ func (unit *parsedLaunchUnit) qualifyAccountHomeWorkingDirectory(value string) (
 	unit.homeWorkingDirectory = expanded
 	if !unit.cleanupEnvironment {
 		if err := qualifyEnvironmentPath(expanded, false, false); err != nil {
-			return "", fmt.Errorf("%w: WorkingDirectory requires an existing trusted account-home path without links", ErrLaunchUnsupported)
+			return "", fmt.Errorf("%w: WorkingDirectory: %w", ErrLaunchUnsupported, err)
 		}
 	}
 	return expanded, nil
@@ -495,7 +439,7 @@ func (unit *parsedLaunchUnit) qualifyExternalWorkingDirectory(directive, value s
 	}
 	if !unit.cleanupEnvironment {
 		if err := qualifyEnvironmentPath(value, false, false); err != nil {
-			return "", fmt.Errorf("%w: WorkingDirectory requires an existing absolute clean trusted directory without links; inspect ownership and permissions of this setting and its ancestors", ErrLaunchUnsupported)
+			return "", fmt.Errorf("%w: WorkingDirectory: %w", ErrLaunchUnsupported, err)
 		}
 	}
 	unit.workingDirectory = value

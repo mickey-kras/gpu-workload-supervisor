@@ -4,13 +4,11 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -68,7 +66,7 @@ func inspectAutomaticLaunchSourcesMode(path, app string, dropInPaths []string, v
 			problems.add(independentErr)
 		} else {
 			problems.add(u.validatePreCommands(validate))
-			args := strings.Fields(u.execStart)
+			args := splitExecWords(u.execStart)
 			if len(args) >= 2 && filepath.IsAbs(args[0]) {
 				problems.add(validate(args[0]))
 			}
@@ -133,7 +131,7 @@ func inspectAutomaticLaunch(raw []byte, app string, validate func(string) error)
 func inspectParsedAutomaticLaunch(u parsedLaunchUnit, raw []byte, app string, validate func(string) error) (AutomaticLaunch, error) {
 	var problems launchProblems
 	problems.add(u.validatePreCommands(validate))
-	args := strings.Fields(u.execStart)
+	args := splitExecWords(u.execStart)
 	if len(args) < 2 || !filepath.IsAbs(args[0]) {
 		problems.add(fmt.Errorf("%w: ExecStart requires an absolute direct command", ErrLaunchUnsupported))
 		return AutomaticLaunch{}, problems.err()
@@ -202,12 +200,11 @@ func comfyLaunchAddressMode(args []string, cleanup bool) (string, string, error)
 	var problems launchProblems
 	seen := map[string]bool{}
 	for i := 0; i < len(args); i++ {
-		key := args[i]
-		if seen[key] && key != flagExtraModelPathsConfig {
-			return "", "", comfyDuplicateOption(key)
+		key, values, attached := comfyOptionArguments(args[i], args[i+1:])
+		if err := comfyDuplicateOption(key, seen); err != nil {
+			return "", "", err
 		}
-		seen[key] = true
-		consumed, err := qualifyComfyOption(key, args[i+1:], cleanup)
+		consumed, err := qualifyComfyOption(key, values, cleanup)
 		if err != nil {
 			problems.add(err)
 			if consumed == 0 {
@@ -216,11 +213,13 @@ func comfyLaunchAddressMode(args []string, cleanup bool) (string, string, error)
 		}
 		switch key {
 		case flagListen:
-			host = args[i+1]
+			host = values[0]
 		case flagPort:
-			port = args[i+1]
+			port = values[0]
 		}
-		i += consumed
+		if !attached {
+			i += consumed
+		}
 	}
 	if err := problems.err(); err != nil {
 		return "", "", err
@@ -228,13 +227,26 @@ func comfyLaunchAddressMode(args []string, cleanup bool) (string, string, error)
 	return host, port, nil
 }
 
-func comfyDuplicateOption(key string) error {
-	switch key {
-	case flagListen, flagPort, "--disable-auto-launch", "--enable-manager", "--output-directory", "--temp-directory", "--user-directory":
-		return comfyOptionError(key, "is repeated; use one unambiguous assignment")
-	default:
-		return comfyUnsupportedOption(key)
+func comfyOptionArguments(key string, following []string) (string, []string, bool) {
+	name, value, attached := strings.Cut(key, "=")
+	if attached {
+		switch name {
+		case flagListen, flagPort, "--base-directory", "--output-directory", "--temp-directory", "--user-directory", flagExtraModelPathsConfig:
+			return name, []string{value}, true
+		}
 	}
+	return key, following, false
+}
+
+func comfyDuplicateOption(key string, seen map[string]bool) error {
+	switch key {
+	case flagListen, flagPort, "--disable-auto-launch", "--enable-manager", "--base-directory", "--output-directory", "--temp-directory", "--user-directory":
+		if seen[key] {
+			return comfyOptionError(key, "is repeated; use one unambiguous assignment")
+		}
+		seen[key] = true
+	}
+	return nil
 }
 
 func qualifyComfyOption(key string, values []string, cleanup bool) (int, error) {
@@ -244,12 +256,12 @@ func qualifyComfyOption(key string, values []string, cleanup bool) (int, error) 
 			return 0, comfyOptionError(key, "requires an explicit value")
 		}
 		return 1, nil
-	case "--output-directory", "--temp-directory", "--user-directory":
+	case "--base-directory", "--output-directory", "--temp-directory", "--user-directory":
 		if len(values) == 0 || strings.HasPrefix(values[0], "--") {
 			return 0, comfyOptionError(key, "requires an existing trusted absolute directory")
 		}
 		if err := qualifyComfyOptionPath(values[0], false, cleanup); err != nil {
-			return 1, comfyOptionError(key, "requires an existing absolute clean trusted directory without links; inspect this setting and its ancestors")
+			return 1, comfyOptionError(key, err.Error())
 		}
 		return 1, nil
 	case flagExtraModelPathsConfig:
@@ -278,7 +290,7 @@ func qualifyComfyConfigurationFiles(values []string, cleanup bool) (int, error) 
 	var problems launchProblems
 	for _, value := range values[:count] {
 		if err := qualifyComfyOptionPath(value, true, cleanup); err != nil {
-			problems.add(comfyOptionError(flagExtraModelPathsConfig, "requires existing absolute clean trusted regular configuration files without links; inspect this setting and its ancestors"))
+			problems.add(comfyOptionError(flagExtraModelPathsConfig, err.Error()))
 		}
 	}
 	return count, problems.err()
@@ -288,88 +300,52 @@ func comfyOptionError(key, reason string) error {
 	return fmt.Errorf("%w: ComfyUI option %s %s", ErrLaunchUnsupported, key, reason)
 }
 
+// Unknown options remain verbatim, but must not bypass endpoint or path
+// qualification. argparse accepts unique long-option abbreviations, which we
+// conservatively reject instead of inferring their meaning across versions.
 func comfyUnsupportedOption(key string) error {
-	// Only static upstream option names are safe diagnostic labels. Unknown
-	// tokens can contain credentials or private paths and are never echoed.
-	switch key {
-	case "--base-directory", "--input-directory", "--auto-launch", "--cuda-device", "--default-device", "--disable-all-custom-nodes", "--whitelist-custom-nodes", "--enable-manager-legacy-ui", "--disable-manager-ui", "--front-end-version", "--front-end-root", "--models-directory", "--database-url", "--tls-keyfile", "--tls-certfile":
-		return comfyOptionError(key, "is not qualified; retain the existing arguments and review a supported direct configuration")
-	default:
-		return fmt.Errorf("%w: unrecognized ComfyUI option or positional argument; review the supported direct options", ErrLaunchUnsupported)
+	name, _, _ := strings.Cut(key, "=")
+	if name == "--" {
+		return fmt.Errorf("%w: ComfyUI end-of-options marker is not supported", ErrLaunchUnsupported)
 	}
-}
-
-func validateComfyExecutable(path string) error {
-	resolved, err := validateExecutable(path)
-	if err != nil {
-		return fmt.Errorf("%w: interpreter trust: %w", ErrLaunchUnsupported, err)
-	}
-	base, target := filepath.Base(path), filepath.Base(resolved)
-	if base == target {
-		return nil
-	}
-	if (base == "python" || base == "python3") && strings.HasPrefix(target, "python3.") {
-		return nil
-	}
-	return ErrLaunchUnsupported
-}
-
-// validateComfyScript uses the deployment trust principal rule: root or the
-// desktop account may own code and directories; other principals cannot write
-// or replace them. Descriptor-relative no-follow opens reject symlink swaps and
-// special files without reading or executing the application.
-func validateComfyScript(path string) error {
-	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return ErrLaunchUnsupported
-	}
-	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return ErrLaunchUnsupported
-	}
-	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	for i, part := range parts {
-		flags := unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
-		leaf := i == len(parts)-1
-		if !leaf {
-			flags |= unix.O_DIRECTORY
-		}
-		next, err := unix.Openat(fd, part, flags, 0)
-		unix.Close(fd)
-		if err != nil {
-			return fmt.Errorf("%w: application script component %d cannot be opened without following links; inspect this component for missing access or symbolic links", ErrLaunchUnsupported, i+1)
-		}
-		fd = next
-		var stat unix.Stat_t
-		if err := unix.Fstat(fd, &stat); err != nil {
-			unix.Close(fd)
-			return ErrLaunchUnsupported
-		}
-		if !trustedComfyComponent(stat, i, len(parts)) {
-			unix.Close(fd)
-			return fmt.Errorf("%w: application script trust: %w", ErrLaunchUnsupported, sourceComponentError(stat, i, len(parts)))
+	for _, option := range []string{flagListen, flagPort, "--tls-keyfile", "--tls-certfile", "--cuda-device", "--default-device", "--base-directory", "--output-directory", "--temp-directory", "--user-directory", flagExtraModelPathsConfig} {
+		if name == option || (strings.HasPrefix(name, "--") && len(name) > 2 && strings.HasPrefix(option, name)) {
+			if strings.HasPrefix(option, "--tls-") {
+				return comfyOptionError(option, "changes the endpoint protocol; TLS endpoints are not supported")
+			}
+			if option == "--cuda-device" || option == "--default-device" {
+				return comfyOptionError(option, "overrides CUDA_VISIBLE_DEVICES; use the inspected full physical GPU UUID selection")
+			}
+			return comfyOptionError(option, "requires its supported full option name and value")
 		}
 	}
-	unix.Close(fd)
 	return nil
 }
 
-func trustedComfyComponent(stat unix.Stat_t, index, count int) bool {
-	trustedOwner := stat.Uid == 0 || stat.Uid == uint32(os.Geteuid())
-	writable := stat.Mode&0022 != 0
-	// A root-owned sticky ancestor cannot replace the subsequently checked private directory.
-	if index < count-2 && stat.Uid == 0 && stat.Mode&unix.S_ISVTX != 0 {
-		writable = false
+func validateComfyExecutable(path string) error {
+	if _, err := validateExecutable(path); err != nil {
+		return fmt.Errorf("%w: interpreter: %w", ErrLaunchUnsupported, err)
 	}
-	leaf := index == count-1
-	return trustedOwner && !writable && (!leaf || (stat.Mode&unix.S_IFMT == unix.S_IFREG && stat.Mode&0444 != 0))
+	return nil
+}
+
+// validateComfyScript checks the application script with the shared path
+// trust rules (owner you/root, not world-writable, symlinks resolved).
+func validateComfyScript(path string) error {
+	if _, err := trustPath(path, kindFile); err != nil {
+		return fmt.Errorf("%w: application script: %w", ErrLaunchUnsupported, err)
+	}
+	return nil
 }
 
 func qualifyComfyOptionPath(path string, file, cleanup bool) error {
-	if !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.ContainsAny(path, launchExpansionCharacters) {
-		return ErrLaunchUnsupported
-	}
 	if cleanup {
 		return nil
 	}
-	return qualifyEnvironmentPath(path, file, false)
+	kind := kindDir
+	if file {
+		kind = kindFile
+	}
+	_, err := trustPath(path, kind)
+	return err
 }
