@@ -110,7 +110,8 @@ func TestEnvironmentSearchPathsAndLoadedParity(t *testing.T) {
 	if _, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nExecStart=/usr/bin/true x\nEnvironment=PATH=/usr/bin:" + bad + "\n")}, "llama.cpp"); err == nil || !strings.Contains(err.Error(), bad) {
 		t.Fatal("world-writable PATH directory accepted or not named", err)
 	}
-	unit, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nExecStart=/usr/bin/true x\nEnvironment=PATH=/usr/bin:/usr/local/bin\nProtectHome=read-only\nPrivateTmp=true\n")}, "llama.cpp")
+	pathA, pathB := t.TempDir(), t.TempDir()
+	unit, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nExecStart=/usr/bin/true x\nEnvironment=PATH=" + pathA + ":" + pathB + "\nProtectHome=read-only\nPrivateTmp=true\n")}, "llama.cpp")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -650,7 +651,8 @@ func TestIndependentBlockersAndDropInReadFailures(t *testing.T) {
 	if _, err := inspectAutomaticLaunch([]byte("[Service]\nExecStart="+interpreter+" "+script+" --output-directory\n"), "comfyui", fixtureExecutableValidator); err == nil {
 		t.Fatal("directory option without value accepted")
 	}
-	if _, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nExecStart=/usr/bin/true x\nEnvironment=PATH=/usr/bin::/usr/local/bin\n")}, "llama.cpp"); err != nil {
+	dirA, dirB := t.TempDir(), t.TempDir()
+	if _, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nExecStart=/usr/bin/true x\nEnvironment=PATH=" + dirA + "::" + dirB + "\n")}, "llama.cpp"); err != nil {
 		t.Fatal("empty PATH entry rejected", err)
 	}
 	executable := filepath.Join(t.TempDir(), "llama-server")
