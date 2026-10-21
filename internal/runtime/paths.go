@@ -15,6 +15,8 @@ import (
 // permitted, but leaves must never be world-writable. Group write by own groups
 // (umask 002) is normal and allowed. Symlinks are followed; broken ones fail.
 
+const missingOrBrokenLinkFormat = "%s: missing or broken link"
+
 type pathKind int
 
 const (
@@ -122,7 +124,7 @@ func resolveTrustedPath(path string, rootOnly bool) (string, error) {
 		current := filepath.Join(prefix, part)
 		info, err := os.Lstat(current)
 		if err != nil {
-			return "", fmt.Errorf("%s: missing or broken link", current)
+			return "", fmt.Errorf(missingOrBrokenLinkFormat, current)
 		}
 		if err := checkPathComponent(current, info, len(pending) > 0, rootOnly); err != nil {
 			return "", err
@@ -150,7 +152,7 @@ func trustedLinkTarget(path string, hops int) (string, error) {
 	}
 	target, err := os.Readlink(path)
 	if err != nil || target == "" {
-		return "", fmt.Errorf("%s: missing or broken link", path)
+		return "", fmt.Errorf(missingOrBrokenLinkFormat, path)
 	}
 	return target, nil
 }
@@ -180,7 +182,7 @@ func checkPathComponent(path string, info os.FileInfo, ancestor, rootOnly bool) 
 func checkResolvedLeaf(resolved string, kind pathKind) error {
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return fmt.Errorf("%s: missing or broken link", resolved)
+		return fmt.Errorf(missingOrBrokenLinkFormat, resolved)
 	}
 	switch kind {
 	case kindDir:
