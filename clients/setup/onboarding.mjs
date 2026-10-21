@@ -153,49 +153,55 @@ export function correctionPreview(candidate, uuid = '') {
     return ['[Service]', ...(gpu ? [`Environment="CUDA_VISIBLE_DEVICES=${uuid}"`] : []), ...(restart ? ['Restart=no'] : [])].join('\n') + '\n';
 }
 
-// Guidance describes supported repairs, never authorizes them or changes the
-// qualification verdict. Data paths and executable paths have different owners.
+// Guidance is one line per problem class. Diagnostics already name the path.
 export function recoveryGuidance(candidate) {
-    const diagnostics = candidateDiagnostics(candidate);
-    const messages = diagnostics.length ? diagnostics : [candidate?.nextStep ?? ''];
+    const reported = candidateDiagnostics(candidate);
+    const diagnostics = reported.length ? reported : [candidate?.nextStep ?? ''];
     const steps = new Set();
-    for (const message of messages) {
+    for (const message of diagnostics) {
         const syntax = recoverySyntax(message);
         if (syntax) {
             steps.add(syntax);
-        } else if (/Environment variable PATH: requires absolute clean root-owned executable directories/.test(message)) {
-            steps.add('PATH: review each directory, including every alias target and ancestor. Use absolute protected root-owned executable directories; do not add user-writable directories. Preserve settings the application requires.');
-        } else if (/Environment variable LD_LIBRARY_PATH: dynamic library search and transitive loader bindings are not qualified/.test(message)) {
-            steps.add('Runtime libraries: use a reviewed root-owned runtime installation with its normal trusted loader configuration. Simply deleting LD_LIBRARY_PATH does not establish that its libraries are safe or that the application still works.');
-        } else if (/WorkingDirectory requires an existing (?:absolute clean trusted directory without links|trusted account-home path without links)/.test(message)) {
-            steps.add('Working directory: choose an existing absolute trusted directory. Inspect the directory and its ancestors for links, ownership and unintended group/world writes; preserve the application and its data.');
-        } else if (dataPathFailure(message)) {
-            steps.add('Application and data paths: inspect each reported setting and its ancestors. Use existing absolute paths without links, owned by this account or root and protected from other users’ writes. Keep directory settings as directories and configuration/token settings as regular files. Preserve models and application data; repair only the reported unsafe component or select another qualified path.');
-        } else if (/(?:^|: )(?:executable|interpreter) trust:|(?:^|: )executable symlink changes application identity;/.test(message)) {
-            steps.add('Runtime executable: ask an administrator to install a trusted package in a protected root-owned location, including its interpreter, libraries and executable ancestors. Choose that executable or review the external service command. Preserve the original application and models; setup never changes ownership or permissions.');
+        } else if (/group-writable by gid \d+, a group you are not in/.test(message)) {
+            steps.add('Fix the named path: choose a path protected from write access by groups you do not belong to. Group write is allowed for your own groups; setup never changes permissions.');
+        } else if (/world-writable|owned by uid|missing or broken link|parent directory unavailable|not a directory|not a (?:readable )?regular file|not an executable|path must be absolute and clean|symlink resolution exceeds/.test(message)) {
+            steps.add('Fix the named path: exists, owned by you or root, not world-writable. Setup never changes permissions.');
+        } else if (legacyPathFailure(message)) {
+            steps.add('Review the reported path and its ancestors: use an existing trusted installation or data path. Check ownership, permissions and link targets; setup changes no files.');
         }
     }
     if (steps.size) {
-        if (candidate?.unit) steps.add('After reviewing changes to this external service, reload the user systemd manager.');
-        steps.add('Choose Check again to inspect fresh evidence; configuration readiness does not prove GPU operation.');
+        if (candidate?.unit) steps.add('After editing the unit: systemctl --user daemon-reload.');
+        steps.add('Check again re-inspects. Ready does not prove GPU operation.');
     }
     return [...steps];
 }
 
 function recoverySyntax(message) {
     if (/Environment(?: variable [A-Za-z_]\w*)?: (?:expected NAME=value|expansion, escapes or whitespace|unterminated whole-assignment quote|quoted fragments|duplicate assignment)/.test(message)) {
-        return 'Environment syntax: review the reported assignment. Use one literal NAME=value assignment per setting, with balanced quotes around the whole assignment when needed. Expansion, escapes, whitespace inside values and quoted fragments are unsupported; filesystem permission changes do not repair this syntax.';
+        return 'Environment syntax: one literal NAME=value per assignment; quote the whole assignment, for example Environment="HOME=/home/alice".';
+    }
+    if (/Environment variable (?:PATH|LD_LIBRARY_PATH|PYTHONPATH): empty search path components/.test(message)) {
+        return 'Search paths: use existing trusted absolute directories with no empty entries; an empty entry can select the current directory.';
+    }
+    if (/Environment variable (?:LD_PRELOAD|LD_AUDIT|PYTHONHOME|PYTHONUSERBASE|PYTHONSTARTUP): nonempty code-loading overrides/.test(message)) {
+        return 'Code-loading environment: this nonempty override is unsupported. Review the runtime configuration before choosing a supported direct launch.';
+    }
+    if (/Environment variable LD_LIBRARY_PATH: dynamic library search and transitive loader bindings are not qualified/.test(message)) {
+        return 'Library search: review the runtime and its configured directories. Do not remove a required loader setting merely to pass setup.';
     }
     if (/ComfyUI option --extra-model-paths-config configuration file count exceeds supported limit/.test(message)) {
-        return 'Configuration-file count: review the launch arguments; each --extra-model-paths-config accepts at most 32 files. Preserve every required model mapping in a supported configuration before changing the command. The reported paths have not been inspected.';
+        return 'Configuration-file count: at most 32 files per --extra-model-paths-config.';
     }
-    if (/ComfyUI option --[a-z-]+ (?:is repeated;|requires an explicit value|requires an existing trusted absolute directory|requires at least one trusted configuration file)/.test(message)) {
-        return 'Launch argument syntax: review the reported option. Supply its missing directory, file or value, or resolve repeated options into one unambiguous assignment. Preserve the intended application settings, then check again; changing file ownership does not repair argument syntax.';
+    if (/ComfyUI option --[a-z-]+ (?:is repeated;|requires an explicit value|requires an existing trusted absolute directory|requires at least one trusted configuration file|requires its supported full option name and value)/.test(message)) {
+        return 'Launch argument syntax: fix the reported option (missing value, repeated flag, missing path).';
     }
     return '';
 }
 
-function dataPathFailure(message) {
-    const setting = /Environment variable (?:HOME|HF_HOME|HUGGINGFACE_HUB_CACHE|TRANSFORMERS_CACHE|XDG_CACHE_HOME|TMPDIR|HF_TOKEN_PATH):|ComfyUI option --(?:output-directory|temp-directory|user-directory|extra-model-paths-config)/.test(message);
-    return (setting && /requires (?:an )?existing .*without links/.test(message)) || /application script (?:trust|component)|launch source component/.test(message);
+function legacyPathFailure(message) {
+    return /Environment variable [A-Za-z_]\w*: requires (?:an existing absolute clean trusted path without links|absolute clean root-owned executable directories)/.test(message) ||
+        /(?:WorkingDirectory|ComfyUI option --[a-z-]+) requires (?:an existing (?:absolute clean trusted directory|trusted account-home path)|existing absolute clean trusted regular configuration files) without links/.test(message) ||
+        /application script trust:.*launch source component \d+: (?:ownership is outside root or the desktop account|group or world write permission permits replacement|source is not a readable regular file)/.test(message) ||
+        /(?:executable|interpreter|application script)(?: trust| target| ancestor| path| alias| component|:).*?(?:not root-owned|group or world writable|group\/world writable|cannot be opened without following links|target unavailable|alias ancestry|alias resolution|alias target unavailable)/.test(message);
 }

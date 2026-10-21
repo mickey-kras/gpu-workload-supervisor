@@ -12,6 +12,11 @@ import (
 )
 
 const (
+	flagBaseDirectory   = "--base-directory"
+	flagOutputDirectory = "--output-directory"
+	flagTempDirectory   = "--temp-directory"
+	flagUserDirectory   = "--user-directory"
+
 	loopbackHTTPPrefix        = "http://"
 	flagExtraModelPathsConfig = "--extra-model-paths-config"
 	flagListen                = "--listen"
@@ -231,7 +236,7 @@ func comfyOptionArguments(key string, following []string) (string, []string, boo
 	name, value, attached := strings.Cut(key, "=")
 	if attached {
 		switch name {
-		case flagListen, flagPort, "--base-directory", "--output-directory", "--temp-directory", "--user-directory", flagExtraModelPathsConfig:
+		case flagListen, flagPort, flagBaseDirectory, flagOutputDirectory, flagTempDirectory, flagUserDirectory, flagExtraModelPathsConfig:
 			return name, []string{value}, true
 		}
 	}
@@ -240,7 +245,7 @@ func comfyOptionArguments(key string, following []string) (string, []string, boo
 
 func comfyDuplicateOption(key string, seen map[string]bool) error {
 	switch key {
-	case flagListen, flagPort, "--disable-auto-launch", "--enable-manager", "--base-directory", "--output-directory", "--temp-directory", "--user-directory":
+	case flagListen, flagPort, "--disable-auto-launch", "--enable-manager", flagBaseDirectory, flagOutputDirectory, flagTempDirectory, flagUserDirectory:
 		if seen[key] {
 			return comfyOptionError(key, "is repeated; use one unambiguous assignment")
 		}
@@ -256,7 +261,7 @@ func qualifyComfyOption(key string, values []string, cleanup bool) (int, error) 
 			return 0, comfyOptionError(key, "requires an explicit value")
 		}
 		return 1, nil
-	case "--base-directory", "--output-directory", "--temp-directory", "--user-directory":
+	case flagBaseDirectory, flagOutputDirectory, flagTempDirectory, flagUserDirectory:
 		if len(values) == 0 || strings.HasPrefix(values[0], "--") {
 			return 0, comfyOptionError(key, "requires an existing trusted absolute directory")
 		}
@@ -308,7 +313,7 @@ func comfyUnsupportedOption(key string) error {
 	if name == "--" {
 		return fmt.Errorf("%w: ComfyUI end-of-options marker is not supported", ErrLaunchUnsupported)
 	}
-	for _, option := range []string{flagListen, flagPort, "--tls-keyfile", "--tls-certfile", "--cuda-device", "--default-device", "--base-directory", "--output-directory", "--temp-directory", "--user-directory", flagExtraModelPathsConfig} {
+	for _, option := range []string{flagListen, flagPort, "--tls-keyfile", "--tls-certfile", "--cuda-device", "--default-device", flagBaseDirectory, flagOutputDirectory, flagTempDirectory, flagUserDirectory, flagExtraModelPathsConfig} {
 		if name == option || (strings.HasPrefix(name, "--") && len(name) > 2 && strings.HasPrefix(option, name)) {
 			if strings.HasPrefix(option, "--tls-") {
 				return comfyOptionError(option, "changes the endpoint protocol; TLS endpoints are not supported")

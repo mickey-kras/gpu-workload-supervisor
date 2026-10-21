@@ -20,13 +20,17 @@ application launch binding. Its `trainer` object contains:
 | `version` | `1` |
 | `gpuUUID` | Full physical GPU UUID |
 | `launchFile`, `launchSHA256` | Exact unit source and SHA256 |
-| `executable`, `executableSHA256` | Trusted root-owned adapter and SHA256 |
+| `executable`, `executableSHA256` | Adapter qualified by shared executable trust checks and SHA256 |
 | `recipeFile`, `recipeSHA256` | Trusted local recipe and SHA256 |
 | `jobFile` | Private lifecycle envelope written before launch |
 | `terminalFile` | Trusted terminal evidence written by the adapter |
 
-All paths must be distinct, absolute, clean literal paths without links or shell
-expansion. Lifecycle output files cannot overlap another trainer binding. The
+All paths must be distinct, absolute, clean literal paths without shell expansion.
+The adapter and its traversed ancestors must be owned by you or root and not
+world-writable; symlinks are resolved and checked. Group write is allowed only
+for groups you belong to, under the single-admin host policy that trusts members
+of your own groups. Lifecycle output
+files cannot overlap another trainer binding. The
 job directory must already exist with trusted ownership and permissions. Keep
 external service management paused while a supervisor job is unfinished.
 

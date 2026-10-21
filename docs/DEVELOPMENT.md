@@ -75,4 +75,4 @@ configure the package or bypass its GNOME 50 dependencies. These checks fail whe
 prerequisites are absent; they are unconditional parts of the existing gate.
 The scripts require a disposable host and refuse existing installed backend paths.
 
-See [repository controls](REPOSITORY-CONTROLS.md) and [releasing](RELEASING.md).
+See [releasing](RELEASING.md).
