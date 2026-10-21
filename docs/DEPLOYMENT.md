@@ -199,8 +199,9 @@ Invalid configuration is rejected:
 - An unknown adapter is invalid.
 - Every health URL must be a loopback URL.
 - The `systemctl` executable, and `nvidia-smi` when configured, must resolve to
-  root-owned executable files under root-owned directories, with no group/world
-  writable component.
+  executable files owned by you or root, with no world-writable file or directory
+  component. Symlink targets and traversed ancestors are checked. Group write is
+  allowed under the single-admin host policy that trusts local group members.
 - Supplying an obsolete flag is an error even for `status` or `restore-state`.
 
 ## Prevent bypasses

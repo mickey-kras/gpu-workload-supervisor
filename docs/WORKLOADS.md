@@ -150,7 +150,8 @@ Launch-file constraints:
   reload, and use the supported direct-command subset. Supported drop-ins
   are adopted without rewriting and verified by hash; unsupported or
   ambiguous drop-in configuration is still rejected.
-- Executables, scripts, models and their traversed directory ancestry must be
+- Executables, scripts, launch sources, validated environment/data paths and
+  their traversed directory ancestry must be
   owned by the desktop user or root and not world-writable. Group write is
   allowed under a single-admin host policy that trusts local group members;
   these checks do not isolate workloads from group members who can modify them.
@@ -161,7 +162,8 @@ Launch-file constraints:
   `ExecStartPre` system checks are supported and inspected without running them.
 - No application/model files are rewritten or installed.
 - llama.cpp requires an existing local model file; vLLM requires an existing
-  local model directory.
+  local model directory. These model checks establish existence and type, not
+  ownership, permissions or content safety.
 - Ollama requires `serve`, explicit `OLLAMA_NO_CLOUD=1` and matching
   `OLLAMA_HOST`; the selected model must be local before preloading.
 
