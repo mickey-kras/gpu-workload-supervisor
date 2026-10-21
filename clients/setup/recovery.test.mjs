@@ -59,6 +59,14 @@ test('recovery mentions systemd reload only for an identified external service',
     assert.match(service, /Check again/);
 });
 
+test('unreadable regular-file launch sources retain path repair guidance', () => {
+    const message = 'existing launch is unsupported: /home/u/images.service: not a readable regular file';
+    const steps = recoveryGuidance({unit: 'images.service', diagnostics: [message]});
+    assert.match(steps[0], /^Fix the named path:/);
+    assert.match(steps.at(-2), /systemctl --user daemon-reload/);
+    assert.match(steps.at(-1), /Check again/);
+});
+
 test('account and other non-runtime ownership failures retain diagnostics without runtime replacement advice', async () => {
     const account = prefix + '%h requires one valid effective-UID record in trusted root-owned local /etc/passwd; missing or NSS-only accounts are unsupported';
     for (const diagnostic of [account, 'unfamiliar root-owned configuration failure',

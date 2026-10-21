@@ -162,7 +162,7 @@ export function recoveryGuidance(candidate) {
         const syntax = recoverySyntax(message);
         if (syntax) {
             steps.add(syntax);
-        } else if (/world-writable|owned by uid|missing or broken link|parent directory unavailable|not a directory|not a regular file|not an executable|path must be absolute and clean|symlink resolution exceeds/.test(message)) {
+        } else if (/world-writable|owned by uid|missing or broken link|parent directory unavailable|not a directory|not a (?:readable )?regular file|not an executable|path must be absolute and clean|symlink resolution exceeds/.test(message)) {
             steps.add('Fix the named path: exists, owned by you or root, not world-writable. Setup never changes permissions.');
         } else if (legacyPathFailure(message)) {
             steps.add('Review the reported path and its ancestors: use an existing trusted installation or data path. Check ownership, permissions and link targets; setup changes no files.');
@@ -203,4 +203,3 @@ function legacyPathFailure(message) {
         /application script trust:.*launch source component \d+: (?:ownership is outside root or the desktop account|group or world write permission permits replacement|source is not a readable regular file)/.test(message) ||
         /(?:executable|interpreter|application script)(?: trust| target| ancestor| path| alias| component|:).*?(?:not root-owned|group or world writable|group\/world writable|cannot be opened without following links|target unavailable|alias ancestry|alias resolution|alias target unavailable)/.test(message);
 }
-
