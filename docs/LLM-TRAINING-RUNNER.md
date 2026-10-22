@@ -45,21 +45,29 @@ then loads the base and saved adapter and checks finite forward output and a
 bounded deterministic continuation. No generated text enters lifecycle evidence.
 Both phases remain in the trainer unit and therefore under the same admission.
 
-Only after both processes succeed does the runner hash the bounded adapter,
-write `supervisor-provenance.json` beside it, and atomically publish the fenced
-`completed` receipt. The provenance records source, raw recipe, model/tokenizer
-revisions, invocation, adapter hash and held-out loss; it contains no completion
-token. A failed phase never publishes successful completion. Systemd failure or
+Only after both processes succeed does the runner verify the bounded export,
+write version 2 `supervisor-provenance.json` beside it, and atomically publish the fenced
+`completed` receipt. The provenance binds source, raw recipe, model/tokenizer
+revisions and inventories, runtime inventory/entrypoint, embedded worker,
+invocation, exported file hashes and held-out loss; it contains no completion
+token. Adapter configuration, weights and saved tokenizer files must be unchanged
+across reload. `exportBytes` bounds their combined size. A failed phase never
+publishes successful completion. Systemd failure or
 explicit recovery still supplies the supervisor's failure/interruption handling.
 The supervisor independently verifies cgroup/GPU release and capacity afterward.
 
 Hub/dataset offline modes are enabled; telemetry and reporting are disabled,
 and ambient credentials are omitted. These settings are not network isolation.
 Qualify the runtime and deployment restrictions before enabling a training
-profile. This runner does not offer serving import, automatic activation or
-checkpoint resume.
+profile. The separate [import preparation tool](LLM-TRAINING-IMPORT.md) validates
+artifact identity without registering or activating a serving model. Serving
+compatibility and checkpoint resume remain outside this runner.
+
+See [qualification](LLM-TRAINING-QUALIFICATION.md) for dependency candidates,
+immutable asset revisions, private host inputs and the real-GPU acceptance gates.
 
 Repository tests use an explicitly identified worker fixture for process,
 environment, receipt, failure and provenance behavior. Python guard tests check
 source/plugin rejection and atomic progress publication. They do not load model
 weights, exercise GPU kernels or establish real training/reload compatibility.
+

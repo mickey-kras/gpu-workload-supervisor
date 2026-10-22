@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import importlib.metadata
+import importlib.util
 import json
 import math
 import os
 from pathlib import Path
+import re
 import sys
 
 SOURCE_REVISION = "1f1eb05a391c43e65c1c5ee7ec6ea1b8a841d5d1"
@@ -24,7 +26,26 @@ BUILTIN_ENTRY_POINTS = {
 }
 
 
+# These optional integrations are deliberately absent from the offline SFT runtime.
+# Check both metadata and importability: an unpackaged module is also unsafe here.
+OMITTED_INTEGRATIONS = {
+    "trackio": "trackio", "gradio": "gradio", "s3fs": "s3fs", "gcsfs": "gcsfs",
+    "adlfs": "adlfs", "ocifs": "ocifs", "lm-eval": "lm_eval", "openenv-core": "openenv",
+}
+
+
+def verify_subset() -> None:
+    installed = {
+        re.sub(r"[-_.]+", "-", distribution.metadata["Name"]).lower()
+        for distribution in importlib.metadata.distributions()
+    }
+    for distribution, module in OMITTED_INTEGRATIONS.items():
+        if distribution in installed or importlib.util.find_spec(module) is not None:
+            raise ValueError("unapproved optional runtime integration: " + distribution)
+
+
 def verify_environment() -> None:
+    verify_subset()
     distribution = importlib.metadata.distribution("axolotl")
     direct_url = json.loads(distribution.read_text("direct_url.json") or "{}")
     if not isinstance(direct_url, dict):
@@ -152,3 +173,4 @@ def main(args: list[str]) -> None:
 
 if __name__ == "__main__":
     main(sys.argv[1:])
+

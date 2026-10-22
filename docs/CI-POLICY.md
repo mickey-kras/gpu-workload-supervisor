@@ -36,7 +36,7 @@ existing policy assertion in the same PR; do not append historical versions.
 
 ## Administrator rollout
 
-Provision a dedicated implementation GitHub App or bot account and connect the
+Provision a dedicated implementation GitHub App and connect the
 implementer to it. Do not share the owner's credential, use the release App, or
 grant the implementer administration or bypass privileges. Owner-authored PRs
 cannot use review admission; changing commit author text is not identity separation.
