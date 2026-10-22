@@ -3,8 +3,8 @@
 // nFPM emits SemVer prereleases after '~' in Debian control metadata. This
 // package does not configure a Debian epoch or revision.
 function verifyRelease(packageVersion, releases) {
-  if (releases.length !== 5 || releases.some(value => value !== releases[0]))
-    throw new Error('The five packaged binaries must have one identical release');
+  if (releases.length !== 6 || releases.some(value => value !== releases[0]))
+    throw new Error('The six packaged binaries must have one identical release');
   const release = releases[0];
   const semver = /^(\d+\.\d+\.\d+)(?:-([0-9A-Za-z.-]+))?(\+[0-9A-Za-z.-]+)?$/.exec(release);
   if (!semver)

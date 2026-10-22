@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,13 +14,14 @@ import (
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/llmtraining"
 )
 
 func TestCLIRejectsOverridesWithoutEchoingArguments(t *testing.T) {
 	for _, args := range [][]string{nil, {"-plugin", "SECRET"}, {"-recipe", "SECRET"}, {"-recipe", "SECRET", "-output", "/tmp/plan", "SECRET"}, {"-recipe", "relative", "-output", "/tmp/plan"}, {"-recipe", "SECRET", "-job-file", "SECRET", "-output", "/tmp/plan"}, {"-job-file", "SECRET", "-output", "/tmp/plan"}} {
 		var stderr bytes.Buffer
-		if exitCode(args, &stderr) != 1 || strings.Contains(stderr.String(), "SECRET") {
+		if exitCode(args, io.Discard, &stderr) != 1 || strings.Contains(stderr.String(), "SECRET") {
 			t.Fatal("unexpected diagnostic", stderr.String())
 		}
 	}
@@ -62,7 +65,7 @@ func TestCLIPreparesPrivateUnqualifiedPlan(t *testing.T) {
 	write(recipePath, string(raw))
 	planPath := filepath.Join(root, "plan.json")
 	var stderr bytes.Buffer
-	if exitCode([]string{"-recipe", recipePath, "-output", planPath}, &stderr) != 0 || stderr.Len() != 0 {
+	if exitCode([]string{"-recipe", recipePath, "-output", planPath}, io.Discard, &stderr) != 0 || stderr.Len() != 0 {
 		t.Fatal(stderr.String())
 	}
 	data, err := os.ReadFile(planPath)
@@ -92,7 +95,7 @@ func TestCLIPreparesPrivateUnqualifiedPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("INVOCATION_ID", strings.Repeat("a", 32))
-	if exitCode([]string{"-job-file", jobPath, "-output", jobPlanPath}, &stderr) != 0 || stderr.Len() != 0 {
+	if exitCode([]string{"-job-file", jobPath, "-output", jobPlanPath}, io.Discard, &stderr) != 0 || stderr.Len() != 0 {
 		t.Fatal(stderr.String())
 	}
 	data, err = os.ReadFile(jobPlanPath)
@@ -102,5 +105,32 @@ func TestCLIPreparesPrivateUnqualifiedPlan(t *testing.T) {
 	var jobPlan llmtraining.JobPlan
 	if err := json.Unmarshal(data, &jobPlan); err != nil || jobPlan.ID != "job" || jobPlan.Candidate.Status != "unqualified" || strings.Contains(string(data), job.Job.Token) {
 		t.Fatal("invalid or sensitive job plan", err)
+	}
+}
+
+func TestVersionReportsReleaseWithoutPreparing(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if exitCode([]string{"-version"}, &stdout, &stderr) != 0 || stdout.String() != deployment.Release+"\n" || stderr.Len() != 0 {
+		t.Fatal("version did not report the release")
+	}
+	for _, flag := range []string{"-recipe", "-job-file", "-output"} {
+		stdout.Reset()
+		stderr.Reset()
+		if exitCode([]string{"-version", flag, "SECRET"}, &stdout, &stderr) != 1 || stdout.Len() != 0 || strings.Contains(stderr.String(), "SECRET") {
+			t.Fatal("version accepted preparation arguments")
+		}
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("output unavailable")
+}
+
+func TestVersionReportsOutputFailure(t *testing.T) {
+	var stderr bytes.Buffer
+	if exitCode([]string{"-version"}, failingWriter{}, &stderr) != 1 || stderr.Len() == 0 {
+		t.Fatal("version output failure was ignored")
 	}
 }

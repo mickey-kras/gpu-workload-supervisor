@@ -6,7 +6,8 @@ when a transition fails.
 
 Binaries: `gpu-mode` (controller), `gpu-workload-proxy` (admission proxy),
 `gpu-operator` (local operator backend), `gpu-setup` (detection and setup),
-`gpu-training-runner` (experimental).
+`gpu-training-runner` (experimental), `gpu-training-candidate` (unqualified input
+preparation; not training execution).
 
 ## Requires
 
