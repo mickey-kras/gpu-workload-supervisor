@@ -9,6 +9,7 @@ const DEPENDABOT_SOURCES = [
   '.github/scripts/policy-dependabot.cjs', '.github/scripts/policy-action-pins.cjs',
   '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs',
   '.github/scripts/policy-pr-scope.cjs', '.github/scripts/policy-ci-reuse.cjs',
+  '.github/scripts/policy-lockfiles.cjs', '.github/scripts/policy-admission.cjs',
 ];
 const compact = source => typeof source === 'string' ? source.replace(/\s+/g, ' ').trim() : '';
 
@@ -215,7 +216,7 @@ function inspectDependabot(files, workflows, failures, checks) {
   inspectSource(files, failures);
 }
 
-async function verifyDependabotAuthor(github, context) {
+async function verifyDependabotAuthor(github, context, reviewed = false) {
   const params = { ...context.repo, pull_number: context.payload.pull_request.number };
   const pull = context.payload.pull_request;
   if (![pull.base?.sha, pull.head?.sha].every(ref => typeof ref === 'string' && /^[a-f0-9]{40}$/.test(ref))) {
@@ -240,7 +241,7 @@ async function verifyDependabotAuthor(github, context) {
     const after = await identity(path, pull.head.sha);
     changed ||= before !== after;
   }
-  if (!changed) return;
+  if (!changed || reviewed) return;
   const { data: current } = await github.rest.pulls.get(params);
   if (!['OWNER', 'MEMBER', 'COLLABORATOR'].includes(current.author_association) ||
       current.user?.type !== 'User' || current.user?.login?.endsWith('[bot]')) {

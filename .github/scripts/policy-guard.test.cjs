@@ -38,12 +38,14 @@ function files({ serial = true } = {}) {
     }
   }
   for (const path of [
+    '.github/CODEOWNERS',
     '.github/dependabot.yml', '.github/scripts/policy-guard.cjs',
     '.github/scripts/dependabot-auto-merge.cjs', '.github/scripts/pr-branch-updater.cjs',
     '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
     'release-version.json', '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs', '.github/scripts/policy-ci-reuse.cjs',
     '.github/scripts/policy-pr-scope.cjs', '.github/scripts/pr-validation-scope.cjs',
     '.github/scripts/policy-action-pins.cjs', '.github/scripts/policy-dependabot.cjs',
+    '.github/scripts/policy-lockfiles.cjs', '.github/scripts/policy-admission.cjs',
     '.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py',
     '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
@@ -871,7 +873,7 @@ test('automation source changes require a trusted human at immutable event refs'
       if (!bot && ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(association)) {
         await verifyDependabotAuthor(github, context);
       } else await assert.rejects(verifyDependabotAuthor(github, context), /trusted human author/);
-      assert.deepEqual(reads.map(read => read.ref), Array.from({ length: 8 }, () => ['a'.repeat(40), 'b'.repeat(40)]).flat());
+      assert.deepEqual(reads.map(read => read.ref), Array.from({ length: 10 }, () => ['a'.repeat(40), 'b'.repeat(40)]).flat());
     }
   }
   const { github, context } = authorFixture({ changed: false });
@@ -1006,7 +1008,134 @@ test('reverted live PR files cannot exempt a protected change at the inspected e
   github.paginate = async () => [{ filename: 'README.md' }];
   github.rest.pulls.get = async () => ({ data: { head: { sha: 'reverted-live-head' },
     author_association: 'NONE', user: { login: 'outsider', type: 'User' } } });
-  await assert.rejects(run({ github, context }), /trusted human author/);
+  await assert.rejects(run({ github, context }), /head or base changed/);
+});
+
+function liveGuardFixture() {
+  const baseline = files({ serial: false });
+  const candidate = { ...baseline };
+  const pull = { number: 1, state: 'open', author_association: 'OWNER',
+    user: { login: 'mickey-kras', id: 24433677, type: 'User' },
+    head: { sha: 'b'.repeat(40) }, base: { sha: 'a'.repeat(40), ref: 'main' } };
+  const context = { repo: { owner: 'mickey-kras', repo: 'gpu-workload-supervisor' }, payload: { pull_request: pull } };
+  let reads = 0;
+  const github = { rest: {
+    pulls: { get: async () => { reads++; return { data: pull }; } },
+    git: {
+      getCommit: async () => ({ data: { tree: { sha: 'c'.repeat(40) } } }),
+      getTree: async () => ({ data: { truncated: false, tree: Object.keys(candidate).map(path => ({ type: 'blob', mode: '100644', path })) } }),
+    },
+    repos: { getContent: async ({ path, ref }) => {
+      const source = (ref === pull.base.sha ? baseline : candidate)[path];
+      return { data: { type: 'file', encoding: 'base64',
+        sha: require('node:crypto').createHash('sha1').update(source).digest('hex'),
+        content: Buffer.from(source).toString('base64') } };
+    } },
+  } };
+  return { baseline, candidate, pull, context, github, reads: () => reads };
+}
+
+test('registry-only lock updates pass the live guard without code admission', async () => {
+  const { run } = require('./policy-guard.cjs');
+  const fixture = liveGuardFixture();
+  const { candidate, github, context, pull } = fixture;
+  const path = '.github/scripts/package-lock.json';
+  const lock = JSON.parse(candidate[path]);
+  const location = Object.keys(lock.packages).find(key => key !== '');
+  const entry = lock.packages[location];
+  const name = location.split('node_modules/').at(-1);
+  entry.version = '99.0.1';
+  entry.resolved = `https://registry.npmjs.org/${name}/-/${name.split('/').at(-1)}-99.0.1.tgz`;
+  candidate[path] = JSON.stringify(lock);
+  await run({ github, context });
+  assert.equal(fixture.reads(), 2);
+  let reads = 0;
+  github.rest.pulls.get = async () => ({ data: reads++ === 0 ? pull : { ...pull, base: { ...pull.base, sha: 'd'.repeat(40) } } });
+  await assert.rejects(run({ github, context }), /changed during policy inspection/);
+});
+
+test('review admission does not exempt semantic policy controls or unsafe lockfiles', () => {
+  const baseline = files({ serial: false });
+  const path = '.github/scripts/eslint.config.cjs';
+  const candidate = { ...baseline, [path]: baseline[path] + '\n// Reviewed change\n' };
+  assert.ok(inspectActivated(candidate, baseline).includes('JavaScript maintainability policy was changed'));
+  assert.deepEqual(inspectActivated(candidate, baseline, new Set([path])), []);
+  const lockPath = '.github/scripts/package-lock.json';
+  const lock = JSON.parse(candidate[lockPath]);
+  lock.packages[Object.keys(lock.packages).find(key => key !== '')].hasInstallScript = true;
+  candidate[lockPath] = JSON.stringify(lock);
+  assert.ok(inspectActivated(candidate, baseline, new Set(Object.keys(candidate))).some(message => message.includes('new install script')));
+});
+
+test('owner-authored policy execution changes need independent exact-head admission', async () => {
+  const { run } = require('./policy-guard.cjs');
+  for (const path of require('./policy-admission.cjs').POLICY_SOURCES) {
+    const fixture = liveGuardFixture();
+    fixture.candidate[path] += '\n';
+    await assert.rejects(run(fixture), /independent exact-head owner admission/, path);
+  }
+});
+
+test('independently approved bot policy changes still enforce lock semantics', async () => {
+  const { run } = require('./policy-guard.cjs');
+  const fixture = liveGuardFixture();
+  fixture.pull.user = { login: 'implementation[bot]', id: 1234, type: 'Bot' };
+  fixture.candidate['.github/scripts/policy-lockfiles.cjs'] += '\n';
+  fixture.github.rest.pulls.listReviews = () => {};
+  const rule = { type: 'pull_request', ruleset_id: 1, parameters: {
+    require_code_owner_review: true, dismiss_stale_reviews_on_push: true,
+    require_last_push_approval: true, required_approving_review_count: 1,
+  } };
+  fixture.github.paginate = async route => typeof route === 'string' ? [rule] : [{
+    id: 1, user: { login: 'mickey-kras', id: 24433677, type: 'User' },
+    state: 'APPROVED', commit_id: fixture.pull.head.sha,
+  }];
+  fixture.github.request = async () => ({ data: {
+    enforcement: 'active', target: 'branch', rules: [rule],
+  } });
+  await run(fixture);
+  const path = '.github/scripts/package-lock.json';
+  const lock = JSON.parse(fixture.candidate[path]);
+  lock.packages[Object.keys(lock.packages).find(key => key !== '')].hasInstallScript = true;
+  fixture.candidate[path] = JSON.stringify(lock);
+  await assert.rejects(run(fixture), /new install script/);
+});
+
+test('the guard import closure is independently protected', () => {
+  const { POLICY_SOURCES } = require('./policy-admission.cjs');
+  for (const path of POLICY_SOURCES.filter(path => path.endsWith('.cjs'))) {
+    const module = { exports: {} };
+    runInNewContext(readFileSync(path, 'utf8'), {
+      module, exports: module.exports, Buffer,
+      require(name) {
+        if (name.startsWith('./')) {
+          assert.ok(POLICY_SOURCES.includes(`.github/scripts/${name.slice(2)}`), `${path} imports ${name}`);
+        }
+        return require(name);
+      },
+    });
+  }
+});
+
+test('the live guard rejects npm redirection even when locks are unchanged', async () => {
+  const { run } = require('./policy-guard.cjs');
+  for (const path of require('./policy-lockfiles.cjs').FORBIDDEN_INPUTS) {
+    const fixture = liveGuardFixture();
+    fixture.candidate[path] = 'registry=https://evil.test\n';
+    await assert.rejects(run(fixture), /CI npm input redirection is forbidden/, path);
+  }
+});
+
+test('symlinks cannot substitute policy or lockfile content', async () => {
+  const { run } = require('./policy-guard.cjs');
+  const fixture = liveGuardFixture();
+  const readTree = fixture.github.rest.git.getTree;
+  fixture.github.rest.git.getTree = async () => {
+    const response = await readTree();
+    response.data.tree.find(entry => entry.path === '.github/scripts/package-lock.json').mode = '120000';
+    return response;
+  };
+  await assert.rejects(run(fixture), /must be regular files/);
 });
 
 test('protected source identity reads fail closed and detect deletion or rename', async () => {

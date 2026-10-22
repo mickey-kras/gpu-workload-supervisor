@@ -63,18 +63,18 @@ function inspectVerificationWorkspace(workflow, failures) {
   }
 }
 
-function inspectValidationReuse(files, workflow, failures, checks) {
+function inspectValidationReuse(files, workflow, failures, checks, admitted) {
   const releaseJobs = workflow?.jobs;
   const path = '.github/workflows/release.yml';
   const validation = releaseJobs?.validation;
   const verification = releaseJobs?.publish?.steps?.find(step =>
     step.name === 'Verify main and successful validation at this commit');
   const digest = content => createHash('sha256').update(content || '').digest('hex');
-  if (digest(files['.github/scripts/release-validation.cjs']) !==
+  if (!admitted.has('.github/scripts/release-validation.cjs') && digest(files['.github/scripts/release-validation.cjs']) !==
       '2ab673a761d632d643901cfdd9294d45135910691481693bcb15b2f20fc75c1b') {
     failures.push('Release validation verifier was changed');
   }
-  if (digest(files['.github/scripts/release-publication.cjs']) !==
+  if (!admitted.has('.github/scripts/release-publication.cjs') && digest(files['.github/scripts/release-publication.cjs']) !==
       '124d6832b052c0f3309755c1874acf303bbef264cf24077e1831dacc51838462') {
     failures.push('Release publication helper was changed');
   }
@@ -111,7 +111,7 @@ function inspectValidationReuse(files, workflow, failures, checks) {
   }
 }
 
-function inspectReleaseEntry(files, workflows, failures, checks) {
+function inspectReleaseEntry(files, workflows, failures, checks, admitted = new Set()) {
   const { event, step } = checks;
   const release = '.github/workflows/release.yml';
   event(release, 'workflow_dispatch');
@@ -120,7 +120,7 @@ function inspectReleaseEntry(files, workflows, failures, checks) {
       releaseJobs?.entry?.outputs?.version !== '${{ steps.version.outputs.version }}') {
     failures.push(`${release} lost dispatch version selection`);
   }
-  inspectValidationReuse(files, workflows[release], failures, checks);
+  inspectValidationReuse(files, workflows[release], failures, checks, admitted);
   step(release, 'entry', 'Require dispatch from main', {
     uses: 'actions/github-script',
     withValues: { script: [
