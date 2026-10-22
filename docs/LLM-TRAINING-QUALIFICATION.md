@@ -7,6 +7,17 @@ Keep host identities, paths, datasets, generated text and raw evidence private.
 
 ## Environment and backend decision
 
+**Installation blocked:** the dependency candidate fails the repository security
+gates. The pinned Trackio 0.40.0 requires Pillow <13, while the scanner requires
+Pillow >=13.0.0; pinned s3fs/gcsfs 2025.10.0 require fsspec 2025.10.0, while the
+scanner requires fsspec >=2026.6.0. FastMCP >=3.2.0 requires python-dotenv >=1.1.0,
+but Axolotl pins python-dotenv 1.0.1. The latest inspected Axolotl commit
+`2f98a743e8ee61bb6bb6f093dec296c5824a409c` retains these constraints.
+Do not install this lock or bypass dependency metadata. A compatible, reviewed
+upstream revision (or an explicitly approved source fork) must replace this
+candidate before installation and GPU qualification. The rejected lock is retained
+for review; it is not an installation recommendation.
+
 The candidate [dependency input](../training/axolotl/requirements.in) is derived
 from Axolotl's pinned `pyproject.toml`, with Torch 2.14.0 and its build tools.
 The accompanying hash-locked requirements resolve for Linux x86_64 and CPython
