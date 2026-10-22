@@ -55,6 +55,26 @@ class SubsetTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate"):
             checker.deviations([distribution("same_name"), distribution("same-name")])
 
+    def test_requested_extras_propagate_through_cycles_and_check_versions(self):
+        # Put requesters last so one forward pass cannot discover the closure.
+        installed = [
+            distribution("leaf", requires=["validator>=2; extra=='validate'", "inactive; extra=='unused'"]),
+            distribution("middle", requires=["leaf[validate]; extra=='feature'", "root[again]; extra=='feature'"]),
+            distribution("root", requires=["middle[feature]", "middle[feature]; extra=='again'", "never[unused]; python_version<'3'"]),
+        ]
+        expected = {("leaf", "validator", ">=2", "missing")}
+        self.assertEqual(checker.deviations(installed), expected)
+        self.assertEqual(checker.deviations(installed + [distribution("validator", "1")]),
+                         {("leaf", "validator", ">=2", "version")})
+        self.assertEqual(checker.deviations(installed + [distribution("validator", "2")]), set())
+
+    def test_unrequested_extra_does_not_activate_its_dependency_extras(self):
+        installed = [
+            distribution("root", requires=["middle[feature]; extra=='optional'"]),
+            distribution("middle", requires=["missing; extra=='feature'"]),
+        ]
+        self.assertEqual(checker.deviations(installed), set())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,5 @@
 """Fail closed on every dependency deviation; do not rewrite upstream metadata."""
+from collections import deque
 import importlib.metadata as metadata
 import importlib.util
 from pathlib import Path
@@ -24,11 +25,23 @@ def deviations(distributions):
         if name in installed:
             raise ValueError("duplicate distribution: " + name)
         installed[name] = distribution
+    requirements = {
+        name: [Requirement(text) for text in distribution.requires or []]
+        for name, distribution in installed.items()
+    }
+    # Every installed distribution activates its base requirements. Requested
+    # extras propagate across dependency edges, including cycles, until no new
+    # (distribution, extra) context remains. Unrequested extras stay inactive.
+    pending = deque((name, "") for name in installed)
+    visited = set()
     result = set()
-    for parent, distribution in installed.items():
-        for text in distribution.requires or []:
-            requirement = Requirement(text)
-            if requirement.marker and not requirement.marker.evaluate({"extra": ""}):
+    while pending:
+        parent, extra = pending.popleft()
+        if (parent, extra) in visited:
+            continue
+        visited.add((parent, extra))
+        for requirement in requirements[parent]:
+            if requirement.marker and not requirement.marker.evaluate({"extra": extra}):
                 continue
             name = canonicalize_name(requirement.name)
             dependency = installed.get(name)
@@ -36,6 +49,8 @@ def deviations(distributions):
                 result.add((parent, name, str(requirement.specifier), "missing"))
             elif requirement.url or not requirement.specifier.contains(dependency.version, prereleases=True):
                 result.add((parent, name, str(requirement.specifier), "version"))
+            if dependency is not None:
+                pending.extend((name, canonicalize_name(requested)) for requested in requirement.extras)
     return result
 
 
