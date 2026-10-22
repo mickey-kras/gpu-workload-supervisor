@@ -29,7 +29,7 @@ export function watchInstanceSelection({instance, instances, draft, endpoint, re
 
 export function addRefreshButton({Gtk, group, draft, status, command, show, reportError, guidance, checking, inspectService}) {
     const refresh = new Gtk.Button({label: 'Check again', visible: false}); group.add(refresh);
-    refresh.connect('clicked', async () => {
+    const check = async () => {
         const target = draft.snapshot();
         if (!target.endpoint && !target.reference && !target.binding?.unit) {
             reportError('Choose an installation before checking again.', new Error(guidance() ?? 'Choose a detected instance, enter the application address, or select a model file or folder before refreshing.'));
@@ -50,7 +50,9 @@ export function addRefreshButton({Gtk, group, draft, status, command, show, repo
         } catch (error) {
             if (probe.generation === draft.generation) reportError('Discovery failed. Check the address or location, then retry.', error);
         } finally { refresh.sensitive = true; checking(false); }
-    });
+    };
+    refresh.connect('clicked', check);
+    refresh.check = check;
     return refresh;
 }
 
@@ -127,4 +129,5 @@ export function addFilePickers({Gtk, window, group, advancedGroup = group, draft
         });
     }
 }
+
 

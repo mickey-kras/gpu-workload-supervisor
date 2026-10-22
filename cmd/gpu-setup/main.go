@@ -66,7 +66,7 @@ func main() {
 }
 func (a setupActions) run(args []string, input io.Reader, output io.Writer) error {
 	if len(args) != 1 {
-		return errors.New("usage: gpu-setup discover|probe|prepare|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|temporary-status|temporary-discover|temporary-cleanup|reconcile|idle-policy-tick|remove-integration")
+		return errors.New("usage: gpu-setup discover|probe|prepare|correct-gpu|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|temporary-status|temporary-discover|temporary-cleanup|reconcile|idle-policy-tick|remove-integration")
 	}
 	parent := context.Background()
 	if args[0] == cmdTemporaryDiscover {
@@ -81,7 +81,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return err
 	}
 	switch args[0] {
-	case cmdTemporaryDiscover, "temporary-status", "temporary-cleanup", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned":
+	case "correct-gpu", cmdTemporaryDiscover, "temporary-status", "temporary-cleanup", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned":
 		if a.euid() == 0 {
 			return errors.New("run guided setup as the desktop account, not root")
 		}
@@ -91,6 +91,16 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 
 func (a setupActions) runAction(ctx context.Context, home, action string, input io.Reader, output io.Writer) error {
 	switch action {
+	case "correct-gpu":
+		var request setup.GPUCorrectionRequest
+		if err := strictjson.DecodeLimited(input, 16384, &request); err != nil {
+			return err
+		}
+		result, err := setup.CorrectGPU(ctx, home, request)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(result)
 	case "temporary-status":
 		result, err := a.temporaryStatus(ctx, home)
 		if err != nil {

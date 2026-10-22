@@ -383,3 +383,19 @@ test('checking an empty installation selection keeps visible guidance and blocks
     assert.equal(ui.calls.some(call => ['probe', 'prepare'].includes(call.argv[1])), false);
     await ui.click('Back'); assert.equal(ui.by('Use installation').sensitive, false);
 });
+
+
+test('rechecking a repaired service updates the main card without reopening or selecting it', async () => {
+    const broken = {...ready, recognized: false, configurationStatus: 'gpu-unresolved'};
+    let calls = 0;
+    const ui = await launch(options(broken, {discover: () => ({request, units: [], applications: [calls++ ? ready : broken]})}));
+    const heading = ui.widgets.find(widget => widget.label === 'Choose your applications');
+    assert.equal(heading.selectable, false);
+    await ui.click('Settings for ComfyUI'); await ui.click('View details');
+    const selections = ui.widgets.filter(widget => widget.widgetType === 'CheckButton').map(widget => Boolean(widget.active));
+    await ui.click('Check again'); await ui.click('Cancel');
+    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label === 'Installed and stopped. Ready to configure.'));
+    assert.deepEqual(ui.widgets.filter(widget => widget.widgetType === 'CheckButton').map(widget => Boolean(widget.active)), selections);
+    await ui.click('Settings for ComfyUI');
+    assert.equal(ui.by('Use installation').sensitive, true);
+});

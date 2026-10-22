@@ -24,13 +24,14 @@ export function addErrorReporter({Adw, Gtk, parent, status}) {
 export function addDraftEditor(options) { return new DraftEditor(options).view(); }
 
 class DraftEditor {
-    constructor({Adw, Gtk, window, parent, initial, detected, gpuUUIDs, gpuInventoryStatus, discoveryErrors, command, changed, removed, bind, taken, modelParent, temporaryStatus, openSettings, reportProblem, reportStatus, navigateSettings, saveSelections}) {
+    constructor({Adw, Gtk, window, parent, initial, detected, discovered, gpuUUIDs, gpuInventoryStatus, discoveryErrors, command, changed, removed, bind, taken, modelParent, temporaryStatus, openSettings, reportProblem, reportStatus, navigateSettings, saveSelections}) {
         this.Adw = Adw;
         this.Gtk = Gtk;
         this.window = window;
         this.parent = parent;
         this.initial = initial;
         this.detected = detected;
+        this.discovered = discovered;
         this.discoveryErrors = discoveryErrors;
         this.command = command;
         this.changed = changed;
@@ -53,7 +54,12 @@ class DraftEditor {
     buildBasics(gpuUUIDs, gpuInventoryStatus) {
         this.draft = new ApplicationDraft(this.initial.app);
         this.draft.edit(this.initial);
-        this.settings = new InstallationSettings({Adw: this.Adw, Gtk: this.Gtk, app: this.initial.app, window: this.window, gpuUUIDs, gpuInventoryStatus, navigate: this.navigateSettings});
+        this.settings = new InstallationSettings({Adw: this.Adw, Gtk: this.Gtk, app: this.initial.app, window: this.window, gpuUUIDs, gpuInventoryStatus, navigate: this.navigateSettings, correctGPU: async (candidate, plan) => {
+            if (this.temporary?.blocked()) throw new Error('Finish temporary application cleanup before changing GPU configuration.');
+            const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'correct-gpu'], JSON.stringify({app: this.initial.app, unit: candidate.unit, fingerprint: plan?.fingerprint, confirm: Boolean(plan)})));
+            if (result.applied) await this.refresh.check();
+            return result;
+        }});
         this.group = this.settings.root;
         this.name = new this.Adw.EntryRow({title: 'Display name', text: this.initial.label});
         this.name.update_property([this.Gtk.AccessibleProperty.LABEL], ['Installation display name']);
@@ -296,6 +302,8 @@ class DraftEditor {
             setProbeGuidance: guidance => this.probeGuidance = guidance, clearOwnedReference: () => this.clearOwnedReference(), selectOwnedReference: (path, kind) => this.selectOwnedReference(path, kind)});
         this.refresh = addRefreshButton({Gtk: this.Gtk, group: {add: child => this.settings.pages.get('configuration').append(child)}, draft: this.draft, status: this.status, command: this.command, show: (candidate) => this.show(candidate), reportError: this.reportError, guidance: () => this.probeGuidance, checking: busy => this.settings.checking(busy), inspectService: async input => {
             const discovery = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'discover']));
+            this.detected = discovery.applications ?? [];
+            this.discovered?.(discovery);
             this.settings.updateGPUInventory(discovery.gpuUUIDs ?? [], discovery.gpuInventoryStatus);
             return discovery.applications?.find(candidate => candidate.app === input.app && candidate.unit === input.binding.unit) ?? null;
         }});
@@ -417,9 +425,9 @@ class DraftEditor {
         this.syncing = false;
         this.syncing = true; this.instance.selected = snapshot.selection; this.syncing = false; this.draft.input = snapshot.input; this.draft.cancel(); this.installationEvidence = snapshot.evidence; this.bindingEdits = new Set(snapshot.bindingEdits); this.endpointEdited = snapshot.endpointEdited; this.overrides = snapshot.overrides;
         this.changed(this.draft.snapshot());
-        const selected = snapshot.candidate;
+        const selected = snapshot.candidate?.unit ? this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === snapshot.candidate.unit) ?? snapshot.candidate : snapshot.candidate;
         if (selected) this.show(selected);
-        if (!selected || !snapshot.ready) this.settings.invalidate();
+        if (!selected || (selected === snapshot.candidate && !snapshot.ready)) this.settings.invalidate();
     }
     selectedModels(input) {
         if (!this.draft.needsModel) return [''];
@@ -454,4 +462,5 @@ class DraftEditor {
         return {profiles: prepared, current: () => generation === this.draft.generation};
     }
 }
+
 

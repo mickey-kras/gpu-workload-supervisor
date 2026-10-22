@@ -34,7 +34,7 @@ export function createShell(ui) {
     ui.toolbar = new Adw.ToolbarView({extend_content_to_top_edge: false, extend_content_to_bottom_edge: false});
     ui.headerBar = new Adw.HeaderBar();
     ui.toolbar.add_top_bar(ui.headerBar);
-    ui.settingsTitle = new Gtk.Label({wrap: false, focusable: true, selectable: true, accessible_role: Gtk.AccessibleRole.HEADING}); ui.settingsTitle.add_css_class('title'); ui.settingsTitle.add_css_class('setup-page-title');
+    ui.settingsTitle = new Gtk.Label({wrap: false, focusable: true, selectable: false, accessible_role: Gtk.AccessibleRole.HEADING}); ui.settingsTitle.add_css_class('title'); ui.settingsTitle.add_css_class('setup-page-title');
     ui.settingsBack = new Gtk.Button({icon_name: 'go-previous-symbolic', visible: false, tooltip_text: 'Back'});
     ui.settingsBack.update_property([Gtk.AccessibleProperty.LABEL], ['Back']); ui.settingsBack.connect('clicked', ui.goBack); ui.headerBar.pack_start(ui.settingsBack);
     ui.box = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 14,
@@ -44,7 +44,7 @@ export function createShell(ui) {
     ui.scroll.set_child(ui.box);
     ui.toolbar.set_content(ui.scroll);
     ui.window.set_content(ui.toolbar);
-    ui.heading = new Gtk.Label({label: 'Choose your applications', xalign: 0, wrap: true, focusable: true, selectable: true,
+    ui.heading = new Gtk.Label({label: 'Choose your applications', xalign: 0, wrap: true, focusable: true, selectable: false,
         accessible_role: Gtk.AccessibleRole.HEADING});
     ui.window.connect('map', () => {
         GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
@@ -198,4 +198,5 @@ export function createFooter(ui) {
     ui.toolbar.add_bottom_bar(ui.footer);
     ui.back.connect('clicked', ui.goBack);
 }
+
 

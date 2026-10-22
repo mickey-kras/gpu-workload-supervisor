@@ -138,6 +138,7 @@ func (b Backend) Plan(home string, request Request) (Preview, error) {
 // Backend holds the host interactions setup performs. Tests inject fakes
 // instead of touching the real runtime, unit manager, or package binaries.
 type Backend struct {
+	gpuInventory        func(context.Context) ([]string, string)
 	temporaryProfile    func() (Profile, error)
 	makeRuntime         func(Request) (gpuruntime.Manager, error)
 	runCommand          func(ctx context.Context, name string, args ...string) ([]byte, error)

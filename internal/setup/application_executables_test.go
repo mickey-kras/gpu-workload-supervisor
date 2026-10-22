@@ -145,15 +145,12 @@ func TestFolderFallbackFindsBlockedInstallationWithoutExecutionOrTraversal(t *te
 func TestRelevantRootsAndSavedSelectionsRemainBounded(t *testing.T) {
 	home := t.TempDir()
 	result := relevantExecutablePaths(home)
-	if len(result) != 9 {
+	if len(result) != 17 {
 		t.Fatalf("unexpected fixed candidates %d", len(result))
 	}
 	for _, request := range result {
 		if err := request.validate(); err != nil {
 			t.Fatal(err)
-		}
-		if strings.Contains(request.Reference, "/AI/") {
-			t.Fatal("guessed arbitrary home directory")
 		}
 	}
 }
@@ -220,7 +217,7 @@ func TestSavedExecutableSelectionIsRediscoveredWithoutHomeScan(t *testing.T) {
 			count++
 		}
 	}
-	if count != 1 || len(paths) != 10 {
+	if count != 1 || len(paths) != 18 {
 		t.Fatalf("saved explicit reference omitted/unbounded: %+v", paths)
 	}
 }
