@@ -399,3 +399,15 @@ test('rechecking a repaired service updates the main card without reopening or s
     await ui.click('Settings for ComfyUI');
     assert.equal(ui.by('Use installation').sensitive, true);
 });
+
+test('Cancel cannot restore readiness after the selected service disappears during recheck', async () => {
+    let count = 0;
+    const ui = await launch(options(ready, {discover: () => ({request, units: [], applications: count++ ? [] : [ready]}),
+        probe: {app: 'comfyui', instanceStatus: 'unreachable', configurationStatus: 'unverified'}}));
+    await ui.click('Settings for ComfyUI'); await ui.click('Advanced settings');
+    ui.edit(ui.by('Health endpoint'), 'text', 'http://127.0.0.1:8188/changed');
+    await ui.click('Back'); await ui.click('View details'); await ui.click('Check again');
+    assert.equal(count, 2, 'the service inventory was refreshed');
+    await ui.click('Cancel'); await ui.click('Settings for ComfyUI');
+    assert.equal(ui.by('Use installation').sensitive, false);
+});

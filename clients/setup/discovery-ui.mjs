@@ -425,8 +425,9 @@ class DraftEditor {
         this.syncing = false;
         this.syncing = true; this.instance.selected = snapshot.selection; this.syncing = false; this.draft.input = snapshot.input; this.draft.cancel(); this.installationEvidence = snapshot.evidence; this.bindingEdits = new Set(snapshot.bindingEdits); this.endpointEdited = snapshot.endpointEdited; this.overrides = snapshot.overrides;
         this.changed(this.draft.snapshot());
-        const selected = snapshot.candidate?.unit ? this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === snapshot.candidate.unit) ?? snapshot.candidate : snapshot.candidate;
+        const selected = snapshot.candidate?.unit ? this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === snapshot.candidate.unit) : snapshot.candidate;
         if (selected) this.show(selected);
+        else this.settings.problem('Installation not detected', new Error('The selected service was not found during the latest check.'));
         if (!selected || (selected === snapshot.candidate && !snapshot.ready)) this.settings.invalidate();
     }
     selectedModels(input) {

@@ -107,3 +107,19 @@ test('RestartSec blockers never propose or classify a Restart policy correction'
     assert.equal(ui.calls.some(call => ['apply', 'prepare', 'temporary-discover'].includes(call.argv[1])), false);
 });
 
+
+test('automatic correction failure restores manual recovery and discards confirmation', async () => {
+    let calls = 0;
+    const ui = await launch({deferAction: 'unused', responses: {
+        discover: {request, units: [], gpuInventoryStatus: 'available', gpuUUIDs: [uuid], applications: [blocked]},
+        'correct-gpu': () => { if (calls++ === 0) return {fingerprint: 'preview', content: 'review me'}; throw new Error('Service is outside the user configuration directory'); },
+    }});
+    await ui.click('Settings for ComfyUI'); await ui.click('View details');
+    await ui.click('Configure GPU'); await ui.click('Apply GPU configuration');
+    assert.equal(ui.by('Copy reviewed override').visible, true);
+    assert.equal(ui.by('Copy reviewed override').sensitive, true);
+    assert.equal(ui.by('Configure GPU').visible, true);
+    await ui.click('Configure GPU');
+    const last = ui.calls.filter(call => call.argv[1] === 'correct-gpu').at(-1);
+    assert.equal(JSON.parse(last.input).confirm, false);
+});

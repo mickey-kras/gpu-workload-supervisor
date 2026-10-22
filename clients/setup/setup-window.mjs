@@ -99,7 +99,7 @@ class SetupWindow {
         this.draftRows.visible = this.step === 0;
         this.setupSettings.visible = this.step === 0; this.back.visible = this.step > 0; this.later.visible = this.step === 0; this.status.visible = this.step === 2 || this.pending; this.apply.visible = this.step === 2; this.review.visible = this.step !== 2;
         this.review.label = 'Continue'; this.review.sensitive = Boolean(this.request);
-        this.heading.grab_focus();
+        (this.step > 0 ? this.back : this.findApplication).grab_focus();
         this.scroll.get_vadjustment().value = 0;
     }
 
@@ -117,7 +117,7 @@ class SetupWindow {
         this.saveDrafts.visible = false; this.later.visible = true; this.later.label = 'Cancel';
         for (const draftEditor of this.draftEditors) draftEditor.group.visible = draftEditor === editor;
         editor.showSettings(editor.replacing);
-        this.settingsTitle.grab_focus();
+        this.settingsBack.grab_focus();
     }
 
     closeApplicationSettings(restoreFocus = true) {
@@ -148,7 +148,7 @@ class SetupWindow {
         this.status.visible = false;
         if (previous !== page) {
             this.scroll.get_vadjustment().value = this.applicationSettings.scrolls.get(page) ?? 0;
-            this.settingsTitle.grab_focus();
+            this.settingsBack.grab_focus();
         }
     }
 

@@ -2,8 +2,6 @@
 import Adw from 'gi://Adw?version=1';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Gtk from 'gi://Gtk?version=4.0';
-// aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
-import GLib from 'gi://GLib';
 import {installSetupStyle, applicationHeader, roundedCard, linkButton} from './presentation.mjs';
 import {applications, diagnosticReport} from './onboarding.mjs';
 import {copySetupText} from './settings-pages.mjs';
@@ -34,7 +32,7 @@ export function createShell(ui) {
     ui.toolbar = new Adw.ToolbarView({extend_content_to_top_edge: false, extend_content_to_bottom_edge: false});
     ui.headerBar = new Adw.HeaderBar();
     ui.toolbar.add_top_bar(ui.headerBar);
-    ui.settingsTitle = new Gtk.Label({wrap: false, focusable: true, selectable: false, accessible_role: Gtk.AccessibleRole.HEADING}); ui.settingsTitle.add_css_class('title'); ui.settingsTitle.add_css_class('setup-page-title');
+    ui.settingsTitle = new Gtk.Label({wrap: false, focusable: false, selectable: false, accessible_role: Gtk.AccessibleRole.HEADING}); ui.settingsTitle.add_css_class('title'); ui.settingsTitle.add_css_class('setup-page-title');
     ui.settingsBack = new Gtk.Button({icon_name: 'go-previous-symbolic', visible: false, tooltip_text: 'Back'});
     ui.settingsBack.update_property([Gtk.AccessibleProperty.LABEL], ['Back']); ui.settingsBack.connect('clicked', ui.goBack); ui.headerBar.pack_start(ui.settingsBack);
     ui.box = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 14,
@@ -44,14 +42,8 @@ export function createShell(ui) {
     ui.scroll.set_child(ui.box);
     ui.toolbar.set_content(ui.scroll);
     ui.window.set_content(ui.toolbar);
-    ui.heading = new Gtk.Label({label: 'Choose your applications', xalign: 0, wrap: true, focusable: true, selectable: false,
+    ui.heading = new Gtk.Label({label: 'Choose your applications', xalign: 0, wrap: true, focusable: false, selectable: false,
         accessible_role: Gtk.AccessibleRole.HEADING});
-    ui.window.connect('map', () => {
-        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-            if (!ui.closed) ui.heading.select_region(0, 0);
-            return GLib.SOURCE_REMOVE;
-        });
-    });
     ui.heading.add_css_class('title-1');
     ui.heading.add_css_class('setup-heading');
     ui.box.append(ui.heading);

@@ -85,7 +85,10 @@ export class InstallationSettings {
                 }
             } catch (error) {
                 this.gpuPlan = null; this.applyGPU.label = 'Configure GPU';
-                this.repairInstructions.label = error.message;
+                this.preview.label = this.overrideText;
+                this.preview.visible = Boolean(this.overrideText);
+                this.copyOverride.visible = Boolean(this.overrideText);
+                this.repairInstructions.label = `${error.message}\n\n${manualCorrectionInstructions}`;
             } finally { this.checking(false); }
         });
         this.repairInstructions = new Gtk.Label({label: manualCorrectionInstructions, wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.repair.add(this.repairInstructions);
