@@ -92,15 +92,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 func (a setupActions) runAction(ctx context.Context, home, action string, input io.Reader, output io.Writer) error {
 	switch action {
 	case "correct-gpu":
-		var request setup.GPUCorrectionRequest
-		if err := strictjson.DecodeLimited(input, 16384, &request); err != nil {
-			return err
-		}
-		result, err := setup.CorrectGPU(ctx, home, request)
-		if err != nil {
-			return err
-		}
-		return json.NewEncoder(output).Encode(result)
+		return runGPUCorrection(ctx, home, input, output)
 	case "temporary-status":
 		result, err := a.temporaryStatus(ctx, home)
 		if err != nil {
@@ -160,6 +152,19 @@ func (a setupActions) runAction(ctx context.Context, home, action string, input 
 	}
 	return errors.New("unknown setup action")
 }
+
+func runGPUCorrection(ctx context.Context, home string, input io.Reader, output io.Writer) error {
+	var request setup.GPUCorrectionRequest
+	if err := strictjson.DecodeLimited(input, 16384, &request); err != nil {
+		return err
+	}
+	result, err := setup.CorrectGPU(ctx, home, request)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(output).Encode(result)
+}
+
 func (a setupActions) runDiscover(ctx context.Context, home string, output io.Writer) error {
 	result, err := a.discover(ctx, home)
 	if err != nil {

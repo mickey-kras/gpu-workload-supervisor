@@ -49,27 +49,8 @@ func (b Backend) CorrectGPU(ctx context.Context, home string, request GPUCorrect
 		return GPUCorrection{}, err
 	}
 	defer gate.Close()
-	statePath := discovery.Request.Profile.StatePath
-	if err := discoverCurrent(ctx, root, &discovery); err != nil {
+	if err := validateGPUCorrectionState(ctx, root, request.Unit, &discovery); err != nil {
 		return GPUCorrection{}, err
-	}
-	if discovery.Request.Profile.StatePath != statePath {
-		return GPUCorrection{}, errors.New("supervisor state location changed; retry")
-	}
-	if _, err := os.Lstat(statePath); err == nil {
-		if err := checkNoTemporaryDiscovery(ctx, statePath); err != nil {
-			return GPUCorrection{}, err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return GPUCorrection{}, err
-	}
-	for _, profile := range discovery.Request.Catalog.Profiles {
-		if profile.Unit == request.Unit {
-			return GPUCorrection{}, errors.New("this service is already managed; change it through workload configuration")
-		}
-	}
-	if _, err := os.Lstat(filepath.Join(root, "activation.json")); !errors.Is(err, os.ErrNotExist) {
-		return GPUCorrection{}, errors.New("finish pending activation before correcting a service")
 	}
 	plan, err := b.previewGPUCorrection(ctx, home, request)
 	if err != nil || !request.Confirm {
@@ -78,6 +59,37 @@ func (b Backend) CorrectGPU(ctx context.Context, home string, request GPUCorrect
 	if request.Fingerprint == "" || request.Fingerprint != plan.Fingerprint {
 		return GPUCorrection{}, errors.New("service or GPU inventory changed; review the correction again")
 	}
+	return b.applyGPUCorrection(ctx, request, plan)
+}
+
+// validateGPUCorrectionState rechecks state while the caller holds its lock.
+func validateGPUCorrectionState(ctx context.Context, root, unit string, discovery *Discovery) error {
+	statePath := discovery.Request.Profile.StatePath
+	if err := discoverCurrent(ctx, root, discovery); err != nil {
+		return err
+	}
+	if discovery.Request.Profile.StatePath != statePath {
+		return errors.New("supervisor state location changed; retry")
+	}
+	if _, err := os.Lstat(statePath); err == nil {
+		if err := checkNoTemporaryDiscovery(ctx, statePath); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for _, profile := range discovery.Request.Catalog.Profiles {
+		if profile.Unit == unit {
+			return errors.New("this service is already managed; change it through workload configuration")
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(root, "activation.json")); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("finish pending activation before correcting a service")
+	}
+	return nil
+}
+
+func (b Backend) applyGPUCorrection(ctx context.Context, request GPUCorrectionRequest, plan GPUCorrection) (GPUCorrection, error) {
 	directory := filepath.Dir(plan.Path)
 	if err := os.Mkdir(directory, 0700); err != nil && !errors.Is(err, os.ErrExist) {
 		return plan, err
