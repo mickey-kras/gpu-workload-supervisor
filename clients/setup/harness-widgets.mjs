@@ -47,8 +47,8 @@ export function createWidgetClass(widgets) {
             this.closed = true; this.emit('unrealize');
         }
         grab_focus() { this.focused = true; }
-        select_region(start, end) { this.selection = [start, end]; }
         run() { this.emit('activate'); }
     }
     return Widget;
 }
+

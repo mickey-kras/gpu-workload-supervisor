@@ -368,7 +368,7 @@ app.connect('activate', () => {
         geometry.push({screen: 'application-report-reachable', viewportBottom: scrollBounds.get_y() + scrollBounds.get_height(),
             footerTop: footerBounds.get_y(), reportY: reportBounds.get_y(), reportHeight: reportBounds.get_height(),
             scrollValue: ui.scroll.get_vadjustment().value});
-        ui.scroll.get_vadjustment().value = 0; ui.heading.grab_focus(); await delay(80);
+        ui.scroll.get_vadjustment().value = 0; ui.findApplication.grab_focus(); await delay(80);
         assert(ui.applicationCards.size === 4, 'all application cards exist');
         for (const card of ui.applicationCards.values()) {
             assert(card.select instanceof Gtk.CheckButton, 'selection is a native checkbox');
@@ -626,7 +626,7 @@ app.connect('activate', () => {
         await tabTo(ui, ui.review); run(['xdotool', 'key', 'space']);
         await waitFor(() => installationReply, 'Check again rechecks selected installation metadata');
         assert(!ui.review.sensitive, 'checking disables the fixed footer action');
-        await tabTo(ui, ui.settingsTitle);
+        await tabTo(ui, ui.settingsBack);
         await settingsTree(ui, 'configuration-checking', 'Back', [button('Check again', false)], [], ['Checking']);
         await capture(ui, 'configuration-checking');
         await tabTo(ui, ui.settingsBack ?? ui.back); run(['xdotool', 'key', 'space']); await delay(100);
