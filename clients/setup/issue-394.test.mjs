@@ -27,7 +27,8 @@ test('beginning gear opens compact settings; Back restores originating scroll, f
     await ui.click('Settings for Ollama');
     assert.ok(saveParent.children.includes(save), 'opening settings retains the rooted save action');
     assert.equal(heading(ui).label, 'Ollama');
-    assert.equal(heading(ui).focused, true);
+    assert.equal(ui.by('Back').focused, true);
+    assert.equal(heading(ui).selectable, false);
     assert.equal(scroll.get_vadjustment().value, 0);
     assert.equal(ui.visible(ui.by('Use ComfyUI')), false);
     assert.equal(ui.visible(ui.by('Installed executable')), false);
@@ -232,3 +233,4 @@ test('an authoritative managed candidate prefills executable and launch options 
     assert.equal(heading(ui).label, 'Ready to finish');
     assert.equal(ui.by('Finish setup').sensitive, true);
 });
+

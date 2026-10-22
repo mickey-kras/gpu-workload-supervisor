@@ -48,6 +48,30 @@ func InspectAutomaticLaunchSources(path, app string, dropInPaths []string) (Auto
 	return inspectAutomaticLaunchSourcesWithValidator(path, app, dropInPaths, validate)
 }
 
+// PreviewAutomaticGPUCorrection validates the complete effective launch with
+// the proposed final drop-in, without writing files or running the application.
+func PreviewAutomaticGPUCorrection(path, app string, dropInPaths []string, uuid string) (AutomaticLaunch, error) {
+	if !control.ValidGPUUUID(uuid) {
+		return AutomaticLaunch{}, ErrGPUIdentityUnresolved
+	}
+	sources, dropIns, err := readAutomaticLaunchSources(path, dropInPaths)
+	if err != nil {
+		return AutomaticLaunch{}, err
+	}
+	sources = append(sources, []byte("[Service]\nEnvironment=\"CUDA_VISIBLE_DEVICES="+uuid+"\"\n"))
+	u, err := parseExternalLaunchSourcesMode(sources, app, false)
+	if err != nil {
+		return AutomaticLaunch{}, err
+	}
+	validate := validateNativeExecutable
+	if app == "comfyui" {
+		validate = validateComfyExecutable
+	}
+	result, err := inspectParsedAutomaticLaunch(u, sources[0], app, validate)
+	result.DropIns = dropIns
+	return result, err
+}
+
 func inspectAutomaticLaunchSourcesWithValidator(path, app string, dropInPaths []string, validate func(string) error) (AutomaticLaunch, error) {
 	return inspectAutomaticLaunchSourcesMode(path, app, dropInPaths, validate, false)
 }

@@ -41,7 +41,7 @@ function nativeImports() {
       imports.push(`${line}\n${lines[index + 1]}`);
     });
   }
-  assert.equal(imports.length, 33);
+  assert.equal(imports.length, 32);
   return imports;
 }
 
@@ -78,3 +78,4 @@ test('native import annotations preserve unknown npm import detection', () => {
     rmSync(directory, {recursive: true, force: true});
   }
 });
+

@@ -44,7 +44,7 @@ The effective account's OS home determines the private profile location:
 do not select runtime configuration. The accepted workload catalog and its opaque
 revision live in SQLite; `catalog.json` is only an owned setup/backup artifact.
 Ordinary controls never adopt edits to that mirror. Setup exposes `discover`,
-`probe`, `prepare`, `fingerprint`, `render-owned`, `drafts`, `save-drafts`,
+`probe`, `correct-gpu`, `prepare`, `fingerprint`, `render-owned`, `drafts`, `save-drafts`,
 `verify-bindings`, `validate`, `apply`, `temporary-status`, `temporary-discover`, `temporary-cleanup`, `reconcile`,
 `idle-policy-tick` and `remove-integration`; request/response commands use a
 strict versioned JSON protocol over stdin/stdout. The desktop application
@@ -305,7 +305,11 @@ Setup distinguishes installation evidence from qualification. Detection inspects
 known executable names in standard directories, at most 32 clean absolute PATH
 directories, `~/.local/bin`, fixed `/opt/ollama`, `/opt/llama.cpp`, `/opt/vllm`
 locations and their `bin` directories, and saved explicit executable selections.
-It never traverses your home or starts discovered programs. For another location,
+Ollama and vLLM also check `~/AI/APP` and `~/AI/APP-supervisor`, each with
+`bin` and `.venv/bin`. Ollama checks `~/AI/ollama/VERSION/bin/ollama` for
+version directories starting with a digit, only when the parent has at most 32
+entries. These bounded checks retain executable trust validation and never run
+programs or recursively scan your home. For another location,
 choose the installed executable directly or choose its folder; folder inspection
 checks only the application filename directly in that folder and its `bin` folder.
 An unreachable default address does not mean the application is absent.
@@ -321,22 +325,34 @@ path or choose a trusted installed location, then Check again. Setup does not co
 programs, change permissions/ownership, remove arguments or rewrite external units
 to make them qualify.
 
-For numeric GPU visibility, the details page offers an explicit full physical GPU
-UUID choice from read-only trusted live NVIDIA inventory. No default is chosen;
-NVIDIA inventory indices are never treated as CUDA ordinals. If inventory is
-unavailable, inspect physical identity with your administrator. A selected UUID
-and a reported restart-policy blocker can produce a narrowly scoped drop-in
-proposal, including `Restart=no`. Review its consequences: automatic crash
-recovery will be disabled. Copy reviewed override copies the proposal only; it
-applies nothing and starts nothing. Have the external service administrator add
-only the reviewed assignments in a drop-in, preserve all other settings, reload
-the desktop user systemd manager, and Check again. Other trust, environment,
-model or source blockers still need correction. Fresh qualification alone unlocks
-Use installation. Temporary inventory retains its separate explicit startup
-consent and cleanup safeguards.
+For unresolved GPU visibility, Supervisor uses its shared trusted NVIDIA inventory.
+With one supported GPU, **Configure GPU** previews a drop-in and **Apply GPU
+configuration** confirms it; no per-application GPU choice is required. Numeric
+CUDA ordinals are not assumed to match NVIDIA inventory indices. Multiple GPUs
+require supervisor-wide configuration; this flow does not implement multi-GPU
+scheduling.
+
+Automatic correction supports stopped, unmanaged user services whose fragment
+is directly in `~/.config/systemd/user`. It rechecks the service, launch files and
+GPU inventory against the preview fingerprint, creates a new
+`UNIT.d/zz-gpu-workload-supervisor.conf` without replacing existing files, reloads
+the user manager and reinspects the service. It never starts a workload or edits
+the original unit. Managed services, pending activation and unfinished temporary
+discovery are refused. A reload or validation error after writing reports that
+the override was saved; repair and recheck before proceeding.
+
+If automatic correction is unavailable or fails, manual recovery remains available.
+**Copy reviewed override** copies the proposal only. A reported restart-policy
+blocker may include `Restart=no`, which disables automatic crash recovery. Have
+the service administrator review the assignments, add the drop-in and reload the
+user manager. Other launch, model and trust blockers still require correction.
+**Check again** refreshes the installation and main application card without
+reopening setup. Fresh qualification unlocks **Use installation**; temporary
+inventory retains its separate startup consent and cleanup safeguards.
 
 Copy diagnostic report on the application page produces one bounded shareable
 report across discovered installations, with application, installed/qualified
 states and blocker categories. It excludes paths, service identities, models,
 GPU UUIDs, endpoint values and raw errors. Local Copy details and Copy reviewed
 override contain concrete local information; review those before sharing them.
+

@@ -383,3 +383,106 @@ test('checking an empty installation selection keeps visible guidance and blocks
     assert.equal(ui.calls.some(call => ['probe', 'prepare'].includes(call.argv[1])), false);
     await ui.click('Back'); assert.equal(ui.by('Use installation').sensitive, false);
 });
+
+
+test('rechecking a repaired service updates the main card without reopening or selecting it', async () => {
+    const broken = {...ready, recognized: false, configurationStatus: 'gpu-unresolved'};
+    let calls = 0;
+    const ui = await launch(options(broken, {discover: () => ({request, units: [], applications: [calls++ ? ready : broken]})}));
+    const heading = ui.widgets.find(widget => widget.label === 'Choose your applications');
+    assert.equal(heading.selectable, false);
+    await ui.click('Settings for ComfyUI'); await ui.click('View details');
+    const selections = ui.widgets.filter(widget => widget.widgetType === 'CheckButton').map(widget => Boolean(widget.active));
+    await ui.click('Check again'); await ui.click('Cancel');
+    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label === 'Installed and stopped. Ready to configure.'));
+    assert.deepEqual(ui.widgets.filter(widget => widget.widgetType === 'CheckButton').map(widget => Boolean(widget.active)), selections);
+    await ui.click('Settings for ComfyUI');
+    assert.equal(ui.by('Use installation').sensitive, true);
+});
+
+test('Cancel cannot restore readiness after the selected service disappears during recheck', async () => {
+    let count = 0;
+    const ui = await launch(options(ready, {discover: () => ({request, units: [], applications: count++ ? [] : [ready]}),
+        probe: {app: 'comfyui', instanceStatus: 'unreachable', configurationStatus: 'unverified'}}));
+    await ui.click('Settings for ComfyUI'); await ui.click('Advanced settings');
+    ui.edit(ui.by('Health endpoint'), 'text', 'http://127.0.0.1:8188/changed');
+    await ui.click('Back'); await ui.click('View details'); await ui.click('Check again');
+    assert.equal(count, 2, 'the service inventory was refreshed');
+    await ui.click('Cancel'); await ui.click('Settings for ComfyUI');
+    assert.equal(ui.by('Use installation').sensitive, false);
+});
+
+test('recheck refreshes installation choices and preserves service selection across reorder and Cancel', async () => {
+    const stale = {...ready, unit: 'removed.service', recognized: false, binding: {...ready.binding, unit: 'removed.service'}};
+    const added = {...ready, unit: 'new.service', endpoint: 'http://127.0.0.1:9000', binding: {...ready.binding, unit: 'new.service'}};
+    const updated = {...ready, location: '/updated/comfyui.service'};
+    let count = 0;
+    const ui = await launch(options(ready, {discover: () => ({request, units: [], applications: count++ ? [added, updated] : [ready, stale]}),
+        probe: {app: 'comfyui', instanceStatus: 'not-running', inventoryStatus: 'not-checked'}}));
+    await ui.click('Settings for ComfyUI'); await ui.click('Advanced settings');
+    ui.edit(ui.by('Health endpoint'), 'text', 'http://127.0.0.1:8188/changed');
+    await ui.click('Back'); await ui.click('View details'); await ui.click('Check again'); await ui.click('Back');
+    const picker = ui.by('Detected instance');
+    assert.equal(picker.selected, 2);
+    assert.equal(picker.model.get_n_items(), 3);
+    assert.equal(picker.model.get_string(2), candidateChoice(updated));
+    assert.equal(ui.by('Application address').text, ready.endpoint, 'refresh does not adopt the newly discovered service');
+    await ui.click('Change installation…');
+    assert.equal(ui.visible(ui.by(candidateChoice(stale))), false);
+    assert.equal(ui.visible(ui.by(candidateChoice(ready))), false);
+    await ui.click(candidateChoice(added));
+    assert.equal(ui.by('Application address').text, added.endpoint);
+    await ui.click('Advanced settings'); await ui.click('Launch details'); await ui.click('Save selections for later');
+    assert.equal(JSON.parse(ui.calls.at(-1).input).drafts[0].binding.unit, added.unit);
+    await ui.click('Cancel'); await ui.click('Settings for ComfyUI');
+    assert.equal(picker.selected, 2, 'Cancel restores the service identity at its new index');
+    assert.equal(ui.by('Application address').text, ready.endpoint);
+    assert.equal(ui.calls.some(call => ['prepare', 'apply'].includes(call.argv[1])), false);
+});
+
+test('recheck clears a removed choice without adopting its replacement, including after Cancel', async () => {
+    const added = {...ready, unit: 'new.service', binding: {...ready.binding, unit: 'new.service'}};
+    let count = 0;
+    const ui = await launch(options(ready, {discover: () => ({request, units: [], applications: count++ ? [added] : [ready]}),
+        probe: {app: 'comfyui', instanceStatus: 'unreachable', configurationStatus: 'unverified'}}));
+    await ui.click('Settings for ComfyUI'); await ui.click('Advanced settings');
+    ui.edit(ui.by('Health endpoint'), 'text', 'http://127.0.0.1:8188/changed');
+    await ui.click('Back'); await ui.click('View details'); await ui.click('Check again');
+    assert.equal(ui.by('Detected instance').selected, 0);
+    await ui.click('Cancel'); await ui.click('Settings for ComfyUI');
+    assert.equal(ui.by('Detected instance').selected, 0);
+    assert.equal(ui.by('Use installation').sensitive, false);
+    await ui.click('Change installation…');
+    assert.equal(ui.visible(ui.by(candidateChoice(ready))), false);
+    await ui.click(candidateChoice(added));
+    assert.equal(ui.by('Detected instance').selected, 1);
+});
+
+for (const removed of [false, true]) {
+    test(`another editor's discovery invalidates ${removed ? 'removed' : 'changed'} service evidence and refreshes choices`, async () => {
+        const source = {...ready, recognized: false, configurationStatus: 'inspection-failed'};
+        const other = {...ready, app: 'ollama', label: 'Ollama', unit: 'ollama.service', endpoint: 'http://127.0.0.1:11434', binding: {...ready.binding, unit: 'ollama.service'}};
+        const replacement = {...other, unit: 'new-ollama.service', binding: {...other.binding, unit: 'new-ollama.service'}};
+        const updated = {...other, recognized: false, configurationStatus: 'inspection-failed'};
+        let count = 0;
+        const ui = await launch(options(source, {discover: () => ({request, units: [], applications: count++ ? [source, replacement, ...(removed ? [] : [updated])] : [source, other]}),
+            probe: {app: 'comfyui', instanceStatus: 'not-running', inventoryStatus: 'not-checked'}}));
+        await ui.click('Settings for Ollama');
+        assert.equal(ui.by('Use installation').sensitive, true);
+        await ui.click('Advanced settings'); ui.edit(ui.by('Installation display name'), 'text', 'My Ollama');
+        await ui.click('Back'); await ui.click('Back');
+        await ui.click('Settings for ComfyUI'); await ui.click('View details'); await ui.click('Check again');
+        await ui.click('Back'); await ui.click('Back');
+        await ui.click('Settings for Ollama');
+        assert.equal(ui.by('Use installation').sensitive, false);
+        await ui.click('Advanced settings'); assert.equal(ui.by('Installation display name').text, 'My Ollama');
+        await ui.click('Back'); await ui.click('Change installation…');
+        assert.equal(ui.visible(ui.by(candidateChoice(other))), false);
+        await ui.click(candidateChoice(replacement));
+        await ui.click('Advanced settings'); await ui.click('Launch details'); await ui.click('Save selections for later');
+        const saved = JSON.parse(ui.calls.at(-1).input).drafts.find(draft => draft.app === 'ollama');
+        assert.equal(saved.binding.unit, replacement.unit);
+        assert.equal(saved.label, 'My Ollama');
+        assert.equal(ui.calls.some(call => ['prepare', 'apply'].includes(call.argv[1])), false);
+    });
+}

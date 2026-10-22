@@ -57,7 +57,7 @@ def run_case(root, output, dimensions):
                 'configuration-checking', 'settings-stale-check', 'settings-stale-endpoint-check', 'temporary-without-consent',
                 'temporary-checking', 'temporary-cleanup-required', 'temporary-close-blocked',
                 'temporary-cleanup-complete', 'temporary-cancelled-restored'}
-    required.update(('diagnostic-export', 'settings-installed-blocked', 'correction-without-selection', 'correction-selected-preview', 'correction-inventory-disappeared'))
+    required.update(('diagnostic-export', 'settings-installed-blocked', 'correction-unavailable', 'correction-selected-preview', 'correction-inventory-disappeared'))
     required.update(('included-unresolved-settings', 'included-unresolved-blocked', 'included-valid-rest-review'))
     required.update(f'settings-{state}' for state in
                     ('ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed'))
@@ -66,9 +66,9 @@ def run_case(root, output, dimensions):
     assert required <= set(report['screenshots']), ('missing native state evidence', required - set(report['screenshots']))
     for name in required:
         assert (case / f'{name}.png').is_file(), ('missing native screenshot', name)
-    for name in ('correction-without-selection', 'correction-selected-preview', 'correction-inventory-disappeared'):
+    for name in ('correction-selected-preview',):
         evidence = next((item for item in report['geometry'] if item['screen'] == name and 'correction' in item), None)
-        assert evidence and {item['control'] for item in evidence['correction']} == {'gpu-picker', 'override-preview', 'copy-override'}, ('missing visible correction evidence', name)
+        assert evidence and {item['control'] for item in evidence['correction']} == {'override-preview', 'apply-override'}, ('missing visible correction evidence', name)
         viewport = evidence['viewport']
         for item in evidence['correction']:
             assert item['x'] >= 0 and item['y'] >= 0 and item['width'] > 0 and item['height'] > 0 and item['x'] + item['width'] <= viewport['width'] and item['y'] + item['height'] <= viewport['height'], ('correction control clipped', name, item)
@@ -104,3 +104,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

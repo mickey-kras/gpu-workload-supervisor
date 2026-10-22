@@ -196,6 +196,10 @@ func physicalGPUInventory(output []byte) []string {
 }
 
 func (b Backend) discoverGPUInventory(ctx context.Context, result *Discovery) {
+	if b.gpuInventory != nil {
+		result.GPUUUIDs, result.GPUInventoryStatus = b.gpuInventory(ctx)
+		return
+	}
 	result.GPUUUIDs, result.GPUInventoryStatus = inspectGPUInventory(ctx, b.runCommand, gpuruntime.ValidateGPUInventoryExecutable)
 }
 

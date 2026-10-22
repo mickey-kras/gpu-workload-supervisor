@@ -7,11 +7,13 @@ import Pango from 'gi://Pango';
 import {applicationHeader, linkButton, roundedCard} from './presentation.mjs';
 import {applications, candidateChoice, candidateDiagnostics, candidateIdentity, candidateMessage, candidateReady, correctionPreview, recoveryGuidance} from './onboarding.mjs';
 
+const manualCorrectionInstructions = 'Not applied. Have the service administrator add only the reviewed assignments with systemctl --user edit SERVICE (replace SERVICE with the service shown above). Save the drop-in, run systemctl --user daemon-reload, then Check again. Restart=no disables automatic crash recovery. Copying applies nothing.';
+
 // Settings share the wizard's scroller and fixed footer. Each optional section
 // has its own page, so long service identities never compete with entry fields.
 export class InstallationSettings {
-    constructor({Adw, Gtk, app, window, gpuUUIDs = [], gpuInventoryStatus, navigate}) {
-        this.Gtk = Gtk; this.navigate = navigate;
+    constructor({Adw, Gtk, app, window, gpuUUIDs = [], gpuInventoryStatus, navigate, correctGPU}) {
+        this.Gtk = Gtk; this.navigate = navigate; this.correctGPU = correctGPU;
         this.busy = false; this.gpuInventoryStatus = gpuInventoryStatus;
         this.appLabel = applications.find(item => item.id === app).label;
         this.root = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 18});
@@ -59,16 +61,38 @@ export class InstallationSettings {
         });
         this.repairUUIDs = [];
         this.repair = new Adw.PreferencesGroup({title: 'Supported recovery'}); this.pages.get('configuration').append(this.repair);
-        this.gpu = new Adw.ComboRow({title: 'Physical GPU UUID (explicit selection required)', selected: 0, model: Gtk.StringList.new(['Choose a full physical GPU UUID…', ...this.repairUUIDs])}); this.repair.add(this.gpu);
         this.preview = new Gtk.Label({wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.preview.add_css_class('monospace'); this.repair.add(this.preview);
         this.copyOverride = new Gtk.Button({label: 'Copy reviewed override', sensitive: false}); this.repair.add(this.copyOverride);
         this.copyOverride.connect('clicked', () => {
             copySetupText(window, this.overrideText);
         });
-        this.gpu.connect('notify::selected', () => this.updateCorrection());
-        this.repairInstructions = new Gtk.Label({label: 'Not applied. Have the service administrator add only the reviewed assignments with systemctl --user edit SERVICE (replace SERVICE with the service shown above). Save the drop-in, run systemctl --user daemon-reload, then Check again. Restart=no disables automatic crash recovery. Copying applies nothing.', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.repair.add(this.repairInstructions);
+        this.applyGPU = new Gtk.Button({label: 'Configure GPU'}); this.repair.add(this.applyGPU);
+        this.applyGPU.connect('clicked', async () => {
+            if (this.busy) return;
+            const candidate = this.currentCandidate;
+            this.checking(true);
+            try {
+                const result = await this.correctGPU(candidate, this.gpuPlan);
+                if (result.applied) {
+                    this.gpuPlan = null;
+                    this.repairInstructions.label = 'GPU configuration applied. The application remains stopped.';
+                } else {
+                    this.gpuPlan = result;
+                    this.preview.label = result.content;
+                    this.preview.visible = true;
+                    this.repairInstructions.label = 'Apply this service override to use the Supervisor GPU. The application will remain stopped.';
+                    this.applyGPU.label = 'Apply GPU configuration';
+                }
+            } catch (error) {
+                this.gpuPlan = null; this.applyGPU.label = 'Configure GPU';
+                this.preview.label = this.overrideText;
+                this.preview.visible = Boolean(this.overrideText);
+                this.copyOverride.visible = Boolean(this.overrideText);
+                this.repairInstructions.label = `${error.message}\n\nIf the correction was saved, run systemctl --user daemon-reload and Check again before attempting another correction. If nothing was saved, have the service administrator review the override and apply it with systemctl --user edit SERVICE, then reload and Check again. Copying applies nothing.`;
+            } finally { this.checking(false); }
+        });
+        this.repairInstructions = new Gtk.Label({label: manualCorrectionInstructions, wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.repair.add(this.repairInstructions);
         this.trustGuidance = new Gtk.Label({wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.repair.add(this.trustGuidance);
-        this.pages.get('configuration').append(new Gtk.Label({label: 'Your service has not been changed.', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0}));
         this.updateGPUInventory(gpuUUIDs, gpuInventoryStatus);
     }
     navigation(label, target) {
@@ -95,7 +119,7 @@ export class InstallationSettings {
         this.navigate?.({title: titles[this.page], page: this.page, ready: this.ready && !this.busy, busy: this.busy});
     }
     candidate(candidate) {
-        this.currentCandidate = candidate; this.gpu.selected = 0; this.updateCorrection();
+        this.currentCandidate = candidate; this.gpuPlan = null; this.updateCorrection();
         this.identity.label = candidateIdentity(candidate);
         this.state.label = candidate.installed || candidate.instanceStatus === 'installed' ? 'Installed' : 'Unverified';
         if (candidate.instanceStatus === 'not-running' && candidate.unit) this.state.label = 'Stopped';
@@ -118,23 +142,23 @@ export class InstallationSettings {
         this.notify();
     }
     updateGPUInventory(uuids, status) {
+        this.gpuPlan = null;
         this.gpuInventoryStatus = status;
         const inventoryUUIDs = uuids === undefined ? [] : uuids;
         this.repairUUIDs = inventoryUUIDs.filter(uuid => /^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(uuid)).slice(0, 32);
-        this.gpu.model = this.Gtk.StringList.new(['Choose a full physical GPU UUID…', ...this.repairUUIDs]);
-        this.gpu.selected = 0;
         this.updateCorrection();
     }
     updateCorrection() {
         const candidate = this.currentCandidate;
         const messages = candidateDiagnostics(candidate).join('\n');
         const needsGPU = candidate?.configurationStatus === 'gpu-unresolved' || /CUDA_VISIBLE_DEVICES|GPU identity/.test(messages);
-        this.gpu.visible = Boolean(candidate?.unit && needsGPU);
-        this.overrideText = correctionPreview(candidate, this.repairUUIDs[this.gpu.selected - 1] ?? '');
+        this.applyGPU.visible = Boolean(candidate?.unit && needsGPU && this.repairUUIDs.length === 1 && this.gpuInventoryStatus === 'available');
+        this.applyGPU.label = 'Configure GPU';
+        this.overrideText = correctionPreview(candidate, this.gpuInventoryStatus === 'available' && this.repairUUIDs.length === 1 ? this.repairUUIDs[0] : '');
         let guidance = 'No service override is proposed for these blockers.';
         if (needsGPU) {
             const reason = {untrusted: 'GPU inventory executable did not pass trust checks.', invalid: 'GPU inventory was incomplete or invalid.', unavailable: 'GPU inventory query was unavailable.'}[this.gpuInventoryStatus] ?? 'Trusted GPU inventory unavailable.';
-            guidance = this.repairUUIDs.length ? 'Choose a full physical GPU UUID. NVIDIA indices do not establish CUDA ordinal mappings.' : `${reason} Inspect physical identity before correcting visibility; no index mapping is assumed.`;
+            guidance = this.repairUUIDs.length ? 'Multiple GPUs require supervisor-wide configuration. Automatic correction is available with one supported GPU.' : `${reason} Inspect physical identity before correcting visibility; no index mapping is assumed.`;
         }
         this.preview.label = this.overrideText || guidance;
         this.copyOverride.sensitive = Boolean(this.overrideText);
@@ -144,8 +168,9 @@ export class InstallationSettings {
         const correction = Boolean(candidate?.unit && (needsGPU || /\bRestart\b/.test(messages)));
         this.trustGuidance.visible = trust;
         this.repairInstructions.visible = correction;
-        this.preview.visible = correction;
-        this.copyOverride.visible = correction;
+        this.preview.visible = correction && !this.applyGPU.visible;
+        this.copyOverride.visible = correction && !this.applyGPU.visible;
+        this.repairInstructions.label = this.applyGPU.visible ? 'Supervisor detected one supported GPU. Configure this stopped service to use it. Review the change before applying.' : manualCorrectionInstructions;
         this.repair.visible = !candidateReady(candidate) && (correction || trust);
     }
     problem(summary, error) {
@@ -191,3 +216,4 @@ export function copySetupText(window, text) {
     const value = new GObject.Value(); value.init(GObject.TYPE_STRING); value.set_string(text);
     window.get_display().get_clipboard().set_content(Gdk.ContentProvider.new_for_value(value));
 }
+

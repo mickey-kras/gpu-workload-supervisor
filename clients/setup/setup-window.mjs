@@ -99,7 +99,7 @@ class SetupWindow {
         this.draftRows.visible = this.step === 0;
         this.setupSettings.visible = this.step === 0; this.back.visible = this.step > 0; this.later.visible = this.step === 0; this.status.visible = this.step === 2 || this.pending; this.apply.visible = this.step === 2; this.review.visible = this.step !== 2;
         this.review.label = 'Continue'; this.review.sensitive = Boolean(this.request);
-        this.heading.grab_focus(); this.heading.select_region(0, 0);
+        (this.step > 0 ? this.back : this.findApplication).grab_focus();
         this.scroll.get_vadjustment().value = 0;
     }
 
@@ -117,7 +117,7 @@ class SetupWindow {
         this.saveDrafts.visible = false; this.later.visible = true; this.later.label = 'Cancel';
         for (const draftEditor of this.draftEditors) draftEditor.group.visible = draftEditor === editor;
         editor.showSettings(editor.replacing);
-        this.settingsTitle.grab_focus(); this.settingsTitle.select_region(0, 0);
+        this.settingsBack.grab_focus();
     }
 
     closeApplicationSettings(restoreFocus = true) {
@@ -148,7 +148,7 @@ class SetupWindow {
         this.status.visible = false;
         if (previous !== page) {
             this.scroll.get_vadjustment().value = this.applicationSettings.scrolls.get(page) ?? 0;
-            this.settingsTitle.grab_focus(); this.settingsTitle.select_region(0, 0);
+            this.settingsBack.grab_focus();
         }
     }
 
@@ -172,7 +172,7 @@ class SetupWindow {
         if (this.drafts.some(draft => draft.id === initial.id)) { this.status.label = 'This workload already has an open selection. Finish or remove that selection first.'; return this.draftEditors.find(editor => editor.id === initial.id); }
         this.drafts.push(initial);
         let editor;
-        editor = addDraftEditor({Adw, Gtk, Gio, window: this.window, parent: this.draftRows, initial, detected: this.discovered, gpuUUIDs: this.gpuUUIDs, gpuInventoryStatus: this.gpuInventoryStatus, discoveryErrors: this.discoveryErrors, command: this.command, modelParent: this.modelPage, temporaryStatus: this.temporaryStatus, reportProblem: this.reportError, reportStatus: message => { this.status.label = message; this.reportError.clear(); }, navigateSettings: state => this.navigateApplicationSettings(editor, state), saveSelections: () => this.saveDraftSelections(), openSettings: origin => this.openApplicationSettings(editor, origin),
+        editor = addDraftEditor({Adw, Gtk, Gio, window: this.window, parent: this.draftRows, initial, detected: this.discovered, discovered: discovery => this.updateDiscovery(discovery), gpuUUIDs: this.gpuUUIDs, gpuInventoryStatus: this.gpuInventoryStatus, discoveryErrors: this.discoveryErrors, command: this.command, modelParent: this.modelPage, temporaryStatus: this.temporaryStatus, reportProblem: this.reportError, reportStatus: message => { this.status.label = message; this.reportError.clear(); }, navigateSettings: state => this.navigateApplicationSettings(editor, state), saveSelections: () => this.saveDraftSelections(), openSettings: origin => this.openApplicationSettings(editor, origin),
             bind: async (profile, current, finish = false) => {
                 replacing ??= this.profiles.find(existing => existing.id === initial.id) ?? null;
                 if (replacing && !this.profiles.includes(replacing)) throw new Error('The original workload was removed. Reopen Manage workloads before editing it.');
@@ -350,6 +350,18 @@ class SetupWindow {
         }
     }
 
+    updateDiscovery(discovery) {
+        this.discovered = discovery.applications ?? [];
+        this.gpuUUIDs = discovery.gpuUUIDs ?? [];
+        this.gpuInventoryStatus = discovery.gpuInventoryStatus;
+        this.discoveryErrors = discovery.errors ?? [];
+        for (const editor of this.draftEditors) editor.updateDiscovery(discovery);
+        for (const [appID, card] of this.applicationCards) {
+            const candidates = this.discovered.filter(candidate => candidate.app === appID);
+            card.detection.label = this.detectionMessage(candidates.filter(candidate => candidate.recognized), candidates);
+        }
+    }
+
     updateApplicationCards() {
         for (const [appID, card] of this.applicationCards) {
             const candidates = this.discovered.filter(candidate => candidate.app === appID);
@@ -495,4 +507,5 @@ class SetupWindow {
         } catch (error) { this.status.label = error.message; this.status.visible = true; this.review.sensitive = false; }
     }
 }
+
 

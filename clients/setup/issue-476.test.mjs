@@ -28,76 +28,47 @@ test('reviewed override requires explicit full UUID and never invents a numeric 
     assert.equal(correctionPreview(blocked, 'GPU-0123'), '');
     assert.equal(correctionPreview(blocked, uuid), `[Service]\nEnvironment="CUDA_VISIBLE_DEVICES=${uuid}"\nRestart=no\n`);
 });
-test('native handlers detect blocked installation, select UUID, copy preview and recheck before ready', async () => {
-    let count = 0;
+test('a single GPU is proposed internally and applying requires a reviewed fingerprint', async () => {
+    let applied = false;
     const ready = {...blocked, recognized: true, diagnostics: [], configurationStatus: 'ready', binding: {unit: blocked.unit, cgroup: '/service', healthURL: 'http://127.0.0.1:8188/system_stats'}};
-    const ui = await launch({deferAction: 'unused', responses: {discover: () => ({request, units: [], gpuUUIDs: [uuid], applications: [count++ ? ready : blocked]})}});
-    await ui.click('Copy diagnostic report');
-    const window = ui.widgets.find(widget => widget.title === 'GPU Workload Setup');
-    assert.equal(window.clipboard.includes('private'), false);
-    await ui.click('Settings for ComfyUI');
-    assert.equal(ui.by('Use installation').sensitive, false);
-    await ui.click('View details');
-    const instructions = ui.widgets.find(widget => ui.visible(widget) && widget.label?.includes('systemctl --user edit SERVICE'));
-    assert.ok(instructions);
-    assert.match(instructions.label, /Save the drop-in, run systemctl --user daemon-reload, then Check again/);
-    assert.match(instructions.label, /Restart=no disables automatic crash recovery/);
-    assert.match(instructions.label, /Copying applies nothing/);
-    assert.equal(ui.by('Copy reviewed override').sensitive, false);
-    ui.edit(ui.by('Physical GPU UUID (explicit selection required)'), 'selected', 1);
-    assert.equal(ui.by('Copy reviewed override').sensitive, true);
-    await ui.click('Copy reviewed override');
-    assert.equal(window.clipboard, correctionPreview(blocked, uuid));
+    const ui = await launch({deferAction: 'unused', responses: {
+        discover: () => ({request, units: [], gpuInventoryStatus: 'available', gpuUUIDs: [uuid], applications: [applied ? ready : blocked]}),
+        'correct-gpu': input => { applied = Boolean(input.confirm); return {fingerprint: 'reviewed', content: 'GPU correction preview', applied}; },
+    }});
+    await ui.click('Settings for ComfyUI'); await ui.click('View details');
+    assert.equal(ui.widgets.some(widget => ui.visible(widget) && widget.title?.includes('GPU UUID')), false);
+    await ui.click('Configure GPU');
+    assert.equal(applied, false);
+    assert.equal(ui.by('Use installation').visible, false);
+    await ui.click('Apply GPU configuration');
+    const calls = ui.calls.filter(call => call.argv[1] === 'correct-gpu');
+    assert.equal(JSON.parse(calls[1].input).fingerprint, 'reviewed');
+    assert.equal(JSON.parse(calls[1].input).confirm, true);
     await ui.click('Back');
-    assert.equal(ui.by('Use installation').sensitive, false);
-    await ui.click('View details');
-    assert.equal(ui.calls.some(call => ['apply', 'temporary-discover'].includes(call.argv[1])), false);
-    await ui.click('Check again'); await ui.click('Back');
     assert.equal(ui.by('Use installation').sensitive, true);
+    assert.equal(ui.calls.some(call => ['apply', 'temporary-discover'].includes(call.argv[1])), false);
 });
 
-test('Check again refreshes available UUIDs and drops a disappeared explicit selection', async () => {
+test('Check again disables automatic correction when trusted GPU inventory disappears', async () => {
     let count = 0;
-    const inventories = [[], [uuid], []];
-    const ui = await launch({deferAction: 'unused', responses: {discover: () => {
-        const gpuUUIDs = inventories[Math.min(count++, 2)];
-        return {request, units: [], gpuUUIDs, gpuInventoryStatus: gpuUUIDs.length ? 'available' : 'unavailable', applications: [blocked]};
-    }}});
+    const ui = await launch({deferAction: 'unused', responses: {discover: () => ({request, units: [],
+        gpuUUIDs: count++ ? [] : [uuid], gpuInventoryStatus: count === 1 ? 'available' : 'unavailable', applications: [blocked]})}});
     await ui.click('Settings for ComfyUI'); await ui.click('View details');
-    const choice = ui.by('Physical GPU UUID (explicit selection required)');
-    assert.equal(choice.model.get_n_items(), 1);
-    assert.equal(ui.by('Copy reviewed override').sensitive, false);
+    assert.equal(ui.by('Configure GPU').visible, true);
     await ui.click('Check again');
-    assert.equal(choice.model.get_n_items(), 2);
-    assert.equal(choice.selected, 0);
-    assert.equal(ui.by('Copy reviewed override').sensitive, false);
-    ui.edit(choice, 'selected', 1);
-    assert.equal(ui.by('Copy reviewed override').sensitive, true);
-    await ui.click('Check again');
-    assert.equal(choice.model.get_n_items(), 1);
-    assert.equal(choice.selected, 0);
-    assert.equal(ui.by('Copy reviewed override').sensitive, false);
+    assert.equal(ui.widgets.some(widget => ui.visible(widget) && widget.label === 'Configure GPU'), false);
     assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('GPU inventory query was unavailable.')));
-    await ui.click('Back');
-    assert.equal(ui.by('Use installation').sensitive, false);
-    assert.equal(ui.calls.some(call => ['apply', 'temporary-discover'].includes(call.argv[1])), false);
 });
 
 test('native-style inherited endpoint keeps reinspection busy until its read-only probe completes', async () => {
-    const native = {...blocked, id: undefined, endpoint: 'http://127.0.0.1:18188', cgroup: '/example/model', inventoryStatus: 'available', models: [], evidence: ['Example command evidence'], nextStep: 'Inspect the existing service. Its files have not been changed.'};
-    let discoveries = 0;
-    const ui = await launch({deferAction: 'probe', responses: {discover: () => ({request, units: [], gpuUUIDs: discoveries++ ? [uuid] : [], applications: [native]}), probe: {app: 'comfyui', instanceStatus: 'unreachable', inventoryStatus: 'unknown'}}});
+    const native = {...blocked, id: undefined, endpoint: 'http://127.0.0.1:18188', cgroup: '/example/model', inventoryStatus: 'available', models: []};
+    const ui = await launch({deferAction: 'probe', responses: {discover: {request, units: [], applications: [native]}, probe: {app: 'comfyui', instanceStatus: 'unreachable', inventoryStatus: 'unknown'}}});
     await ui.click('Settings for ComfyUI'); await ui.click('View details');
     const checking = ui.click('Check again');
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(ui.calls.filter(call => call.argv[1] === 'discover').length, 2);
-    assert.equal(ui.calls.filter(call => call.argv[1] === 'probe').length, 1);
-    assert.equal(ui.by('Physical GPU UUID (explicit selection required)').model.get_n_items(), 2);
     assert.equal(ui.by('Check again').sensitive, false);
     ui.finish(); await checking;
     assert.equal(ui.by('Check again').sensitive, true);
-    assert.equal(ui.by('Copy reviewed override').sensitive, false);
-    assert.equal(ui.calls.some(call => ['apply', 'temporary-discover'].includes(call.argv[1])), false);
 });
 
 test('one diagnostic export uses freshly rechecked installation evidence and keeps other applications', async () => {
@@ -134,4 +105,56 @@ test('RestartSec blockers never propose or classify a Restart policy correction'
     assert.equal(ui.by('Copy reviewed override').sensitive, false);
     assert.equal(ui.visible(ui.by('Copy reviewed override')), false);
     assert.equal(ui.calls.some(call => ['apply', 'prepare', 'temporary-discover'].includes(call.argv[1])), false);
+});
+
+
+test('automatic correction failure restores manual recovery and discards confirmation', async () => {
+    let calls = 0;
+    const ui = await launch({deferAction: 'unused', responses: {
+        discover: {request, units: [], gpuInventoryStatus: 'available', gpuUUIDs: [uuid], applications: [blocked]},
+        'correct-gpu': () => { if (calls++ === 0) return {fingerprint: 'preview', content: 'review me'}; throw new Error('Service is outside the user configuration directory'); },
+    }});
+    await ui.click('Settings for ComfyUI'); await ui.click('View details');
+    await ui.click('Configure GPU'); await ui.click('Apply GPU configuration');
+    assert.equal(ui.by('Copy reviewed override').visible, true);
+    assert.equal(ui.by('Copy reviewed override').sensitive, true);
+    assert.equal(ui.by('Configure GPU').visible, true);
+    await ui.click('Configure GPU');
+    const last = ui.calls.filter(call => call.argv[1] === 'correct-gpu').at(-1);
+    assert.equal(JSON.parse(last.input).confirm, false);
+});
+
+for (const message of ['GPU correction saved; reload failed', 'GPU correction saved; configuration still needs attention']) {
+    test(`correction failure preserves saved-state guidance: ${message}`, async () => {
+        let calls = 0;
+        const ui = await launch({deferAction: 'unused', responses: {
+            discover: {request, units: [], gpuInventoryStatus: 'available', gpuUUIDs: [uuid], applications: [blocked]},
+            'correct-gpu': () => { if (calls++ === 0) return {fingerprint: 'preview', content: 'review me'}; throw new Error(message); },
+        }});
+        await ui.click('Settings for ComfyUI'); await ui.click('View details');
+        await ui.click('Configure GPU'); await ui.click('Apply GPU configuration');
+        const guidance = ui.widgets.find(widget => ui.visible(widget) && widget.label?.includes(message));
+        assert.ok(guidance);
+        assert.equal(guidance.label.includes('Not applied'), false);
+        assert.match(guidance.label, /saved, run systemctl --user daemon-reload and Check again before attempting another correction/);
+        await ui.click('Configure GPU');
+        assert.equal(JSON.parse(ui.calls.filter(call => call.argv[1] === 'correct-gpu').at(-1).input).confirm, false);
+    });
+}
+
+test('discovery from another editor refreshes GPU inventory and discards its reviewed proposal', async () => {
+    const other = {...blocked, app: 'ollama', label: 'Ollama', unit: 'ollama.service'};
+    let count = 0;
+    const ui = await launch({deferAction: 'unused', responses: {
+        discover: () => ({request, units: [], applications: [blocked, other], gpuUUIDs: count ? [] : [uuid], gpuInventoryStatus: count++ ? 'unavailable' : 'available'}),
+        'correct-gpu': {fingerprint: 'old-preview', content: 'old preview'},
+    }});
+    await ui.click('Settings for Ollama'); await ui.click('View details'); await ui.click('Configure GPU');
+    await ui.click('Back'); await ui.click('Back');
+    await ui.click('Settings for ComfyUI'); await ui.click('View details'); await ui.click('Check again');
+    await ui.click('Back'); await ui.click('Back');
+    await ui.click('Settings for Ollama'); await ui.click('View details');
+    assert.equal(ui.widgets.some(widget => ui.visible(widget) && ['Configure GPU', 'Apply GPU configuration'].includes(widget.label)), false);
+    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('GPU inventory query was unavailable.')));
+    assert.equal(ui.calls.filter(call => call.argv[1] === 'correct-gpu').length, 1);
 });
