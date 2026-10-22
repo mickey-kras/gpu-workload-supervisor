@@ -726,3 +726,41 @@ test('failed temporary cleanup vetoes closing and keeps appearance resources act
     assert.equal(ui.styleProviders.size, 1);
     assert.ok(ui.widgets.some(widget => widget.label?.includes('cleanup must finish before closing')));
 });
+
+for (const refresh of ['unrefreshed', 'unchanged', 'changed', 'removed']) {
+    test(`cancelling settings after temporary discovery handles ${refresh} installation evidence`, async () => {
+        const candidate = installation('ollama');
+        const refreshed = refresh === 'removed' ? [] : [{...candidate, ...(refresh === 'changed' ? {models: [{id: 'new', label: 'New model'}], inventoryStatus: 'available'} : {})}];
+        const ui = await launch(temporary({
+            discover: (_input, calls) => ({request: structuredClone(request), units: [], applications: calls.filter(call => call.argv[1] === 'discover').length > 1 ? refreshed : [candidate]}),
+            'temporary-discover': {session, models: [{id: 'a', label: 'Model A'}, {id: 'b', label: 'Model B'}]},
+        }));
+        ui.edit(ui.by('Use Ollama'), 'active', true);
+        await ui.click('Continue');
+        ui.edit(ui.by('I allow this brief start and will keep other application controls paused.'), 'active', true);
+        await ui.click('Start Ollama briefly to list models');
+        ui.edit(ui.by('Model A'), 'active', true); ui.edit(ui.by('Model B'), 'active', true);
+        const choices = ui.widgets.find(widget => widget.children.includes(ui.by('Model A')));
+        await ui.click('Back');
+        await ui.click('Settings for Ollama');
+        if (refresh !== 'unrefreshed') await ui.by('Check again').emit('clicked');
+        await ui.click('Cancel');
+        if (refresh === 'removed') {
+            assert.equal(ui.by('Detected instance').selected, 0);
+            assert.ok(ui.widgets.some(widget => widget.label === 'Configuration changed. Check again before using this installation.'));
+            return;
+        }
+        await ui.click('Continue');
+        const choice = label => choices.children.find(widget => widget.accessibleProperties?.label === label || widget.label === label);
+        const preserved = ['unrefreshed', 'unchanged'].includes(refresh);
+        assert.equal(Boolean(choice('Model A')), preserved);
+        assert.equal(Boolean(choice('Model B')), preserved);
+        if (preserved) {
+            assert.equal(choice('Model A').active, true); assert.equal(choice('Model B').active, true);
+            await ui.click('Continue');
+            assert.deepEqual(ui.calls.filter(call => call.argv[1] === 'prepare').map(call => JSON.parse(call.input).draft.model), ['a', 'b']);
+        } else if (refresh === 'changed') {
+            assert.ok(choices.children.some(widget => widget.accessibleProperties?.label === 'New model' || widget.label === 'New model'));
+        }
+    });
+}

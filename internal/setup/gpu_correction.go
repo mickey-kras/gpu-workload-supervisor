@@ -75,6 +75,12 @@ func validateGPUCorrectionState(ctx context.Context, root, unit string, discover
 		if err := checkNoTemporaryDiscovery(ctx, statePath); err != nil {
 			return err
 		}
+		// The CLI can accept a catalog without creating an operator profile.
+		snapshot, err := ReadCatalog(ctx, statePath)
+		if err != nil {
+			return err
+		}
+		discovery.Request.Catalog = snapshot.Catalog
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}

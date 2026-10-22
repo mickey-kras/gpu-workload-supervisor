@@ -452,7 +452,7 @@ class DraftEditor {
     capture() {
         const fields = [this.name, this.endpoint, this.health, ...Object.values(this.bindingFields), ...Object.values(this.ownedFields)].filter(field => typeof field !== 'function');
         const input = this.draft.snapshot();
-        return {input, candidate: this.lastCandidate, evidence: this.installationEvidence, ready: this.settings.ready && !this.settings.busy, bindingEdits: [...this.bindingEdits], endpointEdited: this.endpointEdited, selection: this.instances[this.instance.selected - 1], fields: fields.map(field => [field, field.text]), capacity: this.capacity.text, retain: this.retain.active, overrides: {...this.overrides}};
+        return {input, candidate: this.lastCandidate, discoveryCandidate: this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === this.lastCandidate?.unit), evidence: this.installationEvidence, ready: this.settings.ready && !this.settings.busy, bindingEdits: [...this.bindingEdits], endpointEdited: this.endpointEdited, selection: this.instances[this.instance.selected - 1], fields: fields.map(field => [field, field.text]), capacity: this.capacity.text, retain: this.retain.active, overrides: {...this.overrides}};
     }
     restore(snapshot) {
         if (!snapshot) return;
@@ -462,7 +462,10 @@ class DraftEditor {
         this.syncing = false;
         this.syncing = true; this.instance.selected = this.instanceIndex(snapshot.selection); this.syncing = false; this.draft.input = snapshot.input; this.draft.cancel(); this.installationEvidence = snapshot.evidence; this.bindingEdits = new Set(snapshot.bindingEdits); this.endpointEdited = snapshot.endpointEdited; this.overrides = snapshot.overrides;
         this.changed(this.draft.snapshot());
-        const selected = snapshot.candidate?.unit ? this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === snapshot.candidate.unit) : snapshot.candidate;
+        const current = snapshot.candidate?.unit ? this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === snapshot.candidate.unit) : snapshot.candidate;
+        // A temporary model inventory enriches the candidate without changing
+        // discovery evidence. Keep it unless the underlying installation changed.
+        const selected = current && JSON.stringify(current) === JSON.stringify(snapshot.discoveryCandidate) ? snapshot.candidate : current;
         if (selected) this.show(selected);
         else this.settings.problem('Installation not detected', new Error('The selected service was not found during the latest check.'));
         if (!selected || (selected === snapshot.candidate && !snapshot.ready)) this.settings.invalidate();
