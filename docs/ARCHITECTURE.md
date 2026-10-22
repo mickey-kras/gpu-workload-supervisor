@@ -13,6 +13,53 @@ The supervisor owns:
 
 It does not own job orchestration, content policy, workload APIs, or runtime data.
 
+## Integration boundaries
+
+| Component | Responsibility |
+| --- | --- |
+| Lifecycle controller | GPU ownership, admission state, fencing, transitions and verified release |
+| Execution proxy and adapters | Forward requests, register admitted work and correlate terminal evidence |
+| External job broker | Workflow steps, retries, checkpoints, cancellation and results |
+| External inference gateway | Request/response policy, authentication and content validation |
+| External model ingestion tools | Artifact scanning, reports, signing and promotion |
+
+The controller receives control metadata, not prompts or responses. The packaged
+proxy does receive and forward workload payloads, and may validate bounded
+protocol envelopes or exact-body authorization digests; it does not make semantic
+content-policy decisions. Durable demand records are admission evidence, not a
+workflow scheduler or permission to replay ambiguous execution.
+
+Local setup does not install a broker, gateway or scanner. Those integrations
+must preserve admission, terminal-evidence and direct-runtime isolation contracts.
+Trainer adapters own recipes and checkpoint contents; the controller owns their
+finite-job lifecycle. See [training](TRAINING.md).
+
+## Planned model attestation
+
+[#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) owns
+external scan/report and attestation preparation;
+[#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583) owns
+verification before supervised use and UI status. Neither is implemented.
+
+Plan adoption of [Microsoft's LLM Backdoor Scanner](https://github.com/microsoft/llm-backdoor-scanner)
+as one qualified ingestion check, with additional tools selected later. Scanning
+may execute an untrusted model: use isolated staging before serving approval,
+outside normal activation. Unsupported formats, skipped checks and errors never
+count as a pass.
+
+Signed evidence binds the exact artifact inventory, scanner versions/configuration,
+results and policy. Signing keys stay outside the supervisor. The execution gate
+verifies evidence and artifact identity without running scanners. Converted,
+quantized or adapter-composed artifacts need their own identity and assessment;
+a source-model result does not automatically qualify a derivative.
+
+The planned UI warns when required checks have not passed, distinguishes findings
+from unavailable checks and integrity failures, and exposes report details.
+Use "Verified attestation", never "Safe model", with:
+"These checks are a defensive component, not comprehensive backdoor or vulnerability detection."
+Advisory/enforce policy and explicit exceptions follow #583; invalid signatures
+or artifact mismatches are always rejected.
+
 ## State model
 
 New stores start closed and require reconciliation:

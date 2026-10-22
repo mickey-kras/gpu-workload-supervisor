@@ -9,6 +9,16 @@ Binaries: `gpu-mode` (controller), `gpu-workload-proxy` (admission proxy),
 `gpu-training-runner` (experimental), `gpu-training-candidate` (unqualified input
 preparation; not training execution).
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/generated/overview-dark.svg">
+  <img src="docs/architecture/generated/overview-light.svg" alt="Clients send requests through the execution proxy to workload services sharing one GPU. A separate controller switches workloads; both use durable state for admission and fencing.">
+</picture>
+
+The lifecycle controller handles ownership and transitions; the execution proxy
+forwards workload traffic without content-policy decisions. Workflow brokers,
+inference security gateways and model scanners are separate integrations, not
+installed by setup. See [responsibility boundaries](docs/ARCHITECTURE.md).
+
 ## Requires
 
 Linux with user systemd and cgroup v2.
@@ -19,7 +29,9 @@ Release archive or .deb from [Releases](https://github.com/mickey-kras/gpu-workl
 or `go build -o bin/ ./cmd/...`.
 
 Setup detects existing systemd user services for the supported applications and
-adopts them read-only. It never rewrites your units.
+adopts them without rewriting their source files. For an eligible stopped user
+service, setup previews a GPU correction and creates a new drop-in only after
+explicit Apply; it does not start the service. See [desktop setup](docs/DESKTOP.md).
 
 ## Setup checks
 
