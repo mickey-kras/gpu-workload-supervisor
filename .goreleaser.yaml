@@ -66,11 +66,20 @@ builds:
     goos: [linux]
     goarch: [amd64, arm64]
 
+  - id: gpu-training-import
+    main: ./cmd/gpu-training-import
+    binary: gpu-training-import
+    ldflags:
+      - -s -w -X github.com/mickey-kras/gpu-workload-supervisor/internal/deployment.Release={{ .Version }}
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+
 nfpms:
   - id: desktop
     package_name: gpu-workload-supervisor
     file_name_template: "{{ .ProjectName }}_{{ .Version }}_linux_{{ .Arch }}"
-    ids: [gpu-mode, gpu-workload-proxy, gpu-operator, gpu-setup, gpu-training-runner, gpu-training-candidate]
+    ids: [gpu-mode, gpu-workload-proxy, gpu-operator, gpu-setup, gpu-training-runner, gpu-training-candidate, gpu-training-import]
     formats: [deb]
     bindir: /usr/bin
     maintainer: gpu-workload-supervisor maintainers <noreply@github.com>
@@ -143,3 +152,4 @@ checksum:
 
 changelog:
   disable: true
+

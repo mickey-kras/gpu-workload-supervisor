@@ -75,6 +75,11 @@ executable adapter contract or enable a training profile. The separate
 [experimental LLM runner](LLM-TRAINING-RUNNER.md) implements that execution
 boundary without qualifying a runtime or enabling a profile.
 
+Read-only [trainer inspection](TRAINER-INSPECTION.md) exposes explicit binding
+validation for discovery and future setup. Follow the
+[LLM qualification guide](LLM-TRAINING-QUALIFICATION.md) for candidate recipe
+materialization and private host evidence; successful inspection is not GPU qualification.
+
 ## Commands
 
 Use the usual `gpu-mode` state/runtime flags before the command:
@@ -106,3 +111,4 @@ explicitly stops the configured trainer, verifies release and records
 it preserves that outcome. Recovery never retries the launch. If stop or release verification fails,
 the job remains pending and recovery can be retried. Start a new job ID only after
 the prior job is terminal. A resume integration must create a new job and fence.
+

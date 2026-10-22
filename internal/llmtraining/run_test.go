@@ -43,7 +43,7 @@ func executionFixture(t *testing.T, script string) (Recipe, jobEnvelope, string)
 	if err := os.Chmod(filepath.Join(bin, "python3"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	r.Budget.ExportBytes = 100
+	r.Budget.ExportBytes = 4096
 	raw, err := json.Marshal(r)
 	if err != nil {
 		t.Fatal(err)
@@ -88,6 +88,7 @@ func TestRunJobRequiresBothPhasesAndBindsCompletion(t *testing.T) {
 
 func updateExecutionScript(t *testing.T, r Recipe, e *jobEnvelope, jobPath, script string) {
 	t.Helper()
+	script = strings.Replace(script, "#!/bin/sh\n", "#!/bin/sh\n"+executionArtifactScript(r), 1)
 	r.Runtime.Inventory.Files[r.Runtime.Entrypoint] = writeFixture(t, filepath.Join(r.Runtime.Inventory.Root, r.Runtime.Entrypoint), script)
 	raw, err := json.Marshal(r)
 	if err != nil {
@@ -239,7 +240,7 @@ func TestRunJobRejectsInputsOrAdapterChangedDuringTraining(t *testing.T) {
 			case "empty adapter":
 				script += ": > '" + adapter + "'\n"
 			case "oversized adapter":
-				script += "printf '" + strings.Repeat("x", 101) + "' > '" + adapter + "'\n"
+				script += "printf '" + strings.Repeat("x", 4097) + "' > '" + adapter + "'\n"
 			}
 			if path != "" {
 				script += "printf changed > '" + path + "'\n"
@@ -483,4 +484,11 @@ func TestPrivateExecutionDirectoryAllowsRootOwnedStickyAncestor(t *testing.T) {
 	if err := privateExecutionDirectory(root); err != nil {
 		t.Fatal("root-owned sticky ancestor rejected", err)
 	}
+}
+
+func executionArtifactScript(r Recipe) string {
+	return "if [ \"$5\" = train ]; then\n" +
+		"printf '%s' '{\"peft_type\":\"LORA\",\"task_type\":\"CAUSAL_LM\",\"base_model_name_or_path\":\"" + r.Model.Inventory.Root + "\"}' > '" + filepath.Join(r.OutputDirectory, "adapter_config.json") + "'\n" +
+		"printf '{}' > '" + filepath.Join(r.OutputDirectory, "tokenizer_config.json") + "'\n" +
+		"printf '{}' > '" + filepath.Join(r.OutputDirectory, "tokenizer.json") + "'\nfi\n"
 }

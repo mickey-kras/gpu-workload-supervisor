@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -65,7 +64,7 @@ func RunJob(ctx context.Context, jobPath, invocationID, gpuUUID string) error {
 	if err != nil {
 		return err
 	}
-	adapter, err := adapterDigest(r)
+	adapter, err := artifactFiles(r)
 	if err != nil {
 		return err
 	}
@@ -252,53 +251,6 @@ func unchangedExecutionInputs(jobPath string, expected jobEnvelope, r Recipe) er
 		return err
 	}
 	return nil
-}
-
-func adapterDigest(r Recipe) (string, error) {
-	adapter := filepath.Join(r.OutputDirectory, "adapter_model.safetensors")
-	f, err := openRegular(adapter)
-	if err != nil {
-		return "", errors.New("trained adapter weights are missing")
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || info.Size() == 0 || uint64(info.Size()) > r.Budget.ExportBytes {
-		return "", errors.New("trained adapter exceeds its export budget or is empty")
-	}
-	h := sha256.New()
-	n, err := io.Copy(h, io.LimitReader(f, int64(min(r.Budget.ExportBytes, 1<<40))+1))
-	if err != nil {
-		return "", errors.New("trained adapter could not be hashed")
-	}
-	if uint64(n) > r.Budget.ExportBytes || n > 1<<40 {
-		return "", errors.New("trained adapter exceeds its export budget")
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-func publishProvenance(r Recipe, job control.TrainingJob, invocation string, loss float64, expectedAdapter string) error {
-	digest, err := adapterDigest(r)
-	if err != nil {
-		return err
-	}
-	if digest != expectedAdapter {
-		return errors.New("trained adapter changed during reload")
-	}
-	provenance := struct {
-		Version           int     `json:"version"`
-		SourceRevision    string  `json:"sourceRevision"`
-		RecipeSHA256      string  `json:"recipeSHA256"`
-		ModelRevision     string  `json:"modelRevision"`
-		TokenizerRevision string  `json:"tokenizerRevision"`
-		InvocationID      string  `json:"invocationId"`
-		AdapterSHA256     string  `json:"adapterSHA256"`
-		EvalLoss          float64 `json:"evalLoss"`
-	}{1, SourceRevision, job.RecipeSHA256, r.Model.Revision, r.Tokenizer.Revision, invocation, digest, loss}
-	raw, err := json.Marshal(provenance)
-	if err != nil {
-		return errors.New("training provenance cannot be encoded")
-	}
-	return publishPlan(filepath.Join(r.OutputDirectory, "supervisor-provenance.json"), append(raw, '\n'))
 }
 
 func replaceEvidence(path string, value control.TrainingTerminal) error {
