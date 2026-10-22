@@ -355,6 +355,7 @@ class SetupWindow {
         this.gpuUUIDs = discovery.gpuUUIDs ?? [];
         this.gpuInventoryStatus = discovery.gpuInventoryStatus;
         this.discoveryErrors = discovery.errors ?? [];
+        for (const editor of this.draftEditors) editor.updateDiscovery(discovery);
         for (const [appID, card] of this.applicationCards) {
             const candidates = this.discovered.filter(candidate => candidate.app === appID);
             card.detection.label = this.detectionMessage(candidates.filter(candidate => candidate.recognized), candidates);

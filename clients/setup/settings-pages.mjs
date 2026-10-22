@@ -88,7 +88,7 @@ export class InstallationSettings {
                 this.preview.label = this.overrideText;
                 this.preview.visible = Boolean(this.overrideText);
                 this.copyOverride.visible = Boolean(this.overrideText);
-                this.repairInstructions.label = `${error.message}\n\n${manualCorrectionInstructions}`;
+                this.repairInstructions.label = `${error.message}\n\nIf the correction was saved, run systemctl --user daemon-reload and Check again before attempting another correction. If nothing was saved, have the service administrator review the override and apply it with systemctl --user edit SERVICE, then reload and Check again. Copying applies nothing.`;
             } finally { this.checking(false); }
         });
         this.repairInstructions = new Gtk.Label({label: manualCorrectionInstructions, wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true}); this.repair.add(this.repairInstructions);
@@ -142,6 +142,7 @@ export class InstallationSettings {
         this.notify();
     }
     updateGPUInventory(uuids, status) {
+        this.gpuPlan = null;
         this.gpuInventoryStatus = status;
         const inventoryUUIDs = uuids === undefined ? [] : uuids;
         this.repairUUIDs = inventoryUUIDs.filter(uuid => /^GPU-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(uuid)).slice(0, 32);

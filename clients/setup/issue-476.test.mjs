@@ -123,3 +123,38 @@ test('automatic correction failure restores manual recovery and discards confirm
     const last = ui.calls.filter(call => call.argv[1] === 'correct-gpu').at(-1);
     assert.equal(JSON.parse(last.input).confirm, false);
 });
+
+for (const message of ['GPU correction saved; reload failed', 'GPU correction saved; configuration still needs attention']) {
+    test(`correction failure preserves saved-state guidance: ${message}`, async () => {
+        let calls = 0;
+        const ui = await launch({deferAction: 'unused', responses: {
+            discover: {request, units: [], gpuInventoryStatus: 'available', gpuUUIDs: [uuid], applications: [blocked]},
+            'correct-gpu': () => { if (calls++ === 0) return {fingerprint: 'preview', content: 'review me'}; throw new Error(message); },
+        }});
+        await ui.click('Settings for ComfyUI'); await ui.click('View details');
+        await ui.click('Configure GPU'); await ui.click('Apply GPU configuration');
+        const guidance = ui.widgets.find(widget => ui.visible(widget) && widget.label?.includes(message));
+        assert.ok(guidance);
+        assert.equal(guidance.label.includes('Not applied'), false);
+        assert.match(guidance.label, /saved, run systemctl --user daemon-reload and Check again before attempting another correction/);
+        await ui.click('Configure GPU');
+        assert.equal(JSON.parse(ui.calls.filter(call => call.argv[1] === 'correct-gpu').at(-1).input).confirm, false);
+    });
+}
+
+test('discovery from another editor refreshes GPU inventory and discards its reviewed proposal', async () => {
+    const other = {...blocked, app: 'ollama', label: 'Ollama', unit: 'ollama.service'};
+    let count = 0;
+    const ui = await launch({deferAction: 'unused', responses: {
+        discover: () => ({request, units: [], applications: [blocked, other], gpuUUIDs: count ? [] : [uuid], gpuInventoryStatus: count++ ? 'unavailable' : 'available'}),
+        'correct-gpu': {fingerprint: 'old-preview', content: 'old preview'},
+    }});
+    await ui.click('Settings for Ollama'); await ui.click('View details'); await ui.click('Configure GPU');
+    await ui.click('Back'); await ui.click('Back');
+    await ui.click('Settings for ComfyUI'); await ui.click('View details'); await ui.click('Check again');
+    await ui.click('Back'); await ui.click('Back');
+    await ui.click('Settings for Ollama'); await ui.click('View details');
+    assert.equal(ui.widgets.some(widget => ui.visible(widget) && ['Configure GPU', 'Apply GPU configuration'].includes(widget.label)), false);
+    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('GPU inventory query was unavailable.')));
+    assert.equal(ui.calls.filter(call => call.argv[1] === 'correct-gpu').length, 1);
+});

@@ -132,6 +132,19 @@ class DraftEditor {
             return button;
         });
     }
+    updateDiscovery(discovery) {
+        const unit = this.draft.snapshot().binding?.unit;
+        const previous = this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === unit);
+        this.detected = discovery.applications ?? [];
+        this.discoveryErrors = discovery.errors ?? [];
+        this.rebuildInstanceChoices(this.detected);
+        const current = this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === unit);
+        if (unit && (!current || JSON.stringify(previous) !== JSON.stringify(current))) {
+            this.installationEvidence = null;
+            this.settings.invalidate();
+        }
+        this.settings.updateGPUInventory(discovery.gpuUUIDs ?? [], discovery.gpuInventoryStatus);
+    }
     connectAddress() {
         this.endpoint.connect('changed', () => {
             if (this.syncing) return;
@@ -326,10 +339,8 @@ class DraftEditor {
             setProbeGuidance: guidance => this.probeGuidance = guidance, clearOwnedReference: () => this.clearOwnedReference(), selectOwnedReference: (path, kind) => this.selectOwnedReference(path, kind)});
         this.refresh = addRefreshButton({Gtk: this.Gtk, group: {add: child => this.settings.pages.get('configuration').append(child)}, draft: this.draft, status: this.status, command: this.command, show: (candidate) => this.show(candidate), reportError: this.reportError, guidance: () => this.probeGuidance, checking: busy => this.settings.checking(busy), inspectService: async input => {
             const discovery = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'discover']));
-            this.detected = discovery.applications ?? [];
-            this.rebuildInstanceChoices(this.detected);
-            this.discovered?.(discovery);
-            this.settings.updateGPUInventory(discovery.gpuUUIDs ?? [], discovery.gpuInventoryStatus);
+            if (this.discovered) this.discovered(discovery);
+            else this.updateDiscovery(discovery);
             return discovery.applications?.find(candidate => candidate.app === input.app && candidate.unit === input.binding.unit) ?? null;
         }});
         addFilePickers({Gtk: this.Gtk, window: this.window, group: this.settings.selection, advancedGroup: this.settings.selection, draft: this.draft, reference: this.reference, endpoint: this.endpoint, status: this.status, changed: this.changed, clearBinding: () => this.clearBinding(), clearModels: () => this.clearModels(), clearOwnedReference: () => this.clearOwnedReference(), setSync: value => this.syncing = value, selectedReference: (path, kind) => this.selectOwnedReference(path, kind), selectedExecutable: path => this.selectExecutable(path), modelGroup: this.modelParent ? this.modelGroup : null, selectionChanged: () => this.resetSelection()});
@@ -402,6 +413,7 @@ class DraftEditor {
     view() {
         return {
             latestCandidate: () => this.lastCandidate,
+            updateDiscovery: discovery => this.updateDiscovery(discovery),
             app: this.initial.app, id: this.initial.id, originalModel: this.initial.model ?? this.initial.binding?.owned?.modelPath, group: this.group, modelGroup: this.modelGroup, finish: this.finish,
             showSettings: profile => {
                 this.syncing = true;

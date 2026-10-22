@@ -457,3 +457,32 @@ test('recheck clears a removed choice without adopting its replacement, includin
     await ui.click(candidateChoice(added));
     assert.equal(ui.by('Detected instance').selected, 1);
 });
+
+for (const removed of [false, true]) {
+    test(`another editor's discovery invalidates ${removed ? 'removed' : 'changed'} service evidence and refreshes choices`, async () => {
+        const source = {...ready, recognized: false, configurationStatus: 'inspection-failed'};
+        const other = {...ready, app: 'ollama', label: 'Ollama', unit: 'ollama.service', endpoint: 'http://127.0.0.1:11434', binding: {...ready.binding, unit: 'ollama.service'}};
+        const replacement = {...other, unit: 'new-ollama.service', binding: {...other.binding, unit: 'new-ollama.service'}};
+        const updated = {...other, recognized: false, configurationStatus: 'inspection-failed'};
+        let count = 0;
+        const ui = await launch(options(source, {discover: () => ({request, units: [], applications: count++ ? [source, replacement, ...(removed ? [] : [updated])] : [source, other]}),
+            probe: {app: 'comfyui', instanceStatus: 'not-running', inventoryStatus: 'not-checked'}}));
+        await ui.click('Settings for Ollama');
+        assert.equal(ui.by('Use installation').sensitive, true);
+        await ui.click('Advanced settings'); ui.edit(ui.by('Installation display name'), 'text', 'My Ollama');
+        await ui.click('Back'); await ui.click('Back');
+        await ui.click('Settings for ComfyUI'); await ui.click('View details'); await ui.click('Check again');
+        await ui.click('Back'); await ui.click('Back');
+        await ui.click('Settings for Ollama');
+        assert.equal(ui.by('Use installation').sensitive, false);
+        await ui.click('Advanced settings'); assert.equal(ui.by('Installation display name').text, 'My Ollama');
+        await ui.click('Back'); await ui.click('Change installation…');
+        assert.equal(ui.visible(ui.by(candidateChoice(other))), false);
+        await ui.click(candidateChoice(replacement));
+        await ui.click('Advanced settings'); await ui.click('Launch details'); await ui.click('Save selections for later');
+        const saved = JSON.parse(ui.calls.at(-1).input).drafts.find(draft => draft.app === 'ollama');
+        assert.equal(saved.binding.unit, replacement.unit);
+        assert.equal(saved.label, 'My Ollama');
+        assert.equal(ui.calls.some(call => ['prepare', 'apply'].includes(call.argv[1])), false);
+    });
+}
