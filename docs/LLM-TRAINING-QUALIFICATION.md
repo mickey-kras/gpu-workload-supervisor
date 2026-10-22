@@ -7,25 +7,44 @@ Keep host identities, paths, datasets, generated text and raw evidence private.
 
 ## Environment and backend decision
 
-**Installation blocked:** the dependency candidate fails the repository security
-gates. The pinned Trackio 0.40.0 requires Pillow <13, while the scanner requires
-Pillow >=13.0.0; pinned s3fs/gcsfs 2025.10.0 require fsspec 2025.10.0, while the
-scanner requires fsspec >=2026.6.0. FastMCP >=3.2.0 requires python-dotenv >=1.1.0,
-but Axolotl pins python-dotenv 1.0.1. The latest inspected Axolotl commit
-`2f98a743e8ee61bb6bb6f093dec296c5824a409c` retains these constraints.
-Do not install this lock or bypass dependency metadata. A compatible, reviewed
-upstream revision (or an explicitly approved source fork) must replace this
-candidate before installation and GPU qualification. The rejected lock is retained
-for review; it is not an installation recommendation.
+The [dependency input](../training/axolotl/requirements.in) is an explicit subset
+for the worker's local SFT/LoRA path, with Torch 2.14.0 and its build tools.
+It omits Gradio, Trackio, s3fs, gcsfs, adlfs, ocifs, lm_eval and openenv-core,
+and overrides Axolotl's python-dotenv pin. The lock requires fsspec >=2026.6.0,
+Pillow >=13 and python-dotenv >=1.2.2. These are nine deliberate deviations from
+Axolotl's declared requirements: eight absent distributions and one version
+override. They are checked exactly; additional or changed deviations fail CI.
+The worker rejects the excluded distributions. Axolotl source and its installed
+dependency metadata remain unchanged; no fork is used.
 
-The candidate [dependency input](../training/axolotl/requirements.in) is derived
-from Axolotl's pinned `pyproject.toml`, with Torch 2.14.0 and its build tools.
+The CPU smoke test exercises the worker's actual setup, train, evaluate and save
+sequence with a tiny random model, two LoRA optimizer steps and a separate-process
+reload. It runs offline after installation and requires finite loss and logits.
+This verifies the subset's code path on dependency updates, not GPU suitability.
 The accompanying hash-locked requirements resolve for Linux x86_64 and CPython
 3.12.14. They are a **package dependency candidate**, not a complete approved
 environment: interpreter/stdlib, built wheels, OS libraries, CUDA driver/kernel
 compatibility and GPU architecture still require deployment evidence. In particular,
 source distributions require controlled builds; a source hash does not pin the
 resulting wheel or its build environment. Do not install these into inference environments.
+
+For a dedicated test environment, install the lock before the unchanged source,
+then run both checks with that environment's interpreter:
+
+```sh
+uv pip sync --python "${PYTHON:?}" --require-hashes training/axolotl/requirements.txt
+uv pip install --python "$PYTHON" --no-deps --no-build-isolation \
+  'axolotl @ git+https://github.com/axolotl-ai-cloud/axolotl.git@1f1eb05a391c43e65c1c5ee7ec6ea1b8a841d5d1'
+"$PYTHON" training/axolotl/check_environment.py
+sudo unshare --net -- timeout 120 "$PYTHON" training/axolotl/smoke.py
+```
+
+Use an absolute `PYTHON` path. Installation requires access to the pinned artifacts;
+the smoke runs in a network namespace with a two-minute limit, as in CI.
+Ordinary `pip check` reports the nine intentional deviations.
+Do not ignore arbitrary failures or edit installed metadata: use the exact
+deviation checker. The CPU reload tests adapter compatibility; the production
+worker's CUDA reload and bounded generation still need real-GPU evidence.
 
 Regenerate only as an explicit dependency update, using uv 0.12.23:
 
@@ -38,7 +57,7 @@ uv pip compile training/axolotl/requirements.in \
 
 Before installation is approved, build/download a private wheelhouse, record its
 hashes and the exact build-tool environment, and test installation offline. Install
-Axolotl noneditable from commit `1f1eb05a391c43e65c1c5ee7ec6ea1b8a841d5d1`
+Axolotl noneditable with `--no-deps` from commit `1f1eb05a391c43e65c1c5ee7ec6ea1b8a841d5d1`
 (version 0.21.0); preserve its real VCS `direct_url.json`. Do not fabricate that
 metadata to satisfy the worker. The runner needs regular `bin/python3` and
 `lib/pythonX.Y/site-packages` files with complete inventories; a usual symlinked
@@ -72,6 +91,10 @@ only the Axolotl candidate; a TRL/Unsloth experiment is not an accepted trainer.
 
 Both presets use learning rate 0.0002 and seed 42. These are training weights,
 not GGUF. The source revisions are pinned; no memory-fit or quality claim follows.
+`assets.json` is the reference for qualification snapshots, not an input to
+materialization. Presets fix training parameters; materialization accepts an
+operator-supplied full revision and hashes the local inventory. Compare both
+input revisions with this table when qualifying these reference candidates.
 Use the model's applicable license. Keep downloaded model and tokenizer in
 separate, new directories. With an already installed download client, use its
 [snapshot_download](https://huggingface.co/docs/huggingface_hub/guides/download)

@@ -37,7 +37,10 @@ causal language modeling and the exact local base path from the recipe.
 
 Preparation rechecks the original model, tokenizer and runtime inventories,
 the full recipe digest and every exported file. It requires version 2 provenance
-from the same worker implementation; old weight-only provenance is rejected.
+from the same worker implementation and source revision; old weight-only
+provenance is rejected. Use the same supervisor release for training and import
+preparation. Both materialization and import hash the complete model inventory,
+so large models require a full read of their weights at each step.
 The plan is a snapshot: consumers must revalidate before copying or loading its
 listed files. It is neither a signature nor proof against a trusted owner who
 rewrites both data and metadata. Private paths and inventories remain private.
