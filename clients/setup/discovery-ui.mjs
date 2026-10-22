@@ -86,14 +86,10 @@ class DraftEditor {
         this.instance = new this.Adw.ComboRow({title: 'Detected instance', visible: false, use_markup: false,
             model: this.Gtk.StringList.new(['Choose an instance...', ...this.instances.map(candidateChoice)]), selected: 0});
         this.settings.selection.add(this.instance);
-        for (const [index, candidate] of this.instances.entries()) {
-            const button = new this.Gtk.Button({hexpand: true});
-            const identity = candidateChoice(candidate);
-            button.set_child(installationChoiceLabel(this.Gtk, identity));
-            button.update_property([this.Gtk.AccessibleProperty.LABEL], [identity]);
-            button.connect('clicked', () => { this.syncing = true; this.instance.selected = 0; this.syncing = false; this.instance.selected = index + 1; this.settings.back(); });
-            this.settings.selection.add(button);
-        }
+        this.instanceChoices = new this.Gtk.Box({orientation: this.Gtk.Orientation.VERTICAL, spacing: 8});
+        this.settings.selection.add(this.instanceChoices);
+        this.choiceButtons = [];
+        this.rebuildInstanceChoices(this.detected);
         this.details = this.settings.launch;
         this.endpoint = new this.Adw.EntryRow({title: 'Application address', text: this.initial.endpoint ?? ''}); this.settings.selection.add(this.endpoint);
         this.health = new this.Adw.EntryRow({title: 'Health endpoint', text: this.initial.binding?.healthURL ?? ''}); this.settings.general.add(this.health);
@@ -107,6 +103,34 @@ class DraftEditor {
             this.installationEvidence = null; this.settings.invalidate(); this.changed(this.draft.snapshot());
         });
         this.reference = new this.Gtk.Label({label: this.initial.reference ?? 'No file or folder selected', wrap: true, xalign: 0, selectable: true}); this.settings.selection.add(this.reference);
+    }
+    instanceIndex(candidate) {
+        if (!candidate) return 0;
+        return this.instances.findIndex(instance => candidate.unit ? instance.unit === candidate.unit : candidateIdentity(instance) === candidateIdentity(candidate)) + 1;
+    }
+    rebuildInstanceChoices(detected) {
+        const selected = this.instances[this.instance.selected - 1];
+        // Selection listeners retain this array; refresh its contents without
+        // selecting or adopting any newly discovered installation.
+        this.instances.splice(0, this.instances.length, ...detected.filter(candidate => candidate.app === this.initial.app));
+        const syncing = this.syncing;
+        this.syncing = true;
+        this.instance.model = this.Gtk.StringList.new(['Choose an instance...', ...this.instances.map(candidateChoice)]);
+        this.instance.selected = this.instanceIndex(selected);
+        this.syncing = syncing;
+        for (const button of this.choiceButtons) {
+            button.visible = false;
+            this.instanceChoices.remove(button);
+        }
+        this.choiceButtons = this.instances.map((candidate, index) => {
+            const button = new this.Gtk.Button({hexpand: true});
+            const identity = candidateChoice(candidate);
+            button.set_child(installationChoiceLabel(this.Gtk, identity));
+            button.update_property([this.Gtk.AccessibleProperty.LABEL], [identity]);
+            button.connect('clicked', () => { this.syncing = true; this.instance.selected = 0; this.syncing = false; this.instance.selected = index + 1; this.settings.back(); });
+            this.instanceChoices.append(button);
+            return button;
+        });
     }
     connectAddress() {
         this.endpoint.connect('changed', () => {
@@ -303,6 +327,7 @@ class DraftEditor {
         this.refresh = addRefreshButton({Gtk: this.Gtk, group: {add: child => this.settings.pages.get('configuration').append(child)}, draft: this.draft, status: this.status, command: this.command, show: (candidate) => this.show(candidate), reportError: this.reportError, guidance: () => this.probeGuidance, checking: busy => this.settings.checking(busy), inspectService: async input => {
             const discovery = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'discover']));
             this.detected = discovery.applications ?? [];
+            this.rebuildInstanceChoices(this.detected);
             this.discovered?.(discovery);
             this.settings.updateGPUInventory(discovery.gpuUUIDs ?? [], discovery.gpuInventoryStatus);
             return discovery.applications?.find(candidate => candidate.app === input.app && candidate.unit === input.binding.unit) ?? null;
@@ -415,7 +440,7 @@ class DraftEditor {
     capture() {
         const fields = [this.name, this.endpoint, this.health, ...Object.values(this.bindingFields), ...Object.values(this.ownedFields)].filter(field => typeof field !== 'function');
         const input = this.draft.snapshot();
-        return {input, candidate: this.lastCandidate, evidence: this.installationEvidence, ready: this.settings.ready && !this.settings.busy, bindingEdits: [...this.bindingEdits], endpointEdited: this.endpointEdited, selection: this.instance.selected, fields: fields.map(field => [field, field.text]), capacity: this.capacity.text, retain: this.retain.active, overrides: {...this.overrides}};
+        return {input, candidate: this.lastCandidate, evidence: this.installationEvidence, ready: this.settings.ready && !this.settings.busy, bindingEdits: [...this.bindingEdits], endpointEdited: this.endpointEdited, selection: this.instances[this.instance.selected - 1], fields: fields.map(field => [field, field.text]), capacity: this.capacity.text, retain: this.retain.active, overrides: {...this.overrides}};
     }
     restore(snapshot) {
         if (!snapshot) return;
@@ -423,7 +448,7 @@ class DraftEditor {
         for (const [field, text] of snapshot.fields) field.text = text;
         this.capacity.text = snapshot.capacity; this.retain.active = snapshot.retain;
         this.syncing = false;
-        this.syncing = true; this.instance.selected = snapshot.selection; this.syncing = false; this.draft.input = snapshot.input; this.draft.cancel(); this.installationEvidence = snapshot.evidence; this.bindingEdits = new Set(snapshot.bindingEdits); this.endpointEdited = snapshot.endpointEdited; this.overrides = snapshot.overrides;
+        this.syncing = true; this.instance.selected = this.instanceIndex(snapshot.selection); this.syncing = false; this.draft.input = snapshot.input; this.draft.cancel(); this.installationEvidence = snapshot.evidence; this.bindingEdits = new Set(snapshot.bindingEdits); this.endpointEdited = snapshot.endpointEdited; this.overrides = snapshot.overrides;
         this.changed(this.draft.snapshot());
         const selected = snapshot.candidate?.unit ? this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === snapshot.candidate.unit) : snapshot.candidate;
         if (selected) this.show(selected);

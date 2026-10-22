@@ -265,6 +265,26 @@ app.connect('activate', () => {
                 !ui.draftEditors.some(editor => editor.checking()), 'configuration reinspection completes');
             assert(ui.settingsTitle.get_mapped(), 'reinspection preserves configuration page');
         }
+        async function captureCorrection(ui) {
+            const group = widgets(ui.window).find(widget => widget instanceof Adw.PreferencesGroup && widget.title === 'Supported recovery');
+            const preview = widgets(group).find(widget => widget instanceof Gtk.Label && widget.has_css_class('monospace'));
+            const apply = named(ui, 'Apply GPU configuration');
+            const adjustment = ui.scroll.get_vadjustment();
+            const [located, target] = preview.compute_bounds(ui.scroll);
+            assert(located, 'GPU preview has viewport-relative geometry');
+            adjustment.value = Math.max(adjustment.lower, Math.min(adjustment.upper - adjustment.page_size, adjustment.value + target.get_y() - 12));
+            await delay(180);
+            const viewport = {width: ui.scroll.get_width(), height: ui.scroll.get_height()};
+            const correction = [preview, apply].map((widget, index) => {
+                const [found, bounds] = widget.compute_bounds(ui.scroll);
+                const rect = {control: ['override-preview', 'apply-override'][index], x: bounds.get_x(), y: bounds.get_y(), width: bounds.get_width(), height: bounds.get_height()};
+                assert(widget.get_mapped() && found && rect.width > 0 && rect.height > 0 && rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= viewport.width && rect.y + rect.height <= viewport.height,
+                    `GPU preview and confirmation must fit above the footer: ${JSON.stringify(rect)}`);
+                return rect;
+            });
+            geometry.push({screen: 'correction-selected-preview', correction, viewport, scrollValue: adjustment.value});
+            await capture(ui, 'correction-selected-preview');
+        }
         async function capture(ui, name) {
             await delay(180);
             const footer = [ui.review, ui.apply, ui.back, ui.later].filter(widget => widget.get_mapped());
@@ -473,7 +493,7 @@ app.connect('activate', () => {
         run(['xdotool', 'key', 'space']);
         await waitFor(() => widgets(ui.window).some(widget => widget.get_mapped() && widget.label === 'Apply GPU configuration'), 'GPU preview requires confirmation');
         assert(!commandRecords.some(record => record.action === 'correct-gpu' && record.input.confirm), 'preview writes nothing');
-        await capture(ui, 'correction-selected-preview');
+        await captureCorrection(ui);
         repairInventory = [];
         await refreshCorrection(ui);
         assert(!widgets(ui.window).some(widget => widget.get_mapped() && ['Configure GPU', 'Apply GPU configuration'].includes(widget.label)), 'missing inventory retires GPU proposal');
