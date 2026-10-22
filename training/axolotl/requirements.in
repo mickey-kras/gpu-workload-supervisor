@@ -1,0 +1,63 @@
+# Dependency input from axolotl 1f1eb05a391c43e65c1c5ee7ec6ea1b8a841d5d1 pyproject.toml.
+# Candidate Linux x86_64 / CPython 3.12.14 environment; not GPU qualification.
+torch>=2.13.0,<2.15.0
+packaging==26.0
+huggingface_hub>=1.31.0
+peft==0.21.2
+tokenizers==0.23.3
+transformers==5.20.1
+accelerate==1.15.0
+datasets==5.0.1
+trl==1.14.1
+hf_xet>=1.5.2
+kernels>=0.17.2,<0.18.0
+trackio==0.40.0
+typing-extensions==4.15.0
+optimum==1.16.2
+hf_transfer
+sentencepiece
+gradio==6.29.1
+pydantic==2.13.5
+addict
+fire
+PyYAML==6.0.3
+requests
+wandb
+einops
+colorama
+numba>=0.63.1,<1.0
+numpy>=2.1,<3.0
+typer==0.25.1
+evaluate==0.4.1
+scipy
+nvidia-ml-py==12.560.30
+art
+tensorboard
+python-dotenv==1.0.1
+s3fs==2025.10.0
+gcsfs==2025.10.0
+adlfs==2026.2.0
+ocifs==1.3.2
+zstandard==0.22.0
+fastcore
+lm_eval==0.4.11
+langdetect==1.0.9
+immutabledict==4.2.0
+antlr4-python3-runtime==4.13.2
+schedulefree==1.4.1
+openenv-core>=0.1.0
+axolotl-contribs-lgpl==0.0.7
+axolotl-contribs-mit==0.0.6
+posthog==6.7.11
+mistral-common==1.12.0
+bitsandbytes==0.50.2 ; sys_platform != 'darwin'
+triton>=3.4.0 ; sys_platform != 'darwin'
+xformers>=0.0.33.post2 ; sys_platform != 'darwin' and platform_machine != 'aarch64'
+liger-kernel==0.8.4 ; sys_platform != 'darwin'
+torchao==0.18.0 ; sys_platform != 'darwin' and platform_machine != 'aarch64'
+fla-core==0.5.2 ; platform_machine != 'aarch64'
+flash-linear-attention==0.5.2 ; platform_machine != 'aarch64'
+torch==2.14.0
+setuptools>=64
+wheel
+setuptools-scm>=8
