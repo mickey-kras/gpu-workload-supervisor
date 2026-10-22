@@ -14,10 +14,11 @@ preparation; not training execution).
   <img src="docs/architecture/generated/overview-light.svg" alt="Clients send requests through the execution proxy to workload services sharing one GPU. A separate controller switches workloads; both use durable state for admission and fencing.">
 </picture>
 
-The lifecycle controller handles ownership and transitions; the execution proxy
-forwards workload traffic without content-policy decisions. Workflow brokers,
-inference security gateways and model scanners are separate integrations, not
-installed by setup. See [responsibility boundaries](docs/ARCHITECTURE.md).
+- Controller: ownership and transitions.
+- Proxy: admission and forwarding; no content policy.
+- Brokers, gateways and scanners: external; not installed by setup.
+
+[Architecture](docs/ARCHITECTURE.md).
 
 ## Requires
 
@@ -28,10 +29,11 @@ Linux with user systemd and cgroup v2.
 Release archive or .deb from [Releases](https://github.com/mickey-kras/gpu-workload-supervisor/releases),
 or `go build -o bin/ ./cmd/...`.
 
-Setup detects existing systemd user services for the supported applications and
-adopts them without rewriting their source files. For an eligible stopped user
-service, setup previews a GPU correction and creates a new drop-in only after
-explicit Apply; it does not start the service. See [desktop setup](docs/DESKTOP.md).
+Setup detects and adopts supported systemd user services without rewriting their
+source files. GPU correction: preview, then explicit Apply creates a drop-in for
+an eligible stopped service. It does not start the service.
+
+[Desktop setup](docs/DESKTOP.md).
 
 ## Setup checks
 

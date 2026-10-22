@@ -19,7 +19,7 @@ Start with [deployment](DEPLOYMENT.md), [boot reconciliation](OPERATIONS.md#boot
 
 ## Understand and integrate
 
-- [State, integration boundaries and planned model attestation](ARCHITECTURE.md)
+- [Architecture and planned attestation](ARCHITECTURE.md)
 - [Proxy adapter contract](PROXY-CONTRACT.md): runtime evidence required before enabling execution
 - [Demand activation and inactivity idle](AUTO-IDLE.md): durable policy, settings, activation and a 60-second timer are implemented; policy defaults to Off, and enablement requires a qualified evidence provider
 
