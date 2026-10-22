@@ -7,13 +7,13 @@
 | Component | Responsibility |
 | --- | --- |
 | Controller | Ownership, desired state, admission, fencing, transitions, journal, recovery and verified GPU release |
-| Proxy/adapters | Route gating, forwarding, work registration and terminal evidence |
+| Proxy/adapters | Route gating, forwarding, optional requester authentication, work registration and terminal evidence |
 | External broker | Workflow steps, retries, checkpoints, cancellation and results |
-| External gateway | Authentication, request/response policy and content validation |
+| External gateway | Gateway authentication, request/response policy and content validation |
 | External ingestion tools | Model scanning, reports, signing and promotion |
 
 - Controller: control metadata only; no prompts or responses.
-- Proxy: payload forwarding, bounded protocol validation and exact-body authorization; no semantic content policy.
+- Proxy: payload forwarding, bounded protocol validation and exact-body authorization; optional [requester authentication](REQUESTER-INGRESS.md) before workflow authorization; no semantic content policy.
 - Demand records: admission evidence; no workflow scheduling or replay of ambiguous execution.
 - Integrations: preserve admission, terminal evidence and runtime-bypass prevention.
 - Setup: no broker, gateway or scanner installation.
