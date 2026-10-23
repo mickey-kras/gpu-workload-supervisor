@@ -35,3 +35,7 @@ coverage/
 
 __pycache__/
 .coverage
+
+# Vale styles are installed from the pinned release.
+.vale/styles/*
+!.vale/styles/config/

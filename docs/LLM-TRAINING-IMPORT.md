@@ -10,17 +10,17 @@ gpu-training-import -format peft -recipe /private/recipe.json -output /private/n
 
 Keep the destination parent private. Publication never replaces an existing
 file. The plan contains `status: "unqualified"` and `servingQualified: false`.
-`peft` identifies the artifact format, not a serving runtime. vLLM, Ollama,
-llama.cpp, GGUF and other target values are rejected. A PEFT reload does not
-establish compatibility with any of those runtimes. Their explicit serving
-import still requires a qualified version, supported base/adapter combination
-and supervised serving/handoff evidence before it can be enabled.
+`peft` identifies the artifact format, not a serving runtime.
+
+The command rejects vLLM, Ollama,
+llama.cpp, GGUF and other target values. A PEFT reload does not
+prove compatibility with any of those runtimes. Before you enable serving import, qualify the version and base and adapter combination.
+Also collect evidence of supervised serving and handoff.
 
 The runner writes provenance version 2 only after successful training,
-evaluation and separate-process reload. It binds the original recipe bytes,
-model/tokenizer revisions and complete inventory identities, runtime inventory
-and entrypoint, embedded worker, invocation, held-out loss and exported files.
-Adapter weights, adapter configuration and saved tokenizer files are checked
+evaluation and separate-process reload. It binds the original recipe bytes, model and tokenizer revisions and complete inventory identities.
+It also binds the runtime inventory and entrypoint, embedded worker, invocation, held-out loss and exported files.
+The runner checks adapter weights, adapter configuration and saved tokenizer files
 before and after reload. Added, removed or changed participating files prevent
 completion. `exportBytes` now bounds their combined size, not only adapter weights.
 
@@ -31,21 +31,23 @@ Supported exports contain one `adapter_model.safetensors`, an
 `config.json`, `vocab.json`, `vocab.txt`, `merges.txt` and `chat_template.jinja`.
 Only these named files belong to the import plan. Checkpoints, caches, training
 arguments, README files and other training outputs are not import payloads.
-Sharded adapters, pickle adapters, template directories and configuration
-redirects to other code/files are unsupported. The adapter must declare LoRA,
+The command does not support sharded adapters, pickle adapters, template directories or configuration
+redirects to other code or files. The adapter must declare LoRA,
 causal language modeling and the exact local base path from the recipe.
 
 Preparation rechecks the original model, tokenizer and runtime inventories,
 the full recipe digest and every exported file. It requires version 2 provenance
-from the same worker implementation and source revision; old weight-only
-provenance is rejected. Use the same supervisor release for training and import
-preparation. Both materialization and import hash the complete model inventory,
-so large models require a full read of their weights at each step.
+from the same worker implementation and source revision. It rejects old weight-only
+provenance. Use the same supervisor release for training and import
+preparation.
+
+Both materialization and import hash the complete model inventory,
+so large models need a full read of their weights at each step.
 The plan is a snapshot: consumers must revalidate before copying or loading its
 listed files. It is neither a signature nor proof against a trusted owner who
 rewrites both data and metadata. Private paths and inventories remain private.
 
-No runtime is imported or executed by this command. Dataset contents and
-completion credentials are not included in the plan. A plan does not prove
+This command does not import or execute a runtime. The plan excludes dataset contents and
+completion credentials. A plan does not prove
 supervisor finalization, GPU release, environment approval or serving fitness.
 #453 remains open until those host qualification gates pass.

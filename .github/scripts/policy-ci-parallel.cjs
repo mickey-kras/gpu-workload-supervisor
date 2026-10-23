@@ -1,13 +1,13 @@
 const { createHash } = require('node:crypto');
 const { sameActionSteps } = require('./policy-action-pins.cjs');
 
-const REQUIRED_JOBS = ['native', 'go', 'frontend', 'scans', 'package'];
+const REQUIRED_JOBS = ['native', 'go', 'frontend', 'scans', 'package', 'docs-ste'];
 const AGGREGATE_RUN = `python3 - <<'PYTHON'
 import json
 import os
 import re
 
-required = {'native', 'go', 'frontend', 'scans', 'package'}
+required = {'native', 'go', 'frontend', 'scans', 'package', 'docs-ste'}
 results = json.loads(os.environ['CI_NEEDS'])
 if set(results) != required or any(results[job].get('result') != 'success' for job in required):
     raise SystemExit('Required CI work did not succeed: ' + json.dumps(results, sort_keys=True))
@@ -195,6 +195,7 @@ function inspectParallelCi(workflow, failures) {
     requireValue(job && !Object.hasOwn(job, 'if') && !Object.hasOwn(job, 'needs') &&
       !Object.hasOwn(job, 'continue-on-error'), `unconditional job ${id}`);
   }
+  requireValue(same(jobs['docs-ste'], { uses: './.github/workflows/docs-ste.yml' }), 'required STE workflow');
   const aggregate = jobs.checks;
   requireValue(aggregate?.name === 'checks' && aggregate.if === '${{ always() }}' &&
     same(aggregate.needs, REQUIRED_JOBS), 'fail-closed aggregate dependencies');

@@ -2,7 +2,9 @@
 
 [Documentation](README.md) | [Repository](../README.md)
 
-The proxy forwards explicitly classified non-execution routes and gates configured execution routes. Verify the deployment against the [adapter contract](PROXY-CONTRACT.md) before enabling execution:
+The proxy forwards explicitly classified non-execution routes and gates configured
+execution routes. Check the deployment against the [adapter contract](PROXY-CONTRACT.md)
+before enabling execution:
 
 ```sh
 /PINNED/RELEASE/gpu-workload-proxy \
@@ -17,7 +19,7 @@ The proxy forwards explicitly classified non-execution routes and gates configur
 
 ## Admission
 
-During supervisor ownership, gated requests require:
+During supervisor ownership, gated requests need:
 
 - a unique request ID
 - the current lease incarnation and epoch
@@ -36,11 +38,25 @@ Header names are configurable with `-request-id-header`, `-job-id-header`,
 `-fence-id-header` and `-fence-epoch-header`. See [Shutdown](#shutdown) for
 `-shutdown-timeout` and the separate HTTP and native completion drain budgets.
 
-The proxy removes caller-supplied lease control headers before forwarding. For an admitted execution route, it then forwards the validated, normalized request ID and lease fence in the configured headers, along with a fresh proxy-generated `X-Workload-Registration-Token`. These values are added after hop-by-hop header filtering, so the upstream receives the registered tuple even if the caller nominated those headers in `Connection`. For configured read-only routes, passthrough routes, and user-owned execution, control headers remain stripped and no work is registered.
+The proxy removes caller-supplied lease control headers before forwarding. For an
+admitted execution route, it then forwards the validated, normalized request ID and
+lease fence in the configured headers, along with a fresh proxy-generated
+`X-Workload-Registration-Token`. The proxy adds these values after hop-by-hop header
+filtering.
+
+Thus, the upstream receives the registered tuple even if the caller nominated those
+headers in `Connection`. For configured read-only routes, passthrough routes, and
+user-owned execution, the proxy strips control headers and registers no work.
 
 ## Report completion
 
-Work is registered before forwarding and remains active after submission. In default `trusted` ingress mode, the proxy also returns the registration token to the caller in `X-Workload-Registration-Token`. Either the trusted upstream or trusted caller can report terminal work: retain the token, request ID, and registered fence from the same admission, then send them to the configurable completion path:
+The proxy registers work before forwarding. Work stays active after submission. In
+`trusted` ingress mode (the default), the proxy also returns the registration token to
+the caller in `X-Workload-Registration-Token`.
+
+Either the trusted upstream or trusted caller can report terminal work. Keep the token,
+request ID, and registered fence from the same admission. Then send them to the
+configurable completion path:
 
 ```json
 {
@@ -54,153 +70,215 @@ Work is registered before forwarding and remains active after submission. In def
 }
 ```
 
-The default completion path is `/_gpu-workload-supervisor/v1/work/finish`. A successful terminal update returns HTTP 204. Completion without the matching token is rejected for newly admitted work. Older registrations created before token support accept tokenless completion with their originally registered request ID and fence, including after the current fence rotates. Failures without verified terminal evidence leave work incomplete for explicit reconciliation.
+The default completion path is `/_gpu-workload-supervisor/v1/work/finish`. A successful
+terminal update returns HTTP 204. For newly admitted work, the proxy rejects completion
+without the matching token.
+
+Older registrations created before token support accept tokenless completion with their
+originally registered request ID and fence, including after the current fence rotates.
+Failures without verified terminal evidence leave work incomplete for explicit
+reconciliation.
 
 Proxies bound to a [native model](WORKLOADS.md#native-model-bindings) hand verified
-terminal evidence to a background persistence worker, so forwarding the response
-does not wait for the completion write. Receiving terminal response bytes does not
-confirm durable completion. A trusted external callback can finish the same
-registration before the worker does. The first durable terminal outcome wins;
-later matching callbacks and native retries are idempotent and preserve that
-outcome, including `abandoned`.
+terminal evidence to a background persistence worker. Thus, response forwarding does not
+wait for the completion write. Receiving terminal response bytes does not confirm
+durable completion.
+
+A trusted external callback can finish the same registration before the worker does. The
+first durable terminal outcome wins. Later matching callbacks and native retries are
+idempotent and preserve that outcome, including `abandoned`.
 
 Native persistence retries only the original request ID, workload, fence and
-registration token; it never replays execution. It makes at most three attempts,
-with a 3-second per-attempt budget and a 10-second aggregate retry budget. Permanent
-tuple rejections stop retries immediately. The command logs failed writes using
-fixed reason codes (`retrying`, `rejected`, `exhausted`, or `canceled`) and attempt
-counts, without raw storage errors or request metadata. If persistence is rejected,
-exhausted or canceled before a durable finish, the registration remains unfinished
-for explicit reconciliation unless another trusted completion has finished it.
-EOF, read errors and disconnects alone are never terminal evidence. Verified proof
-already handed off survives a client disconnect. Storage cancellation can take
-longer than its budget, as described under [Shutdown](#shutdown).
+registration token. It never replays execution. It makes at most three attempts, with a
+3-second budget for each try and a 10-second aggregate retry budget.
+
+Permanent tuple rejections stop retries immediately. The command logs failed writes
+using fixed reason codes (`retrying`, `rejected`, `exhausted`, or `canceled`) and retry
+counts, without raw storage errors or request metadata. If persistence fails before a
+durable finish, the registration stays unfinished for explicit reconciliation.
+
+This includes rejection, exhausted retries, and cancellation. Another trusted completion
+can still finish it. EOF, read errors and disconnects alone are never terminal evidence.
+
+Verified proof already handed off survives a client disconnect. Storage cancellation can
+take longer than its budget, as described under [Shutdown](#shutdown).
 
 ## Retention
 
-Completed registrations and their transition snapshot links are pruned after 30 days by default (`-completed-work-retention` changes the period). Active work and snapshots of transitions still in progress are retained. After pruning, a request ID can be reused, including under the same lease fence; the registration token prevents an old completion from finishing the new admission. Completed legacy tokenless registrations under the current fence are protected from pruning until that fence rotates. Rotation does not revoke completion of unfinished legacy work.
+The proxy prunes completed registrations and their transition snapshot links after 30
+days by default. Use `-completed-work-retention` to change the period. The proxy retains
+active work and snapshots of transitions still in progress.
+
+After pruning, you can reuse a request ID, including under the same lease fence. The
+registration token prevents an old completion from finishing the new admission. The
+proxy protects completed legacy tokenless registrations under the current fence from
+pruning until that fence rotates.
+
+Rotation does not revoke completion of unfinished legacy work.
 
 ## Route and listener boundary
 
-All unclassified routes fail closed, including GET, HEAD and OPTIONS. After
-ingress authentication and request validation, unknown paths return HTTP 404;
-recognized paths with an unconfigured method return HTTP 405 with an `Allow`
-header listing the explicitly configured methods, including POST for the
-completion path. Both return the JSON error `route_not_allowed`. Configure each verified read-only method/path with `-read-only-route`; HEAD is not inferred from GET. Required non-execution editing mutations must be explicitly configured as passthrough routes. When upgrading from implicit safe-method forwarding, inventory and configure these routes first. A method or route name alone does not prove that a backend operation is read-only.
+All unclassified routes fail closed, including GET, HEAD and OPTIONS. After ingress
+authentication and request validation, unknown paths return HTTP 404. Recognized paths
+with an unconfigured method return HTTP 405 with an `Allow` header listing the
+explicitly configured methods, including POST for the completion path.
 
-The listener is restricted to loopback because explicit user ownership bypasses supervisor lease registration. Any process that can write the state directory can drive user-mode execution; processes running as the service UID are fully trusted (see [SECURITY.md](../SECURITY.md)). External exposure belongs to the deployment boundary. Optional [requester ingress](REQUESTER-INGRESS.md) adds local requester/workflow authorization and durable demand; it does not provide host isolation.
+Both return the JSON error `route_not_allowed`. Configure each verified read-only method
+and path with `-read-only-route`. the proxy does not infer HEAD from GET. Explicitly
+configure necessary non-execution editing mutations as passthrough routes.
+
+When upgrading from implicit safe-method forwarding, inventory and configure these
+routes first. A method or route name alone does not prove that a backend operation is
+read-only.
+
+The proxy restricts the listener to loopback because explicit user ownership bypasses
+supervisor lease registration. Any process that can write the state directory can drive
+user-mode execution. The service fully trusts processes that run as its UID (see
+[SECURITY.md](../SECURITY.md)).
+
+External exposure belongs to the deployment boundary. Optional [requester
+ingress](REQUESTER-INGRESS.md) adds local requester and workflow authorization and
+durable demand. It does not give host isolation.
 
 The proxy is content-blind. Content inspection and domain policy belong to the caller.
 
 ## Trusted adapter ingress
 
 Opt in with `-ingress-mode adapter -execution-credential-file /PRIVATE/execution.key
--completion-credential-file /PRIVATE/completion.key`. Both files must be absolute,
-clean paths to private regular files owned by the proxy UID, without symlinks or
-group/other permissions, under trusted directories. Generate each credential
+-completion-credential-file /PRIVATE/completion.key`. Both files need absolute, clean
+paths to private regular files under trusted directories. The proxy UID must own them.
+
+They must have no symlinks or group or other permissions. Generate each credential
 independently from 32 bytes of cryptographic randomness, encoded as 64 lowercase
-hexadecimal characters (one final newline is allowed). Files are read once at
-startup with a bounded read. Missing, malformed, equal or unsafe credentials reject
-startup; credential files with `trusted` mode are rejected too. Rotate by replacing
-the files privately and restarting the proxy; registrations retain their tuples.
+hexadecimal characters (the proxy allows one final newline).
 
-The authenticated deployment gateway supplies `X-Workload-Execution-Credential`
-on every execution, read-only and passthrough request. Only the trusted terminal
-adapter supplies `X-Workload-Completion-Credential` on completion POSTs. Wrong,
-missing, duplicated or combined credentials return HTTP 401 before body parsing,
-state access or forwarding. Completion still requires the original registration
-tuple and verified terminal evidence. The execution credential cannot complete
-work, even if the client obtains that tuple.
+The proxy reads files once at startup with a bounded read. Missing, malformed, equal or
+unsafe credentials reject startup. The proxy also rejects credential files with
+`trusted` mode.
 
-Adapter mode removes ingress credentials and Authorization/Proxy-Authorization
-from upstream request headers and trailers. It forwards admitted correlation to
-the trusted backend but suppresses registration tokens and credentials in client
-response headers, informational responses and trailers. Upstream URL credentials
-are disallowed. Metadata names and values containing either known ingress
-credential or the admitted registration token are dropped using case-insensitive
-substring matching, including reflections under unrelated header names. This
-covers case normalization of hexadecimal credentials and UUID tokens; it does not
-decode other transformations. Trusted backends/adapters must not echo tokens in bodies or logs;
-the content-blind proxy does not inspect arbitrary response payloads. Native
-terminal observation remains internal to the proxy and keeps its existing rules.
+Rotate by replacing the files privately and restarting the proxy. Registrations keep
+their tuples.
 
-This adapter mode is a local prerequisite, not a remote authentication gateway.
-Optional [requester ingress](REQUESTER-INGRESS.md) provides local identity and
-immutable-workflow authorization. Keep the listener on loopback. Without that
-option, the deployment gateway must independently authenticate requesters,
-enforce identity, CSRF/policy and appropriate request limits, and keep its execution
-credential from clients. The terminal credential belongs only to the trusted
-adapter. Separately prevent direct runtime bypass and isolate host service
-identities; a credential does not establish those controls or qualify deployment.
-Idle policy stays Off until its separate evidence and host qualification exist.
+The authenticated deployment gateway supplies `X-Workload-Execution-Credential` on every
+execution, read-only and passthrough request. Only the trusted terminal adapter supplies
+`X-Workload-Completion-Credential` on completion POSTs. Wrong, missing, duplicated or
+combined credentials return HTTP 401 before body parsing, state access or forwarding.
+
+Completion still requires the original registration tuple and verified terminal
+evidence. The execution credential cannot complete work, even if the client obtains that
+tuple.
+
+Adapter mode removes ingress credentials and `Authorization` and `Proxy-Authorization`
+from upstream request headers and trailers. It forwards admitted correlation to the
+trusted backend but suppresses registration tokens and credentials in client response
+headers, informational responses and trailers. The proxy does not allow upstream URL
+credentials.
+
+The proxy drops metadata names and values that contain either known ingress credential
+or the admitted registration token. It uses case-insensitive substring matching,
+including reflections under unrelated header names. This covers case normalization of
+hexadecimal credentials and UUID tokens.
+
+It does not decode other transformations. Trusted backends and adapters must not echo
+tokens in bodies or logs. The content-blind proxy does not inspect arbitrary response
+payloads.
+
+Native terminal observation remains internal to the proxy and keeps its existing rules.
+
+This adapter mode is a local prerequisite, not a remote authentication gateway. Optional
+[requester ingress](REQUESTER-INGRESS.md) provides local identity and immutable-workflow
+authorization. Keep the listener on loopback.
+
+Without that option, the deployment gateway must independently authenticate requesters.
+It must enforce identity, CSRF, policy and appropriate request limits. It must keep its
+execution credential from clients.
+
+The terminal credential belongs only to the trusted adapter. Separately prevent direct
+runtime bypass and isolate the identities of host services.
+
+A credential does not prove those controls or qualify deployment. Idle policy stays Off
+until its separate evidence and host qualification exist.
 
 ## Connection limits
 
-Upstream traffic connects directly. The proxy and runtime health probes use private
-HTTP transports and ignore `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`. Keep the
-upstream on a trusted network; registration tokens are completion capabilities.
-Custom transports supplied by Go callers must enforce the same trust boundary.
+Upstream traffic connects directly. The proxy and runtime health probes use private HTTP
+transports and ignore `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`. Keep the upstream on
+a trusted network.
+
+Registration tokens are completion capabilities. Custom transports supplied by Go
+callers must enforce the same trust boundary.
 
 The listener defaults to a 10-second header timeout and a 2-minute idle keep-alive
-timeout (`-read-header-timeout` and `-idle-timeout`). It has no total
-request-body read or response-write deadline, so uploads and long streams
-complete. Concurrent requests are capped at 128 by default (`-max-inflight`),
-with 16 separate slots reserved for POST completion reports at the configured
-completion path (`-max-completion-inflight`). Both limits must be positive. Saturation
-returns HTTP 503 with `proxy_capacity_exceeded` and `Retry-After: 1` before work
-registration or forwarding. A non-POST request to the completion path uses the
-ordinary limit. Active streams retain their ordinary HTTP slots until the handler
-returns; neither limit imposes a total stream deadline. After shutdown begins,
-new requests instead receive HTTP 503 with the JSON error `proxy_shutting_down`
-and no `Retry-After` header: this process is draining, so clients must wait for
-service availability rather than a promised retry interval. Capacity rejections
-use the same JSON error envelope (`{"error":"proxy_capacity_exceeded"}`); their
-`Retry-After: 1` suggests waiting one second before retrying and does not guarantee
-a free slot.
+timeout (`-read-header-timeout` and `-idle-timeout`). It has no total request-body read
+or response-write deadline, so uploads and long streams complete. The proxy limits
+concurrent requests to 128 by default (`-max-inflight`).
+
+It reserves 16 separate slots for POST completion reports at the configured completion
+path (`-max-completion-inflight`). Both limits must be positive. Saturation returns HTTP
+503 with `proxy_capacity_exceeded` and `Retry-After: 1` before work registration or
+forwarding.
+
+A non-POST request to the completion path uses the ordinary limit. Active streams keep
+their ordinary HTTP slots until the handler returns. Neither limit imposes a total
+stream deadline.
+
+After shutdown begins, new requests instead receive HTTP 503 with the JSON error
+`proxy_shutting_down` and no `Retry-After` header. The process must drain. Clients must
+wait for service availability, with no promised retry interval.
+
+Capacity rejections use the same JSON error envelope
+(`{"error":"proxy_capacity_exceeded"}`). Their `Retry-After: 1` suggests waiting one
+second before retrying and does not guarantee a free slot.
 
 For supervisor-owned native execution, `-max-inflight` also sets a separate cap on
 native reservations. Each reservation starts before work registration and remains
-occupied until the response ends without terminal proof or its native persistence
-worker finishes. A pending completion write retains its reservation after the HTTP
-handler returns, so native execution can receive capacity HTTP 503 even with zero
-active HTTP requests. Once persistence finishes, any still-open response stream
-continues to occupy its ordinary HTTP slot. Size the limit for both expected streams
-and storage write delays. Completion callbacks keep their separately reserved slots.
+occupied until the response ends without terminal proof or its native persistence worker
+finishes. A pending completion write retains its reservation after the HTTP handler
+returns.
+
+Thus, native execution can receive capacity HTTP 503 even with zero active HTTP
+requests. Once persistence finishes, any still-open response stream continues to occupy
+its ordinary HTTP slot. Size the limit for both expected streams and storage write
+delays.
+
+Completion callbacks keep their separately reserved slots.
 
 Keep clients trusted, or enforce workload-appropriate per-client connection,
 request-body, and rate limits at an authenticated front proxy before exposing this
 service. The in-process caps do not bound idle connections or bytes per stream.
 
-Upstream dialing is bounded to 30 seconds and TLS handshakes to 10 seconds. After
-the request body is fully uploaded, response headers must arrive within 10 minutes
-by default. Set `-upstream-response-header-timeout` to a positive duration, such as
-`20m`, above the longest expected model load or non-streaming inference time for
-the workload. This timeout returns HTTP 502 and releases the ordinary request
-slot when an upstream accepts a request but never sends response headers.
+The proxy limits upstream dialing to 30 seconds and TLS handshakes to 10 seconds. After
+the proxy uploads the complete request body, response headers must arrive within 10
+minutes by default. Set `-upstream-response-header-timeout` to a positive duration, such
+as `20m`, above the longest expected model load or non-streaming inference time for the
+workload. This timeout returns HTTP 502 and releases the ordinary request slot when an
+upstream accepts a request but never sends response headers.
 
-Response bodies, including streaming bodies, have no total deadline. Client
-cancellation and proxy shutdown cancel the upstream request. Health probes retain
-their separate `-health-timeout` budget. A timeout or disconnect never proves work
-finished or abandoned and does not clear its registration: uncertain backend work
-still requires terminal evidence or explicit reconciliation. Custom transports
-supplied by Go callers own their response-header timeout policy.
+Response bodies, including streaming bodies, have no total deadline. Client cancellation
+and proxy shutdown cancel the upstream request. Health probes keep their separate
+`-health-timeout` budget.
+
+A timeout or disconnect never proves work finished or abandoned and does not clear its
+registration. Uncertain backend work still requires terminal evidence or explicit
+reconciliation. Custom transports supplied by Go callers own their response-header
+timeout policy.
 
 ## Shutdown
 
-`-shutdown-timeout` defaults to 30 seconds and supplies two separate budgets: first
-for graceful HTTP shutdown, then a fresh budget for draining accepted native
-completion workers. The proxy stops new HTTP admission and attempts to drain HTTP producers
-before sealing native proof submission, allowing terminal evidence observed during
-HTTP draining to reach persistence. Signal shutdown and listener failure use this
-same ordering.
+`-shutdown-timeout` defaults to 30 seconds and supplies two separate budgets: first for
+graceful HTTP shutdown, then a fresh budget for draining accepted native completion
+workers. The proxy stops new HTTP admission and tries to drain HTTP producers before it
+seals native proof submission. This lets terminal evidence observed during HTTP draining
+reach persistence. Signal shutdown and listener failure use this same ordering.
 
-If the native drain budget expires, the proxy cancels further retries and waits for
-active workers to exit before closing the state store or releasing the shared
-recovery-exclusion lock. SQLite busy handling can outlast cancellation; Go callers'
-custom failure-report callbacks must also return promptly. Consequently,
-`-shutdown-timeout` is not a hard process wall-clock bound: the HTTP and native
-budgets are separate, and cancellation is followed by joining active workers.
-Allow for both phases and their cleanup when configuring a service stop grace.
+If the native drain budget expires, the proxy cancels further retries. It waits for
+active workers to exit before it closes the state store or releases the shared
+recovery-exclusion lock. SQLite busy handling can outlast cancellation.
+
+Go callers' custom failure-report callbacks must also return promptly. Consequently,
+`-shutdown-timeout` is not a hard process wall-clock bound: the HTTP and native budgets
+are separate, and the proxy joins active workers after cancellation. Allow for both
+phases and their cleanup when configuring a service stop grace.
+
 Forcing process termination before persistence finishes can leave verified work
 unfinished for explicit reconciliation.
-

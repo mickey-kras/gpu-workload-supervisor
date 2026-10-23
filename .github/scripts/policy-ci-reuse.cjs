@@ -7,7 +7,7 @@ const AISLOP = '.github/workflows/aislop.yml';
 const MAIN = '.github/workflows/main.yml';
 
 const REUSE_HASHES = {
-  ".github/workflows/ci.yml": "2197ef20c3c2c0897dffb80a74df788feddac6ecc744315e2873e9def2413e1d",
+  ".github/workflows/ci.yml": "84691a24fdcf7755c97df70eddc900a1b53dbd16076909b7d5a0a3404c065a82",
   ".github/workflows/aislop.yml": "9b90546484fb17549a120cf47eb7ffd8b625aef2437568f393cb6e7ef51edc26",
   ".github/workflows/main.yml": "aeab59c43ceddc085498cd0ffcd5990fd5543b1f8a0b4c1fa995d07f18ddba6d"
 };

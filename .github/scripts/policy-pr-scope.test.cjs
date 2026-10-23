@@ -71,7 +71,7 @@ test('trusted classifier and full fallback cannot be replaced, overwritten or re
 
 test('aggregate allows only the authorized PR native skip, never failures or main skips', () => {
   const run = SCOPED_AGGREGATE.replace("python3 - <<'PYTHON'\n", '').replace(/\nPYTHON$/, '');
-  const results = Object.fromEntries(['native', 'go', 'frontend', 'scans', 'package'].map(job => [job,
+  const results = Object.fromEntries(['native', 'go', 'frontend', 'scans', 'package', 'docs-ste'].map(job => [job,
     { result: 'success', outputs: job === 'package' ? { 'payload-id': '12', 'qualified-attempt': '1' } : {} }]));
   const execute = (event, mode, input) => execFileSync('python3', ['-c', run], { env: {
     ...process.env, CI_EVENT: event, CI_MODE: mode, CI_NEEDS: JSON.stringify(input),
