@@ -23,6 +23,16 @@ func TrainerUnit(t control.TrainerBinding) string {
 	return fmt.Sprintf("[Unit]\nDescription=Supervised finite training\n[Service]\nType=exec\nRestart=no\nKillMode=control-group\nRemainAfterExit=yes\nEnvironment=CUDA_VISIBLE_DEVICES=%s\nExecStart=%s --job-file %s\n", t.GPUUUID, t.Executable, t.JobFile)
 }
 
+// InspectTrainer verifies a configured launch without reading lifecycle
+// credentials, starting a process or establishing runtime/GPU qualification.
+func (m *SystemdManager) InspectTrainer(ctx context.Context, id control.Workload) error {
+	p, ok := m.config.Catalog.Profile(id)
+	if !ok || p.Trainer == nil {
+		return errors.New("unconfigured trainer")
+	}
+	return m.verifyTrainerBinding(ctx, p)
+}
+
 func (m *SystemdManager) trainerProperties(ctx context.Context, p control.WorkloadProfile) (map[string]string, error) {
 	out, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show", "--property=LoadState,ActiveState,SubState,ControlGroup,InvocationID,Result,ExecMainCode,ExecMainStatus,FragmentPath,DropInPaths,NeedDaemonReload,ExecStart,ExecStartPre,ExecStartPost,ExecStop,ExecStopPost,Environment,Type,Restart,KillMode,RemainAfterExit", "--", p.Unit)
 	if err != nil {

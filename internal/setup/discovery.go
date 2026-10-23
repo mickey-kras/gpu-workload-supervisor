@@ -27,6 +27,7 @@ type Discovery struct {
 	Pending            bool                   `json:"pending"`
 	Applications       []ApplicationCandidate `json:"applications"`
 	OwnedUnits         []OwnedUnitStatus      `json:"ownedUnits"`
+	Trainers           []TrainerCandidate     `json:"trainers"`
 }
 
 // OwnedUnitStatus reports one supervisor-owned unit file so the UI can offer
@@ -77,6 +78,7 @@ func (b Backend) Discover(ctx context.Context, home string) (Discovery, error) {
 	}
 	result.Units = []string{}
 	b.discoverApplications(ctx, &result, units, home)
+	b.discoverTrainers(ctx, &result)
 	b.discoverGPUInventory(ctx, &result)
 	owned, err := discoverOwnedUnits(home, result.Request.Catalog)
 	if err != nil {

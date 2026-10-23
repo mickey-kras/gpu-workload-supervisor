@@ -30,20 +30,30 @@ func run(args []string, stdout io.Writer) error {
 	flags.SetOutput(io.Discard)
 	recipe := flags.String("recipe", "", "absolute local candidate recipe file")
 	job := flags.String("job-file", "", "absolute local supervisor job envelope")
+	materialize := flags.String("materialize", "", "absolute local recipe materialization input")
 	output := flags.String("output", "", "new private candidate plan file")
 	version := flags.Bool("version", false, "print release")
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
-		return errors.New("usage: gpu-training-candidate (-recipe /path/recipe.json | -job-file /path/job.json) -output /path/new-plan.json")
+		return errors.New("usage: gpu-training-candidate (-recipe /path/recipe.json | -job-file /path/job.json | -materialize /path/inputs.json) -output /path/new-file.json")
 	}
 	if *version {
-		if *recipe != "" || *job != "" || *output != "" {
+		if *recipe != "" || *job != "" || *materialize != "" || *output != "" {
 			return errors.New("version cannot be combined with preparation flags")
 		}
 		_, err := fmt.Fprintln(stdout, deployment.Release)
 		return err
 	}
-	if (*recipe == "") == (*job == "") || *output == "" {
-		return errors.New("recipe or job-file and output are required")
+	selected := 0
+	for _, input := range []string{*recipe, *job, *materialize} {
+		if input != "" {
+			selected++
+		}
+	}
+	if selected != 1 || *output == "" {
+		return errors.New("exactly one recipe, job-file or materialize input and output are required")
+	}
+	if *materialize != "" {
+		return llmtraining.Materialize(*materialize, *output)
 	}
 	if *job != "" {
 		return llmtraining.PrepareJob(*job, *output, os.Getenv("INVOCATION_ID"))

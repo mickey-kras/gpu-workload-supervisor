@@ -1,0 +1,10 @@
+{
+  "smoke-lora": {
+    "repository": "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
+    "revision": "59f6f375b26bde864a6ca194a9a3044570490064"
+  },
+  "representative-qlora": {
+    "repository": "NousResearch/Meta-Llama-3.1-8B",
+    "revision": "1f47e50cdbe801ad8a5174156ec3a0655108fb9f"
+  }
+}

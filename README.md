@@ -7,7 +7,19 @@ when a transition fails.
 Binaries: `gpu-mode` (controller), `gpu-workload-proxy` (admission proxy),
 `gpu-operator` (local operator backend), `gpu-setup` (detection and setup),
 `gpu-training-runner` (experimental), `gpu-training-candidate` (unqualified input
-preparation; not training execution).
+preparation; not training execution), `gpu-training-import` (unqualified PEFT
+import preparation; not serving activation).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/generated/overview-dark.svg">
+  <img src="docs/architecture/generated/overview-light.svg" alt="Clients send requests through the execution proxy to workload services sharing one GPU. A separate controller switches workloads; both use durable state for admission and fencing.">
+</picture>
+
+- Controller: ownership and transitions.
+- Proxy: admission and forwarding; no content policy.
+- Brokers, gateways and scanners: external; not installed by setup.
+
+[Architecture](docs/ARCHITECTURE.md).
 
 ## Requires
 
@@ -18,8 +30,11 @@ Linux with user systemd and cgroup v2.
 Release archive or .deb from [Releases](https://github.com/mickey-kras/gpu-workload-supervisor/releases),
 or `go build -o bin/ ./cmd/...`.
 
-Setup detects existing systemd user services for the supported applications and
-adopts them read-only. It never rewrites your units.
+Setup detects and adopts supported systemd user services without rewriting their
+source files. GPU correction: preview, then explicit Apply creates a drop-in for
+an eligible stopped service. It does not start the service.
+
+[Desktop setup](docs/DESKTOP.md).
 
 ## Setup checks
 

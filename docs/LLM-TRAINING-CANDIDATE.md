@@ -11,6 +11,13 @@ Check its release with `gpu-training-candidate -version`, then run it with two a
 gpu-training-candidate -recipe /private/candidate.json -output /private/new-plan.json
 ```
 
+To create the recipe from local directories and explicit resource estimates, use
+`gpu-training-candidate -materialize /private/inputs.json -output /private/new-recipe.json`.
+The [qualification guide](LLM-TRAINING-QUALIFICATION.md#materialize-and-inspect)
+defines the strict input object and pins real smoke/representative asset candidates.
+Materialization inventories observed bytes; it does not authenticate their source
+or approve a runtime. It never downloads, installs or executes training code.
+
 Job-bound preparation accepts the supervisor's finite-job envelope instead of
 `-recipe`:
 
@@ -131,15 +138,16 @@ points even when `plugins` is empty. This tool does not approve those plugins.
 including inventories and dataset digests. Preserve the original recipe with the
 plan. This is not the raw recipe-file digest used by the finite-job envelope.
 
-Suggested **unqualified parameter sets**, requiring real immutable local assets:
+The materializer provides these **unqualified parameter sets**, requiring real immutable local assets:
 
 | Candidate | Adapter | Rank/alpha | Sequence | Microbatch/accumulation | Steps |
 | --- | --- | --- | --- | --- | --- |
 | Small Llama smoke model | LoRA | 8/16 | 128 | 1/1 | 2 |
 | Representative 7-8B Llama | QLoRA | 16/32 | 2048 | 1/4 | 100 |
 
-Both use learning rate 0.0002 and seed 42. No placeholder revision, fake inventory,
-or claimed memory budget is provided as a runnable recipe.
+Both use learning rate 0.0002 and seed 42. The qualification guide supplies real
+immutable asset revisions; local files, datasets and explicit budgets remain
+required. No placeholder revision, fake inventory or measured memory claim is used.
 
 ## Qualification still required
 
@@ -150,10 +158,11 @@ architecture compatibility. Record measured RAM, VRAM and storage privately.
 
 The [experimental runner](LLM-TRAINING-RUNNER.md) adds the supervised execution
 boundary, sanitized child environment, bounded progress, held-out evaluation,
-fresh-process reload and adapter provenance. It still needs a completely pinned,
-qualified runtime and real model/GPU evidence. Explicit serving-import validation
-remains separate. This preparation tool still creates candidate material only;
-#453 remains incomplete.
+fresh-process reload and complete export provenance. It still needs a completely
+pinned, qualified runtime and real model/GPU evidence. The
+[import preparation tool](LLM-TRAINING-IMPORT.md) validates artifact identity;
+serving compatibility and activation remain separate qualification steps.
+This preparation tool still creates candidate material only; #453 remains incomplete.
 
 ## Inspected upstream API
 
@@ -165,3 +174,4 @@ Configuration mapping targets Axolotl source commit
 - [Completion text strategy](https://github.com/axolotl-ai-cloud/axolotl/blob/1f1eb05a391c43e65c1c5ee7ec6ea1b8a841d5d1/src/axolotl/prompt_strategies/completion.py)
 - [Model and NF4 loading](https://github.com/axolotl-ai-cloud/axolotl/blob/1f1eb05a391c43e65c1c5ee7ec6ea1b8a841d5d1/src/axolotl/loaders/model.py)
 - [Reporting and upload configuration](https://github.com/axolotl-ai-cloud/axolotl/blob/1f1eb05a391c43e65c1c5ee7ec6ea1b8a841d5d1/src/axolotl/core/builders/base.py)
+

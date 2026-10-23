@@ -25,6 +25,12 @@ func TestCLIRejectsOverridesWithoutEchoingArguments(t *testing.T) {
 			t.Fatal("unexpected diagnostic", stderr.String())
 		}
 	}
+	for _, args := range [][]string{{"-materialize", "SECRET"}, {"-materialize", "SECRET", "-output", "/tmp/plan"}, {"-materialize", "SECRET", "-recipe", "SECRET", "-output", "/tmp/plan"}, {"-materialize", "SECRET", "-job-file", "SECRET", "-output", "/tmp/plan"}} {
+		var stderr bytes.Buffer
+		if exitCode(args, io.Discard, &stderr) != 1 || strings.Contains(stderr.String(), "SECRET") {
+			t.Fatal("unexpected materialization diagnostic", stderr.String())
+		}
+	}
 }
 
 func TestCLIPreparesPrivateUnqualifiedPlan(t *testing.T) {
@@ -106,6 +112,28 @@ func TestCLIPreparesPrivateUnqualifiedPlan(t *testing.T) {
 	if err := json.Unmarshal(data, &jobPlan); err != nil || jobPlan.ID != "job" || jobPlan.Candidate.Status != "unqualified" || strings.Contains(string(data), job.Job.Token) {
 		t.Fatal("invalid or sensitive job plan", err)
 	}
+	if err := os.Mkdir(filepath.Join(r.Runtime.Inventory.Root, "bin"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	write(filepath.Join(r.Runtime.Inventory.Root, "bin/python3"), "not executable")
+	request := llmtraining.MaterializeRequest{Version: 1, Preset: "smoke-lora", Model: llmtraining.LocalSnapshot{Root: r.Model.Inventory.Root, Revision: r.Model.Revision}, Tokenizer: llmtraining.LocalSnapshot{Root: r.Tokenizer.Inventory.Root, Revision: r.Tokenizer.Revision}, RuntimeRoot: r.Runtime.Inventory.Root, Train: r.Train.Path, HeldOut: r.HeldOut.Path, OutputDirectory: r.OutputDirectory, Budget: r.Budget}
+	requestRaw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputPath := filepath.Join(root, "inputs.json")
+	write(inputPath, string(requestRaw))
+	materializedPath := filepath.Join(root, "materialized.json")
+	if exitCode([]string{"-materialize", inputPath, "-output", materializedPath}, io.Discard, &stderr) != 0 || stderr.Len() != 0 {
+		t.Fatal("materialization CLI failed", stderr.String())
+	}
+	materialized, err := os.ReadFile(materializedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := llmtraining.ReadRecipe(bytes.NewReader(materialized)); err != nil {
+		t.Fatal("materialization CLI did not publish a recipe", err)
+	}
 }
 
 func TestVersionReportsReleaseWithoutPreparing(t *testing.T) {
@@ -113,7 +141,7 @@ func TestVersionReportsReleaseWithoutPreparing(t *testing.T) {
 	if exitCode([]string{"-version"}, &stdout, &stderr) != 0 || stdout.String() != deployment.Release+"\n" || stderr.Len() != 0 {
 		t.Fatal("version did not report the release")
 	}
-	for _, flag := range []string{"-recipe", "-job-file", "-output"} {
+	for _, flag := range []string{"-recipe", "-job-file", "-materialize", "-output"} {
 		stdout.Reset()
 		stderr.Reset()
 		if exitCode([]string{"-version", flag, "SECRET"}, &stdout, &stderr) != 1 || stdout.Len() != 0 || strings.Contains(stderr.String(), "SECRET") {
