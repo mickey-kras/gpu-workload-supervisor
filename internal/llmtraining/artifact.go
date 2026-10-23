@@ -16,11 +16,16 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
-const provenanceName = "supervisor-provenance.json"
+const (
+	provenanceName      = "supervisor-provenance.json"
+	adapterConfigName   = "adapter_config.json"
+	adapterWeightsName  = "adapter_model.safetensors"
+	tokenizerConfigName = "tokenizer_config.json"
+)
 
 var artifactNames = map[string]bool{
-	"adapter_model.safetensors": true, "adapter_config.json": true,
-	"tokenizer_config.json": true, "tokenizer.json": true, "tokenizer.model": true,
+	adapterWeightsName: true, adapterConfigName: true,
+	tokenizerConfigName: true, "tokenizer.json": true, "tokenizer.model": true,
 	"special_tokens_map.json": true, "added_tokens.json": true,
 	"generation_config.json": true, "config.json": true, "vocab.json": true,
 	"merges.txt": true, "vocab.txt": true, "chat_template.jinja": true,
@@ -76,7 +81,7 @@ func artifactFiles(r Recipe) (map[string]string, error) {
 		total += size
 		files[name] = digest
 	}
-	if files["adapter_model.safetensors"] == "" || files["adapter_config.json"] == "" || files["tokenizer_config.json"] == "" || (files["tokenizer.json"] == "" && files["tokenizer.model"] == "") {
+	if files[adapterWeightsName] == "" || files[adapterConfigName] == "" || files[tokenizerConfigName] == "" || (files["tokenizer.json"] == "" && files["tokenizer.model"] == "") {
 		return nil, errors.New("training export requires adapter weights, configuration and saved tokenizer")
 	}
 	if err := validateArtifactConfigs(r); err != nil {
@@ -118,7 +123,7 @@ func artifactConfig(path string) (map[string]json.RawMessage, error) {
 }
 
 func validateArtifactConfigs(r Recipe) error {
-	config, err := artifactConfig(filepath.Join(r.OutputDirectory, "adapter_config.json"))
+	config, err := artifactConfig(filepath.Join(r.OutputDirectory, adapterConfigName))
 	if err != nil {
 		return err
 	}
@@ -128,7 +133,7 @@ func validateArtifactConfigs(r Recipe) error {
 			return errors.New("training export adapter does not match its base or supported format")
 		}
 	}
-	for _, name := range []string{"adapter_config.json", "tokenizer_config.json"} {
+	for _, name := range []string{adapterConfigName, tokenizerConfigName} {
 		if err := rejectArtifactRedirects(filepath.Join(r.OutputDirectory, name)); err != nil {
 			return err
 		}
@@ -163,7 +168,7 @@ func newProvenance(r Recipe, job control.TrainingJob, invocation string, loss fl
 		return Provenance{}, err
 	}
 	worker := sha256.Sum256(workerSource)
-	return Provenance{2, SourceRevision, job.RecipeSHA256, r.Model.Revision, r.Tokenizer.Revision, model, tokenizer, runtime, hex.EncodeToString(worker[:]), invocation, files["adapter_model.safetensors"], loss, files}, nil
+	return Provenance{2, SourceRevision, job.RecipeSHA256, r.Model.Revision, r.Tokenizer.Revision, model, tokenizer, runtime, hex.EncodeToString(worker[:]), invocation, files[adapterWeightsName], loss, files}, nil
 }
 
 func publishProvenance(r Recipe, job control.TrainingJob, invocation string, loss float64, expected map[string]string) error {
