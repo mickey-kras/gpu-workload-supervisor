@@ -40,18 +40,27 @@ def deviations(distributions):
         if (parent, extra) in visited:
             continue
         visited.add((parent, extra))
-        for requirement in requirements[parent]:
-            if requirement.marker and not requirement.marker.evaluate({"extra": extra}):
-                continue
-            name = canonicalize_name(requirement.name)
-            dependency = installed.get(name)
-            if dependency is None:
-                result.add((parent, name, str(requirement.specifier), "missing"))
-            elif requirement.url or not requirement.specifier.contains(dependency.version, prereleases=True):
-                result.add((parent, name, str(requirement.specifier), "version"))
-            if dependency is not None:
-                pending.extend((name, canonicalize_name(requested)) for requested in requirement.extras)
+        context_deviations, requested_extras = context_dependencies(parent, extra, requirements[parent], installed)
+        result.update(context_deviations)
+        pending.extend(requested_extras)
     return result
+
+
+def context_dependencies(parent, extra, requirements, installed):
+    result = set()
+    requested_extras = []
+    for requirement in requirements:
+        if requirement.marker and not requirement.marker.evaluate({"extra": extra}):
+            continue
+        name = canonicalize_name(requirement.name)
+        dependency = installed.get(name)
+        if dependency is None:
+            result.add((parent, name, str(requirement.specifier), "missing"))
+        elif requirement.url or not requirement.specifier.contains(dependency.version, prereleases=True):
+            result.add((parent, name, str(requirement.specifier), "version"))
+        if dependency is not None:
+            requested_extras.extend((name, canonicalize_name(requested)) for requested in requirement.extras)
+    return result, requested_extras
 
 
 def main():
