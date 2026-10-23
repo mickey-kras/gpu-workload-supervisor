@@ -58,12 +58,22 @@ jobs:
               cp -- "$path" "$stage/$path.md"
             done
 
-      # The action checks the release archive against checksums.txt before it runs. Config: .ste.yml.
-      - uses: TudorAndrei/ste-cli@8e73821bba6ef980930553fb24ca1ade2895aabf # v0.10.1
-        with:
-          version: 0.10.1
-          args: >-
-            --warnings-as-errors --no-baseline --all ${{ runner.temp }}/docs-ste
+      - name: Install verified ste-cli
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/ste-cli.tar.gz"
+          curl --fail --location --retry 3 --output "$archive" \
+            https://github.com/TudorAndrei/ste-cli/releases/download/v0.10.1/ste-0.10.1-linux-x64.tar.gz
+          printf '%s  %s\n' d4a9fa77dec2b4623db324fc0951a0a0af6284de3cb42d1717c174bc5762e937 "$archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/ste-cli"
+          tar --no-same-owner -xzf "$archive" -C "$RUNNER_TEMP/ste-cli" ste
+
+      - name: Check STE prose
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/ste-cli/ste" lint --warnings-as-errors --no-baseline --all "$RUNNER_TEMP/docs-ste"
 
   vale:
     name: vale
@@ -122,13 +132,30 @@ jobs:
           rm -rf .vale/styles/STE
           cp -R "$stage/vale-llm-slop/styles/STE" .vale/styles/STE
 
-      - uses: vale-cli/vale-action@518a9136acc6e6668ce7c00d367051e0941e87ff # v3.0.0
-        with:
-          version: 3.25.1
-          sync: false
-          files: ${{ runner.temp }}/docs-ste
-          config: .vale.ini
-          filter_mode: nofilter
-          fail_level: warning
-          # Without this, the action passes when the findings are more than the annotation limit.
-          fail_on_error: true
+      - name: Install verified Vale
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/vale-cli.tar.gz"
+          curl --fail --location --retry 3 --output "$archive" \
+            https://github.com/vale-cli/vale/releases/download/v3.25.1/vale_3.25.1_Linux_64-bit.tar.gz
+          printf '%s  %s\n' 4bf5c5176b682b1da0830f471584d3494f1c2e27ee3029e1ad6f6661d4962182 "$archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/vale-cli"
+          tar --no-same-owner -xzf "$archive" -C "$RUNNER_TEMP/vale-cli" vale
+
+      - name: Check Vale prose
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/vale-cli/vale" --output=JSON --minAlertLevel=warning --config=.vale.ini "$RUNNER_TEMP/docs-ste" | tee "$RUNNER_TEMP/vale-results.json"
+          python3 - "$RUNNER_TEMP/vale-results.json" <<'PYTHON'
+          import json
+          import pathlib
+          import sys
+
+          report = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if not isinstance(report, dict) or any(not isinstance(alerts, list) for alerts in report.values()):
+              raise SystemExit("Invalid Vale report")
+          if any(report.values()):
+              raise SystemExit("Vale found warnings or errors")
+          PYTHON

@@ -101,9 +101,9 @@ test('PR updates replace the same STE run while main validation keeps each run',
 test('Vale verifies the style archive before extraction and cannot sync over it', () => {
   const steps = workflow.jobs.vale.steps;
   const install = steps.findIndex(step => step.name === 'Install verified STE styles');
-  const lint = steps.findIndex(step => step.uses?.startsWith('vale-cli/vale-action@'));
+  const lint = steps.findIndex(step => step.name === 'Check Vale prose');
   assert.ok(install >= 0 && install < lint);
-  assert.equal(steps[lint].with.sync, false);
+  assert.ok(steps.every(step => !step.uses?.startsWith('vale-cli/vale-action@') && !/vale sync/.test(step.run || '')));
   assert.doesNotMatch(readFileSync('.vale.ini', 'utf8'), /^Packages\s*=/m);
   for (const content of ['empty', 'replaced-style']) {
     withRepository((repo, temp) => {
@@ -118,6 +118,42 @@ test('Vale verifies the style archive before extraction and cannot sync over it'
       assert.notEqual(result.status, 0, content);
       assert.match(result.stdout + result.stderr, /FAILED|checksum/);
       assert.equal(existsSync(join(repo, '.vale', 'styles', 'STE')), false);
+    });
+  }
+});
+
+for (const [job, name, binary] of [['ste-cli', 'Install verified ste-cli', 'ste'], ['vale', 'Install verified Vale', 'vale']]) {
+  test(`${job} rejects a replaced executable archive before extraction`, () => {
+    withRepository((repo, temp) => {
+      const bin = join(temp, 'bin'); mkdirSync(bin);
+      const fixture = join(temp, 'download.tar.gz');
+      execFileSync('python3', ['-c',
+        'import io, sys, tarfile; data = b"#!/bin/sh\\nexit 0\\n"; archive = tarfile.open(sys.argv[1], "w:gz"); member = tarfile.TarInfo(sys.argv[2]); member.size = len(data); member.mode = 0o755; archive.addfile(member, io.BytesIO(data)); archive.close()', fixture, binary]);
+      writeFileSync(join(bin, 'curl'), '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n  if [ "$1" = --output ]; then cp "$BINARY_FIXTURE" "$2"; exit 0; fi\n  shift\ndone\nexit 2\n', { mode: 0o755 });
+      const script = workflow.jobs[job].steps.find(step => step.name === name).run;
+      const result = spawnSync('bash', ['-c', script], { cwd: repo,
+        env: { ...process.env, RUNNER_TEMP: temp, BINARY_FIXTURE: fixture, PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8' });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stdout + result.stderr, /FAILED|checksum/);
+      assert.equal(existsSync(join(temp, job === 'vale' ? 'vale-cli' : 'ste-cli', binary)), false);
+    });
+  });
+}
+
+test('Vale gate rejects warnings, tool failures and malformed output', () => {
+  const script = workflow.jobs.vale.steps.find(step => step.name === 'Check Vale prose').run;
+  for (const [report, exit, accepted] of [
+    ['{}', 0, true], ['{"guide.md":[]}', 0, true],
+    ['{"guide.md":[{"Severity":"warning"}]}', 0, false],
+    ['{"guide.md":[{"Severity":"error"}]}', 1, false],
+    ['{}', 2, false], ['', 0, false], ['null', 0, false], ['[]', 0, false], ['{"guide.md":null}', 0, false],
+  ]) {
+    withRepository((repo, temp) => {
+      const bin = join(temp, 'vale-cli'); mkdirSync(bin);
+      writeFileSync(join(bin, 'vale'), '#!/bin/sh\nprintf "%s\\n" "$VALE_REPORT"\nexit "$VALE_EXIT"\n', { mode: 0o755 });
+      const result = spawnSync('bash', ['-c', script], { cwd: repo,
+        env: { ...process.env, RUNNER_TEMP: temp, VALE_REPORT: report, VALE_EXIT: String(exit) }, encoding: 'utf8' });
+      assert.equal(result.status === 0, accepted, `${report}, exit ${exit}: ${result.stderr}`);
     });
   }
 });

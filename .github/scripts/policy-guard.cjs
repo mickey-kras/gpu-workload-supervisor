@@ -12,7 +12,7 @@ const { inspectDependabot, verifyDependabotAuthor } = require('./policy-dependab
 const GORELEASER_ACTION_DIGEST = 'c88133b8d7e69681883fe0aa77a141453ace73146561612522b9cd5f485722ac';
 
 const EXECUTABLE_HASHES = {
-  ".github/workflows/docs-ste.yml": "1d8d2f857ebbcb396fd6b8f99aa45daf3297d27e797a7e1ccd75700b2ea888d3",
+  ".github/workflows/docs-ste.yml": "1b9ae30d5eeba3bd47a9228ace3dc3f8605b1b4d2c4875b3ac17448b31a568d1",
   ".ste.yml": "f75eda8fb8d6ae25db6875adf984b0bb167d52aff977ff5524bcc0f48d02c941",
   ".vale.ini": "1d2daa33c324e5140367a5143df339068822cb45f7f2ae023dbd7d744e0793ff",
   ".vale/styles/config/vocabularies/Project/accept.txt": "5000d8689ae7037cf1336122d156368bbcb9ec3da339d86e1a806f8ecb65668d",
