@@ -98,7 +98,7 @@ def train_cpu(root):
     }
     config_path = root / "config.json"
     config_path.write_text(json.dumps(config))
-    # The CPU smoke has no GPU by design; the supervised runner always checks it.
+    # The CPU smoke has no GPU by design; the supervised runner always checks the GPU.
     worker_module().train(config_path, root / "receipt.json", root / "progress.json", accelerator=False)
     receipt = json.loads((root / "receipt.json").read_text())
     if receipt["step"] != 2 or not math.isfinite(receipt["evalLoss"]) or receipt["evalLoss"] < 0:

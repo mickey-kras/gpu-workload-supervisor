@@ -363,6 +363,9 @@ class AcceleratorTests(unittest.TestCase):
         self.assertEqual(worker.accelerator_problems(accelerator_facts(devices=[[8, 6], [7, 5]]), False), [
             "GPU 1 (compute capability 7.5) has no native BF16, which the training presets need; "
             "use a GPU with compute capability 8.0 or newer"])
+        self.assertEqual(worker.accelerator_problems(accelerator_facts(devices=[[7, 5], [8, 6]]), False), [
+            "GPU 0 (compute capability 7.5) has no native BF16, which the training presets need; "
+            "use a GPU with compute capability 8.0 or newer"])
         self.assertEqual(worker.accelerator_problems(accelerator_facts(archList=[]), False), [
             "GPU 0 (compute capability 8.6) has no kernels in Torch 2.14.0 (an empty architecture list); "
             "install a Torch build with sm_86 or use a supported GPU"])
@@ -409,7 +412,7 @@ class AcceleratorTests(unittest.TestCase):
                 if cuda and available:
                     self.assertEqual((facts["available"], facts["driverCuda"], facts["archList"], facts["devices"]), (True, "13.1", ["sm_86"], [[8, 6], [8, 7]]))
                 else:
-                    self.assertEqual((facts["available"], facts["driverCuda"], facts["devices"]), (False, None, []))
+                    self.assertEqual((facts["available"], facts["driverCuda"], facts["devices"]), (False, "13.1", []))
                 if cuda is None:
                     torch.cuda.is_available.assert_not_called()
 
@@ -442,6 +445,8 @@ class AcceleratorTests(unittest.TestCase):
                 worker.verify_accelerator(True)
         with patch.object(worker, "torch_facts", return_value=accelerator_facts()):
             worker.verify_accelerator(True)
+        with patch.object(worker, "torch_facts", return_value=accelerator_facts(bitsandbytes=False)):
+            worker.verify_accelerator(False)
 
 
 if __name__ == "__main__":

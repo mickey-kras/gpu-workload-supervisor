@@ -27,6 +27,10 @@ BUILTIN_ENTRY_POINTS = {
 }
 
 
+# Remedies for the runtime problems. The runner discards them; the runtime check reports them.
+SYNC = "reinstall the training runtime from the lock with uv pip sync --require-hashes"
+SOURCE = f"install axolotl noneditable with --no-deps from commit {SOURCE_REVISION}"
+
 # The pinned Axolotl source declares Python >=3.12. The runner and the runtime
 # check share this rule; the lock itself targets CPython 3.12.14.
 MINIMUM_PYTHON = (3, 12)
@@ -59,7 +63,7 @@ def verify_subset() -> None:
     }
     for distribution, module in OMITTED_INTEGRATIONS.items():
         if distribution in installed or importlib.util.find_spec(module) is not None:
-            raise ValueError("unapproved optional runtime integration: " + distribution)
+            raise ValueError(f"unapproved optional runtime integration: {distribution}; {SYNC}")
 
 
 def verify_environment() -> None:
@@ -67,7 +71,7 @@ def verify_environment() -> None:
     distribution = importlib.metadata.distribution("axolotl")
     direct_url = json.loads(distribution.read_text("direct_url.json") or "{}")
     if not isinstance(direct_url, dict):
-        raise ValueError("runtime source is not pinned")
+        raise ValueError("runtime source is not pinned; " + SOURCE)
     vcs_info = direct_url.get("vcs_info")
     dir_info = direct_url.get("dir_info", {})
     if (
@@ -76,7 +80,7 @@ def verify_environment() -> None:
         or not isinstance(dir_info, dict)
         or dir_info.get("editable", False)
     ):
-        raise ValueError("runtime source is not pinned")
+        raise ValueError("runtime source is not pinned; " + SOURCE)
     for point in importlib.metadata.entry_points():
         if point.group.startswith("axolotl.") and (
             point.group not in BUILTIN_ENTRY_POINTS
@@ -84,14 +88,14 @@ def verify_environment() -> None:
             or point.dist is None
             or point.dist.metadata["Name"].lower() != "axolotl"
         ):
-            raise ValueError("unapproved runtime entry point")
+            raise ValueError("unapproved runtime entry point; remove the distribution that registers it")
 
 
 # Torch wheels carry SASS for sm_XY targets and PTX for compute_XY targets. SASS
 # runs when the target has the same major and an equal or lower minor than the
 # GPU. PTX JIT-compiles for any equal or lower target capability, with a driver
 # at least as new as the CUDA build. Architecture-specific "a" targets run only
-# on the exact capability and family "f" targets only on the same major.
+# on the exact capability. Family "f" targets run only on the same major.
 def kernel_support(capability: tuple[int, int], arch_list: list[str]) -> str:
     support = ""
     for arch in arch_list:
@@ -171,13 +175,12 @@ def torch_facts() -> dict[str, object]:
 
     facts: dict[str, object] = {
         "torch": str(torch.__version__), "cuda": torch.version.cuda, "hip": getattr(torch.version, "hip", None),
-        "available": False, "driverCuda": None, "archList": [], "devices": [],
+        "available": False, "driverCuda": driver_cuda(), "archList": [], "devices": [],
         "bitsandbytes": importlib.util.find_spec("bitsandbytes") is not None,
     }
     if torch.version.cuda and torch.cuda.is_available():
         facts.update(
-            available=True, driverCuda=driver_cuda(),
-            archList=list(torch.cuda.get_arch_list()),
+            available=True, archList=list(torch.cuda.get_arch_list()),
             devices=[list(torch.cuda.get_device_capability(index)) for index in range(torch.cuda.device_count())],
         )
     return facts

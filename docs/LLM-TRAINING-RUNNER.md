@@ -31,13 +31,14 @@ architecture and native BF16. QLoRA also needs bitsandbytes. The configuration
 value `load_in_4bit` must be a boolean. An unsupported combination stops the
 phase, and training never falls back to CPU.
 
-The runner discards the output of the child process. To see the reason, run the
+The runner discards the output of the worker process. To see the reason, run the
 [runtime check](LLM-TRAINING-QUALIFICATION.md#runtime-check).
 
 This is a byte/inventory boundary, not a complete approved environment lock.
-Python's standard library, OS/native libraries, CUDA and driver compatibility
-still require a separately pinned and qualified deployment. Do not treat a
-matching source metadata file or a successful fixture as runtime approval.
+Python's standard library, OS and native libraries, and CUDA and driver
+compatibility still need pinned and qualified provenance. The check rejects
+incompatible combinations but does not pin them. Do not treat a matching source
+metadata file or a successful fixture as runtime approval.
 
 Every execution gets a new private directory beside its lifecycle envelope,
 named `.llm-<invocation>`. Reusing that invocation fails. It contains the generated

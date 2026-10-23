@@ -37,24 +37,22 @@ jobs:
           .training-tools/bin/uv pip install --python .training-runtime/bin/python --no-deps --no-build-isolation 'axolotl @ git+https://github.com/axolotl-ai-cloud/axolotl.git@1f1eb05a391c43e65c1c5ee7ec6ea1b8a841d5d1'
       - name: Enforce exact dependency deviations, runtime compatibility and worker boundary
         run: |
-          .training-runtime/bin/python -I -B training/axolotl/check_environment.py > cpu-smoke.json
-          python3 - cpu-smoke.json <<'PYTHON'
-          import json, sys
-          report = json.load(open(sys.argv[1]))
-          assert report["status"] == "accepted", report
-          PYTHON
-          # The CI runner has no GPU: each preset target must be rejected with a failed accelerator check.
+          check() { .training-runtime/bin/python -I -S -B training/axolotl/check_environment.py "$@"; }
+          check > cpu-smoke.json
+          # The CI runner has no GPU. The check must reject each preset target with exit status 1.
           for target in smoke-lora representative-qlora; do
             code=0
-            .training-runtime/bin/python -I -B training/axolotl/check_environment.py --target "$target" > "$target.json" || code=$?
+            check --target "$target" > "$target.json" || code=$?
             test "$code" -eq 1
-            python3 - "$target.json" <<'PYTHON'
-          import json, sys
-          report = json.load(open(sys.argv[1]))
-          checks = {check["name"]: check["status"] for check in report["checks"]}
-          assert report["status"] == "rejected" and checks["accelerator"] == "fail", report
-          PYTHON
           done
+          python3 - <<'PYTHON'
+          import json
+          reports = {name: json.load(open(name + ".json")) for name in ("cpu-smoke", "smoke-lora", "representative-qlora")}
+          assert reports.pop("cpu-smoke")["status"] == "accepted"
+          for report in reports.values():
+              checks = {check["name"]: check["status"] for check in report["checks"]}
+              assert report["status"] == "rejected" and checks["accelerator"] == "fail", report
+          PYTHON
           .training-runtime/bin/python -m unittest discover -s tests/training -v
       - name: Train and reload tiny adapter without network access
         run: |
