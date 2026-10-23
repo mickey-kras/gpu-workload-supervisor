@@ -26,7 +26,7 @@ function fingerprint(path, workflow) {
   return createHash('sha256').update(JSON.stringify(canonical(protectedControls(path, normalizeWorkflowActionPins(workflow))))).digest('hex');
 }
 
-function normalizeCiReuse(files, workflows, failures) {
+function normalizeCiReuse(files, workflows, failures, admitted = new Set()) {
   const ci = workflows[CI];
   const steps = workflows[AISLOP]?.jobs?.status?.steps || [];
   const enabled = ci?.on?.workflow_call?.outputs ||
@@ -39,7 +39,7 @@ function normalizeCiReuse(files, workflows, failures) {
     if (fingerprint(path, workflows[path]) !== hash) failures.push(`${path} changed coverage/scanner reuse controls`);
   }
   for (const [path, hash] of Object.entries(HELPER_HASHES)) {
-    if (createHash('sha256').update(files[path] || '').digest('hex') !== hash) {
+    if (!admitted.has(path) && createHash('sha256').update(files[path] || '').digest('hex') !== hash) {
       failures.push(`${path} changed fail-closed coverage/scanner validation`);
     }
   }

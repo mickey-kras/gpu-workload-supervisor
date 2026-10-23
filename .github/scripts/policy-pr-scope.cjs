@@ -58,8 +58,8 @@ PYTHON`;
 const AGGREGATE_ENV = { CI_NEEDS: '${{ toJSON(needs) }}',
   CI_EVENT: '${{ github.event_name }}', CI_MODE: '${{ inputs.validation-mode }}' };
 
-function normalizeScopedValidation(files, workflows, failures, aggregateScript) {
-  if (createHash('sha256').update(files['.github/scripts/pr-validation-scope.cjs'] || '').digest('hex') !== CLASSIFIER_DIGEST) {
+function normalizeScopedValidation(files, workflows, failures, aggregateScript, admitted = new Set()) {
+  if (!admitted.has('.github/scripts/pr-validation-scope.cjs') && createHash('sha256').update(files['.github/scripts/pr-validation-scope.cjs'] || '').digest('hex') !== CLASSIFIER_DIGEST) {
     failures.push('PR validation classifier was changed');
   }
   const pr = workflows['.github/workflows/pr-validation.yml'];

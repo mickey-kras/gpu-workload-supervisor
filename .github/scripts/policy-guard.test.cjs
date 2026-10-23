@@ -1478,3 +1478,25 @@ test('Dependabot workflow and job names allow omission or string labels only', (
     }
   }
 });
+
+
+test('exact-head admission covers executable helpers without relaxing workflow controls', () => {
+  const baseline = files({ serial: false });
+  for (const path of ['.github/actions/setup-goreleaser/action.yml',
+    '.github/scripts/pr-validation-scope.cjs', '.github/scripts/quality-coverage.py',
+    '.github/scripts/check-scan-reports.py']) {
+    const candidate = { ...baseline };
+    if (path.endsWith('action.yml')) {
+      const action = YAML.parse(candidate[path]);
+      action.description += ' Reviewed update';
+      candidate[path] = YAML.stringify(action);
+    } else candidate[path] += '\n# reviewed executable update\n';
+    assert.ok(inspectActivated(candidate, baseline).length > 0, path);
+    assert.deepEqual(inspectActivated(candidate, baseline, new Set([path])), [], path);
+    assert.ok(inspectActivated(candidate, baseline, new Set(['unrelated'])).length > 0, path);
+    const ci = YAML.parse(candidate['.github/workflows/ci.yml']);
+    ci.jobs.go['continue-on-error'] = true;
+    candidate['.github/workflows/ci.yml'] = YAML.stringify(ci);
+    assert.ok(inspectActivated(candidate, baseline, new Set([path])).length > 0, path);
+  }
+});

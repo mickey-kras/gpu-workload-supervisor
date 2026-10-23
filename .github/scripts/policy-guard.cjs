@@ -128,7 +128,7 @@ function inspectGoReleaser({ files, workflows, failures, checks, path, jobId, bu
     if (doc.errors.length) throw doc.errors[0];
     const action = doc.toJS();
     const controls = { ...action, runs: { ...action?.runs, steps: normalizeActionSteps(action?.runs?.steps) } };
-    if (createHash('sha256').update(JSON.stringify(canonical(controls))).digest('hex') !==
+    if (!admitted.has(actionPath) && createHash('sha256').update(JSON.stringify(canonical(controls))).digest('hex') !==
         'c88133b8d7e69681883fe0aa77a141453ace73146561612522b9cd5f485722ac') failures.push(`${actionPath} changed verified GoReleaser installer`);
   } catch {
     failures.push(`${actionPath} changed verified GoReleaser installer`);
@@ -410,8 +410,8 @@ function inspect(files, baseline = files, admitted = new Set()) {
       failures.push(`${path}: policy execution sources require independent exact-head owner admission`);
     }
   }
-  const scoped = normalizeScopedValidation(files, scanWorkflows(files, failures), failures, AGGREGATE_RUN + '\n');
-  const workflows = normalizeCiReuse(files, scoped, failures);
+  const scoped = normalizeScopedValidation(files, scanWorkflows(files, failures), failures, AGGREGATE_RUN + '\n', admitted);
+  const workflows = normalizeCiReuse(files, scoped, failures, admitted);
   const checks = createChecks(workflows, failures);
   const ciWorkflows = normalizeParallelCi(workflows, failures);
   inspectCi(files, ciWorkflows, failures, createChecks(ciWorkflows, failures), admitted);
