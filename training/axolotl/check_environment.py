@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import stat
 import subprocess
 import tempfile
 
@@ -122,12 +123,23 @@ def load_presets(path=None):
     return tuple(presets)
 
 
+def current_directory():
+    # A deleted working directory has no name to hide.
+    try:
+        return os.getcwd()
+    except OSError:
+        return None
+
+
 def mask(text):
     # Report no host paths: hide the known roots literally, then any other absolute path.
     literals = {
-        os.environ.get("HOME", ""): "<home>", tempfile.gettempdir(): "<tmp>", os.getcwd(): "<cwd>",
+        os.environ.get("HOME", ""): "<home>", tempfile.gettempdir(): "<tmp>",
         sys.base_prefix: "<python>", sys.prefix: "<python>", str(runtime_root()): "<runtime>",
     }
+    cwd = current_directory()
+    if cwd is not None:
+        literals.setdefault(cwd, "<cwd>")
     for literal in sorted(literals, key=len, reverse=True):
         if len(literal) > 1:
             # Replace a root only at a path boundary, so /home does not change /homework.
@@ -195,7 +207,9 @@ def site_problems(site, owned, forbidden):
     for entry in sorted(site.iterdir()) if site.is_dir() else ():
         name = entry.name
         if entry.suffix == ".pth":
-            # The runner and the checker use -S, so .pth files never run; a locked wheel's file is accepted.
+            # The runner and the checker use -S, but subprocesses of the training stack can process
+            # .pth files. Accept only a file that a locked wheel's RECORD lists; uv pip sync
+            # --require-hashes, not this check, gives the integrity of its bytes.
             if name not in owned:
                 startup.append(f"site-packages has the startup file {name}, which no locked wheel installs; remove it")
             continue
@@ -287,10 +301,12 @@ def probe_environment(work, gpu_uuid):
     return environment
 
 
-def tail(path):
-    with path.open("rb") as source:
-        source.seek(max(0, path.stat().st_size - OUTPUT_LIMIT))
-        return source.read(OUTPUT_LIMIT).decode("utf-8", "replace").splitlines()
+def tail(source):
+    # Read through the file object that the parent created, never by path: the probe can
+    # replace the path with a FIFO.
+    size = source.seek(0, os.SEEK_END)
+    source.seek(max(0, size - OUTPUT_LIMIT))
+    return source.read(OUTPUT_LIMIT).decode("utf-8", "replace").splitlines()
 
 
 def valid_facts(facts):
@@ -328,7 +344,7 @@ def stop_group(process, killpg):
 
 
 def wait_for_probe(process, killpg):
-    # Return the exit code, or an actionable failure when the probe does not finish.
+    # Return the exit code and None, or None and an actionable failure when the probe does not finish.
     driver = "check the NVIDIA driver and the GPU, then run the check again"
     try:
         code = process.wait(timeout=PROBE_TIMEOUT)
@@ -336,22 +352,25 @@ def wait_for_probe(process, killpg):
         code = None
     stop_group(process, killpg)
     if code is not None:
-        return code
+        return code, None
     try:
         process.wait(timeout=KILL_TIMEOUT)
     except subprocess.TimeoutExpired:
-        return f"the runtime probe hung in the driver and did not stop; {driver}"
-    return f"the runtime probe did not finish in {PROBE_TIMEOUT} seconds; {driver}"
+        return None, f"the runtime probe hung in the driver and did not stop; {driver}"
+    return None, f"the runtime probe did not finish in {PROBE_TIMEOUT} seconds; {driver}"
 
 
 def read_result(path):
-    # Read at most one byte over the limit and never follow a symbolic link.
+    # Read at most one byte over the limit from a regular file. Never follow a symbolic
+    # link, and never block on a FIFO or a device.
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return b""
     try:
         with os.fdopen(descriptor, "rb") as source:
+            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                return b""
             return source.read(OUTPUT_LIMIT + 1)
     except OSError:
         return b""
@@ -389,13 +408,13 @@ def run_probe(quantized, gpu_uuid, popen=subprocess.Popen, killpg=os.killpg):
         result_path = work / "result.json"
         mode = "quantized" if quantized else "plain"
         command = [sys.executable, "-I", "-S", "-B", str(PROBE), str(WORKER), mode, str(result_path)]
-        with open(work / "stdout", "wb") as stdout, open(work / "stderr", "wb") as stderr:
+        with open(work / "stdout", "w+b") as stdout, open(work / "stderr", "w+b") as stderr:
             process = popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, cwd=work,
                             env=probe_environment(work, gpu_uuid), start_new_session=True)
-            code = wait_for_probe(process, killpg)
-        if isinstance(code, str):
-            return None, code
-        lines = tail(work / "stderr") or tail(work / "stdout")
+            code, failure = wait_for_probe(process, killpg)
+            if failure is not None:
+                return None, failure
+            lines = tail(stderr) or tail(stdout)
         raw = read_result(result_path)
     if code != 0:
         return None, exit_failure(code, lines, retry)
@@ -442,15 +461,18 @@ def check(name, problems, target, cpu_smoke_warning=False):
     return {"name": name, "status": status, "problems": bounded, "omitted": max(0, len(problems) - PROBLEM_LIMIT)}
 
 
-def guarded(name, compute, target, cpu_smoke_warning=False, sync=CHECKER_BUG):
-    # A missing packaging module is an installation problem; any other error is a checker bug.
+def remedy_for(error, sync=None):
+    # A missing module or an unreadable file is an installation problem; any other error is a checker bug.
+    if sync is not None and isinstance(error, (ImportError, OSError)):
+        return sync
+    return CHECKER_BUG
+
+
+def guarded(name, compute, target, sync, cpu_smoke_warning=False):
     try:
         problems = compute()
-    except ImportError as error:
-        problems = [f"check could not run ({type(error).__name__}: {error}); {sync}"]
-        cpu_smoke_warning = False
     except Exception as error:  # noqa: BLE001 - a broken check is a failure, never a traceback.
-        problems = [f"check could not run ({type(error).__name__}: {error}); {CHECKER_BUG}"]
+        problems = [f"check could not run ({type(error).__name__}: {error}); {remedy_for(error, sync)}"]
         cpu_smoke_warning = False
     return check(name, problems, target, cpu_smoke_warning)
 
@@ -480,16 +502,24 @@ def report(worker, target, gpu_uuid=None, popen=subprocess.Popen):
     # load a shadowing _sysconfigdata module from site-packages.
     stdlib = Path(os.__file__).parent
     site = worker.runtime_site()
+    forbidden = stdlib_names([stdlib, stdlib / "lib-dynload"])
+
+    def scan():
+        owned = owned_startup_files(distributions, picked(locked, locked_error, None))
+        return dict(zip(("shadows", "startup"), site_problems(site, owned, forbidden)))
+
+    # Scan before and after the probe: the probe imports site-packages first, as the
+    # runner does, so planted code can run there and hide itself.
+    before, before_error = attempt(scan)
     try:
         probe, failure = run_probe(target in QUANTIZED, gpu_uuid, popen)
-    except OSError as error:
-        probe, failure = None, f"the runtime probe could not start ({type(error).__name__}: {error}); {worker.SYNC}"
     except Exception as error:  # noqa: BLE001 - the dependent checks report the failure.
-        probe, failure = None, f"the runtime probe could not run ({type(error).__name__}); {CHECKER_BUG}"
+        remedy = remedy_for(error, worker.SYNC)
+        probe, failure = None, f"the runtime probe could not start ({type(error).__name__}: {error}); {remedy}"
+    found, found_error = attempt(scan)
+    if found_error is None and before_error is None and before != found:
+        found["shadows"].append(f"site-packages changed while the runtime probe ran; {worker.SYNC}")
     mapped, mapped_error = attempt(lambda: probe_checks(worker, probe, failure, target, gpu_uuid))
-    forbidden = stdlib_names([stdlib, stdlib / "lib-dynload"])
-    found, found_error = attempt(lambda: dict(zip(("shadows", "startup"), site_problems(
-        site, owned_startup_files(distributions, picked(locked, locked_error, None)), forbidden))))
 
     def python():
         problem = worker.python_problem((sys.version_info.major, sys.version_info.minor))
@@ -501,7 +531,7 @@ def report(worker, target, gpu_uuid=None, popen=subprocess.Popen):
         return lock_problems(picked(locked, locked_error, None), distributions, set(sys_tags()), worker.SYNC)
 
     def guard(name, compute, cpu_smoke_warning=False):
-        return guarded(name, compute, target, cpu_smoke_warning=cpu_smoke_warning, sync=worker.SYNC)
+        return guarded(name, compute, target, worker.SYNC, cpu_smoke_warning=cpu_smoke_warning)
 
     checks = [
         guard("python", python),
@@ -545,7 +575,7 @@ def main(args=None):
     try:
         presets = load_presets()
     except Exception as error:  # noqa: BLE001 - an internal error still gives one bounded JSON object.
-        return internal_error(target, error)
+        return internal_error(target, error, remedy_for(error))
     parser = argparse.ArgumentParser(description="Check the training runtime for one target. Run with -I -S -B.")
     parser.add_argument("--target", choices=("cpu-smoke", *presets), default="cpu-smoke")
     parser.add_argument("--gpu-uuid", help="trainer GPU UUID; the probe gets it as CUDA_VISIBLE_DEVICES")
@@ -563,15 +593,13 @@ def main(args=None):
         if site not in sys.path:
             sys.path.append(site)
         result = report(worker, target, options.gpu_uuid)
-    except ImportError as error:
-        return internal_error(target, error, worker.SYNC if worker is not None else CHECKER_BUG)
     except Exception as error:  # noqa: BLE001 - an internal error still gives one bounded JSON object.
-        return internal_error(target, error)
+        return internal_error(target, error, remedy_for(error, worker.SYNC if worker is not None else None))
     print(json.dumps(result, indent=2, sort_keys=True))
     return 1 if result["status"] == "rejected" else 0
 
 
-def internal_error(target, error, remedy=CHECKER_BUG):
+def internal_error(target, error, remedy):
     print(json.dumps(skeleton(target, mask(f"check could not run ({type(error).__name__}: {error}); {remedy}")),
                      indent=2, sort_keys=True))
     return 2

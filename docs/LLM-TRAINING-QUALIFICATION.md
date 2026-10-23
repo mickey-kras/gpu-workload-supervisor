@@ -87,8 +87,9 @@ only the Axolotl candidate; a TRL/Unsloth experiment is not an accepted trainer.
 Run `"$PYTHON" -I -S -B training/axolotl/check_environment.py` with the runtime's
 own interpreter, as the runner does. The check refuses to run without `-I` and
 `-S`, and it writes no bytecode even without `-B`. It adds the runtime
-site-packages after the standard library, so `.pth` files never run. It prints
-one bounded JSON report, version 1.
+site-packages after the standard library, so no site-packages module can replace
+a standard-library module inside the checker. It prints one bounded JSON report,
+version 1.
 
 The exit status is 0 for `accepted` and 1 for `rejected`. The exit status 2 has
 two causes. An internal error prints the same JSON keys with the status
@@ -107,7 +108,8 @@ the `accelerator` check.
 
 | Report field | Value |
 | --- | --- |
-| `version`, `target`, `status` | `1`, the selected target (`null` when the exit status 2 comes before target selection), and `accepted` or `rejected` |
+| `version`, `status` | `1`, and `accepted` or `rejected` |
+| `target` | The selected target, or `null` for an internal error before target selection |
 | `python`, `lockTarget` | The interpreter version, and `CPython 3.12.14`, the interpreter of the lock |
 | `workerSHA256`, `lockSHA256` | SHA-256 of the embedded worker and of the lock |
 | `accelerator` | `cuda`, `cpu`, or `null` when the probe or Torch gives no facts |
@@ -129,7 +131,14 @@ the `accelerator` check.
 
 The standard-library names come from `sys.stdlib_module_names` and from the
 private names, such as `_sysconfigdata_*`, in the standard-library directories.
-The runner and the checker use `-S`, so `.pth` files never run.
+The check scans site-packages before and after the child process. A change
+between the two scans fails the `standard-library` check.
+
+The runner's interpreter and the checker use `-S`, so they do not process `.pth`
+files. Subprocesses that the training stack starts, such as compile workers, can
+process them. Thus `startup-files` accepts only a `.pth` file that the `RECORD` of
+a locked wheel lists. The check does not hash files. Installation integrity relies
+on `uv pip sync --require-hashes`.
 
 The native, driver and accelerator checks run in a child process with `-I -S -B`.
 The child gets the runner environment and puts the runtime site-packages first,

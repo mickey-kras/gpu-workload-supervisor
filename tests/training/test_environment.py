@@ -11,7 +11,10 @@ import shutil
 import signal
 import subprocess
 import sys
+import sysconfig
 import tempfile
+import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -118,9 +121,10 @@ def probe_result(**changes):
 
 class FakeProcess:
     def __init__(self, codes):
-        self.codes, self.pid = list(codes), 4321
+        self.codes, self.pid, self.timeouts = list(codes), 4321, []
 
     def wait(self, timeout=None):
+        self.timeouts.append(timeout)
         code = self.codes.pop(0)
         if code is None:
             raise subprocess.TimeoutExpired("probe", timeout)
@@ -143,6 +147,15 @@ def fake_popen(result=None, codes=(0,), stderr=b"", stdout=b"", raw=None):
 
 
 FLAGS = {name: getattr(sys.flags, name) for name in dir(sys.flags) if isinstance(getattr(sys.flags, name), int) and not name.startswith("_")}
+def alive(pid):
+    # A zombie counts as gone: it runs no code and its parent reaps it.
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
+        return False
+    return state != "Z"
+
+
 ISOLATED = SimpleNamespace(**{**FLAGS, "isolated": 1, "no_site": 1})
 RETRY = "reinstall the training runtime from the lock and run the check again"
 DRIVER = "check the NVIDIA driver and the GPU, then run the check again"
@@ -150,14 +163,15 @@ DRIVER = "check the NVIDIA driver and the GPU, then run the check again"
 
 class RuntimeTests(unittest.TestCase):
     def test_limits(self):
-        self.assertEqual((checker.PROBE_TIMEOUT, checker.PROBLEM_LIMIT, checker.PROBLEM_LENGTH), (300, 20, 300))
+        self.assertEqual((checker.PROBE_TIMEOUT, checker.KILL_TIMEOUT, checker.PROBLEM_LIMIT, checker.PROBLEM_LENGTH),
+                         (300, 10, 20, 300))
 
     def test_presets_come_from_the_asset_table_when_main_runs(self):
         presets = json.loads((ROOT / "training/assets.json").read_text())
         self.assertEqual(checker.load_presets(), tuple(presets))
         self.assertLessEqual(checker.QUANTIZED, set(presets))
         with tempfile.TemporaryDirectory() as directory:
-            for text in ("{broken", "[]", "{}"):
+            for text in ("{broken", "[]", "{}", '["smoke-lora"]'):
                 (Path(directory) / "assets.json").write_text(text)
                 with self.subTest(text=text), self.assertRaises(ValueError):
                     checker.load_presets(Path(directory) / "assets.json")
@@ -201,7 +215,8 @@ class RuntimeTests(unittest.TestCase):
             code, output = self.main([])
         self.assertEqual(code, 2)
         self.assertEqual(json.loads(output)["error"], f"check could not run (RuntimeError: CUDA init in <runtime>/lib); {checker.CHECKER_BUG}")
-        for arguments in (["--target", "unknown"], ["--gpu-uuid", "MIG-0123abcd-89ab-cdef-0123-456789abcdef"]):
+        for arguments in (["--target", "unknown"], ["--gpu-uuid", "MIG-0123abcd-89ab-cdef-0123-456789abcdef"],
+                          ["--gpu-uuid", "GPU-0123abcd-89ab-cdef-0123-456789ABCDEF0"]):
             with self.subTest(arguments=arguments), patch("sys.stderr", new_callable=io.StringIO), self.assertRaises(SystemExit) as exit:
                 self.main(arguments)
             self.assertEqual(exit.exception.code, 2)
@@ -211,6 +226,10 @@ class RuntimeTests(unittest.TestCase):
             checker.main([])
         self.assertEqual(exit.exception.code, 2)
         self.assertIn("-I -S -B", error.getvalue())
+        with patch.object(checker.sys, "flags", SimpleNamespace(**{**FLAGS, "isolated": 1, "no_site": 0})), \
+                patch("sys.stderr", new_callable=io.StringIO), self.assertRaises(SystemExit) as exit:
+            checker.main([])
+        self.assertEqual(exit.exception.code, 2)
 
     def test_gpu_uuid_follows_the_go_rule(self):
         valid = "GPU-0123abcd-89ab-cdef-0123-456789ABCDEF"
@@ -308,6 +327,11 @@ class RuntimeTests(unittest.TestCase):
         ])
         self.assertEqual(checker.lock_problems({"peft": Version("0.21.2")}, [wheel("peft", "0.21.2", None)], supported, "SYNC"),
                          ["peft is not a wheel for this interpreter and platform; SYNC"])
+        multi = SimpleNamespace(metadata={"Name": "torch"}, version="2.14.0", files=[], read_text={
+            "WHEEL": "Wheel-Version: 1.0\nTag: cp311-cp311-manylinux_2_28_x86_64\nTag: cp312-cp312-manylinux_2_28_x86_64\n"}.get)
+        for distributions in ([wheel("torch", "2.14.0", "py2.py3-none-any"), wheel("peft", "0.21.2")], [multi, wheel("peft", "0.21.2")]):
+            with self.subTest(distributions=distributions):
+                self.assertEqual(checker.lock_problems(locked, distributions, supported, "SYNC"), [])
 
     def test_dependency_problems_carry_one_remedy_each(self):
         versions = {"python-dotenv": "1.2.2", "fsspec": "2026.6.0", "pillow": "13.0"}
@@ -398,11 +422,26 @@ class RuntimeTests(unittest.TestCase):
             probe_result(facts=cuda_facts(archList="sm_86")), probe_result(facts=cuda_facts(archList=["sm_86"] * 65)),
             probe_result(facts=cuda_facts(devices=[[8]])), probe_result(facts=cuda_facts(devices=[[8, 6.0]])),
             probe_result(facts=cuda_facts(devices=[[8, True]])), probe_result(facts=cuda_facts(driverCuda=13)),
+            probe_result(facts=cuda_facts(cuda=13)), probe_result(facts=cuda_facts(archList=[1])),
+            probe_result(facts=cuda_facts(archList=[None])), probe_result(facts=cuda_facts(devices=[[8, 6]] * 65)),
             probe_result(facts={key: value for key, value in cuda_facts().items() if key != "hip"} | {"hip": 1}),
         ):
             with self.subTest(changed=changed):
                 self.assertEqual(checker.run_probe(False, None, fake_popen(raw=json.dumps(changed).encode())[0]),
                                  (None, f"the runtime probe gave no valid result; {RETRY}"))
+
+    def test_schema_accepts_the_limits(self):
+        result = probe_result(facts=cuda_facts(torch="x" * 64, archList=["sm_86"] * 64, devices=[[8, 6]] * 64))
+        self.assertEqual(checker.decode_probe(json.dumps(result).encode()), result)
+
+    def test_stderr_wins_over_stdout_and_bad_bytes_are_replaced(self):
+        for options, expected in (
+            ({"stdout": b"noise\n", "stderr": b"ImportError: x\n"}, "ImportError: x"),
+            ({"stderr": b"\xff bad\n"}, "\ufffd bad"),
+        ):
+            with self.subTest(expected=expected):
+                self.assertEqual(checker.run_probe(False, None, fake_popen(codes=(1,), **options)[0], lambda *args: None),
+                                 (None, f"the runtime probe failed ({expected}); {RETRY}"))
 
     def test_timeouts_kill_the_process_group_without_blocking(self):
         for codes, expected in (
@@ -424,10 +463,59 @@ class RuntimeTests(unittest.TestCase):
         def gone(pid, number):
             raise ProcessLookupError(pid)
 
-        for codes in ((0,), (None, -9)):
-            with self.subTest(codes=codes):
-                self.assertEqual(checker.wait_for_probe(FakeProcess(codes), gone), 0 if codes == (0,) else
-                                 f"the runtime probe did not finish in 300 seconds; {DRIVER}")
+        process = FakeProcess((0,))
+        self.assertEqual((checker.wait_for_probe(process, gone), process.timeouts), ((0, None), [300]))
+        process = FakeProcess((None, -9))
+        self.assertEqual((checker.wait_for_probe(process, gone), process.timeouts),
+                         ((None, f"the runtime probe did not finish in 300 seconds; {DRIVER}"), [300, 10]))
+        process = FakeProcess((None, None))
+        self.assertEqual((checker.wait_for_probe(process, gone), process.timeouts),
+                         ((None, f"the runtime probe hung in the driver and did not stop; {DRIVER}"), [300, 10]))
+
+    def test_a_timeout_stops_the_whole_probe_process_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            record = Path(directory) / "grandchild"
+            script = Path(directory) / "probe.py"
+            script.write_text("import subprocess, time\n"
+                              "child = subprocess.Popen(['sleep', '60'])\n"
+                              f"open({str(record)!r}, 'w').write(str(child.pid))\n"
+                              "time.sleep(60)\n")
+            with patch.object(checker, "PROBE", script), patch.object(checker, "PROBE_TIMEOUT", 1):
+                result = checker.run_probe(False, None)
+            self.assertEqual(result, (None, f"the runtime probe did not finish in 1 seconds; {DRIVER}"))
+            pid = int(record.read_text())
+            for _ in range(50):
+                if not alive(pid):
+                    break
+                time.sleep(0.1)
+            self.assertFalse(alive(pid))
+
+    def test_fifo_outputs_never_block_the_checker(self):
+        def fifo_result(command, **options):
+            os.mkfifo(command[-1])
+            return FakeProcess((0,))
+
+        def fifo_stderr(command, **options):
+            options["stderr"].write(b"ImportError: before the swap\n")
+            options["stderr"].flush()
+            path = Path(options["cwd"]) / "stderr"
+            path.unlink()
+            os.mkfifo(path)
+            os.mkfifo(command[-1])
+            return FakeProcess((1,))
+
+        for popen, expected in (
+            (fifo_result, f"the runtime probe gave no valid result; {RETRY}"),
+            (fifo_stderr, f"the runtime probe failed (ImportError: before the swap); {RETRY}"),
+        ):
+            with self.subTest(expected=expected):
+                outcome = []
+                thread = threading.Thread(target=lambda: outcome.append(checker.run_probe(False, None, popen, lambda *args: None)),
+                                          daemon=True)
+                thread.start()
+                thread.join(10)
+                self.assertFalse(thread.is_alive(), "the checker blocked on a FIFO")
+                self.assertEqual(outcome, [(None, expected)])
 
     def test_result_file_is_bounded_and_not_followed_through_a_link(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -440,6 +528,9 @@ class RuntimeTests(unittest.TestCase):
             target.write_bytes(b" " * (checker.OUTPUT_LIMIT + 10))
             self.assertEqual(len(checker.read_result(target)), checker.OUTPUT_LIMIT + 1)
         self.assertIsNone(checker.decode_probe(b" " * (checker.OUTPUT_LIMIT + 1)))
+        valid = json.dumps(probe_result()).encode()
+        self.assertIsNone(checker.decode_probe(valid + b" " * checker.OUTPUT_LIMIT))
+        self.assertEqual(checker.decode_probe(valid + b" " * (checker.OUTPUT_LIMIT - len(valid))), probe_result())
         self.assertIsNone(checker.decode_probe(b"{broken"))
         self.assertIsNone(checker.decode_probe(b"[]"))
 
@@ -526,19 +617,48 @@ class RuntimeTests(unittest.TestCase):
         for literal in (directory, sys.base_prefix + "/b", "/home/operator", "/opt/secret"):
             self.assertNotIn(literal, masked)
         self.assertEqual(len(masked), 300)
+        with patch.object(checker, "runtime_root", return_value=Path("/runtime-root")):
+            self.assertIn("<python>/b", checker.mask(f"{sys.base_prefix}/b"))
+        with patch.dict(os.environ, {"HOME": "/"}):
+            self.assertEqual(checker.mask("see /opt/x"), "see <path>")
+        with patch.dict(os.environ, {"HOME": "/home/operator"}):
+            for text, expected in (("at /home/operator", "at <home>"), ("(/home/operator)", "(<home>)"),
+                                   ("/home/operator; next", "<home>; next")):
+                self.assertEqual(checker.mask(text), expected)
+
+    def test_a_deleted_working_directory_still_gives_a_json_report(self):
+        previous = os.getcwd()
+        directory = tempfile.mkdtemp()
+        os.chdir(directory)
+        os.rmdir(directory)
+        try:
+            self.assertEqual(checker.mask("at /opt/x"), "at <path>")
+            with patch.object(checker, "report", side_effect=RuntimeError("broken")):
+                code, output = self.main([])
+        finally:
+            os.chdir(previous)
+        self.assertEqual((code, json.loads(output)["status"]), (2, "rejected"))
 
     def test_a_broken_check_is_a_failure_entry_but_interrupts_propagate(self):
         def broken():
             raise KeyError("facts")
 
-        self.assertEqual(checker.guarded("accelerator", broken, "cpu-smoke", cpu_smoke_warning=True), {
+        self.assertEqual(checker.guarded("accelerator", broken, "cpu-smoke", worker.SYNC, cpu_smoke_warning=True), {
             "name": "accelerator", "status": "fail", "problems": [f"check could not run (KeyError: 'facts'); {checker.CHECKER_BUG}"], "omitted": 0})
 
         def interrupted():
             raise KeyboardInterrupt
 
         with self.assertRaises(KeyboardInterrupt):
-            checker.guarded("python", interrupted, "cpu-smoke")
+            checker.guarded("python", interrupted, "cpu-smoke", worker.SYNC)
+
+        def missing():
+            raise ImportError("No module named 'packaging'")
+
+        self.assertEqual(checker.guarded("startup-files", missing, "cpu-smoke", worker.SYNC, cpu_smoke_warning=True)["status"], "fail")
+        self.assertEqual(checker.remedy_for(OSError("x"), worker.SYNC), worker.SYNC)
+        self.assertEqual(checker.remedy_for(OSError("x")), checker.CHECKER_BUG)
+        self.assertEqual(checker.remedy_for(KeyError("x"), worker.SYNC), checker.CHECKER_BUG)
 
     def report(self, target, probe, gpu_uuid="GPU-1", clean=True, **patches):
         popen, calls = fake_popen(probe)
@@ -603,7 +723,53 @@ class RuntimeTests(unittest.TestCase):
                 return [], []
 
             self.report("cpu-smoke", probe_result(), clean=True, site_problems=site)
-        self.assertEqual((mapped.call_count, names.call_count, len(sites)), (1, 1, 1))
+        # The site-packages scan runs once before and once after the probe.
+        self.assertEqual((mapped.call_count, names.call_count, len(sites)), (1, 1, 2))
+
+    def test_a_site_packages_change_during_the_probe_fails_the_standard_library(self):
+        with tempfile.TemporaryDirectory() as directory:
+            site = Path(directory)
+
+            def planting(command, **options):
+                (site / "json.py").write_text("")
+                Path(command[-1]).write_text(json.dumps(probe_result()))
+                return FakeProcess((0,))
+
+            def hiding(command, **options):
+                (site / "json.py").unlink()
+                Path(command[-1]).write_text(json.dumps(probe_result()))
+                return FakeProcess((0,))
+
+            items = [patch.object(worker, "runtime_site", return_value=site), patch.object(checker.metadata, "distributions", return_value=[]),
+                     patch.object(checker, "lock_problems", return_value=[]), patch.object(checker, "dependency_problems", return_value=[]),
+                     patch.object(checker.os, "killpg")]
+            for item in items:
+                item.start()
+            try:
+                planted = checker.report(worker, "cpu-smoke", None, planting)
+                hidden = checker.report(worker, "cpu-smoke", None, hiding)
+            finally:
+                for item in reversed(items):
+                    item.stop()
+        changed = f"site-packages changed while the runtime probe ran; {worker.SYNC}"
+        for result in (planted, hidden):
+            standard = next(item for item in result["checks"] if item["name"] == "standard-library")
+            self.assertEqual(standard["status"], "fail")
+            self.assertIn(changed, standard["problems"])
+
+    def test_a_missing_lock_is_an_internal_error_with_the_install_remedy(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(checker, "lock_problems", side_effect=ImportError("packaging")):
+            result, _ = self.report("cpu-smoke", probe_result(), clean=False, dependency_problems=lambda *args: [],
+                                    site_problems=lambda *args: ([], []))
+            versions = next(item for item in result["checks"] if item["name"] == "locked-versions")
+            self.assertTrue(versions["problems"][0].endswith(worker.SYNC))
+            missing = Path(directory) / "requirements.txt"
+            with patch.object(checker, "LOCK", missing), patch.object(checker, "report", wraps=checker.report):
+                code, output = self.main([])
+        result = json.loads(output)
+        self.assertEqual((code, result["status"], result["checks"]), (2, "rejected", []))
+        self.assertTrue(result["error"].startswith("check could not run (FileNotFoundError: "))
+        self.assertTrue(result["error"].endswith(worker.SYNC))
 
     def test_report_without_a_probe_result_has_null_runtime_fields(self):
         result, _ = self.report("cpu-smoke", None)
@@ -624,13 +790,13 @@ class RuntimeTests(unittest.TestCase):
         with patch.object(checker.metadata, "distributions", return_value=[]):
             result = checker.report(worker, "cpu-smoke", None, broken)
         native = next(item for item in result["checks"] if item["name"] == "native-libraries")
-        self.assertEqual(native["problems"], [f"the runtime probe could not run (RuntimeError); {checker.CHECKER_BUG}"])
+        self.assertEqual(native["problems"], [f"the runtime probe could not start (RuntimeError: unexpected); {checker.CHECKER_BUG}"])
 
     def test_a_missing_packaging_module_is_an_installation_problem(self):
         def missing():
             raise ImportError("No module named 'packaging'")
 
-        self.assertEqual(checker.guarded("locked-versions", missing, "cpu-smoke", sync=worker.SYNC)["problems"],
+        self.assertEqual(checker.guarded("locked-versions", missing, "cpu-smoke", worker.SYNC)["problems"],
                          [f"check could not run (ImportError: No module named 'packaging'); {worker.SYNC}"])
         with patch.object(checker, "report", side_effect=ImportError("No module named 'packaging'")):
             code, output = self.main([])
@@ -647,6 +813,17 @@ class RuntimeTests(unittest.TestCase):
             # packaging.tags imports logging; a planted copy must not run in the checker.
             marker = Path(directory) / "imported"
             (site / "logging.py").write_text(f"import sys\nopen({str(marker)!r}, 'a').write(sys.argv[0] + '\\n')\nraise SystemExit(9)\n")
+            # A planted _sysconfigdata copy must neither run in the checker nor hide.
+            name = subprocess.run([str(runtime / "bin/python3"), "-I", "-c", "import sysconfig; print(sysconfig._get_sysconfigdata_name())"],
+                                  check=True, capture_output=True, text=True).stdout.strip()
+            planted = [name, "logging"]
+            (site / f"{name}.py").write_text("raise RuntimeError('planted sysconfig data')\n")
+            dynload = Path(sysconfig.get_paths()["stdlib"]) / "lib-dynload"
+            private = sorted(module for module in (checker.module_name(entry) for entry in dynload.iterdir()) if module
+                             and module.startswith("_") and module not in sys.stdlib_module_names) if dynload.is_dir() else []
+            if private:
+                (site / f"{private[0]}.py").write_text("raise RuntimeError('planted dynload copy')\n")
+                planted.append(private[0])
             before = sorted(path.relative_to(runtime) for path in runtime.rglob("*"))
             environment = {key: value for key, value in os.environ.items() if key != "PYTHONDONTWRITEBYTECODE"}
             completed = subprocess.run([str(runtime / "bin/python3"), "-I", "-S", str(ROOT / "training/axolotl/check_environment.py")],
@@ -658,10 +835,12 @@ class RuntimeTests(unittest.TestCase):
             imported = marker.read_text().splitlines() if marker.exists() else []
             self.assertFalse([line for line in imported if line.endswith("check_environment.py")])
             standard = next(item for item in result["checks"] if item["name"] == "standard-library")
-            self.assertIn("site-packages has logging.py, which shadows the standard-library module logging; remove it",
-                          standard["problems"])
-            versions = next(item for item in result["checks"] if item["name"] == "locked-versions")
-            self.assertNotIn("check could not run", " ".join(versions["problems"]))
+            for module in planted:
+                self.assertIn(f"site-packages has {module}.py, which shadows the standard-library module {module}; remove it",
+                              standard["problems"])
+            versions = " ".join(next(item for item in result["checks"] if item["name"] == "locked-versions")["problems"])
+            self.assertNotIn("check could not run", versions)
+            self.assertNotIn("not a wheel for this interpreter", versions)
 
 
 STABLE_REPORT_KEYS = {"version", "target", "status", "python", "lockTarget", "workerSHA256", "lockSHA256",
