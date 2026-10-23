@@ -1059,7 +1059,10 @@ test('review admission does not exempt semantic policy controls or unsafe lockfi
   const path = '.github/scripts/eslint.config.cjs';
   const candidate = { ...baseline, [path]: baseline[path] + '\n// Reviewed change\n' };
   assert.ok(inspectActivated(candidate, baseline).includes('JavaScript maintainability policy was changed'));
-  assert.deepEqual(inspectActivated(candidate, baseline, new Set([path])), []);
+  const policy = '.github/scripts/policy-guard.cjs';
+  const digest = content => require('node:crypto').createHash('sha256').update(content).digest('hex');
+  candidate[policy] = candidate[policy].replace(digest(baseline[path]), digest(candidate[path]));
+  assert.deepEqual(inspectActivated(candidate, baseline, new Set([path, policy])), []);
   const lockPath = '.github/scripts/package-lock.json';
   const lock = JSON.parse(candidate[lockPath]);
   lock.packages[Object.keys(lock.packages).find(key => key !== '')].hasInstallScript = true;
@@ -1483,8 +1486,9 @@ test('Dependabot workflow and job names allow omission or string labels only', (
 test('exact-head admission covers executable helpers without relaxing workflow controls', () => {
   const baseline = files({ serial: false });
   for (const path of ['.github/actions/setup-goreleaser/action.yml',
-    '.github/scripts/quality-coverage.py',
-    '.github/scripts/check-scan-reports.py']) {
+    '.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py',
+    '.github/scripts/install-goreleaser.sh', '.github/scripts/check-go-directives.go',
+    '.github/scripts/eslint.config.cjs']) {
     const candidate = { ...baseline };
     if (path.endsWith('action.yml')) {
       const action = YAML.parse(candidate[path]);
@@ -1494,7 +1498,8 @@ test('exact-head admission covers executable helpers without relaxing workflow c
     assert.ok(inspectActivated(candidate, baseline).length > 0, path);
     assert.ok(inspectActivated(candidate, baseline, new Set([path])).length > 0, path);
     const actionPath = path.endsWith('action.yml');
-    const policyPath = actionPath ? '.github/scripts/policy-guard.cjs' : '.github/scripts/policy-ci-reuse.cjs';
+    const policyPath = ['.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py'].includes(path)
+      ? '.github/scripts/policy-ci-reuse.cjs' : '.github/scripts/policy-guard.cjs';
     const { canonical, normalizeActionSteps } = require('./policy-action-pins.cjs');
     const digest = content => require('node:crypto').createHash('sha256').update(content).digest('hex');
     const fingerprint = content => {
@@ -1533,4 +1538,30 @@ test('classifier admission requires matching policy and workflow digests', () =>
   assert.ok(inspectActivated(candidate, baseline).length > 0);
   candidate[policy] = baseline[policy];
   assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
+});
+
+
+test('release helper admission synchronizes policy and both runtime assertions', () => {
+  const baseline = files({ serial: false });
+  const policy = '.github/scripts/policy-release.cjs';
+  const workflow = '.github/workflows/release.yml';
+  const digest = content => require('node:crypto').createHash('sha256').update(content).digest('hex');
+  for (const helper of ['.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs']) {
+    const candidate = { ...baseline, [helper]: baseline[helper] + '\n// reviewed update\n' };
+    const admitted = new Set([helper, policy, workflow]);
+    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
+    const previous = digest(baseline[helper]);
+    const current = digest(candidate[helper]);
+    candidate[policy] = candidate[policy].replace(previous, current);
+    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
+    candidate[workflow] = candidate[workflow].replace(previous, current);
+    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
+    candidate[workflow] = candidate[workflow].replaceAll(previous, current);
+    assert.deepEqual(inspectActivated(candidate, baseline, admitted), []);
+    assert.ok(inspectActivated(candidate, baseline).length > 0);
+    candidate[policy] = baseline[policy];
+    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
+    candidate[policy] = candidate[policy].replace('const RELEASE_HASHES = {', 'const RELEASE_HASHES = {invalid');
+    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
+  }
 });

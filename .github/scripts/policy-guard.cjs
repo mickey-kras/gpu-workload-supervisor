@@ -11,6 +11,22 @@ const { inspectDependabot, verifyDependabotAuthor } = require('./policy-dependab
 
 const GORELEASER_ACTION_DIGEST = 'c88133b8d7e69681883fe0aa77a141453ace73146561612522b9cd5f485722ac';
 
+const EXECUTABLE_HASHES = {
+  ".github/scripts/install-goreleaser.sh": "de2e876e51298aec0ec86a42fdb850aaa2f95e3d86cd1fa67a6d5c1febbcc8b0",
+  ".github/scripts/check-go-directives.go": "f356bcb0bd9546d4ee133001335740bfb41623e4671554606895e6ab1a305489",
+  ".github/scripts/eslint.config.cjs": "72d5ad0cda934ad013c3b1ddb62bf6aa1b5a65caa457f18c5f6725ea93e48f31"
+};
+
+function expectedExecutableDigest(files, path, admitted) {
+  if (!admitted.has(path)) return EXECUTABLE_HASHES[path];
+  try {
+    const source = files['.github/scripts/policy-guard.cjs'] || '';
+    return JSON.parse(source.match(/const EXECUTABLE_HASHES = (\{[\s\S]*?\n\});/)?.[1] || 'null')?.[path];
+  } catch {
+    return undefined; // The caller rejects a missing or malformed digest.
+  }
+}
+
 const REQUIRED_FILES = [
   '.github/CODEOWNERS',
   '.github/workflows/pr-validation.yml', '.github/workflows/ci.yml',
@@ -137,12 +153,10 @@ function inspectGoReleaser({ files, workflows, failures, checks, path, jobId, bu
   } catch {
     failures.push(`${actionPath} changed verified GoReleaser installer`);
   }
-  for (const [file, digest] of [
-    ['.github/scripts/install-goreleaser.sh', 'de2e876e51298aec0ec86a42fdb850aaa2f95e3d86cd1fa67a6d5c1febbcc8b0'],
-  ]) {
-    if (!admitted.has(file) && createHash('sha256').update(files[file] || '').digest('hex') !== digest) {
-      failures.push(`${file} changed verified GoReleaser installer`);
-    }
+  const installer = '.github/scripts/install-goreleaser.sh';
+  if (createHash('sha256').update(files[installer] || '').digest('hex') !==
+      expectedExecutableDigest(files, installer, admitted)) {
+    failures.push(`${installer} changed verified GoReleaser installer`);
   }
 }
 
@@ -313,14 +327,14 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks, admitted
 }
 
 function inspectScannerConfigs(files, failures, admitted) {
-  if (!admitted.has('.github/scripts/check-go-directives.go') && createHash('sha256').update(files['.github/scripts/check-go-directives.go'] || '').digest('hex') !==
-      'f356bcb0bd9546d4ee133001335740bfb41623e4671554606895e6ab1a305489') {
+  if (createHash('sha256').update(files['.github/scripts/check-go-directives.go'] || '').digest('hex') !==
+      expectedExecutableDigest(files, '.github/scripts/check-go-directives.go', admitted)) {
     failures.push('Go suppression guard was changed');
   }
   // Validate PR config bytes as data; the trusted guard must never execute it.
   const eslintConfig = files['.github/scripts/eslint.config.cjs'] || '';
-  if (!admitted.has('.github/scripts/eslint.config.cjs') && createHash('sha256').update(eslintConfig).digest('hex') !==
-      '72d5ad0cda934ad013c3b1ddb62bf6aa1b5a65caa457f18c5f6725ea93e48f31') {
+  if (createHash('sha256').update(eslintConfig).digest('hex') !==
+      expectedExecutableDigest(files, '.github/scripts/eslint.config.cjs', admitted)) {
     failures.push('JavaScript maintainability policy was changed');
   }
   try {
