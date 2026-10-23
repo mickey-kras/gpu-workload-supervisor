@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import importlib.metadata
 import importlib.util
 import json
@@ -67,6 +68,94 @@ def verify_environment() -> None:
             or point.dist.metadata["Name"].lower() != "axolotl"
         ):
             raise ValueError("unapproved runtime entry point")
+
+
+# Torch wheels carry SASS for sm_XY targets and PTX for compute_XY targets. SASS
+# runs on the same major with an equal or newer minor; PTX JIT-compiles on any
+# equal or newer capability, with a driver at least as new as the CUDA build.
+# Architecture-specific "a" targets run only on the exact capability and family
+# "f" targets only on the same major.
+def kernel_support(capability: tuple[int, int], arch_list: list[str]) -> str:
+    support = ""
+    for arch in arch_list:
+        match = re.fullmatch(r"(sm|compute)_(\d+)(\d)([af]?)", arch)
+        if match is None:
+            continue
+        target = (int(match.group(2)), int(match.group(3)))
+        if (match.group(4) == "a" and target != capability) or target > capability:
+            continue
+        if match.group(1) == "sm" and target[0] == capability[0]:
+            return "sass"
+        if match.group(1) == "compute" and (match.group(4) != "f" or target[0] == capability[0]):
+            support = "ptx"
+    return support
+
+
+def version_pair(text: str) -> tuple[int, int]:
+    major, minor = (text.split(".") + ["0"])[:2]
+    return int(major), int(minor)
+
+
+# Both presets train and reload in BF16 on one CUDA device; QLoRA also needs the
+# bitsandbytes kernels. Each problem states what is wrong and what to change.
+def accelerator_problems(facts: dict[str, object], quantized: bool) -> list[str]:
+    torch, build, driver = str(facts["torch"]), facts["cuda"], facts["driverCuda"]
+    if facts["hip"] or not isinstance(build, str):
+        return [f"Torch {torch} is not a CUDA build; install the CUDA torch wheel from the training lock"]
+    if not facts["available"] or not facts["devices"]:
+        return [f"Torch CUDA {build} cannot use a GPU; install an NVIDIA driver for CUDA {build} or newer and expose one GPU"]
+    problems = []
+    if isinstance(driver, str) and version_pair(driver)[0] < version_pair(build)[0]:
+        problems.append(f"the NVIDIA driver supports CUDA {driver}, older than the Torch CUDA {build} build; upgrade the driver")
+    arch_list = [str(arch) for arch in facts["archList"]]
+    for index, value in enumerate(facts["devices"]):
+        capability = (int(value[0]), int(value[1]))
+        name = f"GPU {index} (compute capability {capability[0]}.{capability[1]})"
+        support = kernel_support(capability, arch_list)
+        if not support:
+            problems.append(f"{name} has no kernels in Torch {torch} ({' '.join(arch_list)}); install a Torch build with sm_{capability[0]}{capability[1]} or use a supported GPU")
+        elif support == "ptx" and (not isinstance(driver, str) or version_pair(driver) < version_pair(build)):
+            problems.append(f"{name} needs PTX JIT compilation, which needs a driver for CUDA {build} or newer; upgrade the driver")
+        if capability < (8, 0):
+            problems.append(f"{name} has no native BF16, which the training presets need; use a GPU with compute capability 8.0 or newer")
+    if quantized and not facts["bitsandbytes"]:
+        problems.append("QLoRA needs bitsandbytes; install bitsandbytes from the training lock")
+    return problems
+
+
+def driver_cuda() -> str | None:
+    # Torch exposes no driver version, so ask the driver library that CUDA loads.
+    try:
+        version = ctypes.c_int()
+        if ctypes.CDLL("libcuda.so.1").cuDriverGetVersion(ctypes.byref(version)) != 0:
+            return None
+    except (OSError, AttributeError):
+        return None
+    return f"{version.value // 1000}.{version.value % 1000 // 10}"
+
+
+def torch_facts() -> dict[str, object]:
+    import torch
+
+    facts: dict[str, object] = {
+        "torch": str(torch.__version__), "cuda": torch.version.cuda, "hip": getattr(torch.version, "hip", None),
+        "available": False, "driverCuda": None, "archList": [], "devices": [],
+        "bitsandbytes": importlib.util.find_spec("bitsandbytes") is not None,
+    }
+    if torch.version.cuda and torch.cuda.is_available():
+        facts.update(
+            available=True, driverCuda=driver_cuda(),
+            archList=list(torch.cuda.get_arch_list()),
+            devices=[list(torch.cuda.get_device_capability(index)) for index in range(torch.cuda.device_count())],
+        )
+    return facts
+
+
+def verify_accelerator(quantized: bool) -> None:
+    # Fail before Axolotl starts: an unsupported GPU must never fall back to CPU.
+    problems = accelerator_problems(torch_facts(), quantized)
+    if problems:
+        raise ValueError("unsupported training accelerator: " + "; ".join(problems))
 
 
 def publish(path: Path, value: dict[str, object]) -> None:
@@ -165,6 +254,7 @@ def main(args: list[str]) -> None:
     sys.path.insert(0, str(site))
     verify_environment()
     config, receipt, progress = (Path(value) for value in args[1:])
+    verify_accelerator(bool(json.loads(config.read_text(encoding="utf-8"))["load_in_4bit"]))
     if args[0] == "train":
         train(config, receipt, progress)
     else:

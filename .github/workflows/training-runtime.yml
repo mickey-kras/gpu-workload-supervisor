@@ -35,9 +35,14 @@ jobs:
           .training-tools/bin/uv venv .training-runtime --python "$(command -v python)"
           .training-tools/bin/uv pip sync --python .training-runtime/bin/python --require-hashes training/axolotl/requirements.txt
           .training-tools/bin/uv pip install --python .training-runtime/bin/python --no-deps --no-build-isolation 'axolotl @ git+https://github.com/axolotl-ai-cloud/axolotl.git@1f1eb05a391c43e65c1c5ee7ec6ea1b8a841d5d1'
-      - name: Enforce exact dependency deviations and worker boundary
+      - name: Enforce exact dependency deviations, runtime compatibility and worker boundary
         run: |
           .training-runtime/bin/python training/axolotl/check_environment.py
+          # The runner has no GPU: a GPU preset target must be rejected, never accepted on CPU.
+          if .training-runtime/bin/python training/axolotl/check_environment.py --target representative-qlora > /dev/null; then
+            echo "GPU preset target was accepted without a compatible GPU" >&2
+            exit 1
+          fi
           .training-runtime/bin/python -m unittest discover -s tests/training -v
       - name: Train and reload tiny adapter without network access
         run: |

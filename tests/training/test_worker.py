@@ -247,33 +247,154 @@ class WorkerTests(unittest.TestCase):
                 worker.sys, "version_info", SimpleNamespace(major=3, minor=11)
             ), patch.object(worker.sys, "path", []) as paths, patch.object(
                 worker, "verify_environment"
-            ) as verify, patch.object(worker, "train") as train, patch.object(worker, "reload") as reload:
+            ) as verify, patch.object(worker, "verify_accelerator") as accelerator, patch.object(
+                worker, "train"
+            ) as train, patch.object(worker, "reload") as reload:
                 with self.assertRaisesRegex(ValueError, "Python 3.12 or newer"):
                     worker.main([phase, "config", "receipt", "progress"])
                 self.assertEqual(paths, [])
                 verify.assert_not_called()
+                accelerator.assert_not_called()
                 train.assert_not_called()
                 reload.assert_not_called()
 
     def test_main_selects_only_the_requested_phase_after_verification(self) -> None:
-        for phase in ("train", "reload"):
+        for phase, quantized in (("train", False), ("reload", True)):
             previous = os.umask(0o077)
             try:
-                with patch.object(
+                with tempfile.TemporaryDirectory() as directory, patch.object(
                     worker.sys, "version_info", SimpleNamespace(major=3, minor=12)
                 ), patch.object(worker.sys, "path", list(worker.sys.path)), patch.object(
                     worker, "verify_environment"
-                ) as verify, patch.object(worker, "train") as train, patch.object(worker, "reload") as reload:
-                    worker.main([phase, "config", "receipt", "progress"])
+                ) as verify, patch.object(worker, "verify_accelerator") as accelerator, patch.object(
+                    worker, "train"
+                ) as train, patch.object(worker, "reload") as reload:
+                    config = Path(directory) / "config"
+                    config.write_text(json.dumps({"load_in_4bit": quantized}))
+                    worker.main([phase, str(config), "receipt", "progress"])
                     verify.assert_called_once_with()
+                    accelerator.assert_called_once_with(quantized)
                     if phase == "train":
-                        train.assert_called_once_with(Path("config"), Path("receipt"), Path("progress"))
+                        train.assert_called_once_with(config, Path("receipt"), Path("progress"))
                         reload.assert_not_called()
                     else:
-                        reload.assert_called_once_with(Path("config"), Path("receipt"))
+                        reload.assert_called_once_with(config, Path("receipt"))
                         train.assert_not_called()
             finally:
                 os.umask(previous)
+
+    def test_main_rejects_unsupported_accelerator_before_training(self) -> None:
+        previous = os.umask(0o077)
+        try:
+            with tempfile.TemporaryDirectory() as directory, patch.object(
+                worker.sys, "version_info", SimpleNamespace(major=3, minor=12)
+            ), patch.object(worker.sys, "path", list(worker.sys.path)), patch.object(
+                worker, "verify_environment"
+            ), patch.object(worker, "torch_facts", return_value=accelerator_facts(cuda=None)), patch.object(
+                worker, "train"
+            ) as train:
+                config = Path(directory) / "config"
+                config.write_text(json.dumps({"load_in_4bit": False}))
+                with self.assertRaisesRegex(ValueError, "unsupported training accelerator: Torch 2.14.0 is not a CUDA build"):
+                    worker.main(["train", str(config), "receipt", "progress"])
+                train.assert_not_called()
+        finally:
+            os.umask(previous)
+
+
+def accelerator_facts(**changes: object) -> dict[str, object]:
+    facts: dict[str, object] = {
+        "torch": "2.14.0", "cuda": "13.0", "hip": None, "available": True, "driverCuda": "13.0",
+        "archList": ["sm_75", "sm_80", "sm_86", "sm_90", "sm_100", "sm_120", "compute_120"],
+        "devices": [[8, 6]], "bitsandbytes": True,
+    }
+    facts.update(changes)
+    return facts
+
+
+class AcceleratorTests(unittest.TestCase):
+    def test_kernel_support_follows_sass_and_ptx_compatibility(self) -> None:
+        for capability, arch_list, expected in (
+            ((8, 6), ["sm_80"], "sass"),
+            ((8, 9), ["sm_86"], "sass"),
+            ((8, 0), ["sm_86"], ""),
+            ((9, 0), ["sm_80"], ""),
+            ((9, 0), ["sm_80", "compute_80"], "ptx"),
+            ((12, 0), ["sm_90", "sm_100"], ""),
+            ((12, 1), ["sm_120", "compute_120"], "sass"),
+            ((9, 0), ["sm_90a"], "sass"),
+            ((10, 0), ["sm_90a", "compute_90a"], ""),
+            ((10, 3), ["sm_100f"], "sass"),
+            ((12, 0), ["compute_100f"], ""),
+            ((12, 0), ["compute_100"], "ptx"),
+            ((8, 6), ["unknown", "sm_x"], ""),
+        ):
+            with self.subTest(capability=capability, arch_list=arch_list):
+                self.assertEqual(worker.kernel_support(capability, arch_list), expected)
+
+    def test_supported_cuda_device_has_no_problems(self) -> None:
+        self.assertEqual(worker.accelerator_problems(accelerator_facts(), True), [])
+        self.assertEqual(worker.accelerator_problems(accelerator_facts(devices=[[13, 0]], driverCuda="13.1"), False), [])
+
+    def test_unsupported_combinations_have_actionable_problems(self) -> None:
+        for changes, quantized, expected in (
+            ({"cuda": None}, False, ["Torch 2.14.0 is not a CUDA build; install the CUDA torch wheel from the training lock"]),
+            ({"hip": "7.0"}, False, ["Torch 2.14.0 is not a CUDA build; install the CUDA torch wheel from the training lock"]),
+            ({"available": False}, False, ["Torch CUDA 13.0 cannot use a GPU; install an NVIDIA driver for CUDA 13.0 or newer and expose one GPU"]),
+            ({"devices": []}, False, ["Torch CUDA 13.0 cannot use a GPU; install an NVIDIA driver for CUDA 13.0 or newer and expose one GPU"]),
+            ({"driverCuda": "12.8"}, False, ["the NVIDIA driver supports CUDA 12.8, older than the Torch CUDA 13.0 build; upgrade the driver"]),
+            ({"archList": ["sm_90", "sm_100"]}, False, ["GPU 0 (compute capability 8.6) has no kernels in Torch 2.14.0 (sm_90 sm_100); install a Torch build with sm_86 or use a supported GPU"]),
+            ({"devices": [[13, 0]], "driverCuda": None}, False, ["GPU 0 (compute capability 13.0) needs PTX JIT compilation, which needs a driver for CUDA 13.0 or newer; upgrade the driver"]),
+            ({"cuda": "13.2", "devices": [[13, 0]]}, False, ["GPU 0 (compute capability 13.0) needs PTX JIT compilation, which needs a driver for CUDA 13.2 or newer; upgrade the driver"]),
+            ({"devices": [[7, 5]]}, False, ["GPU 0 (compute capability 7.5) has no native BF16, which the training presets need; use a GPU with compute capability 8.0 or newer"]),
+            ({"bitsandbytes": False}, True, ["QLoRA needs bitsandbytes; install bitsandbytes from the training lock"]),
+        ):
+            with self.subTest(changes=changes, quantized=quantized):
+                self.assertEqual(worker.accelerator_problems(accelerator_facts(**changes), quantized), expected)
+        self.assertEqual(worker.accelerator_problems(accelerator_facts(bitsandbytes=False), False), [])
+
+    def test_torch_facts_report_cpu_and_cuda_runtimes_without_initializing_cpu_builds(self) -> None:
+        for cuda, available in ((None, True), ("13.0", False), ("13.0", True)):
+            torch: MagicMock = MagicMock()
+            torch.__version__ = "2.14.0"
+            torch.version = SimpleNamespace(cuda=cuda, hip=None)
+            torch.cuda.is_available.return_value = available
+            torch.cuda.get_arch_list.return_value = ["sm_86"]
+            torch.cuda.device_count.return_value = 2
+            torch.cuda.get_device_capability.side_effect = lambda index: (8, 6 + index)
+            with self.subTest(cuda=cuda, available=available), patch.dict(worker.sys.modules, {"torch": torch}), patch.object(
+                worker, "driver_cuda", return_value="13.1"
+            ), patch.object(worker.importlib.util, "find_spec", return_value=None):
+                facts = worker.torch_facts()
+                self.assertEqual((facts["torch"], facts["cuda"], facts["bitsandbytes"]), ("2.14.0", cuda, False))
+                if cuda and available:
+                    self.assertEqual((facts["available"], facts["driverCuda"], facts["archList"], facts["devices"]), (True, "13.1", ["sm_86"], [[8, 6], [8, 7]]))
+                else:
+                    self.assertEqual((facts["available"], facts["driverCuda"], facts["devices"]), (False, None, []))
+                if cuda is None:
+                    torch.cuda.is_available.assert_not_called()
+
+    def test_driver_version_comes_from_the_driver_library(self) -> None:
+        def get_version(reference: object) -> int:
+            getattr(reference, "_obj").value = 13010
+            return 0
+
+        for library, expected in (
+            (SimpleNamespace(cuDriverGetVersion=get_version), "13.1"),
+            (SimpleNamespace(cuDriverGetVersion=lambda reference: 100), None),
+            (SimpleNamespace(), None),
+        ):
+            with self.subTest(expected=expected), patch.object(worker.ctypes, "CDLL", return_value=library):
+                self.assertEqual(worker.driver_cuda(), expected)
+        with patch.object(worker.ctypes, "CDLL", side_effect=OSError("missing")):
+            self.assertIsNone(worker.driver_cuda())
+
+    def test_verify_accelerator_raises_every_problem(self) -> None:
+        with patch.object(worker, "torch_facts", return_value=accelerator_facts(devices=[[7, 5]], bitsandbytes=False)):
+            with self.assertRaisesRegex(ValueError, "no native BF16.*; QLoRA needs bitsandbytes"):
+                worker.verify_accelerator(True)
+        with patch.object(worker, "torch_facts", return_value=accelerator_facts()):
+            worker.verify_accelerator(True)
 
 
 if __name__ == "__main__":
