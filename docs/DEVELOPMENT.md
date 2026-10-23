@@ -106,6 +106,10 @@ It does not exclude release notes or all generated files.
 Do not add linter control comments to Markdown.
 The staging step rejects those comments.
 The trusted policy guard protects the workflow, linter configuration and vocabulary.
+
+The Vale setup checks the style archive against a fixed SHA-256 digest before extraction.
+For local setup, run the `Install verified STE styles` commands from `.github/workflows/docs-ste.yml`.
+The Vale action does not run `vale sync`.
 Policy tests reject missing jobs, weaker thresholds and changes to protected prose checks.
 
 ste-cli and Vale check only part of ASD-STE100.

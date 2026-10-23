@@ -1588,6 +1588,9 @@ test('STE workflow replacement, lowered severities and omitted prose cannot bypa
     candidate => { candidate['.ste.yml'] += '\ndisable: [STE-1.1]\n'; },
     candidate => { candidate['.vale.ini'] = candidate['.vale.ini'].replace('BasedOnStyles = STE', 'BasedOnStyles ='); },
     candidate => { candidate['.vale.ini'] += '\nTokenIgnores = (.*)\n'; },
+    candidate => { candidate['.github/workflows/docs-ste.yml'] = candidate['.github/workflows/docs-ste.yml'].replace('sync: false', 'sync: true'); },
+    candidate => { candidate['.github/workflows/docs-ste.yml'] = candidate['.github/workflows/docs-ste.yml'].replace('sha256sum --check --strict', 'cat'); },
+    candidate => { candidate['.vale.ini'] += '\nPackages = https://example.com/styles.zip\n'; },
     candidate => { candidate['.github/workflows/docs-ste.yml'] = candidate['.github/workflows/docs-ste.yml'].replace('if re.search(directive, source, re.IGNORECASE):', 'if False:'); },
     candidate => { candidate['.vale/styles/config/vocabularies/Project/accept.txt'] += '.*\n'; },
   ];

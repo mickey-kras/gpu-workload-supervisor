@@ -108,10 +108,24 @@ jobs:
               cp -- "$path" "$stage/$path.md"
             done
 
-      # Config: .vale.ini. "vale sync" downloads the pinned vale-llm-slop release.
+      - name: Install verified STE styles
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/vale-llm-slop.zip"
+          curl --fail --location --retry 3 --output "$archive" \
+            https://github.com/Syntaf/vale-llm-slop/releases/download/v0.1.0/vale-llm-slop.zip
+          printf '%s  %s\n' ea6b72b0ab6e91606041d1264006249c21dbd96d4cd501e18d524dbaeaa87fe4 "$archive" | sha256sum --check --strict
+          stage="$(mktemp -d "$RUNNER_TEMP/vale-styles.XXXXXX")"
+          unzip -q "$archive" 'vale-llm-slop/styles/STE/*' -d "$stage"
+          mkdir -p .vale/styles
+          rm -rf .vale/styles/STE
+          cp -R "$stage/vale-llm-slop/styles/STE" .vale/styles/STE
+
       - uses: vale-cli/vale-action@518a9136acc6e6668ce7c00d367051e0941e87ff # v3.0.0
         with:
           version: 3.25.1
+          sync: false
           files: ${{ runner.temp }}/docs-ste
           config: .vale.ini
           filter_mode: nofilter

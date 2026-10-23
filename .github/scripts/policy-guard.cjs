@@ -12,9 +12,9 @@ const { inspectDependabot, verifyDependabotAuthor } = require('./policy-dependab
 const GORELEASER_ACTION_DIGEST = 'c88133b8d7e69681883fe0aa77a141453ace73146561612522b9cd5f485722ac';
 
 const EXECUTABLE_HASHES = {
-  ".github/workflows/docs-ste.yml": "4c13e57a1a2ff3ca461cbc3229bb41e137fb56fe4f1d8c056bd6d903bc8773e3",
+  ".github/workflows/docs-ste.yml": "1d8d2f857ebbcb396fd6b8f99aa45daf3297d27e797a7e1ccd75700b2ea888d3",
   ".ste.yml": "f75eda8fb8d6ae25db6875adf984b0bb167d52aff977ff5524bcc0f48d02c941",
-  ".vale.ini": "a6717199d3e8c4302e2d10d8da9bdee361d02babdb22c7e768870f9ff33747ac",
+  ".vale.ini": "1d2daa33c324e5140367a5143df339068822cb45f7f2ae023dbd7d744e0793ff",
   ".vale/styles/config/vocabularies/Project/accept.txt": "5000d8689ae7037cf1336122d156368bbcb9ec3da339d86e1a806f8ecb65668d",
   ".github/scripts/install-goreleaser.sh": "de2e876e51298aec0ec86a42fdb850aaa2f95e3d86cd1fa67a6d5c1febbcc8b0",
   ".github/scripts/check-go-directives.go": "f356bcb0bd9546d4ee133001335740bfb41623e4671554606895e6ab1a305489",

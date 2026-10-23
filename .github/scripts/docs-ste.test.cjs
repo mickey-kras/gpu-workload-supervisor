@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { readFileSync, mkdtempSync, mkdirSync, writeFileSync, readdirSync, rmSync, symlinkSync } = require('node:fs');
+const { readFileSync, mkdtempSync, mkdirSync, writeFileSync, readdirSync, rmSync, symlinkSync, existsSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join, dirname } = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
@@ -95,5 +95,29 @@ test('PR updates replace the same STE run while main validation keeps each run',
     const first = context(eventName, 100); const next = context(eventName, 101);
     assert.notEqual(render(workflow.concurrency.group, first), render(workflow.concurrency.group, next));
     assert.equal(render(workflow.concurrency['cancel-in-progress'], next), 'false');
+  }
+});
+
+test('Vale verifies the style archive before extraction and cannot sync over it', () => {
+  const steps = workflow.jobs.vale.steps;
+  const install = steps.findIndex(step => step.name === 'Install verified STE styles');
+  const lint = steps.findIndex(step => step.uses?.startsWith('vale-cli/vale-action@'));
+  assert.ok(install >= 0 && install < lint);
+  assert.equal(steps[lint].with.sync, false);
+  assert.doesNotMatch(readFileSync('.vale.ini', 'utf8'), /^Packages\s*=/m);
+  for (const content of ['empty', 'replaced-style']) {
+    withRepository((repo, temp) => {
+      const bin = join(temp, 'bin'); mkdirSync(bin);
+      const fixture = join(temp, 'download.zip');
+      if (content === 'empty') writeFileSync(fixture, '');
+      else execFileSync('python3', ['-c',
+        'import sys, zipfile; archive = zipfile.ZipFile(sys.argv[1], "w"); archive.writestr("vale-llm-slop/styles/STE/Modals.yml", "extends: existence\\nlevel: warning\\ntokens: []\\n"); archive.close()', fixture]);
+      writeFileSync(join(bin, 'curl'), '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n  if [ "$1" = --output ]; then cp "$STYLE_FIXTURE" "$2"; exit 0; fi\n  shift\ndone\nexit 2\n', { mode: 0o755 });
+      const result = spawnSync('bash', ['-c', steps[install].run], { cwd: repo,
+        env: { ...process.env, RUNNER_TEMP: temp, STYLE_FIXTURE: fixture, PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8' });
+      assert.notEqual(result.status, 0, content);
+      assert.match(result.stdout + result.stderr, /FAILED|checksum/);
+      assert.equal(existsSync(join(repo, '.vale', 'styles', 'STE')), false);
+    });
   }
 });
