@@ -2,8 +2,11 @@ package attestation
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"io"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -13,13 +16,17 @@ func fixtureVerifier(t *testing.T, keys ...int) *Verifier {
 	return fixtureVerifierWithPolicies(t, []int{1}, keys...)
 }
 
+func trustedKeys(keys ...int) []TrustedKey {
+	trusted := []TrustedKey{}
+	for _, key := range keys {
+		trusted = append(trusted, TrustedKey{KeyID: KeyID(testKey(key).Public().(ed25519.PublicKey)), PublicKey: testPublicKey(key)})
+	}
+	return trusted
+}
+
 func fixtureVerifierWithPolicies(t *testing.T, policies []int, keys ...int) *Verifier {
 	t.Helper()
-	encoded := []string{}
-	for _, key := range keys {
-		encoded = append(encoded, testPublicKey(key))
-	}
-	v, err := newVerifier(encoded, policies, true)
+	v, err := newVerifier(TrustConfig{Version: TrustConfigVersion, Keys: trustedKeys(keys...), PolicyVersions: policies}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,8 +132,10 @@ func verificationCases(t *testing.T) []verifyCase {
 		{"unscanned control", notScanned, notScannedSig, []int{1}, inventory, Valid},
 		{"trailing data", passed + "{}", passedSig, []int{1}, inventory, Malformed},
 		{"unsupported envelope version", replaced(t, passed, `"version": 1`, `"version": 2`), passedSig, []int{1}, inventory, UnsupportedVersion},
+		{"unsupported envelope version with unknown field", replaced(t, replaced(t, passed, `"version": 1`, `"version": 2`), "{", `{"future":true,`), passedSig, []int{1}, inventory, UnsupportedVersion},
 		{"envelope version not an integer", replaced(t, passed, `"version": 1`, `"version": 2.0`), passedSig, []int{1}, inventory, Malformed},
 		{"unsupported signature version", passed, bytes.Replace(passedSig, []byte(`"version": 1`), []byte(`"version": 3`), 1), []int{1}, inventory, UnsupportedVersion},
+		{"unsupported signature version with unknown field", passed, bytes.Replace(bytes.Replace(passedSig, []byte(`"version": 1`), []byte(`"version": 3`), 1), []byte("{"), []byte(`{"future":true,`), 1), []int{1}, inventory, UnsupportedVersion},
 		{"signature unknown field", passed, bytes.Replace(passedSig, []byte("{"), []byte(`{"trusted":true,`), 1), []int{1}, inventory, Malformed},
 		{"signature other algorithm", passed, bytes.Replace(passedSig, []byte(`"ed25519"`), []byte(`"ed448"`), 1), []int{1}, inventory, Malformed},
 		// Precedence: the signature file and key ID come before the envelope.
@@ -140,14 +149,23 @@ func verificationCases(t *testing.T) []verifyCase {
 
 func TestVerificationFixtureMatrix(t *testing.T) {
 	inventory := fixtureInventory(t)
+	report := fixtureDigest("scanner report")
+	withKeyID := map[Result]bool{UnknownKey: true, InvalidSignature: true, IncompatiblePolicy: true, ArtifactMismatch: true}
+	withoutKeyID := map[string]bool{"inventory with both forms": true, "empty inventory": true, "truncated signature": true, "malformed signature before unknown key": true, "signature unknown field": true}
 	for _, tc := range verificationCases(t) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := fixtureVerifier(t, tc.keys...).Verify(strings.NewReader(tc.envelope), bytes.NewReader(tc.signature), tc.onDisk)
 			if got.Result() != tc.want {
 				t.Fatalf("result %q, want %q: %v", got.Result(), tc.want, got.Err())
 			}
-			if (got.Result() == Valid) != (got.Err() == nil) || (got.Result() == Valid) != (got.Envelope().Version == FormatVersion) {
-				t.Fatalf("valid result must carry only an envelope: %#v", got)
+			if (got.Result() == Valid) != (got.Err() == nil) || (got.Result() == Valid) != (got.Envelope().Version == FormatVersion) || (got.Result() == Valid) != (got.ArtifactDigest() != "") {
+				t.Fatalf("valid result must carry only an envelope and digest: %#v", got)
+			}
+			if withKeyID[tc.want] && got.KeyID() == "" {
+				t.Fatalf("%q result lost the parsed key ID", tc.want)
+			}
+			if withoutKeyID[tc.name] && got.KeyID() != "" {
+				t.Fatalf("key ID %q reported before the signature file parsed", got.KeyID())
 			}
 			if tc.want == Valid {
 				return
@@ -159,11 +177,15 @@ func TestVerificationFixtureMatrix(t *testing.T) {
 			// No exemption admits failed verification, in any mode or kind.
 			exemptions := []Exemption{}
 			for _, kind := range []ExemptionKind{ExemptNotScanned, ExemptUnsupported, ExemptPartialCoverage, ExemptFindings} {
-				exemptions = append(exemptions, Exemption{Artifact: mustDigest(t, inventory), PolicyVersion: 1, Kind: kind, Reason: "fixture"})
+				e := Exemption{Artifact: mustDigest(t, inventory), PolicyVersion: 1, Kind: kind, Reason: "fixture"}
+				if kind == ExemptFindings || kind == ExemptPartialCoverage {
+					e.ReportSHA256 = report
+				}
+				exemptions = append(exemptions, e)
 			}
 			for _, mode := range []Mode{Advisory, Enforce} {
 				want.Allowed = mode == Advisory && want.Status == NotVerified
-				if decision := Decide(Policy{Mode: mode, Exemptions: exemptions}, &got); decision != want {
+				if decision := Decide(Policy{Version: 1, Mode: mode, Exemptions: exemptions}, tc.onDisk, &got); decision != want {
 					t.Fatalf("%s: %#v, want %#v", mode, decision, want)
 				}
 			}
@@ -189,7 +211,29 @@ func deny(status Status, reason Reason) Decision {
 }
 
 func exemption(artifact string, policyVersion int, kind ExemptionKind) []Exemption {
-	return []Exemption{{Artifact: artifact, PolicyVersion: policyVersion, Kind: kind, Reason: "operator accepted fixture risk"}}
+	e := Exemption{Artifact: artifact, PolicyVersion: policyVersion, Kind: kind, Reason: "operator accepted fixture risk"}
+	if kind == ExemptFindings || kind == ExemptPartialCoverage {
+		e.ReportSHA256 = fixtureDigest("scanner report")
+	}
+	return []Exemption{e}
+}
+
+func withReport(exemptions []Exemption, report string) []Exemption {
+	exemptions[0].ReportSHA256 = report
+	return exemptions
+}
+
+func policy(mode Mode, exemptions []Exemption, deny ...string) Policy {
+	return Policy{Version: PolicyFileVersion, Mode: mode, Exemptions: exemptions, Deny: deny}
+}
+
+func verifyFixture(t *testing.T, name string, onDisk Artifact) *Verification {
+	t.Helper()
+	v := fixtureVerifierWithPolicies(t, []int{1, 2}, 1).Verify(bytes.NewReader(readFixture(t, name+".json")), bytes.NewReader(readFixture(t, name+".sig.json")), onDisk)
+	if v.Result() != Valid {
+		t.Fatalf("%s: %q %v", name, v.Result(), v.Err())
+	}
+	return &v
 }
 
 func TestDecisionFixtureMatrix(t *testing.T) {
@@ -197,6 +241,7 @@ func TestDecisionFixtureMatrix(t *testing.T) {
 	single := Artifact{SHA256: fixtureDigest("model.gguf")}
 	digest := mustDigest(t, inventory)
 	other := fixtureDigest("other artifact")
+	newReport := fixtureDigest("new scanner report")
 	for _, tc := range []struct {
 		fixture    string
 		onDisk     Artifact
@@ -209,9 +254,15 @@ func TestDecisionFixtureMatrix(t *testing.T) {
 		{"policy-2", inventory, nil, allow(Verified, ReasonPassed), allow(Verified, ReasonPassed)},
 		{"findings", inventory, nil, deny(FindingsDetected, ReasonFindings), deny(FindingsDetected, ReasonFindings)},
 		{"findings", inventory, exemption(digest, 1, ExemptFindings), allow(Exempted, ReasonFindings), allow(Exempted, ReasonFindings)},
+		{"findings", inventory, withReport(exemption(digest, 1, ExemptFindings), newReport), deny(FindingsDetected, ReasonFindings), deny(FindingsDetected, ReasonFindings)},
+		{"findings", inventory, withReport(exemption(digest, 1, ExemptFindings), ""), deny(FindingsDetected, ReasonFindings), deny(FindingsDetected, ReasonFindings)},
 		{"findings", inventory, exemption(digest, 1, ExemptNotScanned), deny(FindingsDetected, ReasonFindings), deny(FindingsDetected, ReasonFindings)},
 		{"findings", inventory, exemption(other, 1, ExemptFindings), deny(FindingsDetected, ReasonFindings), deny(FindingsDetected, ReasonFindings)},
 		{"error", inventory, nil, allow(NotVerified, ReasonScanError), deny(NotVerified, ReasonScanError)},
+		{"error", inventory, exemption(digest, 1, ExemptNotScanned), allow(NotVerified, ReasonScanError), deny(NotVerified, ReasonScanError)},
+		{"error", inventory, exemption(digest, 1, ExemptUnsupported), allow(NotVerified, ReasonScanError), deny(NotVerified, ReasonScanError)},
+		{"error", inventory, exemption(digest, 1, ExemptFindings), allow(NotVerified, ReasonScanError), deny(NotVerified, ReasonScanError)},
+		{"error", inventory, exemption(digest, 1, ExemptPartialCoverage), allow(NotVerified, ReasonScanError), deny(NotVerified, ReasonScanError)},
 		{"not-scanned", inventory, nil, allow(NotVerified, ReasonNotScanned), deny(NotVerified, ReasonNotScanned)},
 		{"not-scanned", inventory, exemption(digest, 1, ExemptNotScanned), allow(Exempted, ReasonNotScanned), allow(Exempted, ReasonNotScanned)},
 		{"not-scanned", inventory, exemption(digest, 1, ExemptUnsupported), allow(NotVerified, ReasonNotScanned), deny(NotVerified, ReasonNotScanned)},
@@ -223,15 +274,13 @@ func TestDecisionFixtureMatrix(t *testing.T) {
 		{"unsupported", inventory, exemption(digest, 2, ExemptUnsupported), allow(NotVerified, ReasonUnsupported), deny(NotVerified, ReasonUnsupported)},
 		{"partial", inventory, nil, allow(NotVerified, ReasonPartialCoverage), deny(NotVerified, ReasonPartialCoverage)},
 		{"partial", inventory, exemption(digest, 1, ExemptPartialCoverage), allow(Exempted, ReasonPartialCoverage), allow(Exempted, ReasonPartialCoverage)},
+		{"partial", inventory, withReport(exemption(digest, 1, ExemptPartialCoverage), newReport), allow(NotVerified, ReasonPartialCoverage), deny(NotVerified, ReasonPartialCoverage)},
 		{"partial", inventory, exemption(other, 1, ExemptPartialCoverage), allow(NotVerified, ReasonPartialCoverage), deny(NotVerified, ReasonPartialCoverage)},
 		{"partial", inventory, exemption(digest, 2, ExemptPartialCoverage), allow(NotVerified, ReasonPartialCoverage), deny(NotVerified, ReasonPartialCoverage)},
 	} {
-		verification := fixtureVerifierWithPolicies(t, []int{1, 2}, 1).Verify(bytes.NewReader(readFixture(t, tc.fixture+".json")), bytes.NewReader(readFixture(t, tc.fixture+".sig.json")), tc.onDisk)
-		if verification.Result() != Valid {
-			t.Fatalf("%s: %q %v", tc.fixture, verification.Result(), verification.Err())
-		}
+		verification := verifyFixture(t, tc.fixture, tc.onDisk)
 		for mode, want := range map[Mode]Decision{Advisory: tc.advisory, Enforce: tc.enforce, "": tc.enforce, "strict": tc.enforce, "Advisory": tc.enforce} {
-			if got := Decide(Policy{Mode: mode, Exemptions: tc.exemptions}, &verification); got != want {
+			if got := Decide(policy(mode, tc.exemptions), tc.onDisk, verification); got != want {
 				t.Fatalf("%s %q %v: %#v, want %#v", tc.fixture, mode, tc.exemptions, got, want)
 			}
 		}
@@ -243,106 +292,142 @@ func TestSingleArtifactExemptionUsesItsOwnDigest(t *testing.T) {
 	e := fixtureEnvelopes()["single"]
 	e.Scan = Scan{Status: ScanNotScanned}
 	verification := Verification{result: Valid, envelope: e, digest: mustDigest(t, e.Artifact), sealed: true}
-	if got := Decide(Policy{Mode: Enforce, Exemptions: exemption(mustDigest(t, single), 1, ExemptNotScanned)}, &verification); got != allow(Exempted, ReasonNotScanned) {
+	if got := Decide(policy(Enforce, exemption(mustDigest(t, single), 1, ExemptNotScanned)), single, &verification); got != allow(Exempted, ReasonNotScanned) {
 		t.Fatalf("%#v", got)
 	}
-	if got := Decide(Policy{Mode: Enforce, Exemptions: exemption(single.SHA256, 1, ExemptNotScanned)}, &verification); got.Allowed {
+	if got := Decide(policy(Enforce, exemption(single.SHA256, 1, ExemptNotScanned)), single, &verification); got.Allowed {
 		t.Fatalf("raw file digest must not match the domain-separated artifact digest: %#v", got)
 	}
 }
 
-func TestDenyListRejectsValidEvidence(t *testing.T) {
+// Denial follows the gate's own inventory, so changing or removing the
+// evidence never admits a denied artifact.
+func TestDenialHoldsForEveryEvidenceState(t *testing.T) {
 	inventory := fixtureInventory(t)
-	verification := fixtureVerifier(t, 1).Verify(bytes.NewReader(readFixture(t, "passed.json")), bytes.NewReader(readFixture(t, "passed.sig.json")), inventory)
-	for _, mode := range []Mode{Advisory, Enforce} {
-		got := Decide(Policy{Mode: mode, Deny: []string{fixtureDigest("x"), mustDigest(t, inventory)}}, &verification)
-		if got != deny(IntegrityFailure, ReasonArtifactDenied) {
-			t.Fatalf("%s: %#v", mode, got)
+	passed := string(readFixture(t, "passed.json"))
+	passedSig := readFixture(t, "passed.sig.json")
+	v := fixtureVerifier(t, 1)
+	states := map[string]*Verification{"missing": nil}
+	for name, tc := range map[string]struct {
+		envelope  io.Reader
+		signature []byte
+	}{
+		"valid":               {strings.NewReader(passed), passedSig},
+		"unreadable":          {failingReader{}, passedSig},
+		"unsupported-version": {strings.NewReader(replaced(t, passed, `"version": 1`, `"version": 2`)), passedSig},
+		"forged":              {strings.NewReader(passed), forgedSignature(t, passedSig)},
+	} {
+		got := v.Verify(tc.envelope, bytes.NewReader(tc.signature), inventory)
+		states[name] = &got
+	}
+	for name, verification := range states {
+		for _, mode := range []Mode{Advisory, Enforce} {
+			got := Decide(policy(mode, nil, fixtureDigest("x"), mustDigest(t, inventory)), inventory, verification)
+			if got != deny(IntegrityFailure, ReasonArtifactDenied) {
+				t.Fatalf("%s %s: %#v", name, mode, got)
+			}
 		}
+	}
+}
+
+func TestDecideUsesTheGateInventory(t *testing.T) {
+	inventory := fixtureInventory(t)
+	verification := verifyFixture(t, "passed", inventory)
+	other := withFile(inventory.Files, "config.json", fixtureDigest("changed"))
+	if got := Decide(policy(Advisory, nil), other, verification); got != deny(IntegrityFailure, ReasonArtifactMismatch) {
+		t.Fatalf("evidence for other bytes: %#v", got)
+	}
+	if got := Decide(policy(Advisory, nil), Artifact{}, verification); got != deny(IntegrityFailure, ReasonInvalidInventory) {
+		t.Fatalf("invalid inventory with evidence: %#v", got)
+	}
+	// An unsupported path has no digest, so no denial can name it. Without
+	// evidence the root is missing, not tampered.
+	unsupportedPath := Artifact{Files: map[string]string{`model"name.bin`: fixtureDigest("x")}}
+	if got := Decide(policy(Advisory, nil), unsupportedPath, nil); got != allow(NotVerified, ReasonMissing) {
+		t.Fatalf("advisory unsupported path: %#v", got)
+	}
+	if got := Decide(policy(Enforce, nil), unsupportedPath, nil); got != deny(NotVerified, ReasonMissing) {
+		t.Fatalf("enforce unsupported path: %#v", got)
 	}
 }
 
 func TestEnvelopeCopyCannotChangeTheDecision(t *testing.T) {
 	inventory := fixtureInventory(t)
-	verification := fixtureVerifier(t, 1).Verify(bytes.NewReader(readFixture(t, "passed.json")), bytes.NewReader(readFixture(t, "passed.sig.json")), inventory)
+	verification := verifyFixture(t, "passed", inventory)
+	saved := verification.Envelope()
 	copied := verification.Envelope()
 	for path := range copied.Artifact.Files {
 		copied.Artifact.Files[path] = fixtureDigest("changed")
 	}
 	copied.Scan.Scanner.Tool = "changed"
 	copied.Source.URI = "changed"
-	if again := verification.Envelope(); again.Scan.Scanner.Tool == "changed" || again.Source.URI == "changed" ||
-		again.Artifact.Files[firstPath(again.Artifact.Files)] == fixtureDigest("changed") {
+	if !reflect.DeepEqual(verification.Envelope(), saved) {
 		t.Fatal("Envelope must return a copy")
 	}
-	got := Decide(Policy{Mode: Enforce, Deny: []string{mustDigest(t, inventory)}}, &verification)
-	if got != deny(IntegrityFailure, ReasonArtifactDenied) {
+	if got := Decide(policy(Enforce, nil, mustDigest(t, inventory)), inventory, verification); got != deny(IntegrityFailure, ReasonArtifactDenied) {
 		t.Fatalf("a changed copy must not bypass the denial: %#v", got)
 	}
 }
 
-func firstPath(files map[string]string) string {
-	for path := range files {
-		return path
-	}
-	return ""
-}
-
 func TestMissingAttestationIsUnverifiedNeverPassed(t *testing.T) {
-	exempt := exemption(mustDigest(t, fixtureInventory(t)), 1, ExemptNotScanned)
-	if got := Decide(Policy{Mode: Advisory, Exemptions: exempt}, nil); got != allow(NotVerified, ReasonMissing) {
+	inventory := fixtureInventory(t)
+	exempt := exemption(mustDigest(t, inventory), 1, ExemptNotScanned)
+	if got := Decide(policy(Advisory, exempt), inventory, nil); got != allow(NotVerified, ReasonMissing) {
 		t.Fatalf("advisory: %#v", got)
 	}
 	for _, mode := range []Mode{Enforce, ""} {
-		if got := Decide(Policy{Mode: mode, Exemptions: exempt}, nil); got != deny(NotVerified, ReasonMissing) {
+		if got := Decide(policy(mode, exempt), inventory, nil); got != deny(NotVerified, ReasonMissing) {
 			t.Fatalf("%q: %#v", mode, got)
 		}
 	}
 }
 
-func TestDecideFailsClosedOnUnsealedOrUnknownVerification(t *testing.T) {
+func TestDecideFailsClosedOnImpossibleVerification(t *testing.T) {
+	inventory := fixtureInventory(t)
+	digest := mustDigest(t, inventory)
 	envelope := fixtureEnvelopes()["passed"]
-	for name, tc := range map[string]struct {
-		verification Verification
-		want         Decision
-	}{
-		"zero":                {Verification{}, deny(IntegrityFailure, ReasonUnsealed)},
-		"unsealed valid":      {Verification{result: Valid, envelope: envelope}, deny(IntegrityFailure, ReasonUnsealed)},
-		"unknown result":      {Verification{result: "trusted", envelope: envelope, sealed: true}, deny(IntegrityFailure, ReasonUnknownResult)},
-		"zero result":         {Verification{envelope: envelope, sealed: true}, deny(IntegrityFailure, ReasonUnknownResult)},
-		"invalid artifact":    {Verification{result: Valid, sealed: true}, deny(IntegrityFailure, ReasonMalformed)},
-		"unknown scan status": {Verification{result: Valid, envelope: Envelope{Artifact: envelope.Artifact, Scan: Scan{Status: "skipped"}}, sealed: true}, deny(IntegrityFailure, ReasonMalformed)},
+	unknownStatus := envelope
+	unknownStatus.Scan = Scan{Status: "skipped"}
+	for name, verification := range map[string]Verification{
+		"zero":                {},
+		"unsealed valid":      {result: Valid, envelope: envelope, digest: digest},
+		"unknown result":      {result: "trusted", envelope: envelope, digest: digest, sealed: true},
+		"zero result":         {envelope: envelope, digest: digest, sealed: true},
+		"no sealed digest":    {result: Valid, envelope: envelope, sealed: true},
+		"unknown scan status": {result: Valid, envelope: unknownStatus, digest: digest, sealed: true},
 	} {
-		if got := Decide(Policy{Mode: Advisory}, &tc.verification); got != tc.want {
+		if got := Decide(policy(Advisory, nil), inventory, &verification); got != deny(IntegrityFailure, ReasonUnsealed) {
 			t.Fatalf("%s: %#v", name, got)
 		}
 	}
 }
 
-func TestDecideAllUsesMostSevereDecision(t *testing.T) {
+func TestDecideAllUsesFirstMostSevereDecision(t *testing.T) {
 	inventory := fixtureInventory(t)
-	verify := func(name string) *Verification {
-		v := fixtureVerifier(t, 1).Verify(bytes.NewReader(readFixture(t, name+".json")), bytes.NewReader(readFixture(t, name+".sig.json")), inventory)
-		return &v
+	root := func(name string) Root {
+		return Root{Artifact: inventory, Verification: verifyFixture(t, name, inventory)}
 	}
-	passed, findings, notScanned := verify("passed"), verify("findings"), verify("not-scanned")
-	broken := &Verification{result: InvalidSignature, sealed: true}
-	exempt := Policy{Mode: Enforce, Exemptions: exemption(mustDigest(t, inventory), 1, ExemptNotScanned)}
+	passed, findings, notScanned := root("passed"), root("findings"), root("not-scanned")
+	missing := Root{Artifact: inventory}
+	broken := Root{Artifact: inventory, Verification: &Verification{result: InvalidSignature, sealed: true}}
+	exempt := policy(Enforce, exemption(mustDigest(t, inventory), 1, ExemptNotScanned))
 	for name, tc := range map[string]struct {
 		policy Policy
-		set    []*Verification
+		roots  []Root
 		want   Decision
 	}{
-		"empty advisory":                {Policy{Mode: Advisory}, nil, allow(NotVerified, ReasonMissing)},
-		"empty enforce":                 {Policy{Mode: Enforce}, []*Verification{}, deny(NotVerified, ReasonMissing)},
-		"all verified":                  {Policy{Mode: Enforce}, []*Verification{passed, passed}, allow(Verified, ReasonPassed)},
-		"exempted over verified":        {exempt, []*Verification{passed, notScanned}, allow(Exempted, ReasonNotScanned)},
-		"not verified over exempted":    {exempt, []*Verification{notScanned, passed, nil}, deny(NotVerified, ReasonMissing)},
-		"advisory missing member":       {Policy{Mode: Advisory}, []*Verification{passed, nil}, allow(NotVerified, ReasonMissing)},
-		"findings over not verified":    {Policy{Mode: Advisory}, []*Verification{nil, findings}, deny(FindingsDetected, ReasonFindings)},
-		"integrity failure over others": {Policy{Mode: Advisory}, []*Verification{findings, broken, passed}, deny(IntegrityFailure, ReasonInvalidSignature)},
+		"empty advisory":                  {policy(Advisory, nil), nil, allow(NotVerified, ReasonMissing)},
+		"empty enforce":                   {policy(Enforce, nil), []Root{}, deny(NotVerified, ReasonMissing)},
+		"all verified":                    {policy(Enforce, nil), []Root{passed, passed}, allow(Verified, ReasonPassed)},
+		"only first member rejected":      {policy(Enforce, nil), []Root{findings, passed}, deny(FindingsDetected, ReasonFindings)},
+		"missing first member in enforce": {policy(Enforce, nil), []Root{missing, passed}, deny(NotVerified, ReasonMissing)},
+		"exempted over verified":          {exempt, []Root{passed, notScanned}, allow(Exempted, ReasonNotScanned)},
+		"not verified over exempted":      {exempt, []Root{notScanned, passed, missing}, deny(NotVerified, ReasonMissing)},
+		"first most severe wins a tie":    {policy(Advisory, nil), []Root{notScanned, missing}, allow(NotVerified, ReasonNotScanned)},
+		"findings over not verified":      {policy(Advisory, nil), []Root{missing, findings}, deny(FindingsDetected, ReasonFindings)},
+		"integrity failure over others":   {policy(Advisory, nil), []Root{findings, broken, passed}, deny(IntegrityFailure, ReasonInvalidSignature)},
 	} {
-		if got := DecideAll(tc.policy, tc.set); got != tc.want {
+		if got := DecideAll(tc.policy, tc.roots); got != tc.want {
 			t.Fatalf("%s: %#v, want %#v", name, got, tc.want)
 		}
 	}

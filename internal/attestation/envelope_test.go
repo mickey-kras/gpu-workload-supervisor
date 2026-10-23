@@ -100,9 +100,13 @@ func TestValidateRejectsInvalidEnvelopeFields(t *testing.T) {
 		t.Fatalf("version 2: %v", err)
 	}
 	e = validEnvelope()
-	e.PolicyVersion = MaxPolicyVersion
-	if err := e.validate(); err != nil {
+	e.PolicyVersion = 2147483647
+	if err := e.validate(); err != nil || MaxPolicyVersion != 2147483647 {
 		t.Fatalf("rejected maximum policy version: %v", err)
+	}
+	e.PolicyVersion = 2147483648
+	if err := e.validate(); !errors.Is(err, ErrMalformedEnvelope) {
+		t.Fatalf("accepted policy version 2^31: %v", err)
 	}
 }
 

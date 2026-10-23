@@ -4,8 +4,13 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -14,35 +19,50 @@ func encodedKey(raw []byte) string {
 	return base64.StdEncoding.EncodeToString(raw)
 }
 
+func trustConfig(policies []int, keys ...TrustedKey) TrustConfig {
+	return TrustConfig{Version: TrustConfigVersion, Keys: keys, PolicyVersions: policies}
+}
+
+func rawTrustedKey(raw []byte) TrustedKey {
+	return TrustedKey{KeyID: KeyID(raw), PublicKey: encodedKey(raw)}
+}
+
 func TestNewVerifierRejectsInvalidTrustConfiguration(t *testing.T) {
-	seventeen := []string{}
+	seventeen := trustedKeys()
 	for i := 3; i < maxTrustedKeys+4; i++ {
-		seventeen = append(seventeen, testPublicKey(i))
+		seventeen = append(seventeen, trustedKeys(i)...)
 	}
-	for name, tc := range map[string]struct {
-		keys     []string
-		policies []int
-	}{
-		"no keys":                 {nil, []int{1}},
-		"too many keys":           {seventeen, []int{1}},
-		"not base64":              {[]string{"not base64!"}, []int{1}},
-		"unpadded base64":         {[]string{strings.TrimRight(testPublicKey(3), "=")}, []int{1}},
-		"short key":               {[]string{encodedKey(make([]byte, 31))}, []int{1}},
-		"private key length":      {[]string{encodedKey(testKey(3))}, []int{1}},
-		"duplicate key":           {[]string{testPublicKey(3), testPublicKey(3)}, []int{1}},
-		"no policy versions":      {[]string{testPublicKey(3)}, nil},
-		"zero policy version":     {[]string{testPublicKey(3)}, []int{0}},
-		"policy version over cap": {[]string{testPublicKey(3)}, []int{MaxPolicyVersion + 1}},
-		"duplicate policy":        {[]string{testPublicKey(3)}, []int{1, 1}},
+	key3 := trustedKeys(3)[0]
+	unpadded := TrustedKey{KeyID: key3.KeyID, PublicKey: strings.TrimRight(key3.PublicKey, "=")}
+	uppercase := TrustedKey{KeyID: strings.ToUpper(key3.KeyID), PublicKey: key3.PublicKey}
+	for name, config := range map[string]TrustConfig{
+		"no keys":                 trustConfig([]int{1}),
+		"too many keys":           trustConfig([]int{1}, seventeen...),
+		"not base64":              trustConfig([]int{1}, TrustedKey{KeyID: key3.KeyID, PublicKey: "not base64!"}),
+		"unpadded base64":         trustConfig([]int{1}, unpadded),
+		"short key":               trustConfig([]int{1}, rawTrustedKey(make([]byte, 31))),
+		"private key length":      trustConfig([]int{1}, rawTrustedKey(testKey(3))),
+		"duplicate key":           trustConfig([]int{1}, key3, key3),
+		"key ID mismatch":         trustConfig([]int{1}, TrustedKey{KeyID: trustedKeys(4)[0].KeyID, PublicKey: key3.PublicKey}),
+		"uppercase key ID":        trustConfig([]int{1}, uppercase),
+		"no policy versions":      trustConfig(nil, key3),
+		"zero policy version":     trustConfig([]int{0}, key3),
+		"policy version over cap": trustConfig([]int{2147483648}, key3),
+		"duplicate policy":        trustConfig([]int{1, 1}, key3),
 	} {
-		if _, err := NewVerifier(tc.keys, tc.policies); err == nil {
-			t.Fatalf("accepted %s", name)
+		if _, err := NewVerifier(config); !errors.Is(err, ErrInvalidTrust) {
+			t.Fatalf("%s: %v", name, err)
 		}
 	}
-	if _, err := NewVerifier(seventeen[:maxTrustedKeys], []int{1, MaxPolicyVersion}); err != nil {
+	other := trustConfig([]int{1}, key3)
+	other.Version = 2
+	if _, err := NewVerifier(other); !errors.Is(err, ErrUnsupportedVersion) {
+		t.Fatalf("other version: %v", err)
+	}
+	if _, err := NewVerifier(trustConfig([]int{1, 2147483647}, seventeen[:maxTrustedKeys]...)); err != nil {
 		t.Fatalf("rejected maximum trust set: %v", err)
 	}
-	_, err := NewVerifier([]string{testPublicKey(3), "bad"}, []int{1})
+	_, err := NewVerifier(trustConfig([]int{1}, key3, TrustedKey{KeyID: key3.KeyID, PublicKey: "bad"}))
 	if err == nil || !strings.Contains(err.Error(), "key 1") || strings.Contains(err.Error(), "bad") {
 		t.Fatalf("error must locate the key without echoing it: %v", err)
 	}
@@ -50,66 +70,108 @@ func TestNewVerifierRejectsInvalidTrustConfiguration(t *testing.T) {
 
 func TestNewVerifierRejectsTestOnlyFixtureKeys(t *testing.T) {
 	for _, key := range []int{1, 2} {
-		if _, err := NewVerifier([]string{testPublicKey(key)}, []int{1}); err == nil {
-			t.Fatalf("pinned test-only key %d", key)
+		raw := []byte(testKey(key).Public().(ed25519.PublicKey))
+		flipped := append([]byte{}, raw...)
+		flipped[31] ^= 0x80
+		for _, candidate := range [][]byte{raw, flipped} {
+			if _, err := NewVerifier(trustConfig([]int{1}, rawTrustedKey(candidate))); !errors.Is(err, ErrInvalidTrust) {
+				t.Fatalf("pinned test-only key %d: %v", key, err)
+			}
 		}
-		if _, err := newVerifier([]string{testPublicKey(key)}, []int{1}, true); err != nil {
+		if _, err := newVerifier(trustConfig([]int{1}, trustedKeys(key)...), true); err != nil {
 			t.Fatalf("test constructor rejected key %d: %v", key, err)
 		}
-	}
-	if KeyID(testKey(1).Public().(ed25519.PublicKey)) != testOnlyKeyID1 || KeyID(testKey(2).Public().(ed25519.PublicKey)) != testOnlyKeyID2 {
-		t.Fatal("test-only key IDs do not match the fixture keys")
-	}
-}
-
-func TestNewVerifierRejectsSmallOrderAndNonCanonicalKeys(t *testing.T) {
-	keys := map[string][]byte{}
-	for i, blocked := range smallOrderKeys {
-		keys["small-order "+string(rune('0'+i))] = append([]byte{}, blocked[:]...)
-		flipped := append([]byte{}, blocked[:]...)
-		flipped[31] |= 0x80
-		keys["small-order sign bit "+string(rune('0'+i))] = flipped
-	}
-	beyond := bytes.Repeat([]byte{0xff}, ed25519.PublicKeySize)
-	beyond[31] = 0x7f
-	keys["y = 2^255 - 1"] = beyond
-	pPlus2 := append([]byte{0xef}, bytes.Repeat([]byte{0xff}, 30)...)
-	keys["y = p + 2"] = append(pPlus2, 0x7f)
-	for name, raw := range keys {
-		if _, err := newVerifier([]string{encodedKey(raw)}, []int{1}, true); err == nil {
-			t.Fatalf("accepted %s key", name)
+		if testOnlyPublicKeys[key-1] != testPublicKey(key) {
+			t.Fatalf("test-only key %d does not match the fixture key", key)
 		}
 	}
-	almost := append([]byte{0xec}, bytes.Repeat([]byte{0xff}, 30)...)
-	if !weakPublicKey(append(almost, 0x7f)) || weakPublicKey(append(append([]byte{0xeb}, bytes.Repeat([]byte{0xff}, 30)...), 0x7f)) {
-		t.Fatal("canonical boundary below p - 1 misclassified")
-	}
-	lowMiddle := append([]byte{0xed}, make([]byte, 30)...)
-	if weakPublicKey(append(lowMiddle, 0x7f)) {
-		t.Fatal("canonical y with a high top byte misclassified")
-	}
 }
 
-// The identity key verifies an all-identity forgery for any message under
-// cofactorless Ed25519. Pinning that key must fail closed.
-func TestIdentityKeyForgeryFailsClosed(t *testing.T) {
-	identity := make(ed25519.PublicKey, ed25519.PublicKeySize)
-	identity[0] = 0x01
-	forged := make([]byte, ed25519.SignatureSize)
-	forged[0] = 0x01
-	envelope := fixtureEnvelopes()["findings"]
-	message, err := SigningBytes(envelope)
+// libsodium ge25519_has_small_order blocklist, restated here as literals so
+// the test does not trust the production table.
+var smallOrderHex = []string{
+	"0000000000000000000000000000000000000000000000000000000000000000",
+	"0100000000000000000000000000000000000000000000000000000000000000",
+	"26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+	"c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+	"ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+	"edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+	"eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+}
+
+// torsionHex lists the canonical encodings of the eight small-order points.
+var torsionHex = []string{
+	"0100000000000000000000000000000000000000000000000000000000000000",
+	"ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+	"0000000000000000000000000000000000000000000000000000000000000000",
+	"0000000000000000000000000000000000000000000000000000000000000080",
+	"26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+	"26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+	"c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+	"c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+}
+
+func mustHex(t *testing.T, value string) []byte {
+	t.Helper()
+	raw, err := hex.DecodeString(value)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ed25519.Verify(identity, message, forged) {
-		t.Fatal("expected the standard library to accept the identity-key forgery")
+	return raw
+}
+
+// forges reports whether a signature with S = 0 and a small-order R verifies
+// under key for some message. Cofactorless Ed25519 then checks R = -[k]A.
+func forges(t *testing.T, key []byte) bool {
+	t.Helper()
+	for i := 0; i < 64; i++ {
+		message := []byte("forged message " + strconv.Itoa(i))
+		for _, r := range torsionHex {
+			signature := append(mustHex(t, r), make([]byte, 32)...)
+			if ed25519.Verify(ed25519.PublicKey(key), message, signature) {
+				return true
+			}
+		}
 	}
-	if _, err := NewVerifier([]string{encodedKey(identity)}, []int{1}); err == nil {
-		t.Fatal("pinned the identity key")
+	return false
+}
+
+func TestSmallOrderKeysForgeAndAreRejected(t *testing.T) {
+	for i, value := range smallOrderHex {
+		raw := mustHex(t, value)
+		if !forges(t, raw) {
+			t.Fatalf("entry %d: expected the standard library to accept a forgery", i)
+		}
+		flipped := append([]byte{}, raw...)
+		flipped[31] |= 0x80
+		for _, candidate := range [][]byte{raw, flipped} {
+			if _, err := newVerifier(trustConfig([]int{1}, rawTrustedKey(candidate)), true); !errors.Is(err, ErrInvalidTrust) {
+				t.Fatalf("entry %d accepted: %v", i, err)
+			}
+		}
 	}
-	if _, err := NewVerifier([]string{encodedKey(make([]byte, ed25519.PublicKeySize))}, []int{1}); err == nil {
-		t.Fatal("pinned the all-zero key")
+	if forges(t, []byte(testKey(3).Public().(ed25519.PublicKey))) {
+		t.Fatal("an ordinary key accepted a small-order forgery")
+	}
+}
+
+func TestNonCanonicalKeysAreRejected(t *testing.T) {
+	for name, value := range map[string]string{
+		"y = p + 2":     "efffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+		"y = 2^255 - 1": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+	} {
+		if _, err := newVerifier(trustConfig([]int{1}, rawTrustedKey(mustHex(t, value))), true); !errors.Is(err, ErrInvalidTrust) {
+			t.Fatalf("accepted %s: %v", name, err)
+		}
+	}
+	for name, value := range map[string]string{
+		"y = p - 2":            "ebffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+		"high top byte only":   "ed00000000000000000000000000000000000000000000000000000000000000",
+		"high low byte, mixed": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffff00ff7f",
+	} {
+		if weakPublicKey(mustHex(t, value)) {
+			t.Fatalf("%s misclassified as weak", name)
+		}
 	}
 }
 
@@ -126,27 +188,47 @@ func TestVerifyFailsClosedOnMissingInput(t *testing.T) {
 		if got.Result() != Malformed || !errors.Is(got.Err(), ErrMissingInput) {
 			t.Fatalf("%s: %q %v", name, got.Result(), got.Err())
 		}
-		if Decide(Policy{Mode: Advisory}, &got).Allowed {
+		if Decide(policy(Advisory, nil), inventory, &got).Allowed {
 			t.Fatalf("%s allowed", name)
+		}
+	}
+	for name, read := range map[string]func() error{
+		"envelope":     func() error { _, err := readEnvelope(nil); return err },
+		"trust config": func() error { _, err := ReadTrustConfig(nil); return err },
+		"policy":       func() error { _, err := ReadPolicy(nil); return err },
+	} {
+		if err := read(); !errors.Is(err, ErrMissingInput) || !strings.Contains(err.Error(), name) {
+			t.Fatalf("nil %s reader: %v", name, err)
 		}
 	}
 }
 
-func TestVerifyReportsUnreadableInputSeparately(t *testing.T) {
+type errorReader struct{ err error }
+
+func (r errorReader) Read([]byte) (int, error) { return 0, r.err }
+
+func TestUnreadableInputNamesInputAndClassOnly(t *testing.T) {
 	inventory := fixtureInventory(t)
 	v := fixtureVerifier(t, 1)
-	for name, got := range map[string]Verification{
-		"envelope":  v.Verify(failingReader{}, bytes.NewReader(readFixture(t, "passed.sig.json")), inventory),
-		"signature": v.Verify(bytes.NewReader(readFixture(t, "passed.json")), failingReader{}, inventory),
+	for class, err := range map[string]error{
+		"permission": &fs.PathError{Op: "open", Path: "/private/secret", Err: fs.ErrPermission},
+		"timeout":    fmt.Errorf("wrapped /private/secret: %w", os.ErrDeadlineExceeded),
+		"other":      errors.New("failed at /private/secret"),
 	} {
-		if got.Result() != Unreadable || !errors.Is(got.Err(), ErrUnreadable) || strings.Contains(got.Err().Error(), "/private") {
-			t.Fatalf("%s: %q %v", name, got.Result(), got.Err())
-		}
-		if d := Decide(Policy{Mode: Advisory}, &got); d != allow(NotVerified, ReasonUnreadable) {
-			t.Fatalf("%s advisory: %#v", name, d)
-		}
-		if d := Decide(Policy{Mode: Enforce}, &got); d != deny(NotVerified, ReasonUnreadable) {
-			t.Fatalf("%s enforce: %#v", name, d)
+		for name, got := range map[string]Verification{
+			"envelope":       v.Verify(errorReader{err}, bytes.NewReader(readFixture(t, "passed.sig.json")), inventory),
+			"signature file": v.Verify(bytes.NewReader(readFixture(t, "passed.json")), errorReader{err}, inventory),
+		} {
+			message := got.Err().Error()
+			if got.Result() != Unreadable || !errors.Is(got.Err(), ErrUnreadable) || !strings.Contains(message, name+": "+class) || strings.Contains(message, "/private") {
+				t.Fatalf("%s %s: %q %v", name, class, got.Result(), got.Err())
+			}
+			if d := Decide(policy(Advisory, nil), inventory, &got); d != allow(NotVerified, ReasonUnreadable) {
+				t.Fatalf("%s advisory: %#v", name, d)
+			}
+			if d := Decide(policy(Enforce, nil), inventory, &got); d != deny(NotVerified, ReasonUnreadable) {
+				t.Fatalf("%s enforce: %#v", name, d)
+			}
 		}
 	}
 }
@@ -175,11 +257,15 @@ func TestVerifyErrorsAreSentinelsWithoutEvidence(t *testing.T) {
 	if !strings.Contains(single.Err().Error(), "single artifact digest differs") {
 		t.Fatalf("%v", single.Err())
 	}
+	versioned := fixtureVerifier(t, 1).Verify(bytes.NewReader(bytes.Replace(readFixture(t, "passed.json"), []byte(`"version": 1`), []byte(`"version": 2`), 1)), bytes.NewReader(readFixture(t, "passed.sig.json")), inventory)
+	if !errors.Is(versioned.Err(), ErrUnsupportedVersion) || !strings.Contains(versioned.Err().Error(), "envelope") {
+		t.Fatalf("%v", versioned.Err())
+	}
 }
 
 func TestVerifierAcceptsOnlyConfiguredPolicyVersions(t *testing.T) {
 	got := fixtureVerifierWithPolicies(t, []int{1, 2}, 1).Verify(bytes.NewReader(readFixture(t, "policy-2.json")), bytes.NewReader(readFixture(t, "policy-2.sig.json")), fixtureInventory(t))
-	if got.Result() != Valid || got.Envelope().PolicyVersion != 2 || got.KeyID() != testOnlyKeyID1 {
+	if got.Result() != Valid || got.Envelope().PolicyVersion != 2 || got.KeyID() != trustedKeys(1)[0].KeyID {
 		t.Fatalf("%#v", got)
 	}
 }
@@ -211,39 +297,6 @@ func TestReadSignatureRejectsMalformedFiles(t *testing.T) {
 		}
 		if _, _, err := readSignature(bytes.NewReader(body)); !errors.Is(err, ErrMalformedSignature) {
 			t.Fatalf("%s: %v", name, err)
-		}
-	}
-}
-
-func TestPolicyValidate(t *testing.T) {
-	digest := fixtureDigest("artifact")
-	scoped := func(kind ExemptionKind, reason string) Exemption {
-		return Exemption{Artifact: digest, PolicyVersion: 1, Kind: kind, Reason: reason}
-	}
-	for _, valid := range []Policy{
-		{Mode: Advisory},
-		{Mode: Enforce, Exemptions: []Exemption{scoped(ExemptNotScanned, "r"), scoped(ExemptFindings, "r"), scoped(ExemptUnsupported, "r"), scoped(ExemptPartialCoverage, strings.Repeat("r", MaxTextBytes))}},
-		{Mode: Enforce, Deny: []string{digest, fixtureDigest("other")}},
-	} {
-		if err := valid.Validate(); err != nil {
-			t.Fatalf("%#v: %v", valid, err)
-		}
-	}
-	for name, invalid := range map[string]Policy{
-		"empty mode":       {},
-		"unknown mode":     {Mode: "strict"},
-		"short digest":     {Mode: Enforce, Exemptions: []Exemption{{Artifact: "abc", PolicyVersion: 1, Kind: ExemptNotScanned, Reason: "r"}}},
-		"zero policy":      {Mode: Enforce, Exemptions: []Exemption{{Artifact: digest, Kind: ExemptNotScanned, Reason: "r"}}},
-		"policy over cap":  {Mode: Enforce, Exemptions: []Exemption{{Artifact: digest, PolicyVersion: MaxPolicyVersion + 1, Kind: ExemptNotScanned, Reason: "r"}}},
-		"error kind":       {Mode: Enforce, Exemptions: []Exemption{scoped("error", "r")}},
-		"missing reason":   {Mode: Enforce, Exemptions: []Exemption{scoped(ExemptNotScanned, "")}},
-		"long reason":      {Mode: Enforce, Exemptions: []Exemption{scoped(ExemptNotScanned, strings.Repeat("r", MaxTextBytes+1))}},
-		"duplicate scope":  {Mode: Enforce, Exemptions: []Exemption{scoped(ExemptNotScanned, "a"), scoped(ExemptNotScanned, "b")}},
-		"duplicate denial": {Mode: Enforce, Deny: []string{digest, digest}},
-		"invalid denial":   {Mode: Enforce, Deny: []string{"abc"}},
-	} {
-		if invalid.Validate() == nil {
-			t.Fatalf("accepted %s", name)
 		}
 	}
 }

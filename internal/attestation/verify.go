@@ -1,7 +1,6 @@
 package attestation
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -10,8 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
 // SignatureFormatVersion is the only detached signature format this package reads.
@@ -23,14 +20,18 @@ const SignatureAlgorithm = "ed25519"
 
 const maxTrustedKeys = 16
 
-// Fixture key IDs from this package's tests. Production trust never pins them.
-const (
-	testOnlyKeyID1 = "16e9ace517de63926f01a91b90340dc8eff8e21e3786dbbd63dff31baf066d1c"
-	testOnlyKeyID2 = "3db860a7e4791c1f25c3834cc6444f99515e7ed8fdf92e2b78cbe016a4eca529"
-)
+// testOnlyPublicKeys sign this package's fixtures. Production trust never
+// pins them, with or without the sign bit.
+var testOnlyPublicKeys = []string{
+	"8gX7EZR2X3Y2eEMiIq5LH6S/qXxLl8Nnb62uzwJHY4A=",
+	"SEg181cs9rxuEV2Hk6/c8QHn0f7mNm3AI5mPZ9Xree8=",
+}
 
-// smallOrderKeys are the libsodium has_small_order encodings with the sign
-// bit cleared. A small-order key verifies forged signatures for any message.
+// smallOrderKeys are the blocklist of ge25519_has_small_order in libsodium
+// 1.0.20-RELEASE, src/libsodium/crypto_core/ed25519/ref10/ref10.c, with the
+// sign bit cleared. Each value was checked independently by decoding the
+// point and multiplying it to the identity. A small-order key verifies forged
+// signatures for any message.
 var smallOrderKeys = [][ed25519.PublicKeySize]byte{
 	{},
 	{0x01},
@@ -83,6 +84,9 @@ func (v Verification) KeyID() string { return v.keyID }
 // caller cannot change the evidence that Decide uses.
 func (v Verification) Envelope() Envelope { return v.envelope.clone() }
 
+// ArtifactDigest is the sealed artifact digest, empty unless Result is Valid.
+func (v Verification) ArtifactDigest() string { return v.digest }
+
 // Err wraps one of the package sentinels and is nil only for Valid.
 func (v Verification) Err() error { return v.err }
 
@@ -99,39 +103,64 @@ func KeyID(key ed25519.PublicKey) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// NewVerifier pins each standard base64 raw Ed25519 public key. Pin the old
-// and new keys together during rotation, then remove the old key.
-func NewVerifier(publicKeys []string, policyVersions []int) (*Verifier, error) {
-	return newVerifier(publicKeys, policyVersions, false)
+// NewVerifier accepts exactly the trust configurations ReadTrustConfig
+// accepts. Pin the old and new keys together during rotation, then remove the
+// old key.
+func NewVerifier(config TrustConfig) (*Verifier, error) {
+	return newVerifier(config, false)
 }
 
-// newVerifier admits the fixture keys only for this package's tests.
-func newVerifier(publicKeys []string, policyVersions []int, allowTestKeys bool) (*Verifier, error) {
-	if len(publicKeys) == 0 || len(publicKeys) > maxTrustedKeys {
-		return nil, fmt.Errorf("attestation verifier needs 1 to %d pinned public keys", maxTrustedKeys)
+// newVerifier is the one trust validation. Only this package's tests admit
+// the fixture keys.
+func newVerifier(config TrustConfig, allowTestKeys bool) (*Verifier, error) {
+	if config.Version != TrustConfigVersion {
+		return nil, fmt.Errorf("%w: trust config", ErrUnsupportedVersion)
 	}
-	v := &Verifier{keys: map[string]ed25519.PublicKey{}, policies: map[int]bool{}}
-	for index, encoded := range publicKeys {
-		key, err := parsePinnedKey(encoded, allowTestKeys)
+	keys, err := pinKeys(config.Keys, allowTestKeys)
+	if err != nil {
+		return nil, err
+	}
+	policies, err := policySet(config.PolicyVersions)
+	if err != nil {
+		return nil, err
+	}
+	return &Verifier{keys: keys, policies: policies}, nil
+}
+
+func pinKeys(trusted []TrustedKey, allowTestKeys bool) (map[string]ed25519.PublicKey, error) {
+	if len(trusted) == 0 || len(trusted) > maxTrustedKeys {
+		return nil, fmt.Errorf("%w: needs 1 to %d pinned public keys", ErrInvalidTrust, maxTrustedKeys)
+	}
+	keys := map[string]ed25519.PublicKey{}
+	for index, entry := range trusted {
+		key, err := parsePinnedKey(entry.PublicKey, allowTestKeys)
 		if err != nil {
-			return nil, fmt.Errorf("pinned attestation key %d: %w", index, err)
+			return nil, fmt.Errorf("%w: key %d: %v", ErrInvalidTrust, index, err)
 		}
 		id := KeyID(key)
-		if v.keys[id] != nil {
-			return nil, fmt.Errorf("pinned attestation key %d: duplicate key", index)
+		if entry.KeyID != id {
+			return nil, fmt.Errorf("%w: key %d ID does not match its public key", ErrInvalidTrust, index)
 		}
-		v.keys[id] = key
-	}
-	if len(policyVersions) == 0 {
-		return nil, errors.New("attestation verifier needs supported policy versions")
-	}
-	for index, version := range policyVersions {
-		if !validPolicyVersion(version) || v.policies[version] {
-			return nil, fmt.Errorf("supported policy version %d must be unique and 1 to %d", index, MaxPolicyVersion)
+		if keys[id] != nil {
+			return nil, fmt.Errorf("%w: key %d duplicates an earlier key", ErrInvalidTrust, index)
 		}
-		v.policies[version] = true
+		keys[id] = key
 	}
-	return v, nil
+	return keys, nil
+}
+
+func policySet(versions []int) (map[int]bool, error) {
+	if len(versions) == 0 {
+		return nil, fmt.Errorf("%w: needs supported policy versions", ErrInvalidTrust)
+	}
+	policies := map[int]bool{}
+	for index, version := range versions {
+		if !validPolicyVersion(version) || policies[version] {
+			return nil, fmt.Errorf("%w: policy version %d must be unique and 1 to %d", ErrInvalidTrust, index, MaxPolicyVersion)
+		}
+		policies[version] = true
+	}
+	return policies, nil
 }
 
 func parsePinnedKey(encoded string, allowTestKeys bool) (ed25519.PublicKey, error) {
@@ -142,18 +171,34 @@ func parsePinnedKey(encoded string, allowTestKeys bool) (ed25519.PublicKey, erro
 	if weakPublicKey(raw) {
 		return nil, errors.New("small-order or non-canonical Ed25519 key")
 	}
-	if id := KeyID(raw); !allowTestKeys && (id == testOnlyKeyID1 || id == testOnlyKeyID2) {
+	if !allowTestKeys && testOnlyKey(raw) {
 		return nil, errors.New("test-only fixture key")
 	}
 	return ed25519.PublicKey(raw), nil
 }
 
-// weakPublicKey rejects small-order points, ignoring the sign bit, and any
-// encoding whose y coordinate is not below p = 2^255 - 19.
-func weakPublicKey(raw []byte) bool {
+func clearSignBit(raw []byte) [ed25519.PublicKeySize]byte {
 	var masked [ed25519.PublicKeySize]byte
 	copy(masked[:], raw)
 	masked[31] &= 0x7f
+	return masked
+}
+
+func testOnlyKey(raw []byte) bool {
+	masked := clearSignBit(raw)
+	for _, encoded := range testOnlyPublicKeys {
+		fixture, err := base64.StdEncoding.DecodeString(encoded)
+		if err == nil && clearSignBit(fixture) == masked {
+			return true
+		}
+	}
+	return false
+}
+
+// weakPublicKey rejects small-order points, ignoring the sign bit, and any
+// encoding whose y coordinate is not below p = 2^255 - 19.
+func weakPublicKey(raw []byte) bool {
+	masked := clearSignBit(raw)
 	for _, blocked := range smallOrderKeys {
 		if masked == blocked {
 			return true
@@ -229,27 +274,16 @@ func (v *Verifier) Verify(envelope, signature io.Reader, onDisk Artifact) Verifi
 }
 
 func readSignature(r io.Reader) (Signature, []byte, error) {
-	raw, err := readLimited(r, MaxSignatureBytes, ErrMalformedSignature)
-	if err != nil {
+	var sig Signature
+	if err := signatureDocument.read(r, &sig, func() ([]byte, error) { return json.Marshal(sig) }); err != nil {
 		return Signature{}, nil, err
 	}
-	if otherVersion(raw, SignatureFormatVersion) {
-		return Signature{}, nil, ErrUnsupportedVersion
-	}
-	var sig Signature
-	if strictjson.DecodeLimited(bytes.NewReader(raw), MaxSignatureBytes, &sig) != nil {
-		return Signature{}, nil, fmt.Errorf("%w: strict JSON decoding failed", ErrMalformedSignature)
-	}
 	if sig.Version != SignatureFormatVersion || sig.Algorithm != SignatureAlgorithm || !digestPattern.MatchString(sig.KeyID) {
-		return Signature{}, nil, fmt.Errorf("%w: needs version %d, algorithm %s and a hex key ID", ErrMalformedSignature, SignatureFormatVersion, SignatureAlgorithm)
+		return Signature{}, nil, fmt.Errorf("%w: needs version %d, algorithm %s and a lowercase hex key ID", ErrMalformedSignature, SignatureFormatVersion, SignatureAlgorithm)
 	}
 	value, err := base64.StdEncoding.Strict().DecodeString(sig.Value)
 	if err != nil || len(value) != ed25519.SignatureSize {
 		return Signature{}, nil, fmt.Errorf("%w: signature must be standard base64 of %d bytes", ErrMalformedSignature, ed25519.SignatureSize)
-	}
-	canonical, err := json.Marshal(sig)
-	if err != nil || !sameJSON(raw, canonical) {
-		return Signature{}, nil, fmt.Errorf("%w: fields differ from the canonical form", ErrMalformedSignature)
 	}
 	return sig, value, nil
 }

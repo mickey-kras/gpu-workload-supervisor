@@ -4,19 +4,12 @@
 package attestation
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"reflect"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
-
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
 // FormatVersion is the only envelope format this package reads or writes.
@@ -37,18 +30,23 @@ const (
 // TimestampLayout is the only accepted timestamp form: RFC 3339 UTC seconds.
 const TimestampLayout = "2006-01-02T15:04:05Z"
 
-// Sentinel errors identify the failure class. Messages never echo evidence.
+// Sentinel errors identify the failure class. Messages name the input and
+// the failure kind but never echo evidence or reader error text.
 var (
 	ErrUnreadable         = errors.New("attestation input is unreadable")
 	ErrMalformedEnvelope  = errors.New("invalid attestation envelope")
 	ErrMalformedSignature = errors.New("invalid attestation signature file")
 	ErrUnsupportedVersion = errors.New("unsupported attestation format version")
 	ErrInvalidInventory   = errors.New("invalid on-disk artifact inventory")
-	ErrMissingInput       = errors.New("attestation verifier, envelope or signature is missing")
+	ErrMissingInput       = errors.New("attestation verifier or input is missing")
 	ErrUnknownKey         = errors.New("attestation key is not pinned")
 	ErrInvalidSignature   = errors.New("attestation signature is invalid")
 	ErrIncompatiblePolicy = errors.New("attestation policy version is not supported")
 	ErrArtifactMismatch   = errors.New("attestation does not bind the artifact on disk")
+	// ErrInvalidTrust marks a trust configuration or key set that the verifier refuses.
+	ErrInvalidTrust = errors.New("invalid attestation trust configuration")
+	// ErrInvalidPolicy marks a policy file or value that Validate refuses.
+	ErrInvalidPolicy = errors.New("invalid attestation policy")
 )
 
 var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -171,55 +169,12 @@ func MarshalEnvelope(e Envelope) ([]byte, error) {
 // the same JSON value as its canonical form: no unknown, null, empty or
 // differently cased fields can pass through.
 func readEnvelope(r io.Reader) (Envelope, error) {
-	raw, err := readLimited(r, MaxEnvelopeBytes, ErrMalformedEnvelope)
+	var envelope Envelope
+	err := envelopeDocument.read(r, &envelope, func() ([]byte, error) { return MarshalEnvelope(envelope) })
 	if err != nil {
 		return Envelope{}, err
-	}
-	if otherVersion(raw, FormatVersion) {
-		return Envelope{}, ErrUnsupportedVersion
-	}
-	var envelope Envelope
-	if err := strictjson.DecodeLimited(bytes.NewReader(raw), MaxEnvelopeBytes, &envelope); err != nil {
-		return Envelope{}, malformed("strict JSON decoding failed")
-	}
-	if err := envelope.validate(); err != nil {
-		return Envelope{}, err
-	}
-	canonical, err := canonicalJSON(envelope.object())
-	if err != nil || !sameJSON(raw, canonical) {
-		return Envelope{}, malformed("fields differ from the canonical form")
 	}
 	return envelope, nil
-}
-
-// readLimited separates reader failures from oversized or non-UTF-8 input.
-func readLimited(r io.Reader, limit int64, invalid error) ([]byte, error) {
-	raw, err := io.ReadAll(io.LimitReader(r, limit+1))
-	if err != nil {
-		return nil, ErrUnreadable
-	}
-	if int64(len(raw)) > limit {
-		return nil, fmt.Errorf("%w: input exceeds %d bytes", invalid, limit)
-	}
-	if !utf8.Valid(raw) {
-		return nil, fmt.Errorf("%w: input is not UTF-8", invalid)
-	}
-	return raw, nil
-}
-
-// otherVersion reports one well-formed JSON object whose exact "version"
-// member is a positive integer other than current.
-func otherVersion(raw []byte, current int) bool {
-	if strictjson.Check(json.NewDecoder(bytes.NewReader(raw))) != nil {
-		return false
-	}
-	var object map[string]json.RawMessage
-	d := json.NewDecoder(bytes.NewReader(raw))
-	if d.Decode(&object) != nil || d.Decode(&struct{}{}) != io.EOF {
-		return false
-	}
-	version, err := strconv.ParseInt(string(object["version"]), 10, 64)
-	return err == nil && version >= 1 && version != int64(current)
 }
 
 func (e Envelope) validate() error {
@@ -227,7 +182,7 @@ func (e Envelope) validate() error {
 		return malformed("format version must be a positive integer")
 	}
 	if e.Version != FormatVersion {
-		return ErrUnsupportedVersion
+		return fmt.Errorf("%w: envelope", ErrUnsupportedVersion)
 	}
 	if err := e.Artifact.validate(); err != nil {
 		return malformed("artifact: %v", err)
@@ -341,22 +296,4 @@ func safeText(value string, limit int) bool {
 		}
 	}
 	return true
-}
-
-// sameJSON compares decoded values, so key order, whitespace and string
-// escapes can differ while names, nulls and omitted fields cannot.
-func sameJSON(supplied, expected []byte) bool {
-	decode := func(raw []byte) (any, error) {
-		var value any
-		d := json.NewDecoder(bytes.NewReader(raw))
-		d.UseNumber()
-		err := d.Decode(&value)
-		return value, err
-	}
-	got, err := decode(supplied)
-	if err != nil {
-		return false
-	}
-	want, err := decode(expected)
-	return err == nil && reflect.DeepEqual(got, want)
 }

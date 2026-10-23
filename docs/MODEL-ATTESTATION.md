@@ -23,10 +23,14 @@ bytes. It does not prove these items:
 
 ## Files
 
-An attestation is two files:
+The contract uses four strict JSON files:
 
-- An envelope: strict JSON, at most 16 MiB.
-- A detached signature: strict JSON, at most 1 KiB.
+| File | Contents | Maximum size | Reader |
+| --- | --- | --- | --- |
+| Envelope | The evidence for one artifact | 16 MiB | `Verify` |
+| Signature | The detached signature of one envelope | 1 KiB | `Verify` |
+| Trust configuration | Pinned keys and supported policy versions | 64 KiB | `ReadTrustConfig` |
+| Policy | Mode, exemptions and denials | 1 MiB | `ReadPolicy` |
 
 The readers reject these inputs:
 
@@ -38,20 +42,24 @@ The readers reject these inputs:
 The decoded input must be equal to its canonical form. Whitespace, key order
 and JSON string escapes can change. Names and values cannot change.
 
+Each file has a `version` member. A reader gives `unsupported-version` when the
+file is well-formed JSON and `version` is a different positive integer in int64
+range. The reader does this check before the field checks.
+
 ## Envelope fields
 
 | Field | Rule |
 | --- | --- |
-| `version` | Integer `1`. A different positive integer gives `unsupported-version`. |
+| `version` | Integer `1`. |
 | `artifact.files` | Map of relative path to lowercase hex SHA-256. Use 1 to 32768 entries. |
 | `artifact.sha256` | Lowercase hex SHA-256 of one artifact file. Use this form or `files`, not both. |
 | `source.uri` | Optional. Where the producer got the artifact. Maximum 2048 bytes. |
 | `source.revision` | Optional. Source revision. Maximum 256 bytes. |
 | `scan.status` | `passed`, `findings`, `not_scanned`, `unsupported` or `error`. |
-| `scan.scanner` | Object with `tool`, `version` and `configSHA256`. |
-| `scan.scanner.tool` | Scanner name. Maximum 256 bytes. |
-| `scan.scanner.version` | Scanner version. Maximum 256 bytes. |
-| `scan.scanner.configSHA256` | Digest of the effective scanner configuration. |
+| `scan.scanner` | Object with the three fields below. |
+| `scan.scanner.tool` | Necessary, not empty. Scanner name. Maximum 256 bytes. |
+| `scan.scanner.version` | Necessary, not empty. Scanner version. Maximum 256 bytes. |
+| `scan.scanner.configSHA256` | Necessary. Lowercase hex SHA-256 of the effective scanner configuration. |
 | `scan.coverage` | `complete` or `partial`. The report gives the detail for each file. |
 | `scan.verdict` | The scanner verdict text. Maximum 256 bytes. |
 | `scan.reportSHA256` | Lowercase hex SHA-256 of the scanner report. |
@@ -75,12 +83,15 @@ Scan evidence depends on the status:
 | `unsupported` | Necessary | Not permitted | Not permitted | Optional |
 | `not_scanned` | Not permitted | Not permitted | Not permitted | Not permitted |
 
-Record a skipped scan as `not_scanned`. A skipped scan is never a pass.
+Record a skipped scan as `not_scanned`. A skipped scan is never a pass. The
+`unsupported` status means that the scanner does not support the format or
+the architecture of the artifact.
 
 ## Paths and text
 
-All strings use printable ASCII from `0x20` to `0x7E`. The reader rejects the
-quote character and the backslash. Thus canonical strings need no escapes.
+All decoded strings use printable ASCII from `0x20` to `0x7E`. The reader
+rejects a decoded quote character and a decoded backslash. Thus canonical
+strings need no escapes.
 
 Each path must obey these rules:
 
@@ -91,14 +102,17 @@ Each path must obey these rules:
 
 This alphabet is narrower than the alphabet of training inventories. An
 envelope cannot bind an artifact with other path characters, so the producer
-must refuse to seal it. The gate then has no attestation for that artifact:
-advisory mode allows it as `not-verified`, and enforce mode rejects it.
+must refuse to seal it. When no evidence files exist, the gate has no
+attestation for that artifact. Then advisory mode allows it as `not-verified`,
+and enforce mode rejects it. When evidence files exist, `Verify` gives
+`invalid-inventory`, which is an integrity failure.
 
 ## One envelope for each inventory
 
 Each envelope binds one inventory root. Keep separate roots, such as a model
-root and a tokenizer root, in separate envelopes. Use `DecideAll` to combine
-their decisions. The most severe status wins in this order:
+root and a tokenizer root, in separate envelopes. Give `DecideAll` one entry
+for each necessary root. Use a nil verification for a root without an
+attestation. The most severe status wins in this order:
 
 1. `integrity-failure`
 2. `findings-detected`
@@ -106,7 +120,8 @@ their decisions. The most severe status wins in this order:
 4. `exempted`
 5. `verified`
 
-One rejection rejects the full set. An empty set is a missing attestation.
+If two entries have the same status, the first entry wins. One rejection
+rejects the full set. An empty set is a missing attestation.
 
 ## Canonical signing bytes
 
@@ -134,7 +149,7 @@ The signature file has these fields:
 
 | Field | Rule |
 | --- | --- |
-| `version` | Integer `1`. A different positive integer gives `unsupported-version`. |
+| `version` | Integer `1`. |
 | `algorithm` | String `ed25519`. The reader rejects other values as malformed. |
 | `keyId` | Lowercase hex SHA-256 of the raw 32-byte public key. |
 | `signature` | Standard base64 with padding of the 64-byte Ed25519 signature. |
@@ -144,32 +159,61 @@ The verifier uses Go `crypto/ed25519`. That check is cofactorless and rejects
 a signature with S equal to or more than the group order L. The signer works
 offline. The producer CLI must never get or store a signing key.
 
-Trusted configuration pins each public key. Write each key as standard base64
-with padding of the raw 32 bytes. The verifier accepts 1 to 16 pinned keys.
-It rejects these keys:
+The verifier rejects these keys:
 
 - Small-order keys. The list is the libsodium `has_small_order` list. The check
   ignores the sign bit.
 - Keys with a y coordinate equal to or more than 2^255 - 19.
-- The two test-only fixture keys.
+- The two test-only fixture keys. The check ignores the sign bit.
 
-A small-order key accepts forged signatures for all messages. The tests show
-such a forgery with the identity key.
+A small-order key accepts forged signatures. The tests show a forgery for each
+entry in the list.
 
 ## Trust configuration
 
-The producer and the gate must read one trust file with `ReadTrustConfig`. The
-file is strict JSON, at most 1 MiB:
+The trust configuration holds signer trust only. It does not hold the policy.
 
 | Field | Rule |
 | --- | --- |
 | `version` | Integer `1`. |
-| `keys` | List of objects with `keyId` and `publicKey`. Each `keyId` must match its key. |
-| `policyVersions` | The supported policy versions. |
-| `policy` | Object with `mode`, `exemptions` and `deny`. |
+| `keys` | 1 to 16 objects with `keyId` and `publicKey`. Not `null`. |
+| `keys[].publicKey` | Standard base64 with padding of a raw 32-byte Ed25519 key. Each key must be unique. |
+| `keys[].keyId` | Lowercase hex SHA-256 of that key. |
+| `policyVersions` | 1 or more unique integers from 1 to 2147483647. Not `null`. |
 
-Omit `exemptions` and `deny` when they are empty. `NewVerifierFromConfig`
-applies the same key checks as `NewVerifier`.
+`ReadTrustConfig` and `NewVerifier` use the same checks. Thus the reader
+accepts only configurations that the verifier accepts.
+
+## Policy file
+
+The policy is a separate file. The setup of #583 and its rollback journal keep
+it. A consumer that stores a policy keeps a `*Policy` value with `omitempty`.
+
+| Field | Rule |
+| --- | --- |
+| `version` | Integer `1`. |
+| `mode` | `advisory` or `enforce`. Necessary. |
+| `exemptions` | Optional list. Omit it when it is empty. |
+| `deny` | Optional list of unique lowercase hex artifact digests. Omit it when it is empty. |
+
+Each exemption has these fields:
+
+| Field | Rule |
+| --- | --- |
+| `artifact` | The artifact digest in lowercase hex. |
+| `policyVersion` | Integer from 1 to 2147483647. |
+| `kind` | `not_scanned`, `unsupported`, `findings` or `partial_coverage`. |
+| `reportSHA256` | Necessary for `findings` and `partial_coverage`. Not permitted for the other kinds. |
+| `reason` | Necessary text. Maximum 256 bytes. |
+
+The policy rejects two exemptions with the same scope. The scope is all fields
+except `reason`. The setup journal of #583 must record who added an exemption
+and when. Exemptions for uncovered execution paths and for missing
+attestations belong to the gate coverage configuration of #583. They are not
+part of this policy.
+
+The artifact digest is the lowercase hex SHA-256 of `gpu-model-artifact/v1`,
+a line feed and the canonical JSON of the `artifact` object.
 
 ## Verification results
 
@@ -188,25 +232,37 @@ It reads the small signature file before the large envelope.
 | 8 | `artifact-mismatch` | The bound digests are not equal to the inventory on disk. |
 | 9 | `valid` | All checks pass. |
 
-The error tells the failure kind. It does not show paths, digests or file
-content. Only `Verify` makes a sealed result. `Decide` rejects all other values.
+An error names the input and the failure kind. For a read failure, it names
+the class: permission, timeout or other. It does not show paths, digests,
+file content or the text of the reader error. Only `Verify` makes a sealed
+result. `Decide` rejects all other values.
 
 ## Policy decision
 
-The policy mode is `advisory` or `enforce`. The configuration must set it.
-`Decide` applies `enforce` to every other value, which includes an empty mode.
-The configuration loader of #583 must apply the `advisory` default and show it.
+`Decide` takes the policy, the inventory that the gate made and the
+verification. It calculates the digest of the gate inventory first. It
+rejects a denied digest before it looks at the evidence. Thus a deleted or
+changed evidence file cannot admit a denied artifact.
+
+The mode is `advisory` or `enforce`. The files have no default. Setup writes
+`"mode": "advisory"` when the operator selects nothing, and shows that value.
+`Decide` applies `enforce` to every value other than exactly `advisory`.
+
+Advisory mode is not a security boundary against a person who can change or
+delete evidence files. Only enforce mode is a security boundary.
 
 A signature is separate from the scan outcome. A signed `findings` report is
 evidence. It is not an approval.
 
 | Evidence | `advisory` | `enforce` | Reason |
 | --- | --- | --- | --- |
+| Denied artifact digest, any evidence | Reject, `integrity-failure` | Reject, `integrity-failure` | `artifact-denied` |
+| Gate inventory not valid, evidence present | Reject, `integrity-failure` | Reject, `integrity-failure` | `invalid-inventory` |
 | No attestation | Allow, `not-verified` | Reject, `not-verified` | `attestation-missing` |
 | `unreadable` | Allow, `not-verified` | Reject, `not-verified` | `unreadable` |
 | `unsupported-version` | Allow, `not-verified` | Reject, `not-verified` | `unsupported-version` |
 | Other failed result | Reject, `integrity-failure` | Reject, `integrity-failure` | The result code |
-| Denied artifact digest | Reject, `integrity-failure` | Reject, `integrity-failure` | `artifact-denied` |
+| Valid evidence for a different gate inventory | Reject, `integrity-failure` | Reject, `integrity-failure` | `artifact-mismatch` |
 | `passed` with `complete` coverage | Allow, `verified` | Allow, `verified` | `scan-passed` |
 | `findings` | Reject, `findings-detected` | Reject, `findings-detected` | `scan-findings` |
 | `error` | Allow, `not-verified` | Reject, `not-verified` | `scan-error` |
@@ -214,24 +270,15 @@ evidence. It is not an approval.
 | `unsupported` | Allow, `not-verified` | Reject, `not-verified` | `scan-unsupported` |
 | `passed` with `partial` coverage | Allow, `not-verified` | Reject, `not-verified` | `scan-partial-coverage` |
 
+Advisory mode allows `unreadable` and `unsupported-version` as `not-verified`.
+These results do not prove tampering, and the deny check applies first.
+
 An exemption can change only these rows: `findings`, `not_scanned`,
-`unsupported`, and `passed` with `partial` coverage. Then both modes allow the
-artifact with the `exempted` status. The reason stays the same. An exempted
-artifact is never `verified`.
-
-An exemption has these fields. All must match, except `reason`:
-
-| Field | Rule |
-| --- | --- |
-| `artifact` | The artifact digest. |
-| `policyVersion` | The policy version of the envelope. |
-| `kind` | `findings`, `not-scanned`, `unsupported` or `partial-coverage`. |
-| `reason` | Necessary text. Maximum 256 bytes. |
-
-The artifact digest is the lowercase hex SHA-256 of `gpu-model-artifact/v1`,
-a line feed and the canonical JSON of the `artifact` object. The policy
-rejects two exemptions with the same artifact, policy version and kind. The
-setup journal of #583 must record who added an exemption and when.
+`unsupported`, and `passed` with `partial` coverage. The artifact digest,
+the policy version and the kind must match. For `findings` and
+`partial_coverage`, the report digest must also match. Then both modes allow
+the artifact with the `exempted` status. The reason stays the same. An
+exempted artifact is never `verified`.
 
 An exemption never changes these outcomes:
 
@@ -240,12 +287,37 @@ An exemption never changes these outcomes:
 - A denied artifact digest.
 - An `error` result.
 
+The gate calculates a decision again for each admission. Do not keep a
+decision.
+
+## Reason codes
+
+| Reason | Status | Cause |
+| --- | --- | --- |
+| `artifact-denied` | `integrity-failure` | The policy denies the gate inventory digest. |
+| `invalid-inventory` | `integrity-failure` | The gate inventory breaks the artifact rules. |
+| `attestation-missing` | `not-verified` | No attestation exists for the root. |
+| `unreadable` | `not-verified` | A reader failed. |
+| `unsupported-version` | `not-verified` | A file has a different format version. |
+| `malformed` | `integrity-failure` | A file breaks a rule on this page. |
+| `unknown-key` | `integrity-failure` | No pinned key has the key ID. |
+| `invalid-signature` | `integrity-failure` | The signature does not match. |
+| `incompatible-policy` | `integrity-failure` | The trust configuration does not support the policy version. |
+| `artifact-mismatch` | `integrity-failure` | The evidence binds different bytes. |
+| `unsealed-verification` | `integrity-failure` | The verification did not come from `Verify`. |
+| `scan-passed` | `verified` | A complete scan passed. |
+| `scan-findings` | `findings-detected` or `exempted` | The scanner reported findings. |
+| `scan-error` | `not-verified` | The scan failed. |
+| `scan-not-scanned` | `not-verified` or `exempted` | The scan did not run. |
+| `scan-unsupported` | `not-verified` or `exempted` | The scanner does not support the artifact. |
+| `scan-partial-coverage` | `not-verified` or `exempted` | The scan did not cover all files. |
+
 ## Revocation
 
 Put an artifact digest in `deny` to reject that artifact. The deny check comes
-before the scan outcome and before exemptions.
+before all other checks in `Decide`.
 
-Remove a key from the configuration to reject all evidence that the key
+Remove a key from the trust configuration to reject all evidence that the key
 signed. Remove a policy version to reject all evidence for that version. Then
 the producer must attest the artifacts again.
 
@@ -254,7 +326,7 @@ To rotate a key, do these steps:
 1. Pin the new key next to the old key.
 2. Sign new evidence with the new key.
 3. Sign the old evidence again with the new key, or replace that evidence.
-4. Remove the old key from the configuration.
+4. Remove the old key from the trust configuration.
 
 The verifier has no mutable allowlist, no daemon and no listener.
 
@@ -264,6 +336,7 @@ The gate and the producer must obey these rules:
 
 - Make the on-disk inventory from a full walk of the effective artifact.
   Never make it from the envelope.
+- Give the same inventory to `Verify` and to `Decide`.
 - Let the deployment select the `files` form or the single form. The envelope
   must not select it.
 - Reject symbolic links and files that are not regular files.
