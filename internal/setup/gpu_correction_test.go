@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 )
 
 func gpuCorrectionFixture(t *testing.T) (Backend, string, GPUCorrectionRequest, map[string]string) {
@@ -139,5 +142,25 @@ func TestGPUCorrectionAppliesAndRechecksWithoutStartingService(t *testing.T) {
 	}
 	if err := writeGPUCorrection(GPUCorrection{Path: path, Content: "replacement"}); !errors.Is(err, os.ErrExist) {
 		t.Fatalf("existing override was replaced: %v", err)
+	}
+}
+
+func TestGPUCorrectionRejectsCatalogManagedWithoutOperatorProfile(t *testing.T) {
+	b, home, request, _ := gpuCorrectionFixture(t)
+	ctx := context.Background()
+	s := openStoreAt(t, deployment.DefaultStatePath())
+	_, err := s.ReplaceCatalog(ctx, "", control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{
+		ID: "llm", Label: "LLM", Adapter: "systemd", Unit: request.Unit,
+		Cgroup: "/workloads/llm.service", HealthURL: "http://127.0.0.1:8080/health",
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if _, err := os.Stat(filepath.Join(home, ".config/gpu-workload-supervisor/operator.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("operator profile unexpectedly present: %v", err)
+	}
+	if _, err := b.CorrectGPU(ctx, home, request); err == nil || !strings.Contains(err.Error(), "already managed") {
+		t.Fatalf("catalog-managed service accepted without operator profile: %v", err)
 	}
 }

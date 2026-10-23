@@ -54,6 +54,10 @@ func PreviewAutomaticGPUCorrection(path, app string, dropInPaths []string, uuid 
 	if !control.ValidGPUUUID(uuid) {
 		return AutomaticLaunch{}, ErrGPUIdentityUnresolved
 	}
+	// The proposed correction contributes one additional drop-in.
+	if len(dropInPaths) >= 32 {
+		return AutomaticLaunch{}, ErrLaunchUnsupported
+	}
 	sources, dropIns, err := readAutomaticLaunchSources(path, dropInPaths)
 	if err != nil {
 		return AutomaticLaunch{}, err
