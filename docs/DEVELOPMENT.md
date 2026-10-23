@@ -108,9 +108,12 @@ The staging step rejects those comments.
 The trusted policy guard protects the workflow, linter configuration and vocabulary.
 
 The Vale setup checks the style archive against a fixed SHA-256 digest before extraction.
-For local setup, run the `Install verified STE styles` commands from `.github/workflows/docs-ste.yml`.
 The Vale action does not run `vale sync`.
 Policy tests reject missing jobs, weaker thresholds and changes to protected prose checks.
+
+For local setup, open a shell in the repository root.
+Set `RUNNER_TEMP=$(mktemp -d)` in that shell.
+Then run the `Install verified STE styles` commands from `.github/workflows/docs-ste.yml` in the same shell.
 
 ste-cli and Vale check only part of ASD-STE100.
 Neither configured tool checks the full official dictionary.
