@@ -1,26 +1,28 @@
 """Fail closed on every dependency deviation; do not rewrite upstream metadata.
 
-Also check the complete training runtime for one target and print a bounded JSON
-report: Python and its standard library, installed wheels against the lock,
-native library resolution and Torch/CUDA compatibility with the visible GPUs.
+Also check the training runtime for one target and print a bounded JSON report.
+The report covers Python and its standard library, the installed distributions
+against the lock, native library loading, and Torch and CUDA compatibility.
 """
+import sys
+
+# Never write bytecode into the inventoried runtime root, whatever the flags.
+sys.dont_write_bytecode = True
+
 import argparse
-import base64
 from collections import deque
-import csv
 import hashlib
-import importlib
 import importlib.metadata as metadata
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
-import struct
-import sys
+import subprocess
 import sysconfig
+import tempfile
 
 from packaging.requirements import Requirement
-from packaging.tags import parse_tag, sys_tags
 from packaging.utils import canonicalize_name
 from packaging.version import Version
 
@@ -80,25 +82,31 @@ def context_dependencies(parent, extra, requirements, installed):
     return result, requested_extras
 
 
-LOCK = Path(__file__).resolve().with_name("requirements.txt")
-PYTHON = (3, 12)
-TARGETS = ("cpu-smoke", "smoke-lora", "representative-qlora")
+HERE = Path(__file__).resolve().parent
+LOCK = HERE / "requirements.txt"
+WORKER = HERE.parents[1] / "internal/llmtraining/worker.py"
+PROBE = HERE / "runtime_probe.py"
+# requirements.in names the interpreter that the lock resolves for.
+LOCK_TARGET = "CPython 3.12.14"
+# The presets come from the reference asset table; QLoRA is the quantized one.
+PRESETS = tuple(json.loads((HERE.parent / "assets.json").read_text(encoding="utf-8")))
+QUANTIZED = {"representative-qlora"}
+TARGETS = ("cpu-smoke", *PRESETS)
 # Only the Axolotl source is installed outside the hash-locked wheel set.
 UNLOCKED = {"axolotl"}
-# Standard-library modules with native parts that the training stack imports.
-STDLIB_MODULES = ("_bz2", "_ctypes", "_decimal", "_hashlib", "_lzma", "_sqlite3", "_ssl", "zlib")
-# Glibc default directories; the loader cache adds the configured ones. The
-# runner sets no LD_LIBRARY_PATH, so the check ignores it as well.
-SYSTEM_DIRECTORIES = ("/lib64", "/usr/lib64", "/lib", "/usr/lib")
-# The NVIDIA driver, not a wheel, gives these libraries on a GPU host.
-DRIVER_LIBRARIES = {"libcuda.so.1", "libnvidia-ml.so.1"}
+STARTUP_MODULES = {"sitecustomize", "usercustomize"}
+PROBE_TIMEOUT = 300
+OUTPUT_LIMIT = 64 << 10
 PROBLEM_LIMIT = 20
+PROBLEM_LENGTH = 300
+GPU_UUID = re.compile(r"(GPU|MIG)-[0-9A-Fa-f-]{1,64}")
 
 
-def python_problems(implementation, version):
-    if implementation != "cpython" or tuple(version[:2]) != PYTHON:
-        return [f"the runtime is {implementation} {'.'.join(map(str, version[:3]))}; the training lock targets CPython 3.12, so install CPython 3.12"]
-    return []
+def mask(text):
+    # Report no host paths: hide the runtime root first, then any other absolute path.
+    text = text.replace(sys.prefix, "<runtime>")
+    text = re.sub(r"(?<![\w.<>-])/[^\s;:,()'\"]+", "<path>", text)
+    return text[:PROBLEM_LENGTH]
 
 
 def layout_problems(prefix, base_prefix, stdlib):
@@ -109,26 +117,36 @@ def layout_problems(prefix, base_prefix, stdlib):
     executable = prefix / "bin" / "python3"
     if executable.is_symlink() or not executable.is_file():
         problems.append("bin/python3 is not a regular file; copy the interpreter into the runtime root")
-    site = prefix / "lib" / f"python{PYTHON[0]}.{PYTHON[1]}" / "site-packages"
+    site = prefix / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
     if site.is_symlink() or not site.is_dir():
-        problems.append("lib/python3.12/site-packages is not a regular directory in the runtime root")
+        problems.append(f"{site.relative_to(prefix)} is not a regular directory in the runtime root")
     if not stdlib.is_relative_to(prefix):
         problems.append("the standard library is outside the runtime root; install it into the same root")
     return problems
 
 
-def stdlib_problems(directories, modules=STDLIB_MODULES):
-    problems = []
-    for name in modules:
-        try:
-            spec = importlib.util.find_spec(name)
-            importlib.import_module(name)
-        except (ImportError, OSError):
-            problems.append(f"standard-library module {name} cannot load; rebuild or reinstall CPython with its system libraries")
-            continue
-        if spec is None or (spec.origin not in {"built-in", "frozen"} and not any(Path(spec.origin).is_relative_to(path) for path in directories)):
-            problems.append(f"standard-library module {name} is outside the standard library; remove the shadowing copy")
-    return problems
+def site_problems(site, owned):
+    # Return the shadowing and the startup-file problems of one site-packages directory.
+    shadows, startup = [], []
+    for entry in sorted(site.iterdir()) if site.is_dir() else ():
+        name, top = entry.name, entry.name.split(".")[0]
+        if entry.suffix == ".pth":
+            # The runner uses -S, so .pth files never run there; a locked wheel's own file is accepted.
+            if name not in owned:
+                startup.append(f"site-packages has the startup file {name}, which no locked wheel installs; remove it")
+        elif top in STARTUP_MODULES:
+            shadows.append(f"site-packages has {name}; remove the startup customization")
+        elif top in sys.stdlib_module_names and (entry.is_dir() or entry.suffix in {".py", ".pyc", ".so"}):
+            shadows.append(f"site-packages has {name}, which shadows the standard-library module {top}; remove it")
+    return shadows, startup
+
+
+def owned_startup_files(distributions, locked):
+    return {
+        str(file) for distribution in distributions
+        if canonicalize_name(distribution.metadata["Name"]) in locked
+        for file in distribution.files or () if "/" not in str(file) and str(file).endswith(".pth")
+    }
 
 
 def locked_versions(text):
@@ -138,241 +156,208 @@ def locked_versions(text):
     }
 
 
-def lock_problems(locked, distributions, supported_tags):
+def lock_problems(locked, distributions):
+    # uv pip sync --require-hashes checks integrity at installation; this finds later version drift.
     problems = []
     installed = {canonicalize_name(distribution.metadata["Name"]): distribution for distribution in distributions}
     for name in sorted(locked.keys() - installed.keys()):
-        problems.append(f"{name}=={locked[name]} from the lock is missing; run uv pip sync --require-hashes with the lock")
+        problems.append(
+            f"{name}=={locked[name]} from the lock is missing; "
+            "run uv pip sync --require-hashes with the lock"
+        )
     for name in sorted(installed.keys() - locked.keys() - UNLOCKED):
-        problems.append(f"{name} is not in the lock; remove it from the training runtime")
+        problems.append(f"{name} is not in the lock; run uv pip sync --require-hashes with the lock to remove it")
     for name in sorted(installed.keys() & locked.keys()):
-        distribution = installed[name]
-        if Version(distribution.version) != locked[name]:
-            problems.append(f"{name} {distribution.version} differs from the locked {locked[name]}; run uv pip sync with the lock")
-        wheel = distribution.read_text("WHEEL") or ""
-        tags = {tag for line in wheel.splitlines() if line.startswith("Tag: ") for tag in parse_tag(line[5:].strip())}
-        if not tags & supported_tags:
-            problems.append(f"{name} is not an installed wheel for this interpreter and platform; reinstall it from the lock")
+        if Version(installed[name].version) != locked[name]:
+            problems.append(
+                f"{name} {installed[name].version} differs from the locked {locked[name]}; "
+                "run uv pip sync --require-hashes with the lock"
+            )
     return problems
-
-
-def record_problems(distributions):
-    # Installed bytes must still match each wheel RECORD; nothing is rewritten.
-    # Read RECORD directly: Distribution.files omits missing files.
-    problems = []
-    for distribution in sorted(distributions, key=lambda value: canonicalize_name(value.metadata["Name"])):
-        name = canonicalize_name(distribution.metadata["Name"])
-        for row in csv.reader((distribution.read_text("RECORD") or "").splitlines()):
-            if len(row) != 3 or "=" not in row[1]:
-                continue
-            mode, value = row[1].split("=", 1)
-            path = Path(distribution.locate_file(row[0]))
-            if path.is_symlink() or not path.is_file() or (row[2] and path.stat().st_size != int(row[2])) or file_digest(path, mode) != value:
-                problems.append(f"{name} file {row[0]} differs from its RECORD; reinstall {name} from the lock")
-    return problems
-
-
-def file_digest(path, mode):
-    digest = hashlib.new(mode)
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(1 << 20), b""):
-            digest.update(block)
-    return base64.urlsafe_b64encode(digest.digest()).rstrip(b"=").decode()
-
-
-def elf_dynamic(path):
-    """Return the machine, DT_NEEDED names and search paths of a 64-bit little-endian ELF."""
-    with path.open("rb") as source:
-        header = source.read(64)
-        if len(header) < 64 or header[:6] != b"\x7fELF\x02\x01":
-            return None
-        machine, program = struct.unpack_from("<H", header, 18)[0], struct.unpack_from("<Q", header, 32)[0]
-        size, count = struct.unpack_from("<HH", header, 54)
-        source.seek(program)
-        table = source.read(size * count)
-        loads, dynamic = [], None
-        for offset in range(0, len(table) - 39, max(size, 40)):
-            kind, _, file_offset, address, _, length = struct.unpack_from("<IIQQQQ", table, offset)
-            if kind == 1:
-                loads.append((address, file_offset, length))
-            elif kind == 2:
-                dynamic = (file_offset, length)
-        if dynamic is None:
-            return machine, [], []
-        source.seek(dynamic[0])
-        raw = source.read(min(dynamic[1], 1 << 20))
-        entries = []
-        for offset in range(0, len(raw) - 15, 16):
-            entry = struct.unpack_from("<qQ", raw, offset)
-            if entry[0] == 0:
-                break
-            entries.append(entry)
-        values = dict(entries)
-        table_address = values.get(5, -1)
-        start = next((file_offset + table_address - address for address, file_offset, length in loads if address <= table_address < address + length), None)
-        if start is None:
-            return None
-        source.seek(start)
-        strings = source.read(min(values.get(10, 0), 16 << 20))
-
-    def text(index):
-        return strings[index:strings.find(b"\0", index)].decode("utf-8", "replace")
-
-    needed = [text(value) for tag, value in entries if tag == 1]
-    # DT_RUNPATH replaces DT_RPATH; both apply only to direct dependencies.
-    search = [text(value) for tag, value in entries if tag == 29] or [text(value) for tag, value in entries if tag == 15]
-    origin = str(path.parent)
-    return machine, needed, [part.replace("${ORIGIN}", origin).replace("$ORIGIN", origin) for value in search for part in value.split(":") if part]
-
-
-def system_directories(cache=Path("/etc/ld.so.cache")):
-    try:
-        data = cache.read_bytes()
-    except OSError:
-        data = b""
-    configured = sorted({str(Path(match.decode("utf-8", "replace")).parent) for match in re.findall(rb"/[^\0]+\.so[^\0/]*", data)})
-    return list(SYSTEM_DIRECTORIES) + [directory for directory in configured if directory not in SYSTEM_DIRECTORIES]
-
-
-def native_problems(libraries, roots, directories):
-    """Resolve the DT_NEEDED closure of the root libraries without loading them.
-
-    Wheels also ship optional plugins for other CUDA, ROCm, MPI or RDMA stacks.
-    Only the libraries reachable from the roots count. Missing NVIDIA driver
-    libraries are returned separately because only a GPU host has them.
-    """
-    installed = {path.resolve(): display for display, path in libraries}
-    # Torch preloads its bundled CUDA libraries by soname, so a dependency that
-    # another installed wheel gives also resolves.
-    bundled = {}
-    for _, path in sorted(libraries):
-        bundled.setdefault(path.name, path.resolve())
-    problems, driver = [], []
-    pending, visited = deque(sorted(path.resolve() for _, path in roots)), set()
-    while pending:
-        path = pending.popleft()
-        if path in visited:
-            continue
-        visited.add(path)
-        display = installed[path]
-        try:
-            result = elf_dynamic(path)
-        except (OSError, struct.error):
-            result = None
-        if result is None:
-            problems.append(f"{display} is not a readable 64-bit ELF library; reinstall its distribution from the lock")
-            continue
-        machine, needed, search = result
-        for name in needed:
-            found = next((candidate for candidate in (Path(directory) / name for directory in [*search, *directories]) if matching_library(candidate, machine)), None)
-            if found is None and name in bundled:
-                found = bundled[name]
-            if found is not None:
-                if found.resolve() in installed:
-                    pending.append(found.resolve())
-            elif name in DRIVER_LIBRARIES:
-                driver.append(f"{display} needs the NVIDIA driver library {name}; install the NVIDIA driver on the training host")
-            else:
-                problems.append(f"{display} needs {name}, which no RUNPATH, installed wheel or system library directory gives; install the system package that gives {name}")
-    return problems, driver
-
-
-def native_roots(libraries, cuda, quantized):
-    """Select the Torch libraries and the bitsandbytes library for the Torch CUDA build."""
-    roots = [item for item in libraries if item[0].startswith("torch:")]
-    problems = []
-    if isinstance(cuda, str):
-        name = "bitsandbytes:bitsandbytes/libbitsandbytes_cuda" + cuda.replace(".", "") + ".so"
-        selected = [item for item in libraries if item[0] == name]
-        roots += selected
-        if quantized and not selected:
-            problems.append(f"bitsandbytes has no library for CUDA {cuda}; install the bitsandbytes wheel from the lock")
-    return roots, problems
-
-
-def matching_library(path, machine):
-    try:
-        result = elf_dynamic(path) if path.is_file() else None
-    except (OSError, struct.error):
-        return False
-    return result is not None and result[0] == machine
-
-
-def installed_libraries(distributions):
-    libraries = []
-    for distribution in distributions:
-        name = canonicalize_name(distribution.metadata["Name"])
-        for file in distribution.files or ():
-            if re.search(r"\.so(\.[0-9]+)*$", file.name):
-                libraries.append((f"{name}:{file}", Path(distribution.locate_file(file))))
-    return libraries
 
 
 def dependency_problems(worker):
+    sync = "reinstall the training runtime from the lock with uv pip sync --require-hashes"
+    source = f"install axolotl noneditable with --no-deps from commit {worker.SOURCE_REVISION}"
     try:
         actual = deviations(metadata.distributions())
         if actual != EXPECTED:
-            raise ValueError(f"dependency deviations changed: missing={sorted(EXPECTED-actual)}, unexpected={sorted(actual-EXPECTED)}")
+            missing, unexpected = sorted(EXPECTED - actual), sorted(actual - EXPECTED)
+            return [f"dependency deviations changed: missing={missing}, unexpected={unexpected}; {sync}"]
         for name, floor in {"python-dotenv": ">=1.2.2", "fsspec": ">=2026.6.0", "pillow": ">=13"}.items():
             if not Requirement(name + floor).specifier.contains(metadata.version(name)):
-                raise ValueError("security floor not met: " + name)
+                return [f"security floor not met: {name}; {sync}"]
         worker.verify_environment()
-    except (ValueError, metadata.PackageNotFoundError) as error:
-        return [str(error)]
+    except metadata.PackageNotFoundError as error:
+        name = error.args[0] if error.args else "a distribution"
+        return [f"{name} is not installed; {source if name == 'axolotl' else sync}"]
+    except ValueError as error:
+        remedy = {
+            "runtime source is not pinned": source,
+            "unapproved runtime entry point": "remove the distribution that registers it",
+        }.get(str(error), "run uv pip sync --require-hashes with the lock to remove it")
+        return [f"{error}; {remedy}"]
     return []
 
 
-def accelerator_report(worker, target):
+def probe_environment(work, gpu_uuid):
+    # The same variables as executionEnvironment in internal/llmtraining/run.go.
+    environment = {
+        "PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin",
+        "HOME": str(work / "home"), "XDG_CONFIG_HOME": str(work / "home"),
+        "TMPDIR": str(work), "HF_HOME": str(work / "cache"),
+        "HF_HUB_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1", "AXOLOTL_DO_NOT_TRACK": "1", "DO_NOT_TRACK": "1",
+        "WANDB_MODE": "disabled", "TOKENIZERS_PARALLELISM": "false", "LANG": "C.UTF-8",
+    }
+    if gpu_uuid is not None:
+        environment["CUDA_VISIBLE_DEVICES"] = gpu_uuid
+    return environment
+
+
+def run_probe(quantized, gpu_uuid, run=subprocess.run):
+    # Return the runner-like child result, or None and an actionable failure.
+    retry = "reinstall the training runtime from the lock and run the check again"
+    with tempfile.TemporaryDirectory(prefix="training-check-") as directory:
+        work = Path(directory)
+        for name in ("home", "cache"):
+            (work / name).mkdir(mode=0o700)
+        command = [sys.executable, "-I", "-S", "-B", str(PROBE), str(WORKER), "quantized" if quantized else "plain"]
+        with open(work / "stdout", "wb") as stdout, open(work / "stderr", "wb") as stderr:
+            try:
+                completed = run(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, cwd=work,
+                                env=probe_environment(work, gpu_uuid), timeout=PROBE_TIMEOUT, check=False)
+            except subprocess.TimeoutExpired:
+                return None, f"the runtime probe did not finish in {PROBE_TIMEOUT} seconds; {retry}"
+        output = (work / "stdout").read_bytes()[-OUTPUT_LIMIT:].decode("utf-8", "replace").splitlines()
+        errors = (work / "stderr").read_bytes()[-OUTPUT_LIMIT:].decode("utf-8", "replace").splitlines()
+    if completed.returncode != 0:
+        last = next((line.strip() for line in reversed(errors) if line.strip()), f"exit status {completed.returncode}")
+        return None, f"the runtime probe failed ({last}); {retry}"
     try:
-        facts = worker.torch_facts()
-    except (ImportError, OSError) as error:
-        message = (str(error).splitlines() or [type(error).__name__])[0][:200].replace(sys.prefix, "<runtime>")
-        return {"accelerator": "unavailable"}, [f"Torch cannot load ({message}); reinstall torch and its CUDA wheels from the lock"]
-    summary = {key: facts[key] for key in ("torch", "cuda", "driverCuda", "archList", "devices")}
-    summary["accelerator"] = "cuda" if facts["available"] else "cpu"
-    return summary, worker.accelerator_problems(facts, target == "representative-qlora")
+        result = json.loads(output[-1])
+    except (IndexError, ValueError):
+        result = None
+    if not isinstance(result, dict):
+        return None, f"the runtime probe gave no valid result; {retry}"
+    return result, None
 
 
-def check(name, problems, target, gpu_only=False):
-    # A GPU-only problem does not block the CPU smoke, but stays visible as a warning.
-    status = "pass" if not problems else "warn" if gpu_only and target == "cpu-smoke" else "fail"
-    return {"name": name, "status": status, "problems": problems[:PROBLEM_LIMIT], "omitted": max(0, len(problems) - PROBLEM_LIMIT)}
+def probe_checks(probe, failure, target, gpu_uuid, environment):
+    # Map one probe result to the problems of the probe-based checks.
+    if probe is None:
+        dependent = "the runtime probe did not run; fix the native-libraries problem first"
+        return {"stdlib": [failure], "native": [failure], "driver": [dependent], "accelerator": [dependent]}
+    native = []
+    if probe["torchError"]:
+        native.append(f"Torch cannot load ({probe['torchError']}); reinstall torch and its CUDA wheels from the lock")
+    if probe["bitsandbytes"]:
+        native.append(probe["bitsandbytes"])
+    quantized = target in QUANTIZED
+    if quantized and "BNB_CUDA_VERSION" in environment:
+        native.append("BNB_CUDA_VERSION is set, which the training runtime does not support; unset it")
+    driver = []
+    if not probe["driverCuda"]:
+        driver.append("the NVIDIA driver library libcuda.so.1 does not load; install the NVIDIA driver")
+    facts = probe["facts"]
+    accelerator = []
+    if target != "cpu-smoke" and gpu_uuid is None:
+        accelerator.append("no trainer GPU is selected; pass --gpu-uuid with the trainer GPU UUID")
+    if facts is None:
+        accelerator.append("the accelerator check needs Torch; fix the native-libraries problem first")
+    else:
+        accelerator.extend(WORKER_MODULE.accelerator_problems(facts, quantized))
+    return {"stdlib": probe["stdlib"], "native": native, "driver": driver, "accelerator": accelerator}
 
 
-def report(target, worker):
+def check(name, problems, target, cpu_smoke_warning=False):
+    # A cpu_smoke_warning check fails for the presets but only warns for the CPU smoke.
+    status = "pass" if not problems else "warn" if cpu_smoke_warning and target == "cpu-smoke" else "fail"
+    bounded = [mask(str(problem)) for problem in problems[:PROBLEM_LIMIT]]
+    return {"name": name, "status": status, "problems": bounded, "omitted": max(0, len(problems) - PROBLEM_LIMIT)}
+
+
+def guarded(name, compute, target, cpu_smoke_warning=False):
+    try:
+        problems = compute()
+    except Exception as error:  # noqa: BLE001 - a broken check is a failure, never a traceback.
+        problems = [f"check could not run: {type(error).__name__}"]
+        return {"name": name, "status": "fail", "problems": problems, "omitted": 0}
+    return check(name, problems, target, cpu_smoke_warning)
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def report(target, gpu_uuid=None, run=subprocess.run):
     distributions = list(metadata.distributions())
+    locked = locked_versions(LOCK.read_text(encoding="utf-8"))
     paths = sysconfig.get_paths()
-    stdlib = Path(paths["stdlib"])
-    accelerator, accelerator_issues = accelerator_report(worker, target)
-    libraries = installed_libraries(distributions)
-    roots, root_issues = native_roots(libraries, accelerator.get("cuda"), target == "representative-qlora")
-    native_issues, driver_issues = native_problems(libraries, roots, system_directories())
+    try:
+        probe, failure = run_probe(target in QUANTIZED, gpu_uuid, run)
+    except Exception as error:  # noqa: BLE001 - the dependent checks report the failure.
+        probe, failure = None, f"the runtime probe could not run: {type(error).__name__}"
+
+    def mapped(key):
+        return probe_checks(probe, failure, target, gpu_uuid, os.environ)[key]
+
+    def site(index):
+        return site_problems(WORKER_MODULE.runtime_site(), owned_startup_files(distributions, locked))[index]
+
+    def python():
+        problem = WORKER_MODULE.python_problem((sys.version_info.major, sys.version_info.minor))
+        return [problem] if problem else []
+
+    def layout():
+        return layout_problems(Path(sys.prefix), Path(sys.base_prefix), Path(paths["stdlib"]))
+
     checks = [
-        check("python", python_problems(sys.implementation.name, sys.version_info), target),
-        check("runtime-layout", layout_problems(Path(sys.prefix), Path(sys.base_prefix), stdlib), target, gpu_only=True),
-        check("standard-library", stdlib_problems([stdlib, Path(paths["platstdlib"])]), target),
-        check("dependencies", dependency_problems(worker), target),
-        check("locked-wheels", lock_problems(locked_versions(LOCK.read_text(encoding="utf-8")), distributions, set(sys_tags())), target),
-        check("wheel-records", record_problems(distributions), target),
-        check("native-libraries", root_issues + native_issues, target),
-        check("driver-libraries", driver_issues, target, gpu_only=True),
-        check("accelerator", accelerator_issues, target, gpu_only=True),
+        guarded("python", python, target),
+        guarded("runtime-layout", layout, target, cpu_smoke_warning=True),
+        guarded("standard-library", lambda: mapped("stdlib") + site(0), target),
+        guarded("startup-files", lambda: site(1), target, cpu_smoke_warning=True),
+        guarded("dependencies", lambda: dependency_problems(WORKER_MODULE), target),
+        guarded("locked-versions", lambda: lock_problems(locked, distributions), target),
+        guarded("native-libraries", lambda: mapped("native"), target),
+        guarded("driver-libraries", lambda: mapped("driver"), target, cpu_smoke_warning=True),
+        guarded("accelerator", lambda: mapped("accelerator"), target, cpu_smoke_warning=True),
     ]
+    facts = probe.get("facts") if isinstance(probe, dict) else None
+    facts = facts if isinstance(facts, dict) else {}
     return {
-        "version": 1, "target": target, "python": ".".join(map(str, sys.version_info[:3])), **accelerator, "checks": checks,
-        "status": "rejected" if any(item["status"] == "fail" for item in checks) else "accepted",
+        "version": 1, "target": target, "python": ".".join(map(str, sys.version_info[:3])),
+        "lockTarget": LOCK_TARGET, "workerSHA256": digest(WORKER), "lockSHA256": digest(LOCK),
+        "accelerator": ("cuda" if facts["available"] else "cpu") if "available" in facts else None,
+        **{key: facts.get(key) for key in ("torch", "cuda", "driverCuda", "archList", "devices")},
+        "checks": checks, "status": "rejected" if any(item["status"] == "fail" for item in checks) else "accepted",
     }
 
 
-def main(args=None):
-    parser = argparse.ArgumentParser(description="Check the training runtime for one target.")
-    parser.add_argument("--target", choices=TARGETS, default="cpu-smoke")
-    target = parser.parse_args(args).target
-    path = Path(__file__).resolve().parents[2] / "internal/llmtraining/worker.py"
-    spec = importlib.util.spec_from_file_location("training_worker", path)
+def load_worker():
+    spec = importlib.util.spec_from_file_location("training_worker", WORKER)
     worker = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(worker)
-    result = report(target, worker)
+    return worker
+
+
+WORKER_MODULE = load_worker()
+
+
+def main(args=None):
+    # Exit 0 when the report is accepted, 1 when rejected and 2 on a usage or internal error.
+    parser = argparse.ArgumentParser(description="Check the training runtime for one target.")
+    parser.add_argument("--target", choices=TARGETS, default="cpu-smoke")
+    parser.add_argument("--gpu-uuid", help="trainer GPU UUID; the probe gets it as CUDA_VISIBLE_DEVICES")
+    options = parser.parse_args(args)
+    if options.gpu_uuid is not None and not GPU_UUID.fullmatch(options.gpu_uuid):
+        parser.error("--gpu-uuid must be a GPU or MIG UUID")
+    try:
+        result = report(options.target, options.gpu_uuid)
+    except Exception as error:  # noqa: BLE001 - an internal error still gives one bounded JSON object.
+        print(json.dumps({"version": 1, "target": options.target, "status": "rejected",
+                          "error": f"check could not run: {type(error).__name__}"}))
+        return 2
     print(json.dumps(result, indent=2, sort_keys=True))
     return 1 if result["status"] == "rejected" else 0
 

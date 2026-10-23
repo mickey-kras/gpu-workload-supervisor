@@ -24,8 +24,9 @@ This verifies the subset's code path on dependency updates, not GPU suitability.
 The accompanying hash-locked requirements resolve for Linux x86_64 and CPython
 3.12.14. They are a **package dependency candidate**, not a complete approved
 environment. The [runtime check](#runtime-check) tests the interpreter, the
-standard library, the installed wheels, the native libraries and the Torch and
+standard library, the installed versions, the native libraries and the Torch and
 CUDA compatibility with the GPU. It does not record provenance or run GPU kernels.
+
 Source distributions need controlled builds. A source hash does not pin the
 resulting wheel or its build environment. Do not install these into inference environments.
 
@@ -36,7 +37,7 @@ then run both checks with that environment's interpreter:
 uv pip sync --python "${PYTHON:?}" --require-hashes training/axolotl/requirements.txt
 uv pip install --python "$PYTHON" --no-deps --no-build-isolation \
   'axolotl @ git+https://github.com/axolotl-ai-cloud/axolotl.git@1f1eb05a391c43e65c1c5ee7ec6ea1b8a841d5d1'
-"$PYTHON" training/axolotl/check_environment.py
+"$PYTHON" -I -B training/axolotl/check_environment.py
 sudo unshare --net -- timeout 120 "$PYTHON" training/axolotl/smoke.py
 ```
 
@@ -83,43 +84,70 @@ only the Axolotl candidate; a TRL/Unsloth experiment is not an accepted trainer.
 
 ### Runtime check
 
-`check_environment.py` prints one bounded JSON report. The `status` field is
-`accepted` or `rejected`. The exit status is 1 when the report is `rejected`.
-Use `--target` to select the target:
+Run `"$PYTHON" -I -B training/axolotl/check_environment.py` with the runtime's own
+interpreter. The check writes no bytecode into the runtime root. It prints one
+bounded JSON report, version 1. The exit status is 0 for `accepted`, 1 for
+`rejected` and 2 for a usage or internal error. Use `--target` to select the target:
 
 | Target | Rule |
 | --- | --- |
-| `cpu-smoke` (default) | GPU-only problems have the status `warn` and do not reject the CPU smoke |
+| `cpu-smoke` (default) | Preset-only problems have the status `warn` and do not reject the CPU smoke |
 | `smoke-lora` or `representative-qlora` | Each problem has the status `fail` and rejects the report |
+
+For a preset, give `--gpu-uuid` with the trainer GPU UUID. The check then sets
+`CUDA_VISIBLE_DEVICES` to that GPU for its child process, as the runner does.
+Without it, a preset target fails the `accelerator` check.
+
+| Report field | Value |
+| --- | --- |
+| `version`, `target`, `status` | `1`, the selected target, and `accepted` or `rejected` |
+| `python`, `lockTarget` | The interpreter version, and `CPython 3.12.14`, the interpreter of the lock |
+| `workerSHA256`, `lockSHA256` | SHA-256 of the embedded worker and of the lock |
+| `accelerator` | `cuda`, `cpu`, or `null` when Torch does not load |
+| `torch`, `cuda`, `driverCuda`, `archList`, `devices` | The Torch facts, or `null` when unknown |
+| `checks` | Each entry has `name`, `status` (`pass`, `warn` or `fail`), at most 20 `problems` and an `omitted` count |
 
 | Check | What it tests |
 | --- | --- |
-| `python` | The interpreter is CPython 3.12, the lock target |
-| `runtime-layout` | GPU only: a self-contained root with regular `bin/python3`, site-packages and standard library, as the runner needs |
-| `standard-library` | Native standard-library modules load from the standard library |
+| `python` | The runner rule: Python 3.12 or newer |
+| `runtime-layout` | Preset only: not a virtual environment, and a root with regular `bin/python3`, site-packages and standard library |
+| `standard-library` | Native standard-library modules load from the standard library in the runner order, and site-packages shadows no standard-library module and has no `sitecustomize` or `usercustomize` |
+| `startup-files` | Preset only: site-packages has no `.pth` file that a locked wheel does not install |
 | `dependencies` | The exact deviation contract, the security floors and the worker source guard |
-| `locked-wheels` | Installed distributions match the names and versions in the lock, and each wheel tag fits this interpreter |
-| `wheel-records` | Each installed file matches the hash and size in its wheel `RECORD` |
-| `native-libraries` | Each `DT_NEEDED` library of Torch and of the bitsandbytes library for the Torch CUDA build resolves |
-| `driver-libraries` | GPU only: the NVIDIA driver gives `libcuda.so.1` |
-| `accelerator` | GPU only: the Torch CUDA build, the driver, the GPU architecture, BF16 and bitsandbytes for QLoRA |
+| `locked-versions` | The installed names and versions match the lock |
+| `native-libraries` | Torch loads, and for QLoRA the bitsandbytes library for the Torch CUDA build loads |
+| `driver-libraries` | Preset only: `libcuda.so.1` from the NVIDIA driver loads |
+| `accelerator` | Preset only: the Torch CUDA build, the driver, the GPU architecture, BF16 and bitsandbytes for QLoRA |
 
-The native check reads ELF headers and does not load the libraries. It follows
-RUNPATH, the installed wheels, the loader cache and the default directories. It
-ignores `LD_LIBRARY_PATH` because the runner does not set it. Optional wheel
-plugins that Torch does not need are not part of the check.
+The native, driver, accelerator and standard-library checks run in a child
+process with `-I -S -B`. The child gets the runner environment and puts the runtime
+site-packages first, as the worker does. It gets no `LD_LIBRARY_PATH` or
+`LD_PRELOAD`. The runner uses `-S`, so `.pth` files never run there.
 
-The accelerator check needs a CUDA build of Torch and a visible GPU. Each GPU
-needs SASS for its compute capability, or PTX for an equal or lower capability.
-PTX needs a driver for the Torch CUDA version or newer. The presets need native
-BF16, which starts at compute capability 8.0. When Torch has no usable GPU, the
-report shows `"accelerator": "cpu"`.
+`uv pip sync --require-hashes` checks the integrity of the installation. The runtime
+check finds version drift. It does not find changed or damaged files. The default
+`cpu-smoke` target also rejects distributions that are not in the lock. Thus use
+`uv pip sync`, not `uv pip install`, for the lock.
 
-Each problem tells what is wrong and what to change. The worker runs the same
-accelerator check before it imports Axolotl. Thus a preset never falls back to
-CPU training. The report contains no dataset content, credentials or host paths.
-Run the check only in the dedicated training runtime. Activation and inference
-paths do not run it.
+The lock installs xformers, which links `libcudart.so.12`, while Torch uses CUDA
+13.0. The supported presets use SDPA attention, so the check does not load xformers.
+The check does not support `BNB_CUDA_VERSION`. A QLoRA target fails when the
+environment contains it.
+
+The accelerator check needs a CUDA build of Torch and a visible GPU. The driver
+must support at least the CUDA major version of the Torch build. SASS for a target
+runs when the target has the same major and an equal or lower minor than the GPU.
+PTX runs on a GPU with an equal or higher capability. PTX needs a driver for the
+Torch CUDA version or newer. The presets need native BF16, which starts at compute
+capability 8.0.
+
+When Torch has no usable GPU, the report shows `"accelerator": "cpu"`. Each
+problem tells what is wrong and what to change. The report contains no dataset
+content, credentials or host paths.
+
+Before training starts, each worker phase runs the same accelerator check. Thus a
+preset never falls back to CPU training. Run the check only in the dedicated
+training runtime. Activation and inference paths do not run it.
 
 ## Immutable asset candidates
 
@@ -195,12 +223,12 @@ nvidia-smi --query-gpu=uuid,name,driver_version,memory.total \
 free -b > "$EVIDENCE/ram.txt"
 df -B1 -- "${OUTPUT_PARENT:?}" > "$EVIDENCE/storage.txt"
 stat -fc %T /sys/fs/cgroup > "$EVIDENCE/cgroup-filesystem.txt"
-"${PYTHON:?}" training/axolotl/check_environment.py \
-  --target "${PRESET:?}" > "$EVIDENCE/runtime-check.json"
+"${PYTHON:?}" -I -B training/axolotl/check_environment.py --target "${PRESET:?}" \
+  --gpu-uuid "${GPU_UUID:?}" > "$EVIDENCE/runtime-check.json"
 ```
 
-Use the trainer GPU and the preset for `PRESET`. A `rejected` report blocks that
-preset. Fix each `fail` problem in the report and run the check again.
+Set `PRESET` to the preset and `GPU_UUID` to the UUID of the trainer GPU. A
+`rejected` report blocks that preset. Fix each `fail` problem and run the check again.
 
 Also record: release/checksum, approved Python path/version and stdlib inventory;
 all installed distribution metadata and wheel/source hashes; external ELF loader

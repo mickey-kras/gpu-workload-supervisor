@@ -166,7 +166,7 @@ class WorkerTests(unittest.TestCase):
                 trainer.evaluate.return_value = {"eval_loss": loss}
                 tokenizer: MagicMock = MagicMock()
                 saved: MagicMock = MagicMock()
-                cfg = SimpleNamespace(max_steps=2, output_dir=directory)
+                cfg = SimpleNamespace(max_steps=2, output_dir=directory, load_in_4bit=False)
 
                 def callback(value: object) -> None:
                     getattr(value, "on_step_end")(None, SimpleNamespace(global_step=steps), None)
@@ -189,9 +189,10 @@ class WorkerTests(unittest.TestCase):
                     }),
                 }
                 receipt = root / "receipt.json"
-                with patch.dict(worker.sys.modules, modules):
+                with patch.dict(worker.sys.modules, modules), patch.object(worker, "verify_accelerator") as accelerator:
                     if steps == 2 and loss == 1.0:
                         worker.train(root / "config.json", receipt, root / "progress.json")
+                        accelerator.assert_called_once_with(False)
                         self.assertEqual(json.loads(receipt.read_text())["step"], 2)
                         trainer.train.assert_called_once_with(resume_from_checkpoint=None)
                         trainer.evaluate.assert_called_once_with()
@@ -228,9 +229,10 @@ class WorkerTests(unittest.TestCase):
                     "transformers": module("transformers", {"AutoModelForCausalLM": MagicMock(), "AutoTokenizer": tokenizer, "BitsAndBytesConfig": MagicMock()}),
                 }
                 receipt = root / "receipt.json"
-                with patch.dict(worker.sys.modules, modules):
+                with patch.dict(worker.sys.modules, modules), patch.object(worker, "verify_accelerator") as accelerator:
                     if finite and length > 1:
                         worker.reload(config, receipt)
+                        accelerator.assert_called_once_with(quantized)
                         self.assertTrue(json.loads(receipt.read_text())["reloaded"])
                         tokenizer.from_pretrained.assert_called_once_with("saved", local_files_only=True, trust_remote_code=False)
                         self.assertEqual(peft.from_pretrained.call_args.args[1], "saved")
@@ -247,59 +249,73 @@ class WorkerTests(unittest.TestCase):
                 worker.sys, "version_info", SimpleNamespace(major=3, minor=11)
             ), patch.object(worker.sys, "path", []) as paths, patch.object(
                 worker, "verify_environment"
-            ) as verify, patch.object(worker, "verify_accelerator") as accelerator, patch.object(
-                worker, "train"
-            ) as train, patch.object(worker, "reload") as reload:
+            ) as verify, patch.object(worker, "train") as train, patch.object(worker, "reload") as reload:
                 with self.assertRaisesRegex(ValueError, "Python 3.12 or newer"):
                     worker.main([phase, "config", "receipt", "progress"])
                 self.assertEqual(paths, [])
                 verify.assert_not_called()
-                accelerator.assert_not_called()
                 train.assert_not_called()
                 reload.assert_not_called()
 
     def test_main_selects_only_the_requested_phase_after_verification(self) -> None:
-        for phase, quantized in (("train", False), ("reload", True)):
+        for phase in ("train", "reload"):
             previous = os.umask(0o077)
             try:
-                with tempfile.TemporaryDirectory() as directory, patch.object(
+                with patch.object(
                     worker.sys, "version_info", SimpleNamespace(major=3, minor=12)
-                ), patch.object(worker.sys, "path", list(worker.sys.path)), patch.object(
+                ), patch.object(worker.sys, "path", list(worker.sys.path)) as paths, patch.object(
                     worker, "verify_environment"
-                ) as verify, patch.object(worker, "verify_accelerator") as accelerator, patch.object(
-                    worker, "train"
-                ) as train, patch.object(worker, "reload") as reload:
-                    config = Path(directory) / "config"
-                    config.write_text(json.dumps({"load_in_4bit": quantized}))
-                    worker.main([phase, str(config), "receipt", "progress"])
+                ) as verify, patch.object(worker, "train") as train, patch.object(worker, "reload") as reload:
+                    worker.main([phase, "config", "receipt", "progress"])
                     verify.assert_called_once_with()
-                    accelerator.assert_called_once_with(quantized)
+                    self.assertEqual(paths[0], str(worker.runtime_site()))
                     if phase == "train":
-                        train.assert_called_once_with(config, Path("receipt"), Path("progress"))
+                        train.assert_called_once_with(Path("config"), Path("receipt"), Path("progress"))
                         reload.assert_not_called()
                     else:
-                        reload.assert_called_once_with(config, Path("receipt"))
+                        reload.assert_called_once_with(Path("config"), Path("receipt"))
                         train.assert_not_called()
             finally:
                 os.umask(previous)
 
-    def test_main_rejects_unsupported_accelerator_before_training(self) -> None:
-        previous = os.umask(0o077)
-        try:
-            with tempfile.TemporaryDirectory() as directory, patch.object(
-                worker.sys, "version_info", SimpleNamespace(major=3, minor=12)
-            ), patch.object(worker.sys, "path", list(worker.sys.path)), patch.object(
-                worker, "verify_environment"
-            ), patch.object(worker, "torch_facts", return_value=accelerator_facts(cuda=None)), patch.object(
-                worker, "train"
-            ) as train:
-                config = Path(directory) / "config"
-                config.write_text(json.dumps({"load_in_4bit": False}))
-                with self.assertRaisesRegex(ValueError, "unsupported training accelerator: Torch 2.14.0 is not a CUDA build"):
-                    worker.main(["train", str(config), "receipt", "progress"])
-                train.assert_not_called()
-        finally:
-            os.umask(previous)
+    def test_phases_check_the_accelerator_before_training_or_loading(self) -> None:
+        load_cfg: MagicMock = MagicMock(return_value=SimpleNamespace(load_in_4bit=False))
+        load_datasets: MagicMock = MagicMock()
+        modules = {
+            "axolotl": module("axolotl", {}), "axolotl.cli": module("axolotl.cli", {}),
+            "axolotl.cli.config": module("axolotl.cli.config", {"load_cfg": load_cfg}),
+            "axolotl.common": module("axolotl.common", {}),
+            "axolotl.common.datasets": module("axolotl.common.datasets", {"load_datasets": load_datasets}),
+            "axolotl.train": module("axolotl.train", {
+                "save_initial_configs": MagicMock(), "save_trained_model": MagicMock(), "setup_model_and_trainer": MagicMock(),
+            }),
+            "transformers": module("transformers", {
+                "TrainerCallback": object, "TrainerControl": object, "TrainerState": object, "TrainingArguments": object,
+            }),
+        }
+        with tempfile.TemporaryDirectory() as directory, patch.dict(worker.sys.modules, modules), patch.object(
+            worker, "torch_facts", return_value=accelerator_facts(cuda=None)
+        ):
+            root = Path(directory)
+            with self.assertRaisesRegex(ValueError, "unsupported training accelerator: Torch 2.14.0 is not a CUDA build"):
+                worker.train(root / "config.json", root / "receipt.json", root / "progress.json")
+            load_datasets.assert_not_called()
+            for value in (None, 1, "true"):
+                load_cfg.return_value = SimpleNamespace(load_in_4bit=value)
+                with self.subTest(value=value), self.assertRaisesRegex(ValueError, "load_in_4bit must be a boolean"):
+                    worker.train(root / "config.json", root / "receipt.json", root / "progress.json")
+            load_cfg.return_value = SimpleNamespace(load_in_4bit=None)
+            load_datasets.side_effect = RuntimeError("datasets reached")
+            with patch.object(worker, "verify_accelerator") as accelerator, self.assertRaisesRegex(RuntimeError, "datasets reached"):
+                worker.train(root / "config.json", root / "receipt.json", root / "progress.json", accelerator=False)
+            accelerator.assert_not_called()
+            config = root / "config.json"
+            for value, expected in ((False, "not a CUDA build"), ("yes", "load_in_4bit must be a boolean")):
+                config.write_text(json.dumps({"load_in_4bit": value}))
+                torch: MagicMock = MagicMock()
+                with self.subTest(value=value), patch.dict(worker.sys.modules, {"torch": torch}), self.assertRaisesRegex(ValueError, expected):
+                    worker.reload(config, root / "receipt.json")
+                self.assertFalse((root / "receipt.json").exists())
 
 
 def accelerator_facts(**changes: object) -> dict[str, object]:
@@ -335,6 +351,29 @@ class AcceleratorTests(unittest.TestCase):
     def test_supported_cuda_device_has_no_problems(self) -> None:
         self.assertEqual(worker.accelerator_problems(accelerator_facts(), True), [])
         self.assertEqual(worker.accelerator_problems(accelerator_facts(devices=[[13, 0]], driverCuda="13.1"), False), [])
+        # BF16 starts at 8.0, and PTX needs a driver equal to or newer than the build.
+        self.assertEqual(worker.accelerator_problems(accelerator_facts(devices=[[8, 0]]), False), [])
+        self.assertEqual(worker.accelerator_problems(accelerator_facts(devices=[[13, 0]], driverCuda="13.0"), False), [])
+
+    def test_each_visible_device_is_checked_by_index(self) -> None:
+        facts = accelerator_facts(devices=[[8, 6], [12, 0]], archList=["sm_80", "sm_86"])
+        self.assertEqual(worker.accelerator_problems(facts, False), [
+            "GPU 1 (compute capability 12.0) has no kernels in Torch 2.14.0 (sm_80 sm_86); "
+            "install a Torch build with sm_120 or use a supported GPU"])
+        self.assertEqual(worker.accelerator_problems(accelerator_facts(devices=[[8, 6], [7, 5]]), False), [
+            "GPU 1 (compute capability 7.5) has no native BF16, which the training presets need; "
+            "use a GPU with compute capability 8.0 or newer"])
+        self.assertEqual(worker.accelerator_problems(accelerator_facts(archList=[]), False), [
+            "GPU 0 (compute capability 8.6) has no kernels in Torch 2.14.0 (an empty architecture list); "
+            "install a Torch build with sm_86 or use a supported GPU"])
+
+    def test_python_rule_and_runtime_site_match_the_runner(self) -> None:
+        self.assertIsNone(worker.python_problem((3, 12)))
+        self.assertIsNone(worker.python_problem((3, 13)))
+        self.assertEqual(worker.python_problem((3, 11)), "training runtime requires Python 3.12 or newer")
+        with patch.object(worker.sys, "executable", "/runtime/bin/python3"):
+            version = f"python{worker.sys.version_info.major}.{worker.sys.version_info.minor}"
+            self.assertEqual(worker.runtime_site(), Path("/runtime/lib") / version / "site-packages")
 
     def test_unsupported_combinations_have_actionable_problems(self) -> None:
         for changes, quantized, expected in (
@@ -379,8 +418,16 @@ class AcceleratorTests(unittest.TestCase):
             getattr(reference, "_obj").value = 13010
             return 0
 
+        def version(value: int) -> object:
+            def get(reference: object) -> int:
+                getattr(reference, "_obj").value = value
+                return 0
+            return get
+
         for library, expected in (
             (SimpleNamespace(cuDriverGetVersion=get_version), "13.1"),
+            (SimpleNamespace(cuDriverGetVersion=version(12080)), "12.8"),
+            (SimpleNamespace(cuDriverGetVersion=version(13020)), "13.2"),
             (SimpleNamespace(cuDriverGetVersion=lambda reference: 100), None),
             (SimpleNamespace(), None),
         ):

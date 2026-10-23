@@ -25,12 +25,14 @@ without importing or using the providers. Other plugins, providers and model
 entry points are rejected before importing Axolotl. Bundled metadata is not
 permission to use parallel training or cloud providers.
 
-Before Axolotl starts, each phase checks Torch and CUDA against the bound GPU.
+Before training starts, each phase checks Torch and CUDA against the bound GPU.
 The phase needs a CUDA build of Torch, a usable driver, kernels for the GPU
-architecture and native BF16. QLoRA also needs bitsandbytes. An unsupported
-combination stops the phase, and training never falls back to CPU. Child output
-stays discarded, so use the [runtime check](LLM-TRAINING-QUALIFICATION.md#runtime-check)
-to get the actionable reason.
+architecture and native BF16. QLoRA also needs bitsandbytes. The configuration
+value `load_in_4bit` must be a boolean. An unsupported combination stops the
+phase, and training never falls back to CPU.
+
+The runner discards the output of the child process. To see the reason, run the
+[runtime check](LLM-TRAINING-QUALIFICATION.md#runtime-check).
 
 This is a byte/inventory boundary, not a complete approved environment lock.
 Python's standard library, OS/native libraries, CUDA and driver compatibility
