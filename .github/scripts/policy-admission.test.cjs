@@ -6,7 +6,8 @@ const SHA = 'a'.repeat(40);
 const BASE = 'b'.repeat(40);
 const owner = { login: 'mickey-kras', id: 24433677, type: 'User' };
 const review = { id: 1, user: owner, commit_id: SHA, state: 'APPROVED' };
-const rule = { type: 'pull_request', ruleset_id: 123, parameters: {
+const rule = { type: 'pull_request', ruleset_id: 123, ruleset_source_type: 'Repository',
+  ruleset_source: 'mickey-kras/gpu-workload-supervisor', parameters: {
   require_code_owner_review: true, dismiss_stale_reviews_on_push: true,
   require_last_push_approval: true, required_approving_review_count: 1,
 } };
@@ -15,7 +16,8 @@ function fixture() {
   const pull = { number: 1, state: 'open', user: { type: 'Bot', id: 456 },
     head: { sha: SHA }, base: { sha: BASE, ref: 'main' } };
   const state = { pull, current: pull, reviews: [review], rules: [rule],
-    ruleset: { enforcement: 'active', target: 'branch', bypass_actors: [], rules: [rule] },
+    ruleset: { id: 123, source_type: 'Repository', source: 'mickey-kras/gpu-workload-supervisor',
+      updated_at: '2026-10-23T00:00:00Z', enforcement: 'active', target: 'branch', bypass_actors: [], rules: [rule] },
     owners: '/.github/ @mickey-kras\n' };
   let calls = 0;
   const github = {
@@ -37,7 +39,10 @@ test('admits only current owner approval with independently enforced review cont
   assert.equal(await reviewedHead(f.github, f.context), true);
 });
 
-test('read-only ruleset responses use effective rules and the administrator no-bypass contract', async () => {
+const settingsReview = values => JSON.stringify({ repository: 'mickey-kras/gpu-workload-supervisor',
+  ruleset_id: 123, updated_at: '2026-10-23T00:00:00Z', bypass_actors: [], ...values });
+
+test('redacted bypasses need the exact current administrator no-bypass readback', async () => {
   const f = fixture();
   delete f.state.ruleset.bypass_actors;
   let rulePagination = false;
@@ -49,10 +54,34 @@ test('read-only ruleset responses use effective rules and the administrator no-b
     }
     return f.state.reviews;
   };
-  assert.equal(await reviewedHead(f.github, f.context), true);
+  for (const value of ['', '{}', 'null', '[]', '{', settingsReview({ repository: 'other/repo' }),
+    settingsReview({ ruleset_id: 456 }), settingsReview({ ruleset_id: '123' }),
+    settingsReview({ updated_at: '2026-10-22T00:00:00Z' }), settingsReview({ bypass_actors: [{}] })]) {
+    assert.equal(await reviewedHead(f.github, f.context, value), false);
+  }
+  assert.equal(await reviewedHead(f.github, f.context, settingsReview()), true);
   assert.equal(rulePagination, true);
+  f.state.ruleset.updated_at = '2026-10-23T00:00:01Z';
+  assert.equal(await reviewedHead(f.github, f.context, settingsReview()), false);
   f.state.rules = [];
   assert.equal(await reviewedHead(f.github, f.context), false);
+});
+
+test('readback cannot override visible bypasses or a disabled or weakened source', async () => {
+  for (const change of [{ bypass_actors: [{ actor_id: 456, actor_type: 'Integration', bypass_mode: 'pull_request' }] },
+    { bypass_actors: null }, { bypass_actors: {} }, { bypass_actors: '' }, { enforcement: 'disabled' },
+    { enforcement: 'evaluate' }, { id: 456 }, { source_type: 'Organization' }, { source: 'other/repo' },
+    { target: 'tag' }, { rules: [] }, { rules: [{ ...rule, parameters: { ...rule.parameters, require_last_push_approval: false } }] }]) {
+    const f = fixture();
+    Object.assign(f.state.ruleset, change);
+    assert.equal(await reviewedHead(f.github, f.context, settingsReview()), false);
+  }
+  for (const change of [{ ruleset_id: 0 }, { ruleset_id: '123' }, { ruleset_source_type: 'Organization' },
+    { ruleset_source: 'other/repo' }]) {
+    const f = fixture();
+    f.state.rules = [{ ...rule, ...change }];
+    assert.equal(await reviewedHead(f.github, f.context, settingsReview()), false);
+  }
 });
 
 test('rejects self-authored changes, stale reviews, dismissed reviews, bypasses and missing controls', async () => {

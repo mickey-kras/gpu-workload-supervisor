@@ -55,6 +55,23 @@ the ruleset ID and verification in the rollout PR. Do not give the guard an
 administrator credential to expose this field. A checked-in JSON file does not
 activate GitHub protection.
 
+Find the applicable `ruleset_id` through `GET /repos/{owner}/{repo}/rules/branches/{branch}`.
+With an administrator's local `gh` login, read its full source:
+
+```sh
+gh api repos/mickey-kras/gpu-workload-supervisor/rulesets/RULESET_ID --jq 'if has("bypass_actors") and .bypass_actors == [] then {repository: .source, ruleset_id: .id, updated_at: .updated_at, bypass_actors: []} else error("Administrator readback must show no bypass actors") end'
+```
+
+Replace `RULESET_ID` with its numeric ID.
+Store the output JSON in the repository Actions variable `CI_POLICY_SETTINGS_REVIEW`.
+Only an administrator may configure this trusted variable.
+When the API hides bypass actors, the guard needs an exact repository, ruleset ID and `updated_at` match.
+Missing, malformed or stale readbacks disable same-PR code approval.
+Repeat the administrator readback after any ruleset change.
+
+The guard checks the source's current active state, branch target and review parameters.
+A visible bypass list must always be empty, even with a matching readback.
+
 The initial rollout is a one-time owner-reviewed policy migration: review the
 exact bootstrap head and any failing checks before using a specifically authorized
 owner bypass. Never disable guards or fabricate a success status. Record any

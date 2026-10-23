@@ -20,10 +20,33 @@ function protectedReview(rule) {
   const settings = rule?.parameters;
   return rule?.type === 'pull_request' && settings?.require_code_owner_review === true &&
     settings.dismiss_stale_reviews_on_push === true && settings.require_last_push_approval === true &&
-    settings.required_approving_review_count >= 1;
+    Number.isSafeInteger(settings.required_approving_review_count) && settings.required_approving_review_count >= 1;
 }
 
-async function reviewedHead(github, context) {
+async function reviewSourceActive(github, context, rule, settingsReview) {
+  const {owner, repo} = context.repo;
+  const repository = `${owner}/${repo}`;
+  if (rule.ruleset_source_type !== 'Repository' || rule.ruleset_source !== repository ||
+      !Number.isSafeInteger(rule.ruleset_id) || rule.ruleset_id <= 0) return false;
+  const {data: source} = await github.request('GET /repos/{owner}/{repo}/rulesets/{ruleset_id}', {owner, repo, ruleset_id: rule.ruleset_id});
+  if (!source || source.id !== rule.ruleset_id || source.source_type !== 'Repository' ||
+      source.source !== repository || source.target !== 'branch' || source.enforcement !== 'active' ||
+      !Array.isArray(source.rules) || !source.rules.some(protectedReview)) return false;
+  if (Object.hasOwn(source, 'bypass_actors')) {
+    return Array.isArray(source.bypass_actors) && source.bypass_actors.length === 0;
+  }
+  // The read-only token cannot see bypass actors. An administrator
+  // records the no-bypass readback; any settings revision invalidates it.
+  let reviewed;
+  try { reviewed = JSON.parse(settingsReview); } catch { return false; }
+  const revision = source.updated_at;
+  return reviewed !== null && typeof reviewed === 'object' && !Array.isArray(reviewed) &&
+    reviewed.repository === repository && reviewed.ruleset_id === source.id &&
+    typeof revision === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(revision) &&
+    Number.isFinite(Date.parse(revision)) && new Date(revision).toISOString() === revision.replace('Z', '.000Z') &&
+    reviewed.updated_at === revision && Array.isArray(reviewed.bypass_actors) && reviewed.bypass_actors.length === 0;
+}
+async function reviewedHead(github, context, settingsReview = process.env.CI_POLICY_SETTINGS_REVIEW || '') {
   const params = { ...context.repo, pull_number: context.payload.pull_request.number };
   const expected = context.payload.pull_request;
   const { data: pull } = await github.rest.pulls.get(params);
@@ -48,14 +71,7 @@ async function reviewedHead(github, context) {
   const candidates = Array.isArray(rules) ? rules.filter(protectedReview) : [];
   let enforced = false;
   for (const rule of candidates) {
-    if (!Number.isSafeInteger(rule.ruleset_id)) continue;
-    const { data: ruleset } = await github.request('GET /repos/{owner}/{repo}/rulesets/{ruleset_id}', {
-      ...context.repo, ruleset_id: rule.ruleset_id,
-    });
-    const bypasses = ruleset.bypass_actors;
-    if (ruleset.enforcement === 'active' && ruleset.target === 'branch' &&
-        (bypasses === undefined || (Array.isArray(bypasses) && bypasses.length === 0)) &&
-        ruleset.rules?.some(protectedReview)) enforced = true;
+    if (await reviewSourceActive(github, context, rule, settingsReview)) { enforced = true; break; }
   }
   if (!enforced) return false;
   const reviews = await github.paginate(github.rest.pulls.listReviews, { ...params, per_page: 100 });

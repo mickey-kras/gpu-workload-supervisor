@@ -1082,7 +1082,8 @@ test('independently approved bot policy changes still enforce lock semantics', a
   fixture.pull.user = { login: 'implementation[bot]', id: 1234, type: 'Bot' };
   fixture.candidate['.github/scripts/policy-lockfiles.cjs'] += '\n';
   fixture.github.rest.pulls.listReviews = () => {};
-  const rule = { type: 'pull_request', ruleset_id: 1, parameters: {
+  const rule = { type: 'pull_request', ruleset_id: 1, ruleset_source_type: 'Repository',
+    ruleset_source: `${fixture.context.repo.owner}/${fixture.context.repo.repo}`, parameters: {
     require_code_owner_review: true, dismiss_stale_reviews_on_push: true,
     require_last_push_approval: true, required_approving_review_count: 1,
   } };
@@ -1091,7 +1092,8 @@ test('independently approved bot policy changes still enforce lock semantics', a
     state: 'APPROVED', commit_id: fixture.pull.head.sha,
   }];
   fixture.github.request = async () => ({ data: {
-    enforcement: 'active', target: 'branch', rules: [rule],
+    id: 1, source_type: 'Repository', source: rule.ruleset_source,
+    enforcement: 'active', target: 'branch', bypass_actors: [], rules: [rule],
   } });
   await run(fixture);
   const path = '.github/scripts/package-lock.json';
