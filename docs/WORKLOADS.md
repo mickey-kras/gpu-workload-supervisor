@@ -73,7 +73,7 @@ controller checks every configured opposing runtime before it starts a target.
 `bootPolicy` defaults to `stop-to-idle`. Explicit `retain` preserves an already running
 healthy workload during reconciliation. It never starts it.
 
-Multiple running keep profiles fail closed. Healthy retained registrations keep their
+Multiple running `retain` profiles fail closed. Healthy retained registrations keep their
 completion tokens, fence and admission. To reproduce the legacy boot behavior, use
 `retain` for Text and `stop-to-idle` for Media.
 
@@ -298,7 +298,7 @@ the binding.
 
 Supervisor-mode execution of a native binding finishes itself: the proxy observes the
 upstream response and completes the registration on verified terminal evidence. Ollama
-generation and chat ends with a `"done":true` object. OpenAI-compatible chat and
+generation and chat end with a `"done":true` object. OpenAI-compatible chat and
 completion streams end with a `data: [DONE]` event.
 
 Non-streaming responses end when every choice carries a non-null `finish_reason`.

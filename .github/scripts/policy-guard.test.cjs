@@ -1587,6 +1587,8 @@ test('STE workflow replacement, lowered severities and omitted prose cannot bypa
     candidate => { candidate['.github/workflows/docs-ste.yml'] = candidate['.github/workflows/docs-ste.yml'].replace("':(icase)*.md'", "'README.md'"); },
     candidate => { candidate['.ste.yml'] += '\ndisable: [STE-1.1]\n'; },
     candidate => { candidate['.vale.ini'] = candidate['.vale.ini'].replace('BasedOnStyles = STE', 'BasedOnStyles ='); },
+    candidate => { candidate['.vale.ini'] += '\nTokenIgnores = (.*)\n'; },
+    candidate => { candidate['.github/workflows/docs-ste.yml'] = candidate['.github/workflows/docs-ste.yml'].replace('if re.search(directive, source, re.IGNORECASE):', 'if False:'); },
     candidate => { candidate['.vale/styles/config/vocabularies/Project/accept.txt'] += '.*\n'; },
   ];
   for (const mutate of mutations) {

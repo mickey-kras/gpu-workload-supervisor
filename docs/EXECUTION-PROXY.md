@@ -124,7 +124,7 @@ with an unconfigured method return HTTP 405 with an `Allow` header listing the
 explicitly configured methods, including POST for the completion path.
 
 Both return the JSON error `route_not_allowed`. Configure each verified read-only method
-and path with `-read-only-route`. the proxy does not infer HEAD from GET. Explicitly
+and path with `-read-only-route`. The proxy does not infer HEAD from GET. Explicitly
 configure necessary non-execution editing mutations as passthrough routes.
 
 When upgrading from implicit safe-method forwarding, inventory and configure these

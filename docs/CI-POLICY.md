@@ -41,7 +41,7 @@ Provision a dedicated implementation GitHub App and connect the
 implementer to it. Do not share the owner's credential, use the release App, or
 grant the implementer administration or bypass privileges. PRs from the owner cannot get admission through review. Changing commit author text is not identity separation.
 
-Import `.github/rulesets/require-policy-review.json` as an separate active repository ruleset. Keep existing required-check, branch, and tag rulesets. The
+Import `.github/rulesets/require-policy-review.json` as a separate active repository ruleset. Keep existing required-check, branch, and tag rulesets. The
 rule requires one approving review for every PR targeting main or release branches
 and a code-owner review for `.github/**`. Check this repository-wide review change
 before activation.

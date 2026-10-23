@@ -35,7 +35,7 @@ Get a release archive or .deb from [Releases](https://github.com/mickey-kras/gpu
 or build with `go build -o bin/ ./cmd/...`.
 
 Setup detects and adopts supported systemd user services without rewriting their
-source files. GPU correction: preview, then explicit **Apply** creates a drop-in for
+source files. GPU correction: preview, then explicit `Apply` creates a drop-in for
 an eligible stopped service. It does not start the service.
 
 [Desktop setup](docs/DESKTOP.md).

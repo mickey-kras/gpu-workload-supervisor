@@ -102,6 +102,9 @@ This repository has no OpenAPI or Swagger specification.
 The discovery step excludes dependency files, downloaded Vale styles and identified legal notices.
 It checks new untracked Markdown during local validation and tracked Markdown in CI.
 It does not exclude release notes or all generated files.
+
+Do not add linter control comments to Markdown.
+The staging step rejects those comments.
 The trusted policy guard protects the workflow, linter configuration and vocabulary.
 Policy tests reject missing jobs, weaker thresholds and changes to protected prose checks.
 

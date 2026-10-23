@@ -74,11 +74,11 @@ Builds, package checks, checksums, provenance and immutable-publication checks s
 Before dispatch, configure these prerequisites:
 
 - The `release-automation` environment and `RELEASE_APP_ID` repository variable.
-- A GitHub App installation with **Contents: write** and **Pull requests: write** permissions.
+- A GitHub App installation with **Contents: write** and `Pull requests: write` permissions.
 - App bypasses for release-branch and tag creation, and release-branch deletion.
 - GitHub release immutability.
 
-In **Settings > General > Releases**, enable release immutability.
+In `Settings > General > Releases`, enable release immutability.
 Set `RELEASE_SETTINGS_REVIEW` on that environment to the five reviewed release ruleset revisions.
 Its `immutable_releases: true` value is an owner attestation, not a live read of the repository setting.
 Before dispatch, confirm the setting. It makes only future releases immutable.

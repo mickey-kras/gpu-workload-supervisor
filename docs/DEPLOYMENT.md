@@ -99,7 +99,7 @@ Profiles that share one Ollama unit are the exception. The unit runs
 across model switches. Their release evidence is the daemon's loaded-model
 list. Once the shared unit is dead, its cgroup must be empty.
 
-Supervisor-owned launches keep `Restart=no`. Setup preview and the explicit **Apply** action
+Supervisor-owned launches keep `Restart=no`. Setup preview and the explicit `Apply` action
 add catalog-derived `Conflicts=` and acyclic `After=` between distinct owned
 units. Existing owned catalogs keep their recorded unit bytes until Apply.
 Setup preserves adopted units and drop-ins.
@@ -191,6 +191,8 @@ After acceptance, restart each proxy with the updated deployment configuration.
 A proxy pins the catalog revision at startup and rejects affected new work with
 `configuration_changed` if that revision changes. It does not hot-reload the
 catalog. Keep execution closed until you qualify the updated bindings and host.
+
+<a id="check-capacity-before-startup"></a>
 
 ## Check the capacity before startup
 

@@ -81,7 +81,7 @@ to the originating screen and gear while keeping selections. Candidate choices i
 the service or address and its status.
 
 The selected candidate's full identity is also available in wrapped selectable text.
-**Use installation** checks and reviews the selection. Only **Finish setup** activates
+`Use installation` checks and reviews the selection. Only **Finish setup** activates
 it.
 
 An unreachable default address does not prove an installation. Installed but stopped
@@ -398,7 +398,7 @@ can include `Restart=no`, which disables automatic crash recovery.
 Have the service administrator review the assignments, add the drop-in and reload the
 user manager. Other launch, model and trust blockers still need correction. `Check again` refreshes the installation and main application card without reopening setup.
 
-Fresh qualification unlocks **Use installation**. Temporary inventory retains its
+Fresh qualification unlocks `Use installation`. Temporary inventory retains its
 separate startup consent and cleanup safeguards.
 
 Copy diagnostic report on the application page produces one bounded shareable report

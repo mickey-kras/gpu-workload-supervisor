@@ -20,7 +20,7 @@ The optional `owned.conflicts` field pins dependencies into the existing owned
 render, spec and fingerprint chain. As with optional owned executable paths, absent
 metadata retains exact legacy version-2 unit bytes and fingerprints. Readers
 that do not recognize the field reject it through strict JSON decoding. Setup
-preview derives and displays replacement owned-unit writes. Explicit **Apply**
+preview derives and displays replacement owned-unit writes. Explicit `Apply`
 upgrades legacy units through the existing rollback and recovery journal.
 
 Removing

@@ -16,6 +16,6 @@ They keep only the fields necessary for identity and readiness parsing.
 
 Test cases that replace fields or supply inline payloads are synthetic mutations,
 including contradictory loaded and failure states and unsupported shapes. The
-`/models` HTTP replay feeds the existing model-list parser directly. native
+`/models` HTTP replay feeds the existing model-list parser directly. Native
 llama.cpp readiness still requests `/health` and `/v1/models`. This replay does
 not qualify router binding, load and unload, admission or GPU release behavior.

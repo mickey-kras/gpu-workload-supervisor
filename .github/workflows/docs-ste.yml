@@ -8,8 +8,8 @@ on:
   workflow_call:
 
 concurrency:
-  group: docs-ste-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: docs-ste-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -37,9 +37,22 @@ jobs:
           git ls-files --cached --others --exclude-standard -z -- ':(icase)*.md' ':(icase)*.markdown' |
             while IFS= read -r -d '' path; do
               case "/${path,,}" in
-                */.git/*|*/node_modules/*|*/.vale/styles/*|*/licenses/*|*/license.md|*/license.markdown|*/third_party_notices.md|*/third_party_notices.markdown|*/licenses.md|*/licenses.markdown|/clients/setup/icons/vllm-usage-notice.md) continue ;;
+                */.git/*|*/node_modules/*|*/.vale/styles/*) continue ;;
+              esac
+              case "$path" in
+                clients/setup/icons/LICENSES.md|clients/setup/icons/vllm-usage-notice.md) continue ;;
               esac
               test -f "$path" && test ! -L "$path"
+              python3 - "$path" <<'PYTHON'
+          import pathlib
+          import re
+          import sys
+
+          source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+          directive = r"<!--\s*(?:ste-(?:disable(?:-next-line|-line)?|enable)\b|vale\s+(?:off\b|on\b|styles?\s*=|[^\r\n]*=\s*(?:YES|NO|on|off)\b))"
+          if re.search(directive, source, re.IGNORECASE):
+              raise SystemExit(f"{sys.argv[1]}: linter control comments are not permitted")
+          PYTHON
               mkdir -p "$stage/$(dirname -- "$path")"
               # Append a suffix to preserve distinct source paths and use the Markdown parser.
               cp -- "$path" "$stage/$path.md"
@@ -74,9 +87,22 @@ jobs:
           git ls-files --cached --others --exclude-standard -z -- ':(icase)*.md' ':(icase)*.markdown' |
             while IFS= read -r -d '' path; do
               case "/${path,,}" in
-                */.git/*|*/node_modules/*|*/.vale/styles/*|*/licenses/*|*/license.md|*/license.markdown|*/third_party_notices.md|*/third_party_notices.markdown|*/licenses.md|*/licenses.markdown|/clients/setup/icons/vllm-usage-notice.md) continue ;;
+                */.git/*|*/node_modules/*|*/.vale/styles/*) continue ;;
+              esac
+              case "$path" in
+                clients/setup/icons/LICENSES.md|clients/setup/icons/vllm-usage-notice.md) continue ;;
               esac
               test -f "$path" && test ! -L "$path"
+              python3 - "$path" <<'PYTHON'
+          import pathlib
+          import re
+          import sys
+
+          source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+          directive = r"<!--\s*(?:ste-(?:disable(?:-next-line|-line)?|enable)\b|vale\s+(?:off\b|on\b|styles?\s*=|[^\r\n]*=\s*(?:YES|NO|on|off)\b))"
+          if re.search(directive, source, re.IGNORECASE):
+              raise SystemExit(f"{sys.argv[1]}: linter control comments are not permitted")
+          PYTHON
               mkdir -p "$stage/$(dirname -- "$path")"
               # Append a suffix to preserve distinct source paths and use the Markdown parser.
               cp -- "$path" "$stage/$path.md"
