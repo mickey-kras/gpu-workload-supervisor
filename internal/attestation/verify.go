@@ -69,6 +69,7 @@ type Verification struct {
 	result   Result
 	keyID    string
 	envelope Envelope
+	digest   string
 	err      error
 	sealed   bool
 }
@@ -78,8 +79,9 @@ func (v Verification) Result() Result { return v.result }
 // KeyID is empty until the signature file parses.
 func (v Verification) KeyID() string { return v.keyID }
 
-// Envelope is the zero value unless Result is Valid.
-func (v Verification) Envelope() Envelope { return v.envelope }
+// Envelope is the zero value unless Result is Valid. It returns a copy, so a
+// caller cannot change the evidence that Decide uses.
+func (v Verification) Envelope() Envelope { return v.envelope.clone() }
 
 // Err wraps one of the package sentinels and is nil only for Valid.
 func (v Verification) Err() error { return v.err }
@@ -219,7 +221,11 @@ func (v *Verifier) Verify(envelope, signature io.Reader, onDisk Artifact) Verifi
 	if err := parsed.Artifact.match(onDisk); err != nil {
 		return failed(ArtifactMismatch, sig.KeyID, err)
 	}
-	return Verification{result: Valid, keyID: sig.KeyID, envelope: parsed, sealed: true}
+	digest, err := parsed.Artifact.Digest()
+	if err != nil {
+		return failed(Malformed, sig.KeyID, err)
+	}
+	return Verification{result: Valid, keyID: sig.KeyID, envelope: parsed, digest: digest, sealed: true}
 }
 
 func readSignature(r io.Reader) (Signature, []byte, error) {

@@ -135,15 +135,13 @@ func Decide(policy Policy, verification *Verification) Decision {
 	default:
 		return Decision{Status: IntegrityFailure, Reason: ReasonUnknownResult}
 	}
-	envelope := verification.envelope
-	digest, err := envelope.Artifact.Digest()
-	if err != nil {
+	if verification.digest == "" {
 		return Decision{Status: IntegrityFailure, Reason: ReasonMalformed}
 	}
-	if policy.denies(digest) {
+	if policy.denies(verification.digest) {
 		return Decision{Status: IntegrityFailure, Reason: ReasonArtifactDenied}
 	}
-	return decideScan(policy, envelope, digest)
+	return decideScan(policy, verification.envelope, verification.digest)
 }
 
 func decideScan(policy Policy, envelope Envelope, digest string) Decision {

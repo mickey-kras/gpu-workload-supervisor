@@ -242,7 +242,7 @@ func TestSingleArtifactExemptionUsesItsOwnDigest(t *testing.T) {
 	single := Artifact{SHA256: fixtureDigest("model.gguf")}
 	e := fixtureEnvelopes()["single"]
 	e.Scan = Scan{Status: ScanNotScanned}
-	verification := Verification{result: Valid, envelope: e, sealed: true}
+	verification := Verification{result: Valid, envelope: e, digest: mustDigest(t, e.Artifact), sealed: true}
 	if got := Decide(Policy{Mode: Enforce, Exemptions: exemption(mustDigest(t, single), 1, ExemptNotScanned)}, &verification); got != allow(Exempted, ReasonNotScanned) {
 		t.Fatalf("%#v", got)
 	}
@@ -260,6 +260,32 @@ func TestDenyListRejectsValidEvidence(t *testing.T) {
 			t.Fatalf("%s: %#v", mode, got)
 		}
 	}
+}
+
+func TestEnvelopeCopyCannotChangeTheDecision(t *testing.T) {
+	inventory := fixtureInventory(t)
+	verification := fixtureVerifier(t, 1).Verify(bytes.NewReader(readFixture(t, "passed.json")), bytes.NewReader(readFixture(t, "passed.sig.json")), inventory)
+	copied := verification.Envelope()
+	for path := range copied.Artifact.Files {
+		copied.Artifact.Files[path] = fixtureDigest("changed")
+	}
+	copied.Scan.Scanner.Tool = "changed"
+	copied.Source.URI = "changed"
+	if again := verification.Envelope(); again.Scan.Scanner.Tool == "changed" || again.Source.URI == "changed" ||
+		again.Artifact.Files[firstPath(again.Artifact.Files)] == fixtureDigest("changed") {
+		t.Fatal("Envelope must return a copy")
+	}
+	got := Decide(Policy{Mode: Enforce, Deny: []string{mustDigest(t, inventory)}}, &verification)
+	if got != deny(IntegrityFailure, ReasonArtifactDenied) {
+		t.Fatalf("a changed copy must not bypass the denial: %#v", got)
+	}
+}
+
+func firstPath(files map[string]string) string {
+	for path := range files {
+		return path
+	}
+	return ""
 }
 
 func TestMissingAttestationIsUnverifiedNeverPassed(t *testing.T) {

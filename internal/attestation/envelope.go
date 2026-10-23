@@ -112,6 +112,26 @@ type Envelope struct {
 	Timestamp     string   `json:"timestamp"`
 }
 
+// clone copies every reference field, so the copy shares no state with e.
+func (e Envelope) clone() Envelope {
+	if e.Artifact.Files != nil {
+		files := make(map[string]string, len(e.Artifact.Files))
+		for path, digest := range e.Artifact.Files {
+			files[path] = digest
+		}
+		e.Artifact.Files = files
+	}
+	if e.Source != nil {
+		source := *e.Source
+		e.Source = &source
+	}
+	if e.Scan.Scanner != nil {
+		scanner := *e.Scan.Scanner
+		e.Scan.Scanner = &scanner
+	}
+	return e
+}
+
 type presence int
 
 const (
