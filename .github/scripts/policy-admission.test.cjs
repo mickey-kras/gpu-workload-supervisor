@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { reviewedHead, validReview } = require('./policy-admission.cjs');
+const { reviewedHead, validReview, readPolicyConstant } = require('./policy-admission.cjs');
 
 const SHA = 'a'.repeat(40);
 const BASE = 'b'.repeat(40);
@@ -112,4 +112,31 @@ test('API failures cannot authorize an unknown digest', async () => {
   const f = fixture();
   f.github.request = async () => { throw new Error('unavailable'); };
   await assert.rejects(reviewedHead(f.github, f.context), /unavailable/);
+});
+
+
+test('candidate digests use live top-level declarations, never comment or string decoys', () => {
+  for (const prefix of ["// const DIGEST = 'new';\n", "/* const DIGEST = 'new'; */\n",
+    'const text = "const DIGEST = \'new\';";\n', "const text = `const DIGEST = 'new';`;\n",
+    "function nested() { const DIGEST = 'new'; }\n"]) {
+    assert.equal(readPolicyConstant(prefix + "const DIGEST = 'old';", 'DIGEST'), 'old');
+  }
+  assert.equal(readPolicyConstant("const DIGEST = 'new';", 'DIGEST'), 'new');
+  assert.equal(readPolicyConstant("// const DIGEST = 'new';", 'DIGEST'), undefined);
+});
+
+test('candidate digest maps reject ambiguous or executable values', () => {
+  const good = readPolicyConstant('const HASHES = {"helper": "new"};', 'HASHES');
+  assert.equal(good.helper, 'new');
+  for (const source of [
+    'const HASHES = {"helper": "old", "helper": "new"};',
+    'const HASHES = {["helper"]: "new"};',
+    'const HASHES = {get helper() { return "new"; }};',
+    'const HASHES = {...other};',
+    'const HASHES = {"helper": calculate()};',
+    'const HASHES = {}; const HASHES = {};',
+    'let HASHES = {};', 'const HASHES =',
+    'function nested() { const HASHES = {}; }',
+  ]) assert.equal(readPolicyConstant(source, 'HASHES'), undefined, source);
+  assert.equal(readPolicyConstant('// const HASHES = {"helper": "new"};\nconst HASHES = {"helper": "old"};', 'HASHES').helper, 'old');
 });

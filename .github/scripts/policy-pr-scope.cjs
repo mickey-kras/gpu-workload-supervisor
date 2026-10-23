@@ -1,3 +1,4 @@
+const { readPolicyConstant } = require('./policy-admission.cjs');
 const { createHash } = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const { normalizeActionSteps } = require('./policy-action-pins.cjs');
@@ -78,7 +79,7 @@ function normalizeScopedValidation(files, workflows, failures, aggregateScript, 
   const requireValue = (ok, label) => { if (!ok) failures.push(`Path-aware validation lost ${label}`); };
   const expectedClassifier = structuredClone(CLASSIFIER_JOB);
   if (reviewed) {
-    const policyDigest = files['.github/scripts/policy-pr-scope.cjs']?.match(/const CLASSIFIER_DIGEST = '([a-f0-9]{64})';/)?.[1];
+    const policyDigest = readPolicyConstant(files['.github/scripts/policy-pr-scope.cjs'], 'CLASSIFIER_DIGEST');
     requireValue(policyDigest === digest, 'classifier policy digest synchronized with helper');
     expectedClassifier.steps[2].with.script = CLASSIFIER_SCRIPT.replace(CLASSIFIER_DIGEST, digest);
   }

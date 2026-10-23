@@ -1,3 +1,4 @@
+const { readPolicyConstant } = require('./policy-admission.cjs');
 const { createHash } = require('node:crypto');
 const { canonical, normalizeWorkflowActionPins } = require('./policy-action-pins.cjs');
 
@@ -42,7 +43,7 @@ function normalizeCiReuse(files, workflows, failures, admitted = new Set()) {
   if (Object.keys(HELPER_HASHES).some(path => admitted.has(path))) {
     try {
       const source = files['.github/scripts/policy-ci-reuse.cjs'] || '';
-      candidateHashes = JSON.parse(source.match(/const HELPER_HASHES = (\{[\s\S]*?\n\});/)?.[1] || 'null');
+      candidateHashes = readPolicyConstant(source, 'HELPER_HASHES');
     } catch {
       failures.push('Coverage/scanner helper digests are invalid');
     }

@@ -1,3 +1,4 @@
+const { readPolicyConstant } = require('./policy-admission.cjs');
 const { createHash } = require('node:crypto');
 const { sameActionSteps } = require('./policy-action-pins.cjs');
 
@@ -79,7 +80,7 @@ function inspectValidationReuse(files, workflow, failures, checks, admitted) {
   if (Object.keys(RELEASE_HASHES).some(file => admitted.has(file))) {
     try {
       const source = files['.github/scripts/policy-release.cjs'] || '';
-      candidateHashes = JSON.parse(source.match(/const RELEASE_HASHES = (\{[\s\S]*?\n\});/)?.[1] || 'null');
+      candidateHashes = readPolicyConstant(source, 'RELEASE_HASHES');
     } catch {
       failures.push('Release helper digests are invalid');
     }

@@ -1,6 +1,6 @@
 const YAML = require('yaml');
 const { FORBIDDEN_INPUTS, LOCKFILES, inspectLockfiles } = require('./policy-lockfiles.cjs');
-const { POLICY_SOURCES, reviewedHead } = require('./policy-admission.cjs');
+const { POLICY_SOURCES, reviewedHead, readPolicyConstant } = require('./policy-admission.cjs');
 const { createHash } = require('node:crypto');
 const { inspectReleaseEntry, inspectReleasePublish } = require('./policy-release.cjs');
 const { normalizeParallelCi, AGGREGATE_RUN } = require('./policy-ci-parallel.cjs');
@@ -21,7 +21,7 @@ function expectedExecutableDigest(files, path, admitted) {
   if (!admitted.has(path)) return EXECUTABLE_HASHES[path];
   try {
     const source = files['.github/scripts/policy-guard.cjs'] || '';
-    return JSON.parse(source.match(/const EXECUTABLE_HASHES = (\{[\s\S]*?\n\});/)?.[1] || 'null')?.[path];
+    return readPolicyConstant(source, 'EXECUTABLE_HASHES')?.[path];
   } catch {
     return undefined; // The caller rejects a missing or malformed digest.
   }
@@ -147,7 +147,7 @@ function inspectGoReleaser({ files, workflows, failures, checks, path, jobId, bu
     const action = doc.toJS();
     const controls = { ...action, runs: { ...action?.runs, steps: normalizeActionSteps(action?.runs?.steps) } };
     const expected = admitted.has(actionPath)
-      ? files['.github/scripts/policy-guard.cjs']?.match(/const GORELEASER_ACTION_DIGEST = '([a-f0-9]{64})';/)?.[1]
+      ? readPolicyConstant(files['.github/scripts/policy-guard.cjs'], 'GORELEASER_ACTION_DIGEST')
       : GORELEASER_ACTION_DIGEST;
     if (createHash('sha256').update(JSON.stringify(canonical(controls))).digest('hex') !== expected) failures.push(`${actionPath} changed verified GoReleaser installer`);
   } catch {

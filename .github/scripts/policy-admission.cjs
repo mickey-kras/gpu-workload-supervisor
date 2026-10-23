@@ -8,6 +8,35 @@ const POLICY_SOURCES = [
   '.github/scripts/policy-dependabot.cjs',
 ];
 
+// Parse candidate text without executing it or honoring inline lint configuration.
+function readPolicyConstant(source, name) {
+  if (typeof source !== 'string') return undefined;
+  const { Linter } = require('eslint');
+  const linter = new Linter();
+  const messages = linter.verify(source, {
+    languageOptions: { ecmaVersion: 'latest', sourceType: 'commonjs' },
+    rules: {},
+  }, { allowInlineConfig: false });
+  if (messages.some(message => message.fatal)) return undefined;
+  const declarations = linter.getSourceCode().ast.body
+    .filter(node => node.type === 'VariableDeclaration' && node.kind === 'const')
+    .flatMap(node => node.declarations)
+    .filter(node => node.id.type === 'Identifier' && node.id.name === name);
+  if (declarations.length !== 1) return undefined;
+  const value = declarations[0].init;
+  if (value?.type === 'Literal' && typeof value.value === 'string') return value.value;
+  if (value?.type !== 'ObjectExpression') return undefined;
+  const result = Object.create(null);
+  for (const property of value.properties) {
+    if (property.type !== 'Property' || property.kind !== 'init' || property.method ||
+        property.computed || property.shorthand || property.key.type !== 'Literal' ||
+        typeof property.key.value !== 'string' || property.value.type !== 'Literal' ||
+        typeof property.value.value !== 'string' || Object.hasOwn(result, property.key.value)) return undefined;
+    result[property.key.value] = property.value.value;
+  }
+  return result;
+}
+
 function validReview(reviews, sha) {
   const decisive = reviews.filter(review => Number.isSafeInteger(review.id) && review.user?.login === OWNER.login &&
     review.user?.id === OWNER.id && review.user?.type === 'User' &&
@@ -80,4 +109,4 @@ async function reviewedHead(github, context, settingsReview = process.env.CI_POL
   return current.state === 'open' && current.head?.sha === pull.head.sha && current.base?.sha === pull.base.sha;
 }
 
-module.exports = { POLICY_SOURCES, reviewedHead, validReview, protectedReview };
+module.exports = { readPolicyConstant, POLICY_SOURCES, reviewedHead, validReview, protectedReview };

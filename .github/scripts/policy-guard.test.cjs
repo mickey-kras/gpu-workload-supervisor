@@ -1511,6 +1511,13 @@ test('exact-head admission covers executable helpers without relaxing workflow c
     candidate[policyPath] = candidate[policyPath].replace(fingerprint(baseline[path]), fingerprint(candidate[path]));
     const admitted = new Set([path, policyPath]);
     assert.deepEqual(inspectActivated(candidate, baseline, admitted), [], path);
+    const livePolicy = candidate[policyPath];
+    const constant = actionPath ? 'GORELEASER_ACTION_DIGEST'
+      : policyPath.endsWith('policy-ci-reuse.cjs') ? 'HELPER_HASHES' : 'EXECUTABLE_HASHES';
+    const declaration = livePolicy.match(new RegExp(`const ${constant} = (?:'[^']*'|\\{[\\s\\S]*?\\n\\});`))[0];
+    candidate[policyPath] = `/* ${declaration} */\n${baseline[policyPath]}`;
+    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0, `${path}: comment decoy`);
+    candidate[policyPath] = livePolicy;
     assert.ok(inspectActivated(candidate, baseline, new Set(['unrelated'])).length > 0, path);
     const ci = YAML.parse(candidate['.github/workflows/ci.yml']);
     ci.jobs.go['continue-on-error'] = true;
@@ -1536,6 +1543,8 @@ test('classifier admission requires matching policy and workflow digests', () =>
   candidate[workflow] = candidate[workflow].replace(previous, digest);
   assert.deepEqual(inspectActivated(candidate, baseline, admitted), []);
   assert.ok(inspectActivated(candidate, baseline).length > 0);
+  candidate[policy] = `// const CLASSIFIER_DIGEST = '${digest}';\n${baseline[policy]}`;
+  assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
   candidate[policy] = baseline[policy];
   assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
 });
@@ -1559,6 +1568,9 @@ test('release helper admission synchronizes policy and both runtime assertions',
     candidate[workflow] = candidate[workflow].replaceAll(previous, current);
     assert.deepEqual(inspectActivated(candidate, baseline, admitted), []);
     assert.ok(inspectActivated(candidate, baseline).length > 0);
+    const declaration = candidate[policy].match(/const RELEASE_HASHES = (\{[\s\S]*?\n\});/)[0];
+    candidate[policy] = `/* ${declaration} */\n${baseline[policy]}`;
+    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
     candidate[policy] = baseline[policy];
     assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
     candidate[policy] = candidate[policy].replace('const RELEASE_HASHES = {', 'const RELEASE_HASHES = {invalid');
