@@ -3,8 +3,9 @@
 Also check the training runtime for one target and print a bounded JSON report.
 The report covers Python and its standard library, the installed distributions
 against the lock, native library loading, and Torch and CUDA compatibility.
-Run it as the runner does: bin/python3 -I -S -B. It then adds only the runtime
-site-packages, so packaging is imported inside the functions that use it.
+Run it as the runner does: bin/python3 -I -S -B. packaging is in the runtime
+site-packages, which the checker adds only at run time. Thus the functions import
+it locally, and report() loads every packaging module once before the probe runs.
 """
 import sys
 
@@ -116,11 +117,42 @@ def load_module(name, path):
     return module
 
 
+class InputError(Exception):
+    # A repository input file is missing or broken; the remedy names the file to restore.
+    def __init__(self, path, error):
+        super().__init__(f"{path.name}: {type(error).__name__}: {error}")
+        repository = HERE.parents[1]
+        shown = path.relative_to(repository) if path.is_relative_to(repository) else path.name
+        self.remedy = f"restore {shown} from the repository checkout"
+
+
+def read_input(path):
+    try:
+        return path.read_bytes()
+    except OSError as error:
+        raise InputError(path, error) from error
+
+
 def load_presets(path=None):
-    presets = json.loads((path or ASSETS).read_text(encoding="utf-8"))
-    if not isinstance(presets, dict) or not presets or not all(isinstance(name, str) for name in presets):
-        raise ValueError("the asset table has no presets")
+    path = path or ASSETS
+    try:
+        presets = json.loads(read_input(path))
+        if not isinstance(presets, dict) or not presets or not all(isinstance(name, str) for name in presets):
+            raise ValueError("the asset table has no presets")
+    except ValueError as error:
+        raise InputError(path, error) from error
     return tuple(presets)
+
+
+def load_packaging():
+    # Import every packaging module that the checker uses before the probe runs. Later
+    # local imports then reuse these modules, so files that the probe changed do not run here.
+    import packaging.requirements
+    import packaging.tags
+    import packaging.utils
+    import packaging.version
+
+    return packaging
 
 
 def current_directory():
@@ -462,7 +494,11 @@ def check(name, problems, target, cpu_smoke_warning=False):
 
 
 def remedy_for(error, sync=None):
-    # A missing module or an unreadable file is an installation problem; any other error is a checker bug.
+    # A broken repository input names the file to restore. A missing module or an unreadable
+    # runtime file is an installation problem when the sync remedy is known. Any other
+    # error is a checker bug.
+    if isinstance(error, InputError):
+        return error.remedy
     if sync is not None and isinstance(error, (ImportError, OSError)):
         return sync
     return CHECKER_BUG
@@ -495,21 +531,9 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def report(worker, target, gpu_uuid=None, popen=subprocess.Popen):
-    distributions = list(metadata.distributions())
-    locked, locked_error = attempt(lambda: locked_versions(LOCK.read_text(encoding="utf-8")))
-    # os came from the standard library before site-packages was added; sysconfig can
-    # load a shadowing _sysconfigdata module from site-packages.
-    stdlib = Path(os.__file__).parent
-    site = worker.runtime_site()
-    forbidden = stdlib_names([stdlib, stdlib / "lib-dynload"])
-
-    def scan():
-        owned = owned_startup_files(distributions, picked(locked, locked_error, None))
-        return dict(zip(("shadows", "startup"), site_problems(site, owned, forbidden)))
-
-    # Scan before and after the probe: the probe imports site-packages first, as the
-    # runner does, so planted code can run there and hide itself.
+def probe_with_rescan(worker, target, gpu_uuid, popen, scan):
+    # Scan site-packages, run the probe, then scan again: the probe imports site-packages
+    # first, as the runner does, so planted code can run there and hide itself.
     before, before_error = attempt(scan)
     try:
         probe, failure = run_probe(target in QUANTIZED, gpu_uuid, popen)
@@ -517,10 +541,17 @@ def report(worker, target, gpu_uuid=None, popen=subprocess.Popen):
         remedy = remedy_for(error, worker.SYNC)
         probe, failure = None, f"the runtime probe could not start ({type(error).__name__}: {error}); {remedy}"
     found, found_error = attempt(scan)
-    if found_error is None and before_error is None and before != found:
+    if before_error is not None or found_error is not None:
+        # A failed scan must not pass on the other scan alone.
+        return probe, failure, None, before_error or found_error
+    if before != found:
+        # This goes to standard-library on purpose: a change means the probe ran planted code.
         found["shadows"].append(f"site-packages changed while the runtime probe ran; {worker.SYNC}")
-    mapped, mapped_error = attempt(lambda: probe_checks(worker, probe, failure, target, gpu_uuid))
+    return probe, failure, found, None
 
+
+def build_checks(worker, target, context):
+    # context holds the shared values; each check reads them through picked().
     def python():
         problem = worker.python_problem((sys.version_info.major, sys.version_info.minor))
         return [problem] if problem else []
@@ -528,30 +559,52 @@ def report(worker, target, gpu_uuid=None, popen=subprocess.Popen):
     def versions():
         from packaging.tags import sys_tags
 
-        return lock_problems(picked(locked, locked_error, None), distributions, set(sys_tags()), worker.SYNC)
+        return lock_problems(picked(*context["locked"], None), context["distributions"], set(sys_tags()), worker.SYNC)
 
     def guard(name, compute, cpu_smoke_warning=False):
         return guarded(name, compute, target, worker.SYNC, cpu_smoke_warning=cpu_smoke_warning)
 
-    checks = [
+    mapped, found, stdlib, site = context["mapped"], context["found"], context["stdlib"], context["site"]
+    return [
         guard("python", python),
         guard("runtime-layout", lambda: layout_problems(runtime_root(), stdlib, site), cpu_smoke_warning=True),
-        guard("standard-library",
-              lambda: picked(mapped, mapped_error, "stdlib") + picked(found, found_error, "shadows")),
-        guard("startup-files", lambda: picked(found, found_error, "startup"), cpu_smoke_warning=True),
+        guard("standard-library", lambda: picked(*mapped, "stdlib") + picked(*found, "shadows")),
+        guard("startup-files", lambda: picked(*found, "startup"), cpu_smoke_warning=True),
         guard("dependencies", lambda: dependency_problems(worker)),
         guard("locked-versions", versions),
-        guard("native-libraries", lambda: picked(mapped, mapped_error, "native")),
-        guard("driver-libraries", lambda: picked(mapped, mapped_error, "driver"), cpu_smoke_warning=True),
-        guard("accelerator", lambda: picked(mapped, mapped_error, "accelerator"), cpu_smoke_warning=True),
+        guard("native-libraries", lambda: picked(*mapped, "native")),
+        guard("driver-libraries", lambda: picked(*mapped, "driver"), cpu_smoke_warning=True),
+        guard("accelerator", lambda: picked(*mapped, "accelerator"), cpu_smoke_warning=True),
     ]
+
+
+def report(worker, target, gpu_uuid=None, popen=subprocess.Popen):
+    load_packaging()
+    lock = read_input(LOCK)
+    distributions = list(metadata.distributions())
+    locked = attempt(lambda: locked_versions(lock.decode("utf-8")))
+    # os came from the standard library before site-packages was added; sysconfig can
+    # load a shadowing _sysconfigdata module from site-packages.
+    stdlib = Path(os.__file__).parent
+    site = worker.runtime_site()
+    forbidden = stdlib_names([stdlib, stdlib / "lib-dynload"])
+
+    def scan():
+        owned = owned_startup_files(distributions, picked(*locked, None))
+        return dict(zip(("shadows", "startup"), site_problems(site, owned, forbidden)))
+
+    probe, failure, found, found_error = probe_with_rescan(worker, target, gpu_uuid, popen, scan)
+    mapped = attempt(lambda: probe_checks(worker, probe, failure, target, gpu_uuid))
+    checks = build_checks(worker, target, {"locked": locked, "distributions": distributions, "mapped": mapped,
+                                           "found": (found, found_error), "stdlib": stdlib, "site": site})
     facts = probe["facts"] if probe is not None and probe["facts"] is not None else {}
     accelerator = None
     if facts:
         accelerator = "cuda" if facts["available"] else "cpu"
     result = skeleton(target)
     result.update(
-        accelerator=accelerator, workerSHA256=digest(WORKER), lockSHA256=digest(LOCK), checks=checks,
+        accelerator=accelerator, workerSHA256=digest(WORKER), lockSHA256=hashlib.sha256(lock).hexdigest(),
+        checks=checks,
         status="rejected" if any(item["status"] == "fail" for item in checks) else "accepted",
         **{key: facts.get(key) for key in FACT_KEYS},
     )

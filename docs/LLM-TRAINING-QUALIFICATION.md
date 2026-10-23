@@ -131,14 +131,14 @@ the `accelerator` check.
 
 The standard-library names come from `sys.stdlib_module_names` and from the
 private names, such as `_sysconfigdata_*`, in the standard-library directories.
-The check scans site-packages before and after the child process. A change
-between the two scans fails the `standard-library` check.
+The check scans site-packages before and after the child process. When the two
+scans find different shadowing or startup-file problems, the `standard-library`
+check fails. The scan does not detect changed file contents.
 
 The runner's interpreter and the checker use `-S`, so they do not process `.pth`
 files. Subprocesses that the training stack starts, such as compile workers, can
 process them. Thus `startup-files` accepts only a `.pth` file that the `RECORD` of
-a locked wheel lists. The check does not hash files. Installation integrity relies
-on `uv pip sync --require-hashes`.
+a locked wheel lists.
 
 The native, driver and accelerator checks run in a child process with `-I -S -B`.
 The child gets the runner environment and puts the runtime site-packages first,

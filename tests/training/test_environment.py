@@ -17,7 +17,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from packaging.tags import Tag
 from packaging.version import Version
@@ -173,8 +173,15 @@ class RuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             for text in ("{broken", "[]", "{}", '["smoke-lora"]'):
                 (Path(directory) / "assets.json").write_text(text)
-                with self.subTest(text=text), self.assertRaises(ValueError):
+                with self.subTest(text=text), self.assertRaises(checker.InputError) as raised:
                     checker.load_presets(Path(directory) / "assets.json")
+                self.assertEqual(raised.exception.remedy, "restore assets.json from the repository checkout")
+            with self.assertRaises(checker.InputError):
+                checker.load_presets(Path(directory) / "missing.json")
+        for path, shown in ((checker.ASSETS, "training/assets.json"), (checker.LOCK, "training/axolotl/requirements.txt")):
+            remedy = checker.InputError(path, OSError("gone")).remedy
+            self.assertEqual(remedy, f"restore {shown} from the repository checkout")
+            self.assertEqual(checker.remedy_for(checker.InputError(path, OSError("gone")), worker.SYNC), remedy)
 
     def main(self, arguments, **patches):
         with patch("sys.stdout", new_callable=io.StringIO) as output, patch.object(checker.sys, "flags", ISOLATED), \
@@ -194,7 +201,8 @@ class RuntimeTests(unittest.TestCase):
             assets, broken = Path(directory) / "assets.json", Path(directory) / "worker.py"
             assets.write_text("{broken")
             broken.write_text("raise RuntimeError('broken worker')\n")
-            for patches, target in (({"ASSETS": assets}, None), ({"WORKER": broken}, "cpu-smoke")):
+            for patches, target, remedy in (({"ASSETS": assets}, None, "restore assets.json from the repository checkout"),
+                                            ({"WORKER": broken}, "cpu-smoke", checker.CHECKER_BUG)):
                 with self.subTest(patches=patches):
                     code, output = self.main([], **patches)
                     result = json.loads(output)
@@ -202,7 +210,7 @@ class RuntimeTests(unittest.TestCase):
                     self.assertEqual(set(result), STABLE_REPORT_KEYS | {"error"})
                     self.assertEqual((result["status"], result["target"], result["checks"]), ("rejected", target, []))
                     self.assertTrue(result["error"].startswith("check could not run ("))
-                    self.assertTrue(result["error"].endswith(checker.CHECKER_BUG))
+                    self.assertTrue(result["error"].endswith(remedy), result["error"])
 
     def test_main_exit_codes_and_usage_errors(self):
         for status, code in (("accepted", 0), ("rejected", 1)):
@@ -660,8 +668,9 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(checker.remedy_for(OSError("x")), checker.CHECKER_BUG)
         self.assertEqual(checker.remedy_for(KeyError("x"), worker.SYNC), checker.CHECKER_BUG)
 
-    def report(self, target, probe, gpu_uuid="GPU-1", clean=True, **patches):
+    def report(self, target, probe, gpu_uuid="GPU-1", clean=True, popen_override=None, **patches):
         popen, calls = fake_popen(probe)
+        popen = popen_override or popen
         items = [patch.object(checker.metadata, "distributions", return_value=[])]
         if clean:
             items += [patch.object(checker, "lock_problems", return_value=[]), patch.object(checker, "dependency_problems", return_value=[]),
@@ -757,6 +766,30 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(standard["status"], "fail")
             self.assertIn(changed, standard["problems"])
 
+    def test_a_failed_scan_fails_both_site_checks(self):
+        for side_effect in ([PermissionError("site-packages"), ([], [])], [([], []), PermissionError("site-packages")]):
+            with self.subTest(side_effect=side_effect):
+                result, _ = self.report("cpu-smoke", probe_result(), clean=False, dependency_problems=lambda *args: [],
+                                        lock_problems=lambda *args: [], site_problems=MagicMock(side_effect=side_effect))
+                statuses = {item["name"]: item for item in result["checks"]}
+                for name in ("standard-library", "startup-files"):
+                    self.assertEqual(statuses[name]["status"], "fail")
+                    self.assertEqual(statuses[name]["problems"],
+                                     [f"check could not run (PermissionError: site-packages); {worker.SYNC}"])
+
+    def test_packaging_is_loaded_before_the_probe_runs(self):
+        order = []
+        popen, _ = fake_popen(probe_result())
+
+        def probe(*args, **options):
+            order.append("probe")
+            return popen(*args, **options)
+
+        with patch.object(checker, "load_packaging", side_effect=lambda: order.append("packaging")):
+            self.report("cpu-smoke", probe_result(), popen_override=probe)
+        self.assertEqual(order, ["packaging", "probe"])
+        self.assertEqual(checker.load_packaging().__name__, "packaging")
+
     def test_a_missing_lock_is_an_internal_error_with_the_install_remedy(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(checker, "lock_problems", side_effect=ImportError("packaging")):
             result, _ = self.report("cpu-smoke", probe_result(), clean=False, dependency_problems=lambda *args: [],
@@ -768,8 +801,8 @@ class RuntimeTests(unittest.TestCase):
                 code, output = self.main([])
         result = json.loads(output)
         self.assertEqual((code, result["status"], result["checks"]), (2, "rejected", []))
-        self.assertTrue(result["error"].startswith("check could not run (FileNotFoundError: "))
-        self.assertTrue(result["error"].endswith(worker.SYNC))
+        self.assertTrue(result["error"].startswith("check could not run (InputError: requirements.txt: FileNotFoundError: "))
+        self.assertTrue(result["error"].endswith("restore requirements.txt from the repository checkout"))
 
     def test_report_without_a_probe_result_has_null_runtime_fields(self):
         result, _ = self.report("cpu-smoke", None)
