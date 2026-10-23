@@ -38,17 +38,18 @@ jobs:
       - name: Enforce exact dependency deviations, runtime compatibility and worker boundary
         run: |
           check() { .training-runtime/bin/python -I -S -B training/axolotl/check_environment.py "$@"; }
-          check > cpu-smoke.json
+          check > cpu-smoke.json || { cat cpu-smoke.json; exit 1; }
           # The CI runner has no GPU. The check must reject each preset target with exit status 1.
           for target in smoke-lora representative-qlora; do
             code=0
             check --target "$target" > "$target.json" || code=$?
-            test "$code" -eq 1
+            if [ "$code" -ne 1 ]; then cat "$target.json"; exit 1; fi
           done
           python3 - <<'PYTHON'
           import json
           reports = {name: json.load(open(name + ".json")) for name in ("cpu-smoke", "smoke-lora", "representative-qlora")}
-          assert reports.pop("cpu-smoke")["status"] == "accepted"
+          cpu = reports.pop("cpu-smoke")
+          assert cpu["status"] == "accepted", cpu
           for report in reports.values():
               checks = {check["name"]: check["status"] for check in report["checks"]}
               assert report["status"] == "rejected" and checks["accelerator"] == "fail", report

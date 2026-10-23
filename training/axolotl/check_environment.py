@@ -12,9 +12,8 @@ import sys
 sys.dont_write_bytecode = True
 
 import argparse
-import base64
+import contextlib
 from collections import deque
-import csv
 import hashlib
 import importlib.metadata as metadata
 import importlib.util
@@ -105,7 +104,8 @@ FACT_ITEMS = 64
 # The same rule as ValidGPUUUID in internal/control/native_model.go.
 GPU_UUID = re.compile(r"GPU-[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}")
 CHECKER_BUG = "report this as a checker bug"
-STABLE_KEYS = ("accelerator", "torch", "cuda", "driverCuda", "archList", "devices")
+FACT_KEYS = ("torch", "cuda", "driverCuda", "archList", "devices")
+STABLE_KEYS = ("accelerator", *FACT_KEYS)
 
 
 def load_module(name, path):
@@ -130,7 +130,8 @@ def mask(text):
     }
     for literal in sorted(literals, key=len, reverse=True):
         if len(literal) > 1:
-            text = text.replace(literal, literals[literal])
+            # Replace a root only at a path boundary, so /home does not change /homework.
+            text = re.sub(re.escape(literal) + r"(?=/|\s|$|[;:,()'\"])", literals[literal], text)
     text = re.sub(r"(?<![\w.<>-])/[^\s;:,()'\"]+", "<path>", text)
     return text[:PROBLEM_LENGTH]
 
@@ -164,32 +165,28 @@ def module_name(entry):
     if entry.name.endswith(".so"):
         return entry.name.split(".")[0] or None
     stem, suffix = os.path.splitext(entry.name)
-    return stem or None if suffix in {".py", ".pyc"} else None
+    if suffix not in {".py", ".pyc"}:
+        return None
+    return stem or None
 
 
 def stdlib_names(directories):
+    # sys.stdlib_module_names omits private modules such as _sysconfigdata_*, so add the
+    # private names from the directories. Public extras, such as the test package that
+    # some builds ship, are not part of the runtime contract.
     names = set(sys.stdlib_module_names)
     for directory in directories:
         if directory.is_dir():
-            names.update(name for name in map(module_name, directory.iterdir()) if name is not None)
+            names.update(name for name in map(module_name, directory.iterdir()) if name and name.startswith("_"))
     return names
 
 
 def owned_startup_files(distributions, locked):
-    # Map each top-level .pth file of a locked wheel to its RECORD hash.
-    owned = {}
-    for distribution in distributions:
-        if canonical(distribution.metadata["Name"]) not in locked:
-            continue
-        for row in csv.reader((distribution.read_text("RECORD") or "").splitlines()):
-            if len(row) == 3 and "/" not in row[0] and row[0].endswith(".pth") and "=" in row[1]:
-                owned[row[0]] = tuple(row[1].split("=", 1))
-    return owned
-
-
-def file_digest(path, mode):
-    digest = hashlib.new(mode, path.read_bytes())
-    return base64.urlsafe_b64encode(digest.digest()).rstrip(b"=").decode()
+    # Return the top-level .pth files that the RECORD of a locked wheel lists.
+    return {
+        str(file) for distribution in distributions if canonical(distribution.metadata["Name"]) in locked
+        for file in distribution.files or () if "/" not in str(file) and str(file).endswith(".pth")
+    }
 
 
 def site_problems(site, owned, forbidden):
@@ -198,8 +195,8 @@ def site_problems(site, owned, forbidden):
     for entry in sorted(site.iterdir()) if site.is_dir() else ():
         name = entry.name
         if entry.suffix == ".pth":
-            # The runner uses -S, so .pth files never run there; a locked wheel's unchanged file is accepted.
-            if name not in owned or file_digest(entry, owned[name][0]) != owned[name][1]:
+            # The runner and the checker use -S, so .pth files never run; a locked wheel's file is accepted.
+            if name not in owned:
                 startup.append(f"site-packages has the startup file {name}, which no locked wheel installs; remove it")
             continue
         module = module_name(entry)
@@ -275,7 +272,8 @@ def dependency_problems(worker):
 
 
 def probe_environment(work, gpu_uuid):
-    # The same variables as executionEnvironment in internal/llmtraining/run.go; the runner drops all others.
+    # The same variables as executionEnvironment in internal/llmtraining/run.go, except
+    # CUDA_VISIBLE_DEVICES when no GPU is selected. The runner drops all other variables.
     environment = {
         "PATH": f"{Path(sys.executable).parent}:/usr/bin:/bin",
         "HOME": str(work / "home"), "XDG_CONFIG_HOME": str(work / "home"),
@@ -323,6 +321,64 @@ def valid_probe(result):
     )
 
 
+def stop_group(process, killpg):
+    # The probe runs in its own session; stop every process that it left behind.
+    with contextlib.suppress(ProcessLookupError):
+        killpg(process.pid, signal.SIGKILL)
+
+
+def wait_for_probe(process, killpg):
+    # Return the exit code, or an actionable failure when the probe does not finish.
+    driver = "check the NVIDIA driver and the GPU, then run the check again"
+    try:
+        code = process.wait(timeout=PROBE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        code = None
+    stop_group(process, killpg)
+    if code is not None:
+        return code
+    try:
+        process.wait(timeout=KILL_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return f"the runtime probe hung in the driver and did not stop; {driver}"
+    return f"the runtime probe did not finish in {PROBE_TIMEOUT} seconds; {driver}"
+
+
+def read_result(path):
+    # Read at most one byte over the limit and never follow a symbolic link.
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return b""
+    try:
+        with os.fdopen(descriptor, "rb") as source:
+            return source.read(OUTPUT_LIMIT + 1)
+    except OSError:
+        return b""
+
+
+def decode_probe(raw):
+    # Return a valid probe result, or None.
+    if len(raw) > OUTPUT_LIMIT:
+        return None
+    try:
+        result = json.loads(raw)
+    except ValueError:
+        return None
+    return result if valid_probe(result) else None
+
+
+def exit_failure(code, lines, retry):
+    if code < 0:
+        name = signal.Signals(-code).name if -code in signal.valid_signals() else str(-code)
+        if code == -signal.SIGKILL:
+            return (f"the runtime probe was killed by signal {name} (often out of memory); "
+                    "free memory or raise the memory limit and run the check again")
+        return f"the runtime probe was killed by signal {name}; check the system log and run the check again"
+    last = next((line.strip() for line in reversed(lines) if line.strip()), f"exit status {code}")
+    return f"the runtime probe failed ({last}); {retry}"
+
+
 def run_probe(quantized, gpu_uuid, popen=subprocess.Popen, killpg=os.killpg):
     # Return the runner-like child result, or None and an actionable failure.
     retry = "reinstall the training runtime from the lock and run the check again"
@@ -336,31 +392,15 @@ def run_probe(quantized, gpu_uuid, popen=subprocess.Popen, killpg=os.killpg):
         with open(work / "stdout", "wb") as stdout, open(work / "stderr", "wb") as stderr:
             process = popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, cwd=work,
                             env=probe_environment(work, gpu_uuid), start_new_session=True)
-            try:
-                code = process.wait(timeout=PROBE_TIMEOUT)
-            except subprocess.TimeoutExpired:
-                killpg(process.pid, signal.SIGKILL)
-                try:
-                    process.wait(timeout=KILL_TIMEOUT)
-                except subprocess.TimeoutExpired:
-                    hung = "the runtime probe hung in the driver and did not stop"
-                    return None, f"{hung}; check the NVIDIA driver and the GPU"
-                return None, f"the runtime probe did not finish in {PROBE_TIMEOUT} seconds; {retry}"
+            code = wait_for_probe(process, killpg)
+        if isinstance(code, str):
+            return None, code
         lines = tail(work / "stderr") or tail(work / "stdout")
-        raw = result_path.read_bytes()[:OUTPUT_LIMIT + 1] if result_path.is_file() else b""
-    if code < 0:
-        name = signal.Signals(-code).name if -code in signal.valid_signals() else str(-code)
-        remedy = "free memory or raise the memory limit" if code == -signal.SIGKILL else "check the system log"
-        note = " (often out of memory)" if code == -signal.SIGKILL else ""
-        return None, f"the runtime probe was killed by signal {name}{note}; {remedy} and run the check again"
+        raw = read_result(result_path)
     if code != 0:
-        last = next((line.strip() for line in reversed(lines) if line.strip()), f"exit status {code}")
-        return None, f"the runtime probe failed ({last}); {retry}"
-    try:
-        result = json.loads(raw) if len(raw) <= OUTPUT_LIMIT else None
-    except ValueError:
-        result = None
-    if not valid_probe(result):
+        return None, exit_failure(code, lines, retry)
+    result = decode_probe(raw)
+    if result is None:
         return None, f"the runtime probe gave no valid result; {retry}"
     return result, None
 
@@ -402,9 +442,13 @@ def check(name, problems, target, cpu_smoke_warning=False):
     return {"name": name, "status": status, "problems": bounded, "omitted": max(0, len(problems) - PROBLEM_LIMIT)}
 
 
-def guarded(name, compute, target, cpu_smoke_warning=False):
+def guarded(name, compute, target, cpu_smoke_warning=False, sync=CHECKER_BUG):
+    # A missing packaging module is an installation problem; any other error is a checker bug.
     try:
         problems = compute()
+    except ImportError as error:
+        problems = [f"check could not run ({type(error).__name__}: {error}); {sync}"]
+        cpu_smoke_warning = False
     except Exception as error:  # noqa: BLE001 - a broken check is a failure, never a traceback.
         problems = [f"check could not run ({type(error).__name__}: {error}); {CHECKER_BUG}"]
         cpu_smoke_warning = False
@@ -419,9 +463,10 @@ def attempt(compute):
 
 
 def picked(value, error, key):
+    # Return the shared value, or its key, or raise the error that computing it gave.
     if error is not None:
         raise error
-    return value[key]
+    return value if key is None else value[key]
 
 
 def digest(path):
@@ -429,38 +474,46 @@ def digest(path):
 
 
 def report(worker, target, gpu_uuid=None, popen=subprocess.Popen):
-    from packaging.tags import sys_tags
-
     distributions = list(metadata.distributions())
-    locked = locked_versions(LOCK.read_text(encoding="utf-8"))
-    # os came from the standard library before the site-packages insertion; sysconfig can
+    locked, locked_error = attempt(lambda: locked_versions(LOCK.read_text(encoding="utf-8")))
+    # os came from the standard library before site-packages was added; sysconfig can
     # load a shadowing _sysconfigdata module from site-packages.
     stdlib = Path(os.__file__).parent
     site = worker.runtime_site()
     try:
         probe, failure = run_probe(target in QUANTIZED, gpu_uuid, popen)
+    except OSError as error:
+        probe, failure = None, f"the runtime probe could not start ({type(error).__name__}: {error}); {worker.SYNC}"
     except Exception as error:  # noqa: BLE001 - the dependent checks report the failure.
         probe, failure = None, f"the runtime probe could not run ({type(error).__name__}); {CHECKER_BUG}"
     mapped, mapped_error = attempt(lambda: probe_checks(worker, probe, failure, target, gpu_uuid))
     forbidden = stdlib_names([stdlib, stdlib / "lib-dynload"])
     found, found_error = attempt(lambda: dict(zip(("shadows", "startup"), site_problems(
-        site, owned_startup_files(distributions, locked), forbidden))))
+        site, owned_startup_files(distributions, picked(locked, locked_error, None)), forbidden))))
 
     def python():
         problem = worker.python_problem((sys.version_info.major, sys.version_info.minor))
         return [problem] if problem else []
 
+    def versions():
+        from packaging.tags import sys_tags
+
+        return lock_problems(picked(locked, locked_error, None), distributions, set(sys_tags()), worker.SYNC)
+
+    def guard(name, compute, cpu_smoke_warning=False):
+        return guarded(name, compute, target, cpu_smoke_warning=cpu_smoke_warning, sync=worker.SYNC)
+
     checks = [
-        guarded("python", python, target),
-        guarded("runtime-layout", lambda: layout_problems(runtime_root(), stdlib, site), target, True),
-        guarded("standard-library",
-                lambda: picked(mapped, mapped_error, "stdlib") + picked(found, found_error, "shadows"), target),
-        guarded("startup-files", lambda: picked(found, found_error, "startup"), target, cpu_smoke_warning=True),
-        guarded("dependencies", lambda: dependency_problems(worker), target),
-        guarded("locked-versions", lambda: lock_problems(locked, distributions, set(sys_tags()), worker.SYNC), target),
-        guarded("native-libraries", lambda: picked(mapped, mapped_error, "native"), target),
-        guarded("driver-libraries", lambda: picked(mapped, mapped_error, "driver"), target, cpu_smoke_warning=True),
-        guarded("accelerator", lambda: picked(mapped, mapped_error, "accelerator"), target, cpu_smoke_warning=True),
+        guard("python", python),
+        guard("runtime-layout", lambda: layout_problems(runtime_root(), stdlib, site), cpu_smoke_warning=True),
+        guard("standard-library",
+              lambda: picked(mapped, mapped_error, "stdlib") + picked(found, found_error, "shadows")),
+        guard("startup-files", lambda: picked(found, found_error, "startup"), cpu_smoke_warning=True),
+        guard("dependencies", lambda: dependency_problems(worker)),
+        guard("locked-versions", versions),
+        guard("native-libraries", lambda: picked(mapped, mapped_error, "native")),
+        guard("driver-libraries", lambda: picked(mapped, mapped_error, "driver"), cpu_smoke_warning=True),
+        guard("accelerator", lambda: picked(mapped, mapped_error, "accelerator"), cpu_smoke_warning=True),
     ]
     facts = probe["facts"] if probe is not None and probe["facts"] is not None else {}
     accelerator = None
@@ -470,7 +523,7 @@ def report(worker, target, gpu_uuid=None, popen=subprocess.Popen):
     result.update(
         accelerator=accelerator, workerSHA256=digest(WORKER), lockSHA256=digest(LOCK), checks=checks,
         status="rejected" if any(item["status"] == "fail" for item in checks) else "accepted",
-        **{key: facts.get(key) for key in STABLE_KEYS[1:]},
+        **{key: facts.get(key) for key in FACT_KEYS},
     )
     return result
 
@@ -501,21 +554,25 @@ def main(args=None):
         parser.error("--gpu-uuid must be a GPU UUID such as GPU-01234567-89ab-cdef-0123-456789abcdef")
     if not (sys.flags.isolated and sys.flags.no_site):
         parser.error("run the check as the runner does: bin/python3 -I -S -B")
-    target = options.target
+    target, worker = options.target, None
     try:
         worker = load_module("training_worker", WORKER)
+        # Append, unlike the worker: a planted standard-library name in site-packages must
+        # not run in the checker before the shadowing scan finds it. The probe uses the runner order.
         site = str(worker.runtime_site())
         if site not in sys.path:
-            sys.path.insert(0, site)
+            sys.path.append(site)
         result = report(worker, target, options.gpu_uuid)
+    except ImportError as error:
+        return internal_error(target, error, worker.SYNC if worker is not None else CHECKER_BUG)
     except Exception as error:  # noqa: BLE001 - an internal error still gives one bounded JSON object.
         return internal_error(target, error)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 1 if result["status"] == "rejected" else 0
 
 
-def internal_error(target, error):
-    print(json.dumps(skeleton(target, mask(f"check could not run ({type(error).__name__}: {error}); {CHECKER_BUG}")),
+def internal_error(target, error, remedy=CHECKER_BUG):
+    print(json.dumps(skeleton(target, mask(f"check could not run ({type(error).__name__}: {error}); {remedy}")),
                      indent=2, sort_keys=True))
     return 2
 

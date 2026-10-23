@@ -85,12 +85,13 @@ only the Axolotl candidate; a TRL/Unsloth experiment is not an accepted trainer.
 ### Runtime check
 
 Run `"$PYTHON" -I -S -B training/axolotl/check_environment.py` with the runtime's
-own interpreter, as the runner does. The check refuses other flags. It adds only
-the runtime site-packages, so `.pth` files never run, and it writes no bytecode
-into the runtime root. It prints one bounded JSON report, version 1.
+own interpreter, as the runner does. The check refuses to run without `-I` and
+`-S`, and it writes no bytecode even without `-B`. It adds the runtime
+site-packages after the standard library, so `.pth` files never run. It prints
+one bounded JSON report, version 1.
 
 The exit status is 0 for `accepted` and 1 for `rejected`. The exit status 2 has
-two causes. An internal error prints the same JSON keys with `status`
+two causes. An internal error prints the same JSON keys with the status
 `rejected`, empty `checks` and an `error` text. A usage error prints argparse
 usage text on standard error and no JSON. The `--target` option selects the target:
 
@@ -100,16 +101,16 @@ usage text on standard error and no JSON. The `--target` option selects the targ
 | `smoke-lora` or `representative-qlora` | Each problem has the status `fail` and rejects the report |
 
 For a preset, give `--gpu-uuid` with the trainer GPU UUID, in the same format
-that the supervisor accepts. The check then sets
-`CUDA_VISIBLE_DEVICES` to that GPU for its child process, as the runner does.
-Without it, a preset target fails the `accelerator` check.
+that the supervisor accepts. The check then sets `CUDA_VISIBLE_DEVICES` to that
+GPU for its child process, as the runner does. Without it, a preset target fails
+the `accelerator` check.
 
 | Report field | Value |
 | --- | --- |
-| `version`, `target`, `status` | `1`, the selected target, and `accepted` or `rejected` |
+| `version`, `target`, `status` | `1`, the selected target (`null` when the exit status 2 comes before target selection), and `accepted` or `rejected` |
 | `python`, `lockTarget` | The interpreter version, and `CPython 3.12.14`, the interpreter of the lock |
 | `workerSHA256`, `lockSHA256` | SHA-256 of the embedded worker and of the lock |
-| `accelerator` | `cuda`, `cpu`, or `null` when Torch does not load |
+| `accelerator` | `cuda`, `cpu`, or `null` when the probe or Torch gives no facts |
 | `torch`, `cuda`, `driverCuda`, `archList`, `devices` | The Torch facts, or `null` when unknown |
 | `checks` | Each entry has `name`, `status` (`pass`, `warn` or `fail`), at most 20 `problems` and an `omitted` count |
 | `error` | `null`, or the internal error text for the exit status 2 |
@@ -119,19 +120,22 @@ Without it, a preset target fails the `accelerator` check.
 | `python` | The runner rule: Python 3.12 or newer |
 | `runtime-layout` | Preset only: not a virtual environment, and a root with regular `bin/python3`, site-packages and standard library |
 | `standard-library` | Native standard-library modules load, and site-packages has no module with a standard-library name and no `sitecustomize` or `usercustomize` |
-| `startup-files` | Preset only: each `.pth` file in site-packages is in the `RECORD` of a locked wheel, with the same hash |
+| `startup-files` | Preset only: the `RECORD` of a locked wheel lists each `.pth` file in site-packages |
 | `dependencies` | The exact deviation contract, the security floors and the worker source guard |
 | `locked-versions` | The installed names and versions match the lock, and each wheel tag fits this interpreter |
-| `native-libraries` | Torch loads, and for QLoRA the bitsandbytes library for the Torch CUDA build and the package load |
+| `native-libraries` | Torch loads. For QLoRA, the bitsandbytes CUDA library and the bitsandbytes package load |
 | `driver-libraries` | Preset only: `libcuda.so.1` from the NVIDIA driver loads |
 | `accelerator` | Preset only: the Torch CUDA build, the driver, the GPU architecture, BF16 and bitsandbytes for QLoRA |
 
-The standard-library names come from the standard-library directories and
-from `sys.stdlib_module_names`. The native, driver and accelerator checks run in a
-child process with `-I -S -B`. The child gets the runner environment and puts the
-runtime site-packages first, as the worker does. The runner drops all other
-variables, such as `LD_LIBRARY_PATH`, `LD_PRELOAD` and `BNB_CUDA_VERSION`. Thus
-the child does not get them. The check stops a child that runs longer than 300 seconds.
+The standard-library names come from `sys.stdlib_module_names` and from the
+private names, such as `_sysconfigdata_*`, in the standard-library directories.
+The runner and the checker use `-S`, so `.pth` files never run.
+
+The native, driver and accelerator checks run in a child process with `-I -S -B`.
+The child gets the runner environment and puts the runtime site-packages first,
+as the worker does. The runner drops all other variables, such as
+`LD_LIBRARY_PATH`, `LD_PRELOAD` and `BNB_CUDA_VERSION`. Thus the child does not
+get them. The check stops a child that runs longer than 300 seconds.
 
 `uv pip sync --require-hashes` checks the integrity of the installation. The runtime
 check finds version drift and wheels for another interpreter or platform. It does

@@ -145,6 +145,7 @@ def fake_popen(result=None, codes=(0,), stderr=b"", stdout=b"", raw=None):
 FLAGS = {name: getattr(sys.flags, name) for name in dir(sys.flags) if isinstance(getattr(sys.flags, name), int) and not name.startswith("_")}
 ISOLATED = SimpleNamespace(**{**FLAGS, "isolated": 1, "no_site": 1})
 RETRY = "reinstall the training runtime from the lock and run the check again"
+DRIVER = "check the NVIDIA driver and the GPU, then run the check again"
 
 
 class RuntimeTests(unittest.TestCase):
@@ -243,25 +244,25 @@ class RuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             stdlib, site = Path(directory) / "stdlib", Path(directory) / "site"
             for name in ("_sysconfigdata__linux_x86_64-linux-gnu.py", "LICENSE.txt", "site-packages/", "lib-dynload/",
-                         "lib-dynload/_private_native.cpython-312-x86_64-linux-gnu.so"):
+                         "lib-dynload/_private_native.cpython-312-x86_64-linux-gnu.so", "test/", "test/__init__.py",
+                         "extra_public.py"):
                 path = stdlib / name.rstrip("/")
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.mkdir() if name.endswith("/") else path.write_text("")
             forbidden = checker.stdlib_names([stdlib, stdlib / "lib-dynload", stdlib / "missing"])
             self.assertLessEqual({"_sysconfigdata__linux_x86_64-linux-gnu", "_private_native", "json"}, forbidden)
-            self.assertFalse({"LICENSE", "LICENSE.txt", "site-packages"} & forbidden)
+            # Some builds ship the public test package; torchao installs a top-level test package.
+            self.assertFalse({"LICENSE", "LICENSE.txt", "site-packages", "test", "extra_public"} & forbidden)
             site.mkdir()
-            owned = b"import os\n"
+            owned = b"import os\n"  # The content does not matter: .pth files never run with -S.
             for name in ("json.py", "json.txt", "sitecustomize.py", "usercustomize.pyc", "_ssl.cpython-312-x86_64-linux-gnu.so",
-                         "_sysconfigdata__linux_x86_64-linux-gnu.py", "_private_native.py", "torch/", "email/",
-                         "torch-2.14.0.dist-info/", "owned.pth", "changed.pth", "stray.pth", "README.txt"):
+                         "_sysconfigdata__linux_x86_64-linux-gnu.py", "_private_native.py", "torch/", "email/", "test/",
+                         "torch-2.14.0.dist-info/", "owned.pth", "stray.pth", "README.txt"):
                 if name.endswith("/"):
                     (site / name).mkdir()
                 else:
                     (site / name).write_bytes(owned if name.endswith(".pth") else b"")
-            (site / "changed.pth").write_bytes(b"import evil\n")
-            shadows, startup = checker.site_problems(site, {
-                "owned.pth": ("sha256", record_hash(owned)[7:]), "changed.pth": ("sha256", record_hash(owned)[7:])}, forbidden)
+            shadows, startup = checker.site_problems(site, {"owned.pth"}, forbidden)
             self.assertEqual(shadows, [
                 "site-packages has _private_native.py, which shadows the standard-library module _private_native; remove it",
                 "site-packages has _ssl.cpython-312-x86_64-linux-gnu.so, which shadows the standard-library module _ssl; remove it",
@@ -273,19 +274,18 @@ class RuntimeTests(unittest.TestCase):
                 "site-packages has usercustomize.pyc; remove the startup customization",
             ])
             self.assertEqual(startup, [
-                "site-packages has the startup file changed.pth, which no locked wheel installs; remove it",
                 "site-packages has the startup file stray.pth, which no locked wheel installs; remove it",
             ])
             self.assertEqual(checker.site_problems(site / "missing", {}, forbidden), ([], []))
 
     def test_only_startup_files_recorded_by_locked_wheels_are_owned(self):
         distributions = [
-            wheel("coloredlogs", record=f"coloredlogs.pth,{record_hash(b'a')},1\ncoloredlogs/__init__.py,{record_hash(b'b')},1\n"),
-            wheel("unlocked", record=f"unlocked.pth,{record_hash(b'c')},1\n"),
-            wheel("setuptools", record=f"setuptools/nested.pth,{record_hash(b'd')},1\nunhashed.pth,,\n"),
+            wheel("coloredlogs", files=["coloredlogs.pth", "coloredlogs/__init__.py"]),
+            wheel("unlocked", files=["unlocked.pth"]),
+            wheel("setuptools", files=["setuptools/nested.pth", "distutils-precedence.pth"]),
         ]
         owned = checker.owned_startup_files(distributions, {"coloredlogs": Version("1"), "setuptools": Version("1")})
-        self.assertEqual(owned, {"coloredlogs.pth": ("sha256", record_hash(b"a")[7:])})
+        self.assertEqual(owned, {"coloredlogs.pth", "distutils-precedence.pth"})
 
     def test_locked_versions_read_hash_locked_requirements(self):
         text = "Torch==2.14.0 \\\n    --hash=sha256:abc\nnvidia_cublas==13.1.1.3 \\\n    --hash=sha256:def\n# comment==1\nmarker==1.0 ; sys_platform != 'darwin'\n"
@@ -406,14 +406,48 @@ class RuntimeTests(unittest.TestCase):
 
     def test_timeouts_kill_the_process_group_without_blocking(self):
         for codes, expected in (
-            ((None, -9), f"the runtime probe did not finish in 300 seconds; {RETRY}"),
-            ((None, None), "the runtime probe hung in the driver and did not stop; check the NVIDIA driver and the GPU"),
+            ((None, -9), f"the runtime probe did not finish in 300 seconds; {DRIVER}"),
+            ((None, None), f"the runtime probe hung in the driver and did not stop; {DRIVER}"),
         ):
             killed = []
             with self.subTest(codes=codes):
                 result = checker.run_probe(False, None, fake_popen(codes=codes)[0], lambda pid, number: killed.append((pid, number)))
                 self.assertEqual(result, (None, expected))
                 self.assertEqual(killed, [(4321, signal.SIGKILL)])
+
+    def test_the_process_group_is_always_stopped_and_a_gone_group_is_not_an_error(self):
+        killed = []
+        self.assertEqual(checker.run_probe(False, None, fake_popen(probe_result())[0], lambda pid, number: killed.append(number)),
+                         (probe_result(), None))
+        self.assertEqual(killed, [signal.SIGKILL])
+
+        def gone(pid, number):
+            raise ProcessLookupError(pid)
+
+        for codes in ((0,), (None, -9)):
+            with self.subTest(codes=codes):
+                self.assertEqual(checker.wait_for_probe(FakeProcess(codes), gone), 0 if codes == (0,) else
+                                 f"the runtime probe did not finish in 300 seconds; {DRIVER}")
+
+    def test_result_file_is_bounded_and_not_followed_through_a_link(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target, link = Path(directory) / "target.json", Path(directory) / "result.json"
+            target.write_text(json.dumps(probe_result()))
+            link.symlink_to(target)
+            self.assertEqual(checker.read_result(link), b"")
+            self.assertEqual(checker.read_result(Path(directory) / "missing.json"), b"")
+            self.assertEqual(checker.decode_probe(checker.read_result(target)), probe_result())
+            target.write_bytes(b" " * (checker.OUTPUT_LIMIT + 10))
+            self.assertEqual(len(checker.read_result(target)), checker.OUTPUT_LIMIT + 1)
+        self.assertIsNone(checker.decode_probe(b" " * (checker.OUTPUT_LIMIT + 1)))
+        self.assertIsNone(checker.decode_probe(b"{broken"))
+        self.assertIsNone(checker.decode_probe(b"[]"))
+
+        def linked(command, **options):
+            Path(command[-1]).symlink_to("/etc/hostname")
+            return FakeProcess((0,))
+
+        self.assertEqual(checker.run_probe(False, None, linked, lambda *args: None), (None, f"the runtime probe gave no valid result; {RETRY}"))
 
     def test_failing_child_process_maps_to_an_actionable_problem(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -483,10 +517,11 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(checker.check("python", problems, "cpu-smoke"), {"name": "python", "status": "fail", "problems": problems[:20], "omitted": 2})
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"HOME": "/home/operator"}):
             text = (f"x {checker.runtime_root()}/lib/a.so {sys.base_prefix}/b /home/operator/c {directory}/d {os.getcwd()}/e "
-                    "/opt/secret/f.so in lib/g.so " + "y" * 400)
+                    "/opt/secret/f.so in lib/g.so /home/operatorX/z " + "y" * 400)
             masked = checker.check("python", [text], "cpu-smoke")["problems"][0]
         self.assertTrue(masked.startswith("x <runtime>/lib/a.so "), masked)
-        for token in ("/b <home>/c <tmp>", " <cwd>/e <path> in lib/g.so y"):
+        self.assertNotIn("<home>X", masked)
+        for token in ("/b <home>/c <tmp>", " <cwd>/e <path> in lib/g.so <path> y"):
             self.assertIn(token, masked)
         for literal in (directory, sys.base_prefix + "/b", "/home/operator", "/opt/secret"):
             self.assertNotIn(literal, masked)
@@ -581,7 +616,26 @@ class RuntimeTests(unittest.TestCase):
         with patch.object(checker.metadata, "distributions", return_value=[]):
             result = checker.report(worker, "cpu-smoke", None, explode)
         native = next(item for item in result["checks"] if item["name"] == "native-libraries")
-        self.assertEqual(native["problems"], [f"the runtime probe could not run (OSError); {checker.CHECKER_BUG}"])
+        self.assertEqual(native["problems"], [f"the runtime probe could not start (OSError: no temporary directory); {worker.SYNC}"])
+
+        def broken(*args, **options):
+            raise RuntimeError("unexpected")
+
+        with patch.object(checker.metadata, "distributions", return_value=[]):
+            result = checker.report(worker, "cpu-smoke", None, broken)
+        native = next(item for item in result["checks"] if item["name"] == "native-libraries")
+        self.assertEqual(native["problems"], [f"the runtime probe could not run (RuntimeError); {checker.CHECKER_BUG}"])
+
+    def test_a_missing_packaging_module_is_an_installation_problem(self):
+        def missing():
+            raise ImportError("No module named 'packaging'")
+
+        self.assertEqual(checker.guarded("locked-versions", missing, "cpu-smoke", sync=worker.SYNC)["problems"],
+                         [f"check could not run (ImportError: No module named 'packaging'); {worker.SYNC}"])
+        with patch.object(checker, "report", side_effect=ImportError("No module named 'packaging'")):
+            code, output = self.main([])
+        self.assertEqual((code, json.loads(output)["error"]),
+                         (2, f"check could not run (ImportError: No module named 'packaging'); {worker.SYNC}"))
 
     def test_check_writes_no_bytecode_in_an_isolated_runtime(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -590,14 +644,24 @@ class RuntimeTests(unittest.TestCase):
             site = next(runtime.glob("lib/python*/site-packages"))
             shutil.copytree(Path(importlib.util.find_spec("packaging").origin).parent, site / "packaging",
                             ignore=shutil.ignore_patterns("__pycache__"))
+            # packaging.tags imports logging; a planted copy must not run in the checker.
+            marker = Path(directory) / "imported"
+            (site / "logging.py").write_text(f"import sys\nopen({str(marker)!r}, 'a').write(sys.argv[0] + '\\n')\nraise SystemExit(9)\n")
             before = sorted(path.relative_to(runtime) for path in runtime.rglob("*"))
             environment = {key: value for key, value in os.environ.items() if key != "PYTHONDONTWRITEBYTECODE"}
             completed = subprocess.run([str(runtime / "bin/python3"), "-I", "-S", str(ROOT / "training/axolotl/check_environment.py")],
                                        env=environment, capture_output=True, check=False, timeout=120)
-            self.assertIn(completed.returncode, (0, 1), completed.stderr)
+            self.assertEqual(completed.returncode, 1, completed.stderr)
             result = json.loads(completed.stdout)
             self.assertEqual(set(result), STABLE_REPORT_KEYS | {"error"})
             self.assertEqual(sorted(path.relative_to(runtime) for path in runtime.rglob("*")), before)
+            imported = marker.read_text().splitlines() if marker.exists() else []
+            self.assertFalse([line for line in imported if line.endswith("check_environment.py")])
+            standard = next(item for item in result["checks"] if item["name"] == "standard-library")
+            self.assertIn("site-packages has logging.py, which shadows the standard-library module logging; remove it",
+                          standard["problems"])
+            versions = next(item for item in result["checks"] if item["name"] == "locked-versions")
+            self.assertNotIn("check could not run", " ".join(versions["problems"]))
 
 
 STABLE_REPORT_KEYS = {"version", "target", "status", "python", "lockTarget", "workerSHA256", "lockSHA256",
