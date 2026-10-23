@@ -147,13 +147,13 @@ func TestExclusiveUserRecoveryRejectsWrongWorkloadWithoutStoppingUserWork(t *tes
 	runtime := &exclusiveRuntime{}
 	controller := testController(t, stateStore, runtime)
 	controller.id = control.NewUUID
-	controller.config.VerifyTimeout = time.Millisecond
 	if _, err := controller.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := controller.TransferToUser(ctx, control.WorkloadMedia, "test"); err != nil {
 		t.Fatal(err)
 	}
+	controller.config.VerifyTimeout = time.Millisecond
 	runtime.calls = nil
 	state, err := controller.RecoverUser(ctx, control.WorkloadIdle, "test")
 	if err == nil || state.Owner != control.OwnerUser || state.Admission != control.AdmissionClosed || !runtime.mediaReady || len(runtime.calls) != 0 {

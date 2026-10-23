@@ -38,12 +38,14 @@ function files({ serial = true } = {}) {
     }
   }
   for (const path of [
+    '.github/CODEOWNERS',
     '.github/dependabot.yml', '.github/scripts/policy-guard.cjs',
     '.github/scripts/dependabot-auto-merge.cjs', '.github/scripts/pr-branch-updater.cjs',
     '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
     'release-version.json', '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs', '.github/scripts/policy-ci-reuse.cjs',
     '.github/scripts/policy-pr-scope.cjs', '.github/scripts/pr-validation-scope.cjs',
     '.github/scripts/policy-action-pins.cjs', '.github/scripts/policy-dependabot.cjs',
+    '.github/scripts/policy-lockfiles.cjs', '.github/scripts/policy-admission.cjs',
     '.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py',
     '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
@@ -871,7 +873,7 @@ test('automation source changes require a trusted human at immutable event refs'
       if (!bot && ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(association)) {
         await verifyDependabotAuthor(github, context);
       } else await assert.rejects(verifyDependabotAuthor(github, context), /trusted human author/);
-      assert.deepEqual(reads.map(read => read.ref), Array.from({ length: 8 }, () => ['a'.repeat(40), 'b'.repeat(40)]).flat());
+      assert.deepEqual(reads.map(read => read.ref), Array.from({ length: 10 }, () => ['a'.repeat(40), 'b'.repeat(40)]).flat());
     }
   }
   const { github, context } = authorFixture({ changed: false });
@@ -1006,7 +1008,139 @@ test('reverted live PR files cannot exempt a protected change at the inspected e
   github.paginate = async () => [{ filename: 'README.md' }];
   github.rest.pulls.get = async () => ({ data: { head: { sha: 'reverted-live-head' },
     author_association: 'NONE', user: { login: 'outsider', type: 'User' } } });
-  await assert.rejects(run({ github, context }), /trusted human author/);
+  await assert.rejects(run({ github, context }), /head or base changed/);
+});
+
+function liveGuardFixture() {
+  const baseline = files({ serial: false });
+  const candidate = { ...baseline };
+  const pull = { number: 1, state: 'open', author_association: 'OWNER',
+    user: { login: 'mickey-kras', id: 24433677, type: 'User' },
+    head: { sha: 'b'.repeat(40) }, base: { sha: 'a'.repeat(40), ref: 'main' } };
+  const context = { repo: { owner: 'mickey-kras', repo: 'gpu-workload-supervisor' }, payload: { pull_request: pull } };
+  let reads = 0;
+  const github = { rest: {
+    pulls: { get: async () => { reads++; return { data: pull }; } },
+    git: {
+      getCommit: async () => ({ data: { tree: { sha: 'c'.repeat(40) } } }),
+      getTree: async () => ({ data: { truncated: false, tree: Object.keys(candidate).map(path => ({ type: 'blob', mode: '100644', path })) } }),
+    },
+    repos: { getContent: async ({ path, ref }) => {
+      const source = (ref === pull.base.sha ? baseline : candidate)[path];
+      return { data: { type: 'file', encoding: 'base64',
+        sha: require('node:crypto').createHash('sha1').update(source).digest('hex'),
+        content: Buffer.from(source).toString('base64') } };
+    } },
+  } };
+  return { baseline, candidate, pull, context, github, reads: () => reads };
+}
+
+test('registry-only lock updates pass the live guard without code admission', async () => {
+  const { run } = require('./policy-guard.cjs');
+  const fixture = liveGuardFixture();
+  const { candidate, github, context, pull } = fixture;
+  const path = '.github/scripts/package-lock.json';
+  const lock = JSON.parse(candidate[path]);
+  const location = Object.keys(lock.packages).find(key => key !== '');
+  const entry = lock.packages[location];
+  const name = location.split('node_modules/').at(-1);
+  entry.version = '99.0.1';
+  entry.resolved = `https://registry.npmjs.org/${name}/-/${name.split('/').at(-1)}-99.0.1.tgz`;
+  candidate[path] = JSON.stringify(lock);
+  await run({ github, context });
+  assert.equal(fixture.reads(), 2);
+  let reads = 0;
+  github.rest.pulls.get = async () => ({ data: reads++ === 0 ? pull : { ...pull, base: { ...pull.base, sha: 'd'.repeat(40) } } });
+  await assert.rejects(run({ github, context }), /changed during policy inspection/);
+});
+
+test('review admission does not exempt semantic policy controls or unsafe lockfiles', () => {
+  const baseline = files({ serial: false });
+  const path = '.github/scripts/eslint.config.cjs';
+  const candidate = { ...baseline, [path]: baseline[path] + '\n// Reviewed change\n' };
+  assert.ok(inspectActivated(candidate, baseline).includes('JavaScript maintainability policy was changed'));
+  const policy = '.github/scripts/policy-guard.cjs';
+  const digest = content => require('node:crypto').createHash('sha256').update(content).digest('hex');
+  candidate[policy] = candidate[policy].replace(digest(baseline[path]), digest(candidate[path]));
+  assert.deepEqual(inspectActivated(candidate, baseline, new Set([path, policy])), []);
+  const lockPath = '.github/scripts/package-lock.json';
+  const lock = JSON.parse(candidate[lockPath]);
+  lock.packages[Object.keys(lock.packages).find(key => key !== '')].hasInstallScript = true;
+  candidate[lockPath] = JSON.stringify(lock);
+  assert.ok(inspectActivated(candidate, baseline, new Set(Object.keys(candidate))).some(message => message.includes('new install script')));
+});
+
+test('owner-authored policy execution changes need independent exact-head admission', async () => {
+  const { run } = require('./policy-guard.cjs');
+  for (const path of require('./policy-admission.cjs').POLICY_SOURCES) {
+    const fixture = liveGuardFixture();
+    fixture.candidate[path] += '\n';
+    await assert.rejects(run(fixture), /independent exact-head owner admission/, path);
+  }
+});
+
+test('independently approved bot policy changes still enforce lock semantics', async () => {
+  const { run } = require('./policy-guard.cjs');
+  const fixture = liveGuardFixture();
+  fixture.pull.user = { login: 'implementation[bot]', id: 1234, type: 'Bot' };
+  fixture.candidate['.github/scripts/policy-lockfiles.cjs'] += '\n';
+  fixture.github.rest.pulls.listReviews = () => {};
+  const rule = { type: 'pull_request', ruleset_id: 1, ruleset_source_type: 'Repository',
+    ruleset_source: `${fixture.context.repo.owner}/${fixture.context.repo.repo}`, parameters: {
+    require_code_owner_review: true, dismiss_stale_reviews_on_push: true,
+    require_last_push_approval: true, required_approving_review_count: 1,
+  } };
+  fixture.github.paginate = async route => typeof route === 'string' ? [rule] : [{
+    id: 1, user: { login: 'mickey-kras', id: 24433677, type: 'User' },
+    state: 'APPROVED', commit_id: fixture.pull.head.sha,
+  }];
+  fixture.github.request = async () => ({ data: {
+    id: 1, source_type: 'Repository', source: rule.ruleset_source,
+    enforcement: 'active', target: 'branch', bypass_actors: [], rules: [rule],
+  } });
+  await run(fixture);
+  const path = '.github/scripts/package-lock.json';
+  const lock = JSON.parse(fixture.candidate[path]);
+  lock.packages[Object.keys(lock.packages).find(key => key !== '')].hasInstallScript = true;
+  fixture.candidate[path] = JSON.stringify(lock);
+  await assert.rejects(run(fixture), /new install script/);
+});
+
+test('the guard import closure is independently protected', () => {
+  const { POLICY_SOURCES } = require('./policy-admission.cjs');
+  for (const path of POLICY_SOURCES.filter(path => path.endsWith('.cjs'))) {
+    const module = { exports: {} };
+    runInNewContext(readFileSync(path, 'utf8'), {
+      module, exports: module.exports, Buffer,
+      require(name) {
+        if (name.startsWith('./')) {
+          assert.ok(POLICY_SOURCES.includes(`.github/scripts/${name.slice(2)}`), `${path} imports ${name}`);
+        }
+        return require(name);
+      },
+    });
+  }
+});
+
+test('the live guard rejects npm redirection even when locks are unchanged', async () => {
+  const { run } = require('./policy-guard.cjs');
+  for (const path of require('./policy-lockfiles.cjs').FORBIDDEN_INPUTS) {
+    const fixture = liveGuardFixture();
+    fixture.candidate[path] = 'registry=https://evil.test\n';
+    await assert.rejects(run(fixture), /CI npm input redirection is forbidden/, path);
+  }
+});
+
+test('symlinks cannot substitute policy or lockfile content', async () => {
+  const { run } = require('./policy-guard.cjs');
+  const fixture = liveGuardFixture();
+  const readTree = fixture.github.rest.git.getTree;
+  fixture.github.rest.git.getTree = async () => {
+    const response = await readTree();
+    response.data.tree.find(entry => entry.path === '.github/scripts/package-lock.json').mode = '120000';
+    return response;
+  };
+  await assert.rejects(run(fixture), /must be regular files/);
 });
 
 test('protected source identity reads fail closed and detect deletion or rename', async () => {
@@ -1345,5 +1479,101 @@ test('Dependabot workflow and job names allow omission or string labels only', (
       else { workflow.name = name; workflow.jobs[job].name = name; }
       assert.deepEqual(inspectActivated({ ...baseline, [path]: YAML.stringify(workflow) }), []);
     }
+  }
+});
+
+
+test('exact-head admission covers executable helpers without relaxing workflow controls', () => {
+  const baseline = files({ serial: false });
+  for (const path of ['.github/actions/setup-goreleaser/action.yml',
+    '.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py',
+    '.github/scripts/install-goreleaser.sh', '.github/scripts/check-go-directives.go',
+    '.github/scripts/eslint.config.cjs']) {
+    const candidate = { ...baseline };
+    if (path.endsWith('action.yml')) {
+      const action = YAML.parse(candidate[path]);
+      action.description += ' Reviewed update';
+      candidate[path] = YAML.stringify(action);
+    } else candidate[path] += '\n# reviewed executable update\n';
+    assert.ok(inspectActivated(candidate, baseline).length > 0, path);
+    assert.ok(inspectActivated(candidate, baseline, new Set([path])).length > 0, path);
+    const actionPath = path.endsWith('action.yml');
+    const policyPath = ['.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py'].includes(path)
+      ? '.github/scripts/policy-ci-reuse.cjs' : '.github/scripts/policy-guard.cjs';
+    const { canonical, normalizeActionSteps } = require('./policy-action-pins.cjs');
+    const digest = content => require('node:crypto').createHash('sha256').update(content).digest('hex');
+    const fingerprint = content => {
+      if (!actionPath) return digest(content);
+      const action = YAML.parse(content);
+      return digest(JSON.stringify(canonical({ ...action,
+        runs: { ...action.runs, steps: normalizeActionSteps(action.runs.steps) } })));
+    };
+    candidate[policyPath] = candidate[policyPath].replace(fingerprint(baseline[path]), fingerprint(candidate[path]));
+    const admitted = new Set([path, policyPath]);
+    assert.deepEqual(inspectActivated(candidate, baseline, admitted), [], path);
+    const livePolicy = candidate[policyPath];
+    const constant = actionPath ? 'GORELEASER_ACTION_DIGEST'
+      : policyPath.endsWith('policy-ci-reuse.cjs') ? 'HELPER_HASHES' : 'EXECUTABLE_HASHES';
+    const declaration = livePolicy.match(new RegExp(`const ${constant} = (?:'[^']*'|\\{[\\s\\S]*?\\n\\});`))[0];
+    candidate[policyPath] = `/* ${declaration} */\n${baseline[policyPath]}`;
+    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0, `${path}: comment decoy`);
+    candidate[policyPath] = livePolicy;
+    assert.ok(inspectActivated(candidate, baseline, new Set(['unrelated'])).length > 0, path);
+    const ci = YAML.parse(candidate['.github/workflows/ci.yml']);
+    ci.jobs.go['continue-on-error'] = true;
+    candidate['.github/workflows/ci.yml'] = YAML.stringify(ci);
+    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0, path);
+  }
+});
+
+
+test('classifier admission requires matching policy and workflow digests', () => {
+  const baseline = files({ serial: false });
+  const helper = '.github/scripts/pr-validation-scope.cjs';
+  const policy = '.github/scripts/policy-pr-scope.cjs';
+  const workflow = '.github/workflows/pr-validation.yml';
+  const candidate = { ...baseline, [helper]: baseline[helper] + '\n// reviewed update\n' };
+  const admitted = new Set([helper, policy, workflow]);
+  assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
+  const hash = require('node:crypto').createHash('sha256');
+  const digest = hash.update(candidate[helper]).digest('hex');
+  const previous = baseline[policy].match(/const CLASSIFIER_DIGEST = '([a-f0-9]{64})';/)[1];
+  candidate[policy] = candidate[policy].replace(previous, digest);
+  assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
+  candidate[workflow] = candidate[workflow].replace(previous, digest);
+  assert.deepEqual(inspectActivated(candidate, baseline, admitted), []);
+  assert.ok(inspectActivated(candidate, baseline).length > 0);
+  candidate[policy] = `// const CLASSIFIER_DIGEST = '${digest}';\n${baseline[policy]}`;
+  assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
+  candidate[policy] = baseline[policy];
+  assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
+});
+
+
+test('release helper admission synchronizes policy and both runtime assertions', () => {
+  const baseline = files({ serial: false });
+  const policy = '.github/scripts/policy-release.cjs';
+  const workflow = '.github/workflows/release.yml';
+  const digest = content => require('node:crypto').createHash('sha256').update(content).digest('hex');
+  for (const helper of ['.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs']) {
+    const candidate = { ...baseline, [helper]: baseline[helper] + '\n// reviewed update\n' };
+    const admitted = new Set([helper, policy, workflow]);
+    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
+    const previous = digest(baseline[helper]);
+    const current = digest(candidate[helper]);
+    candidate[policy] = candidate[policy].replace(previous, current);
+    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
+    candidate[workflow] = candidate[workflow].replace(previous, current);
+    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
+    candidate[workflow] = candidate[workflow].replaceAll(previous, current);
+    assert.deepEqual(inspectActivated(candidate, baseline, admitted), []);
+    assert.ok(inspectActivated(candidate, baseline).length > 0);
+    const declaration = candidate[policy].match(/const RELEASE_HASHES = (\{[\s\S]*?\n\});/)[0];
+    candidate[policy] = `/* ${declaration} */\n${baseline[policy]}`;
+    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
+    candidate[policy] = baseline[policy];
+    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
+    candidate[policy] = candidate[policy].replace('const RELEASE_HASHES = {', 'const RELEASE_HASHES = {invalid');
+    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
   }
 });

@@ -1,4 +1,6 @@
 const YAML = require('yaml');
+const { FORBIDDEN_INPUTS, LOCKFILES, inspectLockfiles } = require('./policy-lockfiles.cjs');
+const { POLICY_SOURCES, reviewedHead, readPolicyConstant } = require('./policy-admission.cjs');
 const { createHash } = require('node:crypto');
 const { inspectReleaseEntry, inspectReleasePublish } = require('./policy-release.cjs');
 const { normalizeParallelCi, AGGREGATE_RUN } = require('./policy-ci-parallel.cjs');
@@ -7,7 +9,26 @@ const { normalizeCiReuse } = require('./policy-ci-reuse.cjs');
 const { canonical, normalizeActionSteps } = require('./policy-action-pins.cjs');
 const { inspectDependabot, verifyDependabotAuthor } = require('./policy-dependabot.cjs');
 
+const GORELEASER_ACTION_DIGEST = 'c88133b8d7e69681883fe0aa77a141453ace73146561612522b9cd5f485722ac';
+
+const EXECUTABLE_HASHES = {
+  ".github/scripts/install-goreleaser.sh": "de2e876e51298aec0ec86a42fdb850aaa2f95e3d86cd1fa67a6d5c1febbcc8b0",
+  ".github/scripts/check-go-directives.go": "f356bcb0bd9546d4ee133001335740bfb41623e4671554606895e6ab1a305489",
+  ".github/scripts/eslint.config.cjs": "72d5ad0cda934ad013c3b1ddb62bf6aa1b5a65caa457f18c5f6725ea93e48f31"
+};
+
+function expectedExecutableDigest(files, path, admitted) {
+  if (!admitted.has(path)) return EXECUTABLE_HASHES[path];
+  try {
+    const source = files['.github/scripts/policy-guard.cjs'] || '';
+    return readPolicyConstant(source, 'EXECUTABLE_HASHES')?.[path];
+  } catch {
+    return undefined; // The caller rejects a missing or malformed digest.
+  }
+}
+
 const REQUIRED_FILES = [
+  '.github/CODEOWNERS',
   '.github/workflows/pr-validation.yml', '.github/workflows/ci.yml',
   '.github/workflows/main.yml', '.github/workflows/policy-guard.yml',
   '.github/workflows/release.yml', '.github/workflows/codeql.yml',
@@ -19,6 +40,7 @@ const REQUIRED_FILES = [
   'release-version.json', '.github/scripts/policy-release.cjs', '.github/scripts/policy-ci-parallel.cjs', '.github/scripts/policy-ci-reuse.cjs',
   '.github/scripts/policy-pr-scope.cjs', '.github/scripts/pr-validation-scope.cjs',
   '.github/scripts/policy-action-pins.cjs', '.github/scripts/policy-dependabot.cjs',
+  '.github/scripts/policy-lockfiles.cjs', '.github/scripts/policy-admission.cjs',
   '.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py',
   '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
   '.github/scripts/pr-branch-updater.cjs', 'sonar-project.properties',
@@ -105,7 +127,7 @@ function createChecks(workflows, failures) {
   return { event, job, step, exactRun };
 }
 
-function inspectGoReleaser({ files, workflows, failures, checks, path, jobId, builds, expectedIf }) {
+function inspectGoReleaser({ files, workflows, failures, checks, path, jobId, builds, expectedIf, admitted = new Set() }) {
   const steps = workflows[path]?.jobs?.[jobId]?.steps || [];
   const setupName = 'Install verified GoReleaser';
   checks.step(path, jobId, setupName, { expectedIf });
@@ -124,17 +146,17 @@ function inspectGoReleaser({ files, workflows, failures, checks, path, jobId, bu
     if (doc.errors.length) throw doc.errors[0];
     const action = doc.toJS();
     const controls = { ...action, runs: { ...action?.runs, steps: normalizeActionSteps(action?.runs?.steps) } };
-    if (createHash('sha256').update(JSON.stringify(canonical(controls))).digest('hex') !==
-        'c88133b8d7e69681883fe0aa77a141453ace73146561612522b9cd5f485722ac') failures.push(`${actionPath} changed verified GoReleaser installer`);
+    const expected = admitted.has(actionPath)
+      ? readPolicyConstant(files['.github/scripts/policy-guard.cjs'], 'GORELEASER_ACTION_DIGEST')
+      : GORELEASER_ACTION_DIGEST;
+    if (createHash('sha256').update(JSON.stringify(canonical(controls))).digest('hex') !== expected) failures.push(`${actionPath} changed verified GoReleaser installer`);
   } catch {
     failures.push(`${actionPath} changed verified GoReleaser installer`);
   }
-  for (const [file, digest] of [
-    ['.github/scripts/install-goreleaser.sh', 'de2e876e51298aec0ec86a42fdb850aaa2f95e3d86cd1fa67a6d5c1febbcc8b0'],
-  ]) {
-    if (createHash('sha256').update(files[file] || '').digest('hex') !== digest) {
-      failures.push(`${file} changed verified GoReleaser installer`);
-    }
+  const installer = '.github/scripts/install-goreleaser.sh';
+  if (createHash('sha256').update(files[installer] || '').digest('hex') !==
+      expectedExecutableDigest(files, installer, admitted)) {
+    failures.push(`${installer} changed verified GoReleaser installer`);
   }
 }
 
@@ -161,7 +183,7 @@ function inspectTrivyUpload(steps, failures) {
   return guarded;
 }
 
-function inspectCi(files, workflows, failures, checks) {
+function inspectCi(files, workflows, failures, checks, admitted) {
   const { event, job, step, exactRun } = checks;
   const pr = '.github/workflows/pr-validation.yml';
   event(pr, 'pull_request');
@@ -199,7 +221,7 @@ function inspectCi(files, workflows, failures, checks) {
     'semgrep/semgrep:1.172.0@sha256:65dcd4408adda7c183a6b4550cb1e9b19f7f627a6fbb7e0559bd466bedc44d7b \\',
     'semgrep --test --config .semgrep.yml .github/semgrep-tests/maintainability.go',
   ]);
-  inspectGoReleaser({ files, workflows, failures, checks, path: ci, jobId: 'checks', builds: [
+  inspectGoReleaser({ files, workflows, failures, checks, admitted, path: ci, jobId: 'checks', builds: [
     ['Validate GoReleaser configuration', 'check'], ['Build snapshot artifacts', 'release --snapshot --clean'],
   ] });
   step(ci, 'checks', 'Verify snapshot archives', { run: ['tar -tzf', '(cd dist && sha256sum --check checksums.txt)'] });
@@ -245,7 +267,7 @@ function inspectCi(files, workflows, failures, checks) {
 
 }
 
-function inspectAdditionalWorkflows(files, workflows, failures, checks) {
+function inspectAdditionalWorkflows(files, workflows, failures, checks, admitted) {
   const { event, job, step } = checks;
   const main = '.github/workflows/main.yml';
   event(main, 'push');
@@ -274,8 +296,8 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
       reviewInputs['config-file'] !== './.github/dependency-review-config.yml') {
     failures.push('Dependency review inputs must use the protected config without overrides');
   }
-  inspectReleaseEntry(files, workflows, failures, checks);
-  inspectReleasePublish(files, workflows, failures, checks, inspectGoReleaser);
+  inspectReleaseEntry(files, workflows, failures, checks, admitted);
+  inspectReleasePublish(files, workflows, failures, checks, options => inspectGoReleaser({ ...options, admitted }));
   inspectDependabot(files, workflows, failures, checks);
   for (const [path, jobId, name, expected] of [
     ['.github/workflows/codeql.yml', 'analyze', undefined, 'github/codeql-action/analyze'],
@@ -304,15 +326,15 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks) {
   }
 }
 
-function inspectScannerConfigs(files, failures) {
+function inspectScannerConfigs(files, failures, admitted) {
   if (createHash('sha256').update(files['.github/scripts/check-go-directives.go'] || '').digest('hex') !==
-      'f356bcb0bd9546d4ee133001335740bfb41623e4671554606895e6ab1a305489') {
+      expectedExecutableDigest(files, '.github/scripts/check-go-directives.go', admitted)) {
     failures.push('Go suppression guard was changed');
   }
   // Validate PR config bytes as data; the trusted guard must never execute it.
   const eslintConfig = files['.github/scripts/eslint.config.cjs'] || '';
   if (createHash('sha256').update(eslintConfig).digest('hex') !==
-      '72d5ad0cda934ad013c3b1ddb62bf6aa1b5a65caa457f18c5f6725ea93e48f31') {
+      expectedExecutableDigest(files, '.github/scripts/eslint.config.cjs', admitted)) {
     failures.push('JavaScript maintainability policy was changed');
   }
   try {
@@ -399,28 +421,46 @@ function inspectCoverageConfig(files, failures) {
   }
 }
 
-function inspect(files) {
+function inspect(files, baseline = files, admitted = new Set()) {
   const failures = [];
-  const scoped = normalizeScopedValidation(files, scanWorkflows(files, failures), failures, AGGREGATE_RUN + '\n');
-  const workflows = normalizeCiReuse(files, scoped, failures);
+  for (const path of POLICY_SOURCES) {
+    if (typeof baseline[path] !== 'string' || (files[path] !== baseline[path] && !admitted.has(path))) {
+      failures.push(`${path}: policy execution sources require independent exact-head owner admission`);
+    }
+  }
+  const scoped = normalizeScopedValidation(files, scanWorkflows(files, failures), failures, AGGREGATE_RUN + '\n', admitted);
+  const workflows = normalizeCiReuse(files, scoped, failures, admitted);
   const checks = createChecks(workflows, failures);
   const ciWorkflows = normalizeParallelCi(workflows, failures);
-  inspectCi(files, ciWorkflows, failures, createChecks(ciWorkflows, failures));
-  inspectAdditionalWorkflows(files, workflows, failures, checks);
-  inspectScannerConfigs(files, failures);
+  inspectCi(files, ciWorkflows, failures, createChecks(ciWorkflows, failures), admitted);
+  inspectAdditionalWorkflows(files, workflows, failures, checks, admitted);
+  inspectScannerConfigs(files, failures, admitted);
+  inspectLockfiles(files, baseline, failures, admitted);
   inspectCoverageConfig(files, failures);
   return failures;
 }
 
 async function run({ github, context }) {
-  await verifyDependabotAuthor(github, context);
   const { owner, repo } = context.repo;
+  const pullParams = { owner, repo, pull_number: context.payload.pull_request.number };
+  const { data: initial } = await github.rest.pulls.get(pullParams);
+  const eventPull = context.payload.pull_request;
+  if (initial.state !== 'open' || initial.head?.sha !== eventPull.head.sha || initial.base?.sha !== eventPull.base.sha) {
+    throw new Error('Pull request head or base changed; rerun policy for the current commit');
+  }
   const sha = context.payload.pull_request.head.sha;
   const { data: commit } = await github.rest.git.getCommit({ owner, repo, commit_sha: sha });
   const { data: tree } = await github.rest.git.getTree({
     owner, repo, tree_sha: commit.tree.sha, recursive: 'true',
   });
   if (tree.truncated) throw new Error('Cannot verify a truncated PR tree');
+  for (const entry of tree.tree) {
+    if (FORBIDDEN_INPUTS.includes(entry.path)) throw new Error(`${entry.path}: CI npm input redirection is forbidden`);
+    if (REQUIRED_FILES.includes(entry.path) &&
+        (entry.type !== 'blob' || !['100644', '100755'].includes(entry.mode))) {
+      throw new Error(`${entry.path}: policy inputs must be regular files`);
+    }
+  }
   const paths = tree.tree.filter(entry => entry.type === 'blob' &&
     (REQUIRED_FILES.includes(entry.path) ||
       (entry.path.startsWith('.github/workflows/') && /\.ya?ml$/.test(entry.path))))
@@ -431,8 +471,30 @@ async function run({ github, context }) {
     if (!('content' in data)) throw new Error(`Unexpected directory: ${path}`);
     files[path] = Buffer.from(data.content, data.encoding || 'base64').toString('utf8');
   }
-  const failures = inspect(files);
+  const baseline = {};
+  for (const path of [...POLICY_SOURCES, ...LOCKFILES.flatMap(path => [path, path.replace('package-lock.json', 'package.json')])]) {
+    const { data } = await github.rest.repos.getContent({
+      owner, repo, path, ref: context.payload.pull_request.base.sha,
+    });
+    if (data.type !== 'file' || data.encoding !== 'base64' || typeof data.content !== 'string') {
+      throw new Error(`Cannot read immutable base dependency input: ${path}`);
+    }
+    baseline[path] = Buffer.from(data.content, 'base64').toString('utf8');
+  }
+  let authorFailure;
+  try { await verifyDependabotAuthor(github, context); } catch (error) { authorFailure = error; }
+  let failures = inspect(files, baseline);
+  if ((authorFailure || failures.length) && await reviewedHead(github, context)) {
+    failures = inspect(files, baseline, new Set(Object.keys(files)));
+    await verifyDependabotAuthor(github, context, true);
+    authorFailure = undefined;
+  }
+  if (authorFailure) throw authorFailure;
   if (failures.length) throw new Error(failures.join('\n'));
+  const { data: final } = await github.rest.pulls.get(pullParams);
+  if (final.state !== 'open' || final.head?.sha !== eventPull.head.sha || final.base?.sha !== eventPull.base.sha) {
+    throw new Error('Pull request head or base changed during policy inspection');
+  }
 }
 
 module.exports = { inspect, run, verifyDependabotAuthor };
