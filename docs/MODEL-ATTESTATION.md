@@ -89,8 +89,10 @@ Each path must obey these rules:
 - No segment is empty, `.` or `..`.
 - The path has a maximum of 512 bytes.
 
-This alphabet is narrower than the alphabet of training inventories. The
-producer must record an artifact with other path characters as `unsupported`.
+This alphabet is narrower than the alphabet of training inventories. An
+envelope cannot bind an artifact with other path characters, so the producer
+must refuse to seal it. The gate then has no attestation for that artifact:
+advisory mode allows it as `not-verified`, and enforce mode rejects it.
 
 ## One envelope for each inventory
 
