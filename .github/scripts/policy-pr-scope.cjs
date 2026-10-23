@@ -59,7 +59,10 @@ const AGGREGATE_ENV = { CI_NEEDS: '${{ toJSON(needs) }}',
   CI_EVENT: '${{ github.event_name }}', CI_MODE: '${{ inputs.validation-mode }}' };
 
 function normalizeScopedValidation(files, workflows, failures, aggregateScript, admitted = new Set()) {
-  if (!admitted.has('.github/scripts/pr-validation-scope.cjs') && createHash('sha256').update(files['.github/scripts/pr-validation-scope.cjs'] || '').digest('hex') !== CLASSIFIER_DIGEST) {
+  const classifierPath = '.github/scripts/pr-validation-scope.cjs';
+  const digest = createHash('sha256').update(files[classifierPath] || '').digest('hex');
+  const reviewed = admitted.has(classifierPath);
+  if (!reviewed && digest !== CLASSIFIER_DIGEST) {
     failures.push('PR validation classifier was changed');
   }
   const pr = workflows['.github/workflows/pr-validation.yml'];
@@ -73,8 +76,14 @@ function normalizeScopedValidation(files, workflows, failures, aggregateScript, 
     return workflows;
   }
   const requireValue = (ok, label) => { if (!ok) failures.push(`Path-aware validation lost ${label}`); };
+  const expectedClassifier = structuredClone(CLASSIFIER_JOB);
+  if (reviewed) {
+    const policyDigest = files['.github/scripts/policy-pr-scope.cjs']?.match(/const CLASSIFIER_DIGEST = '([a-f0-9]{64})';/)?.[1];
+    requireValue(policyDigest === digest, 'classifier policy digest synchronized with helper');
+    expectedClassifier.steps[2].with.script = CLASSIFIER_SCRIPT.replace(CLASSIFIER_DIGEST, digest);
+  }
   requireValue(isDeepStrictEqual(classifier && { ...classifier, steps: normalizeActionSteps(classifier.steps) },
-    { ...CLASSIFIER_JOB, steps: normalizeActionSteps(CLASSIFIER_JOB.steps) }), 'trusted read-only classifier sequence');
+    { ...expectedClassifier, steps: normalizeActionSteps(expectedClassifier.steps) }), 'trusted read-only classifier sequence');
   requireValue(!Object.hasOwn(pr, 'env') && !Object.hasOwn(pr, 'defaults'), 'trusted classifier environment');
   requireValue(isDeepStrictEqual(pr.jobs.quality, SCOPED_QUALITY), 'full-fallback quality input');
   requireValue(isDeepStrictEqual(input, SCOPE_INPUT), 'default-full reusable input');

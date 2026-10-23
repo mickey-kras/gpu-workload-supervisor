@@ -1483,7 +1483,7 @@ test('Dependabot workflow and job names allow omission or string labels only', (
 test('exact-head admission covers executable helpers without relaxing workflow controls', () => {
   const baseline = files({ serial: false });
   for (const path of ['.github/actions/setup-goreleaser/action.yml',
-    '.github/scripts/pr-validation-scope.cjs', '.github/scripts/quality-coverage.py',
+    '.github/scripts/quality-coverage.py',
     '.github/scripts/check-scan-reports.py']) {
     const candidate = { ...baseline };
     if (path.endsWith('action.yml')) {
@@ -1499,4 +1499,25 @@ test('exact-head admission covers executable helpers without relaxing workflow c
     candidate['.github/workflows/ci.yml'] = YAML.stringify(ci);
     assert.ok(inspectActivated(candidate, baseline, new Set([path])).length > 0, path);
   }
+});
+
+
+test('classifier admission requires matching policy and workflow digests', () => {
+  const baseline = files({ serial: false });
+  const helper = '.github/scripts/pr-validation-scope.cjs';
+  const policy = '.github/scripts/policy-pr-scope.cjs';
+  const workflow = '.github/workflows/pr-validation.yml';
+  const candidate = { ...baseline, [helper]: baseline[helper] + '\n// reviewed update\n' };
+  const admitted = new Set([helper, policy, workflow]);
+  assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
+  const hash = require('node:crypto').createHash('sha256');
+  const digest = hash.update(candidate[helper]).digest('hex');
+  const previous = baseline[policy].match(/const CLASSIFIER_DIGEST = '([a-f0-9]{64})';/)[1];
+  candidate[policy] = candidate[policy].replace(previous, digest);
+  assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
+  candidate[workflow] = candidate[workflow].replace(previous, digest);
+  assert.deepEqual(inspectActivated(candidate, baseline, admitted), []);
+  assert.ok(inspectActivated(candidate, baseline).length > 0);
+  candidate[policy] = baseline[policy];
+  assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
 });
