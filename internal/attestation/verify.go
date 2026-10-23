@@ -64,15 +64,15 @@ const (
 	IncompatiblePolicy Result = "incompatible-policy"
 )
 
-// Verification is sealed: only Verify sets its fields, and Decide treats any
-// other value as an integrity failure.
+// Verification is sealed exactly when its verifier is set. Only Verify on a
+// non-nil Verifier sets it, and Decide treats any other value as an
+// integrity failure.
 type Verification struct {
 	result   Result
 	keyID    string
 	envelope Envelope
 	digest   string
 	err      error
-	sealed   bool
 	// verifier is the immutable trust that sealed this result. A trust
 	// reload builds a new Verifier, so Decide rejects older results.
 	verifier *Verifier
@@ -222,7 +222,7 @@ func weakPublicKey(raw []byte) bool {
 }
 
 func (v *Verifier) failed(result Result, keyID string, err error) Verification {
-	return Verification{result: result, keyID: keyID, err: err, sealed: true, verifier: v}
+	return Verification{result: result, keyID: keyID, err: err, verifier: v}
 }
 
 // classify maps a read error to its result. Anything unrecognized is malformed.
@@ -276,7 +276,7 @@ func (v *Verifier) Verify(envelope, signature io.Reader, onDisk Artifact) Verifi
 	if err != nil {
 		return v.failed(Malformed, sig.KeyID, err)
 	}
-	return Verification{result: Valid, keyID: sig.KeyID, envelope: parsed, digest: digest, sealed: true, verifier: v}
+	return Verification{result: Valid, keyID: sig.KeyID, envelope: parsed, digest: digest, verifier: v}
 }
 
 func missingInput(v *Verifier, envelope, signature io.Reader) string {

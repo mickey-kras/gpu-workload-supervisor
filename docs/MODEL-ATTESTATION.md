@@ -194,6 +194,8 @@ accepts only configurations that the verifier accepts.
 
 The policy is a separate file. The setup of #583 and its rollback journal keep
 it. A consumer that stores a policy keeps a `*Policy` value with `omitempty`.
+The gate uses `DefaultPolicy()` only when setup never wrote a policy. After
+that, a missing, unreadable or invalid policy file gives `invalid-policy`.
 
 | Field | Rule |
 | --- | --- |
@@ -248,24 +250,42 @@ result. `Decide` rejects all other values.
 ## Policy decision
 
 The call is `Decide(policy, verifier, onDisk, verification)`. `DecideAll`
-takes the policy, the verifier and the roots. Each call checks the policy
-first. An invalid policy gives `integrity-failure` with the reason
-`invalid-policy` in both modes, also for an empty set of roots.
+takes the policy, the verifier and the roots. `Decide` does the checks in this
+order. The first check that settles the root gives the decision:
 
-Then `Decide` checks the deny list against the gate inventory. It rejects a
-denied digest before it looks at the evidence. Thus a deleted or changed
-evidence file cannot admit a denied artifact.
+1. The policy. An invalid policy gives `invalid-policy`, also for an empty set
+   of roots.
+2. The deny list, against the gate inventory.
+3. The gate inventory.
+4. Missing evidence.
+5. The seal. A verification that `Verify` did not make gives
+   `unsealed-verification`.
+6. The verifier. A nil verifier with evidence gives `missing-verifier`.
+7. The verifier match. A verification from a different verifier gives
+   `stale-verification`.
+8. The verification result.
+9. The artifact match between the evidence and the gate inventory.
+10. The scan coverage and verdict, with exemptions.
 
-`verifier` is the current verifier. A verification from a different verifier
-gives `integrity-failure` with the reason `stale-verification`. A nil verifier
-with evidence gives the same result. A trust change makes a new verifier, so
-evidence that a removed key signed cannot pass.
+Thus a deleted or changed evidence file cannot admit a denied artifact.
+Missing evidence with a nil verifier stays `attestation-missing`, because an
+old installation can have no trust configuration.
+
+Give `Decide` the same `*Verifier` that made the verification. Each new
+`Verifier` makes all earlier results stale. This is also true for a verifier
+from an unchanged trust file. After `stale-verification`, the gate must check
+the evidence again with the current verifier. Then it must decide again before
+it reports or alerts. A UI must show this result as "check again", not as an
+integrity failure.
 
 The mode is `advisory` or `enforce`. A different mode makes the policy invalid,
-and `Decide` gives `invalid-policy`. The files have no default. A gate with no
-policy file uses `DefaultPolicy()`, which is advisory mode in memory. Setup
-writes `"mode": "advisory"` when the operator selects nothing, and shows that
-value.
+and `Decide` gives `invalid-policy`. The files have no default.
+
+A gate uses `DefaultPolicy()`, which is advisory mode in memory, only in one
+case. Setup or journal state must show that setup never wrote a policy. After
+setup writes a policy, a missing, unreadable or invalid policy file gives
+`invalid-policy`. The gate never uses advisory mode as a fallback. Setup writes
+`"mode": "advisory"` when the operator selects nothing, and shows that value.
 
 Advisory mode is not a security boundary against a person who can change or
 delete evidence files. Only enforce mode is a security boundary.
@@ -273,14 +293,18 @@ delete evidence files. Only enforce mode is a security boundary.
 A signature is separate from the scan outcome. A signed `findings` report is
 evidence. It is not an approval.
 
+The table rows follow the check order:
+
 | Evidence | `advisory` | `enforce` | Reason |
 | --- | --- | --- | --- |
 | Policy not valid, any evidence | Reject, `integrity-failure` | Reject, `integrity-failure` | `invalid-policy` |
 | Denied digest, any evidence | Reject, `integrity-failure` | Reject, `integrity-failure` | `artifact-denied` |
-| Evidence from a different verifier | Reject, `integrity-failure` | Reject, `integrity-failure` | `stale-verification` |
 | Gate inventory not valid, evidence present | Reject, `integrity-failure` | Reject, `integrity-failure` | `invalid-inventory` |
 | Gate inventory not valid, no evidence | Allow, `not-verified` | Reject, `not-verified` | `invalid-inventory` |
 | No attestation | Allow, `not-verified` | Reject, `not-verified` | `attestation-missing` |
+| Verification not from `Verify` | Reject, `integrity-failure` | Reject, `integrity-failure` | `unsealed-verification` |
+| Evidence, no verifier | Reject, `integrity-failure` | Reject, `integrity-failure` | `missing-verifier` |
+| Evidence from a different verifier | Reject, `integrity-failure` | Reject, `integrity-failure` | `stale-verification` |
 | `unreadable` | Allow, `not-verified` | Reject, `not-verified` | `unreadable` |
 | `unsupported-version` | Allow, `not-verified` | Reject, `not-verified` | `unsupported-version` |
 | Other failed result | Reject, `integrity-failure` | Reject, `integrity-failure` | The result code |
@@ -328,7 +352,8 @@ decision.
 | `incompatible-policy` | `integrity-failure` | The trust configuration does not support the policy version. |
 | `artifact-mismatch` | `integrity-failure` | The evidence binds different bytes. |
 | `unsealed-verification` | `integrity-failure` | The verification did not come from `Verify`, or it holds an unknown result. |
-| `stale-verification` | `integrity-failure` | A different verifier made the verification. Check the evidence again. |
+| `missing-verifier` | `integrity-failure` | Evidence exists, but the gate has no verifier. Load the trust configuration. |
+| `stale-verification` | `integrity-failure` | A different verifier made the verification. Check the evidence again with the current verifier. A UI shows "check again". |
 | `scan-passed` | `verified` | A complete scan passed. |
 | `scan-findings` | `findings-detected` or `exempted` | The scanner reported findings. |
 | `scan-error` | `not-verified` | The scan failed. |
@@ -379,8 +404,16 @@ The gate and the producer must obey these rules:
 - Make the on-disk inventory from a full walk of the effective artifact.
   Never make it from the envelope.
 - Give the same inventory to `Verify` and to `Decide`.
-- Check the evidence again after each trust change. `Decide` rejects a
-  verification from an old verifier.
+- Give `Decide` the same `*Verifier` that made the verification.
+- Check the evidence again after each trust change and after each new
+  `Verifier`. `Decide` rejects a verification from an old verifier.
+- After `stale-verification`, check again and decide again before a report
+  or an alert.
+- Use `DefaultPolicy()` only when setup or journal state shows that setup
+  never wrote a policy.
+- When setup wrote a policy, treat a missing, unreadable or invalid policy
+  file as `invalid-policy`.
+- Never fall back to advisory mode.
 - Let the deployment select the `files` form or the single form. The envelope
   must not select it.
 - Reject symbolic links and files that are not regular files.

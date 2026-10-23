@@ -310,7 +310,7 @@ func TestSingleArtifactExemptionUsesItsOwnDigest(t *testing.T) {
 	single := Artifact{SHA256: fixtureDigest("model.gguf")}
 	e := fixtureEnvelopes()["single"]
 	e.Scan = Scan{Status: ScanNotScanned}
-	verification := Verification{result: Valid, envelope: e, digest: mustDigest(t, e.Artifact), sealed: true, verifier: fixtureVerifierWithPolicies(t, []int{1, 2}, 1)}
+	verification := Verification{result: Valid, envelope: e, digest: mustDigest(t, e.Artifact), verifier: fixtureVerifierWithPolicies(t, []int{1, 2}, 1)}
 	if got := decideTest(policy(Enforce, exemption(mustDigest(t, single), 1, ExemptNotScanned)), single, &verification); got != allow(Exempted, ReasonNotScanned) {
 		t.Fatalf("%#v", got)
 	}
@@ -411,13 +411,33 @@ func TestStaleVerification(t *testing.T) {
 	}
 	passed, findings := verify("passed"), verify("findings")
 	forged := verifierA.Verify(bytes.NewReader(readFixture(t, "passed.json")), bytes.NewReader(forgedSignature(t, readFixture(t, "passed.sig.json"))), inventory)
+	// fresh returns evidence that verifierB itself seals as valid.
+	fresh := func(t *testing.T, verifierB *Verifier) *Verification {
+		t.Helper()
+		for _, pair := range [][2]string{{"passed.json", "passed.key-2.sig.json"}, {"policy-2.json", "policy-2.sig.json"}, {"passed.json", "passed.sig.json"}} {
+			v := verifierB.Verify(bytes.NewReader(readFixture(t, pair[0])), bytes.NewReader(readFixture(t, pair[1])), inventory)
+			if v.Result() == Valid {
+				return &v
+			}
+		}
+		t.Fatal("no fixture verifies under verifierB")
+		return nil
+	}
 	for name, verifierB := range map[string]*Verifier{
 		"key removed":            trust([]int{2}, []int{1, 2}),
 		"policy version removed": trust([]int{1, 2}, []int{2}),
 		"same trust rebuilt":     trust([]int{1, 2}, []int{1, 2}),
-		"no verifier":            nil,
 	} {
+		current := fresh(t, verifierB)
 		for _, mode := range []Mode{Advisory, Enforce} {
+			// A stale non-first root must not borrow its own sealing verifier.
+			roots := []Root{{Artifact: inventory, Verification: current}, {Artifact: inventory, Verification: passed}}
+			if got := DecideAll(policy(mode, nil), verifierB, roots); got != deny(IntegrityFailure, ReasonStale) {
+				t.Fatalf("%s %s stale second root: %#v", name, mode, got)
+			}
+			if got := DecideAll(policy(mode, nil), verifierB, roots[:1]); got != allow(Verified, ReasonPassed) {
+				t.Fatalf("%s %s fresh root: %#v", name, mode, got)
+			}
 			for _, v := range []*Verification{passed, findings, &forged} {
 				if got := Decide(policy(mode, nil), verifierB, inventory, v); got != deny(IntegrityFailure, ReasonStale) {
 					t.Fatalf("%s %s: %#v", name, mode, got)
@@ -444,6 +464,39 @@ func TestStaleVerification(t *testing.T) {
 		}
 		if got := Decide(policy(mode, nil), verifierA, inventory, &forged); got != deny(IntegrityFailure, ReasonInvalidSignature) {
 			t.Fatalf("same verifier forged %s: %#v", mode, got)
+		}
+	}
+}
+
+// Evidence needs a loaded verifier; an unsealed value never reaches the
+// verifier check. Missing evidence keeps the missing path for an install
+// without a trust configuration.
+func TestSealAndVerifierChecks(t *testing.T) {
+	inventory := fixtureInventory(t)
+	verifier := fixtureVerifierWithPolicies(t, []int{1, 2}, 1)
+	passed := verifyFixture(t, "passed", inventory)
+	var nilVerifier *Verifier
+	nilReceiver := nilVerifier.Verify(bytes.NewReader(readFixture(t, "passed.json")), bytes.NewReader(readFixture(t, "passed.sig.json")), inventory)
+	for _, mode := range []Mode{Advisory, Enforce} {
+		p := policy(mode, nil)
+		for name, tc := range map[string]struct {
+			verifier     *Verifier
+			verification *Verification
+			want         Decision
+		}{
+			"zero verification":          {verifier, &Verification{}, deny(IntegrityFailure, ReasonUnsealed)},
+			"nil receiver result":        {verifier, &nilReceiver, deny(IntegrityFailure, ReasonUnsealed)},
+			"zero verification, nil arg": {nil, &Verification{}, deny(IntegrityFailure, ReasonUnsealed)},
+			"nil verifier argument":      {nil, passed, deny(IntegrityFailure, ReasonMissingVerifier)},
+			"nil verifier, no evidence":  {nil, nil, missingDecision(p, ReasonMissing)},
+			"same verifier":              {verifier, passed, allow(Verified, ReasonPassed)},
+		} {
+			if got := Decide(p, tc.verifier, inventory, tc.verification); got != tc.want {
+				t.Fatalf("%s %s: %#v, want %#v", name, mode, got, tc.want)
+			}
+		}
+		if got := DecideAll(p, nil, []Root{{Artifact: inventory, Verification: passed}}); got != deny(IntegrityFailure, ReasonMissingVerifier) {
+			t.Fatalf("DecideAll nil verifier %s: %#v", mode, got)
 		}
 	}
 }
@@ -527,10 +580,11 @@ func TestDecideFailsClosedOnImpossibleVerification(t *testing.T) {
 	for name, verification := range map[string]Verification{
 		"zero":                {},
 		"unsealed valid":      {result: Valid, envelope: envelope, digest: digest},
-		"unknown result":      {result: "trusted", envelope: envelope, digest: digest, sealed: true, verifier: v},
-		"zero result":         {envelope: envelope, digest: digest, sealed: true, verifier: v},
-		"no sealed digest":    {result: Valid, envelope: envelope, sealed: true, verifier: v},
-		"unknown scan status": {result: Valid, envelope: unknownStatus, digest: digest, sealed: true, verifier: v},
+		"unsealed failure":    {result: InvalidSignature},
+		"unknown result":      {result: "trusted", envelope: envelope, digest: digest, verifier: v},
+		"zero result":         {envelope: envelope, digest: digest, verifier: v},
+		"no sealed digest":    {result: Valid, envelope: envelope, verifier: v},
+		"unknown scan status": {result: Valid, envelope: unknownStatus, digest: digest, verifier: v},
 	} {
 		if got := decideTest(policy(Advisory, nil), inventory, &verification); got != deny(IntegrityFailure, ReasonUnsealed) {
 			t.Fatalf("%s: %#v", name, got)
@@ -546,7 +600,7 @@ func TestDecideAllUsesFirstMostSevereDecision(t *testing.T) {
 	passed, findings, notScanned := root("passed"), root("findings"), root("not-scanned")
 	missing := Root{Artifact: inventory}
 	single := Artifact{SHA256: fixtureDigest("model.gguf")}
-	broken := Root{Artifact: inventory, Verification: &Verification{result: InvalidSignature, sealed: true, verifier: fixtureVerifierWithPolicies(t, []int{1, 2}, 1)}}
+	broken := Root{Artifact: inventory, Verification: &Verification{result: InvalidSignature, verifier: fixtureVerifierWithPolicies(t, []int{1, 2}, 1)}}
 	exempt := policy(Enforce, exemption(mustDigest(t, inventory), 1, ExemptNotScanned))
 	for name, tc := range map[string]struct {
 		policy Policy

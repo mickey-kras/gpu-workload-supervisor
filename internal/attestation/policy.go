@@ -51,7 +51,10 @@ type Policy struct {
 	Version    int         `json:"version"`
 	Mode       Mode        `json:"mode"`
 	Exemptions []Exemption `json:"exemptions,omitempty"`
-	Deny       []string    `json:"deny,omitempty"`
+	// Deny entries match three kinds of digest: the inventory artifact
+	// digest, the raw SHA-256 of any file, and the single-form artifact
+	// digest of any file, which is the digest shown for a single-file model.
+	Deny []string `json:"deny,omitempty"`
 }
 
 type Status string
@@ -72,6 +75,7 @@ const (
 	ReasonUnsealed           Reason = "unsealed-verification"
 	ReasonArtifactDenied     Reason = "artifact-denied"
 	ReasonStale              Reason = "stale-verification"
+	ReasonMissingVerifier    Reason = "missing-verifier"
 	ReasonInvalidPolicy      Reason = "invalid-policy"
 	ReasonMalformed          Reason = Reason(Malformed)
 	ReasonUnreadable         Reason = Reason(Unreadable)
@@ -166,6 +170,11 @@ func (e Exemption) valid() bool {
 	return digestPattern.MatchString(e.Artifact) && validPolicyVersion(e.PolicyVersion) && safeText(e.Reason, MaxTextBytes)
 }
 
+// invalidPolicyDecision is the fail-closed outcome for a policy that Validate refuses.
+func invalidPolicyDecision() Decision {
+	return Decision{Status: IntegrityFailure, Reason: ReasonInvalidPolicy}
+}
+
 // missingDecision is the outcome for a root without evidence.
 func missingDecision(policy Policy, reason Reason) Decision {
 	return Decision{Allowed: policy.Mode == Advisory, Status: NotVerified, Reason: reason}
@@ -178,12 +187,10 @@ func missingDecision(policy Policy, reason Reason) Decision {
 // attestation exists. An invalid policy fails closed.
 func Decide(policy Policy, verifier *Verifier, onDisk Artifact, verification *Verification) Decision {
 	if policy.Validate() != nil {
-		return invalidPolicy
+		return invalidPolicyDecision()
 	}
 	return decide(policy, verifier, onDisk, verification)
 }
-
-var invalidPolicy = Decision{Status: IntegrityFailure, Reason: ReasonInvalidPolicy}
 
 // decide needs a policy that Validate accepts.
 func decide(policy Policy, verifier *Verifier, onDisk Artifact, verification *Verification) Decision {
@@ -200,8 +207,8 @@ func decide(policy Policy, verifier *Verifier, onDisk Artifact, verification *Ve
 	if verification == nil {
 		return missingDecision(policy, ReasonMissing)
 	}
-	if verification.sealed && (verifier == nil || verification.verifier != verifier) {
-		return Decision{Status: IntegrityFailure, Reason: ReasonStale}
+	if decision, final := decideBinding(verifier, verification); final {
+		return decision
 	}
 	if decision, final := decideEvidence(policy.Mode == Advisory, verification); final {
 		return decision
@@ -212,12 +219,23 @@ func decide(policy Policy, verifier *Verifier, onDisk Artifact, verification *Ve
 	return decideScan(policy, verification.envelope, digest)
 }
 
+// decideBinding rejects evidence that the current verifier did not seal.
+// Without a verifier, evidence cannot be checked: load the trust configuration.
+func decideBinding(verifier *Verifier, verification *Verification) (Decision, bool) {
+	switch {
+	case verification.verifier == nil:
+		return Decision{Status: IntegrityFailure, Reason: ReasonUnsealed}, true
+	case verifier == nil:
+		return Decision{Status: IntegrityFailure, Reason: ReasonMissingVerifier}, true
+	case verification.verifier != verifier:
+		return Decision{Status: IntegrityFailure, Reason: ReasonStale}, true
+	}
+	return Decision{}, false
+}
+
 // decideEvidence settles every result other than a sealed Valid.
 func decideEvidence(permissive bool, verification *Verification) (Decision, bool) {
 	unsealed := Decision{Status: IntegrityFailure, Reason: ReasonUnsealed}
-	if !verification.sealed {
-		return unsealed, true
-	}
 	switch verification.result {
 	case Valid:
 		if verification.digest == "" {
@@ -320,7 +338,7 @@ var statusRank = map[Status]int{IntegrityFailure: 4, FindingsDetected: 3, NotVer
 // an empty set. An empty set is a missing attestation.
 func DecideAll(policy Policy, verifier *Verifier, roots []Root) Decision {
 	if policy.Validate() != nil {
-		return invalidPolicy
+		return invalidPolicyDecision()
 	}
 	if len(roots) == 0 {
 		return missingDecision(policy, ReasonMissing)
