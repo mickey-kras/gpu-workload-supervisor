@@ -103,3 +103,31 @@ func TestPreviewAutomaticGPUCorrectionRejectsInvalidLaunch(t *testing.T) {
 		})
 	}
 }
+
+func TestPreviewAutomaticGPUCorrectionReservesDropInSlot(t *testing.T) {
+	for _, count := range []int{31, 32} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			home := t.TempDir()
+			executable := filepath.Join(home, "llama-server")
+			model := filepath.Join(home, "model.gguf")
+			fragment := filepath.Join(home, "app.service")
+			writeCorrectionPreviewFile(t, executable, "fixture, never executed")
+			writeCorrectionPreviewFile(t, model, "model fixture")
+			writeCorrectionPreviewFile(t, fragment, "[Service]\nEnvironment=CUDA_VISIBLE_DEVICES=0\nExecStart="+executable+" -m "+model+" --host 127.0.0.1 --port 8080\n")
+			var paths []string
+			for i := range count {
+				path := filepath.Join(home, "app.service.d", fmt.Sprintf("%02d-existing.conf", i))
+				writeCorrectionPreviewFile(t, path, "[Service]\nEnvironment=CUDA_VISIBLE_DEVICES=0\n")
+				paths = append(paths, path)
+			}
+			_, err := PreviewAutomaticGPUCorrection(fragment, "llama.cpp", paths, previewCorrectionUUID)
+			if count == 32 {
+				if !errors.Is(err, ErrLaunchUnsupported) {
+					t.Fatalf("exhausted drop-in limit accepted: %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
