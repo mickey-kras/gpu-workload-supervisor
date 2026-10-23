@@ -126,8 +126,10 @@ wins in this order:
 4. `exempted`
 5. `verified`
 
-If two entries have the same status, the first entry wins. One rejection
-rejects the full set. An empty set is a missing attestation.
+If two entries have the same status, the first entry wins. One exception
+applies to integrity failures: every other reason wins over
+`stale-verification`. Thus a stale root cannot hide a forged root. One
+rejection rejects the full set. An empty set is a missing attestation.
 
 ## Canonical signing bytes
 
@@ -142,7 +144,8 @@ Do these steps to make the signing bytes:
 7. Put the 24 bytes `gpu-model-attestation/v1` and one line feed byte first.
 
 The signing bytes have no line feed at the end. `MarshalEnvelope` gives the
-result of steps 1 to 6.
+result of steps 1 to 6. It refuses an envelope that is larger than 16 MiB, so
+the producer cannot seal an envelope that the readers reject.
 
 The tests compare steps 3 to 6 with a sorted-key compact JSON encoder. The
 integer limit and the ASCII alphabet keep this output equal to the RFC 8785
@@ -244,8 +247,8 @@ It reads the small signature file before the large envelope.
 
 An error names the input and the failure kind. For a read failure, it names
 the class: permission, timeout or other. It does not show paths, digests,
-file content or the text of the reader error. Only `Verify` makes a sealed
-result. `Decide` rejects all other values.
+file content or the text of the reader error. Only `Verify` on a `Verifier`
+with keys makes a sealed result. `Decide` rejects all other values.
 
 ## Policy decision
 
@@ -258,9 +261,9 @@ order. The first check that settles the root gives the decision:
 2. The deny list, against the gate inventory.
 3. The gate inventory.
 4. Missing evidence.
-5. The seal. A verification that `Verify` did not make gives
+5. The verifier. A nil verifier with evidence gives `missing-verifier`.
+6. The seal. A verification that `Verify` did not seal gives
    `unsealed-verification`.
-6. The verifier. A nil verifier with evidence gives `missing-verifier`.
 7. The verifier match. A verification from a different verifier gives
    `stale-verification`.
 8. The verification result.
@@ -275,8 +278,10 @@ Give `Decide` the same `*Verifier` that made the verification. Each new
 `Verifier` makes all earlier results stale. This is also true for a verifier
 from an unchanged trust file. After `stale-verification`, the gate must check
 the evidence again with the current verifier. Then it must decide again before
-it reports or alerts. A UI must show this result as "check again", not as an
-integrity failure.
+it reports or alerts.
+
+The status stays `integrity-failure`. A UI must select the "check again"
+message from the reason `stale-verification`, whatever the status.
 
 The mode is `advisory` or `enforce`. A different mode makes the policy invalid,
 and `Decide` gives `invalid-policy`. The files have no default.
@@ -302,8 +307,8 @@ The table rows follow the check order:
 | Gate inventory not valid, evidence present | Reject, `integrity-failure` | Reject, `integrity-failure` | `invalid-inventory` |
 | Gate inventory not valid, no evidence | Allow, `not-verified` | Reject, `not-verified` | `invalid-inventory` |
 | No attestation | Allow, `not-verified` | Reject, `not-verified` | `attestation-missing` |
-| Verification not from `Verify` | Reject, `integrity-failure` | Reject, `integrity-failure` | `unsealed-verification` |
 | Evidence, no verifier | Reject, `integrity-failure` | Reject, `integrity-failure` | `missing-verifier` |
+| Verification not sealed by `Verify` | Reject, `integrity-failure` | Reject, `integrity-failure` | `unsealed-verification` |
 | Evidence from a different verifier | Reject, `integrity-failure` | Reject, `integrity-failure` | `stale-verification` |
 | `unreadable` | Allow, `not-verified` | Reject, `not-verified` | `unreadable` |
 | `unsupported-version` | Allow, `not-verified` | Reject, `not-verified` | `unsupported-version` |
@@ -351,9 +356,9 @@ decision.
 | `invalid-signature` | `integrity-failure` | The signature does not match. |
 | `incompatible-policy` | `integrity-failure` | The trust configuration does not support the policy version. |
 | `artifact-mismatch` | `integrity-failure` | The evidence binds different bytes. |
-| `unsealed-verification` | `integrity-failure` | The verification did not come from `Verify`, or it holds an unknown result. |
-| `missing-verifier` | `integrity-failure` | Evidence exists, but the gate has no verifier. Load the trust configuration. |
-| `stale-verification` | `integrity-failure` | A different verifier made the verification. Check the evidence again with the current verifier. A UI shows "check again". |
+| `missing-verifier` | `integrity-failure` | Evidence exists, but the gate has no verifier. Load the trust configuration. This check comes before the seal check. |
+| `unsealed-verification` | `integrity-failure` | A verifier is present, but `Verify` on a verifier with keys did not seal the verification, or the verification holds an unknown result. |
+| `stale-verification` | `integrity-failure` | A different verifier made the verification. Check the evidence again with the current verifier. A UI selects "check again" from this reason. |
 | `scan-passed` | `verified` | A complete scan passed. |
 | `scan-findings` | `findings-detected` or `exempted` | The scanner reported findings. |
 | `scan-error` | `not-verified` | The scan failed. |
@@ -411,6 +416,8 @@ The gate and the producer must obey these rules:
   or an alert.
 - Use `DefaultPolicy()` only when setup or journal state shows that setup
   never wrote a policy.
+- Keep that setup state with protection equal to or more than the protection
+  of the policy file. A person who can delete both files gets advisory mode.
 - When setup wrote a policy, treat a missing, unreadable or invalid policy
   file as `invalid-policy`.
 - Never fall back to advisory mode.

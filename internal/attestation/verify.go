@@ -242,7 +242,12 @@ func classify(err error) Result {
 // signature file and its key ID are checked before the envelope is read.
 func (v *Verifier) Verify(envelope, signature io.Reader, onDisk Artifact) Verification {
 	if missing := missingInput(v, envelope, signature); missing != "" {
-		return v.failed(Malformed, "", fmt.Errorf("%w: %s", ErrMissingInput, missing))
+		err := fmt.Errorf("%w: %s", ErrMissingInput, missing)
+		if missing == "verifier" {
+			// Without trust, nothing can seal the result.
+			return Verification{result: Malformed, err: err}
+		}
+		return v.failed(Malformed, "", err)
 	}
 	if err := onDisk.validate(); err != nil {
 		return v.failed(InvalidInventory, "", fmt.Errorf("%w: %v", ErrInvalidInventory, err))
@@ -281,7 +286,7 @@ func (v *Verifier) Verify(envelope, signature io.Reader, onDisk Artifact) Verifi
 
 func missingInput(v *Verifier, envelope, signature io.Reader) string {
 	switch {
-	case v == nil:
+	case v == nil || len(v.keys) == 0:
 		return "verifier"
 	case envelope == nil:
 		return "envelope"

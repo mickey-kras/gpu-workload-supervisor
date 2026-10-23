@@ -220,13 +220,14 @@ func decide(policy Policy, verifier *Verifier, onDisk Artifact, verification *Ve
 }
 
 // decideBinding rejects evidence that the current verifier did not seal.
-// Without a verifier, evidence cannot be checked: load the trust configuration.
+// A missing verifier comes first, so a gate without trust configuration
+// learns to load it: no verification can be checked without one.
 func decideBinding(verifier *Verifier, verification *Verification) (Decision, bool) {
 	switch {
-	case verification.verifier == nil:
-		return Decision{Status: IntegrityFailure, Reason: ReasonUnsealed}, true
 	case verifier == nil:
 		return Decision{Status: IntegrityFailure, Reason: ReasonMissingVerifier}, true
+	case verification.verifier == nil:
+		return Decision{Status: IntegrityFailure, Reason: ReasonUnsealed}, true
 	case verification.verifier != verifier:
 		return Decision{Status: IntegrityFailure, Reason: ReasonStale}, true
 	}
@@ -332,6 +333,15 @@ type Root struct {
 // statusRank orders combined decisions from most to least severe.
 var statusRank = map[Status]int{IntegrityFailure: 4, FindingsDetected: 3, NotVerified: 2, Exempted: 1, Verified: 0}
 
+// moreSevere ranks by status. Within integrity failures, any other reason
+// beats stale-verification, so a stale root cannot hide a forged one.
+func moreSevere(decision, combined Decision) bool {
+	if statusRank[decision.Status] != statusRank[combined.Status] {
+		return statusRank[decision.Status] > statusRank[combined.Status]
+	}
+	return combined.Reason == ReasonStale && decision.Reason != ReasonStale
+}
+
 // DecideAll combines one entry for each required root, such as separate
 // model and tokenizer roots. The first most severe decision wins and any
 // rejection rejects the whole set. An invalid policy fails closed, also for
@@ -348,7 +358,7 @@ func DecideAll(policy Policy, verifier *Verifier, roots []Root) Decision {
 	for _, root := range roots[1:] {
 		decision := decide(policy, verifier, root.Artifact, root.Verification)
 		allowed = allowed && decision.Allowed
-		if statusRank[decision.Status] > statusRank[combined.Status] {
+		if moreSevere(decision, combined) {
 			combined = decision
 		}
 	}

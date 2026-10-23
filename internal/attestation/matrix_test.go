@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -477,8 +478,24 @@ func TestSealAndVerifierChecks(t *testing.T) {
 	passed := verifyFixture(t, "passed", inventory)
 	var nilVerifier *Verifier
 	nilReceiver := nilVerifier.Verify(bytes.NewReader(readFixture(t, "passed.json")), bytes.NewReader(readFixture(t, "passed.sig.json")), inventory)
+	keyless := (&Verifier{}).Verify(bytes.NewReader(readFixture(t, "passed.json")), bytes.NewReader(readFixture(t, "passed.sig.json")), inventory)
+	for name, result := range map[string]Verification{"nil receiver": nilReceiver, "keyless verifier": keyless} {
+		if result.Result() != Malformed || result.verifier != nil || !errors.Is(result.Err(), ErrMissingInput) || !strings.Contains(result.Err().Error(), "verifier") {
+			t.Fatalf("%s must give an unsealed malformed result: %#v", name, result)
+		}
+	}
+	other := fixtureVerifierWithPolicies(t, []int{1}, 1)
 	for _, mode := range []Mode{Advisory, Enforce} {
 		p := policy(mode, nil)
+		// The inventory check comes before the verifier binding.
+		for name, v := range map[string]*Verifier{"other verifier": other, "nil verifier": nil} {
+			if got := Decide(p, v, Artifact{}, passed); got != deny(IntegrityFailure, ReasonInvalidInventory) {
+				t.Fatalf("%s %s with invalid inventory: %#v", name, mode, got)
+			}
+		}
+		if got := DecideAll(p, nil, []Root{{Artifact: inventory, Verification: &nilReceiver}}); got != deny(IntegrityFailure, ReasonMissingVerifier) {
+			t.Fatalf("DecideAll nil receiver, nil verifier %s: %#v", mode, got)
+		}
 		for name, tc := range map[string]struct {
 			verifier     *Verifier
 			verification *Verification
@@ -486,7 +503,9 @@ func TestSealAndVerifierChecks(t *testing.T) {
 		}{
 			"zero verification":          {verifier, &Verification{}, deny(IntegrityFailure, ReasonUnsealed)},
 			"nil receiver result":        {verifier, &nilReceiver, deny(IntegrityFailure, ReasonUnsealed)},
-			"zero verification, nil arg": {nil, &Verification{}, deny(IntegrityFailure, ReasonUnsealed)},
+			"keyless verifier result":    {verifier, &keyless, deny(IntegrityFailure, ReasonUnsealed)},
+			"zero verification, nil arg": {nil, &Verification{}, deny(IntegrityFailure, ReasonMissingVerifier)},
+			"nil receiver, nil arg":      {nil, &nilReceiver, deny(IntegrityFailure, ReasonMissingVerifier)},
 			"nil verifier argument":      {nil, passed, deny(IntegrityFailure, ReasonMissingVerifier)},
 			"nil verifier, no evidence":  {nil, nil, missingDecision(p, ReasonMissing)},
 			"same verifier":              {verifier, passed, allow(Verified, ReasonPassed)},
@@ -497,6 +516,30 @@ func TestSealAndVerifierChecks(t *testing.T) {
 		}
 		if got := DecideAll(p, nil, []Root{{Artifact: inventory, Verification: passed}}); got != deny(IntegrityFailure, ReasonMissingVerifier) {
 			t.Fatalf("DecideAll nil verifier %s: %#v", mode, got)
+		}
+	}
+}
+
+// A stale root must not hide a real integrity failure on another root.
+func TestDecideAllPrefersRealFailureOverStale(t *testing.T) {
+	inventory := fixtureInventory(t)
+	current := fixtureVerifierWithPolicies(t, []int{1}, 1)
+	old, err := newVerifier(trustConfig([]int{1}, trustedKeys(1)...), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleResult := old.Verify(bytes.NewReader(readFixture(t, "passed.json")), bytes.NewReader(readFixture(t, "passed.sig.json")), inventory)
+	forged := current.Verify(bytes.NewReader(readFixture(t, "passed.json")), bytes.NewReader(forgedSignature(t, readFixture(t, "passed.sig.json"))), inventory)
+	stale := Root{Artifact: inventory, Verification: &staleResult}
+	broken := Root{Artifact: inventory, Verification: &forged}
+	for _, mode := range []Mode{Advisory, Enforce} {
+		for name, roots := range map[string][]Root{"stale first": {stale, broken}, "stale second": {broken, stale}} {
+			if got := DecideAll(policy(mode, nil), current, roots); got != deny(IntegrityFailure, ReasonInvalidSignature) {
+				t.Fatalf("%s %s: %#v", name, mode, got)
+			}
+		}
+		if got := DecideAll(policy(mode, nil), current, []Root{stale, stale}); got != deny(IntegrityFailure, ReasonStale) {
+			t.Fatalf("only stale %s: %#v", mode, got)
 		}
 	}
 }

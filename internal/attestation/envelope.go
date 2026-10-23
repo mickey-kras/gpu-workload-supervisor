@@ -157,12 +157,20 @@ func malformed(format string, args ...any) error {
 }
 
 // MarshalEnvelope returns the canonical JSON of a valid envelope without the
-// signing domain prefix. Producers write these bytes as the envelope file.
+// signing domain prefix. Producers write these bytes as the envelope file. It
+// refuses an envelope that readers would reject as too large.
 func MarshalEnvelope(e Envelope) ([]byte, error) {
 	if err := e.validate(); err != nil {
 		return nil, err
 	}
-	return canonicalJSON(e.object())
+	canonical, err := canonicalJSON(e.object())
+	if err != nil {
+		return nil, err
+	}
+	if len(canonical) > MaxEnvelopeBytes {
+		return nil, malformed("canonical envelope exceeds %d bytes", MaxEnvelopeBytes)
+	}
+	return canonical, nil
 }
 
 // readEnvelope reads one bounded strict envelope. The input must decode to

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -213,6 +214,24 @@ func TestSigningBytesAreCanonicalAndDomainSeparated(t *testing.T) {
 	}
 	if parsed, err := readEnvelope(bytes.NewReader(marshaled)); err != nil || parsed.Timestamp != e.Timestamp {
 		t.Fatalf("marshaled envelope does not read back: %v", err)
+	}
+}
+
+func TestMarshalEnvelopeRefusesOversizedEnvelope(t *testing.T) {
+	files := map[string]string{}
+	for i := 0; i < 30000; i++ {
+		files[fmt.Sprintf("%05d", i)+strings.Repeat("a", MaxPathBytes-5)] = fixtureDigest("x")
+	}
+	e := validEnvelope()
+	e.Artifact = Artifact{Files: files}
+	if err := e.validate(); err != nil {
+		t.Fatalf("each field must be valid alone: %v", err)
+	}
+	if _, err := MarshalEnvelope(e); !errors.Is(err, ErrMalformedEnvelope) {
+		t.Fatalf("marshal: %v", err)
+	}
+	if _, err := SigningBytes(e); !errors.Is(err, ErrMalformedEnvelope) {
+		t.Fatalf("signing bytes: %v", err)
 	}
 }
 
