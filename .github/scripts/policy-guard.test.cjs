@@ -1492,12 +1492,25 @@ test('exact-head admission covers executable helpers without relaxing workflow c
       candidate[path] = YAML.stringify(action);
     } else candidate[path] += '\n# reviewed executable update\n';
     assert.ok(inspectActivated(candidate, baseline).length > 0, path);
-    assert.deepEqual(inspectActivated(candidate, baseline, new Set([path])), [], path);
+    assert.ok(inspectActivated(candidate, baseline, new Set([path])).length > 0, path);
+    const actionPath = path.endsWith('action.yml');
+    const policyPath = actionPath ? '.github/scripts/policy-guard.cjs' : '.github/scripts/policy-ci-reuse.cjs';
+    const { canonical, normalizeActionSteps } = require('./policy-action-pins.cjs');
+    const digest = content => require('node:crypto').createHash('sha256').update(content).digest('hex');
+    const fingerprint = content => {
+      if (!actionPath) return digest(content);
+      const action = YAML.parse(content);
+      return digest(JSON.stringify(canonical({ ...action,
+        runs: { ...action.runs, steps: normalizeActionSteps(action.runs.steps) } })));
+    };
+    candidate[policyPath] = candidate[policyPath].replace(fingerprint(baseline[path]), fingerprint(candidate[path]));
+    const admitted = new Set([path, policyPath]);
+    assert.deepEqual(inspectActivated(candidate, baseline, admitted), [], path);
     assert.ok(inspectActivated(candidate, baseline, new Set(['unrelated'])).length > 0, path);
     const ci = YAML.parse(candidate['.github/workflows/ci.yml']);
     ci.jobs.go['continue-on-error'] = true;
     candidate['.github/workflows/ci.yml'] = YAML.stringify(ci);
-    assert.ok(inspectActivated(candidate, baseline, new Set([path])).length > 0, path);
+    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0, path);
   }
 });
 

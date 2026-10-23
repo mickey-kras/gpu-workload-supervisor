@@ -38,8 +38,18 @@ function normalizeCiReuse(files, workflows, failures, admitted = new Set()) {
   for (const [path, hash] of Object.entries(REUSE_HASHES)) {
     if (fingerprint(path, workflows[path]) !== hash) failures.push(`${path} changed coverage/scanner reuse controls`);
   }
+  let candidateHashes = {};
+  if (Object.keys(HELPER_HASHES).some(path => admitted.has(path))) {
+    try {
+      const source = files['.github/scripts/policy-ci-reuse.cjs'] || '';
+      candidateHashes = JSON.parse(source.match(/const HELPER_HASHES = (\{[\s\S]*?\n\});/)?.[1] || 'null');
+    } catch {
+      failures.push('Coverage/scanner helper digests are invalid');
+    }
+  }
   for (const [path, hash] of Object.entries(HELPER_HASHES)) {
-    if (!admitted.has(path) && createHash('sha256').update(files[path] || '').digest('hex') !== hash) {
+    const expected = admitted.has(path) ? candidateHashes?.[path] : hash;
+    if (createHash('sha256').update(files[path] || '').digest('hex') !== expected) {
       failures.push(`${path} changed fail-closed coverage/scanner validation`);
     }
   }

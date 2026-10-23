@@ -9,6 +9,8 @@ const { normalizeCiReuse } = require('./policy-ci-reuse.cjs');
 const { canonical, normalizeActionSteps } = require('./policy-action-pins.cjs');
 const { inspectDependabot, verifyDependabotAuthor } = require('./policy-dependabot.cjs');
 
+const GORELEASER_ACTION_DIGEST = 'c88133b8d7e69681883fe0aa77a141453ace73146561612522b9cd5f485722ac';
+
 const REQUIRED_FILES = [
   '.github/CODEOWNERS',
   '.github/workflows/pr-validation.yml', '.github/workflows/ci.yml',
@@ -128,8 +130,10 @@ function inspectGoReleaser({ files, workflows, failures, checks, path, jobId, bu
     if (doc.errors.length) throw doc.errors[0];
     const action = doc.toJS();
     const controls = { ...action, runs: { ...action?.runs, steps: normalizeActionSteps(action?.runs?.steps) } };
-    if (!admitted.has(actionPath) && createHash('sha256').update(JSON.stringify(canonical(controls))).digest('hex') !==
-        'c88133b8d7e69681883fe0aa77a141453ace73146561612522b9cd5f485722ac') failures.push(`${actionPath} changed verified GoReleaser installer`);
+    const expected = admitted.has(actionPath)
+      ? files['.github/scripts/policy-guard.cjs']?.match(/const GORELEASER_ACTION_DIGEST = '([a-f0-9]{64})';/)?.[1]
+      : GORELEASER_ACTION_DIGEST;
+    if (createHash('sha256').update(JSON.stringify(canonical(controls))).digest('hex') !== expected) failures.push(`${actionPath} changed verified GoReleaser installer`);
   } catch {
     failures.push(`${actionPath} changed verified GoReleaser installer`);
   }
