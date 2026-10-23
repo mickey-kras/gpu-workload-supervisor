@@ -19,11 +19,11 @@
 - Setup: no broker, gateway or scanner installation.
 - [Trainer adapters](TRAINING.md): recipes and checkpoint contents; controller: finite-job lifecycle.
 
-## Model attestation (planned)
+## Model attestation
 
 The [attestation contract](MODEL-ATTESTATION.md) defines the envelope, signing bytes and policy.
 The producer and the gate do not exist yet. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585):
-scan/report and attestation preparation.
+scan, report and attestation preparation.
 [#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583):
 pre-execution verification, policy and UI.
 

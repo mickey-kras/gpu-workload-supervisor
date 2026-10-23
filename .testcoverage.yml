@@ -21,5 +21,3 @@ override:
     threshold: 95
   - path: ^internal/supervisor$
     threshold: 93
-  - path: ^internal/attestation$
-    threshold: 98

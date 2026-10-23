@@ -9,37 +9,35 @@ import (
 	"strconv"
 )
 
-// Domain prefixes keep envelope signatures and artifact digests from being
-// valid for any other message format.
+// SigningDomain prefixes the signed bytes so an envelope signature is never
+// valid for another message format. The same holds for artifactDomain.
 const (
 	SigningDomain  = "gpu-model-attestation/v1\n"
-	ArtifactDomain = "gpu-model-artifact/v1\n"
+	artifactDomain = "gpu-model-artifact/v1\n"
 )
 
 // SigningBytes returns the exact bytes an offline signer signs: SigningDomain
-// followed by the canonical JSON of the validated envelope.
+// followed by MarshalEnvelope output, with no trailing line feed.
 func SigningBytes(e Envelope) ([]byte, error) {
-	if err := e.Validate(); err != nil {
-		return nil, err
-	}
-	canonical, err := canonicalJSON(e.object())
+	canonical, err := MarshalEnvelope(e)
 	if err != nil {
 		return nil, err
 	}
 	return append([]byte(SigningDomain), canonical...), nil
 }
 
-// Digest identifies the complete artifact for exemptions: lowercase hex
-// SHA-256 of ArtifactDomain followed by the artifact's canonical JSON.
+// Digest identifies the complete artifact for exemptions and denials:
+// lowercase hex SHA-256 of artifactDomain followed by the artifact's
+// canonical JSON.
 func (a Artifact) Digest() (string, error) {
-	if err := a.Validate(); err != nil {
-		return "", err
+	if err := a.validate(); err != nil {
+		return "", malformed("artifact: %v", err)
 	}
 	canonical, err := canonicalJSON(a.object())
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(append([]byte(ArtifactDomain), canonical...))
+	sum := sha256.Sum256(append([]byte(artifactDomain), canonical...))
 	return hex.EncodeToString(sum[:]), nil
 }
 
@@ -74,7 +72,11 @@ func (a Artifact) object() map[string]any {
 func (s Scan) object() map[string]any {
 	object := map[string]any{"status": string(s.Status)}
 	if s.Scanner != nil {
-		object["scanner"] = map[string]any{"tool": s.Scanner.Tool, "version": s.Scanner.Version, "configSHA256": s.Scanner.ConfigSHA256}
+		object["scanner"] = map[string]any{
+			"tool":         s.Scanner.Tool,
+			"version":      s.Scanner.Version,
+			"configSHA256": s.Scanner.ConfigSHA256,
+		}
 	}
 	putText(object, "coverage", string(s.Coverage))
 	putText(object, "verdict", s.Verdict)
@@ -89,8 +91,8 @@ func putText(object map[string]any, key, value string) {
 }
 
 // canonicalJSON writes objects with members sorted by key bytes, no
-// insignificant whitespace, unescaped strings and decimal integers. For the
-// restricted envelope alphabet this is the RFC 8785 serialization.
+// insignificant whitespace, unescaped strings and decimal integers. Tests
+// cross-check it against a sorted-key compact JSON encoder.
 func canonicalJSON(value any) ([]byte, error) {
 	var out bytes.Buffer
 	if err := writeCanonical(&out, value); err != nil {
@@ -104,8 +106,8 @@ func writeCanonical(out *bytes.Buffer, value any) error {
 	case map[string]any:
 		return writeObject(out, v)
 	case string:
-		if !text(v, MaxEnvelopeBytes) {
-			return errors.New("attestation string needs JSON escapes")
+		if !safeText(v, MaxEnvelopeBytes) {
+			return malformed("string needs JSON escapes")
 		}
 		out.WriteByte('"')
 		out.WriteString(v)

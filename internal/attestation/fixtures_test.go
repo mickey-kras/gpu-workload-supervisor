@@ -11,16 +11,20 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 var updateFixtures = flag.Bool("update", false, "rewrite attestation testdata fixtures")
 
+// independentGoldens come from an encoder outside this package, never from -update.
+var independentGoldens = []string{"artifact-digests.json"}
+
 // TEST ONLY. Fixture signing keys derive from public seeds at test time, so no
 // private key material is committed. Never pin these keys outside tests.
 func testKey(n int) ed25519.PrivateKey {
-	seed := sha256.Sum256([]byte("gpu-workload-supervisor attestation TEST-ONLY fixture key " + string(rune('0'+n))))
+	seed := sha256.Sum256([]byte("gpu-workload-supervisor attestation TEST-ONLY fixture key " + strconv.Itoa(n)))
 	return ed25519.NewKeyFromSeed(seed[:])
 }
 
@@ -98,7 +102,7 @@ func signFixture(t *testing.T, key ed25519.PrivateKey, e Envelope) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return marshalFixture(t, Signature{Version: FormatVersion, Algorithm: SignatureAlgorithm, KeyID: KeyID(key.Public().(ed25519.PublicKey)), Value: base64.StdEncoding.EncodeToString(ed25519.Sign(key, message))})
+	return marshalFixture(t, Signature{Version: SignatureFormatVersion, Algorithm: SignatureAlgorithm, KeyID: KeyID(key.Public().(ed25519.PublicKey)), Value: base64.StdEncoding.EncodeToString(ed25519.Sign(key, message))})
 }
 
 func marshalFixture(t *testing.T, value any) []byte {
@@ -153,15 +157,15 @@ func TestCommittedFixturesMatchDeterministicGeneration(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !bytes.Equal(committed, generated[name]) {
-			t.Fatalf("%s is stale; run go test ./internal/attestation -run TestCommittedFixtures -update", name)
+			t.Fatalf("%s is stale; run go test ./internal/attestation -run TestCommittedFixturesMatchDeterministicGeneration -update", name)
 		}
 	}
 	entries, err := os.ReadDir("testdata")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != len(generated) {
-		t.Fatalf("testdata has %d files, generation has %d", len(entries), len(generated))
+	if len(entries) != len(generated)+len(independentGoldens) {
+		t.Fatalf("testdata has %d files, generation has %d", len(entries), len(generated)+len(independentGoldens))
 	}
 }
 

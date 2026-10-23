@@ -7,17 +7,19 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
-	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
-// FormatVersion is the only envelope format this package reads or signs.
+// FormatVersion is the only envelope format this package reads or writes.
 const FormatVersion = 1
 
 // Bounds apply before signature checks so hostile evidence stays cheap to reject.
@@ -26,12 +28,28 @@ const (
 	MaxSignatureBytes = 1 << 10
 	MaxFiles          = 32768
 	MaxPathBytes      = 512
-	maxTextBytes      = 256
-	maxURIBytes       = 2048
+	MaxTextBytes      = 256
+	MaxURIBytes       = 2048
+	// MaxPolicyVersion keeps every integer exact in any JSON number encoding.
+	MaxPolicyVersion = 1<<31 - 1
 )
 
 // TimestampLayout is the only accepted timestamp form: RFC 3339 UTC seconds.
 const TimestampLayout = "2006-01-02T15:04:05Z"
+
+// Sentinel errors identify the failure class. Messages never echo evidence.
+var (
+	ErrUnreadable         = errors.New("attestation input is unreadable")
+	ErrMalformedEnvelope  = errors.New("invalid attestation envelope")
+	ErrMalformedSignature = errors.New("invalid attestation signature file")
+	ErrUnsupportedVersion = errors.New("unsupported attestation format version")
+	ErrInvalidInventory   = errors.New("invalid on-disk artifact inventory")
+	ErrMissingInput       = errors.New("attestation verifier, envelope or signature is missing")
+	ErrUnknownKey         = errors.New("attestation key is not pinned")
+	ErrInvalidSignature   = errors.New("attestation signature is invalid")
+	ErrIncompatiblePolicy = errors.New("attestation policy version is not supported")
+	ErrArtifactMismatch   = errors.New("attestation does not bind the artifact on disk")
+)
 
 var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
@@ -55,8 +73,8 @@ const (
 )
 
 // Artifact binds either a complete directory inventory or one artifact file.
-// Files maps clean relative paths to lowercase hex SHA-256 digests, the same
-// shape as a training inventory. Shard index files are ordinary entries.
+// Files maps relative paths to lowercase hex SHA-256 digests, the same shape
+// as a training inventory. Shard index files are ordinary entries.
 type Artifact struct {
 	Files  map[string]string `json:"files,omitempty"`
 	SHA256 string            `json:"sha256,omitempty"`
@@ -102,73 +120,128 @@ const (
 	required
 )
 
-// scanFields lists scanner, coverage, verdict and report presence per status.
-// A skipped scan carries no scanner evidence, so it can never look like a pass.
-var scanFields = map[ScanStatus][4]presence{
-	ScanPassed:      {required, required, required, required},
-	ScanFindings:    {required, required, required, required},
-	ScanError:       {required, forbidden, forbidden, optional},
-	ScanUnsupported: {required, forbidden, forbidden, optional},
-	ScanNotScanned:  {forbidden, forbidden, forbidden, forbidden},
+type scanEvidence struct {
+	scanner, coverage, verdict, report presence
 }
 
-var errMalformedEnvelope = errors.New("invalid attestation envelope JSON")
+// scanFields lists evidence presence per status. A skipped scan carries no
+// scanner evidence, so it can never look like a pass.
+var scanFields = map[ScanStatus]scanEvidence{
+	ScanPassed:      {scanner: required, coverage: required, verdict: required, report: required},
+	ScanFindings:    {scanner: required, coverage: required, verdict: required, report: required},
+	ScanError:       {scanner: required, coverage: forbidden, verdict: forbidden, report: optional},
+	ScanUnsupported: {scanner: required, coverage: forbidden, verdict: forbidden, report: optional},
+	ScanNotScanned:  {scanner: forbidden, coverage: forbidden, verdict: forbidden, report: forbidden},
+}
 
-// ReadEnvelope reads one bounded strict envelope. The input must decode to
+func malformed(format string, args ...any) error {
+	return fmt.Errorf("%w: "+format, append([]any{ErrMalformedEnvelope}, args...)...)
+}
+
+// MarshalEnvelope returns the canonical JSON of a valid envelope without the
+// signing domain prefix. Producers write these bytes as the envelope file.
+func MarshalEnvelope(e Envelope) ([]byte, error) {
+	if err := e.validate(); err != nil {
+		return nil, err
+	}
+	return canonicalJSON(e.object())
+}
+
+// readEnvelope reads one bounded strict envelope. The input must decode to
 // the same JSON value as its canonical form: no unknown, null, empty or
 // differently cased fields can pass through.
-func ReadEnvelope(r io.Reader) (Envelope, error) {
-	var envelope Envelope
-	raw, err := io.ReadAll(io.LimitReader(r, MaxEnvelopeBytes+1))
-	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), MaxEnvelopeBytes, &envelope) != nil {
-		return Envelope{}, errMalformedEnvelope
+func readEnvelope(r io.Reader) (Envelope, error) {
+	raw, err := readLimited(r, MaxEnvelopeBytes, ErrMalformedEnvelope)
+	if err != nil {
+		return Envelope{}, err
 	}
-	if err := envelope.Validate(); err != nil {
+	if otherVersion(raw, FormatVersion) {
+		return Envelope{}, ErrUnsupportedVersion
+	}
+	var envelope Envelope
+	if err := strictjson.DecodeLimited(bytes.NewReader(raw), MaxEnvelopeBytes, &envelope); err != nil {
+		return Envelope{}, malformed("strict JSON decoding failed")
+	}
+	if err := envelope.validate(); err != nil {
 		return Envelope{}, err
 	}
 	canonical, err := canonicalJSON(envelope.object())
 	if err != nil || !sameJSON(raw, canonical) {
-		return Envelope{}, errMalformedEnvelope
+		return Envelope{}, malformed("fields differ from the canonical form")
 	}
 	return envelope, nil
 }
 
-func (e Envelope) Validate() error {
-	if e.Version != FormatVersion {
-		return errors.New("unsupported attestation format version")
+// readLimited separates reader failures from oversized or non-UTF-8 input.
+func readLimited(r io.Reader, limit int64, invalid error) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, ErrUnreadable
 	}
-	if err := e.Artifact.Validate(); err != nil {
-		return err
+	if int64(len(raw)) > limit {
+		return nil, fmt.Errorf("%w: input exceeds %d bytes", invalid, limit)
+	}
+	if !utf8.Valid(raw) {
+		return nil, fmt.Errorf("%w: input is not UTF-8", invalid)
+	}
+	return raw, nil
+}
+
+// otherVersion reports one well-formed JSON object whose exact "version"
+// member is a positive integer other than current.
+func otherVersion(raw []byte, current int) bool {
+	if strictjson.Check(json.NewDecoder(bytes.NewReader(raw))) != nil {
+		return false
+	}
+	var object map[string]json.RawMessage
+	d := json.NewDecoder(bytes.NewReader(raw))
+	if d.Decode(&object) != nil || d.Decode(&struct{}{}) != io.EOF {
+		return false
+	}
+	version, err := strconv.ParseInt(string(object["version"]), 10, 64)
+	return err == nil && version >= 1 && version != int64(current)
+}
+
+func (e Envelope) validate() error {
+	if e.Version < 1 {
+		return malformed("format version must be a positive integer")
+	}
+	if e.Version != FormatVersion {
+		return ErrUnsupportedVersion
+	}
+	if err := e.Artifact.validate(); err != nil {
+		return malformed("artifact: %v", err)
 	}
 	if e.Source != nil && !e.Source.valid() {
-		return errors.New("invalid attestation source")
+		return malformed("source needs a uri of at most %d bytes or a revision of at most %d bytes", MaxURIBytes, MaxTextBytes)
 	}
 	if err := e.Scan.validate(); err != nil {
 		return err
 	}
-	if e.PolicyVersion < 1 {
-		return errors.New("invalid attestation policy version")
+	if !validPolicyVersion(e.PolicyVersion) {
+		return malformed("policy version must be 1 to %d", MaxPolicyVersion)
 	}
 	if !validTimestamp(e.Timestamp) {
-		return errors.New("attestation timestamp must be RFC 3339 UTC seconds")
+		return malformed("timestamp must be RFC 3339 UTC seconds")
 	}
 	return nil
 }
 
-// Validate accepts exactly one artifact form with bounded, clean entries.
-func (a Artifact) Validate() error {
+// validate accepts exactly one artifact form with bounded, clean entries. It
+// checks envelope artifacts and the caller's on-disk inventory alike.
+func (a Artifact) validate() error {
 	if a.SHA256 != "" {
 		if a.Files != nil || !digestPattern.MatchString(a.SHA256) {
-			return errors.New("invalid single attestation artifact")
+			return errors.New("single form needs only a lowercase hex SHA-256")
 		}
 		return nil
 	}
 	if len(a.Files) == 0 || len(a.Files) > MaxFiles {
-		return errors.New("attestation artifact needs 1 to 32768 files")
+		return fmt.Errorf("needs 1 to %d files", MaxFiles)
 	}
 	for path, digest := range a.Files {
 		if !validPath(path) || !digestPattern.MatchString(digest) {
-			return errors.New("invalid attestation artifact entry")
+			return errors.New("an entry has an unsupported path or digest")
 		}
 	}
 	return nil
@@ -178,34 +251,39 @@ func (s Source) valid() bool {
 	if s.URI == "" && s.Revision == "" {
 		return false
 	}
-	return optionalText(s.URI, maxURIBytes) && optionalText(s.Revision, maxTextBytes)
+	return optionalText(s.URI, MaxURIBytes) && optionalText(s.Revision, MaxTextBytes)
 }
 
 func (s Scan) validate() error {
 	fields, known := scanFields[s.Status]
 	if !known {
-		return errors.New("unsupported attestation scan status")
+		return malformed("unsupported scan status")
 	}
-	present := [4]bool{s.Scanner != nil, s.Coverage != "", s.Verdict != "", s.ReportSHA256 != ""}
-	for i, rule := range fields {
-		if (rule == required && !present[i]) || (rule == forbidden && present[i]) {
-			return errors.New("attestation scan evidence does not match its status")
-		}
+	if !fields.scanner.allows(s.Scanner != nil) || !fields.coverage.allows(s.Coverage != "") || !fields.verdict.allows(s.Verdict != "") || !fields.report.allows(s.ReportSHA256 != "") {
+		return malformed("scan evidence does not match its status")
 	}
 	if s.Scanner != nil && !s.Scanner.valid() {
-		return errors.New("invalid attestation scanner identity")
+		return malformed("scanner needs a tool and version of at most %d bytes and a configuration digest", MaxTextBytes)
 	}
 	if s.Coverage != "" && s.Coverage != CoverageComplete && s.Coverage != CoveragePartial {
-		return errors.New("invalid attestation scan coverage")
+		return malformed("unsupported scan coverage")
 	}
-	if !optionalText(s.Verdict, maxTextBytes) || (s.ReportSHA256 != "" && !digestPattern.MatchString(s.ReportSHA256)) {
-		return errors.New("invalid attestation scan verdict or report")
+	if !optionalText(s.Verdict, MaxTextBytes) || (s.ReportSHA256 != "" && !digestPattern.MatchString(s.ReportSHA256)) {
+		return malformed("verdict must be at most %d bytes and the report a SHA-256 digest", MaxTextBytes)
 	}
 	return nil
 }
 
+func (p presence) allows(present bool) bool {
+	return (p != required || present) && (p != forbidden || !present)
+}
+
 func (s Scanner) valid() bool {
-	return text(s.Tool, maxTextBytes) && text(s.Version, maxTextBytes) && digestPattern.MatchString(s.ConfigSHA256)
+	return safeText(s.Tool, MaxTextBytes) && safeText(s.Version, MaxTextBytes) && digestPattern.MatchString(s.ConfigSHA256)
+}
+
+func validPolicyVersion(version int) bool {
+	return version >= 1 && version <= MaxPolicyVersion
 }
 
 func validTimestamp(value string) bool {
@@ -213,18 +291,28 @@ func validTimestamp(value string) bool {
 	return err == nil && parsed.Format(TimestampLayout) == value
 }
 
+// validPath accepts "/"-separated relative paths with no empty, "." or ".."
+// segment. The alphabet is narrower than training inventories accept.
 func validPath(path string) bool {
-	return text(path, MaxPathBytes) && filepath.IsLocal(path) && path != "." && filepath.Clean(path) == path
+	if !safeText(path, MaxPathBytes) {
+		return false
+	}
+	for _, segment := range strings.Split(path, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return true
 }
 
-func optionalText(value string, max int) bool {
-	return value == "" || text(value, max)
+func optionalText(value string, limit int) bool {
+	return value == "" || safeText(value, limit)
 }
 
-// text admits printable ASCII except quote and backslash, so canonical JSON
-// strings never need escapes.
-func text(value string, max int) bool {
-	if value == "" || len(value) > max {
+// safeText admits printable ASCII except quote and backslash, so canonical
+// JSON strings never need escapes.
+func safeText(value string, limit int) bool {
+	if value == "" || len(value) > limit {
 		return false
 	}
 	for i := 0; i < len(value); i++ {
