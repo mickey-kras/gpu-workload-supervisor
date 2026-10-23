@@ -137,6 +137,10 @@ class DraftEditor {
         const previous = this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === unit);
         this.detected = discovery.applications ?? [];
         this.discoveryErrors = discovery.errors ?? [];
+        if (this.session?.candidate?.unit) {
+            const original = this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === this.session.candidate.unit);
+            if (JSON.stringify(original) !== JSON.stringify(this.session.discoveryCandidate)) this.session.discoveryChanged = true;
+        }
         this.rebuildInstanceChoices(this.detected);
         const current = this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === unit);
         if (unit && (!current || JSON.stringify(previous) !== JSON.stringify(current))) {
@@ -464,11 +468,13 @@ class DraftEditor {
         this.changed(this.draft.snapshot());
         const current = snapshot.candidate?.unit ? this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === snapshot.candidate.unit) : snapshot.candidate;
         // A temporary model inventory enriches the candidate without changing
-        // discovery evidence. Keep it unless the underlying installation changed.
-        const selected = current && JSON.stringify(current) === JSON.stringify(snapshot.discoveryCandidate) ? snapshot.candidate : current;
+        // discovery evidence. Any intervening installation change invalidates it,
+        // even if a later check reports the original discovery evidence again.
+        const unchanged = JSON.stringify(current) === JSON.stringify(snapshot.discoveryCandidate);
+        const selected = current && !snapshot.discoveryChanged && unchanged ? snapshot.candidate : current;
         if (selected) this.show(selected);
         else this.settings.problem('Installation not detected', new Error('The selected service was not found during the latest check.'));
-        if (!selected || (selected === snapshot.candidate && !snapshot.ready)) this.settings.invalidate();
+        if (!selected || (snapshot.discoveryChanged && unchanged) || (selected === snapshot.candidate && !snapshot.ready)) this.settings.invalidate();
     }
     selectedModels(input) {
         if (!this.draft.needsModel) return [''];

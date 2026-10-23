@@ -727,12 +727,15 @@ test('failed temporary cleanup vetoes closing and keeps appearance resources act
     assert.ok(ui.widgets.some(widget => widget.label?.includes('cleanup must finish before closing')));
 });
 
-for (const refresh of ['unrefreshed', 'unchanged', 'changed', 'removed']) {
+for (const refresh of ['unrefreshed', 'unchanged', 'changed', 'removed', 'changed-then-restored', 'removed-then-restored']) {
     test(`cancelling settings after temporary discovery handles ${refresh} installation evidence`, async () => {
         const candidate = installation('ollama');
-        const refreshed = refresh === 'removed' ? [] : [{...candidate, ...(refresh === 'changed' ? {models: [{id: 'new', label: 'New model'}], inventoryStatus: 'available'} : {})}];
+        const refreshed = refresh.startsWith('removed') ? [] : [{...candidate, ...(refresh.startsWith('changed') ? {models: [{id: 'new', label: 'New model'}], inventoryStatus: 'available'} : {})}];
         const ui = await launch(temporary({
-            discover: (_input, calls) => ({request: structuredClone(request), units: [], applications: calls.filter(call => call.argv[1] === 'discover').length > 1 ? refreshed : [candidate]}),
+            discover: (_input, calls) => {
+                const count = calls.filter(call => call.argv[1] === 'discover').length;
+                return {request: structuredClone(request), units: [], applications: count === 1 || (refresh.endsWith('-then-restored') && count > 2) ? [candidate] : refreshed};
+            },
             'temporary-discover': {session, models: [{id: 'a', label: 'Model A'}, {id: 'b', label: 'Model B'}]},
         }));
         ui.edit(ui.by('Use Ollama'), 'active', true);
@@ -744,7 +747,13 @@ for (const refresh of ['unrefreshed', 'unchanged', 'changed', 'removed']) {
         await ui.click('Back');
         await ui.click('Settings for Ollama');
         if (refresh !== 'unrefreshed') await ui.by('Check again').emit('clicked');
+        if (refresh.endsWith('-then-restored')) await ui.by('Check again').emit('clicked');
         await ui.click('Cancel');
+        if (refresh.endsWith('-then-restored')) {
+            await ui.click('Settings for Ollama');
+            assert.equal(ui.by('Use installation').sensitive, false);
+            await ui.click('Cancel');
+        }
         if (refresh === 'removed') {
             assert.equal(ui.by('Detected instance').selected, 0);
             assert.ok(ui.widgets.some(widget => widget.label === 'Configuration changed. Check again before using this installation.'));
