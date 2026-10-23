@@ -1,5 +1,11 @@
+const { readPolicyConstant } = require('./policy-admission.cjs');
 const { createHash } = require('node:crypto');
 const { sameActionSteps } = require('./policy-action-pins.cjs');
+
+const RELEASE_HASHES = {
+  ".github/scripts/release-validation.cjs": "2ab673a761d632d643901cfdd9294d45135910691481693bcb15b2f20fc75c1b",
+  ".github/scripts/release-publication.cjs": "124d6832b052c0f3309755c1874acf303bbef264cf24077e1831dacc51838462"
+};
 
 const VALIDATION_SCRIPT = [
   "const { readFileSync } = require('node:fs');",
@@ -9,12 +15,12 @@ const VALIDATION_SCRIPT = [
   "const filename = resolve('.github/scripts/release-validation.cjs');",
   'const source = readFileSync(filename);',
   "if (createHash('sha256').update(source).digest('hex') !==",
-  "    '2ab673a761d632d643901cfdd9294d45135910691481693bcb15b2f20fc75c1b') {",
+  `    '${RELEASE_HASHES[".github/scripts/release-validation.cjs"]}') {`,
   "  throw new Error('Release validation verifier bytes changed in the workspace');", '}',
   "const publicationFilename = resolve('.github/scripts/release-publication.cjs');",
   'const publicationSource = readFileSync(publicationFilename);',
   "if (createHash('sha256').update(publicationSource).digest('hex') !==",
-  "    '124d6832b052c0f3309755c1874acf303bbef264cf24077e1831dacc51838462') {",
+  `    '${RELEASE_HASHES[".github/scripts/release-publication.cjs"]}') {`,
   "  throw new Error('Release publication helper bytes changed in the workspace');", '}',
   'const publication = { exports: {} };',
   "const noImports = () => { throw new Error('Unexpected publication helper dependency'); };",
@@ -38,11 +44,11 @@ const GO = { uses: 'actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e',
   with: { 'go-version-file': 'go.mod', cache: true } };
 const INSTALL = { name: 'Install release tools',
   run: 'npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund' };
-const verificationStep = name => ({ name,
+const verificationStep = (name, script) => ({ name,
   uses: 'actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3',
-  env: { VERSION: '${{ needs.entry.outputs.version }}' }, with: { script: VALIDATION_SCRIPT } });
+  env: { VERSION: '${{ needs.entry.outputs.version }}' }, with: { script } });
 
-function inspectVerificationWorkspace(workflow, failures) {
+function inspectVerificationWorkspace(workflow, failures, script) {
   const jobs = workflow.jobs;
   const validation = jobs.validation;
   const publish = jobs.publish;
@@ -56,33 +62,41 @@ function inspectVerificationWorkspace(workflow, failures) {
       publish['runs-on'] !== 'ubuntu-latest' ||
       ['env', 'defaults', 'container', 'services'].some(key => Object.hasOwn(publish, key)) ||
       !sameSteps(validation.steps, [HARDEN, CHECKOUT,
-        verificationStep('Verify exact-commit main validation')]) ||
+        verificationStep('Verify exact-commit main validation', script)]) ||
       !sameSteps(publish.steps?.slice(0, beforePublish + 1), [HARDEN, publishCheckout, GO, INSTALL,
-        verificationStep('Verify main and successful validation at this commit')])) {
+        verificationStep('Verify main and successful validation at this commit', script)])) {
     failures.push('Release validation workspace or runtime inputs were changed');
   }
 }
 
-function inspectValidationReuse(files, workflow, failures, checks) {
+function inspectValidationReuse(files, workflow, failures, checks, admitted) {
   const releaseJobs = workflow?.jobs;
   const path = '.github/workflows/release.yml';
   const validation = releaseJobs?.validation;
   const verification = releaseJobs?.publish?.steps?.find(step =>
     step.name === 'Verify main and successful validation at this commit');
-  const digest = content => createHash('sha256').update(content || '').digest('hex');
-  if (digest(files['.github/scripts/release-validation.cjs']) !==
-      '2ab673a761d632d643901cfdd9294d45135910691481693bcb15b2f20fc75c1b') {
-    failures.push('Release validation verifier was changed');
+  let script = VALIDATION_SCRIPT;
+  let candidateHashes = {};
+  if (Object.keys(RELEASE_HASHES).some(file => admitted.has(file))) {
+    try {
+      const source = files['.github/scripts/policy-release.cjs'] || '';
+      candidateHashes = readPolicyConstant(source, 'RELEASE_HASHES');
+    } catch {
+      failures.push('Release helper digests are invalid');
+    }
   }
-  if (digest(files['.github/scripts/release-publication.cjs']) !==
-      '124d6832b052c0f3309755c1874acf303bbef264cf24077e1831dacc51838462') {
-    failures.push('Release publication helper was changed');
+  for (const [file, hash] of Object.entries(RELEASE_HASHES)) {
+    const actual = createHash('sha256').update(files[file] || '').digest('hex');
+    const expected = admitted.has(file) ? candidateHashes?.[file] : hash;
+    if (actual !== expected) failures.push(file.endsWith('release-validation.cjs')
+      ? 'Release validation verifier was changed' : 'Release publication helper was changed');
+    if (admitted.has(file)) script = script.replaceAll(hash, actual);
   }
   if (!validation) {
     failures.push(`${path} lost exact-commit main validation`);
     return;
   }
-  inspectVerificationWorkspace(workflow, failures);
+  inspectVerificationWorkspace(workflow, failures, script);
   if (['quality', 'aislop', 'codeql'].some(id => Object.hasOwn(releaseJobs, id)) ||
       validation.needs !== 'entry' || Object.hasOwn(validation, 'if') ||
       validation['runs-on'] !== 'ubuntu-latest' ||
@@ -97,10 +111,10 @@ function inspectValidationReuse(files, workflow, failures, checks) {
     failures.push(`${path} lost exact-dispatch validation checkout`);
   }
   checks.step(path, 'validation', 'Verify exact-commit main validation', {
-    uses: 'actions/github-script', withValues: { script: VALIDATION_SCRIPT },
+    uses: 'actions/github-script', withValues: { script },
   });
   checks.step(path, 'publish', 'Verify main and successful validation at this commit', {
-    uses: 'actions/github-script', withValues: { script: VALIDATION_SCRIPT },
+    uses: 'actions/github-script', withValues: { script },
   });
   for (const step of [verification, validation.steps?.find(step =>
     step.name === 'Verify exact-commit main validation')]) {
@@ -111,7 +125,7 @@ function inspectValidationReuse(files, workflow, failures, checks) {
   }
 }
 
-function inspectReleaseEntry(files, workflows, failures, checks) {
+function inspectReleaseEntry(files, workflows, failures, checks, admitted = new Set()) {
   const { event, step } = checks;
   const release = '.github/workflows/release.yml';
   event(release, 'workflow_dispatch');
@@ -120,7 +134,7 @@ function inspectReleaseEntry(files, workflows, failures, checks) {
       releaseJobs?.entry?.outputs?.version !== '${{ steps.version.outputs.version }}') {
     failures.push(`${release} lost dispatch version selection`);
   }
-  inspectValidationReuse(files, workflows[release], failures, checks);
+  inspectValidationReuse(files, workflows[release], failures, checks, admitted);
   step(release, 'entry', 'Require dispatch from main', {
     uses: 'actions/github-script',
     withValues: { script: [

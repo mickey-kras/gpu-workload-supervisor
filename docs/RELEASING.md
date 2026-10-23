@@ -107,3 +107,9 @@ notice and representative transitive notices. Keep collector updates separate fr
 runtime dependencies, review warnings about non-Go code when dependencies change,
 and preserve this directory when redistributing binaries. The SBOM supplements
 these full notices; it does not replace them.
+
+## CI policy maintenance
+
+Use [CI policy changes](CI-POLICY.md) for dependency-lock validation, independent
+owner admission, and the administrator rollout. Lockfiles must never acquire
+content-hash approval lists. Existing release checks remain required.

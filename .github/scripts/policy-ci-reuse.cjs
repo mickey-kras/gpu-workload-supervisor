@@ -1,3 +1,4 @@
+const { readPolicyConstant } = require('./policy-admission.cjs');
 const { createHash } = require('node:crypto');
 const { canonical, normalizeWorkflowActionPins } = require('./policy-action-pins.cjs');
 
@@ -26,7 +27,7 @@ function fingerprint(path, workflow) {
   return createHash('sha256').update(JSON.stringify(canonical(protectedControls(path, normalizeWorkflowActionPins(workflow))))).digest('hex');
 }
 
-function normalizeCiReuse(files, workflows, failures) {
+function normalizeCiReuse(files, workflows, failures, admitted = new Set()) {
   const ci = workflows[CI];
   const steps = workflows[AISLOP]?.jobs?.status?.steps || [];
   const enabled = ci?.on?.workflow_call?.outputs ||
@@ -38,8 +39,18 @@ function normalizeCiReuse(files, workflows, failures) {
   for (const [path, hash] of Object.entries(REUSE_HASHES)) {
     if (fingerprint(path, workflows[path]) !== hash) failures.push(`${path} changed coverage/scanner reuse controls`);
   }
+  let candidateHashes = {};
+  if (Object.keys(HELPER_HASHES).some(path => admitted.has(path))) {
+    try {
+      const source = files['.github/scripts/policy-ci-reuse.cjs'] || '';
+      candidateHashes = readPolicyConstant(source, 'HELPER_HASHES');
+    } catch {
+      failures.push('Coverage/scanner helper digests are invalid');
+    }
+  }
   for (const [path, hash] of Object.entries(HELPER_HASHES)) {
-    if (createHash('sha256').update(files[path] || '').digest('hex') !== hash) {
+    const expected = admitted.has(path) ? candidateHashes?.[path] : hash;
+    if (createHash('sha256').update(files[path] || '').digest('hex') !== expected) {
       failures.push(`${path} changed fail-closed coverage/scanner validation`);
     }
   }
