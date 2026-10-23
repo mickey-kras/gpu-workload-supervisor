@@ -73,6 +73,9 @@ type Verification struct {
 	digest   string
 	err      error
 	sealed   bool
+	// verifier is the immutable trust that sealed this result. A trust
+	// reload builds a new Verifier, so Decide rejects older results.
+	verifier *Verifier
 }
 
 func (v Verification) Result() Result { return v.result }
@@ -218,8 +221,8 @@ func weakPublicKey(raw []byte) bool {
 	return true
 }
 
-func failed(result Result, keyID string, err error) Verification {
-	return Verification{result: result, keyID: keyID, err: err, sealed: true}
+func (v *Verifier) failed(result Result, keyID string, err error) Verification {
+	return Verification{result: result, keyID: keyID, err: err, sealed: true, verifier: v}
 }
 
 // classify maps a read error to its result. Anything unrecognized is malformed.
@@ -239,41 +242,41 @@ func classify(err error) Result {
 // signature file and its key ID are checked before the envelope is read.
 func (v *Verifier) Verify(envelope, signature io.Reader, onDisk Artifact) Verification {
 	if missing := missingInput(v, envelope, signature); missing != "" {
-		return failed(Malformed, "", fmt.Errorf("%w: %s", ErrMissingInput, missing))
+		return v.failed(Malformed, "", fmt.Errorf("%w: %s", ErrMissingInput, missing))
 	}
 	if err := onDisk.validate(); err != nil {
-		return failed(InvalidInventory, "", fmt.Errorf("%w: %v", ErrInvalidInventory, err))
+		return v.failed(InvalidInventory, "", fmt.Errorf("%w: %v", ErrInvalidInventory, err))
 	}
 	sig, value, err := readSignature(signature)
 	if err != nil {
-		return failed(classify(err), "", err)
+		return v.failed(classify(err), "", err)
 	}
 	key := v.keys[sig.KeyID]
 	if key == nil {
-		return failed(UnknownKey, sig.KeyID, ErrUnknownKey)
+		return v.failed(UnknownKey, sig.KeyID, ErrUnknownKey)
 	}
 	parsed, err := readEnvelope(envelope)
 	if err != nil {
-		return failed(classify(err), sig.KeyID, err)
+		return v.failed(classify(err), sig.KeyID, err)
 	}
 	message, err := SigningBytes(parsed)
 	if err != nil {
-		return failed(Malformed, sig.KeyID, err)
+		return v.failed(Malformed, sig.KeyID, err)
 	}
 	if !ed25519.Verify(key, message, value) {
-		return failed(InvalidSignature, sig.KeyID, ErrInvalidSignature)
+		return v.failed(InvalidSignature, sig.KeyID, ErrInvalidSignature)
 	}
 	if !v.policies[parsed.PolicyVersion] {
-		return failed(IncompatiblePolicy, sig.KeyID, ErrIncompatiblePolicy)
+		return v.failed(IncompatiblePolicy, sig.KeyID, ErrIncompatiblePolicy)
 	}
 	if err := parsed.Artifact.match(onDisk); err != nil {
-		return failed(ArtifactMismatch, sig.KeyID, err)
+		return v.failed(ArtifactMismatch, sig.KeyID, err)
 	}
 	digest, err := parsed.Artifact.Digest()
 	if err != nil {
-		return failed(Malformed, sig.KeyID, err)
+		return v.failed(Malformed, sig.KeyID, err)
 	}
-	return Verification{result: Valid, keyID: sig.KeyID, envelope: parsed, digest: digest, sealed: true}
+	return Verification{result: Valid, keyID: sig.KeyID, envelope: parsed, digest: digest, sealed: true, verifier: v}
 }
 
 func missingInput(v *Verifier, envelope, signature io.Reader) string {

@@ -194,7 +194,7 @@ func TestVerifyFailsClosedOnMissingInput(t *testing.T) {
 		if got.Result() != Malformed || !errors.Is(got.Err(), ErrMissingInput) || !strings.Contains(got.Err().Error(), strings.TrimPrefix(name, "nil ")) {
 			t.Fatalf("%s: %q %v", name, got.Result(), got.Err())
 		}
-		if Decide(policy(Advisory, nil), inventory, &got).Allowed {
+		if decideTest(policy(Advisory, nil), inventory, &got).Allowed {
 			t.Fatalf("%s allowed", name)
 		}
 	}
@@ -229,10 +229,10 @@ func TestUnreadableInputNamesInputAndClassOnly(t *testing.T) {
 			if got.Result() != Unreadable || !errors.Is(got.Err(), ErrUnreadable) || !strings.Contains(message, name+": "+class) || strings.Contains(message, "/private") {
 				t.Fatalf("%s %s: %q %v", name, class, got.Result(), got.Err())
 			}
-			if d := Decide(policy(Advisory, nil), inventory, &got); d != allow(NotVerified, ReasonUnreadable) {
+			if d := decideTest(policy(Advisory, nil), inventory, &got); d != allow(NotVerified, ReasonUnreadable) {
 				t.Fatalf("%s advisory: %#v", name, d)
 			}
-			if d := Decide(policy(Enforce, nil), inventory, &got); d != deny(NotVerified, ReasonUnreadable) {
+			if d := decideTest(policy(Enforce, nil), inventory, &got); d != deny(NotVerified, ReasonUnreadable) {
 				t.Fatalf("%s enforce: %#v", name, d)
 			}
 		}

@@ -44,9 +44,9 @@ type Exemption struct {
 }
 
 // Policy is admission policy, separate from signer trust. Setup and the
-// rollback journal persist it; consumers embed *Policy with omitempty. Mode
-// has no implicit default: Decide treats every value other than Advisory as
-// Enforce.
+// rollback journal persist it; consumers embed *Policy with omitempty. Files
+// have no default mode: any mode other than Advisory or Enforce makes the
+// policy invalid, and Decide gives ReasonInvalidPolicy.
 type Policy struct {
 	Version    int         `json:"version"`
 	Mode       Mode        `json:"mode"`
@@ -71,6 +71,7 @@ const (
 	ReasonMissing            Reason = "attestation-missing"
 	ReasonUnsealed           Reason = "unsealed-verification"
 	ReasonArtifactDenied     Reason = "artifact-denied"
+	ReasonStale              Reason = "stale-verification"
 	ReasonInvalidPolicy      Reason = "invalid-policy"
 	ReasonMalformed          Reason = Reason(Malformed)
 	ReasonUnreadable         Reason = Reason(Unreadable)
@@ -93,6 +94,12 @@ type Decision struct {
 	Allowed bool   `json:"allowed"`
 	Status  Status `json:"status"`
 	Reason  Reason `json:"reason"`
+}
+
+// DefaultPolicy is the in-memory policy for a gate with no policy file. A
+// policy file must still name its mode.
+func DefaultPolicy() Policy {
+	return Policy{Version: PolicyFileVersion, Mode: Advisory}
 }
 
 // ReadPolicy reads one bounded strict policy file and validates it.
@@ -164,18 +171,26 @@ func missingDecision(policy Policy, reason Reason) Decision {
 	return Decision{Allowed: policy.Mode == Advisory, Status: NotVerified, Reason: reason}
 }
 
-// Decide maps one root to admission. onDisk is the inventory the gate built
-// and gave to Verify; its digests decide denial first, whatever the evidence
-// state. Pass a nil verification when no attestation exists. An invalid
-// policy fails closed.
-func Decide(policy Policy, onDisk Artifact, verification *Verification) Decision {
+// Decide maps one root to admission. verifier is the current trust; a
+// verification sealed by any other verifier is stale. onDisk is the
+// inventory the gate built and gave to Verify; its digests decide denial
+// first, whatever the evidence state. Pass a nil verification when no
+// attestation exists. An invalid policy fails closed.
+func Decide(policy Policy, verifier *Verifier, onDisk Artifact, verification *Verification) Decision {
 	if policy.Validate() != nil {
-		return Decision{Status: IntegrityFailure, Reason: ReasonInvalidPolicy}
+		return invalidPolicy
 	}
-	if policy.denies(onDisk) {
+	return decide(policy, verifier, onDisk, verification)
+}
+
+var invalidPolicy = Decision{Status: IntegrityFailure, Reason: ReasonInvalidPolicy}
+
+// decide needs a policy that Validate accepts.
+func decide(policy Policy, verifier *Verifier, onDisk Artifact, verification *Verification) Decision {
+	digest, err := onDisk.Digest()
+	if policy.denies(onDisk, digest) {
 		return Decision{Status: IntegrityFailure, Reason: ReasonArtifactDenied}
 	}
-	digest, err := onDisk.Digest()
 	if err != nil {
 		if verification == nil {
 			return missingDecision(policy, ReasonInvalidInventory)
@@ -184,6 +199,9 @@ func Decide(policy Policy, onDisk Artifact, verification *Verification) Decision
 	}
 	if verification == nil {
 		return missingDecision(policy, ReasonMissing)
+	}
+	if verification.sealed && (verifier == nil || verification.verifier != verifier) {
+		return Decision{Status: IntegrityFailure, Reason: ReasonStale}
 	}
 	if decision, final := decideEvidence(policy.Mode == Advisory, verification); final {
 		return decision
@@ -243,27 +261,30 @@ func decideScan(policy Policy, envelope Envelope, digest string) Decision {
 	return Decision{Allowed: permissive && status == NotVerified, Status: status, Reason: reason}
 }
 
-// denies matches the inventory digest or any single file digest, so a denied
-// file stays denied inside a rearranged copy. File digests match even when
-// the inventory has no valid digest.
-func (p Policy) denies(onDisk Artifact) bool {
+// denies matches the inventory digest (empty when it has none), any file
+// digest, or the single-form artifact digest of any file. A denied file thus
+// stays denied inside a rearranged copy, even one without a valid digest.
+func (p Policy) denies(onDisk Artifact, digest string) bool {
 	if len(p.Deny) == 0 {
 		return false
 	}
 	denied := make(map[string]bool, len(p.Deny))
-	for _, digest := range p.Deny {
-		denied[digest] = true
+	for _, entry := range p.Deny {
+		denied[entry] = true
 	}
-	if denied[onDisk.SHA256] {
+	if denied[digest] || denied[onDisk.SHA256] {
 		return true
 	}
-	for _, digest := range onDisk.Files {
-		if denied[digest] {
+	for _, file := range onDisk.Files {
+		if denied[file] {
+			return true
+		}
+		single, err := Artifact{SHA256: file}.Digest()
+		if err == nil && denied[single] {
 			return true
 		}
 	}
-	digest, err := onDisk.Digest()
-	return err == nil && denied[digest]
+	return false
 }
 
 func (p Policy) exempts(digest string, policyVersion int, kind ExemptionKind, report string) bool {
@@ -295,18 +316,19 @@ var statusRank = map[Status]int{IntegrityFailure: 4, FindingsDetected: 3, NotVer
 
 // DecideAll combines one entry for each required root, such as separate
 // model and tokenizer roots. The first most severe decision wins and any
-// rejection rejects the whole set. An empty set is a missing attestation,
-// allowed only under a valid advisory policy.
-func DecideAll(policy Policy, roots []Root) Decision {
-	if len(roots) == 0 {
-		decision := missingDecision(policy, ReasonMissing)
-		decision.Allowed = decision.Allowed && policy.Validate() == nil
-		return decision
+// rejection rejects the whole set. An invalid policy fails closed, also for
+// an empty set. An empty set is a missing attestation.
+func DecideAll(policy Policy, verifier *Verifier, roots []Root) Decision {
+	if policy.Validate() != nil {
+		return invalidPolicy
 	}
-	combined := Decide(policy, roots[0].Artifact, roots[0].Verification)
+	if len(roots) == 0 {
+		return missingDecision(policy, ReasonMissing)
+	}
+	combined := decide(policy, verifier, roots[0].Artifact, roots[0].Verification)
 	allowed := combined.Allowed
 	for _, root := range roots[1:] {
-		decision := Decide(policy, root.Artifact, root.Verification)
+		decision := decide(policy, verifier, root.Artifact, root.Verification)
 		allowed = allowed && decision.Allowed
 		if statusRank[decision.Status] > statusRank[combined.Status] {
 			combined = decision
