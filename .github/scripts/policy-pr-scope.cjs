@@ -46,7 +46,7 @@ import json
 import os
 import re
 
-required = {'native', 'go', 'frontend', 'scans', 'package'}
+required = {'native', 'go', 'frontend', 'scans', 'package', 'docs-ste'}
 results = json.loads(os.environ['CI_NEEDS'])
 docs = os.environ['CI_EVENT'] == 'pull_request' and os.environ['CI_MODE'] == 'docs-only'
 expected = {job: ('skipped' if docs and job == 'native' else 'success') for job in required}

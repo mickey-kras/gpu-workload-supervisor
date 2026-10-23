@@ -72,6 +72,7 @@ function parallelFixture() {
   manifest.run = manifest.run.replace('"runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],',
     '"runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],\n    "packageQualificationAttempt": os.environ["PACKAGE_QUALIFICATION_ATTEMPT"],');
   workflow.jobs.checks.if = '${{ always() }}';
+  workflow.jobs['docs-ste'] = { uses: './.github/workflows/docs-ste.yml' };
   workflow.jobs.checks.needs = [...REQUIRED_JOBS];
   return workflow;
 }

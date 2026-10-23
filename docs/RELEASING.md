@@ -6,110 +6,125 @@ The release workflow publishes the tested source tree, two Linux archives
 (amd64 and arm64), and one Debian package per architecture. Each archive
 contains six executables:
 
-- `gpu-mode`: controller; runs and journals workload transitions
+- `gpu-mode`: controller that runs and journals workload transitions
 - `gpu-workload-proxy`: execution admission and completion proxy
 - `gpu-operator`: one-request local operator backend
 - `gpu-setup`: guided setup, discovery and catalog commit
-- `gpu-training-runner`: experimental finite-job LLM runner; no preset is enabled
-- `gpu-training-candidate`: unqualified input preparation; not training execution
+- `gpu-training-runner`: experimental finite-job LLM runner with no enabled preset
+- `gpu-training-candidate`: preparation of unqualified inputs, not training execution
 
-The Debian package adds the GNOME Shell extension and setup application. The
-workflow also publishes a checksum file covering all archives and the CycloneDX
-source SBOM. Build provenance is recorded in GitHub attestations and can be
-checked with `gh attestation verify` on a downloaded asset.
+The Debian package adds the GNOME Shell extension and setup application.
+The workflow publishes a checksum file for all archives and the CycloneDX source SBOM.
+Attestations in GitHub record the provenance of each build.
+Use `gh attestation verify` on a downloaded asset to check its provenance.
 
-1. Merge through a green PR, and wait for the `main` workflow on the merge commit.
-   SonarQube quality gate must pass there.
-2. Confirm the planned version in `release-version.json`, then dispatch `release`
-   from `main`. There is no version input; the dispatch snapshot supplies the version.
-3. The workflow confirms that `main` still points to the dispatch SHA and reuses
-   successful main validation for that exact commit, including SonarQube, then
-   freezes `release/X.Y.Z`, builds and attests assets, and creates the immutable `vX.Y.Z`
-   tag and release through the release GitHub App. It deletes the release branch
-   after successful publication. Re-run the failed job from the original run to
-   retry the same SHA, even if `main` has advanced. If publication already
-   completed, the workflow verifies the immutable tag, assets, and checksum,
-   then removes the prepared branch. For an incomplete or mutable publication,
-   follow the recovery procedure below.
-4. After verified publication, the workflow opens or reuses a next-patch bump PR
-   for `release-version.json`. It enables squash auto-merge only after validating
-   that the complete PR diff is exactly the expected version line. Required PR
-   checks and repository protections still apply. Re-run the failed follow-up job
-   to recover a failed bump without publishing another release. A newer planned
-   version on main is preserved; a lower version or unrelated PR changes fail closed.
+1. Merge through a PR with successful checks.
+   Wait for the `main` workflow on the merge commit.
+   The SonarQube quality gate must pass there.
+2. Confirm the planned version in `release-version.json`.
+   Dispatch `release` from `main`.
+   The dispatch snapshot supplies the version. There is no version input.
+3. Watch release publication.
+   The workflow confirms that `main` still points to the dispatch SHA.
+   It reuses successful main validation for that exact commit, including SonarQube.
+   It freezes `release/X.Y.Z`, builds assets and attests them.
+   The release GitHub App creates the immutable `vX.Y.Z` tag and release.
+   After successful publication, the workflow deletes the release branch.
+4. If publication fails, re-run the failed job from the original run.
+   Even if `main` points to a newer commit, this retries the same SHA.
+   If publication is complete, the workflow verifies the immutable tag, assets and checksum.
+   It then removes the prepared branch.
+   For an incomplete or mutable publication, follow the recovery procedure below.
+5. Check the next-patch bump PR for `release-version.json` after verified publication.
+   The workflow opens or reuses this PR.
+   It enables squash auto-merge only if the complete PR diff is exactly the expected version line.
+   Required PR checks and repository protections still apply.
 
-A non-empty `docs/releases/vX.Y.Z.md` becomes the GitHub release notes. The
-file is optional; without one the release uses auto-generated notes. `v0.1.6`
-and `v0.1.7` shipped without notes files.
+To recover a failed version bump, re-run the failed follow-up job.
+This does not publish another release.
+The workflow preserves a newer planned version on main.
+A lower version or unrelated PR changes cause the workflow to fail closed.
 
-Release validation waits up to 70 minutes for the exact-commit `main` run,
-including queued time. The wait is bounded separately from workflow timeouts;
-queued or unusually long main runs may need a release retry after completion.
-The latest main run must succeed,
-and every required quality, Aislop, CodeQL and Sonar job must belong to its
-current attempt. A failed-jobs rerun that omits prior successful jobs is
-insufficient: use **Re-run all jobs** on the original main run, then retry the
-release run. This also refreshes validation for a frozen commit after main moves.
+A non-empty `docs/releases/vX.Y.Z.md` supplies the GitHub release notes.
+Without this optional file, the release uses automatically generated notes.
+`v0.1.6` and `v0.1.7` shipped without notes files.
 
-All reused job evidence must be at most 24 hours old when the validation and
-publication jobs check it. Age starts at each actual producer job's start,
-including the Go and npm vulnerability audits and scanner jobs; a later
-aggregate job cannot make old scans fresh. The one-day maximum bounds exposure
-to newly published vulnerabilities while allowing same-day release retries.
-It does not guarantee that a vulnerability database is current. Missing,
-failed, stale or mismatched evidence stops the release. Refresh stale evidence
-by rerunning all jobs of the original main run for the same SHA; do not move
-the prepared release branch. Builds, package checks, checksums, provenance and
-immutable-publication checks still run in the release workflow.
+The release validation waits up to 70 minutes for the `main` run for the exact commit, including queued time.
+This limit is separate from workflow timeouts.
+If main stays queued or runs unusually long, retry the release after main completes.
+The latest main run must succeed.
+Every required quality, Aislop, CodeQL and Sonar job must belong to its current run execution.
 
-The `release-automation` environment, `RELEASE_APP_ID` repository variable, App
-installation with Contents write and Pull requests write, release-branch/tag
-creation and release-branch deletion bypasses, and GitHub release immutability must be configured
-before dispatch. In Settings > General > Releases, enable release immutability.
-Set `RELEASE_SETTINGS_REVIEW` on that environment to the five reviewed release
-ruleset revisions. Its `immutable_releases: true` value is an owner attestation,
-not a live read of the repository setting. Confirm that setting before dispatch;
-only future releases become immutable when it is enabled. The workflow validates
-the attestation and checks the accessible live rulesets before preparing a release.
-When GitHub redacts
-bypass actors, the matching reviewed ruleset revision supplies that assurance.
-Administration permission is not required. After publication, the workflow
-verifies that the release is immutable before cleanup or the next-patch bump. Failed runs do not rewrite existing
-tags or releases.
+A rerun of failed jobs that omits earlier successful jobs does not supply all required evidence.
+Select **Re-run all jobs** on the original main run.
+Then retry the release run.
+This also refreshes validation for a frozen commit after main moves.
+
+All reused job evidence must be at most 24 hours old when the validation and publication jobs check it.
+Age starts when each producer job starts, including Go and npm vulnerability audits and scanner jobs.
+A later aggregate job cannot make old scans fresh.
+This one-day limit bounds exposure to new vulnerabilities and permits release retries on the same day.
+It does not guarantee a current vulnerability database.
+
+Missing, failed, stale or mismatched evidence stops the release.
+To refresh stale evidence, rerun all jobs of the original main run for the same SHA.
+Do not move the prepared release branch.
+Builds, package checks, checksums, provenance and immutable-publication checks still run in the release workflow.
+
+Before dispatch, configure these prerequisites:
+
+- The `release-automation` environment and `RELEASE_APP_ID` repository variable.
+- A GitHub App installation with **Contents: write** and `Pull requests: write` permissions.
+- App bypasses for release-branch and tag creation, and release-branch deletion.
+- GitHub release immutability.
+
+In `Settings > General > Releases`, enable release immutability.
+Set `RELEASE_SETTINGS_REVIEW` on that environment to the five reviewed release ruleset revisions.
+Its `immutable_releases: true` value is an owner attestation, not a live read of the repository setting.
+Before dispatch, confirm the setting. It makes only future releases immutable.
+
+The workflow validates the attestation and checks accessible live rulesets before release preparation.
+When GitHub hides bypass actors, the matching reviewed ruleset revision supplies that assurance.
+Administration permission is not necessary.
+After publication, the workflow verifies release immutability before cleanup or the next-patch bump.
+Failed runs do not rewrite existing tags or releases.
+
 `release-version.json` tracks the next planned release.
 For a minor or major release, change it through a normal PR before dispatch.
-Go module versions remain Git tags; the version file is release planning metadata.
+Go module versions remain Git tags. The version file is release planning metadata.
 
 ## Recover a mutable or incomplete publication
 
-The existing `v0.1.0` release was published mutable and is retained with its
-original tag and assets. Later version reservations do not certify `v0.1.0`
-or bypass the immutable publication check. Read `release-version.json` for the
-current planned version.
+The original `v0.1.0` publication was mutable. Keep its original tag and assets.
+Later version reservations do not certify `v0.1.0` or bypass the immutable publication check.
+Read `release-version.json` for the current planned version.
 
-1. Preserve the existing release, tag, and assets. Release tags prohibit updates
-   and deletion; the release App has no bypass for those protections.
-2. Confirm release immutability is enabled and the reviewed ruleset revisions
-   remain current. Fix the failing validation before dispatching again.
-3. Reserve an unused higher version in `release-version.json` through a normal PR
-   if the planned tag is already occupied by an invalid publication.
-4. Wait for green main validation, then dispatch a new release from `main`.
-   Retrying the old run still targets its original version and commit.
-5. Check that the new publication is immutable and complete, and that the
-   next-patch PR merges after its required checks and reserves the following patch
-   version automatically.
+1. Preserve the existing release, tag and assets.
+   The release tags prohibit updates and deletion. The release App has no bypass for those protections.
+2. Confirm that release immutability is on.
+   Confirm that the reviewed ruleset revisions are current.
+   Repair failing validation before another dispatch.
+3. If an invalid publication occupies the planned tag, reserve an unused higher version in `release-version.json` through a normal PR.
+4. Wait for successful main validation.
+   Dispatch a new release from `main`.
+   A retry of the old run still targets its original version and commit.
+5. Check that the new publication is immutable and complete.
+   Check that the next-patch PR merges after its required checks.
+   Check that it automatically reserves the following patch version.
 
-Binary archives include full dependency licenses and notices in
-`THIRD_PARTY_NOTICES/`, collected for both Linux architectures by pinned
-`google/go-licenses/v2` v2.0.1 using the shipped commands' dependency graphs.
-GoReleaser regenerates the bundle; snapshot and release gates inspect UUID's BSD
-notice and representative transitive notices. Keep collector updates separate from
-runtime dependencies, review warnings about non-Go code when dependencies change,
-and preserve this directory when redistributing binaries. The SBOM supplements
-these full notices; it does not replace them.
+Binary archives include full dependency licenses and notices in `THIRD_PARTY_NOTICES/`.
+Pinned `google/go-licenses/v2` v2.0.1 collects them for both Linux architectures from the shipped commands' dependency graphs.
+GoReleaser generates the bundle again.
+Snapshot and release gates inspect UUID's BSD notice and representative transitive notices.
+
+Keep collector updates separate from runtime dependencies.
+When dependencies change, review warnings about non-Go code.
+When you redistribute binaries, preserve this directory.
+The SBOM supplements these full notices. It does not replace them.
 
 ## CI policy maintenance
 
-Use [CI policy changes](CI-POLICY.md) for dependency-lock validation, independent
-owner admission, and the administrator rollout. Lockfiles must never acquire
-content-hash approval lists. Existing release checks remain required.
+See [CI policy changes](CI-POLICY.md) for dependency-lock validation, independent
+owner admission and administrator rollout.
+Do not add content-hash approval lists to lockfiles.
+Existing release checks remain mandatory.
