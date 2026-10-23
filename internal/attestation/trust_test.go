@@ -98,6 +98,19 @@ func TestReadPolicy(t *testing.T) {
 	if _, err := ReadPolicy(strings.NewReader(strings.Replace(valid, `"version":1`, `"version":2`, 1))); !errors.Is(err, ErrUnsupportedVersion) || !strings.Contains(err.Error(), "policy") {
 		t.Fatalf("other version: %v", err)
 	}
+	if _, err := ReadPolicy(strings.NewReader(strings.Replace(valid, `"version":1`, `"version":0`, 1))); !errors.Is(err, ErrInvalidPolicy) {
+		t.Fatalf("version 0: %v", err)
+	}
+	atLimit := valid + strings.Repeat(" ", MaxPolicyBytes-len(valid))
+	if _, err := ReadPolicy(strings.NewReader(atLimit)); err != nil {
+		t.Fatalf("policy at the size limit: %v", err)
+	}
+	if _, err := ReadPolicy(strings.NewReader(atLimit + " ")); !errors.Is(err, ErrInvalidPolicy) {
+		t.Fatalf("policy over the size limit: %v", err)
+	}
+	if _, err := ReadTrustConfig(strings.NewReader(strings.Replace(trustConfigJSON(t, 3), `"version":1`, `"version":0`, 1))); !errors.Is(err, ErrInvalidTrust) {
+		t.Fatalf("trust version 0: %v", err)
+	}
 }
 
 func TestPolicyValidate(t *testing.T) {
@@ -133,6 +146,8 @@ func TestPolicyValidate(t *testing.T) {
 		"long reason":             policy(Enforce, []Exemption{scoped(ExemptNotScanned, "", strings.Repeat("r", MaxTextBytes+1))}),
 		"duplicate scope":         policy(Enforce, []Exemption{scoped(ExemptNotScanned, "", "a"), scoped(ExemptNotScanned, "", "b")}),
 		"duplicate denial":        policy(Enforce, nil, digest, digest),
+		"uppercase denial":        policy(Enforce, nil, strings.ToUpper(digest)),
+		"unscanned non-digest":    policy(Enforce, []Exemption{scoped(ExemptNotScanned, "abc", "r")}),
 		"invalid denial":          policy(Enforce, nil, "abc"),
 	} {
 		if err := invalid.Validate(); !errors.Is(err, ErrInvalidPolicy) {
@@ -143,5 +158,11 @@ func TestPolicyValidate(t *testing.T) {
 	other.Version = 2
 	if err := other.Validate(); !errors.Is(err, ErrUnsupportedVersion) {
 		t.Fatalf("other version: %v", err)
+	}
+	for _, version := range []int{0, -1} {
+		other.Version = version
+		if err := other.Validate(); !errors.Is(err, ErrInvalidPolicy) {
+			t.Fatalf("version %d: %v", version, err)
+		}
 	}
 }

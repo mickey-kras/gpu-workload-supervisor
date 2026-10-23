@@ -59,6 +59,12 @@ func TestNewVerifierRejectsInvalidTrustConfiguration(t *testing.T) {
 	if _, err := NewVerifier(other); !errors.Is(err, ErrUnsupportedVersion) {
 		t.Fatalf("other version: %v", err)
 	}
+	for _, version := range []int{0, -1} {
+		other.Version = version
+		if _, err := NewVerifier(other); !errors.Is(err, ErrInvalidTrust) {
+			t.Fatalf("version %d: %v", version, err)
+		}
+	}
 	if _, err := NewVerifier(trustConfig([]int{1, 2147483647}, seventeen[:maxTrustedKeys]...)); err != nil {
 		t.Fatalf("rejected maximum trust set: %v", err)
 	}
@@ -81,7 +87,7 @@ func TestNewVerifierRejectsTestOnlyFixtureKeys(t *testing.T) {
 		if _, err := newVerifier(trustConfig([]int{1}, trustedKeys(key)...), true); err != nil {
 			t.Fatalf("test constructor rejected key %d: %v", key, err)
 		}
-		if testOnlyPublicKeys[key-1] != testPublicKey(key) {
+		if clearSignBit(raw) != testOnlyKeys[key-1] {
 			t.Fatalf("test-only key %d does not match the fixture key", key)
 		}
 	}
@@ -181,11 +187,11 @@ func TestVerifyFailsClosedOnMissingInput(t *testing.T) {
 	signature := func() io.Reader { return bytes.NewReader(readFixture(t, "passed.sig.json")) }
 	var nilVerifier *Verifier
 	for name, got := range map[string]Verification{
-		"nil verifier":  nilVerifier.Verify(envelope(), signature(), inventory),
-		"nil envelope":  fixtureVerifier(t, 1).Verify(nil, signature(), inventory),
-		"nil signature": fixtureVerifier(t, 1).Verify(envelope(), nil, inventory),
+		"nil verifier":       nilVerifier.Verify(envelope(), signature(), inventory),
+		"nil envelope":       fixtureVerifier(t, 1).Verify(nil, signature(), inventory),
+		"nil signature file": fixtureVerifier(t, 1).Verify(envelope(), nil, inventory),
 	} {
-		if got.Result() != Malformed || !errors.Is(got.Err(), ErrMissingInput) {
+		if got.Result() != Malformed || !errors.Is(got.Err(), ErrMissingInput) || !strings.Contains(got.Err().Error(), strings.TrimPrefix(name, "nil ")) {
 			t.Fatalf("%s: %q %v", name, got.Result(), got.Err())
 		}
 		if Decide(policy(Advisory, nil), inventory, &got).Allowed {

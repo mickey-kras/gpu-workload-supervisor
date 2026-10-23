@@ -71,6 +71,7 @@ const (
 	ReasonMissing            Reason = "attestation-missing"
 	ReasonUnsealed           Reason = "unsealed-verification"
 	ReasonArtifactDenied     Reason = "artifact-denied"
+	ReasonInvalidPolicy      Reason = "invalid-policy"
 	ReasonMalformed          Reason = Reason(Malformed)
 	ReasonUnreadable         Reason = Reason(Unreadable)
 	ReasonUnsupportedVersion Reason = Reason(UnsupportedVersion)
@@ -109,6 +110,9 @@ func ReadPolicy(r io.Reader) (Policy, error) {
 // Validate needs an explicit mode. Setup writes "advisory" when the operator
 // chooses nothing and shows it; the zero Policy fails closed in Decide.
 func (p Policy) Validate() error {
+	if p.Version < 1 {
+		return fmt.Errorf("%w: version must be a positive integer", ErrInvalidPolicy)
+	}
 	if p.Version != PolicyFileVersion {
 		return fmt.Errorf("%w: policy", ErrUnsupportedVersion)
 	}
@@ -118,7 +122,7 @@ func (p Policy) Validate() error {
 	seen := map[Exemption]bool{}
 	for index, exemption := range p.Exemptions {
 		if !exemption.valid() {
-			return fmt.Errorf("%w: exemption %d needs a digest, a policy version of 1 to %d, a known kind, a report digest for findings and partial_coverage only, and a reason of at most %d bytes", ErrInvalidPolicy, index, MaxPolicyVersion, MaxTextBytes)
+			return fmt.Errorf("%w: exemption %d breaks the exemption rules", ErrInvalidPolicy, index)
 		}
 		scope := exemption
 		scope.Reason = ""
@@ -138,41 +142,50 @@ func (p Policy) Validate() error {
 }
 
 func (e Exemption) valid() bool {
-	var needsReport bool
 	switch e.Kind {
 	case ExemptFindings, ExemptPartialCoverage:
-		needsReport = true
+		// Report-bound kinds need the digest of the accepted report.
+		if !digestPattern.MatchString(e.ReportSHA256) {
+			return false
+		}
 	case ExemptNotScanned, ExemptUnsupported:
+		// These kinds have no report to bind.
+		if e.ReportSHA256 != "" {
+			return false
+		}
 	default:
-		return false
-	}
-	if needsReport != digestPattern.MatchString(e.ReportSHA256) || (!needsReport && e.ReportSHA256 != "") {
 		return false
 	}
 	return digestPattern.MatchString(e.Artifact) && validPolicyVersion(e.PolicyVersion) && safeText(e.Reason, MaxTextBytes)
 }
 
-// Decide maps one root to admission. onDisk is the inventory the gate built;
-// its digest decides denial first, whatever the evidence state. Pass a nil
-// verification when no attestation exists.
+// missingDecision is the outcome for a root without evidence.
+func missingDecision(policy Policy, reason Reason) Decision {
+	return Decision{Allowed: policy.Mode == Advisory, Status: NotVerified, Reason: reason}
+}
+
+// Decide maps one root to admission. onDisk is the inventory the gate built
+// and gave to Verify; its digests decide denial first, whatever the evidence
+// state. Pass a nil verification when no attestation exists. An invalid
+// policy fails closed.
 func Decide(policy Policy, onDisk Artifact, verification *Verification) Decision {
-	permissive := policy.Mode == Advisory
-	missing := Decision{Allowed: permissive, Status: NotVerified, Reason: ReasonMissing}
+	if policy.Validate() != nil {
+		return Decision{Status: IntegrityFailure, Reason: ReasonInvalidPolicy}
+	}
+	if policy.denies(onDisk) {
+		return Decision{Status: IntegrityFailure, Reason: ReasonArtifactDenied}
+	}
 	digest, err := onDisk.Digest()
 	if err != nil {
-		// No denial can name an inventory without a digest.
 		if verification == nil {
-			return missing
+			return missingDecision(policy, ReasonInvalidInventory)
 		}
 		return Decision{Status: IntegrityFailure, Reason: ReasonInvalidInventory}
 	}
-	if policy.denies(digest) {
-		return Decision{Status: IntegrityFailure, Reason: ReasonArtifactDenied}
-	}
 	if verification == nil {
-		return missing
+		return missingDecision(policy, ReasonMissing)
 	}
-	if decision, final := decideEvidence(permissive, verification); final {
+	if decision, final := decideEvidence(policy.Mode == Advisory, verification); final {
 		return decision
 	}
 	if verification.digest != digest {
@@ -230,13 +243,27 @@ func decideScan(policy Policy, envelope Envelope, digest string) Decision {
 	return Decision{Allowed: permissive && status == NotVerified, Status: status, Reason: reason}
 }
 
-func (p Policy) denies(digest string) bool {
-	for _, denied := range p.Deny {
-		if denied == digest {
+// denies matches the inventory digest or any single file digest, so a denied
+// file stays denied inside a rearranged copy. File digests match even when
+// the inventory has no valid digest.
+func (p Policy) denies(onDisk Artifact) bool {
+	if len(p.Deny) == 0 {
+		return false
+	}
+	denied := make(map[string]bool, len(p.Deny))
+	for _, digest := range p.Deny {
+		denied[digest] = true
+	}
+	if denied[onDisk.SHA256] {
+		return true
+	}
+	for _, digest := range onDisk.Files {
+		if denied[digest] {
 			return true
 		}
 	}
-	return false
+	digest, err := onDisk.Digest()
+	return err == nil && denied[digest]
 }
 
 func (p Policy) exempts(digest string, policyVersion int, kind ExemptionKind, report string) bool {
@@ -255,8 +282,9 @@ func (p Policy) exempts(digest string, policyVersion int, kind ExemptionKind, re
 	return false
 }
 
-// Root is one required inventory root and its attestation. Use a nil
-// Verification for an absent attestation.
+// Root is one required inventory root and its attestation. Artifact must be
+// the same gate inventory given to Verify. Use a nil Verification for an
+// absent attestation.
 type Root struct {
 	Artifact     Artifact
 	Verification *Verification
@@ -267,10 +295,13 @@ var statusRank = map[Status]int{IntegrityFailure: 4, FindingsDetected: 3, NotVer
 
 // DecideAll combines one entry for each required root, such as separate
 // model and tokenizer roots. The first most severe decision wins and any
-// rejection rejects the whole set. An empty set is a missing attestation.
+// rejection rejects the whole set. An empty set is a missing attestation,
+// allowed only under a valid advisory policy.
 func DecideAll(policy Policy, roots []Root) Decision {
 	if len(roots) == 0 {
-		return Decision{Allowed: policy.Mode == Advisory, Status: NotVerified, Reason: ReasonMissing}
+		decision := missingDecision(policy, ReasonMissing)
+		decision.Allowed = decision.Allowed && policy.Validate() == nil
+		return decision
 	}
 	combined := Decide(policy, roots[0].Artifact, roots[0].Verification)
 	allowed := combined.Allowed

@@ -46,6 +46,10 @@ Each file has a `version` member. A reader gives `unsupported-version` when the
 file is well-formed JSON and `version` is a different positive integer in int64
 range. The reader does this check before the field checks.
 
+A `version` below 1 is not a different format. The reader rejects that file
+as malformed. For the trust configuration, the error is `ErrInvalidTrust`. For
+the policy, the error is `ErrInvalidPolicy`.
+
 ## Envelope fields
 
 | Field | Rule |
@@ -102,17 +106,19 @@ Each path must obey these rules:
 
 This alphabet is narrower than the alphabet of training inventories. An
 envelope cannot bind an artifact with other path characters, so the producer
-must refuse to seal it. When no evidence files exist, the gate has no
-attestation for that artifact. Then advisory mode allows it as `not-verified`,
-and enforce mode rejects it. When evidence files exist, `Verify` gives
-`invalid-inventory`, which is an integrity failure.
+must refuse to seal it. When no evidence files exist, `Decide` gives
+`not-verified` with the reason `invalid-inventory`. Advisory mode allows that
+artifact, and enforce mode rejects it. When evidence files exist, `Verify`
+gives `invalid-inventory`, which is an integrity failure.
 
 ## One envelope for each inventory
 
 Each envelope binds one inventory root. Keep separate roots, such as a model
-root and a tokenizer root, in separate envelopes. Give `DecideAll` one entry
-for each necessary root. Use a nil verification for a root without an
-attestation. The most severe status wins in this order:
+root and a tokenizer root, in separate envelopes. Give `DecideAll` one
+`Root{Artifact, Verification}` value for each necessary root.
+`Root.Artifact` must be the same gate inventory that you gave to `Verify`. Use
+a nil `Verification` for a root without an attestation. The most severe status
+wins in this order:
 
 1. `integrity-failure`
 2. `findings-detected`
@@ -194,7 +200,7 @@ it. A consumer that stores a policy keeps a `*Policy` value with `omitempty`.
 | `version` | Integer `1`. |
 | `mode` | `advisory` or `enforce`. Necessary. |
 | `exemptions` | Optional list. Omit it when it is empty. |
-| `deny` | Optional list of unique lowercase hex artifact digests. Omit it when it is empty. |
+| `deny` | Optional list of unique lowercase hex digests of artifacts or files. Omit it when it is empty. |
 
 Each exemption has these fields:
 
@@ -240,9 +246,11 @@ result. `Decide` rejects all other values.
 ## Policy decision
 
 `Decide` takes the policy, the inventory that the gate made and the
-verification. It calculates the digest of the gate inventory first. It
-rejects a denied digest before it looks at the evidence. Thus a deleted or
-changed evidence file cannot admit a denied artifact.
+verification. It checks the policy first. An invalid policy gives
+`integrity-failure` with the reason `invalid-policy` in both modes. Then
+`Decide` checks the deny list against the gate inventory. It rejects a denied
+digest before it looks at the evidence. Thus a deleted or changed evidence
+file cannot admit a denied artifact.
 
 The mode is `advisory` or `enforce`. The files have no default. Setup writes
 `"mode": "advisory"` when the operator selects nothing, and shows that value.
@@ -256,8 +264,10 @@ evidence. It is not an approval.
 
 | Evidence | `advisory` | `enforce` | Reason |
 | --- | --- | --- | --- |
-| Denied artifact digest, any evidence | Reject, `integrity-failure` | Reject, `integrity-failure` | `artifact-denied` |
+| Policy not valid, any evidence | Reject, `integrity-failure` | Reject, `integrity-failure` | `invalid-policy` |
+| Denied digest, any evidence | Reject, `integrity-failure` | Reject, `integrity-failure` | `artifact-denied` |
 | Gate inventory not valid, evidence present | Reject, `integrity-failure` | Reject, `integrity-failure` | `invalid-inventory` |
+| Gate inventory not valid, no evidence | Allow, `not-verified` | Reject, `not-verified` | `invalid-inventory` |
 | No attestation | Allow, `not-verified` | Reject, `not-verified` | `attestation-missing` |
 | `unreadable` | Allow, `not-verified` | Reject, `not-verified` | `unreadable` |
 | `unsupported-version` | Allow, `not-verified` | Reject, `not-verified` | `unsupported-version` |
@@ -294,8 +304,9 @@ decision.
 
 | Reason | Status | Cause |
 | --- | --- | --- |
-| `artifact-denied` | `integrity-failure` | The policy denies the gate inventory digest. |
-| `invalid-inventory` | `integrity-failure` | The gate inventory breaks the artifact rules. |
+| `invalid-policy` | `integrity-failure` | The policy breaks the policy rules. |
+| `artifact-denied` | `integrity-failure` | The policy denies the inventory digest or a file digest. |
+| `invalid-inventory` | `integrity-failure` or `not-verified` | The gate inventory breaks the artifact rules. Without evidence, the status is `not-verified`. |
 | `attestation-missing` | `not-verified` | No attestation exists for the root. |
 | `unreadable` | `not-verified` | A reader failed. |
 | `unsupported-version` | `not-verified` | A file has a different format version. |
@@ -304,7 +315,7 @@ decision.
 | `invalid-signature` | `integrity-failure` | The signature does not match. |
 | `incompatible-policy` | `integrity-failure` | The trust configuration does not support the policy version. |
 | `artifact-mismatch` | `integrity-failure` | The evidence binds different bytes. |
-| `unsealed-verification` | `integrity-failure` | The verification did not come from `Verify`. |
+| `unsealed-verification` | `integrity-failure` | The verification did not come from `Verify`, or it holds an unknown result. |
 | `scan-passed` | `verified` | A complete scan passed. |
 | `scan-findings` | `findings-detected` or `exempted` | The scanner reported findings. |
 | `scan-error` | `not-verified` | The scan failed. |
@@ -314,8 +325,16 @@ decision.
 
 ## Revocation
 
-Put an artifact digest in `deny` to reject that artifact. The deny check comes
-before all other checks in `Decide`.
+Put a digest in `deny` to reject exact bytes. A deny entry matches the artifact
+digest of the gate inventory. It also matches the digest of each file in the
+inventory, and the digest of a single artifact file. Use a file digest to block
+weights in a copy that has other files or other names. A file digest matches
+even when the inventory breaks the artifact rules. The deny check comes after
+the policy check and before all other checks in `Decide`.
+
+Changed bytes have a different digest, so a deny entry cannot match them. Only
+enforce mode makes revocation binding, because it rejects bytes without valid
+evidence.
 
 Remove a key from the trust configuration to reject all evidence that the key
 signed. Remove a policy version to reject all evidence for that version. Then

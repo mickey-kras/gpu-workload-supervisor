@@ -20,11 +20,11 @@ const SignatureAlgorithm = "ed25519"
 
 const maxTrustedKeys = 16
 
-// testOnlyPublicKeys sign this package's fixtures. Production trust never
-// pins them, with or without the sign bit.
-var testOnlyPublicKeys = []string{
-	"8gX7EZR2X3Y2eEMiIq5LH6S/qXxLl8Nnb62uzwJHY4A=",
-	"SEg181cs9rxuEV2Hk6/c8QHn0f7mNm3AI5mPZ9Xree8=",
+// testOnlyKeys are the raw fixture public keys with the sign bit cleared.
+// Production trust never pins them, with or without the sign bit.
+var testOnlyKeys = [][ed25519.PublicKeySize]byte{
+	{0xf2, 0x05, 0xfb, 0x11, 0x94, 0x76, 0x5f, 0x76, 0x36, 0x78, 0x43, 0x22, 0x22, 0xae, 0x4b, 0x1f, 0xa4, 0xbf, 0xa9, 0x7c, 0x4b, 0x97, 0xc3, 0x67, 0x6f, 0xad, 0xae, 0xcf, 0x02, 0x47, 0x63, 0x00},
+	{0x48, 0x48, 0x35, 0xf3, 0x57, 0x2c, 0xf6, 0xbc, 0x6e, 0x11, 0x5d, 0x87, 0x93, 0xaf, 0xdc, 0xf1, 0x01, 0xe7, 0xd1, 0xfe, 0xe6, 0x36, 0x6d, 0xc0, 0x23, 0x99, 0x8f, 0x67, 0xd5, 0xeb, 0x79, 0x6f},
 }
 
 // smallOrderKeys are the blocklist of ge25519_has_small_order in libsodium
@@ -85,6 +85,7 @@ func (v Verification) KeyID() string { return v.keyID }
 func (v Verification) Envelope() Envelope { return v.envelope.clone() }
 
 // ArtifactDigest is the sealed artifact digest, empty unless Result is Valid.
+// The producer CLI prints it and the UI shows it to scope exemptions and denials.
 func (v Verification) ArtifactDigest() string { return v.digest }
 
 // Err wraps one of the package sentinels and is nil only for Valid.
@@ -113,6 +114,9 @@ func NewVerifier(config TrustConfig) (*Verifier, error) {
 // newVerifier is the one trust validation. Only this package's tests admit
 // the fixture keys.
 func newVerifier(config TrustConfig, allowTestKeys bool) (*Verifier, error) {
+	if config.Version < 1 {
+		return nil, fmt.Errorf("%w: version must be a positive integer", ErrInvalidTrust)
+	}
 	if config.Version != TrustConfigVersion {
 		return nil, fmt.Errorf("%w: trust config", ErrUnsupportedVersion)
 	}
@@ -186,9 +190,8 @@ func clearSignBit(raw []byte) [ed25519.PublicKeySize]byte {
 
 func testOnlyKey(raw []byte) bool {
 	masked := clearSignBit(raw)
-	for _, encoded := range testOnlyPublicKeys {
-		fixture, err := base64.StdEncoding.DecodeString(encoded)
-		if err == nil && clearSignBit(fixture) == masked {
+	for _, fixture := range testOnlyKeys {
+		if masked == fixture {
 			return true
 		}
 	}
@@ -235,8 +238,8 @@ func classify(err error) Result {
 // bytes reports ArtifactMismatch even when its signature is valid. The small
 // signature file and its key ID are checked before the envelope is read.
 func (v *Verifier) Verify(envelope, signature io.Reader, onDisk Artifact) Verification {
-	if v == nil || envelope == nil || signature == nil {
-		return failed(Malformed, "", ErrMissingInput)
+	if missing := missingInput(v, envelope, signature); missing != "" {
+		return failed(Malformed, "", fmt.Errorf("%w: %s", ErrMissingInput, missing))
 	}
 	if err := onDisk.validate(); err != nil {
 		return failed(InvalidInventory, "", fmt.Errorf("%w: %v", ErrInvalidInventory, err))
@@ -271,6 +274,18 @@ func (v *Verifier) Verify(envelope, signature io.Reader, onDisk Artifact) Verifi
 		return failed(Malformed, sig.KeyID, err)
 	}
 	return Verification{result: Valid, keyID: sig.KeyID, envelope: parsed, digest: digest, sealed: true}
+}
+
+func missingInput(v *Verifier, envelope, signature io.Reader) string {
+	switch {
+	case v == nil:
+		return "verifier"
+	case envelope == nil:
+		return "envelope"
+	case signature == nil:
+		return "signature file"
+	}
+	return ""
 }
 
 func readSignature(r io.Reader) (Signature, []byte, error) {
