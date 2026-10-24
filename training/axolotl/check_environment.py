@@ -27,6 +27,7 @@ import signal
 import stat
 import subprocess
 import tempfile
+from typing import NamedTuple
 
 # Exact requirements from the unchanged source commit. Absence is intentional only
 # for these optional integrations; python-dotenv is replaced by a patched version.
@@ -571,8 +572,20 @@ def probe_with_rescan(worker, target, gpu_uuid, popen, scan):
     return probe, failure, found, None
 
 
-def build_checks(worker, target, *, locked, distributions, mapped, found, stdlib, site):
-    # mapped and found are (value, error) pairs; each check reads them through picked().
+class Inputs(NamedTuple):
+    # The shared values of one report. mapped and found are (value, error) pairs; each
+    # check reads them through picked().
+    locked: dict
+    distributions: list
+    mapped: tuple
+    found: tuple
+    stdlib: Path
+    site: Path
+
+
+def build_checks(worker, target, inputs):
+    locked, distributions, mapped, found, stdlib, site = inputs
+
     def python():
         problem = worker.python_problem((sys.version_info.major, sys.version_info.minor))
         return [problem] if problem else []
@@ -616,8 +629,7 @@ def report(worker, target, gpu_uuid=None, popen=subprocess.Popen, worker_source=
 
     probe, failure, found, found_error = probe_with_rescan(worker, target, gpu_uuid, popen, scan)
     mapped = attempt(lambda: probe_checks(worker, probe, failure, target, gpu_uuid))
-    checks = build_checks(worker, target, locked=locked, distributions=distributions, mapped=mapped,
-                          found=(found, found_error), stdlib=stdlib, site=site)
+    checks = build_checks(worker, target, Inputs(locked, distributions, mapped, (found, found_error), stdlib, site))
     facts = probe["facts"] if probe is not None and probe["facts"] is not None else {}
     accelerator = None
     if facts:

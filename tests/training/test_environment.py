@@ -629,6 +629,11 @@ class RuntimeTests(unittest.TestCase):
             self.assertIn("<python>/b", checker.mask(f"{sys.base_prefix}/b"))
         with patch.dict(os.environ, {"HOME": "/"}):
             self.assertEqual(checker.mask("see /opt/x"), "see <path>")
+            self.assertEqual(checker.mask("/opt/x"), "<path>")
+        with patch.dict(os.environ, clear=True):
+            self.assertEqual(checker.mask("/opt/x"), "<path>")
+        with patch.object(checker, "runtime_root", return_value=Path("/runtime-root")):
+            self.assertIn("<python>/b", checker.mask(f"x {sys.base_prefix}/b y"))
         with patch.dict(os.environ, {"HOME": "/home/operator"}):
             for text, expected in (("at /home/operator", "at <home>"), ("(/home/operator)", "(<home>)"),
                                    ("/home/operator; next", "<home>; next")):
@@ -776,6 +781,45 @@ class RuntimeTests(unittest.TestCase):
                     self.assertEqual(statuses[name]["status"], "fail")
                     self.assertEqual(statuses[name]["problems"],
                                      [f"check could not run (PermissionError: site-packages); {worker.SYNC}"])
+
+    def test_both_failed_scans_report_one_error(self):
+        result, _ = self.report("cpu-smoke", probe_result(), clean=False, dependency_problems=lambda *args: [],
+                                lock_problems=lambda *args: [],
+                                site_problems=MagicMock(side_effect=[PermissionError("first"), PermissionError("second")]))
+        statuses = {item["name"]: item for item in result["checks"]}
+        for name in ("standard-library", "startup-files"):
+            self.assertEqual(statuses[name]["status"], "fail")
+            self.assertEqual(statuses[name]["problems"], [f"check could not run (PermissionError: first); {worker.SYNC}"])
+
+    def test_probe_stdlib_problems_reach_the_standard_library_check(self):
+        broken = "standard-library module _ssl cannot load; rebuild or reinstall CPython with its system libraries"
+        result, _ = self.report("smoke-lora", probe_result(stdlib=[broken]))
+        standard = next(item for item in result["checks"] if item["name"] == "standard-library")
+        self.assertEqual((standard["status"], standard["problems"]), ("fail", [broken]))
+        shadow = "site-packages has json.py, which shadows the standard-library module json; remove it"
+        result, _ = self.report("smoke-lora", probe_result(stdlib=[broken]), clean=False, dependency_problems=lambda *args: [],
+                                lock_problems=lambda *args: [], site_problems=lambda *args: ([shadow], []))
+        standard = next(item for item in result["checks"] if item["name"] == "standard-library")
+        self.assertEqual((standard["status"], standard["problems"]), ("fail", [broken, shadow]))
+
+    def test_report_gives_lock_problems_the_tags_of_this_interpreter(self):
+        from packaging.tags import sys_tags
+
+        with patch.object(checker, "lock_problems", wraps=checker.lock_problems) as wrapped:
+            self.report("cpu-smoke", probe_result(), clean=False, dependency_problems=lambda *args: [],
+                        site_problems=lambda *args: ([], []))
+        supported = wrapped.call_args.args[2]
+        self.assertTrue(supported)
+        self.assertIn(next(iter(sys_tags())), supported)
+
+    def test_load_packaging_imports_every_submodule(self):
+        names = {"packaging.requirements", "packaging.tags", "packaging.utils", "packaging.version"}
+        with patch.dict(sys.modules):
+            for name in [name for name in sys.modules if name == "packaging" or name.startswith("packaging.")]:
+                del sys.modules[name]
+            self.assertFalse(names & set(sys.modules))
+            self.assertIsNone(checker.load_packaging())
+            self.assertLessEqual(names, set(sys.modules))
 
     def test_packaging_is_loaded_before_the_probe_runs(self):
         order = []
