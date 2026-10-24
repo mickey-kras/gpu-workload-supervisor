@@ -113,22 +113,28 @@ STABLE_KEYS = ("accelerator", *FACT_KEYS)
 
 
 class SourceBytesLoader(importlib.abc.InspectLoader):
-    # Load a module from bytes that the checker already read, so a later change to the file
-    # cannot give a module that differs from the hashed bytes.
-    def __init__(self, path, source):
-        self.path, self.source = path, source
+    # Load the worker from the hashed bytes. The probe gets a copy of the same bytes, so
+    # the parent, the probe and workerSHA256 agree. This is a loader and not exec(): the
+    # import system runs the compiled code, and aislop rejects a direct exec().
+    def __init__(self, source, code):
+        self.source, self.code = source, code
 
     def get_source(self, fullname):
-        return self.source.decode("utf-8")
+        return self.source.decode("utf-8", "replace")
 
     def get_code(self, fullname):
-        return self.source_to_code(self.source, str(self.path))
+        return self.code
 
 
 def load_worker():
-    # Read the worker once: the same bytes give the module and workerSHA256.
+    # Read the worker once. A worker that does not compile is a damaged repository input;
+    # an exception while its module code runs stays a checker bug.
     source = read_input(WORKER)
-    spec = importlib.util.spec_from_loader("training_worker", SourceBytesLoader(WORKER, source), origin=str(WORKER))
+    try:
+        code = compile(source, str(WORKER), "exec", dont_inherit=True)
+    except (SyntaxError, ValueError) as error:
+        raise InputError(WORKER, error) from error
+    spec = importlib.util.spec_from_loader("training_worker", SourceBytesLoader(source, code), origin=str(WORKER))
     worker = importlib.util.module_from_spec(spec)
     worker.__file__ = str(WORKER)
     spec.loader.exec_module(worker)
@@ -444,16 +450,24 @@ def exit_failure(code, lines, retry):
     return f"the runtime probe failed ({last}); {retry}"
 
 
-def run_probe(quantized, gpu_uuid, popen=subprocess.Popen, killpg=os.killpg):
+def write_private(path, data):
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as target:
+        target.write(data)
+
+
+def run_probe(quantized, gpu_uuid, worker_source, popen=subprocess.Popen, killpg=os.killpg):
     # Return the runner-like child result, or None and an actionable failure.
     retry = "reinstall the training runtime from the lock and run the check again"
     with tempfile.TemporaryDirectory(prefix="training-check-") as directory:
         work = Path(directory)
         for name in ("home", "cache"):
             (work / name).mkdir(mode=0o700)
+        # Like run.go, give the child a private copy of the hashed worker bytes.
+        write_private(work / "worker.py", worker_source)
         result_path = work / "result.json"
         mode = "quantized" if quantized else "plain"
-        command = [sys.executable, "-I", "-S", "-B", str(PROBE), str(WORKER), mode, str(result_path)]
+        command = [sys.executable, "-I", "-S", "-B", str(PROBE), str(work / "worker.py"), mode, str(result_path)]
         with open(work / "stdout", "w+b") as stdout, open(work / "stderr", "w+b") as stderr:
             process = popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, cwd=work,
                             env=probe_environment(work, gpu_uuid), start_new_session=True)
@@ -535,10 +549,10 @@ def attempt(compute):
 
 
 def picked(value, error, key):
-    # Return the shared value, or its key, or raise the error that computing it gave.
+    # Return one key of the shared value, or raise the error that computing it gave.
     if error is not None:
         raise error
-    return value if key is None else value[key]
+    return value[key]
 
 
 def digest(data):
@@ -553,12 +567,12 @@ def parse_lock(lock):
         raise InputError(LOCK, error) from error
 
 
-def probe_with_rescan(worker, target, gpu_uuid, popen, scan):
+def probe_with_rescan(worker, worker_source, target, gpu_uuid, popen, scan):
     # Scan site-packages, run the probe, then scan again: the probe imports site-packages
     # first, as the runner does, so planted code can run there and hide itself.
     before, before_error = attempt(scan)
     try:
-        probe, failure = run_probe(target in QUANTIZED, gpu_uuid, popen)
+        probe, failure = run_probe(target in QUANTIZED, gpu_uuid, worker_source, popen)
     except Exception as error:  # noqa: BLE001 - the dependent checks report the failure.
         remedy = remedy_for(error, worker.SYNC)
         probe, failure = None, f"the runtime probe could not start ({type(error).__name__}: {error}); {remedy}"
@@ -611,9 +625,8 @@ def build_checks(worker, target, inputs):
     ]
 
 
-def report(worker, target, gpu_uuid=None, popen=subprocess.Popen, worker_source=None):
+def report(worker, target, gpu_uuid=None, popen=subprocess.Popen, *, worker_source):
     load_packaging()
-    worker_source = read_input(WORKER) if worker_source is None else worker_source
     lock = read_input(LOCK)
     locked = parse_lock(lock)
     distributions = list(metadata.distributions())
@@ -627,7 +640,7 @@ def report(worker, target, gpu_uuid=None, popen=subprocess.Popen, worker_source=
         owned = owned_startup_files(distributions, locked)
         return dict(zip(("shadows", "startup"), site_problems(site, owned, forbidden)))
 
-    probe, failure, found, found_error = probe_with_rescan(worker, target, gpu_uuid, popen, scan)
+    probe, failure, found, found_error = probe_with_rescan(worker, worker_source, target, gpu_uuid, popen, scan)
     mapped = attempt(lambda: probe_checks(worker, probe, failure, target, gpu_uuid))
     checks = build_checks(worker, target, Inputs(locked, distributions, mapped, (found, found_error), stdlib, site))
     facts = probe["facts"] if probe is not None and probe["facts"] is not None else {}

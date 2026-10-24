@@ -158,6 +158,7 @@ def alive(pid):
 
 ISOLATED = SimpleNamespace(**{**FLAGS, "isolated": 1, "no_site": 1})
 RETRY = "reinstall the training runtime from the lock and run the check again"
+SOURCE = (ROOT / "internal/llmtraining/worker.py").read_bytes()
 DRIVER = "check the NVIDIA driver and the GPU, then run the check again"
 
 
@@ -395,16 +396,16 @@ class RuntimeTests(unittest.TestCase):
 
     def test_run_probe_uses_a_runner_like_child_and_the_result_file(self):
         popen, calls = fake_popen(probe_result(), stdout=b"third-party noise\n")
-        self.assertEqual(checker.run_probe(True, "GPU-1", popen), (probe_result(), None))
+        self.assertEqual(checker.run_probe(True, "GPU-1", SOURCE, popen), (probe_result(), None))
         command, options = calls[0]
         work = Path(options["env"]["TMPDIR"])
-        self.assertEqual(command, [sys.executable, "-I", "-S", "-B", str(checker.PROBE), str(checker.WORKER), "quantized",
+        self.assertEqual(command, [sys.executable, "-I", "-S", "-B", str(checker.PROBE), str(work / "worker.py"), "quantized",
                                    str(work / "result.json")])
         self.assertEqual((options["stdin"], options["start_new_session"], options["cwd"], options["env"]["CUDA_VISIBLE_DEVICES"]),
                          (subprocess.DEVNULL, True, work, "GPU-1"))
         self.assertFalse(work.exists())
         popen, calls = fake_popen(probe_result())
-        self.assertEqual(checker.run_probe(False, None, popen), (probe_result(), None))
+        self.assertEqual(checker.run_probe(False, None, SOURCE, popen), (probe_result(), None))
         self.assertEqual(calls[0][0][-2], "plain")
 
     def test_probe_failures_map_to_actionable_problems(self):
@@ -421,7 +422,7 @@ class RuntimeTests(unittest.TestCase):
             ({"raw": b" " * (checker.OUTPUT_LIMIT + 1)}, f"the runtime probe gave no valid result; {RETRY}"),
         ):
             with self.subTest(options=options):
-                self.assertEqual(checker.run_probe(False, None, fake_popen(**options)[0]), (None, expected))
+                self.assertEqual(checker.run_probe(False, None, SOURCE, fake_popen(**options)[0]), (None, expected))
         for changed in (
             [1], {}, {**probe_result(), "extra": 1}, {key: value for key, value in probe_result().items() if key != "stdlib"},
             probe_result(stdlib=[1]), probe_result(torchError=1), probe_result(bitsandbytes=[]),
@@ -435,7 +436,7 @@ class RuntimeTests(unittest.TestCase):
             probe_result(facts={key: value for key, value in cuda_facts().items() if key != "hip"} | {"hip": 1}),
         ):
             with self.subTest(changed=changed):
-                self.assertEqual(checker.run_probe(False, None, fake_popen(raw=json.dumps(changed).encode())[0]),
+                self.assertEqual(checker.run_probe(False, None, SOURCE, fake_popen(raw=json.dumps(changed).encode())[0]),
                                  (None, f"the runtime probe gave no valid result; {RETRY}"))
 
     def test_schema_accepts_the_limits(self):
@@ -448,7 +449,7 @@ class RuntimeTests(unittest.TestCase):
             ({"stderr": b"\xff bad\n"}, "\ufffd bad"),
         ):
             with self.subTest(expected=expected):
-                self.assertEqual(checker.run_probe(False, None, fake_popen(codes=(1,), **options)[0], lambda *args: None),
+                self.assertEqual(checker.run_probe(False, None, SOURCE, fake_popen(codes=(1,), **options)[0], lambda *args: None),
                                  (None, f"the runtime probe failed ({expected}); {RETRY}"))
 
     def test_timeouts_kill_the_process_group_without_blocking(self):
@@ -458,13 +459,13 @@ class RuntimeTests(unittest.TestCase):
         ):
             killed = []
             with self.subTest(codes=codes):
-                result = checker.run_probe(False, None, fake_popen(codes=codes)[0], lambda pid, number: killed.append((pid, number)))
+                result = checker.run_probe(False, None, SOURCE, fake_popen(codes=codes)[0], lambda pid, number: killed.append((pid, number)))
                 self.assertEqual(result, (None, expected))
                 self.assertEqual(killed, [(4321, signal.SIGKILL)])
 
     def test_the_process_group_is_always_stopped_and_a_gone_group_is_not_an_error(self):
         killed = []
-        self.assertEqual(checker.run_probe(False, None, fake_popen(probe_result())[0], lambda pid, number: killed.append(number)),
+        self.assertEqual(checker.run_probe(False, None, SOURCE, fake_popen(probe_result())[0], lambda pid, number: killed.append(number)),
                          (probe_result(), None))
         self.assertEqual(killed, [signal.SIGKILL])
 
@@ -489,7 +490,7 @@ class RuntimeTests(unittest.TestCase):
                               f"open({str(record)!r}, 'w').write(str(child.pid))\n"
                               "time.sleep(60)\n")
             with patch.object(checker, "PROBE", script), patch.object(checker, "PROBE_TIMEOUT", 1):
-                result = checker.run_probe(False, None)
+                result = checker.run_probe(False, None, SOURCE)
             self.assertEqual(result, (None, f"the runtime probe did not finish in 1 seconds; {DRIVER}"))
             pid = int(record.read_text())
             for _ in range(50):
@@ -518,7 +519,7 @@ class RuntimeTests(unittest.TestCase):
         ):
             with self.subTest(expected=expected):
                 outcome = []
-                thread = threading.Thread(target=lambda: outcome.append(checker.run_probe(False, None, popen, lambda *args: None)),
+                thread = threading.Thread(target=lambda: outcome.append(checker.run_probe(False, None, SOURCE, popen, lambda *args: None)),
                                           daemon=True)
                 thread.start()
                 thread.join(10)
@@ -546,14 +547,14 @@ class RuntimeTests(unittest.TestCase):
             Path(command[-1]).symlink_to("/etc/hostname")
             return FakeProcess((0,))
 
-        self.assertEqual(checker.run_probe(False, None, linked, lambda *args: None), (None, f"the runtime probe gave no valid result; {RETRY}"))
+        self.assertEqual(checker.run_probe(False, None, SOURCE, linked, lambda *args: None), (None, f"the runtime probe gave no valid result; {RETRY}"))
 
     def test_failing_child_process_maps_to_an_actionable_problem(self):
         with tempfile.TemporaryDirectory() as directory:
             script = Path(directory) / "probe.py"
             script.write_text("import sys\nsys.stderr.write('OSError: libcudnn.so.9: cannot open shared object file\\n')\nsys.exit(3)\n")
             with patch.object(checker, "PROBE", script):
-                probe, failure = checker.run_probe(False, None)
+                probe, failure = checker.run_probe(False, None, SOURCE)
         self.assertIsNone(probe)
         self.assertEqual(failure, f"the runtime probe failed (OSError: libcudnn.so.9: cannot open shared object file); {RETRY}")
         problems = checker.probe_checks(worker, None, failure, "cpu-smoke", None)
@@ -577,7 +578,7 @@ class RuntimeTests(unittest.TestCase):
                 "        raise ImportError('no torch ' + repr(flags) + ' ' + str('LD_PRELOAD' in os.environ))\n"
                 "    return json.loads(FACTS)\n")
             with patch.object(checker, "WORKER", fake), patch.dict(os.environ, {"LD_PRELOAD": "/injected.so"}):
-                return checker.run_probe(mode_quantized, "GPU-1")
+                return checker.run_probe(mode_quantized, "GPU-1", fake.read_bytes())
 
     def test_real_probe_child_runs_isolated_with_a_fake_worker(self):
         self.assertEqual(self.real_probe(True, None), (
@@ -684,7 +685,7 @@ class RuntimeTests(unittest.TestCase):
         for item in items:
             item.start()
         try:
-            return checker.report(worker, target, gpu_uuid, popen), calls
+            return checker.report(worker, target, gpu_uuid, popen, worker_source=SOURCE), calls
         finally:
             for item in reversed(items):
                 item.stop()
@@ -760,8 +761,8 @@ class RuntimeTests(unittest.TestCase):
             for item in items:
                 item.start()
             try:
-                planted = checker.report(worker, "cpu-smoke", None, planting)
-                hidden = checker.report(worker, "cpu-smoke", None, hiding)
+                planted = checker.report(worker, "cpu-smoke", None, planting, worker_source=SOURCE)
+                hidden = checker.report(worker, "cpu-smoke", None, hiding, worker_source=SOURCE)
             finally:
                 for item in reversed(items):
                     item.stop()
@@ -878,6 +879,32 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(result["error"].startswith("check could not run (InputError: worker.py: FileNotFoundError: "))
         self.assertTrue(result["error"].endswith("restore internal/llmtraining/worker.py from the repository checkout"))
 
+    def test_the_probe_gets_a_private_copy_of_the_hashed_worker_bytes(self):
+        seen = []
+
+        def popen(command, **options):
+            path = Path(command[5])
+            seen.append((path.parent == Path(options["cwd"]), path.name, path.read_bytes(), path.stat().st_mode & 0o777))
+            Path(command[-1]).write_text(json.dumps(probe_result()))
+            return FakeProcess((0,))
+
+        self.assertEqual(checker.run_probe(False, None, b"hashed worker bytes", popen, lambda *args: None), (probe_result(), None))
+        self.assertEqual(seen, [(True, "worker.py", b"hashed worker bytes", 0o600)])
+        seen.clear()
+        result, _ = self.report("cpu-smoke", probe_result(), popen_override=popen)
+        self.assertEqual(seen[0][2], SOURCE)
+        self.assertEqual(result["workerSHA256"], hashlib.sha256(SOURCE).hexdigest())
+
+    def test_a_damaged_worker_is_an_internal_error_with_the_restore_remedy(self):
+        for data in (b"def broken(:\n", b"<<<<<<< HEAD\nSYNC = 1\n=======\n", b"value = '\xff\xfe'\n", b"\x00"):
+            with self.subTest(data=data):
+                root, damaged = self.repository_input("internal/llmtraining/worker.py", data)
+                code, output = self.main([], WORKER=damaged, HERE=root / "training/axolotl")
+                result = json.loads(output)
+                self.assertEqual((code, result["checks"]), (2, []))
+                self.assertTrue(result["error"].startswith("check could not run (InputError: worker.py: "), result["error"])
+                self.assertTrue(result["error"].endswith("restore internal/llmtraining/worker.py from the repository checkout"))
+
     def test_the_worker_hash_uses_the_loaded_bytes(self):
         loaded, source = checker.load_worker()
         self.assertEqual(source, checker.WORKER.read_bytes())
@@ -888,6 +915,8 @@ class RuntimeTests(unittest.TestCase):
         with patch.object(checker.metadata, "distributions", return_value=[]):
             result = checker.report(worker, "cpu-smoke", None, popen, worker_source=b"other bytes")
         self.assertEqual(result["workerSHA256"], hashlib.sha256(b"other bytes").hexdigest())
+        with self.assertRaises(TypeError):
+            checker.report(worker, "cpu-smoke", None, popen)
 
     def test_report_without_a_probe_result_has_null_runtime_fields(self):
         result, _ = self.report("cpu-smoke", None)
@@ -898,7 +927,7 @@ class RuntimeTests(unittest.TestCase):
             raise OSError("no temporary directory")
 
         with patch.object(checker.metadata, "distributions", return_value=[]):
-            result = checker.report(worker, "cpu-smoke", None, explode)
+            result = checker.report(worker, "cpu-smoke", None, explode, worker_source=SOURCE)
         native = next(item for item in result["checks"] if item["name"] == "native-libraries")
         self.assertEqual(native["problems"], [f"the runtime probe could not start (OSError: no temporary directory); {worker.SYNC}"])
 
@@ -906,7 +935,7 @@ class RuntimeTests(unittest.TestCase):
             raise RuntimeError("unexpected")
 
         with patch.object(checker.metadata, "distributions", return_value=[]):
-            result = checker.report(worker, "cpu-smoke", None, broken)
+            result = checker.report(worker, "cpu-smoke", None, broken, worker_source=SOURCE)
         native = next(item for item in result["checks"] if item["name"] == "native-libraries")
         self.assertEqual(native["problems"], [f"the runtime probe could not start (RuntimeError: unexpected); {checker.CHECKER_BUG}"])
 
