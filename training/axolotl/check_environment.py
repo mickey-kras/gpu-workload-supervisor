@@ -3,9 +3,9 @@
 Also check the training runtime for one target and print a bounded JSON report.
 The report covers Python and its standard library, the installed distributions
 against the lock, native library loading, and Torch and CUDA compatibility.
-Run it as the runner does: bin/python3 -I -S -B. packaging is in the runtime
-site-packages, which the checker adds only at run time. Thus the functions import
-it locally, and report() loads every packaging module once before the probe runs.
+Run it as the runner does: bin/python3 -I -S -B. The `packaging` library is in the
+runtime site-packages, which the checker adds only at run time. Thus the functions
+import it locally, and report() loads every packaging module once before the probe runs.
 """
 import sys
 
@@ -16,6 +16,7 @@ import argparse
 import contextlib
 from collections import deque
 import hashlib
+import importlib.abc
 import importlib.metadata as metadata
 import importlib.util
 import json
@@ -110,11 +111,27 @@ FACT_KEYS = ("torch", "cuda", "driverCuda", "archList", "devices")
 STABLE_KEYS = ("accelerator", *FACT_KEYS)
 
 
-def load_module(name, path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+class SourceBytesLoader(importlib.abc.InspectLoader):
+    # Load a module from bytes that the checker already read, so a later change to the file
+    # cannot give a module that differs from the hashed bytes.
+    def __init__(self, path, source):
+        self.path, self.source = path, source
+
+    def get_source(self, fullname):
+        return self.source.decode("utf-8")
+
+    def get_code(self, fullname):
+        return self.source_to_code(self.source, str(self.path))
+
+
+def load_worker():
+    # Read the worker once: the same bytes give the module and workerSHA256.
+    source = read_input(WORKER)
+    spec = importlib.util.spec_from_loader("training_worker", SourceBytesLoader(WORKER, source), origin=str(WORKER))
+    worker = importlib.util.module_from_spec(spec)
+    worker.__file__ = str(WORKER)
+    spec.loader.exec_module(worker)
+    return worker, source
 
 
 class InputError(Exception):
@@ -147,12 +164,8 @@ def load_presets(path=None):
 def load_packaging():
     # Import every packaging module that the checker uses before the probe runs. Later
     # local imports then reuse these modules, so files that the probe changed do not run here.
-    import packaging.requirements
-    import packaging.tags
-    import packaging.utils
-    import packaging.version
-
-    return packaging
+    for name in ("packaging.requirements", "packaging.tags", "packaging.utils", "packaging.version"):
+        importlib.import_module(name)
 
 
 def current_directory():
@@ -527,8 +540,16 @@ def picked(value, error, key):
     return value if key is None else value[key]
 
 
-def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def parse_lock(lock):
+    # A lock that does not decode or has a bad version is a damaged repository input.
+    try:
+        return locked_versions(lock.decode("utf-8"))
+    except ValueError as error:
+        raise InputError(LOCK, error) from error
 
 
 def probe_with_rescan(worker, target, gpu_uuid, popen, scan):
@@ -550,8 +571,8 @@ def probe_with_rescan(worker, target, gpu_uuid, popen, scan):
     return probe, failure, found, None
 
 
-def build_checks(worker, target, context):
-    # context holds the shared values; each check reads them through picked().
+def build_checks(worker, target, *, locked, distributions, mapped, found, stdlib, site):
+    # mapped and found are (value, error) pairs; each check reads them through picked().
     def python():
         problem = worker.python_problem((sys.version_info.major, sys.version_info.minor))
         return [problem] if problem else []
@@ -559,12 +580,11 @@ def build_checks(worker, target, context):
     def versions():
         from packaging.tags import sys_tags
 
-        return lock_problems(picked(*context["locked"], None), context["distributions"], set(sys_tags()), worker.SYNC)
+        return lock_problems(locked, distributions, set(sys_tags()), worker.SYNC)
 
     def guard(name, compute, cpu_smoke_warning=False):
         return guarded(name, compute, target, worker.SYNC, cpu_smoke_warning=cpu_smoke_warning)
 
-    mapped, found, stdlib, site = context["mapped"], context["found"], context["stdlib"], context["site"]
     return [
         guard("python", python),
         guard("runtime-layout", lambda: layout_problems(runtime_root(), stdlib, site), cpu_smoke_warning=True),
@@ -578,11 +598,12 @@ def build_checks(worker, target, context):
     ]
 
 
-def report(worker, target, gpu_uuid=None, popen=subprocess.Popen):
+def report(worker, target, gpu_uuid=None, popen=subprocess.Popen, worker_source=None):
     load_packaging()
+    worker_source = read_input(WORKER) if worker_source is None else worker_source
     lock = read_input(LOCK)
+    locked = parse_lock(lock)
     distributions = list(metadata.distributions())
-    locked = attempt(lambda: locked_versions(lock.decode("utf-8")))
     # os came from the standard library before site-packages was added; sysconfig can
     # load a shadowing _sysconfigdata module from site-packages.
     stdlib = Path(os.__file__).parent
@@ -590,21 +611,20 @@ def report(worker, target, gpu_uuid=None, popen=subprocess.Popen):
     forbidden = stdlib_names([stdlib, stdlib / "lib-dynload"])
 
     def scan():
-        owned = owned_startup_files(distributions, picked(*locked, None))
+        owned = owned_startup_files(distributions, locked)
         return dict(zip(("shadows", "startup"), site_problems(site, owned, forbidden)))
 
     probe, failure, found, found_error = probe_with_rescan(worker, target, gpu_uuid, popen, scan)
     mapped = attempt(lambda: probe_checks(worker, probe, failure, target, gpu_uuid))
-    checks = build_checks(worker, target, {"locked": locked, "distributions": distributions, "mapped": mapped,
-                                           "found": (found, found_error), "stdlib": stdlib, "site": site})
+    checks = build_checks(worker, target, locked=locked, distributions=distributions, mapped=mapped,
+                          found=(found, found_error), stdlib=stdlib, site=site)
     facts = probe["facts"] if probe is not None and probe["facts"] is not None else {}
     accelerator = None
     if facts:
         accelerator = "cuda" if facts["available"] else "cpu"
     result = skeleton(target)
     result.update(
-        accelerator=accelerator, workerSHA256=digest(WORKER), lockSHA256=hashlib.sha256(lock).hexdigest(),
-        checks=checks,
+        accelerator=accelerator, workerSHA256=digest(worker_source), lockSHA256=digest(lock), checks=checks,
         status="rejected" if any(item["status"] == "fail" for item in checks) else "accepted",
         **{key: facts.get(key) for key in FACT_KEYS},
     )
@@ -639,13 +659,13 @@ def main(args=None):
         parser.error("run the check as the runner does: bin/python3 -I -S -B")
     target, worker = options.target, None
     try:
-        worker = load_module("training_worker", WORKER)
+        worker, worker_source = load_worker()
         # Append, unlike the worker: a planted standard-library name in site-packages must
         # not run in the checker before the shadowing scan finds it. The probe uses the runner order.
         site = str(worker.runtime_site())
         if site not in sys.path:
             sys.path.append(site)
-        result = report(worker, target, options.gpu_uuid)
+        result = report(worker, target, options.gpu_uuid, worker_source=worker_source)
     except Exception as error:  # noqa: BLE001 - an internal error still gives one bounded JSON object.
         return internal_error(target, error, remedy_for(error, worker.SYNC if worker is not None else None))
     print(json.dumps(result, indent=2, sort_keys=True))

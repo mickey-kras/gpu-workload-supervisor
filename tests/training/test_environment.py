@@ -788,7 +788,8 @@ class RuntimeTests(unittest.TestCase):
         with patch.object(checker, "load_packaging", side_effect=lambda: order.append("packaging")):
             self.report("cpu-smoke", probe_result(), popen_override=probe)
         self.assertEqual(order, ["packaging", "probe"])
-        self.assertEqual(checker.load_packaging().__name__, "packaging")
+        self.assertIsNone(checker.load_packaging())
+        self.assertLessEqual({"packaging.requirements", "packaging.tags", "packaging.utils", "packaging.version"}, set(sys.modules))
 
     def test_a_missing_lock_is_an_internal_error_with_the_install_remedy(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(checker, "lock_problems", side_effect=ImportError("packaging")):
@@ -803,6 +804,46 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual((code, result["status"], result["checks"]), (2, "rejected", []))
         self.assertTrue(result["error"].startswith("check could not run (InputError: requirements.txt: FileNotFoundError: "))
         self.assertTrue(result["error"].endswith("restore requirements.txt from the repository checkout"))
+
+    def repository_input(self, relative, data):
+        # Build a fake repository so the remedy shows the repository path of the input.
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        path = root / relative
+        path.parent.mkdir(parents=True)
+        if data is not None:
+            path.write_bytes(data)
+        return root, path
+
+    def test_a_damaged_lock_is_an_internal_error_with_the_restore_remedy(self):
+        for data in (b"\xff\xfe torch==2.14.0\n", b"packaging==not.a.version!\n"):
+            with self.subTest(data=data):
+                root, lock = self.repository_input("training/axolotl/requirements.txt", data)
+                code, output = self.main([], LOCK=lock, HERE=root / "training/axolotl")
+                result = json.loads(output)
+                self.assertEqual((code, result["status"], result["checks"]), (2, "rejected", []))
+                self.assertTrue(result["error"].startswith("check could not run (InputError: requirements.txt: "), result["error"])
+                self.assertTrue(result["error"].endswith("restore training/axolotl/requirements.txt from the repository checkout"))
+
+    def test_a_missing_worker_is_an_internal_error_with_the_restore_remedy(self):
+        root, missing = self.repository_input("internal/llmtraining/worker.py", None)
+        code, output = self.main([], WORKER=missing, HERE=root / "training/axolotl")
+        result = json.loads(output)
+        self.assertEqual((code, result["target"], result["checks"]), (2, "cpu-smoke", []))
+        self.assertTrue(result["error"].startswith("check could not run (InputError: worker.py: FileNotFoundError: "))
+        self.assertTrue(result["error"].endswith("restore internal/llmtraining/worker.py from the repository checkout"))
+
+    def test_the_worker_hash_uses_the_loaded_bytes(self):
+        loaded, source = checker.load_worker()
+        self.assertEqual(source, checker.WORKER.read_bytes())
+        self.assertEqual((loaded.SOURCE_REVISION, loaded.__file__), (worker.SOURCE_REVISION, str(checker.WORKER)))
+        result, _ = self.report("cpu-smoke", probe_result())
+        self.assertEqual(result["workerSHA256"], checker.digest(source))
+        popen, _ = fake_popen(probe_result())
+        with patch.object(checker.metadata, "distributions", return_value=[]):
+            result = checker.report(worker, "cpu-smoke", None, popen, worker_source=b"other bytes")
+        self.assertEqual(result["workerSHA256"], hashlib.sha256(b"other bytes").hexdigest())
 
     def test_report_without_a_probe_result_has_null_runtime_fields(self):
         result, _ = self.report("cpu-smoke", None)
