@@ -219,7 +219,7 @@ class RuntimeTests(unittest.TestCase):
                 uuid = "GPU-0123abcd-89ab-cdef-0123-456789ABCDEF"
                 result, output = self.main(["--target", "representative-qlora", "--gpu-uuid", uuid])
                 self.assertEqual((result, json.loads(output)), (code, {"status": status}))
-                self.assertEqual(report.call_args.args[1:], ("representative-qlora", uuid))
+                self.assertEqual((report.call_args.args[1:], report.call_args.kwargs["gpu_uuid"]), (("representative-qlora",), uuid))
         with patch.object(checker, "report", side_effect=RuntimeError(f"CUDA init in {checker.runtime_root()}/lib")):
             code, output = self.main([])
         self.assertEqual(code, 2)
@@ -399,7 +399,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(checker.run_probe(True, "GPU-1", SOURCE, popen), (probe_result(), None))
         command, options = calls[0]
         work = Path(options["env"]["TMPDIR"])
-        self.assertEqual(command, [sys.executable, "-I", "-S", "-B", str(checker.PROBE), str(work / "worker.py"), "quantized",
+        self.assertEqual(command, [sys.executable, "-I", "-S", "-B", str(work / "runtime_probe.py"), str(work / "worker.py"), "quantized",
                                    str(work / "result.json")])
         self.assertEqual((options["stdin"], options["start_new_session"], options["cwd"], options["env"]["CUDA_VISIBLE_DEVICES"]),
                          (subprocess.DEVNULL, True, work, "GPU-1"))
@@ -685,7 +685,7 @@ class RuntimeTests(unittest.TestCase):
         for item in items:
             item.start()
         try:
-            return checker.report(worker, target, gpu_uuid, popen, worker_source=SOURCE), calls
+            return checker.report(worker, target, worker_source=SOURCE, gpu_uuid=gpu_uuid, popen=popen), calls
         finally:
             for item in reversed(items):
                 item.stop()
@@ -761,8 +761,8 @@ class RuntimeTests(unittest.TestCase):
             for item in items:
                 item.start()
             try:
-                planted = checker.report(worker, "cpu-smoke", None, planting, worker_source=SOURCE)
-                hidden = checker.report(worker, "cpu-smoke", None, hiding, worker_source=SOURCE)
+                planted = checker.report(worker, "cpu-smoke", worker_source=SOURCE, popen=planting)
+                hidden = checker.report(worker, "cpu-smoke", worker_source=SOURCE, popen=hiding)
             finally:
                 for item in reversed(items):
                     item.stop()
@@ -895,6 +895,31 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(seen[0][2], SOURCE)
         self.assertEqual(result["workerSHA256"], hashlib.sha256(SOURCE).hexdigest())
 
+    def test_the_child_runs_the_probe_bytes_read_before_it_starts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "runtime_probe.py"
+            writer = "import json, sys\nopen(sys.argv[3], 'w').write(json.dumps({!r}))\n"
+            script.write_text(writer.format(probe_result(stdlib=["original"])))
+
+            def tampering(command, **options):
+                # Replace the repository probe after the checker read it and before the child starts.
+                script.write_text(writer.format(probe_result(stdlib=["tampered"])))
+                self.assertEqual(Path(command[4]).parent, Path(options["cwd"]))
+                self.assertEqual(Path(command[4]).stat().st_mode & 0o777, 0o600)
+                return subprocess.Popen(command, **options)
+
+            with patch.object(checker, "PROBE", script):
+                probe, failure = checker.run_probe(False, None, SOURCE, tampering)
+            self.assertEqual((probe, failure), (probe_result(stdlib=["original"]), None))
+
+    def test_a_missing_probe_is_reported_with_the_restore_remedy(self):
+        root, missing = self.repository_input("training/axolotl/runtime_probe.py", None)
+        with patch.object(checker, "PROBE", missing), patch.object(checker, "HERE", root / "training/axolotl"):
+            result, _ = self.report("cpu-smoke", probe_result())
+        native = next(item for item in result["checks"] if item["name"] == "native-libraries")
+        self.assertEqual(native["status"], "fail")
+        self.assertTrue(native["problems"][0].endswith("restore training/axolotl/runtime_probe.py from the repository checkout"))
+
     def test_a_damaged_worker_is_an_internal_error_with_the_restore_remedy(self):
         for data in (b"def broken(:\n", b"<<<<<<< HEAD\nSYNC = 1\n=======\n", b"value = '\xff\xfe'\n", b"\x00"):
             with self.subTest(data=data):
@@ -937,10 +962,10 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(result["workerSHA256"], checker.digest(source))
         popen, _ = fake_popen(probe_result())
         with patch.object(checker.metadata, "distributions", return_value=[]):
-            result = checker.report(worker, "cpu-smoke", None, popen, worker_source=b"other bytes")
+            result = checker.report(worker, "cpu-smoke", worker_source=b"other bytes", popen=popen)
         self.assertEqual(result["workerSHA256"], hashlib.sha256(b"other bytes").hexdigest())
         with self.assertRaises(TypeError):
-            checker.report(worker, "cpu-smoke", None, popen)
+            checker.report(worker, "cpu-smoke", popen=popen)
 
     def test_report_without_a_probe_result_has_null_runtime_fields(self):
         result, _ = self.report("cpu-smoke", None)
@@ -951,7 +976,7 @@ class RuntimeTests(unittest.TestCase):
             raise OSError("no temporary directory")
 
         with patch.object(checker.metadata, "distributions", return_value=[]):
-            result = checker.report(worker, "cpu-smoke", None, explode, worker_source=SOURCE)
+            result = checker.report(worker, "cpu-smoke", worker_source=SOURCE, popen=explode)
         native = next(item for item in result["checks"] if item["name"] == "native-libraries")
         self.assertEqual(native["problems"], [f"the runtime probe could not start (OSError: no temporary directory); {worker.SYNC}"])
 
@@ -959,7 +984,7 @@ class RuntimeTests(unittest.TestCase):
             raise RuntimeError("unexpected")
 
         with patch.object(checker.metadata, "distributions", return_value=[]):
-            result = checker.report(worker, "cpu-smoke", None, broken, worker_source=SOURCE)
+            result = checker.report(worker, "cpu-smoke", worker_source=SOURCE, popen=broken)
         native = next(item for item in result["checks"] if item["name"] == "native-libraries")
         self.assertEqual(native["problems"], [f"the runtime probe could not start (RuntimeError: unexpected); {checker.CHECKER_BUG}"])
 

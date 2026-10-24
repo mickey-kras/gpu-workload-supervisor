@@ -114,8 +114,8 @@ STABLE_KEYS = ("accelerator", *FACT_KEYS)
 
 class SourceBytesLoader(importlib.abc.InspectLoader):
     # Load the worker from the hashed bytes. The probe gets a copy of the same bytes, so
-    # the parent, the probe and workerSHA256 agree. This is a loader and not exec(): the
-    # import system runs the compiled code, and aislop rejects a direct exec().
+    # the parent, the probe and workerSHA256 agree. A loader lets the import system run the
+    # code that the checker compiled from those bytes; nothing reads the file again.
     def __init__(self, source, code):
         self.source, self.code = source, code
 
@@ -463,11 +463,14 @@ def run_probe(quantized, gpu_uuid, worker_source, popen=subprocess.Popen, killpg
         work = Path(directory)
         for name in ("home", "cache"):
             (work / name).mkdir(mode=0o700)
-        # Like run.go, give the child a private copy of the hashed worker bytes.
+        # Like run.go, give the child private copies: the hashed worker bytes and the probe
+        # bytes read once here, so a later change to either repository file cannot reach the child.
         write_private(work / "worker.py", worker_source)
+        write_private(work / "runtime_probe.py", read_input(PROBE))
         result_path = work / "result.json"
         mode = "quantized" if quantized else "plain"
-        command = [sys.executable, "-I", "-S", "-B", str(PROBE), str(work / "worker.py"), mode, str(result_path)]
+        command = [sys.executable, "-I", "-S", "-B", str(work / "runtime_probe.py"), str(work / "worker.py"), mode,
+                   str(result_path)]
         with open(work / "stdout", "w+b") as stdout, open(work / "stderr", "w+b") as stderr:
             process = popen(command, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, cwd=work,
                             env=probe_environment(work, gpu_uuid), start_new_session=True)
@@ -625,7 +628,7 @@ def build_checks(worker, target, inputs):
     ]
 
 
-def report(worker, target, gpu_uuid=None, popen=subprocess.Popen, *, worker_source):
+def report(worker, target, *, worker_source, gpu_uuid=None, popen=subprocess.Popen):
     load_packaging()
     lock = read_input(LOCK)
     locked = parse_lock(lock)
@@ -690,7 +693,7 @@ def main(args=None):
         site = str(worker.runtime_site())
         if site not in sys.path:
             sys.path.append(site)
-        result = report(worker, target, options.gpu_uuid, worker_source=worker_source)
+        result = report(worker, target, worker_source=worker_source, gpu_uuid=options.gpu_uuid)
     except Exception as error:  # noqa: BLE001 - an internal error still gives one bounded JSON object.
         return internal_error(target, error, remedy_for(error, worker.SYNC if worker is not None else None))
     print(json.dumps(result, indent=2, sort_keys=True))
