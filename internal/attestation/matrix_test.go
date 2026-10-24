@@ -480,7 +480,7 @@ func TestSealAndVerifierChecks(t *testing.T) {
 	nilReceiver := nilVerifier.Verify(bytes.NewReader(readFixture(t, "passed.json")), bytes.NewReader(readFixture(t, "passed.sig.json")), inventory)
 	keyless := (&Verifier{}).Verify(bytes.NewReader(readFixture(t, "passed.json")), bytes.NewReader(readFixture(t, "passed.sig.json")), inventory)
 	for name, result := range map[string]Verification{"nil receiver": nilReceiver, "keyless verifier": keyless} {
-		if result.Result() != Malformed || result.verifier != nil || !errors.Is(result.Err(), ErrMissingInput) || !strings.Contains(result.Err().Error(), "verifier") {
+		if result.Result() != Malformed || result.verifier != nil || !errors.Is(result.Err(), ErrMissingInput) || !strings.HasSuffix(result.Err().Error(), ": verifier") {
 			t.Fatalf("%s must give an unsealed malformed result: %#v", name, result)
 		}
 	}

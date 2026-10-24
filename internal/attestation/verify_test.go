@@ -186,16 +186,27 @@ func TestVerifyFailsClosedOnMissingInput(t *testing.T) {
 	envelope := func() io.Reader { return bytes.NewReader(readFixture(t, "passed.json")) }
 	signature := func() io.Reader { return bytes.NewReader(readFixture(t, "passed.sig.json")) }
 	var nilVerifier *Verifier
+	v := fixtureVerifier(t, 1)
 	for name, got := range map[string]Verification{
 		"nil verifier":       nilVerifier.Verify(envelope(), signature(), inventory),
-		"nil envelope":       fixtureVerifier(t, 1).Verify(nil, signature(), inventory),
-		"nil signature file": fixtureVerifier(t, 1).Verify(envelope(), nil, inventory),
+		"nil envelope":       v.Verify(nil, signature(), inventory),
+		"nil signature file": v.Verify(envelope(), nil, inventory),
 	} {
-		if got.Result() != Malformed || !errors.Is(got.Err(), ErrMissingInput) || !strings.Contains(got.Err().Error(), strings.TrimPrefix(name, "nil ")) {
+		if got.Result() != Malformed || !errors.Is(got.Err(), ErrMissingInput) || !strings.HasSuffix(got.Err().Error(), ": "+strings.TrimPrefix(name, "nil ")) {
 			t.Fatalf("%s: %q %v", name, got.Result(), got.Err())
 		}
 		if decideTest(policy(Advisory, nil), inventory, &got).Allowed {
 			t.Fatalf("%s allowed", name)
+		}
+		if name == "nil verifier" {
+			continue
+		}
+		// A missing reader with real trust gives a sealed malformed result.
+		if got.verifier != v {
+			t.Fatalf("%s must be sealed by its verifier", name)
+		}
+		if d := Decide(policy(Advisory, nil), v, inventory, &got); d != deny(IntegrityFailure, ReasonMalformed) {
+			t.Fatalf("%s: %#v", name, d)
 		}
 	}
 	for name, read := range map[string]func() error{
@@ -203,7 +214,7 @@ func TestVerifyFailsClosedOnMissingInput(t *testing.T) {
 		"trust config": func() error { _, err := ReadTrustConfig(nil); return err },
 		"policy":       func() error { _, err := ReadPolicy(nil); return err },
 	} {
-		if err := read(); !errors.Is(err, ErrMissingInput) || !strings.Contains(err.Error(), name) {
+		if err := read(); !errors.Is(err, ErrMissingInput) || !strings.HasSuffix(err.Error(), ": "+name) {
 			t.Fatalf("nil %s reader: %v", name, err)
 		}
 	}
