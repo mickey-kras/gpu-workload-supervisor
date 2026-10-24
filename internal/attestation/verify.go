@@ -241,13 +241,12 @@ func classify(err error) Result {
 // bytes reports ArtifactMismatch even when its signature is valid. The small
 // signature file and its key ID are checked before the envelope is read.
 func (v *Verifier) Verify(envelope, signature io.Reader, onDisk Artifact) Verification {
-	if missing := missingInput(v, envelope, signature); missing != "" {
-		err := fmt.Errorf("%w: %s", ErrMissingInput, missing)
-		if missing == "verifier" {
-			// Without trust, nothing can seal the result.
-			return Verification{result: Malformed, err: err}
-		}
-		return v.failed(Malformed, "", err)
+	if !v.hasTrust() {
+		// Without trust, nothing can seal the result.
+		return Verification{result: Malformed, err: fmt.Errorf("%w: verifier", ErrMissingInput)}
+	}
+	if missing := missingInput(envelope, signature); missing != "" {
+		return v.failed(Malformed, "", fmt.Errorf("%w: %s", ErrMissingInput, missing))
 	}
 	if err := onDisk.validate(); err != nil {
 		return v.failed(InvalidInventory, "", fmt.Errorf("%w: %v", ErrInvalidInventory, err))
@@ -284,10 +283,11 @@ func (v *Verifier) Verify(envelope, signature io.Reader, onDisk Artifact) Verifi
 	return Verification{result: Valid, keyID: sig.KeyID, envelope: parsed, digest: digest, verifier: v}
 }
 
-func missingInput(v *Verifier, envelope, signature io.Reader) string {
+// hasTrust reports a verifier that can seal results: non-nil with pinned keys.
+func (v *Verifier) hasTrust() bool { return v != nil && len(v.keys) > 0 }
+
+func missingInput(envelope, signature io.Reader) string {
 	switch {
-	case v == nil || len(v.keys) == 0:
-		return "verifier"
 	case envelope == nil:
 		return "envelope"
 	case signature == nil:

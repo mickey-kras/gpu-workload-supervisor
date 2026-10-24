@@ -507,6 +507,8 @@ func TestSealAndVerifierChecks(t *testing.T) {
 			"zero verification, nil arg": {nil, &Verification{}, deny(IntegrityFailure, ReasonMissingVerifier)},
 			"nil receiver, nil arg":      {nil, &nilReceiver, deny(IntegrityFailure, ReasonMissingVerifier)},
 			"nil verifier argument":      {nil, passed, deny(IntegrityFailure, ReasonMissingVerifier)},
+			"zero verifier argument":     {&Verifier{}, passed, deny(IntegrityFailure, ReasonMissingVerifier)},
+			"zero verifier, no evidence": {&Verifier{}, nil, missingDecision(p, ReasonMissing)},
 			"nil verifier, no evidence":  {nil, nil, missingDecision(p, ReasonMissing)},
 			"same verifier":              {verifier, passed, allow(Verified, ReasonPassed)},
 		} {
@@ -530,12 +532,26 @@ func TestDecideAllPrefersRealFailureOverStale(t *testing.T) {
 	}
 	staleResult := old.Verify(bytes.NewReader(readFixture(t, "passed.json")), bytes.NewReader(readFixture(t, "passed.sig.json")), inventory)
 	forged := current.Verify(bytes.NewReader(readFixture(t, "passed.json")), bytes.NewReader(forgedSignature(t, readFixture(t, "passed.sig.json"))), inventory)
+	passed := current.Verify(bytes.NewReader(readFixture(t, "passed.json")), bytes.NewReader(readFixture(t, "passed.sig.json")), inventory)
+	single := Artifact{SHA256: fixtureDigest("model.gguf")}
+	changed := withFile(inventory.Files, "config.json", fixtureDigest("changed"))
 	stale := Root{Artifact: inventory, Verification: &staleResult}
-	broken := Root{Artifact: inventory, Verification: &forged}
 	for _, mode := range []Mode{Advisory, Enforce} {
-		for name, roots := range map[string][]Root{"stale first": {stale, broken}, "stale second": {broken, stale}} {
-			if got := DecideAll(policy(mode, nil), current, roots); got != deny(IntegrityFailure, ReasonInvalidSignature) {
-				t.Fatalf("%s %s: %#v", name, mode, got)
+		for name, tc := range map[string]struct {
+			policy Policy
+			other  Root
+			want   Reason
+		}{
+			"invalid signature": {policy(mode, nil), Root{Artifact: inventory, Verification: &forged}, ReasonInvalidSignature},
+			"denied":            {policy(mode, nil, mustDigest(t, single)), Root{Artifact: single}, ReasonArtifactDenied},
+			"unsealed":          {policy(mode, nil), Root{Artifact: inventory, Verification: &Verification{}}, ReasonUnsealed},
+			"artifact mismatch": {policy(mode, nil), Root{Artifact: changed, Verification: &passed}, ReasonArtifactMismatch},
+			"invalid inventory": {policy(mode, nil), Root{Artifact: Artifact{}, Verification: &passed}, ReasonInvalidInventory},
+		} {
+			for order, roots := range map[string][]Root{"stale first": {stale, tc.other}, "stale second": {tc.other, stale}} {
+				if got := DecideAll(tc.policy, current, roots); got != deny(IntegrityFailure, tc.want) {
+					t.Fatalf("%s %s %s: %#v", name, order, mode, got)
+				}
 			}
 		}
 		if got := DecideAll(policy(mode, nil), current, []Root{stale, stale}); got != deny(IntegrityFailure, ReasonStale) {

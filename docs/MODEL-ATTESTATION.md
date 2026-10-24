@@ -235,7 +235,7 @@ It reads the small signature file before the large envelope.
 
 | Order | Result | Cause |
 | --- | --- | --- |
-| 1 | `malformed` | The verifier, the envelope reader or the signature reader is missing. |
+| 1 | `malformed` | The verifier is nil or has no keys, or the envelope reader or the signature reader is missing. A missing verifier gives an unsealed result. |
 | 2 | `invalid-inventory` | The caller inventory breaks the artifact rules. |
 | 3 | `unreadable`, `unsupported-version` or `malformed` | The signature file. |
 | 4 | `unknown-key` | No pinned key has the key ID. |
@@ -261,7 +261,8 @@ order. The first check that settles the root gives the decision:
 2. The deny list, against the gate inventory.
 3. The gate inventory.
 4. Missing evidence.
-5. The verifier. A nil verifier with evidence gives `missing-verifier`.
+5. The verifier. Evidence with a verifier that is nil or has no keys gives
+   `missing-verifier`.
 6. The seal. A verification that `Verify` did not seal gives
    `unsealed-verification`.
 7. The verifier match. A verification from a different verifier gives
@@ -356,7 +357,7 @@ decision.
 | `invalid-signature` | `integrity-failure` | The signature does not match. |
 | `incompatible-policy` | `integrity-failure` | The trust configuration does not support the policy version. |
 | `artifact-mismatch` | `integrity-failure` | The evidence binds different bytes. |
-| `missing-verifier` | `integrity-failure` | Evidence exists, but the gate has no verifier. Load the trust configuration. This check comes before the seal check. |
+| `missing-verifier` | `integrity-failure` | Evidence exists, but the verifier is nil or has no keys. Load the trust configuration. This check comes before the seal check. |
 | `unsealed-verification` | `integrity-failure` | A verifier is present, but `Verify` on a verifier with keys did not seal the verification, or the verification holds an unknown result. |
 | `stale-verification` | `integrity-failure` | A different verifier made the verification. Check the evidence again with the current verifier. A UI selects "check again" from this reason. |
 | `scan-passed` | `verified` | A complete scan passed. |

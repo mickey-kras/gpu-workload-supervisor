@@ -220,11 +220,10 @@ func decide(policy Policy, verifier *Verifier, onDisk Artifact, verification *Ve
 }
 
 // decideBinding rejects evidence that the current verifier did not seal.
-// A missing verifier comes first, so a gate without trust configuration
-// learns to load it: no verification can be checked without one.
+// A missing verifier comes first: no verification can be checked without one.
 func decideBinding(verifier *Verifier, verification *Verification) (Decision, bool) {
 	switch {
-	case verifier == nil:
+	case !verifier.hasTrust():
 		return Decision{Status: IntegrityFailure, Reason: ReasonMissingVerifier}, true
 	case verification.verifier == nil:
 		return Decision{Status: IntegrityFailure, Reason: ReasonUnsealed}, true
