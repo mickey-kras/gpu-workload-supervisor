@@ -905,6 +905,30 @@ class RuntimeTests(unittest.TestCase):
                 self.assertTrue(result["error"].startswith("check could not run (InputError: worker.py: "), result["error"])
                 self.assertTrue(result["error"].endswith("restore internal/llmtraining/worker.py from the repository checkout"))
 
+    def test_the_loader_runs_the_bytes_it_read_not_the_file(self):
+        minimal = "SYNC = 'sync'\ndef runtime_site():\n    return None\n"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "worker.py"
+            path.write_text("X = 1\n" + minimal)
+            hashed = ("X = 2\n" + minimal).encode()
+            with patch.object(checker, "WORKER", path), patch.object(checker, "read_input", return_value=hashed):
+                loaded, source = checker.load_worker()
+        self.assertEqual((loaded.X, source), (2, hashed))
+
+    def test_main_passes_the_loaded_bytes_to_the_report(self):
+        with patch.object(checker, "load_worker", return_value=(worker, b"sentinel")), \
+                patch.object(checker, "report", return_value={"status": "accepted"}) as report:
+            code, _ = self.main([])
+        self.assertEqual((code, report.call_args.kwargs["worker_source"]), (0, b"sentinel"))
+
+    def test_a_worker_import_failure_is_a_checker_bug(self):
+        root, failing = self.repository_input("internal/llmtraining/worker.py", b"import missing_module_xyz\n")
+        code, output = self.main([], WORKER=failing, HERE=root / "training/axolotl")
+        result = json.loads(output)
+        self.assertEqual((code, result["checks"]), (2, []))
+        self.assertTrue(result["error"].startswith("check could not run (ModuleNotFoundError: "), result["error"])
+        self.assertTrue(result["error"].endswith(checker.CHECKER_BUG))
+
     def test_the_worker_hash_uses_the_loaded_bytes(self):
         loaded, source = checker.load_worker()
         self.assertEqual(source, checker.WORKER.read_bytes())
