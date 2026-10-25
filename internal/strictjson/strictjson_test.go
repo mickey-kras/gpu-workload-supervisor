@@ -40,6 +40,43 @@ func TestCheckRejectsMalformedJSON(t *testing.T) {
 	}
 }
 
+func TestCheckMatchesJSONNestingLimit(t *testing.T) {
+	for name, delimiters := range map[string][2]string{
+		"arrays":  {"[", "]"},
+		"objects": {`{"a":`, "}"},
+		"mixed":   {`[{"a":`, "}]"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, depth := range []int{10000, 10001} {
+				count := depth
+				if name == "mixed" {
+					count = depth / 2
+				}
+				body := strings.Repeat(delimiters[0], count) + "0" + strings.Repeat(delimiters[1], count)
+				if name == "mixed" && depth%2 != 0 {
+					body = "[" + body + "]"
+				}
+				want := depth == 10000
+				if json.Valid([]byte(body)) != want {
+					t.Fatalf("encoding/json nesting limit changed at depth %d", depth)
+				}
+				if err := Check(json.NewDecoder(strings.NewReader(body))); (err == nil) != want {
+					t.Fatalf("depth %d: %v, want valid=%v", depth, err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestCheckConsumesOneValue(t *testing.T) {
+	d := json.NewDecoder(strings.NewReader(`{"a":[]} {"b":{}}`))
+	for i := 0; i < 2; i++ {
+		if err := Check(d); err != nil {
+			t.Fatalf("value %d: %v", i, err)
+		}
+	}
+}
+
 type failingReader struct{}
 
 func (failingReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }
