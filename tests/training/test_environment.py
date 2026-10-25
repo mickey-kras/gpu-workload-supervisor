@@ -1,6 +1,7 @@
 """Guard the subset boundary, the exact deviation contract and the runtime report."""
 import base64
 import hashlib
+from functools import partial
 import importlib.metadata
 import importlib.util
 import io
@@ -35,6 +36,9 @@ def load(name, path):
 worker = load("subset_worker", "internal/llmtraining/worker.py")
 checker = load("subset_checker", "training/axolotl/check_environment.py")
 probe = load("runtime_probe", "training/axolotl/runtime_probe.py")
+
+# Patching os.killpg does not replace the default bound by run_probe at import.
+FAKE_RUN_PROBE = partial(checker.run_probe, killpg=lambda *args: None)
 
 
 def distribution(name, version="1.0", requires=()):
@@ -398,7 +402,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_run_probe_uses_a_runner_like_child_and_the_result_file(self):
         popen, calls = fake_popen(probe_result(), stdout=b"third-party noise\n")
-        self.assertEqual(checker.run_probe(True, "GPU-1", SOURCES, popen), (probe_result(), None))
+        self.assertEqual(checker.run_probe(True, "GPU-1", SOURCES, popen, lambda *args: None), (probe_result(), None))
         command, options = calls[0]
         work = Path(options["env"]["TMPDIR"])
         self.assertEqual(command, [sys.executable, "-I", "-S", "-B", str(work / "runtime_probe.py"), str(work / "worker.py"), "quantized",
@@ -407,7 +411,7 @@ class RuntimeTests(unittest.TestCase):
                          (subprocess.DEVNULL, True, work, "GPU-1"))
         self.assertFalse(work.exists())
         popen, calls = fake_popen(probe_result())
-        self.assertEqual(checker.run_probe(False, None, SOURCES, popen), (probe_result(), None))
+        self.assertEqual(checker.run_probe(False, None, SOURCES, popen, lambda *args: None), (probe_result(), None))
         self.assertEqual(calls[0][0][-2], "plain")
 
     def test_probe_failures_map_to_actionable_problems(self):
@@ -424,7 +428,7 @@ class RuntimeTests(unittest.TestCase):
             ({"raw": b" " * (checker.OUTPUT_LIMIT + 1)}, f"the runtime probe gave no valid result; {RETRY}"),
         ):
             with self.subTest(options=options):
-                self.assertEqual(checker.run_probe(False, None, SOURCES, fake_popen(**options)[0]), (None, expected))
+                self.assertEqual(checker.run_probe(False, None, SOURCES, fake_popen(**options)[0], lambda *args: None), (None, expected))
         for changed in (
             [1], {}, {**probe_result(), "extra": 1}, {key: value for key, value in probe_result().items() if key != "stdlib"},
             probe_result(stdlib=[1]), probe_result(torchError=1), probe_result(bitsandbytes=[]),
@@ -438,7 +442,7 @@ class RuntimeTests(unittest.TestCase):
             probe_result(facts={key: value for key, value in cuda_facts().items() if key != "hip"} | {"hip": 1}),
         ):
             with self.subTest(changed=changed):
-                self.assertEqual(checker.run_probe(False, None, SOURCES, fake_popen(raw=json.dumps(changed).encode())[0]),
+                self.assertEqual(checker.run_probe(False, None, SOURCES, fake_popen(raw=json.dumps(changed).encode())[0], lambda *args: None),
                                  (None, f"the runtime probe gave no valid result; {RETRY}"))
 
     def test_schema_accepts_the_limits(self):
@@ -676,10 +680,12 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(checker.remedy_for(OSError("x")), checker.CHECKER_BUG)
         self.assertEqual(checker.remedy_for(KeyError("x"), worker.SYNC), checker.CHECKER_BUG)
 
-    def report(self, target, probe, gpu_uuid="GPU-1", clean=True, popen_override=None, **patches):
+    def report(self, target, probe, gpu_uuid="GPU-1", clean=True, popen_override=None, real_probe=False, **patches):
         popen, calls = fake_popen(probe)
         popen = popen_override or popen
         items = [patch.object(checker.metadata, "distributions", return_value=[])]
+        if not real_probe:
+            items.append(patch.object(checker, "run_probe", FAKE_RUN_PROBE))
         if clean:
             items += [patch.object(checker, "lock_problems", return_value=[]), patch.object(checker, "dependency_problems", return_value=[]),
                       patch.object(checker, "site_problems", return_value=([], []))]
@@ -719,7 +725,7 @@ class RuntimeTests(unittest.TestCase):
             "python": "fail", "runtime-layout": "warn", "standard-library": "fail", "startup-files": "warn",
             "dependencies": "fail", "locked-versions": "fail", "native-libraries": "fail", "driver-libraries": "warn",
             "accelerator": "warn"})
-        self.assertEqual(result["accelerator"], None)
+        self.assertIsNone(result["accelerator"])
 
     def test_report_rejects_presets_with_preset_only_problems(self):
         result, _ = self.report("smoke-lora", probe_result(facts=cuda_facts(driverCuda=None)))
@@ -759,7 +765,7 @@ class RuntimeTests(unittest.TestCase):
 
             items = [patch.object(worker, "runtime_site", return_value=site), patch.object(checker.metadata, "distributions", return_value=[]),
                      patch.object(checker, "lock_problems", return_value=[]), patch.object(checker, "dependency_problems", return_value=[]),
-                     patch.object(checker.os, "killpg")]
+                     patch.object(checker, "run_probe", FAKE_RUN_PROBE)]
             for item in items:
                 item.start()
             try:
@@ -918,7 +924,7 @@ class RuntimeTests(unittest.TestCase):
                 return subprocess.Popen(command, **options)
 
             with patch.object(checker, "PROBE", script), patch.object(checker, "read_probe", read_then_tamper):
-                result, _ = self.report("cpu-smoke", probe_result(), popen_override=checking)
+                result, _ = self.report("cpu-smoke", probe_result(), popen_override=checking, real_probe=True)
         standard = next(item for item in result["checks"] if item["name"] == "standard-library")
         self.assertEqual(standard["problems"], ["original"])
 
@@ -973,7 +979,7 @@ class RuntimeTests(unittest.TestCase):
         result, _ = self.report("cpu-smoke", probe_result())
         self.assertEqual(result["workerSHA256"], checker.digest(source))
         popen, _ = fake_popen(probe_result())
-        with patch.object(checker.metadata, "distributions", return_value=[]):
+        with patch.object(checker.metadata, "distributions", return_value=[]), patch.object(checker, "run_probe", FAKE_RUN_PROBE):
             result = checker.report(worker, "cpu-smoke", worker_source=b"other bytes", popen=popen)
         self.assertEqual(result["workerSHA256"], hashlib.sha256(b"other bytes").hexdigest())
         with self.assertRaises(TypeError):
