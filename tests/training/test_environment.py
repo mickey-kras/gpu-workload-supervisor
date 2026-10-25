@@ -719,7 +719,7 @@ class RuntimeTests(unittest.TestCase):
             "python": "fail", "runtime-layout": "warn", "standard-library": "fail", "startup-files": "warn",
             "dependencies": "fail", "locked-versions": "fail", "native-libraries": "fail", "driver-libraries": "warn",
             "accelerator": "warn"})
-        self.assertEqual(result["accelerator"], None)
+        self.assertIsNone(result["accelerator"])
 
     def test_report_rejects_presets_with_preset_only_problems(self):
         result, _ = self.report("smoke-lora", probe_result(facts=cuda_facts(driverCuda=None)))

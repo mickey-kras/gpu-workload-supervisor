@@ -117,6 +117,30 @@ def version_pair(text: str) -> tuple[int, int]:
     return int(major), int(minor)
 
 
+def device_problems(
+    index: int, capability: tuple[int, int], torch: str, build: str, driver: object, arch_list: list[str]
+) -> list[str]:
+    name = f"GPU {index} (compute capability {capability[0]}.{capability[1]})"
+    problems = []
+    support = kernel_support(capability, arch_list)
+    if not support:
+        targets = " ".join(arch_list) or "an empty architecture list"
+        problems.append(
+            f"{name} has no kernels in Torch {torch} ({targets}); "
+            f"install a Torch build with sm_{capability[0]}{capability[1]} or use a supported GPU"
+        )
+    elif support == "ptx" and (not isinstance(driver, str) or version_pair(driver) < version_pair(build)):
+        problems.append(
+            f"{name} needs PTX JIT compilation, which needs a driver for CUDA {build} or newer; upgrade the driver"
+        )
+    if capability < (8, 0):
+        problems.append(
+            f"{name} has no native BF16, which the training presets need; "
+            "use a GPU with compute capability 8.0 or newer"
+        )
+    return problems
+
+
 # Both presets train and reload in BF16 on one CUDA device; QLoRA also needs the
 # bitsandbytes kernels. The driver must support at least the CUDA major version
 # of the Torch build. Each problem states what is wrong and what to change.
@@ -136,24 +160,7 @@ def accelerator_problems(facts: dict[str, object], quantized: bool) -> list[str]
         )
     arch_list = [str(arch) for arch in facts["archList"]]
     for index, value in enumerate(facts["devices"]):
-        capability = (int(value[0]), int(value[1]))
-        name = f"GPU {index} (compute capability {capability[0]}.{capability[1]})"
-        support = kernel_support(capability, arch_list)
-        if not support:
-            targets = " ".join(arch_list) or "an empty architecture list"
-            problems.append(
-                f"{name} has no kernels in Torch {torch} ({targets}); "
-                f"install a Torch build with sm_{capability[0]}{capability[1]} or use a supported GPU"
-            )
-        elif support == "ptx" and (not isinstance(driver, str) or version_pair(driver) < version_pair(build)):
-            problems.append(
-                f"{name} needs PTX JIT compilation, which needs a driver for CUDA {build} or newer; upgrade the driver"
-            )
-        if capability < (8, 0):
-            problems.append(
-                f"{name} has no native BF16, which the training presets need; "
-                "use a GPU with compute capability 8.0 or newer"
-            )
+        problems.extend(device_problems(index, (int(value[0]), int(value[1])), torch, build, driver, arch_list))
     if quantized and not facts["bitsandbytes"]:
         problems.append("QLoRA needs bitsandbytes; install bitsandbytes from the training lock")
     return problems

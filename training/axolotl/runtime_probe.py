@@ -56,7 +56,8 @@ def bitsandbytes_problem(cuda):
         )
     try:
         importlib.import_module("bitsandbytes")
-    except Exception as error:  # noqa: BLE001 - every import failure is report data.
+    except Exception as error:  # noqa: BLE001
+        # Every import failure is report data.
         return f"bitsandbytes cannot import ({failure(error)}); reinstall bitsandbytes from the lock"
     return None
 
@@ -66,7 +67,8 @@ def probe(worker, quantized):
     result = {"stdlib": stdlib_problems(), "facts": None, "torchError": None, "bitsandbytes": None}
     try:
         result["facts"] = worker.torch_facts()
-    except Exception as error:  # noqa: BLE001 - every import or CUDA initialization failure is report data.
+    except Exception as error:  # noqa: BLE001
+        # Every import or CUDA initialization failure is report data.
         result["torchError"] = failure(error)
     facts = result["facts"]
     if quantized and facts is not None and isinstance(facts["cuda"], str):
