@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "artifact": {
+    "files": {
+      "adapter/adapter_config.json": "881f6afb6c80b2c7be8ade5ff4f07e618aaba3f7bf880192de4a2396534032cd",
+      "adapter/adapter_model.safetensors": "1a15e78464b95d99f16be49b7a4f1829a22b876da21edb1fdfcf0f4785921709",
+      "config.json": "36a266b3d0f7a232e4c8e7f96c3dfb86c195e7cbc07b1c4fce0071e555ac728c",
+      "generation_config.json": "87608d899278fe3328a7caaf460adddde3c8bbdec07e81db2624f2b4b6e0059c",
+      "merges.txt": "abb2a3fa6195de61bd8d33ff7aadbecc1ab2f41e8b754b26f5bcfaa59f0225b5",
+      "model-00001-of-00002.safetensors": "2b375640b24cb01fced164ad0919e82c299c8706b44d477e8ae7ab57ecde3e04",
+      "model-00002-of-00002.safetensors": "896837fae6bc391d33e8d7d9013443575b314750a054deed6d091634adc85efa",
+      "model.safetensors.index.json": "384094c52ddfba92d2c051a9046645ea8e9f4a529a7eb5a338cc5fe2e8c8392f",
+      "vocab.json": "1300e00c66c6a751f9a7792a37b720430d688f3d037a8eabc788b6974a26a3f3"
+    }
+  },
+  "source": {
+    "uri": "https://huggingface.co/example/fixture-model",
+    "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "scan": {
+    "status": "passed",
+    "scanner": {
+      "tool": "llm-backdoor-scanner",
+      "version": "0.0.0-fixture",
+      "configSHA256": "be7d708e9e72c2b808b2411ac7531d1dcff5153d0ab467681a4c025bd4d64ab1"
+    },
+    "coverage": "partial",
+    "verdict": "no-findings",
+    "reportSHA256": "de19e91c00bb3786c135742acb2197d89ea19b07f1e6bb3de79016c707f8b89c"
+  },
+  "policyVersion": 1,
+  "timestamp": "2026-10-01T12:00:00Z"
+}
