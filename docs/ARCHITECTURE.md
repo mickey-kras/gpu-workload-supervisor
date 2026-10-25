@@ -22,8 +22,8 @@
 ## Model attestation
 
 The [attestation contract](MODEL-ATTESTATION.md) defines the envelope, signing bytes and policy.
-The producer and the gate do not exist yet. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585):
-scan, report and attestation preparation.
+The producer is [`gpu-model-seal`](MODEL-SEAL.md) ([#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585)):
+scan, report and attestation preparation. The gate does not exist yet.
 [#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583):
 pre-execution verification, policy and UI.
 

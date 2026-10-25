@@ -8,7 +8,8 @@ Binaries: `gpu-mode` (controller), `gpu-workload-proxy` (admission proxy),
 `gpu-operator` (local operator backend), `gpu-setup` (detection and setup),
 `gpu-training-runner` (experimental), `gpu-training-candidate` (unqualified input
 preparation; not training execution), `gpu-training-import` (unqualified PEFT
-import preparation; not serving activation).
+import preparation; not serving activation), `gpu-model-seal` (model attestation
+preparation and verification for isolated staging).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/generated/overview-dark.svg">

@@ -4,9 +4,11 @@
 
 This page defines format version 1 of the signed model attestation. The
 package `internal/attestation` holds the contract, the verifier and the
-fixtures. The producer CLI ([#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585))
-and the supervisor gate ([#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583))
-do not exist yet. When they exist, both must use this package.
+fixtures. The producer CLI [`gpu-model-seal`](MODEL-SEAL.md)
+([#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585))
+uses this package. The supervisor gate
+([#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583))
+does not exist yet. When it exists, it must use this package.
 
 Signatures attest provenance and policy decisions, not model safety.
 

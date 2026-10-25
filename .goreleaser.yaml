@@ -75,6 +75,15 @@ builds:
     goos: [linux]
     goarch: [amd64, arm64]
 
+  - id: gpu-model-seal
+    main: ./cmd/gpu-model-seal
+    binary: gpu-model-seal
+    ldflags:
+      - -s -w -X github.com/mickey-kras/gpu-workload-supervisor/internal/deployment.Release={{ .Version }}
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+
 nfpms:
   - id: desktop
     package_name: gpu-workload-supervisor

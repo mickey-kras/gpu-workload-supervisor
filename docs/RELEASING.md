@@ -4,7 +4,7 @@
 
 The release workflow publishes the tested source tree, two Linux archives
 (amd64 and arm64), and one Debian package per architecture. Each archive
-contains six executables:
+contains eight executables:
 
 - `gpu-mode`: controller; runs and journals workload transitions
 - `gpu-workload-proxy`: execution admission and completion proxy
@@ -12,8 +12,11 @@ contains six executables:
 - `gpu-setup`: guided setup, discovery and catalog commit
 - `gpu-training-runner`: experimental finite-job LLM runner; no preset is enabled
 - `gpu-training-candidate`: unqualified input preparation; not training execution
+- `gpu-training-import`: unqualified PEFT import preparation; not serving activation
+- `gpu-model-seal`: model attestation preparation and verification for isolated staging
 
-The Debian package adds the GNOME Shell extension and setup application. The
+The Debian package adds the GNOME Shell extension and setup application. It
+does not install `gpu-model-seal`, which runs outside the supervisor. The
 workflow also publishes a checksum file covering all archives and the CycloneDX
 source SBOM. Build provenance is recorded in GitHub attestations and can be
 checked with `gh attestation verify` on a downloaded asset.
