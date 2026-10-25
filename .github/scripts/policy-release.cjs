@@ -59,7 +59,7 @@ function inspectVerificationWorkspace(workflow, failures, script) {
     step.name === 'Verify main and successful validation at this commit');
   if (Object.hasOwn(workflow, 'env') || Object.hasOwn(workflow, 'defaults') ||
       Object.keys(validation).some(key => !allowed.includes(key)) ||
-      publish['runs-on'] !== 'ubuntu-latest' ||
+      publish['runs-on'] !== 'ubuntu-24.04' ||
       ['env', 'defaults', 'container', 'services'].some(key => Object.hasOwn(publish, key)) ||
       !sameSteps(validation.steps, [HARDEN, CHECKOUT,
         verificationStep('Verify exact-commit main validation', script)]) ||
@@ -99,7 +99,7 @@ function inspectValidationReuse(files, workflow, failures, checks, admitted) {
   inspectVerificationWorkspace(workflow, failures, script);
   if (['quality', 'aislop', 'codeql'].some(id => Object.hasOwn(releaseJobs, id)) ||
       validation.needs !== 'entry' || Object.hasOwn(validation, 'if') ||
-      validation['runs-on'] !== 'ubuntu-latest' ||
+      validation['runs-on'] !== 'ubuntu-24.04' ||
       validation['timeout-minutes'] !== 75 ||
       JSON.stringify(validation.permissions) !== '{"contents":"read","actions":"read"}' ||
       JSON.stringify(releaseJobs?.publish?.needs) !== '["entry","validation"]') {
