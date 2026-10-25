@@ -13,7 +13,7 @@ concurrency:
 jobs:
   entry:
     name: read release version from main
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -47,7 +47,7 @@ jobs:
   validation:
     name: verify exact-commit main validation
     needs: entry
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 75
     permissions:
       contents: read
@@ -100,7 +100,7 @@ jobs:
   publish:
     name: publish source and binaries v${{ needs.entry.outputs.version }}
     needs: [entry, validation]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: release-automation
     permissions:
       contents: read
@@ -337,7 +337,7 @@ jobs:
   release-followup:
     name: reserve next patch after v${{ needs.entry.outputs.version }}
     needs: [entry, publish]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: release-automation
     permissions:
       contents: read

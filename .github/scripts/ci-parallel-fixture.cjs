@@ -53,7 +53,7 @@ function parallelFixture() {
       run: 'python3 -m unittest discover -s tests/desktop -p test_setup_native_shards.py' },
   };
   workflow.jobs = Object.fromEntries(Object.entries(STEP_JOBS).map(([id, names]) => [id, {
-    name: id, 'runs-on': 'ubuntu-latest', steps: [...structuredClone(common), ...names.map(name => added[name] || find(name))],
+    name: id, 'runs-on': 'ubuntu-24.04', steps: [...structuredClone(common), ...names.map(name => added[name] || find(name))],
   }]));
   for (const id of ['go', 'package']) {
     workflow.jobs[id].steps.splice(common.length, 0, structuredClone(steps.find(step => step.uses?.startsWith('actions/setup-go@'))));
