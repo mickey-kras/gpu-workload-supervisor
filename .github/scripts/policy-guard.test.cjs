@@ -79,7 +79,7 @@ function files({ serial = true } = {}) {
     const jobsIndex = source.indexOf('jobs:\n');
     const sections = source.slice(jobsIndex + 6).split(/^  [a-z]+:\n/m).slice(1);
     const steps = sections.map(section => section.slice(section.indexOf('    steps:\n') + 11)).join('');
-    result[path] = source.slice(0, jobsIndex) + 'jobs:\n  checks:\n    name: checks\n    runs-on: ubuntu-latest\n    steps:\n' + steps;
+    result[path] = source.slice(0, jobsIndex) + 'jobs:\n  checks:\n    name: checks\n    runs-on: ubuntu-24.04\n    steps:\n' + steps;
   }
   return result;
 }
@@ -194,7 +194,7 @@ function reusableRelease(candidate) {
     env: { VERSION: '${{ needs.entry.outputs.version }}' }, with: { script } };
   const entrySteps = workflow.jobs.entry.steps;
   const harden = entrySteps.find(step => step.uses?.startsWith('step-security/harden-runner@'));
-  workflow.jobs.validation = { needs: 'entry', 'runs-on': 'ubuntu-latest', 'timeout-minutes': 75,
+  workflow.jobs.validation = { needs: 'entry', 'runs-on': 'ubuntu-24.04', 'timeout-minutes': 75,
     permissions: { contents: 'read', actions: 'read' }, steps: [
       structuredClone(harden),
       { uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
@@ -952,7 +952,7 @@ test('privileged Dependabot workflow rejects workspace replacement and execution
     w => { w.jobs['enable-auto-merge'].env = { NODE_OPTIONS: '--require /tmp/override.cjs' }; },
     w => { w.defaults = { run: { 'working-directory': 'untrusted' } }; },
     w => { w.jobs['enable-auto-merge'].defaults = { run: { 'working-directory': 'untrusted' } }; },
-    w => { w.jobs.extra = { 'runs-on': 'ubuntu-latest', steps: [{ run: 'true' }] }; },
+    w => { w.jobs.extra = { 'runs-on': 'ubuntu-24.04', steps: [{ run: 'true' }] }; },
     w => { w.on.pull_request_target.branches = ['unused-branch']; },
     w => { w.on.pull_request_target['branches-ignore'] = ['main']; },
     w => { w.on.pull_request_target.paths = ['unused/**']; },

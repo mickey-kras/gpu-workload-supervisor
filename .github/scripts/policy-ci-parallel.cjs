@@ -237,7 +237,7 @@ function inspectParallelCi(workflow, failures) {
     if (id === 'package') allowed.push('outputs');
     if (id === 'checks') allowed.push('if', 'needs');
     requireValue(jobs[id] && Object.keys(jobs[id]).every(key => allowed.includes(key)) &&
-      jobs[id].name === id && jobs[id]['runs-on'] === 'ubuntu-latest', `${id} runner and execution settings`);
+      jobs[id].name === id && jobs[id]['runs-on'] === 'ubuntu-24.04', `${id} runner and execution settings`);
     for (const step of steps.filter(step => step.name)) {
       const expectedHash = QUALIFICATION_HASHES[step.name];
       if (expectedHash) {
