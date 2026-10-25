@@ -27,7 +27,7 @@ const CLASSIFIER_SCRIPT = [
   'await classifier.exports.run({ github, context, core });', '',
 ].join('\n');
 const CLASSIFIER_JOB = {
-  name: 'classify changed paths', 'runs-on': 'ubuntu-latest', 'timeout-minutes': 5,
+  name: 'classify changed paths', 'runs-on': 'ubuntu-24.04', 'timeout-minutes': 5,
   permissions: { contents: 'read', 'pull-requests': 'read' },
   outputs: { 'validation-mode': '${{ steps.scope.outputs.validation-mode }}' },
   steps: [

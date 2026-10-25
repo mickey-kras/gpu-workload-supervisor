@@ -7,9 +7,9 @@ const AISLOP = '.github/workflows/aislop.yml';
 const MAIN = '.github/workflows/main.yml';
 
 const REUSE_HASHES = {
-  ".github/workflows/ci.yml": "2197ef20c3c2c0897dffb80a74df788feddac6ecc744315e2873e9def2413e1d",
-  ".github/workflows/aislop.yml": "9b90546484fb17549a120cf47eb7ffd8b625aef2437568f393cb6e7ef51edc26",
-  ".github/workflows/main.yml": "aeab59c43ceddc085498cd0ffcd5990fd5543b1f8a0b4c1fa995d07f18ddba6d"
+  ".github/workflows/ci.yml": "ea1f15a59088f4b58e87bc219708a801ac2dac41215c96036325629a3de3d9e2",
+  ".github/workflows/aislop.yml": "c33bceeeb1a4f685a75e622364e2c136d9352a3f8266d6a0383eed65178523e7",
+  ".github/workflows/main.yml": "92302363b733e5176abc7a43bdb4ad5fe6dc74d75108c5dc7f755a0befe1d7ca"
 };
 const HELPER_HASHES = {
   ".github/scripts/quality-coverage.py": "96c047e6c876af769edbb141e2230861b665d368d27579244a2f8f356d141c65",

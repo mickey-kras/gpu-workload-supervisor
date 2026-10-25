@@ -71,7 +71,7 @@ function inspectWorkflow(workflows, failures, checks) {
       workflow?.on?.workflow_call !== null ||
       Object.keys(workflow?.jobs || {}).length !== 1 ||
       Object.keys(job || {}).some(key => !['name', 'if', 'runs-on', 'timeout-minutes', 'steps', 'permissions'].includes(key)) ||
-      job?.['runs-on'] !== 'ubuntu-latest' || job?.['timeout-minutes'] !== 15) {
+      job?.['runs-on'] !== 'ubuntu-24.04' || job?.['timeout-minutes'] !== 15) {
     failures.push('Dependabot lost trusted executable workflow structure');
   }
 }
