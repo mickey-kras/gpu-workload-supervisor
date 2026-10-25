@@ -553,7 +553,8 @@ def remedy_for(error, sync=None):
 def guarded(name, compute, target, sync, cpu_smoke_warning=False):
     try:
         problems = compute()
-    except Exception as error:  # noqa: BLE001 - a broken check is a failure, never a traceback.
+    except Exception as error:  # noqa: BLE001
+        # A broken check is a failure, never a traceback.
         problems = [f"check could not run ({type(error).__name__}: {error}); {remedy_for(error, sync)}"]
         cpu_smoke_warning = False
     return check(name, problems, target, cpu_smoke_warning)
@@ -562,7 +563,8 @@ def guarded(name, compute, target, sync, cpu_smoke_warning=False):
 def attempt(compute):
     try:
         return compute(), None
-    except Exception as error:  # noqa: BLE001 - each dependent check reports the failure.
+    except Exception as error:  # noqa: BLE001
+        # Each dependent check reports the failure.
         return None, error
 
 
@@ -591,7 +593,8 @@ def probe_with_rescan(worker, sources, target, gpu_uuid, popen, scan):
     before, before_error = attempt(scan)
     try:
         probe, failure = run_probe(target in QUANTIZED, gpu_uuid, sources, popen)
-    except Exception as error:  # noqa: BLE001 - the dependent checks report the failure.
+    except Exception as error:  # noqa: BLE001
+        # The dependent checks report the failure.
         remedy = remedy_for(error, worker.SYNC)
         probe, failure = None, f"the runtime probe could not start ({type(error).__name__}: {error}); {remedy}"
     found, found_error = attempt(scan)
@@ -681,7 +684,7 @@ def skeleton(target, error=None):
         "version": 1, "target": target, "status": "rejected", "python": ".".join(map(str, sys.version_info[:3])),
         "lockTarget": LOCK_TARGET, "workerSHA256": None, "lockSHA256": None, "checks": [], "error": error,
     }
-    result.update({key: None for key in STABLE_KEYS})
+    result.update(dict.fromkeys(STABLE_KEYS))
     return result
 
 
@@ -691,7 +694,8 @@ def main(args=None):
     target = None
     try:
         presets = load_presets()
-    except Exception as error:  # noqa: BLE001 - an internal error still gives one bounded JSON object.
+    except Exception as error:  # noqa: BLE001
+        # An internal error still gives one bounded JSON object.
         return internal_error(target, error, remedy_for(error))
     parser = argparse.ArgumentParser(description="Check the training runtime for one target. Run with -I -S -B.")
     parser.add_argument("--target", choices=("cpu-smoke", *presets), default="cpu-smoke")
@@ -710,7 +714,8 @@ def main(args=None):
         if site not in sys.path:
             sys.path.append(site)
         result = report(worker, target, worker_source=worker_source, gpu_uuid=options.gpu_uuid)
-    except Exception as error:  # noqa: BLE001 - an internal error still gives one bounded JSON object.
+    except Exception as error:  # noqa: BLE001
+        # An internal error still gives one bounded JSON object.
         return internal_error(target, error, remedy_for(error, worker.SYNC if worker is not None else None))
     print(json.dumps(result, indent=2, sort_keys=True))
     return 1 if result["status"] == "rejected" else 0
@@ -724,3 +729,4 @@ def internal_error(target, error, remedy):
 
 if __name__ == "__main__":
     sys.exit(main())
+

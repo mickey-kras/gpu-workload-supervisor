@@ -134,6 +134,15 @@ def accelerator_problems(facts: dict[str, object], quantized: bool) -> list[str]
         problems.append(
             f"the NVIDIA driver supports CUDA {driver}, older than the Torch CUDA {build} build; upgrade the driver"
         )
+    problems.extend(gpu_problems(facts))
+    if quantized and not facts["bitsandbytes"]:
+        problems.append("QLoRA needs bitsandbytes; install bitsandbytes from the training lock")
+    return problems
+
+
+def gpu_problems(facts: dict[str, object]) -> list[str]:
+    torch, build, driver = str(facts["torch"]), facts["cuda"], facts["driverCuda"]
+    problems = []
     arch_list = [str(arch) for arch in facts["archList"]]
     for index, value in enumerate(facts["devices"]):
         capability = (int(value[0]), int(value[1]))
@@ -154,8 +163,6 @@ def accelerator_problems(facts: dict[str, object], quantized: bool) -> list[str]
                 f"{name} has no native BF16, which the training presets need; "
                 "use a GPU with compute capability 8.0 or newer"
             )
-    if quantized and not facts["bitsandbytes"]:
-        problems.append("QLoRA needs bitsandbytes; install bitsandbytes from the training lock")
     return problems
 
 
@@ -303,4 +310,5 @@ def main(args: list[str]) -> None:
 
 if __name__ == "__main__":
     main(sys.argv[1:])
+
 
