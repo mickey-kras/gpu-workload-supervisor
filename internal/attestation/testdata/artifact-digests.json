@@ -1,0 +1,5 @@
+{
+  "note": "Derived with Python json.dumps(sort_keys=True, separators=(',', ':')) and hashlib, not with this package.",
+  "files": "11f787766e154d3c781f162e6f440f7c7340f64cb55b772d3f1314b9c40b9a43",
+  "single": "baf5303fbd84be4bba30b236ffe051177dfbc903b4b3a413b4055427414c0069"
+}
