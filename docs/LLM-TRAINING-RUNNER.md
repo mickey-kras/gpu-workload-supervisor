@@ -25,10 +25,20 @@ without importing or using the providers. Other plugins, providers and model
 entry points are rejected before importing Axolotl. Bundled metadata is not
 permission to use parallel training or cloud providers.
 
+Before training starts, each phase checks Torch and CUDA against the bound GPU.
+The phase needs a CUDA build of Torch, a usable driver, kernels for the GPU
+architecture and native BF16. QLoRA also needs bitsandbytes. The configuration
+value `load_in_4bit` must be a boolean. An unsupported combination stops the
+phase, and training never falls back to CPU.
+
+The runner discards the output of the worker process. To see the reason, run the
+[runtime check](LLM-TRAINING-QUALIFICATION.md#runtime-check).
+
 This is a byte/inventory boundary, not a complete approved environment lock.
-Python's standard library, OS/native libraries, CUDA and driver compatibility
-still require a separately pinned and qualified deployment. Do not treat a
-matching source metadata file or a successful fixture as runtime approval.
+Python's standard library, OS and native libraries, and CUDA and driver
+compatibility still need pinned and qualified provenance. The check rejects
+incompatible combinations but does not pin them. Do not treat a matching source
+metadata file or a successful fixture as runtime approval.
 
 Every execution gets a new private directory beside its lifecycle envelope,
 named `.llm-<invocation>`. Reusing that invocation fails. It contains the generated
@@ -68,6 +78,7 @@ immutable asset revisions, private host inputs and the real-GPU acceptance gates
 
 Repository tests use an explicitly identified worker fixture for process,
 environment, receipt, failure and provenance behavior. Python guard tests check
-source/plugin rejection and atomic progress publication. They do not load model
+source and plugin rejection and atomic progress publication. They also check the
+accelerator rules with mocked Torch and CUDA values. They do not load model
 weights, exercise GPU kernels or establish real training/reload compatibility.
 
