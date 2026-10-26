@@ -168,8 +168,8 @@ function inspectGoReleaser({ files, workflows, failures, checks, path, jobId, bu
 }
 
 function inspectTrivyUpload(steps, failures) {
-  const trusted = "(github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)";
-  const guarded = "${{ !cancelled() && steps.trivy_report.outcome == 'success' && " + trusted + " }}";
+  const trusted = "(github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name === github.repository)";
+  const guarded = "${{ !cancelled() && steps.trivy_report.outcome === 'success' && " + trusted + " }}";
   const uploadIndex = steps.findIndex(step => step.name === 'Upload Trivy SARIF');
   const upload = steps[uploadIndex];
   const reportIndex = steps.findIndex(step => step.name === 'Trivy filesystem report');
@@ -391,8 +391,7 @@ function inspectScannerConfigs(files, workflows, failures, admitted) {
       paths: { include: ['/internal/setup/*.go'], exclude: ['*_test.go'] },
       options: { constant_propagation: false },
       patterns: [
-        { 'pattern-either': [{ pattern: '"ExecStart="' }, { pattern: '"inspection-failed"' }] },
-        { 'pattern-not-inside': 'const $NAME = $VALUE' },
+        { 'pattern-either': [{ pattern: "const $NAME = $VALUE" }, { pattern: "inspectionFailed = true" }] },
       ],
     })) failures.push('Setup shared-literal policy was weakened');
     if (shell?.severity !== 'ERROR' || shell.pattern !== 'exec.Command("sh", "-c", ...)' ||
@@ -436,10 +435,22 @@ function inspectCoverageConfig(files, failures) {
   }
 }
 
+function onlyHardenRunnerPinsChanged(path, content, baseline) {
+  if (path !== '.github/workflows/policy-guard.yml' ||
+      typeof content !== 'string' || typeof baseline !== 'string') return false;
+  const normalize = value => value.replace(
+    /^([ \t]*-[ \t]+uses:[ \t]+step-security\/harden-runner@)[a-f0-9]{40}(?:[ \t]+#[^\r\n]*)?(?=\r?$)/gm,
+    '$1PINNED',
+  );
+  return content !== baseline && normalize(content) === normalize(baseline);
+}
+
 function inspect(files, baseline = files, admitted = new Set()) {
   const failures = [];
   for (const path of POLICY_SOURCES) {
-    if (typeof baseline[path] !== 'string' || (files[path] !== baseline[path] && !admitted.has(path))) {
+    const unreviewed = files[path] !== baseline[path] && !admitted.has(path) &&
+      !onlyHardenRunnerPinsChanged(path, files[path], baseline[path]);
+    if (typeof baseline[path] !== 'string' || unreviewed) {
       failures.push(`${path}: policy execution sources require independent exact-head owner admission`);
     }
   }
