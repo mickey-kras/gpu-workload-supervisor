@@ -71,6 +71,8 @@ function verifyJobs(jobs, run, now) {
     required.set('quality / go', ['Go vulnerability audit']);
     required.set('quality / frontend', ['Audit Aislop toolchain', 'Test policy automation']);
     required.set('quality / package', []);
+    required.set('quality / docs-ste / ste-cli', []);
+    required.set('quality / docs-ste / vale', []);
     required.set('quality / scans', ['Gitleaks', 'Semgrep', 'Trivy high and critical gate']);
     for (let shard = 0; shard < 6; shard++) required.set(`quality / native (${shard})`, []);
   }

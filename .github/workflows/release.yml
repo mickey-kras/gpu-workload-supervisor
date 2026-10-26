@@ -73,7 +73,7 @@ jobs:
             const filename = resolve('.github/scripts/release-validation.cjs');
             const source = readFileSync(filename);
             if (createHash('sha256').update(source).digest('hex') !==
-                '2ab673a761d632d643901cfdd9294d45135910691481693bcb15b2f20fc75c1b') {
+                'a0b980507a2b5e4b0a7d27a11b36afd27db5f39dd2d74bca72ab82eecf9ec337') {
               throw new Error('Release validation verifier bytes changed in the workspace');
             }
             const publicationFilename = resolve('.github/scripts/release-publication.cjs');
@@ -135,7 +135,7 @@ jobs:
             const filename = resolve('.github/scripts/release-validation.cjs');
             const source = readFileSync(filename);
             if (createHash('sha256').update(source).digest('hex') !==
-                '2ab673a761d632d643901cfdd9294d45135910691481693bcb15b2f20fc75c1b') {
+                'a0b980507a2b5e4b0a7d27a11b36afd27db5f39dd2d74bca72ab82eecf9ec337') {
               throw new Error('Release validation verifier bytes changed in the workspace');
             }
             const publicationFilename = resolve('.github/scripts/release-publication.cjs');

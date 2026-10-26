@@ -38,7 +38,7 @@ function files({ serial = true } = {}) {
     }
   }
   for (const path of [
-    '.github/CODEOWNERS',
+    '.github/CODEOWNERS', '.ste.yml', '.vale.ini', '.vale/styles/config/vocabularies/Project/accept.txt',
     '.github/dependabot.yml', '.github/scripts/policy-guard.cjs',
     '.github/scripts/dependabot-auto-merge.cjs', '.github/scripts/pr-branch-updater.cjs',
     '.github/scripts/release-settings.cjs', '.github/scripts/release-follow-up.cjs',
@@ -76,10 +76,10 @@ function files({ serial = true } = {}) {
     source = result[path];
   }
   if (serial && YAML.parse(source).jobs.native) {
-    const jobsIndex = source.indexOf('jobs:\n');
-    const sections = source.slice(jobsIndex + 6).split(/^  [a-z]+:\n/m).slice(1);
-    const steps = sections.map(section => section.slice(section.indexOf('    steps:\n') + 11)).join('');
-    result[path] = source.slice(0, jobsIndex) + 'jobs:\n  checks:\n    name: checks\n    runs-on: ubuntu-24.04\n    steps:\n' + steps;
+    const workflow = YAML.parse(source);
+    const steps = Object.values(workflow.jobs).flatMap(job => job.steps || []);
+    workflow.jobs = { checks: { name: 'checks', 'runs-on': 'ubuntu-24.04', steps } };
+    result[path] = YAML.stringify(workflow);
   }
   return result;
 }
@@ -1576,4 +1576,42 @@ test('release helper admission synchronizes policy and both runtime assertions',
     candidate[policy] = candidate[policy].replace('const RELEASE_HASHES = {', 'const RELEASE_HASHES = {invalid');
     assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
   }
+});
+
+test('STE workflow replacement, lowered severities and omitted prose cannot bypass policy', () => {
+  const mutations = [
+    candidate => { candidate['.github/workflows/docs-ste.yml'] = 'name: docs-ste\non: {workflow_call: null}\njobs: {pass: {runs-on: ubuntu-latest, steps: [{run: "true"}]}}\n'; },
+    candidate => { candidate['.github/workflows/docs-ste.yml'] = candidate['.github/workflows/docs-ste.yml'].replace('--warnings-as-errors ', ''); },
+    candidate => { candidate['.github/workflows/docs-ste.yml'] = candidate['.github/workflows/docs-ste.yml'].replace('--no-baseline ', ''); },
+    candidate => { candidate['.github/workflows/docs-ste.yml'] = candidate['.github/workflows/docs-ste.yml'].replace('if any(report.values()):', 'if False:'); },
+    candidate => { candidate['.github/workflows/docs-ste.yml'] = candidate['.github/workflows/docs-ste.yml'].replace("':(icase)*.md'", "'README.md'"); },
+    candidate => { candidate['.ste.yml'] += '\ndisable: [STE-1.1]\n'; },
+    candidate => { candidate['.vale.ini'] = candidate['.vale.ini'].replace('BasedOnStyles = STE', 'BasedOnStyles ='); },
+    candidate => { candidate['.vale.ini'] += '\nTokenIgnores = (.*)\n'; },
+    candidate => { candidate['.github/workflows/docs-ste.yml'] = candidate['.github/workflows/docs-ste.yml'].replace('--minAlertLevel=warning', '--minAlertLevel=error'); },
+    candidate => { candidate['.github/workflows/docs-ste.yml'] = candidate['.github/workflows/docs-ste.yml'].replace('sha256sum --check --strict', 'cat'); },
+    candidate => { candidate['.vale.ini'] += '\nPackages = https://example.com/styles.zip\n'; },
+    candidate => { candidate['.github/workflows/docs-ste.yml'] = candidate['.github/workflows/docs-ste.yml'].replace('if re.search(directive, source, re.IGNORECASE):', 'if False:'); },
+    candidate => { candidate['.vale/styles/config/vocabularies/Project/accept.txt'] += '.*\n'; },
+  ];
+  for (const mutate of mutations) {
+    const candidate = files({ serial: false }); mutate(candidate);
+    assert.ok(inspectActivated(candidate).some(failure => failure.includes('documentation gate controls changed')));
+  }
+});
+
+test('STE control files are mandatory and their replacement cannot authorize its own digest', () => {
+  for (const path of ['.github/workflows/docs-ste.yml', '.ste.yml', '.vale.ini', '.vale/styles/config/vocabularies/Project/accept.txt']) {
+    const candidate = files({ serial: false });
+    delete candidate[path];
+    assert.ok(inspectActivated(candidate).some(failure => failure.includes(`Missing required file: ${path}`)));
+  }
+  const baseline = files({ serial: false });
+  const candidate = { ...baseline, '.ste.yml': 'presets: []\n' };
+  const { createHash } = require('node:crypto');
+  const digest = createHash('sha256').update(candidate['.ste.yml']).digest('hex');
+  candidate['.github/scripts/policy-guard.cjs'] = candidate['.github/scripts/policy-guard.cjs']
+    .replace(/("\.ste.yml": ")[a-f0-9]+"/, `$1${digest}"`);
+  assert.ok(inspectActivated(candidate, baseline).some(failure => failure.includes('independent exact-head owner admission')));
+  assert.ok(inspectActivated(candidate, baseline).some(failure => failure.includes('documentation gate controls changed')));
 });

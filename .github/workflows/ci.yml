@@ -20,6 +20,9 @@ permissions:
   security-events: write
 
 jobs:
+  docs-ste:
+    uses: ./.github/workflows/docs-ste.yml
+
   native:
     if: ${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}
     name: native
@@ -340,7 +343,7 @@ jobs:
   checks:
     name: checks
     if: ${{ always() }}
-    needs: [native, go, frontend, scans, package]
+    needs: [native, go, frontend, scans, package, docs-ste]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -362,7 +365,7 @@ jobs:
           import os
           import re
 
-          required = {'native', 'go', 'frontend', 'scans', 'package'}
+          required = {'native', 'go', 'frontend', 'scans', 'package', 'docs-ste'}
           results = json.loads(os.environ['CI_NEEDS'])
           docs = os.environ['CI_EVENT'] == 'pull_request' and os.environ['CI_MODE'] == 'docs-only'
           expected = {job: ('skipped' if docs and job == 'native' else 'success') for job in required}
