@@ -6,12 +6,16 @@ const { inspectReleaseEntry, inspectReleasePublish } = require('./policy-release
 const { normalizeParallelCi, AGGREGATE_RUN } = require('./policy-ci-parallel.cjs');
 const { normalizeScopedValidation } = require('./policy-pr-scope.cjs');
 const { normalizeCiReuse } = require('./policy-ci-reuse.cjs');
-const { canonical, normalizeActionSteps } = require('./policy-action-pins.cjs');
+const { canonical, normalizeActionSteps, normalizeWorkflowActionPins } = require('./policy-action-pins.cjs');
 const { inspectDependabot, verifyDependabotAuthor } = require('./policy-dependabot.cjs');
 
 const GORELEASER_ACTION_DIGEST = 'c88133b8d7e69681883fe0aa77a141453ace73146561612522b9cd5f485722ac';
 
 const EXECUTABLE_HASHES = {
+  ".github/workflows/docs-ste.yml": "674f1c64f24b65cc50fcc5b1223c73ecfe0e607ed0e3d8a50b517fbb218fe4b4",
+  ".ste.yml": "f75eda8fb8d6ae25db6875adf984b0bb167d52aff977ff5524bcc0f48d02c941",
+  ".vale.ini": "1d2daa33c324e5140367a5143df339068822cb45f7f2ae023dbd7d744e0793ff",
+  ".vale/styles/config/vocabularies/Project/accept.txt": "5000d8689ae7037cf1336122d156368bbcb9ec3da339d86e1a806f8ecb65668d",
   ".github/scripts/install-goreleaser.sh": "de2e876e51298aec0ec86a42fdb850aaa2f95e3d86cd1fa67a6d5c1febbcc8b0",
   ".github/scripts/check-go-directives.go": "f356bcb0bd9546d4ee133001335740bfb41623e4671554606895e6ab1a305489",
   ".github/scripts/eslint.config.cjs": "72d5ad0cda934ad013c3b1ddb62bf6aa1b5a65caa457f18c5f6725ea93e48f31"
@@ -27,7 +31,10 @@ function expectedExecutableDigest(files, path, admitted) {
   }
 }
 
+const STE_FILES = ['.github/workflows/docs-ste.yml', '.ste.yml', '.vale.ini', '.vale/styles/config/vocabularies/Project/accept.txt'];
+
 const REQUIRED_FILES = [
+  ...STE_FILES,
   '.github/CODEOWNERS',
   '.github/workflows/pr-validation.yml', '.github/workflows/ci.yml',
   '.github/workflows/main.yml', '.github/workflows/policy-guard.yml',
@@ -326,7 +333,15 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks, admitted
   }
 }
 
-function inspectScannerConfigs(files, failures, admitted) {
+function inspectScannerConfigs(files, workflows, failures, admitted) {
+  for (const path of STE_FILES) {
+    const content = path === '.github/workflows/docs-ste.yml'
+      ? JSON.stringify(canonical(normalizeWorkflowActionPins(workflows[path] || {}))) : files[path] || '';
+    if (createHash('sha256').update(content).digest('hex') !==
+        expectedExecutableDigest(files, path, admitted)) {
+      failures.push(`${path}: documentation gate controls changed`);
+    }
+  }
   if (createHash('sha256').update(files['.github/scripts/check-go-directives.go'] || '').digest('hex') !==
       expectedExecutableDigest(files, '.github/scripts/check-go-directives.go', admitted)) {
     failures.push('Go suppression guard was changed');
@@ -434,7 +449,7 @@ function inspect(files, baseline = files, admitted = new Set()) {
   const ciWorkflows = normalizeParallelCi(workflows, failures);
   inspectCi(files, ciWorkflows, failures, createChecks(ciWorkflows, failures), admitted);
   inspectAdditionalWorkflows(files, workflows, failures, checks, admitted);
-  inspectScannerConfigs(files, failures, admitted);
+  inspectScannerConfigs(files, workflows, failures, admitted);
   inspectLockfiles(files, baseline, failures, admitted);
   inspectCoverageConfig(files, failures);
   return failures;

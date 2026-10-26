@@ -1,0 +1,161 @@
+name: docs-ste
+
+# ASD-STE100 Simplified Technical English gate for the documentation.
+# ste-cli checks the writing rules of the standard. Vale checks the STE style of vale-llm-slop.
+# Neither tool uses the ASD-STE100 dictionary: the specification does not permit redistribution.
+
+on:
+  workflow_call:
+
+concurrency:
+  group: docs-ste-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  ste-cli:
+    name: ste-cli
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2
+        with:
+          egress-policy: audit
+
+      - name: Prepare documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/docs-ste"
+          mkdir -p "$stage"
+          git ls-files --cached --others --exclude-standard -z -- ':(icase)*.md' ':(icase)*.markdown' |
+            while IFS= read -r -d '' path; do
+              case "/${path,,}" in
+                */.git/*|*/node_modules/*|*/.vale/styles/*) continue ;;
+              esac
+              case "$path" in
+                clients/setup/icons/LICENSES.md|clients/setup/icons/vllm-usage-notice.md) continue ;;
+              esac
+              test -f "$path" && test ! -L "$path"
+              python3 - "$path" <<'PYTHON'
+          import pathlib
+          import re
+          import sys
+
+          source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+          directive = r"<!--\s*(?:ste-(?:disable(?:-next-line|-line)?|enable)\b|vale\s+(?:off\b|on\b|styles?\s*=|[^\r\n]*=\s*(?:YES|NO|on|off)\b))"
+          if re.search(directive, source, re.IGNORECASE):
+              raise SystemExit(f"{sys.argv[1]}: linter control comments are not permitted")
+          PYTHON
+              mkdir -p "$stage/$(dirname -- "$path")"
+              # Append a suffix to preserve distinct source paths and use the Markdown parser.
+              cp -- "$path" "$stage/$path.md"
+            done
+
+      - name: Install verified ste-cli
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/ste-cli.tar.gz"
+          curl --fail --location --retry 3 --output "$archive" \
+            https://github.com/TudorAndrei/ste-cli/releases/download/v0.10.1/ste-0.10.1-linux-x64.tar.gz
+          printf '%s  %s\n' d4a9fa77dec2b4623db324fc0951a0a0af6284de3cb42d1717c174bc5762e937 "$archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/ste-cli"
+          tar --no-same-owner -xzf "$archive" -C "$RUNNER_TEMP/ste-cli" ste
+
+      - name: Check STE prose
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/ste-cli/ste" lint --warnings-as-errors --no-baseline --all "$RUNNER_TEMP/docs-ste"
+
+  vale:
+    name: vale
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2
+        with:
+          egress-policy: audit
+
+      - name: Prepare documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/docs-ste"
+          mkdir -p "$stage"
+          git ls-files --cached --others --exclude-standard -z -- ':(icase)*.md' ':(icase)*.markdown' |
+            while IFS= read -r -d '' path; do
+              case "/${path,,}" in
+                */.git/*|*/node_modules/*|*/.vale/styles/*) continue ;;
+              esac
+              case "$path" in
+                clients/setup/icons/LICENSES.md|clients/setup/icons/vllm-usage-notice.md) continue ;;
+              esac
+              test -f "$path" && test ! -L "$path"
+              python3 - "$path" <<'PYTHON'
+          import pathlib
+          import re
+          import sys
+
+          source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+          directive = r"<!--\s*(?:ste-(?:disable(?:-next-line|-line)?|enable)\b|vale\s+(?:off\b|on\b|styles?\s*=|[^\r\n]*=\s*(?:YES|NO|on|off)\b))"
+          if re.search(directive, source, re.IGNORECASE):
+              raise SystemExit(f"{sys.argv[1]}: linter control comments are not permitted")
+          PYTHON
+              mkdir -p "$stage/$(dirname -- "$path")"
+              # Append a suffix to preserve distinct source paths and use the Markdown parser.
+              cp -- "$path" "$stage/$path.md"
+            done
+
+      - name: Install verified STE styles
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/vale-llm-slop.zip"
+          curl --fail --location --retry 3 --output "$archive" \
+            https://github.com/Syntaf/vale-llm-slop/releases/download/v0.1.0/vale-llm-slop.zip
+          printf '%s  %s\n' ea6b72b0ab6e91606041d1264006249c21dbd96d4cd501e18d524dbaeaa87fe4 "$archive" | sha256sum --check --strict
+          stage="$(mktemp -d "$RUNNER_TEMP/vale-styles.XXXXXX")"
+          unzip -q "$archive" 'vale-llm-slop/styles/STE/*' -d "$stage"
+          mkdir -p .vale/styles
+          rm -rf .vale/styles/STE
+          cp -R "$stage/vale-llm-slop/styles/STE" .vale/styles/STE
+
+      - name: Install verified Vale
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/vale-cli.tar.gz"
+          curl --fail --location --retry 3 --output "$archive" \
+            https://github.com/vale-cli/vale/releases/download/v3.25.1/vale_3.25.1_Linux_64-bit.tar.gz
+          printf '%s  %s\n' 4bf5c5176b682b1da0830f471584d3494f1c2e27ee3029e1ad6f6661d4962182 "$archive" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/vale-cli"
+          tar --no-same-owner -xzf "$archive" -C "$RUNNER_TEMP/vale-cli" vale
+
+      - name: Check Vale prose
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/vale-cli/vale" --output=JSON --minAlertLevel=warning --config=.vale.ini "$RUNNER_TEMP/docs-ste" | tee "$RUNNER_TEMP/vale-results.json"
+          python3 - "$RUNNER_TEMP/vale-results.json" <<'PYTHON'
+          import json
+          import pathlib
+          import sys
+
+          report = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if not isinstance(report, dict) or any(not isinstance(alerts, list) for alerts in report.values()):
+              raise SystemExit("Invalid Vale report")
+          if any(report.values()):
+              raise SystemExit("Vale found warnings or errors")
+          PYTHON

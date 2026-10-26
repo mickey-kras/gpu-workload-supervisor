@@ -3,7 +3,7 @@ const { createHash } = require('node:crypto');
 const { sameActionSteps } = require('./policy-action-pins.cjs');
 
 const RELEASE_HASHES = {
-  ".github/scripts/release-validation.cjs": "2ab673a761d632d643901cfdd9294d45135910691481693bcb15b2f20fc75c1b",
+  ".github/scripts/release-validation.cjs": "a0b980507a2b5e4b0a7d27a11b36afd27db5f39dd2d74bca72ab82eecf9ec337",
   ".github/scripts/release-publication.cjs": "124d6832b052c0f3309755c1874acf303bbef264cf24077e1831dacc51838462"
 };
 

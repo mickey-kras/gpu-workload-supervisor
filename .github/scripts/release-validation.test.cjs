@@ -22,6 +22,8 @@ function splitQuality(input) {
     ['quality / frontend', ['Audit Aislop toolchain', 'Test policy automation']],
     ['quality / scans', ['Gitleaks', 'Semgrep', 'Trivy high and critical gate']],
     ['quality / package', []],
+    ['quality / docs-ste / ste-cli', []],
+    ['quality / docs-ste / vale', []],
     ...Array.from({ length: 6 }, (_, shard) => [`quality / native (${shard})`, []]),
   ]) {
     input.state.jobs.push({ ...structuredClone(original), id: input.state.jobs.length + 1, name,
@@ -221,16 +223,37 @@ test('split quality evidence requires every producer and ages actual security jo
   const complete = fixture(); splitQuality(complete);
   await verifyMain(complete);
   for (const name of ['quality / go', 'quality / frontend', 'quality / scans',
-    'quality / package', ...Array.from({ length: 6 }, (_, shard) => `quality / native (${shard})`)]) {
+    'quality / package', 'quality / docs-ste / ste-cli', 'quality / docs-ste / vale', ...Array.from({ length: 6 }, (_, shard) => `quality / native (${shard})`)]) {
     const missing = fixture(); splitQuality(missing);
     missing.state.jobs = missing.state.jobs.filter(job => job.name !== name);
     await assert.rejects(verifyMain(missing), /exact-attempt job|successful step/);
   }
-  for (const name of ['quality / go', 'quality / frontend', 'quality / scans']) {
+  for (const name of ['quality / go', 'quality / frontend', 'quality / scans',
+    'quality / docs-ste / ste-cli', 'quality / docs-ste / vale']) {
     const stale = fixture(); splitQuality(stale);
     stale.state.jobs[0].started_at = time(-60000);
     stale.state.jobs.find(job => job.name === name).started_at = time(-24 * 3600000 - 1);
     await assert.rejects(verifyMain(stale), /stale/);
+  }
+});
+
+test('release reuse requires successful STE producers from the current attempt', async () => {
+  const complete = fixture(); splitQuality(complete); complete.state.run.run_attempt = 2;
+  for (const job of complete.state.jobs) job.run_attempt = 2;
+  await verifyMain(complete);
+  for (const name of ['quality / docs-ste / ste-cli', 'quality / docs-ste / vale']) {
+    for (const change of [
+      job => { job.run_attempt = 1; },
+      job => { job.conclusion = 'failure'; },
+      job => { job.conclusion = 'cancelled'; },
+      job => { job.conclusion = 'skipped'; },
+      job => { job.head_sha = OTHER; },
+    ]) {
+      const input = fixture(); splitQuality(input); input.state.run.run_attempt = 2;
+      for (const job of input.state.jobs) job.run_attempt = 2;
+      change(input.state.jobs.find(job => job.name === name));
+      await assert.rejects(verifyMain(input), /exact-attempt job/);
+    }
   }
 });
 

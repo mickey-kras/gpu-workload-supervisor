@@ -1,0 +1,3 @@
+# ste-cli checks part of ASD-STE100 Issue 9.
+# The official dictionary and editorial checks are still necessary.
+presets: [software]
