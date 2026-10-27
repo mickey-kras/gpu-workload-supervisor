@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 from contextlib import nullcontext
@@ -37,6 +38,19 @@ def module(name: str, attributes: dict[str, object]) -> ModuleType:
     for key, value in attributes.items():
         setattr(result, key, value)
     return result
+
+
+PROGRESS_GOLDEN = Path(__file__).resolve().parents[2] / "internal/llmtraining/testdata/worker-progress.json"
+
+
+class CudaOutOfMemory(RuntimeError):
+    """Stands for torch.cuda.OutOfMemoryError."""
+
+
+def cuda_torch() -> MagicMock:
+    torch: MagicMock = MagicMock()
+    torch.cuda.OutOfMemoryError = CudaOutOfMemory
+    return torch
 
 
 class WorkerTests(unittest.TestCase):
@@ -151,6 +165,164 @@ class WorkerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 worker.publish(path, {"step": float("nan")})
             self.assertEqual(json.loads(path.read_text()), {"step": 1})
+            # The failed attempt leaves no temporary file, so the next one works.
+            self.assertEqual([entry.name for entry in path.parent.iterdir()], ["progress.json"])
+            worker.publish(path, {"step": 2})
+            self.assertEqual(json.loads(path.read_text()), {"step": 2})
+
+    def test_vram_peak_keeps_the_largest_allocator_value(self) -> None:
+        torch: MagicMock = MagicMock()
+        torch.cuda.is_available.return_value = False
+        with patch.dict(worker.sys.modules, {"torch": torch}):
+            self.assertIsNone(worker.vram_peak(None))
+            self.assertEqual(worker.vram_peak(5), 5)
+            torch.cuda.max_memory_reserved.assert_not_called()
+            torch.cuda.is_available.return_value = True
+            # Device memory in use counts other processes, so it is not read.
+            torch.cuda.mem_get_info.return_value = (0, 100)
+            # A process that never allocated on the GPU stays unmeasured.
+            torch.cuda.max_memory_reserved.return_value = 0
+            self.assertIsNone(worker.vram_peak(None))
+            self.assertEqual(worker.vram_peak(4), 4)
+            torch.cuda.max_memory_reserved.return_value = 7
+            self.assertEqual(worker.vram_peak(None), 7)
+            self.assertEqual(worker.vram_peak(9), 9)
+            torch.cuda.mem_get_info.assert_not_called()
+
+    def test_cpu_smoke_hides_cuda_before_torch_import(self) -> None:
+        # With no visible device, torch.cuda.is_available() is False, so the smoke
+        # reports an unmeasured VRAM peak even on a CUDA host.
+        smoke = (Path(__file__).resolve().parents[2] / "training/axolotl/smoke.py").read_text(encoding="utf-8")
+        tree = ast.parse(smoke)
+        hidden = torch_import = None
+        for node in tree.body:
+            if isinstance(node, ast.Import) and any(alias.name == "torch" for alias in node.names):
+                torch_import = node.lineno if torch_import is None else torch_import
+            for call in ast.walk(node):
+                if isinstance(call, ast.Call) and getattr(call.func, "attr", "") == "update" and any(
+                    keyword.arg == "CUDA_VISIBLE_DEVICES" and isinstance(keyword.value, ast.Constant) and keyword.value.value == ""
+                    for keyword in call.keywords
+                ):
+                    hidden = node.lineno
+        self.assertIsNotNone(hidden)
+        self.assertIsNotNone(torch_import)
+        self.assertLess(hidden, torch_import)
+
+    def test_failed_vram_samples_never_fail_a_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            trainer: MagicMock = MagicMock()
+            trainer.state.global_step = 2
+            trainer.evaluate.return_value = {"eval_loss": 1.0}
+            cfg = SimpleNamespace(max_steps=2, output_dir=directory, load_in_4bit=False)
+            trainer.add_callback.side_effect = lambda value: getattr(value, "on_step_end")(None, SimpleNamespace(global_step=2), None)
+            modules = {
+                "axolotl": module("axolotl", {}), "axolotl.cli": module("axolotl.cli", {}),
+                "axolotl.cli.config": module("axolotl.cli.config", {"load_cfg": MagicMock(return_value=cfg)}),
+                "axolotl.common": module("axolotl.common", {}),
+                "axolotl.common.datasets": module("axolotl.common.datasets", {"load_datasets": MagicMock()}),
+                "axolotl.train": module("axolotl.train", {
+                    "save_initial_configs": MagicMock(), "save_trained_model": MagicMock(),
+                    "setup_model_and_trainer": MagicMock(return_value=(trainer, object(), MagicMock(), None, None)),
+                }),
+                "transformers": module("transformers", {
+                    "TrainerCallback": object, "TrainerControl": object, "TrainerState": object, "TrainingArguments": object,
+                }),
+            }
+            # Every sample fails, including the per-step sample in trainer.train.
+            with patch.dict(worker.sys.modules, modules), patch.object(worker, "verify_accelerator"), patch.object(
+                worker, "vram_peak", side_effect=RuntimeError("CUDA sample failed")
+            ):
+                worker.train(root / "config.json", root / "receipt.json", root / "progress.json")
+            self.assertEqual(json.loads((root / "receipt.json").read_text())["step"], 2)
+            self.assertEqual(json.loads((root / "progress.json").read_text()), {"version": 1, "phase": "training", "step": 2, "vramPeakBytes": None})
+            (root / "receipt.json").unlink()
+
+            # The first sample works; the samples after evaluation and the save fail.
+            samples = iter((4,))
+
+            def sample(previous: int | None) -> int:
+                try:
+                    return next(samples)
+                except StopIteration:
+                    raise RuntimeError("CUDA sample failed") from None
+
+            with patch.dict(worker.sys.modules, modules), patch.object(worker, "verify_accelerator"), patch.object(worker, "vram_peak", side_effect=sample):
+                worker.train(root / "config.json", root / "receipt.json", root / "progress.json")
+            self.assertEqual(json.loads((root / "receipt.json").read_text())["step"], 2)
+            self.assertEqual(json.loads((root / "progress.json").read_text())["vramPeakBytes"], 4)
+
+            cfg_path = root / "reload.json"
+            cfg_path.write_text(json.dumps({"base_model": "base", "output_dir": "saved", "load_in_4bit": False, "max_steps": 2}))
+            torch: MagicMock = MagicMock()
+            torch.inference_mode.return_value = nullcontext()
+            torch.isfinite.return_value.all.return_value.item.return_value = True
+            torch.cuda.is_available.return_value = True
+            torch.cuda.max_memory_reserved.side_effect = RuntimeError("max_memory_reserved failed")
+            model: MagicMock = MagicMock()
+            model.generate.return_value = SimpleNamespace(shape=(1, 9))
+            tokenizer: MagicMock = MagicMock()
+            tokenizer.from_pretrained.return_value.return_value.to.return_value = {"input_ids": SimpleNamespace(shape=(1, 1))}
+            peft: MagicMock = MagicMock()
+            peft.from_pretrained.return_value = model
+            reload_modules = {
+                "torch": torch, "peft": module("peft", {"PeftModel": peft}),
+                "transformers": module("transformers", {"AutoModelForCausalLM": MagicMock(), "AutoTokenizer": tokenizer, "BitsAndBytesConfig": MagicMock()}),
+            }
+            with patch.dict(worker.sys.modules, reload_modules), patch.object(worker, "verify_accelerator"):
+                worker.reload(cfg_path, root / "reload-receipt.json", root / "progress.json")
+            self.assertTrue(json.loads((root / "reload-receipt.json").read_text())["reloaded"])
+
+    def test_failed_phase_publishes_a_final_vram_sample_and_keeps_its_error(self) -> None:
+        for phase, label, previous in (("train", "training", None), ("reload", "reload", {"version": 1, "phase": "training", "step": 2, "vramPeakBytes": 3})):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
+                progress = Path(directory) / "progress"
+                if previous is not None:
+                    progress.write_text(json.dumps(previous))
+                previous_umask = os.umask(0o077)
+                try:
+                    with patch.object(worker.sys, "version_info", SimpleNamespace(major=3, minor=12)), patch.object(
+                        worker.sys, "path", list(worker.sys.path)
+                    ), patch.object(worker, "verify_environment"), patch.object(
+                        worker, phase, side_effect=CudaOutOfMemory("out of memory")
+                    ), patch.object(worker, "vram_peak", side_effect=lambda last: max(last or 0, 8)) as sample, patch.dict(
+                        worker.sys.modules, {"torch": cuda_torch()}
+                    ):
+                        with self.assertRaisesRegex(CudaOutOfMemory, "out of memory"):
+                            worker.main([phase, str(Path(directory) / "config"), str(Path(directory) / "receipt"), str(progress)])
+                finally:
+                    os.umask(previous_umask)
+                record = json.loads(progress.read_text())
+                self.assertEqual((record["phase"], record["vramPeakBytes"]), (label, 8))
+                self.assertEqual(record["step"], 0 if previous is None else 2)
+                sample.assert_called_once_with(None if previous is None else 3)
+
+    def test_final_sample_makes_no_cuda_call_for_other_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            progress = Path(directory) / "progress"
+            for imported, error in ((False, CudaOutOfMemory()), (True, RuntimeError("CUDA error: device lost")), (True, ValueError("bad config"))):
+                with self.subTest(imported=imported, error=error), patch.dict(worker.sys.modules), patch.object(worker, "vram_peak") as sample:
+                    worker.sys.modules.pop("torch", None)
+                    if imported:
+                        worker.sys.modules["torch"] = cuda_torch()
+                    worker.final_sample(progress, "training", error)
+                    sample.assert_not_called()
+            self.assertFalse(progress.exists())
+
+    def test_final_sample_never_hides_the_original_error(self) -> None:
+        error = CudaOutOfMemory()
+        with tempfile.TemporaryDirectory() as directory, patch.dict(worker.sys.modules, {"torch": cuda_torch()}):
+            progress = Path(directory) / "progress"
+            progress.write_text("{broken")
+            with patch.object(worker, "vram_peak") as sample:
+                worker.final_sample(progress, "training", error)
+            sample.assert_not_called()
+            progress.write_text(json.dumps({"step": 1}))
+            with patch.object(worker, "vram_peak", return_value=None):
+                worker.final_sample(progress, "training", error)
+            self.assertEqual(json.loads(progress.read_text()), {"step": 1})
+            with patch.object(worker, "vram_peak", side_effect=RuntimeError("no CUDA")):
+                worker.final_sample(progress, "training", error)
 
     def test_worker_rejects_unsupported_invocation(self) -> None:
         for arguments in ([], ["resume", "a", "b", "c"], ["train", "a", "b"]):
@@ -189,10 +361,25 @@ class WorkerTests(unittest.TestCase):
                     }),
                 }
                 receipt = root / "receipt.json"
-                with patch.dict(worker.sys.modules, modules), patch.object(worker, "verify_accelerator") as accelerator:
+                samples = iter((9, 5, 7))
+                seen: list[int | None] = []
+
+                def sample(previous: int | None) -> int:
+                    # The stub returns the raw sample; the worker must carry the running peak.
+                    seen.append(previous)
+                    return max(previous or 0, next(samples))
+
+                with patch.dict(worker.sys.modules, modules), patch.object(worker, "verify_accelerator") as accelerator, patch.object(
+                    worker, "vram_peak", side_effect=sample
+                ):
                     if steps == 2 and loss == 1.0:
                         worker.train(root / "config.json", receipt, root / "progress.json")
                         accelerator.assert_called_once_with(False)
+                        # One sample per step, after evaluation and after the save.
+                        self.assertEqual(json.loads((root / "progress.json").read_text())["vramPeakBytes"], 9)
+                        self.assertEqual(seen, [None, 9, 9])
+                        # The Go runner decodes the same bytes in TestWorkerProgressContract.
+                        self.assertEqual((root / "progress.json").read_bytes(), PROGRESS_GOLDEN.read_bytes())
                         self.assertEqual(json.loads(receipt.read_text())["step"], 2)
                         trainer.train.assert_called_once_with(resume_from_checkpoint=None)
                         trainer.evaluate.assert_called_once_with()
@@ -215,6 +402,8 @@ class WorkerTests(unittest.TestCase):
                 torch: MagicMock = MagicMock()
                 torch.inference_mode.return_value = nullcontext()
                 torch.isfinite.return_value.all.return_value.item.return_value = finite
+                torch.cuda.is_available.return_value = True
+                torch.cuda.max_memory_reserved.return_value = 6 << 30
                 model: MagicMock = MagicMock()
                 model.generate.return_value = SimpleNamespace(shape=(1, length))
                 input_ids = SimpleNamespace(shape=(1, 1))
@@ -231,16 +420,18 @@ class WorkerTests(unittest.TestCase):
                 receipt = root / "receipt.json"
                 with patch.dict(worker.sys.modules, modules), patch.object(worker, "verify_accelerator") as accelerator:
                     if finite and length > 1:
-                        worker.reload(config, receipt)
+                        worker.reload(config, receipt, root / "progress.json")
                         accelerator.assert_called_once_with(quantized)
                         self.assertTrue(json.loads(receipt.read_text())["reloaded"])
+                        progress = json.loads((root / "progress.json").read_text())
+                        self.assertEqual((progress["phase"], progress["vramPeakBytes"]), ("reload", 6 << 30))
                         tokenizer.from_pretrained.assert_called_once_with("saved", local_files_only=True, trust_remote_code=False)
                         self.assertEqual(peft.from_pretrained.call_args.args[1], "saved")
                         model.assert_called_once_with(input_ids=input_ids)
                         model.generate.assert_called_once_with(input_ids=input_ids, max_new_tokens=8, do_sample=False)
                     else:
                         with self.assertRaises(ValueError):
-                            worker.reload(config, receipt)
+                            worker.reload(config, receipt, root / "progress.json")
                         self.assertFalse(receipt.exists())
 
     def test_main_rejects_unsupported_python_before_runtime_preparation(self) -> None:
@@ -273,7 +464,7 @@ class WorkerTests(unittest.TestCase):
                         train.assert_called_once_with(Path("config"), Path("receipt"), Path("progress"))
                         reload.assert_not_called()
                     else:
-                        reload.assert_called_once_with(Path("config"), Path("receipt"))
+                        reload.assert_called_once_with(Path("config"), Path("receipt"), Path("progress"))
                         train.assert_not_called()
             finally:
                 os.umask(previous)
@@ -314,7 +505,7 @@ class WorkerTests(unittest.TestCase):
                 config.write_text(json.dumps({"load_in_4bit": value}))
                 torch: MagicMock = MagicMock()
                 with self.subTest(value=value), patch.dict(worker.sys.modules, {"torch": torch}), self.assertRaisesRegex(ValueError, expected):
-                    worker.reload(config, root / "receipt.json")
+                    worker.reload(config, root / "receipt.json", root / "progress.json")
                 self.assertFalse((root / "receipt.json").exists())
 
 

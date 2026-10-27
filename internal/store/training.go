@@ -137,6 +137,28 @@ func (s *Store) RecordTrainingTerminal(ctx context.Context, job control.Training
 	return err
 }
 
+// RecordTrainingMemoryPeak keeps the largest memory peak of the trainer unit
+// read for the job, from the cgroup or from systemd.
+// A retried cleanup can read the same cgroup again; a smaller value is ignored.
+func (s *Store) RecordTrainingMemoryPeak(ctx context.Context, job control.TrainingJob, peak uint64) error {
+	_, err := s.stateTx(ctx, func(tx *sql.Tx, current control.State) (control.State, error) {
+		stored, err := checkTrainingJob(ctx, tx, current, job)
+		if err != nil {
+			return current, err
+		}
+		if stored.InvocationID == "" {
+			return current, ErrStaleFence
+		}
+		if stored.MemoryPeakBytes != nil && *stored.MemoryPeakBytes >= peak {
+			return current, nil
+		}
+		stored.MemoryPeakBytes = &peak
+		stored.UpdatedAt = s.now().UTC()
+		return current, writeTrainingJob(ctx, tx, stored, false)
+	})
+	return err
+}
+
 func writeTrainingJob(ctx context.Context, tx *sql.Tx, job control.TrainingJob, finished bool) error {
 	raw, err := json.Marshal(job)
 	if err != nil {

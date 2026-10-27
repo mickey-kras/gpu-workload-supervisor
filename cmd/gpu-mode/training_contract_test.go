@@ -33,6 +33,9 @@ func (r *cliTrainingRuntime) TrainingTerminal(context.Context, control.WorkloadP
 func (r *cliTrainingRuntime) ReleaseTraining(context.Context, control.WorkloadProfile) error {
 	return nil
 }
+func (r *cliTrainingRuntime) TrainingMemoryPeak(context.Context, control.WorkloadProfile, control.TrainingJob) (uint64, error) {
+	return 1 << 30, nil
+}
 
 func cliTrainingFixture(t *testing.T) (*supervisor.Controller, *store.Store, *cliTrainingRuntime) {
 	t.Helper()
@@ -114,6 +117,9 @@ func TestCLITrainingLifecycleRedactsTokens(t *testing.T) {
 				if displayed.ID != "job-a" || displayed.Status != "running" || displayed.Token != "" {
 					t.Fatalf("incorrect public job: %+v", displayed)
 				}
+				if strings.Contains(string(raw), "memoryPeakBytes") {
+					t.Fatal("status showed a peak that was not measured")
+				}
 			}
 			raw, err := captureTrainingCommand(t, func() error { return executeRuntimeCommand(ctx, c, finish, options) })
 			if err != nil {
@@ -139,6 +145,10 @@ func TestCLITrainingLifecycleRedactsTokens(t *testing.T) {
 			}
 			if r.starts != 1 {
 				t.Fatalf("launch count=%d", r.starts)
+			}
+			raw, err = captureTrainingCommand(t, func() error { return executeRuntimeCommand(ctx, c, "training-status", options) })
+			if err != nil || !strings.Contains(string(raw), `"memoryPeakBytes":1073741824`) {
+				t.Fatalf("status does not show the recorded peak: %s %v", raw, err)
 			}
 		})
 	}

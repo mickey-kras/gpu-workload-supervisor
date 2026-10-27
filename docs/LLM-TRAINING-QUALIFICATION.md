@@ -313,17 +313,33 @@ For each backend and size, keep the following evidence privately:
 | Real training | Finite forward and backward execution and exactly the requested optimizer step count |
 | Quality boundary | Finite nonnegative held-out loss. Preserved split identity. No generated text in supervisor logs |
 | Reload | Separate process loads the exact base, adapter and config and saved tokenizer. Finite forward output and bounded continuation |
-| Capacity | Peak process and cgroup RAM and GPU VRAM. Free disk throughout. Retained checkpoints plus one in-progress save, cache and export |
+| Capacity | Peak cgroup RAM of the trainer unit and GPU VRAM, from the sources below. Free disk throughout. Retained checkpoints plus one in-progress save, cache and export |
 | Completion | Valid fenced completion accepted by reconcile. Recursive cgroup empty and GPU compute processes released |
 | Failure | Controlled interruption or failure never publishes success. Recovery releases admission only after verified cleanup |
 | Handoff | Existing inference profile starts through the supervisor after release and serves the expected model |
 | Serving import | Explicit prepared artifact matches its manifest. Separately selected serving runtime and version loads the exact base+adapter correctly |
 
-Sample memory usage with `nvidia-smi` throughout the job. Keep the cgroup `memory.peak`
-before cleanup. Record the sample interval: sampled GPU usage is a lower bound, not
-an exact peak. Capture disk usage during saves, not just after pruning. Add safety
-headroom to observed values before setting capacity. Failures, unmeasured peaks,
-missing evidence or unsupported combinations keep qualification incomplete.
+Sample memory usage with `nvidia-smi` throughout the job and record its sample
+interval. Sampled GPU usage is a lower bound, not an exact peak.
+
+For the RAM peak, use the sources in this order:
+
+1. The [`memoryPeakBytes`](TRAINING.md#memory-peak) value of the job status. The
+   kernel and systemd measure it for the unit cgroup. It is a lower bound.
+2. Your own samples of the `memory.peak` file of the unit cgroup during the run.
+
+A `memoryPeakBytes` value for every outcome needs systemd 256 or later. On
+systemd 252, the `MemoryPeak` property does not exist. On systemd 255, systemd
+usually does not keep the value after the unit exits. On those hosts, the
+sampling in item 2 is an operator step for each qualification run. The
+supervisor does not do it. See [the systemd check](TRAINING.md#memory-peak).
+
+The [runner `peaks.json` file](LLM-TRAINING-RUNNER.md#resource-peaks) is only an
+unverified hint, because code in the trainer unit can write it.
+
+Capture disk usage during saves, not just after pruning. Add safety headroom to
+observed values before setting capacity. Failures, unmeasured peaks, missing
+evidence or unsupported combinations keep qualification incomplete.
 
 The [tool for import preparation](LLM-TRAINING-IMPORT.md) validates artifact identity.
 It does not merge or convert weights, change a serving model or activate a runtime.

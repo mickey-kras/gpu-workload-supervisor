@@ -57,28 +57,58 @@ func RunJob(ctx context.Context, jobPath, invocationID, gpuUUID string) error {
 	if os.Mkdir(work, 0700) != nil {
 		return errors.New("training execution directory already exists or cannot be created")
 	}
-	if err := prepareExecution(work, r); err != nil {
+	// The peaks file is diagnostic data: a failed write never changes the
+	// outcome. A completed run takes the final sample before its final input
+	// checks; the checks, the provenance and the receipt then follow with no
+	// sampling between them. After the outcome, the runner only writes the
+	// small file. At shutdown, a storage walk in progress stops and gives no
+	// value.
+	peaks := newPeakRecorder(work, r.OutputDirectory, ctx.Done())
+	x := execution{jobPath: jobPath, invocationID: invocationID, gpuUUID: gpuUUID, work: work, envelope: e, recipe: r, peaks: peaks}
+	err = x.run(ctx)
+	// A completed run took the final sample already; this call does nothing then.
+	peaks.finalSample()
+	if err == nil {
+		receipt := control.TrainingTerminal{Version: 1, ID: e.Job.ID, Token: e.Job.Token, Fence: e.Job.Fence, RecipeSHA256: e.Job.RecipeSHA256, InvocationID: invocationID, Outcome: "completed"}
+		err = replaceEvidence(e.TerminalFile, receipt)
+	}
+	outcome := "completed"
+	if err != nil {
+		outcome = "failed"
+	}
+	_ = peaks.write(work, outcome)
+	return err
+}
+
+// execution is one validated invocation in its private directory.
+type execution struct {
+	jobPath, invocationID, gpuUUID, work string
+	envelope                             jobEnvelope
+	recipe                               Recipe
+	peaks                                *peakRecorder
+}
+
+func (x execution) run(ctx context.Context) error {
+	if err := prepareFiles(x.work, x.recipe); err != nil {
 		return err
 	}
-	train, err := executeWorker(ctx, r, work, gpuUUID, "train")
+	train, err := executeWorker(ctx, x.recipe, x.work, x.gpuUUID, "train", x.peaks)
 	if err != nil {
 		return err
 	}
-	adapter, err := artifactFiles(r)
+	adapter, err := artifactFiles(x.recipe)
 	if err != nil {
 		return err
 	}
-	if _, err := executeWorker(ctx, r, work, gpuUUID, "reload"); err != nil {
+	if _, err := executeWorker(ctx, x.recipe, x.work, x.gpuUUID, "reload", x.peaks); err != nil {
 		return err
 	}
-	if err := unchangedExecutionInputs(jobPath, e, r); err != nil {
+	x.peaks.startPhase("export")
+	x.peaks.finalSample()
+	if err := checkInputs(x.jobPath, x.envelope, x.recipe); err != nil {
 		return err
 	}
-	if err := publishProvenance(r, e.Job, invocationID, train.EvalLoss, adapter); err != nil {
-		return err
-	}
-	receipt := control.TrainingTerminal{Version: 1, ID: e.Job.ID, Token: e.Job.Token, Fence: e.Job.Fence, RecipeSHA256: e.Job.RecipeSHA256, InvocationID: invocationID, Outcome: "completed"}
-	return replaceEvidence(e.TerminalFile, receipt)
+	return publishProvenance(x.recipe, x.envelope.Job, x.invocationID, train.EvalLoss, adapter)
 }
 
 func executionRecipe(e jobEnvelope, jobPath, work string) (Recipe, error) {
@@ -177,6 +207,12 @@ func trustedExecutionComponent(stat unix.Stat_t, stickyAncestor bool) bool {
 	return (stat.Uid == 0 || stat.Uid == uint32(os.Geteuid())) && !writable && (kind == unix.S_IFDIR || kind == unix.S_IFREG)
 }
 
+// Tests replace these steps.
+var (
+	prepareFiles = prepareExecution
+	checkInputs  = unchangedExecutionInputs
+)
+
 func prepareExecution(work string, r Recipe) error {
 	for _, name := range []string{"home", "cache"} {
 		if os.Mkdir(filepath.Join(work, name), 0700) != nil {
@@ -204,15 +240,21 @@ func executionEnvironment(work, runtimeRoot, gpuUUID string) []string {
 	}
 }
 
-func executeWorker(ctx context.Context, r Recipe, work, gpuUUID, phase string) (workerReceipt, error) {
+func executeWorker(ctx context.Context, r Recipe, work, gpuUUID, phase string, peaks *peakRecorder) (workerReceipt, error) {
 	var receipt workerReceipt
 	path := filepath.Join(work, phase+".json")
-	cmd := exec.CommandContext(ctx, filepath.Join(r.Runtime.Inventory.Root, r.Runtime.Entrypoint), "-I", "-S", "-B", filepath.Join(work, "worker.py"), phase, filepath.Join(work, "config.json"), path, filepath.Join(work, "progress.json"))
+	progress := filepath.Join(work, "progress.json")
+	cmd := exec.CommandContext(ctx, filepath.Join(r.Runtime.Inventory.Root, r.Runtime.Entrypoint), "-I", "-S", "-B", filepath.Join(work, "worker.py"), phase, filepath.Join(work, "config.json"), path, progress)
 	cmd.Env = executionEnvironment(work, r.Runtime.Inventory.Root, gpuUUID)
 	cmd.Dir = work
+	peaks.startPhase(phase)
+	stop := peaks.watch()
 	// Child output may contain private examples, paths or third-party tracebacks.
 	// Only the bounded structured receipt crosses the supervisor boundary.
-	if cmd.Run() != nil {
+	runErr := cmd.Run()
+	stop()
+	peaks.finishWorker(cmd.ProcessState, progress)
+	if runErr != nil {
 		return receipt, errors.New("training worker failed; output is not eligible for import")
 	}
 	raw, err := readJobInput(path, 4096, true)
@@ -265,24 +307,30 @@ func replaceEvidence(path string, value control.TrainingTerminal) error {
 	if err != nil {
 		return errors.New("training terminal evidence cannot be encoded")
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".terminal-*")
+	return publishPrivateFile(path, ".terminal-*", raw, "training terminal")
+}
+
+// publishPrivateFile stages raw in the directory of path, syncs it, renames it
+// over path and syncs the directory. label names the file in errors.
+func publishPrivateFile(path, pattern string, raw []byte, label string) error {
+	f, err := os.CreateTemp(filepath.Dir(path), pattern)
 	if err != nil {
-		return errors.New("training terminal staging failed")
+		return errors.New(label + " staging failed")
 	}
 	defer os.Remove(f.Name())
 	_, writeErr := f.Write(raw)
 	syncErr := f.Sync()
 	closeErr := f.Close()
 	if writeErr != nil || syncErr != nil || closeErr != nil || os.Rename(f.Name(), path) != nil {
-		return errors.New("training terminal publication failed")
+		return errors.New(label + " publication failed")
 	}
 	dir, err := os.Open(filepath.Dir(path))
 	if err != nil {
-		return errors.New("training terminal directory is unreadable")
+		return errors.New(label + " directory is unreadable")
 	}
 	defer dir.Close()
 	if dir.Sync() != nil {
-		return errors.New("training terminal directory sync failed")
+		return errors.New(label + " directory sync failed")
 	}
 	return nil
 }

@@ -6,8 +6,9 @@ cannot launch training.
 
 The trainer adapter owns its recipe, datasets, metrics, checkpoints, evaluation
 and export. All GPU work must remain inside its systemd unit's recursive cgroup.
-The supervisor stores lifecycle identity and terminal evidence only. It does not
-queue jobs or resume interrupted training automatically.
+The supervisor stores only lifecycle identity, terminal evidence and the memory
+peak of the trainer unit. It does not queue jobs or resume interrupted training
+automatically.
 
 ## Adapter contract, version 1
 
@@ -121,4 +122,55 @@ it preserves that outcome. Recovery never retries the launch.
 If stop or release verification fails,
 the job remains pending. You can retry recovery. Start a new job ID only after
 the prior job is terminal. A resume integration must create a new job and fence.
+
+### Memory peak
+
+Before cleanup stops the trainer unit, reconcile and recovery read the memory
+peak of the unit. The job record keeps the largest value as `memoryPeakBytes`,
+and status shows it. This recording is best effort: a missing peak or a failed
+write never blocks the stop or the cleanup. `memoryPeakBytes` is a field of the
+job record. The terminal file contract does not change.
+
+systemd can report the unit cgroup for the invocation of the job. Then the
+supervisor keeps the larger of the cgroup `memory.peak` and the `MemoryPeak`
+property. Otherwise it reads only the `MemoryPeak` property. The kernel and
+systemd measure the value, not the trainer. The value includes the page cache,
+but only of processes in the unit cgroup. Trainer code can move processes out of
+that cgroup, so the value is a lower bound and not proof against changes.
+
+Reconcile reads the value after the trainer writes its outcome. Recovery reads
+it before it stops the unit. When recovery stops a running trainer, the value is
+the cgroup peak up to that time. When the unit already exited or failed, systemd
+usually removed the cgroup, and the value comes from the `MemoryPeak` property.
+
+A value for every outcome needs systemd 256 or later. The systemd source shows
+these facts for the supported versions (see [the desktop requirements](DESKTOP.md)):
+
+- systemd 252 has no `MemoryPeak` property. systemd 255 adds it.
+- systemd 255 keeps the value only if something reads it before it removes the
+  cgroup. Thus it usually gives no value after the unit exits.
+- systemd 256 and later, 259 included, keep the value when they remove the cgroup.
+
+Use the systemd version to decide. Run `systemctl --version`. On systemd 256 or
+later, `memoryPeakBytes` has a value for every outcome. On earlier versions, the
+supervisor does not sample during the run. For qualification, the operator reads
+the `memory.peak` file of the unit cgroup directly during every run, not through
+`systemctl`.
+
+To confirm, use a unit that nothing queried during its run, because a query
+during the run can make systemd 255 keep a value. After the unit exits, run
+`systemctl --user show -p MemoryPeak -- <trainer-unit>.service`. A decimal byte
+count shows that systemd kept the value. Any other output shows that it did not.
+Examples are `[not set]`, `infinity`, `18446744073709551615`, an empty value and
+no `MemoryPeak=` line.
+
+These are some conditions that make the field absent:
+
+- Your systemd version does not keep `MemoryPeak`.
+- The unit cgroup has no memory controller.
+- The unit has another invocation.
+- The read or the write failed or timed out. Recording is best effort and leaves
+  no log.
+
+For qualification, follow [the source order](LLM-TRAINING-QUALIFICATION.md#private-host-inputs-and-evidence).
 

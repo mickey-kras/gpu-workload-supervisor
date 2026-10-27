@@ -8,6 +8,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"golang.org/x/sys/unix"
 )
 
@@ -91,49 +92,77 @@ func (fs cgroupFS) empty(group string) error {
 
 // A manager anchor must exist, even when an individual workload was removed.
 func (fs cgroupFS) check(group string, requireEmpty bool) error {
-	fd, err := unix.Open(fs.root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	data, err := fs.read(group, "cgroup.events")
+	if errors.Is(err, errCgroupRemoved) && requireEmpty {
+		return nil
+	}
 	if err != nil {
-		return fmt.Errorf("open cgroup hierarchy: %w", err)
-	}
-	defer func() { _ = unix.Close(fd) }()
-	if err := fs.verify(fd); err != nil {
-		return fmt.Errorf("verify cgroup hierarchy: %w", err)
-	}
-	// Walk with directory descriptors and no symlinks, keeping removal distinct
-	// from inaccessible state. ENOENT here means the configured group is removed;
-	// ENOENT for cgroup.events in an existing group is NOT proof of release.
-	for _, component := range strings.Split(strings.TrimPrefix(group, "/"), "/") {
-		next, err := unix.Openat(fd, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-		if errors.Is(err, unix.ENOENT) && requireEmpty {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("inspect cgroup %s: %w", group, err)
-		}
-		_ = unix.Close(fd)
-		fd = next
-		if err := fs.verify(fd); err != nil {
-			return fmt.Errorf("verify cgroup %s: %w", group, err)
-		}
-	}
-	eventsFD, err := unix.Openat(fd, "cgroup.events", unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
-	if err != nil {
-		return fmt.Errorf("read cgroup.events for %s: %w", group, err)
-	}
-	file := os.NewFile(uintptr(eventsFD), "cgroup.events")
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, 4097))
-	if err != nil {
-		return fmt.Errorf("read cgroup.events for %s: %w", group, err)
-	}
-	if len(data) > 4096 {
-		return errors.New("oversized cgroup.events")
+		return err
 	}
 	err = parseCgroupEvents(string(data))
 	if !requireEmpty && errors.Is(err, errCgroupPopulated) {
 		return nil
 	}
 	return err
+}
+
+// memoryPeak reads the recursive cgroup v2 memory high-water mark. A removed
+// group or a kernel without memory.peak gives an error: the peak is unmeasured.
+func (fs cgroupFS) memoryPeak(group string) (uint64, error) {
+	data, err := fs.read(group, "memory.peak")
+	if err != nil {
+		return 0, err
+	}
+	peak, ok := control.CanonicalUint(strings.TrimSuffix(string(data), "\n"))
+	if !ok {
+		return 0, errors.New("malformed cgroup memory.peak")
+	}
+	return peak, nil
+}
+
+var errCgroupRemoved = errors.New("cgroup is removed")
+
+// read returns one bounded control file of an existing group.
+func (fs cgroupFS) read(group, name string) ([]byte, error) {
+	fd, err := unix.Open(fs.root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open cgroup hierarchy: %w", err)
+	}
+	defer func() { _ = unix.Close(fd) }()
+	if err := fs.verify(fd); err != nil {
+		return nil, fmt.Errorf("verify cgroup hierarchy: %w", err)
+	}
+	// Walk with directory descriptors and no symlinks, keeping removal distinct
+	// from inaccessible state. ENOENT here means the configured group is removed;
+	// ENOENT for a control file in an existing group is NOT proof of release.
+	for _, component := range strings.Split(strings.TrimPrefix(group, "/"), "/") {
+		next, err := unix.Openat(fd, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if errors.Is(err, unix.ENOENT) {
+			return nil, fmt.Errorf("inspect cgroup %s: %w", group, errCgroupRemoved)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect cgroup %s: %w", group, err)
+		}
+		_ = unix.Close(fd)
+		fd = next
+		if err := fs.verify(fd); err != nil {
+			return nil, fmt.Errorf("verify cgroup %s: %w", group, err)
+		}
+	}
+	fileFD, err := unix.Openat(fd, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, fmt.Errorf("read %s for %s: %w", name, group, err)
+	}
+	file := os.NewFile(uintptr(fileFD), name)
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, 4097))
+	if err != nil {
+		return nil, fmt.Errorf("read %s for %s: %w", name, group, err)
+	}
+	if len(data) > 4096 {
+		return nil, fmt.Errorf("oversized %s", name)
+	}
+	return data, nil
 }
 
 var errCgroupPopulated = errors.New("workload cgroup still contains processes (including descendants)")

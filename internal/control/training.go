@@ -56,6 +56,10 @@ type TrainingJob struct {
 	InvocationID    string    `json:"invocationId"`
 	Status          string    `json:"status"`
 	UpdatedAt       time.Time `json:"updatedAt"`
+	// MemoryPeakBytes is the memory peak of the trainer unit, from the cgroup
+	// memory.peak or the systemd MemoryPeak property, read before cleanup. It is
+	// absent when the peak was not measured.
+	MemoryPeakBytes *uint64 `json:"memoryPeakBytes,omitempty"`
 }
 
 type TrainingTerminal struct {

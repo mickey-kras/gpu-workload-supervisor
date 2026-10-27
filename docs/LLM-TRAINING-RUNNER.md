@@ -41,11 +41,11 @@ compatibility still need pinned and qualified provenance. The check rejects
 incompatible combinations but does not pin them. Do not treat a matching source
 metadata file or a successful fixture as runtime approval.
 
-Every execution gets a new private directory beside its lifecycle envelope,
-named `.llm-<invocation>`. Reusing that invocation fails. It contains the generated
-configuration, embedded worker, isolated home and cache, bounded current progress and
-per-phase receipts. The completion credential never enters the worker's files,
-arguments or environment.
+Every execution gets a new private directory beside its lifecycle envelope, named
+`.llm-<invocation>`. Reusing that invocation fails. It contains the generated
+configuration, embedded worker, isolated home and cache, bounded current progress,
+per-phase receipts and a best-effort [resource peaks file](#resource-peaks). The
+completion credential never enters the worker's files, arguments or environment.
 
 The runner discards child stdout and stderr because third-party
 messages can contain private data. Errors report a failed phase without echoing
@@ -87,3 +87,66 @@ source and plugin rejection and atomic progress publication. They also check the
 accelerator rules with mocked Torch and CUDA values. They do not load model
 weights, exercise GPU kernels or prove real training and reload compatibility.
 
+## Resource peaks
+
+Do not trust `peaks.json`. It is best-effort diagnostic data. Code in the trainer unit
+can write or change it at any time, with or without a terminal receipt. A failed
+job has no receipt by design. Use the file only as an unverified hint. For
+qualification, see [the source order](LLM-TRAINING-QUALIFICATION.md#private-host-inputs-and-evidence).
+
+After it creates the private execution directory `.llm-<invocation>` beside the
+lifecycle envelope, the runner writes `peaks.json` in it when the job completes
+or fails. It writes no file in these conditions:
+
+- Validation fails before the runner creates that directory.
+- A signal that the runner cannot handle stops it, for example an OOM kill or
+  `SIGKILL`.
+
+The runner takes one final sample per job, the cgroup peak included. A completed
+run takes it before its final input checks. After the checks, the runner
+publishes the provenance and then writes the receipt. A run that fails before
+its final input checks takes the final sample after the failure. A run that
+fails during or after those checks keeps the final sample that it took before
+them.
+
+The runner writes the file once, after the outcome is final: after the
+`completed` receipt or after the failure. A failed write never changes the
+outcome. The terminal receipt, not the outcome in `peaks.json`, is the
+authoritative outcome. The file is one JSON object of at most a few hundred
+bytes. It contains no paths, dataset contents or credentials.
+
+| Field | Meaning |
+| --- | --- |
+| `version` | `1` |
+| `outcome` | `completed` or `failed` |
+| `phase` | Last phase that started: `prepare`, `train`, `reload` or `export`. `export` is the final input check, the provenance and the receipt after reload. The progress file calls the `train` phase `training` |
+| `ramPeakBytes` | Largest resident set of a single process, from `ru_maxrss` of each worker and the descendants that it reaped, across phases. It is not a sum. Use the cgroup values for the total |
+| `vramPeakBytes` | Largest sample of GPU memory from the progress file of the worker |
+| `storagePeakBytes` | Largest allocated size of the output directory and the execution directory |
+| `cgroupMemoryPeakBytes` | `memory.peak` of the cgroup of the trainer unit, read with the final sample |
+| `sampleIntervalMs` | Interval of the storage samples only |
+
+A `null` value shows that the runner did not measure the value. The worker samples
+GPU memory at each optimizer step, after held-out evaluation, after the save and
+after reload. Each sample is the Torch allocator peak of the worker. It does not
+include memory outside the allocator, such as the CUDA context, so it is a lower
+bound for the trainer. Other processes on the GPU do not change it.
+
+When a phase fails with a CUDA out-of-memory error, the worker tries to write one
+last sample. Other errors make no CUDA call. A killed worker writes none.
+
+A failed sample never fails a phase. Storage samples can miss a short peak, so
+the storage value is a lower bound.
+
+The storage sample includes retained checkpoints, a save in progress, the cache
+and the export. One walk stops after 65536 entries or 10 seconds. It also stops
+at a directory that it cannot read, at the end of a phase and at a stop signal.
+A walk that stops early gives no value, because a partial total is not a usable
+capacity value. If no walk completes, `storagePeakBytes` is `null`.
+
+The walk opens each directory from its parent directory without following links,
+so a link that replaces a directory cannot redirect it. It does not cross into
+another mount. A blocked filesystem call can hold one walk. At the end of each
+phase, the runner waits at most 1 second for a walk in progress. It waits at most
+11 seconds for the final sample: the 10-second walk deadline plus 1 second. After
+that, the runner drops the result of the walk.

@@ -103,6 +103,10 @@ def train_cpu(root):
     receipt = json.loads((root / "receipt.json").read_text())
     if receipt["step"] != 2 or not math.isfinite(receipt["evalLoss"]) or receipt["evalLoss"] < 0:
         raise ValueError("smoke failed to complete two steps with finite held-out loss")
+    progress = json.loads((root / "progress.json").read_text())
+    vram = progress.get("vramPeakBytes", "missing")
+    if progress["step"] != 2 or not (vram is None or (isinstance(vram, int) and vram > 0)):
+        raise ValueError("smoke progress has no final step or no valid VRAM peak field")
     assert_no_optional_imports()
     subprocess.run([sys.executable, __file__, "--reload", str(root)], check=True, timeout=45)
     print("CPU smoke passed: two LoRA steps, finite held-out loss and fresh-process adapter reload")
