@@ -88,8 +88,8 @@ that it can see:
 | `cron` | Spools, system crontabs, and cronie allow or deny rules, as below | Fail closed, and the error names the file or spool |
 | `at` | The same allow or deny rule, plus queued jobs, as below | Fail closed, and the error names the file or job |
 | Groups and sockets | Membership in `docker`, `podman`, `libvirt`, `lxd`, `incus`, `sudo`, `wheel` or `disk`, or a daemon socket this UID can open | Fail closed, and the error names each group or socket |
-| `sudo` | Any rule from `sudo -l -U`, or a policy setup cannot read | Fail closed, and the error names each rule or that setup could not read the policy |
-| `polkit` | A rule that lets this UID start a system unit, or a policy setup cannot read | Fail closed, and the error names the rule or that setup could not read the policy |
+| `sudo` | Any rule from `sudo -l -U`, or a policy setup cannot read | Fail closed, and the error names each rule or that setup cannot read the policy |
+| `polkit` | A rule that lets this UID start a system unit, or a policy setup cannot read | Fail closed, and the error names the rule or that setup cannot read the policy |
 | System units | A loaded system unit with `User=` set to the service UID | Fail closed, and the error names each unit |
 
 The cron check does not stop at the daemon. Setup fails closed when a user
@@ -99,7 +99,7 @@ or numeric id. An absent cron binary does not skip that scan. The error names
 the spool or the file.
 
 Allow and deny files, and every parent directory, must be root-owned regular
-files. None of them may have group or other write, or an ACL that lets this
+files. They must not have group or other write, or an ACL that lets this
 UID write. Setup walks them with `O_NOFOLLOW`. An unreadable `cron.allow`
 counts as absent. A line counts only when it is the exact user name and ends
 in a newline, with no trailing space or CR. The check passes only when those
@@ -393,10 +393,12 @@ systemd skips the limit with a warning
 
 Setup accepts only a leaf block device. The operator selects the disk. Setup
 resolves it to its major and minor numbers. It requires `S_ISBLK`, a `queue`
-directory, no `partition` file, and no `slaves` directory under
-`/sys/dev/block/MAJ:MIN`. A `slaves` directory covers device-mapper, md,
-bcache, and multipath. Setup reads the kernel name from `DEVNAME` in the
-`uevent` file of that directory.
+directory, no `partition` file, and an empty `slaves` directory under
+`/sys/dev/block/MAJ:MIN`. Setup rejects the device if it cannot read `slaves`
+or if that directory has entries. These entries identify backing devices in
+device-mapper, md, bcache, and multipath stacks.
+
+Setup reads the kernel name from `DEVNAME` in the `uevent` file under `/sys/dev/block/MAJ:MIN`.
 
 Host qualification must show that the device throttles a write.
 A matching `io.max` line is not enough.
@@ -609,7 +611,7 @@ the existing recovery rules.
 
 `Restart=no` stays. The feature adds no `StartLimit*` policy, no automatic
 restart and no lifecycle phase. Idle release stops non-shared units. A shared
-owned Ollama daemon may stay `active/running` with an empty model list, which
+owned Ollama daemon can stay `active/running` with an empty model list, which
 is its existing idle state. Before setup renders or reloads limit lines, that
 daemon must be `inactive/dead`. `daemon-reload` would otherwise apply the new
 cgroup values to the live daemon.
@@ -648,9 +650,9 @@ Each fail-closed error class has plain-language text:
 | Reserve violation | This limit leaves too little room for the supervisor. Use `<value>` or less |
 | Escape route | Programs from this account can run outside host protection through `<route>`. Setup did not save limits |
 | Memory pressure | Slice memory does not fit this limit. `<usage>` MiB is in use, and the ceiling is `<ceiling>` MiB |
-| Memory usage unknown | Setup could not read the memory already in use. Setup did not save limits |
+| Memory usage unknown | Setup cannot read the memory already in use. Setup did not save limits |
 | Drift | A limit changed after start. The supervisor stopped the workload. `<control>` was `<actual>`, not `<expected>` |
-| Readback failure | Setup could not read `<path>` (`<errno>`). The supervisor stopped the workload |
+| Readback failure | Setup cannot read `<path>` (`<errno>`). The supervisor stopped the workload |
 | `IOWeight` not applicable | The selected disk does not support I/O weight |
 
 ## Schema
