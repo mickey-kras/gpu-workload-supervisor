@@ -14,7 +14,11 @@ import (
 
 func TestPreviewPreflightChecksAdoptedBindingsWithPendingOwnedLaunch(t *testing.T) {
 	binaryDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(binaryDir, "ollama"), []byte("fixture"), 0700); err != nil {
+	if err := os.WriteFile(filepath.Join(binaryDir, "vllm"), []byte("fixture"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	model := filepath.Join(binaryDir, "chat")
+	if err := os.Mkdir(model, 0755); err != nil {
 		t.Fatal(err)
 	}
 	previous := ownedBinaryDirectory
@@ -22,10 +26,10 @@ func TestPreviewPreflightChecksAdoptedBindingsWithPendingOwnedLaunch(t *testing.
 	t.Cleanup(func() { ownedBinaryDirectory = previous })
 	for _, failure := range []string{"none", "missing launch", "drifted launch", "missing unit", "missing cgroup"} {
 		t.Run(failure, func(t *testing.T) {
-			m, r, adopted, fragmentCommand := nativeFixture(t, "llama.cpp", "http://localhost:9000")
+			m, r, adopted, fragmentCommand := nativeFixture(t, "vllm", "http://localhost:9000")
 			m.config.OwnedUnitDir = t.TempDir()
-			owned := ownedRenderProfile("ollama", "chat", &control.OwnedLaunch{Port: 11434})
-			owned.Label, owned.Adapter, owned.HealthURL = "Chat", "systemd", "http://127.0.0.1:11434/api/tags"
+			owned := ownedRenderProfile("vllm", "chat", &control.OwnedLaunch{ModelPath: model, Port: 9100, Alias: "selected"})
+			owned.Label, owned.Adapter, owned.HealthURL = "Chat", "systemd", "http://127.0.0.1:9100/health"
 			owned.Cgroup = OwnedCgroup("/workloads", owned)
 			raw, err := RenderOwnedUnit(owned)
 			if err != nil {

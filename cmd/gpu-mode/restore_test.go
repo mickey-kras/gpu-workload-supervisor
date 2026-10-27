@@ -136,7 +136,7 @@ func TestRestoreStateRequiresStoppedProxiesBeforeOpeningDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proxyLock, err := lock.AcquireShared(path + ".proxy.lock")
+	proxyLock, err := lock.AcquireContext(context.Background(), path+".proxy.lock", true)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -20,13 +20,13 @@ func ownedRenderProfile(runtimeName, id string, owned *control.OwnedLaunch) cont
 	endpoint := fmt.Sprintf("http://127.0.0.1:%d", owned.Port)
 	return control.WorkloadProfile{
 		ID:   control.Workload(id),
-		Unit: control.OwnedUnitName(runtimeName, "local", control.Workload(id)),
+		Unit: control.OwnedUnitName(control.Workload(id)),
 		NativeModel: &control.NativeModel{
 			Runtime:    runtimeName,
 			Instance:   "local",
 			Model:      model,
 			Endpoint:   endpoint,
-			LaunchFile: "/home/u/.config/systemd/user/" + control.OwnedUnitName(runtimeName, "local", control.Workload(id)),
+			LaunchFile: "/home/u/.config/systemd/user/" + control.OwnedUnitName(control.Workload(id)),
 			Owned:      owned,
 		},
 	}
@@ -38,30 +38,19 @@ func TestRenderOwnedUnitGolden(t *testing.T) {
 		want    string
 		wantErr error
 	}{
-		"ollama": {
-			profile: ownedRenderProfile("ollama", "chat", &control.OwnedLaunch{Port: 11434}),
-			want: "[Unit]\nDescription=Supervisor-owned ollama launch for instance local\n\n[Service]\nType=simple\nRestart=no\n" +
-				"Environment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=127.0.0.1:11434\nEnvironment=OLLAMA_MAX_LOADED_MODELS=1\n" +
-				"ExecStart=/usr/bin/ollama serve\n",
-		},
-		"llama full": {
-			profile: ownedRenderProfile("llama.cpp", "vision", &control.OwnedLaunch{ModelPath: "/models/v.gguf", Port: 9100, CtxSize: 8192, GPULayers: 99, Alias: "selected"}),
-			want: "[Unit]\nDescription=Supervisor-owned llama.cpp launch for vision\n\n[Service]\nType=simple\nRestart=no\n" +
-				"ExecStart=/usr/bin/llama-server -m /models/v.gguf --host 127.0.0.1 --port 9100 --ctx-size 8192 --n-gpu-layers 99 --alias selected\n",
-		},
-		"llama minimal": {
-			profile: ownedRenderProfile("llama.cpp", "vision", &control.OwnedLaunch{ModelPath: "/models/v.gguf", Port: 9100}),
-			want: "[Unit]\nDescription=Supervisor-owned llama.cpp launch for vision\n\n[Service]\nType=simple\nRestart=no\n" +
-				"ExecStart=/usr/bin/llama-server -m /models/v.gguf --host 127.0.0.1 --port 9100\n",
+		"vllm minimal": {
+			profile: ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100}),
+			want: "[Unit]\nDescription=Supervisor-owned vllm launch for vision\n\n[Service]\nType=simple\nRestart=no\n" +
+				"ExecStart=/usr/bin/vllm serve /models/v --host 127.0.0.1 --port 9100\n",
 		},
 		"vllm full": {
 			profile: ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100, MaxModelLen: 4096, Alias: "selected"}),
 			want: "[Unit]\nDescription=Supervisor-owned vllm launch for vision\n\n[Service]\nType=simple\nRestart=no\n" +
 				"ExecStart=/usr/bin/vllm serve /models/v --host 127.0.0.1 --port 9100 --max-model-len 4096 --served-model-name selected\n",
 		},
-		"external ollama": {
+		"external vllm": {
 			profile: control.WorkloadProfile{ID: "chat", NativeModel: &control.NativeModel{
-				Runtime: "ollama", Instance: "external", Model: "selected", Endpoint: "http://127.0.0.1:11434",
+				Runtime: "vllm", Instance: "external", Model: "selected", Endpoint: "http://127.0.0.1:9100",
 			}},
 			wantErr: ErrOwnedRender,
 		},
@@ -90,27 +79,19 @@ func TestRenderOwnedUnitGolden(t *testing.T) {
 
 func TestRenderOwnedUnitRoundTripQualifies(t *testing.T) {
 	dir := t.TempDir()
-	for _, name := range []string{"ollama", "llama-server", "vllm"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/false\n"), 0700); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(filepath.Join(dir, "vllm"), []byte("#!/bin/false\n"), 0700); err != nil {
+		t.Fatal(err)
 	}
 	saved := ownedBinaryDirectory
 	ownedBinaryDirectory = dir
 	t.Cleanup(func() { ownedBinaryDirectory = saved })
-	gguf := filepath.Join(dir, "v.gguf")
-	if err := os.WriteFile(gguf, []byte("fixture"), 0600); err != nil {
-		t.Fatal(err)
-	}
 	modelDir := filepath.Join(dir, "v")
 	if err := os.Mkdir(modelDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	defaultAlias := ownedRenderProfile("llama.cpp", "vision", &control.OwnedLaunch{ModelPath: gguf, Port: 9100})
-	defaultAlias.NativeModel.Model = gguf
+	defaultAlias := ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: modelDir, Port: 9100})
+	defaultAlias.NativeModel.Model = modelDir
 	for _, tc := range []control.WorkloadProfile{
-		ownedRenderProfile("ollama", "chat", &control.OwnedLaunch{Port: 11434}),
-		ownedRenderProfile("llama.cpp", "vision", &control.OwnedLaunch{ModelPath: gguf, Port: 9100, CtxSize: 8192, GPULayers: 99, Alias: "selected"}),
 		defaultAlias,
 		ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: modelDir, Port: 9100, MaxModelLen: 4096, Alias: "selected"}),
 	} {
@@ -128,12 +109,12 @@ func TestRenderOwnedUnitRejectsUnrenderable(t *testing.T) {
 	if _, err := RenderOwnedUnit(control.WorkloadProfile{ID: "x"}); !errors.Is(err, ErrOwnedRender) {
 		t.Fatalf("missing spec = %v", err)
 	}
-	p := ownedRenderProfile("llama.cpp", "vision", &control.OwnedLaunch{ModelPath: "/models/v.gguf", Port: 9100})
+	p := ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100})
 	p.NativeModel.Owned = nil
 	if _, err := RenderOwnedUnit(p); !errors.Is(err, ErrOwnedRender) {
 		t.Fatalf("nil owned = %v", err)
 	}
-	p = ownedRenderProfile("ollama", "chat", &control.OwnedLaunch{Port: 11434})
+	p = ownedRenderProfile("vllm", "chat", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100, Alias: "selected"})
 	p.NativeModel.Runtime = "comfyui"
 	if _, err := RenderOwnedUnit(p); !errors.Is(err, ErrOwnedRender) {
 		t.Fatalf("unknown runtime = %v", err)
@@ -141,7 +122,7 @@ func TestRenderOwnedUnitRejectsUnrenderable(t *testing.T) {
 }
 
 func TestRenderMustQualifyFailsClosed(t *testing.T) {
-	p := ownedRenderProfile("ollama", "chat", &control.OwnedLaunch{Port: 11434})
+	p := ownedRenderProfile("vllm", "chat", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100, Alias: "selected"})
 	raw, err := RenderOwnedUnit(p)
 	if err != nil {
 		t.Fatal(err)
@@ -158,7 +139,7 @@ func TestVerifyOwnedSpec(t *testing.T) {
 	if err := verifyOwnedSpec(control.WorkloadProfile{}); err != nil {
 		t.Fatal("non-owned profile rejected")
 	}
-	p := ownedRenderProfile("ollama", "chat", &control.OwnedLaunch{Port: 11434})
+	p := ownedRenderProfile("vllm", "chat", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100, Alias: "selected"})
 	raw, err := RenderOwnedUnit(p)
 	if err != nil {
 		t.Fatal(err)
@@ -171,19 +152,19 @@ func TestVerifyOwnedSpec(t *testing.T) {
 }
 
 func TestOwnedCgroupDerivation(t *testing.T) {
-	p := ownedRenderProfile("ollama", "chat", &control.OwnedLaunch{Port: 11434})
-	if got := OwnedCgroup("/user.slice/user-1000.slice/user@1000.service", p); got != "/user.slice/user-1000.slice/user@1000.service/app.slice/gws-owned-ollama-local.service" {
+	p := ownedRenderProfile("vllm", "chat", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100, Alias: "selected"})
+	if got := OwnedCgroup("/user.slice/user-1000.slice/user@1000.service", p); got != "/user.slice/user-1000.slice/user@1000.service/app.slice/gws-owned-chat.service" {
 		t.Fatalf("cgroup %q", got)
 	}
 }
 
 func TestPreflightRejectsSkewedOwnedSpec(t *testing.T) {
 	config := testConfig()
-	owned := ownedRenderProfile("ollama", "chat", &control.OwnedLaunch{Port: 11434})
+	owned := ownedRenderProfile("vllm", "chat", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100, Alias: "selected"})
 	owned.Label = "Chat"
 	owned.Adapter = "systemd"
 	owned.Cgroup = "/user.slice/user-1000.slice/user@1000.service/app.slice/" + owned.Unit
-	owned.HealthURL = "http://127.0.0.1:11434/api/tags"
+	owned.HealthURL = "http://127.0.0.1:9100/health"
 	owned.NativeModel.LaunchSHA256 = fmt.Sprintf("%x", sha256.Sum256([]byte("stale rendering")))
 	catalog := control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{owned}}
 	config.Catalog = &catalog
@@ -227,10 +208,10 @@ func TestPreflightFlagsOrphanedOwnedUnit(t *testing.T) {
 // whose cgroup carries a foreign or nested prefix: only the exact derivation
 // from the discovered manager root is admissible.
 func TestOwnedCgroupMustDeriveFromManagerRoot(t *testing.T) {
-	owned := ownedRenderProfile("ollama", "chat", &control.OwnedLaunch{Port: 11434})
+	owned := ownedRenderProfile("vllm", "chat", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100, Alias: "selected"})
 	owned.Label = "Chat"
 	owned.Adapter = "systemd"
-	owned.HealthURL = "http://127.0.0.1:11434/api/tags"
+	owned.HealthURL = "http://127.0.0.1:9100/health"
 	owned.NativeModel.LaunchSHA256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	manager := func(cgroup string) *SystemdManager {
 		owned.Cgroup = cgroup
@@ -284,7 +265,7 @@ func TestPreflightOrphanScan(t *testing.T) {
 	if err := m.preflightOwned(t.Context(), dir); !errors.Is(err, ErrOrphanedOwnedUnit) {
 		t.Fatalf("orphan accepted: %v", err)
 	}
-	owned := ownedRenderProfile("ollama", "chat", &control.OwnedLaunch{Port: 11434})
+	owned := ownedRenderProfile("vllm", "chat", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100, Alias: "selected"})
 	catalog := control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{owned}}
 	m.config.Catalog = &catalog
 	if err := os.Rename(orphan, filepath.Join(dir, owned.Unit)); err != nil {
@@ -317,7 +298,7 @@ func TestPreflightOrphanScan(t *testing.T) {
 // qualification gate: a render whose packaged executable is absent or whose
 // launch cannot be parsed by the shared qualifier fails loudly.
 func TestQualifyOwnedUnitRejectsUnqualifiedHosts(t *testing.T) {
-	p := ownedRenderProfile("ollama", "chat", &control.OwnedLaunch{Port: 11434})
+	p := ownedRenderProfile("vllm", "chat", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100, Alias: "selected"})
 	restore := ownedBinaryDirectory
 	ownedBinaryDirectory = filepath.Join(t.TempDir(), "empty")
 	defer func() { ownedBinaryDirectory = restore }()
@@ -349,7 +330,7 @@ func TestPreflightAccountsAdoptedOwnedUnitBinding(t *testing.T) {
 		Cgroup:    "/workloads/" + name,
 		HealthURL: "http://127.0.0.1:9100/health",
 		NativeModel: &control.NativeModel{
-			Runtime:      "llama.cpp",
+			Runtime:      "vllm",
 			Instance:     "second",
 			Model:        "vision",
 			Endpoint:     "http://127.0.0.1:9100",

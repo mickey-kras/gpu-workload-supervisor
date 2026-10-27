@@ -13,10 +13,9 @@ environment, prove measured capacity, test GPU kernels or authorize launch.
 Failures remain visible with generic diagnostic guidance, without subprocess
 output or lifecycle credentials.
 
-The setup backend also exposes `InspectTrainer(ctx, request, workload)` for an
-explicit draft request for setup. It validates the request before inspecting the
-selected binding and never applies it. A new binding must supply the complete
-version 4 catalog trainer profile described in [TRAINING.md](TRAINING.md).
+Inspection validates the request before it inspects the selected binding and never
+applies it. A trainer binding must supply the complete version 4 catalog trainer
+profile described in [TRAINING.md](TRAINING.md).
 Include measured `requiredMiB`, GPU UUID, unit, executable and recipe paths and
 digests, and private lifecycle paths. Inspection does not infer these values
 from a service name or read the job envelope to discover them.

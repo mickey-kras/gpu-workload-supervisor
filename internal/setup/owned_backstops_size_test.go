@@ -22,18 +22,15 @@ func TestMaximumOwnedBackstopCatalogRoundTrips(t *testing.T) {
 	for i := 0; i < 32; i++ {
 		id := fmt.Sprintf("p%02d", i) + strings.Repeat("x", 61)
 		draft := ownedDraft(id, uint16(9000+i))
-		draft.App = "ollama"
-		draft.Model = "model"
 		draft.Binding.Instance = id
-		draft.Binding.Owned = &DraftOwnedLaunch{Port: uint16(9000 + i)}
 		p, _, err := OwnedProfile(draft, "/user.slice/user-1000.slice/user@1000.service", home)
 		if err != nil {
 			t.Fatal(err)
 		}
 		request.Catalog.Profiles = append(request.Catalog.Profiles, p)
 	}
-	// The longest owned unit names are per-instance Ollama names. Fill the
-	// input budget through a clean placement prefix, retaining the owned suffix.
+	// Maximum workload IDs give the longest owned unit names. Fill the input
+	// budget through a clean placement prefix, retaining the owned suffix.
 	p := &request.Catalog.Profiles[0]
 	base, err := json.Marshal(request.Catalog)
 	if err != nil {
@@ -56,7 +53,7 @@ func TestMaximumOwnedBackstopCatalogRoundTrips(t *testing.T) {
 		t.Fatal("fixture does not exercise the derived allowance", len(raw))
 	}
 	for _, p := range normalized.Catalog.Profiles {
-		if len(p.Unit) != 89 || len(strings.Fields(p.NativeModel.Owned.Conflicts)) != 31 {
+		if len(p.Unit) != 82 || len(strings.Fields(p.NativeModel.Owned.Conflicts)) != 31 {
 			t.Fatal("fixture does not have the maximum peer count and unit name length")
 		}
 	}

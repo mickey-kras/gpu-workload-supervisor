@@ -5,12 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
@@ -18,10 +16,10 @@ func ownedDraft(id string, port uint16) Draft {
 	return Draft{
 		ID:    id,
 		Label: "Owned " + id,
-		App:   appLlamaCPP,
+		App:   "vllm",
 		Binding: &DraftBinding{
 			Instance: "owned",
-			Owned:    &DraftOwnedLaunch{ModelPath: "/models/" + id + ".gguf", Port: port, CtxSize: 8192},
+			Owned:    &DraftOwnedLaunch{ModelPath: "/models/" + id, Port: port},
 		},
 	}
 }
@@ -61,19 +59,13 @@ func TestOwnedProfileSynthesis(t *testing.T) {
 	if profile.NativeModel.LaunchSHA256 != digest(raw) || profile.NativeModel.Endpoint != "http://127.0.0.1:9100" {
 		t.Fatal("fingerprint or endpoint wrong")
 	}
-	if profile.NativeModel.Model != "/models/vision.gguf" {
+	if profile.NativeModel.Model != "/models/vision" {
 		t.Fatalf("model identity %q", profile.NativeModel.Model)
 	}
 	ollama := ownedDraft("chat", 11434)
 	ollama.App = "ollama"
-	ollama.Model = "qwen3:latest"
-	ollama.Binding.Owned = &DraftOwnedLaunch{Port: 11434}
-	profile, _, err = OwnedProfile(ollama, "/user.slice/user-1000.slice/user@1000.service", home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if profile.Unit != "gws-owned-ollama-owned.service" || profile.NativeModel.Model != "qwen3:latest" || profile.HealthURL != "http://127.0.0.1:11434/api/tags" {
-		t.Fatalf("ollama profile %+v", profile)
+	if _, _, err := OwnedProfile(ollama, "/user.slice/user-1000.slice/user@1000.service", home); err == nil {
+		t.Fatal("removed Ollama owned profile synthesized")
 	}
 	bad := ownedDraft("vision", 80)
 	if _, _, err := OwnedProfile(bad, "/user.slice", home); err == nil {
@@ -466,83 +458,42 @@ func TestResumeOwnedUnitJournalAtApplyEntry(t *testing.T) {
 	})
 }
 
-func TestApplyCarriedSharedPairVerbatim(t *testing.T) {
+func TestApplyCarriedAdoptedProfilesVerbatim(t *testing.T) {
 	backend, home, r := fixture(t)
 	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
-	native := func(model string) *control.NativeModel {
-		return &control.NativeModel{Runtime: "ollama", Instance: "local", Model: model, Endpoint: "http://127.0.0.1:11434", LaunchFile: "/etc/systemd/user/ollama.service", LaunchSHA256: strings.Repeat("0", 64)}
-	}
-	shared := func(id, model string) control.WorkloadProfile {
-		return control.WorkloadProfile{ID: control.Workload(id), Label: id, Adapter: "systemd", Unit: "ollama.service", Cgroup: "/user.slice/ollama.service", HealthURL: "http://127.0.0.1:11434/health", NativeModel: native(model)}
-	}
-	// Setup applies a plain catalog first; the adopted shared pair is then
+	// Setup applies a plain catalog first; the adopted profiles are then
 	// committed through the configure path (store-level equivalent).
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
+	adopted := adoptedProfiles()
 	s := openStoreAt(t, r.Profile.StatePath)
 	snap, _ := s.Catalog(ctx)
-	pair := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{r.Catalog.Profiles[0], shared("alpha", "a"), shared("beta", "b")}}
-	if _, err := s.ReplaceCatalog(ctx, snap.Revision, pair); err != nil {
+	if _, err := s.ReplaceCatalog(ctx, snap.Revision, control.Catalog{Version: 1, Profiles: append([]control.WorkloadProfile{r.Catalog.Profiles[0]}, adopted...)}); err != nil {
 		t.Fatal(err)
 	}
 	snap, _ = s.Catalog(ctx)
 	s.Close()
-	// A verbatim carried pair rides along with a new owned profile.
+	// Verbatim carried profiles ride along with a new owned profile.
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
 	r.ExpectedRevision = snap.Revision
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{shared("alpha", "a"), shared("beta", "b"), profile}}
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{adopted[0], adopted[1], profile}}
 	if err := backend.Apply(ctx, home, r); err != nil {
-		t.Fatalf("verbatim carried pair rejected: %v", err)
+		t.Fatalf("verbatim carried profiles rejected: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(ownedUnitDirectory(home), profile.Unit)); err != nil {
 		t.Fatal("owned unit not written")
 	}
-	// An edited adopted group is accepted after read-only binding verification.
 	s = openStoreAt(t, r.Profile.StatePath)
 	snap, _ = s.Catalog(ctx)
 	r.ExpectedRevision = snap.Revision
 	s.Close()
-	previews := 0
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
-		return launchPreflightRuntime{verify: func() error { return nil }, preview: func(map[string]string) error { previews++; return nil }}, nil
-	}
-	changed := shared("beta", "b")
+	changed := adopted[1]
 	changed.Label = "Renamed"
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{shared("alpha", "a"), changed, profile}}
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{adopted[0], changed, profile}}
 	if err := backend.Apply(ctx, home, r); err != nil {
-		t.Fatalf("changed adopted shared pair rejected: %v", err)
-	}
-	if previews != 1 {
-		t.Fatalf("edited adopted pair preview count: %d", previews)
-	}
-}
-
-func TestApplyOwnedSharedPairRenderedBySetup(t *testing.T) {
-	backend, home, r := fixture(t)
-	backend.runCommand = fakeOwnedCommandFor(home)
-	draft := func(id, model string) Draft {
-		return Draft{ID: id, Label: "Owned " + id, App: "ollama", Model: model, Binding: &DraftBinding{Instance: "local", Owned: &DraftOwnedLaunch{Port: 11434}}}
-	}
-	first, _, err := OwnedProfile(draft("chat", "qwen3:latest"), "/user.slice/user-1000.slice/user@1000.service", home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, raw, err := OwnedProfile(draft("code", "qwen3-coder:latest"), "/user.slice/user-1000.slice/user@1000.service", home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.Unit != second.Unit {
-		t.Fatal("owned shared pair derived different units")
-	}
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{first, second}}
-	if err := backend.Apply(context.Background(), home, r); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(ownedUnitDirectory(home), first.Unit))
-	if err != nil || string(data) != string(raw) {
-		t.Fatalf("shared owned unit not rendered: %v", err)
+		t.Fatalf("changed adopted profile rejected: %v", err)
 	}
 }
 
@@ -553,11 +504,9 @@ func TestDraftOwnedValidation(t *testing.T) {
 	}
 	cases := map[string]func(*Draft){
 		"privileged port": func(d *Draft) { d.Binding.Owned.Port = 80 },
-		"llama max len":   func(d *Draft) { d.Binding.Owned.MaxModelLen = 1 },
-		"llama rel path":  func(d *Draft) { d.Binding.Owned.ModelPath = "rel.gguf" },
-		"ollama alias":    func(d *Draft) { d.App = "ollama"; d.Binding.Owned.Alias = "x" },
-		"ollama ctx":      func(d *Draft) { d.App = "ollama"; d.Binding.Owned.CtxSize = 1 },
-		"vllm gpu layers": func(d *Draft) { d.App = "vllm"; d.Binding.Owned.GPULayers = 1 },
+		"relative path":   func(d *Draft) { d.Binding.Owned.ModelPath = "rel" },
+		"removed ollama":  func(d *Draft) { d.App = "ollama" },
+		"removed llama":   func(d *Draft) { d.App = "llama.cpp" },
 		"comfyui owned":   func(d *Draft) { d.App = "comfyui" },
 	}
 	for name, mutate := range cases {

@@ -1,7 +1,6 @@
 package setup
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -153,7 +152,7 @@ func ReadCatalog(ctx context.Context, path string) (control.CatalogSnapshot, err
 	if err != nil {
 		return snapshot, err
 	}
-	snapshot.Catalog, err = control.DecodeCatalog(bytes.NewReader(data))
+	snapshot.Catalog, err = control.DecodeStoredCatalog(data)
 	return snapshot, err
 }
 

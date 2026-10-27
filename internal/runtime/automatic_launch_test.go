@@ -11,15 +11,14 @@ import (
 func TestAutomaticLaunchEvidence(t *testing.T) {
 	script := comfyScriptFixture(t)
 	dir := t.TempDir()
-	model := filepath.Join(dir, "a.gguf")
-	if err := os.WriteFile(model, []byte("model"), 0600); err != nil {
+	model := filepath.Join(dir, "a")
+	if err := os.Mkdir(model, 0755); err != nil {
 		t.Fatal(err)
 	}
 	tests := []struct{ app, command, env, endpoint, model string }{
 		{"comfyui", "/usr/bin/python3 " + script, "", "http://127.0.0.1:8188", ""},
 		{"comfyui", "/usr/bin/python3 " + script + " --listen ::1 --port 9000 --disable-auto-launch", "", "http://[::1]:9000", ""},
-		{"ollama", "/usr/bin/ollama serve", "Environment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=127.0.0.1:11434\n", "http://127.0.0.1:11434", ""},
-		{"llama.cpp", "/usr/bin/llama-server -m " + model + " --host 127.0.0.1 --port 8080 --alias chat --ctx-size 4096", "", "http://127.0.0.1:8080", "chat"},
+		{"vllm", "/usr/bin/vllm serve " + model + " --host 127.0.0.1 --port 8080 --served-model-name chat --max-model-len 4096", "", "http://127.0.0.1:8080", "chat"},
 		{"vllm", "/usr/bin/vllm serve " + dir + " --host 127.0.0.1 --port 8000", "", "http://127.0.0.1:8000", dir},
 	}
 	for _, tt := range tests {
@@ -51,12 +50,12 @@ func TestAutomaticLaunchRefusesAmbiguousCommands(t *testing.T) {
 			t.Fatal(app)
 		}
 	}
-	if _, err := InspectAutomaticLaunch("/missing", "comfyui"); err == nil {
+	if _, err := InspectAutomaticLaunchSources("/missing", "comfyui", nil); err == nil {
 		t.Fatal("missing fragment accepted")
 	}
 	path := filepath.Join(t.TempDir(), "unit.service")
 	os.WriteFile(path, []byte("[Service]\nExecStart=/missing /opt/ComfyUI/main.py\n"), 0600)
-	if _, err := InspectAutomaticLaunch(path, "comfyui"); err == nil {
+	if _, err := InspectAutomaticLaunchSources(path, "comfyui", nil); err == nil {
 		t.Fatal("missing executable accepted")
 	}
 	if err := validateComfyExecutable("/missing"); err == nil {
@@ -65,7 +64,7 @@ func TestAutomaticLaunchRefusesAmbiguousCommands(t *testing.T) {
 	if err := validateComfyExecutable("/usr/bin/true"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := InspectAutomaticLaunch(path, "vllm"); err == nil {
+	if _, err := InspectAutomaticLaunchSources(path, "vllm", nil); err == nil {
 		t.Fatal("missing native executable accepted")
 	}
 	if err := validateComfyExecutable("/usr/bin/python3"); err != nil && !strings.Contains(err.Error(), "supported") {

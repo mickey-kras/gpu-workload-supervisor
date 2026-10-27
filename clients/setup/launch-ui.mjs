@@ -1,41 +1,27 @@
 import {applications, profileIDFromModel} from './onboarding.mjs';
 
-export function addOwnedEditor({Adw, Gtk, group, draftGroup, draft, initial, command, bind, changed, taken, status, reportError, parent, removed, modelChanged, isSyncing, edited}) {
+export function addOwnedEditor({Adw, Gtk, group, draftGroup, draft, initial, command, bind, changed, taken, status, reportError, parent, removed, isSyncing, edited}) {
     const launch = new Adw.PreferencesGroup({title: 'Supervisor-managed launch',
-        description: initial.app === 'ollama' ? 'Models with the same instance name and port share one Ollama service.' : 'Create a service for this model using the installed application. Applications and model files are preserved.'});
+        description: 'Create a service for this model using the installed application. Applications and model files are preserved.'});
     group.add(launch);
     const fields = {};
-    if (initial.app === 'ollama') {
-        const model = new Adw.EntryRow({title: 'Model name', text: initial.model ?? ''});
-        launch.add(model);
-        fields.model = model;
-        model.connect('changed', () => {
-            if (isSyncing()) return;
-            draft.edit({model: model.text, models: undefined}); modelChanged(model.text); edited(); changed(draft.snapshot());
-        });
-    }
-    const expectedModelReference = initial.app === 'llama.cpp' ? 'model-file' : 'model-directory';
-    const defaults = {executable: initial.referenceKind === 'application' ? initial.reference ?? '' : '', instance: initial.binding?.instance ?? 'local', port: {ollama: 11434, 'llama.cpp': 8080, vllm: 8000}[initial.app],
+    const expectedModelReference = 'model-directory';
+    const defaults = {executable: initial.referenceKind === 'application' ? initial.reference ?? '' : '', instance: initial.binding?.instance ?? 'local', port: 8000,
         modelPath: initial.referenceKind === expectedModelReference ? initial.reference ?? '' : '', ...initial.binding?.owned};
-    const entries = [['executable', 'Installed executable'], ['instance', 'Instance name'], ['port', 'Launch port'], ...(initial.app === 'ollama' ? [] : [['modelPath', initial.app === 'llama.cpp' ? 'Model file' : 'Model directory']])];
+    const entries = [['executable', 'Installed executable'], ['instance', 'Instance name'], ['port', 'Launch port'], ['modelPath', 'Model directory']];
     const advanced = new Adw.PreferencesGroup({title: 'Launch options'});
-    const options = {
-        ollama: [],
-        'llama.cpp': [['ctxSize', 'Context size'], ['gpuLayers', 'GPU layers'], ['alias', 'Served model name']],
-        vllm: [['maxModelLen', 'Maximum model length'], ['alias', 'Served model name']],
-    }[initial.app];
+    const options = [['maxModelLen', 'Maximum model length'], ['alias', 'Served model name']];
     function save(markEdited = true) {
         if (isSyncing()) return;
         const owned = {};
         for (const [key, field] of Object.entries(fields).filter(([, field]) => typeof field !== 'function')) {
-            if (key === 'instance' || key === 'model' || field.text === '') continue;
-            owned[key] = ['port', 'ctxSize', 'gpuLayers', 'maxModelLen'].includes(key) ? Number(field.text) : field.text;
+            if (key === 'instance' || field.text === '') continue;
+            owned[key] = ['port', 'maxModelLen'].includes(key) ? Number(field.text) : field.text;
         }
         const previous = draft.snapshot();
-        if (initial.app !== 'ollama' && !owned.modelPath && previous.referenceKind === expectedModelReference && previous.reference) owned.modelPath = previous.reference;
+        if (!owned.modelPath && previous.referenceKind === expectedModelReference && previous.reference) owned.modelPath = previous.reference;
         const changedModelPath = previous.binding?.owned?.modelPath !== owned.modelPath;
-        draft.edit({binding: {instance: fields.instance.text, owned}, ...(changedModelPath ? {model: undefined, models: undefined} : {})});
-        if (changedModelPath) modelChanged(owned.modelPath);
+        draft.edit({binding: {instance: fields.instance.text, owned}, ...(changedModelPath ? {model: undefined} : {})});
         if (markEdited) edited();
         changed(draft.snapshot());
     }
@@ -46,7 +32,7 @@ export function addOwnedEditor({Adw, Gtk, group, draftGroup, draft, initial, com
         if (options.some(([option]) => option === key)) advanced.add(row); else launch.add(row);
         row.connect('changed', () => save());
     }
-    if (options.length) launch.add(advanced);
+    launch.add(advanced);
     const preview = new Gtk.Button({label: 'Preview managed launch and add for review'}); launch.add(preview);
     preview.connect('clicked', async () => {
         preview.sensitive = false;
@@ -54,7 +40,7 @@ export function addOwnedEditor({Adw, Gtk, group, draftGroup, draft, initial, com
             save(false);
             const input = draft.snapshot();
             for (const [key, value] of Object.entries(input.binding.owned))
-                if (['port', 'ctxSize', 'gpuLayers', 'maxModelLen'].includes(key) && (!Number.isSafeInteger(value) || value < 0))
+                if (['port', 'maxModelLen'].includes(key) && (!Number.isSafeInteger(value) || value < 0))
                     throw new Error('Launch numbers must be nonnegative whole numbers.');
             const proposed = profileIDFromModel(input.app, input.model || input.binding.owned.modelPath);
             if (input.id.startsWith('draft-') && proposed && !taken().includes(proposed)) input.id = proposed;
@@ -72,7 +58,7 @@ export function addOwnedEditor({Adw, Gtk, group, draftGroup, draft, initial, com
     return fields;
 }
 
-export function addBindingEditor({Adw, Gtk, group, draftGroup, draft, initial, status, parent, removed, bind, command, changed, taken, reportError, isSyncing, edited, modelChanged}) {
+export function addBindingEditor({Adw, Gtk, group, draftGroup, draft, initial, status, parent, removed, bind, command, changed, taken, reportError, isSyncing, edited}) {
     const binding = new Adw.PreferencesGroup({title: 'Existing service', description: 'Adopt an existing isolated service and its loaded configuration. This does not create a new launch. Saved fields remain unverified.'});
     group.add(binding);
     const fields = {};
@@ -86,14 +72,10 @@ export function addBindingEditor({Adw, Gtk, group, draftGroup, draft, initial, s
             const changedSource = ['unit', 'instance', 'launchFile'].some(key => values[key] !== previous?.[key]);
             const changedModel = values.model !== previous?.model;
             let modelChanges = {};
-            if (changedSource) modelChanges = {model: undefined, models: undefined};
-            else if (changedModel) modelChanges = {model: values.model, models: undefined};
+            if (changedSource) modelChanges = {model: undefined};
+            else if (changedModel) modelChanges = {model: values.model};
             draft.edit({binding: values, ...modelChanges});
-            if (changedSource) {
-                if (fields.model) { fields.model.text = ''; }
-                modelChanged(undefined);
-            }
-            else if (changedModel) modelChanged(values.model);
+            if (changedSource && fields.model) fields.model.text = '';
             edited(key); changed(draft.snapshot());
         });
     }

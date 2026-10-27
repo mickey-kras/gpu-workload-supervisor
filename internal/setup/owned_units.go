@@ -117,11 +117,11 @@ func acceptedOwnedUnitEntries(accepted control.Catalog, home string) ([]ownedUni
 			continue
 		}
 		if p.NativeModel.Owned != nil {
-			raw, err := ownedRenderChecked(p)
+			proof, err := acceptedOwnedProof(p, dir)
 			if err != nil {
 				return nil, err
 			}
-			entries = append(entries, ownedUnitEntry{unit: p.Unit, path: filepath.Join(dir, p.Unit), proof: digest(raw)})
+			entries = append(entries, ownedUnitEntry{unit: p.Unit, path: filepath.Join(dir, p.Unit), proof: proof})
 			continue
 		}
 		if p.AdoptedOwnedFile() {
@@ -137,6 +137,9 @@ func acceptedOwnedUnitEntries(accepted control.Catalog, home string) ([]ownedUni
 }
 
 func (b Backend) planOwnedUnits(req Request, accepted control.CatalogSnapshot, home string) (unitPlan, error) {
+	if err := rejectLegacyOwnedReplacement(accepted.Catalog, req.Catalog); err != nil {
+		return unitPlan{}, err
+	}
 	plan := unitPlan{Writes: map[string][]byte{}, proven: map[string]string{}, prior: map[string][]byte{}, absent: map[string]bool{}, written: map[string]bool{}}
 	entries, err := acceptedOwnedUnitEntries(accepted.Catalog, home)
 	if err != nil {
@@ -148,13 +151,16 @@ func (b Backend) planOwnedUnits(req Request, accepted control.CatalogSnapshot, h
 	if err := b.planOwnedUnitWrites(req, home, plan); err != nil {
 		return plan, err
 	}
+	return planOwnedUnitDeletes(req.Catalog, plan, entries)
+}
+
+func planOwnedUnitDeletes(requested control.Catalog, plan unitPlan, entries []ownedUnitEntry) (unitPlan, error) {
 	deleted := map[string]bool{}
 	for _, e := range entries {
 		if _, kept := plan.Writes[e.unit]; kept || deleted[e.unit] {
-			// Shared Ollama pairs carry one unit file across profiles.
 			continue
 		}
-		if ownedUnitStillReferenced(req.Catalog, e.path, e.proof) {
+		if ownedUnitStillReferenced(requested, e.path, e.proof) {
 			// The requested catalog still claims this exact file (for example
 			// an owned profile converted to adopted); keep it.
 			continue
@@ -570,4 +576,32 @@ func rollbackOwnedUnitWrite(dir, name string, plan unitPlan) (bool, error) {
 		return true, provenDelete(path, digest(plan.Writes[name]))
 	}
 	return true, ownedAtomicWrite(path, plan.prior[name])
+}
+
+func acceptedOwnedProof(p control.WorkloadProfile, dir string) (string, error) {
+	if p.RemovedRuntime() {
+		if p.NativeModel.LaunchFile != filepath.Join(dir, p.Unit) {
+			return "", ErrOwnedLaunchFileOutsideHome
+		}
+		return p.NativeModel.LaunchSHA256, nil
+	}
+	raw, err := ownedRenderChecked(p)
+	if err != nil {
+		return "", err
+	}
+	return digest(raw), nil
+}
+
+func rejectLegacyOwnedReplacement(accepted, requested control.Catalog) error {
+	for _, prior := range accepted.Profiles {
+		if !prior.RemovedRuntime() || prior.NativeModel.Owned == nil {
+			continue
+		}
+		for _, next := range requested.Profiles {
+			if next.NativeModel != nil && next.NativeModel.Owned != nil && next.Unit == prior.Unit {
+				return errors.New("remove the legacy owned profile before reusing its service unit")
+			}
+		}
+	}
+	return nil
 }

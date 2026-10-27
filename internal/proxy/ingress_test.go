@@ -332,17 +332,21 @@ func TestAdapterFiltersInformationalResponsesAndRequestTrailers(t *testing.T) {
 func TestAdapterNativeCompletionAndUserForwarding(t *testing.T) {
 	for _, owner := range []control.Owner{control.OwnerSupervisor, control.OwnerUser} {
 		for _, terminal := range []bool{false, true} {
-			fixture := newTerminalFixture(t, "ollama", "/api/generate", "application/json", `{"done":`+strconv.FormatBool(terminal)+`}`)
+			body := `{"choices":[{"finish_reason":null}]}`
+			if terminal {
+				body = `{"choices":[{"finish_reason":"stop"}]}`
+			}
+			fixture := newTerminalFixture(t, "vllm", "/v1/completions", "application/json", body)
 			fixture.store.state.Owner = owner
 			target, _ := url.Parse(fixture.upstream.URL)
 			config := adapterConfig(target)
-			config.ExecutionRoutes = []Route{{"POST", "/api/generate"}}
+			config.ExecutionRoutes = []Route{{"POST", "/v1/completions"}}
 			config.ReadOnlyRoutes, config.PassthroughRoutes = nil, nil
 			handler, err := NewWithContext(context.Background(), fixture.store, config)
 			if err != nil {
 				t.Fatal(err)
 			}
-			request := httptest.NewRequest("POST", "/api/generate", strings.NewReader(`{"model":"selected"}`))
+			request := httptest.NewRequest("POST", "/v1/completions", strings.NewReader(`{"model":"selected"}`))
 			addLeaseHeaders(request, fixture.store.state.LeaseFence)
 			request.Header.Set(ExecutionCredentialHeader, executionCredential)
 			response := httptest.NewRecorder()

@@ -59,7 +59,7 @@ func TestAccountHomeExpansionUsesAccountDatabaseAndRejectsOtherSyntax(t *testing
 
 func TestEffectiveWorkingDirectoryResetClearsSpecifierBinding(t *testing.T) {
 	workingDirectory := t.TempDir()
-	unit, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nExecStart=/usr/bin/true x\nWorkingDirectory=%h\n"), []byte("[Service]\nWorkingDirectory=" + workingDirectory + "\n")}, "llama.cpp")
+	unit, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nExecStart=/usr/bin/true x\nWorkingDirectory=%h\n"), []byte("[Service]\nWorkingDirectory=" + workingDirectory + "\n")})
 	if err != nil || unit.homeWorkingDirectory != "" {
 		t.Fatalf("stale specifier binding: %+v %v", unit, err)
 	}
@@ -67,11 +67,11 @@ func TestEffectiveWorkingDirectoryResetClearsSpecifierBinding(t *testing.T) {
 
 func TestInvalidLaunchHasNoUsableBindingAndCollectsCommandBlockers(t *testing.T) {
 	path := t.TempDir() + "/external.service"
-	raw := []byte("[Service]\nExecStart=/usr/bin/llama-server -m /missing-model --host 127.0.0.1 --port 8080\nEnvironment=CUDA_VISIBLE_DEVICES=0\nRestart=on-failure\n")
+	raw := []byte("[Service]\nExecStart=/usr/bin/vllm serve /missing-model --host 127.0.0.1 --port 8080\nEnvironment=CUDA_VISIBLE_DEVICES=0\nRestart=on-failure\n")
 	if err := os.WriteFile(path, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	found, err := inspectAutomaticLaunchSourcesWithValidator(path, "llama.cpp", nil, func(string) error { return errors.New("executable trust is unavailable") })
+	found, err := inspectAutomaticLaunchSourcesWithValidator(path, "vllm", nil, func(string) error { return errors.New("executable trust is unavailable") })
 	if !errors.Is(err, ErrModelUnavailable) || len(LaunchDiagnostics(err)) < 2 {
 		t.Fatal(err)
 	}
@@ -90,24 +90,24 @@ func TestAccountHomeSpecifierEffectiveEnvironmentAndCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", "/private-untrusted-home")
-	raw := []byte("[Service]\nExecStart=%h/bin/llama-server -m %h/models/example.gguf --host 127.0.0.1 --port 8080\nEnvironment=HOME=%h\nWorkingDirectory=%h\n")
-	if err := qualifyEnvironmentPath(account.HomeDir, false, false); err != nil {
+	raw := []byte("[Service]\nExecStart=%h/bin/vllm serve %h/models/example --host 127.0.0.1 --port 8080\nEnvironment=HOME=%h\nWorkingDirectory=%h\n")
+	if err := qualifyEnvironmentPath(account.HomeDir, false); err != nil {
 		t.Skip("OS account home is not a qualified fixture path")
 	}
-	unit, err := parseExternalLaunchSources([][]byte{raw}, "llama.cpp")
+	unit, err := parseExternalLaunchSources([][]byte{raw})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if unit.environmentValues["HOME"] != account.HomeDir || unit.homeWorkingDirectory != account.HomeDir || !strings.HasPrefix(unit.execStart, account.HomeDir+"/bin/") {
 		t.Fatal("account home resolution mismatch")
 	}
-	if _, err := parseLaunchUnit(raw, "llama.cpp"); err == nil {
+	if _, err := parseLaunchUnit(raw); err == nil {
 		t.Fatal("owned grammar unexpectedly expanded specifier")
 	}
 }
 
 func TestDiagnosticsDoNotEchoUnqualifiedCommandTokens(t *testing.T) {
-	_, err := parseServerCommand([]string{"/usr/bin/llama-server", "--private-credential-value", "unused"}, "llama.cpp")
+	_, err := parseServerCommand([]string{"/usr/bin/vllm", "--private-credential-value", "unused"}, "vllm")
 	if err == nil || strings.Contains(err.Error(), "private-credential-value") {
 		t.Fatal(err)
 	}
@@ -116,16 +116,16 @@ func TestDiagnosticsDoNotEchoUnqualifiedCommandTokens(t *testing.T) {
 func TestQuotedEnvironmentWhitespaceCannotInventAssignments(t *testing.T) {
 	for _, quote := range []string{"\"", "'"} {
 		path := t.TempDir() + "/external.service"
-		raw := []byte("[Service]\nExecStart=/usr/bin/ollama serve\nEnvironment=" + quote + "OLLAMA_NO_CLOUD=1 OLLAMA_HOST=127.0.0.1:11434" + quote + "\n")
+		raw := []byte("[Service]\nExecStart=/usr/bin/vllm serve /models/example --host 127.0.0.1 --port 8080\nEnvironment=" + quote + "CUDA_VISIBLE_DEVICES=0 HOME=/tmp" + quote + "\n")
 		if err := os.WriteFile(path, raw, 0600); err != nil {
 			t.Fatal(err)
 		}
-		found, err := inspectAutomaticLaunchSourcesWithValidator(path, "ollama", nil, func(string) error { return nil })
+		found, err := inspectAutomaticLaunchSourcesWithValidator(path, "vllm", nil, func(string) error { return nil })
 		if err == nil || found.Endpoint != "" || found.Command != "" || found.Environment != nil || !strings.Contains(err.Error(), "whitespace") {
 			t.Fatalf("quoted whitespace acquired usable launch: %+v %v", found, err)
 		}
-		unit, _ := parseExternalLaunchSources([][]byte{raw}, "ollama")
-		if unit.cloudOff || unit.host != "" || len(unit.environmentValues) != 0 {
+		unit, _ := parseExternalLaunchSources([][]byte{raw})
+		if unit.gpuUUID != "" || len(unit.environmentValues) != 0 {
 			t.Fatal("quoted assignment invented runtime settings")
 		}
 	}
@@ -135,22 +135,22 @@ func TestExternalExpansionUsesOnlyEffectiveCommandsAndScalars(t *testing.T) {
 	workingDirectory := t.TempDir()
 	sources := [][]byte{
 		[]byte("[Service]\nExecStart=%u/unsupported\nWorkingDirectory=%u/unsupported\n"),
-		[]byte("[Service]\nExecStart=\nExecStart=/usr/bin/ollama serve\nWorkingDirectory=" + workingDirectory + "\nEnvironment=OLLAMA_NO_CLOUD=1 OLLAMA_HOST=127.0.0.1:11434\n"),
+		[]byte("[Service]\nExecStart=\nExecStart=/usr/bin/vllm serve /models/example --host 127.0.0.1 --port 8080\nWorkingDirectory=" + workingDirectory + "\n"),
 	}
-	unit, err := parseExternalLaunchSources(sources, "ollama")
-	if err != nil || unit.execStart != "/usr/bin/ollama serve" || unit.homeWorkingDirectory != "" {
+	unit, err := parseExternalLaunchSources(sources)
+	if err != nil || unit.execStart != "/usr/bin/vllm serve /models/example --host 127.0.0.1 --port 8080" || unit.homeWorkingDirectory != "" {
 		t.Fatalf("obsolete directives blocked effective launch: %+v %v", unit, err)
 	}
 }
 
 func TestOvercountPreparationSkipsAllExecutableValidation(t *testing.T) {
 	path := t.TempDir() + "/external.service"
-	raw := "[Service]\nExecStart=/usr/bin/ollama serve\nEnvironment=OLLAMA_NO_CLOUD=1 OLLAMA_HOST=127.0.0.1:11434\n" + strings.Repeat("ExecStartPre=/usr/bin/test -f /private-predicate\n", 33)
+	raw := "[Service]\nExecStart=/usr/bin/vllm serve /models/example --host 127.0.0.1 --port 8080\n" + strings.Repeat("ExecStartPre=/usr/bin/test -f /private-predicate\n", 33)
 	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
 	preparationCalls := 0
-	_, err := inspectAutomaticLaunchSourcesWithValidator(path, "ollama", nil, func(path string) error {
+	_, err := inspectAutomaticLaunchSourcesWithValidator(path, "vllm", nil, func(path string) error {
 		if path == "/usr/bin/test" {
 			preparationCalls++
 		}
@@ -163,11 +163,11 @@ func TestOvercountPreparationSkipsAllExecutableValidation(t *testing.T) {
 
 func TestInvalidPreparationDoesNotHideIndependentMissingModel(t *testing.T) {
 	path := t.TempDir() + "/external.service"
-	raw := []byte("[Service]\nExecStart=/usr/bin/llama-server -m /nonexistent-supervisor-fixture/example.gguf --host 127.0.0.1 --port 8080\nExecStartPre=/usr/bin/true extra\n")
+	raw := []byte("[Service]\nExecStart=/usr/bin/vllm serve /nonexistent-supervisor-fixture/example --host 127.0.0.1 --port 8080\nExecStartPre=/usr/bin/true extra\n")
 	if err := os.WriteFile(path, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	found, err := inspectAutomaticLaunchSourcesWithValidator(path, "llama.cpp", nil, func(string) error { return nil })
+	found, err := inspectAutomaticLaunchSourcesWithValidator(path, "vllm", nil, func(string) error { return nil })
 	if !errors.Is(err, ErrModelUnavailable) || !strings.Contains(err.Error(), "ExecStartPre") || found.Command != "" || found.Endpoint != "" {
 		t.Fatalf("independent model blocker hidden: %+v %v", found, err)
 	}
@@ -192,10 +192,10 @@ func TestRuntimeBindingRequiresLoadedAccountHomeWorkingDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if qualifyEnvironmentPath(account.HomeDir, false, false) != nil {
+	if qualifyEnvironmentPath(account.HomeDir, false) != nil {
 		t.Skip("OS account home is not a qualified fixture path")
 	}
-	manager, runner, profile, show := nativeFixture(t, "ollama", "http://localhost:9000")
+	manager, runner, profile, show := nativeFixture(t, "vllm", "http://localhost:9000")
 	raw, err := os.ReadFile(profile.NativeModel.LaunchFile)
 	if err != nil {
 		t.Fatal(err)

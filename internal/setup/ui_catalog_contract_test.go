@@ -34,7 +34,7 @@ import {launch} from '../../clients/setup/harness.mjs';
 const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 const ui = await launch({responses: {discover: {request: input.request, units: []},
     drafts: {drafts: [input.draft]}, 'render-owned': {profile: input.profile}}, deferAction: 'unused'});
-if (!ui.by('Use llama.cpp').active) throw new Error('Saved application was not selected');
+if (!ui.by('Use vLLM').active) throw new Error('Saved application was not selected');
 await ui.by('Continue').emit('clicked');
 if (ui.calls.some(call => call.argv[1] === 'apply')) throw new Error('Continue silently applied');
 if (!ui.by('Finish setup')?.sensitive || !ui.by('Finish setup').visible) throw new Error('Validated configuration did not reach explicit Finish confirmation');
@@ -78,20 +78,12 @@ process.stdout.write(JSON.stringify(ui.calls.filter(call => ['verify-bindings', 
 }
 
 func TestIncompleteManagedUIDraftsRoundTripWithoutBecomingReady(t *testing.T) {
-	for _, app := range []string{"llama.cpp", "vllm", "ollama"} {
+	for _, app := range []string{"vllm"} {
 		for _, selection := range []string{"manual", "detected"} {
 			t.Run(app+"/"+selection, func(t *testing.T) {
 				_, home, request := fixture(t)
-				draft := Draft{ID: "draft-model", Label: "Model", App: app, Endpoint: "http://127.0.0.1:9000", Model: "qwen:latest",
-					Binding: &DraftBinding{Instance: "custom", Owned: &DraftOwnedLaunch{Port: 12345}}}
-				if app != "ollama" {
-					draft.Endpoint, draft.Model = "", ""
-					draft.Reference, draft.ReferenceKind = "/models/old", "model-file"
-					if app == "vllm" {
-						draft.ReferenceKind = "model-directory"
-					}
-					draft.Binding.Owned.ModelPath = draft.Reference
-				}
+				draft := Draft{ID: "draft-model", Label: "Model", App: app, Reference: "/models/old", ReferenceKind: "model-directory",
+					Binding: &DraftBinding{Instance: "custom", Owned: &DraftOwnedLaunch{ModelPath: "/models/old", Port: 12345}}}
 				input, err := json.Marshal(struct {
 					Request   Request `json:"request"`
 					Draft     Draft   `json:"draft"`
@@ -107,7 +99,7 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 const ui = await launch({responses: {discover: {request: input.request, units: [], applications: [{app: input.draft.app,
     label: 'Other address', instanceStatus: 'not-running', endpoint: 'http://127.0.0.1:9100'}]},
     drafts: {drafts: [input.draft]}}, deferAction: 'unused'});
-ui.by('Settings for ' + (input.draft.app === 'vllm' ? 'vLLM' : input.draft.app === 'ollama' ? 'Ollama' : 'llama.cpp')).emit('clicked');
+ui.by('Settings for vLLM').emit('clicked');
 if (input.selection === 'detected') ui.edit(ui.by('Detected instance'), 'selected', 1);
 else ui.edit(ui.by('Application address'), 'text', 'http://127.0.0.1:9100');
 await ui.by('Save selections for later').emit('clicked');

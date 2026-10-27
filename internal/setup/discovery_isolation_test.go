@@ -9,7 +9,7 @@ import (
 )
 
 func TestDiscoveryClassifiesBeforeStrictBindingMetadata(t *testing.T) {
-	for _, app := range []string{appLlamaCPP, "comfyui"} {
+	for _, app := range []string{"vllm", "comfyui"} {
 		t.Run(app, func(t *testing.T) {
 			b, d, metadata := automaticFixture(t, app)
 			arbitrary := "chosen-installation.service"
@@ -44,37 +44,37 @@ func TestDiscoveryClassifiesBeforeStrictBindingMetadata(t *testing.T) {
 }
 
 func TestExecutableReferenceCreatesOnlyOwnedDraftEvidence(t *testing.T) {
-	r := ProbeRequest{App: "ollama", Reference: "/opt/trusted/ollama", ReferenceKind: "application"}
+	r := ProbeRequest{App: "vllm", Reference: "/opt/trusted/vllm", ReferenceKind: "application"}
 	selected := probeSelectedExecutable(r, candidate(r), func(app, path string) error {
-		if app != "ollama" || path != r.Reference {
+		if app != "vllm" || path != r.Reference {
 			t.Fatal("wrong executable inspected")
 		}
 		return nil
 	})
-	if !selected.Recognized || selected.SourceKind != "owned" || selected.InstanceStatus != "installed" || selected.Binding.Owned.Executable != r.Reference || selected.Binding.Owned.Port != 11434 || selected.LifecycleControl != "unverified" {
+	if !selected.Recognized || selected.SourceKind != "owned" || selected.InstanceStatus != "installed" || selected.Binding.Owned.Executable != r.Reference || selected.Binding.Owned.Port != 8000 || selected.LifecycleControl != "unverified" {
 		t.Fatalf("owned candidate contract: %+v", selected)
 	}
 	// /usr/bin/true is trusted but its name does not establish a supported app.
-	got, err := Probe(context.Background(), ProbeRequest{App: "ollama", Reference: "/usr/bin/true", ReferenceKind: "application"})
+	got, err := Probe(context.Background(), ProbeRequest{App: "vllm", Reference: "/usr/bin/true", ReferenceKind: "application"})
 	if err != nil || got.Recognized || got.Binding != nil || got.InstanceStatus != "inspection-failed" {
 		t.Fatalf("unsupported executable was accepted: %+v %v", got, err)
 	}
 	d := ownedDraft("selected", 9100)
-	d.Reference = "/opt/trusted/llama-server"
+	d.Reference = "/opt/trusted/vllm"
 	d.ReferenceKind = "application"
 	d.Binding.Owned.Executable = d.Reference
 	p, raw, err := OwnedProfile(d, "/manager", t.TempDir())
-	if err != nil || p.NativeModel.Owned.Executable != d.Reference || !strings.Contains(string(raw), "ExecStart="+d.Reference+" -m ") {
+	if err != nil || p.NativeModel.Owned.Executable != d.Reference || !strings.Contains(string(raw), "ExecStart="+d.Reference+" serve ") {
 		t.Fatalf("selected executable lost: %+v %s %v", p, string(raw), err)
 	}
-	d.Binding.Owned.Executable = "/usr/bin/llama-server"
+	d.Binding.Owned.Executable = "/usr/bin/vllm"
 	if _, _, err := OwnedProfile(d, "/manager", t.TempDir()); err == nil {
 		t.Fatal("selection mismatch accepted")
 	}
 }
 
 func TestStoppedApplicationMissingModelDiffersFromInspectionFailure(t *testing.T) {
-	b, d, _ := automaticFixture(t, appLlamaCPP)
+	b, d, _ := automaticFixture(t, "vllm")
 	b.inspectAutomatic = func(string, string) (gpuruntime.AutomaticLaunch, error) {
 		return gpuruntime.AutomaticLaunch{}, fmt.Errorf("%w: choose a local model", gpuruntime.ErrModelUnavailable)
 	}
@@ -86,7 +86,7 @@ func TestStoppedApplicationMissingModelDiffersFromInspectionFailure(t *testing.T
 }
 
 func TestReferenceSelectionIsolatesUnselectedSameApplicationMetadata(t *testing.T) {
-	b, d, metadata := automaticFixture(t, "ollama")
+	b, d, metadata := automaticFixture(t, "vllm")
 	d.Reference = metadata[d.Binding.Unit]["FragmentPath"]
 	d.ReferenceKind = "configuration"
 	d.Binding = nil
@@ -94,15 +94,15 @@ func TestReferenceSelectionIsolatesUnselectedSameApplicationMetadata(t *testing.
 	unrelatedPath := "/different/location.service"
 	b.runCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		if strings.Contains(strings.Join(args, " "), "list-unit-files") {
-			return []byte("unrelated-ollama.service disabled\nollama.service disabled\n"), nil
+			return []byte("unrelated-vllm.service disabled\nvllm.service disabled\n"), nil
 		}
-		if args[len(args)-1] == "unrelated-ollama.service" {
-			return []byte("Id=unrelated-ollama.service\nFragmentPath=" + unrelatedPath + "\nExecStart={ path=/usr/bin/ollama ; argv[]=/usr/bin/ollama serve ; }\nExecStartPre=unparseable preparation metadata\n"), nil
+		if args[len(args)-1] == "unrelated-vllm.service" {
+			return []byte("Id=unrelated-vllm.service\nFragmentPath=" + unrelatedPath + "\nExecStart={ path=/usr/bin/vllm ; argv[]=/usr/bin/vllm serve ; }\nExecStartPre=unparseable preparation metadata\n"), nil
 		}
 		return original(ctx, name, args...)
 	}
 	got, err := b.unitAtReference(context.Background(), d)
-	if err != nil || got != "ollama.service" {
+	if err != nil || got != "vllm.service" {
 		t.Fatalf("selected configuration poisoned by unselected same-app metadata: %q %v", got, err)
 	}
 	unrelatedPath = d.Reference

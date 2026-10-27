@@ -3,10 +3,8 @@ package runtime
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -21,145 +19,31 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
-func TestNativeOllamaVersionedPSReplay(t *testing.T) {
-	loaded, err := os.ReadFile("testdata/ollama-v0.40.3/api-ps-loaded.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	empty, err := os.ReadFile("testdata/ollama-v0.40.3/api-ps-empty.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct {
-		name      string
-		body      string
-		ready     bool
-		listValid bool
-	}{
-		{"loaded", string(loaded), true, true},
-		{"empty", string(empty), false, true},
-		{"wrong-tag", strings.ReplaceAll(string(loaded), "selected:latest", "selected:other"), false, true},
-		{"wrong-case", strings.ReplaceAll(string(loaded), "selected:latest", "Selected:latest"), false, true},
-		{"contradictory", `{"models":[{"name":"selected:latest","model":"other:latest"}]}`, false, true},
-		{"multiple", `{"models":[{"name":"selected:latest","model":"selected:latest"},{"name":"other:latest","model":"other:latest"}]}`, false, true},
-		{"missing", `{}`, false, false},
-		{"null", `{"models":null}`, false, false},
-		{"object", `{"models":{}}`, false, false},
-		{"wrong-type", `{"models":[{"name":17,"model":"selected:latest"}]}`, false, false},
-		{"duplicate-key", `{"models":[{"name":"other:latest","name":"selected:latest","model":"selected:latest"}]}`, false, false},
-		{"root-case-collision", `{"models":[{"name":"foreign:latest","model":"foreign:latest"}],"Models":[]}`, false, false},
-		{"root-case-alias", `{"Models":[]}`, false, false},
-		{"root-unicode-alias", `{"modelſ":[]}`, false, false},
-		{"name-case-collision", `{"models":[{"name":"other:latest","Name":"selected:latest","model":"selected:latest"}]}`, false, false},
-		{"model-case-alias", `{"models":[{"name":"selected:latest","Model":"selected:latest"}]}`, false, false},
-		{"unsupported-data", `{"data":[{"id":"selected"}]}`, false, false},
-		{"trailing", string(loaded) + ` {}`, false, false},
-		{"invalid", `{"models":[`, false, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodGet || r.URL.Path != "/api/ps" {
-					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
-					w.WriteHeader(http.StatusNotFound)
-					return
-				}
-				fmt.Fprint(w, tc.body)
-			}))
-			defer s.Close()
-			m := &SystemdManager{client: s.Client()}
-			n := control.NativeModel{Runtime: "ollama", Model: "selected", Endpoint: s.URL}
-			if err := m.nativeReady(context.Background(), n); (err == nil) != tc.ready {
-				t.Fatalf("ready = %v, err = %v", tc.ready, err)
-			}
-			body, err := m.fetchModelList(context.Background(), n)
-			if err != nil {
-				t.Fatal(err)
-			}
-			models, err := ollamaLoadedModels(body)
-			if (err == nil) != tc.listValid {
-				t.Fatalf("listValid = %v, err = %v", tc.listValid, err)
-			}
-			if tc.ready && !models["selected:latest"] {
-				t.Fatal("selected model missing from loaded list")
-			}
-		})
-	}
-}
-
-func TestNativeLlamaVersionedModelsReplay(t *testing.T) {
-	loaded, err := os.ReadFile("testdata/llama.cpp-v0.6.0/models-loaded.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	failed, err := os.ReadFile("testdata/llama.cpp-v0.6.0/models-failed.json")
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestNativeModelListIdentity(t *testing.T) {
+	loaded := `{"object":"list","data":[{"id":"selected","object":"model","owned_by":"vllm","root":"/models/selected","parent":null,"max_model_len":4096}]}`
 	for _, tc := range []struct {
 		name  string
 		body  string
 		ready bool
 	}{
-		{"loaded", string(loaded), true},
-		{"failed", string(failed), false},
-		{"wrong-id-with-selected-alias", strings.Replace(strings.Replace(string(loaded), `"id": "selected"`, `"id": "other"`, 1), `"selected-alias"`, `"selected"`, 1), false},
-		{"wrong-case", strings.Replace(string(loaded), `"id": "selected"`, `"id": "Selected"`, 1), false},
-		{"multiple", `{"data":[{"id":"selected","status":{"value":"loaded"}},{"id":"other","status":{"value":"loaded"}}]}`, false},
-		{"loading", strings.Replace(string(loaded), `"value": "loaded"`, `"value": "loading"`, 1), false},
-		{"unloaded", strings.Replace(string(loaded), `"value": "loaded"`, `"value": "unloaded"`, 1), false},
-		{"downloading", strings.Replace(string(loaded), `"value": "loaded"`, `"value": "downloading"`, 1), false},
-		{"downloaded", strings.Replace(string(loaded), `"value": "loaded"`, `"value": "downloaded"`, 1), false},
-		{"sleeping", strings.Replace(string(loaded), `"value": "loaded"`, `"value": "sleeping"`, 1), false},
-		{"unknown-status", strings.Replace(string(loaded), `"value": "loaded"`, `"value": "ready"`, 1), false},
-		{"loaded-but-failed", `{"data":[{"id":"selected","status":{"value":"loaded","failed":true}}]}`, false},
-		{"loaded-with-exit-code", `{"data":[{"id":"selected","status":{"value":"loaded","exit_code":1}}]}`, false},
-		{"loaded-with-zero-exit", `{"data":[{"id":"selected","status":{"value":"loaded","failed":false,"exit_code":0}}]}`, true},
-		{"null-status", `{"data":[{"id":"selected","status":null}]}`, false},
-		{"string-status", `{"data":[{"id":"selected","status":"loaded"}]}`, false},
-		{"empty-status", `{"data":[{"id":"selected","status":{}}]}`, false},
-		{"wrong-failed-type", `{"data":[{"id":"selected","status":{"value":"loaded","failed":"false"}}]}`, false},
-		{"null-failed", `{"data":[{"id":"selected","status":{"value":"loaded","failed":null}}]}`, false},
-		{"wrong-exit-type", `{"data":[{"id":"selected","status":{"value":"loaded","exit_code":"0"}}]}`, false},
-		{"null-exit", `{"data":[{"id":"selected","status":{"value":"loaded","exit_code":null}}]}`, false},
+		{"loaded", loaded, true},
+		{"minimal", `{"data":[{"id":"selected"}]}`, true},
+		{"wrong-id", strings.Replace(loaded, `"id":"selected"`, `"id":"other"`, 1), false},
+		{"wrong-case", strings.Replace(loaded, `"id":"selected"`, `"id":"Selected"`, 1), false},
+		{"multiple", `{"data":[{"id":"selected"},{"id":"other"}]}`, false},
 		{"duplicate-id", `{"data":[{"id":"other","id":"selected"}]}`, false},
-		{"duplicate-status", `{"data":[{"id":"selected","status":{"value":"unloaded","value":"loaded"}}]}`, false},
 		{"data-case-alias", `{"Data":[{"id":"selected"}]}`, false},
 		{"id-case-collision", `{"data":[{"id":"other","ID":"selected"}]}`, false},
-		{"status-case-collision", `{"data":[{"id":"selected","status":{"value":"unloaded"},"Status":{"value":"loaded"}}]}`, false},
-		{"status-case-alias", `{"data":[{"id":"selected","Status":{"value":"loaded"}}]}`, false},
-		{"status-unicode-alias", `{"data":[{"id":"selected","ſtatus":{"value":"loaded"}}]}`, false},
-		{"value-case-collision", `{"data":[{"id":"selected","status":{"value":"unloaded","Value":"loaded"}}]}`, false},
-		{"failure-case-collision", `{"data":[{"id":"selected","status":{"value":"loaded","failed":true,"Failed":false,"exit_code":1,"Exit_Code":0}}]}`, false},
-		{"failed-case-alias", `{"data":[{"id":"selected","status":{"value":"loaded","Failed":false}}]}`, false},
-		{"exit-case-collision", `{"data":[{"id":"selected","status":{"value":"loaded","exit_code":1,"Exit_Code":0}}]}`, false},
-		{"exit-case-alias", `{"data":[{"id":"selected","status":{"value":"loaded","Exit_Code":0}}]}`, false},
 		{"missing", `{}`, false},
 		{"null-data", `{"data":null}`, false},
 		{"empty-data", `{"data":[]}`, false},
 		{"object-data", `{"data":{}}`, false},
 		{"unsupported-models", `{"models":[{"name":"selected"}]}`, false},
 		{"invalid", `{"data":[`, false},
-		{"trailing", string(loaded) + ` {}`, false},
+		{"trailing", loaded + ` {}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodGet || r.URL.Path != "/models" {
-					w.WriteHeader(http.StatusNotFound)
-					return
-				}
-				fmt.Fprint(w, tc.body)
-			}))
-			defer s.Close()
-			resp, err := s.Client().Get(s.URL + "/models")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer resp.Body.Close()
-			body, err := io.ReadAll(resp.Body)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := verifyModelList(body, control.NativeModel{Runtime: "llama.cpp", Model: "selected"}); (err == nil) != tc.ready {
+			if err := verifyModelList([]byte(tc.body), control.NativeModel{Runtime: "vllm", Model: "selected"}); (err == nil) != tc.ready {
 				t.Fatalf("ready = %v, err = %v", tc.ready, err)
 			}
 		})
@@ -167,7 +51,7 @@ func TestNativeLlamaVersionedModelsReplay(t *testing.T) {
 }
 
 func TestNativeDirectServerReadinessPaths(t *testing.T) {
-	for _, family := range []string{"llama.cpp", "vllm"} {
+	for _, family := range []string{"vllm"} {
 		t.Run(family, func(t *testing.T) {
 			var mu sync.Mutex
 			var paths []string
@@ -199,9 +83,9 @@ func TestNativeDirectServerReadinessPaths(t *testing.T) {
 }
 
 func TestNativeIdentityRejectsHealthyWrongModel(t *testing.T) {
-	for _, family := range []string{"ollama", "llama.cpp", "vllm"} {
+	for _, family := range []string{"vllm"} {
 		t.Run(family, func(t *testing.T) {
-			body := `{"data":[{"id":"other"}],"models":[{"name":"other:latest","model":"other:latest"}]}`
+			body := `{"data":[{"id":"other"}]}`
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 			defer server.Close()
 			m := &SystemdManager{client: server.Client()}
@@ -209,11 +93,11 @@ func TestNativeIdentityRejectsHealthyWrongModel(t *testing.T) {
 			if m.nativeReady(context.Background(), n) == nil {
 				t.Fatal("wrong model accepted")
 			}
-			body = `{"data":[{"id":"selected"}],"models":[{"name":"selected:latest","model":"selected:latest"}]}`
+			body = `{"data":[{"id":"selected"}]}`
 			if err := m.nativeReady(context.Background(), n); err != nil {
 				t.Fatal(err)
 			}
-			body = `{"data":[{"id":"selected"},{"id":"other"}],"models":[{"name":"selected:latest","model":"selected:latest"},{"name":"other:latest","model":"other:latest"}]}`
+			body = `{"data":[{"id":"selected"},{"id":"other"}]}`
 			if m.nativeReady(context.Background(), n) == nil {
 				t.Fatal("multiple loaded models accepted")
 			}
@@ -222,11 +106,11 @@ func TestNativeIdentityRejectsHealthyWrongModel(t *testing.T) {
 }
 func TestNativeLaunchDrift(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "model.service")
-	data := nativeLaunchFixture(t, "ollama", "http://localhost:11434", "a")
+	data := nativeLaunchFixture(t, "vllm", "http://localhost:8080", "a")
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	n := control.NativeModel{Runtime: "ollama", Endpoint: "http://localhost:11434", LaunchFile: path, LaunchSHA256: fmt.Sprintf("%x", sha256.Sum256(data))}
+	n := control.NativeModel{Runtime: "vllm", Model: "a", Endpoint: "http://localhost:8080", LaunchFile: path, LaunchSHA256: fmt.Sprintf("%x", sha256.Sum256(data))}
 	if err := verifyNativeLaunchWithValidator(n, fixtureExecutableValidator); err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +137,7 @@ func nativeFixture(t *testing.T, family, endpoint string) (*SystemdManager, *fak
 	m, r := acceptanceManager(t, c)
 	m.nativeExecutableValidator = fixtureExecutableValidator
 	cmd := "/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload --property=ExecStartPre --property=ExecStart -- speech.service"
-	launch, _ := parseLaunchUnit(data, family)
+	launch, _ := parseLaunchUnit(data)
 	r.outputs[cmd] = []byte("ExecStart={ path=" + strings.Fields(launch.execStart)[0] + " ; argv[]=" + launch.execStart + " ; }\nFragmentPath=" + path + "\nDropInPaths=\nNeedDaemonReload=no\n")
 	return m, r, p, cmd
 }
@@ -294,26 +178,17 @@ func TestNativeLaunchBindingVerification(t *testing.T) {
 		t.Fatal("healthy despite drift")
 	}
 }
-func TestNativeStartPreloadsAndVerifiesSelectedModel(t *testing.T) {
-	for _, family := range []string{"ollama", "llama.cpp", "vllm"} {
+func TestNativeStartVerifiesSelectedModelWithoutRequests(t *testing.T) {
+	for _, family := range []string{"vllm"} {
 		t.Run(family, func(t *testing.T) {
-			preloads := 0
+			posts := 0
 			identity := true
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/api/show" {
-					fmt.Fprint(w, `{"model_info":{"general.architecture":"llama"}}`)
+				if r.Method != http.MethodGet {
+					posts++
 					return
 				}
-				if r.Method == "POST" {
-					preloads++
-					var v map[string]any
-					if json.NewDecoder(r.Body).Decode(&v) != nil || v["model"] != "selected" || v["keep_alive"] != float64(-1) {
-						t.Error("invalid preload")
-					}
-					fmt.Fprint(w, `{"done":true}`)
-					return
-				}
-				if r.URL.Path == "/api/ps" || r.URL.Path == "/v1/models" {
+				if r.URL.Path == "/v1/models" {
 					if !identity {
 						w.WriteHeader(503)
 						return
@@ -332,12 +207,8 @@ func TestNativeStartPreloadsAndVerifiesSelectedModel(t *testing.T) {
 			if err := m.Healthy(context.Background(), p.ID); err != nil {
 				t.Fatal(err)
 			}
-			expected := 0
-			if family == "ollama" {
-				expected = 1
-			}
-			if preloads != expected {
-				t.Fatal(preloads)
+			if posts != 0 {
+				t.Fatalf("start sent %d model requests", posts)
 			}
 			identity = false
 			if m.Healthy(context.Background(), p.ID) == nil {
@@ -363,10 +234,6 @@ func TestNativeReadinessMalformedAndCanceled(t *testing.T) {
 	cancel()
 	if m.nativeReady(ctx, control.NativeModel{Endpoint: "http://127.0.0.1:1"}) == nil {
 		t.Fatal("cancel ignored")
-	}
-	p := control.WorkloadProfile{HealthURL: "http://127.0.0.1:1", NativeModel: &control.NativeModel{Runtime: "ollama"}}
-	if m.startNative(ctx, p) == nil {
-		t.Fatal("preload wait cancellation ignored")
 	}
 }
 func TestNativeLaunchMissingDirectoryAndOversize(t *testing.T) {
@@ -401,45 +268,10 @@ func TestNativeLaunchFIFOIsRejected(t *testing.T) {
 		t.Fatal("FIFO blocked launch verification")
 	}
 }
-func TestNativeOllamaContradictoryIdentity(t *testing.T) {
-	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"models":[{"name":"selected","model":"other"}]}`)
-	}))
-	defer s.Close()
-	m := &SystemdManager{client: s.Client()}
-	if m.nativeReady(context.Background(), control.NativeModel{Runtime: "ollama", Endpoint: s.URL, Model: "selected"}) == nil {
-		t.Fatal("contradictory identity accepted")
-	}
-}
-func TestOllamaPreloadRequiresLocalModel(t *testing.T) {
-	for _, body := range []string{`{"remote_host":"https://ollama.com","remote_model":"cloud"}`, `{}`, `garbage`} {
-		t.Run(body, func(t *testing.T) {
-			loads := 0
-			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/api/show" {
-					fmt.Fprint(w, body)
-				} else if r.URL.Path == "/api/generate" {
-					loads++
-				}
-			}))
-			defer s.Close()
-			m := &SystemdManager{client: s.Client()}
-			p := control.WorkloadProfile{HealthURL: s.URL, NativeModel: &control.NativeModel{Runtime: "ollama", Endpoint: s.URL, Model: "selected"}}
-			if m.startNative(context.Background(), p) == nil || loads != 0 {
-				t.Fatal("nonlocal model preloaded")
-			}
-		})
-	}
-}
-
 func nativeLaunchFixture(t *testing.T, family, endpoint, model string) []byte {
 	t.Helper()
-	base := "llama-server"
-	if family == "ollama" {
-		base = "ollama"
-	}
-	if family == "vllm" {
-		base = "vllm"
+	if family != "vllm" {
+		t.Fatalf("unsupported fixture runtime %q", family)
 	}
 	dir, err := os.MkdirTemp("", "native-launch-test-")
 	if err != nil {
@@ -450,7 +282,7 @@ func nativeLaunchFixture(t *testing.T, family, endpoint, model string) []byte {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	exe := filepath.Join(dir, base)
+	exe := filepath.Join(dir, "vllm")
 	if err := os.WriteFile(exe, []byte("#!/bin/false\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -458,22 +290,11 @@ func nativeLaunchFixture(t *testing.T, family, endpoint, model string) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if family == "ollama" {
-		return []byte("[Service]\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=" + u.Host + "\nExecStart=" + exe + " serve\n")
-	}
 	local := filepath.Join(dir, "model")
-	command := ""
-	if family == "vllm" {
-		if err := os.Mkdir(local, 0700); err != nil {
-			t.Fatal(err)
-		}
-		command = exe + " serve " + local + " --served-model-name " + model
-	} else {
-		if err := os.WriteFile(local, []byte("fixture"), 0600); err != nil {
-			t.Fatal(err)
-		}
-		command = exe + " --model " + local + " --alias " + model
+	if err := os.Mkdir(local, 0700); err != nil {
+		t.Fatal(err)
 	}
+	command := exe + " serve " + local + " --served-model-name " + model
 	return []byte("[Service]\nExecStart=" + command + " --host " + u.Hostname() + " --port " + u.Port() + "\n")
 }
 

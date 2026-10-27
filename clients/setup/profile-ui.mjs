@@ -7,9 +7,15 @@ export function editableOwnedLaunch(launch) {
     return owned;
 }
 
-export function createProfileEditor({current, Adw, Gtk, GLib, units, field, invalidate, applicationRuntime, onRemove, onEdit, onLabelEdit}) {
+export function createProfileEditor({current, Adw, Gtk, GLib, units, field, invalidate, applicationRuntime, removalOnly = false, onRemove, onEdit, onLabelEdit}) {
     const group = new Adw.PreferencesGroup({title: GLib.markup_escape_text(current.label || 'New workload', -1),
         description: current.nativeModel ? `${current.nativeModel.runtime} · ${current.nativeModel.model}. Applications and model files are preserved.` : 'Start and stop this installation from GPU Control. Applications and files are preserved.'});
+    const remove = new Gtk.Button({label: removalOnly ? `Remove unsupported workload: ${current.label || current.id}` : 'Remove from supervisor'});
+    remove.connect('clicked', () => { onRemove(group); });
+    if (removalOnly) {
+        group.description = `${current.nativeModel.runtime} is no longer supported. Remove this workload, then finish setup. Applications and model files are preserved.`;
+        group.add(remove); return group;
+    }
     field(group, 'Display name', current.label, text => {
         current.label = text; group.title = GLib.markup_escape_text(text || 'New workload', -1);
         onLabelEdit?.(text);
@@ -66,8 +72,6 @@ export function createProfileEditor({current, Adw, Gtk, GLib, units, field, inva
     const retain = wrappedCheckButton(Gtk, 'Keep this workload running at login if already active', {active: current.bootPolicy === 'retain'});
     retain.connect('toggled', () => { current.bootPolicy = retain.active ? 'retain' : 'stop-to-idle'; invalidate(); });
     details.add_row(retain);
-    const remove = new Gtk.Button({label: 'Remove from supervisor'});
-    remove.connect('clicked', () => { onRemove(group); });
     const runtime = current.nativeModel?.runtime ?? current.launchBinding?.runtime ?? applicationRuntime ?? (current.adapter === 'comfyui' ? 'comfyui' : undefined);
     if (runtime) {
         const editLaunch = new Gtk.Button({label: 'Edit application'});

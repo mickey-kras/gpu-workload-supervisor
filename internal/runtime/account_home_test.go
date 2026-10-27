@@ -73,20 +73,20 @@ func TestExternalInspectionUsesOneLazyAccountHomeSnapshot(t *testing.T) {
 	home := t.TempDir()
 	var sources [][]byte
 	for i := 0; i < 33; i++ {
-		sources = append(sources, []byte("[Service]\nEnvironment=HOME=%h\nWorkingDirectory=%h\nExecStart=\nExecStart=%h/bin/llama-server -m /models/example.gguf --host 127.0.0.1 --port 8080\n"))
+		sources = append(sources, []byte("[Service]\nEnvironment=HOME=%h\nWorkingDirectory=%h\nExecStart=\nExecStart=%h/bin/vllm serve /models/example --host 127.0.0.1 --port 8080\n"))
 	}
 	reads := 0
-	unit, err := parseExternalLaunchSourcesWithAccountHome(sources, "llama.cpp", false, func() (string, error) { reads++; return home, nil })
+	unit, err := parseExternalLaunchSourcesWithAccountHome(sources, func() (string, error) { reads++; return home, nil })
 	if err != nil || reads != 1 || unit.environmentValues["HOME"] != home || unit.homeWorkingDirectory != home || !strings.HasPrefix(unit.execStart, home+"/bin/") {
 		t.Fatalf("inspection did not share one home snapshot: reads=%d %v", reads, err)
 	}
 	reads = 0
-	_, err = parseExternalLaunchSourcesWithAccountHome(sources, "llama.cpp", false, func() (string, error) { reads++; return "", accountHomeError() })
+	_, err = parseExternalLaunchSourcesWithAccountHome(sources, func() (string, error) { reads++; return "", accountHomeError() })
 	if !errors.Is(err, ErrLaunchUnsupported) || reads != 1 {
 		t.Fatalf("failed account reads were repeated: reads=%d %v", reads, err)
 	}
 	reads = 0
-	_, err = parseExternalLaunchSourcesWithAccountHome([][]byte{[]byte("[Service]\nExecStart=/usr/bin/ollama serve\nEnvironment=OLLAMA_NO_CLOUD=1 OLLAMA_HOST=127.0.0.1:11434\n")}, "ollama", false, func() (string, error) { reads++; return "", accountHomeError() })
+	_, err = parseExternalLaunchSourcesWithAccountHome([][]byte{[]byte("[Service]\nExecStart=/usr/bin/vllm serve /models/example --host 127.0.0.1 --port 8080\n")}, func() (string, error) { reads++; return "", accountHomeError() })
 	if err != nil || reads != 0 {
 		t.Fatalf("literal launch unnecessarily read account database: reads=%d %v", reads, err)
 	}

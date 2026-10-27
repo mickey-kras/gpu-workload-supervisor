@@ -206,14 +206,14 @@ func TestResponseHeaderTimeoutAllowsSlowResponsesAndStreaming(t *testing.T) {
 }
 
 func TestNativeHeaderTimeoutDoesNotSupplyTerminalEvidence(t *testing.T) {
-	f := newTerminalFixtureWith(t, "ollama", "/api/generate", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f := newTerminalFixtureWith(t, "vllm", "/v1/completions", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		<-r.Context().Done()
 	}))
 	transport := f.handler.proxy.Transport.(*http.Transport)
 	transport.ResponseHeaderTimeout = 50 * time.Millisecond
 	t.Cleanup(transport.CloseIdleConnections)
-	response := f.execute(t, "/api/generate", `{"model":"selected"}`)
+	response := f.execute(t, "/v1/completions", `{"model":"selected"}`)
 	if response.Code != http.StatusBadGateway {
 		t.Fatalf("native timeout status = %d, want 502", response.Code)
 	}

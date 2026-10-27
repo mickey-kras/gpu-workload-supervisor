@@ -17,19 +17,19 @@ function profileFor(app) {
     return profile;
 }
 
-for (const [index, app] of ['comfyui', 'ollama', 'llama.cpp', 'vllm'].entries()) {
+for (const [index, app] of ['comfyui', 'vllm'].entries()) {
     test(`${app}: one recognized stopped installation finishes with no technical entry or startup`, async () => {
         const prepared = profileFor(app);
         const ui = await launch({deferAction: 'unused', responses: {
             discover: {request, units: [], applications: [installation(app)]}, prepare: {profile: prepared}, fingerprint: {sha256: 'fresh'},
         }});
-        ui.edit(ui.by(`Use ${['ComfyUI', 'Ollama', 'llama.cpp', 'vLLM'][index]}`), 'active', true);
+        ui.edit(ui.by(`Use ${['ComfyUI', 'vLLM'][index]}`), 'active', true);
         assert.equal(ui.by('Detected instance').visible, false);
         assert.ok(ui.widgets.some(widget => widget.label?.includes('Installed and stopped. Ready to configure.')));
         if (app === 'comfyui') assert.equal(ui.by('Model'), undefined);
         else assert.equal(ui.by('Model').visible, false, 'existing launch model needs no new decision');
         assert.equal(ui.visible(ui.by('Existing service')), false);
-        ui.by(`Settings for ${['ComfyUI', 'Ollama', 'llama.cpp', 'vLLM'][index]}`).emit('clicked');
+        ui.by(`Settings for ${['ComfyUI', 'vLLM'][index]}`).emit('clicked');
         assert.equal(ui.visible(ui.by('Advanced settings')), true);
         assert.equal(ui.calls.filter(call => call.argv[1] === 'apply').length, 0);
         await ui.by('Use installation').emit('clicked');
@@ -46,7 +46,7 @@ for (const [index, app] of ['comfyui', 'ollama', 'llama.cpp', 'vllm'].entries())
         const applied = JSON.parse(ui.calls.find(call => call.argv[1] === 'apply').input);
         assert.equal(applied.confirmQuiesced, true);
         assert.equal(applied.catalog.profiles.length, 1);
-        assert.ok(ui.calls.every(call => ['--version', 'discover', 'temporary-status', 'drafts', 'prepare', 'fingerprint', 'validate', 'verify-bindings', 'apply'].includes(call.argv[1])));
+        assert.ok(ui.calls.every(call => ['--version', 'discover', 'drafts', 'prepare', 'fingerprint', 'validate', 'verify-bindings', 'apply'].includes(call.argv[1])));
     });
 }
 
@@ -98,18 +98,6 @@ test('ComfyUI explicit application location is a folder, never a model decision'
     assert.equal(ui.by('Model'), undefined);
 });
 
-test('stopped Ollama asks only for its existing model name when inventory cannot be read', async () => {
-    const candidate = {...installation('ollama'), configurationStatus: 'model-required', models: [], binding: {...installation('ollama').binding, model: ''}};
-    const ui = await launch({deferAction: 'unused', responses: {discover: {request, units: [], applications: [candidate]}, prepare: {profile: profileFor('ollama')}, fingerprint: {sha256: 'fresh'}}});
-    ui.applicationIndex = 1; ui.selectApplication(ui.applicationIndex ?? 0);
-    assert.equal(ui.by('Existing model name').visible, true);
-    assert.equal(ui.by('Model').visible, false);
-    ui.edit(ui.by('Existing model name'), 'text', 'existing');
-    await ui.by('Use installation').emit('clicked');
-    assert.equal(JSON.parse(ui.calls.find(call => call.argv[1] === 'prepare').input).draft.model, 'existing');
-    assert.ok(!ui.calls.some(call => call.argv[1] === 'apply'));
-});
-
 test('failed automatic review retains draft and retry replaces the staged profile', async () => {
     const ui = await launch({deferAction: 'unused', responses: {discover: {request: structuredClone(request), units: [], applications: [installation('comfyui')]}, prepare: {profile: profileFor('comfyui')}}});
     ui.selectApplication(ui.applicationIndex ?? 0);
@@ -145,12 +133,12 @@ test('ordinary application edit preserves stable ID, cgroup evidence, resources 
 });
 
 test('ordinary Finish of a managed edit retains owned launch options through the existing renderer', async () => {
-    const owned = {...profileFor('ollama'), nativeModel: {...profileFor('ollama').nativeModel, owned: {port: 11434}}};
+    const owned = {...profileFor('vllm'), nativeModel: {...profileFor('vllm').nativeModel, owned: {port: 8000}}};
     const ui = await launch({profiles: [owned], deferAction: 'unused', responses: {'render-owned': {profile: owned}}});
     ui.by('Edit application').emit('clicked');
     await ui.by('Use installation').emit('clicked');
     const rendered = JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input);
-    assert.deepEqual(rendered.draft.binding.owned, {port: 11434});
+    assert.deepEqual(rendered.draft.binding.owned, {port: 8000});
     assert.ok(!ui.calls.some(call => call.argv[1] === 'prepare'));
     assert.ok(ui.calls.some(call => call.argv[1] === 'validate'));
     assert.equal(ui.calls.filter(call => call.argv[1] === 'apply').length, 0);
@@ -198,27 +186,12 @@ for (const phase of ['validate', 'final verification']) {
     }
 }
 
-test('inventory refresh preserves stopped Ollama lifecycle identity and ordinary model entry', async () => {
-    const candidate = {...installation('ollama'), configurationStatus: 'model-required', models: [], binding: {...installation('ollama').binding, model: ''}};
-    const ui = await launch({responses: {discover: {request, units: [], applications: [candidate]}, probe: {app: 'ollama', instanceStatus: 'not-running', inventoryStatus: 'not-checked', models: []}}});
-    ui.applicationIndex = 1; ui.selectApplication(ui.applicationIndex ?? 0);
-    assert.equal(ui.by('Existing model name').visible, true);
-    await ui.by('Check again').emit('clicked');
-    assert.equal(ui.by('Existing model name').visible, true);
-    assert.ok(ui.widgets.some(widget => widget.label?.includes('Installed and stopped. Ready to configure.')));
-    ui.edit(ui.by('Existing model name'), 'text', 'existing');
-    await ui.by('Save selections for later').emit('clicked');
-    const saved = JSON.parse(ui.calls.at(-1).input).drafts[0];
-    assert.deepEqual(saved.binding, {...candidate.binding, model: 'existing'});
-    assert.equal(saved.model, 'existing');
-});
-
 for (const advanced of ['existing service', 'managed launch']) {
     test(`successful Advanced ${advanced} completion removes the outer draft card`, async () => {
-        const prepared = profileFor('ollama');
-        const draft = {id: 'advanced-draft', app: 'ollama', label: 'Existing model', model: 'existing', endpoint: prepared.nativeModel.endpoint,
-            binding: advanced === 'managed launch' ? {instance: 'local', owned: {port: 11434}} : {unit: prepared.unit, cgroup: prepared.cgroup, healthURL: prepared.healthURL, instance: 'local', model: 'existing', launchFile: prepared.nativeModel.launchFile}};
-        const ui = await launch({deferAction: 'unused', responses: {drafts: {drafts: [draft]}, 'render-owned': {profile: {...prepared, nativeModel: {...prepared.nativeModel, owned: {port: 11434}}}}, fingerprint: {sha256: 'checked'}}});
+        const prepared = profileFor('vllm');
+        const draft = {id: 'advanced-draft', app: 'vllm', label: 'Existing model', model: 'existing', endpoint: prepared.nativeModel.endpoint,
+            binding: advanced === 'managed launch' ? {instance: 'local', owned: {port: 8000}} : {unit: prepared.unit, cgroup: prepared.cgroup, healthURL: prepared.healthURL, instance: 'local', model: 'existing', launchFile: prepared.nativeModel.launchFile}};
+        const ui = await launch({deferAction: 'unused', responses: {drafts: {drafts: [draft]}, 'render-owned': {profile: {...prepared, nativeModel: {...prepared.nativeModel, owned: {port: 8000}}}}, fingerprint: {sha256: 'checked'}}});
         const card = ui.widgets.find(widget => widget.children.some(child => child.children.includes(ui.by('Change installation…'))));
         const parent = ui.widgets.find(widget => widget.children.includes(card));
         assert.ok(parent);

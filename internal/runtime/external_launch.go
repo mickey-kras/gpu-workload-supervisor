@@ -77,17 +77,13 @@ type externalLaunchDirectives struct {
 // parseExternalLaunchSources models the effective subset rather than rendering
 // an adopted service into the owned grammar. Scalars override; command lists
 // append, with explicit empty assignments resetting the list.
-func parseExternalLaunchSources(sources [][]byte, runtimeName string) (parsedLaunchUnit, error) {
-	return parseExternalLaunchSourcesMode(sources, runtimeName, false)
+func parseExternalLaunchSources(sources [][]byte) (parsedLaunchUnit, error) {
+	return parseExternalLaunchSourcesWithAccountHome(sources, localAccountHome)
 }
 
-func parseExternalLaunchSourcesMode(sources [][]byte, runtimeName string, cleanupEnvironment bool) (parsedLaunchUnit, error) {
-	return parseExternalLaunchSourcesWithAccountHome(sources, runtimeName, cleanupEnvironment, localAccountHome)
-}
-
-func parseExternalLaunchSourcesWithAccountHome(sources [][]byte, runtimeName string, cleanupEnvironment bool, readHome func() (string, error)) (parsedLaunchUnit, error) {
+func parseExternalLaunchSourcesWithAccountHome(sources [][]byte, readHome func() (string, error)) (parsedLaunchUnit, error) {
 	snapshot := &accountHomeSnapshot{read: readHome}
-	unit := parsedLaunchUnit{cleanupEnvironment: cleanupEnvironment, accountHome: snapshot}
+	unit := parsedLaunchUnit{accountHome: snapshot}
 	directives := externalLaunchDirectives{scalars: map[string]string{}, env: map[string]string{}, accountHome: snapshot}
 	var problems launchProblems
 	for _, raw := range sources {
@@ -95,7 +91,7 @@ func parseExternalLaunchSourcesWithAccountHome(sources [][]byte, runtimeName str
 	}
 	problems.add(unit.applyEffectiveCommands(directives))
 	for _, name := range directives.envOrder {
-		problems.add(unit.applyDirective(runtimeName, "[Service]", "Environment", directives.env[name]))
+		problems.add(unit.applyDirective("[Service]", "Environment", directives.env[name]))
 	}
 	keys := make([]string, 0, len(directives.scalars))
 	for directive := range directives.scalars {
@@ -103,7 +99,7 @@ func parseExternalLaunchSourcesWithAccountHome(sources [][]byte, runtimeName str
 	}
 	sort.Strings(keys)
 	for _, directive := range keys {
-		problems.add(unit.applyExternalScalar(runtimeName, directive, directives.scalars[directive]))
+		problems.add(unit.applyExternalScalar(directive, directives.scalars[directive]))
 	}
 	return unit, problems.err()
 }
@@ -230,7 +226,7 @@ func externalEnvironmentAssignments(assignment string, snapshot *accountHomeSnap
 	return []string{assignment}, nil
 }
 
-func (unit *parsedLaunchUnit) applyExternalScalar(runtimeName, directive, value string) error {
+func (unit *parsedLaunchUnit) applyExternalScalar(directive, value string) error {
 	end := strings.Index(directive, "]")
 	if end < 0 {
 		return fmt.Errorf("%w: directive outside supported section", ErrLaunchUnsupported)
@@ -252,7 +248,7 @@ func (unit *parsedLaunchUnit) applyExternalScalar(runtimeName, directive, value 
 	if strings.ContainsAny(value, launchExpansionCharacters) {
 		return fmt.Errorf("%w: expansion or quoting in %s", ErrLaunchUnsupported, key)
 	}
-	if err := unit.applyDirective(runtimeName, section, key, value); err != nil {
+	if err := unit.applyDirective(section, key, value); err != nil {
 		return fmt.Errorf("%w: unsupported directive or value %s", err, key)
 	}
 	return nil
@@ -349,13 +345,6 @@ func CheckNativeBindingSources(values map[string]string, unit, launchFile string
 	return nil
 }
 
-// expandAccountHome recognizes only %h at the beginning of a path token. The
-// trusted local passwd record supplies the user-manager identity, never HOME. Every expanded value still passes the ordinary literal validators.
-func expandAccountHome(value string) (string, error) {
-	snapshot := accountHomeSnapshot{read: localAccountHome}
-	return snapshot.expand(value)
-}
-
 func expandAccountHomePath(value, home string) (string, error) {
 	if !filepath.IsAbs(home) || filepath.Clean(home) != home || strings.ContainsAny(home, launchExpansionCharacters+" ;\t\r\n") {
 		return "", fmt.Errorf("%w: local account home cannot be qualified for %%h", ErrLaunchUnsupported)
@@ -418,10 +407,8 @@ func (unit *parsedLaunchUnit) qualifyAccountHomeWorkingDirectory(value string) (
 		return "", err
 	}
 	unit.homeWorkingDirectory = expanded
-	if !unit.cleanupEnvironment {
-		if err := qualifyEnvironmentPath(expanded, false, false); err != nil {
-			return "", fmt.Errorf("%w: WorkingDirectory: %w", ErrLaunchUnsupported, err)
-		}
+	if err := qualifyEnvironmentPath(expanded, false); err != nil {
+		return "", fmt.Errorf("%w: WorkingDirectory: %w", ErrLaunchUnsupported, err)
 	}
 	return expanded, nil
 }
@@ -437,10 +424,8 @@ func (unit *parsedLaunchUnit) qualifyExternalWorkingDirectory(directive, value s
 		}
 		value = expanded
 	}
-	if !unit.cleanupEnvironment {
-		if err := qualifyEnvironmentPath(value, false, false); err != nil {
-			return "", fmt.Errorf("%w: WorkingDirectory: %w", ErrLaunchUnsupported, err)
-		}
+	if err := qualifyEnvironmentPath(value, false); err != nil {
+		return "", fmt.Errorf("%w: WorkingDirectory: %w", ErrLaunchUnsupported, err)
 	}
 	unit.workingDirectory = value
 	return value, nil

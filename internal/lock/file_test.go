@@ -114,11 +114,11 @@ func TestAcquireSerializesProcesses(t *testing.T) {
 
 func TestSharedProxyLocksBlockExclusiveResolution(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.proxy.lock")
-	first, err := AcquireShared(path)
+	first, err := AcquireContext(context.Background(), path, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := AcquireShared(path)
+	second, err := AcquireContext(context.Background(), path, true)
 	if err != nil {
 		t.Fatal(err)
 	}

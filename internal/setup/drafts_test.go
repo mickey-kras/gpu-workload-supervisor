@@ -1,11 +1,9 @@
 package setup
 
 import (
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -16,7 +14,7 @@ func TestDraftsPersistOutsideCatalogAndRejectStaleWrite(t *testing.T) {
 	if err != nil || len(first.Drafts) != 0 {
 		t.Fatalf("initial: %+v %v", first, err)
 	}
-	request := DraftRequest{Version: 1, Drafts: []Draft{{ID: "draft-one", Label: "My model", App: "ollama", Model: "model-one"}}}
+	request := DraftRequest{Version: 1, Drafts: []Draft{{ID: "draft-one", Label: "My model", App: "vllm", Model: "model-one"}}}
 	saved, err := SaveDrafts(home, request)
 	if err != nil || saved.Revision == "" {
 		t.Fatalf("save: %+v %v", saved, err)
@@ -35,7 +33,7 @@ func TestDraftsPersistOutsideCatalogAndRejectStaleWrite(t *testing.T) {
 }
 
 func TestDraftRejectsUnsupportedAppsAndConflictingLocations(t *testing.T) {
-	for _, draft := range []Draft{{ID: "d", Label: "D", App: "other"}, {ID: "d", Label: "D", App: "ollama", Endpoint: "http://localhost:1", Reference: "/file", ReferenceKind: "model-file"}} {
+	for _, draft := range []Draft{{ID: "d", Label: "D", App: "other"}, {ID: "d", Label: "D", App: "vllm", Endpoint: "http://localhost:1", Reference: "/file", ReferenceKind: "model-file"}} {
 		if _, err := SaveDrafts(t.TempDir(), DraftRequest{Version: 1, Drafts: []Draft{draft}}); err == nil {
 			t.Fatal("invalid draft accepted")
 		}
@@ -43,7 +41,7 @@ func TestDraftRejectsUnsupportedAppsAndConflictingLocations(t *testing.T) {
 }
 
 func TestDraftValidationAndCorruptStorage(t *testing.T) {
-	valid := Draft{ID: "d", Label: "D", App: "llama.cpp", Reference: "/models/a.gguf", ReferenceKind: "model-file"}
+	valid := Draft{ID: "d", Label: "D", App: "vllm", Reference: "/models/a", ReferenceKind: "model-directory"}
 	if err := validateDrafts(1, []Draft{valid}); err != nil {
 		t.Fatal(err)
 	}
@@ -84,9 +82,45 @@ func TestDraftValidationAndCorruptStorage(t *testing.T) {
 	}
 }
 
+func TestDraftWithRemovedApplicationIsReplaceable(t *testing.T) {
+	for _, app := range []string{"ollama", "llama.cpp"} {
+		t.Run(app, func(t *testing.T) {
+			home := t.TempDir()
+			root := filepath.Join(home, ".config/gpu-workload-supervisor")
+			if err := mkdirTrusted(root); err != nil {
+				t.Fatal(err)
+			}
+			stored := []byte(`{"version":1,"drafts":[{"id":"old-chat","label":"Old chat","app":"` + app + `"}]}`)
+			if err := os.WriteFile(filepath.Join(root, "drafts.json"), stored, 0600); err != nil {
+				t.Fatal(err)
+			}
+			current, err := ReadDrafts(home)
+			if err == nil {
+				t.Fatal("draft with removed application accepted")
+			}
+			for _, want := range []string{"draft old-chat", `application "` + app + `"`, draftsDisplayPath, "delete the file"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error %q does not contain %q", err, want)
+				}
+			}
+			if current.Revision != digest(stored) {
+				t.Fatal("unusable drafts lost their raw revision")
+			}
+			if _, err := SaveDrafts(home, DraftRequest{Version: 1}); err == nil {
+				t.Fatal("unusable drafts replaced without their revision")
+			}
+			replacement := Draft{ID: "chat", Label: "Chat", App: "vllm"}
+			saved, err := SaveDrafts(home, DraftRequest{Version: 1, ExpectedRevision: current.Revision, Drafts: []Draft{replacement}})
+			if err != nil || len(saved.Drafts) != 1 || saved.Drafts[0].ID != "chat" {
+				t.Fatalf("unusable drafts were not replaced: %+v %v", saved, err)
+			}
+		})
+	}
+}
+
 func TestDraftBindingsRemainUntrustedAndRoundTrip(t *testing.T) {
 	binding := &DraftBinding{Unit: "existing.service", Cgroup: "/scope", HealthURL: "http://127.0.0.1:1234", Instance: "runtime", Model: "chosen", LaunchFile: "/trusted/model.service"}
-	draft := Draft{ID: "d", Label: "Draft", App: "ollama", Binding: binding}
+	draft := Draft{ID: "d", Label: "Draft", App: "vllm", Binding: binding}
 	result, err := SaveDrafts(t.TempDir(), DraftRequest{Version: 1, Drafts: []Draft{draft}})
 	if err != nil {
 		t.Fatal(err)
@@ -105,24 +139,24 @@ func TestDraftBindingsRemainUntrustedAndRoundTrip(t *testing.T) {
 // validation.
 func TestDraftOwnedRejectsGrammarUnsafeValues(t *testing.T) {
 	owned := func(modelPath, alias string) Draft {
-		return Draft{ID: "vision", Label: "Vision", App: "llama.cpp", Binding: &DraftBinding{Instance: "owned", Owned: &DraftOwnedLaunch{ModelPath: modelPath, Port: 9100, Alias: alias}}}
+		return Draft{ID: "vision", Label: "Vision", App: "vllm", Binding: &DraftBinding{Instance: "owned", Owned: &DraftOwnedLaunch{ModelPath: modelPath, Port: 9100, Alias: alias}}}
 	}
 	for name, d := range map[string]Draft{
-		"space in model path":     owned("/models/vision v2.gguf", ""),
-		"quote in model path":     owned(`/models/vis"ion.gguf`, ""),
-		"percent in model path":   owned("/models/vision%i.gguf", ""),
-		"dollar in model path":    owned("/models/$vision.gguf", ""),
-		"backslash in model path": owned(`/models/vis\ion.gguf`, ""),
-		"semicolon model path":    owned("/models/a;b.gguf", ""),
-		"space in alias":          owned("/models/vision.gguf", "vision v2"),
-		"backtick in alias":       owned("/models/vision.gguf", "vis`ion"),
-		"semicolon alias":         owned("/models/vision.gguf", "a;b"),
+		"space in model path":     owned("/models/vision v2", ""),
+		"quote in model path":     owned(`/models/vis"ion`, ""),
+		"percent in model path":   owned("/models/vision%i", ""),
+		"dollar in model path":    owned("/models/$vision", ""),
+		"backslash in model path": owned(`/models/vis\ion`, ""),
+		"semicolon model path":    owned("/models/a;b", ""),
+		"space in alias":          owned("/models/vision", "vision v2"),
+		"backtick in alias":       owned("/models/vision", "vis`ion"),
+		"semicolon alias":         owned("/models/vision", "a;b"),
 	} {
 		if err := validateDrafts(1, []Draft{d}); err == nil {
 			t.Fatalf("%s saved", name)
 		}
 	}
-	if err := validateDrafts(1, []Draft{owned("/models/vision-v2.Q4_K_M.gguf", "vision-v2")}); err != nil {
+	if err := validateDrafts(1, []Draft{owned("/models/vision-v2.Q4_K_M", "vision-v2")}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -131,21 +165,21 @@ func TestDraftOwnedRejectsGrammarUnsafeValues(t *testing.T) {
 // model selection to remain deferred outside the executable catalog.
 func TestDraftOwnedRejectsMissingInstance(t *testing.T) {
 	for name, d := range map[string]Draft{
-		"llama without instance":  {ID: "vision", Label: "Vision", App: "llama.cpp", Binding: &DraftBinding{Owned: &DraftOwnedLaunch{ModelPath: "/models/vision.gguf", Port: 9100}}},
-		"ollama without instance": {ID: "vision", Label: "Vision", App: "ollama", Model: "vision", Binding: &DraftBinding{Owned: &DraftOwnedLaunch{Port: 9100}}},
+		"missing instance":      {ID: "vision", Label: "Vision", App: "vllm", Binding: &DraftBinding{Owned: &DraftOwnedLaunch{ModelPath: "/models/vision", Port: 9100}}},
+		"vllm without instance": {ID: "vision", Label: "Vision", App: "vllm", Binding: &DraftBinding{Owned: &DraftOwnedLaunch{ModelPath: "/models/vision", Port: 9100}}},
 	} {
 		if err := validateDrafts(1, []Draft{d}); err == nil {
 			t.Fatalf("%s saved", name)
 		}
 	}
-	incomplete := Draft{ID: "vision", Label: "Vision", App: "ollama", Binding: &DraftBinding{Instance: "owned", Owned: &DraftOwnedLaunch{Port: 9100}}}
+	incomplete := Draft{ID: "vision", Label: "Vision", App: "vllm", Binding: &DraftBinding{Instance: "owned", Owned: &DraftOwnedLaunch{Port: 9100}}}
 	if err := validateDrafts(1, []Draft{incomplete}); err != nil {
 		t.Fatalf("deferred model draft rejected: %v", err)
 	}
 	if _, _, err := OwnedProfile(incomplete, "/user.slice/user-1000.slice/user@1000.service", t.TempDir()); err == nil {
 		t.Fatal("deferred model became ready")
 	}
-	valid := Draft{ID: "vision", Label: "Vision", App: "ollama", Model: "vision", Binding: &DraftBinding{Instance: "owned", Owned: &DraftOwnedLaunch{Port: 9100}}}
+	valid := Draft{ID: "vision", Label: "Vision", App: "vllm", Binding: &DraftBinding{Instance: "owned", Owned: &DraftOwnedLaunch{ModelPath: "/models/vision", Port: 9100}}}
 	if err := validateDrafts(1, []Draft{valid}); err != nil {
 		t.Fatal(err)
 	}
@@ -155,107 +189,30 @@ func TestDraftOwnedRejectsMissingInstance(t *testing.T) {
 // grammar to owned instances at save time.
 func TestDraftOwnedRejectsInvalidInstanceSyntax(t *testing.T) {
 	for _, instance := range []string{"Local", "bad!name", "white space", ""} {
-		d := Draft{ID: "vision", Label: "Vision", App: "llama.cpp", Binding: &DraftBinding{Instance: instance, Owned: &DraftOwnedLaunch{ModelPath: "/models/vision.gguf", Port: 9100}}}
+		d := Draft{ID: "vision", Label: "Vision", App: "vllm", Binding: &DraftBinding{Instance: instance, Owned: &DraftOwnedLaunch{ModelPath: "/models/vision", Port: 9100}}}
 		if err := validateDrafts(1, []Draft{d}); err == nil {
 			t.Fatalf("instance %q saved", instance)
 		}
 	}
-	d := Draft{ID: "vision", Label: "Vision", App: "llama.cpp", Binding: &DraftBinding{Instance: "rig-2", Owned: &DraftOwnedLaunch{ModelPath: "/models/vision.gguf", Port: 9100}}}
+	d := Draft{ID: "vision", Label: "Vision", App: "vllm", Binding: &DraftBinding{Instance: "rig-2", Owned: &DraftOwnedLaunch{ModelPath: "/models/vision", Port: 9100}}}
 	if err := validateDrafts(1, []Draft{d}); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// TestDraftOwnedRejectsInvalidOllamaModel applies the catalog's model-identity
-// rule to owned Ollama drafts at save time.
-func TestDraftOwnedRejectsInvalidOllamaModel(t *testing.T) {
-	for _, model := range []string{"   ", "foo/", "/bar", "vis\x00ion", "a//b"} {
-		d := Draft{ID: "vision", Label: "Vision", App: "ollama", Model: model, Binding: &DraftBinding{Instance: "rig", Owned: &DraftOwnedLaunch{Port: 9100}}}
-		if err := validateDrafts(1, []Draft{d}); err == nil {
-			t.Fatalf("model %q saved", model)
-		}
-	}
-	d := Draft{ID: "vision", Label: "Vision", App: "ollama", Model: "library/vision:latest", Binding: &DraftBinding{Instance: "rig", Owned: &DraftOwnedLaunch{Port: 9100}}}
-	if err := validateDrafts(1, []Draft{d}); err != nil {
-		t.Fatal(err)
+func TestDraftComfyUIRejectsModelChoice(t *testing.T) {
+	if err := validateDrafts(1, []Draft{{ID: "images", Label: "Images", App: "comfyui", Model: "first"}}); err == nil {
+		t.Fatal("ComfyUI accepted a model choice")
 	}
 }
 
-func TestDraftModelSelectionsPersistAndRemainOutsideCatalog(t *testing.T) {
-	for _, app := range []string{"ollama", "llama.cpp", "vllm"} {
-		t.Run(app, func(t *testing.T) {
-			home := t.TempDir()
-			// Model choices can include remote identities: discovery/admission determines
-			// whether a selected model is local and ready, rather than draft persistence.
-			choices := []string{"library/vision:latest", "cloud-model:cloud"}
-			if app != "ollama" {
-				choices = []string{"/models/vision.gguf", "organization/remote-model"}
-			}
-			draft := Draft{ID: "models", Label: "My models", App: app, Models: choices}
-			saved, err := SaveDrafts(home, DraftRequest{Version: 1, Drafts: []Draft{draft}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			reopened, err := ReadDrafts(home)
-			if err != nil || !reflect.DeepEqual(reopened, saved) || !reflect.DeepEqual(reopened.Drafts[0].Models, choices) {
-				t.Fatalf("lost model choices: %+v %v", reopened, err)
-			}
-			if _, err := os.Stat(filepath.Join(home, ".config/gpu-workload-supervisor/catalog.json")); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("choices entered catalog: %v", err)
-			}
-			if _, err := SaveDrafts(home, DraftRequest{Version: 1, Drafts: []Draft{draft}}); err == nil {
-				t.Fatal("stale group save accepted")
-			}
-		})
-	}
-}
-
-func TestDraftModelSelectionsRejectInvalidAndDuplicateValues(t *testing.T) {
-	tooMany := make([]string, 33)
-	for i := range tooMany {
-		tooMany[i] = strings.Repeat("x", i+1)
-	}
-	for name, models := range map[string][]string{
-		"empty identity": {""}, "whitespace": {"   "}, "control": {"valid\n"}, "too long": {strings.Repeat("x", 1025)},
-		"duplicate": {"first", "first"}, "canonical duplicate": {"first", "first:latest"}, "malformed identity": {"first//second"}, "too many": tooMany,
+func TestUnsupportedDraftDoesNotHideOtherInvalidSelections(t *testing.T) {
+	for _, drafts := range [][]Draft{
+		{{ID: "old", Label: "Old", App: "ollama"}, {ID: "bad", Label: "Bad", App: "comfyui", Model: "invalid"}},
+		{{ID: "old", Label: "Old", App: "ollama"}, {ID: "old", Label: "Duplicate", App: "llama.cpp"}},
 	} {
-		t.Run(name, func(t *testing.T) {
-			home := t.TempDir()
-			original, err := SaveDrafts(home, DraftRequest{Version: 1, Drafts: []Draft{{ID: "models", Label: "Models", App: "ollama", Models: []string{"first"}}}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			invalid := Draft{ID: "models", Label: "Models", App: "ollama", Models: models}
-			if _, err := SaveDrafts(home, DraftRequest{Version: 1, ExpectedRevision: original.Revision, Drafts: []Draft{invalid}}); err == nil {
-				t.Fatal("invalid choices saved")
-			}
-			reopened, err := ReadDrafts(home)
-			if err != nil || !reflect.DeepEqual(reopened, original) {
-				t.Fatalf("failed save changed existing choices: %v", err)
-			}
-		})
-	}
-	if err := validateDrafts(1, []Draft{{ID: "models", Label: "Models", App: "comfyui", Models: []string{"first"}}}); err == nil {
-		t.Fatal("ComfyUI accepted model choices")
-	}
-}
-
-func TestDraftModelSelectionsRejectNonScalarJSONAndCorruptStoredChoices(t *testing.T) {
-	for _, raw := range []string{`{"models":[1]}`, `{"models":[{}]}`, `{"models":"first"}`} {
-		var d Draft
-		if err := json.Unmarshal([]byte(raw), &d); err == nil {
-			t.Fatalf("non-scalar model choices accepted: %s", raw)
+		if err := validateDrafts(1, drafts); err == nil || errors.Is(err, ErrUnsupportedDraftApplication) {
+			t.Fatalf("invalid selection treated as removable unsupported application: %v", err)
 		}
-	}
-	home := t.TempDir()
-	if _, err := SaveDrafts(home, DraftRequest{Version: 1}); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(home, ".config/gpu-workload-supervisor/drafts.json")
-	if err := os.WriteFile(path, []byte(`{"version":1,"drafts":[{"id":"models","label":"Models","app":"ollama","models":["first","first:latest"]}]}`), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ReadDrafts(home); err == nil {
-		t.Fatal("corrupt stored selections accepted")
 	}
 }

@@ -13,7 +13,7 @@ import (
 )
 
 func TestNativeLaunchFingerprintAndModelPath(t *testing.T) {
-	for _, family := range []string{"llama.cpp", "vllm", "ollama"} {
+	for _, family := range []string{"vllm"} {
 		t.Run(family, func(t *testing.T) {
 			n := control.NativeModel{Runtime: family, Endpoint: "http://localhost:9000", Model: "selected"}
 			raw := nativeLaunchFixture(t, family, n.Endpoint, n.Model)
@@ -37,36 +37,43 @@ func TestNativeLaunchFingerprintAndModelPath(t *testing.T) {
 			if _, err := inspectFixtureLaunch(path, n); err == nil {
 				t.Fatal("invalid launch qualified")
 			}
-			if family == "ollama" {
-				for _, bad := range []string{strings.Replace(string(raw), "OLLAMA_NO_CLOUD=1", "OLLAMA_NO_CLOUD=0", 1), string(raw) + "Environment=OLLAMA_NO_CLOUD=1\n", string(raw) + "Environment=OLLAMA_HOST=localhost:9000\n", strings.Replace(string(raw), " serve", " run selected", 1), strings.Replace(string(raw), "localhost:9000", "localhost:9001", 1)} {
-					if qualifyFixtureLaunch([]byte(bad), n) == nil {
-						t.Fatal("unsafe ollama launch accepted")
-					}
-				}
-			} else {
-				if family == "vllm" {
-					if err := qualifyFixtureLaunch([]byte(strings.TrimSpace(string(raw))+" --max-model-len 8192"), n); err != nil {
-						t.Fatal(err)
-					}
-				}
-				args := strings.Fields(strings.Split(string(raw), "ExecStart=")[1])
-				local := args[2]
-				withoutAlias := strings.Replace(string(raw), " --alias selected", "", 1)
-				withoutAlias = strings.Replace(withoutAlias, " --served-model-name selected", "", 1)
-				n.Model = local
-				if err := qualifyFixtureLaunch([]byte(withoutAlias), n); err != nil {
+			if qualifyFixtureLaunch([]byte(strings.Replace(string(raw), "--port 9000", "--port 9001", 1)), n) == nil {
+				t.Fatal("launch on another endpoint accepted")
+			}
+			if family == "vllm" {
+				if err := qualifyFixtureLaunch([]byte(strings.TrimSpace(string(raw))+" --max-model-len 8192"), n); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.Remove(local); err != nil {
-					t.Fatal(err)
-				}
-				if qualifyFixtureLaunch(raw, n) == nil {
-					t.Fatal("missing model accepted")
-				}
+			}
+			args := strings.Fields(strings.Split(string(raw), "ExecStart=")[1])
+			local := args[2]
+			withoutAlias := strings.Replace(string(raw), " --served-model-name selected", "", 1)
+			withoutAlias = strings.Replace(withoutAlias, " --served-model-name selected", "", 1)
+			n.Model = local
+			if err := qualifyFixtureLaunch([]byte(withoutAlias), n); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(local); err != nil {
+				t.Fatal(err)
+			}
+			if qualifyFixtureLaunch(raw, n) == nil {
+				t.Fatal("missing model accepted")
 			}
 		})
 	}
 }
+
+// vllmLaunchFixture returns a qualifying direct vLLM launch on
+// localhost:9000 and its binding. The model directory exists.
+func vllmLaunchFixture(t *testing.T) (string, control.NativeModel) {
+	t.Helper()
+	model := filepath.Join(t.TempDir(), "selected")
+	if err := os.Mkdir(model, 0755); err != nil {
+		t.Fatal(err)
+	}
+	return "[Service]\nExecStart=/usr/bin/vllm serve " + model + " --host localhost --port 9000\n", control.NativeModel{Runtime: "vllm", Endpoint: "http://localhost:9000", Model: model}
+}
+
 func qualifyFixtureLaunch(raw []byte, n control.NativeModel) error {
 	return qualifyNativeLaunchWithValidator(raw, n, fixtureExecutableValidator)
 }
@@ -74,24 +81,20 @@ func inspectFixtureLaunch(path string, n control.NativeModel) (string, error) {
 	return inspectQualifiedNativeLaunch(path, n, fixtureExecutableValidator)
 }
 
-func TestNativeLaunchPreservesDocumentedLlamaOptionsAndPreparation(t *testing.T) {
-	n := control.NativeModel{Runtime: "llama.cpp", Endpoint: "http://localhost:9000", Model: "selected"}
+func TestNativeLaunchPreservesDocumentedOptionsAndPreparation(t *testing.T) {
+	n := control.NativeModel{Runtime: "vllm", Endpoint: "http://localhost:9000", Model: "selected"}
 	good := strings.TrimSpace(string(nativeLaunchFixture(t, n.Runtime, n.Endpoint, n.Model)))
-	for _, options := range []string{
-		"--parallel 4 --cont-batching --flash-attn on --spec-type draft-mtp --spec-draft-n-max 4 --spec-draft-n-min 0",
-		"-np -1 -nocb -fa auto",
-	} {
-		model := strings.Fields(strings.Split(good, "ExecStart=")[1])[2]
-		raw := []byte(good + " " + options + "\nExecStartPre=/usr/bin/test -f " + model + "\nExecStartPre=-/usr/bin/true\n")
-		launch, err := inspectAutomaticLaunch(raw, n.Runtime, fixtureExecutableValidator)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(launch.PreCommands) != 2 || launch.SHA256 != fmt.Sprintf("%x", sha256.Sum256(raw)) || !strings.HasSuffix(launch.Command, options) {
-			t.Fatalf("preparation or options lost: %+v", launch)
-		}
+	options := "--max-model-len 4096"
+	model := strings.Fields(strings.Split(good, "ExecStart=")[1])[2]
+	raw := []byte(good + " " + options + "\nExecStartPre=/usr/bin/test -d " + model + "\nExecStartPre=-/usr/bin/true\n")
+	launch, err := inspectAutomaticLaunch(raw, n.Runtime, fixtureExecutableValidator)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, options := range []string{"--parallel 0", "--parallel nope", "-np 2 --parallel 3", "-cb --no-cont-batching", "--flash-attn yes", "--spec-type draft-simple", "--spec-draft-model /other.gguf", "--spec-draft-n-max -1"} {
+	if len(launch.PreCommands) != 2 || launch.SHA256 != fmt.Sprintf("%x", sha256.Sum256(raw)) || !strings.HasSuffix(launch.Command, options) {
+		t.Fatalf("preparation or options lost: %+v", launch)
+	}
+	for _, options := range []string{"--max-model-len 0", "--max-model-len nope", "--max-model-len 1 --max-model-len 2", "--served-model-name other", "--model /other", "--parallel 4", "--unknown x", "--max-model-len"} {
 		if qualifyFixtureLaunch([]byte(good+" "+options), n) == nil {
 			t.Errorf("unsupported options accepted: %s", options)
 		}
@@ -120,7 +123,7 @@ func TestLoadedStartupPreparationMustMatchBoundCommands(t *testing.T) {
 }
 
 func TestNativeStartupPreparationRecheckedBeforeStart(t *testing.T) {
-	m, r, p, cmd := nativeFixture(t, "llama.cpp", "http://localhost:9000")
+	m, r, p, cmd := nativeFixture(t, "vllm", "http://localhost:9000")
 	raw, err := os.ReadFile(p.NativeModel.LaunchFile)
 	if err != nil {
 		t.Fatal(err)
@@ -160,10 +163,9 @@ func TestStartupPreparationRejectsUnboundCodeAndWrappers(t *testing.T) {
 		"/usr/bin/busybox sh " + script,
 		"/usr/bin/timeout 1 /usr/bin/perl " + script,
 		"/usr/bin/xargs /usr/bin/perl " + script,
-		"/opt/trusted/test -f /models/selected.gguf",
+		"/opt/trusted/test -f /models/selected",
 	}
-	n := control.NativeModel{Runtime: "ollama", Endpoint: "http://localhost:9000", Model: "selected"}
-	good := "[Service]\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=localhost:9000\nExecStart=/usr/bin/ollama serve\n"
+	good, n := vllmLaunchFixture(t)
 	// Trust all executable paths to isolate the missing command-policy check.
 	// Script input remains writable by a different principal.
 	validate := func(string) error { return nil }
@@ -199,11 +201,10 @@ func TestStartupPreparationRejectsWritableScriptWithTrustedInterpreter(t *testin
 }
 
 func TestStartupPreparationPreservesSupportedChecks(t *testing.T) {
-	n := control.NativeModel{Runtime: "ollama", Endpoint: "http://localhost:9000"}
-	good := "[Service]\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=localhost:9000\nExecStart=/usr/bin/ollama serve\n"
+	good, n := vllmLaunchFixture(t)
 	commands := []string{"/usr/bin/true", "-/usr/bin/true --", "/bin/false", "-/bin/false --"}
 	for _, predicate := range []string{"-e", "-f", "-d", "-r", "-w", "-x", "-s"} {
-		commands = append(commands, "/usr/bin/test "+predicate+" /models/selected.gguf", "-/bin/test "+predicate+" /models/selected.gguf")
+		commands = append(commands, "/usr/bin/test "+predicate+" /models/selected", "-/bin/test "+predicate+" /models/selected")
 	}
 	for _, command := range commands {
 		t.Run(command, func(t *testing.T) {
@@ -223,10 +224,10 @@ func TestStartupPreparationPreservesSupportedChecks(t *testing.T) {
 		})
 	}
 	for _, command := range []string{
-		"/usr/bin/test -f relative", "/usr/bin/test -f /models/../selected.gguf",
-		"/usr/bin/test -f /models/selected.gguf -o -d /models", "/usr/bin/test /models/selected.gguf",
-		"/usr/bin/test -f /models/selected.gguf extra", "/usr/bin/true ignored", "/usr/bin/false -- extra",
-		"--/usr/bin/true", "+/usr/bin/test -f /models/selected.gguf", "/usr/bin/../bin/true",
+		"/usr/bin/test -f relative", "/usr/bin/test -f /models/../selected",
+		"/usr/bin/test -f /models/selected -o -d /models", "/usr/bin/test /models/selected",
+		"/usr/bin/test -f /models/selected extra", "/usr/bin/true ignored", "/usr/bin/false -- extra",
+		"--/usr/bin/true", "+/usr/bin/test -f /models/selected", "/usr/bin/../bin/true",
 	} {
 		raw := []byte(good + "ExecStartPre=" + command + "\n")
 		if qualifyNativeLaunchWithValidator(raw, n, func(string) error { return nil }) == nil {

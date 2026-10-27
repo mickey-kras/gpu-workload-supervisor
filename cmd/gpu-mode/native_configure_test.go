@@ -1,14 +1,16 @@
 package main
 
 import (
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
+	"context"
 	"path/filepath"
 	"testing"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 )
 
 func TestConfigureRequiresStoppedProxies(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
-	proxy, err := lock.AcquireShared(path + ".proxy.lock")
+	proxy, err := lock.AcquireContext(context.Background(), path+".proxy.lock", true)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -142,22 +142,18 @@ func TestResumeSkipsConflictCheckWhenDeleteAlreadyRan(t *testing.T) {
 	}
 }
 
-// TestPlanOwnedUnitsDedupesSharedUnitDeletes covers the shared Ollama pair:
-// both profiles removed, one unit file, one delete entry.
-func TestPlanOwnedUnitsDedupesSharedUnitDeletes(t *testing.T) {
+// TestPlanOwnedUnitsDedupesRepeatedUnitDeletes covers an owned profile and an
+// adopted profile that both account for one owned unit file: one delete entry.
+func TestPlanOwnedUnitsDedupesRepeatedUnitDeletes(t *testing.T) {
 	home := t.TempDir()
 	backend, _, _ := fixture(t)
-	draft := func(id, model string) Draft {
-		return Draft{ID: id, Label: "Owned " + id, App: "ollama", Model: model, Binding: &DraftBinding{Instance: "local", Owned: &DraftOwnedLaunch{Port: 11434}}}
-	}
-	first, _, err := OwnedProfile(draft("chat", "qwen3:latest"), "/user.slice/user-1000.slice/user@1000.service", home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, raw, err := OwnedProfile(draft("code", "qwen3-coder:latest"), "/user.slice/user-1000.slice/user@1000.service", home)
-	if err != nil {
-		t.Fatal(err)
-	}
+	first, raw := ownedFixtureProfile(t, home, "chat", 9100)
+	converted := first
+	native := *first.NativeModel
+	native.Owned = nil
+	native.LaunchSHA256 = digest(raw)
+	converted.ID = "converted"
+	converted.NativeModel = &native
 	dir := ownedUnitDirectory(home)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
@@ -165,7 +161,7 @@ func TestPlanOwnedUnitsDedupesSharedUnitDeletes(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, first.Unit), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	accepted := control.CatalogSnapshot{Revision: "r1", Catalog: control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{first, second}}}
+	accepted := control.CatalogSnapshot{Revision: "r1", Catalog: control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{first, converted}}}
 	req := ownedFixtureRequest(t, home)
 	req.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health"}}}
 	plan, err := backend.planOwnedUnits(req, accepted, home)
@@ -173,7 +169,7 @@ func TestPlanOwnedUnitsDedupesSharedUnitDeletes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(plan.Deletes) != 1 || plan.Deletes[0] != first.Unit {
-		t.Fatalf("shared unit deleted %v", plan.Deletes)
+		t.Fatalf("repeated unit deleted %v", plan.Deletes)
 	}
 }
 

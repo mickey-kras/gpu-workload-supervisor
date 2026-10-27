@@ -10,22 +10,22 @@ import (
 )
 
 func TestSetupAndRuntimeLoadedCommandParity(t *testing.T) {
-	const command = "/usr/bin/ollama serve"
+	const command = "/usr/bin/vllm serve /models/a --host 127.0.0.1 --port 8080"
 	for _, tc := range []struct {
 		name, loaded string
 		valid        bool
 	}{
-		{"direct", "{ path=/usr/bin/ollama ; argv[]=/usr/bin/ollama serve ; }", true},
-		{"systemd status metadata", "{ path=/usr/bin/ollama ; argv[]=/usr/bin/ollama serve ; ignore_errors=no ; start_time=[n/a] ; }", true},
-		{"different executable", "{ path=/usr/bin/other ; argv[]=/usr/bin/ollama serve ; }", false},
-		{"different argv", "{ path=/usr/bin/ollama ; argv[]=/usr/bin/ollama serve extra ; }", false},
-		{"ignored failure", "{ path=/usr/bin/ollama ; argv[]=/usr/bin/ollama serve ; ignore_errors=yes ; }", false},
-		{"unparsed metadata", "{ path=/usr/bin/ollama ; argv[]=/usr/bin/ollama serve ; } unsupported", false},
-		{"multiple commands", "{ path=/usr/bin/ollama ; argv[]=/usr/bin/ollama serve ; } { path=/usr/bin/ollama ; argv[]=/usr/bin/ollama serve ; }", false},
-		{"missing path", "{ argv[]=/usr/bin/ollama serve ; }", false},
+		{"direct", "{ path=/usr/bin/vllm ; argv[]=/usr/bin/vllm serve /models/a --host 127.0.0.1 --port 8080 ; }", true},
+		{"systemd status metadata", "{ path=/usr/bin/vllm ; argv[]=/usr/bin/vllm serve /models/a --host 127.0.0.1 --port 8080 ; ignore_errors=no ; start_time=[n/a] ; }", true},
+		{"different executable", "{ path=/usr/bin/other ; argv[]=/usr/bin/vllm serve /models/a --host 127.0.0.1 --port 8080 ; }", false},
+		{"different argv", "{ path=/usr/bin/vllm ; argv[]=/usr/bin/vllm serve /models/a --host 127.0.0.1 --port 8080 extra ; }", false},
+		{"ignored failure", "{ path=/usr/bin/vllm ; argv[]=/usr/bin/vllm serve /models/a --host 127.0.0.1 --port 8080 ; ignore_errors=yes ; }", false},
+		{"unparsed metadata", "{ path=/usr/bin/vllm ; argv[]=/usr/bin/vllm serve /models/a --host 127.0.0.1 --port 8080 ; } unsupported", false},
+		{"multiple commands", "{ path=/usr/bin/vllm ; argv[]=/usr/bin/vllm serve /models/a --host 127.0.0.1 --port 8080 ; } { path=/usr/bin/vllm ; argv[]=/usr/bin/vllm serve /models/a --host 127.0.0.1 --port 8080 ; }", false},
+		{"missing path", "{ argv[]=/usr/bin/vllm serve /models/a --host 127.0.0.1 --port 8080 ; }", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			b, d, metadata := automaticFixture(t, "ollama")
+			b, d, metadata := automaticFixture(t, "vllm")
 			metadata[d.Binding.Unit]["ExecStart"] = tc.loaded
 			_, setupErr := b.Prepare(context.Background(), PrepareRequest{Draft: d})
 			runtimeErr := gpuruntime.CheckLoadedLaunchCommand(tc.loaded, command)

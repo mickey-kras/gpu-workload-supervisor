@@ -28,7 +28,7 @@ func (s *shutdownNativeStore) State(context.Context) (control.State, error) {
 }
 func (s *shutdownNativeStore) Catalog(context.Context) (control.CatalogSnapshot, error) {
 	return control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{
-		{ID: "media", NativeModel: &control.NativeModel{Runtime: "ollama", Model: "selected", Endpoint: s.endpoint}},
+		{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: s.endpoint}},
 	}}}, nil
 }
 func (s *shutdownNativeStore) AdmitWorkTokenAtCatalog(context.Context, string, string, control.Workload, control.Fence, string) (string, error) {
@@ -56,8 +56,8 @@ func TestShutdownProxyDrainsHTTPBeforeNativePersistence(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		close(requested)
 		<-terminal
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		_, _ = io.WriteString(w, "{\"done\":true}\n")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
 	}))
 	defer upstream.Close()
 	s := &shutdownNativeStore{endpoint: upstream.URL, started: make(chan struct{}), release: make(chan struct{})}
@@ -65,7 +65,7 @@ func TestShutdownProxyDrainsHTTPBeforeNativePersistence(t *testing.T) {
 	defer releaseWrite.Do(func() { close(s.release) })
 	target, _ := url.Parse(upstream.URL)
 	handler, err := workloadproxy.NewWithContext(context.Background(), s, workloadproxy.Config{
-		Upstream: target, Workload: "media", ExecutionRoutes: []workloadproxy.Route{{Method: "POST", Path: "/api/generate"}},
+		Upstream: target, Workload: "media", ExecutionRoutes: []workloadproxy.Route{{Method: "POST", Path: "/v1/completions"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func TestShutdownProxyDrainsHTTPBeforeNativePersistence(t *testing.T) {
 	}()
 	shuttingDown := make(chan struct{})
 	server.Config.RegisterOnShutdown(func() { close(shuttingDown) })
-	request, _ := http.NewRequest("POST", server.URL+"/api/generate", strings.NewReader(`{"model":"selected"}`))
+	request, _ := http.NewRequest("POST", server.URL+"/v1/completions", strings.NewReader(`{"model":"selected"}`))
 	request.Header.Set(workloadproxy.DefaultRequestIDHeader, "request-1")
 	request.Header.Set(workloadproxy.DefaultFenceIDHeader, "11111111-1111-4111-8111-111111111111")
 	request.Header.Set(workloadproxy.DefaultFenceEpochHeader, "1")
@@ -93,7 +93,7 @@ func TestShutdownProxyDrainsHTTPBeforeNativePersistence(t *testing.T) {
 		}
 		defer response.Body.Close()
 		body, err := io.ReadAll(response.Body)
-		if err != nil || string(body) != "{\"done\":true}\n" {
+		if err != nil || string(body) != "data: [DONE]\n\n" {
 			t.Error("shutdown lost admitted terminal response")
 		}
 	}()

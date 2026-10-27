@@ -35,12 +35,12 @@ func nativePolicy(ctx context.Context, catalog CatalogStore, config Config) (*co
 		return nil, "", errors.New("native model requires matching upstream and no passthrough routes")
 	}
 	for _, r := range config.ExecutionRoutes {
-		if !nativeExecutionRoute(n.Runtime, r) {
+		if !nativeExecutionRoute(r) {
 			return nil, "", errors.New("unsupported native execution route")
 		}
 	}
 	for _, r := range config.ReadOnlyRoutes {
-		if r.Method != "GET" || !nativeReadRoute(n.Runtime, r.Path) {
+		if r.Method != "GET" || r.Path != "/v1/models" {
 			return nil, "", errors.New("unsupported native read route")
 		}
 	}
@@ -54,23 +54,15 @@ func supportedCatalogVersion(v int) bool {
 	return v == 1 || v == 2 || v == 4
 }
 
-func nativeExecutionRoute(runtime string, r Route) bool {
+func nativeExecutionRoute(r Route) bool {
 	if r.Method != "POST" {
 		return false
 	}
 	switch r.Path {
 	case "/v1/chat/completions", "/v1/completions", "/v1/embeddings":
 		return true
-	case "/api/generate", "/api/chat", "/api/embed", "/api/embeddings":
-		return runtime == "ollama"
 	}
 	return false
-}
-func nativeReadRoute(runtime, path string) bool {
-	if path == "/v1/models" {
-		return true
-	}
-	return runtime == "ollama" && (path == "/api/tags" || path == "/api/ps" || path == "/api/version")
 }
 func (h *Handler) checkNativeCatalog(w http.ResponseWriter, r *http.Request) bool {
 	if h.catalog == nil {

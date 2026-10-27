@@ -2,12 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {launch} from './harness.mjs';
 
-const saved = {id: 'draft-one', app: 'ollama', label: 'Qwen', model: 'qwen:latest', endpoint: 'http://127.0.0.1:11434'};
+const saved = {id: 'draft-one', app: 'vllm', label: 'Qwen', model: 'qwen:latest', endpoint: 'http://127.0.0.1:8000'};
 
 for (const [name, probe] of [
-    ['missing from the refreshed inventory', {app: 'ollama', instanceStatus: 'available', inventoryStatus: 'available', models: [{id: 'other'}]}],
-    ['an empty refreshed inventory', {app: 'ollama', instanceStatus: 'available', inventoryStatus: 'available', models: []}],
-    ['an unchecked inventory', {app: 'ollama', instanceStatus: 'not-running', inventoryStatus: 'not-checked'}],
+    ['missing from the refreshed inventory', {app: 'vllm', instanceStatus: 'available', inventoryStatus: 'available', models: [{id: 'other'}]}],
+    ['an empty refreshed inventory', {app: 'vllm', instanceStatus: 'available', inventoryStatus: 'available', models: []}],
+    ['an unchecked inventory', {app: 'vllm', instanceStatus: 'not-running', inventoryStatus: 'not-checked'}],
 ]) {
     test(`refresh retains the saved model when it is ${name}`, async () => {
         const ui = await launch({responses: {drafts: {revision: 'r1', drafts: [saved]}, probe}});
@@ -22,7 +22,7 @@ for (const [name, probe] of [
 
 test('refresh keeps the saved model selected when inventory order changes', async () => {
     const ui = await launch({responses: {drafts: {revision: 'r1', drafts: [saved]},
-        probe: {app: 'ollama', instanceStatus: 'available', inventoryStatus: 'available', models: [{id: 'other'}, {id: 'qwen:latest'}]}}});
+        probe: {app: 'vllm', instanceStatus: 'available', inventoryStatus: 'available', models: [{id: 'other'}, {id: 'qwen:latest'}]}}});
     await ui.by('Check again').emit('clicked');
     const model = ui.by('Model');
     assert.equal(model.selected, 2);
@@ -33,7 +33,7 @@ test('refresh keeps the saved model selected when inventory order changes', asyn
 
 test('unavailable placeholder never rewrites the draft model', async () => {
     const ui = await launch({responses: {drafts: {revision: 'r1', drafts: [saved]},
-        probe: {app: 'ollama', instanceStatus: 'available', inventoryStatus: 'available', models: [{id: 'other'}]}}});
+        probe: {app: 'vllm', instanceStatus: 'available', inventoryStatus: 'available', models: [{id: 'other'}]}}});
     await ui.by('Check again').emit('clicked');
     const model = ui.by('Model');
     ui.edit(model, 'selected', 1);

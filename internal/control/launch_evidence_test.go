@@ -25,7 +25,7 @@ func TestApplicationAndNativeBindingsShareLaunchEvidenceBoundary(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			app := WorkloadProfile{Adapter: "systemd", HealthURL: tt.endpoint + "/system_stats", LaunchBinding: &LaunchBinding{Runtime: "comfyui", Endpoint: tt.endpoint, LaunchFile: tt.file, LaunchSHA256: tt.hash}}
-			native := NativeModel{Runtime: "ollama", Instance: "local", Model: "existing", Endpoint: tt.endpoint, LaunchFile: tt.file, LaunchSHA256: tt.hash}
+			native := NativeModel{Runtime: "vllm", Instance: "local", Model: "existing", Endpoint: tt.endpoint, LaunchFile: tt.file, LaunchSHA256: tt.hash}
 			appErr, nativeErr := app.validateNativeBinding(), native.validate()
 			if (appErr == nil) != tt.valid || (nativeErr == nil) != tt.valid {
 				t.Fatalf("application=%v native=%v expected valid=%v", appErr, nativeErr, tt.valid)
@@ -36,7 +36,7 @@ func TestApplicationAndNativeBindingsShareLaunchEvidenceBoundary(t *testing.T) {
 	if err := native.validate(); err == nil {
 		t.Fatal("shared evidence bypassed runtime validation")
 	}
-	native.Runtime = "ollama"
+	native.Runtime = "vllm"
 	native.Model = ""
 	if err := native.validate(); err == nil {
 		t.Fatal("shared evidence bypassed model identity")
@@ -74,7 +74,7 @@ func TestLaunchBindingRejectsUnsupportedPlacementAndHealthRoute(t *testing.T) {
 		"unsupported slice version": func(p *WorkloadProfile) { p.SystemdSlice, p.SystemdVersion = "app.slice", 250 },
 		"binding with native model": func(p *WorkloadProfile) { p.NativeModel = &NativeModel{} },
 		"binding with wrong runtime": func(p *WorkloadProfile) {
-			p.LaunchBinding.Runtime = "ollama"
+			p.LaunchBinding.Runtime = "vllm"
 		},
 		"binding with wrong adapter": func(p *WorkloadProfile) { p.Adapter = AdapterMediaUnload },
 		"health route mismatch":      func(p *WorkloadProfile) { p.HealthURL = "http://127.0.0.1:8188/other" },
@@ -95,15 +95,15 @@ func TestLaunchBindingEndpointCollisionWithNativeProfile(t *testing.T) {
 		ID:        "text",
 		Label:     "Text",
 		Adapter:   "systemd",
-		Unit:      "llama.service",
-		Cgroup:    "/workloads/llama.service",
+		Unit:      "model.service",
+		Cgroup:    "/workloads/model.service",
 		HealthURL: "http://127.0.0.1:8188/health",
 		NativeModel: &NativeModel{
-			Runtime:      nativeRuntimeLlamaCPP,
+			Runtime:      nativeRuntimeVLLM,
 			Instance:     "local",
 			Model:        "existing",
 			Endpoint:     "http://127.0.0.1:8188",
-			LaunchFile:   "/units/llama.service",
+			LaunchFile:   "/units/model.service",
 			LaunchSHA256: strings.Repeat("b", 64),
 		},
 	}

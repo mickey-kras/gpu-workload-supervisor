@@ -23,13 +23,13 @@ func ownedCLIProfile() control.WorkloadProfile {
 		Cgroup:    "/user.slice/user-1000.slice/user@1000.service/app.slice/gws-owned-vision.service",
 		HealthURL: "http://127.0.0.1:9100/health",
 		NativeModel: &control.NativeModel{
-			Runtime:      "llama.cpp",
+			Runtime:      "vllm",
 			Instance:     "owned",
 			Model:        "vision-q8",
 			Endpoint:     "http://127.0.0.1:9100",
 			LaunchFile:   "/home/u/.config/systemd/user/gws-owned-vision.service",
 			LaunchSHA256: strings.Repeat("a", 64),
-			Owned:        &control.OwnedLaunch{ModelPath: "/models/vision-q8.gguf", Port: 9100, Alias: "vision-q8"},
+			Owned:        &control.OwnedLaunch{ModelPath: "/models/vision-q8", Port: 9100, Alias: "vision-q8"},
 		},
 	}
 }
@@ -63,7 +63,7 @@ func TestOwnedProfilesVerbatimGate(t *testing.T) {
 	})
 	t.Run("modify rejected", func(t *testing.T) {
 		next := accepted.Clone()
-		next.Profiles[0].NativeModel.Owned.CtxSize = 4096
+		next.Profiles[0].NativeModel.Owned.MaxModelLen = 4096
 		if err := ownedProfilesVerbatim(accepted, next); !errors.Is(err, control.ErrOwnedCatalogManagedBySetup) {
 			t.Fatalf("modify = %v", err)
 		}
@@ -129,7 +129,7 @@ func TestConfigureCarriesOwnedProfilesVerbatim(t *testing.T) {
 	})
 	t.Run("mutation rejected", func(t *testing.T) {
 		mutated := v2.Clone()
-		mutated.Profiles[0].NativeModel.Owned.GPULayers = 12
+		mutated.Profiles[0].NativeModel.Owned.MaxModelLen = 12
 		write(mutated)
 		if err := invoke("-catalog", file, "-configuration-revision", snap.Revision, "configure"); !errors.Is(err, control.ErrOwnedCatalogManagedBySetup) {
 			t.Fatalf("mutation = %v", err)
@@ -173,7 +173,7 @@ func TestAdoptedOwnedFileBindingStaysBehindGate(t *testing.T) {
 		}
 	})
 	t.Run("unrelated adopted profile unmanaged", func(t *testing.T) {
-		plain := control.WorkloadProfile{ID: "chat", NativeModel: &control.NativeModel{LaunchFile: "/etc/systemd/user/ollama.service"}}
+		plain := control.WorkloadProfile{ID: "chat", NativeModel: &control.NativeModel{LaunchFile: "/etc/systemd/user/model.service"}}
 		a := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{plain}}
 		n := a.Clone()
 		n.Profiles[0].NativeModel.Model = "other"

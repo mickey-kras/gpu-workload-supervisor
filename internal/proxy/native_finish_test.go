@@ -159,14 +159,14 @@ type nativeRoundTrip func(*http.Request) (*http.Response, error)
 func (f nativeRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func nativeRequest(fence control.Fence) *http.Request {
-	r := httptest.NewRequest("POST", "/api/generate", strings.NewReader(`{"model":"selected"}`))
+	r := httptest.NewRequest("POST", "/v1/completions", strings.NewReader(`{"model":"selected"}`))
 	r.Header.Set(DefaultRequestIDHeader, "request-1")
 	addLeaseHeaders(r, fence)
 	return r
 }
 
 func TestNativePersistenceDoesNotBlockForwardingAndBoundsAdmission(t *testing.T) {
-	f := newTerminalFixture(t, "ollama", "/api/generate", "application/x-ndjson", "{\"done\":true}\n")
+	f := newTerminalFixture(t, "vllm", "/v1/completions", "application/json", `{"choices":[{"finish_reason":"stop"}]}`)
 	started, release := make(chan struct{}), make(chan struct{})
 	var unblock sync.Once
 	defer unblock.Do(func() { close(release) })
@@ -190,7 +190,7 @@ func TestNativePersistenceDoesNotBlockForwardingAndBoundsAdmission(t *testing.T)
 	go func() { f.handler.ServeHTTP(response, request.WithContext(ctx)); close(forwarded) }()
 	awaitNative(t, started)
 	awaitNative(t, forwarded)
-	if response.Body.String() != "{\"done\":true}\n" {
+	if response.Body.String() != `{"choices":[{"finish_reason":"stop"}]}` {
 		t.Fatal("finish contention delayed or damaged terminal bytes")
 	}
 	disconnect() // Verified evidence outlives the downstream request.
@@ -209,7 +209,7 @@ func TestNativePersistenceDoesNotBlockForwardingAndBoundsAdmission(t *testing.T)
 func TestNativeReservationReleasedWithoutProof(t *testing.T) {
 	for _, failure := range []string{"admission", "transport", "unsupported response", "no proof"} {
 		t.Run(failure, func(t *testing.T) {
-			f := newTerminalFixture(t, "ollama", "/api/generate", "application/x-ndjson", "{\"done\":false}\n")
+			f := newTerminalFixture(t, "vllm", "/v1/completions", "application/json", `{"choices":[{"finish_reason":null}]}`)
 			f.handler.nativeFinishes.limit = 1
 			switch failure {
 			case "admission":
@@ -218,7 +218,7 @@ func TestNativeReservationReleasedWithoutProof(t *testing.T) {
 				f.handler.proxy.Transport = nativeRoundTrip(func(*http.Request) (*http.Response, error) { return nil, errors.New("transport failed") })
 			case "unsupported response":
 				f.handler.proxy.Transport = nativeRoundTrip(func(*http.Request) (*http.Response, error) {
-					return &http.Response{StatusCode: 503, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("{\"done\":true}\n"))}, nil
+					return &http.Response{StatusCode: 503, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"choices":[{"finish_reason":"stop"}]}`))}, nil
 				})
 			}
 			for range 2 {
@@ -242,9 +242,9 @@ func TestNativePostTerminalStreamRemainsUnderServerCap(t *testing.T) {
 	proof, release := make(chan struct{}), make(chan struct{})
 	var unblock sync.Once
 	defer unblock.Do(func() { close(release) })
-	f := newTerminalFixtureWith(t, "ollama", "/api/generate", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		fmt.Fprint(w, "{\"done\":true}\n")
+	f := newTerminalFixtureWith(t, "vllm", "/v1/completions", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: [DONE]\n\n")
 		w.(http.Flusher).Flush()
 		<-release
 	}))
@@ -292,12 +292,12 @@ func (b *terminalErrorBody) Read(p []byte) (int, error) {
 func (b *terminalErrorBody) Close() error { b.once.Do(func() { close(b.closed) }); return nil }
 
 func TestNativeProofBytesSurviveConcurrentCloseAndReadError(t *testing.T) {
-	for _, body := range []string{"{\"done\":true}\n", "{\"done\":false}\n", "not json\n{\"done\":true}\n"} {
+	for _, body := range []string{"data: [DONE]\n", "data: {}\n", "data: [DONE]"} {
 		t.Run(body, func(t *testing.T) {
-			f := newTerminalFixture(t, "ollama", "/api/generate", "application/json", "")
+			f := newTerminalFixture(t, "vllm", "/v1/completions", "application/json", "")
 			r := f.handler.nativeFinishes.reserve()
-			response := &http.Response{StatusCode: 200, Header: make(http.Header), Body: &terminalErrorBody{closed: make(chan struct{}), data: body}}
-			f.handler.observeNativeTerminal(response, "/api/generate", "request-1", f.store.state.LeaseFence, "test-registration-token", r)
+			response := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: &terminalErrorBody{closed: make(chan struct{}), data: body}}
+			f.handler.observeNativeTerminal(response, "/v1/completions", "request-1", f.store.state.LeaseFence, "test-registration-token", r)
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
@@ -314,7 +314,7 @@ func TestNativeProofBytesSurviveConcurrentCloseAndReadError(t *testing.T) {
 			r.release()
 			drainNative(t, f.handler)
 			want := 0
-			if body == "{\"done\":true}\n" {
+			if body == "data: [DONE]\n" {
 				want = 1
 			}
 			if len(f.store.finished) != want {
@@ -325,7 +325,7 @@ func TestNativeProofBytesSurviveConcurrentCloseAndReadError(t *testing.T) {
 }
 
 func TestNativeDrainSealsCancelsAndJoins(t *testing.T) {
-	f := newTerminalFixture(t, "ollama", "/api/generate", "application/json", "")
+	f := newTerminalFixture(t, "vllm", "/v1/completions", "application/json", "")
 	started, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var unblock sync.Once
 	defer unblock.Do(func() { close(release) })
@@ -376,7 +376,7 @@ func TestNativeDrainSealsCancelsAndJoins(t *testing.T) {
 }
 
 func TestNativeReportsOutsideLifecycleLocks(t *testing.T) {
-	f := newTerminalFixture(t, "ollama", "/api/generate", "application/json", "")
+	f := newTerminalFixture(t, "vllm", "/v1/completions", "application/json", "")
 	reporting, release := make(chan struct{}), make(chan struct{})
 	var unblock sync.Once
 	defer unblock.Do(func() { close(release) })
@@ -453,13 +453,13 @@ func TestNativePersistenceRecoversFromRealSQLiteContention(t *testing.T) {
 	})
 	defer func() { _ = tx.Rollback(); drainNative(t, h) }()
 	r := h.nativeFinishes.reserve()
-	response := &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("{\"done\":true}\n"))}
-	h.observeNativeTerminal(response, "/api/generate", "contended", state.LeaseFence, token, r)
+	response := &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"choices":[{"finish_reason":"stop"}]}`))}
+	h.observeNativeTerminal(response, "/v1/completions", "contended", state.LeaseFence, token, r)
 	start := time.Now()
 	body, err := io.ReadAll(response.Body)
 	_ = response.Body.Close()
 	r.release()
-	if err != nil || string(body) != "{\"done\":true}\n" || time.Since(start) > time.Second {
+	if err != nil || string(body) != `{"choices":[{"finish_reason":"stop"}]}` || time.Since(start) > time.Second {
 		t.Fatal("SQLite contention blocked terminal forwarding")
 	}
 	// Keep the writer through the first real busy timeout. Cancellation cannot

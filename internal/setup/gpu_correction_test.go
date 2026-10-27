@@ -20,14 +20,15 @@ func gpuCorrectionFixture(t *testing.T) (Backend, string, GPUCorrectionRequest, 
 	if err := os.MkdirAll(unitRoot, 0700); err != nil {
 		t.Fatal(err)
 	}
-	executable := filepath.Join(home, "llama-server")
-	model := filepath.Join(home, "model.gguf")
-	for _, path := range []string{executable, model} {
-		if err := os.WriteFile(path, []byte("fixture, never executed"), 0700); err != nil {
-			t.Fatal(err)
-		}
+	executable := filepath.Join(home, "vllm")
+	model := filepath.Join(home, "model")
+	if err := os.WriteFile(executable, []byte("fixture, never executed"), 0700); err != nil {
+		t.Fatal(err)
 	}
-	command := executable + " -m " + model + " --host 127.0.0.1 --port 8080"
+	if err := os.Mkdir(model, 0700); err != nil {
+		t.Fatal(err)
+	}
+	command := executable + " serve " + model + " --host 127.0.0.1 --port 8080"
 	unit := "llm.service"
 	fragment := filepath.Join(unitRoot, unit)
 	if err := os.WriteFile(fragment, []byte("[Service]\nType=exec\nRestart=no\nEnvironment=CUDA_VISIBLE_DEVICES=0\nExecStart="+command+"\n"), 0600); err != nil {
@@ -53,7 +54,7 @@ func gpuCorrectionFixture(t *testing.T) (Backend, string, GPUCorrectionRequest, 
 		}
 		return []byte(out.String()), nil
 	}
-	return b, home, GPUCorrectionRequest{App: appLlamaCPP, Unit: unit}, values
+	return b, home, GPUCorrectionRequest{App: "vllm", Unit: unit}, values
 }
 
 func TestGPUCorrectionRequiresFreshConsentAndPreservesOriginalService(t *testing.T) {
@@ -105,7 +106,7 @@ func TestGPUCorrectionRejectsActiveServiceAndAmbiguousInventory(t *testing.T) {
 
 func TestGPUCorrectionPreviewDoesNotHideOtherLaunchFailures(t *testing.T) {
 	b, home, request, values := gpuCorrectionFixture(t)
-	if err := os.WriteFile(values["FragmentPath"], []byte("[Service]\nEnvironment=CUDA_VISIBLE_DEVICES=0\nExecStart=/missing/llama-server --model /missing/model\n"), 0600); err != nil {
+	if err := os.WriteFile(values["FragmentPath"], []byte("[Service]\nEnvironment=CUDA_VISIBLE_DEVICES=0\nExecStart=/missing/vllm --model /missing/model\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := b.CorrectGPU(context.Background(), home, request); err == nil {

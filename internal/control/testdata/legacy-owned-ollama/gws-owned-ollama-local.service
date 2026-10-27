@@ -1,0 +1,10 @@
+[Unit]
+Description=Supervisor-owned ollama launch for instance local
+
+[Service]
+Type=simple
+Restart=no
+Environment=OLLAMA_NO_CLOUD=1
+Environment=OLLAMA_HOST=127.0.0.1:11434
+Environment=OLLAMA_MAX_LOADED_MODELS=1
+ExecStart=/usr/bin/ollama serve

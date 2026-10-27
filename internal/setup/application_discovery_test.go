@@ -15,7 +15,13 @@ func TestApplicationDiscoveryFiltersServicesByExecutable(t *testing.T) {
 			t.Fatalf("unexpected executable %s", exe)
 		}
 		if strings.Contains(joined, "list-unit-files") {
-			return []byte("ollama.service disabled\nvllm-fake.service enabled\nssh.service enabled\ncustom.service enabled\n"), nil
+			return []byte("vllm.service disabled\nllama.service disabled\nollama.service disabled\nvllm-fake.service enabled\nssh.service enabled\ncustom.service enabled\n"), nil
+		}
+		if strings.HasSuffix(joined, "-- vllm.service") {
+			return []byte("ExecStart={ path=/usr/bin/vllm ; argv[]=/usr/bin/vllm serve --port 8000 ; ignore_errors=no ; }\nControlGroup=/user.slice/vllm.service\nActiveState=inactive\nSubState=dead\n"), nil
+		}
+		if strings.HasSuffix(joined, "-- llama.service") {
+			return []byte("ExecStart={ path=/usr/bin/llama-server ; argv[]=/usr/bin/llama-server --port 8080 ; ignore_errors=no ; }\nControlGroup=/user.slice/llama.service\nActiveState=inactive\nSubState=dead\n"), nil
 		}
 		if strings.HasSuffix(joined, "-- ollama.service") {
 			return []byte("ExecStart={ path=/usr/bin/ollama ; argv[]=/usr/bin/ollama serve ; ignore_errors=no ; }\nControlGroup=/user.slice/ollama.service\nActiveState=inactive\nSubState=dead\n"), nil
@@ -30,14 +36,14 @@ func TestApplicationDiscoveryFiltersServicesByExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Units) != 1 || got.Units[0] != "ollama.service" {
-		t.Fatalf("unrelated services leaked: %v", got.Units)
+	if len(got.Units) != 1 || got.Units[0] != "vllm.service" {
+		t.Fatalf("unrelated or removed services leaked: %v", got.Units)
 	}
-	if len(got.Applications) != 5 {
+	if len(got.Applications) != 3 {
 		t.Fatal(got.Applications)
 	}
-	service := got.Applications[4]
-	if service.App != "ollama" || service.InstanceStatus != "not-running" || service.Cgroup != "/user.slice/ollama.service" || service.LifecycleControl != "unverified" {
+	service := got.Applications[2]
+	if service.App != "vllm" || service.InstanceStatus != "not-running" || service.Cgroup != "/user.slice/vllm.service" || service.LifecycleControl != "unverified" {
 		t.Fatalf("%+v", service)
 	}
 	data, err := json.Marshal(service)
@@ -49,12 +55,12 @@ func TestApplicationDiscoveryFiltersServicesByExecutable(t *testing.T) {
 	}
 }
 func TestServiceIdentityDoesNotExecuteConfiguration(t *testing.T) {
-	for _, input := range []string{"ExecStart={ path=/bin/bash ; argv[]=/bin/bash -c ollama serve ; }", "ExecStart={ path=/usr/bin/python ; argv[]=/usr/bin/python /tmp/main.py ; }", "ExecStart={ path=/usr/bin/not-ollama ; argv[]=/usr/bin/not-ollama ; }", "ExecStart={ path=llama-server ; argv[]=llama-server -m /a ; }", "ExecStart={ path=/usr/bin/llama-server ; argv[]=/usr/bin/other -m /a ; }", "ExecStart={ path=/usr/bin/llama-server ; argv[]=/usr/bin/llama-server -m /a ; } { path=/usr/bin/other ; argv[]=/usr/bin/other x ; }"} {
+	for _, input := range []string{"ExecStart={ path=/usr/bin/ollama ; argv[]=/usr/bin/ollama serve ; }", "ExecStart={ path=/bin/bash ; argv[]=/bin/bash -c ollama serve ; }", "ExecStart={ path=/usr/bin/python ; argv[]=/usr/bin/python /tmp/main.py ; }", "ExecStart={ path=/usr/bin/not-ollama ; argv[]=/usr/bin/not-ollama ; }", "ExecStart={ path=llama-server ; argv[]=llama-server -m /a ; }", "ExecStart={ path=/usr/bin/llama-server ; argv[]=/usr/bin/other -m /a ; }", "ExecStart={ path=/usr/bin/llama-server ; argv[]=/usr/bin/llama-server -m /a ; } { path=/usr/bin/other ; argv[]=/usr/bin/other x ; }", "ExecStart={ path=/usr/bin/llama-server ; argv[]=/usr/bin/llama-server -m /a.gguf ; }", "ExecStart={ path=/usr/bin/vllm ; argv[]=/usr/bin/vllm serve /a ; } { path=/usr/bin/other ; argv[]=/usr/bin/other x ; }"} {
 		if appFromUnit(input) != "" {
 			t.Fatal("guessed application", input)
 		}
 	}
-	for _, tt := range []struct{ input, app string }{{"ExecStart={ path=/usr/bin/llama-server ; argv[]=/usr/bin/llama-server -m /a.gguf ; }", "llama.cpp"}, {"ExecStart={ path=/usr/bin/vllm ; argv[]=/usr/bin/vllm serve /a ; }", "vllm"}, {"ExecStart={ path=/opt/env/bin/python3 ; argv[]=/opt/env/bin/python3 -m vllm.entrypoints.openai.api_server ; }", "vllm"}, {"ExecStart={ path=/opt/env/bin/python ; argv[]=/opt/env/bin/python /opt/ComfyUI/main.py ; }", "comfyui"}} {
+	for _, tt := range []struct{ input, app string }{{"ExecStart={ path=/usr/bin/vllm ; argv[]=/usr/bin/vllm serve /a ; }", "vllm"}, {"ExecStart={ path=/opt/env/bin/python3 ; argv[]=/opt/env/bin/python3 -m vllm.entrypoints.openai.api_server ; }", "vllm"}, {"ExecStart={ path=/opt/env/bin/python ; argv[]=/opt/env/bin/python /opt/ComfyUI/main.py ; }", "comfyui"}} {
 		if got := appFromUnit(tt.input); got != tt.app {
 			t.Fatalf("%s != %s", got, tt.app)
 		}
@@ -62,10 +68,13 @@ func TestServiceIdentityDoesNotExecuteConfiguration(t *testing.T) {
 }
 
 func TestDiscoveryUsesLaunchReferencesWithoutExecutingThem(t *testing.T) {
-	input := "ExecStart={ path=/usr/bin/llama-server ; argv[]=/usr/bin/llama-server -m /models/a.gguf --alias chat ; }\n"
-	found := launchModels("llama.cpp", input)
-	if len(found) != 1 || found[0].ID != "/models/a.gguf" || found[0].Loaded != "unknown" {
+	input := "ExecStart={ path=/usr/bin/vllm ; argv[]=/usr/bin/vllm serve /models/a --served-model-name chat ; }\n"
+	found := launchModels("vllm", input)
+	if len(found) != 1 || found[0].ID != "/models/a" || found[0].Loaded != "unknown" || found[0].Locality != "local" {
 		t.Fatal(found)
+	}
+	if found := launchModels("llama.cpp", "ExecStart={ path=/usr/bin/llama-server ; argv[]=/usr/bin/llama-server -m /models/a.gguf ; }\n"); len(found) != 0 {
+		t.Fatal("removed runtime model parsed")
 	}
 	input = "ExecStart={ path=/usr/bin/vllm ; argv[]=/usr/bin/vllm serve org/model --served-model-name one two --port 8000 ; }\n"
 	found = launchModels("vllm", input)
@@ -75,7 +84,7 @@ func TestDiscoveryUsesLaunchReferencesWithoutExecutingThem(t *testing.T) {
 	if found := launchModels("comfyui", input); len(found) != 0 {
 		t.Fatal("ComfyUI model picker")
 	}
-	if found := launchModels("llama.cpp", "ExecStart={ path=/bin/sh ; argv[]=/bin/sh -c 'llama-server -m /model' ; }"); len(found) != 0 {
+	if found := launchModels("vllm", "ExecStart={ path=/bin/sh ; argv[]=/bin/sh -c 'vllm serve /model' ; }"); len(found) != 0 {
 		t.Fatal("shell command parsed")
 	}
 }

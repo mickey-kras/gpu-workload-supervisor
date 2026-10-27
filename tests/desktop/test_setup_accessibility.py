@@ -21,8 +21,8 @@ with patch.dict(sys.modules, {'pyatspi': types.ModuleType('pyatspi'), 'gi': type
 
 
 def model_tree(focus=True):
-    content = [('Example small', 'check box'), ('Example large', 'check box'),
-               ('Settings for ComfyUI', 'push button'), ('Settings for Ollama', 'push button'),
+    content = [('Model', 'combo box'),
+               ('Settings for ComfyUI', 'push button'), ('Settings for vLLM', 'push button'),
                ('Continue', 'push button'), ('Back', 'push button')]
     return [{'name': name, 'role': role, 'showing': True, 'focused': focus and name == 'Continue', 'expanded': False, 'enabled': True, 'sensitive': True}
             for name, role in content]
@@ -146,8 +146,8 @@ class SamplingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = pathlib.Path(directory) / 'snapshot.json'
             contract = pathlib.Path(directory) / 'contract.json'
-            contract.write_text(json.dumps({'required': [{'name': 'Example small'}, {'name': 'Continue', 'sensitive': True}],
-                                            'requiredContains': ['Example']}))
+            contract.write_text(json.dumps({'required': [{'name': 'Model'}, {'name': 'Continue', 'sensitive': True}],
+                                            'requiredContains': ['Model']}))
             self.run_main(model_tree(), output, screen='settings', contract=contract)
 
     def test_sampling_retains_distinct_enabled_and_sensitive_states(self):
@@ -180,13 +180,13 @@ class SamplingTests(unittest.TestCase):
         with patch.object(accessibility, 'sample_in_main_context', lambda sample, _deadline, clock: sample()), \
                 tempfile.TemporaryDirectory() as directory:
             output = pathlib.Path(directory) / 'snapshot.json'
-            with self.assertRaisesRegex(AssertionError, 'missing model choice: Example small'):
+            with self.assertRaisesRegex(AssertionError, 'missing model choice: Model'):
                 self.run_main(model_tree(), output)
             self.assertEqual(set(self.registry.native_depths), {0})
             self.assertEqual(len(json.loads(output.read_text())), 1)
 
     def test_persistent_root_only_and_missing_content_still_fail(self):
-        for content in ([], [node for node in model_tree() if node['name'] != 'Example small'],
+        for content in ([], [node for node in model_tree() if node['name'] != 'Model'],
                         model_tree(focus=False)):
             with self.subTest(content=content), tempfile.TemporaryDirectory() as directory:
                 output = pathlib.Path(directory) / 'snapshot.json'
@@ -292,10 +292,10 @@ class ReadinessTests(unittest.TestCase):
             self.assertEqual(json.loads(output.read_text()), complete)
 
     def test_missing_model_never_passes_and_retains_final_snapshot(self):
-        incomplete = [node for node in model_tree() if node['name'] != 'Example small']
+        incomplete = [node for node in model_tree() if node['name'] != 'Model']
         with tempfile.TemporaryDirectory() as directory:
             output = pathlib.Path(directory) / 'snapshot.json'
-            with self.assertRaisesRegex(AssertionError, 'missing model choice: Example small'):
+            with self.assertRaisesRegex(AssertionError, 'missing model choice: Model'):
                 self.observe([[], incomplete], output)
             self.assertEqual(json.loads(output.read_text()), incomplete)
 

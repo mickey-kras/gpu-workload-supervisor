@@ -19,24 +19,12 @@
 - Setup: no broker, gateway or scanner installation.
 - [Trainer adapters](TRAINING.md): recipes and checkpoint contents. Controller: finite-job lifecycle.
 
-## Model attestation
+## Model checks
 
-The [attestation contract](MODEL-ATTESTATION.md) defines the envelope, signing bytes and policy.
-The producer and the gate do not exist yet. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585):
-scan, report and attestation preparation.
-[#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583):
-pre-execution verification, policy and UI.
-
-- Adopt [Microsoft's LLM Backdoor Scanner](https://github.com/microsoft/llm-backdoor-scanner) after qualification. Select other tools later.
-- Scan in isolated staging before serving approval, never during activation. Scans can execute untrusted models.
-- Bind signatures to exact artifact inventory, scanner versions and configuration, results and policy.
-- Keep signing keys and scanners outside the supervisor. Check the evidence and artifact identity before model loading or execution.
-- Assess converted, quantized and adapter-composed artifacts separately.
-- Reject invalid signatures and artifact mismatches. Advisory and enforcement rules and explicit exceptions: #583.
-- Warn on missing, unsupported, skipped or failed checks. Distinguish findings from integrity failures.
-- UI: **Verified attestation**, never **Safe model**. Report details available.
-
-UI notice: "These checks are a defensive part. They do not detect every backdoor or vulnerability."
+The supervisor does not check models yet.
+[#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans a scan of each LLM before its first use.
+[#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583) plans to show the result and to stop models that did not pass.
+These checks are a defensive layer. They do not prove that a model is safe.
 
 ## State model
 

@@ -53,7 +53,7 @@ func (b Backend) Prepare(ctx context.Context, request PrepareRequest) (PreparedA
 	if !selectedUnitName.MatchString(d.Binding.Unit) {
 		return PreparedApplication{}, errors.New("choose a recognized installed application first")
 	}
-	found, err := b.automaticConfiguration(ctx, d.App, d.Binding.Unit, d.Model)
+	found, err := b.automaticConfiguration(ctx, d.App, d.Binding.Unit)
 	if err != nil {
 		return PreparedApplication{}, err
 	}
@@ -85,7 +85,7 @@ func validatePreparedInstallation(d Draft, found control.WorkloadProfile) error 
 			return errors.New("installation settings changed or the override does not match its supported launch; refresh and retry")
 		}
 	}
-	if d.App != "comfyui" && d.App != "ollama" && d.Model != "" && d.Model != model {
+	if d.App != "comfyui" && d.Model != "" && d.Model != model {
 		return errors.New("selected model does not match the existing launch; choose its configured model")
 	}
 	return nil
@@ -137,14 +137,14 @@ func (b Backend) showApplicationCandidate(ctx context.Context, unit string) (map
 	}
 	return values, nil
 }
-func (b Backend) automaticConfiguration(ctx context.Context, app, unit, model string) (control.WorkloadProfile, error) {
+func (b Backend) automaticConfiguration(ctx context.Context, app, unit string) (control.WorkloadProfile, error) {
 	values, err := b.showAutomatic(ctx, unit)
 	if err != nil {
 		return control.WorkloadProfile{}, err
 	}
-	return b.configurationFromMetadata(ctx, app, unit, model, values)
+	return b.configurationFromMetadata(ctx, app, unit, values)
 }
-func (b Backend) configurationFromMetadata(ctx context.Context, app, unit, model string, values map[string]string) (control.WorkloadProfile, error) {
+func (b Backend) configurationFromMetadata(ctx context.Context, app, unit string, values map[string]string) (control.WorkloadProfile, error) {
 	p := control.WorkloadProfile{Adapter: "systemd", Unit: unit}
 	var problems []error
 	if values["NeedDaemonReload"] != "no" {
@@ -181,8 +181,8 @@ func (b Backend) configurationFromMetadata(ctx context.Context, app, unit, model
 	if err := (ProbeRequest{App: app, Endpoint: launch.Endpoint}).validate(); err != nil {
 		return p, err
 	}
-	err = bindInstallationLaunch(&p, values, launch, app, unit, model)
-	return p, err
+	bindInstallationLaunch(&p, values, launch, app, unit)
+	return p, nil
 }
 
 func (b Backend) inspectAutomaticMetadata(values map[string]string, app string) (gpuruntime.AutomaticLaunch, error) {
@@ -223,24 +223,14 @@ func (b Backend) resolveInstallationPlacement(ctx context.Context, unit string, 
 	return nil
 }
 
-func bindInstallationLaunch(p *control.WorkloadProfile, values map[string]string, launch gpuruntime.AutomaticLaunch, app, unit, model string) error {
+func bindInstallationLaunch(p *control.WorkloadProfile, values map[string]string, launch gpuruntime.AutomaticLaunch, app, unit string) {
 	if app == "comfyui" {
 		p.HealthURL = launch.Endpoint + "/system_stats"
 		p.LaunchBinding = &control.LaunchBinding{GPUUUID: launch.GPUUUID, Runtime: app, Endpoint: launch.Endpoint, LaunchFile: values["FragmentPath"], LaunchSHA256: launch.SHA256, DropIns: launch.DropIns}
 	} else {
-		if app != "ollama" {
-			model = launch.Model
-		}
-		if app == "ollama" && model == "" {
-			return errors.New("choose an existing local Ollama model; setup will not start Ollama or download models")
-		}
 		p.HealthURL = launch.Endpoint + "/health"
-		if app == "ollama" {
-			p.HealthURL = launch.Endpoint + "/api/tags"
-		}
-		p.NativeModel = &control.NativeModel{GPUUUID: launch.GPUUUID, Runtime: app, Instance: "instance-" + candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"}).ID, Model: model, Endpoint: launch.Endpoint, LaunchFile: values["FragmentPath"], LaunchSHA256: launch.SHA256, DropIns: launch.DropIns}
+		p.NativeModel = &control.NativeModel{GPUUUID: launch.GPUUUID, Runtime: app, Instance: "instance-" + candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"}).ID, Model: launch.Model, Endpoint: launch.Endpoint, LaunchFile: values["FragmentPath"], LaunchSHA256: launch.SHA256, DropIns: launch.DropIns}
 	}
-	return nil
 }
 
 func (b Backend) unitAtReference(ctx context.Context, d Draft) (string, error) {

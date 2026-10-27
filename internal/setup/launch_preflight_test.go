@@ -37,7 +37,7 @@ func TestApplyPreflightsWrittenOwnedAndDriftedAdoptedBeforeCommit(t *testing.T) 
 				t.Fatal(err)
 			}
 			adopted := request.Catalog.Profiles[0]
-			adopted.NativeModel = &control.NativeModel{Runtime: "llama.cpp", Instance: "existing", Model: "selected", Endpoint: "http://127.0.0.1:8000", LaunchFile: external, LaunchSHA256: digest(original)}
+			adopted.NativeModel = &control.NativeModel{Runtime: "vllm", Instance: "existing", Model: "selected", Endpoint: "http://127.0.0.1:8000", LaunchFile: external, LaunchSHA256: digest(original)}
 			request.Catalog.Profiles = []control.WorkloadProfile{adopted}
 			if err := backend.Apply(t.Context(), home, request); err != nil {
 				t.Fatal(err)
@@ -131,11 +131,11 @@ func TestAllOwnedActivationPreflightsNewUnitBeforeCatalogCommit(t *testing.T) {
 }
 
 func TestPreviewAndApplyCarryOnlyAcceptedOwnedRemovalProofs(t *testing.T) {
-	for _, change := range []string{"remove", "instance edit", "drifted removal"} {
+	for _, change := range []string{"remove", "identity edit", "drifted removal"} {
 		t.Run(change, func(t *testing.T) {
 			backend, home, request := fixture(t)
 			backend.runCommand = fakeOwnedCommandFor(home)
-			draft := Draft{ID: "chat", Label: "Chat", App: "ollama", Model: "qwen:latest", Binding: &DraftBinding{Instance: "first", Owned: &DraftOwnedLaunch{Port: 11434}}}
+			draft := ownedDraft("chat", 9100)
 			original, raw, err := OwnedProfile(draft, "/user.slice/user-1000.slice/user@1000.service", home)
 			if err != nil {
 				t.Fatal(err)
@@ -147,8 +147,8 @@ func TestPreviewAndApplyCarryOnlyAcceptedOwnedRemovalProofs(t *testing.T) {
 			}
 			request.ExpectedRevision = currentRevision(t, request)
 			request.Catalog.Profiles = []control.WorkloadProfile{adopted}
-			if change == "instance edit" {
-				draft.Binding.Instance = "second"
+			if change == "identity edit" {
+				draft.ID = "chat-two"
 				replacement, _, err := OwnedProfile(draft, "/user.slice/user-1000.slice/user@1000.service", home)
 				if err != nil {
 					t.Fatal(err)

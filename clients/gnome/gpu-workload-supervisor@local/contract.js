@@ -142,7 +142,7 @@ function validateStatus(s) {
 // version-1 shape with status and no settings. A successful activate-workload
 // additionally carries the freshly rotated lease fence.
 export const SETTINGS_ACTIONS = ['get-settings', 'set-idle-policy'];
-export const ACTIVATE_ACTION = 'activate-workload';
+const ACTIVATE_ACTION = 'activate-workload';
 
 // The committed fence handed to the activating caller: an opaque incarnation
 // token plus a canonical nonzero uint64 epoch string (never a number), the

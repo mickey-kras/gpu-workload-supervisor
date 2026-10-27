@@ -33,7 +33,7 @@ func TestFinalApplicationUIRequestsApplyAndReopenWithRealBackend(t *testing.T) {
 	}
 	request.ExpectedRevision = before.Revision
 	request.ConfirmQuiesced = false
-	paths := []string{request.Catalog.Profiles[0].LaunchBinding.LaunchFile, filepath.Join(home, "models/model.gguf"), filepath.Join(home, "application/workflow.json"), filepath.Join(home, ".config/systemd/user/comfyui.service.d/override.conf")}
+	paths := []string{request.Catalog.Profiles[0].LaunchBinding.LaunchFile, filepath.Join(home, "models/model"), filepath.Join(home, "application/workflow.json"), filepath.Join(home, ".config/systemd/user/comfyui.service.d/override.conf")}
 	for _, path := range paths {
 		acceptanceWrite(t, path, []byte("preserved application content"))
 	}

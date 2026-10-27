@@ -54,9 +54,7 @@ def run_case(root, output, dimensions):
     # issue state so an accidentally skipped path cannot produce a green run.
     required = {'settings-rechecked-ready', 'settings-stopped', 'settings-installation-long-identity', 'installation-selection', 'application-settings', 'settings-advanced-edited',
                 'settings-resource-checks', 'settings-launch-details', 'settings-draft-cancelled',
-                'configuration-checking', 'settings-stale-check', 'settings-stale-endpoint-check', 'temporary-without-consent',
-                'temporary-checking', 'temporary-cleanup-required', 'temporary-close-blocked',
-                'temporary-cleanup-complete', 'temporary-cancelled-restored'}
+                'configuration-checking', 'settings-stale-check', 'settings-stale-endpoint-check'}
     required.update(('diagnostic-export', 'settings-installed-blocked', 'correction-unavailable', 'correction-selected-preview', 'correction-inventory-disappeared'))
     required.update(('included-unresolved-settings', 'included-unresolved-blocked', 'included-valid-rest-review'))
     required.update(f'settings-{state}' for state in

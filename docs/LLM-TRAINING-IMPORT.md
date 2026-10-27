@@ -12,7 +12,7 @@ Keep the destination parent private. Publication never replaces an existing
 file. The plan contains `status: "unqualified"` and `servingQualified: false`.
 `peft` identifies the artifact format, not a serving runtime.
 
-The command rejects vLLM, Ollama,
+The command rejects vLLM,
 llama.cpp, GGUF and other target values. A PEFT reload does not
 prove compatibility with any of those runtimes. Before you enable serving import for one of those runtimes, qualify the version and a supported base and adapter combination.
 Also collect evidence of supervised serving and handoff.

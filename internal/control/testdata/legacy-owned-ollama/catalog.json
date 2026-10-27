@@ -1,0 +1,43 @@
+{
+  "version": 2,
+  "profiles": [
+    {
+      "nativeModel": {
+        "runtime": "ollama",
+        "instance": "local",
+        "model": "qwen:latest",
+        "endpoint": "http://127.0.0.1:11434",
+        "launchFile": "/home/legacy/.config/systemd/user/gws-owned-ollama-local.service",
+        "launchSHA256": "83b43ae18aaed16d96116d3672cb355fa884a4b532b4f04d26df5790d0fa5e8d",
+        "owned": {
+          "port": 11434
+        }
+      },
+      "id": "assistant",
+      "label": "Assistant",
+      "adapter": "systemd",
+      "unit": "gws-owned-ollama-local.service",
+      "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/gws-owned-ollama-local.service",
+      "healthURL": "http://127.0.0.1:11434/api/tags"
+    },
+    {
+      "nativeModel": {
+        "runtime": "ollama",
+        "instance": "local",
+        "model": "coder:latest",
+        "endpoint": "http://127.0.0.1:11434",
+        "launchFile": "/home/legacy/.config/systemd/user/gws-owned-ollama-local.service",
+        "launchSHA256": "83b43ae18aaed16d96116d3672cb355fa884a4b532b4f04d26df5790d0fa5e8d",
+        "owned": {
+          "port": 11434
+        }
+      },
+      "id": "coder",
+      "label": "Coder",
+      "adapter": "systemd",
+      "unit": "gws-owned-ollama-local.service",
+      "cgroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/gws-owned-ollama-local.service",
+      "healthURL": "http://127.0.0.1:11434/api/tags"
+    }
+  ]
+}

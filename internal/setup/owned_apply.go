@@ -350,28 +350,6 @@ func ownedProfileForUnit(c control.Catalog, unit string) (control.WorkloadProfil
 	return control.WorkloadProfile{}, false
 }
 
-// verifySharedPairBindings preflights new or edited adopted Ollama groups before
-// owned writes. Pending owned launches are excluded from this read-only check;
-// Apply verifies the complete catalog and GPU release again before commit.
-func (work *activationWork) verifySharedPairBindings(ctx context.Context) error {
-	for i, p := range work.request.Catalog.Profiles {
-		for _, q := range work.request.Catalog.Profiles[:i] {
-			if !control.SharedOllamaUnit(p, q) {
-				continue
-			}
-			if p.NativeModel.Owned != nil && q.NativeModel.Owned != nil {
-				continue
-			}
-			acceptedP, okP := work.accepted.Catalog.Profile(p.ID)
-			acceptedQ, okQ := work.accepted.Catalog.Profile(q.ID)
-			if !okP || !okQ || !reflect.DeepEqual(acceptedP, p) || !reflect.DeepEqual(acceptedQ, q) {
-				return work.backend.verifyBindings(ctx, work.home, work.request)
-			}
-		}
-	}
-	return nil
-}
-
 // requireMatchingActivation blocks journal consumption by any request other
 // than the one the in-flight activation recorded. A successful commit retires
 // the record, so its presence means the activation is genuinely interrupted.
@@ -406,12 +384,12 @@ func (work activationWork) verifyAcceptedRuntime(ctx context.Context) error {
 	}
 	previous := work.request
 	previous.Profile = work.old
-	previous.Catalog = work.accepted.Catalog
+	previous.Catalog = removalObservationCatalog(work.accepted.Catalog)
 	manager, err := work.backend.makeRuntime(previous)
 	if err != nil {
 		return err
 	}
-	if err := verifyActivationBindings(ctx, manager, unitPlan{}); err != nil {
+	if err := verifyActivationBindings(ctx, manager, work.removedRuntimePlan()); err != nil {
 		return err
 	}
 	return manager.ReleasedFor(ctx, control.WorkloadIdle)
@@ -462,7 +440,7 @@ func (work activationWork) verifyRuntimes(ctx context.Context, plan unitPlan) (g
 	if work.existing && work.old.StatePath != "" {
 		previous := work.request
 		previous.Profile = work.old
-		previous.Catalog = work.accepted.Catalog
+		previous.Catalog = removalObservationCatalog(work.accepted.Catalog)
 		replaced := map[string]bool{}
 		// Before the first commit, only the recorded setup plan has a mapping.
 		if work.accepted.Revision == "" {
@@ -598,4 +576,46 @@ func verifyActivationBindings(ctx context.Context, manager gpuruntime.Manager, p
 		return fmt.Errorf("configured workload bindings are not verified: %w", err)
 	}
 	return nil
+}
+
+func removalObservationCatalog(c control.Catalog) control.Catalog {
+	if !hasRemovedRuntime(c) {
+		return c
+	}
+	c = c.Clone()
+	var profiles []control.WorkloadProfile
+	seen := map[string]bool{}
+	for _, p := range c.Profiles {
+		if seen[p.Unit] {
+			continue
+		}
+		seen[p.Unit] = true
+		p.NativeModel = nil
+		profiles = append(profiles, p)
+	}
+	c.Profiles = profiles
+	return c
+}
+
+func (work activationWork) removedRuntimePlan() unitPlan {
+	plan := unitPlan{proven: map[string]string{}}
+	if !hasRemovedRuntime(work.accepted.Catalog) {
+		return plan
+	}
+	for _, p := range work.accepted.Catalog.Profiles {
+		if p.NativeModel != nil && (p.NativeModel.Owned != nil || p.AdoptedOwnedFile()) {
+			plan.Deletes = append(plan.Deletes, p.Unit)
+			plan.proven[p.Unit] = p.NativeModel.LaunchSHA256
+		}
+	}
+	return plan
+}
+
+func hasRemovedRuntime(c control.Catalog) bool {
+	for _, p := range c.Profiles {
+		if p.RemovedRuntime() {
+			return true
+		}
+	}
+	return false
 }

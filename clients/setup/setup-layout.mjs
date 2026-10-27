@@ -107,7 +107,7 @@ export function createSettings(ui) {
 }
 
 export function createApplicationCards(ui) {
-    for (const choice of ['comfyui', 'llama.cpp', 'ollama', 'vllm'].map(id => applications.find(choice => choice.id === id))) {
+    for (const choice of ['comfyui', 'vllm'].map(id => applications.find(choice => choice.id === id))) {
         const card = roundedCard(Gtk, Gtk.Orientation.HORIZONTAL, 16);
         const detection = new Gtk.Label({label: 'Checking installation…', wrap: true, xalign: 0}); detection.add_css_class('dim-label'); detection.add_css_class('setup-detection');
         const select = new Gtk.CheckButton({active: false, sensitive: false, valign: Gtk.Align.CENTER});
@@ -139,7 +139,7 @@ export function createApplicationCards(ui) {
                     drafts: appDrafts,
                     editors: ui.draftEditors.filter(editor => appDrafts.some(draft => draft.id === editor.id)),
                 });
-                for (const editor of ui.draftEditors.filter(editor => editor.app === choice.id)) { editor.cancel().catch(error => ui.reportError('Temporary cleanup needs attention. Keep external controls paused and retry.', error)); editor.group.visible = false; editor.modelGroup.visible = false; }
+                for (const editor of ui.draftEditors.filter(editor => editor.app === choice.id)) { editor.cancel(); editor.group.visible = false; editor.modelGroup.visible = false; }
                 ui.drafts = ui.drafts.filter(draft => draft.app !== choice.id);
                 for (const profile of [...ui.profiles].filter(profile => ui.runtimeOf(profile) === choice.id)) {
                     ui.profiles.splice(ui.profiles.indexOf(profile), 1); ui.rows.remove(ui.profileRows.get(profile)); ui.profileRows.delete(profile);

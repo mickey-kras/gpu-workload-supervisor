@@ -21,15 +21,13 @@ func TestExternalInspectionRejectsUnqualifiedExplicitGPUSelections(t *testing.T)
 			if err := os.WriteFile(path, raw, 0600); err != nil {
 				t.Fatal(err)
 			}
-			for _, cleanup := range []bool{false, true} {
-				launch, err := inspectAutomaticLaunchSourcesMode(path, "comfyui", nil, func(string) error { return nil }, cleanup)
-				if !errors.Is(err, ErrLaunchUnsupported) || launch.Endpoint != "" || launch.Command != "" || launch.SHA256 != "" || launch.Environment != nil || launch.GPUUUID != "" {
-					t.Fatalf("selection produced a usable binding (cleanup=%v): %+v, %v", cleanup, launch, err)
-				}
-				wantUnresolved := selection == "0" || selection == "12"
-				if errors.Is(err, ErrGPUIdentityUnresolved) != wantUnresolved {
-					t.Fatalf("numeric discovery distinction lost: %v", err)
-				}
+			launch, err := inspectAutomaticLaunchSourcesWithValidator(path, "comfyui", nil, func(string) error { return nil })
+			if !errors.Is(err, ErrLaunchUnsupported) || launch.Endpoint != "" || launch.Command != "" || launch.SHA256 != "" || launch.Environment != nil || launch.GPUUUID != "" {
+				t.Fatalf("selection produced a usable binding: %+v, %v", launch, err)
+			}
+			wantUnresolved := selection == "0" || selection == "12"
+			if errors.Is(err, ErrGPUIdentityUnresolved) != wantUnresolved {
+				t.Fatalf("numeric discovery distinction lost: %v", err)
 			}
 			after, err := os.ReadFile(path)
 			if err != nil || !bytes.Equal(after, raw) {

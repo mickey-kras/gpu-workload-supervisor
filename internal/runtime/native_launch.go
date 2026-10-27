@@ -17,17 +17,8 @@ import (
 )
 
 const (
-	runtimeLlamaCPP    = "llama.cpp"
-	flagParallel       = "--parallel"
-	flagContBatching   = "--cont-batching"
-	flagNoContBatching = "--no-cont-batching"
-	flagFlashAttn      = "--flash-attn"
-	flagSpecDraftNMin  = "--spec-draft-n-min"
-	flagAlias          = "--alias"
-	flagCtxSize        = "--ctx-size"
-	flagModel          = "--model"
-	flagMaxModelLen    = "--max-model-len"
-	flagNGPULayers     = "--n-gpu-layers"
+	flagMaxModelLen     = "--max-model-len"
+	flagServedModelName = "--served-model-name"
 )
 
 var ErrModelUnavailable = errors.New("configured local model is unavailable")
@@ -68,9 +59,6 @@ func qualifyParsedMainCommand(unit parsedLaunchUnit, n control.NativeModel, vali
 	if err != nil {
 		return ErrLaunchUnsupported
 	}
-	if n.Runtime == "ollama" {
-		return qualifyOllamaLaunch(args, unit, endpoint)
-	}
 	return qualifyServerLaunch(args, n, endpoint)
 }
 
@@ -81,16 +69,12 @@ type parsedLaunchUnit struct {
 	loadedProperties     map[string]string
 	execStart            string
 	preCommands          []string
-	cloudOff             bool
-	host                 string
-	maxLoadedPinned      bool
 	gpuUUID              string
 	environment          map[string]bool
 	environmentValues    map[string]string
-	cleanupEnvironment   bool
 }
 
-func parseLaunchUnit(raw []byte, runtimeName string) (parsedLaunchUnit, error) {
+func parseLaunchUnit(raw []byte) (parsedLaunchUnit, error) {
 	var unit parsedLaunchUnit
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	scanner.Buffer(make([]byte, 4096), 1<<20)
@@ -105,7 +89,7 @@ func parseLaunchUnit(raw []byte, runtimeName string) (parsedLaunchUnit, error) {
 			section = header
 			continue
 		}
-		if err := unit.applyLaunchLine(seen, runtimeName, section, line); err != nil {
+		if err := unit.applyLaunchLine(seen, section, line); err != nil {
 			return unit, err
 		}
 	}
@@ -123,7 +107,7 @@ func launchSectionHeader(line string) (string, bool) {
 	return "", false
 }
 
-func (u *parsedLaunchUnit) applyLaunchLine(seen map[string]bool, runtimeName, section, line string) error {
+func (u *parsedLaunchUnit) applyLaunchLine(seen map[string]bool, section, line string) error {
 	key, value, ok := strings.Cut(line, "=")
 	if !ok {
 		return ErrLaunchUnsupported
@@ -132,10 +116,10 @@ func (u *parsedLaunchUnit) applyLaunchLine(seen map[string]bool, runtimeName, se
 		return ErrLaunchUnsupported
 	}
 	seen[section+key] = true
-	return u.applyDirective(runtimeName, section, key, value)
+	return u.applyDirective(section, key, value)
 }
 
-func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value string) error {
+func (u *parsedLaunchUnit) applyDirective(section, key, value string) error {
 	switch section + key {
 	case "[Unit]Description", "[Install]WantedBy":
 	case unitWantsDirective:
@@ -156,7 +140,7 @@ func (u *parsedLaunchUnit) applyDirective(runtimeName, section, key, value strin
 		}
 		u.execStart = value
 	case "[Service]Environment":
-		return u.applySafeEnvironment(runtimeName, value)
+		return u.applySafeEnvironment(value)
 	default:
 		if unsupportedOperationalDirective(section, key) {
 			return fmt.Errorf("%w: unsupported operational directive %s", ErrLaunchUnsupported, key)
@@ -250,26 +234,6 @@ func supportedPreCommand(args []string) bool {
 	return false
 }
 
-func (u *parsedLaunchUnit) applyOllamaEnvironment(value string) error {
-	if value == "OLLAMA_NO_CLOUD=1" && !u.cloudOff {
-		u.cloudOff = true
-	} else if strings.HasPrefix(value, "OLLAMA_HOST=") && u.host == "" {
-		u.host = strings.TrimPrefix(value, "OLLAMA_HOST=")
-	} else if value == "OLLAMA_MAX_LOADED_MODELS=1" && !u.maxLoadedPinned {
-		u.maxLoadedPinned = true
-	} else {
-		return ErrLaunchUnsupported
-	}
-	return nil
-}
-
-func qualifyOllamaLaunch(args []string, unit parsedLaunchUnit, endpoint *url.URL) error {
-	if filepath.Base(args[0]) != "ollama" || len(args) != 2 || args[1] != "serve" || !unit.cloudOff || unit.host != endpoint.Host {
-		return ErrLaunchUnsupported
-	}
-	return nil
-}
-
 func qualifyServerLaunch(args []string, n control.NativeModel, endpoint *url.URL) error {
 	flags, err := parseServerCommand(args, n.Runtime)
 	if err != nil {
@@ -285,7 +249,7 @@ func qualifyServerLaunch(args []string, n control.NativeModel, endpoint *url.URL
 	if err != nil {
 		return fmt.Errorf("%w: model metadata could not be inspected; check access to the configured local model", ErrLaunchUnsupported)
 	}
-	if (n.Runtime == runtimeLlamaCPP && !info.Mode().IsRegular()) || (n.Runtime == "vllm" && !info.IsDir()) {
+	if !info.IsDir() {
 		return fmt.Errorf("%w: model has the wrong file or directory type; select a compatible local model", ErrModelUnavailable)
 	}
 	alias := flags.alias
@@ -307,46 +271,28 @@ type serverFlags struct {
 
 func parseServerCommand(args []string, runtimeName string) (serverFlags, error) {
 	var flags serverFlags
-	switch runtimeName {
-	case runtimeLlamaCPP:
-		if filepath.Base(args[0]) != "llama-server" {
-			return flags, ErrLaunchUnsupported
-		}
-		args = args[1:]
-	case "vllm":
-		if filepath.Base(args[0]) != "vllm" || len(args) < 3 || args[1] != "serve" {
-			return flags, ErrLaunchUnsupported
-		}
-		flags.model = args[2]
-		args = args[3:]
-	default:
+	if runtimeName != "vllm" || filepath.Base(args[0]) != "vllm" || len(args) < 3 || args[1] != "serve" {
 		return flags, ErrLaunchUnsupported
 	}
-	return flags.parse(args, runtimeName)
+	flags.model = args[2]
+	return flags.parse(args[3:])
 }
 
-func (f *serverFlags) parse(args []string, runtimeName string) (serverFlags, error) {
+func (f *serverFlags) parse(args []string) (serverFlags, error) {
 	seen := map[string]bool{}
 	for len(args) > 0 {
-		key := canonicalServerFlag(args[0], runtimeName)
+		key := args[0]
 		args = args[1:]
 		if seen[key] {
 			return *f, fmt.Errorf("%w: duplicate option %s", ErrLaunchUnsupported, diagnosticServerFlag(key))
 		}
 		seen[key] = true
-		if runtimeName == runtimeLlamaCPP && (key == flagContBatching || key == flagNoContBatching) {
-			if seen["continuous-batching"] {
-				return *f, ErrLaunchUnsupported
-			}
-			seen["continuous-batching"] = true
-			continue
-		}
 		if len(args) == 0 {
 			return *f, fmt.Errorf("%w: option %s requires a value", ErrLaunchUnsupported, diagnosticServerFlag(key))
 		}
 		value := args[0]
 		args = args[1:]
-		if err := f.apply(runtimeName, key, value); err != nil {
+		if err := f.apply(key, value); err != nil {
 			return *f, fmt.Errorf("%w: unsupported option or value %s", err, diagnosticServerFlag(key))
 		}
 	}
@@ -355,93 +301,25 @@ func (f *serverFlags) parse(args []string, runtimeName string) (serverFlags, err
 
 func diagnosticServerFlag(key string) string {
 	switch key {
-	case "--host", "--port", flagModel, flagAlias, "--served-model-name", flagParallel, "--spec-draft-n-max", flagSpecDraftNMin, flagFlashAttn, "--spec-type", flagCtxSize, flagNGPULayers, flagMaxModelLen, flagContBatching, flagNoContBatching:
+	case "--host", "--port", flagServedModelName, flagMaxModelLen:
 		return key
 	}
 	return "(unqualified option)"
 }
 
-func canonicalServerFlag(key, runtimeName string) string {
-	if runtimeName != runtimeLlamaCPP {
-		return key
-	}
-	switch key {
-	case "-m":
-		return flagModel
-	case "-c":
-		return flagCtxSize
-	case "-ngl":
-		return flagNGPULayers
-	case "-np":
-		return flagParallel
-	case "-cb":
-		return flagContBatching
-	case "-nocb":
-		return flagNoContBatching
-	case "-fa":
-		return flagFlashAttn
-	}
-	return key
-}
-
-func (f *serverFlags) apply(runtimeName, key, value string) error {
+func (f *serverFlags) apply(key, value string) error {
 	switch key {
 	case "--host":
 		f.bindHost = value
 	case "--port":
 		f.port = value
-	case flagModel, "-m":
-		if runtimeName != runtimeLlamaCPP || f.model != "" {
-			return ErrLaunchUnsupported
-		}
-		f.model = value
-	case flagAlias, "--served-model-name":
-		if f.alias != "" || (key == flagAlias) != (runtimeName == runtimeLlamaCPP) {
-			return ErrLaunchUnsupported
-		}
+	case flagServedModelName:
 		f.alias = value
-	default:
-		return validateServerOption(runtimeName, key, value)
-	}
-	return nil
-}
-
-func validateServerOption(runtimeName, key, value string) error {
-	switch key {
-	case flagParallel, "--spec-draft-n-max", flagSpecDraftNMin:
-		return validateLlamaNumericOption(runtimeName, key, value)
-	case flagFlashAttn:
-		if runtimeName != runtimeLlamaCPP || (value != "on" && value != "off" && value != "auto") {
-			return ErrLaunchUnsupported
-		}
-	case "--spec-type":
-		// MTP uses the already bound local model; draft-model and remote sources
-		// require separate identity evidence and remain unsupported.
-		if runtimeName != runtimeLlamaCPP || (value != "none" && value != "draft-mtp") {
-			return ErrLaunchUnsupported
-		}
-	case flagCtxSize, flagNGPULayers, flagMaxModelLen:
-		if (runtimeName == runtimeLlamaCPP) != (key != flagMaxModelLen) {
-			return ErrLaunchUnsupported
-		}
+	case flagMaxModelLen:
 		if v, err := strconv.ParseUint(value, 10, 32); err != nil || v == 0 {
 			return ErrLaunchUnsupported
 		}
 	default:
-		return ErrLaunchUnsupported
-	}
-	return nil
-}
-
-func validateLlamaNumericOption(runtimeName, key, value string) error {
-	if runtimeName != runtimeLlamaCPP {
-		return ErrLaunchUnsupported
-	}
-	if key == flagParallel && value == "-1" {
-		return nil
-	}
-	v, err := strconv.ParseUint(value, 10, 32)
-	if err != nil || (v == 0 && key != flagSpecDraftNMin) {
 		return ErrLaunchUnsupported
 	}
 	return nil

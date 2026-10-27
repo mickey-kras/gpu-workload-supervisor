@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func ownedLlamaProfile() WorkloadProfile {
+func ownedVLLMProfile() WorkloadProfile {
 	return WorkloadProfile{
 		ID:        "vision",
 		Label:     "Vision",
@@ -16,39 +16,19 @@ func ownedLlamaProfile() WorkloadProfile {
 		Cgroup:    "/user.slice/user-1000.slice/user@1000.service/app.slice/gws-owned-vision.service",
 		HealthURL: "http://127.0.0.1:9100/health",
 		NativeModel: &NativeModel{
-			Runtime:      "llama.cpp",
+			Runtime:      "vllm",
 			Instance:     "local",
 			Model:        "vision-q8",
 			Endpoint:     "http://127.0.0.1:9100",
 			LaunchFile:   "/home/u/.config/systemd/user/gws-owned-vision.service",
 			LaunchSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			Owned:        &OwnedLaunch{ModelPath: "/models/vision-q8.gguf", Port: 9100, CtxSize: 8192, GPULayers: 99, Alias: "vision-q8"},
-		},
-	}
-}
-
-func ownedOllamaProfile(id, model string) WorkloadProfile {
-	return WorkloadProfile{
-		ID:        Workload(id),
-		Label:     "Ollama " + model,
-		Adapter:   "systemd",
-		Unit:      "gws-owned-ollama-local.service",
-		Cgroup:    "/user.slice/user-1000.slice/user@1000.service/app.slice/gws-owned-ollama-local.service",
-		HealthURL: "http://127.0.0.1:11434/api/tags",
-		NativeModel: &NativeModel{
-			Runtime:      "ollama",
-			Instance:     "local",
-			Model:        model,
-			Endpoint:     "http://127.0.0.1:11434",
-			LaunchFile:   "/home/u/.config/systemd/user/gws-owned-ollama-local.service",
-			LaunchSHA256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-			Owned:        &OwnedLaunch{Port: 11434},
+			Owned:        &OwnedLaunch{ModelPath: "/models/vision-q8", Port: 9100, MaxModelLen: 8192, Alias: "vision-q8"},
 		},
 	}
 }
 
 func TestOwnedCatalogRequiresVersion2(t *testing.T) {
-	c := Catalog{Version: 2, Profiles: []WorkloadProfile{ownedLlamaProfile()}}
+	c := Catalog{Version: 2, Profiles: []WorkloadProfile{ownedVLLMProfile()}}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("v2 owned catalog rejected: %v", err)
 	}
@@ -69,7 +49,7 @@ func TestOwnedCatalogRequiresVersion2(t *testing.T) {
 }
 
 func TestOwnedCatalogStrictDecode(t *testing.T) {
-	c := Catalog{Version: 2, Profiles: []WorkloadProfile{ownedLlamaProfile()}}
+	c := Catalog{Version: 2, Profiles: []WorkloadProfile{ownedVLLMProfile()}}
 	raw, err := json.Marshal(c)
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +78,7 @@ func TestOwnedCatalogStrictDecode(t *testing.T) {
 }
 
 func TestCatalogCloneDeepCopiesOwned(t *testing.T) {
-	c := Catalog{Version: 2, Profiles: []WorkloadProfile{ownedLlamaProfile()}}
+	c := Catalog{Version: 2, Profiles: []WorkloadProfile{ownedVLLMProfile()}}
 	clone := c.Clone()
 	c.Profiles[0].NativeModel.Owned.Port = 9200
 	if clone.Profiles[0].NativeModel.Owned.Port != 9100 {
@@ -117,7 +97,7 @@ func TestOwnedPlacementDerivation(t *testing.T) {
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
-			p := ownedLlamaProfile()
+			p := ownedVLLMProfile()
 			mutate(&p)
 			c := Catalog{Version: 2, Profiles: []WorkloadProfile{p}}
 			if err := c.Validate(); err == nil {
@@ -125,18 +105,6 @@ func TestOwnedPlacementDerivation(t *testing.T) {
 			}
 		})
 	}
-	t.Run("ollama instance unit", func(t *testing.T) {
-		c := Catalog{Version: 2, Profiles: []WorkloadProfile{ownedOllamaProfile("chat", "qwen3:latest")}}
-		if err := c.Validate(); err != nil {
-			t.Fatal(err)
-		}
-		p := ownedOllamaProfile("chat", "qwen3:latest")
-		p.Unit = "gws-owned-chat.service"
-		c.Profiles[0] = p
-		if err := c.Validate(); err == nil {
-			t.Fatal("ollama owned model unit accepted")
-		}
-	})
 }
 
 func TestOwnedLaunchPerRuntimeAdmissibility(t *testing.T) {
@@ -144,44 +112,22 @@ func TestOwnedLaunchPerRuntimeAdmissibility(t *testing.T) {
 		"privileged port":     func(p *WorkloadProfile) { p.NativeModel.Owned.Port = 80 },
 		"endpoint port drift": func(p *WorkloadProfile) { p.NativeModel.Endpoint = "http://127.0.0.1:9200" },
 		"endpoint host drift": func(p *WorkloadProfile) { p.NativeModel.Endpoint = "http://localhost:9100" },
-		"relative model path": func(p *WorkloadProfile) { p.NativeModel.Owned.ModelPath = "models/vision.gguf" },
-		"unclean model path":  func(p *WorkloadProfile) { p.NativeModel.Owned.ModelPath = "/models/../models/v.gguf" },
-		"llama max model len": func(p *WorkloadProfile) { p.NativeModel.Owned.MaxModelLen = 4096 },
+		"relative model path": func(p *WorkloadProfile) { p.NativeModel.Owned.ModelPath = "models/vision" },
+		"unclean model path":  func(p *WorkloadProfile) { p.NativeModel.Owned.ModelPath = "/models/../models/v" },
 		"alias control char":  func(p *WorkloadProfile) { p.NativeModel.Owned.Alias = "bad\nalias" },
-		"ollama model path": func(p *WorkloadProfile) {
-			p.NativeModel.Runtime = "ollama"
-			p.NativeModel.Owned.ModelPath = "/models/v.gguf"
-		},
-		"ollama ctx size":      func(p *WorkloadProfile) { p.NativeModel.Runtime = "ollama"; p.NativeModel.Owned.CtxSize = 8192 },
-		"ollama gpu layers":    func(p *WorkloadProfile) { p.NativeModel.Runtime = "ollama"; p.NativeModel.Owned.GPULayers = 1 },
-		"ollama max model len": func(p *WorkloadProfile) { p.NativeModel.Runtime = "ollama"; p.NativeModel.Owned.MaxModelLen = 1 },
-		"ollama alias":         func(p *WorkloadProfile) { p.NativeModel.Runtime = "ollama"; p.NativeModel.Owned.Alias = "a" },
-		"vllm ctx size":        func(p *WorkloadProfile) { p.NativeModel.Runtime = "vllm"; p.NativeModel.Owned.CtxSize = 8192 },
-		"vllm gpu layers":      func(p *WorkloadProfile) { p.NativeModel.Runtime = "vllm"; p.NativeModel.Owned.GPULayers = 1 },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
-			p := ownedLlamaProfile()
+			p := ownedVLLMProfile()
 			mutate(&p)
-			if p.NativeModel.Runtime != "llama.cpp" {
-				p.NativeModel.Owned.ModelPath = ""
-				p.NativeModel.Owned.CtxSize = 0
-				p.NativeModel.Owned.GPULayers = 0
-				p.NativeModel.Owned.Alias = ""
-				if p.NativeModel.Runtime == "vllm" {
-					p.NativeModel.Owned.ModelPath = "/models/vision"
-				}
-				mutate(&p)
-			}
 			c := Catalog{Version: 2, Profiles: []WorkloadProfile{p}}
 			if err := c.Validate(); err == nil {
 				t.Fatal("inadmissible owned spec accepted")
 			}
 		})
 	}
-	t.Run("vllm valid", func(t *testing.T) {
-		p := ownedLlamaProfile()
-		p.NativeModel.Runtime = "vllm"
+	t.Run("max model len valid", func(t *testing.T) {
+		p := ownedVLLMProfile()
 		p.NativeModel.Owned = &OwnedLaunch{ModelPath: "/models/vision", Port: 9100, MaxModelLen: 4096, Alias: "vision-q8"}
 		c := Catalog{Version: 2, Profiles: []WorkloadProfile{p}}
 		if err := c.Validate(); err != nil {
@@ -189,9 +135,9 @@ func TestOwnedLaunchPerRuntimeAdmissibility(t *testing.T) {
 		}
 	})
 	t.Run("defaults without optional fields", func(t *testing.T) {
-		p := ownedLlamaProfile()
-		p.NativeModel.Owned = &OwnedLaunch{ModelPath: "/models/vision-q8.gguf", Port: 9100}
-		p.NativeModel.Model = "/models/vision-q8.gguf"
+		p := ownedVLLMProfile()
+		p.NativeModel.Owned = &OwnedLaunch{ModelPath: "/models/vision-q8", Port: 9100}
+		p.NativeModel.Model = "/models/vision-q8"
 		c := Catalog{Version: 2, Profiles: []WorkloadProfile{p}}
 		if err := c.Validate(); err != nil {
 			t.Fatal(err)
@@ -204,21 +150,21 @@ func TestOwnedLaunchPerRuntimeAdmissibility(t *testing.T) {
 // NativeModel.Model could never qualify, so the catalog rejects it up front.
 func TestOwnedServedModelNameMatchesCatalog(t *testing.T) {
 	t.Run("mismatched alias rejected", func(t *testing.T) {
-		p := ownedLlamaProfile()
+		p := ownedVLLMProfile()
 		p.NativeModel.Owned.Alias = "other-name"
 		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{p}}).Validate(); err == nil {
 			t.Fatal("mismatched alias accepted")
 		}
 	})
 	t.Run("empty alias with divergent model path rejected", func(t *testing.T) {
-		p := ownedLlamaProfile()
+		p := ownedVLLMProfile()
 		p.NativeModel.Owned.Alias = ""
 		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{p}}).Validate(); err == nil {
 			t.Fatal("model-path fallback diverging from model accepted")
 		}
 	})
 	t.Run("empty alias with model path as identity accepted", func(t *testing.T) {
-		p := ownedLlamaProfile()
+		p := ownedVLLMProfile()
 		p.NativeModel.Owned.Alias = ""
 		p.NativeModel.Model = p.NativeModel.Owned.ModelPath
 		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{p}}).Validate(); err != nil {
@@ -226,21 +172,16 @@ func TestOwnedServedModelNameMatchesCatalog(t *testing.T) {
 		}
 	})
 	t.Run("matching alias accepted", func(t *testing.T) {
-		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{ownedLlamaProfile()}}).Validate(); err != nil {
+		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{ownedVLLMProfile()}}).Validate(); err != nil {
 			t.Fatal(err)
 		}
 	})
 	t.Run("vllm mismatched served name rejected", func(t *testing.T) {
-		p := ownedLlamaProfile()
+		p := ownedVLLMProfile()
 		p.NativeModel.Runtime = "vllm"
 		p.NativeModel.Owned = &OwnedLaunch{ModelPath: "/models/vision", Port: 9100, Alias: "not-vision-q8"}
 		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{p}}).Validate(); err == nil {
 			t.Fatal("mismatched vllm served name accepted")
-		}
-	})
-	t.Run("ollama unaffected", func(t *testing.T) {
-		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{ownedOllamaProfile("chat", "qwen3:latest")}}).Validate(); err != nil {
-			t.Fatal(err)
 		}
 	})
 }
@@ -250,16 +191,16 @@ func TestOwnedServedModelNameMatchesCatalog(t *testing.T) {
 // catalogs cannot produce unqualifiable units.
 func TestOwnedValuesFitCommandGrammar(t *testing.T) {
 	cases := map[string]func(*OwnedLaunch){
-		"whitespace model path":  func(o *OwnedLaunch) { o.ModelPath = "/models/my model.gguf" },
-		"tab model path":         func(o *OwnedLaunch) { o.ModelPath = "/models/my\tmodel.gguf" },
-		"newline model path":     func(o *OwnedLaunch) { o.ModelPath = "/models/my\nmodel.gguf" },
-		"quote model path":       func(o *OwnedLaunch) { o.ModelPath = "/models/we\"ird.gguf" },
-		"single quote path":      func(o *OwnedLaunch) { o.ModelPath = "/models/we'ird.gguf" },
-		"backtick model path":    func(o *OwnedLaunch) { o.ModelPath = "/models/we`ird.gguf" },
-		"dollar model path":      func(o *OwnedLaunch) { o.ModelPath = "/models/$HOME.gguf" },
-		"percent model path":     func(o *OwnedLaunch) { o.ModelPath = "/models/100%.gguf" },
-		"backslash model path":   func(o *OwnedLaunch) { o.ModelPath = "/models/win\\path.gguf" },
-		"semicolon model path":   func(o *OwnedLaunch) { o.ModelPath = "/models/a;b.gguf" },
+		"whitespace model path":  func(o *OwnedLaunch) { o.ModelPath = "/models/my model" },
+		"tab model path":         func(o *OwnedLaunch) { o.ModelPath = "/models/my\tmodel" },
+		"newline model path":     func(o *OwnedLaunch) { o.ModelPath = "/models/my\nmodel" },
+		"quote model path":       func(o *OwnedLaunch) { o.ModelPath = "/models/we\"ird" },
+		"single quote path":      func(o *OwnedLaunch) { o.ModelPath = "/models/we'ird" },
+		"backtick model path":    func(o *OwnedLaunch) { o.ModelPath = "/models/we`ird" },
+		"dollar model path":      func(o *OwnedLaunch) { o.ModelPath = "/models/$HOME" },
+		"percent model path":     func(o *OwnedLaunch) { o.ModelPath = "/models/100%" },
+		"backslash model path":   func(o *OwnedLaunch) { o.ModelPath = "/models/win\\path" },
+		"semicolon model path":   func(o *OwnedLaunch) { o.ModelPath = "/models/a;b" },
 		"whitespace alias":       func(o *OwnedLaunch) { o.Alias = "my model" },
 		"quote alias":            func(o *OwnedLaunch) { o.Alias = "mo\"del" },
 		"control alias":          func(o *OwnedLaunch) { o.Alias = "bad\x01alias" },
@@ -268,7 +209,7 @@ func TestOwnedValuesFitCommandGrammar(t *testing.T) {
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
-			p := ownedLlamaProfile()
+			p := ownedVLLMProfile()
 			mutate(p.NativeModel.Owned)
 			p.NativeModel.Model = p.NativeModel.Owned.Alias
 			if p.NativeModel.Model == "" {
@@ -280,15 +221,15 @@ func TestOwnedValuesFitCommandGrammar(t *testing.T) {
 		})
 	}
 	t.Run("normal path and alias accepted", func(t *testing.T) {
-		p := ownedLlamaProfile()
-		p.NativeModel.Owned.ModelPath = "/models/vision-q8_4.0-final.gguf"
+		p := ownedVLLMProfile()
+		p.NativeModel.Owned.ModelPath = "/models/vision-q8_4.0-final"
 		p.NativeModel.Owned.Alias = "vision-q8"
 		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{p}}).Validate(); err != nil {
 			t.Fatal(err)
 		}
 	})
 	t.Run("vllm whitespace model path rejected", func(t *testing.T) {
-		p := ownedLlamaProfile()
+		p := ownedVLLMProfile()
 		p.NativeModel.Runtime = "vllm"
 		p.NativeModel.Model = "/models/my model"
 		p.NativeModel.Owned = &OwnedLaunch{ModelPath: "/models/my model", Port: 9100}
@@ -296,34 +237,24 @@ func TestOwnedValuesFitCommandGrammar(t *testing.T) {
 			t.Fatal("vllm whitespace path accepted")
 		}
 	})
-	t.Run("ollama unaffected", func(t *testing.T) {
-		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{ownedOllamaProfile("chat", "qwen3:latest")}}).Validate(); err != nil {
-			t.Fatal(err)
-		}
-	})
 }
 
 func TestOwnedEndpointSharingRule(t *testing.T) {
-	t.Run("shared owned ollama pair accepted", func(t *testing.T) {
-		c := Catalog{Version: 2, Profiles: []WorkloadProfile{ownedOllamaProfile("chat", "qwen3:latest"), ownedOllamaProfile("code", "qwen3-coder:latest")}}
-		if err := c.Validate(); err != nil {
-			t.Fatal(err)
-		}
-	})
 	t.Run("cross instance owned endpoint collision", func(t *testing.T) {
-		first := ownedOllamaProfile("chat", "qwen3:latest")
-		second := ownedOllamaProfile("code", "qwen3-coder:latest")
+		first := ownedVLLMProfile()
+		second := ownedVLLMProfile()
+		second.ID = "vision2"
 		second.NativeModel.Instance = "remote"
-		second.Unit = "gws-owned-ollama-remote.service"
-		second.Cgroup = "/user.slice/user-1000.slice/user@1000.service/app.slice/gws-owned-ollama-remote.service"
-		second.NativeModel.LaunchFile = "/home/u/.config/systemd/user/gws-owned-ollama-remote.service"
+		second.Unit = "gws-owned-vision2.service"
+		second.Cgroup = "/user.slice/user-1000.slice/user@1000.service/app.slice/gws-owned-vision2.service"
+		second.NativeModel.LaunchFile = "/home/u/.config/systemd/user/gws-owned-vision2.service"
 		c := Catalog{Version: 2, Profiles: []WorkloadProfile{first, second}}
 		if err := c.Validate(); err == nil {
 			t.Fatal("cross-instance owned endpoint collision accepted")
 		}
 	})
 	t.Run("owned adopted endpoint collision", func(t *testing.T) {
-		owned := ownedLlamaProfile()
+		owned := ownedVLLMProfile()
 		adopted := WorkloadProfile{
 			ID:        "adopted",
 			Label:     "Adopted",
@@ -332,7 +263,7 @@ func TestOwnedEndpointSharingRule(t *testing.T) {
 			Cgroup:    "/workloads/adopted",
 			HealthURL: "http://127.0.0.1:9100/health",
 			NativeModel: &NativeModel{
-				Runtime:      "llama.cpp",
+				Runtime:      "vllm",
 				Instance:     "other",
 				Model:        "vision-q8",
 				Endpoint:     "http://127.0.0.1:9100",
@@ -345,87 +276,41 @@ func TestOwnedEndpointSharingRule(t *testing.T) {
 			t.Fatal("owned-adopted endpoint collision accepted")
 		}
 	})
-	t.Run("owned llama share rejected", func(t *testing.T) {
-		first := ownedLlamaProfile()
-		second := ownedLlamaProfile()
+	t.Run("owned vllm share rejected", func(t *testing.T) {
+		first := ownedVLLMProfile()
+		second := ownedVLLMProfile()
 		second.ID = "vision2"
 		second.NativeModel.Model = "vision-q4"
+		second.NativeModel.Owned.Alias = "vision-q4"
+		second.Unit = "gws-owned-vision2.service"
+		second.Cgroup = "/user.slice/user-1000.slice/user@1000.service/app.slice/gws-owned-vision2.service"
+		second.NativeModel.LaunchFile = "/home/u/.config/systemd/user/gws-owned-vision2.service"
 		c := Catalog{Version: 2, Profiles: []WorkloadProfile{first, second}}
 		if err := c.Validate(); err == nil {
-			t.Fatal("owned llama unit share accepted")
+			t.Fatal("owned vllm endpoint share accepted")
 		}
 	})
-}
-
-// TestSharedUnitRequiresIdenticalLaunchBindings locks the launch fingerprint
-// for profiles sharing one unit: only one launch file exists, so divergent
-// bindings would guarantee ErrLaunchChanged for at least one profile. The rule
-// covers adopted pairs too because they can drift the same way.
-func TestSharedUnitRequiresIdenticalLaunchBindings(t *testing.T) {
-	adopted := func(id, model string) WorkloadProfile {
-		return WorkloadProfile{
-			ID:        Workload(id),
-			Label:     "Ollama " + model,
+	t.Run("owned and adopted share instance and endpoint", func(t *testing.T) {
+		owned := ownedVLLMProfile()
+		adopted := WorkloadProfile{
+			ID:        "adopted",
+			Label:     "Adopted",
 			Adapter:   "systemd",
-			Unit:      "ollama.service",
-			Cgroup:    "/workloads/ollama.service",
-			HealthURL: "http://127.0.0.1:11434/health",
+			Unit:      "vllm.service",
+			Cgroup:    "/workloads/vllm",
+			HealthURL: "http://127.0.0.1:9100/health",
 			NativeModel: &NativeModel{
-				Runtime:      "ollama",
-				Instance:     "local",
-				Model:        model,
-				Endpoint:     "http://127.0.0.1:11434",
-				LaunchFile:   "/etc/systemd/user/ollama.service",
-				LaunchSHA256: strings.Repeat("0", 64),
+				Runtime:      "vllm",
+				Instance:     owned.NativeModel.Instance,
+				Model:        "other-model",
+				Endpoint:     owned.NativeModel.Endpoint,
+				LaunchFile:   "/units/vllm.service",
+				LaunchSHA256: strings.Repeat("c", 64),
 			},
 		}
-	}
-	t.Run("owned divergent hash rejected", func(t *testing.T) {
-		a, b := ownedOllamaProfile("chat", "qwen3:latest"), ownedOllamaProfile("code", "qwen3-coder:latest")
-		b.NativeModel.LaunchSHA256 = strings.Repeat("f", 64)
-		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{a, b}}).Validate(); err == nil {
-			t.Fatal("divergent hash on shared owned unit accepted")
-		}
-	})
-	t.Run("owned divergent file rejected", func(t *testing.T) {
-		a, b := ownedOllamaProfile("chat", "qwen3:latest"), ownedOllamaProfile("code", "qwen3-coder:latest")
-		b.NativeModel.LaunchFile = "/home/u/.config/systemd/user/other.service"
-		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{a, b}}).Validate(); err == nil {
-			t.Fatal("divergent launch file on shared owned unit accepted")
-		}
-	})
-	t.Run("owned identical accepted", func(t *testing.T) {
-		a, b := ownedOllamaProfile("chat", "qwen3:latest"), ownedOllamaProfile("code", "qwen3-coder:latest")
-		if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{a, b}}).Validate(); err != nil {
-			t.Fatal(err)
-		}
-	})
-	t.Run("adopted divergent hash rejected", func(t *testing.T) {
-		a, b := adopted("alpha", "a"), adopted("beta", "b")
-		b.NativeModel.LaunchSHA256 = strings.Repeat("1", 64)
-		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{a, b}}).Validate(); err == nil {
-			t.Fatal("divergent hash on shared adopted unit accepted")
-		}
-	})
-	t.Run("adopted drop-in evidence must match", func(t *testing.T) {
-		a, b := adopted("alpha", "a"), adopted("beta", "b")
-		source := LaunchSource{Path: "/etc/systemd/user/ollama.service.d/10-options.conf", SHA256: strings.Repeat("a", 64)}
-		a.NativeModel.DropIns = []LaunchSource{source}
-		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{a, b}}).Validate(); err == nil {
-			t.Fatal("missing shared source accepted")
-		}
-		b.NativeModel.DropIns = []LaunchSource{source}
-		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{a, b}}).Validate(); err != nil {
-			t.Fatal(err)
-		}
-		b.NativeModel.DropIns[0].SHA256 = strings.Repeat("b", 64)
-		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{a, b}}).Validate(); err == nil {
-			t.Fatal("divergent shared source accepted")
-		}
-	})
-	t.Run("adopted identical accepted", func(t *testing.T) {
-		if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{adopted("alpha", "a"), adopted("beta", "b")}}).Validate(); err != nil {
-			t.Fatal(err)
+		c := Catalog{Version: 2, Profiles: []WorkloadProfile{owned, adopted}}
+		if err := c.Validate(); err == nil {
+			t.Fatal("owned profile shared its endpoint with an adopted profile")
 		}
 	})
 }
@@ -436,17 +321,17 @@ func TestNativeEndpointNormalizedCollision(t *testing.T) {
 	adopted := func(id, instance, endpoint string) WorkloadProfile {
 		return WorkloadProfile{
 			ID:        Workload(id),
-			Label:     "Llama " + id,
+			Label:     "Model " + id,
 			Adapter:   "systemd",
-			Unit:      "llama-" + id + ".service",
-			Cgroup:    "/workloads/llama-" + id,
+			Unit:      "model-" + id + ".service",
+			Cgroup:    "/workloads/model-" + id,
 			HealthURL: endpoint + "/health",
 			NativeModel: &NativeModel{
-				Runtime:      "llama.cpp",
+				Runtime:      "vllm",
 				Instance:     instance,
 				Model:        "m-" + id,
 				Endpoint:     endpoint,
-				LaunchFile:   "/units/llama-" + id + ".service",
+				LaunchFile:   "/units/model-" + id + ".service",
 				LaunchSHA256: strings.Repeat("2", 64),
 			},
 		}
@@ -491,13 +376,7 @@ func TestNativeEndpointNormalizedCollision(t *testing.T) {
 }
 
 func TestOwnedUnitNameDerivation(t *testing.T) {
-	if got := OwnedUnitName("ollama", "local", "chat"); got != "gws-owned-ollama-local.service" {
-		t.Fatalf("ollama owned unit %q", got)
-	}
-	if got := OwnedUnitName("llama.cpp", "local", "vision"); got != "gws-owned-vision.service" {
-		t.Fatalf("llama owned unit %q", got)
-	}
-	if got := OwnedUnitName("vllm", "local", "vision"); got != "gws-owned-vision.service" {
-		t.Fatalf("vllm owned unit %q", got)
+	if got := OwnedUnitName("vision"); got != "gws-owned-vision.service" {
+		t.Fatalf("owned unit %q", got)
 	}
 }

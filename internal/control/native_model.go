@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"path/filepath"
 	"strconv"
@@ -14,11 +15,10 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
-const nativeRuntimeLlamaCPP = "llama.cpp"
+const nativeRuntimeVLLM = "vllm"
 
 // NativeModel binds an existing per-model service to its runtime API identity.
-// Ollama profiles may share one unit with sibling profiles bound to different
-// models of the same instance; other runtimes require one unit per model.
+// Each model requires its own unit.
 type NativeModel struct {
 	GPUUUID      string         `json:"gpuUUID,omitempty"`
 	Runtime      string         `json:"runtime"`
@@ -54,23 +54,10 @@ func ValidateLaunchSources(launchFile string, sources []LaunchSource) error {
 	return nil
 }
 
-// EqualLaunchSources compares the exact ordered contributing file evidence.
-func EqualLaunchSources(a, b []LaunchSource) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // OwnedLaunch is a supervisor-owned launch specification: the supervisor
 // renders the unit deterministically from it instead of fingerprinting an
-// imported file. ModelPath is the llama.cpp GGUF file or vLLM model
-// directory and stays empty for Ollama; Alias defaults to ModelPath.
+// imported file. ModelPath is the vLLM model directory; Alias defaults to
+// ModelPath.
 type OwnedLaunch struct {
 	// Conflicts is setup-derived, sorted distinct owned peer units. Empty keeps
 	// legacy unit bytes/fingerprints; setup Apply upgrades the peer relationships.
@@ -78,53 +65,51 @@ type OwnedLaunch struct {
 	Executable  string `json:"executable,omitempty"`
 	ModelPath   string `json:"modelPath,omitempty"`
 	Port        uint16 `json:"port"`
-	CtxSize     uint32 `json:"ctxSize,omitempty"`
-	GPULayers   uint32 `json:"gpuLayers,omitempty"`
 	MaxModelLen uint32 `json:"maxModelLen,omitempty"`
 	Alias       string `json:"alias,omitempty"`
 }
 
-// ComparisonModel is the model identity as the runtime API reports it, used
-// only for comparison; the configured string is never rewritten. Ollama
-// canonicalizes an untagged name to the :latest tag in /api/ps.
-func (n NativeModel) ComparisonModel() string {
-	if n.Runtime != "ollama" {
-		return n.Model
-	}
-	base := n.Model[strings.LastIndex(n.Model, "/")+1:]
-	if strings.Contains(base, ":") {
-		return n.Model
-	}
-	return n.Model + ":latest"
-}
-
-// malformedOllamaModel rejects empty name segments so a configured string
-// cannot canonicalize to an identity the API would never report, such as
-// "foo/" becoming "foo/:latest".
 // ValidNativeModelIdentity applies the catalog's model-identity rule
-// (non-blank, bounded, no control characters) plus the runtime-specific
-// grammar, so draft surfaces can reject failing names at save time.
-func ValidNativeModelIdentity(runtime, model string) bool {
-	if strings.TrimSpace(model) == "" || len(model) > 1024 || strings.IndexFunc(model, unicode.IsControl) >= 0 {
-		return false
-	}
-	return runtime != "ollama" || !malformedOllamaModel(model)
+// (non-blank, bounded, no control characters), so draft surfaces can reject
+// failing names at save time.
+func ValidNativeModelIdentity(model string) bool {
+	return strings.TrimSpace(model) != "" && len(model) <= 1024 && strings.IndexFunc(model, unicode.IsControl) < 0
 }
 
-func malformedOllamaModel(model string) bool {
-	for _, segment := range strings.Split(model, "/") {
-		if segment == "" {
-			return true
+// unsupportedNativeRuntime names the profile and runtime so the operator knows
+// which stored profile to remove or replace.
+func unsupportedNativeRuntime(id Workload, runtime string) error {
+	return fmt.Errorf("workload %s uses native runtime %q, which is no longer supported (vLLM only); remove or replace this profile", id, runtime)
+}
+
+// rejectUnsupportedNativeRuntimes reads only profile IDs and native runtimes.
+// Strict decoding would otherwise report a removed runtime's own fields as
+// unknown fields instead of naming the runtime.
+func rejectUnsupportedNativeRuntimes(raw []byte) error {
+	var probe struct {
+		Profiles []struct {
+			ID          Workload `json:"id"`
+			NativeModel *struct {
+				Runtime string `json:"runtime"`
+			} `json:"nativeModel"`
+		} `json:"profiles"`
+	}
+	if json.Unmarshal(raw, &probe) != nil {
+		return nil // The strict decode reports malformed catalogs.
+	}
+	for _, p := range probe.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Runtime != nativeRuntimeVLLM {
+			return unsupportedNativeRuntime(p.ID, p.NativeModel.Runtime)
 		}
 	}
-	return false
+	return nil
 }
 
 func (n NativeModel) validate() error {
-	if n.Runtime != "ollama" && n.Runtime != nativeRuntimeLlamaCPP && n.Runtime != "vllm" {
+	if n.Runtime != nativeRuntimeVLLM {
 		return errors.New("unsupported native runtime")
 	}
-	if !ValidInstanceID(n.Instance) || !ValidNativeModelIdentity(n.Runtime, n.Model) {
+	if !ValidInstanceID(n.Instance) || !ValidNativeModelIdentity(n.Model) {
 		return errors.New("invalid native model identity")
 	}
 	if err := validateLaunchEvidence(n.Endpoint, n.LaunchFile, n.LaunchSHA256); err != nil {
@@ -177,31 +162,7 @@ func (n NativeModel) validateOwned() error {
 	if endpoint := "http://127.0.0.1:" + strconv.Itoa(int(o.Port)); n.Endpoint != endpoint {
 		return errors.New("owned launch endpoint must match the rendered loopback binding")
 	}
-	if err := o.validateRuntimeOptions(n.Runtime); err != nil {
-		return err
-	}
-	if n.Runtime == nativeRuntimeLlamaCPP || n.Runtime == "vllm" {
-		return n.validateOwnedModel()
-	}
-	return nil
-}
-
-func (o OwnedLaunch) validateRuntimeOptions(runtime string) error {
-	switch runtime {
-	case "ollama":
-		if o.ModelPath != "" || o.CtxSize != 0 || o.GPULayers != 0 || o.MaxModelLen != 0 || o.Alias != "" {
-			return errors.New("ollama owned launches accept only a port")
-		}
-	case nativeRuntimeLlamaCPP:
-		if o.MaxModelLen != 0 {
-			return errors.New("max-model-len is a vllm owned launch field")
-		}
-	case "vllm":
-		if o.CtxSize != 0 || o.GPULayers != 0 {
-			return errors.New("ctx-size and gpu-layers are llama.cpp owned launch fields")
-		}
-	}
-	return nil
+	return n.validateOwnedModel()
 }
 
 func (n NativeModel) validateOwnedModel() error {
@@ -301,8 +262,7 @@ func ValidateModelRequest(body []byte, model string) error {
 // ValidOwnedExecutable binds an explicit supported executable without allowing
 // command arguments or an interpreter in the executable field.
 func ValidOwnedExecutable(app, path string) bool {
-	expected := map[string]string{"ollama": "ollama", "llama.cpp": "llama-server", "vllm": "vllm"}[app]
-	return expected != "" && filepath.IsAbs(path) && filepath.Clean(path) == path && LaunchGrammarExpressible(path) && filepath.Base(path) == expected
+	return app == nativeRuntimeVLLM && filepath.IsAbs(path) && filepath.Clean(path) == path && LaunchGrammarExpressible(path) && filepath.Base(path) == nativeRuntimeVLLM
 }
 
 func ValidGPUUUID(value string) bool {

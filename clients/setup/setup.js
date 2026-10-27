@@ -5,13 +5,11 @@ import Gio from 'gi://Gio';
 import {createSetupWindow} from './setup-window.mjs';
 
 // The setup application is short-lived. Runtime controls use gpu-operator.
-function command(argv, input = null, operation = null) {
+function command(argv, input = null) {
     return new Promise((resolve, reject) => {
         const proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDIN_PIPE |
             Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
-        if (operation) operation.cancel = () => proc.send_signal(2); // SIGINT: helper restores its recorded stopped state.
         proc.communicate_utf8_async(input, null, (child, result) => {
-            if (operation) operation.cancel = null;
             try {
                 const [, stdout, stderr] = child.communicate_utf8_finish(result);
                 if (!child.get_successful()) throw new Error(stderr.trim() || 'Command failed');

@@ -16,9 +16,9 @@ const inspectionFailedStatus = "inspection-failed"
 
 func (b Backend) discoverApplications(ctx context.Context, result *Discovery, units []string, home string) {
 	defer b.discoverInstalledExecutables(ctx, result, home)
-	// Only these four local default origins are probed. Non-default instances use
+	// Only these two local default origins are probed. Non-default instances use
 	// an explicit endpoint selection; no port, process, or filesystem scanning.
-	for _, r := range []ProbeRequest{{App: "comfyui", Endpoint: "http://127.0.0.1:8188"}, {App: "ollama", Endpoint: "http://127.0.0.1:11434"}, {App: appLlamaCPP, Endpoint: "http://127.0.0.1:8080"}, {App: "vllm", Endpoint: "http://127.0.0.1:8000"}} {
+	for _, r := range []ProbeRequest{{App: "comfyui", Endpoint: "http://127.0.0.1:8188"}, {App: "vllm", Endpoint: "http://127.0.0.1:8000"}} {
 		found, err := b.probeApplication(ctx, r)
 		if err != nil {
 			found = candidate(r)
@@ -99,11 +99,7 @@ func (b Backend) discoverUnit(ctx context.Context, result *Discovery, unit strin
 	if values["ActiveState"] == "inactive" && values["SubState"] == "dead" {
 		found.InstanceStatus = "not-running"
 	}
-	model := ""
-	if app == "ollama" {
-		model = "selection-pending"
-	}
-	profile, err := b.configurationFromMetadata(ctx, app, unit, model, values)
+	profile, err := b.configurationFromMetadata(ctx, app, unit, values)
 	if err != nil {
 		found.NextStep = err.Error()
 		found.Diagnostics = gpuruntime.LaunchDiagnostics(err)
@@ -175,10 +171,6 @@ func (b Backend) recognizeUnit(ctx context.Context, found *ApplicationCandidate,
 	found.Endpoint = endpoint
 	found.Cgroup = profile.Cgroup
 	found.Binding = &DraftBinding{Unit: unit, Cgroup: profile.Cgroup, HealthURL: profile.HealthURL, Instance: instance, Model: model, LaunchFile: launchFile}
-	if app == "ollama" {
-		found.Binding.Model = ""
-		found.ConfigurationStatus = "model-required"
-	}
 	found.NextStep = "Ready to configure. Finish to review and confirm control of this installation."
 	b.discoverUnitInventory(ctx, found, app)
 }
@@ -193,9 +185,6 @@ func (b Backend) discoverUnitInventory(ctx context.Context, found *ApplicationCa
 		} else {
 			found.InstanceStatus = observed.InstanceStatus
 			found.InventoryStatus = observed.InventoryStatus
-			if app == "ollama" {
-				found.Models = observed.Models
-			}
 		}
 	}
 }
@@ -229,10 +218,6 @@ func appFromUnit(output string) string {
 		return ""
 	}
 	switch filepath.Base(paths[0][1]) {
-	case "ollama":
-		return "ollama"
-	case "llama-server":
-		return appLlamaCPP
 	case "vllm":
 		return "vllm"
 	}
@@ -252,7 +237,7 @@ func appFromUnit(output string) string {
 // launchModels extracts only simple, explicit launch arguments. Escaped or
 // shell-based commands remain manual references instead of being interpreted.
 func launchModels(app, output string) []ModelCandidate {
-	if app != appLlamaCPP && app != "vllm" || appFromUnit(output) != app {
+	if app != "vllm" || appFromUnit(output) != app {
 		return nil
 	}
 	start := unitProperties(output)["ExecStart"]
@@ -288,7 +273,7 @@ func launchArguments(app string, fields []string) (string, []string) {
 	return model, aliases
 }
 func modelFlagValue(app string, fields []string, i int) (string, bool) {
-	if (app == appLlamaCPP && fields[i] == "-m") || fields[i] == "--model" || (app == "vllm" && fields[i] == "serve") {
+	if fields[i] == "--model" || (app == "vllm" && fields[i] == "serve") {
 		if i+1 < len(fields) && !strings.HasPrefix(fields[i+1], "-") {
 			return fields[i+1], true
 		}
@@ -297,7 +282,7 @@ func modelFlagValue(app string, fields []string, i int) (string, bool) {
 }
 func consumeAliasFlags(fields []string, i int, aliases *[]string) int {
 	flag := fields[i]
-	if flag != "--alias" && flag != "--served-model-name" {
+	if flag != "--served-model-name" {
 		return i
 	}
 	for i+1 < len(fields) && !strings.HasPrefix(fields[i+1], "-") {

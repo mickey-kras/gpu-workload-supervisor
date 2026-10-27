@@ -26,12 +26,12 @@ func TestNativeCaseFoldBypass(t *testing.T) {
 			w.WriteHeader(200)
 		}))
 		u, _ := url.Parse(upstream.URL)
-		s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "ollama", Model: "selected", Endpoint: upstream.URL}}}}}}
-		h, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/api/generate"}}})
+		s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: upstream.URL}}}}}}
+		h, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/v1/completions"}}})
 		if err != nil {
 			t.Fatal(err)
 		}
-		req := httptest.NewRequest("POST", "/api/generate", strings.NewReader(body))
+		req := httptest.NewRequest("POST", "/v1/completions", strings.NewReader(body))
 		req.Header.Set(DefaultRequestIDHeader, "review")
 		addLeaseHeaders(req, s.state.LeaseFence)
 		w := httptest.NewRecorder()
@@ -53,7 +53,7 @@ func TestNativeReadonlyReloadBypass(t *testing.T) {
 	}))
 	defer upstream.Close()
 	u, _ := url.Parse(upstream.URL)
-	s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "llama.cpp", Model: "selected", Endpoint: upstream.URL}}}}}}
+	s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: upstream.URL}}}}}}
 	s.state.Admission = control.AdmissionClosed
 	h, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/v1/completions"}}, ReadOnlyRoutes: []Route{{Method: "GET", Path: "/v1/models"}}})
 	if err != nil {

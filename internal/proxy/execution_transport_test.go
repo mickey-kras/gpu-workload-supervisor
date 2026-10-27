@@ -32,7 +32,7 @@ func TestExecutionDoesNotReplayAfterLostResponse(t *testing.T) {
 				t.Run(fmt.Sprintf("%s/%s/%s/%s/%s", mode, owner, input.method, input.body, input.hint), func(t *testing.T) {
 					path, monitor, body := "/execute", "/monitor", input.body
 					if mode == "native" {
-						path, monitor, body = "/api/generate", "/api/version", `{"model":"selected"}`
+						path, monitor, body = "/v1/completions", "/v1/models", `{"model":"selected"}`
 					}
 					var calls atomic.Int32
 					var warmAddress string
@@ -79,7 +79,7 @@ func TestExecutionDoesNotReplayAfterLostResponse(t *testing.T) {
 					case "adapter":
 						config.IngressMode, config.ExecutionCredential, config.CompletionCredential = IngressAdapter, executionCredential, completionCredential
 					case "native":
-						stateStore = &nativeStore{fakeStore: fakeStore{state: state}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "ollama", Model: "selected", Endpoint: upstream.URL}}}}}}
+						stateStore = &nativeStore{fakeStore: fakeStore{state: state}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: upstream.URL}}}}}}
 						baseStore = &stateStore.(*nativeStore).fakeStore
 					}
 					h, err := NewWithContext(context.Background(), stateStore, config)

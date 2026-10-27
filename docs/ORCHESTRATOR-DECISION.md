@@ -1,12 +1,11 @@
-# Orchestrator decision (#396)
+# Orchestrator decision
 
 The durable state machine, lease fencing, fail-closed admission and drain remain
 our control authority. Runtime readiness, capacity and cgroup and GPU-release checks
 remain required evidence. Unit ordering or completion cannot replace them.
 
 Issue #397 adds systemd backstops to distinct supervisor-owned units in the
-configured catalog. Shared Ollama profiles use one unit and never conflict with
-that same unit. Setup derives `Conflicts=` for other owned units and `After=`
+configured catalog. Setup derives `Conflicts=` for other owned units and `After=`
 only for lexically earlier peers, giving each pair one ordering edge without
 cycles. The [contract for systemd units](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html#Conflicts=)
 orders a conflicting stop before a start in either direction.
@@ -40,7 +39,5 @@ the full serialization bounded at 352 KiB on validation and readback. Other
 fields cannot consume this derived allowance. Setup requests have a 416 KiB limit.
 This reserves 64 KiB for the deployment profile and request envelope around a maximum catalog.
 
-A native router remains additive, behind a spike and demonstrated parity for
-readiness, drain, release and capacity. Keep existing control until that gate passes. `requiredMiB` is a demand estimate, not an enforced memory ceiling.
-Defer llama-swap, Quadlet, HAMi, metrics and Litestream code until concrete demand and qualified experiments support them. Host evidence and hardware and build
-identifiers stay outside this decision record.
+`requiredMiB` is a demand estimate, not an enforced memory ceiling.
+Host evidence and hardware and build identifiers stay outside this decision record.

@@ -4,7 +4,7 @@ export function watchInstanceSelection({instance, instances, draft, endpoint, re
         const selected = instances[instance.selected - 1];
         if (!selected) return;
         beforeSelection(); clearBinding(); clearModels();
-        draft.edit({endpoint: undefined, reference: undefined, referenceKind: undefined, model: '', models: undefined});
+        draft.edit({endpoint: undefined, reference: undefined, referenceKind: undefined, model: ''});
         clearOwnedReference();
         setSync(true); endpoint.text = ''; setSync(false);
         reference.label = 'No file or folder selected';
@@ -107,7 +107,7 @@ export function addFilePickers({Gtk, window, group, advancedGroup = group, draft
         modelGroup.add(chooser); modelGroup.add(choices);
         chooserGroup = {add: child => choices.append(child)};
     }
-    for (const [label, method, kind] of [['Choose model file...', 'open', 'model-file'], ['Choose model folder...', 'select_folder', 'model-directory']]) {
+    for (const [label, method, kind] of [['Choose model folder...', 'select_folder', 'model-directory']]) {
         const choose = new Gtk.Button({label}); chooserGroup.add(choose);
         choose.connect('clicked', () => {
             const dialog = new Gtk.FileDialog({title: label});

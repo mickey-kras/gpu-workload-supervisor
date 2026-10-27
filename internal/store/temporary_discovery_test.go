@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"testing"
@@ -18,8 +19,18 @@ func startTemporaryFixture(t *testing.T) (*Store, control.State, control.Tempora
 	}
 	v := control.TemporaryDiscoverySession{ID: "temporary-one", Token: "private-token", Status: "starting", PriorStopped: true, Candidate: control.TemporaryDiscoveryCandidate{Unit: "ollama.service", Endpoint: "http://127.0.0.1:11434"}}
 	tr := Transition{ID: v.ID, Source: current, Target: current, Previous: current, Initiator: "temporary-native-discovery", Deadline: time.Now().Add(time.Minute), ConfigurationRevision: e.ConfigurationRevision}
-	next, err := s.StartTemporaryDiscovery(ctx, e, tr, v)
+	next, err := s.StartTransition(ctx, current.Version, tr)
 	if err != nil {
+		t.Fatal(err)
+	}
+	v.Fence = next.LeaseFence
+	v.Version = next.Version
+	v.ConfigurationRevision = e.ConfigurationRevision
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.Exec(`INSERT INTO temporary_discovery_sessions(id,payload,status) VALUES(?,?,?)`, v.ID, raw, v.Status); err != nil {
 		t.Fatal(err)
 	}
 	record, err := s.TemporaryDiscoveryStatus(ctx)
@@ -74,7 +85,7 @@ func TestTemporarySessionClosesFenceAndBlocksOtherControlPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	done, err := s.TemporaryDiscoveryStatus(ctx)
-	if err != nil || done.Status != "completed" {
+	if err != nil || done != nil {
 		t.Fatalf("%+v %v", done, err)
 	}
 	after, err = s.State(ctx)
@@ -82,21 +93,75 @@ func TestTemporarySessionClosesFenceAndBlocksOtherControlPaths(t *testing.T) {
 		t.Fatalf("%+v %v", after, err)
 	}
 }
-func TestTemporarySessionInvocationCannotBeReplaced(t *testing.T) {
-	s, _, v := startTemporaryFixture(t)
+
+func TestTemporaryCleanupRejectsPayloadStatusMismatch(t *testing.T) {
+	s, _, record := startTemporaryFixture(t)
 	defer s.Close()
-	ctx := context.Background()
-	launch := control.TemporaryDiscoveryLaunchEvidence{InvocationID: "abc", JobID: "32", ActivationTimestamp: "13"}
-	if err := s.RecordTemporaryLaunch(ctx, v.ID, v.Token, launch); err != nil {
+	record.Status = "completed"
+	raw, err := json.Marshal(record)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpdateTemporaryDiscovery(ctx, v.ID, v.Token, "abc", "running", ""); err != nil {
+	if _, err := s.db.Exec(`UPDATE temporary_discovery_sessions SET payload=? WHERE id=?`, raw, record.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpdateTemporaryDiscovery(ctx, v.ID, v.Token, "other", "cleanup_required", ""); !errors.Is(err, ErrStaleFence) {
-		t.Fatal(err)
+	if err := s.CheckTemporaryDiscovery(t.Context(), record.ID, record.Token); err == nil {
+		t.Fatal("mismatched status accepted")
 	}
-	if err := s.RecordTemporaryLaunch(ctx, v.ID, v.Token, launch); !errors.Is(err, ErrStaleFence) {
-		t.Fatal(err)
+	if _, err := s.TemporaryDiscoveryStatus(t.Context()); err == nil {
+		t.Fatal("mismatched status exposed")
+	}
+}
+
+func TestTemporaryCleanupInspectionRejectsSchemaDriftWithoutMigration(t *testing.T) {
+	for _, mode := range []string{"older", "future"} {
+		t.Run(mode, func(t *testing.T) {
+			s, _, _ := startTemporaryFixture(t)
+			defer s.Close()
+			expected := len(migrations) - 1
+			if mode == "older" {
+				if _, err := s.db.Exec(`DELETE FROM schema_migrations WHERE version=?`, len(migrations)); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				expected = len(migrations) + 1
+				if _, err := s.db.Exec(`INSERT INTO schema_migrations(version,applied_at) VALUES(?,?)`, expected, formatTime(s.now())); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := InspectTemporaryDiscoveryStatus(t.Context(), s.db); err == nil {
+				t.Fatal("incompatible schema accepted")
+			}
+			var current int
+			if err := s.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&current); err != nil || current != expected {
+				t.Fatal("inspection changed schema", current, err)
+			}
+		})
+	}
+}
+
+func TestTemporaryCleanupRejectsMissingAndMalformedRecords(t *testing.T) {
+	s, _, record := startTemporaryFixture(t)
+	defer s.Close()
+	if err := s.CheckTemporaryDiscovery(t.Context(), "missing", record.Token); err == nil {
+		t.Fatal("missing session accepted")
+	}
+	for _, raw := range []string{`{`, `{"id":"temporary-one","token":"private-token","status":"running","priorStopped":true}`} {
+		if _, err := s.db.Exec(`UPDATE temporary_discovery_sessions SET payload=? WHERE id=?`, []byte(raw), record.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.TemporaryDiscoveryStatus(t.Context()); err == nil {
+			t.Fatal("corrupt session accepted")
+		}
+		if _, err := s.FinishTemporaryDiscovery(t.Context(), record.ID, record.Token); err == nil {
+			t.Fatal("corrupt session finalized")
+		}
+	}
+	s.Close()
+	if _, err := s.TemporaryDiscoveryStatus(t.Context()); err == nil {
+		t.Fatal("storage failure hidden")
+	}
+	if _, err := InspectTemporaryDiscoveryStatus(t.Context(), s.db); err == nil {
+		t.Fatal("inspection failure hidden")
 	}
 }

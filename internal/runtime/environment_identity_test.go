@@ -26,17 +26,17 @@ func (r *identityRunner) Run(_ context.Context, name string, args ...string) ([]
 
 func TestCUDAVisibilityBindsPhysicalIdentityForAdmissionAndRelease(t *testing.T) {
 	raw := []byte("[Service]\nEnvironment=\"CUDA_VISIBLE_DEVICES=" + testPhysicalUUID + "\"\nExecStart=/usr/bin/true x\n")
-	u, err := parseExternalLaunchSources([][]byte{raw}, "llama.cpp")
+	u, err := parseExternalLaunchSources([][]byte{raw})
 	if err != nil || u.gpuUUID != testPhysicalUUID {
 		t.Fatal(err)
 	}
-	n := control.NativeModel{Runtime: "llama.cpp", GPUUUID: ""}
+	n := control.NativeModel{Runtime: "vllm", GPUUUID: ""}
 	if err := qualifyParsedLaunch(u, n, fixtureExecutableValidator); err == nil || !strings.Contains(err.Error(), "recorded physical GPU") {
 		t.Fatal("omitted UUID evidence accepted", err)
 	}
 	// Explicit non-UUID selections must not escape with empty identity evidence.
 	for _, plain := range []string{"0", "1", "", "-1", "GPU-0123", testPhysicalUUID + ",GPU-ffffffff-ffff-ffff-ffff-ffffffffffff", "MIG-01234567-89ab-cdef-0123-456789abcdef"} {
-		u, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nEnvironment=CUDA_VISIBLE_DEVICES=" + plain + "\nExecStart=/usr/bin/true x\n")}, "llama.cpp")
+		u, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nEnvironment=CUDA_VISIBLE_DEVICES=" + plain + "\nExecStart=/usr/bin/true x\n")})
 		if !errors.Is(err, ErrLaunchUnsupported) || u.gpuUUID != "" {
 			t.Fatalf("unqualified visibility accepted or bound: %q %v", plain, err)
 		}
@@ -82,7 +82,7 @@ func TestCUDAVisibilityBindsPhysicalIdentityForAdmissionAndRelease(t *testing.T)
 	}
 }
 func TestCUDAUUIDSourceBindingCannotBeOmittedOrDrifted(t *testing.T) {
-	n := control.NativeModel{Runtime: "llama.cpp", Endpoint: "http://localhost:9000", Model: "selected", GPUUUID: testPhysicalUUID}
+	n := control.NativeModel{Runtime: "vllm", Endpoint: "http://localhost:9000", Model: "selected", GPUUUID: testPhysicalUUID}
 	raw := append(nativeLaunchFixture(t, n.Runtime, n.Endpoint, n.Model), []byte("Environment=CUDA_VISIBLE_DEVICES="+testPhysicalUUID+"\n")...)
 	path := filepath.Join(t.TempDir(), "bound.service")
 	if err := os.WriteFile(path, raw, 0600); err != nil {
@@ -144,17 +144,17 @@ func TestEnvironmentRejectsAmbiguousAndUninspectedLoadedSettings(t *testing.T) {
 	}
 	u := parsedLaunchUnit{}
 	homeAssignment := "HOME=" + t.TempDir()
-	if err := u.applySafeEnvironment("llama.cpp", homeAssignment); err != nil {
+	if err := u.applySafeEnvironment(homeAssignment); err != nil {
 		t.Fatal(err)
 	}
-	if err := u.applySafeEnvironment("llama.cpp", homeAssignment); err == nil {
+	if err := u.applySafeEnvironment(homeAssignment); err == nil {
 		t.Fatal("ambiguous direct assignment accepted")
 	}
-	if err := u.applySafeEnvironment("llama.cpp", "malformed"); err == nil {
+	if err := u.applySafeEnvironment("malformed"); err == nil {
 		t.Fatal("malformed assignment accepted")
 	}
-	for _, path := range []string{"/usr/bin/true", "/missing/ollama"} {
-		if err := ValidateSelectedNativeExecutable("ollama", path); err == nil {
+	for _, path := range []string{"/usr/bin/true", "/missing/vllm"} {
+		if err := ValidateSelectedNativeExecutable("vllm", path); err == nil {
 			t.Fatal("unqualified executable accepted")
 		}
 	}

@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -203,10 +202,7 @@ func TestPruneAuditHistoryDeletesCompletedSessionWithTransition(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	payload, err := json.Marshal(control.TemporaryDiscoverySession{ID: "session", Token: "t", Status: "completed"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	payload := legacySessionPayload("session", "completed")
 	if _, err := s.db.Exec(`INSERT INTO temporary_discovery_sessions(id,payload,status) VALUES('session',?,'completed')`, payload); err != nil {
 		t.Fatal(err)
 	}
@@ -216,8 +212,9 @@ func TestPruneAuditHistoryDeletesCompletedSessionWithTransition(t *testing.T) {
 	}
 	assertAuditTransitionIDs(t, s, "transitions", nil)
 	assertAuditTransitionIDs(t, s, "transition_events", nil)
-	if session, err := s.TemporaryDiscoveryStatus(ctx); err != nil || session != nil {
-		t.Fatalf("completed session leaked after audit prune: %+v %v", session, err)
+	var sessions int
+	if err := s.db.QueryRow(`SELECT count(*) FROM temporary_discovery_sessions`).Scan(&sessions); err != nil || sessions != 0 {
+		t.Fatalf("completed session leaked after audit prune: %d %v", sessions, err)
 	}
 	count, err = s.PruneAuditHistory(ctx, s.now().Add(-time.Hour), 10)
 	if err != nil || count != 0 {
@@ -272,7 +269,7 @@ func TestTemporarySessionAuditRetentionHonorsExistingGuards(t *testing.T) {
 					}
 				}
 			}
-			payload, _ := json.Marshal(control.TemporaryDiscoverySession{ID: tr.ID, Token: "t", Status: status})
+			payload := legacySessionPayload(tr.ID, status)
 			if _, err := s.db.Exec(`INSERT INTO temporary_discovery_sessions(id,payload,status) VALUES(?,?,?)`, tr.ID, payload, status); err != nil {
 				t.Fatal(err)
 			}
@@ -332,7 +329,7 @@ func TestCompletedSessionPruningRollsBackAllAuditRows(t *testing.T) {
 			if _, err := s.db.Exec(`UPDATE transitions SET status='failed',updated_at='2000-01-01T00:00:00Z',lease_epoch=99 WHERE transition_id=?`, tr.ID); err != nil {
 				t.Fatal(err)
 			}
-			payload, _ := json.Marshal(control.TemporaryDiscoverySession{ID: tr.ID, Token: "t", Status: "completed"})
+			payload := legacySessionPayload(tr.ID, "completed")
 			if _, err := s.db.Exec(`INSERT INTO temporary_discovery_sessions(id,payload,status) VALUES(?,?,'completed')`, tr.ID, payload); err != nil {
 				t.Fatal(err)
 			}
@@ -350,4 +347,9 @@ func TestCompletedSessionPruningRollsBackAllAuditRows(t *testing.T) {
 			}
 		})
 	}
+}
+
+// legacySessionPayload is a session row as an earlier release stored it.
+func legacySessionPayload(id, status string) []byte {
+	return []byte(`{"id":"` + id + `","token":"t","status":"` + status + `"}`)
 }

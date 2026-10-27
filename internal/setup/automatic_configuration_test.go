@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -17,8 +18,8 @@ func automaticFixture(t *testing.T, app string) (Backend, Draft, map[string]map[
 	if app == "comfyui" {
 		command = "/usr/bin/python3 /opt/ComfyUI/main.py"
 	}
-	if app == appLlamaCPP {
-		command = "/usr/bin/llama-server -m /models/a.gguf --host 127.0.0.1 --port 8080"
+	if app == "vllm" {
+		command = "/usr/bin/vllm serve /models/a --host 127.0.0.1 --port 8080"
 	}
 	metadata := map[string]map[string]string{
 		app + ".service": {"Id": app + ".service", "LoadState": "loaded", "ExecStart": "{ path=" + strings.Fields(command)[0] + " ; argv[]=" + command + " ; }", "ControlGroup": "", "ActiveState": "inactive", "SubState": "dead", "Slice": "app.slice", "FragmentPath": "/opt/launch/" + app + ".service", "NeedDaemonReload": "no", "DropInPaths": ""},
@@ -60,16 +61,13 @@ func automaticFixture(t *testing.T, app string) (Backend, Draft, map[string]map[
 		return ApplicationCandidate{InstanceStatus: "present", InventoryStatus: "available", Models: []ModelCandidate{{ID: "local", Locality: "local"}}}, nil
 	}}
 	model := "served-model"
-	if app == "ollama" {
-		model = "local-model"
-	}
 	if app == "comfyui" {
 		model = ""
 	}
 	return b, Draft{ID: "chosen", Label: "Chosen installation", App: app, Binding: &DraftBinding{Unit: app + ".service"}, Model: model}, metadata
 }
-func TestPrepareFourStoppedApplicationsFromMetadata(t *testing.T) {
-	for _, app := range []string{"comfyui", "ollama", appLlamaCPP, "vllm"} {
+func TestPrepareStoppedApplicationsFromMetadata(t *testing.T) {
+	for _, app := range []string{"comfyui", "vllm"} {
 		t.Run(app, func(t *testing.T) {
 			b, d, _ := automaticFixture(t, app)
 			if app == "comfyui" {
@@ -91,11 +89,7 @@ func TestPrepareFourStoppedApplicationsFromMetadata(t *testing.T) {
 				if p.NativeModel == nil || p.NativeModel.Owned != nil {
 					t.Fatal(p)
 				}
-				want := "served-model"
-				if app == "ollama" {
-					want = "local-model"
-				}
-				if p.NativeModel.Model != want {
+				if p.NativeModel.Model != "served-model" {
 					t.Fatal(p.NativeModel)
 				}
 			}
@@ -137,9 +131,8 @@ func TestPrepareRefusesMissingChangedAndUnsupportedEvidence(t *testing.T) {
 		t.Fatal("invalid draft accepted")
 	}
 	b, d, _ = automaticFixture(t, "ollama")
-	d.Model = ""
 	if _, err := b.Prepare(context.Background(), PrepareRequest{Draft: d}); err == nil {
-		t.Fatal("missing Ollama choice accepted")
+		t.Fatal("removed Ollama installation accepted")
 	}
 }
 func TestPrepareExplicitLocationWithoutScanning(t *testing.T) {
@@ -187,8 +180,8 @@ func TestDiscoveryReportsReadFailureAndRecognizedStoppedInstallation(t *testing.
 	}
 	b, d, _ := automaticFixture(t, "ollama")
 	b.discoverUnit(context.Background(), &result, d.Binding.Unit)
-	if result.Applications[2].ConfigurationStatus != "model-required" || result.Applications[2].Binding.Model != "" {
-		t.Fatal(result)
+	if len(result.Applications) != 2 {
+		t.Fatalf("removed Ollama installation discovered: %+v", result)
 	}
 	result = Discovery{}
 	b.discoverApplications(context.Background(), &result, make([]string, 257), t.TempDir())
@@ -219,7 +212,7 @@ func TestLaunchBindingCatalogCloneAndValidation(t *testing.T) {
 }
 
 func TestDiscoveryRecognizesKeywordlessDirectApplications(t *testing.T) {
-	for _, app := range []string{"comfyui", "ollama", appLlamaCPP, "vllm"} {
+	for _, app := range []string{"comfyui", "vllm"} {
 		t.Run(app, func(t *testing.T) {
 			b, d, metadata := automaticFixture(t, app)
 			unit := "inference-worker.service"
@@ -234,7 +227,7 @@ func TestDiscoveryRecognizesKeywordlessDirectApplications(t *testing.T) {
 			}
 			result := Discovery{}
 			b.discoverApplications(context.Background(), &result, []string{unit}, t.TempDir())
-			if len(result.Units) != 1 || result.Units[0] != unit || len(result.Applications) != 5 || !result.Applications[4].Recognized {
+			if len(result.Units) != 1 || result.Units[0] != unit || len(result.Applications) != 3 || !result.Applications[2].Recognized {
 				t.Fatalf("keywordless direct service excluded: %+v", result)
 			}
 			d.Binding.Unit = unit
@@ -246,7 +239,7 @@ func TestDiscoveryRecognizesKeywordlessDirectApplications(t *testing.T) {
 }
 
 func TestPrepareRequiresLoadedStartupPreparationMatch(t *testing.T) {
-	b, d, metadata := automaticFixture(t, appLlamaCPP)
+	b, d, metadata := automaticFixture(t, "vllm")
 	inspect := b.inspectAutomatic
 	b.inspectAutomatic = func(path, app string) (gpuruntime.AutomaticLaunch, error) {
 		launch, err := inspect(path, app)
@@ -263,7 +256,7 @@ func TestPrepareRequiresLoadedStartupPreparationMatch(t *testing.T) {
 }
 
 func TestPrepareRetainsLoadedDropInEvidence(t *testing.T) {
-	b, d, metadata := automaticFixture(t, appLlamaCPP)
+	b, d, metadata := automaticFixture(t, "vllm")
 	inspect := b.inspectAutomatic
 	source := control.LaunchSource{Path: "/opt/launch/10-tuning.conf", SHA256: strings.Repeat("b", 64)}
 	b.inspectAutomatic = func(path, app string) (gpuruntime.AutomaticLaunch, error) {
@@ -276,7 +269,7 @@ func TestPrepareRetainsLoadedDropInEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !control.EqualLaunchSources(got.Profile.NativeModel.DropIns, []control.LaunchSource{source}) {
+	if !slices.Equal(got.Profile.NativeModel.DropIns, []control.LaunchSource{source}) {
 		t.Fatal("drop-in evidence discarded")
 	}
 	metadata[d.Binding.Unit]["DropInPaths"] += " /opt/launch/20-unbound.conf"
@@ -286,16 +279,16 @@ func TestPrepareRetainsLoadedDropInEvidence(t *testing.T) {
 }
 
 func TestKeywordlessApplicationWithRepeatedSystemctlPreCommandsIsDiscovered(t *testing.T) {
-	b, d, metadata := automaticFixture(t, appLlamaCPP)
+	b, d, metadata := automaticFixture(t, "vllm")
 	unit := "inference-worker.service"
 	metadata[unit] = metadata[d.Binding.Unit]
 	metadata[unit]["Id"] = unit
 	metadata[unit]["DropInPaths"] = "/opt/launch/10-precondition.conf"
-	metadata[unit]["ExecStartPre"] = "{ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; }\nExecStartPre={ path=/usr/bin/test ; argv[]=/usr/bin/test -f /models/a.gguf ; ignore_errors=no ; }"
+	metadata[unit]["ExecStartPre"] = "{ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; }\nExecStartPre={ path=/usr/bin/test ; argv[]=/usr/bin/test -f /models/a ; ignore_errors=no ; }"
 	inspect := b.inspectAutomatic
 	b.inspectAutomatic = func(path, app string) (gpuruntime.AutomaticLaunch, error) {
 		launch, err := inspect(path, app)
-		launch.PreCommands = []string{"/usr/bin/true", "/usr/bin/test -f /models/a.gguf"}
+		launch.PreCommands = []string{"/usr/bin/true", "/usr/bin/test -f /models/a"}
 		launch.DropIns = []control.LaunchSource{{Path: metadata[unit]["DropInPaths"], SHA256: strings.Repeat("b", 64)}}
 		return launch, err
 	}
@@ -308,7 +301,7 @@ func TestKeywordlessApplicationWithRepeatedSystemctlPreCommandsIsDiscovered(t *t
 	if _, err := b.Prepare(context.Background(), PrepareRequest{Draft: d}); err != nil {
 		t.Fatal(err)
 	}
-	metadata[unit]["ExecStartPre"] = "{ path=/usr/bin/test ; argv[]=/usr/bin/test -f /models/a.gguf ; ignore_errors=no ; }\nExecStartPre={ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; }"
+	metadata[unit]["ExecStartPre"] = "{ path=/usr/bin/test ; argv[]=/usr/bin/test -f /models/a ; ignore_errors=no ; }\nExecStartPre={ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; }"
 	if _, err := b.Prepare(context.Background(), PrepareRequest{Draft: d}); err == nil {
 		t.Fatal("reversed startup preconditions accepted")
 	}
@@ -535,7 +528,7 @@ func TestPrepareRejectsOwnedDraft(t *testing.T) {
 }
 
 func TestPrepareRejectsModelConflictingWithExistingLaunch(t *testing.T) {
-	b, d, _ := automaticFixture(t, appLlamaCPP)
+	b, d, _ := automaticFixture(t, "vllm")
 	d.Model = "other-model"
 	if _, err := b.Prepare(context.Background(), PrepareRequest{Draft: d}); err == nil {
 		t.Fatal("model conflicting with the existing launch accepted")

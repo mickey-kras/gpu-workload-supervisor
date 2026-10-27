@@ -31,19 +31,18 @@ def validate_tree(tree, screen, expected_focus, disclosure=None, contract=None):
         return any(node['name'] == name and (role is None or node['role'] == role)
                    for node in visible)
     if screen == 'applications':
-        for application in ('ComfyUI', 'Ollama', 'llama.cpp', 'vLLM'):
+        for application in ('ComfyUI', 'vLLM'):
             assert present(f'Use {application}', 'check box'), f'missing selection: {application}'
             assert present(f'Settings for {application}', 'push button'), f'missing settings: {application}'
         assert present('Continue', 'push button'), 'missing Continue action'
     elif screen == 'models':
-        for model in ('Example small', 'Example large'):
-            assert present(model, 'check box'), f'missing model choice: {model}'
-        for application in ('ComfyUI', 'Ollama'):
+        assert present('Model', 'combo box'), 'missing model choice: Model'
+        for application in ('ComfyUI', 'vLLM'):
             assert present(f'Settings for {application}', 'push button'), f'missing model settings: {application}'
         assert present('Continue', 'push button') and present('Back', 'push button'), 'missing model navigation'
     elif screen == 'review':
         assert present('Finish setup', 'push button') and present('Back', 'push button'), 'missing review actions'
-        for workload in ('ComfyUI', 'Ollama - Example small', 'Ollama - Example large'):
+        for workload in ('ComfyUI', 'vLLM - Example small'):
             assert present(workload), f'missing review workload: {workload}'
     elif screen == 'settings':
         assert contract, 'settings observation requires an independent content contract'
@@ -68,8 +67,7 @@ def validate_tree(tree, screen, expected_focus, disclosure=None, contract=None):
     if disclosure is not None and screen == 'models':
         expanded = disclosure == 'open'
         assert any(node['name'] == 'Choose another model…' and node['role'] == 'push button' and node['expanded'] == expanded for node in visible), 'model chooser accessible expansion state'
-        for picker in ('Choose model file...', 'Choose model folder...'):
-            assert present(picker, 'push button') == expanded, f'picker visibility: {picker}'
+        assert present('Choose model folder...', 'push button') == expanded, 'picker visibility: Choose model folder...'
     assert any(node['focused'] and node['name'] == expected_focus for node in visible), (expected_focus, [node for node in visible if node['focused']])
 
 

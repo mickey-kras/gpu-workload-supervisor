@@ -14,7 +14,7 @@ import (
 func TestExecutableDiscoveryPathsAreBoundedExplicitCandidates(t *testing.T) {
 	path := strings.Join([]string{"", ".", "relative/bin", "/env/bin/../bin", "/env/bin", "/env/bin", "/usr/bin"}, string(os.PathListSeparator))
 	requests := executableDiscoveryPaths(path)
-	if len(requests) != 12 {
+	if len(requests) != 4 {
 		t.Fatalf("unexpected bounded locations: %+v", requests)
 	}
 	for _, request := range requests {
@@ -25,42 +25,42 @@ func TestExecutableDiscoveryPathsAreBoundedExplicitCandidates(t *testing.T) {
 			t.Fatalf("not explicit executable evidence: %+v", request)
 		}
 	}
-	if got := len(executableDiscoveryPaths(strings.Repeat("/env/bin:", 100000))); got != 12 {
+	if got := len(executableDiscoveryPaths(strings.Repeat("/env/bin:", 100000))); got != 4 {
 		t.Fatalf("duplicate or unbounded PATH candidates: %d", got)
 	}
 	entries := make([]string, 100)
 	for i := range entries {
 		entries[i] = filepath.Join("/environments", strings.Repeat("a", i+1))
 	}
-	if got := len(executableDiscoveryPaths(strings.Join(entries, ":"))); got != (3+32)*3 {
+	if got := len(executableDiscoveryPaths(strings.Join(entries, ":"))); got != 3+32 {
 		t.Fatalf("PATH discovery exceeds 32 directories: %d", got)
 	}
 }
 
 func TestInstalledExecutableInspectionSharesQualificationAndDeduplicatesTrustedAliases(t *testing.T) {
 	requests := []ProbeRequest{
-		{App: "ollama", Reference: "/usr/bin/ollama", ReferenceKind: "application"},
-		{App: "ollama", Reference: "/bin/ollama", ReferenceKind: "application"},
+		{App: "vllm", Reference: "/usr/bin/vllm", ReferenceKind: "application"},
+		{App: "vllm", Reference: "/bin/vllm", ReferenceKind: "application"},
 		{App: "vllm", Reference: "/env/bin/vllm", ReferenceKind: "application"},
-		{App: appLlamaCPP, Reference: "/usr/bin/llama-server", ReferenceKind: "application"},
+		{App: "vllm", Reference: "/opt/missing/vllm", ReferenceKind: "application"},
 	}
 	var qualified []string
 	found := inspectInstalledExecutables(context.Background(), requests, func(path string) (os.FileInfo, error) {
-		if strings.HasSuffix(path, "llama-server") {
+		if path == "/opt/missing/vllm" {
 			return nil, os.ErrNotExist
 		}
 		return nil, nil
 	}, func(app, path string) error {
 		qualified = append(qualified, path)
-		if app == "vllm" {
+		if path == "/env/bin/vllm" {
 			return errors.New("untrusted selected executable")
 		}
 		return nil
-	}, func(string) (string, error) { return "/usr/bin/ollama", nil })
+	}, func(string) (string, error) { return "/usr/bin/vllm", nil })
 	if len(qualified) != 3 || len(found) != 2 {
 		t.Fatalf("missing candidates inspected or trusted alias duplicated: %v %+v", qualified, found)
 	}
-	if !found[0].Recognized || found[0].SourceKind != "owned" || found[0].Binding.Owned.Executable != "/usr/bin/ollama" {
+	if !found[0].Recognized || found[0].SourceKind != "owned" || found[0].Binding.Owned.Executable != "/usr/bin/vllm" {
 		t.Fatalf("supported executable not ready for managed flow: %+v", found[0])
 	}
 	if found[1].Recognized || found[1].Binding != nil || found[1].ConfigurationStatus != inspectionFailedStatus {
@@ -78,12 +78,12 @@ func TestInstalledExecutableInspectionSharesQualificationAndDeduplicatesTrustedA
 
 func TestExecutableDiscoveryKeepsEndpointObservationSeparateAndPrefersRecognizedService(t *testing.T) {
 	for _, hasService := range []bool{false, true} {
-		result := Discovery{Applications: []ApplicationCandidate{{App: "ollama", SourceKind: "endpoint", InstanceStatus: "unreachable"}}}
+		result := Discovery{Applications: []ApplicationCandidate{{App: "vllm", SourceKind: "endpoint", InstanceStatus: "unreachable"}}}
 		if hasService {
-			result.Applications = append(result.Applications, ApplicationCandidate{App: "ollama", Unit: "existing.service", Recognized: true})
+			result.Applications = append(result.Applications, ApplicationCandidate{App: "vllm", Unit: "existing.service", Recognized: true})
 		}
 		b := Backend{discoverExecutables: func(context.Context, string) []ApplicationCandidate {
-			request := ProbeRequest{App: "ollama", Reference: "/usr/bin/ollama", ReferenceKind: "application"}
+			request := ProbeRequest{App: "vllm", Reference: "/usr/bin/vllm", ReferenceKind: "application"}
 			found := probeSelectedExecutable(request, candidate(request), func(string, string) error { return nil })
 			return []ApplicationCandidate{found}
 		}}
@@ -98,7 +98,7 @@ func TestExecutableDiscoveryKeepsEndpointObservationSeparateAndPrefersRecognized
 }
 
 func TestUnresolvedGPUIdentityIsInspectableWithoutInstallationFailure(t *testing.T) {
-	b, draft, _ := automaticFixture(t, "ollama")
+	b, draft, _ := automaticFixture(t, "vllm")
 	b.inspectAutomatic = func(string, string) (gpuruntime.AutomaticLaunch, error) {
 		return gpuruntime.AutomaticLaunch{}, gpuruntime.ErrGPUIdentityUnresolved
 	}
@@ -145,7 +145,7 @@ func TestFolderFallbackFindsBlockedInstallationWithoutExecutionOrTraversal(t *te
 func TestRelevantRootsAndSavedSelectionsRemainBounded(t *testing.T) {
 	home := t.TempDir()
 	result := relevantExecutablePaths(home)
-	if len(result) != 17 {
+	if len(result) != 7 {
 		t.Fatalf("unexpected fixed candidates %d", len(result))
 	}
 	for _, request := range result {
@@ -217,13 +217,13 @@ func TestSavedExecutableSelectionIsRediscoveredWithoutHomeScan(t *testing.T) {
 			count++
 		}
 	}
-	if count != 1 || len(paths) != 18 {
+	if count != 1 || len(paths) != 8 {
 		t.Fatalf("saved explicit reference omitted/unbounded: %+v", paths)
 	}
 }
 
 func TestStoppedServiceWithMissingExecutableDoesNotClaimInstalled(t *testing.T) {
-	b, draft, _ := automaticFixture(t, "ollama")
+	b, draft, _ := automaticFixture(t, "vllm")
 	b.inspectAutomatic = func(string, string) (gpuruntime.AutomaticLaunch, error) {
 		return gpuruntime.AutomaticLaunch{}, errors.New("executable is missing")
 	}
@@ -250,14 +250,14 @@ func TestExecutableDiscoveryUsesExplicitAccountHomeDespiteAmbientHOME(t *testing
 			t.Fatal(err)
 		}
 	}
-	selected := filepath.Join(home, "custom/ollama")
+	selected := filepath.Join(home, "custom/vllm")
 	if err := os.MkdirAll(filepath.Dir(selected), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(selected, nil, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := SaveDrafts(home, DraftRequest{Version: 1, Drafts: []Draft{{ID: "custom", Label: "Custom", App: "ollama", Reference: selected, ReferenceKind: "application"}}}); err != nil {
+	if _, err := SaveDrafts(home, DraftRequest{Version: 1, Drafts: []Draft{{ID: "custom", Label: "Custom", App: "vllm", Reference: selected, ReferenceKind: "application"}}}); err != nil {
 		t.Fatal(err)
 	}
 	found := installedExecutables(context.Background(), home)
@@ -282,11 +282,11 @@ func TestExecutableDiscoveryUsesExplicitAccountHomeDespiteAmbientHOME(t *testing
 }
 
 func TestWrongApplicationSelectionCannotHideCorrectExecutableAtSamePath(t *testing.T) {
-	path := "/custom/bin/llama-server"
+	path := "/custom/bin/vllm"
 	requests := []ProbeRequest{
+		{App: "comfyui", Reference: path, ReferenceKind: "application"},
 		{App: "vllm", Reference: path, ReferenceKind: "application"},
-		{App: appLlamaCPP, Reference: path, ReferenceKind: "application"},
-		{App: appLlamaCPP, Reference: path, ReferenceKind: "application"},
+		{App: "vllm", Reference: path, ReferenceKind: "application"},
 	}
 	calls := 0
 	found := inspectInstalledExecutables(context.Background(), requests, func(string) (os.FileInfo, error) { return nil, nil }, func(app, reference string) error {
@@ -294,7 +294,7 @@ func TestWrongApplicationSelectionCannotHideCorrectExecutableAtSamePath(t *testi
 		if reference != path {
 			t.Fatal(reference)
 		}
-		if app != appLlamaCPP {
+		if app != "vllm" {
 			return errors.New("selected application does not match executable")
 		}
 		return nil
@@ -302,7 +302,7 @@ func TestWrongApplicationSelectionCannotHideCorrectExecutableAtSamePath(t *testi
 	if calls != 2 || len(found) != 2 {
 		t.Fatalf("different app hidden or same app repeated: calls=%d candidates=%+v", calls, found)
 	}
-	if found[0].Recognized || found[0].Binding != nil || !found[1].Recognized || found[1].App != appLlamaCPP || found[1].Binding == nil {
+	if found[0].Recognized || found[0].Binding != nil || !found[1].Recognized || found[1].App != "vllm" || found[1].Binding == nil {
 		t.Fatalf("invalid app request suppressed qualification: %+v", found)
 	}
 }

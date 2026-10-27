@@ -438,14 +438,6 @@ func (a *comfyUIAdapter) reconcileAttempt(ctx context.Context, attempt store.Com
 	return nil
 }
 
-// reconcile is one bounded pass; it only polls, including after restart. A
-// caller invokes it serially and reports its typed unresolved errors.
-func (a *comfyUIAdapter) reconcile(ctx context.Context) error {
-	return a.reconcileWithDiagnostics(ctx, func(string, string) {
-		// This wrapper intentionally ignores diagnostics while propagating errors.
-	})
-}
-
 func (a *comfyUIAdapter) reconcileWithDiagnostics(ctx context.Context, observe func(string, string)) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

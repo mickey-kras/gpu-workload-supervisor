@@ -53,11 +53,9 @@ func TestComfyDeviceOptionsCannotOverrideInspectedGPUIdentity(t *testing.T) {
 			if err := os.WriteFile(path, raw, 0600); err != nil {
 				t.Fatal(err)
 			}
-			for _, cleanup := range []bool{false, true} {
-				launch, err := inspectAutomaticLaunchSourcesMode(path, "comfyui", nil, func(string) error { return nil }, cleanup)
-				if !errors.Is(err, ErrLaunchUnsupported) || !strings.Contains(err.Error(), "overrides CUDA_VISIBLE_DEVICES") || launch.Endpoint != "" || launch.GPUUUID != "" || launch.Command != "" || launch.Environment != nil {
-					t.Fatalf("device option escaped GPU qualification (cleanup=%v): %+v, %v", cleanup, launch, err)
-				}
+			launch, err := inspectAutomaticLaunchSourcesWithValidator(path, "comfyui", nil, func(string) error { return nil })
+			if !errors.Is(err, ErrLaunchUnsupported) || !strings.Contains(err.Error(), "overrides CUDA_VISIBLE_DEVICES") || launch.Endpoint != "" || launch.GPUUUID != "" || launch.Command != "" || launch.Environment != nil {
+				t.Fatalf("device option escaped GPU qualification: %+v, %v", launch, err)
 			}
 			if after, err := os.ReadFile(path); err != nil || !bytes.Equal(after, raw) {
 				t.Fatalf("inspection changed external source: %v", err)
@@ -90,10 +88,8 @@ func TestComfyEndpointChangingOptionsCannotBeIgnored(t *testing.T) {
 	} {
 		t.Run(strings.Join(flags, " "), func(t *testing.T) {
 			args := append([]string{"/usr/bin/python3", script}, flags...)
-			for _, cleanup := range []bool{false, true} {
-				if endpoint, err := comfyLaunchEndpointMode(args, cleanup); !errors.Is(err, ErrLaunchUnsupported) {
-					t.Fatalf("inferred endpoint %q for %v (cleanup=%v): %v", endpoint, flags, cleanup, err)
-				}
+			if endpoint, err := comfyLaunchEndpoint(args); !errors.Is(err, ErrLaunchUnsupported) {
+				t.Fatalf("inferred endpoint %q for %v: %v", endpoint, flags, err)
 			}
 		})
 	}

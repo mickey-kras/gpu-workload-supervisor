@@ -28,7 +28,7 @@ func trainingPending(ctx context.Context, tx *sql.Tx) error {
 	if pending {
 		return ErrTrainingPending
 	}
-	return nil
+	return temporaryDiscoveryPending(ctx, tx)
 }
 
 func (s *Store) TrainingJob(ctx context.Context, id string) (control.TrainingJob, error) {
@@ -211,7 +211,7 @@ func (s *Store) FinishTraining(ctx context.Context, job control.TrainingJob, out
 }
 
 func (s *Store) trainingReservationSource(ctx context.Context, tx *sql.Tx, current control.State, workload control.Workload, revision string) (control.WorkloadProfile, error) {
-	if err := temporaryDiscoveryPending(ctx, tx); err != nil {
+	if err := trainingPending(ctx, tx); err != nil {
 		return control.WorkloadProfile{}, err
 	}
 	catalog, err := readCatalog(ctx, tx)

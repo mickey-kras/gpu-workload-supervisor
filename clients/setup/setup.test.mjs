@@ -5,7 +5,7 @@ import {launch} from './harness.mjs';
 test('large discovery stays compact and adopts no service until explicit selection', async () => {
     const ui = await launch({units: Array.from({length: 10000}, (_, i) => `worker-${i}.service`)});
     assert.ok(ui.widgets.every(widget => (widget.label ?? '').length < 1000));
-    assert.deepEqual(ui.calls.map(call => call.argv[1]), ['--version', 'discover', 'temporary-status', 'drafts']);
+    assert.deepEqual(ui.calls.map(call => call.argv[1]), ['--version', 'discover', 'drafts']);
     ui.by('Add existing service (Advanced)').emit('clicked');
     const service = ui.by('Existing user service');
     assert.ok(service, 'service selection is available in each workload card');
@@ -52,21 +52,21 @@ test('editing invalidates review and requires fresh explicit confirmation', asyn
 });
 
 test('manual profile edits retain lifecycle fields and native or application binding metadata through review', async () => {
-    const native = {id: 'text', label: 'Text', unit: 'ollama.service', cgroup: '/old', healthURL: 'http://127.0.0.1:11434/old',
-        nativeModel: {runtime: 'ollama', instance: 'old', model: 'old', endpoint: 'http://127.0.0.1:11434', launchFile: '/old/ollama.service'}};
+    const native = {id: 'text', label: 'Text', unit: 'vllm.service', cgroup: '/old', healthURL: 'http://127.0.0.1:8000/old',
+        nativeModel: {runtime: 'vllm', instance: 'old', model: 'old', endpoint: 'http://127.0.0.1:8000', launchFile: '/old/vllm.service'}};
     const images = {id: 'images', label: 'Images', unit: 'images.service', launchBinding: {runtime: 'comfyui', endpoint: 'http://127.0.0.1:8188', launchFile: '/old/images.service'}};
     const ui = await launch({profiles: [native, images], deferAction: 'unused'});
     const nativeFields = ui.by('Text').children.find(widget => widget.title === 'Advanced').children;
-    for (const [title, value] of [['Cgroup path beneath /sys/fs/cgroup (required)', '/ollama'], ['Loopback health URL (required)', 'http://127.0.0.1:11434/api/tags'],
-        ['Runtime instance ID', 'selected'], ['Exact model ID', 'existing:latest'], ['Runtime base URL', 'http://127.0.0.1:11435'], ['Loaded service file path', '/selected/ollama.service']])
+    for (const [title, value] of [['Cgroup path beneath /sys/fs/cgroup (required)', '/vllm'], ['Loopback health URL (required)', 'http://127.0.0.1:8000/health'],
+        ['Runtime instance ID', 'selected'], ['Exact model ID', 'existing:latest'], ['Runtime base URL', 'http://127.0.0.1:11435'], ['Loaded service file path', '/selected/vllm.service']])
         ui.edit(nativeFields.find(widget => widget.title === title), 'text', value);
     const imageFields = ui.by('Images').children.find(widget => widget.title === 'Advanced').children;
     ui.edit(imageFields.find(widget => widget.title === 'Application address'), 'text', 'http://127.0.0.1:8189');
     ui.edit(imageFields.find(widget => widget.title === 'Loaded service file path'), 'text', '/selected/images.service');
     await ui.by('Continue').emit('clicked');
     const checked = JSON.parse(ui.calls.find(call => call.argv[1] === 'validate').input).catalog.profiles;
-    assert.equal(checked[0].cgroup, '/ollama'); assert.equal(checked[0].healthURL, 'http://127.0.0.1:11434/api/tags');
-    assert.deepEqual(checked[0].nativeModel, {...native.nativeModel, instance: 'selected', model: 'existing:latest', endpoint: 'http://127.0.0.1:11435', launchFile: '/selected/ollama.service'});
+    assert.equal(checked[0].cgroup, '/vllm'); assert.equal(checked[0].healthURL, 'http://127.0.0.1:8000/health');
+    assert.deepEqual(checked[0].nativeModel, {...native.nativeModel, instance: 'selected', model: 'existing:latest', endpoint: 'http://127.0.0.1:11435', launchFile: '/selected/vllm.service'});
     assert.deepEqual(checked[1].launchBinding, {...images.launchBinding, endpoint: 'http://127.0.0.1:8189', launchFile: '/selected/images.service'});
     assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
 });
@@ -244,21 +244,21 @@ test('app-first draft is separate from catalog and deferral never applies', asyn
     assert.ok(ui.widgets.some(widget => widget.closed));
 });
 
-for (const [index, app] of ['comfyui', 'ollama', 'llama.cpp', 'vllm'].entries()) {
+for (const [index, app] of ['comfyui', 'vllm'].entries()) {
     test(`${app} discovery remains a draft until explicit binding verification`, async () => {
         const ui = await launch({responses: {probe: {app, instanceStatus: 'available', inventoryStatus: 'available', models: [{id: 'one', label: 'One'}, {id: 'two', label: 'Two'}]}}});
         ui.applicationIndex = index;
         ui.selectApplication(ui.applicationIndex ?? 0);
-        ui.edit(ui.by('Application address'), 'text', 'http://127.0.0.1:11434');
+        ui.edit(ui.by('Application address'), 'text', 'http://127.0.0.1:8000');
         await ui.by('Check again').emit('clicked');
         assert.equal(JSON.parse(ui.calls.find(call => call.argv[1] === 'probe').input).app, app);
         if (app !== 'comfyui') {
             ui.edit(ui.by('Model'), 'selected', 1);
-            ui.by('Choose model file...').emit('clicked');
+            ui.by('Choose model folder...').emit('clicked');
             await ui.by('Check again').emit('clicked');
             const probe = JSON.parse(ui.calls.at(-1).input);
-            assert.equal(probe.reference, '/models/selected.gguf');
-            assert.equal(probe.referenceKind, 'model-file');
+            assert.equal(probe.reference, '/models/selected');
+            assert.equal(probe.referenceKind, 'model-directory');
         }
         assert.equal(ui.calls.filter(call => ['apply', 'verify-bindings'].includes(call.argv[1])).length, 0);
         await ui.by('Verify binding and add for review').emit('clicked');
@@ -270,19 +270,19 @@ for (const [index, app] of ['comfyui', 'ollama', 'llama.cpp', 'vllm'].entries())
 }
 
 test('promoted binding prefills a friendly label and stable ID; application re-selection adds no duplicate', async () => {
-    const ui = await launch({responses: {probe: {app: 'ollama', instanceStatus: 'available', inventoryStatus: 'available', models: [{id: 'qwen:latest'}]}, fingerprint: {sha256: 'fp'}}});
+    const ui = await launch({responses: {probe: {app: 'vllm', instanceStatus: 'available', inventoryStatus: 'available', models: [{id: 'qwen:latest'}]}, fingerprint: {sha256: 'fp'}}});
     const promote = async () => {
         ui.applicationIndex = 1;
         ui.selectApplication(ui.applicationIndex ?? 0);
-        ui.edit(ui.widgets.filter(widget => widget.title === 'Application address').at(-1), 'text', 'http://127.0.0.1:11434');
+        ui.edit(ui.widgets.filter(widget => widget.title === 'Application address').at(-1), 'text', 'http://127.0.0.1:8000');
         await ui.widgets.filter(widget => widget.label === 'Check again').at(-1).emit('clicked');
         ui.edit(ui.widgets.filter(widget => widget.title === 'Model').at(-1), 'selected', 1);
         await ui.widgets.filter(widget => widget.label === 'Verify binding and add for review').at(-1).emit('clicked');
         return JSON.parse(ui.calls.filter(call => call.argv[1] === 'verify-bindings').at(-1).input).catalog.profiles.at(-1);
     };
     const first = await promote();
-    assert.equal(first.id, 'ollama-qwen-latest');
-    assert.equal(first.label, 'Ollama - qwen:latest');
+    assert.equal(first.id, 'vllm-qwen-latest');
+    assert.equal(first.label, 'vLLM - qwen:latest');
     const count = ui.calls.filter(call => call.argv[1] === 'verify-bindings').length;
     ui.selectApplication(1);
     assert.equal(ui.calls.filter(call => call.argv[1] === 'verify-bindings').length, count);
@@ -312,12 +312,12 @@ test('late binding cannot promote removed draft', async () => {
 });
 
 test('choosing a model folder stores a directory reference instead of an endpoint', async () => {
-    const ui = await launch({filePath: '/models/llama-directory'});
+    const ui = await launch({filePath: '/models/model-directory'});
     ui.applicationIndex = 1; ui.selectApplication(ui.applicationIndex ?? 0);
     ui.by('Choose model folder...').emit('clicked');
     await ui.by('Save selections for later').emit('clicked');
     const saved = JSON.parse(ui.calls.at(-1).input).drafts[0];
-    assert.equal(saved.reference, '/models/llama-directory');
+    assert.equal(saved.reference, '/models/model-directory');
     assert.equal(saved.referenceKind, 'model-directory');
     assert.equal(saved.endpoint, undefined);
 });
@@ -325,7 +325,7 @@ test('choosing a model folder stores a directory reference instead of an endpoin
 test('cancelled file picker preserves draft input', async () => {
     const ui = await launch({fileError: {matches: () => true}});
     ui.applicationIndex = 1; ui.selectApplication(ui.applicationIndex ?? 0);
-    ui.by('Choose model file...').emit('clicked');
+    ui.by('Choose model folder...').emit('clicked');
     await ui.by('Save selections for later').emit('clicked');
     assert.equal(JSON.parse(ui.calls.at(-1).input).drafts[0].reference, undefined);
 });
@@ -355,7 +355,7 @@ test('editing a draft during fingerprinting cannot promote the old binding', asy
 });
 
 test('review refreshes configured native launch fingerprints automatically', async () => {
-    const ui = await launch({profiles: [{id: 'text', nativeModel: {runtime: 'ollama', model: 'chosen', launchFile: '/trusted/model.service', launchSHA256: 'old'}}],
+    const ui = await launch({profiles: [{id: 'text', nativeModel: {runtime: 'vllm', model: 'chosen', launchFile: '/trusted/model.service', launchSHA256: 'old'}}],
         responses: {fingerprint: {sha256: 'new'}}, deferAction: 'none'});
     assert.equal(ui.by('Service file SHA-256'), undefined);
     await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
@@ -369,15 +369,54 @@ test('review refreshes configured native launch fingerprints automatically', asy
 test('Save drafts restores unverified launch fields without fingerprint proof', async () => {
     const ui = await launch();
     ui.applicationIndex = 1; ui.selectApplication(ui.applicationIndex ?? 0);
-    for (const [label, value] of [['Existing user service', 'ollama-custom.service'], ['Cgroup path', '/custom'], ['Loopback health URL', 'http://127.0.0.1:11434'], ['Runtime instance ID', 'custom'], ['Loaded service file path', '/trusted/model.service'], ['Exact model ID', 'chosen']])
+    for (const [label, value] of [['Existing user service', 'vllm-custom.service'], ['Cgroup path', '/custom'], ['Loopback health URL', 'http://127.0.0.1:8000'], ['Runtime instance ID', 'custom'], ['Loaded service file path', '/trusted/model.service'], ['Exact model ID', 'chosen']])
         ui.edit(ui.by(label), 'text', value);
     await ui.by('Save selections for later').emit('clicked');
     const saved = JSON.parse(ui.calls.at(-1).input);
-    assert.equal(saved.drafts[0].binding.unit, 'ollama-custom.service');
+    assert.equal(saved.drafts[0].binding.unit, 'vllm-custom.service');
     assert.equal(saved.drafts[0].binding.model, 'chosen');
     assert.equal('launchSHA256' in saved.drafts[0].binding, false);
     const reopened = await launch({responses: {drafts: saved}});
-    assert.equal(reopened.by('Existing user service').text, 'ollama-custom.service');
+    assert.equal(reopened.by('Existing user service').text, 'vllm-custom.service');
     assert.equal(reopened.by('Exact model ID').text, 'chosen');
     assert.equal(reopened.calls.some(call => call.argv[1] === 'verify-bindings'), false);
+});
+
+test('unsupported saved applications can be removed while preserving other drafts and the recovery revision', async () => {
+    const drafts = [{id: 'old-chat', label: 'Old chat', app: 'ollama'}, {id: 'old-model', label: 'Old model', app: 'llama.cpp'}, {id: 'images', label: 'Images', app: 'comfyui'}];
+    const ui = await launch({responses: {drafts: {version: 1, revision: 'saved-revision', drafts, warning: 'Saved application is unsupported.'}, 'save-drafts': {version: 1, revision: 'new-revision'}}});
+    assert.ok(ui.by('Remove saved selection: Old chat'));
+    assert.ok(ui.by('Remove saved selection: Old model'));
+    assert.ok(ui.widgets.some(widget => widget.label === 'Remove unsupported saved selections, then save. Other selections are kept.'));
+    await ui.click('Continue');
+    assert.equal(ui.calls.some(call => ['probe', 'prepare', 'validate', 'apply'].includes(call.argv[1])), false);
+    await ui.click('Remove saved selection: Old chat');
+    await ui.click('Remove saved selection: Old model');
+    await ui.click('Setup settings'); await ui.click('Save selections for later');
+    const saved = JSON.parse(ui.calls.at(-1).input);
+    assert.equal(saved.expectedRevision, 'saved-revision');
+    assert.deepEqual(saved.drafts, [drafts[2]]);
+    assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
+});
+
+test('legacy catalog workloads have visible removal-only controls and supported profiles survive setup', async () => {
+    const images = {id: 'images', label: 'Images', adapter: 'comfyui', unit: 'images.service', launchBinding: {runtime: 'comfyui', endpoint: 'http://127.0.0.1:8188'}};
+    const chat = {id: 'chat', label: 'Chat', adapter: 'systemd', unit: 'chat.service', nativeModel: {runtime: 'vllm', instance: 'chat', model: 'current', owned: {executable: '/opt/vllm/bin/vllm', modelPath: '/models/current', port: 8000}}};
+    const legacy = ['ollama', 'llama.cpp'].map((runtime, index) => ({id: `old-${index}`, label: `Old ${runtime}`, adapter: 'systemd', unit: `old-${index}.service`, nativeModel: {runtime, instance: `old-${index}`, model: 'old'}}));
+    const ui = await launch({profiles: [...legacy, images, chat], deferAction: 'unused'});
+    for (const profile of legacy) {
+        const remove = ui.by(`Remove unsupported workload: ${profile.label}`);
+        assert.ok(ui.visible(remove), 'legacy removal must be reachable from the initial page');
+        const group = ui.widgets.find(widget => widget.children.includes(remove));
+        assert.deepEqual(group.children, [remove], 'legacy catalog entries must not expose editable launch controls');
+        await ui.click(remove.label);
+    }
+    assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
+    await ui.click('Continue');
+    const preview = JSON.parse(ui.calls.find(call => call.argv[1] === 'validate').input);
+    assert.deepEqual(preview.catalog.profiles, [images, chat]);
+    await ui.click('Finish setup');
+    const applied = JSON.parse(ui.calls.find(call => call.argv[1] === 'apply').input);
+    assert.deepEqual(applied.catalog.profiles, [images, chat]);
+    assert.equal(applied.confirmQuiesced, true);
 });

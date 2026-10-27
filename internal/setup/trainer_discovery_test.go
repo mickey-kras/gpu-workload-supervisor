@@ -39,7 +39,7 @@ func trainerInspectionRequest(t *testing.T) (Backend, Request) {
 }
 
 func TestTrainerInspectionRequiresExplicitValidBinding(t *testing.T) {
-	if _, err := InspectTrainer(context.Background(), Request{}, "trainer"); err == nil {
+	if _, err := SystemBackend().InspectTrainer(context.Background(), Request{}, "trainer"); err == nil {
 		t.Fatal("public inspection accepted an empty request")
 	}
 	for _, mutation := range []func(*Request){
