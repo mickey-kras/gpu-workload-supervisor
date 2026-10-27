@@ -85,11 +85,34 @@ that it can see:
 
 | Route | Check | Result |
 | --- | --- | --- |
-| `cron` | Daemon or binary absent: pass. `cron.allow` present without the user: pass. Only `cron.deny` present and it lists the user: pass. Any other case: fail | Fail closed. The error names the file to create or edit |
-| `at` | The same rule with `at.allow` and `at.deny` | Fail closed. The error names the file to create or edit |
-| Groups | Membership in `docker`, `podman`, `libvirt`, `lxd`, `incus`, `sudo`, `wheel` or `disk` | Warning that names each group |
-| `sudo` | Rules for the user that setup can read with `sudo -l -U` | Warning that names each rule |
-| System units | A loaded system unit with `User=` set to the service UID | Warning that names each unit |
+| `cron` | Spools, system crontabs, and cronie allow or deny rules, as below | Fail closed, and the error names the file or spool |
+| `at` | The same allow or deny rule, plus queued jobs, as below | Fail closed, and the error names the file or job |
+| Groups and sockets | Membership in `docker`, `podman`, `libvirt`, `lxd`, `incus`, `sudo`, `wheel` or `disk`, or a daemon socket this UID can open | Fail closed, and the error names each group or socket |
+| `sudo` | Any rule from `sudo -l -U`, or a policy setup cannot read | Fail closed, and the error names each rule or that setup could not read the policy |
+| `polkit` | A rule that lets this UID start a system unit, or a policy setup cannot read | Fail closed, and the error names the rule or that setup could not read the policy |
+| System units | A loaded system unit with `User=` set to the service UID | Fail closed, and the error names each unit |
+
+The cron check does not stop at the daemon. Setup fails closed when a user
+crontab exists under `/var/spool/cron` or `/var/spool/cron/crontabs`. It also
+fails when `/etc/crontab` or a file in `/etc/cron.d` runs as this UID by name
+or numeric id. An absent cron binary does not skip that scan. The error names
+the spool or the file.
+
+Allow and deny files, and every parent directory, must be root-owned regular
+files. None of them may have group or other write, or an ACL that lets this
+UID write. Setup walks them with `O_NOFOLLOW`. An unreadable `cron.allow`
+counts as absent. A line counts only when it is the exact user name and ends
+in a newline, with no trailing space or CR. The check passes only when those
+spools and system entries are empty, and either a readable `cron.allow` omits
+the user or only `cron.deny` lists the user.
+
+The `at` check uses the same allow and deny rule, with `at.allow` and
+`at.deny`. Setup also fails closed when a queued job for this UID exists. An
+absent `at` binary does not skip that scan. The error names the allow file or
+the queued job.
+
+A socket check reads the mode and ACL of the docker, podman, and libvirt
+sockets. Group membership alone is not the whole check.
 
 ## Host cap
 
@@ -105,8 +128,8 @@ MemoryMax=61440M
 MemorySwapMax=0
 TasksMax=16384
 CPUQuota=1400%
-IOReadBandwidthMax=/dev/nvme0n1 1073741824
-IOWriteBandwidthMax=/dev/nvme0n1 536870912
+IOReadBandwidthMax=/dev/nvme0n1 1000000000
+IOWriteBandwidthMax=/dev/nvme0n1 500000000
 ```
 
 ```ini
@@ -171,17 +194,22 @@ Every unit with limits needs the host cap. Setup shows the exact drop-ins with
 the selected values. Setup and runtime preflight check these items before setup
 accepts a unit with limits and before each launch of one:
 
-1. Each drop-in of the host cap is a regular file, not a symlink. Root owns the
-   file and every parent directory up to `/etc`. None of them has group or
-   other write.
+1. Each drop-in of the host cap is a regular file, not a symlink. The walk
+   uses `O_NOFOLLOW`. Root owns the file and every parent directory through
+   `/etc`. Every parent is a real directory. None of them has group or other
+   write, or an ACL or capability that lets the service UID write.
 2. `systemctl show` for the slice and for `user@UID.service` lists only known
    drop-ins in `DropInPaths`. It reports the expected limit properties and
    `NeedDaemonReload=no`.
-3. Root owns each limit file of the slice cgroup, with no group or other write.
-   Each file holds the expected value.
+3. The slice path comes only from the system manager `ControlGroup`. Root owns
+   each limit file there, with no group or other write and no ACL for the
+   service UID. The user-manager cgroup and the unit cgroup are descendants of
+   that slice. The slice shows a finite `memory.max`, a finite `pids.max`, and
+   a finite `cpu.max`. The slice shows `memory.swap.max` of 0. When swap is
+   off and swap accounting is impossible, setup accepts a missing file.
 4. When a unit uses an I/O control, the `cgroup.controllers` file in the root
    cgroup of the user manager lists `io`.
-5. The `cron` and `at` checks of the trust model pass.
+5. Every escape check of the trust model passes, including `cron` and `at`.
 
 A missing item or a different value fails closed. The error names the drop-in
 path and the property or file that differs. Profiles without limits do not need
@@ -196,35 +224,29 @@ cap. Unit `MemoryHigh` and unit `MemoryMax` must each be at most the slice
 the value of the same control in the host cap, minus its reserve.
 
 When a unit with limits does not set a control that the host cap sets, setup
-fills in a default and shows it. For every control other than `MemoryHigh` and
-`MemoryMax`, the default is the host cap value minus the reserve.
+fills in a default and shows it. Setup does not fill `MemoryHigh` or
+`MemoryMax`. The operator sets both from the measured model size. `MemoryMax`
+must stay above `MemoryHigh`, and both must stay at most the memory ceiling.
 
-The memory defaults do not use the slice `MemoryMax`. Both stay at most the
-slice `MemoryHigh` minus the memory reserve. That bound is the memory ceiling.
-Setup rounds the slice `memory.current` up to the next MiB. The default
-`MemoryMax` is the ceiling minus that usage. The default `MemoryHigh` is the
-default `MemoryMax` minus the memory reserve when the result is at least
-256 MiB.
+For every other control, the default is the host cap value minus the reserve.
+Setup rounds a percent reserve down to a whole byte or a whole operation
+before that subtraction. If the default is outside the schema range, setup
+rejects the unit and writes no `limits` for it. Setup does not store 0. The
+value struct cannot tell 0 from an absent field. The same rounding is the
+maximum setup accepts.
 
-Otherwise setup leaves `MemoryHigh` unset. If the default `MemoryMax`
-is below 256 MiB, setup fills in no memory value and shows the memory-pressure
-error.
+The memory ceiling is the slice `MemoryHigh` minus the memory reserve. It does
+not use the slice `MemoryMax`. With the example host cap, the ceiling is
+55296 MiB. The slice `MemoryMax` minus the reserve is 59392 MiB, which is
+above the ceiling, so it is not a legal unit value. A unit `MemoryMax` of
+55296 MiB also fails admission while the slice uses any memory.
 
-With the example host cap, the ceiling is 55296 MiB. The slice `MemoryMax`
-minus the reserve is 59392 MiB, which is above the ceiling, so it is not a
-default. A `MemoryMax` of 55296 MiB also fails admission while the slice uses
-any memory.
-
-Subtracting `memory.current` leaves room for that usage. At
-1024 MiB of slice usage the defaults are `MemoryMax` 54272 MiB and
-`MemoryHigh` 52224 MiB. Then 1024 plus 54272 plus 2048 equals the slice
-`MemoryHigh` of 57344, so admission can accept the unit.
-
-A later rise in `memory.current` still fails the admission check above. The
-defaults are a starting point.
-[Memory sizing for mapped models](#memory-sizing-for-mapped-models)
-still requires `MemoryHigh` above the model file size plus the measured
-working set.
+Setup reads `memory.current` before it accepts memory values. A failed read
+fails closed, and setup does not treat it as zero. The page shows the measured
+usage and the ceiling next to the fields. The operator's `MemoryMax` must
+leave room for that usage under the admission check below.
+[Memory sizing for mapped models](#memory-sizing-for-mapped-models) still
+requires `MemoryHigh` above the model file size plus the measured working set.
 
 | Control | Proposed reserve |
 | --- | --- |
@@ -232,15 +254,21 @@ working set.
 | `MemorySwapMax` | 0 |
 | `TasksMax` | 512 |
 | `CPUQuota` | 100% |
-| I/O bandwidth and IOPS caps | 10% of the host cap |
+| I/O bandwidth and IOPS caps | 10% of the host cap, rounded down |
 
 Memory can stay charged to the slice after a unit stops. Examples are files in
 `/dev/shm` and other `tmpfs` mounts. The kernel guide states that the kernel
 charges a memory area to the cgroup that instantiated it, until a process
-releases the area. Before admission of a unit with limits, the supervisor reads
-`memory.current` of the slice. The value plus the `MemoryMax` of the unit plus
-the reserve must be at most the slice `MemoryHigh`. Otherwise admission fails
-closed, and the error names `/dev/shm` and `tmpfs` as common causes.
+releases the area.
+
+Before admission of a unit with limits, the supervisor reads `memory.current`
+of the slice. A failed read fails closed. Setup does not use zero for that
+read. The value plus the `MemoryMax` of the unit plus the reserve must be at
+most the slice `MemoryHigh`. Otherwise admission fails closed. The error names
+the measured usage, the ceiling, and `/dev/shm` and `tmpfs` as common causes.
+
+Admission does not divide the ceiling across units. A second unit launches
+only when its own `MemoryMax` still fits beside the memory already charged.
 
 A unit with limits renders `OOMScoreAdjust=500`. An OOM kill at the slice level
 then selects a workload before the supervisor and the proxy. From systemd sources, systemd sets
@@ -352,21 +380,26 @@ absent value and 0. With this rule, both give the same rendering.
 
 ### I/O devices
 
-From systemd sources, systemd resolves a device path to the originating device
-of a device-mapper stack, then to the whole disk
+From systemd sources, systemd follows `slaves` to the originating device of a
+device-mapper stack
 ([v252](https://github.com/systemd/systemd/blob/v252/src/core/cgroup.c#L855),
 [v255](https://github.com/systemd/systemd/blob/v255/src/core/cgroup.c#L1101),
 [v259](https://github.com/systemd/systemd/blob/v259/src/core/cgroup.c#L1034)).
-If the lookup fails, systemd skips the limit with a warning
+systemd leaves a node that already has a request queue as it is. If the lookup fails,
+systemd skips the limit with a warning
 ([v252](https://github.com/systemd/systemd/blob/v252/src/core/cgroup.c#L1169),
 [v255](https://github.com/systemd/systemd/blob/v255/src/core/cgroup.c#L1417),
 [v259](https://github.com/systemd/systemd/blob/v259/src/core/cgroup.c#L1265)).
 
-Thus setup accepts only a whole disk that is not a device-mapper device. The
-operator selects the disk. Setup resolves it to its major and minor numbers. It
-requires `S_ISBLK`, no `partition` file and no `dm` directory under
-`/sys/dev/block/MAJ:MIN`. Setup reads the kernel name from `DEVNAME` in the
+Setup accepts only a leaf block device. The operator selects the disk. Setup
+resolves it to its major and minor numbers. It requires `S_ISBLK`, a `queue`
+directory, no `partition` file, and no `slaves` directory under
+`/sys/dev/block/MAJ:MIN`. A `slaves` directory covers device-mapper, md,
+bcache, and multipath. Setup reads the kernel name from `DEVNAME` in the
 `uevent` file of that directory.
+
+Host qualification must show that the device throttles a write.
+A matching `io.max` line is not enough.
 
 The catalog stores the canonical path `/dev/<kernel name>` and the numbers. The
 renderer writes that canonical path, so systemd and the checks resolve the same
@@ -453,15 +486,25 @@ All checks fail closed.
 
 The readback in item 4 runs while the recursive cgroup of the unit contains
 processes. This includes a trainer in the `exited` state with remaining
-processes. If the cgroup is empty or absent, the supervisor does not judge
-drift. The existing terminal evidence and release rules then decide the
-outcome.
+processes. The supervisor must record one successful populated readback for
+the invocation before it binds `completed`. If the first observation finds an
+empty or absent cgroup, the job stays pending. Explicit `training-recover`
+then records `interrupted` when the job does not have a cause yet. The
+supervisor ignores a cgroup that disappears during a later read only after
+that first sample, or when a new read shows a different invocation.
 
 The readback has two failure types. A value mismatch is drift. A read error or
 a missing file is a readback failure. After a readback failure, the supervisor
 reads `ActiveState`, `SubState`, `InvocationID` and `MainPID` again. The
-failure counts only when the same invocation is still active or exited with a
-populated cgroup. Otherwise the terminal evidence rules decide the outcome.
+failure counts when that second read shows the same invocation still active or
+exited with a populated cgroup. If the second read itself fails, the failure
+also counts.
+
+A counted failure stops the unit and returns a typed error. The supervisor
+does not record a successful launch. The error names drift or readback
+failure, plus the controller, the path, and the errno. The supervisor stores
+that cause on the job. A later reconcile or `training-recover` keeps it, and does not
+replace it with a bare `interrupted`.
 
 A unit test covers a cgroup that goes away between the state check and the
 read.
@@ -471,10 +514,9 @@ type. The results are:
 
 - **Trainer.** The command that finds the failure stops the unit and does not
   retry the launch. That command is `training-start` after start, or
-  `training-reconcile` later. Reconcile still records no outcome, so the job
-  stays pending. This is a documented exception to the rule that reconcile only
-  reads evidence. Explicit `training-recover` then verifies release and records
-  `interrupted` when no verified outcome exists. Drift never gives `completed`.
+  `training-reconcile` later. Reconcile does not bind `completed`, which is an
+  exception to reconcile only reading evidence. A stored cause stays on the job
+  for `training-recover`. Drift never gives `completed`.
   The implementation updates `docs/TRAINING.md` to match.
 - **Inference.** The supervisor stops the unit. The activation or the stable
   state fails under the existing health, transition and recovery rules.
@@ -545,12 +587,19 @@ qualification.
 
 ## Checks before admission release
 
-A limit kill is not release evidence. After any termination, the existing
-release checks stay independent and each is necessary:
+A limit kill is not release evidence. After any termination, release stays on
+the existing contract for that unit. Capacity is not an inference release
+check.
 
-1. The unit is inactive, and the recursive cgroup is empty or absent.
-2. No GPU compute process remains on the bound GPU.
-3. Capacity is available.
+Trainer release needs all of these, in order. The unit is `inactive` and
+`dead`. The recursive cgroup is empty or absent. No GPU compute process
+remains on the trainer GPU. Capacity is then available for the next admission.
+
+Inference release needs `inactive` and `dead`, then `cgroup.events`
+`populated` 0 or an absent cgroup. It does not query compute apps. A shared
+owned Ollama unit can stay `active/running` with an empty loaded-model list.
+That is the existing idle release for that unit. A limit kill of that daemon
+still has to reach `inactive/dead` before release.
 
 A process in an uninterruptible driver wait can keep the cgroup populated after
 the kill. Admission then stays closed. Failed cleanup stays fail-closed under
@@ -559,18 +608,19 @@ the existing recovery rules.
 ## Lifecycle
 
 `Restart=no` stays. The feature adds no `StartLimit*` policy, no automatic
-restart and no lifecycle phase. Apply in setup already requires verified idle
-release, so a limit change never reaches a running unit. This matters because
-`daemon-reload` applies new cgroup values to a running unit.
+restart and no lifecycle phase. Idle release stops non-shared units. A shared
+owned Ollama daemon may stay `active/running` with an empty model list, which
+is its existing idle state. Before setup renders or reloads limit lines, that
+daemon must be `inactive/dead`. `daemon-reload` would otherwise apply the new
+cgroup values to the live daemon.
 
 ## Desktop
 
 The setup application shows limits on the existing **Resource checks** page of
 **Advanced settings**. Limits are off by default for each unit. When the user
-enables limits, setup fills in the defaults from
-[Reserve and pressure](#reserve-and-pressure). The default `MemoryMax` is the
-slice `MemoryHigh` minus the reserve minus the slice usage. It is not the
-slice `MemoryMax` minus the reserve.
+enables limits, setup fills defaults for every host-cap control except
+`MemoryHigh` and `MemoryMax`. The operator sets those two. The page shows the
+memory ceiling and the current slice usage next to the fields.
 
 The page shows memory in GiB,
 CPU in cores and tasks as a count. I/O controls and `IOWeight` are in a
@@ -583,6 +633,10 @@ The page shows one host cap status:
 | Present | Host protection is active for this account | None |
 | Absent | This account has no host protection. An administrator must run one step as root | Show the exact drop-ins and commands, with a copy button |
 | Different | Host protection settings do not match. An administrator must update them | Show each different value and the exact step |
+| Escape | Programs from this account can run outside host protection | Name each route. Do not accept limits |
+
+Status Present requires the hard slice ceilings and a passing escape check.
+An open escape route is not Present.
 
 Each fail-closed error class has plain-language text:
 
@@ -592,9 +646,11 @@ Each fail-closed error class has plain-language text:
 | Interface file missing | The system cannot apply `<control>`. `<kernel feature>` is off on this computer |
 | Host cap absent or different | The host protection of this account is missing or different. See the step on this page |
 | Reserve violation | This limit leaves too little room for the supervisor. Use `<value>` or less |
-| Escape route | Programs from this account can run outside host protection through `<route>` |
-| Memory pressure | Other memory of this account is still in use. Close the programs that use `/dev/shm`, then try again |
-| Drift or readback failure | The limits changed after start. The supervisor stopped the workload |
+| Escape route | Programs from this account can run outside host protection through `<route>`. Setup did not save limits |
+| Memory pressure | Slice memory does not fit this limit. `<usage>` MiB is in use, and the ceiling is `<ceiling>` MiB |
+| Memory usage unknown | Setup could not read the memory already in use. Setup did not save limits |
+| Drift | A limit changed after start. The supervisor stopped the workload. `<control>` was `<actual>`, not `<expected>` |
+| Readback failure | Setup could not read `<path>` (`<errno>`). The supervisor stopped the workload |
 | `IOWeight` not applicable | The selected disk does not support I/O weight |
 
 ## Schema
@@ -620,20 +676,30 @@ Every catalog reader must accept version 5:
 - The proxy reads the catalog without `Validate`. Its `supportedCatalogVersion`
   guard must accept version 5. A test must send a version 5 catalog through the
   proxy.
+- `Validate` rejects `limits` unless the catalog version is 5. It also rejects
+  trainer binding version 2 unless the catalog version is 5.
 - The store guard for version changes already permits a change to version 5.
-  It gets one new rule: it rejects a change from version 5 to a lower version
-  when the new catalog still carries `limits`.
+  It still rejects a change from version 5 to a lower version while `limits`
+  remain. An older binary is safe only when the blob has no `limits` key. A
+  lower version number is not enough, because that binary rejects an unknown
+  field at version 2 or 4.
 
 Every catalog writer uses one version rule:
 
 - One Go function computes the lowest version that a catalog needs. The result
   is 5 with any limits, 4 with a trainer binding, 2 with an owned launch, and 1
-  otherwise. Setup preview and apply both use it.
+  otherwise. Setup preview and apply both use it. While setup resumes a
+  recorded activation, it keeps the recorded catalog bytes, including the
+  version. It lowers the version only in a later write, after maintenance is
+  clear.
 - The function replaces the client rule in `clients/setup/setup-window.mjs`,
   which only raises the version. It also replaces the literal version 2 in
   `internal/setup/owned.go`.
-- Drafts get a strict `limits` field. The draft file version goes up, so older
-  binaries reject a draft with limits and do not drop the field.
+- A draft with no `limits` stays draft version 1, and a new binary still reads
+  it. A draft with `limits` uses the next draft version. Setup rejects a
+  version 1 body that contains `limits` before unmarshal. Unmarshal then
+  cannot drop the field. The client `save-drafts` path uses the same rule.
+  `ReadDrafts` today uses `json.Unmarshal`, which would drop the field.
 - The test of version 2 to version 5 and back to the same version 2 bytes uses
   this function.
 
@@ -644,8 +710,9 @@ The implementation adds these steps to `docs/RESTORING.md`.
 
 When the catalog before the limits also used its lowest version, the result has
 the exact earlier bytes. A catalog with a higher version than it needs gets the
-lower version at the next setup write. Its unit bytes and fingerprints stay the
-same.
+lower version at the next setup write after maintenance is clear. Its unit
+bytes and fingerprints stay the same. The write does not happen while an
+activation resume is open.
 
 Proposed bounds:
 
@@ -685,6 +752,7 @@ active. Stop and reset each probe unit after the check.
 | OOM kill in the exited state | `systemd-run --user --unit=gws-q-exited -p Type=exec -p RemainAfterExit=yes -p MemoryMax=64M -p MemorySwapMax=0 -p OOMPolicy=stop sh -c 'stress-ng --vm 1 --vm-bytes 256M --timeout 60s & exit 0'` | After the main process exits with status 0: `Result=oom-kill` and `ActiveState=failed` |
 | Task-creation failure | `systemd-run --user --unit=gws-q-pids -p TasksMax=16 sh -c 'for i in $(seq 64); do (sleep 600 &) 2>/dev/null \|\| true; done; exec sleep 600'` | During the run: `ActiveState=active` and `pids.events` `max` above 0 |
 | Host cap holds | As the service UID, write `max` to each capped file of the slice and of `user@UID.service`: `memory.high`, `memory.max`, `memory.swap.max`, `pids.max`, `cpu.max` and `io.max` | Each write fails with `EACCES` |
+| I/O cap holds | On the selected leaf disk, write a file larger than the read cap | The device throttles the write. An `io.max` line alone does not pass |
 | BFQ weight | On a BFQ device: `systemd-run --user --unit=gws-q-bfq -p IOWeight=1000 sleep 600` | `io.weight` `default 1000` and `io.bfq.weight` `default 181` |
 
 Each test category of #584 maps to one level:
