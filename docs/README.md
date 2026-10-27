@@ -25,6 +25,7 @@ Start with [deployment](DEPLOYMENT.md), [boot reconciliation](OPERATIONS.md#boot
 
 - [Architecture and model attestation](ARCHITECTURE.md)
 - [Model attestation contract](MODEL-ATTESTATION.md): envelope, signing bytes, key rules and the advisory and enforce policy
+- [Host-protection resource limits](RESOURCE-LIMITS.md): design for an opt-in host cap and limits on owned units. Not implemented
 - [Proxy adapter contract](PROXY-CONTRACT.md): runtime evidence required before you enable execution
 - [Demand activation and inactivity idle](AUTO-IDLE.md): durable policy, settings, activation and a 60-second timer. The policy defaults to Off. A qualified evidence provider is necessary to enable it
 
