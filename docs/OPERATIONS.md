@@ -94,7 +94,7 @@ Cleanup requires the current database schema. If the schema differs, use a compa
    ```
 
 Cleanup checks the saved session, launch files, and invocation before it stops the service.
-It clears the pending session only after the service and its cgroup release are verified.
+It completes the session only after it confirms an inactive service and an empty cgroup.
 A changed invocation or failed check keeps the gate closed. Inspect the service and retry cleanup after you correct the cause.
 Do not delete the session record to bypass cleanup.
 
