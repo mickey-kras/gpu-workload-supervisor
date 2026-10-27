@@ -17,10 +17,12 @@ The guard reads PR contents as data and executes only its trusted base checkout.
 Existing executable hash checks and semantic workflow, scanner, and release checks
 remain active. The guard workflow, its complete local import closure, and CODEOWNERS
 must match the immutable base byte-for-byte or receive independent admission.
+
 One exception permits changes to `step-security/harden-runner` pins and their
 trailing comments in `.github/workflows/policy-guard.yml`. Each pin must remain
 an immutable SHA of 40 lowercase hexadecimal characters. All other changes to
 these files require independent admission. This exception does not bypass other gates.
+
 The repository owner and trusted human authors have no exemption.
 The guard can admit an unknown executable digest in the same PR if
 all these conditions hold:
