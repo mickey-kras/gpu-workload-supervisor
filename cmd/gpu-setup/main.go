@@ -55,7 +55,7 @@ func main() {
 }
 func (a setupActions) run(args []string, input io.Reader, output io.Writer) error {
 	if len(args) != 1 {
-		return errors.New("usage: gpu-setup discover|probe|prepare|correct-gpu|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|reconcile|idle-policy-tick|remove-integration")
+		return errors.New("usage: gpu-setup temporary-status|temporary-cleanup|discover|probe|prepare|correct-gpu|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|reconcile|idle-policy-tick|remove-integration")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -64,7 +64,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return err
 	}
 	switch args[0] {
-	case "correct-gpu", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned":
+	case "temporary-status", "temporary-cleanup", "correct-gpu", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned":
 		if a.euid() == 0 {
 			return errors.New("run guided setup as the desktop account, not root")
 		}
@@ -74,6 +74,18 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 
 func (a setupActions) runAction(ctx context.Context, home, action string, input io.Reader, output io.Writer) error {
 	switch action {
+	case "temporary-status":
+		result, err := setup.TemporaryStatus(ctx, home)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(result)
+	case "temporary-cleanup":
+		var request setup.TemporaryCleanupRequest
+		if err := strictjson.DecodeLimited(input, 65536, &request); err != nil {
+			return err
+		}
+		return setup.TemporaryCleanup(ctx, home, request)
 	case "correct-gpu":
 		return runGPUCorrection(ctx, home, input, output)
 	case "remove-integration":

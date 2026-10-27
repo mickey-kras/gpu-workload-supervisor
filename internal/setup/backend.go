@@ -524,6 +524,9 @@ func (work *activationWork) inspectExistingCatalog(ctx context.Context) error {
 		return err
 	}
 	if work.existing {
+		if err := checkNoTemporaryDiscovery(ctx, work.request.Profile.StatePath); err != nil {
+			return err
+		}
 		if !work.marker.Maintenance {
 			if err := Inspect(ctx, work.request.Profile.StatePath); err != nil {
 				return err

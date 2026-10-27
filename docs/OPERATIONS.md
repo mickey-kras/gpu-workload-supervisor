@@ -72,6 +72,32 @@ probe detail. Inspect the affected unit with `systemctl --user status UNIT` and
 `journalctl --user -u UNIT` for service diagnostics. The supervisor does
 not automatically copy suppressed probe output to the journal.
 
+## Interrupted legacy discovery
+
+An upgrade can find an unfinished temporary Ollama discovery session.
+The supervisor blocks recovery, workload activation, and catalog changes until cleanup succeeds.
+Temporary discovery cannot start new sessions.
+Cleanup requires the current database schema. If the schema differs, use a compatible release to complete cleanup before the upgrade.
+
+1. Pause external application control, including timers and other service activation paths.
+2. Run the status command as the desktop account:
+
+   ```sh
+   /usr/bin/gpu-setup temporary-status
+   ```
+
+3. Read the recorded unit, invocation, session ID, and token. Stop the execution proxy before cleanup.
+4. Replace `SESSION_ID` and `SESSION_TOKEN` with the values from the status result:
+
+   ```sh
+   printf '%s\n' '{"id":"SESSION_ID","token":"SESSION_TOKEN","externalControlPaused":true}' | /usr/bin/gpu-setup temporary-cleanup
+   ```
+
+Cleanup checks the saved session, launch files, and invocation before it stops the service.
+It clears the pending session only after the service and its cgroup release are verified.
+A changed invocation or failed check keeps the gate closed. Inspect the service and retry cleanup after you correct the cause.
+Do not delete the session record to bypass cleanup.
+
 ## Ownership and unfinished work
 
 Ownership changes always need a target. Add the normal runtime flags before the command:
