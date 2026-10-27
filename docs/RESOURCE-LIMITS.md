@@ -204,19 +204,25 @@ slice `MemoryHigh` minus the memory reserve. That bound is the memory ceiling.
 Setup rounds the slice `memory.current` up to the next MiB. The default
 `MemoryMax` is the ceiling minus that usage. The default `MemoryHigh` is the
 default `MemoryMax` minus the memory reserve when the result is at least
-256 MiB. Otherwise setup leaves `MemoryHigh` unset. If the default `MemoryMax`
+256 MiB.
+
+Otherwise setup leaves `MemoryHigh` unset. If the default `MemoryMax`
 is below 256 MiB, setup fills in no memory value and shows the memory-pressure
 error.
 
 With the example host cap, the ceiling is 55296 MiB. The slice `MemoryMax`
 minus the reserve is 59392 MiB, which is above the ceiling, so it is not a
 default. A `MemoryMax` of 55296 MiB also fails admission while the slice uses
-any memory. Subtracting `memory.current` leaves room for that usage. At
+any memory.
+
+Subtracting `memory.current` leaves room for that usage. At
 1024 MiB of slice usage the defaults are `MemoryMax` 54272 MiB and
 `MemoryHigh` 52224 MiB. Then 1024 plus 54272 plus 2048 equals the slice
-`MemoryHigh` of 57344, so admission can accept the unit. A later rise in
-`memory.current` still fails the admission check above. The defaults are a
-starting point. [Memory sizing for mapped models](#memory-sizing-for-mapped-models)
+`MemoryHigh` of 57344, so admission can accept the unit.
+
+A later rise in `memory.current` still fails the admission check above. The
+defaults are a starting point.
+[Memory sizing for mapped models](#memory-sizing-for-mapped-models)
 still requires `MemoryHigh` above the model file size plus the measured
 working set.
 
@@ -564,7 +570,9 @@ The setup application shows limits on the existing **Resource checks** page of
 enables limits, setup fills in the defaults from
 [Reserve and pressure](#reserve-and-pressure). The default `MemoryMax` is the
 slice `MemoryHigh` minus the reserve minus the slice usage. It is not the
-slice `MemoryMax` minus the reserve. The page shows memory in GiB,
+slice `MemoryMax` minus the reserve.
+
+The page shows memory in GiB,
 CPU in cores and tasks as a count. I/O controls and `IOWeight` are in a
 separate, closed section.
 
