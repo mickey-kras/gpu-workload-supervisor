@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
@@ -16,6 +17,7 @@ type trainingStore interface {
 	AbortTrainingPreparation(context.Context, control.TrainingJob) (control.State, error)
 	RecordTrainingLaunch(context.Context, control.TrainingJob, string) error
 	RecordTrainingTerminal(context.Context, control.TrainingJob, control.TrainingTerminal) error
+	RecordTrainingMemoryPeak(context.Context, control.TrainingJob, uint64) error
 	FinishTraining(context.Context, control.TrainingJob, string) (control.State, error)
 }
 
@@ -23,6 +25,7 @@ type trainingRuntime interface {
 	StartTraining(context.Context, control.WorkloadProfile, control.TrainingJob) (string, error)
 	TrainingTerminal(context.Context, control.WorkloadProfile, control.TrainingJob) (control.TrainingTerminal, error)
 	ReleaseTraining(context.Context, control.WorkloadProfile) error
+	TrainingMemoryPeak(context.Context, control.WorkloadProfile, control.TrainingJob) (uint64, error)
 }
 
 func (c *Controller) trainingCapabilities() (trainingStore, trainingRuntime, error) {
@@ -174,6 +177,7 @@ func (c *Controller) RecoverTraining(ctx context.Context, id string) (control.St
 }
 
 func (c *Controller) finishTraining(ctx context.Context, s trainingStore, r trainingRuntime, p control.WorkloadProfile, job control.TrainingJob, outcome string) (control.State, error) {
+	c.recordTrainingMemoryPeak(ctx, s, r, p, job)
 	if err := c.runAction(ctx, func(actionCtx context.Context) error { return c.runtime.Stop(actionCtx, p.ID) }); err != nil {
 		return control.State{}, err
 	}
@@ -183,6 +187,33 @@ func (c *Controller) finishTraining(ctx context.Context, s trainingStore, r trai
 	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.FinalizeTimeout)
 	defer cancel()
 	return s.FinishTraining(finalCtx, job, outcome)
+}
+
+// trainingPeakTimeout bounds the peak read and, separately, the store write,
+// so that the recording delays the stop by a short time at most. Tests lower it.
+var trainingPeakTimeout = 5 * time.Second
+
+// recordTrainingMemoryPeak stores the memory peak before the stop. It is best
+// effort: a peak that cannot be read or stored never blocks the stop. The
+// controller has no log, so an absent memoryPeakBytes is the only trace;
+// qualification then uses external samples of the unit cgroup memory.peak.
+// The runner peaks file is only an unverified hint.
+func (c *Controller) recordTrainingMemoryPeak(ctx context.Context, s trainingStore, r trainingRuntime, p control.WorkloadProfile, job control.TrainingJob) {
+	if job.InvocationID == "" || ctx.Err() != nil {
+		return
+	}
+	// Neither step takes the cancellation of the caller, so the stop keeps its
+	// own deadline. The write gets its own budget after the read returns, so a
+	// slow read never loses a peak that it read.
+	read, cancelRead := context.WithTimeout(context.WithoutCancel(ctx), min(c.config.ActionTimeout, trainingPeakTimeout))
+	peak, err := r.TrainingMemoryPeak(read, p, job)
+	cancelRead()
+	if err != nil {
+		return
+	}
+	write, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), min(c.config.FinalizeTimeout, trainingPeakTimeout))
+	defer cancelWrite()
+	_ = s.RecordTrainingMemoryPeak(write, job, peak)
 }
 
 func (c *Controller) abortTrainingPreparation(ctx context.Context, s trainingStore, claim control.TrainingJob, cause error) error {

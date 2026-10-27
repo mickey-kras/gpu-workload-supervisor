@@ -610,3 +610,50 @@ func reserveTrainingFixture(ctx context.Context, s *Store, id, revision string) 
 	}
 	return s.ReserveTraining(ctx, claim)
 }
+
+func TestTrainingContractMemoryPeakKeepsHighWaterMarkDurably(t *testing.T) {
+	s, path, revision := trainingContractStore(t)
+	ctx := context.Background()
+	job, err := reserveTrainingFixture(ctx, s, "peak-job", revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RecordTrainingMemoryPeak(ctx, job, 1); !errors.Is(err, ErrStaleFence) {
+		t.Fatalf("recorded a peak before launch evidence: %v", err)
+	}
+	if err = s.RecordTrainingLaunch(ctx, job, strings.Repeat("a", 32)); err != nil {
+		t.Fatal(err)
+	}
+	stale := job
+	stale.Fence.Epoch--
+	if err = s.RecordTrainingMemoryPeak(ctx, stale, 1); !errors.Is(err, ErrStaleFence) {
+		t.Fatalf("stale peak: %v", err)
+	}
+	for _, peak := range []uint64{4 << 30, 5 << 30, 2 << 30} {
+		if err = s.RecordTrainingMemoryPeak(ctx, job, peak); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The smaller last value does not replace the high-water mark.
+	if stored, err := s.TrainingJob(ctx, job.ID); err != nil || stored.MemoryPeakBytes == nil || *stored.MemoryPeakBytes != 5<<30 {
+		t.Fatalf("job = %+v, %v", stored, err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	stored, err := reopened.TrainingJob(ctx, job.ID)
+	if err != nil || stored.MemoryPeakBytes == nil || *stored.MemoryPeakBytes != 5<<30 || stored.Status != "running" {
+		t.Fatalf("job = %+v, %v", stored, err)
+	}
+	if _, err = reopened.FinishTraining(ctx, job, "failed"); err != nil {
+		t.Fatal(err)
+	}
+	if err = reopened.RecordTrainingMemoryPeak(ctx, job, 6<<30); !errors.Is(err, ErrStaleFence) {
+		t.Fatalf("changed the peak of a finished job: %v", err)
+	}
+}

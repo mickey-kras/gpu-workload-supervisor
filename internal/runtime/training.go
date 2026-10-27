@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -247,6 +248,67 @@ func (m *SystemdManager) ReleaseTraining(ctx context.Context, p control.Workload
 		return errors.New("GPU compute processes remain after trainer exit")
 	}
 	return m.capacity(ctx, p.ID)
+}
+
+// TrainingMemoryPeak returns the memory peak of the job's trainer invocation.
+// systemd removes the cgroup when the unit exits or fails. Then the value comes
+// from the MemoryPeak property, which only systemd versions that keep it report.
+// A unit with another invocation gives no value.
+func (m *SystemdManager) TrainingMemoryPeak(ctx context.Context, p control.WorkloadProfile, job control.TrainingJob) (uint64, error) {
+	if p.Trainer == nil || job.InvocationID == "" {
+		return 0, ErrLaunchUnsupported
+	}
+	v, err := m.trainerPeakProperties(ctx, p, job)
+	if err != nil {
+		return 0, err
+	}
+	if v["ControlGroup"] == p.Cgroup {
+		peak, readErr := m.cgroups.memoryPeak(p.Cgroup)
+		// Ask systemd again: the read counts only if the invocation did not
+		// change, and a unit that exited during the read has a newer MemoryPeak.
+		after, err := m.trainerPeakProperties(ctx, p, job)
+		switch {
+		case err != nil:
+			// An unverified read is not evidence. The first snapshot belongs to
+			// this invocation, so its MemoryPeak still counts.
+			return systemdMemoryPeak(v)
+		case readErr == nil && after["ControlGroup"] == p.Cgroup:
+			// The same invocation owned the same group before and after the read.
+			// A read is trusted only then: a re-created path could hold another
+			// group, so a good read is dropped when systemd stops reporting it.
+			if property, err := systemdMemoryPeak(after); err == nil {
+				return max(peak, property), nil
+			}
+			return peak, nil
+		}
+		v = after
+	}
+	return systemdMemoryPeak(v)
+}
+
+// systemdMemoryPeak parses the MemoryPeak property of one systemctl snapshot.
+func systemdMemoryPeak(v map[string]string) (uint64, error) {
+	peak, ok := control.CanonicalUint(v["MemoryPeak"])
+	// systemd prints [not set], infinity or the maximum value for an unmeasured peak.
+	if !ok || peak == math.MaxUint64 {
+		return 0, errors.New("trainer memory peak is not measured")
+	}
+	return peak, nil
+}
+
+func (m *SystemdManager) trainerPeakProperties(ctx context.Context, p control.WorkloadProfile, job control.TrainingJob) (map[string]string, error) {
+	out, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show", "--property=InvocationID,ControlGroup,MemoryPeak", "--", p.Unit)
+	if err != nil {
+		return nil, SafeError("trainer memory peak observation failed", err)
+	}
+	v, err := ParseUnitProperties(out)
+	if err != nil {
+		return nil, err
+	}
+	if v["InvocationID"] != job.InvocationID {
+		return nil, ErrLaunchChanged
+	}
+	return v, nil
 }
 
 // The parent is qualified before this atomic replacement; the envelope contains

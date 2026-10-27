@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import importlib.metadata
 import importlib.util
@@ -205,11 +206,31 @@ def verify_accelerator(quantized: object) -> None:
 def publish(path: Path, value: dict[str, object]) -> None:
     temporary = path.with_suffix(".pending")
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-        json.dump(value, output, allow_nan=False)
-        output.flush()
-        os.fsync(output.fileno())
-    temporary.replace(path)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            json.dump(value, output, allow_nan=False)
+            output.flush()
+            os.fsync(output.fileno())
+        temporary.replace(path)
+    except BaseException:
+        # A failed publish must not leave a file that blocks the next one.
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def vram_peak(previous: int | None) -> int | None:
+    # The Torch allocator peak of this process is a lower bound for the trainer.
+    # Device memory in use is not: it counts every process on the GPU. Samples
+    # can miss memory outside the allocator, such as the CUDA context.
+    import torch
+
+    if not torch.cuda.is_available():
+        return previous
+    reserved = int(torch.cuda.max_memory_reserved())
+    # A process that never allocated on the GPU has no measured peak.
+    if reserved <= 0:
+        return previous
+    return max(previous or 0, reserved)
 
 
 def train(config_path: Path, receipt: Path, progress: Path, accelerator: bool = True) -> None:
@@ -223,6 +244,14 @@ def train(config_path: Path, receipt: Path, progress: Path, accelerator: bool = 
     from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 
     class Progress(TrainerCallback):
+        vram: int | None = None
+
+        def record(self, step: int) -> None:
+            # A VRAM sample is diagnostic data, never a condition for completion.
+            with contextlib.suppress(Exception):
+                self.vram = vram_peak(self.vram)
+            publish(progress, {"version": 1, "phase": "training", "step": step, "vramPeakBytes": self.vram})
+
         def on_step_end(
             self,
             args: TrainingArguments,
@@ -230,7 +259,7 @@ def train(config_path: Path, receipt: Path, progress: Path, accelerator: bool = 
             control: TrainerControl,
             **kwargs: object,
         ) -> TrainerControl:
-            publish(progress, {"version": 1, "phase": "training", "step": state.global_step})
+            self.record(state.global_step)
             return control
 
     cfg = load_cfg(str(config_path))
@@ -240,7 +269,8 @@ def train(config_path: Path, receipt: Path, progress: Path, accelerator: bool = 
     dataset = load_datasets(cfg=cfg)
     trainer, model, tokenizer, adapter, processor = setup_model_and_trainer(cfg, dataset)
     save_initial_configs(cfg, tokenizer, model, adapter, processor)
-    trainer.add_callback(Progress())
+    tracker = Progress()
+    trainer.add_callback(tracker)
     trainer.train(resume_from_checkpoint=None)
     if trainer.state.global_step != cfg.max_steps:
         raise ValueError("training did not reach the requested step")
@@ -248,12 +278,16 @@ def train(config_path: Path, receipt: Path, progress: Path, accelerator: bool = 
     loss = float(metrics["eval_loss"])
     if not math.isfinite(loss) or loss < 0:
         raise ValueError("invalid held-out evaluation")
+    with contextlib.suppress(Exception):
+        tracker.record(trainer.state.global_step)
     save_trained_model(cfg, trainer, model)
     tokenizer.save_pretrained(cfg.output_dir)
+    with contextlib.suppress(Exception):
+        tracker.record(trainer.state.global_step)
     publish(receipt, {"version": 1, "phase": "train", "step": cfg.max_steps, "evalLoss": loss, "reloaded": False})
 
 
-def reload(config_path: Path, receipt: Path) -> None:
+def reload(config_path: Path, receipt: Path, progress: Path) -> None:
     cfg: dict[str, object] = json.loads(config_path.read_text(encoding="utf-8"))
     verify_accelerator(cfg.get("load_in_4bit"))
     import torch
@@ -289,7 +323,26 @@ def reload(config_path: Path, receipt: Path) -> None:
         generated = model.generate(**tokens, max_new_tokens=8, do_sample=False)
         if generated.shape[1] <= tokens["input_ids"].shape[1]:
             raise ValueError("reload produced no continuation")
+    with contextlib.suppress(Exception):
+        publish(progress, {"version": 1, "phase": "reload", "step": cfg["max_steps"], "vramPeakBytes": vram_peak(None)})
     publish(receipt, {"version": 1, "phase": "reload", "step": cfg["max_steps"], "evalLoss": 0.0, "reloaded": True})
+
+
+def final_sample(progress: Path, phase: str, error: BaseException) -> None:
+    # After a CUDA out-of-memory error, the allocator still works and its peak is
+    # the useful value, so the worker tries to write one last VRAM sample. Other
+    # errors make no CUDA call: a broken device call could block the exit. This
+    # never hides the original error. A killed worker writes none.
+    with contextlib.suppress(Exception):
+        torch = sys.modules.get("torch")
+        if torch is None or not isinstance(error, torch.cuda.OutOfMemoryError):
+            return
+        previous = json.loads(progress.read_text(encoding="utf-8")) if progress.exists() else {}
+        step = previous.get("step") if isinstance(previous, dict) else None
+        last = previous.get("vramPeakBytes") if isinstance(previous, dict) else None
+        vram = vram_peak(last if isinstance(last, int) else None)
+        if vram is not None:
+            publish(progress, {"version": 1, "phase": phase, "step": step if isinstance(step, int) else 0, "vramPeakBytes": vram})
 
 
 def main(args: list[str]) -> None:
@@ -302,10 +355,14 @@ def main(args: list[str]) -> None:
     sys.path.insert(0, str(runtime_site()))
     verify_environment()
     config, receipt, progress = (Path(value) for value in args[1:])
-    if args[0] == "train":
-        train(config, receipt, progress)
-    else:
-        reload(config, receipt)
+    try:
+        if args[0] == "train":
+            train(config, receipt, progress)
+        else:
+            reload(config, receipt, progress)
+    except BaseException as error:
+        final_sample(progress, "training" if args[0] == "train" else "reload", error)
+        raise
 
 
 if __name__ == "__main__":

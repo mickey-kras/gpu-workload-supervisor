@@ -24,6 +24,46 @@ type trainingContractRuntime struct {
 	startErr      error
 	startHook     func(control.TrainingJob)
 	invocation    string
+	peaks         []uint64
+	peakErr       error
+	peakHangs     bool
+	peakDeadline  time.Duration
+	// order records peak reads and stops in one log.
+	order    []string
+	peakHook func(context.Context)
+}
+
+func (r *trainingContractRuntime) Stop(ctx context.Context, workload control.Workload) error {
+	r.order = append(r.order, "stop "+string(workload))
+	return r.fakeRuntime.Stop(ctx, workload)
+}
+
+// assertPeakBeforeStop requires a peak read before the first trainer stop.
+func assertPeakBeforeStop(t *testing.T, order []string) {
+	t.Helper()
+	if len(order) < 2 || order[0] != "peak" || order[1] != "stop trainer" {
+		t.Fatalf("order = %v, want peak before stop trainer", order)
+	}
+}
+
+func (r *trainingContractRuntime) TrainingMemoryPeak(ctx context.Context, _ control.WorkloadProfile, _ control.TrainingJob) (uint64, error) {
+	r.trainingCalls = append(r.trainingCalls, "peak")
+	r.order = append(r.order, "peak")
+	if r.peakHook != nil {
+		r.peakHook(ctx)
+	}
+	if r.peakHangs {
+		deadline, _ := ctx.Deadline()
+		r.peakDeadline = time.Until(deadline)
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	if r.peakErr != nil || len(r.peaks) == 0 {
+		return 0, errors.Join(r.peakErr, errors.New("memory.peak is unavailable"))
+	}
+	peak := r.peaks[0]
+	r.peaks = r.peaks[1:]
+	return peak, nil
 }
 
 func (r *trainingContractRuntime) StartTraining(_ context.Context, _ control.WorkloadProfile, job control.TrainingJob) (string, error) {
@@ -156,9 +196,196 @@ func TestTrainingContractRecoveryNeverReplaysOrClaimsSuccess(t *testing.T) {
 		t.Fatalf("recovery status=%s", stored.Status)
 	}
 	assertCalls(t, r.calls, "stop trainer")
-	assertCalls(t, r.trainingCalls, "release")
+	assertCalls(t, r.trainingCalls, "peak", "release")
+	assertPeakBeforeStop(t, r.order)
 	if _, err := c.RecoverTraining(ctx, job.ID); !errors.Is(err, store.ErrStaleFence) {
 		t.Fatalf("repeated recovery: %v", err)
+	}
+}
+
+func TestTrainingContractRecordsMemoryPeakBeforeCleanup(t *testing.T) {
+	c, s, r, job := trainingControllerContract(t)
+	ctx := context.Background()
+	r.peaks = []uint64{6 << 30, 4 << 30}
+	r.stopErr = errors.New("stop failed")
+	if _, err := c.ReconcileTraining(ctx, job.ID); err == nil {
+		t.Fatal("failed stop finished the job")
+	}
+	r.stopErr = nil
+	// The retry reads a smaller value; the store keeps the high-water mark.
+	if _, err := c.ReconcileTraining(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.TrainingJob(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "completed" || stored.MemoryPeakBytes == nil || *stored.MemoryPeakBytes != 6<<30 {
+		t.Fatalf("job = %+v", stored)
+	}
+	assertCalls(t, r.trainingCalls, "terminal", "peak", "peak", "release")
+	assertPeakBeforeStop(t, r.order)
+	if r.calls[0] != "stop trainer" {
+		t.Fatalf("calls = %v", r.calls)
+	}
+}
+
+func TestTrainingContractUnmeasuredPeakNeverBlocksCleanup(t *testing.T) {
+	for _, failure := range []string{"reconcile", "recover"} {
+		t.Run(failure, func(t *testing.T) {
+			c, s, r, job := trainingControllerContract(t)
+			ctx := context.Background()
+			r.peakErr = errors.New("cgroup removed")
+			var err error
+			if failure == "reconcile" {
+				_, err = c.ReconcileTraining(ctx, job.ID)
+			} else {
+				_, err = c.RecoverTraining(ctx, job.ID)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored, err := s.TrainingJob(ctx, job.ID)
+			if err != nil || stored.MemoryPeakBytes != nil || !control.TrainingTerminalOutcome(stored.Status) {
+				t.Fatalf("job = %+v, %v", stored, err)
+			}
+			assertPeakBeforeStop(t, r.order)
+		})
+	}
+}
+
+// lowerPeakTimeout makes the peak budget the smallest timeout, so a test sees
+// the cap and stays fast.
+func lowerPeakTimeout(t *testing.T, c *Controller) {
+	t.Helper()
+	previous := trainingPeakTimeout
+	t.Cleanup(func() { trainingPeakTimeout = previous })
+	trainingPeakTimeout = 50 * time.Millisecond
+	c.config.ActionTimeout = time.Minute
+	c.config.FinalizeTimeout = time.Minute
+}
+
+func TestTrainingContractHungPeakReadIsBoundedAndNeverBlocksStop(t *testing.T) {
+	c, s, r, job := trainingControllerContract(t)
+	lowerPeakTimeout(t, c)
+	ctx := context.Background()
+	r.peakHangs = true
+	if _, err := c.ReconcileTraining(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if r.peakDeadline <= 0 || r.peakDeadline > trainingPeakTimeout {
+		t.Fatalf("peak read deadline = %v", r.peakDeadline)
+	}
+	assertPeakBeforeStop(t, r.order)
+	assertCalls(t, r.calls, "stop trainer")
+	stored, err := s.TrainingJob(ctx, job.ID)
+	if err != nil || stored.Status != "completed" || stored.MemoryPeakBytes != nil {
+		t.Fatalf("job = %+v, %v", stored, err)
+	}
+	// A cancelled caller never reads a peak. Call the step directly: a
+	// cancelled reconcile fails before cleanup.
+	c2, s2, r2, job2 := trainingControllerContract(t)
+	r2.peaks = []uint64{1 << 30}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	p2, _ := c2.config.Catalog.Catalog.Profile(job2.Workload)
+	c2.recordTrainingMemoryPeak(cancelled, s2, r2, p2, job2)
+	if len(r2.trainingCalls) != 0 {
+		t.Fatalf("read a peak for a cancelled caller: %v", r2.trainingCalls)
+	}
+	c2.recordTrainingMemoryPeak(ctx, s2, r2, p2, job2)
+	if stored, err := s2.TrainingJob(ctx, job2.ID); err != nil || stored.MemoryPeakBytes == nil || *stored.MemoryPeakBytes != 1<<30 {
+		t.Fatalf("job = %+v, %v", stored, err)
+	}
+}
+
+func TestTrainingContractRecoveryRecordsPeakOfAFailedJob(t *testing.T) {
+	c, s, r, job := trainingControllerContract(t)
+	ctx := context.Background()
+	r.peaks = []uint64{3 << 30}
+	r.terminalErr = errors.New("no receipt")
+	if _, err := c.RecoverTraining(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.TrainingJob(ctx, job.ID)
+	if err != nil || stored.Status != "interrupted" || stored.MemoryPeakBytes == nil || *stored.MemoryPeakBytes != 3<<30 {
+		t.Fatalf("job = %+v, %v", stored, err)
+	}
+	assertPeakBeforeStop(t, r.order)
+}
+
+type trainingPeakDeadlineStore struct {
+	*store.Store
+	deadline time.Time
+}
+
+func (s *trainingPeakDeadlineStore) RecordTrainingMemoryPeak(ctx context.Context, job control.TrainingJob, peak uint64) error {
+	s.deadline, _ = ctx.Deadline()
+	return s.Store.RecordTrainingMemoryPeak(ctx, job, peak)
+}
+
+func TestTrainingContractSlowPeakReadKeepsItsValue(t *testing.T) {
+	_, s, r, job := trainingControllerContract(t)
+	recorder := &trainingPeakDeadlineStore{Store: s}
+	c := testController(t, recorder, r)
+	lowerPeakTimeout(t, c)
+	r.peaks = []uint64{1 << 30}
+	var readDeadline time.Time
+	started := time.Now()
+	// The read uses its whole budget and then returns a good value.
+	r.peakHook = func(ctx context.Context) {
+		readDeadline, _ = ctx.Deadline()
+		<-ctx.Done()
+	}
+	if _, err := c.ReconcileTraining(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if readDeadline.IsZero() || !recorder.deadline.After(readDeadline) {
+		t.Fatalf("read deadline %v, write deadline %v", readDeadline, recorder.deadline)
+	}
+	// Both budgets keep the cap, although the configured timeouts are one
+	// minute. The slack covers scheduling, not a configured timeout.
+	if readDeadline.Sub(started) > 10*trainingPeakTimeout || recorder.deadline.Sub(readDeadline) > 10*trainingPeakTimeout {
+		t.Fatalf("read deadline %v, write deadline %v after start", readDeadline.Sub(started), recorder.deadline.Sub(started))
+	}
+	stored, err := s.TrainingJob(context.Background(), job.ID)
+	if err != nil || stored.MemoryPeakBytes == nil || *stored.MemoryPeakBytes != 1<<30 {
+		t.Fatalf("job = %+v, %v", stored, err)
+	}
+}
+
+type trainingPeakFailureStore struct {
+	*store.Store
+	peakErr error
+}
+
+func (s *trainingPeakFailureStore) RecordTrainingMemoryPeak(context.Context, control.TrainingJob, uint64) error {
+	return s.peakErr
+}
+
+func TestTrainingContractPeakStoreFailureNeverBlocksStop(t *testing.T) {
+	for _, failure := range []string{"reconcile", "recover"} {
+		t.Run(failure, func(t *testing.T) {
+			_, s, r, job := trainingControllerContract(t)
+			ctx := context.Background()
+			c := testController(t, &trainingPeakFailureStore{s, errors.New("store unavailable")}, r)
+			r.peaks = []uint64{1 << 30}
+			var err error
+			if failure == "reconcile" {
+				_, err = c.ReconcileTraining(ctx, job.ID)
+			} else {
+				_, err = c.RecoverTraining(ctx, job.ID)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertPeakBeforeStop(t, r.order)
+			assertCalls(t, r.calls, "stop trainer")
+			stored, err := s.TrainingJob(ctx, job.ID)
+			if err != nil || stored.MemoryPeakBytes != nil || !control.TrainingTerminalOutcome(stored.Status) {
+				t.Fatalf("job = %+v, %v", stored, err)
+			}
+		})
 	}
 }
 
@@ -294,7 +521,7 @@ func TestTrainingContractMaximumRequestIDsReconcileDurably(t *testing.T) {
 			if pending, err := s.PendingWork(ctx); err != nil || pending != 0 {
 				t.Fatalf("pending after reconciliation=%d, %v", pending, err)
 			}
-			assertCalls(t, r.trainingCalls, "release")
+			assertCalls(t, r.trainingCalls, "peak", "release")
 		})
 	}
 }

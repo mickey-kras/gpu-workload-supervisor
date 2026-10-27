@@ -389,7 +389,7 @@ func TestExecuteWorkerRequiresCompleteReceipt(t *testing.T) {
 					}
 					script := "#!/bin/sh\nprintf '%s' '" + string(raw) + "' > \"$7\"\nchmod 600 \"$7\"\n"
 					r, _, jobPath := executionFixture(t, script)
-					if _, err := executeWorker(context.Background(), r, filepath.Dir(jobPath), executionGPU, phase); err == nil {
+					if _, err := executeWorker(context.Background(), r, filepath.Dir(jobPath), executionGPU, phase, newPeakRecorder(filepath.Dir(jobPath), r.OutputDirectory, nil)); err == nil {
 						t.Fatal("accepted incomplete or null receipt")
 					}
 				})
@@ -401,7 +401,7 @@ func TestExecuteWorkerRequiresCompleteReceipt(t *testing.T) {
 func TestExecuteWorkerAcceptsZeroLoss(t *testing.T) {
 	r, _, jobPath := executionFixture(t, strings.ReplaceAll(executionScript, `"evalLoss":1.5`, `"evalLoss":0`))
 	for _, phase := range []string{"train", "reload"} {
-		receipt, err := executeWorker(context.Background(), r, filepath.Dir(jobPath), executionGPU, phase)
+		receipt, err := executeWorker(context.Background(), r, filepath.Dir(jobPath), executionGPU, phase, newPeakRecorder(filepath.Dir(jobPath), r.OutputDirectory, nil))
 		if err != nil || receipt.EvalLoss != 0 {
 			t.Fatalf("zero loss rejected: %v", err)
 		}
