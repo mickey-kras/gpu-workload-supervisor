@@ -2,6 +2,7 @@ package control
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -81,5 +82,41 @@ func TestStoredLegacyCatalogRejectsUnsafeRemovalEvidence(t *testing.T) {
 		if _, err := DecodeStoredCatalog([]byte(raw)); err == nil {
 			t.Fatal("invalid schema accepted")
 		}
+	}
+}
+
+func TestHistoricalOwnedOllamaPlacementRemainsStrict(t *testing.T) {
+	raw, err := os.ReadFile("testdata/legacy-owned-ollama/catalog.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	historical, err := DecodeStoredCatalog(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if historical.Profiles[0].Unit != "gws-owned-ollama-local.service" || len(historical.Profiles) != 2 {
+		t.Fatal("historical instance naming lost")
+	}
+	for name, change := range map[string]func(*WorkloadProfile){
+		"workload name instead of instance": func(p *WorkloadProfile) { p.Unit = OwnedUnitName(p.ID) },
+		"different instance":                func(p *WorkloadProfile) { p.NativeModel.Instance = "other" },
+		"wrong cgroup":                      func(p *WorkloadProfile) { p.Cgroup = "/user/app.slice/gws-owned-assistant.service" },
+		"wrong launch file": func(p *WorkloadProfile) {
+			p.NativeModel.LaunchFile = "/home/legacy/.config/systemd/user/gws-owned-assistant.service"
+		},
+		"invalid fingerprint":         func(p *WorkloadProfile) { p.NativeModel.LaunchSHA256 = "wrong" },
+		"shared fingerprint mismatch": func(p *WorkloadProfile) { p.NativeModel.LaunchSHA256 = strings.Repeat("b", 64) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := historical.Clone()
+			change(&c.Profiles[0])
+			data, err := json.Marshal(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := DecodeStoredCatalog(data); err == nil {
+				t.Fatal("unsafe historical placement accepted")
+			}
+		})
 	}
 }

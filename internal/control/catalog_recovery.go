@@ -133,7 +133,7 @@ func validateRemovedProfile(p WorkloadProfile) error {
 	if p.Adapter != "systemd" || p.LaunchBinding != nil || p.Trainer != nil {
 		return errors.New("invalid removed runtime binding")
 	}
-	if err := p.validateOwnedPlacement(); err != nil {
+	if err := validateRemovedOwnedPlacement(p); err != nil {
 		return err
 	}
 	p.NativeModel = nil
@@ -179,4 +179,15 @@ func legacySharedUnit(a, b WorkloadProfile) bool {
 	x.Model = ""
 	y.Model = ""
 	return reflect.DeepEqual(x, y)
+}
+
+func validateRemovedOwnedPlacement(p WorkloadProfile) error {
+	if p.NativeModel.Owned == nil {
+		return nil
+	}
+	unit := OwnedUnitName(p.ID)
+	if p.NativeModel.Runtime == "ollama" {
+		unit = OwnedUnitFilePrefix + "ollama-" + p.NativeModel.Instance + ".service"
+	}
+	return p.validateOwnedPlacementForUnit(unit)
 }

@@ -599,7 +599,7 @@ func rejectLegacyOwnedReplacement(accepted, requested control.Catalog) error {
 		}
 		for _, next := range requested.Profiles {
 			if next.NativeModel != nil && next.NativeModel.Owned != nil && next.Unit == prior.Unit {
-				return errors.New("remove the legacy owned profile before reusing its workload ID")
+				return errors.New("remove the legacy owned profile before reusing its service unit")
 			}
 		}
 	}

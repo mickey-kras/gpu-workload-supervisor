@@ -302,7 +302,10 @@ func (p WorkloadProfile) validateOwnedPlacement() error {
 	if p.NativeModel == nil || p.NativeModel.Owned == nil {
 		return nil
 	}
-	unit := OwnedUnitName(p.ID)
+	return p.validateOwnedPlacementForUnit(OwnedUnitName(p.ID))
+}
+
+func (p WorkloadProfile) validateOwnedPlacementForUnit(unit string) error {
 	if p.Unit != unit {
 		return errors.New("owned launch unit must be the derived supervisor-owned name")
 	}
