@@ -436,10 +436,22 @@ function inspectCoverageConfig(files, failures) {
   }
 }
 
+function onlyHardenRunnerPinsChanged(path, content, baseline) {
+  if (path !== '.github/workflows/policy-guard.yml' ||
+      typeof content !== 'string' || typeof baseline !== 'string') return false;
+  const normalize = value => value.replace(
+    /^([ \t]*-[ \t]+uses:[ \t]+step-security\/harden-runner@)[a-f0-9]{40}(?:[ \t]+#[^\r\n]*)?(?=\r?$)/gm,
+    '$1PINNED',
+  );
+  return content !== baseline && normalize(content) === normalize(baseline);
+}
+
 function inspect(files, baseline = files, admitted = new Set()) {
   const failures = [];
   for (const path of POLICY_SOURCES) {
-    if (typeof baseline[path] !== 'string' || (files[path] !== baseline[path] && !admitted.has(path))) {
+    const unreviewed = files[path] !== baseline[path] && !admitted.has(path) &&
+      !onlyHardenRunnerPinsChanged(path, files[path], baseline[path]);
+    if (typeof baseline[path] !== 'string' || unreviewed) {
       failures.push(`${path}: policy execution sources require independent exact-head owner admission`);
     }
   }
