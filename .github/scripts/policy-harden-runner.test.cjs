@@ -13,8 +13,9 @@ test('policy guard admits only harden-runner pin and comment changes without rev
   for (const changed of [
     before.replace(action, prefix + 'f'.repeat(40)),
     before.replace(action, prefix + 'f'.repeat(40) + ' # v2.22.2'),
-    before.replace(action, action.split('#')[0].trimEnd() + ' # v2.22.2'),
+    before.replace(action, action + ' # comment-only mutation'),
   ]) {
+    assert.notEqual(changed, before);
     const errors = inspect({ [path]: changed }, { [path]: before });
     assert.ok(!errors.includes(admission));
   }
@@ -25,6 +26,7 @@ test('policy guard admits only harden-runner pin and comment changes without rev
     ['other action', before.replace(/actions\/checkout@[a-f0-9]{40}/, 'actions/checkout@' + 'f'.repeat(40))],
     ['malformed pin', before.replace(action, prefix + 'v2.22.2')],
   ]) {
+    assert.notEqual(changed, before, mutation);
     const errors = inspect({ [path]: changed }, { [path]: before });
     assert.ok(errors.includes(admission), mutation);
   }
