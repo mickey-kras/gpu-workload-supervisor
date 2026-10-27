@@ -76,7 +76,7 @@ func environmentError(name, reason string) error {
 	return fmt.Errorf("%w: Environment%s: %s", ErrLaunchUnsupported, name, reason)
 }
 
-func (u *parsedLaunchUnit) applySafeEnvironment(runtimeName, assignment string) error {
+func (u *parsedLaunchUnit) applySafeEnvironment(assignment string) error {
 	name, value, ok := strings.Cut(assignment, "=")
 	if !ok || !environmentName.MatchString(name) {
 		return environmentError("", "expected NAME=value")
@@ -92,25 +92,16 @@ func (u *parsedLaunchUnit) applySafeEnvironment(runtimeName, assignment string) 
 		u.environmentValues = map[string]string{}
 	}
 	u.environmentValues[name] = value
-	return u.qualifyEnvironmentValue(runtimeName, name, value, assignment)
+	return u.qualifyEnvironmentValue(name, value)
 }
 
-func (u *parsedLaunchUnit) qualifyEnvironmentValue(runtimeName, name, value, assignment string) error {
+func (u *parsedLaunchUnit) qualifyEnvironmentValue(name, value string) error {
 	switch name {
 	case "CUDA_VISIBLE_DEVICES":
 		return u.applyGPUVisibility(value)
 	case "HOME", "HF_HOME", "HUGGINGFACE_HUB_CACHE", "TRANSFORMERS_CACHE", "XDG_CACHE_HOME", "TMPDIR", "HF_TOKEN_PATH":
-		if u.cleanupEnvironment {
-			return nil
-		}
-		if err := qualifyEnvironmentPath(value, name == "HF_TOKEN_PATH", false); err != nil {
-			return err
-		}
-		return nil
+		return qualifyEnvironmentPath(value, name == "HF_TOKEN_PATH")
 	case "PATH", "LD_LIBRARY_PATH", "PYTHONPATH":
-		if u.cleanupEnvironment {
-			return nil
-		}
 		return qualifyEnvironmentSearchPaths(name, value)
 	case "LD_PRELOAD", "LD_AUDIT", "PYTHONHOME", "PYTHONUSERBASE", "PYTHONSTARTUP":
 		// These settings load code or select an interpreter installation through
@@ -121,9 +112,6 @@ func (u *parsedLaunchUnit) qualifyEnvironmentValue(runtimeName, name, value, ass
 		}
 		return nil
 	default:
-		if runtimeName == "ollama" && strings.HasPrefix(name, "OLLAMA_") {
-			_ = u.applyOllamaEnvironment(assignment)
-		}
 		return nil
 	}
 }
@@ -147,7 +135,7 @@ func qualifyEnvironmentSearchPaths(name, value string) error {
 
 // qualifyEnvironmentPath checks an existing directory (file=false) or regular
 // file (file=true) with the shared path trust rules.
-func qualifyEnvironmentPath(path string, file, rootOnly bool) error {
+func qualifyEnvironmentPath(path string, file bool) error {
 	if strings.ContainsAny(path, launchExpansionCharacters) {
 		return environmentError(pathName(path), "expansion characters are unsupported; use a literal path")
 	}
@@ -183,13 +171,7 @@ func qualifyEnvironmentSearchPath(path string) error {
 // CheckLoadedEnvironment requires exact effective values for newly qualified
 // settings. Error messages identify only the variable name, never secrets.
 func CheckLoadedEnvironment(output string, expected map[string]string) error {
-	required := false
-	for name := range expected {
-		if !strings.HasPrefix(name, "OLLAMA_") {
-			required = true
-		}
-	}
-	if !required {
+	if len(expected) == 0 {
 		return nil
 	}
 	assignments, err := environmentAssignments(output)

@@ -43,7 +43,7 @@ test('a recognized installation with an unreachable address can be configured an
     await ui.click('Use installation');
     assert.equal(ui.by('Finish setup').sensitive, true);
     assert.ok(ui.calls.some(call => call.argv[1] === 'verify-bindings'));
-    assert.equal(ui.calls.some(call => ['apply', 'temporary-discover'].includes(call.argv[1])), false);
+    assert.equal(ui.calls.some(call => ['apply'].includes(call.argv[1])), false);
 });
 
 test('Use installation cannot omit another included unresolved application; deselection lets the valid rest finish', async () => {
@@ -96,29 +96,25 @@ test('a busy installation check cannot be counted as passed after cancelling set
     assert.equal(ui.by('Finish setup').sensitive, false, 'late check only ends busy state');
 });
 
-for (const app of ['ollama', 'vllm']) {
-    test(`${app}: a discovered executable enters the ordinary managed model flow while the endpoint stays unverified`, async () => {
-        const label = app === 'ollama' ? 'Ollama' : 'vLLM';
-        const executable = `/environment/bin/${app}`;
-        const endpoint = {app, label, sourceKind: 'endpoint', recognized: false, instanceStatus: 'unreachable', configurationStatus: 'unverified', endpoint: 'http://127.0.0.1:8000', models: []};
-        const managed = {app, label, sourceKind: 'owned', reference: executable, referenceKind: 'application', recognized: true, instanceStatus: 'installed', configurationStatus: 'model-required', models: [],
-            binding: {instance: 'local', owned: {executable, port: 9000}}};
-        const ui = await launch(options([endpoint, managed], {'render-owned': {profile: {...profile, id: app, nativeModel: {runtime: app, owned: {executable, port: 9000}}}}}));
-        ui.edit(ui.by(`Use ${label}`), 'active', true);
-        await ui.click('Continue');
-        assert.equal(heading(ui).label, 'Choose models');
-        if (app === 'ollama') ui.edit(ui.by('Existing model name'), 'text', 'local-model');
-        else {
-            await ui.click('Choose another model…'); await ui.click('Choose model folder...');
-        }
-        await ui.click('Continue');
-        const rendered = JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input).draft;
-        assert.equal(rendered.binding.owned.executable, executable);
-        assert.equal(ui.calls.some(call => ['prepare', 'apply', 'temporary-discover'].includes(call.argv[1])), false);
-        assert.equal(ui.by('Finish setup').sensitive, true);
-        assert.doesNotMatch(candidateMessage(endpoint), /Start.*separately/);
-    });
-}
+test('vllm: a discovered executable enters the ordinary managed model flow while the endpoint stays unverified', async () => {
+    const app = 'vllm';
+    const label = 'vLLM';
+    const executable = `/environment/bin/${app}`;
+    const endpoint = {app, label, sourceKind: 'endpoint', recognized: false, instanceStatus: 'unreachable', configurationStatus: 'unverified', endpoint: 'http://127.0.0.1:8000', models: []};
+    const managed = {app, label, sourceKind: 'owned', reference: executable, referenceKind: 'application', recognized: true, instanceStatus: 'installed', configurationStatus: 'model-required', models: [],
+        binding: {instance: 'local', owned: {executable, port: 9000}}};
+    const ui = await launch(options([endpoint, managed], {'render-owned': {profile: {...profile, id: app, nativeModel: {runtime: app, owned: {executable, port: 9000}}}}}));
+    ui.edit(ui.by(`Use ${label}`), 'active', true);
+    await ui.click('Continue');
+    assert.equal(heading(ui).label, 'Choose models');
+    await ui.click('Choose another model…'); await ui.click('Choose model folder...');
+    await ui.click('Continue');
+    const rendered = JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input).draft;
+    assert.equal(rendered.binding.owned.executable, executable);
+    assert.equal(ui.calls.some(call => ['prepare', 'apply'].includes(call.argv[1])), false);
+    assert.equal(ui.by('Finish setup').sensitive, true);
+    assert.doesNotMatch(candidateMessage(endpoint), /Start.*separately/);
+});
 
 test('unresolved GPU identity has review guidance and remains a Needs setup installation', async () => {
     const unresolved = {...installation, sourceKind: 'configuration', recognized: false, binding: undefined, configurationStatus: 'gpu-unresolved', instanceStatus: 'not-running'};

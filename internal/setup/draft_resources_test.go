@@ -9,7 +9,7 @@ import (
 func resourceDraft(t *testing.T, settings string) Draft {
 	t.Helper()
 	var draft Draft
-	if err := json.Unmarshal([]byte(`{"id":"chosen","label":"Chosen","app":"ollama"`+settings+`}`), &draft); err != nil {
+	if err := json.Unmarshal([]byte(`{"id":"chosen","label":"Chosen","app":"vllm"`+settings+`}`), &draft); err != nil {
 		t.Fatal(err)
 	}
 	return draft
@@ -66,7 +66,7 @@ func TestDraftResourceChecksRejectInvalidValuesWithoutReplacingSelections(t *tes
 				t.Fatal(err)
 			}
 			var invalid Draft
-			err = json.Unmarshal([]byte(`{"id":"chosen","label":"Chosen","app":"ollama"`+settings+`}`), &invalid)
+			err = json.Unmarshal([]byte(`{"id":"chosen","label":"Chosen","app":"vllm"`+settings+`}`), &invalid)
 			if err == nil {
 				_, err = SaveDrafts(home, DraftRequest{Version: 1, ExpectedRevision: original.Revision, Drafts: []Draft{invalid}})
 			}

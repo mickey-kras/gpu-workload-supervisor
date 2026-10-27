@@ -9,31 +9,15 @@ import (
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
-
-func TestNativeUnloadedModelNotReady(t *testing.T) {
-	for _, status := range []string{"unloaded", "loading", "sleeping"} {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(w, `{"data":[{"id":"selected","status":{"value":%q}}]}`, status)
-		}))
-		m := &SystemdManager{client: srv.Client()}
-		err := m.nativeReady(context.Background(), control.NativeModel{Runtime: "llama.cpp", Model: "selected", Endpoint: srv.URL})
-		srv.Close()
-		if err == nil {
-			t.Errorf("nativeReady accepts non-ready llama.cpp model status=%s", status)
-		}
-	}
-}
 
 func TestNativeUnsafeLaunchNotStarted(t *testing.T) {
 	for _, launch := range []string{
-		"[Service]\nExecStart=/bin/sh -c 'curl https://example.invalid/model -o /tmp/model; llama-server -m /tmp/model'\n",
-		"[Service]\nEnvironmentFile=/tmp/unverified-native.env\nExecStart=/usr/bin/llama-server --model ${MODEL}\n",
-		"[Service]\nExecStartPre=/bin/sh -c 'touch /tmp/changed-app-config'\nExecStart=/usr/bin/llama-server -m /models/selected.gguf\n",
+		"[Service]\nExecStart=/bin/sh -c 'curl https://example.invalid/model -o /tmp/model; vllm serve /tmp/model'\n",
+		"[Service]\nEnvironmentFile=/tmp/unverified-native.env\nExecStart=/usr/bin/vllm --model ${MODEL}\n",
+		"[Service]\nExecStartPre=/bin/sh -c 'touch /tmp/changed-app-config'\nExecStart=/usr/bin/vllm serve /models/selected\n",
 	} {
-		m, r, p, _ := nativeFixture(t, "llama.cpp", "http://localhost:9000")
+		m, r, p, _ := nativeFixture(t, "vllm", "http://localhost:9000")
 		if err := os.WriteFile(p.NativeModel.LaunchFile, []byte(launch), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -58,7 +42,7 @@ func TestNativeLoadingSingleServerNotHealthy(t *testing.T) {
 		fmt.Fprint(w, `{"object":"list","data":[{"id":"selected","object":"model","meta":null}]}`)
 	}))
 	defer srv.Close()
-	m, _, p, _ := nativeFixture(t, "llama.cpp", srv.URL)
+	m, _, p, _ := nativeFixture(t, "vllm", srv.URL)
 	if err := m.Healthy(context.Background(), p.ID); err == nil {
 		t.Error("Healthy accepts model list with meta:null while native /health is 503")
 	}

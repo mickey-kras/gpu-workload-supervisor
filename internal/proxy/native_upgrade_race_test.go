@@ -29,7 +29,7 @@ func TestNativeLegacyNativeUpgradeRace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest("POST", "/api/generate", strings.NewReader(`{"model":"other"}`))
+	req := httptest.NewRequest("POST", "/v1/completions", strings.NewReader(`{"model":"other"}`))
 	addLeaseHeaders(req, s.state.LeaseFence)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)

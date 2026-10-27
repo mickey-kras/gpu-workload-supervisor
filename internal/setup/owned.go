@@ -69,36 +69,26 @@ func OwnedProfile(d Draft, managerCgroup, home string) (control.WorkloadProfile,
 	if err := validateDraftOwned(d.App, d.Binding.Owned); err != nil {
 		return control.WorkloadProfile{}, nil, err
 	}
-	if d.App == "ollama" {
-		if d.Model == "" || d.Binding.Instance == "" {
-			return control.WorkloadProfile{}, nil, errors.New("owned ollama drafts require a model and instance")
-		}
-	} else if d.Binding.Instance == "" {
+	if d.Binding.Instance == "" {
 		return control.WorkloadProfile{}, nil, errors.New("owned drafts require an instance")
 	}
 	owned := control.OwnedLaunch{
 		Executable:  d.Binding.Owned.Executable,
 		ModelPath:   d.Binding.Owned.ModelPath,
 		Port:        d.Binding.Owned.Port,
-		CtxSize:     d.Binding.Owned.CtxSize,
-		GPULayers:   d.Binding.Owned.GPULayers,
 		MaxModelLen: d.Binding.Owned.MaxModelLen,
 		Alias:       d.Binding.Owned.Alias,
 	}
-	model := ownedProfileModel(d, owned)
+	model := ownedProfileModel(owned)
 	id := control.Workload(d.ID)
-	unit := control.OwnedUnitName(d.App, d.Binding.Instance, id)
+	unit := control.OwnedUnitName(id)
 	endpoint := "http://127.0.0.1:" + strconv.Itoa(int(owned.Port))
-	healthURL := endpoint + "/health"
-	if d.App == "ollama" {
-		healthURL = endpoint + "/api/tags"
-	}
 	profile := control.WorkloadProfile{
 		ID:        id,
 		Label:     d.Label,
 		Adapter:   "systemd",
 		Unit:      unit,
-		HealthURL: healthURL,
+		HealthURL: endpoint + "/health",
 		NativeModel: &control.NativeModel{
 			Runtime:    d.App,
 			Instance:   d.Binding.Instance,
@@ -120,10 +110,7 @@ func OwnedProfile(d Draft, managerCgroup, home string) (control.WorkloadProfile,
 	return profile, raw, nil
 }
 
-func ownedProfileModel(d Draft, owned control.OwnedLaunch) string {
-	if d.App == "ollama" {
-		return d.Model
-	}
+func ownedProfileModel(owned control.OwnedLaunch) string {
 	if owned.Alias != "" {
 		return owned.Alias
 	}

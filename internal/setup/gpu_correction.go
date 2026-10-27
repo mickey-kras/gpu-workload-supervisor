@@ -72,9 +72,6 @@ func validateGPUCorrectionState(ctx context.Context, root, unit string, discover
 		return errors.New("supervisor state location changed; retry")
 	}
 	if _, err := os.Lstat(statePath); err == nil {
-		if err := checkNoTemporaryDiscovery(ctx, statePath); err != nil {
-			return err
-		}
 		// The CLI can accept a catalog without creating an operator profile.
 		snapshot, err := ReadCatalog(ctx, statePath)
 		if err != nil {
@@ -109,11 +106,7 @@ func (b Backend) applyGPUCorrection(ctx context.Context, request GPUCorrectionRe
 	if _, err := b.runCommand(ctx, automaticSystemctlPath, "--user", "daemon-reload"); err != nil {
 		return plan, fmt.Errorf("GPU correction saved; systemd reload failed. Retry Check again after reloading: %w", err)
 	}
-	model := ""
-	if request.App == "ollama" {
-		model = "selection-pending"
-	}
-	if _, err := b.automaticConfiguration(ctx, request.App, request.Unit, model); err != nil {
+	if _, err := b.automaticConfiguration(ctx, request.App, request.Unit); err != nil {
 		return plan, fmt.Errorf("GPU correction saved; configuration still needs attention: %w", err)
 	}
 	plan.Applied = true
@@ -146,7 +139,7 @@ func writeGPUCorrection(plan GPUCorrection) error {
 }
 
 func supportedCorrectionApp(app string) bool {
-	return app == "comfyui" || app == "ollama" || app == appLlamaCPP || app == "vllm"
+	return app == "comfyui" || app == "vllm"
 }
 
 func (b Backend) previewGPUCorrection(ctx context.Context, home string, request GPUCorrectionRequest) (GPUCorrection, error) {

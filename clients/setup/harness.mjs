@@ -6,8 +6,8 @@ function FileIcon(properties) { return {...properties}; }
 function fileAtURI() { return {get_parent: () => ({get_child: () => ({query_exists: () => true})})}; }
 
 // Substitute only GI widgets and subprocesses; run the setup's real event handlers.
-export async function launch({units = [], profiles = [], pending = false, fail = null, version = 'GNOME Shell 50.1', responses = {}, filePath = '/models/selected.gguf', fileError = null, deferAction = 'validate', deferOccurrence = null} = {}) {
-    const widgets = []; const calls = []; const deferred = []; const signals = []; let uuidSequence = 0;
+export async function launch({units = [], profiles = [], pending = false, fail = null, version = 'GNOME Shell 50.1', responses = {}, filePath = '/models/selected', fileError = null, deferAction = 'validate', deferOccurrence = null} = {}) {
+    const widgets = []; const calls = []; const deferred = []; let uuidSequence = 0;
     const Widget = createWidgetClass(widgets);
     const request = {profile: {statePath: '/state.db', gpuIndex: 2, extra: 'profile'},
         catalog: {version: 1, profiles, extra: {keep: true}}, expectedRevision: 7,
@@ -56,7 +56,6 @@ export async function launch({units = [], profiles = [], pending = false, fail =
         }},
         'gi://Gio': {default: {FileIcon, File: {new_for_uri: fileAtURI}, SubprocessFlags: {STDIN_PIPE: 1, STDOUT_PIPE: 2, STDERR_PIPE: 4},
             Subprocess: {new(argv) { let requestInput; return {
-                send_signal(signal) { signals.push({argv, signal}); },
                 communicate_utf8_async(input, cancel, callback) {
                     requestInput = input; calls.push({argv, input});
                     if (argv[1] === deferAction && (deferOccurrence === null || calls.filter(call => call.argv[1] === deferAction).length === deferOccurrence)) deferred.push(() => callback(this, {}));
@@ -88,8 +87,8 @@ export async function launch({units = [], profiles = [], pending = false, fail =
         if (!visible(widget) || !widget.sensitive) throw new Error(`Control is not actionable: ${label}`);
         await widget.emit('clicked');
     };
-    return {widgets, calls, signals, request, appearance, styleProviders, by, visible, click, selectApplication(index) {
-        const label = ['ComfyUI', 'Ollama', 'llama.cpp', 'vLLM'][index];
+    return {widgets, calls, request, appearance, styleProviders, by, visible, click, selectApplication(index) {
+        const label = ['ComfyUI', 'vLLM'][index];
         by(`Use ${label}`).active = true;
         by(`Settings for ${label}`).emit('clicked');
     }, finish: () => deferred.shift()(),

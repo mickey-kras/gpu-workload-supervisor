@@ -1,4 +1,0 @@
-[Service]
-Type=simple
-Restart=no
-ExecStart=/opt/llama.cpp/d81235049384534c167caea52b85a694f6103d14/llama-server --host 127.0.0.1 --port 9000 --models-preset /opt/router-spike/models.ini --models-max 1 --no-models-autoload --sleep-idle-seconds -1 --api-key-file /opt/router-spike/api-key

@@ -6,7 +6,7 @@ const uuid = 'GPU-01234567-89ab-cdef-0123-456789abcdef';
 const blocked = {id: 'blocked', app: 'comfyui', label: 'ComfyUI', installed: true, recognized: false, unit: 'private-secret.service', location: '/private-path-secret', instanceStatus: 'not-running', configurationStatus: 'gpu-unresolved', diagnostics: ['CUDA_VISIBLE_DEVICES needs a full GPU UUID.', 'Restart policy is unsupported.', 'Executable /private-exec-secret is not root-owned.']};
 const request = {profile: {statePath: '/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: []}};
 test('shareable report structurally removes identities, raw values and unknown states', () => {
-    const raw = diagnosticReport([blocked, {...blocked, app: 'ollama', instanceStatus: '/secret-status', diagnostics: ['unrecognized private-error-secret'], models: [{id: '/secret-model'}], endpoint: 'http://secret', evidence: ['/secret-evidence'], binding: {secret: uuid}}], ['private-discovery-secret']);
+    const raw = diagnosticReport([blocked, {...blocked, app: 'vllm', instanceStatus: '/secret-status', diagnostics: ['unrecognized private-error-secret'], models: [{id: '/secret-model'}], endpoint: 'http://secret', evidence: ['/secret-evidence'], binding: {secret: uuid}}], ['private-discovery-secret']);
     assert.equal(/private|secret|GPU-/.test(raw), false);
     const report = JSON.parse(raw);
     assert.equal(report.installations.length, 2);
@@ -46,7 +46,7 @@ test('a single GPU is proposed internally and applying requires a reviewed finge
     assert.equal(JSON.parse(calls[1].input).confirm, true);
     await ui.click('Back');
     assert.equal(ui.by('Use installation').sensitive, true);
-    assert.equal(ui.calls.some(call => ['apply', 'temporary-discover'].includes(call.argv[1])), false);
+    assert.equal(ui.calls.some(call => ['apply'].includes(call.argv[1])), false);
 });
 
 test('Check again disables automatic correction when trusted GPU inventory disappears', async () => {
@@ -73,7 +73,7 @@ test('native-style inherited endpoint keeps reinspection busy until its read-onl
 
 test('one diagnostic export uses freshly rechecked installation evidence and keeps other applications', async () => {
     const repaired = {...blocked, recognized: true, diagnostics: [], configurationStatus: 'ready', binding: {unit: blocked.unit, cgroup: '/service', healthURL: 'http://127.0.0.1:8188/system_stats'}};
-    const other = {id: 'other-address', app: 'ollama', label: 'Ollama', endpoint: 'http://127.0.0.1:11434', recognized: false, instanceStatus: 'unreachable', configurationStatus: 'unverified'};
+    const other = {id: 'other-address', app: 'vllm', label: 'vLLM', endpoint: 'http://127.0.0.1:8000', recognized: false, instanceStatus: 'unreachable', configurationStatus: 'unverified'};
     let discoveries = 0;
     const ui = await launch({deferAction: 'unused', responses: {discover: () => ({request, units: [], applications: [discoveries++ ? repaired : blocked, other]})}});
     const window = ui.widgets.find(widget => widget.title === 'GPU Workload Setup');
@@ -86,9 +86,9 @@ test('one diagnostic export uses freshly rechecked installation evidence and kee
     assert.equal(report.installations.length, 2);
     assert.equal(report.installations.find(item => item.application === 'comfyui').qualified, true);
     assert.equal(report.installations.find(item => item.application === 'comfyui').configuration, 'ready');
-    assert.equal(report.installations.find(item => item.application === 'ollama').state, 'unreachable');
+    assert.equal(report.installations.find(item => item.application === 'vllm').state, 'unreachable');
     assert.equal(/private|secret|127\.0\.0\.1/.test(window.clipboard), false);
-    assert.equal(ui.calls.some(call => ['apply', 'prepare', 'temporary-discover'].includes(call.argv[1])), false);
+    assert.equal(ui.calls.some(call => ['apply', 'prepare'].includes(call.argv[1])), false);
 });
 
 test('RestartSec blockers never propose or classify a Restart policy correction', async () => {
@@ -104,7 +104,7 @@ test('RestartSec blockers never propose or classify a Restart policy correction'
     await ui.click('Settings for ComfyUI'); await ui.click('View details');
     assert.equal(ui.by('Copy reviewed override').sensitive, false);
     assert.equal(ui.visible(ui.by('Copy reviewed override')), false);
-    assert.equal(ui.calls.some(call => ['apply', 'prepare', 'temporary-discover'].includes(call.argv[1])), false);
+    assert.equal(ui.calls.some(call => ['apply', 'prepare'].includes(call.argv[1])), false);
 });
 
 
@@ -143,17 +143,17 @@ for (const message of ['GPU correction saved; reload failed', 'GPU correction sa
 }
 
 test('discovery from another editor refreshes GPU inventory and discards its reviewed proposal', async () => {
-    const other = {...blocked, app: 'ollama', label: 'Ollama', unit: 'ollama.service'};
+    const other = {...blocked, app: 'vllm', label: 'vLLM', unit: 'vllm.service'};
     let count = 0;
     const ui = await launch({deferAction: 'unused', responses: {
         discover: () => ({request, units: [], applications: [blocked, other], gpuUUIDs: count ? [] : [uuid], gpuInventoryStatus: count++ ? 'unavailable' : 'available'}),
         'correct-gpu': {fingerprint: 'old-preview', content: 'old preview'},
     }});
-    await ui.click('Settings for Ollama'); await ui.click('View details'); await ui.click('Configure GPU');
+    await ui.click('Settings for vLLM'); await ui.click('View details'); await ui.click('Configure GPU');
     await ui.click('Back'); await ui.click('Back');
     await ui.click('Settings for ComfyUI'); await ui.click('View details'); await ui.click('Check again');
     await ui.click('Back'); await ui.click('Back');
-    await ui.click('Settings for Ollama'); await ui.click('View details');
+    await ui.click('Settings for vLLM'); await ui.click('View details');
     assert.equal(ui.widgets.some(widget => ui.visible(widget) && ['Configure GPU', 'Apply GPU configuration'].includes(widget.label)), false);
     assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('GPU inventory query was unavailable.')));
     assert.equal(ui.calls.filter(call => call.argv[1] === 'correct-gpu').length, 1);

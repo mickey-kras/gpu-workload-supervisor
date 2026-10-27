@@ -12,7 +12,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 var ErrModelIdentity = errors.New("native model identity mismatch")
@@ -35,7 +34,7 @@ func inspectQualifiedNativeLaunch(path string, binding control.NativeModel, vali
 	if binding.Owned != nil {
 		unit, err = parseOwnedLaunchUnit(sources[0], binding)
 	} else {
-		unit, err = parseExternalLaunchSources(sources, binding.Runtime)
+		unit, err = parseExternalLaunchSources(sources)
 	}
 	if err != nil {
 		return "", err
@@ -44,11 +43,6 @@ func inspectQualifiedNativeLaunch(path string, binding control.NativeModel, vali
 		return "", err
 	}
 	return fmt.Sprintf("%x", sha256.Sum256(sources[0])), nil
-}
-
-func verifyNativeLaunchWithValidator(n control.NativeModel, validate func(string) error) error {
-	_, err := readVerifiedNativeLaunch(n, validate)
-	return err
 }
 
 func readVerifiedNativeLaunch(n control.NativeModel, validate func(string) error) (parsedLaunchUnit, error) {
@@ -66,7 +60,7 @@ func readVerifiedNativeLaunch(n control.NativeModel, validate func(string) error
 	if n.Owned != nil {
 		unit, err = parseOwnedLaunchUnit(sources[0], n)
 	} else {
-		unit, err = parseExternalLaunchSources(sources, n.Runtime)
+		unit, err = parseExternalLaunchSources(sources)
 	}
 	if err != nil {
 		return unit, err
@@ -74,13 +68,9 @@ func readVerifiedNativeLaunch(n control.NativeModel, validate func(string) error
 	return unit, qualifyParsedLaunch(unit, n, validate)
 }
 
-// verifyOwnedSpec is the spec↔fingerprint chain for owned launches: the
-// deterministic re-render must exist, match the recorded digest, and qualify
-// under the shared grammar before the on-disk binding is checked.
-func verifyOwnedSpec(p control.WorkloadProfile) error {
-	return verifyOwnedSpecWithValidator(p, validateNativeExecutable)
-}
-
+// verifyOwnedSpecWithValidator is the spec↔fingerprint chain for owned
+// launches: the deterministic re-render must exist, match the recorded digest,
+// and qualify under the shared grammar before the on-disk binding is checked.
 func verifyOwnedSpecWithValidator(p control.WorkloadProfile, validate func(string) error) error {
 	if p.NativeModel == nil || p.NativeModel.Owned == nil {
 		return nil
@@ -153,11 +143,8 @@ func nativeBindingShowArguments(unit string, launch parsedLaunchUnit) []string {
 			args = append(args, "--property="+key)
 		}
 	}
-	for name := range launch.environmentValues {
-		if !strings.HasPrefix(name, "OLLAMA_") {
-			args = append(args, "--property=Environment")
-			break
-		}
+	if len(launch.environmentValues) > 0 {
+		args = append(args, "--property=Environment")
 	}
 	args = append(args, "--", unit)
 	return args
@@ -181,7 +168,7 @@ func (m *SystemdManager) readApplicationLaunch(binding control.LaunchBinding, va
 	if m.nativeExecutableValidator == nil {
 		validate = validateComfyExecutable
 	}
-	unit, err := parseExternalLaunchSources(sources, binding.Runtime)
+	unit, err := parseExternalLaunchSources(sources)
 	if err != nil {
 		return unit, err
 	}
@@ -237,10 +224,8 @@ func CheckNativeBinding(values map[string]string, unit, launchFile string) error
 	return nil
 }
 func (m *SystemdManager) nativeReady(ctx context.Context, n control.NativeModel) error {
-	if n.Runtime != "ollama" {
-		if err := m.getHealthy(ctx, n.Endpoint+"/health"); err != nil {
-			return err
-		}
+	if err := m.getHealthy(ctx, n.Endpoint+"/health"); err != nil {
+		return err
 	}
 	b, err := m.fetchModelList(ctx, n)
 	if err != nil {
@@ -250,11 +235,7 @@ func (m *SystemdManager) nativeReady(ctx context.Context, n control.NativeModel)
 }
 
 func (m *SystemdManager) fetchModelList(ctx context.Context, n control.NativeModel) ([]byte, error) {
-	path := "/v1/models"
-	if n.Runtime == "ollama" {
-		path = "/api/ps"
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, n.Endpoint+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, n.Endpoint+"/v1/models", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -280,22 +261,14 @@ func (m *SystemdManager) fetchModelList(ctx context.Context, n control.NativeMod
 
 type modelListPayload struct {
 	Data []struct {
-		ID     string          `json:"id"`
-		Status json.RawMessage `json:"status"`
+		ID string `json:"id"`
 	} `json:"data"`
-	Models []struct {
-		Name  string `json:"name"`
-		Model string `json:"model"`
-	} `json:"models"`
 }
 
 func verifyModelList(b []byte, n control.NativeModel) error {
 	payload, err := decodeModelList(b)
 	if err != nil {
 		return ErrModelIdentity
-	}
-	if n.Runtime == "ollama" {
-		return verifyOllamaModelList(payload, n.ComparisonModel())
 	}
 	return verifyServerModelList(payload, n.Model)
 }
@@ -305,8 +278,8 @@ func decodeModelList(b []byte) (modelListPayload, error) {
 	if strictjson.Check(json.NewDecoder(bytes.NewReader(b))) != nil || json.Unmarshal(b, &payload) != nil {
 		return payload, ErrModelIdentity
 	}
-	fields, err := modelObjectFields(b, "data", "models")
-	if err != nil || checkModelEntryFields(fields["data"], "id", "status") != nil || checkModelEntryFields(fields["models"], "name", "model") != nil {
+	fields, err := modelObjectFields(b, "data")
+	if err != nil || checkModelEntryFields(fields["data"], "id") != nil {
 		return payload, ErrModelIdentity
 	}
 	return payload, nil
@@ -336,110 +309,15 @@ func checkModelEntryFields(raw []byte, names ...string) error {
 		return ErrModelIdentity
 	}
 	for _, entry := range entries {
-		fields, err := modelObjectFields(entry, names...)
-		if err != nil {
+		if _, err := modelObjectFields(entry, names...); err != nil {
 			return err
 		}
-		if status := fields["status"]; len(status) != 0 {
-			if _, err := modelObjectFields(status, "value", "failed", "exit_code"); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func verifyOllamaModelList(payload modelListPayload, model string) error {
-	if len(payload.Models) != 1 || (payload.Models[0].Name != model && payload.Models[0].Model != model) || (payload.Models[0].Name != "" && payload.Models[0].Name != model) || (payload.Models[0].Model != "" && payload.Models[0].Model != model) {
-		return ErrModelIdentity
 	}
 	return nil
 }
 
 func verifyServerModelList(payload modelListPayload, model string) error {
 	if len(payload.Data) != 1 || payload.Data[0].ID != model {
-		return ErrModelIdentity
-	}
-	raw := payload.Data[0].Status
-	if len(raw) == 0 {
-		return nil
-	}
-	var status struct {
-		Value    string          `json:"value"`
-		Failed   json.RawMessage `json:"failed"`
-		ExitCode json.RawMessage `json:"exit_code"`
-	}
-	if json.Unmarshal(raw, &status) != nil || status.Value != "loaded" {
-		return ErrModelIdentity
-	}
-	if len(status.Failed) != 0 {
-		var failed bool
-		if bytes.Equal(status.Failed, []byte("null")) || json.Unmarshal(status.Failed, &failed) != nil || failed {
-			return ErrModelIdentity
-		}
-	}
-	if len(status.ExitCode) != 0 {
-		var exitCode int
-		if bytes.Equal(status.ExitCode, []byte("null")) || json.Unmarshal(status.ExitCode, &exitCode) != nil || exitCode != 0 {
-			return ErrModelIdentity
-		}
-	}
-	return nil
-}
-func (m *SystemdManager) startNative(ctx context.Context, p control.WorkloadProfile) error {
-	if p.NativeModel.Runtime != "ollama" {
-		return nil
-	}
-	for {
-		if err := m.getHealthy(ctx, p.HealthURL); err == nil {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
-	if err := m.requireLocalOllama(ctx, *p.NativeModel); err != nil {
-		return err
-	}
-	b, _ := json.Marshal(struct {
-		Model     string `json:"model"`
-		Stream    bool   `json:"stream"`
-		KeepAlive int    `json:"keep_alive"`
-	}{Model: p.NativeModel.Model, KeepAlive: -1})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.NativeModel.Endpoint+"/api/generate", bytes.NewReader(b))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	return m.checkHTTPResponse(req, "preload selected model")
-}
-
-func (m *SystemdManager) requireLocalOllama(ctx context.Context, n control.NativeModel) error {
-	b, _ := json.Marshal(struct {
-		Model string `json:"model"`
-	}{n.Model})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, n.Endpoint+"/api/show", bytes.NewReader(b))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := m.client.Do(req)
-	if err != nil {
-		return &safeHTTPRequestError{cause: err}
-	}
-	defer resp.Body.Close()
-	b, err = io.ReadAll(io.LimitReader(resp.Body, 65537))
-	if err != nil || len(b) > 65536 || resp.StatusCode != 200 {
-		return ErrModelIdentity
-	}
-	var info struct {
-		RemoteHost  string                     `json:"remote_host"`
-		RemoteModel string                     `json:"remote_model"`
-		ModelInfo   map[string]json.RawMessage `json:"model_info"`
-	}
-	if json.Unmarshal(b, &info) != nil || info.RemoteHost != "" || info.RemoteModel != "" || len(info.ModelInfo) == 0 {
 		return ErrModelIdentity
 	}
 	return nil

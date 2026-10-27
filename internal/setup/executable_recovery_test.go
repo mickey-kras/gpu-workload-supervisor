@@ -9,10 +9,11 @@ import (
 )
 
 func TestCustomStoppedExecutableRecoveryKeepsQualificationAndConsentSeparate(t *testing.T) {
-	for _, app := range []string{"ollama", "vllm"} {
+	for _, app := range []string{"vllm"} {
 		t.Run(app, func(t *testing.T) {
+			name := app
 			root := t.TempDir()
-			path := filepath.Join(root, app)
+			path := filepath.Join(root, name)
 			raw := []byte("fixture executable must never run")
 			if err := os.WriteFile(path, raw, 0700); err != nil {
 				t.Fatal(err)
@@ -29,9 +30,9 @@ func TestCustomStoppedExecutableRecoveryKeepsQualificationAndConsentSeparate(t *
 				t.Fatal("selection lost or runtime operation implied", blocked)
 			}
 			// Select a separate fixture for positive boundary wiring. No trusted
-			// Ollama/vLLM is installed in CI; the validator substitute does not
+			// vLLM is installed in CI; the validator substitute does not
 			// prove native runtime trust or override the unsafe selection above.
-			replacement := filepath.Join(t.TempDir(), app)
+			replacement := filepath.Join(t.TempDir(), name)
 			if err := os.WriteFile(replacement, raw, 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -46,9 +47,7 @@ func TestCustomStoppedExecutableRecoveryKeepsQualificationAndConsentSeparate(t *
 				t.Fatal("installed/configured/reachable states conflated", selected, err)
 			}
 			draft := Draft{ID: "chosen", App: app, Label: "Existing application", Reference: replacement, ReferenceKind: "application", Binding: selected.Binding, Model: "existing:latest"}
-			if app == "vllm" {
-				draft.Binding.Owned.ModelPath = root
-			}
+			draft.Binding.Owned.ModelPath = root
 			profile, rendered, err := OwnedProfile(draft, "/manager", root)
 			if err != nil || profile.NativeModel.Owned.Executable != replacement || len(rendered) == 0 {
 				t.Fatal("selection failed to reach the managed preview", err)

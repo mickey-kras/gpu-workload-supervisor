@@ -29,7 +29,7 @@ schema change:
 | --- | --- | --- |
 | 1 | Existing workload profiles and native model bindings | Supported |
 | 2 | Adds owned native launch specifications | Supported |
-| 3 | Planned fields for llama.cpp router bindings | Not yet supported |
+| 3 | Reserved | Not supported |
 | 4 | Finite trainer bindings and fenced job lifecycle | Supported |
 | Later | Later features receive separate version changes | Not yet supported |
 
@@ -37,11 +37,11 @@ Existing v1 and v2 catalogs remain valid under their current rules. Unchanged pr
 need no migration or version bump. Owned launch specifications need v2 or v4.
 
 Finite trainer bindings need v4. See [Finite training jobs](TRAINING.md). The validator
-rejects unsupported versions (including planned v3), unknown fields and fields outside
+rejects unsupported versions (including v3), unknown fields and fields outside
 their supported version.
 
-A planned version does not enable its feature. Catalog versions are separate from
-database schema versions and upstream runtime and API versions.
+Catalog versions are separate from database schema versions and upstream runtime and
+API versions.
 
 Removing the final application through setup writes an explicit disabled catalog, such
 as `{"version":1,"profiles":[],"disabled":true}`, with no configured workloads. Empty
@@ -116,10 +116,10 @@ downgrade a live database.
 
 ## Native model bindings
 
-A `systemd` profile can include `nativeModel` with `runtime` (`ollama`, `llama.cpp`, or
-`vllm`), `instance`, exact API `model`, loopback base `endpoint`, absolute `launchFile`,
-and its `launchSHA256`. Model names are case-sensitive. By default each workload needs
-its own existing unit and non-overlapping cgroup.
+A `systemd` profile can include `nativeModel` with `runtime` `vllm`, `instance`,
+exact API `model`, loopback base `endpoint`, absolute `launchFile`, and its
+`launchSHA256`. Model names are case-sensitive. Each workload needs its own
+existing unit and non-overlapping cgroup.
 
 Two models in the same runtime instance can use different units on the same endpoint.
 The controller stops the old unit and verifies GPU release before it starts the next
@@ -127,36 +127,7 @@ unit. Re-selecting an active workload does not restart that unit.
 
 Opposing units remain reconciled.
 
-Ollama workloads can instead share one unit, cgroup, endpoint and instance with
-different exact models. Untagged names canonicalize to `:latest`, so `m` and `m:latest`
-are the same model and cannot bind two profiles. To start a sibling on the shared unit,
-the controller evicts every other loaded model over the Ollama API.
-
-It waits for eviction, preloads the target with infinite keep-alive, and verifies
-`/api/ps`. The unit keeps running. Switching to Idle or a non-shared workload unloads
-only the outgoing model and does not evict.
-
-The release fails while any other model, such as an auto-loaded foreign model, stays in
-`/api/ps`. While the unit runs, release evidence is the loaded-model list. Once the unit
-is dead, the controller verifies recursive cgroup emptiness instead.
-
-If the controller cannot check an unload, the switch fails. Absence from `/api/ps` is
-scheduler bookkeeping. Driver VRAM recovery lags an unload by roughly 0.5–1.5s (Ollama
-`waitForVRAMRecovery`).
-
-VRAM can leak entirely in known cases ([Ollama issue
-#10597](https://github.com/ollama/ollama/issues/10597)). Thus, cross-runtime admission
-after a shared-unit unload relies on the `requiredMiB` capacity probe, not `/api/ps`
-alone. llama.cpp and vLLM still need one unit per model.
-
-The native HTTP tests replay version-tagged, sanitized source-derived `/api/ps` and
-llama.cpp `/models` examples. See the provenance and synthetic mutations in [the fixture
-notes](../internal/runtime/testdata/README.md). Native llama.cpp readiness continues to
-query `/health` and `/v1/models`.
-
-`/models` replay is test-only parser coverage. Parsing exact identity and status does
-not prove router lifecycle safety, fencing, admission or GPU release, and adds no router
-binding support.
+Native readiness queries `/health` and `/v1/models`.
 
 Stop the workload proxies before applying a catalog change. Setup and CLI configure both
 enforce the proxy lifetime lock, including in-flight requests.
@@ -170,11 +141,8 @@ Launch-file constraints:
   Setup resolves symlinks with ownership and permission checks on every traversed path. It rejects broken links and excessive link chains.
 - Setup rejects shell wrappers, environment files, uninspected execution hooks, filesystem remapping directives and command substitution. Setup supports bounded direct `ExecStartPre` system checks and inspects them without running them.
 - Setup does not change or install application or model files.
-- llama.cpp requires an existing local model file. vLLM requires an existing
-  local model directory. These model checks prove existence and type, not
+- vLLM requires an existing local model directory. These model checks prove existence and type, not
   ownership, permissions or content safety.
-- Ollama requires `serve`, explicit `OLLAMA_NO_CLOUD=1` and matching
-  `OLLAMA_HOST`. The selected model must be local before preloading.
 
 Adopted `Environment=` assignments support literal values, including quotes around a
 whole assignment. HOME, cache, temporary-directory and token-path settings need existing
@@ -196,8 +164,7 @@ assignments.
 Literal and `%h` `WorkingDirectory=` settings use the same existing-directory trust
 checks: setup checks symlink targets and every traversed ancestor for foreign ownership
 and world write permissions. Their exact effective loaded paths must match inspection
-during setup, start and temporary discovery. Cleanup can skip directory availability
-after admission, while retaining source, command, loaded-property and invocation checks.
+during setup and start.
 
 Existing services can keep `Wants=network-online.target`, `KillSignal=SIGINT`,
 `NoNewPrivileges=true`, `PrivateTmp=true` or `false`, `ProtectHome=read-only`, and
@@ -227,8 +194,7 @@ and their abbreviations because they override the inspected `CUDA_VISIBLE_DEVICE
 selection. Setup preserves multiple files and repeated configuration options (at most
 256 arguments and 32 configuration files per option).
 
-Cleanup skips availability checks for these paths while retaining the command syntax and
-source checks. Setup retains other ComfyUI arguments but does not certify their
+Setup retains other ComfyUI arguments but does not certify their
 behavior. Configuration qualification checks the file's metadata, without parsing YAML
 or certifying referenced model or custom-node content.
 
@@ -284,12 +250,7 @@ must identify the selected runtime and pass the same executable trust checks. Om
 it retains the standard `/usr/bin` location. You must still select a model, review the
 side-effect-free preview and explicitly confirm activation.
 
-Supervisor-owned Ollama units set `OLLAMA_MAX_LOADED_MODELS=1`. This limits the loaded
-model count, not memory used by parallel requests to the same model. Eviction,
-admission, readiness and release checks still apply.
-
-Readiness requires native health plus exactly the selected model identity. Ollama checks
-its loaded model list. A native proxy accepts only supported inference routes with the
+Readiness requires native health plus exactly the selected model identity. A native proxy accepts only supported inference routes with the
 exact JSON `model`.
 
 It rejects lifetime overrides, ambiguous keys, query parameters and encoded bodies. When
@@ -297,9 +258,8 @@ its catalog revision changes, it stops accepting new requests. Its upstream must
 the binding.
 
 Supervisor-mode execution of a native binding finishes itself: the proxy observes the
-upstream response and completes the registration on verified terminal evidence. Ollama
-generation and chat end with a `"done":true` object. OpenAI-compatible chat and
-completion streams end with a `data: [DONE]` event.
+upstream response and completes the registration on verified terminal evidence.
+OpenAI-compatible chat and completion streams end with a `data: [DONE]` event.
 
 Non-streaming responses end when every choice carries a non-null `finish_reason`.
 Embedding responses end when the complete result body parses.

@@ -21,7 +21,7 @@ func TestFullUUIDMappingRemainsConsistentAcrossRuntimeGates(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	m, runner, p, show := nativeFixture(t, "llama.cpp", server.URL)
+	m, runner, p, show := nativeFixture(t, "vllm", server.URL)
 	raw, err := os.ReadFile(p.NativeModel.LaunchFile)
 	if err != nil {
 		t.Fatal(err)

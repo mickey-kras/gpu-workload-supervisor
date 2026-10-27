@@ -61,7 +61,6 @@ type ModelCandidate struct {
 }
 
 const (
-	appLlamaCPP                   = "llama.cpp"
 	referenceModelDirectory       = "model-directory"
 	referenceApplicationDirectory = "application-directory"
 )
@@ -70,10 +69,6 @@ func appLabel(app string) string {
 	switch app {
 	case "comfyui":
 		return "ComfyUI"
-	case "ollama":
-		return "Ollama"
-	case appLlamaCPP:
-		return appLlamaCPP
 	case "vllm":
 		return "vLLM"
 	}
@@ -93,7 +88,7 @@ func (r ProbeRequest) validate() error {
 		return errors.New("reference must be an absolute clean path")
 	}
 	switch r.ReferenceKind {
-	case "application", referenceApplicationDirectory, "configuration", "model-file", referenceModelDirectory:
+	case "application", referenceApplicationDirectory, "configuration", referenceModelDirectory:
 		return nil
 	}
 	return errors.New("unsupported reference kind")
@@ -129,7 +124,7 @@ func candidate(r ProbeRequest) ApplicationCandidate {
 }
 
 // Probe never starts a process or reads model contents. HTTP routes are fixed
-// read-only routes, including no llama.cpp reload or routed autoload requests.
+// read-only routes.
 func Probe(ctx context.Context, r ProbeRequest) (ApplicationCandidate, error) {
 	result := candidate(r)
 	if err := r.validate(); err != nil {
@@ -161,10 +156,6 @@ func Probe(ctx context.Context, r ProbeRequest) (ApplicationCandidate, error) {
 	switch r.App {
 	case "comfyui":
 		err = probe.comfy(ctx, &result)
-	case "ollama":
-		err = probe.ollama(ctx, &result)
-	case appLlamaCPP:
-		err = probe.llama(ctx, &result)
 	case "vllm":
 		err = probe.vllm(ctx, &result)
 	}
@@ -247,12 +238,11 @@ func probeSelectedExecutable(r ProbeRequest, result ApplicationCandidate, valida
 		result.Diagnostics = gpuruntime.LaunchDiagnostics(err)
 		return result
 	}
-	ports := map[string]uint16{"ollama": 11434, appLlamaCPP: 8080, "vllm": 8000}
 	result.SourceKind = "owned"
 	result.Recognized = true
 	result.InstanceStatus = "installed"
 	result.ConfigurationStatus = "model-required"
-	result.Binding = &DraftBinding{Instance: "instance-" + result.ID, Owned: &DraftOwnedLaunch{Executable: r.Reference, Port: ports[r.App]}}
+	result.Binding = &DraftBinding{Instance: "instance-" + result.ID, Owned: &DraftOwnedLaunch{Executable: r.Reference, Port: 8000}}
 	result.NextStep = "Supported executable installed. Select an existing local model, then review creation of a supervisor-owned launch. Nothing has been started."
 	return result
 }
@@ -267,12 +257,8 @@ func missingReference(err error, result ApplicationCandidate) ApplicationCandida
 	return result
 }
 func referencedCandidate(r ProbeRequest, directory bool, result ApplicationCandidate) ApplicationCandidate {
-	if r.ReferenceKind == "model-file" || (directory && r.ReferenceKind == referenceModelDirectory) {
-		source := "file"
-		if directory {
-			source = "directory"
-		}
-		result.Models = []ModelCandidate{{ID: r.Reference, Label: filepath.Base(r.Reference), Source: source, Loaded: "unknown", Locality: "local"}}
+	if directory && r.ReferenceKind == referenceModelDirectory {
+		result.Models = []ModelCandidate{{ID: r.Reference, Label: filepath.Base(r.Reference), Source: "directory", Loaded: "unknown", Locality: "local"}}
 	}
 	result.NextStep = "Reference saved as a candidate only. Verify application compatibility and lifecycle control."
 	return result
@@ -316,13 +302,9 @@ func (p applicationHTTP) get(ctx context.Context, path string, destination inter
 
 // Folder fallback inspects exactly two known names, never directory contents.
 func probeExecutableDirectory(ctx context.Context, r ProbeRequest, validate func(string, string) error) ApplicationCandidate {
-	name := r.App
-	if r.App == appLlamaCPP {
-		name = llamaServerExecutable
-	}
 	requests := []ProbeRequest{}
 	for _, directory := range []string{r.Reference, filepath.Join(r.Reference, "bin")} {
-		requests = append(requests, ProbeRequest{App: r.App, Reference: filepath.Join(directory, name), ReferenceKind: "application"})
+		requests = append(requests, ProbeRequest{App: r.App, Reference: filepath.Join(directory, r.App), ReferenceKind: "application"})
 	}
 	found := inspectInstalledExecutables(ctx, requests, os.Lstat, validate, filepath.EvalSymlinks)
 	for _, item := range found {

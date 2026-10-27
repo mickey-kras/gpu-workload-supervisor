@@ -103,8 +103,6 @@ nfpms:
         dst: /usr/share/gpu-workload-supervisor/discovery-inputs.mjs
       - src: clients/setup/launch-ui.mjs
         dst: /usr/share/gpu-workload-supervisor/launch-ui.mjs
-      - src: clients/setup/temporary-discovery-ui.mjs
-        dst: /usr/share/gpu-workload-supervisor/temporary-discovery-ui.mjs
       - src: clients/setup/profile-ui.mjs
         dst: /usr/share/gpu-workload-supervisor/profile-ui.mjs
       - src: clients/setup/discovery-ui.mjs

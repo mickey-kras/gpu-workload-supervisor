@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/setup"
 	"os"
@@ -114,7 +115,7 @@ func TestDraftCommands(t *testing.T) {
 	if err := actions.run([]string{"drafts"}, strings.NewReader(""), &output); err != nil {
 		t.Fatal(err)
 	}
-	input := `{"version":1,"expectedRevision":"","drafts":[{"id":"d","label":"D","app":"ollama"}]}`
+	input := `{"version":1,"expectedRevision":"","drafts":[{"id":"d","label":"D","app":"vllm"}]}`
 	for _, data := range []string{`{`, input + ` {}`, strings.Repeat(" ", 65537), `{"version":2}`, `{"unknown":true}`} {
 		if err := actions.run([]string{"save-drafts"}, strings.NewReader(data), &bytes.Buffer{}); err == nil {
 			t.Fatalf("accepted %s", data)
@@ -168,7 +169,7 @@ func TestRootRejectedForAllSetupActions(t *testing.T) {
 
 func TestAllDesktopCommandsRejectRootBeforeReadingInputOrWritingOutput(t *testing.T) {
 	for _, command := range []string{
-		"discover", "probe", "prepare", "fingerprint", "render-owned", "drafts", "save-drafts", "verify-bindings", "validate", "apply", "temporary-status", "temporary-discover", "temporary-cleanup", "reconcile", "idle-policy-tick", "remove-integration",
+		"correct-gpu", "discover", "probe", "prepare", "fingerprint", "render-owned", "drafts", "save-drafts", "verify-bindings", "validate", "apply", "reconcile", "idle-policy-tick", "remove-integration",
 	} {
 		t.Run(command, func(t *testing.T) {
 			a := systemActions()
@@ -187,6 +188,70 @@ func TestAllDesktopCommandsRejectRootBeforeReadingInputOrWritingOutput(t *testin
 			files, err := os.ReadDir(home)
 			if err != nil || len(files) != 0 {
 				t.Fatalf("root command changed home: %v %v", files, err)
+			}
+		})
+	}
+}
+
+func TestCorrectGPURejectsMalformedRequestWithoutOutput(t *testing.T) {
+	actions := systemActions()
+	home := t.TempDir()
+	actions.home = func() (string, error) { return home, nil }
+	actions.euid = func() int { return 1000 }
+	var out bytes.Buffer
+	if err := actions.run([]string{"correct-gpu"}, strings.NewReader(`{"unknown":true}`), &out); err == nil {
+		t.Fatal("malformed GPU correction request was accepted")
+	}
+	if out.Len() != 0 {
+		t.Fatalf("rejected GPU correction wrote output: %q", out.String())
+	}
+	files, err := os.ReadDir(home)
+	if err != nil || len(files) != 0 {
+		t.Fatalf("rejected GPU correction changed home: %v %v", files, err)
+	}
+}
+
+func TestDraftCommandsRecoverUnsupportedSelections(t *testing.T) {
+	for _, app := range []string{"ollama", "llama.cpp"} {
+		t.Run(app, func(t *testing.T) {
+			home := t.TempDir()
+			root := home + "/.config/gpu-workload-supervisor"
+			if err := os.MkdirAll(root, 0700); err != nil {
+				t.Fatal(err)
+			}
+			data := `{"version":1,"drafts":[{"id":"old","label":"Old","app":"` + app + `"},{"id":"keep","label":"Keep","app":"comfyui"}]}`
+			if err := os.WriteFile(root+"/drafts.json", []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			if err := runDrafts(home, &output); err != nil {
+				t.Fatal(err)
+			}
+			var snapshot struct {
+				setup.DraftSnapshot
+				Warning string `json:"warning"`
+			}
+			if err := json.Unmarshal(output.Bytes(), &snapshot); err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.Revision == "" || snapshot.Warning == "" || len(snapshot.Drafts) != 2 {
+				t.Fatalf("missing recovery snapshot: %+v", snapshot)
+			}
+			request := setup.DraftRequest{Version: 1, ExpectedRevision: snapshot.Revision, Drafts: snapshot.Drafts[1:]}
+			encoded, err := json.Marshal(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			output.Reset()
+			if err := runSaveDrafts(home, bytes.NewReader(encoded), &output); err != nil {
+				t.Fatal(err)
+			}
+			if err := runSaveDrafts(home, bytes.NewReader(encoded), &bytes.Buffer{}); err == nil {
+				t.Fatal("stale recovery revision accepted")
+			}
+			current, err := setup.ReadDrafts(home)
+			if err != nil || len(current.Drafts) != 1 || current.Drafts[0].ID != "keep" {
+				t.Fatalf("supported selection lost: %+v %v", current, err)
 			}
 		})
 	}

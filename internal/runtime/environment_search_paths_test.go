@@ -34,13 +34,13 @@ func TestEnvironmentSearchPathsRejectUntrustedCodeDirectories(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			for _, value := range []string{trusted, trusted + ":" + trusted} {
 				u := parsedLaunchUnit{}
-				if err := u.applySafeEnvironment("llama.cpp", name+"="+value); err != nil {
+				if err := u.applySafeEnvironment(name + "=" + value); err != nil {
 					t.Fatalf("trusted search path rejected: %v", err)
 				}
 			}
 			for _, value := range []string{"", ":", ":" + trusted, trusted + ":", trusted + "::" + trusted, ".", "relative", trusted + ":.", filepath.Join(trusted, "missing"), worldWritable, sticky, link, file} {
 				u := parsedLaunchUnit{}
-				if err := u.applySafeEnvironment("llama.cpp", name+"="+value); !errors.Is(err, ErrLaunchUnsupported) {
+				if err := u.applySafeEnvironment(name + "=" + value); !errors.Is(err, ErrLaunchUnsupported) {
 					t.Errorf("unsafe search path %q accepted: %v", value, err)
 				}
 			}
@@ -50,12 +50,12 @@ func TestEnvironmentSearchPathsRejectUntrustedCodeDirectories(t *testing.T) {
 	// search list. Both supported separators require the same checks.
 	for _, value := range []string{";" + trusted, trusted + ";", trusted + ";;" + trusted, trusted + ";" + sticky} {
 		u := parsedLaunchUnit{}
-		if err := u.applySafeEnvironment("llama.cpp", "LD_LIBRARY_PATH="+value); err == nil {
+		if err := u.applySafeEnvironment("LD_LIBRARY_PATH=" + value); err == nil {
 			t.Errorf("unsafe dynamic linker search path %q accepted", value)
 		}
 	}
 	u := parsedLaunchUnit{}
-	if err := u.applySafeEnvironment("llama.cpp", "LD_LIBRARY_PATH="+trusted+";"+trusted); err != nil {
+	if err := u.applySafeEnvironment("LD_LIBRARY_PATH=" + trusted + ";" + trusted); err != nil {
 		t.Fatal("trusted semicolon-separated library directories rejected", err)
 	}
 }
@@ -64,27 +64,18 @@ func TestEnvironmentRejectsUnsupportedCodeLoadingOverrides(t *testing.T) {
 	for _, name := range []string{"LD_PRELOAD", "LD_AUDIT", "PYTHONHOME", "PYTHONUSERBASE", "PYTHONSTARTUP"} {
 		t.Run(name, func(t *testing.T) {
 			u := parsedLaunchUnit{}
-			err := u.applySafeEnvironment("llama.cpp", name+"=/PRIVATE_CODE_LOCATION")
+			err := u.applySafeEnvironment(name + "=/PRIVATE_CODE_LOCATION")
 			if !errors.Is(err, ErrLaunchUnsupported) || !strings.Contains(err.Error(), name) || strings.Contains(err.Error(), "PRIVATE_CODE_LOCATION") {
 				t.Fatalf("code-loading override accepted or disclosed: %v", err)
 			}
 			u = parsedLaunchUnit{}
-			if err := u.applySafeEnvironment("llama.cpp", name+"="); err != nil {
+			if err := u.applySafeEnvironment(name + "="); err != nil {
 				t.Fatal("disabled code-loading override rejected", err)
 			}
 		})
 	}
 	u := parsedLaunchUnit{}
-	if err := u.applySafeEnvironment("llama.cpp", "CUSTOM_HARMLESS_SETTING=literal"); err != nil || u.environmentValues["CUSTOM_HARMLESS_SETTING"] != "literal" {
+	if err := u.applySafeEnvironment("CUSTOM_HARMLESS_SETTING=literal"); err != nil || u.environmentValues["CUSTOM_HARMLESS_SETTING"] != "literal" {
 		t.Fatal("harmless unknown environment setting rejected", err)
-	}
-}
-
-func TestEnvironmentSearchPathCleanupDoesNotRequireExistingDirectories(t *testing.T) {
-	for _, name := range []string{"PATH", "LD_LIBRARY_PATH", "PYTHONPATH"} {
-		u := parsedLaunchUnit{cleanupEnvironment: true}
-		if err := u.applySafeEnvironment("llama.cpp", name+"=/removed/after/admission"); err != nil {
-			t.Fatalf("%s prevented exact invocation cleanup: %v", name, err)
-		}
 	}
 }

@@ -9,7 +9,7 @@ import (
 
 func TestOwnedBackstopOrderingAndRejectsInvalidPeers(t *testing.T) {
 	for _, id := range []string{"a", "m", "z"} {
-		p := ownedRenderProfile("llama.cpp", id, &control.OwnedLaunch{Port: 9100, ModelPath: "/models/m"})
+		p := ownedRenderProfile("vllm", id, &control.OwnedLaunch{Port: 9100, ModelPath: "/models/m"})
 		peers := []string{}
 		for _, other := range []string{"a", "m", "z"} {
 			if other != id {
@@ -31,7 +31,7 @@ func TestOwnedBackstopOrderingAndRejectsInvalidPeers(t *testing.T) {
 			}
 		}
 	}
-	p := ownedRenderProfile("llama.cpp", "m", &control.OwnedLaunch{Port: 9100, ModelPath: "/models/m"})
+	p := ownedRenderProfile("vllm", "m", &control.OwnedLaunch{Port: 9100, ModelPath: "/models/m"})
 	for _, peers := range []string{"foreign.service", p.Unit, "gws-owned-z.service gws-owned-a.service", "gws-owned-a.service gws-owned-a.service", "gws-owned-a.service\nAfter=external.service", "gws-owned-%n.service", "gws-owned-a.service  gws-owned-z.service", strings.Repeat("gws-owned-a.service ", 33)} {
 		p.NativeModel.Owned.Conflicts = peers
 		if _, err := RenderOwnedUnit(p); err == nil {

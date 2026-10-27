@@ -1,5 +1,4 @@
 """Guard the subset boundary, the exact deviation contract and the runtime report."""
-import base64
 import hashlib
 from functools import partial
 import importlib.metadata
@@ -102,10 +101,6 @@ def wheel(name, version="1.0", tag="py3-none-any", record="", files=()):
     texts = {"WHEEL": f"Wheel-Version: 1.0\nTag: {tag}\n" if tag else None, "RECORD": record}
     return SimpleNamespace(metadata={"Name": name}, version=version, files=[Path(file) for file in files],
                            read_text=texts.get)
-
-
-def record_hash(data):
-    return "sha256=" + base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
 
 
 def cuda_facts(**changes):

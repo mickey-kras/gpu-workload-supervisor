@@ -26,33 +26,22 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 	if n == nil || n.Owned == nil {
 		return nil, fmt.Errorf("%w: profile %s has no owned launch spec", ErrOwnedRender, p.ID)
 	}
-	// Ollama units are per instance so owned models can share them; the
-	// description must not embed a single workload's identity.
-	subject := string(p.ID)
-	if n.Runtime == "ollama" {
-		subject = "instance " + n.Instance
-	}
 	var b strings.Builder
 	if !control.ValidOwnedConflicts(p.Unit, n.Owned.Conflicts) {
 		return nil, fmt.Errorf("%w: invalid owned conflicts", ErrOwnedRender)
 	}
-	b.WriteString("[Unit]\nDescription=Supervisor-owned " + n.Runtime + " launch for " + subject + "\n")
+	b.WriteString("[Unit]\nDescription=Supervisor-owned " + n.Runtime + " launch for " + string(p.ID) + "\n")
 	b.WriteString(ownedDependencies(p.Unit, n.Owned.Conflicts))
 	b.WriteString("\n[Service]\nType=simple\nRestart=no\n")
 	var execStart string
 	executable := n.Owned.Executable
 	if executable == "" {
-		executable = ownedBinaryDirectory + "/" + map[string]string{"ollama": "ollama", "llama.cpp": "llama-server", "vllm": "vllm"}[n.Runtime]
+		executable = ownedBinaryDirectory + "/" + n.Runtime
 	}
 	if !control.ValidOwnedExecutable(n.Runtime, executable) {
 		return nil, fmt.Errorf("%w: unsupported executable", ErrOwnedRender)
 	}
 	switch n.Runtime {
-	case "ollama":
-		b.WriteString("Environment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=127.0.0.1:" + strconv.Itoa(int(n.Owned.Port)) + "\nEnvironment=OLLAMA_MAX_LOADED_MODELS=1\n")
-		execStart = executable + " serve"
-	case "llama.cpp":
-		execStart = renderOwnedLlamaCommand(executable, *n.Owned)
 	case "vllm":
 		execStart = executable + " serve " + n.Owned.ModelPath + " --host 127.0.0.1 --port " + strconv.Itoa(int(n.Owned.Port))
 		if n.Owned.MaxModelLen != 0 {
@@ -66,20 +55,6 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 	}
 	b.WriteString("ExecStart=" + execStart + "\n")
 	return []byte(b.String()), nil
-}
-
-func renderOwnedLlamaCommand(executable string, owned control.OwnedLaunch) string {
-	execStart := executable + " -m " + owned.ModelPath + " --host 127.0.0.1 --port " + strconv.Itoa(int(owned.Port))
-	if owned.CtxSize != 0 {
-		execStart += " --ctx-size " + strconv.FormatUint(uint64(owned.CtxSize), 10)
-	}
-	if owned.GPULayers != 0 {
-		execStart += " --n-gpu-layers " + strconv.FormatUint(uint64(owned.GPULayers), 10)
-	}
-	if owned.Alias != "" {
-		execStart += " --alias " + owned.Alias
-	}
-	return execStart
 }
 
 // OwnedCgroup derives the workload cgroup from the systemd manager root.
@@ -134,12 +109,9 @@ func ownedDependencies(unit, peers string) string {
 // are left to the strict parser to reject.
 func parseOwnedLaunchUnit(raw []byte, n control.NativeModel) (parsedLaunchUnit, error) {
 	if n.Owned == nil {
-		return parseLaunchUnit(raw, n.Runtime)
+		return parseLaunchUnit(raw)
 	}
-	unit := control.OwnedUnitName(n.Runtime, n.Instance, "")
-	if n.Runtime != "ollama" {
-		unit = filepath.Base(n.LaunchFile)
-	}
+	unit := filepath.Base(n.LaunchFile)
 	if !control.ValidOwnedConflicts(unit, n.Owned.Conflicts) {
 		return parsedLaunchUnit{}, ErrLaunchUnsupported
 	}
@@ -152,5 +124,5 @@ func parseOwnedLaunchUnit(raw []byte, n control.NativeModel) (parsedLaunchUnit, 
 		}
 		raw = []byte(lines[0] + "\n" + lines[1] + "\n" + strings.TrimPrefix(lines[2], dependencies))
 	}
-	return parseLaunchUnit(raw, n.Runtime)
+	return parseLaunchUnit(raw)
 }

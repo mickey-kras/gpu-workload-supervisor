@@ -95,24 +95,3 @@ func TestRecoveryObservedFailureRequiresSafeStopAndIndependentRelease(t *testing
 		}
 	}
 }
-
-func TestRecoveryStopsFailedSharedUnitWithoutModelRequests(t *testing.T) {
-	m, r, backend, show := sharedOllamaFixture(t)
-	r.outputs[show] = []byte("LoadState=loaded\nActiveState=failed\nSubState=failed\nControlGroup=\n")
-	// The fixed runner intentionally keeps failed state after reset; cleanup must
-	// attempt a real unit stop, then fail closed on the subsequent observation.
-	if _, err := m.ObserveForRecovery(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.Stop(context.Background(), "alpha"); err == nil {
-		t.Fatal("unchanged failed unit accepted after reset")
-	}
-	stop, reset := false, false
-	for _, call := range r.calls {
-		stop = stop || call == "/usr/bin/true --user stop -- ollama.service"
-		reset = reset || call == "/usr/bin/true --user reset-failed -- ollama.service"
-	}
-	if !stop || !reset || backend.psCalls != 0 || len(backend.requests) != 0 {
-		t.Fatalf("failed shared cleanup stop=%v reset=%v backend=%#v", stop, reset, backend)
-	}
-}

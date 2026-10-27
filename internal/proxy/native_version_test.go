@@ -16,17 +16,17 @@ func TestNativePolicyCatalogVersionGuard(t *testing.T) {
 	defer upstream.Close()
 	u, _ := url.Parse(upstream.URL)
 	profile := func(version int) control.CatalogSnapshot {
-		return control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: version, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "ollama", Model: "selected", Endpoint: upstream.URL}}}}}
+		return control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: version, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: upstream.URL}}}}}
 	}
 	for _, version := range []int{1, 2, 4} {
 		s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: profile(version)}
-		if _, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/api/generate"}}}); err != nil {
+		if _, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/v1/completions"}}}); err != nil {
 			t.Fatalf("catalog version %d refused: %v", version, err)
 		}
 	}
 	for _, version := range []int{0, 3, 99} {
 		s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: profile(version)}
-		if _, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/api/generate"}}}); err == nil {
+		if _, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/v1/completions"}}}); err == nil {
 			t.Fatalf("catalog version %d accepted", version)
 		}
 	}
@@ -43,7 +43,7 @@ func TestV4TrainerCatalogPreservesInferenceProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest("POST", "/api/generate", strings.NewReader(`{"model":"selected"}`))
+	req := httptest.NewRequest("POST", "/v1/completions", strings.NewReader(`{"model":"selected"}`))
 	req.Header.Set(DefaultRequestIDHeader, "v4-inference")
 	addLeaseHeaders(req, s.state.LeaseFence)
 	w := httptest.NewRecorder()

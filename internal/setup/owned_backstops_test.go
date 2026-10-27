@@ -94,22 +94,12 @@ func TestSetupOwnedBackstopsUpgradeRollbackAndPeerRemoval(t *testing.T) {
 	}
 }
 
-func TestSetupOwnedBackstopsSharedAndExternalUnits(t *testing.T) {
+func TestSetupOwnedBackstopsPeerAndExternalUnits(t *testing.T) {
 	_, home, request := fixture(t)
-	draft := ownedDraft("chat", 11434)
-	draft.App = "ollama"
-	draft.Model = "model-a"
-	draft.Binding.Owned = &DraftOwnedLaunch{Port: 11434}
-	chat, _, err := OwnedProfile(draft, "/user.slice/user-1000.slice/user@1000.service", home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	draft.ID = "code"
-	draft.Model = "model-b"
-	code, _, err := OwnedProfile(draft, "/user.slice/user-1000.slice/user@1000.service", home)
-	if err != nil {
-		t.Fatal(err)
-	}
+	chat, _ := ownedFixtureProfile(t, home, "chat", 9101)
+	chat.NativeModel.Instance = "chat"
+	code, _ := ownedFixtureProfile(t, home, "code", 9102)
+	code.NativeModel.Instance = "code"
 	media, _ := ownedFixtureProfile(t, home, "media", 9100)
 	media.NativeModel.Instance = "media"
 	external := request.Catalog.Profiles[0]
@@ -127,8 +117,8 @@ func TestSetupOwnedBackstopsSharedAndExternalUnits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoded.Catalog.Profiles[0].NativeModel.Owned.Conflicts != media.Unit || decoded.Catalog.Profiles[3].NativeModel.Owned.Conflicts != media.Unit || decoded.Catalog.Profiles[2].NativeModel.Owned.Conflicts != chat.Unit {
-		t.Fatal("shared/foreign dependencies", decoded.Catalog)
+	if decoded.Catalog.Profiles[0].NativeModel.Owned.Conflicts != code.Unit+" "+media.Unit || decoded.Catalog.Profiles[3].NativeModel.Owned.Conflicts != chat.Unit+" "+media.Unit || decoded.Catalog.Profiles[2].NativeModel.Owned.Conflicts != chat.Unit+" "+code.Unit {
+		t.Fatal("peer/foreign dependencies", decoded.Catalog)
 	}
 	after, _ := json.Marshal(decoded.Catalog.Profiles[1])
 	if string(before) != string(after) {
@@ -149,7 +139,7 @@ func TestSetupOwnedBackstopsSharedAndExternalUnits(t *testing.T) {
 		t.Fatal("adopted peer", err)
 	}
 	adoptedAfter, _ := json.Marshal(adoptedRequest.Catalog.Profiles[2])
-	if string(adoptedBefore) != string(adoptedAfter) || adoptedRequest.Catalog.Profiles[0].NativeModel.Owned.Conflicts != "" {
+	if string(adoptedBefore) != string(adoptedAfter) || adoptedRequest.Catalog.Profiles[0].NativeModel.Owned.Conflicts != code.Unit {
 		t.Fatal("adopted peer changed or kept dependency")
 	}
 	wrong := decoded.Catalog.Clone()

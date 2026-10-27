@@ -152,7 +152,7 @@ func TestTrainingContractDurableIdentityAndNoReplay(t *testing.T) {
 }
 
 func TestTrainingContractGenericPathsCannotCompleteTraining(t *testing.T) {
-	for _, operation := range []string{"finish-work", "recover", "rotate-incarnation", "update-state"} {
+	for _, operation := range []string{"finish-work", "recover", "rotate-incarnation", "update-state", "catalog", "rotate-fence", "begin-transition", "finish-transition", "transition-phase", "operator-precondition"} {
 		t.Run(operation, func(t *testing.T) {
 			s, _, revision := trainingContractStore(t)
 			ctx := context.Background()
@@ -179,6 +179,22 @@ func TestTrainingContractGenericPathsCannotCompleteTraining(t *testing.T) {
 				next.ActiveWorkload = control.WorkloadIdle
 				next.DesiredWorkload = control.WorkloadIdle
 				_, err = s.UpdateState(ctx, state.Version, next)
+			case "catalog":
+				snap, snapErr := s.Catalog(ctx)
+				if snapErr != nil {
+					t.Fatal(snapErr)
+				}
+				_, err = s.ReplaceCatalog(ctx, snap.Revision, snap.Catalog)
+			case "rotate-fence":
+				_, err = s.RotateFenceAndCloseAdmission(ctx, state.Version)
+			case "begin-transition":
+				_, err = s.StartTransition(ctx, state.Version, Transition{ID: "blocked-transition", Source: state, Target: state, Previous: state, Deadline: time.Now().Add(time.Minute), ConfigurationRevision: revision})
+			case "finish-transition":
+				_, err = s.FinishTransition(ctx, "blocked-transition", "committed", state.Version, state)
+			case "transition-phase":
+				_, err = s.SetTransitionPhase(ctx, "blocked-transition", state.Version, control.PhaseStable)
+			case "operator-precondition":
+				err = s.CheckOperatorPrecondition(ctx, control.OperatorPrecondition{Incarnation: state.LeaseFence.Incarnation, Version: state.Version, Owner: state.Owner, ConfigurationRevision: revision})
 			}
 			if !errors.Is(err, ErrTrainingPending) {
 				t.Fatalf("generic %s must reject pending training, got %v", operation, err)

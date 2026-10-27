@@ -104,18 +104,7 @@ func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) e
 	if err := m.verifyNativeBinding(ctx, p); err != nil {
 		return err
 	}
-	if m.sharedUnitProfile(p) {
-		if err := m.evictSharedOllamaUnit(ctx, p); err != nil {
-			return err
-		}
-	}
-	if err := m.startUnit(ctx, p.Unit, workload); err != nil {
-		return err
-	}
-	if p.NativeModel != nil {
-		return m.startNative(ctx, p)
-	}
-	return nil
+	return m.startUnit(ctx, p.Unit, workload)
 }
 
 // StopForRecovery shuts down every configured unit regardless of adapter policy.

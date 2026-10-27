@@ -20,7 +20,7 @@ func TestRenderOwnedGoldenOutput(t *testing.T) {
 	actions.managerCgroup = func(context.Context, string) (string, error) {
 		return "/user.slice/user-1000.slice/user@1000.service", nil
 	}
-	input := `{"draft":{"id":"vision","label":"Vision","app":"llama.cpp","binding":{"instance":"owned","owned":{"modelPath":"/models/vision.gguf","port":9100,"ctxSize":8192}}},"managerCgroup":"/user.slice/user-1000.slice/user@1000.service"}`
+	input := `{"draft":{"id":"vision","label":"Vision","app":"vllm","binding":{"instance":"owned","owned":{"modelPath":"/models/vision","port":9100,"maxModelLen":8192}}},"managerCgroup":"/user.slice/user-1000.slice/user@1000.service"}`
 	var output bytes.Buffer
 	if err := actions.run([]string{"render-owned"}, strings.NewReader(input), &output); err != nil {
 		t.Fatal(err)
@@ -54,7 +54,7 @@ func TestRenderOwnedGoldenOutput(t *testing.T) {
 	if result.LaunchFile != home+"/.config/systemd/user/gws-owned-vision.service" || len(result.SHA256) != 64 {
 		t.Fatalf("launch file %q sha %q", result.LaunchFile, result.SHA256)
 	}
-	if result.Profile.ID != "vision" || result.Profile.NativeModel.Runtime != "llama.cpp" || result.Profile.NativeModel.Owned.Port != 9100 {
+	if result.Profile.ID != "vision" || result.Profile.NativeModel.Runtime != "vllm" || result.Profile.NativeModel.Owned.Port != 9100 {
 		t.Fatalf("profile %+v", result.Profile)
 	}
 	if result.SHA256 != result.Profile.NativeModel.LaunchSHA256 {
@@ -86,7 +86,7 @@ func TestRenderOwnedVerifiesManagerCgroupAgainstHost(t *testing.T) {
 	actions.managerCgroup = func(context.Context, string) (string, error) {
 		return "/user.slice/user-1000.slice/user@1000.service", nil
 	}
-	input := `{"draft":{"id":"vision","label":"Vision","app":"llama.cpp","binding":{"instance":"owned","owned":{"modelPath":"/models/vision.gguf","port":9100}}},"managerCgroup":"/user.slice/user-1000.slice/user@1000.service"}`
+	input := `{"draft":{"id":"vision","label":"Vision","app":"vllm","binding":{"instance":"owned","owned":{"modelPath":"/models/vision","port":9100}}},"managerCgroup":"/user.slice/user-1000.slice/user@1000.service"}`
 	if err := actions.renderOwned(context.Background(), home, strings.NewReader(input), &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}

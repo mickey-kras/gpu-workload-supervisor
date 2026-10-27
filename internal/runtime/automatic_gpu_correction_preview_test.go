@@ -22,13 +22,13 @@ func writeCorrectionPreviewFile(t *testing.T, path, content string) {
 }
 
 func TestPreviewAutomaticGPUCorrectionPreservesEffectiveLaunchAndSources(t *testing.T) {
-	for _, app := range []string{"llama.cpp", "comfyui"} {
+	for _, app := range []string{"vllm", "comfyui"} {
 		t.Run(app, func(t *testing.T) {
 			home := t.TempDir()
-			executable := filepath.Join(home, "llama-server")
-			model := filepath.Join(home, "model.gguf")
-			writeCorrectionPreviewFile(t, model, "model fixture")
-			command := executable + " -m " + model + " --host 127.0.0.1 --port 8080"
+			executable := filepath.Join(home, "vllm")
+			model := filepath.Join(home, "model")
+			writeCorrectionPreviewFile(t, filepath.Join(model, "config.json"), "{}")
+			command := executable + " serve " + model + " --host 127.0.0.1 --port 8080"
 			endpoint := "http://127.0.0.1:8080"
 			if app == "comfyui" {
 				executable = filepath.Join(home, "python3")
@@ -54,7 +54,7 @@ func TestPreviewAutomaticGPUCorrectionPreservesEffectiveLaunchAndSources(t *test
 			if result.Command != command || result.Endpoint != endpoint || result.WorkingDirectory != home {
 				t.Fatalf("effective launch changed: %+v", result)
 			}
-			if app == "llama.cpp" && result.Model != model {
+			if app == "vllm" && result.Model != model {
 				t.Fatalf("model = %q", result.Model)
 			}
 			if result.SHA256 != fmt.Sprintf("%x", sha256.Sum256([]byte(original))) {
@@ -79,25 +79,25 @@ func TestPreviewAutomaticGPUCorrectionPreservesEffectiveLaunchAndSources(t *test
 
 func TestPreviewAutomaticGPUCorrectionRejectsInvalidLaunch(t *testing.T) {
 	home := t.TempDir()
-	executable := filepath.Join(home, "llama-server")
+	executable := filepath.Join(home, "vllm")
 	writeCorrectionPreviewFile(t, executable, "fixture, never executed")
 	fragment := filepath.Join(home, "app.service")
-	if _, err := PreviewAutomaticGPUCorrection(fragment, "llama.cpp", nil, "0"); !errors.Is(err, ErrGPUIdentityUnresolved) {
+	if _, err := PreviewAutomaticGPUCorrection(fragment, "vllm", nil, "0"); !errors.Is(err, ErrGPUIdentityUnresolved) {
 		t.Fatalf("invalid UUID accepted or source read first: %v", err)
 	}
-	if _, err := PreviewAutomaticGPUCorrection(fragment, "llama.cpp", nil, previewCorrectionUUID); err == nil {
+	if _, err := PreviewAutomaticGPUCorrection(fragment, "vllm", nil, previewCorrectionUUID); err == nil {
 		t.Fatal("missing source accepted")
 	}
 	for _, tc := range []struct {
 		name, content string
 		want          error
 	}{
-		{"unsupported directive", "[Service]\nEnvironmentFile=/missing/environment\nExecStart=" + executable + " -m /missing/model.gguf\n", ErrLaunchUnsupported},
-		{"missing model", "[Service]\nEnvironment=CUDA_VISIBLE_DEVICES=0\nExecStart=" + executable + " -m " + filepath.Join(home, "missing.gguf") + " --host 127.0.0.1 --port 8080\n", ErrModelUnavailable},
+		{"unsupported directive", "[Service]\nEnvironmentFile=/missing/environment\nExecStart=" + executable + " serve /missing/model\n", ErrLaunchUnsupported},
+		{"missing model", "[Service]\nEnvironment=CUDA_VISIBLE_DEVICES=0\nExecStart=" + executable + " serve " + filepath.Join(home, "missing") + " --host 127.0.0.1 --port 8080\n", ErrModelUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			writeCorrectionPreviewFile(t, fragment, tc.content)
-			if _, err := PreviewAutomaticGPUCorrection(fragment, "llama.cpp", nil, previewCorrectionUUID); !errors.Is(err, tc.want) {
+			if _, err := PreviewAutomaticGPUCorrection(fragment, "vllm", nil, previewCorrectionUUID); !errors.Is(err, tc.want) {
 				t.Fatalf("GPU correction hid launch failure: %v", err)
 			}
 		})
@@ -108,19 +108,19 @@ func TestPreviewAutomaticGPUCorrectionReservesDropInSlot(t *testing.T) {
 	for _, count := range []int{31, 32} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			home := t.TempDir()
-			executable := filepath.Join(home, "llama-server")
-			model := filepath.Join(home, "model.gguf")
+			executable := filepath.Join(home, "vllm")
+			model := filepath.Join(home, "model")
 			fragment := filepath.Join(home, "app.service")
 			writeCorrectionPreviewFile(t, executable, "fixture, never executed")
-			writeCorrectionPreviewFile(t, model, "model fixture")
-			writeCorrectionPreviewFile(t, fragment, "[Service]\nEnvironment=CUDA_VISIBLE_DEVICES=0\nExecStart="+executable+" -m "+model+" --host 127.0.0.1 --port 8080\n")
+			writeCorrectionPreviewFile(t, filepath.Join(model, "config.json"), "{}")
+			writeCorrectionPreviewFile(t, fragment, "[Service]\nEnvironment=CUDA_VISIBLE_DEVICES=0\nExecStart="+executable+" serve "+model+" --host 127.0.0.1 --port 8080\n")
 			var paths []string
 			for i := range count {
 				path := filepath.Join(home, "app.service.d", fmt.Sprintf("%02d-existing.conf", i))
 				writeCorrectionPreviewFile(t, path, "[Service]\nEnvironment=CUDA_VISIBLE_DEVICES=0\n")
 				paths = append(paths, path)
 			}
-			_, err := PreviewAutomaticGPUCorrection(fragment, "llama.cpp", paths, previewCorrectionUUID)
+			_, err := PreviewAutomaticGPUCorrection(fragment, "vllm", paths, previewCorrectionUUID)
 			if count == 32 {
 				if !errors.Is(err, ErrLaunchUnsupported) {
 					t.Fatalf("exhausted drop-in limit accepted: %v", err)

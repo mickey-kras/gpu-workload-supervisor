@@ -64,12 +64,6 @@ func (b *observedBody) Close() error { return b.body.Close() }
 
 func newTerminalDetector(path, contentType string) terminalDetector {
 	switch path {
-	case "/api/generate", "/api/chat":
-		return &ollamaStreamDetector{}
-	case "/api/embed":
-		return &objectKeyDetector{key: "embeddings"}
-	case "/api/embeddings":
-		return &objectKeyDetector{key: "embedding"}
 	case "/v1/embeddings":
 		return &objectKeyDetector{key: "data"}
 	case "/v1/chat/completions", "/v1/completions":
@@ -96,62 +90,6 @@ func (b *observedBuffer) add(chunk []byte) bool {
 	}
 	b.data = append(b.data, chunk...)
 	return true
-}
-
-// Ollama streams newline-delimited objects and terminates with a "done":true
-// object; a non-streaming response is that same object as a single line.
-type ollamaStreamDetector struct {
-	buf      observedBuffer
-	terminal bool
-}
-
-func (d *ollamaStreamDetector) observe(chunk []byte, eof bool) bool {
-	if d.terminal || !d.buf.add(chunk) {
-		return d.terminal
-	}
-	for {
-		line, rest, found := bytes.Cut(d.buf.data, []byte{'\n'})
-		if !found {
-			break
-		}
-		d.buf.data = rest
-		if d.line(line) || d.buf.dead {
-			return d.terminal
-		}
-	}
-	if eof && len(bytes.TrimSpace(d.buf.data)) > 0 {
-		d.line(d.buf.data)
-	}
-	return d.terminal
-}
-
-func (d *ollamaStreamDetector) line(line []byte) bool {
-	done, valid := ollamaLineDone(line)
-	if !valid {
-		d.buf.dead = true
-		return false
-	}
-	if done {
-		d.terminal = true
-	}
-	return d.terminal
-}
-
-func ollamaLineDone(line []byte) (done, valid bool) {
-	line = bytes.TrimSpace(line)
-	if len(line) == 0 {
-		return false, true
-	}
-	if strictjson.Check(json.NewDecoder(bytes.NewReader(line))) != nil {
-		return false, false
-	}
-	var object struct {
-		Done bool `json:"done"`
-	}
-	if err := json.Unmarshal(line, &object); err != nil {
-		return false, false
-	}
-	return object.Done, true
 }
 
 // OpenAI-compatible servers terminate event streams with a "data: [DONE]"

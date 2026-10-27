@@ -78,7 +78,7 @@ func TestForwardingFailureNeedsVerifiedAuditedResolution(t *testing.T) {
 	}
 	controller.config.DrainTimeout = drainTimeout
 
-	proxyLock, err := lock.AcquireShared(dbPath + ".proxy.lock")
+	proxyLock, err := lock.AcquireContext(context.Background(), dbPath+".proxy.lock", true)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,5 +1,5 @@
-// Render production GTK widgets with injected transport; consented temporary
-// operations are simulated and recorded without invoking any real service.
+// Render production GTK widgets with injected transport; backend commands are
+// simulated and recorded without invoking any real service.
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Adw from 'gi://Adw?version=1';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
@@ -58,22 +58,19 @@ const calls = [];
 let mode = 'stopped';
 let installationReply = null;
 let deferDiscovery = false;
-let temporaryReply = null;
-let cleanupFails = false;
 const commandRecords = [];
 const longUnit = 'comfyui-production-rendering-installation-with-long-service-identity.service';
 const longLocation = `/home/example/.config/systemd/user/${longUnit}`;
 const longEndpoint = 'http://127.0.0.1:18188';
-const temporaryConsentLabel = 'I allow this brief start and will keep other application controls paused.';
 const serviceIdentity = `Service: ${longUnit} · ${longLocation}`;
 const longIdentity = `${serviceIdentity} · ${longEndpoint}`;
 const diagnosticEvidence = 'ExecStart: /home/example/Applications/ComfyUI-production-rendering-environment/bin/python /home/example/Applications/ComfyUI-production-rendering-environment/main.py --listen 127.0.0.1 --port 18188';
 
-const candidate = {app: 'ollama', label: 'Ollama', unit: 'example-model.service',
-    endpoint: 'http://127.0.0.1:11434', cgroup: '/example/model', location: '/example/model.service',
+const candidate = {app: 'vllm', label: 'vLLM', unit: 'example-model.service',
+    endpoint: 'http://127.0.0.1:8000', cgroup: '/example/model', location: '/example/model.service',
     recognized: true, configurationStatus: 'ready', instanceStatus: 'not-running', inventoryStatus: 'available',
     models: [{id: 'example-small', label: 'Example small'}, {id: 'example-large', label: 'Example large'}],
-    binding: {unit: 'example-model.service', cgroup: '/example/model', healthURL: 'http://127.0.0.1:11434/api/tags', launchFile: '/example/model.service'}};
+    binding: {unit: 'example-model.service', cgroup: '/example/model', healthURL: 'http://127.0.0.1:8000/health', launchFile: '/example/model.service'}};
 const comfy = {...candidate, app: 'comfyui', label: 'ComfyUI', unit: 'example-image.service', models: [],
     binding: {...candidate.binding, unit: 'example-image.service', model: ''}};
 const repairUUID = 'GPU-01234567-89ab-cdef-0123-456789abcdef';
@@ -97,13 +94,13 @@ function stateCandidate(state) {
     if (state === 'installed-blocked') Object.assign(result, {installed: true, recognized: false, endpoint: undefined, cgroup: undefined, binding: undefined, configurationStatus: 'gpu-unresolved', diagnostics: ['CUDA_VISIBLE_DEVICES requires a full GPU UUID.', 'Restart policy is unsupported.', 'Executable /private-runtime-secret is not root-owned.']});
     return result;
 }
-async function command(argv, input, operation) {
+async function command(argv, input) {
     const action = argv[1]; calls.push(action);
     commandRecords.push({action, input: input ? JSON.parse(input) : null});
-    assert(!['apply', 'render-owned', 'temporary-start'].includes(action), `unexpected mutation: ${action}`);
+    assert(!['apply', 'render-owned'].includes(action), `unexpected mutation: ${action}`);
     if (action === '--version') return 'GNOME Shell 50.1';
     if (action === 'discover') {
-        const discovery = {gpuUUIDs: mode === 'installed-blocked' ? repairInventory : [repairUUID], gpuInventoryStatus: mode === 'installed-blocked' && !repairInventory.length ? 'unavailable' : 'available', request: {profile: {statePath: '/example/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: []}}, units: [], applications: mode === 'missing' ? [] : mode === 'temporary' ? [{...candidate, configurationStatus: 'model-required', models: []}] : mode === 'mixed-unresolved' ? [comfy, {...candidate, recognized: false, binding: undefined, instanceStatus: 'invalid', configurationStatus: 'unsupported', models: []}] : ['ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed', 'installed-blocked'].includes(mode) ? [stateCandidate(mode)] : [comfy, candidate], errors: mode === 'error' ? ['Example discovery unavailable.'] : []};
+        const discovery = {gpuUUIDs: mode === 'installed-blocked' ? repairInventory : [repairUUID], gpuInventoryStatus: mode === 'installed-blocked' && !repairInventory.length ? 'unavailable' : 'available', request: {profile: {statePath: '/example/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: []}}, units: [], applications: mode === 'missing' ? [] : mode === 'mixed-unresolved' ? [comfy, {...candidate, recognized: false, binding: undefined, instanceStatus: 'invalid', configurationStatus: 'unsupported', models: []}] : ['ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed', 'installed-blocked'].includes(mode) ? [stateCandidate(mode)] : [comfy, candidate], errors: mode === 'error' ? ['Example discovery unavailable.'] : []};
         if (deferDiscovery) {
             deferDiscovery = false;
             return await new Promise(resolve => { installationReply = result => { installationReply = null; resolve(JSON.stringify({...discovery, applications: [result]})); }; });
@@ -111,21 +108,7 @@ async function command(argv, input, operation) {
         return JSON.stringify(discovery);
     }
     if (action === 'correct-gpu') return JSON.stringify({fingerprint: 'native-preview', content: `[Service]\nEnvironment="CUDA_VISIBLE_DEVICES=${repairUUID}"\n`, applied: false});
-    if (action === 'temporary-status') return JSON.stringify(mode === 'temporary' ? {available: true, expected: {fixture: 'native-read-only'}} : {available: false});
     if (action === 'probe') return await new Promise(resolve => { deferDiscovery = false; installationReply = result => { installationReply = null; resolve(JSON.stringify(result)); }; });
-    if (action === 'temporary-discover') {
-        const request = JSON.parse(input);
-        assert(request.consent === true && request.externalControlPaused === true && request.unit === candidate.unit, 'temporary fixture requires explicit consent for the selected service');
-        return await new Promise(resolve => {
-            temporaryReply = result => { temporaryReply = null; resolve(JSON.stringify(result)); };
-            operation.cancel = () => temporaryReply?.({session: {id: 'native-session', token: 'fixture-token', status: 'cleanup_required'}, error: 'Cancelled temporary check'});
-        });
-    }
-    if (action === 'temporary-cleanup') {
-        const request = JSON.parse(input);
-        assert(request.id === 'native-session' && request.token === 'fixture-token' && request.externalControlPaused, 'cleanup must retain exact consented session identity');
-        return JSON.stringify({session: {id: request.id, token: request.token, status: cleanupFails ? 'cleanup_required' : 'completed'}, ...(cleanupFails ? {error: 'Fixture cleanup failed; application stopped state is unconfirmed.'} : {})});
-    }
     if (action === 'drafts') return JSON.stringify({revision: 'fixture', drafts: []});
     if (action === 'prepare') {
         const {draft} = JSON.parse(input);
@@ -133,7 +116,7 @@ async function command(argv, input, operation) {
         return JSON.stringify({profile: {id: draft.id, label: draft.label, adapter: 'systemd', unit: installation.unit,
             cgroup: installation.cgroup, healthURL: installation.binding.healthURL, bootPolicy: 'stop-to-idle',
             ...(draft.app === 'comfyui' ? {launchBinding: {runtime: 'comfyui', launchFile: comfy.binding.launchFile}} :
-                {nativeModel: {runtime: 'ollama', model: draft.model, endpoint: candidate.endpoint, launchFile: candidate.binding.launchFile}})}});
+                {nativeModel: {runtime: 'vllm', model: draft.model, endpoint: candidate.endpoint, launchFile: candidate.binding.launchFile}})}});
     }
     if (action === 'fingerprint') return JSON.stringify({sha256: 'generic-fixture-sha'});
     if (action === 'validate') return JSON.stringify({changes: ['Configure the selected existing model.']});
@@ -177,7 +160,9 @@ app.connect('activate', () => {
             assert(Number(x11.WIDTH) === Number(width) * scale, `native window width mismatch: geometry=${JSON.stringify(startup)}`);
             assert(Number(x11.HEIGHT) === Number(height) * scale, `native window height mismatch: geometry=${JSON.stringify(startup)}`);
             const appImages = widgets(ui.window).filter(widget => widget.has_css_class('setup-icon-tile')).flatMap(tile => widgets(tile).filter(widget => widget instanceof Gtk.Image || widget instanceof Gtk.Picture));
-            assert(appImages.length >= 4, 'all four application icons are rendered');
+            assert(appImages.length >= 2, 'both application icons are rendered');
+            // A slow compositor can map the window before it allocates every icon.
+            for (let attempt = 0; attempt < 40 && appImages.some(image => image.get_width() === 0); attempt++) await delay(50);
             startup.icons = appImages.map(image => ({widget: image.constructor.name,
                 width: image.get_width(), height: image.get_height(),
                 intrinsicWidth: image.paintable?.get_intrinsic_width(), intrinsicHeight: image.paintable?.get_intrinsic_height()}));
@@ -389,7 +374,7 @@ app.connect('activate', () => {
             footerTop: footerBounds.get_y(), reportY: reportBounds.get_y(), reportHeight: reportBounds.get_height(),
             scrollValue: ui.scroll.get_vadjustment().value});
         ui.scroll.get_vadjustment().value = 0; ui.findApplication.grab_focus(); await delay(80);
-        assert(ui.applicationCards.size === 4, 'all application cards exist');
+        assert(ui.applicationCards.size === 2, 'all application cards exist');
         for (const card of ui.applicationCards.values()) {
             assert(card.select instanceof Gtk.CheckButton, 'selection is a native checkbox');
             assert(card.gear.tooltip_text?.length > 0, 'settings button has accessible description');
@@ -401,10 +386,10 @@ app.connect('activate', () => {
         run(['xdotool', 'key', 'Tab']); await delay(50);
         assert(ui.window.get_focus() !== null && ui.window.get_focus() !== firstFocus, 'Tab advances to a different native focus target');
         await capture(ui, 'applications-keyboard-focus');
-        const settingsGear = ui.applicationCards.get('ollama').gear;
+        const settingsGear = ui.applicationCards.get('vllm').gear;
         await tabTo(ui, settingsGear);
         const settingsScroll = ui.scroll.get_vadjustment().value;
-        await activate(ui, settingsGear, 'Ollama');
+        await activate(ui, settingsGear, 'vLLM');
         assert(ui.review.label === 'Use installation' && ui.later.label === 'Cancel', 'main settings uses fixed confirmation and cancel actions');
         assert(!ui.applicationGroup.get_mapped(), 'settings hides unrelated application cards');
         const selectedBeforeCancel = JSON.stringify(ui.drafts);
@@ -421,28 +406,27 @@ app.connect('activate', () => {
         assert(JSON.stringify(ui.drafts) === selectedBeforeCancel, 'chooser cancellation preserves service and model selections');
         await capture(ui, 'installation-selection');
         await tabTo(ui, ui.review); run(['xdotool', 'key', 'space']); await delay(100);
-        assert(ui.heading.label === 'Ollama' && ownsFocus(ui, named(ui, 'Change installation…')), 'Done restores main settings and originating navigation focus');
+        assert(ui.heading.label === 'vLLM' && ownsFocus(ui, named(ui, 'Change installation…')), 'Done restores main settings and originating navigation focus');
         await capture(ui, 'application-settings');
         await tabTo(ui, ui.later); run(['xdotool', 'key', 'space']); await delay(150);
         assert(ui.heading.label === 'Choose your applications', 'Cancel restores the originating screen');
         assert(ownsFocus(ui, settingsGear), 'Cancel restores the originating gear focus');
         assert(Math.abs(ui.scroll.get_vadjustment().value - settingsScroll) < 1, 'Cancel restores originating scroll position');
-        assert(ui.applicationCards.get('ollama').select.active, 'Cancel retains the selected application');
+        assert(ui.applicationCards.get('vllm').select.active, 'Cancel retains the selected application');
         assert(JSON.stringify(ui.drafts) === selectedBeforeCancel, 'Cancel retains selected service and model');
         await capture(ui, 'application-settings-return');
         ui.applicationCards.get('comfyui').select.active = true;
-        ui.applicationCards.get('ollama').select.active = true;
+        ui.applicationCards.get('vllm').select.active = true;
         await capture(ui, 'applications-selected');
         await tabTo(ui, ui.review);
         await inspect('applications', 'applications-continue', 'Continue');
         await activate(ui, ui.review, 'Choose models');
         await inspect('models', 'models-arrival', 'Back');
-        for (const label of ['Example small', 'Example large']) {
-            const model = byLabel(ui.window, label);
-            assert(model && model.get_mapped(), 'native model choice is visible');
-            await tabTo(ui, model); run(['xdotool', 'key', 'space']); await delay(40);
-            assert(model.active, 'keyboard selects an existing model');
-        }
+        const model = widgets(ui.window).find(widget => widget instanceof Adw.ComboRow && widget.title === 'Model' && widget.get_mapped());
+        assert(model, 'native model choice is visible');
+        await tabTo(ui, model);
+        model.selected = 1; await delay(40);
+        assert(model.selected === 1, 'an existing model is selected');
         const chooser = widgets(ui.window).find(widget => widget instanceof Gtk.Button && widget.label === 'Choose another model…' && widget.get_mapped());
         assert(chooser, 'native model chooser disclosure exists');
         await tabTo(ui, chooser);
@@ -458,7 +442,7 @@ app.connect('activate', () => {
         await activate(ui, ui.review, 'Ready to finish');
         await inspect('review', 'review-arrival', 'Back');
         assert(ui.apply.sensitive, 'review unlocks final confirmation');
-        assert(calls.filter(action => action === 'prepare').length === 3, 'review prepares three selected workloads');
+        assert(calls.filter(action => action === 'prepare').length === 2, 'review prepares two selected workloads');
         await tabTo(ui, ui.apply);
         await inspect('review', 'review-finish', 'Finish setup');
         await capture(ui, 'review');
@@ -579,30 +563,30 @@ app.connect('activate', () => {
             await closeAndVerify(ui, state);
         }
         ui = await open('mixed-unresolved');
-        for (const appID of ['comfyui', 'ollama']) {
+        for (const appID of ['comfyui', 'vllm']) {
             const select = ui.applicationCards.get(appID).select;
             await tabTo(ui, select); run(['xdotool', 'key', 'space']); await delay(40);
             assert(select.active, 'keyboard checkbox records included application intent');
         }
-        const unresolvedGear = ui.applicationCards.get('ollama').gear;
-        await activate(ui, unresolvedGear, 'Ollama');
+        const unresolvedGear = ui.applicationCards.get('vllm').gear;
+        await activate(ui, unresolvedGear, 'vLLM');
         await settingsTree(ui, 'included-unresolved-settings', 'Back', [button('Use installation', false), button('View details'), button('Cancel')], [], ['Needs setup']);
         await capture(ui, 'included-unresolved-settings');
         await activate(ui, named(ui, 'View details'), 'Configuration details');
         await settingsTree(ui, 'included-unresolved-details', 'Back', [button('Copy details'), button('Check again'), button('Cancel')]);
         await tabTo(ui, ui.later); run(['xdotool', 'key', 'space']); await delay(80);
-        assert(ui.applicationCards.get('ollama').select.active && ownsFocus(ui, unresolvedGear), 'Cancel preserves include intent and returns keyboard focus');
+        assert(ui.applicationCards.get('vllm').select.active && ownsFocus(ui, unresolvedGear), 'Cancel preserves include intent and returns keyboard focus');
         await activate(ui, ui.applicationCards.get('comfyui').gear, 'ComfyUI');
         await activate(ui, ui.review, 'Choose models');
         await tabTo(ui, ui.review); run(['xdotool', 'key', 'space']); await delay(100);
         assert(ui.heading.label === 'Choose models' && !ui.apply.sensitive, 'included unresolved model/configuration blocks confirmation');
         await capture(ui, 'included-unresolved-blocked');
         await activate(ui, ui.back, 'Choose your applications');
-        const unresolvedSelect = ui.applicationCards.get('ollama').select;
+        const unresolvedSelect = ui.applicationCards.get('vllm').select;
         await tabTo(ui, unresolvedSelect); run(['xdotool', 'key', 'space']); await delay(50);
         assert(!unresolvedSelect.active && ui.applicationCards.get('comfyui').select.active, 'keyboard deselection retains valid application');
         await activate(ui, ui.review, 'Ready to finish');
-        await settingsTree(ui, 'included-valid-rest-review', 'Back', [button('Finish setup'), button('Back')], ['Ollama']);
+        await settingsTree(ui, 'included-valid-rest-review', 'Back', [button('Finish setup'), button('Back')], ['vLLM']);
         await capture(ui, 'included-valid-rest-review');
         await closeAndVerify(ui, 'mixed-unresolved');
         ui = await open('ready');
@@ -682,55 +666,6 @@ app.connect('activate', () => {
         await capture(ui, 'settings-stale-endpoint-check');
         await closeAndVerify(ui, 'stale-endpoint-check');
 
-        ui = await open('temporary');
-        ui.applicationCards.get('ollama').select.active = true;
-        await activate(ui, ui.review, 'Choose models');
-        const consent = byLabel(ui.window, temporaryConsentLabel);
-        const start = named(ui, 'Start Ollama briefly to list models');
-        assert(consent?.get_mapped() && !start.sensitive, 'temporary model detection requires native explicit consent');
-        wrapping(ui, temporaryConsentLabel);
-        await settingsTree(ui, 'temporary-without-consent', 'Back', [button('Start Ollama briefly to list models', false), {name: temporaryConsentLabel, role: 'check box', sensitive: true}]);
-        await capture(ui, 'temporary-without-consent');
-        await tabTo(ui, consent); run(['xdotool', 'key', 'space']); await delay(60);
-        assert(start.sensitive, 'native consent enables temporary detection');
-        await tabTo(ui, start); run(['xdotool', 'key', 'space']);
-        await waitFor(() => temporaryReply, 'consented temporary check begins');
-        await capture(ui, 'temporary-checking');
-        cleanupFails = true;
-        temporaryReply({session: {id: 'native-session', token: 'fixture-token', status: 'cleanup_required'}, error: 'Fixture previous stopped state not restored.'});
-        await waitFor(() => start.label === 'Retry Ollama cleanup', 'failed cleanup offers explicit retry');
-        await tabTo(ui, start);
-        await settingsTree(ui, 'temporary-cleanup-required', 'Retry Ollama cleanup', [button('Retry Ollama cleanup')], [], ['previous stopped state']);
-        await capture(ui, 'temporary-cleanup-required');
-        const prepareCount = calls.filter(action => action === 'prepare').length;
-        await tabTo(ui, ui.review); run(['xdotool', 'key', 'space']); await delay(80);
-        assert(calls.filter(action => action === 'prepare').length === prepareCount && !ui.apply.sensitive, 'unrestored temporary check blocks configuration review');
-        ui.window.close(); await delay(120);
-        assert(ui.window.get_visible(), 'failed temporary cleanup vetoes closing the real native window');
-        await capture(ui, 'temporary-close-blocked');
-        cleanupFails = false;
-        await tabTo(ui, start); run(['xdotool', 'key', 'space']);
-        await waitFor(() => !ui.draftEditors.some(editor => editor.temporaryActive()), 'retry restores stopped state and clears cleanup block');
-        assert(start.label === 'Start Ollama briefly to list models' && !start.is_sensitive() && !consent.active,
-            'completed temporary cleanup restores the start action and resets consent');
-        await capture(ui, 'temporary-cleanup-complete');
-        await closeAndVerify(ui, 'temporary-cleanup');
-        ui = await open('temporary');
-        ui.applicationCards.get('ollama').select.active = true;
-        await activate(ui, ui.review, 'Choose models');
-        const cancelConsent = byLabel(ui.window, temporaryConsentLabel);
-        assert(cancelConsent?.get_mapped() && cancelConsent.is_sensitive(), 'cancel-path consent is the actual sensitive native checkbox');
-        await tabTo(ui, cancelConsent); run(['xdotool', 'key', 'space']); await delay(30);
-        await tabTo(ui, named(ui, 'Start Ollama briefly to list models')); run(['xdotool', 'key', 'space']);
-        await waitFor(() => temporaryReply, 'cancel-path temporary check begins');
-        await tabTo(ui, named(ui, 'Cancel model detection')); run(['xdotool', 'key', 'space']);
-        await waitFor(() => temporaryReply === null && !ui.draftEditors.some(editor => editor.temporaryActive()), 'native cancellation waits for stopped-state restoration');
-        const cancelledStart = named(ui, 'Start Ollama briefly to list models');
-        assert(cancelledStart.label === 'Start Ollama briefly to list models' && !cancelledStart.is_sensitive() &&
-            !cancelConsent.active && !ui.drafts.at(-1).model,
-            'cancelled detection restores the start action, resets consent and cannot accept a late model inventory');
-        await capture(ui, 'temporary-cancelled-restored');
-        await closeAndVerify(ui, 'temporary-cancelled');
         const report = {theme, width: Number(width), height: Number(height), scale: Number(GLib.getenv('GDK_SCALE') || 1),
             dark: style.dark, highContrast: style.high_contrast, calls, commandRecords, geometry, screenshots, lifetime, criticalLogs,
             scope: 'Production GTK factory with injected generic backend; screenshots and accessibility only. No GNOME Shell, real service startup, or GPU operation qualified.',

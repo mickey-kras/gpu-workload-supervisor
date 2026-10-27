@@ -4,14 +4,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
-	"syscall"
 
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 )
-
-const llamaServerExecutable = "llama-server"
 
 // Only known executable names at standard locations and a bounded number of
 // explicit PATH directories are inspected. No directories are scanned and no
@@ -30,11 +26,8 @@ func executableDiscoveryPaths(path string) []ProbeRequest {
 			continue
 		}
 		seen[directory] = true
-		for _, app := range []string{"ollama", appLlamaCPP, "vllm"} {
+		for _, app := range []string{"vllm"} {
 			name := app
-			if app == appLlamaCPP {
-				name = llamaServerExecutable
-			}
 			requests = append(requests, ProbeRequest{App: app, Reference: filepath.Join(directory, name), ReferenceKind: "application"})
 		}
 	}
@@ -87,21 +80,15 @@ func inspectInstalledExecutables(ctx context.Context, requests []ProbeRequest, s
 func relevantExecutablePaths(home string) []ProbeRequest {
 	paths := []ProbeRequest{}
 	if filepath.IsAbs(home) && filepath.Clean(home) == home {
-		for _, app := range []string{"ollama", appLlamaCPP, "vllm"} {
+		for _, app := range []string{"vllm"} {
 			name := app
-			if app == appLlamaCPP {
-				name = llamaServerExecutable
-			}
 			paths = append(paths, ProbeRequest{App: app, Reference: filepath.Join(home, ".local/bin", name), ReferenceKind: "application"})
 		}
 		paths = append(paths, savedExecutablePaths(home)...)
 		paths = append(paths, localAIExecutablePaths(home)...)
 	}
-	for _, app := range []string{"ollama", appLlamaCPP, "vllm"} {
+	for _, app := range []string{"vllm"} {
 		name := app
-		if app == appLlamaCPP {
-			name = llamaServerExecutable
-		}
 		for _, dir := range []string{filepath.Join("/opt", app), filepath.Join("/opt", app, "bin")} {
 			paths = append(paths, ProbeRequest{App: app, Reference: filepath.Join(dir, name), ReferenceKind: "application"})
 		}
@@ -111,29 +98,9 @@ func relevantExecutablePaths(home string) []ProbeRequest {
 
 func localAIExecutablePaths(home string) []ProbeRequest {
 	paths := []ProbeRequest{}
-	for _, app := range []string{"ollama", "vllm"} {
-		for _, directory := range []string{app, app + "-supervisor"} {
-			for _, bin := range []string{"bin", ".venv/bin"} {
-				paths = append(paths, ProbeRequest{App: app, Reference: filepath.Join(home, "AI", directory, bin, app), ReferenceKind: "application"})
-			}
-		}
-	}
-	// Inspect one bounded level of the versioned Ollama install root. Never
-	// walk model/cache trees or run a discovered executable.
-	root := filepath.Join(home, "AI", "ollama")
-	directory, err := os.OpenFile(root, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return paths
-	}
-	defer directory.Close()
-	entries, err := directory.ReadDir(33)
-	if err != nil && len(entries) == 0 || len(entries) > 32 {
-		return paths
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-	for _, entry := range entries {
-		if entry.IsDir() && entry.Name()[0] >= '0' && entry.Name()[0] <= '9' {
-			paths = append(paths, ProbeRequest{App: "ollama", Reference: filepath.Join(root, entry.Name(), "bin", "ollama"), ReferenceKind: "application"})
+	for _, directory := range []string{"vllm", "vllm-supervisor"} {
+		for _, bin := range []string{"bin", ".venv/bin"} {
+			paths = append(paths, ProbeRequest{App: "vllm", Reference: filepath.Join(home, "AI", directory, bin, "vllm"), ReferenceKind: "application"})
 		}
 	}
 	return paths

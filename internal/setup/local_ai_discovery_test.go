@@ -2,16 +2,15 @@ package setup
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
+	"strings"
 	"testing"
 )
 
 func TestLocalAIInstallationsAreDiscoveredWhileStopped(t *testing.T) {
 	home := t.TempDir()
-	paths := []string{"AI/ollama/0.40.2/bin/ollama", "AI/vllm-supervisor/.venv/bin/vllm"}
+	paths := []string{"AI/ollama/0.40.2/bin/ollama", "AI/ollama/bin/ollama", "AI/vllm-supervisor/.venv/bin/vllm"}
 	for _, relative := range paths {
 		path := filepath.Join(home, relative)
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
@@ -23,37 +22,23 @@ func TestLocalAIInstallationsAreDiscoveredWhileStopped(t *testing.T) {
 	}
 	requests := relevantExecutablePaths(home)
 	found := inspectInstalledExecutables(context.Background(), requests, os.Lstat, func(string, string) error { return nil }, filepath.EvalSymlinks)
-	if len(found) != 2 {
-		t.Fatalf("want two stopped installations, got %+v", found)
+	if len(found) != 1 || found[0].App != "vllm" {
+		t.Fatalf("want only the stopped vLLM installation, got %+v", found)
 	}
-	for _, candidate := range found {
-		if !candidate.Recognized || !candidate.Installed || candidate.Binding == nil || candidate.Binding.Owned == nil {
-			t.Fatalf("missing executable evidence: %+v", candidate)
-		}
+	if !found[0].Recognized || !found[0].Installed || found[0].Binding == nil || found[0].Binding.Owned == nil {
+		t.Fatalf("missing executable evidence: %+v", found[0])
 	}
 }
 
-func TestLocalAIDiscoveryBoundsVersionDirectoryAndRejectsFIFO(t *testing.T) {
+func TestLocalAIDiscoveryUsesFixedVLLMLocations(t *testing.T) {
 	home := t.TempDir()
-	root := filepath.Join(home, "AI/ollama")
-	if err := os.MkdirAll(root, 0700); err != nil {
-		t.Fatal(err)
+	paths := localAIExecutablePaths(home)
+	if len(paths) != 4 {
+		t.Fatalf("unexpected local AI locations: %+v", paths)
 	}
-	for i := 0; i < 33; i++ {
-		if err := os.Mkdir(filepath.Join(root, fmt.Sprintf("0.%d", i)), 0700); err != nil {
-			t.Fatal(err)
+	for _, path := range paths {
+		if path.App != "vllm" || strings.Contains(path.Reference, "ollama") || !strings.HasPrefix(path.Reference, filepath.Join(home, "AI")+string(os.PathSeparator)) {
+			t.Fatalf("unexpected local AI location: %+v", path)
 		}
-	}
-	if got := len(localAIExecutablePaths(home)); got != 8 {
-		t.Fatalf("unbounded version scan: %d", got)
-	}
-	if err := os.RemoveAll(root); err != nil {
-		t.Fatal(err)
-	}
-	if err := syscall.Mkfifo(root, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if got := len(localAIExecutablePaths(home)); got != 8 {
-		t.Fatalf("FIFO became an installation root: %d", got)
 	}
 }

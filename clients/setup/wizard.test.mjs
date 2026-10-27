@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {launch} from './harness.mjs';
 
 const request = {profile: {statePath: '/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: []}, expectedRevision: 7};
-const endpoint = 'http://127.0.0.1:11434';
+const endpoint = 'http://127.0.0.1:8000';
 function installation(app = 'comfyui', models = []) {
     return {app, label: app, unit: `${app}.service`, endpoint, recognized: true, configurationStatus: models.length ? 'ready' : app === 'comfyui' ? 'ready' : 'model-required', instanceStatus: 'not-running', models,
         binding: {unit: `${app}.service`, cgroup: '/trusted', healthURL: `${endpoint}/health`, instance: 'local', model: models.length === 1 ? models[0].id : '', launchFile: '/trusted/unit'}};
@@ -23,7 +23,7 @@ const primary = ui => ui.widgets.filter(widget => widget.cssClasses?.includes('s
 test('application cards precede configuration, labeled gears and one primary action stay in reserved toolbar', async () => {
     const ui = await launch(options([installation()]));
     assert.equal(heading(ui).label, 'Choose your applications');
-    for (const label of ['ComfyUI', 'Ollama', 'llama.cpp', 'vLLM']) {
+    for (const label of ['ComfyUI', 'vLLM']) {
         assert.equal(ui.by(`Use ${label}`).active, false);
         assert.equal(ui.by(`Settings for ${label}`).accessibleProperties.label, `Settings for ${label}`);
         assert.ok(ui.by(`Settings for ${label}`).tooltip_text);
@@ -57,35 +57,35 @@ test('ComfyUI skips models; Finish setup explicitly activates only the freshly c
     assert.equal(applied.catalog.profiles.length, 1);
 });
 
-test('Ollama is selected once; several existing models become separately named workloads, and Back preserves selections', async () => {
-    const ui = await launch(options([installation('ollama', [{id: 'a', label: 'Model A'}, {id: 'b', label: 'Model B'}])]));
-    ui.edit(ui.by('Use Ollama'), 'active', true);
+test('an application is selected once; the chosen model becomes a named workload, and Back preserves the selection', async () => {
+    const ui = await launch(options([installation('vllm', [{id: 'a', label: 'Model A'}, {id: 'b', label: 'Model B'}])]));
+    ui.edit(ui.by('Use vLLM'), 'active', true);
     await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
     assert.equal(heading(ui).label, 'Choose models');
-    ui.edit(ui.by('Model A'), 'active', true); ui.edit(ui.by('Model B'), 'active', true);
+    ui.edit(ui.by('Model'), 'selected', 1);
     await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
     let checked = JSON.parse(ui.calls.filter(call => call.argv[1] === 'validate').at(-1).input);
-    assert.deepEqual(checked.catalog.profiles.map(profile => profile.label), ['Ollama - Model A', 'Ollama - Model B']);
-    assert.deepEqual(checked.catalog.profiles.map(profile => profile.unit), ['ollama.service', 'ollama.service']);
+    assert.deepEqual(checked.catalog.profiles.map(profile => profile.label), ['vLLM - Model A']);
+    assert.deepEqual(checked.catalog.profiles.map(profile => profile.unit), ['vllm.service']);
     await ui.by('Back').emit('clicked');
     assert.equal(heading(ui).label, 'Choose models');
-    assert.equal(ui.by('Model A').active, true); assert.equal(ui.by('Model B').active, true);
+    assert.equal(ui.by('Model').selected, 1);
     assert.equal(ui.by('Finish setup').sensitive, false);
     await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
     checked = JSON.parse(ui.calls.filter(call => call.argv[1] === 'validate').at(-1).input);
-    assert.equal(checked.catalog.profiles.length, 2, 'Back then Continue replaces the staged models rather than duplicating them');
-    await ui.by('Back').emit('clicked'); ui.edit(ui.by('Model B'), 'active', false);
+    assert.equal(checked.catalog.profiles.length, 1, 'Back then Continue replaces the staged workload rather than duplicating it');
+    await ui.by('Back').emit('clicked'); ui.edit(ui.by('Model'), 'selected', 2);
     await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
     checked = JSON.parse(ui.calls.filter(call => call.argv[1] === 'validate').at(-1).input);
-    assert.equal(checked.catalog.profiles.length, 1);
+    assert.deepEqual(checked.catalog.profiles.map(profile => profile.nativeModel.model), ['b']);
 });
 
 test('model chooser disclosure preserves rooted pickers and opens no dialog until a picker is activated', async () => {
-    const ui = await launch(options([installation('ollama', [{id: 'a'}, {id: 'b'}])]));
-    ui.edit(ui.by('Use Ollama'), 'active', true);
+    const ui = await launch(options([installation('vllm', [{id: 'a'}, {id: 'b'}])]));
+    ui.edit(ui.by('Use vLLM'), 'active', true);
     await ui.click('Continue');
     const chooser = ui.by('Choose another model…');
-    const file = ui.by('Choose model file...');
+    const file = ui.by('Choose model folder...');
     const folder = ui.by('Choose model folder...');
     const choices = ui.widgets.find(widget => widget.children.includes(file));
     const parent = ui.widgets.find(widget => widget.children.includes(choices));
@@ -103,17 +103,17 @@ test('model chooser disclosure preserves rooted pickers and opens no dialog unti
     assert.ok(parent.children.includes(choices), 'collapsed choices remain attached to the page');
     assert.equal(ui.calls.length, callsBefore, 'disclosure does not start discovery or change configuration');
     await ui.click('Choose another model…');
-    await ui.click('Choose model file...');
-    assert.ok(ui.widgets.some(widget => widget.label === '/models/selected.gguf'));
+    await ui.click('Choose model folder...');
+    assert.ok(ui.widgets.some(widget => widget.label === '/models/selected'));
     assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
 });
 
 test('Back permits changing application without duplicate drafts or applying saved selections', async () => {
-    const ui = await launch(options([installation(), installation('ollama', [{id: 'a'}, {id: 'b'}])]));
-    ui.edit(ui.by('Use Ollama'), 'active', true);
+    const ui = await launch(options([installation(), installation('vllm', [{id: 'a'}, {id: 'b'}])]));
+    ui.edit(ui.by('Use vLLM'), 'active', true);
     await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); await ui.by('Back').emit('clicked');
     assert.equal(heading(ui).label, 'Choose your applications');
-    ui.edit(ui.by('Use Ollama'), 'active', false); ui.edit(ui.by('Use ComfyUI'), 'active', true);
+    ui.edit(ui.by('Use vLLM'), 'active', false); ui.edit(ui.by('Use ComfyUI'), 'active', true);
     await ui.by('Save selections for later').emit('clicked');
     assert.deepEqual(JSON.parse(ui.calls.at(-1).input).drafts.map(draft => draft.app), ['comfyui']);
     await ui.by('Set up later').emit('clicked');
@@ -134,157 +134,16 @@ for (const phase of ['prepare', 'validate', 'verify-bindings']) {
     });
 }
 
-test('duplicate installation and model replies are rejected before activation review', async () => {
-    const duplicate = prepared({draft: {id: 'same', label: 'Same', app: 'ollama', model: 'same', binding: {unit: 'ollama.service'}}});
-    const ui = await launch(options([installation('ollama', [{id: 'a'}, {id: 'b'}])], {prepare: duplicate}));
-    ui.edit(ui.by('Use Ollama'), 'active', true); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    ui.edit(ui.by('a'), 'active', true); ui.edit(ui.by('b'), 'active', true);
+test('a prepared workload that reuses a configured workload ID is rejected before activation review', async () => {
+    const existing = prepared({draft: {id: 'same', label: 'ComfyUI', app: 'comfyui', binding: {unit: 'comfyui.service'}}}).profile;
+    const duplicate = prepared({draft: {id: 'same', label: 'Same', app: 'vllm', model: 'a', binding: {unit: 'vllm.service'}}});
+    const ui = await launch(options([installation(), installation('vllm', [{id: 'a'}, {id: 'b'}])], {prepare: duplicate, discover: {request: {...request, catalog: {version: 1, profiles: [existing]}}, units: [], applications: [installation(), installation('vllm', [{id: 'a'}, {id: 'b'}])]}}));
+    ui.edit(ui.by('Use vLLM'), 'active', true); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
+    ui.edit(ui.by('Model'), 'selected', 1);
     await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
     assert.equal(ui.calls.some(call => call.argv[1] === 'validate'), false);
     assert.equal(ui.by('Finish setup').sensitive, false);
     assert.ok(ui.widgets.some(widget => widget.label?.includes('already configured')));
-});
-
-const session = {id: 'session-id', token: 'secret', status: 'completed'};
-const expected = {incarnation: 'incarnation', version: 2, owner: 'supervisor', configurationRevision: 7};
-function temporary(extra = {}) { return options([installation('ollama')], {'temporary-status': {available: true, expected}, 'temporary-discover': {session, models: [{id: 'existing', label: 'Existing model'}]}, ...extra}); }
-
-test('temporary discovery is a separate consented action and does not replace ordinary model-name entry', async () => {
-    const ui = await launch(temporary()); ui.edit(ui.by('Use Ollama'), 'active', true);
-    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    const start = ui.by('Start Ollama briefly to list models');
-    assert.equal(start.visible, true); assert.equal(start.sensitive, false);
-    assert.equal(ui.by('Existing model name').visible, true);
-    await start.emit('clicked'); assert.equal(ui.calls.some(call => call.argv[1] === 'temporary-discover'), false);
-    ui.edit(ui.by('I allow this brief start and will keep other application controls paused.'), 'active', true);
-    await start.emit('clicked');
-    const input = JSON.parse(ui.calls.find(call => call.argv[1] === 'temporary-discover').input);
-    assert.deepEqual(input, {unit: 'ollama.service', expected, consent: true, externalControlPaused: true});
-    assert.equal(ui.by('Existing model').active, true);
-    assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
-    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); assert.equal(heading(ui).label, 'Ready to finish');
-});
-
-for (const available of [false, undefined]) {
-    test(`temporary start is unavailable without authoritative capability: ${available}`, async () => {
-        const ui = await launch(temporary({'temporary-status': {available}})); ui.edit(ui.by('Use Ollama'), 'active', true);
-        assert.equal(ui.by('Start Ollama briefly to list models').visible, false);
-        ui.edit(ui.by('Existing model name'), 'text', 'known');
-        await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); assert.equal(heading(ui).label, 'Ready to finish');
-        assert.equal(ui.calls.some(call => call.argv[1] === 'temporary-discover'), false);
-    });
-}
-
-test('temporary cleanup failure is reported, blocks Continue, and retry uses the durable token', async () => {
-    const ui = await launch(temporary({'temporary-discover': {session: {...session, status: 'cleanup_required'}, models: [], error: 'stop failed'}, 'temporary-cleanup': {session}}));
-    ui.edit(ui.by('Use Ollama'), 'active', true); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    const consent = ui.by('I allow this brief start and will keep other application controls paused.');
-    assert.equal(consent.children[0].wrap, true); assert.equal(consent.children[0].wrap_mode, 2);
-    assert.equal(consent.accessibleProperties.label, consent.children[0].label);
-    ui.edit(consent, 'active', true);
-    await ui.by('Start Ollama briefly to list models').emit('clicked');
-    assert.ok(ui.widgets.some(widget => widget.label?.includes('stop failed')));
-    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); assert.equal(ui.by('Finish setup').sensitive, false);
-    await ui.by('Retry Ollama cleanup').emit('clicked');
-    assert.deepEqual(JSON.parse(ui.calls.find(call => call.argv[1] === 'temporary-cleanup').input), {id: session.id, token: session.token, externalControlPaused: true});
-    assert.equal(ui.widgets.filter(widget => ui.visible(widget) && widget.label === 'Previous stopped state restored.').length, 2);
-    assert.equal(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('cleanup needs attention')), false);
-});
-
-test('restored cleanup retains the refresh failure instead of claiming model-check status is current', async () => {
-    const incomplete = {...session, status: 'cleanup_required'};
-    const ui = await launch(temporary({'temporary-discover': {session: incomplete, error: 'stop failed'}, 'temporary-cleanup': {session},
-        'temporary-status': (_input, calls) => {
-            if (calls.some(call => call.argv[1] === 'temporary-cleanup')) throw new Error('status unavailable');
-            return calls.some(call => call.argv[1] === 'temporary-discover') ? {available: false, session: incomplete} : {available: true, expected};
-        }}));
-    ui.edit(ui.by('Use Ollama'), 'active', true); await ui.by('Continue').emit('clicked');
-    ui.edit(ui.by('I allow this brief start and will keep other application controls paused.'), 'active', true);
-    await ui.by('Start Ollama briefly to list models').emit('clicked'); await ui.by('Retry Ollama cleanup').emit('clicked');
-    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('model-check status could not be refreshed')));
-    assert.equal(ui.widgets.some(widget => ui.visible(widget) && widget.label === 'Previous stopped state restored.'), false);
-});
-
-test('cancelling an in-flight check requiring cleanup retires its Retry action after restoration', async () => {
-    const incomplete = {...session, status: 'cleanup_required'};
-    const ui = await launch({...temporary({'temporary-discover': {session: incomplete, error: 'check cancelled'}, 'temporary-cleanup': {session},
-        'temporary-status': (_input, calls) => calls.some(call => call.argv[1] === 'temporary-cleanup') ? {available: true, expected, session} :
-            {available: true, expected, session: calls.some(call => call.argv[1] === 'temporary-discover') ? incomplete : undefined}}), deferAction: 'temporary-discover'});
-    ui.edit(ui.by('Use Ollama'), 'active', true); await ui.by('Continue').emit('clicked');
-    ui.edit(ui.by('I allow this brief start and will keep other application controls paused.'), 'active', true);
-    const running = ui.by('Start Ollama briefly to list models').emit('clicked');
-    const cancelling = ui.by('Cancel model detection').emit('clicked');
-    ui.finish(); await running; await cancelling;
-    assert.equal(ui.calls.filter(call => call.argv[1] === 'temporary-cleanup').length, 1);
-    assert.equal(ui.by('Retry Ollama cleanup'), undefined);
-    assert.equal(ui.by('Start Ollama briefly to list models').sensitive, false);
-    assert.equal(ui.by('I allow this brief start and will keep other application controls paused.').active, false);
-    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label === 'Model detection cancelled. Previous stopped state restored.'));
-});
-
-test('cancellation preserves the failed status refresh after confirmed stopped-state cleanup', async () => {
-    const incomplete = {...session, status: 'cleanup_required'};
-    const ui = await launch({...temporary({'temporary-discover': {session: incomplete, error: 'check cancelled'}, 'temporary-cleanup': {session},
-        'temporary-status': (_input, calls) => {
-            if (calls.some(call => call.argv[1] === 'temporary-cleanup')) throw new Error('status unavailable');
-            return {available: true, expected, session: calls.some(call => call.argv[1] === 'temporary-discover') ? incomplete : undefined};
-        }}), deferAction: 'temporary-discover'});
-    ui.edit(ui.by('Use Ollama'), 'active', true); await ui.by('Continue').emit('clicked');
-    ui.edit(ui.by('I allow this brief start and will keep other application controls paused.'), 'active', true);
-    const running = ui.by('Start Ollama briefly to list models').emit('clicked');
-    const cancelling = ui.by('Cancel model detection').emit('clicked'); ui.finish(); await running; await cancelling;
-    assert.equal(ui.widgets.filter(widget => ui.visible(widget) && widget.label?.includes('model-check status could not be refreshed')).length, 2);
-    assert.equal(ui.by('Start Ollama briefly to list models').sensitive, false);
-    assert.equal(ui.widgets.some(widget => ui.visible(widget) && widget.label === 'Model detection cancelled. Previous stopped state restored.'), false);
-});
-
-test('deselecting an application with failed temporary cleanup keeps its recovery warning visible', async () => {
-    const incomplete = {...session, status: 'cleanup_required'};
-    const ui = await launch(temporary({'temporary-discover': {session: incomplete, error: 'stop failed'},
-        'temporary-status': (_input, calls) => calls.some(call => call.argv[1] === 'temporary-discover') ? {available: false, session: incomplete} : {available: true, expected},
-        'temporary-cleanup': {session: incomplete, error: 'cleanup refused'}}));
-    ui.edit(ui.by('Use Ollama'), 'active', true); await ui.by('Continue').emit('clicked');
-    ui.edit(ui.by('I allow this brief start and will keep other application controls paused.'), 'active', true);
-    await ui.by('Start Ollama briefly to list models').emit('clicked'); ui.edit(ui.by('Use Ollama'), 'active', false);
-    await new Promise(resolve => setImmediate(resolve));
-    assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('Temporary cleanup needs attention. Keep external controls paused and retry.')));
-    assert.equal(ui.calls.filter(call => call.argv[1] === 'temporary-cleanup').length, 1);
-    assert.equal(ui.by('Finish setup').sensitive, false);
-});
-
-test('reopening a saved configured Ollama draft does not create an extra grouped editor', async () => {
-    const candidate = installation('ollama', [{id: 'a'}, {id: 'b'}]);
-    const existing = prepared({draft: {id: 'stable', app: 'ollama', model: 'a', label: 'Existing A', binding: candidate.binding}}).profile;
-    const saved = {id: 'stable', app: 'ollama', label: 'Existing A', model: 'a', models: ['a'], endpoint, binding: {...candidate.binding, model: 'a'}};
-    const ui = await launch(options([candidate], {discover: {request: {...request, catalog: {version: 1, profiles: [existing]}}, units: [], applications: [candidate]}, drafts: {drafts: [saved]}}));
-    await ui.click('Setup settings'); await ui.click('Save selections for later');
-    const drafts = JSON.parse(ui.calls.at(-1).input).drafts;
-    assert.equal(drafts.length, 1); assert.equal(drafts[0].id, 'stable'); assert.deepEqual(drafts[0].models, ['a']);
-    assert.equal(ui.widgets.filter(widget => widget.accessibleProperties?.label === 'Settings for Ollama').length, 2);
-});
-
-test('cancelling an in-flight temporary check waits for cleanup and never imports late inventory', async () => {
-    const ui = await launch({...temporary(), deferAction: 'temporary-discover'});
-    ui.edit(ui.by('Use Ollama'), 'active', true); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    ui.edit(ui.by('I allow this brief start and will keep other application controls paused.'), 'active', true);
-    const checking = ui.by('Start Ollama briefly to list models').emit('clicked');
-    const closing = ui.by('Set up later').emit('clicked');
-    assert.equal(ui.widgets.some(widget => widget.closed), false);
-    assert.deepEqual(ui.signals.map(item => item.signal), [2], 'cancel sends SIGINT to the helper rather than killing it or only discarding its reply');
-    ui.finish(); await checking; await closing;
-    assert.equal(ui.by('Existing model'), undefined, 'late model inventory cannot replace cancelled selections');
-    assert.ok(ui.widgets.some(widget => widget.closed));
-});
-
-test('reopening a durable temporary session requires explicit stopped-state restoration before review', async () => {
-    const ui = await launch(options([], {'temporary-status': (_input, calls) => calls.some(call => call.argv[1] === 'temporary-cleanup') ? {available: true, expected, session} : {available: false, session: {...session, status: 'cleanup_required'}}, 'temporary-cleanup': {session}}));
-    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); assert.equal(ui.calls.some(call => call.argv[1] === 'validate'), false);
-    await ui.by('Restore stopped application').emit('clicked');
-    assert.equal(ui.calls.some(call => call.argv[1] === 'temporary-cleanup'), false, 'an unacknowledged click cannot assert paused external controls');
-    ui.edit(ui.by('I have paused external application controls and finished any resumed work.'), 'active', true);
-    await ui.by('Restore stopped application').emit('clicked');
-    assert.equal(ui.by('Restore stopped application').sensitive, false);
-    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); assert.equal(heading(ui).label, 'Ready to finish');
 });
 
 test('deselecting an existing application reviews only Supervisor removal and preserves its files', async () => {
@@ -296,45 +155,6 @@ test('deselecting an existing application reviews only Supervisor removal and pr
     assert.deepEqual(JSON.parse(ui.calls.find(call => call.argv[1] === 'validate').input).catalog.profiles, []);
     assert.ok(ui.widgets.some(widget => widget.label?.includes('Their applications and files are preserved')));
     assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
-});
-
-for (const action of ['close', 'defer', 'back']) {
-    test(`recovered session ${action} leaves its durable block intact without claiming paused external controls`, async () => {
-        const ui = await launch(options([], {'temporary-status': {session: {...session, status: 'cleanup_required'}}}));
-        if (action === 'close') assert.equal(ui.widgets.find(widget => widget.title === 'GPU Workload Setup').emit('close-request'), false);
-        else if (action === 'defer') { await ui.by('Set up later').emit('clicked'); assert.ok(ui.widgets.some(widget => widget.closed)); }
-        else { await ui.by('Back').emit('clicked'); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); }
-        assert.equal(ui.calls.some(call => call.argv[1] === 'temporary-cleanup'), false);
-        assert.equal(ui.calls.some(call => call.argv[1] === 'validate'), false);
-    });
-}
-
-for (const failure of [{error: 'cleanup refused', session: {...session, status: 'cleanup_required'}}, {}]) {
-    test(`recovery cleanup never treats an incomplete reply as success: ${failure.error ?? 'missing session'}`, async () => {
-        const ui = await launch(options([], {'temporary-status': {session: {...session, status: 'cleanup_required'}}, 'temporary-cleanup': failure}));
-        ui.edit(ui.by('I have paused external application controls and finished any resumed work.'), 'active', true);
-        await ui.by('Restore stopped application').emit('clicked');
-        assert.equal(ui.by('Restore stopped application').sensitive, false, 'retry requires a fresh acknowledgement');
-        await ui.by('Restore stopped application').emit('clicked');
-        assert.equal(ui.calls.filter(call => call.argv[1] === 'temporary-cleanup').length, 1);
-        await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); assert.equal(ui.calls.some(call => call.argv[1] === 'validate'), false);
-        await ui.by('Set up later').emit('clicked'); assert.equal(ui.widgets.some(widget => widget.closed), true);
-    });
-}
-
-test('explicit cancellation signals the helper and reports failed safe cleanup without closing', async () => {
-    const ui = await launch({...temporary({'temporary-discover': {session: {...session, status: 'cleanup_required'}, error: 'cancelled'}, 'temporary-cleanup': {session: {...session, status: 'cleanup_required'}, error: 'stop failed'}}), deferAction: 'temporary-discover'});
-    ui.edit(ui.by('Use Ollama'), 'active', true); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    ui.edit(ui.by('I allow this brief start and will keep other application controls paused.'), 'active', true);
-    const detecting = ui.by('Start Ollama briefly to list models').emit('clicked');
-    const cancelling = ui.by('Cancel model detection').emit('clicked');
-    ui.finish(); await detecting; await cancelling;
-    assert.equal(ui.signals[0].signal, 2);
-    assert.ok(ui.widgets.some(widget => widget.label?.includes('Cancellation needs cleanup')));
-    await ui.by('Back').emit('clicked');
-    assert.equal(heading(ui).label, 'Choose models');
-    await ui.by('Remove this application').emit('clicked');
-    assert.ok(ui.widgets.some(widget => widget.label?.includes('before removing this selection')));
 });
 
 test('application location picker cancellation and real errors keep the saved selection', async () => {
@@ -354,45 +174,26 @@ test('failed discovery refresh retains editable selections and reports the techn
 });
 
 test('model-screen gear opens the same application settings and invalidates ready confirmation', async () => {
-    const ui = await launch(options([installation('ollama', [{id: 'a'}, {id: 'b'}])]));
-    ui.edit(ui.by('Use Ollama'), 'active', true); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    ui.by('Settings for Ollama').emit('clicked');
-    assert.equal(heading(ui).label, 'Ollama');
+    const ui = await launch(options([installation('vllm', [{id: 'a'}, {id: 'b'}])]));
+    ui.edit(ui.by('Use vLLM'), 'active', true); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
+    ui.by('Settings for vLLM').emit('clicked');
+    assert.equal(heading(ui).label, 'vLLM');
     assert.equal(ui.visible(ui.by('Advanced settings')), true);
     assert.equal(ui.visible(ui.by('Existing service')), false);
     assert.equal(ui.by('Finish setup').sensitive, false);
 });
 
-test('helper subprocess failure rechecks durable status before allowing review', async () => {
-    const ui = await launch({...temporary({'temporary-status': (_input, calls) => calls.some(call => call.argv[1] === 'temporary-cleanup') ? {available: true, expected, session} : calls.filter(call => call.argv[1] === 'temporary-status').length === 1 ? {available: true, expected} : {available: false, session: {...session, status: 'cleanup_required'}}, 'temporary-cleanup': {session}}), fail: 'temporary-discover'});
-    ui.edit(ui.by('Use Ollama'), 'active', true); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    ui.edit(ui.by('I allow this brief start and will keep other application controls paused.'), 'active', true);
-    await ui.by('Start Ollama briefly to list models').emit('clicked');
-    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); assert.equal(ui.by('Finish setup').sensitive, false);
-    assert.equal(ui.calls.filter(call => call.argv[1] === 'temporary-status').length, 2);
-    await ui.by('Set up later').emit('clicked'); assert.ok(ui.widgets.some(widget => widget.closed));
-});
-
-test('post-install selection adds a model beneath the existing runtime while retaining stable ID and resources', async () => {
-    const original = {...prepared({draft: {id: 'stable', label: 'Ollama', app: 'ollama', model: 'a', binding: {unit: 'ollama.service'}}}).profile, requiredMiB: 9000, bootPolicy: 'retain', systemdSlice: 'app.slice'};
-    const ui = await launch(options([installation('ollama', [{id: 'b', label: 'B'}, {id: 'a', label: 'A'}])], {discover: {request: {...request, catalog: {version: 1, profiles: [original]}}, units: [], applications: [installation('ollama', [{id: 'b', label: 'B'}, {id: 'a', label: 'A'}])]}}));
-    ui.by('Settings for Ollama').emit('clicked');
-    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); ui.edit(ui.by('B'), 'active', true);
+test('changing the model of a configured runtime keeps its stable ID and resources', async () => {
+    const original = {...prepared({draft: {id: 'stable', label: 'vLLM', app: 'vllm', model: 'a', binding: {unit: 'vllm.service'}}}).profile, requiredMiB: 9000, bootPolicy: 'retain', systemdSlice: 'app.slice'};
+    const ui = await launch(options([installation('vllm', [{id: 'b', label: 'B'}, {id: 'a', label: 'A'}])], {discover: {request: {...request, catalog: {version: 1, profiles: [original]}}, units: [], applications: [installation('vllm', [{id: 'b', label: 'B'}, {id: 'a', label: 'A'}])]}}));
+    ui.by('Settings for vLLM').emit('clicked');
+    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); ui.edit(ui.by('Model'), 'selected', 1);
     await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
     const checked = JSON.parse(ui.calls.find(call => call.argv[1] === 'validate').input).catalog.profiles;
-    assert.equal(checked.length, 2);
-    const retained = checked.find(profile => profile.nativeModel.model === 'a');
+    assert.equal(checked.length, 1);
+    const [retained] = checked;
+    assert.equal(retained.nativeModel.model, 'b');
     assert.equal(retained.id, 'stable'); assert.equal(retained.requiredMiB, 9000); assert.equal(retained.bootPolicy, 'retain'); assert.equal(retained.systemdSlice, 'app.slice');
-    assert.notEqual(checked.find(profile => profile.nativeModel.model === 'b').id, 'stable');
-});
-
-test('saved multi-model choices reopen together beneath a single runtime', async () => {
-    const initial = {id: 'draft-saved', app: 'ollama', label: 'Ollama', model: 'b', models: ['a', 'b'], endpoint, binding: installation('ollama').binding};
-    const ui = await launch(options([installation('ollama', [{id: 'a'}, {id: 'b'}])], {drafts: {drafts: [initial]}}));
-    assert.equal(ui.by('Use Ollama').active, true); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    assert.equal(ui.by('a').active, true); assert.equal(ui.by('b').active, true);
-    await ui.by('Save selections for later').emit('clicked');
-    assert.deepEqual(JSON.parse(ui.calls.at(-1).input).drafts[0].models, ['a', 'b']);
 });
 
 test('legacy ComfyUI is selected without a new draft and remains removable from the same app card', async () => {
@@ -417,93 +218,10 @@ test('removing an existing profile during batch preparation cannot replace a dif
     assert.equal(ui.by('Finish setup').sensitive, false);
 });
 
-test('configured Ollama presents its model group in the ordinary journey without requiring a gear', async () => {
-    const original = {...prepared({draft: {id: 'stable', label: 'Custom A', app: 'ollama', model: 'a', binding: {unit: 'ollama.service'}}}).profile, requiredMiB: 4000};
-    const ui = await launch(options([installation('ollama', [{id: 'a'}, {id: 'b'}])], {discover: {request: {...request, catalog: {version: 1, profiles: [original]}}, units: [], applications: [installation('ollama', [{id: 'a'}, {id: 'b'}])]}}));
-    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); assert.equal(heading(ui).label, 'Choose models');
-    assert.equal(ui.by('a').active, true); ui.edit(ui.by('b'), 'active', true);
-    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    const checked = JSON.parse(ui.calls.find(call => call.argv[1] === 'validate').input).catalog.profiles;
-    assert.deepEqual(checked.map(profile => profile.label), ['Custom A', 'Ollama - b']);
-    assert.equal(checked[0].id, 'stable'); assert.equal(checked[0].requiredMiB, 4000);
-});
-
-for (const next of ['continue and close', 'another temporary check']) {
-    test(`same-process failed check cleanup refreshes its shared fence before ${next}`, async () => {
-        const freshExpected = {...expected, version: 4};
-        const ui = await launch(temporary({
-            'temporary-discover': (_input, calls) => calls.filter(call => call.argv[1] === 'temporary-discover').length === 1 ? {session: {...session, status: 'cleanup_required'}, error: 'start cancelled'} : {session, models: [{id: 'existing'}]},
-            'temporary-cleanup': {session},
-            'temporary-status': (_input, calls) => calls.some(call => call.argv[1] === 'temporary-cleanup') ? {available: true, expected: freshExpected, session} : calls.some(call => call.argv[1] === 'temporary-discover') ? {available: false, session: {...session, status: 'cleanup_required'}} : {available: true, expected},
-        }));
-        ui.edit(ui.by('Use Ollama'), 'active', true); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-        ui.edit(ui.by('I allow this brief start and will keep other application controls paused.'), 'active', true);
-        await ui.by('Start Ollama briefly to list models').emit('clicked');
-        await ui.by('Retry Ollama cleanup').emit('clicked');
-        assert.equal(ui.calls.filter(call => call.argv[1] === 'temporary-cleanup').length, 1);
-        if (next === 'another temporary check') {
-            ui.edit(ui.by('I allow this brief start and will keep other application controls paused.'), 'active', true);
-            await ui.by('Start Ollama briefly to list models').emit('clicked');
-            const inputs = ui.calls.filter(call => call.argv[1] === 'temporary-discover').map(call => JSON.parse(call.input));
-            assert.equal(inputs.length, 2); assert.deepEqual(inputs[1].expected, freshExpected);
-        } else ui.edit(ui.by('Existing model name'), 'text', 'known');
-        await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-        assert.equal(heading(ui).label, 'Ready to finish');
-        await ui.by('Set up later').emit('clicked'); assert.ok(ui.widgets.some(widget => widget.closed));
-        assert.equal(ui.calls.filter(call => call.argv[1] === 'temporary-cleanup').length, 1, 'completion is synchronized globally and never cleaned a second time');
-    });
-}
-
-test('window cancellation of a locally authorized temporary check still waits for supervised cleanup', async () => {
-    const ui = await launch({...temporary(), deferAction: 'temporary-discover'});
-    ui.edit(ui.by('Use Ollama'), 'active', true); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    ui.edit(ui.by('I allow this brief start and will keep other application controls paused.'), 'active', true);
-    const detecting = ui.by('Start Ollama briefly to list models').emit('clicked');
-    assert.equal(ui.widgets.find(widget => widget.title === 'GPU Workload Setup').emit('close-request'), true);
-    await new Promise(resolve => setImmediate(resolve));
-    assert.equal(ui.widgets.some(widget => widget.closed), false); assert.equal(ui.signals[0].signal, 2);
-    ui.finish(); await detecting; await new Promise(resolve => setImmediate(resolve));
-    assert.ok(ui.widgets.some(widget => widget.closed));
-});
-
-test('deselect/reselect restores original model IDs and deliberately edited resources without fresh defaults', async () => {
-    const model = (id, nativeModel, label, requiredMiB) => ({...prepared({draft: {id, label, app: 'ollama', model: nativeModel, binding: {unit: 'ollama.service'}}}).profile, requiredMiB, bootPolicy: 'retain', systemdSlice: 'app.slice'});
-    const originals = [model('stable-a', 'a', 'Custom A', 7777), model('stable-b', 'b', 'Custom B', 8888)];
-    const ui = await launch(options([installation('ollama', [{id: 'a'}, {id: 'b'}])], {discover: {request: {...request, catalog: {version: 1, profiles: originals}}, units: [], applications: [installation('ollama', [{id: 'a'}, {id: 'b'}])]}}));
-    ui.edit(ui.by('Measured VRAM requirement (MiB; optional)'), 'text', '7999');
-    ui.edit(ui.by('Display name'), 'text', 'Renamed A');
-    ui.edit(ui.by('Use Ollama'), 'active', false); ui.edit(ui.by('Use Ollama'), 'active', true);
-    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    assert.equal(ui.by('a').active, true); assert.equal(ui.by('b').active, true);
-    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    await ui.by('Back').emit('clicked'); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    const checked = JSON.parse(ui.calls.filter(call => call.argv[1] === 'validate').at(-1).input).catalog.profiles;
-    assert.deepEqual(checked.map(profile => ({id: profile.id, label: profile.label, requiredMiB: profile.requiredMiB, bootPolicy: profile.bootPolicy, systemdSlice: profile.systemdSlice})), [
-        {id: 'stable-a', label: 'Renamed A', requiredMiB: 7999, bootPolicy: 'retain', systemdSlice: 'app.slice'},
-        {id: 'stable-b', label: 'Custom B', requiredMiB: 8888, bootPolicy: 'retain', systemdSlice: 'app.slice'},
-    ]);
-});
-
-test('renaming a configured grouped model survives ID changes, staging and later friendly-name edits', async () => {
-    const original = prepared({draft: {id: 'stable-a', label: 'Old label', app: 'ollama', model: 'a', binding: {unit: 'ollama.service'}}}).profile;
-    const ui = await launch(options([installation('ollama', [{id: 'a'}, {id: 'b'}])], {discover: {request: {...request, catalog: {version: 1, profiles: [original]}}, units: [], applications: [installation('ollama', [{id: 'a'}, {id: 'b'}])]}}));
-    ui.edit(ui.by('Display name'), 'text', 'New label');
-    ui.edit(ui.by('Workload ID (lowercase, stable; required)'), 'text', 'new-id');
-    const checked = () => JSON.parse(ui.calls.filter(call => call.argv[1] === 'validate').at(-1).input).catalog.profiles.map(({id, label}) => ({id, label}));
-    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    assert.deepEqual(checked(), [{id: 'new-id', label: 'New label'}]);
-    await ui.by('Back').emit('clicked'); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    assert.deepEqual(checked(), [{id: 'new-id', label: 'New label'}]);
-    await ui.by('Back').emit('clicked');
-    ui.edit(ui.by('Installation display name'), 'text', 'Latest name');
-    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    assert.deepEqual(checked(), [{id: 'new-id', label: 'Latest name'}]);
-});
-
 test('deselect/reselect restores a single configured model without a duplicate draft', async () => {
-    const original = {...prepared({draft: {id: 'stable', label: 'Custom', app: 'ollama', model: 'a', binding: {unit: 'ollama.service'}}}).profile, requiredMiB: 7777, bootPolicy: 'retain', systemdSlice: 'app.slice'};
-    const ui = await launch(options([installation('ollama', [{id: 'a'}])], {discover: {request: {...request, catalog: {version: 1, profiles: [original]}}, units: [], applications: [installation('ollama', [{id: 'a'}])]}}));
-    ui.edit(ui.by('Use Ollama'), 'active', false); ui.edit(ui.by('Use Ollama'), 'active', true);
+    const original = {...prepared({draft: {id: 'stable', label: 'Custom', app: 'vllm', model: 'a', binding: {unit: 'vllm.service'}}}).profile, requiredMiB: 7777, bootPolicy: 'retain', systemdSlice: 'app.slice'};
+    const ui = await launch(options([installation('vllm', [{id: 'a'}])], {discover: {request: {...request, catalog: {version: 1, profiles: [original]}}, units: [], applications: [installation('vllm', [{id: 'a'}])]}}));
+    ui.edit(ui.by('Use vLLM'), 'active', false); ui.edit(ui.by('Use vLLM'), 'active', true);
     await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
     const checked = JSON.parse(ui.calls.find(call => call.argv[1] === 'validate').input).catalog.profiles;
     assert.deepEqual(checked, [{...original, nativeModel: {...original.nativeModel, launchSHA256: 'fresh'}}]);
@@ -512,110 +230,59 @@ test('deselect/reselect restores a single configured model without a duplicate d
 
 function twoInstallations() {
     return [
-        {...installation('ollama', [{id: 'a1'}, {id: 'a2'}]), label: 'Installation A', unit: 'a.service', binding: {...installation('ollama').binding, unit: 'a.service'}},
-        {...installation('ollama', [{id: 'b1'}, {id: 'b2'}]), label: 'Installation B', unit: 'b.service', binding: {...installation('ollama').binding, unit: 'b.service'}},
+        {...installation('vllm', [{id: 'a1'}, {id: 'a2'}]), label: 'Installation A', unit: 'a.service', binding: {...installation('vllm').binding, unit: 'a.service'}},
+        {...installation('vllm', [{id: 'b1'}, {id: 'b2'}]), label: 'Installation B', unit: 'b.service', binding: {...installation('vllm').binding, unit: 'b.service'}},
     ];
 }
 
-test('changing installations discards the previous multi-model selection before preparing the new service', async () => {
+test('changing installations discards the previous model selection before preparing the new service', async () => {
     const ui = await launch(options(twoInstallations())); ui.selectApplication(1);
     ui.edit(ui.by('Detected instance'), 'selected', 1);
-    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); ui.edit(ui.by('a1'), 'active', true); ui.edit(ui.by('a2'), 'active', true);
-    ui.by('Settings for Ollama').emit('clicked'); ui.edit(ui.by('Detected instance'), 'selected', 2);
+    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); ui.edit(ui.by('Model'), 'selected', 1);
+    ui.by('Settings for vLLM').emit('clicked'); ui.edit(ui.by('Detected instance'), 'selected', 2);
     await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    assert.equal(ui.by('b1').active, false); assert.equal(ui.by('b2').active, false);
+    assert.equal(ui.by('Model').selected, 0);
     await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); assert.equal(ui.calls.some(call => call.argv[1] === 'prepare'), false);
-    ui.edit(ui.by('b2'), 'active', true); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
+    ui.edit(ui.by('Model'), 'selected', 2); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
     const inputs = ui.calls.filter(call => call.argv[1] === 'prepare').map(call => JSON.parse(call.input));
     assert.deepEqual(inputs.map(input => [input.draft.binding.unit, input.draft.model]), [['b.service', 'b2']]);
 });
 
-for (const source of ['address', 'application location', 'model file']) {
-    test(`changing ${source} clears old grouped model choices`, async () => {
-        const ui = await launch({...options([installation('ollama', [{id: 'a'}, {id: 'b'}])]), filePath: '/new/source'}); ui.selectApplication(1);
-        await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); ui.edit(ui.by('a'), 'active', true); ui.edit(ui.by('b'), 'active', true);
-        ui.by('Settings for Ollama').emit('clicked');
+for (const source of ['address', 'application location', 'model folder']) {
+    test(`changing ${source} clears the old model choice`, async () => {
+        const ui = await launch({...options([installation('vllm', [{id: 'a'}, {id: 'b'}])]), filePath: '/new/source'}); ui.selectApplication(1);
+        await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); ui.edit(ui.by('Model'), 'selected', 1);
+        ui.by('Settings for vLLM').emit('clicked');
         if (source === 'address') ui.edit(ui.by('Application address'), 'text', 'http://127.0.0.1:9900');
-        else ui.by(source === 'application location' ? 'Choose application location…' : 'Choose model file...').emit('clicked');
+        else ui.by(source === 'application location' ? 'Choose application location…' : 'Choose model folder...').emit('clicked');
         await ui.by('Save selections for later').emit('clicked');
         const saved = JSON.parse(ui.calls.at(-1).input).drafts[0];
-        assert.equal(saved.models, undefined); assert.equal(saved.model, undefined);
+        assert.equal(saved.model, undefined);
         await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
         assert.equal(ui.calls.some(call => call.argv[1] === 'prepare'), false);
     });
 }
 
-for (const selected of [['a', 'b'], []]) {
-    test(`ordinary manual model entry replaces saved multi-model choices: ${JSON.stringify(selected)}`, async () => {
-        const saved = {id: 'draft-saved', label: 'Ollama', app: 'ollama', model: 'a', models: selected, endpoint, binding: installation('ollama').binding};
-        const ui = await launch(options([installation('ollama')], {drafts: {drafts: [saved]}}));
-        await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-        ui.edit(ui.by('Existing model name'), 'text', 'c'); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-        const inputs = ui.calls.filter(call => call.argv[1] === 'prepare').map(call => JSON.parse(call.input));
-        assert.deepEqual(inputs.map(input => input.draft.model), ['c']);
-    });
-}
-
-test('manual owned-model edits replace grouped selections and synchronize the visible inventory checks', async () => {
-    const ui = await launch(options([installation('ollama', [{id: 'a'}, {id: 'b'}])], {'render-owned': prepared})); ui.selectApplication(1);
-    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); ui.edit(ui.by('a'), 'active', true); ui.edit(ui.by('b'), 'active', true);
-    ui.by('Settings for Ollama').emit('clicked'); ui.edit(ui.by('Model name'), 'text', 'c');
-    await ui.by('Save selections for later').emit('clicked');
-    const saved = JSON.parse(ui.calls.at(-1).input).drafts[0]; assert.equal(saved.models, undefined); assert.equal(saved.model, 'c');
-    assert.equal(ui.by('a').active, false); assert.equal(ui.by('b').active, false);
-});
-
-test('refreshing the same installation preserves only its available selected models', async () => {
-    const ui = await launch(options([installation('ollama', [{id: 'a'}, {id: 'b'}])], {probe: {...installation('ollama', [{id: 'b'}, {id: 'a'}]), inventoryStatus: 'available'}})); ui.selectApplication(1);
-    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); ui.edit(ui.by('a'), 'active', true); ui.edit(ui.by('b'), 'active', true);
-    await ui.by('Check again').emit('clicked');
-    await ui.by('Save selections for later').emit('clicked'); assert.deepEqual(JSON.parse(ui.calls.at(-1).input).drafts[0].models, ['a', 'b']);
-});
-
-test('a new temporary attempt cannot inherit a completed record when its helper and status both fail', async () => {
-    const ui = await launch(temporary({
-        'temporary-discover': (_input, calls) => {
-            if (calls.filter(call => call.argv[1] === 'temporary-discover').length > 1) throw new Error('helper failed');
-            return {session, models: []};
-        },
-        'temporary-status': (_input, calls) => {
-            if (calls.filter(call => call.argv[1] === 'temporary-discover').length > 1) throw new Error('status failed');
-            return {available: true, expected, ...(calls.some(call => call.argv[1] === 'temporary-discover') ? {session} : {})};
-        },
-    }));
-    ui.edit(ui.by('Use Ollama'), 'active', true); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    const consent = ui.by('I allow this brief start and will keep other application controls paused.');
-    ui.edit(consent, 'active', true); await ui.by('Start Ollama briefly to list models').emit('clicked');
-    ui.edit(consent, 'active', true); await ui.by('Start Ollama briefly to list models').emit('clicked');
-    ui.edit(ui.by('Existing model name'), 'text', 'known'); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
-    assert.equal(ui.calls.some(call => call.argv[1] === 'prepare'), false); assert.equal(ui.by('Finish setup').sensitive, false);
-    assert.equal(ui.by('Retry Ollama cleanup').sensitive, false);
-    await ui.by('Retry Ollama cleanup').emit('clicked');
-    assert.equal(ui.calls.some(call => call.argv[1] === 'temporary-cleanup'), false, 'unknown session IDs and tokens are never guessed');
-    await ui.by('Set up later').emit('clicked'); assert.ok(ui.widgets.some(widget => widget.closed));
-    assert.ok(ui.widgets.some(widget => widget.label?.includes('preserves its durable recovery block')));
-});
-
 test('manual lifecycle service changes invalidate selections until a model is chosen for the new source', async () => {
-    const ui = await launch(options([installation('ollama', [{id: 'a'}, {id: 'b'}])])); ui.selectApplication(1);
-    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); ui.edit(ui.by('a'), 'active', true); ui.edit(ui.by('b'), 'active', true);
-    ui.by('Settings for Ollama').emit('clicked'); ui.edit(ui.by('Existing user service'), 'text', 'new.service');
+    const ui = await launch(options([installation('vllm', [{id: 'a'}, {id: 'b'}])])); ui.selectApplication(1);
+    await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); ui.edit(ui.by('Model'), 'selected', 1);
+    ui.by('Settings for vLLM').emit('clicked'); ui.edit(ui.by('Existing user service'), 'text', 'new.service');
     await ui.by('Save selections for later').emit('clicked');
-    assert.equal(JSON.parse(ui.calls.at(-1).input).drafts[0].models, undefined);
+    assert.ok(!JSON.parse(ui.calls.at(-1).input).drafts[0].model, 'no model is selected for the new source');
     await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked'); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
     assert.equal(ui.calls.some(call => call.argv[1] === 'prepare'), false);
     ui.edit(ui.by('Exact model ID'), 'text', 'new-model'); await (ui.by('Continue') ?? ui.by('Use installation')).emit('clicked');
     assert.deepEqual(ui.calls.filter(call => call.argv[1] === 'prepare').map(call => JSON.parse(call.input).draft.model), ['new-model']);
 });
 
-for (const app of ['llama.cpp', 'vllm']) {
+for (const app of ['vllm']) {
     test(`${app}: choosing an application folder clears the managed model widget and cannot become a model after another launch edit`, async () => {
-        const oldPath = app === 'llama.cpp' ? '/models/old.gguf' : '/models/old';
-        const draft = {id: 'draft-saved', label: app, app, reference: oldPath, referenceKind: app === 'llama.cpp' ? 'model-file' : 'model-directory', binding: {instance: 'local', owned: {port: 9000, modelPath: oldPath}}};
+        const oldPath = '/models/old';
+        const draft = {id: 'draft-saved', label: app, app, reference: oldPath, referenceKind: 'model-directory', binding: {instance: 'local', owned: {port: 9000, modelPath: oldPath}}};
         const ui = await launch({...options([], {drafts: {drafts: [draft]}}), filePath: '/new/application'});
-        ui.by(`Settings for ${app === 'vllm' ? 'vLLM' : 'llama.cpp'}`).emit('clicked');
+        ui.by('Settings for vLLM').emit('clicked');
         ui.by('Choose application location…').emit('clicked');
-        const modelField = ui.by(app === 'llama.cpp' ? 'Model file' : 'Model directory');
+        const modelField = ui.by('Model directory');
         assert.equal(modelField.text, '');
         ui.edit(ui.by('Launch port'), 'text', '9010');
         await ui.by('Save selections for later').emit('clicked');
@@ -623,7 +290,7 @@ for (const app of ['llama.cpp', 'vllm']) {
         assert.equal(saved.reference, '/new/application'); assert.equal(saved.referenceKind, 'application-directory');
         assert.equal(saved.binding.owned.modelPath, undefined); assert.equal(saved.binding.owned.port, 9010);
         const reopened = await launch(options([], {drafts: {drafts: [saved]}}));
-        assert.equal(reopened.by(app === 'llama.cpp' ? 'Model file' : 'Model directory').text, '');
+        assert.equal(reopened.by('Model directory').text, '');
         await ui.by('Preview managed launch and add for review').emit('clicked');
         const preview = JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input);
         assert.equal(preview.draft.binding.owned.modelPath, undefined);
@@ -635,10 +302,9 @@ for (const [instanceStatus, expected] of [['unreachable', 'Address unreachable �
         const candidate = {...installation(), recognized: false, instanceStatus};
         const ui = await launch(options([candidate]));
         assert.ok(ui.widgets.some(widget => widget.label === expected));
-        assert.equal(ui.calls.some(call => ['prepare', 'apply', 'temporary-discover'].includes(call.argv[1])), false);
+        assert.equal(ui.calls.some(call => ['prepare', 'apply'].includes(call.argv[1])), false);
     });
 }
-
 
 test('fresh setup exposes global technical settings through an accessible gear without selecting an application', async () => {
     const ui = await launch(options([]));
@@ -666,20 +332,20 @@ for (const saved of [false, true]) {
         ui.edit(ui.by('Installation display name'), 'text', 'My workflow editor');
         await ui.click('Save selections for later');
         assert.equal(JSON.parse(ui.calls.at(-1).input).drafts[0].label, 'My workflow editor');
-        assert.equal(ui.calls.some(call => ['apply', 'temporary-discover'].includes(call.argv[1])), false);
+        assert.equal(ui.calls.some(call => ['apply'].includes(call.argv[1])), false);
     });
 }
 
 test('global settings gear is hidden on model and confirmation pages; Back restores it with invalidated review', async () => {
-    const ui = await launch(options([installation('ollama', [{id: 'a', label: 'Model A'}, {id: 'b', label: 'Model B'}])]));
-    assert.equal(ui.visible(ui.by('Use Ollama')), true);
-    ui.edit(ui.by('Use Ollama'), 'active', true);
+    const ui = await launch(options([installation('vllm', [{id: 'a', label: 'Model A'}, {id: 'b', label: 'Model B'}])]));
+    assert.equal(ui.visible(ui.by('Use vLLM')), true);
+    ui.edit(ui.by('Use vLLM'), 'active', true);
     await ui.click('Continue');
     assert.equal(heading(ui).label, 'Choose models');
     assert.equal(ui.visible(ui.by('Setup settings')), false);
     await assert.rejects(ui.click('Setup settings'), /not actionable/);
-    assert.equal(ui.visible(ui.by('Model A')), true);
-    ui.edit(ui.by('Model A'), 'active', true);
+    assert.equal(ui.visible(ui.by('Model')), true);
+    ui.edit(ui.by('Model'), 'selected', 1);
     await ui.click('Continue');
     assert.equal(heading(ui).label, 'Ready to finish');
     assert.equal(ui.visible(ui.by('Setup settings')), false);
@@ -696,7 +362,6 @@ test('global settings gear is hidden on model and confirmation pages; Back resto
     assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
 });
 
-
 test('closing setup releases display styling and singleton appearance subscriptions', async () => {
     const ui = await launch(options([]));
     assert.equal(ui.appearance.handlers.size, 2);
@@ -710,66 +375,3 @@ test('closing setup releases display styling and singleton appearance subscripti
     assert.equal(ui.calls.some(call => call.argv[1] === 'apply'), false);
 });
 
-
-test('failed temporary cleanup vetoes closing and keeps appearance resources active', async () => {
-    const blocked = {...session, status: 'cleanup_required'};
-    const ui = await launch(temporary({'temporary-discover': {session: blocked, models: [], error: 'stop failed'},
-        'temporary-cleanup': {session: blocked, error: 'cleanup refused'}}));
-    ui.edit(ui.by('Use Ollama'), 'active', true); await ui.click('Continue');
-    ui.edit(ui.by('I allow this brief start and will keep other application controls paused.'), 'active', true);
-    await ui.click('Start Ollama briefly to list models');
-    const window = ui.widgets.find(widget => widget.widgetType === 'ApplicationWindow');
-    window.close();
-    await new Promise(resolve => setImmediate(resolve));
-    assert.notEqual(window.closed, true);
-    assert.equal(ui.appearance.handlers.size, 2);
-    assert.equal(ui.styleProviders.size, 1);
-    assert.ok(ui.widgets.some(widget => widget.label?.includes('cleanup must finish before closing')));
-});
-
-for (const refresh of ['unrefreshed', 'unchanged', 'changed', 'removed', 'changed-then-restored', 'removed-then-restored']) {
-    test(`cancelling settings after temporary discovery handles ${refresh} installation evidence`, async () => {
-        const candidate = installation('ollama');
-        const refreshed = refresh.startsWith('removed') ? [] : [{...candidate, ...(refresh.startsWith('changed') ? {models: [{id: 'new', label: 'New model'}], inventoryStatus: 'available'} : {})}];
-        const ui = await launch(temporary({
-            discover: (_input, calls) => {
-                const count = calls.filter(call => call.argv[1] === 'discover').length;
-                return {request: structuredClone(request), units: [], applications: count === 1 || (refresh.endsWith('-then-restored') && count > 2) ? [candidate] : refreshed};
-            },
-            'temporary-discover': {session, models: [{id: 'a', label: 'Model A'}, {id: 'b', label: 'Model B'}]},
-        }));
-        ui.edit(ui.by('Use Ollama'), 'active', true);
-        await ui.click('Continue');
-        ui.edit(ui.by('I allow this brief start and will keep other application controls paused.'), 'active', true);
-        await ui.click('Start Ollama briefly to list models');
-        ui.edit(ui.by('Model A'), 'active', true); ui.edit(ui.by('Model B'), 'active', true);
-        const choices = ui.widgets.find(widget => widget.children.includes(ui.by('Model A')));
-        await ui.click('Back');
-        await ui.click('Settings for Ollama');
-        if (refresh !== 'unrefreshed') await ui.by('Check again').emit('clicked');
-        if (refresh.endsWith('-then-restored')) await ui.by('Check again').emit('clicked');
-        await ui.click('Cancel');
-        if (refresh.endsWith('-then-restored')) {
-            await ui.click('Settings for Ollama');
-            assert.equal(ui.by('Use installation').sensitive, false);
-            await ui.click('Cancel');
-        }
-        if (refresh === 'removed') {
-            assert.equal(ui.by('Detected instance').selected, 0);
-            assert.ok(ui.widgets.some(widget => widget.label === 'Configuration changed. Check again before using this installation.'));
-            return;
-        }
-        await ui.click('Continue');
-        const choice = label => choices.children.find(widget => widget.accessibleProperties?.label === label || widget.label === label);
-        const preserved = ['unrefreshed', 'unchanged'].includes(refresh);
-        assert.equal(Boolean(choice('Model A')), preserved);
-        assert.equal(Boolean(choice('Model B')), preserved);
-        if (preserved) {
-            assert.equal(choice('Model A').active, true); assert.equal(choice('Model B').active, true);
-            await ui.click('Continue');
-            assert.deepEqual(ui.calls.filter(call => call.argv[1] === 'prepare').map(call => JSON.parse(call.input).draft.model), ['a', 'b']);
-        } else if (refresh === 'changed') {
-            assert.ok(choices.children.some(widget => widget.accessibleProperties?.label === 'New model' || widget.label === 'New model'));
-        }
-    });
-}

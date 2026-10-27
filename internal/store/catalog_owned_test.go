@@ -18,13 +18,13 @@ func ownedTestCatalog() control.Catalog {
 		Cgroup:    "/user.slice/user-1000.slice/user@1000.service/app.slice/gws-owned-vision.service",
 		HealthURL: "http://127.0.0.1:9100/health",
 		NativeModel: &control.NativeModel{
-			Runtime:      "llama.cpp",
+			Runtime:      "vllm",
 			Instance:     "local",
 			Model:        "vision-q8",
 			Endpoint:     "http://127.0.0.1:9100",
 			LaunchFile:   "/home/u/.config/systemd/user/gws-owned-vision.service",
 			LaunchSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			Owned:        &control.OwnedLaunch{ModelPath: "/models/vision-q8.gguf", Port: 9100, Alias: "vision-q8"},
+			Owned:        &control.OwnedLaunch{ModelPath: "/models/vision-q8", Port: 9100, Alias: "vision-q8"},
 		},
 	}}}
 }
@@ -38,7 +38,7 @@ func TestReadCatalogRejectsSmuggledFields(t *testing.T) {
 	defer s.Close()
 	for name, blob := range map[string]string{
 		"unknown top-level": `{"version":1,"profiles":[{"id":"text","label":"Text","adapter":"systemd","unit":"text.service","cgroup":"/user/text","healthURL":"http://localhost:9000"}],"extra":true}`,
-		"unknown owned key": `{"version":2,"profiles":[{"id":"vision","label":"Vision","adapter":"systemd","unit":"gws-owned-vision.service","cgroup":"/user.slice/app.slice/gws-owned-vision.service","healthURL":"http://127.0.0.1:9100/health","nativeModel":{"runtime":"llama.cpp","instance":"local","model":"m","endpoint":"http://127.0.0.1:9100","launchFile":"/home/u/.config/systemd/user/gws-owned-vision.service","launchSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","owned":{"modelPath":"/models/m.gguf","port":9100,"threads":4}}}]}`,
+		"unknown owned key": `{"version":2,"profiles":[{"id":"vision","label":"Vision","adapter":"systemd","unit":"gws-owned-vision.service","cgroup":"/user.slice/app.slice/gws-owned-vision.service","healthURL":"http://127.0.0.1:9100/health","nativeModel":{"runtime":"vllm","instance":"local","model":"m","endpoint":"http://127.0.0.1:9100","launchFile":"/home/u/.config/systemd/user/gws-owned-vision.service","launchSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","owned":{"modelPath":"/models/m","port":9100,"threads":4}}}]}`,
 		"duplicate key":     `{"version":1,"version":1,"profiles":[{"id":"text","label":"Text","adapter":"systemd","unit":"text.service","cgroup":"/user/text","healthURL":"http://localhost:9000"}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -141,7 +141,7 @@ func TestOwnedProfileReferencedByLiveState(t *testing.T) {
 		t.Fatal(err)
 	}
 	mutated := owned.Clone()
-	mutated.Profiles[0].NativeModel.Owned.CtxSize = 4096
+	mutated.Profiles[0].NativeModel.Owned.MaxModelLen = 4096
 	if _, err := s.ReplaceCatalog(ctx, snap.Revision, mutated); !errors.Is(err, ErrCatalogReferenced) {
 		t.Fatalf("referenced owned mutation = %v", err)
 	}

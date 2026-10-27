@@ -9,7 +9,7 @@ import (
 )
 
 func TestDiscoveryCandidateRetainsAllLaunchDiagnosticsWithoutBinding(t *testing.T) {
-	b, draft, _ := automaticFixture(t, appLlamaCPP)
+	b, draft, _ := automaticFixture(t, "vllm")
 	b.inspectAutomatic = func(string, string) (gpuruntime.AutomaticLaunch, error) {
 		return gpuruntime.AutomaticLaunch{}, gpuruntime.CombineLaunchErrors(gpuruntime.ErrGPUIdentityUnresolved, errors.New("Environment setting is not qualified"))
 	}
@@ -25,7 +25,7 @@ func TestDiscoveryCandidateRetainsAllLaunchDiagnosticsWithoutBinding(t *testing.
 }
 
 func TestSelectedExecutableCandidateRetainsWrappedDiagnostics(t *testing.T) {
-	request := ProbeRequest{App: appLlamaCPP, Reference: "/usr/bin/llama-server", ReferenceKind: "application"}
+	request := ProbeRequest{App: "vllm", Reference: "/usr/bin/vllm", ReferenceKind: "application"}
 	got := probeSelectedExecutable(request, candidate(request), func(string, string) error {
 		return gpuruntime.CombineLaunchErrors(errors.New("executable ownership is not trusted"), errors.New("executable ancestor is writable"))
 	})
@@ -35,7 +35,7 @@ func TestSelectedExecutableCandidateRetainsWrappedDiagnostics(t *testing.T) {
 }
 
 func TestPrepareRequiresLoadedAccountHomeWorkingDirectory(t *testing.T) {
-	backend, draft, metadata := automaticFixture(t, appLlamaCPP)
+	backend, draft, metadata := automaticFixture(t, "vllm")
 	inspect := backend.inspectAutomatic
 	backend.inspectAutomatic = func(path, app string) (gpuruntime.AutomaticLaunch, error) {
 		launch, err := inspect(path, app)

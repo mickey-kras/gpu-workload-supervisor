@@ -182,7 +182,7 @@ func TestCLIWorkResolutionRequiresReasonAndStoppedProxies(t *testing.T) {
 	if err := run(); err == nil || !strings.Contains(err.Error(), "requires -resolve-reason") {
 		t.Fatalf("blank reason error = %v", err)
 	}
-	proxyLock, err := lock.AcquireShared(statePath + ".proxy.lock")
+	proxyLock, err := lock.AcquireContext(context.Background(), statePath+".proxy.lock", true)
 	if err != nil {
 		t.Fatal(err)
 	}

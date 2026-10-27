@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {ApplicationDraft, applications, candidateMessage, profileIDFromModel} from './onboarding.mjs';
 
-test('four app choices never become executable profiles through discovery', () => {
-    assert.deepEqual(applications.map(app => app.id), ['comfyui', 'ollama', 'llama.cpp', 'vllm']);
+test('app choices never become executable profiles through discovery', () => {
+    assert.deepEqual(applications.map(app => app.id), ['comfyui', 'vllm']);
+    assert.throws(() => new ApplicationDraft('ollama'), /supported application/);
+    assert.throws(() => new ApplicationDraft('llama.cpp'), /supported application/);
     for (const app of applications) {
         const draft = new ApplicationDraft(app.id);
         const probe = draft.begin();
@@ -15,7 +17,7 @@ test('four app choices never become executable profiles through discovery', () =
 });
 
 test('edited and cancelled probes cannot replace current discovery', () => {
-    const draft = new ApplicationDraft('ollama');
+    const draft = new ApplicationDraft('vllm');
     const old = draft.begin();
     draft.edit({endpoint: 'http://127.0.0.1:1234'});
     assert.equal(draft.accept(old, {models: [{id: 'old'}]}), false);
@@ -26,17 +28,17 @@ test('edited and cancelled probes cannot replace current discovery', () => {
 });
 
 test('file fallback replaces endpoint and preserves honest verification', () => {
-    const draft = new ApplicationDraft('llama.cpp');
-    draft.edit({endpoint: 'http://127.0.0.1:8080'});
-    draft.reference('/models/one.gguf', 'model-file');
-    assert.deepEqual(draft.begin().request, {app: 'llama.cpp', reference: '/models/one.gguf', referenceKind: 'model-file'});
+    const draft = new ApplicationDraft('vllm');
+    draft.edit({endpoint: 'http://127.0.0.1:8000'});
+    draft.reference('/models/one', 'model-directory');
+    assert.deepEqual(draft.begin().request, {app: 'vllm', reference: '/models/one', referenceKind: 'model-directory'});
 });
 
 test('profile IDs slugify app and model within backend rules and refuse unusable input', () => {
-    assert.equal(profileIDFromModel('ollama', 'qwen:latest'), 'ollama-qwen-latest');
-    assert.equal(profileIDFromModel('llama.cpp', '/models/a.gguf'), 'llama-cpp-models-a-gguf');
-    assert.equal(profileIDFromModel('ollama', ''), null);
-    assert.equal(profileIDFromModel('ollama', undefined), null);
+    assert.equal(profileIDFromModel('vllm', 'qwen:latest'), 'vllm-qwen-latest');
+    assert.equal(profileIDFromModel('vllm', '/models/a'), 'vllm-models-a');
+    assert.equal(profileIDFromModel('vllm', ''), null);
+    assert.equal(profileIDFromModel('vllm', undefined), null);
     const long = profileIDFromModel('vllm', `Org/${'Model-Name_'.repeat(20)}`);
     assert.ok(long.length <= 64 && /^[a-z][a-z0-9_-]*$/.test(long) && !long.endsWith('-'));
 });
@@ -62,7 +64,7 @@ test('profile IDs refuse empty-after-strip and reserved slugs', () => {
 });
 
 test('profile ID derivation stays linear on pathological dash runs', () => {
-    assert.equal(profileIDFromModel('ollama', `a${'-'.repeat(50000)}b`), 'ollama-a-b');
+    assert.equal(profileIDFromModel('vllm', `a${'-'.repeat(50000)}b`), 'vllm-a-b');
 });
 
 test('stopped and unreachable instances never report no models', () => {

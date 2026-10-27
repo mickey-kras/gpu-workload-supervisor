@@ -142,34 +142,24 @@ func TestCatalogDecodeBoundaries(t *testing.T) {
 	}
 }
 
-func TestCatalogSharedOllamaUnit(t *testing.T) {
+func TestCatalogRejectsSharedUnits(t *testing.T) {
 	native := func(runtime, model string) *NativeModel {
-		return &NativeModel{Runtime: runtime, Instance: "local", Model: model, Endpoint: "http://127.0.0.1:11434", LaunchFile: "/etc/systemd/user/ollama.service", LaunchSHA256: strings.Repeat("0", 64)}
+		return &NativeModel{Runtime: runtime, Instance: "local", Model: model, Endpoint: "http://127.0.0.1:8080", LaunchFile: "/etc/systemd/user/model.service", LaunchSHA256: strings.Repeat("0", 64)}
 	}
 	shared := func(id, runtime, model string) WorkloadProfile {
-		return WorkloadProfile{ID: Workload(id), Label: id, Adapter: "systemd", Unit: "ollama.service", Cgroup: "/workloads/ollama.service", HealthURL: "http://127.0.0.1:11434/health", NativeModel: native(runtime, model)}
-	}
-	if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{shared("alpha", "ollama", "a"), shared("beta", "ollama", "b")}}).Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if err := (Catalog{Version: 1, Profiles: []WorkloadProfile{shared("alpha", "ollama", "a:latest"), shared("beta", "ollama", "b")}}).Validate(); err != nil {
-		t.Fatal(err)
+		return WorkloadProfile{ID: Workload(id), Label: id, Adapter: "systemd", Unit: "model.service", Cgroup: "/workloads/model.service", HealthURL: "http://127.0.0.1:8080/health", NativeModel: native(runtime, model)}
 	}
 	cases := map[string][]WorkloadProfile{
-		"same model ambiguous":   {shared("alpha", "ollama", "a"), shared("beta", "ollama", "a")},
-		"tag default ambiguous":  {shared("alpha", "ollama", "a"), shared("beta", "ollama", "a:latest")},
-		"duplicate workload id":  {shared("alpha", "ollama", "a"), shared("alpha", "ollama", "b")},
-		"non-ollama shared unit": {shared("alpha", "llama.cpp", "a"), shared("beta", "llama.cpp", "b")},
-		"mixed runtimes":         {shared("alpha", "ollama", "a"), shared("beta", "llama.cpp", "b")},
-		"same unit other cgroup": {shared("alpha", "ollama", "a"), func() WorkloadProfile { p := shared("beta", "ollama", "b"); p.Cgroup = "/workloads/other"; return p }()},
-		"same cgroup other unit": {shared("alpha", "ollama", "a"), func() WorkloadProfile { p := shared("beta", "ollama", "b"); p.Unit = "other.service"; return p }()},
-		"shared unit plain": {shared("alpha", "ollama", "a"), func() WorkloadProfile {
-			p := validCatalog().Profiles[0]
-			p.ID = "beta"
-			p.Unit = "ollama.service"
-			p.Cgroup = "/workloads/ollama.service"
+		"same model ambiguous": {shared("alpha", "vllm", "a"), func() WorkloadProfile {
+			p := shared("beta", "vllm", "a")
+			p.Unit = "other.service"
+			p.Cgroup = "/workloads/other"
 			return p
 		}()},
+		"duplicate workload id":  {shared("alpha", "vllm", "a"), shared("alpha", "vllm", "b")},
+		"shared unit":            {shared("alpha", "vllm", "a"), shared("beta", "vllm", "b")},
+		"same unit other cgroup": {shared("alpha", "vllm", "a"), func() WorkloadProfile { p := shared("beta", "vllm", "b"); p.Cgroup = "/workloads/other"; return p }()},
+		"same cgroup other unit": {shared("alpha", "vllm", "a"), func() WorkloadProfile { p := shared("beta", "vllm", "b"); p.Unit = "other.service"; return p }()},
 	}
 	for name, profiles := range cases {
 		t.Run(name, func(t *testing.T) {

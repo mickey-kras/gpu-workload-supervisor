@@ -16,16 +16,16 @@ func TestRunProbe(t *testing.T) {
 	actions.euid = func() int { return 1000 }
 	for _, failed := range []bool{false, true} {
 		actions.probe = func(ctx context.Context, r setup.ProbeRequest) (setup.ApplicationCandidate, error) {
-			if r.App != "ollama" {
+			if r.App != "vllm" {
 				t.Fatal(r)
 			}
 			if failed {
 				return setup.ApplicationCandidate{}, errors.New("cancelled")
 			}
-			return setup.ApplicationCandidate{App: "ollama", LifecycleControl: "unverified"}, nil
+			return setup.ApplicationCandidate{App: "vllm", LifecycleControl: "unverified"}, nil
 		}
 		var output bytes.Buffer
-		err := actions.run([]string{"probe"}, strings.NewReader(`{"app":"ollama","endpoint":"http://127.0.0.1"}`), &output)
+		err := actions.run([]string{"probe"}, strings.NewReader(`{"app":"vllm","endpoint":"http://127.0.0.1"}`), &output)
 		if (err != nil) != failed {
 			t.Fatal(err)
 		}

@@ -99,13 +99,9 @@ func (m *SystemdManager) ownedUnitDirectory() (string, error) {
 	return filepath.Join(account.HomeDir, ".config/systemd/user"), nil
 }
 
-// preflightOwned fails closed on supervisor-owned unit files the current
-// catalog cannot account for. It reads the directory only; unit contents are
-// verified elsewhere by digest.
-func (m *SystemdManager) preflightOwned(ctx context.Context, unitDir string) error {
-	return m.preflightOwnedWithRemovals(ctx, unitDir, nil)
-}
-
+// preflightOwnedWithRemovals fails closed on supervisor-owned unit files the
+// current catalog cannot account for. It reads the directory only; unit
+// contents are verified elsewhere by digest.
 func (m *SystemdManager) preflightOwnedWithRemovals(_ context.Context, unitDir string, removals map[string]string) error {
 	if unitDir == "" {
 		return nil

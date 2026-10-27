@@ -46,7 +46,7 @@ func TestDiscoveryRetainsCatalogApplicationIdentityWhenInspectionFails(t *testin
 		err         error
 	}{
 		{"comfyui", "unsupported", true, nil},
-		{"ollama", inspectionFailedStatus, false, errors.New("user bus unavailable")},
+		{"vllm", inspectionFailedStatus, false, errors.New("user bus unavailable")},
 	} {
 		t.Run(tc.app, func(t *testing.T) {
 			p := control.WorkloadProfile{Unit: "custom-worker.service"}
@@ -72,7 +72,7 @@ func TestDiscoveryRetainsCatalogApplicationIdentityWhenInspectionFails(t *testin
 }
 
 func TestStoppedNativeApplicationsRemainInstalledWithoutEndpointProbes(t *testing.T) {
-	for _, app := range []string{"ollama", "vllm"} {
+	for _, app := range []string{"vllm"} {
 		t.Run(app, func(t *testing.T) {
 			b, draft, _ := automaticFixture(t, app)
 			b.probeApplication = func(context.Context, ProbeRequest) (ApplicationCandidate, error) {
@@ -96,7 +96,7 @@ func TestUnreachableNativeAddressDoesNotEstablishMissingExecutable(t *testing.T)
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	endpoint := server.URL
 	server.Close()
-	for _, app := range []string{"ollama", "vllm"} {
+	for _, app := range []string{"vllm"} {
 		t.Run(app, func(t *testing.T) {
 			found, err := Probe(context.Background(), ProbeRequest{App: app, Endpoint: endpoint})
 			if err != nil || found.InstanceStatus != "unreachable" || found.Recognized || found.Binding != nil || found.Reference != "" {

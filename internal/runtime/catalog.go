@@ -30,13 +30,7 @@ func (m *SystemdManager) observe(ctx context.Context, recovering bool) (Snapshot
 		if !validObservedUnit(st, p.Trainer != nil, recovering) {
 			return Snapshot{}, fmt.Errorf("%s is neither running nor stopped", p.Unit)
 		}
-		active := st.active == "active"
-		if m.sharedUnitProfile(p) {
-			if active, err = m.observeSharedOllama(ctx, p, active); err != nil {
-				return Snapshot{}, err
-			}
-		}
-		s.Workloads[p.ID] = WorkloadObservation{Active: active, Exclusive: p.Adapter != control.AdapterMediaUnload}
+		s.Workloads[p.ID] = WorkloadObservation{Active: st.active == "active", Exclusive: p.Adapter != control.AdapterMediaUnload}
 	}
 	return s, nil
 }
@@ -44,10 +38,10 @@ func (m *SystemdManager) ReleasedFor(ctx context.Context, target control.Workloa
 	return m.releasedFor(ctx, target, nil)
 }
 
-// ReleasedForUnchangedLaunches rechecks accepted workloads during setup while
-// retaining the full catalog for shared-unit policy. Only profiles whose exact
-// launch sources were replaced are excluded; setup must separately verify and
-// prove release of the replacement catalog before calling this method.
+// ReleasedForUnchangedLaunches rechecks accepted workloads during setup. Only
+// profiles whose exact launch sources were replaced are excluded; setup must
+// separately verify and prove release of the replacement catalog before
+// calling this method.
 func (m *SystemdManager) ReleasedForUnchangedLaunches(ctx context.Context, target control.Workload, replaced map[string]bool) error {
 	return m.releasedFor(ctx, target, replaced)
 }
@@ -58,7 +52,6 @@ func (m *SystemdManager) releasedFor(ctx context.Context, target control.Workloa
 			return errors.New("unconfigured release target")
 		}
 	}
-	loadedByUnit := map[string]map[string]bool{}
 	for _, p := range m.config.Catalog.Profiles {
 		if launchSourceReplaced(p, replaced) {
 			continue
@@ -71,7 +64,7 @@ func (m *SystemdManager) releasedFor(ctx context.Context, target control.Workloa
 		if p.ID == target {
 			continue
 		}
-		if err := m.releasedProfile(ctx, p, target, loadedByUnit); err != nil {
+		if err := m.releasedUnit(ctx, p.Unit, p.Cgroup, p.Adapter == control.AdapterMediaUnload); err != nil {
 			return err
 		}
 	}
@@ -97,12 +90,6 @@ func launchSourceReplaced(p control.WorkloadProfile, replaced map[string]bool) b
 	return false
 }
 
-func (m *SystemdManager) releasedProfile(ctx context.Context, p control.WorkloadProfile, target control.Workload, loadedByUnit map[string]map[string]bool) error {
-	if m.sharedUnitProfile(p) {
-		return m.releasedSharedOllama(ctx, p, target, loadedByUnit)
-	}
-	return m.releasedUnit(ctx, p.Unit, p.Cgroup, p.Adapter == control.AdapterMediaUnload)
-}
 func (m *SystemdManager) Healthy(ctx context.Context, id control.Workload) error {
 	ctx, cancel := context.WithTimeout(ctx, m.config.HealthTimeout)
 	defer cancel()
@@ -131,9 +118,6 @@ func (m *SystemdManager) Stop(ctx context.Context, id control.Workload) error {
 	p, ok := m.config.Catalog.Profile(id)
 	if !ok {
 		return errors.New("unconfigured workload")
-	}
-	if m.sharedUnitProfile(p) {
-		return m.stopSharedOllama(ctx, p)
 	}
 	if p.Adapter != control.AdapterMediaUnload {
 		return m.stopUnit(ctx, p.Unit)

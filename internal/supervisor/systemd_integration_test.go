@@ -81,7 +81,7 @@ func newSystemdFixtureWithBackstops(t *testing.T, backstops bool) *systemdFixtur
 	for _, kind := range []string{"text", "media"} {
 		unit := prefix + "-" + kind + ".service"
 		if backstops {
-			unit = control.OwnedUnitName("llama.cpp", "fixture", control.Workload(prefix+"-"+kind))
+			unit = control.OwnedUnitName(control.Workload(prefix + "-" + kind))
 		}
 		f.units = append(f.units, unit)
 	}
@@ -92,8 +92,8 @@ func newSystemdFixtureWithBackstops(t *testing.T, backstops bool) *systemdFixtur
 			// These fixture-only commands do not qualify a native GPU runtime.
 			other := f.units[1-i]
 			p := control.WorkloadProfile{ID: control.Workload(prefix + "-" + []string{"text", "media"}[i]), Unit: unit,
-				NativeModel: &control.NativeModel{Runtime: "llama.cpp", Instance: "fixture", LaunchFile: filepath.Join(unitDir, unit),
-					Owned: &control.OwnedLaunch{ModelPath: "/fixture.gguf", Port: 9100, Conflicts: other}}}
+				NativeModel: &control.NativeModel{Runtime: "vllm", Instance: "fixture", LaunchFile: filepath.Join(unitDir, unit),
+					Owned: &control.OwnedLaunch{ModelPath: "/fixture", Port: 9100, Conflicts: other}}}
 			rendered, err := gpuruntime.RenderOwnedUnit(p)
 			if err != nil {
 				t.Fatal(err)

@@ -54,7 +54,7 @@ func TestWantsDuplicatesHaveBoundedRepresentationAndUnsafeDependenciesStayReject
 	}
 	valid := []byte("[Unit]\nWants=\nWants=network-online.target\n[Service]\nExecStart=/usr/bin/true x\n")
 	for _, unsafe := range []string{"[Unit]\nWants=other-runtime.service\n", "[Unit]\nWants=network-online.target other-runtime.service\n"} {
-		_, err := parseExternalLaunchSources([][]byte{[]byte(unsafe), raw, valid}, "comfyui")
+		_, err := parseExternalLaunchSources([][]byte{[]byte(unsafe), raw, valid})
 		if !errors.Is(err, ErrLaunchUnsupported) || !strings.Contains(err.Error(), "Wants") || strings.Contains(err.Error(), "other-runtime") {
 			t.Fatal("earlier unsafe dependency erased or disclosed", err)
 		}

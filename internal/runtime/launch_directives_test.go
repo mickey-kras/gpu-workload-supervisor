@@ -14,8 +14,9 @@ import (
 )
 
 func TestLaunchInspectionRejectsUninspectedOperationalDirectives(t *testing.T) {
-	good := []byte("[Service]\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=localhost:9000\nEnvironment=CUDA_VISIBLE_DEVICES=GPU-01234567-89ab-cdef-0123-456789abcdef\nExecStart=/usr/bin/ollama serve\n")
-	n := control.NativeModel{Runtime: "ollama", Endpoint: "http://localhost:9000", GPUUUID: "GPU-01234567-89ab-cdef-0123-456789abcdef"}
+	base, n := vllmLaunchFixture(t)
+	good := []byte(base + "Environment=CUDA_VISIBLE_DEVICES=GPU-01234567-89ab-cdef-0123-456789abcdef\n")
+	n.GPUUUID = "GPU-01234567-89ab-cdef-0123-456789abcdef"
 	validate := func(string) error { return nil }
 	if _, err := inspectAutomaticLaunch(good, n.Runtime, validate); err != nil {
 		t.Fatal("baseline launch must qualify", err)
@@ -23,7 +24,7 @@ func TestLaunchInspectionRejectsUninspectedOperationalDirectives(t *testing.T) {
 	directives := []string{
 		"EnvironmentFile=/etc/runtime-environment",
 		"EnvironmentFile=-/etc/optional-runtime-environment",
-		"UnsetEnvironment=CUDA_VISIBLE_DEVICES OLLAMA_HOST OLLAMA_NO_CLOUD",
+		"UnsetEnvironment=CUDA_VISIBLE_DEVICES HF_HOME",
 		"PassEnvironment=LD_PRELOAD",
 		"PAMName=login",
 		"Sockets=unbound.socket",
@@ -36,8 +37,8 @@ func TestLaunchInspectionRejectsUninspectedOperationalDirectives(t *testing.T) {
 		"ExecReload=/usr/bin/perl /tmp/unbound.pl",
 		"RootDirectory=/srv/alternate-root",
 		"RootImage=/srv/alternate-root.img",
-		"BindPaths=/tmp/ollama:/usr/bin/ollama",
-		"BindReadOnlyPaths=/tmp/ollama:/usr/bin/ollama",
+		"BindPaths=/tmp/vllm:/usr/bin/vllm",
+		"BindReadOnlyPaths=/tmp/vllm:/usr/bin/vllm",
 		"TemporaryFileSystem=/usr",
 		"MountImages=/srv/alternate-root.img:/usr",
 		"ExtensionImages=/srv/alternate-usr.img",
@@ -90,22 +91,24 @@ func TestLaunchInspectionRejectsUninspectedOperationalDirectives(t *testing.T) {
 }
 
 func TestLaunchInspectionRetainsHarmlessUnknownSettings(t *testing.T) {
-	raw := []byte("[Unit]\nDocumentation=https://example.org/runtime\n[Service]\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=localhost:9000\nExecStart=/usr/bin/ollama serve\nSyslogIdentifier=local-model\n")
+	base, n := vllmLaunchFixture(t)
+	raw := []byte("[Unit]\nDocumentation=https://example.org/runtime\n" + base + "SyslogIdentifier=local-model\n")
 	validate := func(string) error { return nil }
-	if _, err := inspectAutomaticLaunch(raw, "ollama", validate); err != nil {
+	if _, err := inspectAutomaticLaunch(raw, n.Runtime, validate); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "worker.service")
 	if err := os.WriteFile(path, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := inspectAutomaticLaunchSourcesWithValidator(path, "ollama", nil, validate); err != nil {
+	if _, err := inspectAutomaticLaunchSourcesWithValidator(path, n.Runtime, nil, validate); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestLaunchInspectionRejectsUnboundUnitEffects(t *testing.T) {
-	good := []byte("[Service]\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=localhost:9000\nExecStart=/usr/bin/ollama serve\n")
+	base, n := vllmLaunchFixture(t)
+	good := []byte(base)
 	validate := func(string) error { return nil }
 	for _, key := range []string{
 		"Requires", "RequiresOverridable", "Requisite", "RequisiteOverridable", "BindsTo", "BindTo", "PartOf", "Upholds", "Conflicts", "OnFailure", "OnSuccess",
@@ -123,7 +126,7 @@ func TestLaunchInspectionRejectsUnboundUnitEffects(t *testing.T) {
 			}
 			dependency := []byte("[Unit]\n" + key + "=" + value + "\n")
 			raw := append(append([]byte(nil), dependency...), good...)
-			if _, err := inspectAutomaticLaunch(raw, "ollama", validate); !errors.Is(err, ErrLaunchUnsupported) {
+			if _, err := inspectAutomaticLaunch(raw, n.Runtime, validate); !errors.Is(err, ErrLaunchUnsupported) {
 				t.Errorf("strict inspection accepted unit effect: %v", err)
 			}
 			for _, inDropIn := range []bool{false, true} {
@@ -131,7 +134,7 @@ func TestLaunchInspectionRejectsUnboundUnitEffects(t *testing.T) {
 				path := filepath.Join(dir, "worker.service")
 				primary := raw
 				var dropPaths []string
-				binding := control.NativeModel{Runtime: "ollama", Endpoint: "http://localhost:9000"}
+				binding := n
 				if inDropIn {
 					primary = good
 					drop := filepath.Join(dir, "10-dependency.conf")
@@ -144,7 +147,7 @@ func TestLaunchInspectionRejectsUnboundUnitEffects(t *testing.T) {
 				if err := os.WriteFile(path, primary, 0600); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := inspectAutomaticLaunchSourcesWithValidator(path, "ollama", dropPaths, validate); !errors.Is(err, ErrLaunchUnsupported) {
+				if _, err := inspectAutomaticLaunchSourcesWithValidator(path, n.Runtime, dropPaths, validate); !errors.Is(err, ErrLaunchUnsupported) {
 					t.Errorf("automatic inspection accepted unit effect (drop-in=%v): %v", inDropIn, err)
 				}
 				if _, err := inspectQualifiedNativeLaunch(path, binding, validate); !errors.Is(err, ErrLaunchUnsupported) {
@@ -166,16 +169,17 @@ func TestLaunchInspectionRejectsUnboundUnitEffects(t *testing.T) {
 }
 
 func TestLaunchInspectionPreservesQualifiedNetworkDependencyAndOrdering(t *testing.T) {
-	raw := []byte("[Unit]\nDescription=Local model\nWants=network-online.target\nAfter=network-online.target\nBefore=shutdown.target\n[Service]\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=localhost:9000\nExecStart=/usr/bin/ollama serve\n")
+	base, n := vllmLaunchFixture(t)
+	raw := []byte("[Unit]\nDescription=Local model\nWants=network-online.target\nAfter=network-online.target\nBefore=shutdown.target\n" + base)
 	validate := func(string) error { return nil }
-	if _, err := inspectAutomaticLaunch(raw, "ollama", validate); err != nil {
+	if _, err := inspectAutomaticLaunch(raw, n.Runtime, validate); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "worker.service")
 	if err := os.WriteFile(path, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := inspectAutomaticLaunchSourcesWithValidator(path, "ollama", nil, validate); err != nil {
+	if _, err := inspectAutomaticLaunchSourcesWithValidator(path, n.Runtime, nil, validate); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -1,6 +1,6 @@
 # GPU Workload Supervisor
 
-The supervisor switches one GPU between configured workloads (ComfyUI, llama.cpp, Ollama, vLLM).
+The supervisor switches one GPU between configured workloads (ComfyUI, vLLM).
 It stops and verifies the outgoing workload before it starts the next workload.
 It blocks requests when a transition fails.
 

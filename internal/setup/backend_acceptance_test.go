@@ -240,7 +240,7 @@ func TestDiscoveryDegradesToEndpointsWhenUnitListingFails(t *testing.T) {
 			if len(found.Units) != 0 {
 				t.Fatalf("unavailable unit listing leaked: %v", found.Units)
 			}
-			if len(found.Applications) != 4 {
+			if len(found.Applications) != 2 {
 				t.Fatalf("endpoint probes skipped: %+v", found.Applications)
 			}
 			for _, application := range found.Applications {

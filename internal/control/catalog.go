@@ -25,13 +25,9 @@ var ErrOwnedRequiresV2 = errors.New("owned launch profiles require catalog versi
 var ErrOwnedCatalogManagedBySetup = errors.New("owned launch profiles are created and removed by gpu-setup apply")
 
 // OwnedUnitName derives the supervisor-owned unit name; it is never user
-// supplied. Ollama owned units are per instance so owned models may share
-// them; other runtimes render one unit per workload.
-func OwnedUnitName(runtimeName, instance string, id Workload) string {
-	if runtimeName == "ollama" {
-		return "gws-owned-ollama-" + instance + ".service"
-	}
-	return "gws-owned-" + string(id) + ".service"
+// supplied. Each owned workload renders its own unit.
+func OwnedUnitName(id Workload) string {
+	return OwnedUnitFilePrefix + string(id) + ".service"
 }
 
 var workloadID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
@@ -80,7 +76,7 @@ type CatalogSnapshot struct {
 
 // MaxCatalogInputBytes bounds canonical catalog data excluding derived owned
 // conflicts. The separate allowance fits 32 profiles with 31 peers each,
-// including 89-byte owned Ollama unit names, spaces and JSON field overhead.
+// including the longest owned unit names, spaces and JSON field overhead.
 const MaxCatalogInputBytes = 256 * 1024
 const MaxOwnedConflictBytes = 96 * 1024
 
@@ -115,6 +111,9 @@ func DecodeCatalogBytes(raw []byte) (Catalog, error) {
 		if errors.Is(err, strictjson.ErrDuplicateKey) {
 			return c, errors.New("duplicate catalog key")
 		}
+		return c, err
+	}
+	if err := rejectUnsupportedNativeRuntimes(raw); err != nil {
 		return c, err
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
@@ -267,6 +266,9 @@ func (p WorkloadProfile) validateNativeBinding() error {
 	if p.Adapter != "systemd" {
 		return errors.New("native models require stop-service bindings")
 	}
+	if p.NativeModel.Runtime != nativeRuntimeVLLM {
+		return unsupportedNativeRuntime(p.ID, p.NativeModel.Runtime)
+	}
 	return p.NativeModel.validate()
 }
 
@@ -300,7 +302,7 @@ func (p WorkloadProfile) validateOwnedPlacement() error {
 	if p.NativeModel == nil || p.NativeModel.Owned == nil {
 		return nil
 	}
-	unit := OwnedUnitName(p.NativeModel.Runtime, p.NativeModel.Instance, p.ID)
+	unit := OwnedUnitName(p.ID)
 	if p.Unit != unit {
 		return errors.New("owned launch unit must be the derived supervisor-owned name")
 	}
@@ -367,9 +369,6 @@ func validateProfileOverlap(p WorkloadProfile, previous []WorkloadProfile) error
 		if launchBindingCollision(p, q) {
 			return errors.New("launch endpoint belongs to another workload")
 		}
-		if sharedOllamaUnit(p, q) && (p.NativeModel.GPUUUID != q.NativeModel.GPUUUID || !equalOwnedLaunch(p.NativeModel.Owned, q.NativeModel.Owned) || p.NativeModel.LaunchFile != q.NativeModel.LaunchFile || p.NativeModel.LaunchSHA256 != q.NativeModel.LaunchSHA256 || !EqualLaunchSources(p.NativeModel.DropIns, q.NativeModel.DropIns)) {
-			return errors.New("shared Ollama unit requires identical launch bindings")
-		}
 		if profilesOverlap(p, q) {
 			return errors.New("duplicate or overlapping profiles")
 		}
@@ -377,17 +376,13 @@ func validateProfileOverlap(p WorkloadProfile, previous []WorkloadProfile) error
 	return nil
 }
 
-// ownedEndpointCollision extends the endpoint rule to owned profiles: two
-// profiles may share an endpoint only when they share one Ollama instance per
-// the shared-unit rule.
+// ownedEndpointCollision extends the endpoint rule to owned profiles: an
+// owned profile never shares its endpoint with another profile.
 func ownedEndpointCollision(p, q WorkloadProfile) bool {
 	if p.NativeModel == nil || q.NativeModel == nil || nativeEndpointKey(p.NativeModel.Endpoint) != nativeEndpointKey(q.NativeModel.Endpoint) {
 		return false
 	}
-	if p.NativeModel.Owned == nil && q.NativeModel.Owned == nil {
-		return false
-	}
-	return !sharedOllamaUnit(p, q)
+	return p.NativeModel.Owned != nil || q.NativeModel.Owned != nil
 }
 
 // launchBindingCollision extends the endpoint invariant to launch-binding
@@ -444,7 +439,7 @@ func validateNativeOverlap(a, b *NativeModel) error {
 	if nativeEndpointKey(a.Endpoint) == nativeEndpointKey(b.Endpoint) && a.Instance != b.Instance {
 		return errors.New("native endpoint belongs to another instance")
 	}
-	if a.Instance == b.Instance && a.ComparisonModel() == b.ComparisonModel() {
+	if a.Instance == b.Instance && a.Model == b.Model {
 		return errors.New("ambiguous native model binding")
 	}
 	return nil
@@ -457,39 +452,10 @@ func profilesOverlap(p, q WorkloadProfile) bool {
 	if p.ID == q.ID {
 		return true
 	}
-	if sharedOllamaUnit(p, q) {
-		return false
-	}
 	return p.Unit == q.Unit || p.Cgroup == q.Cgroup || strings.HasPrefix(p.Cgroup, q.Cgroup+"/") || strings.HasPrefix(q.Cgroup, p.Cgroup+"/")
 }
 
-// SharedOllamaUnit reports whether two profiles bind different models to one
-// Ollama unit: the only case where a unit and cgroup may repeat. Switching
-// between them replaces the loaded model through the Ollama API; the unit
-// keeps running.
-func SharedOllamaUnit(p, q WorkloadProfile) bool {
-	return sharedOllamaUnit(p, q)
-}
-
-func sharedOllamaUnit(p, q WorkloadProfile) bool {
-	if p.NativeModel == nil || q.NativeModel == nil {
-		return false
-	}
-	a, b := p.NativeModel, q.NativeModel
-	return a.Runtime == "ollama" && b.Runtime == "ollama" &&
-		a.Instance == b.Instance && a.Endpoint == b.Endpoint && a.ComparisonModel() != b.ComparisonModel() &&
-		p.Unit == q.Unit && p.Cgroup == q.Cgroup
-}
-
-func equalOwnedLaunch(a, b *OwnedLaunch) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return *a == *b
-}
-
 // OwnedConflictUnits returns the unique owned units that must exclude p's unit.
-// Profiles sharing an Ollama unit exclude other units, never one another.
 func (c Catalog) OwnedConflictUnits(p WorkloadProfile) string {
 	units := map[string]bool{}
 	for _, q := range c.Profiles {

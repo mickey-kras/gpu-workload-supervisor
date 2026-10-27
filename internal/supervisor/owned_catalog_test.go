@@ -19,13 +19,13 @@ func ownedSupervisorCatalog() control.Catalog {
 		Cgroup:    "/user.slice/user-1000.slice/user@1000.service/app.slice/gws-owned-vision.service",
 		HealthURL: "http://127.0.0.1:9100/health",
 		NativeModel: &control.NativeModel{
-			Runtime:      "llama.cpp",
+			Runtime:      "vllm",
 			Instance:     "owned",
 			Model:        "vision-q8",
 			Endpoint:     "http://127.0.0.1:9100",
 			LaunchFile:   "/home/u/.config/systemd/user/gws-owned-vision.service",
 			LaunchSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			Owned:        &control.OwnedLaunch{ModelPath: "/models/vision-q8.gguf", Port: 9100, Alias: "vision-q8"},
+			Owned:        &control.OwnedLaunch{ModelPath: "/models/vision-q8", Port: 9100, Alias: "vision-q8"},
 		},
 	}}}
 }

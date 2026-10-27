@@ -95,9 +95,6 @@ Database conflicts or commit errors still need inspection and recovery.
 
 Test graceful and forced stopping with the real runtime, driver, and workers.
 Unit completion or HTTP success never replaces recursive cgroup release evidence.
-Profiles that share one Ollama unit are the exception. The unit runs
-across model switches. Their release evidence is the daemon's loaded-model
-list. Once the shared unit is dead, its cgroup must be empty.
 
 Supervisor-owned launches keep `Restart=no`. Setup preview and the explicit `apply` action
 add catalog-derived `Conflicts=` and acyclic `After=` between distinct owned
@@ -115,9 +112,7 @@ proof. Arbitrary external units remain outside the guarantee. Setup adds no cust
 
 The `systemd` catalog adapter verifies both units are `inactive/dead` and their
 configured cgroup v2 subtrees have `cgroup.events` `populated 0`, which includes
-descendants. For running units that sibling Ollama profiles share, the adapter verifies release at
-model level. Any loaded model other than the sibling target's own fails
-release.
+descendants.
 The adapter also treats a removed workload cgroup as released. Missing events in an existing group,
 unreadable or malformed evidence, mismatched systemd metadata, and surviving
 children fail closed. The UI is unavailable outside media mode.
@@ -142,8 +137,7 @@ Configure every profile's cgroup path from deployment knowledge of the actual
 systemd units
 (for example, inspect `systemctl --user show --property=ControlGroup -- UNIT.service` while
 the unit runs). Paths are absolute **within** `/sys/fs/cgroup`, canonical,
-non-root, distinct, and non-overlapping. Only sibling profiles sharing one
-Ollama unit repeat the same unit and cgroup. A nonempty systemd `ControlGroup` must
+non-root, distinct, and non-overlapping. A nonempty systemd `ControlGroup` must
 match.
 
 An empty property after shutdown uses the accepted catalog, never an
@@ -172,8 +166,7 @@ authorizes a service stop. `restore-state` requires no runtime policy.
 
 Remove `-release-max-used-mib`, including explicit `=0`, which the CLI rejects.
 Configure cgroup paths in the catalog. The release check uses cgroup evidence, never GPU
-memory accounting (running shared Ollama units use the loaded-model list, as
-above). Move the legacy runtime flags for each workload to profiles in the accepted
+memory accounting. Move the legacy runtime flags for each workload to profiles in the accepted
 [catalog](WORKLOADS.md), including unit, cgroup, health endpoint, adapter and
 capacity requirement.
 
@@ -212,8 +205,8 @@ Repair capacity before retrying. A snapshot of capacity does not reserve memory 
 The validator rejects invalid configuration:
 
 - A profile requirement plus headroom must not overflow.
-- Workload cgroups must not overlap, except the validated shared Ollama instance.
-- One unit must not serve two profiles, except shared Ollama profiles with distinct model identities (see [WORKLOADS.md](WORKLOADS.md)).
+- Workload cgroups must not overlap.
+- One unit must not serve two profiles (see [WORKLOADS.md](WORKLOADS.md)).
 - The `media-unload` adapter needs a release URL. The `systemd` adapter does
   not need one, but the validator still checks a supplied URL.
 - An unknown adapter is invalid.

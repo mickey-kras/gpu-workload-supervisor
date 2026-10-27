@@ -6,10 +6,10 @@ import Gtk from 'gi://Gtk?version=4.0';
 import Gio from 'gi://Gio';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import GLib from 'gi://GLib';
-import {applicationHeader, roundedCard, wrappedCheckButton} from './presentation.mjs';
+import {applicationHeader, roundedCard} from './presentation.mjs';
 import {createShell, createSettings, createApplicationCards, createFooter} from './setup-layout.mjs';
 import {ReviewedConfiguration} from './review.mjs';
-import {createProfileEditor, editableOwnedLaunch} from './profile-ui.mjs';
+import {createProfileEditor} from './profile-ui.mjs';
 import {addDraftEditor} from './discovery-ui.mjs';
 import {applications, candidateDiagnostics} from './onboarding.mjs';
 
@@ -22,7 +22,6 @@ class SetupWindow {
         this.step = 0;
         this.ready = false;
         this.closed = false;
-        this.temporaryStatus = null;
         this.discovered = [];
         this.discoveryErrors = [];
         this.draftRevision = '';
@@ -40,7 +39,7 @@ class SetupWindow {
         this.editedLabels = new WeakMap();
         this.applicationCards = new Map();
         this.suspendedApplications = new Map();
-        for (const name of ['field', 'invalidate', 'preparedStillCurrent', 'preparedProfiles',
+        for (const name of ['field', 'invalidate', 'preparedStillCurrent', 'preparedProfile',
             'continueSetup', 'saveDraftSelections', 'postponeSetup', 'goBack', 'activateConfiguration', 'closeRequested'])
             this[name] = this[name].bind(this);
         createShell(this); createSettings(this); createApplicationCards(this); createFooter(this);
@@ -76,17 +75,23 @@ class SetupWindow {
         const current = {...profile};
         if (this.editedLabels.has(profile)) this.editedLabels.set(current, this.editedLabels.get(profile));
         this.profiles.push(current);
+        const removalOnly = ['ollama', 'llama.cpp'].includes(current.nativeModel?.runtime);
+        const parent = this.profileContainer(current);
         const group = createProfileEditor({current, Adw, Gtk, GLib, units: this.units, field: this.field, invalidate: this.invalidate,
-            applicationRuntime: this.profileApps.get(current.id),
+            applicationRuntime: this.profileApps.get(current.id), removalOnly,
             onLabelEdit: label => this.editedLabels.set(current, label),
             onRemove: group => {
                 this.profiles.splice(this.profiles.indexOf(current), 1);
-                this.rows.remove(group);
+                parent.remove(group);
                 this.profileRows.delete(current);
                 this.invalidate();
             },
             onEdit: draft => { const editor = this.appendDraft(draft, current, true); if (this.applicationSettings && editor) this.openApplicationSettings(editor, this.applicationSettings.origin); }});
-        this.rows.append(group); this.profileRows.set(current, group); return current;
+        parent.append(group); this.profileRows.set(current, group); return current;
+    }
+
+    profileContainer(profile) {
+        return ['ollama', 'llama.cpp'].includes(profile.nativeModel?.runtime) ? this.draftRows : this.rows;
     }
 
     setStep(next) {
@@ -94,7 +99,7 @@ class SetupWindow {
         this.step = next;
         this.box.spacing = this.step === 2 ? 10 : 14;
         this.heading.label = ['Choose your applications', 'Choose models', 'Ready to finish'][this.step];
-        this.introduction.label = ['Use applications already installed on this computer.', 'Each selected model appears as a separate workload in GPU Control.', 'Supervisor will switch between these workloads.'][this.step];
+        this.introduction.label = ['Use applications already installed on this computer.', 'The selected model appears as a workload in GPU Control.', 'Supervisor will switch between these workloads.'][this.step];
         this.applicationPage.visible = this.step === 0; this.modelPage.visible = this.step === 1; this.finishPage.visible = this.step === 2;
         this.draftRows.visible = this.step === 0;
         this.setupSettings.visible = this.step === 0; this.back.visible = this.step > 0; this.later.visible = this.step === 0; this.status.visible = this.step === 2 || this.pending; this.apply.visible = this.step === 2; this.review.visible = this.step !== 2;
@@ -172,7 +177,7 @@ class SetupWindow {
         if (this.drafts.some(draft => draft.id === initial.id)) { this.status.label = 'This workload already has an open selection. Finish or remove that selection first.'; return this.draftEditors.find(editor => editor.id === initial.id); }
         this.drafts.push(initial);
         let editor;
-        editor = addDraftEditor({Adw, Gtk, Gio, window: this.window, parent: this.draftRows, initial, detected: this.discovered, discovered: discovery => this.updateDiscovery(discovery), gpuUUIDs: this.gpuUUIDs, gpuInventoryStatus: this.gpuInventoryStatus, discoveryErrors: this.discoveryErrors, command: this.command, modelParent: this.modelPage, temporaryStatus: this.temporaryStatus, reportProblem: this.reportError, reportStatus: message => { this.status.label = message; this.reportError.clear(); }, navigateSettings: state => this.navigateApplicationSettings(editor, state), saveSelections: () => this.saveDraftSelections(), openSettings: origin => this.openApplicationSettings(editor, origin),
+        editor = addDraftEditor({Adw, Gtk, Gio, window: this.window, parent: this.draftRows, initial, detected: this.discovered, discovered: discovery => this.updateDiscovery(discovery), gpuUUIDs: this.gpuUUIDs, gpuInventoryStatus: this.gpuInventoryStatus, discoveryErrors: this.discoveryErrors, command: this.command, modelParent: this.modelPage, reportProblem: this.reportError, navigateSettings: state => this.navigateApplicationSettings(editor, state), saveSelections: () => this.saveDraftSelections(), openSettings: origin => this.openApplicationSettings(editor, origin),
             bind: async (profile, current, finish = false) => {
                 replacing ??= this.profiles.find(existing => existing.id === initial.id) ?? null;
                 if (replacing && !this.profiles.includes(replacing)) throw new Error('The original workload was removed. Reopen Manage workloads before editing it.');
@@ -186,14 +191,13 @@ class SetupWindow {
                 const commit = () => {
                     if (replacing) {
                         this.profiles.splice(this.profiles.indexOf(replacing), 1);
-                        this.rows.remove(this.profileRows.get(replacing)); this.profileRows.delete(replacing);
+                        this.profileContainer(replacing).remove(this.profileRows.get(replacing)); this.profileRows.delete(replacing);
                     }
                     this.profileApps.set(prepared.id, initial.app);
                     this.addProfile(prepared, !finish);
                 };
                 if (finish) {
                     if (this.drafts.some(draft => draft.id !== initial.id)) throw new Error('Other included applications still need a check. Return to setup and Continue to check every selected installation.');
-                    if (this.draftEditors.some(item => item.temporaryActive()) || (this.temporaryStatus?.session && this.temporaryStatus.session.status !== 'completed')) throw new Error('Finish temporary application cleanup before continuing.');
                     const items = [...this.profiles.filter(existing => existing !== replacing), prepared];
                     if (!await this.reviewConfiguration({items, current, commit}))
                         throw new Error('The configuration needs another check before confirmation. Your draft is kept.');
@@ -213,10 +217,20 @@ class SetupWindow {
         return editor;
     }
 
-    async cancelEditors() {
-        // Only this window's consented checks can be cancelled automatically.
-        // Recovered sessions require a fresh paused-controls acknowledgement.
-        await Promise.all(this.draftEditors.map(editor => editor.cancel()));
+    appendUnsupportedDraft(draft) {
+        this.drafts.push(draft);
+        const group = new Adw.PreferencesGroup({title: draft.label, description: `${draft.app} is no longer supported. Remove this selection, then save.`});
+        const remove = new Gtk.Button({label: `Remove saved selection: ${draft.label}`});
+        group.add(remove); this.draftRows.append(group);
+        remove.connect('clicked', () => {
+            this.invalidate(); this.draftRows.remove(group);
+            this.drafts = this.drafts.filter(item => item !== draft);
+            this.draftGeneration++; this.saveDrafts.sensitive = !this.pending;
+        });
+    }
+
+    cancelEditors() {
+        for (const editor of this.draftEditors) editor.cancel();
     }
 
     async reviewConfiguration({items, current, commit}) {
@@ -253,13 +267,12 @@ class SetupWindow {
     }
 
     preparedStillCurrent({editor, result}) {
-        return result.current() && (!editor.replacing || this.profiles.includes(editor.replacing)) && (editor.staged ?? []).every(profile => this.profiles.includes(profile));
+        return result.current() && (!editor.replacing || this.profiles.includes(editor.replacing));
     }
 
-    preservePreparedProfile(editor, result, profile, index) {
-        const sameModel = editor.replacing?.nativeModel?.model === profile.nativeModel?.model;
-        const replacingModelKept = result.profiles.some(item => item.nativeModel?.model === editor.replacing?.nativeModel?.model);
-        const previous = editor.staged?.find(existing => existing.nativeModel?.model === profile.nativeModel?.model) ?? (sameModel || (index === 0 && !replacingModelKept) ? editor.replacing : null);
+    preparedProfile({editor, result}) {
+        const {profile} = result;
+        const previous = editor.replacing;
         if (previous) {
             const updated = {...previous, ...profile, label: this.editedLabels.get(previous) ?? (profile.nativeModel?.model === editor.originalModel ? profile.label : previous.label), id: previous.id, requiredMiB: previous.requiredMiB, bootPolicy: previous.bootPolicy, ...editor.settingsOverrides()};
             if (this.editedLabels.has(previous)) this.editedLabels.set(updated, this.editedLabels.get(previous));
@@ -268,14 +281,12 @@ class SetupWindow {
         return {...profile, ...editor.settingsOverrides()};
     }
 
-    preparedProfiles({editor, result}) {
-        return result.profiles.map((profile, index) => this.preservePreparedProfile(editor, result, profile, index));
-    }
-
     async continueSetup() {
+        if (this.drafts.some(draft => !applications.some(app => app.id === draft.app))) {
+            this.status.label = 'Remove unsupported saved selections, then save before continuing.'; this.status.visible = true; return;
+        }
         if (!this.request || this.closed) return;
         this.closeApplicationSettings(false);
-        if (this.draftEditors.some(editor => editor.temporaryActive()) || (this.temporaryStatus?.session && this.temporaryStatus.session.status !== 'completed')) { this.status.label = 'Restore the stopped application before continuing.'; this.status.visible = true; return; }
         const editors = this.draftEditors.filter(editor => this.drafts.some(draft => draft.id === editor.id));
         if (editors.some(editor => editor.checking())) { this.status.label = 'Wait for the installation check to finish before continuing.'; this.status.visible = true; return; }
         if (this.step === 0 && editors.some(editor => editor.needsModelDecision())) { this.setStep(1); return; }
@@ -286,8 +297,8 @@ class SetupWindow {
             for (const editor of editors) prepared.push({editor, result: await editor.prepare()});
             const current = () => !this.closed && generation === this.draftGeneration && prepared.every(this.preparedStillCurrent);
             if (!current()) { this.status.label = 'The selected application changed while checking it. Reopen setup to refresh.'; this.status.visible = true; return; }
-            const replaced = new Set(prepared.flatMap(({editor}) => editor.staged ?? (editor.replacing ? [editor.replacing] : [])));
-            const additions = prepared.flatMap(this.preparedProfiles);
+            const replaced = new Set(prepared.flatMap(({editor}) => editor.replacing ? [editor.replacing] : []));
+            const additions = prepared.map(this.preparedProfile);
             const items = [...this.profiles.filter(profile => !replaced.has(profile)), ...additions];
             const keys = new Set(); const ids = new Set();
             for (const profile of items) {
@@ -296,12 +307,12 @@ class SetupWindow {
                 ids.add(profile.id); keys.add(key);
             }
             const commit = () => {
-                for (const profile of replaced) { this.profiles.splice(this.profiles.indexOf(profile), 1); this.rows.remove(this.profileRows.get(profile)); this.profileRows.delete(profile); }
-                let index = 0;
-                for (const {editor, result} of prepared) {
-                    editor.staged = result.profiles.map(() => { const profile = additions[index++]; this.profileApps.set(profile.id, editor.app); return this.addProfile(profile, false); });
-                    editor.replacing = editor.staged[0];
-                }
+                for (const profile of replaced) { this.profiles.splice(this.profiles.indexOf(profile), 1); this.profileContainer(profile).remove(this.profileRows.get(profile)); this.profileRows.delete(profile); }
+                prepared.forEach(({editor}, index) => {
+                    const profile = additions[index];
+                    this.profileApps.set(profile.id, editor.app);
+                    editor.replacing = this.addProfile(profile, false);
+                });
             };
             if (await this.reviewConfiguration({items, current, commit})) {
                 this.ready = true; this.renderSummary(items);
@@ -309,45 +320,6 @@ class SetupWindow {
             }
         } catch (error) { this.reportError('Setup needs attention. Check the selected applications and models, then continue again.', error); this.invalidate(); }
         finally { this.review.sensitive = true; }
-    }
-
-    addRecoveryCleanup() {
-        if (!this.temporaryStatus.session || this.temporaryStatus.session.status === 'completed') return;
-        const cleanupConsent = wrappedCheckButton(Gtk, 'I have paused external application controls and finished any resumed work.', {});
-        const retryCleanup = new Gtk.Button({label: 'Restore stopped application', sensitive: false});
-        cleanupConsent.connect('toggled', () => { retryCleanup.sensitive = cleanupConsent.active; });
-        this.applicationPage.append(new Gtk.Label({label: 'An earlier temporary model check still blocks setup. Restoring its stopped state will stop this application. Finish resumed work and pause external application controls before restoring it. Leaving setup keeps the recovery record for next time.', wrap: true, xalign: 0}));
-        this.applicationPage.append(cleanupConsent); this.applicationPage.append(retryCleanup);
-        retryCleanup.connect('clicked', async () => {
-            if (!cleanupConsent.active || this.temporaryStatus.session.status === 'completed') return;
-            retryCleanup.sensitive = false;
-            try {
-                const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'temporary-cleanup'], JSON.stringify({id: this.temporaryStatus.session.id, token: this.temporaryStatus.session.token, externalControlPaused: true})));
-                if (result.error || result.session?.status !== 'completed') throw new Error(result.error || 'Cleanup remains incomplete.');
-                this.temporaryStatus.session = result.session; this.temporaryStatus.available = false; this.temporaryStatus.expected = undefined;
-                cleanupConsent.sensitive = false;
-                const refreshed = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'temporary-status']));
-                Object.assign(this.temporaryStatus, refreshed, {session: refreshed.session ?? result.session});
-                this.status.label = 'Previous stopped state restored. Reopen setup to refresh detection.';
-            } catch (error) { this.reportError(this.temporaryStatus.session.status === 'completed' ? 'The stopped state was restored, but model-check status could not be refreshed. Reopen setup before another temporary check.' : 'Temporary cleanup needs attention. Pause external controls and acknowledge again before retrying.', error); }
-            finally { cleanupConsent.active = false; retryCleanup.sensitive = false; }
-        });
-    }
-
-    addConfiguredOllama() {
-        // Existing Ollama models share one recognized installation. Ordinary
-        // editing uses that application's model group, without adding it again.
-        const existingOllama = this.profiles.filter(profile => this.runtimeOf(profile) === 'ollama');
-        const recognizedOllama = this.discovered.filter(candidate => candidate.app === 'ollama' && candidate.recognized);
-        if (!this.pending && existingOllama.length && recognizedOllama.length === 1 && !this.drafts.some(draft => draft.app === 'ollama')) {
-            const current = existingOllama.find(profile => profile.unit === recognizedOllama[0].unit);
-            if (current && recognizedOllama[0].models?.length > 1) {
-                const related = existingOllama.filter(profile => profile.unit === current.unit);
-                this.appendDraft({id: current.id, app: 'ollama', label: current.label, model: current.nativeModel.model, models: related.map(profile => profile.nativeModel.model), endpoint: current.nativeModel.endpoint,
-                    binding: current.nativeModel.owned ? {instance: current.nativeModel.instance, owned: editableOwnedLaunch(current.nativeModel.owned)} : {unit: current.unit, cgroup: current.cgroup, healthURL: current.healthURL, instance: current.nativeModel.instance, model: current.nativeModel.model, launchFile: current.nativeModel.launchFile}}, current);
-                this.draftEditors.at(-1).staged = related;
-            }
-        }
     }
 
     updateDiscovery(discovery) {
@@ -430,21 +402,19 @@ class SetupWindow {
         finally { this.saveDrafts.sensitive = !this.pending && (!saved || generation !== this.draftGeneration); }
     }
 
-    async postponeSetup() {
+    postponeSetup() {
         if (this.applicationSettings?.editor) {
-            try { await this.applicationSettings.editor.cancelSettings(); this.closeApplicationSettings(); }
-            catch (error) { this.applicationSettings.editor.showProblem('Temporary cleanup must finish before cancelling.', error); }
+            this.applicationSettings.editor.cancelSettings(); this.closeApplicationSettings();
             return;
         }
-        try { await this.cancelEditors(); this.closed = true; this.releasePresentation(); this.window.close(); }
-        catch (error) { this.reportError('Temporary application cleanup must finish before closing setup. Keep external application controls paused and retry.', error); }
+        this.cancelEditors(); this.closed = true; this.releasePresentation(); this.window.close();
     }
 
-    async goBack() {
+    goBack() {
         this.invalidate();
         if (this.applicationSettings?.editor?.settingsBack()) return;
-        try { await this.cancelEditors(); if (this.applicationSettings) this.closeApplicationSettings(); else this.setStep(this.step === 2 && this.draftEditors.some(editor => this.drafts.some(draft => draft.id === editor.id) && editor.needsModelDecision()) ? 1 : 0); }
-        catch (error) { this.reportError('Temporary application cleanup must finish before going back. Retry cleanup.', error); }
+        this.cancelEditors();
+        if (this.applicationSettings) this.closeApplicationSettings(); else this.setStep(this.step === 2 && this.draftEditors.some(editor => this.drafts.some(draft => draft.id === editor.id) && editor.needsModelDecision()) ? 1 : 0);
     }
 
     async activateConfiguration() {
@@ -466,12 +436,7 @@ class SetupWindow {
 
     closeRequested() {
         this.invalidate();
-        if (this.draftEditors.some(editor => editor.temporaryActive())) {
-            this.cancelEditors().then(() => { this.closed = true; this.releasePresentation(); this.window.close(); })
-                .catch(error => this.reportError('Temporary cleanup must finish before closing. Keep external controls paused and retry.', error));
-            return true;
-        }
-        this.closed = true; this.draftEditors.forEach(editor => editor.cancel()); this.releasePresentation(); return false;
+        this.closed = true; this.cancelEditors(); this.releasePresentation(); return false;
     }
 
     async initialize() {
@@ -481,12 +446,15 @@ class SetupWindow {
                 throw new Error('This package requires a GNOME Shell 50 desktop session.');
             const discovery = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'discover']));
             this.request = discovery.request; this.units = discovery.units; this.pending = Boolean(discovery.pending); this.discovered = discovery.applications ?? []; this.gpuUUIDs = discovery.gpuUUIDs ?? []; this.gpuInventoryStatus = discovery.gpuInventoryStatus; this.discoveryErrors = discovery.errors ?? [];
+            let draftWarning = '';
             if (!this.pending) {
-                this.temporaryStatus = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'temporary-status']));
                 const saved = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'drafts']));
                 this.draftRevision = saved.revision ?? '';
-                for (const draft of saved.drafts ?? []) this.appendDraft(draft);
-                this.addRecoveryCleanup();
+                draftWarning = saved.warning ?? '';
+                for (const draft of saved.drafts ?? []) {
+                    if (applications.some(app => app.id === draft.app)) this.appendDraft(draft);
+                    else this.appendUnsupportedDraft(draft);
+                }
             }
             this.applicationGroup.sensitive = !this.pending;
             this.status.label = this.pending ? 'Interrupted setup found. Review and resume its original configuration.' :
@@ -495,14 +463,11 @@ class SetupWindow {
             this.field(this.advanced, 'State database path', this.request.profile.statePath, text => this.request.profile.statePath = text);
             this.field(this.advanced, 'NVIDIA GPU index', this.request.profile.gpuIndex, text => this.request.profile.gpuIndex = Number(text));
             for (const profile of this.request.catalog.profiles ?? []) this.addProfile(profile);
-            for (const editor of this.draftEditors) {
-                editor.replacing ??= this.profiles.find(profile => profile.id === editor.id) ?? null;
-                if (editor.replacing) editor.staged = this.profiles.filter(profile => this.runtimeOf(profile) === editor.app && profile.unit === editor.replacing.unit);
-            }
-            this.addConfiguredOllama();
-            this.add.sensitive = !this.pending; this.rows.sensitive = !this.pending; this.settings.sensitive = !this.pending;
+            for (const editor of this.draftEditors) editor.replacing ??= this.profiles.find(profile => profile.id === editor.id) ?? null;
+            this.add.sensitive = !this.pending; this.rows.sensitive = !this.pending; this.draftRows.sensitive = !this.pending; this.settings.sensitive = !this.pending;
             this.updateApplicationCards();
             this.review.sensitive = true;
+            if (draftWarning) this.reportError('Remove unsupported saved selections, then save. Other selections are kept.', new Error(draftWarning));
             if (this.discoveryErrors.length) this.reportError('Some installations could not be checked. Choose an application location or reopen setup to retry discovery.', new Error(this.discoveryErrors.join('\n')));
         } catch (error) { this.status.label = error.message; this.status.visible = true; this.review.sensitive = false; }
     }

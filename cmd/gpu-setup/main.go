@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
@@ -17,44 +15,35 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
-const (
-	cmdVerifyBindings    = "verify-bindings"
-	cmdTemporaryDiscover = "temporary-discover"
-)
+const cmdVerifyBindings = "verify-bindings"
 
 type setupActions struct {
-	home              func() (string, error)
-	temporaryStatus   func(context.Context, string) (setup.TemporaryDiscoveryStatus, error)
-	temporaryDiscover func(context.Context, string, setup.TemporaryDiscoveryRequest) (setup.TemporaryDiscoveryResult, error)
-	temporaryCleanup  func(context.Context, string, setup.TemporaryCleanupRequest) (setup.TemporaryDiscoveryResult, error)
-	apply             func(context.Context, string, setup.Request) error
-	reconcile         func(context.Context, string) error
-	policyTick        func(context.Context, string) error
-	discover          func(context.Context, string) (setup.Discovery, error)
-	prepare           func(context.Context, setup.PrepareRequest) (setup.PreparedApplication, error)
-	probe             func(context.Context, setup.ProbeRequest) (setup.ApplicationCandidate, error)
-	euid              func() int
-	verify            func(context.Context, setup.Request) error
-	inspect           func(string, control.NativeModel) (string, error)
-	managerCgroup     func(context.Context, string) (string, error)
+	home          func() (string, error)
+	apply         func(context.Context, string, setup.Request) error
+	reconcile     func(context.Context, string) error
+	policyTick    func(context.Context, string) error
+	discover      func(context.Context, string) (setup.Discovery, error)
+	prepare       func(context.Context, setup.PrepareRequest) (setup.PreparedApplication, error)
+	probe         func(context.Context, setup.ProbeRequest) (setup.ApplicationCandidate, error)
+	euid          func() int
+	verify        func(context.Context, setup.Request) error
+	inspect       func(string, control.NativeModel) (string, error)
+	managerCgroup func(context.Context, string) (string, error)
 }
 
 func systemActions() setupActions {
 	return setupActions{
-		home:              setup.Home,
-		temporaryStatus:   setup.TemporaryStatus,
-		temporaryDiscover: setup.TemporaryDiscover,
-		temporaryCleanup:  setup.TemporaryCleanup,
-		apply:             setup.Apply,
-		reconcile:         setup.Reconcile,
-		policyTick:        setup.PolicyTick,
-		discover:          setup.Discover,
-		probe:             setup.Probe,
-		prepare:           setup.Prepare,
-		euid:              os.Geteuid,
-		verify:            setup.VerifyBindings,
-		inspect:           runtime.InspectQualifiedNativeLaunch,
-		managerCgroup:     setup.ManagerCgroup,
+		home:          setup.Home,
+		apply:         setup.Apply,
+		reconcile:     setup.Reconcile,
+		policyTick:    setup.PolicyTick,
+		discover:      setup.Discover,
+		probe:         setup.Probe,
+		prepare:       setup.Prepare,
+		euid:          os.Geteuid,
+		verify:        setup.VerifyBindings,
+		inspect:       runtime.InspectQualifiedNativeLaunch,
+		managerCgroup: setup.ManagerCgroup,
 	}
 }
 
@@ -66,22 +55,16 @@ func main() {
 }
 func (a setupActions) run(args []string, input io.Reader, output io.Writer) error {
 	if len(args) != 1 {
-		return errors.New("usage: gpu-setup discover|probe|prepare|correct-gpu|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|temporary-status|temporary-discover|temporary-cleanup|reconcile|idle-policy-tick|remove-integration")
+		return errors.New("usage: gpu-setup discover|probe|prepare|correct-gpu|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|reconcile|idle-policy-tick|remove-integration")
 	}
-	parent := context.Background()
-	if args[0] == cmdTemporaryDiscover {
-		signalCtx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
-		defer stop()
-		parent = signalCtx
-	}
-	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	home, err := a.home()
 	if err != nil {
 		return err
 	}
 	switch args[0] {
-	case "correct-gpu", cmdTemporaryDiscover, "temporary-status", "temporary-cleanup", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned":
+	case "correct-gpu", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned":
 		if a.euid() == 0 {
 			return errors.New("run guided setup as the desktop account, not root")
 		}
@@ -93,32 +76,6 @@ func (a setupActions) runAction(ctx context.Context, home, action string, input 
 	switch action {
 	case "correct-gpu":
 		return runGPUCorrection(ctx, home, input, output)
-	case "temporary-status":
-		result, err := a.temporaryStatus(ctx, home)
-		if err != nil {
-			return err
-		}
-		return json.NewEncoder(output).Encode(result)
-	case cmdTemporaryDiscover:
-		var request setup.TemporaryDiscoveryRequest
-		if err := strictjson.DecodeLimited(input, 16384, &request); err != nil {
-			return err
-		}
-		result, err := a.temporaryDiscover(ctx, home, request)
-		if err != nil {
-			return err
-		}
-		return json.NewEncoder(output).Encode(result)
-	case "temporary-cleanup":
-		var request setup.TemporaryCleanupRequest
-		if err := strictjson.DecodeLimited(input, 16384, &request); err != nil {
-			return err
-		}
-		result, err := a.temporaryCleanup(ctx, home, request)
-		if err != nil {
-			return err
-		}
-		return json.NewEncoder(output).Encode(result)
 	case "remove-integration":
 		return setup.RemoveIntegration(ctx, home)
 	case "discover":
@@ -174,10 +131,17 @@ func (a setupActions) runDiscover(ctx context.Context, home string, output io.Wr
 }
 func runDrafts(home string, output io.Writer) error {
 	result, err := setup.ReadDrafts(home)
-	if err != nil {
+	if err != nil && !errors.Is(err, setup.ErrUnsupportedDraftApplication) {
 		return err
 	}
-	return json.NewEncoder(output).Encode(result)
+	warning := ""
+	if err != nil {
+		warning = err.Error()
+	}
+	return json.NewEncoder(output).Encode(struct {
+		setup.DraftSnapshot
+		Warning string `json:"warning,omitempty"`
+	}{result, warning})
 }
 func runSaveDrafts(home string, input io.Reader, output io.Writer) error {
 	var request setup.DraftRequest

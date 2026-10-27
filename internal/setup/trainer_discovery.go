@@ -16,12 +16,9 @@ type TrainerCandidate struct {
 	NextStep            string           `json:"nextStep"`
 }
 
-// InspectTrainer accepts an explicit draft binding without applying it. Runtime
-// approval and measured capacity cannot be inferred from installed executables.
-func InspectTrainer(ctx context.Context, request Request, target control.Workload) (TrainerCandidate, error) {
-	return SystemBackend().InspectTrainer(ctx, request, target)
-}
-
+// InspectTrainer inspects an explicit trainer binding without applying it.
+// Runtime approval and measured capacity cannot be inferred from installed
+// executables.
 func (b Backend) InspectTrainer(ctx context.Context, request Request, target control.Workload) (TrainerCandidate, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()

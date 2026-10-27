@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,12 +25,12 @@ func TestAdoptedDropInLaunchStartStopIdentityAndDrift(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	m, runner, p, cmd := nativeFixture(t, "llama.cpp", server.URL)
+	m, runner, p, cmd := nativeFixture(t, "vllm", server.URL)
 	original, err := os.ReadFile(p.NativeModel.LaunchFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := strings.TrimSpace(strings.Split(string(original), "ExecStart=")[1]) + " --parallel 2 --cont-batching --flash-attn on --spec-type draft-mtp --spec-draft-n-max 4"
+	command := strings.TrimSpace(strings.Split(string(original), "ExecStart=")[1]) + " --max-model-len 4096"
 	model := strings.Fields(command)[2]
 	original = append(original, []byte("ExecStartPre=/usr/bin/true\n")...)
 	if err := os.WriteFile(p.NativeModel.LaunchFile, original, 0600); err != nil {
@@ -41,7 +42,7 @@ func TestAdoptedDropInLaunchStartStopIdentityAndDrift(t *testing.T) {
 	if err := os.WriteFile(drop, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	launch, err := inspectAutomaticLaunchSourcesWithValidator(p.NativeModel.LaunchFile, "llama.cpp", []string{drop}, fixtureExecutableValidator)
+	launch, err := inspectAutomaticLaunchSourcesWithValidator(p.NativeModel.LaunchFile, "vllm", []string{drop}, fixtureExecutableValidator)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,10 +73,10 @@ func TestAdoptedDropInLaunchStartStopIdentityAndDrift(t *testing.T) {
 			t.Fatal("adopted source modified", path)
 		}
 	}
-	if p.NativeModel.LaunchSHA256 != fmt.Sprintf("%x", sha256.Sum256(original)) || !control.EqualLaunchSources(p.NativeModel.DropIns, launch.DropIns) {
+	if p.NativeModel.LaunchSHA256 != fmt.Sprintf("%x", sha256.Sum256(original)) || !slices.Equal(p.NativeModel.DropIns, launch.DropIns) {
 		t.Fatal("source evidence lost")
 	}
-	runner.outputs[cmd] = []byte(strings.Replace(string(runner.outputs[cmd]), " --parallel 2", " --parallel 3", 1))
+	runner.outputs[cmd] = []byte(strings.Replace(string(runner.outputs[cmd]), " --max-model-len 4096", " --max-model-len 8192", 1))
 	if m.verifyNativeBinding(ctx, p) == nil {
 		t.Fatal("loaded main command drift accepted")
 	}
@@ -88,13 +89,16 @@ func TestAdoptedDropInLaunchStartStopIdentityAndDrift(t *testing.T) {
 }
 
 func TestMalformedExternalConfigurationCannotReachQualification(t *testing.T) {
-	good := "[Service]\nExecStart=/usr/bin/ollama serve\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=localhost:9000\n"
+	good, _ := vllmLaunchFixture(t)
+	if _, err := parseExternalLaunchSources([][]byte{[]byte(good)}); err != nil {
+		t.Fatal("baseline launch rejected", err)
+	}
 	for _, raw := range []string{"[Service]\nmalformed", good + "ExecStartPre=/usr/bin/true \\", good + "Description=" + strings.Repeat("x", 1<<20), good + "ExecStart=$COMMAND\n", good + strings.Repeat("ExecStartPre=/usr/bin/true\n", 33)} {
-		if _, err := parseExternalLaunchSources([][]byte{[]byte(raw)}, "ollama"); err == nil {
+		if _, err := parseExternalLaunchSources([][]byte{[]byte(raw)}); err == nil {
 			t.Fatal("malformed or unbounded configuration accepted")
 		}
 	}
-	n := control.NativeModel{Runtime: "ollama", Endpoint: "http://localhost:9000", Owned: &control.OwnedLaunch{}, DropIns: []control.LaunchSource{{Path: "/opt/10-extra.conf", SHA256: strings.Repeat("a", 64)}}}
+	n := control.NativeModel{Runtime: "vllm", Endpoint: "http://localhost:9000", Owned: &control.OwnedLaunch{}, DropIns: []control.LaunchSource{{Path: "/opt/10-extra.conf", SHA256: strings.Repeat("a", 64)}}}
 	if _, err := inspectQualifiedNativeLaunch("/missing", n, fixtureExecutableValidator); err == nil {
 		t.Fatal("owned source override accepted during inspection")
 	}
@@ -127,15 +131,15 @@ func TestLoadedSourceBindingsRejectChangedOrderOrPaths(t *testing.T) {
 	if CheckNativeBinding(values, "worker.service", file) == nil {
 		t.Fatal("wrong primary source accepted")
 	}
-	if CheckLoadedLaunchCommand("{ path=/usr/bin/ollama ; argv[]=/usr/bin/ollama serve ; ignore_errors=yes ; }", "/usr/bin/ollama serve") == nil {
+	if CheckLoadedLaunchCommand("{ path=/usr/bin/vllm ; argv[]=/usr/bin/vllm serve /models/a ; ignore_errors=yes ; }", "/usr/bin/vllm serve /models/a") == nil {
 		t.Fatal("loaded main ignore-errors override accepted")
 	}
 }
 
 func TestSystemctlRepeatedPreCommandPropertiesRetainExactOrderedBinding(t *testing.T) {
 	first := "{ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; start_time=[n/a] ; }"
-	second := "{ path=/usr/bin/test ; argv[]=/usr/bin/test -f /opt/model.gguf ; ignore_errors=yes ; start_time=[n/a] ; }"
-	commands := []string{"/usr/bin/true", "-/usr/bin/test -f /opt/model.gguf"}
+	second := "{ path=/usr/bin/test ; argv[]=/usr/bin/test -f /opt/model ; ignore_errors=yes ; start_time=[n/a] ; }"
+	commands := []string{"/usr/bin/true", "-/usr/bin/test -f /opt/model"}
 	props, err := ParseUnitProperties([]byte("Id=worker.service\nExecStartPre=" + first + "\nExecStartPre=" + second + "\n"))
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +147,7 @@ func TestSystemctlRepeatedPreCommandPropertiesRetainExactOrderedBinding(t *testi
 	if err := CheckLoadedPreCommands(props["ExecStartPre"], commands); err != nil {
 		t.Fatal(err)
 	}
-	for _, value := range []string{second + " " + first, first, first + " " + strings.Replace(second, "ignore_errors=yes", "ignore_errors=no", 1), first + " " + strings.Replace(second, "/opt/model.gguf", "/opt/other.gguf", 1)} {
+	for _, value := range []string{second + " " + first, first, first + " " + strings.Replace(second, "ignore_errors=yes", "ignore_errors=no", 1), first + " " + strings.Replace(second, "/opt/model", "/opt/other", 1)} {
 		if CheckLoadedPreCommands(value, commands) == nil {
 			t.Fatal("changed ordered startup binding accepted", value)
 		}
@@ -167,8 +171,8 @@ func TestSystemctlRepeatedPreCommandPropertiesRetainExactOrderedBinding(t *testi
 }
 
 func TestExternalStartupPreparationRejectsInterpretersInUnitAndDropIn(t *testing.T) {
-	n := control.NativeModel{Runtime: "ollama", Endpoint: "http://localhost:9000"}
-	good := []byte("[Service]\nEnvironment=OLLAMA_NO_CLOUD=1\nEnvironment=OLLAMA_HOST=localhost:9000\nExecStart=/usr/bin/ollama serve\nExecStartPre=/usr/bin/true --\n")
+	base, n := vllmLaunchFixture(t)
+	good := []byte(base + "ExecStartPre=/usr/bin/true --\n")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "worker.service")
 	drop := filepath.Join(dir, "10-preflight.conf")

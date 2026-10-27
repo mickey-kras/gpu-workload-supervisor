@@ -68,8 +68,8 @@ func TestRenderOwnedRejectsUntrustedSystemctlBeforeExecution(t *testing.T) {
 			}
 			input, err := json.Marshal(map[string]any{
 				"systemctlPath": path,
-				"draft": setup.Draft{ID: "vision", Label: "Vision", App: "llama.cpp", Binding: &setup.DraftBinding{
-					Instance: "owned", Owned: &setup.DraftOwnedLaunch{ModelPath: "/models/vision.gguf", Port: 9100},
+				"draft": setup.Draft{ID: "vision", Label: "Vision", App: "vllm", Binding: &setup.DraftBinding{
+					Instance: "owned", Owned: &setup.DraftOwnedLaunch{ModelPath: "/models/vision", Port: 9100},
 				}},
 			})
 			if err != nil {

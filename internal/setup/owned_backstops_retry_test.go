@@ -159,7 +159,7 @@ func TestLegacyOwnedPrunedJournalAfterActualAbort(t *testing.T) {
 }
 
 func TestDerivedOwnedOriginalRequestAfterActualPrecommitFailure(t *testing.T) {
-	for _, scenario := range []string{"fresh", "incremental-peer-add", "shared-ollama"} {
+	for _, scenario := range []string{"fresh", "incremental-peer-add"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := context.Background()
 			backend, home, request := fixture(t)
@@ -181,17 +181,6 @@ func TestDerivedOwnedOriginalRequestAfterActualPrecommitFailure(t *testing.T) {
 				}
 				request.ExpectedRevision = accepted.Revision
 				priorCatalog = accepted.Catalog.Clone()
-			}
-			if scenario == "shared-ollama" {
-				profiles := []control.WorkloadProfile{z}
-				for _, id := range []string{"chat", "code"} {
-					p, _, err := OwnedProfile(Draft{ID: id, Label: id, App: "ollama", Model: id + ":latest", Binding: &DraftBinding{Instance: "local", Owned: &DraftOwnedLaunch{Port: 11434}}}, "/user.slice/user-1000.slice/user@1000.service", home)
-					if err != nil {
-						t.Fatal(err)
-					}
-					profiles = append(profiles, p)
-				}
-				request.Catalog = control.Catalog{Version: 2, Profiles: profiles}
 			}
 			candidate, err := prepareOwnedBackstops(request)
 			if err != nil {

@@ -10,7 +10,7 @@ import (
 )
 
 func TestNamedModelsUseFullReleaseLifecycleWithinRuntime(t *testing.T) {
-	for _, family := range []string{"ollama", "llama.cpp", "vllm"} {
+	for _, family := range []string{"vllm"} {
 		t.Run(family, func(t *testing.T) {
 			ctx := context.Background()
 			c, s, r, _ := acceptanceController(t)

@@ -139,7 +139,6 @@ func (b Backend) Plan(home string, request Request) (Preview, error) {
 // instead of touching the real runtime, unit manager, or package binaries.
 type Backend struct {
 	gpuInventory        func(context.Context) ([]string, string)
-	temporaryProfile    func() (Profile, error)
 	makeRuntime         func(Request) (gpuruntime.Manager, error)
 	runCommand          func(ctx context.Context, name string, args ...string) ([]byte, error)
 	probeApplication    func(ctx context.Context, request ProbeRequest) (ApplicationCandidate, error)
@@ -203,9 +202,6 @@ func (b Backend) Apply(ctx context.Context, home string, request Request) error 
 		return err
 	}
 	if err := work.inspect(ctx); err != nil {
-		return err
-	}
-	if err := work.verifySharedPairBindings(ctx); err != nil {
 		return err
 	}
 	// Prove the accepted bindings and release while their unit files are still
@@ -528,9 +524,6 @@ func (work *activationWork) inspectExistingCatalog(ctx context.Context) error {
 		return err
 	}
 	if work.existing {
-		if err := checkNoTemporaryDiscovery(ctx, work.request.Profile.StatePath); err != nil {
-			return err
-		}
 		if !work.marker.Maintenance {
 			if err := Inspect(ctx, work.request.Profile.StatePath); err != nil {
 				return err

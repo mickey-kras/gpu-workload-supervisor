@@ -12,7 +12,7 @@ import (
 )
 
 func TestLaunchSemicolonArgumentsRejectedBeforeLoadedCommandVerification(t *testing.T) {
-	for _, app := range []string{"llama.cpp", "vllm"} {
+	for _, app := range []string{"vllm"} {
 		for _, field := range []string{"model path", "alias"} {
 			t.Run(app+"/"+field, func(t *testing.T) {
 				n := control.NativeModel{Runtime: app, Endpoint: "http://localhost:9000", Model: "selected"}
@@ -61,9 +61,9 @@ func TestLaunchSemicolonArgumentsRejectedBeforeLoadedCommandVerification(t *test
 }
 
 func TestLaunchSemicolonPreparationAndDropInPathsRejected(t *testing.T) {
-	n := control.NativeModel{Runtime: "ollama", Endpoint: "http://localhost:9000", Model: "selected"}
+	n := control.NativeModel{Runtime: "vllm", Endpoint: "http://localhost:9000", Model: "selected"}
 	raw := nativeLaunchFixture(t, n.Runtime, n.Endpoint, n.Model)
-	if err := qualifyFixtureLaunch(append(raw, []byte("ExecStartPre=/usr/bin/test -f /models/a;b.gguf\n")...), n); !errors.Is(err, ErrLaunchUnsupported) {
+	if err := qualifyFixtureLaunch(append(raw, []byte("ExecStartPre=/usr/bin/test -f /models/a;b\n")...), n); !errors.Is(err, ErrLaunchUnsupported) {
 		t.Fatalf("delimiter in preparation operand accepted: %v", err)
 	}
 	path := filepath.Join(t.TempDir(), "model.service")

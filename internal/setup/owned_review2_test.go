@@ -212,7 +212,7 @@ func TestPlanOwnedUnitsQualifiesOwnedLaunches(t *testing.T) {
 // TestOwnedProfileRejectsGrammarUnsafeModelPath surfaces the catalog grammar
 // rule at draft synthesis: whitespace in a rendered field fails loudly.
 func TestOwnedProfileRejectsGrammarUnsafeModelPath(t *testing.T) {
-	draft := Draft{ID: "vision", Label: "Vision", App: "llama.cpp", Model: "vision", Binding: &DraftBinding{Instance: "owned", Owned: &DraftOwnedLaunch{ModelPath: "/models/my model.gguf", Port: 9100}}}
+	draft := Draft{ID: "vision", Label: "Vision", App: "vllm", Model: "vision", Binding: &DraftBinding{Instance: "owned", Owned: &DraftOwnedLaunch{ModelPath: "/models/my model", Port: 9100}}}
 	if _, _, err := OwnedProfile(draft, "/user.slice/user-1000.slice/user@1000.service", t.TempDir()); err == nil {
 		t.Fatal("whitespace model path synthesized")
 	}
@@ -1183,7 +1183,7 @@ func TestDiscoveryAccountsAdoptedOwnedBinding(t *testing.T) {
 	adopted := control.WorkloadProfile{
 		ID: "vision", Label: "Vision", Adapter: "systemd", Unit: "gws-owned-vision.service",
 		Cgroup: "/user.slice/x", HealthURL: "http://127.0.0.1:9100/health",
-		NativeModel: &control.NativeModel{Runtime: "llama.cpp", Instance: "second", Model: "vision", Endpoint: "http://127.0.0.1:9100", LaunchFile: filepath.Join(dir, "gws-owned-vision.service"), LaunchSHA256: digest(raw)},
+		NativeModel: &control.NativeModel{Runtime: "vllm", Instance: "second", Model: "vision", Endpoint: "http://127.0.0.1:9100", LaunchFile: filepath.Join(dir, "gws-owned-vision.service"), LaunchSHA256: digest(raw)},
 	}
 	owned, err := discoverOwnedUnits(home, control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{adopted}})
 	if err != nil {

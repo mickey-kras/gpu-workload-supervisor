@@ -5,7 +5,7 @@ import Gio from 'gi://Gio';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Pango from 'gi://Pango';
 
-const icons = {'comfyui': 'comfyui.png', 'llama.cpp': 'llama-cpp.svg', 'ollama': 'ollama.svg', 'vllm': 'vllm.png'};
+const icons = {'comfyui': 'comfyui.png', 'vllm': 'vllm.png'};
 
 // Surface and border colors follow Adwaita, including its high-contrast palette.
 // Ubuntu's orange is local to the setup journey, not a system theme override.
@@ -26,8 +26,6 @@ export function installSetupStyle(window) {
         .setup-app-name { font-size: 18px; font-weight: 700; }
         .setup-detection, .setup-guidance { font-size: 14px; opacity: .8; }
         .setup-high-contrast .setup-detection, .setup-high-contrast .setup-guidance { opacity: 1; }
-        .setup-model-choice { background: alpha(@window_fg_color, .04); border: 1px solid alpha(@window_fg_color, .08); border-radius: 9px; padding: 12px 16px; font-size: 16px; }
-        .setup-high-contrast .setup-model-choice { border-color: @window_fg_color; }
         .setup-link { color: #c64600; text-decoration: underline; padding: 4px 0; }
         .setup-footer button { padding: 12px 24px; min-width: 72px; }
         .setup-state { background: alpha(@window_fg_color, .08); border: 1px solid alpha(@window_fg_color, .12); border-radius: 8px; padding: 8px; }
@@ -47,7 +45,7 @@ export function roundedCard(Gtk, orientation = Gtk.Orientation.VERTICAL, spacing
     return card;
 }
 
-export function applicationIcon(Gtk, appID) {
+function applicationIcon(Gtk, appID) {
     const tile = new Gtk.Box({valign: Gtk.Align.CENTER});
     tile.add_css_class('setup-icon-tile');
     const source = Gio.File.new_for_uri(import.meta.url).get_parent().get_child(`icons/${icons[appID]}`);

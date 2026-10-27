@@ -20,7 +20,7 @@ import (
 
 func TestShutdownTimeoutKeepsLifetimeLockUntilHandlerExits(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), "state.db.proxy.lock")
-	shared, err := lock.AcquireShared(lockPath)
+	shared, err := lock.AcquireContext(context.Background(), lockPath, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestShutdownWaitsForHijackedHandler(t *testing.T) {
 
 func TestShutdownClosesHijackedConnectionAndReleasesLifetimeLock(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), "state.db.proxy.lock")
-	shared, err := lock.AcquireShared(lockPath)
+	shared, err := lock.AcquireContext(context.Background(), lockPath, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +412,7 @@ func TestShutdownClosesConnectionHijackedAfterDrainDeadline(t *testing.T) {
 
 func TestShutdownClosesReverseProxyUpgrade(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), "state.db.proxy.lock")
-	shared, err := lock.AcquireShared(lockPath)
+	shared, err := lock.AcquireContext(context.Background(), lockPath, true)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,5 @@
 import {applicationHeader, wrappedCheckButton} from './presentation.mjs';
 import {InstallationSettings, installationChoiceLabel} from './settings-pages.mjs';
-import {TemporaryDiscovery} from './temporary-discovery-ui.mjs';
 import {watchInstanceSelection, addRefreshButton, addFilePickers} from './discovery-inputs.mjs';
 import {addOwnedEditor, addBindingEditor} from './launch-ui.mjs';
 import {ApplicationDraft, applications, candidateChoice, candidateIdentity, profileIDFromModel} from './onboarding.mjs';
@@ -11,20 +10,18 @@ export function addErrorReporter({Adw, Gtk, parent, status}) {
     const text = new Gtk.Label({wrap: true, xalign: 0, selectable: true});
     details.add_row(text);
     if (parent.add) parent.add(details); else parent.append(details);
-    const report = (summary, error) => {
+    return (summary, error) => {
         status.label = summary; status.visible = true;
         text.label = error.message;
         details.expanded = false;
         details.visible = true;
     };
-    report.clear = () => { details.visible = false; };
-    return report;
 }
 
 export function addDraftEditor(options) { return new DraftEditor(options).view(); }
 
 class DraftEditor {
-    constructor({Adw, Gtk, window, parent, initial, detected, discovered, gpuUUIDs, gpuInventoryStatus, discoveryErrors, command, changed, removed, bind, taken, modelParent, temporaryStatus, openSettings, reportProblem, reportStatus, navigateSettings, saveSelections}) {
+    constructor({Adw, Gtk, window, parent, initial, detected, discovered, gpuUUIDs, gpuInventoryStatus, discoveryErrors, command, changed, removed, bind, taken, modelParent, openSettings, reportProblem, navigateSettings, saveSelections}) {
         this.Adw = Adw;
         this.Gtk = Gtk;
         this.window = window;
@@ -39,7 +36,6 @@ class DraftEditor {
         this.bind = bind;
         this.taken = taken;
         this.modelParent = modelParent;
-        this.temporaryStatus = temporaryStatus;
         this.openSettings = openSettings; this.reportProblem = reportProblem; this.navigateSettings = navigateSettings; this.saveSelections = saveSelections;
         this.discoveryErrors ??= [];
         this.syncing = false; this.bindingFields = {}; this.ownedFields = {}; this.overrides = {}; this.bindingEdits = new Set();
@@ -48,14 +44,12 @@ class DraftEditor {
         this.installationEvidence = null;
         this.buildBasics(gpuUUIDs, gpuInventoryStatus); this.connectAddress(); this.buildModels();
         this.connectModelPicker();
-        this.temporary = new TemporaryDiscovery({Gtk, draft: this.draft, app: initial.app, modelGroup: this.modelGroup, status: this.modelStatus ?? this.status, temporaryStatus, command, changed, reportError: this.reportError, restored: reportStatus, show: candidate => this.show(candidate), getEvidence: () => this.installationEvidence});
         this.connectInputs(); this.buildResources(); this.addActions(); this.initialDiscovery();
     }
     buildBasics(gpuUUIDs, gpuInventoryStatus) {
         this.draft = new ApplicationDraft(this.initial.app);
         this.draft.edit(this.initial);
         this.settings = new InstallationSettings({Adw: this.Adw, Gtk: this.Gtk, app: this.initial.app, window: this.window, gpuUUIDs, gpuInventoryStatus, navigate: this.navigateSettings, correctGPU: async (candidate, plan) => {
-            if (this.temporary?.blocked()) throw new Error('Finish temporary application cleanup before changing GPU configuration.');
             const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'correct-gpu'], JSON.stringify({app: this.initial.app, unit: candidate.unit, fingerprint: plan?.fingerprint, confirm: Boolean(plan)})));
             if (result.applied) await this.refresh.check();
             return result;
@@ -179,44 +173,20 @@ class DraftEditor {
             this.modelGroup.add(this.model);
         }
         this.models = [];
-        this.modelChecks = new Map();
-        this.selectionBox = new this.Gtk.Box({orientation: this.Gtk.Orientation.VERTICAL, spacing: 8});
-        if (this.modelParent && this.draft.needsModel) this.modelGroup.add(this.selectionBox);
-        this.modelName = null;
-        if (this.initial.app === 'ollama') {
-            this.modelName = new this.Adw.EntryRow({title: 'Existing model name', text: this.initial.model ?? '', visible: Boolean(this.initial.binding?.owned?.executable)});
-            this.modelGroup.add(this.modelName);
-            this.modelName.connect('changed', () => {
-                if (this.syncing) return;
-                const binding = this.draft.snapshot().binding;
-                this.draft.edit({model: this.modelName.text, models: undefined, binding: binding && !binding.owned ? {...binding, model: this.modelName.text} : binding});
-                this.syncModelChoices(this.modelName.text); this.changed(this.draft.snapshot());
-            });
-        }
-    }
-    syncModelChoices(id) {
-        this.syncing = true;
-        for (const [modelID, check] of this.modelChecks) check.active = modelID === id;
-        if (this.modelName) this.modelName.text = id ?? '';
-        this.syncing = false;
     }
     clearModels() {
         this.models = [];
-        for (const check of this.modelChecks.values()) this.selectionBox.remove(check);
-        this.modelChecks.clear();
         this.syncing = true;
         if (this.model) { this.model.model = this.Gtk.StringList.new(['Check an instance to list models']); this.model.selected = 0; }
         this.syncing = false;
-        this.draft.edit({model: undefined, models: undefined});
-        if (this.ownedFields.model) this.ownedFields.model.text = '';
+        this.draft.edit({model: undefined});
     }
     clearOwnedReference() {
-        if (this.ownedFields.model) this.ownedFields.model.text = '';
         if (this.ownedFields.modelPath) this.ownedFields.modelPath.text = '';
     }
     selectOwnedReference(path, kind) {
         if (!this.ownedFields.modelPath) return;
-        const expected = this.initial.app === 'llama.cpp' ? 'model-file' : 'model-directory';
+        const expected = 'model-directory';
         this.ownedFields.modelPath.text = kind === expected ? path : '';
     }
     clearBinding() {
@@ -234,42 +204,20 @@ class DraftEditor {
             const selected = this.models[this.model.selected - 1];
             if (!selected) return;
             const input = this.draft.snapshot();
-            this.draft.edit({model: selected.id, models: undefined, binding: input.binding && !input.binding.owned ? {...input.binding, model: selected.id} : input.binding});
+            this.draft.edit({model: selected.id, binding: input.binding && !input.binding.owned ? {...input.binding, model: selected.id} : input.binding});
             this.syncing = true;
             if (this.bindingFields.model) this.bindingFields.model.text = selected.id;
             this.syncing = false;
-            if (this.ownedFields.model) this.ownedFields.model.text = selected.id;
             if (this.ownedFields.modelPath) this.ownedFields.modelPath.text = selected.id.startsWith('/') ? selected.id : '';
-            this.syncModelChoices(selected.id); this.changed(this.draft.snapshot());
+            this.changed(this.draft.snapshot());
         });
-    }
-    showModelChecks(candidate) {
-        const selectedModels = this.draft.snapshot().models;
-        if (selectedModels && (this.models.length || candidate.inventoryStatus === 'available')) {
-            const available = selectedModels.filter(id => this.models.some(item => item.id === id));
-            if (available.length !== selectedModels.length) this.draft.edit({models: available});
-        }
-        const savedModels = this.draft.snapshot().models ?? (this.draft.snapshot().model ? [this.draft.snapshot().model] : []);
-        for (const check of this.modelChecks.values()) this.selectionBox.remove(check);
-        this.modelChecks.clear();
-        for (const item of this.models) {
-            const check = wrappedCheckButton(this.Gtk, item.label || item.id, {active: savedModels.includes(item.id)});
-            check.add_css_class('setup-model-choice');
-            check.connect('toggled', () => {
-                if (this.syncing) return;
-                const selected = [...this.modelChecks].filter(([, widget]) => widget.active).map(([id]) => id);
-                this.draft.edit({models: selected, model: selected[0] ?? ''}); this.changed(this.draft.snapshot());
-            });
-            this.modelChecks.set(item.id, check); this.selectionBox.append(check);
-        }
-        this.model.visible = false;
     }
     showModels(candidate) {
         const chosen = this.draft.snapshot().model;
         this.models = candidate.models ?? [];
-        // Existing llama.cpp/vLLM services pin their launch model. Alternate
-        // files require a separately validated launch, never a unit rewrite.
-        if (candidate.recognized && ['llama.cpp', 'vllm'].includes(this.initial.app) && candidate.binding?.model)
+        // Existing vLLM services pin their launch model. Alternate
+        // models require a separately validated launch, never a unit rewrite.
+        if (candidate.recognized && this.initial.app === 'vllm' && candidate.binding?.model)
             this.models = this.models.filter(item => item.id === candidate.binding.model);
         const selection = this.models.findIndex(item => item.id === chosen) + 1;
         const prompt = this.modelPrompt(candidate, chosen, selection);
@@ -277,14 +225,8 @@ class DraftEditor {
         this.model.model = this.Gtk.StringList.new([prompt, ...this.models.map(item => item.label || item.id)]);
         this.model.selected = selection || (candidate.recognized && this.models.length === 1 && !chosen ? 1 : 0);
         this.syncing = false;
-        if (candidate.recognized && !chosen && !this.draft.snapshot().models && this.models.length === 1) this.draft.edit({model: this.models[0].id});
+        if (candidate.recognized && !chosen && this.models.length === 1) this.draft.edit({model: this.models[0].id});
         this.model.visible = !(candidate.recognized && candidate.configurationStatus === 'ready' && this.draft.snapshot().model);
-        if (this.modelParent) this.showModelChecks(candidate);
-        if (this.modelName) {
-            this.modelName.visible = candidate.recognized && candidate.configurationStatus === 'model-required' && !this.models.length;
-            this.syncing = true; this.modelName.text = this.draft.snapshot().model ?? ''; this.syncing = false;
-            if (this.modelName.visible) this.model.visible = false;
-        }
     }
     modelPrompt(candidate, chosen, selection) {
         if (chosen && !selection) return `Saved model unavailable: ${chosen}`;
@@ -306,7 +248,6 @@ class DraftEditor {
             [...this.bindingEdits].some(key => key !== 'model' && candidate.binding && input.binding?.[key] !== candidate.binding[key]);
         if (mismatch) this.settings.problem('An override does not match this installation.', new Error('Open Change installation… to correct the saved address or choose the intended installation; edit service settings in Advanced settings → Launch details. Then Check again. Your service has not been changed.'));
         this.syncing = true; this.health.text = this.draft.snapshot().binding?.healthURL ?? ''; this.health.editable = !this.draft.snapshot().binding?.owned; this.syncing = false;
-        this.temporary.showAvailability(candidate);
         if (this.model) this.showModels(candidate);
         this.changed(this.draft.snapshot());
     }
@@ -348,12 +289,12 @@ class DraftEditor {
             return discovery.applications?.find(candidate => candidate.app === input.app && candidate.unit === input.binding.unit) ?? null;
         }});
         addFilePickers({Gtk: this.Gtk, window: this.window, group: this.settings.selection, advancedGroup: this.settings.selection, draft: this.draft, reference: this.reference, endpoint: this.endpoint, status: this.status, changed: this.changed, clearBinding: () => this.clearBinding(), clearModels: () => this.clearModels(), clearOwnedReference: () => this.clearOwnedReference(), setSync: value => this.syncing = value, selectedReference: (path, kind) => this.selectOwnedReference(path, kind), selectedExecutable: path => this.selectExecutable(path), modelGroup: this.modelParent ? this.modelGroup : null, selectionChanged: () => this.resetSelection()});
-        if (this.draft.needsModel) this.ownedFields = addOwnedEditor({Adw: this.Adw, Gtk: this.Gtk, group: this.details, draftGroup: this.group, draft: this.draft, initial: this.initial, command: this.command, bind: this.bind, changed: this.changed, taken: this.taken, status: this.status, isSyncing: () => this.syncing, edited: () => { this.installationEvidence = null; this.settings.invalidate(); }, reportError: this.reportError, parent: this.parent, removed: this.removed, modelChanged: (id) => this.syncModelChoices(id)});
+        if (this.draft.needsModel) this.ownedFields = addOwnedEditor({Adw: this.Adw, Gtk: this.Gtk, group: this.details, draftGroup: this.group, draft: this.draft, initial: this.initial, command: this.command, bind: this.bind, changed: this.changed, taken: this.taken, status: this.status, isSyncing: () => this.syncing, edited: () => { this.installationEvidence = null; this.settings.invalidate(); }, reportError: this.reportError, parent: this.parent, removed: this.removed});
         this.bindingFields = addBindingEditor({Adw: this.Adw, Gtk: this.Gtk, group: this.details, draftGroup: this.group, draft: this.draft, initial: this.initial, status: this.status, parent: this.parent, removed: this.removed, bind: this.bind, command: this.command, changed: this.changed, taken: this.taken, reportError: this.reportError, isSyncing: () => this.syncing, edited: key => {
                 this.bindingEdits.add(key); this.installationEvidence = null; this.settings.invalidate();
                 this.syncing = true; this.health.text = this.draft.snapshot().binding?.healthURL ?? ''; this.syncing = false;
                 this.settings.identity.label = candidateIdentity({...this.draft.snapshot(), ...this.draft.snapshot().binding});
-            }, modelChanged: (id) => this.syncModelChoices(id)});
+            }});
     }
     buildResources() {
         this.capacity = new this.Adw.EntryRow({title: 'Measured VRAM requirement (MiB; optional)', text: ''});
@@ -383,7 +324,6 @@ class DraftEditor {
             const generation = this.draft.generation;
             this.finish.sensitive = false; this.settings.checking(true);
             try {
-                if (this.temporary.blocked()) throw new Error('Finish temporary application cleanup before continuing.');
                 const action = input.binding?.owned ? 'render-owned' : 'prepare';
                 const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', action], JSON.stringify({draft: input})));
                 if (generation !== this.draft.generation) return;
@@ -395,7 +335,7 @@ class DraftEditor {
             } finally { this.finish.sensitive = true; this.settings.checking(false); }
         });
         const remove = new this.Gtk.Button({label: 'Remove this application'}); this.details.add(remove);
-        remove.connect('clicked', async () => { this.draft.cancel(); try { await this.temporary.cleanup(); this.parent.remove(this.group); if (this.modelParent) { this.modelParent.remove(this.modelGroup); } this.removed(); } catch (error) { this.reportError('Temporary cleanup must finish before removing this selection.', error); } });
+        remove.connect('clicked', () => { this.draft.cancel(); this.parent.remove(this.group); if (this.modelParent) { this.modelParent.remove(this.modelGroup); } this.removed(); });
         this.parent.append(this.group);
     }
     initialDiscovery() {
@@ -434,13 +374,12 @@ class DraftEditor {
                 return this.finish.emit('clicked');
             },
             settingsBack: () => this.settings.back(),
-            cancelSettings: async () => { this.draft.cancel(); await this.temporary.cancel(); this.restore(this.session); },
+            cancelSettings: () => { this.draft.cancel(); this.restore(this.session); },
             settingsOverrides: () => this.overrides,
             showProblem: this.reportError,
-            cancel: () => { this.draft.cancel(); return this.temporary.cancel(); },
-            temporaryActive: () => this.temporary.active(),
+            cancel: () => this.draft.cancel(),
             checking: () => this.settings.busy,
-            needsModelDecision: () => this.draft.needsModel && (this.models.length > 1 || this.draft.snapshot().models?.length > 1 || this.draft.snapshot().models?.length === 0 || !(this.draft.snapshot().model || this.draft.snapshot().binding?.owned?.modelPath)),
+            needsModelDecision: () => this.draft.needsModel && (this.models.length > 1 || !(this.draft.snapshot().model || this.draft.snapshot().binding?.owned?.modelPath)),
             prepare: () => this.prepare(),
         };
     }
@@ -451,7 +390,6 @@ class DraftEditor {
         this.ownedFields.selectLaunch();
         this.reference.label = path;
         this.status.label = 'Executable selected. Choose an existing model, then Continue to validate and preview a Supervisor-managed launch. Nothing starts during preview.';
-        if (this.modelName) this.modelName.visible = true;
     }
     capture() {
         const fields = [this.name, this.endpoint, this.health, ...Object.values(this.bindingFields), ...Object.values(this.ownedFields)].filter(field => typeof field !== 'function');
@@ -467,7 +405,7 @@ class DraftEditor {
         this.syncing = true; this.instance.selected = this.instanceIndex(snapshot.selection); this.syncing = false; this.draft.input = snapshot.input; this.draft.cancel(); this.installationEvidence = snapshot.evidence; this.bindingEdits = new Set(snapshot.bindingEdits); this.endpointEdited = snapshot.endpointEdited; this.overrides = snapshot.overrides;
         this.changed(this.draft.snapshot());
         const current = snapshot.candidate?.unit ? this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === snapshot.candidate.unit) : snapshot.candidate;
-        // A temporary model inventory enriches the candidate without changing
+        // A checked model inventory enriches the candidate without changing
         // discovery evidence. Any intervening installation change invalidates it,
         // even if a later check reports the original discovery evidence again.
         const unchanged = JSON.stringify(current) === JSON.stringify(snapshot.discoveryCandidate);
@@ -476,15 +414,8 @@ class DraftEditor {
         else this.settings.problem('Installation not detected', new Error('The selected service was not found during the latest check.'));
         if (!selected || (snapshot.discoveryChanged && unchanged) || (selected === snapshot.candidate && !snapshot.ready)) this.settings.invalidate();
     }
-    selectedModels(input) {
-        if (!this.draft.needsModel) return [''];
-        if (input.models !== undefined && input.models !== null) return input.models;
-        const model = input.model || input.binding?.owned?.modelPath;
-        return model ? [model] : [];
-    }
     modelInput(input, selectedModel) {
         const value = {...input, model: selectedModel, binding: input.binding && !input.binding.owned ? {...input.binding, model: selectedModel} : input.binding};
-        delete value.models;
         const changedModel = selectedModel !== (this.initial.model ?? this.initial.binding?.owned?.modelPath);
         const proposed = profileIDFromModel(input.app, selectedModel);
         if (proposed && (input.id.startsWith('draft-') || changedModel)) value.id = proposed;
@@ -494,19 +425,14 @@ class DraftEditor {
     }
     async prepare() {
         if (this.settings.busy) throw new Error('Wait for the installation check to finish before continuing.');
-        if (this.temporary.blocked()) throw new Error('Finish temporary application cleanup before continuing.');
         const input = this.draft.snapshot();
         const generation = this.draft.generation;
-        const selected = this.selectedModels(input);
-        if (!selected.length) throw new Error('Choose at least one existing model.');
-        const prepared = [];
-        for (const selectedModel of selected) {
-            const value = this.modelInput(input, selectedModel);
-            const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', input.binding?.owned ? 'render-owned' : 'prepare'], JSON.stringify({draft: value})));
-            if (generation !== this.draft.generation) throw new Error('Application changed while checking it. Continue again.');
-            prepared.push(result.profile);
-        }
-        return {profiles: prepared, current: () => generation === this.draft.generation};
+        const selectedModel = this.draft.needsModel ? input.model || input.binding?.owned?.modelPath || '' : '';
+        if (this.draft.needsModel && !selectedModel) throw new Error('Choose an existing model.');
+        const value = this.modelInput(input, selectedModel);
+        const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', input.binding?.owned ? 'render-owned' : 'prepare'], JSON.stringify({draft: value})));
+        if (generation !== this.draft.generation) throw new Error('Application changed while checking it. Continue again.');
+        return {profile: result.profile, current: () => generation === this.draft.generation};
     }
 }
 

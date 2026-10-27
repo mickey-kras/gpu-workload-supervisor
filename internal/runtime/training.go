@@ -129,7 +129,7 @@ func (m *SystemdManager) verifyTrainerBinding(ctx context.Context, p control.Wor
 
 func qualifyTrainingOutputs(t control.TrainerBinding) error {
 	for _, path := range []string{t.JobFile, t.TerminalFile} {
-		if err := qualifyEnvironmentPath(filepath.Dir(path), false, false); err != nil {
+		if err := qualifyEnvironmentPath(filepath.Dir(path), false); err != nil {
 			return err
 		}
 		if err := unix.Faccessat(unix.AT_FDCWD, filepath.Dir(path), unix.W_OK|unix.X_OK, unix.AT_EACCESS); err != nil {
@@ -140,7 +140,7 @@ func qualifyTrainingOutputs(t control.TrainerBinding) error {
 		} else if err != nil {
 			return err
 		}
-		if err := qualifyEnvironmentPath(path, true, false); err != nil {
+		if err := qualifyEnvironmentPath(path, true); err != nil {
 			return err
 		}
 	}
@@ -335,4 +335,16 @@ func writeTrainingEnvelope(path string, raw []byte) error {
 	}
 	defer dir.Close()
 	return dir.Sync()
+}
+
+func validInvocationID(id string) bool {
+	if len(id) != 32 {
+		return false
+	}
+	for _, r := range id {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return false
+		}
+	}
+	return id != strings.Repeat("0", 32)
 }

@@ -3,6 +3,7 @@ package setup
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -26,8 +27,6 @@ type DraftOwnedLaunch struct {
 	Executable  string `json:"executable,omitempty"`
 	ModelPath   string `json:"modelPath,omitempty"`
 	Port        uint16 `json:"port"`
-	CtxSize     uint32 `json:"ctxSize,omitempty"`
-	GPULayers   uint32 `json:"gpuLayers,omitempty"`
 	MaxModelLen uint32 `json:"maxModelLen,omitempty"`
 	Alias       string `json:"alias,omitempty"`
 }
@@ -42,7 +41,6 @@ type Draft struct {
 	Reference     string        `json:"reference,omitempty"`
 	ReferenceKind string        `json:"referenceKind,omitempty"`
 	Model         string        `json:"model,omitempty"`
-	Models        []string      `json:"models,omitzero"` // Nil means no choice; [] preserves explicit deselection.
 	Binding       *DraftBinding `json:"binding,omitempty"`
 }
 type DraftSnapshot struct {
@@ -56,6 +54,17 @@ type DraftRequest struct {
 	Drafts           []Draft `json:"drafts"`
 }
 
+// draftsDisplayPath names the drafts file without the account home.
+const draftsDisplayPath = "~/.config/gpu-workload-supervisor/drafts.json"
+
+// errUnusableDrafts marks a drafts file that was read but does not decode or
+// validate. SaveDrafts may replace such a file.
+var errUnusableDrafts = errors.New("saved setup drafts are unusable")
+
+var ErrUnsupportedDraftApplication = errors.New("saved draft application is not supported")
+
+// ReadDrafts returns the revision of the raw file bytes even when the file is
+// unusable, so a save can replace it.
 func ReadDrafts(home string) (DraftSnapshot, error) {
 	result := DraftSnapshot{Version: 1, Drafts: []Draft{}}
 	data, err := privateRead(filepath.Join(home, ".config/gpu-workload-supervisor/drafts.json"))
@@ -65,13 +74,14 @@ func ReadDrafts(home string) (DraftSnapshot, error) {
 	if err != nil {
 		return result, err
 	}
-	if err = json.Unmarshal(data, &result); err != nil {
-		return result, err
+	revision := digest(data)
+	if err = json.Unmarshal(data, &result); err == nil {
+		err = validateDrafts(result.Version, result.Drafts)
 	}
-	if err = validateDrafts(result.Version, result.Drafts); err != nil {
-		return result, err
+	result.Revision = revision
+	if err != nil {
+		return result, fmt.Errorf("%w: %s: %w; remove the draft in setup and save, or delete the file", errUnusableDrafts, draftsDisplayPath, err)
 	}
-	result.Revision = digest(data)
 	return result, nil
 }
 func SaveDrafts(home string, request DraftRequest) (DraftSnapshot, error) {
@@ -88,9 +98,11 @@ func SaveDrafts(home string, request DraftRequest) (DraftSnapshot, error) {
 	}
 	defer gate.Close()
 	current, err := ReadDrafts(home)
-	if err != nil {
+	if err != nil && !errors.Is(err, errUnusableDrafts) {
 		return current, err
 	}
+	// An unusable file keeps its raw-bytes revision, so a caller that read it
+	// can replace it. A missing or different revision is still refused.
 	if current.Revision != request.ExpectedRevision {
 		return current, errors.New("drafts changed; refresh before saving")
 	}
@@ -108,12 +120,16 @@ func validateDrafts(version int, drafts []Draft) error {
 		return errors.New("unsupported draft version or too many drafts")
 	}
 	ids := map[string]bool{}
+	var unsupported error
 	for _, d := range drafts {
 		if err := validateDraft(d, ids); err != nil {
-			return err
+			if !errors.Is(err, ErrUnsupportedDraftApplication) {
+				return err
+			}
+			unsupported = err
 		}
 	}
-	return nil
+	return unsupported
 }
 func validateDraft(d Draft, ids map[string]bool) error {
 	if !control.ValidWorkloadID(control.Workload(d.ID)) || ids[d.ID] || !control.ValidWorkloadLabel(d.Label) {
@@ -121,9 +137,9 @@ func validateDraft(d Draft, ids map[string]bool) error {
 	}
 	ids[d.ID] = true
 	switch d.App {
-	case "comfyui", "ollama", appLlamaCPP, "vllm":
+	case "comfyui", "vllm":
 	default:
-		return errors.New("unsupported draft application")
+		return fmt.Errorf("%w: draft %s uses application %q (ComfyUI and vLLM only)", ErrUnsupportedDraftApplication, d.ID, d.App)
 	}
 	if err := validateDraftBinding(d.Binding); err != nil {
 		return err
@@ -157,21 +173,7 @@ func validateDraftResourceChecks(d Draft) error {
 }
 
 func validateDraftModels(d Draft) error {
-	if len(d.Models) > 32 {
-		return errors.New("too many draft model selections")
-	}
-	models := map[string]bool{}
-	for _, model := range d.Models {
-		if !control.ValidNativeModelIdentity(d.App, model) {
-			return errors.New("invalid draft model selection")
-		}
-		identity := (control.NativeModel{Runtime: d.App, Model: model}).ComparisonModel()
-		if models[identity] {
-			return errors.New("duplicate draft model selection")
-		}
-		models[identity] = true
-	}
-	if d.App == "comfyui" && (d.Model != "" || len(d.Models) != 0) {
+	if d.App == "comfyui" && d.Model != "" {
 		return errors.New("ComfyUI workflows select models")
 	}
 	return nil
@@ -198,7 +200,7 @@ func validateOwnedOptions(app string, o *DraftOwnedLaunch, allowMissingPath bool
 	if o == nil {
 		return nil
 	}
-	if app != "ollama" && app != appLlamaCPP && app != "vllm" {
+	if app != "vllm" {
 		return errors.New("owned launches are only supported for native model runtimes")
 	}
 	if o.Executable != "" && !control.ValidOwnedExecutable(app, o.Executable) {
@@ -207,29 +209,10 @@ func validateOwnedOptions(app string, o *DraftOwnedLaunch, allowMissingPath bool
 	if o.Port < 1024 {
 		return errors.New("owned launch port must be an unprivileged TCP port")
 	}
-	if err := validateOwnedRuntimeOptions(app, o, allowMissingPath); err != nil {
-		return err
+	if !validDraftModelPath(o.ModelPath, allowMissingPath) {
+		return errors.New("vllm owned launches require an absolute model directory")
 	}
 	return validateDraftLaunchGrammar(o)
-}
-
-func validateOwnedRuntimeOptions(app string, o *DraftOwnedLaunch, allowMissingPath bool) error {
-	validModelPath := validDraftModelPath(o.ModelPath, allowMissingPath)
-	switch app {
-	case "ollama":
-		if o.ModelPath != "" || o.CtxSize != 0 || o.GPULayers != 0 || o.MaxModelLen != 0 || o.Alias != "" {
-			return errors.New("ollama owned launches accept only a port")
-		}
-	case appLlamaCPP:
-		if o.MaxModelLen != 0 || !validModelPath {
-			return errors.New("llama.cpp owned launches require an absolute model file")
-		}
-	case "vllm":
-		if o.CtxSize != 0 || o.GPULayers != 0 || !validModelPath {
-			return errors.New("vllm owned launches require an absolute model directory")
-		}
-	}
-	return nil
 }
 
 func validDraftModelPath(path string, allowMissing bool) bool {
@@ -262,7 +245,7 @@ func validateDraftReference(d Draft) error {
 		return errors.New("draft path must be absolute and clean")
 	}
 	switch d.ReferenceKind {
-	case "application", "application-directory", "configuration", "model-file", "model-directory":
+	case "application", "application-directory", "configuration", "model-directory":
 		return nil
 	}
 	return errors.New("invalid draft reference kind")
@@ -284,9 +267,6 @@ func validateDraftSynthesis(d Draft) error {
 	}
 	if !control.ValidInstanceID(d.Binding.Instance) {
 		return errors.New("owned draft instance must be a valid workload identifier")
-	}
-	if d.App == "ollama" && d.Model != "" && !control.ValidNativeModelIdentity(d.App, d.Model) {
-		return errors.New("invalid native model identity")
 	}
 	return nil
 }

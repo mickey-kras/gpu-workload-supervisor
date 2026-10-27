@@ -29,7 +29,7 @@ func TestNativeCatalogChangesDuringBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest("POST", "/api/generate", nil)
+	req := httptest.NewRequest("POST", "/v1/completions", nil)
 	req.Body = &catalogRaceBody{Reader: strings.NewReader(`{"model":"selected"}`), mutate: func() { s.catalog.Revision = "two"; s.catalog.Catalog.Profiles[0].NativeModel.Model = "replacement" }}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)

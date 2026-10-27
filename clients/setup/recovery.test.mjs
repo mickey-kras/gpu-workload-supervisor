@@ -115,10 +115,10 @@ test('reinspection clears obsolete data recovery only after fresh configuration 
     assert.equal(ui.widgets.some(widget => ui.visible(widget) && widget.label?.includes('Fix the named path')), false);
     await ui.click('Back');
     assert.equal(ui.by('Use installation').sensitive, true);
-    assert.equal(ui.calls.some(call => ['apply', 'prepare', 'temporary-discover'].includes(call.argv[1])), false);
+    assert.equal(ui.calls.some(call => ['apply', 'prepare'].includes(call.argv[1])), false);
 });
 
-for (const [app, label, port] of [['ollama', 'Ollama', 11434], ['vllm', 'vLLM', 8000]]) {
+for (const [app, label, port] of [['vllm', 'vLLM', 8000]]) {
     test(`${app}: custom executable selection is retained while blocked and rechecked before review`, async () => {
         const path = `/custom/runtime/${app}`;
         const endpoint = {app, label, instanceStatus: 'unreachable', endpoint: `http://127.0.0.1:${port}`, recognized: false};
@@ -143,7 +143,7 @@ for (const [app, label, port] of [['ollama', 'Ollama', 11434], ['vllm', 'vLLM', 
         assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label === 'Installed'));
         assert.ok(ui.widgets.some(widget => ui.visible(widget) && widget.label === 'GPU operation has not been tested.'));
         assert.equal(ui.widgets.some(widget => ui.visible(widget) && widget.label === 'Reachable'), false);
-        assert.equal(ui.calls.some(call => ['apply', 'render-owned', 'prepare', 'temporary-discover'].includes(call.argv[1])), false);
+        assert.equal(ui.calls.some(call => ['apply', 'render-owned', 'prepare'].includes(call.argv[1])), false);
         await ui.click('Advanced settings'); await ui.click('Launch details'); await ui.click('Save selections for later');
         const saved = JSON.parse(ui.calls.at(-1).input).drafts.find(draft => draft.app === app);
         assert.equal(saved.reference, path);

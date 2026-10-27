@@ -22,7 +22,7 @@ func readCatalog(ctx context.Context, q querier) (control.CatalogSnapshot, error
 	if err != nil {
 		return s, err
 	}
-	s.Catalog, err = control.DecodeCatalogBytes(b)
+	s.Catalog, err = control.DecodeStoredCatalog(b)
 	return s, err
 }
 func (s *Store) Catalog(ctx context.Context) (control.CatalogSnapshot, error) {
@@ -42,7 +42,7 @@ func (s *Store) CatalogAtRevision(ctx context.Context, revision string) (control
 	if err != nil {
 		return s2, err
 	}
-	s2.Catalog, err = control.DecodeCatalogBytes(b)
+	s2.Catalog, err = control.DecodeStoredCatalog(b)
 	return s2, err
 }
 
@@ -67,7 +67,7 @@ func (s *Store) ReplaceCatalog(ctx context.Context, expected string, c control.C
 }
 
 func (s *Store) replaceCatalog(ctx context.Context, tx *sql.Tx, expected string, c control.Catalog) (control.CatalogSnapshot, string, error) {
-	if err := temporaryDiscoveryPending(ctx, tx); err != nil {
+	if err := trainingPending(ctx, tx); err != nil {
 		return control.CatalogSnapshot{}, "", err
 	}
 	old, err := readCatalog(ctx, tx)

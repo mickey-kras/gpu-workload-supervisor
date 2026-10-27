@@ -36,10 +36,6 @@ type AutomaticLaunch struct {
 	DropIns                          []control.LaunchSource
 }
 
-func InspectAutomaticLaunch(path, app string) (AutomaticLaunch, error) {
-	return InspectAutomaticLaunchSources(path, app, nil)
-}
-
 func InspectAutomaticLaunchSources(path, app string, dropInPaths []string) (AutomaticLaunch, error) {
 	validate := validateNativeExecutable
 	if app == "comfyui" {
@@ -63,7 +59,7 @@ func PreviewAutomaticGPUCorrection(path, app string, dropInPaths []string, uuid 
 		return AutomaticLaunch{}, err
 	}
 	sources = append(sources, []byte("[Service]\nEnvironment=\"CUDA_VISIBLE_DEVICES="+uuid+"\"\n"))
-	u, err := parseExternalLaunchSourcesMode(sources, app, false)
+	u, err := parseExternalLaunchSources(sources)
 	if err != nil {
 		return AutomaticLaunch{}, err
 	}
@@ -77,24 +73,17 @@ func PreviewAutomaticGPUCorrection(path, app string, dropInPaths []string, uuid 
 }
 
 func inspectAutomaticLaunchSourcesWithValidator(path, app string, dropInPaths []string, validate func(string) error) (AutomaticLaunch, error) {
-	return inspectAutomaticLaunchSourcesMode(path, app, dropInPaths, validate, false)
-}
-
-// Cleanup may inspect unchanged source without requiring cache/credential paths
-// to remain usable. Source and command trust are still mandatory; this mode
-// never authorizes execution or admission.
-func inspectAutomaticLaunchSourcesMode(path, app string, dropInPaths []string, validate func(string) error, cleanupEnvironment bool) (AutomaticLaunch, error) {
 	sources, dropIns, err := readAutomaticLaunchSources(path, dropInPaths)
 	if err != nil {
 		return AutomaticLaunch{}, err
 	}
-	u, err := parseExternalLaunchSourcesMode(sources, app, cleanupEnvironment)
+	u, err := parseExternalLaunchSources(sources)
 	if err != nil {
 		var problems launchProblems
 		problems.add(err)
 		// Validate independent command evidence without deriving a binding from a
 		// partially valid environment or directive set.
-		if app != "ollama" && u.execStart != "" {
+		if u.execStart != "" {
 			_, independentErr := inspectParsedAutomaticLaunch(u, sources[0], app, validate)
 			problems.add(independentErr)
 		} else {
@@ -150,17 +139,6 @@ func readAutomaticLaunchSources(path string, dropInPaths []string) ([][]byte, []
 	return sources, dropIns, nil
 }
 
-func inspectAutomaticLaunch(raw []byte, app string, validate func(string) error) (AutomaticLaunch, error) {
-	u, err := parseLaunchUnit(raw, app)
-	if err != nil {
-		return AutomaticLaunch{}, err
-	}
-	if err := u.validatePreCommands(validate); err != nil {
-		return AutomaticLaunch{}, err
-	}
-	return inspectParsedAutomaticLaunch(u, raw, app, validate)
-}
-
 func inspectParsedAutomaticLaunch(u parsedLaunchUnit, raw []byte, app string, validate func(string) error) (AutomaticLaunch, error) {
 	var problems launchProblems
 	problems.add(u.validatePreCommands(validate))
@@ -174,13 +152,10 @@ func inspectParsedAutomaticLaunch(u parsedLaunchUnit, raw []byte, app string, va
 	}
 	result := AutomaticLaunch{HomeWorkingDirectory: u.homeWorkingDirectory, WorkingDirectory: u.workingDirectory, LoadedProperties: u.loadedProperties, Environment: u.environmentValues, GPUUUID: u.gpuUUID, Command: u.execStart, PreCommands: u.preCommands, SHA256: fmt.Sprintf("%x", sha256.Sum256(raw))}
 	if app == "comfyui" {
-		endpoint, err := comfyLaunchEndpointMode(args, u.cleanupEnvironment)
+		endpoint, err := comfyLaunchEndpoint(args)
 		result.Endpoint = endpoint
 		problems.add(err)
 		problems.add(validateComfyScript(args[1]))
-	} else if app == "ollama" {
-		result.Endpoint = loopbackHTTPPrefix + u.host
-		problems.add(qualifyParsedMainCommand(u, control.NativeModel{GPUUUID: u.gpuUUID, Runtime: app, Endpoint: result.Endpoint}, func(string) error { return nil }))
 	} else {
 		f, err := parseServerCommand(args, app)
 		problems.add(err)
@@ -199,9 +174,7 @@ func inspectParsedAutomaticLaunch(u parsedLaunchUnit, raw []byte, app string, va
 	return result, nil
 }
 
-func comfyLaunchEndpoint(args []string) (string, error) { return comfyLaunchEndpointMode(args, false) }
-
-func comfyLaunchEndpointMode(args []string, cleanup bool) (string, error) {
+func comfyLaunchEndpoint(args []string) (string, error) {
 	executable := filepath.Base(args[0])
 	if executable != "python" && executable != "python3" && !strings.HasPrefix(executable, "python3.") {
 		return "", ErrLaunchUnsupported
@@ -209,7 +182,7 @@ func comfyLaunchEndpointMode(args []string, cleanup bool) (string, error) {
 	if !filepath.IsAbs(args[1]) || filepath.Base(args[1]) != "main.py" || !strings.EqualFold(filepath.Base(filepath.Dir(args[1])), "ComfyUI") {
 		return "", ErrLaunchUnsupported
 	}
-	host, port, err := comfyLaunchAddressMode(args[2:], cleanup)
+	host, port, err := comfyLaunchAddress(args[2:])
 	if err != nil {
 		return "", err
 	}
@@ -222,10 +195,6 @@ func comfyLaunchEndpointMode(args []string, cleanup bool) (string, error) {
 }
 
 func comfyLaunchAddress(args []string) (string, string, error) {
-	return comfyLaunchAddressMode(args, false)
-}
-
-func comfyLaunchAddressMode(args []string, cleanup bool) (string, string, error) {
 	host, port := "127.0.0.1", "8188"
 	if len(args) > 256 {
 		return "", "", fmt.Errorf("%w: ComfyUI argument count exceeds supported limit", ErrLaunchUnsupported)
@@ -237,7 +206,7 @@ func comfyLaunchAddressMode(args []string, cleanup bool) (string, string, error)
 		if err := comfyDuplicateOption(key, seen); err != nil {
 			return "", "", err
 		}
-		consumed, err := qualifyComfyOption(key, values, cleanup)
+		consumed, err := qualifyComfyOption(key, values)
 		if err != nil {
 			problems.add(err)
 			if consumed == 0 {
@@ -282,7 +251,7 @@ func comfyDuplicateOption(key string, seen map[string]bool) error {
 	return nil
 }
 
-func qualifyComfyOption(key string, values []string, cleanup bool) (int, error) {
+func qualifyComfyOption(key string, values []string) (int, error) {
 	switch key {
 	case flagListen, flagPort:
 		if len(values) == 0 || strings.HasPrefix(values[0], "--") {
@@ -293,12 +262,12 @@ func qualifyComfyOption(key string, values []string, cleanup bool) (int, error) 
 		if len(values) == 0 || strings.HasPrefix(values[0], "--") {
 			return 0, comfyOptionError(key, "requires an existing trusted absolute directory")
 		}
-		if err := qualifyComfyOptionPath(values[0], false, cleanup); err != nil {
+		if err := qualifyComfyOptionPath(values[0], false); err != nil {
 			return 1, comfyOptionError(key, err.Error())
 		}
 		return 1, nil
 	case flagExtraModelPathsConfig:
-		return qualifyComfyConfigurationFiles(values, cleanup)
+		return qualifyComfyConfigurationFiles(values)
 	case "--disable-auto-launch", "--enable-manager":
 		return 0, nil
 	default:
@@ -306,7 +275,7 @@ func qualifyComfyOption(key string, values []string, cleanup bool) (int, error) 
 	}
 }
 
-func qualifyComfyConfigurationFiles(values []string, cleanup bool) (int, error) {
+func qualifyComfyConfigurationFiles(values []string) (int, error) {
 	count := 0
 	for _, value := range values {
 		if strings.HasPrefix(value, "--") {
@@ -322,7 +291,7 @@ func qualifyComfyConfigurationFiles(values []string, cleanup bool) (int, error) 
 	}
 	var problems launchProblems
 	for _, value := range values[:count] {
-		if err := qualifyComfyOptionPath(value, true, cleanup); err != nil {
+		if err := qualifyComfyOptionPath(value, true); err != nil {
 			problems.add(comfyOptionError(flagExtraModelPathsConfig, err.Error()))
 		}
 	}
@@ -371,10 +340,7 @@ func validateComfyScript(path string) error {
 	return nil
 }
 
-func qualifyComfyOptionPath(path string, file, cleanup bool) error {
-	if cleanup {
-		return nil
-	}
+func qualifyComfyOptionPath(path string, file bool) error {
 	kind := kindDir
 	if file {
 		kind = kindFile

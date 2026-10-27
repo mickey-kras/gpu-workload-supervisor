@@ -27,13 +27,13 @@ func TestNativeProxyRejectsModelBeforeAdmission(t *testing.T) {
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; w.WriteHeader(200) }))
 			defer upstream.Close()
 			u, _ := url.Parse(upstream.URL)
-			s := &nativeStore{fakeStore: fakeStore{state: admittedState(owner)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "ollama", Model: "selected", Endpoint: upstream.URL}}}}}}
-			h, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/api/generate"}}})
+			s := &nativeStore{fakeStore: fakeStore{state: admittedState(owner)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: upstream.URL}}}}}}
+			h, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/v1/completions"}}})
 			if err != nil {
 				t.Fatal(err)
 			}
 			for _, body := range []string{`{"model":"selected","Model":"other"}`, `{"model":"selected","Keep_Alive":0}`, `{"model":"other"}`, `{"model":"selected","keep_alive":0}`, `{"model":"selected","model":"other"}`} {
-				req := httptest.NewRequest("POST", "/api/generate", strings.NewReader(body))
+				req := httptest.NewRequest("POST", "/v1/completions", strings.NewReader(body))
 				req.Header.Set(DefaultRequestIDHeader, "request")
 				addLeaseHeaders(req, s.state.LeaseFence)
 				w := httptest.NewRecorder()
@@ -43,7 +43,7 @@ func TestNativeProxyRejectsModelBeforeAdmission(t *testing.T) {
 				}
 			}
 			s.catalog.Revision = "two"
-			req := httptest.NewRequest("POST", "/api/generate", strings.NewReader(`{"model":"selected"}`))
+			req := httptest.NewRequest("POST", "/v1/completions", strings.NewReader(`{"model":"selected"}`))
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, req)
 			if w.Code != 409 || calls != 0 {
@@ -58,16 +58,16 @@ func nativeProxyFixture(t *testing.T) (*nativeStore, Config, *httptest.Server, *
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { *calls++; w.WriteHeader(200) }))
 	t.Cleanup(server.Close)
 	u, _ := url.Parse(server.URL)
-	s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "ollama", Model: "selected", Endpoint: server.URL}}}}}}
-	return s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/api/generate"}}}, server, calls
+	s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: server.URL}}}}}}
+	return s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/v1/completions"}}}, server, calls
 }
 func TestNativeProxyRoutePolicies(t *testing.T) {
 	cases := map[string]func(*Config){
 		"upstream":      func(c *Config) { u, _ := url.Parse("http://127.0.0.1:1"); c.Upstream = u },
 		"passthrough":   func(c *Config) { c.PassthroughRoutes = []Route{{Method: "POST", Path: "/api/create"}} },
 		"mutation":      func(c *Config) { c.ExecutionRoutes = []Route{{Method: "POST", Path: "/api/pull"}} },
-		"method":        func(c *Config) { c.ExecutionRoutes = []Route{{Method: "GET", Path: "/api/generate"}} },
-		"read mutation": func(c *Config) { c.ReadOnlyRoutes = []Route{{Method: "GET", Path: "/api/generate"}} },
+		"method":        func(c *Config) { c.ExecutionRoutes = []Route{{Method: "GET", Path: "/v1/completions"}} },
+		"read mutation": func(c *Config) { c.ReadOnlyRoutes = []Route{{Method: "GET", Path: "/v1/completions"}} },
 		"head":          func(c *Config) { c.ReadOnlyRoutes = []Route{{Method: "HEAD", Path: "/api/ps"}} },
 	}
 	for name, edit := range cases {
@@ -79,7 +79,7 @@ func TestNativeProxyRoutePolicies(t *testing.T) {
 			}
 		})
 	}
-	for _, family := range []string{"ollama", "llama.cpp", "vllm"} {
+	for _, family := range []string{"vllm"} {
 		s, c, _, _ := nativeProxyFixture(t)
 		s.catalog.Catalog.Profiles[0].NativeModel.Runtime = family
 		c.ExecutionRoutes = []Route{{Method: "POST", Path: "/v1/chat/completions"}}
@@ -87,18 +87,18 @@ func TestNativeProxyRoutePolicies(t *testing.T) {
 		if _, err := NewWithContext(context.Background(), s, c); err != nil {
 			t.Fatal(err)
 		}
-		if family != "ollama" {
-			c.ExecutionRoutes = []Route{{Method: "POST", Path: "/api/generate"}}
+		for _, path := range []string{"/api/generate", "/api/chat", "/api/embed", "/api/embeddings"} {
+			c.ExecutionRoutes = []Route{{Method: "POST", Path: path}}
 			if _, err := NewWithContext(context.Background(), s, c); err == nil {
-				t.Fatal("non-Ollama route accepted")
+				t.Fatal("removed Ollama execution route accepted", path)
 			}
 		}
-	}
-	s, c, _, _ := nativeProxyFixture(t)
-	for _, path := range []string{"/api/tags", "/api/ps", "/api/version"} {
-		c.ReadOnlyRoutes = []Route{{Method: "GET", Path: path}}
-		if _, err := NewWithContext(context.Background(), s, c); err != nil {
-			t.Fatal(err)
+		c.ExecutionRoutes = []Route{{Method: "POST", Path: "/v1/chat/completions"}}
+		for _, path := range []string{"/api/tags", "/api/ps", "/api/version"} {
+			c.ReadOnlyRoutes = []Route{{Method: "GET", Path: path}}
+			if _, err := NewWithContext(context.Background(), s, c); err == nil {
+				t.Fatal("removed Ollama read route accepted", path)
+			}
 		}
 	}
 }
@@ -111,7 +111,7 @@ func TestNativeProxyValidBodyAndLimits(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			req := httptest.NewRequest("POST", "/api/generate", strings.NewReader(`{"model":"selected","prompt":"hello"}`))
+			req := httptest.NewRequest("POST", "/v1/completions", strings.NewReader(`{"model":"selected","prompt":"hello"}`))
 			addLeaseHeaders(req, s.state.LeaseFence)
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, req)
@@ -121,7 +121,7 @@ func TestNativeProxyValidBodyAndLimits(t *testing.T) {
 			for _, tc := range []struct {
 				path, encoding, body string
 				code                 int
-			}{{"/api/generate?model=other", "", `{"model":"selected"}`, 400}, {"/api/generate", "gzip", `{"model":"selected"}`, 400}, {"/api/generate", "", strings.Repeat("x", 16<<20+1), 502}} {
+			}{{"/v1/completions?model=other", "", `{"model":"selected"}`, 400}, {"/v1/completions", "gzip", `{"model":"selected"}`, 400}, {"/v1/completions", "", strings.Repeat("x", 16<<20+1), 502}} {
 				req := httptest.NewRequest("POST", tc.path, strings.NewReader(tc.body))
 				req.Header.Set("Content-Encoding", tc.encoding)
 				w := httptest.NewRecorder()
@@ -153,7 +153,7 @@ func TestNativeCatalogReadFailure(t *testing.T) {
 	}
 	h.catalog = &failingCatalogStore{}
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/generate", strings.NewReader(`{"model":"selected"}`)))
+	h.ServeHTTP(w, httptest.NewRequest("POST", "/v1/completions", strings.NewReader(`{"model":"selected"}`)))
 	if w.Code != 503 {
 		t.Fatal(w.Code)
 	}
@@ -197,7 +197,7 @@ func TestNativeBodyReadFailureIsNotModelMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/generate", brokenBody{}))
+	h.ServeHTTP(w, httptest.NewRequest("POST", "/v1/completions", brokenBody{}))
 	if w.Code != 502 || *calls != 0 || len(s.admitted) != 0 {
 		t.Fatalf("aborted upload classified: %d", w.Code)
 	}

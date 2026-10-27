@@ -1,7 +1,5 @@
 export const applications = Object.freeze([
     {id: 'comfyui', label: 'ComfyUI'},
-    {id: 'ollama', label: 'Ollama'},
-    {id: 'llama.cpp', label: 'llama.cpp'},
     {id: 'vllm', label: 'vLLM'},
 ]);
 
