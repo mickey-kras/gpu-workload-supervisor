@@ -135,3 +135,22 @@ func TestLegacyTemporaryCleanupStopsOnlyRecordedInvocation(t *testing.T) {
 		})
 	}
 }
+
+func TestLegacyTemporaryCleanupQualifiesInferredStoppedPlacement(t *testing.T) {
+	for _, mode := range []string{"changed-version", "version-unavailable"} {
+		t.Run(mode, func(t *testing.T) {
+			m, r, v := temporaryManagerFixture(t)
+			if mode == "changed-version" {
+				v.SystemdVersion = 255
+			} else {
+				r.failCommand = "--version"
+			}
+			if err := m.StopTemporaryDiscovery(t.Context(), v, ""); err == nil {
+				t.Fatal("unqualified stopped placement accepted")
+			}
+			if r.stops != 0 || r.starts != 0 {
+				t.Fatal("stopped qualification changed service")
+			}
+		})
+	}
+}

@@ -44,24 +44,10 @@ func (m *SystemdManager) verifyTemporaryCleanup(ctx context.Context, v control.T
 	if service["NeedDaemonReload"] != "no" || service["Slice"] != "app.slice" {
 		return nil, ErrLaunchChanged
 	}
-	root, err := m.temporaryProperties(ctx, "-.slice")
-	if err != nil {
+	if err := m.verifyTemporaryCleanupPlacement(ctx, v, service); err != nil {
 		return nil, err
 	}
-	slice, err := m.temporaryProperties(ctx, "app.slice")
-	if err != nil {
-		return nil, err
-	}
-	group, err := ResolveAutomaticCgroup(v.Unit, service, slice, root)
-	if err != nil {
-		return nil, err
-	}
-	if group != v.Cgroup {
-		return nil, ErrLaunchChanged
-	}
-	if err := m.cgroups.check(root["ControlGroup"], false); err != nil {
-		return nil, err
-	}
+
 	return service, nil
 }
 
@@ -87,4 +73,39 @@ func (m *SystemdManager) StopTemporaryDiscovery(ctx context.Context, v control.T
 		}
 	}
 	return m.cgroups.empty(v.Cgroup)
+}
+
+func (m *SystemdManager) verifyTemporaryCleanupPlacement(ctx context.Context, v control.TemporaryDiscoveryCandidate, service map[string]string) error {
+	if service["ControlGroup"] == "" {
+		output, err := m.runner.Run(ctx, m.config.SystemctlPath, "--version")
+		if err != nil {
+			return err
+		}
+		version, err := SupportedSystemdPlacementVersion(output)
+		if err != nil {
+			return err
+		}
+		if version != v.SystemdVersion {
+			return ErrLaunchChanged
+		}
+	}
+	root, err := m.temporaryProperties(ctx, "-.slice")
+	if err != nil {
+		return err
+	}
+	slice, err := m.temporaryProperties(ctx, "app.slice")
+	if err != nil {
+		return err
+	}
+	group, err := ResolveAutomaticCgroup(v.Unit, service, slice, root)
+	if err != nil {
+		return err
+	}
+	if group != v.Cgroup {
+		return ErrLaunchChanged
+	}
+	if err := m.cgroups.check(root["ControlGroup"], false); err != nil {
+		return err
+	}
+	return nil
 }
