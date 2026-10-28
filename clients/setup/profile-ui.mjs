@@ -23,7 +23,6 @@ export function createProfileEditor({current, Adw, Gtk, GLib, units, field, inva
     const details = new Adw.ExpanderRow({title: 'Advanced',
         subtitle: 'Stable ID, manual service name, VRAM and login behavior', expanded: false});
     group.add(details);
-    const bindingParent = details;
     const choices = ['', ...new Set([...(current.unit ? [current.unit] : []), ...units]), null];
     let syncingService = false;
     const service = new Adw.ComboRow({title: 'Existing user service', enable_search: true, use_markup: false,
@@ -31,9 +30,9 @@ export function createProfileEditor({current, Adw, Gtk, GLib, units, field, inva
         model: Gtk.StringList.new(['Choose a service…', ...choices.slice(1, -1), 'Enter another service…']),
         selected: current.unit ? choices.indexOf(current.unit) : 0});
     if (current.nativeModel?.owned) service.sensitive = false;
-    if (bindingParent === details) details.add_row(service); else group.add(service);
-    field(bindingParent, 'Cgroup path beneath /sys/fs/cgroup (required)', current.cgroup, text => current.cgroup = text).editable = !current.nativeModel?.owned;
-    field(bindingParent, 'Loopback health URL (required)', current.healthURL, text => current.healthURL = text).editable = !current.nativeModel?.owned;
+    details.add_row(service);
+    field(details, 'Cgroup path beneath /sys/fs/cgroup (required)', current.cgroup, text => current.cgroup = text).editable = !current.nativeModel?.owned;
+    field(details, 'Loopback health URL (required)', current.healthURL, text => current.healthURL = text).editable = !current.nativeModel?.owned;
 
     const manualService = field(details, 'Service name (manual entry)', current.unit, text => {
         current.unit = text;
