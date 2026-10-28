@@ -15,7 +15,7 @@
 - Controller: control metadata only. No prompts or responses.
 - Proxy: payload forwarding, bounded protocol validation and exact-body authorization. Optional [requester authentication](REQUESTER-INGRESS.md) before workflow authorization. No semantic content policy.
 - Demand records: admission evidence. No workflow scheduling or replay of ambiguous execution.
-- Integrations: preserve admission, terminal evidence and runtime-bypass prevention.
+- Integrations: keep admission, terminal evidence and runtime-bypass prevention.
 - Setup: no broker, gateway or scanner installation.
 - [Trainer adapters](TRAINING.md): recipes and checkpoint contents. Controller: finite-job lifecycle.
 

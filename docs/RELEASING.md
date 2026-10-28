@@ -15,8 +15,8 @@ contains six executables:
 
 The Debian package adds the GNOME Shell extension and setup application.
 The workflow publishes a checksum file for all archives and the CycloneDX source SBOM.
-Attestations in GitHub record the provenance of each build.
-Use `gh attestation verify` on a downloaded asset to check its provenance.
+Attestations in GitHub record the provenance of each build. Use
+`gh attestation verify` on a downloaded asset to check it.
 
 1. Merge through a PR with successful checks.
    Wait for the `main` workflow on the merge commit.
@@ -32,12 +32,12 @@ Use `gh attestation verify` on a downloaded asset to check its provenance.
    After successful publication, the workflow deletes the release branch.
 4. To retry the same SHA, re-run the failed job from the original run.
    This works even if `main` points to a newer commit.
-   If an earlier try already completed publication, the workflow verifies the immutable tag, assets and checksum.
+   If an earlier try already finished publication, the workflow verifies the immutable tag, assets and checksum.
    It then removes the prepared branch.
    For an incomplete or mutable publication, follow the recovery procedure below.
 5. After verified publication, the workflow opens or reuses a next-patch bump PR
    for `release-version.json`.
-   It enables squash auto-merge only if the complete PR diff is exactly the expected version line.
+   If the complete PR diff is exactly the expected version line, it enables squash auto-merge. Other diffs get no auto-merge.
    Required PR checks and repository protections still apply.
 
 To recover a failed version bump, re-run the failed follow-up job.
@@ -81,7 +81,7 @@ Before dispatch, configure these prerequisites:
 In `Settings > General > Releases`, enable release immutability.
 Set `RELEASE_SETTINGS_REVIEW` on that environment to the five reviewed release ruleset revisions.
 Its `immutable_releases: true` value is an owner attestation, not a live read of the repository setting.
-Before dispatch, confirm the setting. It makes only future releases immutable.
+Before dispatch, check the setting. It makes only future releases immutable.
 
 The workflow validates the attestation and checks accessible live rulesets before release preparation.
 When GitHub hides bypass actors, the matching reviewed ruleset revision supplies that assurance.
@@ -114,7 +114,7 @@ Read `release-version.json` for the current planned version.
 
 Binary archives include full dependency licenses and notices in `THIRD_PARTY_NOTICES/`.
 Pinned `google/go-licenses/v2` v2.0.1 collects them for both Linux architectures from the shipped commands' dependency graphs.
-GoReleaser generates the bundle again.
+GoReleaser produces the bundle again.
 Snapshot and release gates inspect UUID's BSD notice and representative transitive notices.
 
 Keep collector updates separate from runtime dependencies.

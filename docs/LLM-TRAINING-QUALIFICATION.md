@@ -1,42 +1,44 @@
 # LLM training qualification
 
 #453 stays open until the real GPU evidence below passes. Repository tests,
-dependency resolution, discovery and import preparation do not approve a runtime.
-All training presets remain disabled. Checkpoint and resume is #454. Training UI is #456.
-Keep host identities, paths, datasets, generated text and raw evidence private.
+dependency resolution, discovery and import preparation do not approve a
+runtime. All training presets remain disabled. Checkpoint and resume is #454.
+Training UI is #456. Keep host identities, paths, datasets, generated text and
+raw evidence private.
 
 ## Environment and backend decision
 
-The [dependency input](../training/axolotl/requirements.in) is an explicit subset
-for the worker's local SFT and LoRA path, with Torch 2.14.0 and its build tools.
-It omits Gradio, Trackio, s3fs, gcsfs, adlfs, ocifs, lm_eval and openenv-core,
-and overrides Axolotl's python-dotenv pin. The lock requires fsspec >=2026.6.0,
-Pillow >=13 and python-dotenv >=1.2.2. These are nine deliberate deviations from
-Axolotl's declared requirements: eight absent distributions and one version
-override.
+The [dependency input](../training/axolotl/requirements.in) is an explicit
+subset for the worker's local SFT and LoRA path, with Torch 2.14.0 and its
+build tools. It omits Gradio, Trackio, s3fs, gcsfs, adlfs, ocifs, lm_eval and
+openenv-core, and overrides Axolotl's python-dotenv pin. The lock requires
+fsspec >=2026.6.0, Pillow >=13 and python-dotenv >=1.2.2. These are nine
+deliberate deviations from Axolotl's declared requirements: eight absent
+distributions and one version override.
 
-CI checks these deviations exactly. More or changed deviations fail CI.
-The worker rejects the excluded distributions. Axolotl source and its installed
-dependency metadata remain unchanged.
+CI checks these deviations exactly. More or changed deviations fail CI. The
+worker rejects the excluded distributions. Axolotl source and its installed
+dependency metadata remain unchanged. The worker uses no fork.
 
-The worker uses no fork.
-
-The CPU smoke test exercises the worker's actual setup, train, evaluate and save
-sequence. It uses a tiny random model, two LoRA optimizer steps and a separate-process
-reload. It runs offline after installation and requires finite loss and logits.
-This verifies the subset's code path on dependency updates, not GPU suitability.
+The CPU smoke test exercises the worker's actual setup, train, evaluate and
+save sequence. It uses a tiny random model, two LoRA optimizer steps and a
+separate-process reload. It runs offline after installation and requires
+finite loss and logits. This verifies the subset's code path on dependency
+updates, not GPU suitability.
 
 The accompanying hash-locked requirements resolve for Linux x86_64 and CPython
 3.12.14. They are a **package dependency candidate**, not a complete approved
 environment. The [runtime check](#runtime-check) tests the interpreter, the
-standard library, the installed versions, the native libraries and the Torch and
-CUDA compatibility with the GPU. It does not record provenance or run GPU kernels.
+standard library, the installed versions, the native libraries and the Torch
+and CUDA compatibility with the GPU. It does not record provenance or run GPU
+kernels.
 
 Source distributions need controlled builds. A source hash does not pin the
-resulting wheel or its build environment. Do not install these into inference environments.
+resulting wheel or its build environment. Do not install these into inference
+environments.
 
-For a dedicated test environment, install the lock before the unchanged source,
-then run both checks with that environment's interpreter:
+For a dedicated test environment, install the lock before the unchanged
+source, then run both checks with that environment's interpreter:
 
 ```sh
 uv pip sync --python "${PYTHON:?}" --require-hashes training/axolotl/requirements.txt
@@ -46,9 +48,9 @@ uv pip install --python "$PYTHON" --no-deps --no-build-isolation \
 sudo unshare --net -- timeout 120 "$PYTHON" training/axolotl/smoke.py
 ```
 
-Use an absolute `PYTHON` path. Installation requires access to the pinned artifacts.
-The smoke runs in a network namespace with a two-minute limit, as in CI.
-Ordinary `pip check` reports the nine intentional deviations.
+Use an absolute `PYTHON` path. Installation requires access to the pinned
+artifacts. The smoke runs in a network namespace with a two-minute limit, as in
+CI. Ordinary `pip check` reports the nine intentional deviations.
 
 Do not ignore arbitrary failures or edit installed metadata: use the exact
 deviation checker. The CPU reload tests adapter compatibility. The production
@@ -63,21 +65,21 @@ uv pip compile training/axolotl/requirements.in \
   --output-file training/axolotl/requirements.txt
 ```
 
-Before you approve installation, build or download a private wheelhouse.
-Record the hashes and the exact build-tool environment.
-Test installation offline. Install
-Axolotl noneditable with `--no-deps` from commit `1f1eb05a391c43e65c1c5ee7ec6ea1b8a841d5d1`
-(version 0.21.0).
+Before approving installation, build or download a private wheelhouse. Record
+the hashes and the exact build-tool environment. Test installation offline.
+Install Axolotl noneditable with `--no-deps` from commit
+`1f1eb05a391c43e65c1c5ee7ec6ea1b8a841d5d1` (version 0.21.0).
 
-Preserve its real VCS `direct_url.json`. Do not falsify that
-metadata to satisfy the worker. The runner needs regular `bin/python3` and
-`lib/pythonX.Y/site-packages` files with complete inventories. A usual symlinked
-virtualenv is not this runtime layout.
+Preserve its real VCS `direct_url.json`. Do not falsify that metadata to
+satisfy the worker. The runner needs regular `bin/python3` and
+`lib/pythonX.Y/site-packages` files with complete inventories. A usual
+symlinked virtualenv is not this runtime layout.
 
-Record the approved interpreter, stdlib and
-external shared-library closure separately, including hashes and provenance.
+Record the approved interpreter, stdlib and external shared-library closure
+separately, including hashes and provenance.
 
-Source review on 2026-10-22 establishes these constraints, not a performance winner:
+Source review on 2026-10-22 sets these constraints, not a performance
+winner:
 
 | Candidate source | Verified integration constraint | Remaining evidence |
 | --- | --- | --- |
@@ -85,33 +87,33 @@ Source review on 2026-10-22 establishes these constraints, not a performance win
 | [TRL 1.14.1 fd74bbc](https://github.com/huggingface/trl/blob/fd74bbc7b5f852a70d4cc94377e0a8f94392fda1/pyproject.toml) with PEFT | Python >=3.10. Datasets >=4.7.0 and Transformers >=4.56.2. Independent reference adapter still needs qualification | Equal tokenization, loss, optimizer steps, export and fresh reload |
 | [Unsloth 356721b](https://github.com/unslothai/unsloth/blob/356721b31ebef3c1c0fcb8d53572c5be3d6eba89/pyproject.toml) | Its training extra caps Transformers at 5.17.0 and Datasets below 5.0.0. Cannot share this Axolotl environment | Separate resolved closure, equal recipe and measured comparison |
 
-Run each backend in its own pinned environment.
-Use the same values for these items:
+Run each backend in its own pinned environment, using the same values for:
 
 - Asset revisions, dataset bytes and splits, and seed.
 - LoRA targets, rank, alpha and dropout.
 - BF16, sequence length, batch and accumulation.
 - Optimizer, learning rate and number of optimizer steps.
 
-Disable packing, reporting and uploads. Record the tokenization differences explicitly. Matching
-row counts alone does not make the workloads equal.
+Disable packing, reporting and uploads. Record the tokenization differences
+explicitly. Matching row counts alone does not make the workloads equal.
 
-Do not bypass dependency constraints to force a shared environment. The production runner currently supports
-only the Axolotl candidate. A TRL or Unsloth experiment is not an accepted trainer.
+Do not bypass dependency constraints to force a shared environment. The
+production runner now supports only the Axolotl candidate. A TRL or
+Unsloth experiment is not an accepted trainer.
 
 ### Runtime check
 
-Run `"$PYTHON" -I -S -B training/axolotl/check_environment.py` with the runtime's
-own interpreter, as the runner does. The check refuses to run without `-I` and
-`-S`, and it writes no bytecode even without `-B`. It adds the runtime
-site-packages after the standard library, so no site-packages module can replace
-a standard-library module inside the checker. It prints one bounded JSON report,
-version 1.
+Run `"$PYTHON" -I -S -B training/axolotl/check_environment.py` with the
+runtime's own interpreter, as the runner does. The check refuses to run without
+`-I` and `-S`, and it writes no bytecode even without `-B`. It adds the runtime
+site-packages after the standard library, so no site-packages module can
+replace a standard-library module inside the checker. It prints one bounded
+JSON report, version 1.
 
-The exit status is 0 for `accepted` and 1 for `rejected`. The exit status 2 has
-two causes. An internal error prints the same JSON keys with the status
-`rejected`, empty `checks` and an `error` text. A usage error prints argparse
-usage text on standard error and no JSON. The `--target` option selects the target:
+The exit status is 0 for `accepted` and 1 for `rejected`. Exit status 2 has two
+causes. An internal error prints the same JSON keys with the status `rejected`,
+empty `checks` and an `error` text. A usage error prints argparse usage text on
+standard error and no JSON. The `--target` option selects the target:
 
 | Target | Rule |
 | --- | --- |
@@ -120,8 +122,8 @@ usage text on standard error and no JSON. The `--target` option selects the targ
 
 For a preset, give `--gpu-uuid` with the trainer GPU UUID, in the same format
 that the supervisor accepts. The check then sets `CUDA_VISIBLE_DEVICES` to that
-GPU for its child process, as the runner does. Without it, a preset target fails
-the `accelerator` check.
+GPU for its child process, as the runner does. Without it, a preset target
+fails the `accelerator` check.
 
 | Report field | Value |
 | --- | --- |
@@ -150,24 +152,24 @@ The standard-library names come from `sys.stdlib_module_names` and from the
 private names, such as `_sysconfigdata_*`, in the standard-library directories.
 The check scans site-packages before and after the child process. When the two
 scans find different shadowing or startup-file problems, the `standard-library`
-check fails. The scan does not detect changed file contents.
+check fails. The scan does not notice changed file contents.
 
-The runner's interpreter and the checker use `-S`, so they do not process `.pth`
-files. Subprocesses that the training stack starts, such as compile workers, can
-process them. Thus `startup-files` accepts only a `.pth` file that the `RECORD` of
-a locked wheel lists.
+The runner's interpreter and the checker use `-S`, so they do not process
+`.pth` files. Subprocesses that the training stack starts, such as compile
+workers, can process them. Thus `startup-files` accepts only a `.pth` file that
+the `RECORD` of a locked wheel lists.
 
-The native, driver and accelerator checks run in a child process with `-I -S -B`.
-The child gets the runner environment and puts the runtime site-packages first,
-as the worker does. The runner drops all other variables, such as
-`LD_LIBRARY_PATH`, `LD_PRELOAD` and `BNB_CUDA_VERSION`. Thus the child does not
-get them. The check stops a child that runs longer than 300 seconds.
+The native, driver and accelerator checks run in a child process with
+`-I -S -B`. The child gets the runner environment and puts the runtime
+site-packages first, as the worker does. The runner drops all other variables,
+such as `LD_LIBRARY_PATH`, `LD_PRELOAD` and `BNB_CUDA_VERSION`, so the child
+does not get them. The check stops a child that runs longer than 300 seconds.
 
-`uv pip sync --require-hashes` checks the integrity of the installation. The runtime
-check finds version drift and wheels for another interpreter or platform. It does
-not find changed or damaged files. Every target, also `cpu-smoke`, rejects
-distributions that are not in the lock. Thus use `uv pip sync`, not
-`uv pip install`, for the lock.
+`uv pip sync --require-hashes` checks the integrity of the installation. The
+runtime check finds version drift and wheels for another interpreter or
+platform. It does not find changed or damaged files. Every target, also
+`cpu-smoke`, rejects distributions that are not in the lock. Thus use
+`uv pip sync`, not `uv pip install`, for the lock.
 
 The lock installs xformers, which links `libcudart.so.12`. The lock installs no
 `libcudart.so.12`, because Torch uses CUDA 13.0. The supported presets use SDPA
@@ -177,17 +179,17 @@ The accelerator check needs a CUDA build of Torch and a visible GPU. The driver
 must support at least the CUDA major version of the Torch build.
 
 SASS for a target runs when the target has the same major and an equal or lower
-minor than the GPU.
-PTX runs on a GPU with an equal or higher capability. PTX needs a driver for the
-Torch CUDA version or newer. An `a` target, such as `sm_90a`, runs only on the exact
-capability. An `f` target, such as `sm_100f`, runs only on the same major. The
-presets need native BF16, which starts at compute capability 8.0.
+minor than the GPU. PTX runs on a GPU with an equal or higher capability. PTX
+needs a driver for the Torch CUDA version or newer. An `a` target, such as
+`sm_90a`, runs only on the exact capability. An `f` target, such as `sm_100f`,
+runs only on the same major. The presets need native BF16, which starts at
+compute capability 8.0.
 
 When Torch has no usable GPU, the report shows `"accelerator": "cpu"`. Each
 problem tells what is wrong and what to change. The report contains no dataset
 content, credentials or host paths.
 
-Before training starts, each worker phase runs the same accelerator check. Thus a
+Before training starts, each worker phase runs the same accelerator check, so a
 preset never falls back to CPU training. Run the check only in the dedicated
 training runtime. Activation and inference paths do not run it.
 
@@ -200,8 +202,9 @@ training runtime. Activation and inference paths do not run it.
 | `smoke-lora` | [TinyLlama 1.1B](https://huggingface.co/TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T/tree/59f6f375b26bde864a6ca194a9a3044570490064) | LoRA 8/16, sequence 128, batch 1, accumulation 1, 2 steps |
 | `representative-qlora` | [Llama 3.1 8B, NousResearch distribution](https://huggingface.co/NousResearch/Meta-Llama-3.1-8B/tree/1f47e50cdbe801ad8a5174156ec3a0655108fb9f) | QLoRA 16/32, sequence 2048, batch 1, accumulation 4, 100 steps |
 
-Both presets use learning rate 0.0002 and seed 42. These weights support training, not GGUF inference. The presets pin the source revisions.
-This does not prove memory fit or quality.
+Both presets use learning rate 0.0002 and seed 42. These weights support
+training, not GGUF inference. The presets pin the source revisions. This does
+not show memory fit or quality.
 
 `assets.json` is the reference for qualification snapshots, not an input to
 materialization. Presets fix training parameters. Materialization accepts an
@@ -212,13 +215,14 @@ Use the model's applicable license. Keep downloaded model and tokenizer in
 separate, new directories. With an already installed download client, use its
 [snapshot_download](https://huggingface.co/docs/huggingface_hub/guides/download)
 API with the exact `revision` above and `local_dir`. Allow only model
-`config.json`, `generation_config.json`, `model*.safetensors` and shard-index JSON,
-and tokenizer `tokenizer.json`, `tokenizer.model`, `tokenizer_config.json`,
-`special_tokens_map.json` and `added_tokens.json`.
+`config.json`, `generation_config.json`, `model*.safetensors` and shard-index
+JSON, and tokenizer `tokenizer.json`, `tokenizer.model`,
+`tokenizer_config.json`, `special_tokens_map.json` and `added_tokens.json`.
 
-Exclude pickle weights and code.
-Before you inventory those new download directories, remove the downloader's `.cache/huggingface` metadata only. Otherwise the exact asset inventory rejects it.
-Download and installation remains an explicit deployment step outside activation.
+Exclude pickle weights and code. Before inventorying the new download
+directories, remove only the downloader's `.cache/huggingface` metadata.
+Otherwise the precise asset inventory rejects them. Download and installation
+remain an explicit deployment step outside activation.
 
 ## Materialize and inspect
 
@@ -233,9 +237,9 @@ Write a private input JSON object with exactly these fields:
 | `outputDirectory` | New, empty, private absolute directory |
 | `budget` | All fields from [candidate resource estimates](LLM-TRAINING-CANDIDATE.md#resource-estimates). Explicit operator estimates, never zeros or inferred from model size |
 
-Use absolute paths for the shell variables below. New recipe and plan files must not
-already exist. Their parent directories must be private. Use different output
-directories, recipes and job IDs for each training run.
+Use absolute paths for the shell variables below. New recipe and plan files
+must not already exist. Their parent directories must be private. Use different
+output directories, recipes and job IDs for each training run.
 
 ```sh
 gpu-training-candidate -version
@@ -247,15 +251,17 @@ sha256sum "$RECIPE" "$PLAN"
 
 Materialization records observed bytes and runs existing candidate validation.
 It does not prove where those bytes originated. The original input and recipe
-remain private. The [trainer binding](TRAINING.md) also needs the exact unit,
-executable and recipe hashes, physical GPU UUID, cgroup, distinct job and terminal
-paths and a **measured** `requiredMiB`. Read-only trainer inspection can check
-that binding. It cannot invent the absent measurement or approve the environment.
+stay private. The [trainer binding](TRAINING.md) also needs the exact unit,
+executable and recipe hashes, physical GPU UUID, cgroup, distinct job and
+terminal paths and a **measured** `requiredMiB`. Read-only trainer inspection
+can check that binding. It cannot invent the absent measurement or approve the
+environment.
 
 ## Private host inputs and evidence
 
-Collect these before choosing a deployment lock. These commands read system
-state. Redirect their output to a private directory, never a public issue or CI log:
+Gather these before choosing a deployment lock. These commands read system
+state. Redirect their output to a private directory, never a public issue or CI
+log:
 
 ```sh
 umask 077
@@ -273,26 +279,29 @@ stat -fc %T /sys/fs/cgroup > "$EVIDENCE/cgroup-filesystem.txt"
 ```
 
 Set `PRESET` to the preset and `GPU_UUID` to the UUID of the trainer GPU. A
-`rejected` report blocks that preset. Fix each `fail` problem and run the check again.
+`rejected` report blocks that preset. Fix each `fail` problem and run the check
+again.
 
-Also record these items:
+Also record:
 
 - Release and checksum, approved Python path and version and stdlib inventory.
 - All installed distribution metadata and wheel and source hashes.
 - External ELF loader and library identities.
-- CUDA runtime, Torch build, supported GPU architecture and driver compatibility.
+- CUDA runtime, Torch build, supported GPU architecture and driver
+  compatibility.
 - The reviewed egress containment.
 - Model and tokenizer source and inventories.
 - Dataset digests and counts and recipe and plan.
 - Unit bytes and loaded properties.
 - Existing inference catalog and revision for handoff verification.
 
-Do not collect raw
-environment dumps or lifecycle completion tokens into reports.
+Do not collect raw environment dumps or lifecycle completion tokens into
+reports.
 
 After the environment and measured trainer binding are ready, run through the
-supervisor, never by starting the worker or trainer unit directly. Use the installed
-operator's existing state and runtime flags before each command where required:
+supervisor, never by starting the worker or trainer unit directly. Use the
+installed operator's existing state and runtime flags before each command where
+required:
 
 ```sh
 gpu-mode -target "${TRAINER_PROFILE:?}" -training-job "${JOB_ID:?}" training-start
@@ -301,10 +310,11 @@ gpu-mode -training-job "$JOB_ID" training-reconcile
 gpu-mode -training-job "$JOB_ID" training-status
 ```
 
-Reconcile only after the trainer exits. Missing or invalid evidence leaves admission
-pending. For interruption or uncertain launch, explicitly run
-`gpu-mode -training-job "$JOB_ID" training-recover`. It stops and verifies release,
-never resumes or retries training. Keep the output private for every command.
+Reconcile only after the trainer exits. Missing or invalid evidence leaves
+admission pending. For interruption or uncertain launch, explicitly run
+`gpu-mode -training-job "$JOB_ID" training-recover`. It stops and verifies
+release, never resumes or retries training. Keep the output private for every
+command.
 
 For each backend and size, keep the following evidence privately:
 
@@ -324,9 +334,10 @@ interval. Sampled GPU usage is a lower bound, not an exact peak.
 
 For the RAM peak, use the sources in this order:
 
-1. The [`memoryPeakBytes`](TRAINING.md#memory-peak) value of the job status. The
-   kernel and systemd measure it for the unit cgroup. It is a lower bound.
-2. Your own samples of the `memory.peak` file of the unit cgroup during the run.
+1. The [`memoryPeakBytes`](TRAINING.md#memory-peak) value of the job status.
+   The kernel and systemd measure it for the unit cgroup. It is a lower bound.
+2. Your own samples of the `memory.peak` file of the unit cgroup during the
+   run.
 
 A `memoryPeakBytes` value for every outcome needs systemd 256 or later. On
 systemd 252, the `MemoryPeak` property does not exist. On systemd 255, systemd
@@ -334,13 +345,14 @@ usually does not keep the value after the unit exits. On those hosts, the
 sampling in item 2 is an operator step for each qualification run. The
 supervisor does not do it. See [the systemd check](TRAINING.md#memory-peak).
 
-The [runner `peaks.json` file](LLM-TRAINING-RUNNER.md#resource-peaks) is only an
-unverified hint, because code in the trainer unit can write it.
+The [runner `peaks.json` file](LLM-TRAINING-RUNNER.md#resource-peaks) is only
+an unverified hint, because code in the trainer unit can write it.
 
 Capture disk usage during saves, not just after pruning. Add safety headroom to
 observed values before setting capacity. Failures, unmeasured peaks, missing
 evidence or unsupported combinations keep qualification incomplete.
 
-The [tool for import preparation](LLM-TRAINING-IMPORT.md) validates artifact identity.
-It does not merge or convert weights, change a serving model or activate a runtime.
-Keep #453 open until a reviewed deployment record covers every real-GPU gate.
+The [tool for import preparation](LLM-TRAINING-IMPORT.md) validates artifact
+identity. It does not merge or convert weights, change a serving model or
+activate a runtime. Keep #453 open until a reviewed deployment record covers
+every real-GPU gate.

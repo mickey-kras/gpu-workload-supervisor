@@ -2,8 +2,8 @@
 
 Implementation and remaining qualification for [issue
 #144](https://github.com/mickey-kras/gpu-workload-supervisor/issues/144). Durable
-policy, typed settings and demand activation and a 60-second user timer exist. Policy
-defaults to Off.
+policy, typed settings, demand activation, and a 60-second user timer exist.
+Policy defaults to Off.
 
 Packaged entrypoints have no qualified evidence provider: enabling returns
 `unavailable`, and policy evaluation fails closed. Keep Off for initial desktop
@@ -18,9 +18,9 @@ deployment.
 ## Required before enablement
 
 1. Deploy and qualify an orchestration `EvidenceProvider`. Contracts alone are not adapters.
-2. Check the evidence for queued, reserved, running and unresolved work and prevent direct execution bypass at the deployment boundary.
+2. Check the evidence for queued, reserved, running and unresolved work and stop direct execution bypass at the deployment boundary.
 3. Qualify native terminal completion and model lifecycle on the deployment host. Fixture coverage is not host acceptance.
-4. Integrate the desktop presentation of settings and deadlines only when backend capability and fresh evidence support it.
+4. When backend capability and fresh evidence support it, integrate the desktop presentation of settings and deadlines.
 
 [REQUESTER-INGRESS.md](REQUESTER-INGRESS.md) describes the optional authenticated requester and workflow
 ingress and the durable queued and reserved demand. Production
@@ -34,7 +34,7 @@ lease fence only after the controller verifies readiness and admission. There is
 remote control facade.
 
 - Queue and job state stays with orchestration until activation completes.
-- Adapters receive the fresh fence. Stale-fence registrations remain rejected.
+- Adapters get the fresh fence. Stale-fence registrations remain rejected.
 - User ownership, busy transitions and recovery latches reject activation.
 
 ## Activation
@@ -55,12 +55,12 @@ Admission between check and switch aborts the transition. No shutdown race.
 
 ## Evidence input contract
 
-The policy loop consumes one attestation from the orchestration adapter. No other
+The policy loop uses one attestation from the orchestration adapter. No other
 evidence source.
 
 1. Content: queued, reserved, running, and unresolved work sets, each as a set of job identities. Unresolved maps to store primitives: `PendingWork` (registrations retaining completion authority). `ResolveUnfinishedWork` stays reserved for verified operator recovery, never for policy cleanup.
 2. Pull `Attest` on each evaluation. `AcquireFence` must validate its generation and exclude queue or reservation changes through the idle transition transaction. Invalidation cannot replace fresh evidence.
-3. Freshness: the attestation carries an adapter timestamp. The policy treats attestations older than a bounded staleness limit as missing. Implementation: 120 seconds (`MaxAttestationAge` in `internal/supervisor/policy.go`). The user timer ticks every 60 seconds (`packaging/gpu-workload-supervisor-idle.timer`).
+3. Freshness: the attestation has an adapter timestamp. The policy treats attestations older than a bounded staleness limit as missing. Implementation: 120 seconds (`MaxAttestationAge` in `internal/supervisor/policy.go`). The user timer ticks every 60 seconds (`packaging/gpu-workload-supervisor-idle.timer`).
 4. Adapter outage or unreachable adapter -> fail closed: evidence counts as missing, no idle transition.
 5. Uncertain, partial, or missing attestation -> no idle transition.
 
@@ -89,7 +89,7 @@ evidence source.
 ## Status interface
 
 - `control.State` carries policy and deadline read-model fields. Committed operator settings are available through `get-settings`. Ordinary operator `status` is not a settings snapshot.
-- Desktop policy and deadline presentation remains a follow-up. Expose a pending deadline only from verified backend evidence.
+- Desktop policy and deadline presentation stays a follow-up. Expose a pending deadline only from verified backend evidence.
 - No savings estimate, no live countdown. Countdown is UI-side rendering of the deadline only.
 
 ## Boundaries
@@ -101,7 +101,10 @@ evidence source.
 
 ## Acceptance
 
-- Cases: request at exact timeout, cold activation, activation during active work, mixed workloads, streaming and async completion.
-- Also test long jobs crossing timeout, disconnects, ambiguous completion, adapter outage and stale attestation.
-- Also test restart with pending deadline, ownership transfer with armed deadline, rejected requests and recovery latches.
-- Measure the power for loaded-but-unused and idle states and activation latency on the deployment host. Record in the private qualification record before any savings claim or enabled default.
+Test cases:
+
+- Request at exact timeout, cold activation, activation during active work, mixed workloads, streaming and async completion.
+- Long jobs crossing timeout, disconnects, ambiguous completion, adapter outage and stale attestation.
+- Restart with pending deadline, ownership transfer with armed deadline, rejected requests and recovery latches.
+
+Measure the power for loaded-but-unused and idle states and activation latency on the deployment host. Record in the private qualification record before any savings claim or enabled default.

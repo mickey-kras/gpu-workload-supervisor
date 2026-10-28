@@ -64,7 +64,7 @@ are outside this repository.
   it waits up to `-drain-timeout` for already admitted work to finish. Old
   registrations keep their completion authority. Failed or canceled recovery
   stays closed with error health and unknown runtime state.
-- Unfinished orphan work requires the explicit `resolve-work` procedure below
+- Unfinished orphan work needs the explicit `resolve-work` procedure below
   before destructive recovery can proceed.
 
 Runtime error messages omit untrusted command output and can omit the underlying
@@ -77,7 +77,7 @@ not automatically copy suppressed probe output to the journal.
 An upgrade can find an unfinished temporary Ollama discovery session.
 The supervisor blocks recovery, workload activation, and catalog changes until cleanup succeeds.
 Temporary discovery cannot start new sessions.
-Cleanup requires the current database schema. If the schema differs, use a compatible release to complete cleanup before the upgrade.
+Cleanup requires the current database schema. If the schema differs, use a compatible release to finish cleanup before the upgrade.
 
 1. Pause external application control, including timers and other service activation paths.
 2. Run the status command as the desktop account:
@@ -147,7 +147,7 @@ Use this only after investigating work that cannot report completion, such as a 
 
 ## Restore state
 
-Restored databases need an explicit `/PINNED/RELEASE/gpu-mode -state /PRIVATE/DURABLE/STATE/state.db restore-state` before any proxy starts. This command needs no runtime flags. It does not copy a backup. Follow the [restore procedure](RESTORING.md) for ordering and validation. Normal restart does not rotate the fence.
+Restored databases need an explicit `/PINNED/RELEASE/gpu-mode -state /PRIVATE/DURABLE/STATE/state.db restore-state` before any proxy starts. The command needs no runtime flags and does not copy a backup. Follow the [restore procedure](RESTORING.md) for ordering and validation. Normal restart does not rotate the fence.
 
 <a id="retain-or-archive-audit-history"></a>
 
@@ -169,7 +169,7 @@ with their events and snapshots. In-progress and current-fence transitions and
 transitions referencing unfinished work remain.
 
 The command prunes restoration and work-resolution
-history only with no unfinished work or live transition. It always retains
+history only with no unfinished work or live transition. It always keeps
 the latest record of each kind. Resolve safety evidence through normal recovery.
 Do not delete protected records manually to meet a storage target.
 

@@ -14,7 +14,7 @@ Finish or explicitly stop running jobs, then stop every proxy and workload runti
 using the state file. Keep these components from restarting during maintenance.
 
 Create a consistent SQLite backup using SQLite's backup mechanism or a verified
-consistent snapshot. Preserve the complete database, including audit and migration
+consistent snapshot. Keep the complete database, including audit and migration
 metadata. Do not copy only the main `.db` file from a live WAL database. Protect
 backup contents and the durable state directory with the service identity's private
 permissions.
@@ -97,11 +97,13 @@ The lease incarnation in a SQLite backup can be older than the live database. A 
    fi
    ```
 
-   Use the matching runtime configuration and trainer bindings from the restored database's accepted catalog. Runtime commands do not accept `-catalog`. A `reserved job` blocks `restore-state`. Before you retry it, recovery must succeed and you must check recursive cgroup and GPU release. A `preparing claim` does not reserve GPU work and does not block `restore-state`. Recovery records it as `interrupted` without stopping a trainer. The query excludes finished jobs and interrupted claims.
+   Use the matching runtime configuration and trainer bindings from the restored database's accepted catalog. Runtime commands do not accept `-catalog`. A `reserved job` blocks `restore-state`. Before you retry it, recovery must succeed and you must check recursive cgroup and GPU release. A `preparing claim` does not reserve GPU work and does not block `restore-state`. Recovery records it as `interrupted` without stopping a trainer, and the query excludes finished jobs and interrupted claims.
 
-   If the query fails or lists no reserved job despite the unfinished-training error, keep components stopped. Investigate the database path and schema. Do not guess an ID or edit state. After successful recovery, retry `restore-state`, then continue with step 4. Do not bypass the unfinished-training guard. [Training recovery](TRAINING.md#commands) never resumes or relaunches training: it preserves an already persisted terminal outcome, otherwise records `interrupted`. The backup alone does not prove completion. If recovery fails, keep proxies stopped and resolve the runtime or configuration error before retrying.
+   If the query fails or lists no reserved job despite the unfinished-training error, keep components stopped. Investigate the database path and schema. Do not guess an ID or edit state. After successful recovery, retry `restore-state`, then continue with step 4. Do not bypass the unfinished-training guard.
 
-4. Keep the proxies stopped. Run the same pinned `gpu-mode` with the `reconcile` command and complete runtime flags. Include the same `-state` path. It must finish with a stable, healthy state. If it reports a failure, leave the proxies stopped and use `recover` only after checking the runtime state. If you need an active workload, start it through the controller.
+   [Training recovery](TRAINING.md#commands) never resumes or relaunches training: it preserves an already persisted terminal outcome, otherwise records `interrupted`. The backup alone does not prove completion. If recovery fails, keep proxies stopped and resolve the runtime or configuration error before retrying.
+
+4. Keep the proxies stopped. Run the same pinned `gpu-mode` with the `reconcile` command and full runtime flags. Include the same `-state` path. It must finish with a stable, healthy state. If it reports a failure, leave the proxies stopped and use `recover` only after checking the runtime state. If you need an active workload, start it through the controller.
 5. Start the proxies only after successful reconciliation. Clients must get the new fence. The proxy rejects requests with a fence from the backup.
 
 `restore-state` acquires the exclusive proxy lifetime lock before opening the database and holds it through completion. Proxies keep their shared locks until in-flight handlers finish. This enforces proxy shutdown only. Operators must still stop all runtimes before replacing the database.

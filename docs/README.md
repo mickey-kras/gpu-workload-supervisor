@@ -4,7 +4,7 @@
 
 [Repository](../README.md)
 
-Start with [deployment](DEPLOYMENT.md), [boot reconciliation](OPERATIONS.md#boot-and-explicit-recovery), and [proxy setup](EXECUTION-PROXY.md). Complete [host qualification](DEPLOYMENT.md#qualify-the-host) before you enable execution.
+Start with [deployment](DEPLOYMENT.md), [boot reconciliation](OPERATIONS.md#boot-and-explicit-recovery), and [proxy setup](EXECUTION-PROXY.md). Finish [host qualification](DEPLOYMENT.md#qualify-the-host) before you enable execution.
 
 <a id="deploy-and-operate"></a>
 

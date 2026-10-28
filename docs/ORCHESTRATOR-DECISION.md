@@ -33,11 +33,17 @@ After recovery completes, setup offers the upgrade in a later preview. Runtime
 startup never silently rewrites accepted files. This additive feature needs no database migration.
 Each future schema change gets its own version with its feature.
 
-Catalog canonical input has a 256 KiB limit, excluding derived owned conflicts. A
-separate 96 KiB allowance accommodates the supported 32-unit peer graph, with
-the full serialization bounded at 352 KiB on validation and readback. Other
-fields cannot consume this derived allowance. Setup requests have a 416 KiB limit.
-This reserves 64 KiB for the deployment profile and request envelope around a maximum catalog.
+Size limits:
+
+| Data | Limit |
+| --- | --- |
+| Catalog canonical input, excluding derived owned conflicts | 256 KiB |
+| Derived allowance for the supported 32-unit peer graph | 96 KiB |
+| Full serialization on validation and readback | 352 KiB |
+| Setup requests | 416 KiB |
+
+Other fields cannot consume the derived allowance. The request limit reserves
+64 KiB for the deployment profile and request envelope around a maximum catalog.
 
 `requiredMiB` is a demand estimate, not an enforced memory ceiling.
 Host evidence and hardware and build identifiers stay outside this decision record.
