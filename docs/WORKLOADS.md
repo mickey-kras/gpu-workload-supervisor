@@ -62,7 +62,7 @@ larger than 352 KiB. Canonical catalog data excluding derived owned conflicts re
 capped at 256 KiB. Only the valid owned peer graph can use the extra 96 KiB allowance.
 
 The `systemd` adapter stops the unit and verifies its recursive cgroup is empty. The
-compatibility `media-unload` adapter also requires `releaseURL`. HTTP unload success
+compatibility `media-unload` adapter also needs `releaseURL`. HTTP unload success
 never proves GPU release.
 
 A live opposing unload runtime remains fail-closed until independently stopped. The
@@ -106,7 +106,7 @@ Flags precede the command, following Go's flag parser. Select workloads only thr
 
 Proxies accept configured workload IDs and SQLite validates registration against the
 accepted catalog and active allocation. Automation grants remain explicit: adding a
-workload never grants an existing principal permission to select it.
+workload never grants an existing principal permission to choose it.
 
 Schema v11 rebuilds workload-constrained tables transactionally, retaining state,
 fences, registrations, tokens, transitions, events and relationships. Older binaries
@@ -123,9 +123,8 @@ existing unit and non-overlapping cgroup.
 
 Two models in the same runtime instance can use different units on the same endpoint.
 The controller stops the old unit and verifies GPU release before it starts the next
-unit. Re-selecting an active workload does not restart that unit.
-
-Opposing units remain reconciled.
+unit. Re-selecting an active workload does not restart that unit. Opposing units
+stay reconciled.
 
 Native readiness queries `/health` and `/v1/models`.
 
@@ -141,7 +140,7 @@ Launch-file constraints:
   Setup resolves symlinks with ownership and permission checks on every traversed path. It rejects broken links and excessive link chains.
 - Setup rejects shell wrappers, environment files, uninspected execution hooks, filesystem remapping directives and command substitution. Setup supports bounded direct `ExecStartPre` system checks and inspects them without running them.
 - Setup does not change or install application or model files.
-- vLLM requires an existing local model directory. These model checks prove existence and type, not
+- The vLLM runtime needs an existing local model directory. These model checks prove existence and type, not
   ownership, permissions or content safety.
 
 Adopted `Environment=` assignments support literal values, including quotes around a
@@ -149,20 +148,20 @@ whole assignment. HOME, cache, temporary-directory and token-path settings need 
 trusted paths. Setup never reads token contents.
 
 `PATH`, `LD_LIBRARY_PATH` and `PYTHONPATH` need trusted absolute directories and reject
-empty search entries. `LD_LIBRARY_PATH` also treats semicolons as separators. Nonempty
-code-loading overrides such as `LD_PRELOAD`, `LD_AUDIT` and `PYTHONHOME` remain
+empty search entries. `LD_LIBRARY_PATH` additionally treats semicolons as separators. Nonempty
+code-loading overrides such as `LD_PRELOAD`, `LD_AUDIT` and `PYTHONHOME` stay
 unsupported.
 
-Setup preserves other literal variables. It does not certify their application-specific
+Setup keeps other literal variables. It does not certify their application-specific
 behavior. Unsupported expansion and environment files remain rejected.
 
 Directory checks do not inspect ownership, permissions or contents of loaded modules or
-libraries. The operator remains responsible for trusted local installation and
+libraries. The operator stays responsible for trusted local installation and
 dependency contents. Setup preserves the source files and checks their effective loaded
 assignments.
 
 Literal and `%h` `WorkingDirectory=` settings use the same existing-directory trust
-checks: setup checks symlink targets and every traversed ancestor for foreign ownership
+checks. Setup checks symlink targets and every traversed ancestor for foreign ownership
 and world write permissions. Their exact effective loaded paths must match inspection
 during setup and start.
 
@@ -172,18 +171,16 @@ Existing services can keep `Wants=network-online.target`, `KillSignal=SIGINT`,
 against the preserved sources. `Wants=` uses systemd's additive dependency behavior.
 
 Empty assignments do not remove earlier dependencies. Other dependency targets remain
-unsupported. These settings qualify compatible syntax and preserve isolation settings.
+unsupported. These settings qualify compatible syntax and keep isolation settings.
 
 They do not prove the application can run within that sandbox. Setup preserves existing
 `Type=` and `Restart=` values, including `Restart=on-failure`. Automatic restarts can
-run outside controller admission.
-
-Account for that in deployment.
+run outside controller admission. Account for that in deployment.
 
 ComfyUI direct commands can keep `--base-directory`, `--output-directory`,
 `--temp-directory`, `--user-directory`, `--extra-model-paths-config` and
 `--enable-manager`. Directory options need existing trusted directories. Each explicit
-configuration file requires an existing trusted readable regular file.
+configuration file needs an existing trusted readable regular file.
 
 Symlinks undergo the same path checks. Recognized endpoint and path options support
 `--option=value` as well as separate values. Setup does not support endpoint-changing
@@ -207,17 +204,15 @@ qualification. Exact original arguments and source fingerprints remain bound and
 before execution. The upstream [ComfyUI command
 definitions](https://github.com/Comfy-Org/ComfyUI/blob/master/comfy/cli_args.py) and
 [startup handling](https://github.com/Comfy-Org/ComfyUI/blob/master/main.py) describe
-these options.
-
-The supervisor preserves their behavior.
+these options. The supervisor preserves their behavior.
 
 Trusting library-search directories does not certify dynamic-loader resolution,
 transitive dependencies or plugin behavior. Setup neither loads libraries nor removes
 required settings to make checks pass.
 
 `CUDA_VISIBLE_DEVICES` supports one full physical GPU UUID, recorded as `gpuUUID` in the
-binding and checked against the configured NVIDIA GPU at preflight, startup, readiness
-and release. Numeric indices, UUID prefixes, multiple devices and MIG mappings remain
+binding. The supervisor checks it against the configured NVIDIA GPU at preflight,
+startup, readiness and release. Numeric indices, UUID prefixes, multiple devices and MIG mappings stay
 unsupported. Setup never removes or rewrites the setting to make adoption pass.
 
 Numeric CUDA visibility has an explicit unsupported disposition: a discovered
@@ -250,10 +245,8 @@ must identify the selected runtime and pass the same executable trust checks. Om
 it retains the standard `/usr/bin` location. You must still select a model, review the
 side-effect-free preview and explicitly confirm activation.
 
-Readiness requires native health plus exactly the selected model identity. A native proxy accepts only supported inference routes with the
-exact JSON `model`.
-
-It rejects lifetime overrides, ambiguous keys, query parameters and encoded bodies. When
+Readiness requires native health plus exactly the chosen model identity. A native proxy accepts only supported inference routes with the
+exact JSON `model`. It rejects lifetime overrides, ambiguous keys, query parameters and encoded bodies. When
 its catalog revision changes, it stops accepting new requests. Its upstream must match
 the binding.
 

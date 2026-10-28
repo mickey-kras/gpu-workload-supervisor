@@ -1,7 +1,7 @@
 # CI policy changes
 
 CI dependency lockfiles are data, not approval lists. The trusted base guard validates the structure of both CI npm lockfiles.
-It requires npm lockfile v3, registry.npmjs.org HTTPS tarballs and canonical SHA-512 integrity.
+It needs npm lockfile v3, registry.npmjs.org HTTPS tarballs and canonical SHA-512 integrity.
 It rejects links, bundled packages and new install-script flags relative to the immutable PR base.
 
 The root lockfile metadata must match its manifest. CI manifest changes need independent owner admission.
@@ -15,7 +15,7 @@ dependency review, and behavioral tests remain required. Installs keep
 
 The guard reads PR contents as data and executes only its trusted base checkout.
 Existing executable hash checks and semantic workflow, scanner, and release checks
-remain active. The guard workflow, its complete local import closure, and CODEOWNERS
+stay active. The guard workflow, its complete local import closure, and CODEOWNERS
 must match the immutable base byte-for-byte or receive independent admission.
 
 One exception permits changes to `step-security/harden-runner` pins and their
@@ -48,7 +48,7 @@ implementer to it. Do not share the owner's credential, use the release App, or
 grant the implementer administration or bypass privileges. PRs from the owner cannot get admission through review. Changing commit author text is not identity separation.
 
 Import `.github/rulesets/require-policy-review.json` as a separate active repository ruleset. Keep existing required-check, branch, and tag rulesets. The
-rule requires one approving review for every PR targeting main or release branches
+rule needs one approving review for every PR targeting main or release branches
 and a code-owner review for `.github/**`. Check this repository-wide review change
 before activation.
 
@@ -89,10 +89,10 @@ until CODEOWNERS is on the base and native protection is active.
 
 For later changes, the bot opens the PR, checks run, and the owner approves its
 exact head. Re-run the trusted policy job after approval. Pushing or updating the
-branch requires another review. Native protection prevents a guard with an earlier successful result from authorizing a merge after review dismissal or a new push.
+branch requires another review. Native protection stops a guard with an earlier successful result from authorizing a merge after review dismissal or a new push.
 
-No review event does a checkout of contributor code or runs it. Complete all required checks before
+No review event retrieves or runs contributor code. Complete all required checks before
 squash merging. A semantic-policy change still needs the trusted base guard's
 invariants satisfied or an explicitly reviewed policy migration.
 
-The implementation PR must come from the installation identity of a GitHub App. Its REST `user.type` must equal `Bot`. A personal machine account using a PAT remains a `User` and cannot get admission through review. Check this before rollout.
+The implementation PR must come from the installation identity of a GitHub App. Its REST `user.type` must equal `Bot`. A personal machine account using a PAT stays a `User` and cannot get admission through review. Check this before rollout.

@@ -112,9 +112,9 @@ The checks run verified binaries directly.
 They do not run `vale sync` or download reviewdog.
 Policy tests reject missing jobs, weaker thresholds and changes to protected prose checks.
 
-For local setup, open a shell in the repository root.
-Set `RUNNER_TEMP=$(mktemp -d)` in that shell.
-Then run the three installation steps from `.github/workflows/docs-ste.yml` in the same shell.
+For local setup, open a shell in the repository root, set
+`RUNNER_TEMP=$(mktemp -d)`, and run the three installation steps from
+`.github/workflows/docs-ste.yml` in the same shell.
 
 ste-cli and Vale check only part of ASD-STE100.
 Neither configured tool checks the full official dictionary.

@@ -20,13 +20,18 @@ Do not log credentials, workload payloads, or untrusted runtime output.
 The execution proxy defaults to trusted local callers. Opt-in adapter ingress
 separates gateway execution credentials from trusted terminal-adapter completion
 credentials and hides registration tokens from client response metadata. It does
-not replace remote requester authentication, CSRF and policy, host identity isolation,
-or direct runtime bypass prevention. Trusted backends must not echo credentials or
-registration tokens in response bodies or logs. See
+not replace:
+
+- Remote requester authentication, CSRF and policy
+- Host identity isolation
+- Direct runtime bypass prevention
+
+Trusted backends must not echo credentials or registration tokens in response
+bodies or logs. See
 [adapter ingress](docs/EXECUTION-PROXY.md#trusted-adapter-ingress).
 
-Host service permissions and access to the SQLite state file are deployment controls.
-Review these controls for each runtime integration.
+Host service permissions and access to the SQLite state file are deployment
+controls. Review them for each runtime integration.
 The deployment trusts the service UID and its private state directory.
 Processes with that UID can replace state between validation and the SQLite open operation.
 File checks do not isolate mutually untrusted processes that share a UID.
