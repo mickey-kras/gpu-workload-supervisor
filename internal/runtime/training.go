@@ -18,6 +18,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const systemctlUserFlag string = "--user"
+
 // TrainerUnit is intentionally a separate, exact launch grammar. Adapter v1
 // reads the lifecycle envelope, owns all GPU phases and writes terminal evidence.
 func TrainerUnit(t control.TrainerBinding) string {
@@ -35,7 +37,7 @@ func (m *SystemdManager) InspectTrainer(ctx context.Context, id control.Workload
 }
 
 func (m *SystemdManager) trainerProperties(ctx context.Context, p control.WorkloadProfile) (map[string]string, error) {
-	out, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show", "--property=LoadState,ActiveState,SubState,ControlGroup,InvocationID,Result,ExecMainCode,ExecMainStatus,FragmentPath,DropInPaths,NeedDaemonReload,ExecStart,ExecStartPre,ExecStartPost,ExecStop,ExecStopPost,Environment,Type,Restart,KillMode,RemainAfterExit", "--", p.Unit)
+	out, err := m.runner.Run(ctx, m.config.SystemctlPath, systemctlUserFlag, "show", "--property=LoadState,ActiveState,SubState,ControlGroup,InvocationID,Result,ExecMainCode,ExecMainStatus,FragmentPath,DropInPaths,NeedDaemonReload,ExecStart,ExecStartPre,ExecStartPost,ExecStop,ExecStopPost,Environment,Type,Restart,KillMode,RemainAfterExit", "--", p.Unit)
 	if err != nil {
 		return nil, SafeError("trainer observation failed", err)
 	}
@@ -184,7 +186,7 @@ func (m *SystemdManager) StartTraining(ctx context.Context, p control.WorkloadPr
 	}
 	// The committed launch intent is single-use. Never retry this command after
 	// uncertainty: explicit recovery stops and verifies before another job.
-	_, startErr := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "--job-mode=fail", "start", "--", p.Unit)
+	_, startErr := m.runner.Run(ctx, m.config.SystemctlPath, systemctlUserFlag, "--job-mode=fail", "start", "--", p.Unit)
 	v, err := m.trainerProperties(ctx, p)
 	if err != nil {
 		return "", errors.Join(startErr, err)
@@ -297,7 +299,7 @@ func systemdMemoryPeak(v map[string]string) (uint64, error) {
 }
 
 func (m *SystemdManager) trainerPeakProperties(ctx context.Context, p control.WorkloadProfile, job control.TrainingJob) (map[string]string, error) {
-	out, err := m.runner.Run(ctx, m.config.SystemctlPath, "--user", "show", "--property=InvocationID,ControlGroup,MemoryPeak", "--", p.Unit)
+	out, err := m.runner.Run(ctx, m.config.SystemctlPath, systemctlUserFlag, "show", "--property=InvocationID,ControlGroup,MemoryPeak", "--", p.Unit)
 	if err != nil {
 		return nil, SafeError("trainer memory peak observation failed", err)
 	}
