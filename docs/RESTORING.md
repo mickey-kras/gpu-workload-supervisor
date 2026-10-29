@@ -121,8 +121,9 @@ semantics. Do not edit migration metadata to force an older binary to open state
 
 Older binaries reject catalog version 5. Remove all resource limits before you
 stop the components and install an older binary. Setup then writes the lowest
-version that the remaining catalog needs. Make sure that the catalog version
-went down.
+version that the remaining catalog needs. To check it, run `gpu-setup discover`
+and read `request.catalog.version`. It must be 4 with a trainer binding, 2 with
+an owned launch, or 1 otherwise. Version 5 means that limits remain.
 
 The setup application of this release has no control for limits. To remove
 limits with this release, do one of these steps:

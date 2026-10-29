@@ -168,10 +168,11 @@ func removeOwnedLimitLines(raw []byte, limits control.ResourceLimits) ([]byte, e
 	return []byte(text[:start] + text[start+len(block):]), nil
 }
 
-// requireEnforceableLimits is the launch gate. Start and Healthy call it for
-// their own profile only, so a limited unit cannot block other workloads or
+// RequireEnforceableLimits is the one launch gate. The supervisor calls it for
+// a switch target before any unload, and Start and Healthy call it for their
+// own profile as the backstop. A limited unit cannot block other workloads or
 // the setup change that removes it.
-func requireEnforceableLimits(p control.WorkloadProfile) error {
+func RequireEnforceableLimits(p control.WorkloadProfile) error {
 	if p.HasLimits() {
 		return fmt.Errorf("%s (%s): %w", p.ID, p.Unit, ErrLimitsNotEnforced)
 	}

@@ -226,10 +226,10 @@ func TestUnitWithLimitsDoesNotLaunchUntilEnforced(t *testing.T) {
 		t.Fatalf("health of an unlimited profile = %v", err)
 	}
 	plain := ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100})
-	if err := requireEnforceableLimits(plain); err != nil {
+	if err := RequireEnforceableLimits(plain); err != nil {
 		t.Fatalf("unit without limits blocked: %v", err)
 	}
-	if err := requireEnforceableLimits(control.WorkloadProfile{}); err != nil {
+	if err := RequireEnforceableLimits(control.WorkloadProfile{}); err != nil {
 		t.Fatalf("profile without a native model blocked: %v", err)
 	}
 }

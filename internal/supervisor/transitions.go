@@ -246,8 +246,6 @@ func (c *Controller) executeTransition(ctx context.Context, transition store.Tra
 // effect, so the current workload keeps running. The runtime Start and
 // Healthy gate stays as the backstop.
 func (c *Controller) refuseLimitedTarget(target control.Workload) error {
-	if p, ok := c.config.Catalog.Catalog.Profile(target); ok && p.HasLimits() {
-		return fmt.Errorf("%s (%s): %w", p.ID, p.Unit, gpuruntime.ErrLimitsNotEnforced)
-	}
-	return nil
+	p, _ := c.config.Catalog.Catalog.Profile(target)
+	return gpuruntime.RequireEnforceableLimits(p)
 }

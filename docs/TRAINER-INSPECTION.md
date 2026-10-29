@@ -15,11 +15,12 @@ subprocess output or lifecycle credentials.
 
 Inspection validates the request before inspecting the selected binding and
 never applies it. A trainer binding must supply the complete catalog trainer
-profile (catalog version 4 or 5) in [TRAINING.md](TRAINING.md). A profile with
-resource limits elsewhere in the catalog does not block the inspection. This includes measured
-`requiredMiB`, GPU UUID, unit, executable and recipe paths and digests, and
-private lifecycle paths.
+profile (catalog version 4 or 5) in [TRAINING.md](TRAINING.md). This includes
+measured `requiredMiB`, GPU UUID, unit, executable and recipe paths and digests,
+and private lifecycle paths.
 Inspection infers none of these from a service name or the job envelope.
+A profile with resource limits elsewhere in the catalog does not block the
+inspection.
 
 Inspection performs file and loaded-unit observations only. It does not execute
 the trainer or preparation command, start or stop services, install

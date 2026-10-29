@@ -195,6 +195,9 @@ A `deferred` activation response additionally carries the observed current
 status. Invalid request envelopes can have an empty correlation ID. Error
 responses do not disclose profile paths or runtime output.
 
+The supervisor refuses a switch or activation to a unit with resource limits
+before any change. The response is `incompatible_configuration`.
+
 ## Lifetimes and limits
 
 Status defaults to 30 seconds, with a profile maximum of 60 seconds. Mutation

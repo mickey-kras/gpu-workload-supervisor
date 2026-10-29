@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 	"golang.org/x/sys/unix"
@@ -254,7 +255,8 @@ func validCatalog(s Session) bool {
 }
 func errorCode(err error) Code {
 	switch {
-	case errors.Is(err, ErrIncompatibleConfiguration):
+	case errors.Is(err, ErrIncompatibleConfiguration) || errors.Is(err, gpuruntime.ErrLimitsNotEnforced):
+		// A refused limited target is a definite outcome: nothing changed.
 		return IncompatibleConfiguration
 	case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, supervisor.ErrDrainTimeout) || errors.Is(err, supervisor.ErrVerifyTimeout):
 		return Timeout
