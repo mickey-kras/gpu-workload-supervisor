@@ -147,6 +147,8 @@ func checkShardIndexes(root string, files map[string]string) (string, error) {
 			return ReasonShardTooLarge, nil
 		case errors.Is(err, llmtraining.ErrShardIndexChanged):
 			return "", errChanged
+		case errors.Is(err, llmtraining.ErrShardIndexUnreadable):
+			return "", errUnreadable
 		case err != nil:
 			return ReasonInvalidShard, nil
 		}

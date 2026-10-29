@@ -42,7 +42,7 @@ func (c Checker) Run(ctx context.Context, r Request) (Record, error) {
 	if ctx.Err() != nil {
 		return Record{}, errors.New("model check was canceled")
 	}
-	if err != nil && !errors.Is(err, errChanged) {
+	if err != nil && !errors.Is(err, errChanged) && !errors.Is(err, errUnreadable) {
 		return Record{}, fmt.Errorf("model files cannot be inventoried: %w", err)
 	}
 	record := Record{
@@ -95,11 +95,13 @@ func outcome(name, reason string, err error) Check {
 	var upstream upstreamError
 	switch {
 	case errors.Is(err, errChanged):
-		return Check{Name: name, Outcome: OutcomeError, Reason: "files-changed"}
+		return Check{Name: name, Outcome: OutcomeError, Reason: ReasonFilesChanged}
+	case errors.Is(err, errNotOnBranch):
+		return Check{Name: name, Outcome: OutcomeFailed, Reason: ReasonNotOnBranch}
 	case errors.As(err, &upstream):
 		return Check{Name: name, Outcome: OutcomeError, Reason: upstream.reason}
 	case err != nil:
-		return Check{Name: name, Outcome: OutcomeError, Reason: "unreadable"}
+		return Check{Name: name, Outcome: OutcomeError, Reason: ReasonUnreadable}
 	case unsupportedReasons[reason]:
 		return Check{Name: name, Outcome: OutcomeUnsupported, Reason: reason}
 	case reason != "":

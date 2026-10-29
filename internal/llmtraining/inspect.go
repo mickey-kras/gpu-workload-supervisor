@@ -163,8 +163,9 @@ func inspectShardIndexes(inventory Inventory) error {
 
 // Shard index errors that callers can tell apart.
 var (
-	ErrShardIndexTooLarge = errors.New("shard index exceeds its size limit")
-	ErrShardIndexChanged  = errors.New("shard index changed after the inventory")
+	ErrShardIndexTooLarge   = errors.New("shard index exceeds its size limit")
+	ErrShardIndexChanged    = errors.New("shard index changed after the inventory")
+	ErrShardIndexUnreadable = errors.New("candidate shard index is unreadable")
 )
 
 // trainingShardIndexBytes bounds the shard index of a training candidate.
@@ -180,12 +181,12 @@ func inspectShardIndex(inventory Inventory, name string) error {
 func CheckShardIndex(inventory Inventory, name string, limit int64) error {
 	f, err := openRegular(filepath.Join(inventory.Root, name))
 	if err != nil {
-		return errors.New("candidate shard index is unreadable")
+		return ErrShardIndexUnreadable
 	}
 	defer f.Close()
 	raw, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
-		return errors.New("candidate shard index is unreadable")
+		return ErrShardIndexUnreadable
 	}
 	if int64(len(raw)) > limit {
 		return ErrShardIndexTooLarge
@@ -209,6 +210,15 @@ func CheckShardIndex(inventory Inventory, name string, limit int64) error {
 	return nil
 }
 
+func hasAnyKey(object map[string]json.RawMessage, keys []string) bool {
+	for _, key := range keys {
+		if _, exists := object[key]; exists {
+			return true
+		}
+	}
+	return false
+}
+
 func inspectConfig(path string, model bool) error {
 	f, err := openRegular(path)
 	if err != nil {
@@ -220,7 +230,7 @@ func inspectConfig(path string, model bool) error {
 	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &config) != nil || config == nil {
 		return errors.New("candidate asset configuration is invalid")
 	}
-	if _, exists := config["auto_map"]; exists {
+	if hasAnyKey(config, RemoteCodeKeys) {
 		return errors.New("candidate remote-code mappings are unsupported")
 	}
 	if !model {

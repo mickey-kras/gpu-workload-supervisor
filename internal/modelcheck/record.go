@@ -2,6 +2,7 @@ package modelcheck
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -235,14 +236,24 @@ func ReadRecord(raw []byte) (Record, error) {
 	return record, nil
 }
 
-// Current gives the status that applies to the model files on disk now. A
-// record for other digests, another root, another source, another checker
-// version or another configuration, such as another hub, leaves the model
-// not scanned: results never carry over to changed or other models, and a
-// new checker checks again.
-func Current(r *Record, model, root string, source Source, checker Checker, files map[string]string) Status {
+// Current gives the status that applies to the model files on disk now. It
+// takes a fresh inventory of root. An inventory error, an inventory problem
+// that the record does not hold, or a record for other digests, another root, another source, another
+// checker version or another configuration, such as another hub, leaves the
+// model not scanned: results never carry over to changed or other models,
+// and a new checker checks again.
+func Current(ctx context.Context, r *Record, model, root string, source Source, checker Checker) Status {
 	if r == nil || r.Model != model || r.Root != root || r.Source != source || r.Checker != checker.Version ||
-		r.Configuration != currentConfiguration(checker.Hub) || !reflect.DeepEqual(r.Files, files) {
+		r.Configuration != currentConfiguration(checker.Hub) {
+		return StatusNotScanned
+	}
+	files, reason, err := Inventory(ctx, root)
+	if err != nil || !reflect.DeepEqual(r.Files, files) {
+		return StatusNotScanned
+	}
+	// An inventory with a problem stops early, so its digests can equal a
+	// complete record. Only a record of the same problem still applies.
+	if reason != "" && (len(r.Checks) == 0 || r.Checks[0].Reason != reason) {
 		return StatusNotScanned
 	}
 	return r.Status

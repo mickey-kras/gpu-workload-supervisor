@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -85,21 +86,28 @@ func upstreamOf(files map[string]string) []UpstreamFile {
 	return entries
 }
 
-// hub serves a listing in pages of two entries, with next links.
+// hub serves the refs, a branch history and a tree listing in pages of two
+// entries, with next links. Overrides apply to the tree listing only.
 type hub struct {
-	server   *httptest.Server
-	entries  []UpstreamFile
-	requests atomic.Int32
-	strays   atomic.Int32
-	status   int
-	redirect bool
-	link     string
-	body     string
+	server    *httptest.Server
+	entries   []UpstreamFile
+	requests  atomic.Int32
+	strays    atomic.Int32
+	status    int
+	redirect  bool
+	errorCode string
+	link      string
+	body      string
+	head      string
+	history   []string
+	stalled   chan struct{}
+	mu        sync.Mutex
+	auth      []string
 }
 
 func newHub(t *testing.T, entries []UpstreamFile) *hub {
 	t.Helper()
-	h := &hub{entries: entries, status: http.StatusOK}
+	h := &hub{entries: entries, status: http.StatusOK, head: testSource.Revision}
 	h.server = httptest.NewTLSServer(http.HandlerFunc(h.serve))
 	t.Cleanup(h.server.Close)
 	return h
@@ -107,30 +115,64 @@ func newHub(t *testing.T, entries []UpstreamFile) *hub {
 
 func (h *hub) serve(w http.ResponseWriter, r *http.Request) {
 	h.requests.Add(1)
-	if r.URL.Path != "/api/models/"+testSource.Repo+"/tree/"+testSource.Revision || r.URL.Query().Get("recursive") != "true" {
+	h.mu.Lock()
+	h.auth = append(h.auth, r.Header.Get("Authorization"))
+	h.mu.Unlock()
+	base := "/api/models/" + testSource.Repo
+	switch {
+	case r.URL.Path == base+"/refs":
+		raw, _ := json.Marshal(map[string]any{"branches": []hubRef{{Name: "main", TargetCommit: h.head}}, "tags": []hubRef{}})
+		_, _ = w.Write(raw)
+	case r.URL.Path == base+"/commits/main":
+		h.page(w, r, len(h.history), func(start, end int) any {
+			commits := []map[string]string{}
+			for _, id := range h.history[start:end] {
+				commits = append(commits, map[string]string{"id": id})
+			}
+			return commits
+		})
+	case r.URL.Path == base+"/tree/"+testSource.Revision && r.URL.Query().Get("recursive") == "true":
+		h.tree(w, r)
+	default:
 		h.strays.Add(1)
 		http.NotFound(w, r)
+	}
+}
+
+func (h *hub) tree(w http.ResponseWriter, r *http.Request) {
+	if h.stalled != nil {
+		close(h.stalled)
+		<-r.Context().Done()
 		return
 	}
 	if h.body != "" || h.status != http.StatusOK {
 		if h.redirect {
 			w.Header().Set("Location", "/elsewhere")
 		}
+		if h.errorCode != "" {
+			w.Header().Set("X-Error-Code", h.errorCode)
+		}
 		w.WriteHeader(h.status)
 		_, _ = w.Write([]byte(h.body))
 		return
 	}
-	page := 0
-	fmt.Sscan(r.URL.Query().Get("cursor"), &page)
-	end := min(page+2, len(h.entries))
-	if end < len(h.entries) {
+	h.page(w, r, len(h.entries), func(start, end int) any {
+		return append([]UpstreamFile{{Type: "directory", Path: "dir", OID: strings.Repeat("0", 40)}}, h.entries[start:end]...)
+	})
+}
+
+func (h *hub) page(w http.ResponseWriter, r *http.Request, total int, items func(start, end int) any) {
+	start := 0
+	fmt.Sscan(r.URL.Query().Get("cursor"), &start)
+	end := min(start+2, total)
+	if end < total {
 		next := fmt.Sprintf("<%s%s?recursive=true&cursor=%d>; rel=\"next\"", h.server.URL, r.URL.Path, end)
-		if h.link != "" {
+		if h.link != "" && strings.Contains(r.URL.Path, "/tree/") {
 			next = h.link
 		}
 		w.Header().Set("Link", next)
 	}
-	raw, _ := json.Marshal(append([]UpstreamFile{{Type: "directory", Path: "dir", OID: strings.Repeat("0", 40)}}, h.entries[page:end]...))
+	raw, _ := json.Marshal(items(start, end))
 	_, _ = w.Write(raw)
 }
 
@@ -169,31 +211,34 @@ func TestAllowlistRejectsFiles(t *testing.T) {
 		file, content string
 		reason        string
 	}{
-		"python code":         {"modeling.py", "import os", ReasonCodeOrPickleFile},
-		"pickle weights":      {"pytorch_model.bin", "pickle", ReasonCodeOrPickleFile},
-		"torch weights":       {"model.pt", "pickle", ReasonCodeOrPickleFile},
-		"torch state":         {"model.pth", "pickle", ReasonCodeOrPickleFile},
-		"pickle":              {"model.pkl", "pickle", ReasonCodeOrPickleFile},
-		"checkpoint":          {"model.ckpt", "pickle", ReasonCodeOrPickleFile},
-		"unlisted file":       {"notes.txt", "text", ReasonUnlistedFile},
-		"nested file":         {"original/config.json", "{}", ReasonNestedFile},
-		"other cache file":    {".cache/other/file", "x", ReasonUnlistedFile},
-		"adapter redirect":    {"adapter_config.json", `{"base_model_name_or_path":"other/base"}`, ReasonAdapterRedirect},
-		"auto_map":            {"config.json", `{"auto_map":{"AutoModel":"x.Model"}}`, ReasonRemoteCode},
-		"nested auto_map":     {"tokenizer_config.json", `{"a":[{"b":{"auto_map":1}}]}`, ReasonRemoteCode},
-		"auto_mapping":        {"generation_config.json", `{"auto_mapping":{}}`, ReasonRemoteCode},
-		"custom_pipelines":    {"config.json", `{"custom_pipelines":{"x":{}}}`, ReasonRemoteCode},
-		"duplicate JSON key":  {"generation_config.json", `{"a":1,"a":2}`, ReasonInvalidJSON},
-		"trailing value":      {"generation_config.json", `{}{}`, ReasonInvalidJSON},
-		"malformed JSON":      {"generation_config.json", `{"a":`, ReasonInvalidJSON},
-		"speculators config":  {"config.json", `{"speculators_config":{"verifier":{"name_or_path":"other/model"}}}`, ReasonModelRedirect},
-		"tokenizer file path": {"tokenizer_config.json", `{"tokenizer_file":"/elsewhere/tokenizer.json"}`, ReasonFilePathRedirect},
-		"absent vocab file":   {"tokenizer_config.json", `{"vocab_file":"absent.json"}`, ReasonFilePathRedirect},
-		"numeric merges file": {"tokenizer_config.json", `{"merges_file":1}`, ReasonFilePathRedirect},
-		"near-miss license":   {"LICENSE.txt", "text", ReasonUnlistedFile},
-		"near-miss readme":    {"readme.md", "text", ReasonUnlistedFile},
-		"other readme":        {"README.rst", "text", ReasonUnlistedFile},
-		"license variant":     {"LICENSE-APACHE", "text", ReasonUnlistedFile},
+		"python code":          {"modeling.py", "import os", ReasonCodeOrPickleFile},
+		"pickle weights":       {"pytorch_model.bin", "pickle", ReasonCodeOrPickleFile},
+		"torch weights":        {"model.pt", "pickle", ReasonCodeOrPickleFile},
+		"torch state":          {"model.pth", "pickle", ReasonCodeOrPickleFile},
+		"pickle":               {"model.pkl", "pickle", ReasonCodeOrPickleFile},
+		"checkpoint":           {"model.ckpt", "pickle", ReasonCodeOrPickleFile},
+		"unlisted file":        {"notes.txt", "text", ReasonUnlistedFile},
+		"nested file":          {"original/config.json", "{}", ReasonNestedFile},
+		"other cache file":     {".cache/other/file", "x", ReasonUnlistedFile},
+		"adapter redirect":     {"adapter_config.json", `{"base_model_name_or_path":"other/base"}`, ReasonAdapterRedirect},
+		"auto_map":             {"config.json", `{"auto_map":{"AutoModel":"x.Model"}}`, ReasonRemoteCode},
+		"nested auto_map":      {"tokenizer_config.json", `{"a":[{"b":{"auto_map":1}}]}`, ReasonRemoteCode},
+		"auto_mapping":         {"generation_config.json", `{"auto_mapping":{}}`, ReasonRemoteCode},
+		"custom_pipelines":     {"config.json", `{"custom_pipelines":{"x":{}}}`, ReasonRemoteCode},
+		"duplicate JSON key":   {"generation_config.json", `{"a":1,"a":2}`, ReasonInvalidJSON},
+		"trailing value":       {"generation_config.json", `{}{}`, ReasonInvalidJSON},
+		"malformed JSON":       {"generation_config.json", `{"a":`, ReasonInvalidJSON},
+		"speculators config":   {"config.json", `{"speculators_config":{"verifier":{"name_or_path":"other/model"}}}`, ReasonModelRedirect},
+		"tokenizer file path":  {"tokenizer_config.json", `{"tokenizer_file":"/elsewhere/tokenizer.json"}`, ReasonFilePathRedirect},
+		"absent vocab file":    {"tokenizer_config.json", `{"vocab_file":"absent.json"}`, ReasonFilePathRedirect},
+		"numeric merges file":  {"tokenizer_config.json", `{"merges_file":1}`, ReasonFilePathRedirect},
+		"near-miss license":    {"LICENSE.txt", "text", ReasonUnlistedFile},
+		"near-miss readme":     {"readme.md", "text", ReasonUnlistedFile},
+		"other readme":         {"README.rst", "text", ReasonUnlistedFile},
+		"license variant":      {"LICENSE-APACHE", "text", ReasonUnlistedFile},
+		"fast tokenizer files": {"tokenizer_config.json", `{"fast_tokenizer_files":["x.json"]}`, ReasonFilePathRedirect},
+		"weights override":     {"config.json", `{"transformers_weights":"other.safetensors"}`, ReasonFilePathRedirect},
+		"configuration files":  {"config.json", `{"configuration_files":["other.json"]}`, ReasonModelRedirect},
 	} {
 		t.Run(name, func(t *testing.T) {
 			files := modelFiles()
@@ -464,20 +509,19 @@ func TestNextLinksStayOnTheSameTree(t *testing.T) {
 	files := modelFiles()
 	entries := upstreamOf(files)
 	other := newHub(t, entries)
-	plain := httptest.NewServer(http.HandlerFunc(other.serve))
-	t.Cleanup(plain.Close)
 	tree := "/api/models/" + testSource.Repo + "/tree/" + testSource.Revision
 	for name, link := range map[string]string{
 		"other host":   "<" + other.server.URL + tree + "?recursive=true&cursor=2>; rel=\"next\"",
 		"other path":   "<%s/api/models/" + testSource.Repo + "/tree/main?recursive=true&cursor=2>; rel=\"next\"",
-		"other scheme": "<" + plain.URL + tree + "?recursive=true&cursor=2>; rel=\"next\"",
+		"other scheme": "<http://%h" + tree + "?recursive=true&cursor=2>; rel=\"next\"",
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHub(t, entries)
-			h.link = strings.Replace(link, "%s", h.server.URL, 1)
+			h.link = strings.NewReplacer("%s", h.server.URL, "%h", h.server.Listener.Addr().String()).Replace(link)
 			before := other.requests.Load()
 			_, err := HubListing(trustBoth(h.server, other.server), h.server.URL)(context.Background(), testSource)
-			if !errors.Is(err, upstreamError{reason: ReasonUpstreamInvalid}) || other.requests.Load() != before || h.strays.Load() != 0 {
+			// The hub must see only the refs and the first tree page.
+			if !errors.Is(err, upstreamError{reason: ReasonUpstreamInvalid}) || other.requests.Load() != before || h.requests.Load() != 2 || h.strays.Load() != 0 {
 				t.Fatalf("a next link to another location was followed or misreported: %v", err)
 			}
 		})
@@ -547,6 +591,7 @@ func TestRunRefusesBadRequestsAndCancel(t *testing.T) {
 }
 
 func TestFileChangeResetsToNotScanned(t *testing.T) {
+	ctx := context.Background()
 	files := modelFiles()
 	root := writeModel(t, files)
 	checker := newHub(t, upstreamOf(files)).checker()
@@ -556,31 +601,45 @@ func TestFileChangeResetsToNotScanned(t *testing.T) {
 	if record.Status != StatusPassed || record.Coverage != CoverageComplete {
 		t.Fatal("all checks passing must give passed and complete coverage")
 	}
-	fresh, reason, err := Inventory(context.Background(), root)
-	if err != nil || reason != "" || Current(&record, "example", root, testSource, checker, fresh) != StatusPassed {
-		t.Fatal("an unchanged model must keep its status", err)
-	}
-	write(t, filepath.Join(root, "generation_config.json"), `{"changed":true}`)
-	changed, _, err := Inventory(context.Background(), root)
-	if err != nil {
-		t.Fatal(err)
+	if Current(ctx, &record, "example", root, testSource, checker) != StatusPassed {
+		t.Fatal("an unchanged model must keep its status")
 	}
 	other := testSource
 	other.Revision = strings.Repeat("b", 40)
 	newer, otherHub := checker, checker
 	newer.Version, otherHub.Hub = "test-2", "https://mirror.invalid"
 	for name, status := range map[string]Status{
-		"changed file":  Current(&record, "example", root, testSource, checker, changed),
-		"other model":   Current(&record, "other", root, testSource, checker, fresh),
-		"other root":    Current(&record, "example", root+"2", testSource, checker, fresh),
-		"other source":  Current(&record, "example", root, other, checker, fresh),
-		"other checker": Current(&record, "example", root, testSource, newer, fresh),
-		"other hub":     Current(&record, "example", root, testSource, otherHub, fresh),
-		"no record":     Current(nil, "example", root, testSource, checker, fresh),
+		"other model":   Current(ctx, &record, "other", root, testSource, checker),
+		"other root":    Current(ctx, &record, "example", root+"2", testSource, checker),
+		"other source":  Current(ctx, &record, "example", root, other, checker),
+		"other checker": Current(ctx, &record, "example", root, testSource, newer),
+		"other hub":     Current(ctx, &record, "example", root, testSource, otherHub),
+		"no record":     Current(ctx, nil, "example", root, testSource, checker),
 	} {
 		if status != StatusNotScanned {
 			t.Fatalf("%s: status = %s, want not_scanned", name, status)
 		}
+	}
+	if err := os.Symlink("config.json", filepath.Join(root, "zz.safetensors")); err != nil {
+		t.Fatal(err)
+	}
+	if got := Current(ctx, &record, "example", root, testSource, checker); got != StatusNotScanned {
+		t.Fatalf("a late-sorting link must not keep the old status: %s", got)
+	}
+	if err := os.Remove(filepath.Join(root, "zz.safetensors")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(root, "generation_config.json"), `{"changed":true}`)
+	if got := Current(ctx, &record, "example", root, testSource, checker); got != StatusNotScanned {
+		t.Fatalf("a changed file must reset the status: %s", got)
+	}
+	linked := writeModel(t, files)
+	if err := os.Symlink("config.json", filepath.Join(linked, "zz.safetensors")); err != nil {
+		t.Fatal(err)
+	}
+	finding := run(t, checker, linked)
+	if finding.Status != StatusFindings || Current(ctx, &finding, "example", linked, testSource, checker) != StatusFindings {
+		t.Fatal("a stored inventory finding must still apply to the same files")
 	}
 }
 
@@ -635,5 +694,127 @@ func TestFilePathKeysAcceptNullAndInventoriedNames(t *testing.T) {
 	record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
 	if record.Checks[0].Outcome != OutcomePassed {
 		t.Fatalf("allowlist = %+v", record.Checks[0])
+	}
+}
+
+func TestRevisionMustBeOnABranch(t *testing.T) {
+	files := modelFiles()
+	other := func(i int) string { return fmt.Sprintf("%040x", i+1) }
+	for name, tc := range map[string]struct {
+		history []string
+		check   Check
+	}{
+		"in branch history":          {[]string{other(0), other(1), testSource.Revision}, Check{CheckIdentity, OutcomePassed, ""}},
+		"only on a pull request ref": {[]string{other(0), other(1), other(2)}, Check{CheckIdentity, OutcomeFailed, ReasonNotOnBranch}},
+		"history above the bound": {func() []string {
+			ids := make([]string, 2*maxHistoryPages+1)
+			for i := range ids {
+				ids[i] = other(i)
+			}
+			return ids
+		}(), Check{CheckIdentity, OutcomeError, ReasonHistoryTooLong}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHub(t, upstreamOf(files))
+			h.head, h.history = other(99), tc.history
+			record := run(t, h.checker(), writeModel(t, files))
+			if record.Checks[1] != tc.check {
+				t.Fatalf("identity = %+v, want %+v", record.Checks[1], tc.check)
+			}
+		})
+	}
+}
+
+func TestMissingRepositoryWithoutTokenIsNotFound(t *testing.T) {
+	files := modelFiles()
+	for _, code := range []string{"RepoNotFound", "RevisionNotFound"} {
+		h := newHub(t, upstreamOf(files))
+		h.status, h.errorCode = http.StatusUnauthorized, code
+		record := run(t, h.checker(), writeModel(t, files))
+		if record.Checks[1] != (Check{CheckIdentity, OutcomeError, ReasonUpstreamNotFound}) {
+			t.Fatalf("%s: identity = %+v", code, record.Checks[1])
+		}
+	}
+}
+
+func TestHubLoginTokenGoesOnlyToTheHub(t *testing.T) {
+	files := modelFiles()
+	home := t.TempDir()
+	write(t, filepath.Join(home, "token"), "hf_secrettoken\n")
+	t.Setenv("HF_TOKEN", "")
+	t.Setenv("HF_TOKEN_PATH", "")
+	t.Setenv("HF_HOME", home)
+	h := newHub(t, upstreamOf(files))
+	record := run(t, h.checker(), writeModel(t, files))
+	raw, err := MarshalRecord(record)
+	if err != nil || strings.Contains(string(raw), "secret") {
+		t.Fatal("the token must never reach the record", err)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.auth) < 2 {
+		t.Fatal("the hub got no requests")
+	}
+	for _, auth := range h.auth {
+		if auth != "Bearer hf_secrettoken" {
+			t.Fatalf("request authorization = %q", auth)
+		}
+	}
+	t.Setenv("HF_TOKEN", "hf_from env")
+	if hubToken() != "hf_secrettoken" {
+		t.Fatal("a token with a space must be refused for the login file")
+	}
+	t.Setenv("HF_TOKEN", "hf_fromenv")
+	if hubToken() != "hf_fromenv" {
+		t.Fatal("HF_TOKEN must come first")
+	}
+}
+
+func TestListingHasADefaultDeadline(t *testing.T) {
+	original := listingTimeout
+	listingTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { listingTimeout = original })
+	files := modelFiles()
+	h := newHub(t, upstreamOf(files))
+	h.stalled = make(chan struct{})
+	checker := h.checker()
+	checker.Client = &http.Client{Transport: h.server.Client().Transport}
+	start := time.Now()
+	record := run(t, checker, writeModel(t, files))
+	if record.Checks[1] != (Check{CheckIdentity, OutcomeError, ReasonUpstreamUnreachable}) || time.Since(start) > 10*time.Second {
+		t.Fatalf("a stalled hub must time out as unreachable: %+v", record.Checks[1])
+	}
+}
+
+func TestCancelDuringListingStoresNoResult(t *testing.T) {
+	files := modelFiles()
+	h := newHub(t, upstreamOf(files))
+	h.stalled = make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-h.stalled
+		cancel()
+	}()
+	record, err := h.checker().Run(ctx, Request{Model: "example", Root: writeModel(t, files), Source: testSource})
+	if err == nil || record.Model != "" {
+		t.Fatalf("a check canceled during the listing gave a result: %+v", record)
+	}
+}
+
+func TestUnreadableShardIndexIsAnError(t *testing.T) {
+	root := writeModel(t, modelFiles())
+	digests, _, err := Inventory(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := filepath.Join(root, "model.safetensors.index.json")
+	if err := os.Remove(index); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("config.json", index); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := checkShardIndexes(root, digests); !errors.Is(err, errUnreadable) {
+		t.Fatal("an index that becomes a link must be an error, not a finding", err)
 	}
 }

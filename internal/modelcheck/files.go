@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/llmtraining"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 	"golang.org/x/sys/unix"
 )
@@ -45,18 +46,21 @@ var allowedNames = map[string]bool{
 // them anyway; the reason makes the report clear.
 var rejectedExtensions = map[string]bool{".py": true, ".bin": true, ".pt": true, ".pth": true, ".pkl": true, ".ckpt": true}
 
-// redirectKeys make a loader import code or load another model. vLLM reads
-// speculators_config and then loads the verifier model that it names. Review
-// new loader versions for more keys of this kind.
-var redirectKeys = map[string]string{
-	"auto_map": ReasonRemoteCode, "auto_mapping": ReasonRemoteCode, "custom_pipelines": ReasonRemoteCode,
-	"speculators_config": ReasonModelRedirect,
-}
-
-// filePathKeys name tokenizer and processor files. A value must be null or
-// the bare name of an inventoried file, so a loader cannot read a file that
-// the checks did not bind.
-var filePathKeys = []string{"tokenizer_file", "vocab_file", "merges_file", "spm_file", "added_tokens_file"}
+// redirectKeys map the shared loader keys to their reasons. The checks
+// reject these keys at any depth of each JSON file.
+var redirectKeys = func() map[string]string {
+	keys := map[string]string{}
+	for reason, list := range map[string][]string{
+		ReasonRemoteCode:       llmtraining.RemoteCodeKeys,
+		ReasonModelRedirect:    llmtraining.ModelRedirectKeys,
+		ReasonFilePathRedirect: llmtraining.FileRedirectKeys,
+	} {
+		for _, key := range list {
+			keys[key] = reason
+		}
+	}
+	return keys
+}()
 
 // adapterConfig makes a loader load the base model that it names, which
 // this check never saw.
@@ -74,8 +78,11 @@ const (
 	ReasonFilePathRedirect = "file-path-redirect"
 	ReasonInvalidJSON      = "invalid-json"
 	ReasonJSONTooLarge     = "json-file-too-large"
-	ReasonNoWeights        = "no-safetensors-weights"
-	ReasonNoConfiguration  = "no-model-configuration"
+	// ReasonFilesChanged and ReasonUnreadable are error reasons.
+	ReasonFilesChanged    = "files-changed"
+	ReasonUnreadable      = "unreadable"
+	ReasonNoWeights       = "no-safetensors-weights"
+	ReasonNoConfiguration = "no-model-configuration"
 )
 
 var (
@@ -173,7 +180,7 @@ func filePaths(raw []byte, digests map[string]string) string {
 	if json.Unmarshal(raw, &object) != nil {
 		return ""
 	}
-	for _, key := range filePathKeys {
+	for _, key := range llmtraining.FilePathKeys {
 		value, present := object[key]
 		if !present || string(value) == "null" {
 			continue

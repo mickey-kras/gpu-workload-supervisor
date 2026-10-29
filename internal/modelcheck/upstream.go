@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -75,6 +77,9 @@ const (
 	ReasonUpstreamInvalid     = "upstream-invalid"
 	ReasonUpstreamUnreachable = "upstream-unreachable"
 	ReasonUpstreamMoved       = "upstream-moved"
+	ReasonHistoryTooLong      = "upstream-history-too-long"
+	// ReasonNotOnBranch is a finding: no branch or tag reaches the revision.
+	ReasonNotOnBranch = "revision-not-on-branch"
 )
 
 // upstreamError keeps the reason of a failed listing.
@@ -84,70 +89,210 @@ func (e upstreamError) Error() string { return "upstream listing failed: " + e.r
 
 func listingError(reason string) error { return upstreamError{reason: reason} }
 
+// listingTimeout bounds one listing when ctx has no deadline. Tests shorten it.
+var listingTimeout = 10 * time.Minute
+
+// maxHistoryPages bounds the commit history pages that the branch check reads.
+const maxHistoryPages = 64
+
+// errNotOnBranch marks a revision that no branch or tag of the repository
+// reaches, for example a commit of a community pull request.
+var errNotOnBranch = errors.New("revision is not on a branch or tag")
+
 // HubListing reads the recursive tree of a source from a hub API over
-// HTTPS. It refuses redirects, follows only next-page links to the same tree
-// URL and bounds every page. A redirected repository needs its current name
-// in the source.
+// HTTPS. The revision must be on a branch or a tag of the repository. It
+// refuses redirects, follows only next-page links to the same URL path and
+// bounds every page. A redirected repository needs its current name in the
+// source. It sends the token of an existing hub login only to the hub.
 func HubListing(client *http.Client, hub string) Listing {
 	strict := *client
 	strict.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return func(ctx context.Context, source Source) (map[string]UpstreamFile, error) {
-		if !source.valid() {
+		if _, ok := ctx.Deadline(); !ok {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, listingTimeout)
+			defer cancel()
+		}
+		base, err := url.Parse(hub + "/api/models/" + source.Repo)
+		if !source.valid() || err != nil || base.Scheme != "https" {
 			return nil, listingError(ReasonUpstreamInvalid)
 		}
-		first, err := url.Parse(hub + "/api/models/" + source.Repo + "/tree/" + source.Revision + "?recursive=true")
-		if err != nil || first.Scheme != "https" {
-			return nil, listingError(ReasonUpstreamInvalid)
+		h := hubClient{client: &strict, base: base, token: hubToken()}
+		if err := h.onBranch(ctx, source.Revision); err != nil {
+			return nil, err
 		}
-		files := map[string]UpstreamFile{}
-		next := first.String()
-		for page := 0; next != ""; page++ {
-			if page == maxListingPages {
-				return nil, listingError(ReasonUpstreamInvalid)
-			}
-			if next, err = readPage(ctx, &strict, first, next, files); err != nil {
-				return nil, err
-			}
-		}
-		return files, nil
+		return h.tree(ctx, source.Revision)
 	}
 }
 
-func readPage(ctx context.Context, client *http.Client, first *url.URL, page string, files map[string]UpstreamFile) (string, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, page, nil)
+// tree reads the recursive file tree at the revision.
+func (h hubClient) tree(ctx context.Context, revision string) (map[string]UpstreamFile, error) {
+	files := map[string]UpstreamFile{}
+	_, _, err := h.pages(ctx, "/tree/"+revision+"?recursive=true", maxListingPages, func(raw []byte) (bool, error) {
+		var entries []UpstreamFile
+		if json.Unmarshal(raw, &entries) != nil {
+			return false, listingError(ReasonUpstreamInvalid)
+		}
+		for _, entry := range entries {
+			if err := addUpstream(files, entry); err != nil {
+				return false, err
+			}
+		}
+		return false, nil
+	})
+	if errors.Is(err, errPageLimit) {
+		return nil, listingError(ReasonUpstreamInvalid)
+	}
 	if err != nil {
-		return "", listingError(ReasonUpstreamInvalid)
+		return nil, err
+	}
+	return files, nil
+}
+
+// hubClient reads JSON pages below one repository URL.
+type hubClient struct {
+	client *http.Client
+	base   *url.URL
+	token  string
+}
+
+type hubRef struct {
+	Name         string `json:"name"`
+	TargetCommit string `json:"targetCommit"`
+}
+
+// onBranch needs the revision to be the head of a branch or a tag, or to be
+// in the bounded history of a branch.
+func (h hubClient) onBranch(ctx context.Context, revision string) error {
+	var refs struct {
+		Branches []hubRef `json:"branches"`
+		Tags     []hubRef `json:"tags"`
+	}
+	if _, _, err := h.pages(ctx, "/refs", 1, func(raw []byte) (bool, error) {
+		if json.Unmarshal(raw, &refs) != nil {
+			return false, listingError(ReasonUpstreamInvalid)
+		}
+		return false, nil
+	}); err != nil {
+		if errors.Is(err, errPageLimit) {
+			return listingError(ReasonUpstreamInvalid)
+		}
+		return err
+	}
+	for _, ref := range append(append([]hubRef(nil), refs.Branches...), refs.Tags...) {
+		if ref.TargetCommit == revision {
+			return nil
+		}
+	}
+	budget := maxHistoryPages
+	for _, branch := range refs.Branches {
+		if branch.Name == "" {
+			return listingError(ReasonUpstreamInvalid)
+		}
+		found, err := h.history(ctx, branch.Name, revision, &budget)
+		if err != nil || found {
+			return err
+		}
+	}
+	return errNotOnBranch
+}
+
+// history looks for the revision in the commit history of one branch.
+func (h hubClient) history(ctx context.Context, branch, revision string, budget *int) (bool, error) {
+	if *budget <= 0 {
+		return false, listingError(ReasonHistoryTooLong)
+	}
+	used, found, err := h.pages(ctx, "/commits/"+url.PathEscape(branch), *budget, func(raw []byte) (bool, error) {
+		var commits []struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(raw, &commits) != nil {
+			return false, listingError(ReasonUpstreamInvalid)
+		}
+		for _, commit := range commits {
+			if commit.ID == revision {
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+	*budget -= used
+	if errors.Is(err, errPageLimit) {
+		return false, listingError(ReasonHistoryTooLong)
+	}
+	return found, err
+}
+
+// errPageLimit marks a paged list with more pages than the caller allows.
+var errPageLimit = errors.New("too many pages")
+
+// pages reads at most limit pages that start at the repository URL plus
+// suffix. It follows next-page links only to the same scheme, host and path.
+// visit returns true to stop. pages gives the number of pages read and
+// whether visit stopped.
+func (h hubClient) pages(ctx context.Context, suffix string, limit int, visit func([]byte) (bool, error)) (int, bool, error) {
+	first, err := url.Parse(h.base.String() + suffix)
+	if err != nil {
+		return 0, false, listingError(ReasonUpstreamInvalid)
+	}
+	next := first.String()
+	used := 0
+	for next != "" {
+		if used == limit {
+			return used, false, errPageLimit
+		}
+		raw, link, err := h.get(ctx, next)
+		used++
+		if err != nil {
+			return used, false, err
+		}
+		done, err := visit(raw)
+		if err != nil || done {
+			return used, done, err
+		}
+		if next, err = nextPage(first, link); err != nil {
+			return used, false, err
+		}
+	}
+	return used, false, nil
+}
+
+// get reads one bounded JSON page. The token goes only to the hub host.
+func (h hubClient) get(ctx context.Context, page string) ([]byte, string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, page, nil)
+	if err != nil || request.URL.Host != h.base.Host || request.URL.Scheme != "https" {
+		return nil, "", listingError(ReasonUpstreamInvalid)
 	}
 	request.Header.Set("Accept", "application/json")
-	response, err := client.Do(request)
+	if h.token != "" {
+		request.Header.Set("Authorization", "Bearer "+h.token)
+	}
+	response, err := h.client.Do(request)
 	if err != nil {
-		return "", listingError(ReasonUpstreamUnreachable)
+		return nil, "", listingError(ReasonUpstreamUnreachable)
 	}
 	defer response.Body.Close()
-	if reason := statusReason(response.StatusCode); reason != "" {
-		return "", listingError(reason)
+	if reason := statusReason(response); reason != "" {
+		return nil, "", listingError(reason)
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxListingPageBytes+1))
 	if err != nil {
-		return "", listingError(ReasonUpstreamUnreachable)
+		return nil, "", listingError(ReasonUpstreamUnreachable)
 	}
-	var entries []UpstreamFile
-	if len(raw) > maxListingPageBytes || !utf8.Valid(raw) || json.Unmarshal(raw, &entries) != nil {
-		return "", listingError(ReasonUpstreamInvalid)
+	if len(raw) > maxListingPageBytes || !utf8.Valid(raw) {
+		return nil, "", listingError(ReasonUpstreamInvalid)
 	}
-	for _, entry := range entries {
-		if err := addUpstream(files, entry); err != nil {
-			return "", err
-		}
-	}
-	return nextPage(first, response.Header.Get("Link"))
+	return raw, response.Header.Get("Link"), nil
 }
 
-func statusReason(status int) string {
-	switch {
+// statusReason maps an HTTP status to a reason. The hub can answer 401 or
+// 403 with an error code for a repository or revision that does not exist.
+func statusReason(response *http.Response) string {
+	status := response.StatusCode
+	switch code := response.Header.Get("X-Error-Code"); {
 	case status == http.StatusOK:
 		return ""
-	case status == http.StatusNotFound:
+	case status == http.StatusNotFound, code == "RepoNotFound", code == "RevisionNotFound":
 		return ReasonUpstreamNotFound
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return ReasonUpstreamDenied
