@@ -100,6 +100,9 @@ func (m *SystemdManager) Healthy(ctx context.Context, id control.Workload) error
 		return nil
 	}
 	p, _ := m.config.Catalog.Profile(id)
+	if err := requireEnforceableLimits(p); err != nil {
+		return err
+	}
 	if err := m.verifyNativeBinding(ctx, p); err != nil {
 		return err
 	}

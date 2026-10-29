@@ -111,13 +111,13 @@ func (s *Store) replaceCatalog(ctx context.Context, tx *sql.Tx, expected string,
 	return old, revision, nil
 }
 
-// validateCatalogVersionTransition permits 1→1, 1→2 and 2→2. A 2→1 downgrade
-// is safe only when the new catalog carries no owned profiles; owned profiles
-// in a v1 catalog are already rejected by Validate, so this guard is the
-// defense-in-depth layer behind it. The same layer rejects any version below 5
-// that still carries resource limits: an older binary rejects the unknown key.
+// validateCatalogVersionTransition permits every transition between supported
+// versions except two. It rejects 2→1 when the new catalog carries owned
+// profiles, and any version below 5 that still carries resource limits, which
+// an older binary rejects as an unknown key. Validate already rejects both, so
+// this guard is the defense-in-depth layer behind it.
 func validateCatalogVersionTransition(old, next control.Catalog) error {
-	if next.Version < control.CatalogVersionLimits && next.CatalogHasLimits() {
+	if next.Version < control.CatalogVersionLimits && next.HasLimits() {
 		return control.ErrLimitsRequireV5
 	}
 	if old.Version != 2 || next.Version != 1 {

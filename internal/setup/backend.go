@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/user"
@@ -86,8 +87,16 @@ func Validate(request Request) error {
 	if err := request.Profile.ValidateConfiguration(); err != nil {
 		return err
 	}
+	if p, ok := request.Catalog.LimitedProfile(); ok {
+		return fmt.Errorf("workload %s: %w", p.ID, ErrLimitsNotInSetup)
+	}
 	return request.Catalog.Validate()
 }
+
+// ErrLimitsNotInSetup rejects a request with resource limits before any unit
+// write. This release cannot verify limits, so setup accepts no request that
+// has them. A request can still remove limits that an accepted catalog has.
+var ErrLimitsNotInSetup = errors.New("setup in this release cannot apply resource limits; remove the limits or the workload from the request")
 
 func Home() (string, error) {
 	account, err := user.LookupId(strconv.Itoa(os.Geteuid()))

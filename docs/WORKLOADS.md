@@ -31,21 +31,26 @@ schema change:
 | 2 | Adds owned native launch specifications | Supported |
 | 3 | Reserved | Not supported |
 | 4 | Finite trainer bindings and fenced job lifecycle | Supported |
-| 5 | Resource limits on owned launch specifications | Accepted. Units with limits do not launch yet |
+| 5 | Resource limits on owned launch specifications | Accepted. Units with limits do not start yet |
 | Later | Later features receive separate version changes | Not yet supported |
 
 Existing v1 and v2 catalogs remain valid under their current rules. Unchanged profiles
-need no migration or version bump. Owned launch specifications need v2 or v4.
+need no migration or version bump. Owned launch specifications need v2, v4 or v5.
 
 Finite trainer bindings need v4 or v5. See [Finite training jobs](TRAINING.md). The validator
 rejects unsupported versions (including v3), unknown fields and fields outside
 their supported version.
 
 Version 5 accepts all v4 content and adds `limits` on an owned launch specification.
-See [Host-protection resource limits](RESOURCE-LIMITS.md). Setup writes the lowest
-version that the catalog needs: 5 with limits, 4 with a trainer binding, 2 with an
-owned launch, and 1 otherwise. A unit with limits does not launch yet, because the
-controller, host cap and cgroup readback checks are not in this release.
+`limits` need v5. See [Host-protection resource limits](RESOURCE-LIMITS.md). The
+version rule applies to the catalog content: 5 with limits, 4 with a trainer
+binding, 2 with an owned launch, and 1 otherwise. Setup writes the lowest version
+that the catalog needs.
+
+Setup cannot write limits yet. It rejects a request with limits, and it accepts a
+request that removes them. The supervisor does not start a unit with limits,
+because the controller, host cap and cgroup readback checks are not in this
+release. This gate does not change other workloads.
 
 Catalog versions are separate from database schema versions and upstream runtime and
 API versions.

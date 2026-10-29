@@ -116,9 +116,6 @@ func DecodeCatalogBytes(raw []byte) (Catalog, error) {
 	if err := rejectUnsupportedNativeRuntimes(raw); err != nil {
 		return c, err
 	}
-	if err := rejectEmptyLimits(raw); err != nil {
-		return c, err
-	}
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()
 	if err := d.Decode(&c); err != nil {
@@ -166,7 +163,7 @@ func (c Catalog) Validate() error {
 	if err := c.validateSize(); err != nil {
 		return err
 	}
-	if c.Version != 1 && c.Version != 2 && c.Version != 4 && c.Version != CatalogVersionLimits {
+	if c.Version != 1 && c.Version != 2 && c.Version != CatalogVersionTrainer && c.Version != CatalogVersionLimits {
 		return errors.New("unsupported catalog version")
 	}
 	if c.Disabled {
@@ -208,10 +205,10 @@ func (c Catalog) validateSize() error {
 
 func (c Catalog) validateProfiles() error {
 	for i, p := range c.Profiles {
-		if p.Trainer != nil && c.Version < 4 {
+		if p.Trainer != nil && c.Version < CatalogVersionTrainer {
 			return errors.New("trainer bindings require catalog version 4 or 5")
 		}
-		if c.Version < CatalogVersionLimits && p.NativeModel != nil && p.NativeModel.Owned != nil && !p.NativeModel.Owned.Limits.IsZero() {
+		if c.Version < CatalogVersionLimits && p.HasLimits() {
 			return ErrLimitsRequireV5
 		}
 		if c.Version == 1 && p.NativeModel != nil && p.NativeModel.Owned != nil {

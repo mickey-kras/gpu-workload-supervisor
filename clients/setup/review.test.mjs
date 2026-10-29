@@ -32,4 +32,6 @@ test('catalog version is the lowest that the profiles need', () => {
     assert.equal(lowestCatalogVersion([owned]), 2);
     assert.equal(lowestCatalogVersion([owned, trainer]), 4);
     assert.equal(lowestCatalogVersion([trainer, limited]), 5);
+    for (const limits of [{}, null, {version: 0}, {version: 0, memoryMaxMiB: 0}])
+        assert.equal(lowestCatalogVersion([{nativeModel: {owned: {port: 8000, limits}}}]), 2, JSON.stringify(limits));
 });

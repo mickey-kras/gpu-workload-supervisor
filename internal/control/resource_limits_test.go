@@ -43,10 +43,20 @@ func TestResourceLimitsValidation(t *testing.T) {
 		}
 	}
 	for name, mutate := range map[string]func(*ResourceLimits){
-		"version":            func(l *ResourceLimits) { l.Version = 2 },
-		"no control":         func(l *ResourceLimits) { *l = ResourceLimits{Version: 1} },
-		"memory low":         func(l *ResourceLimits) { l.MemoryMaxMiB = MinLimitMemoryMiB - 1 },
-		"memory high":        func(l *ResourceLimits) { l.MemoryHighMiB = MaxLimitMemoryMiB + 1 },
+		"version":    func(l *ResourceLimits) { l.Version = 2 },
+		"no control": func(l *ResourceLimits) { *l = ResourceLimits{Version: 1} },
+		// The memory bound cases clear the other memory value, so only the
+		// bounds rule can reject them, not the high-below-max order.
+		"memory max low": func(l *ResourceLimits) {
+			l.MemoryHighMiB, l.MemoryMaxMiB, l.MemorySwapMaxMiB = 0, MinLimitMemoryMiB-1, 0
+		},
+		"memory max high": func(l *ResourceLimits) { l.MemoryHighMiB, l.MemoryMaxMiB = 0, MaxLimitMemoryMiB+1 },
+		"memory high low": func(l *ResourceLimits) {
+			l.MemoryHighMiB, l.MemoryMaxMiB, l.MemorySwapMaxMiB = MinLimitMemoryMiB-1, 0, 0
+		},
+		"memory high high": func(l *ResourceLimits) {
+			l.MemoryHighMiB, l.MemoryMaxMiB, l.MemorySwapMaxMiB = MaxLimitMemoryMiB+1, 0, 0
+		},
 		"high not below max": func(l *ResourceLimits) { l.MemoryHighMiB = l.MemoryMaxMiB },
 		"swap without max":   func(l *ResourceLimits) { l.MemoryMaxMiB, l.MemoryHighMiB = 0, 0 },
 		"swap too large":     func(l *ResourceLimits) { l.MemorySwapMaxMiB = MaxLimitMemoryMiB + 1 },
@@ -115,6 +125,22 @@ func TestLimitsRequireCatalogVersion5(t *testing.T) {
 	if err := (Catalog{Version: 5, Profiles: []WorkloadProfile{ownedVLLMProfile()}}).Validate(); err != nil {
 		t.Fatalf("v5 owned without limits rejected: %v", err)
 	}
+	trainer := contractTrainerCatalog().Profiles[0]
+	for _, tc := range []struct {
+		profiles []WorkloadProfile
+		lowest   int
+	}{{[]WorkloadProfile{trainer}, 4}, {[]WorkloadProfile{trainer, p}, 5}} {
+		c := Catalog{Version: 5, Profiles: tc.profiles}
+		if err := c.Validate(); err != nil {
+			t.Fatalf("v5 with a trainer rejected: %v", err)
+		}
+		if got := LowestCatalogVersion(c); got != tc.lowest {
+			t.Fatalf("lowest version = %d, want %d", got, tc.lowest)
+		}
+	}
+	if err := (Catalog{Version: 2, Profiles: []WorkloadProfile{trainer}}).Validate(); err == nil {
+		t.Fatal("v2 accepted a trainer")
+	}
 	invalid := limitedProfile(ResourceLimits{Version: 1, TasksMax: 1})
 	if err := (Catalog{Version: 5, Profiles: []WorkloadProfile{invalid}}).Validate(); err == nil {
 		t.Fatal("v5 accepted an out-of-range limit")
@@ -156,15 +182,21 @@ func TestLimitsStrictDecode(t *testing.T) {
 	if bytes.Contains(legacy, []byte("limits")) {
 		t.Fatal("absent limits changed the legacy encoding")
 	}
-	for _, empty := range []string{`{}`, `{"version":0}`, `null`} {
+	for _, empty := range []string{`{}`, `{"version":0}`, `null`, ` null `} {
 		smuggled := strings.Replace(string(legacy), `"port":9100`, `"port":9100,"limits":`+empty, 1)
 		smuggled = strings.Replace(smuggled, `"version":2`, `"version":5`, 1)
-		if _, err := DecodeCatalogBytes([]byte(smuggled)); err == nil {
-			t.Fatalf("empty limits %s accepted", empty)
+		if _, err := DecodeCatalogBytes([]byte(smuggled)); !errors.Is(err, ErrEmptyLimits) {
+			t.Fatalf("empty limits %s = %v", empty, err)
+		}
+		// Every decoder of the type applies the rule, not only the catalog path.
+		var lax Catalog
+		if err := json.Unmarshal([]byte(smuggled), &lax); !errors.Is(err, ErrEmptyLimits) {
+			t.Fatalf("lax decode of empty limits %s = %v", empty, err)
 		}
 	}
-	if err := rejectEmptyLimits([]byte(`{"profiles":`)); err != nil {
-		t.Fatalf("malformed probe = %v", err)
+	var unknown ResourceLimits
+	if err := json.Unmarshal([]byte(`{"version":1,"tasksMax":64,"cpuSet":"0"}`), &unknown); err == nil {
+		t.Fatal("lax decode accepted an unknown limit field")
 	}
 }
 
@@ -184,6 +216,9 @@ func TestLowestCatalogVersionRoundTrip(t *testing.T) {
 		if got := LowestCatalogVersion(Catalog{Profiles: tc.profiles}); got != tc.want {
 			t.Fatalf("lowest version = %d, want %d", got, tc.want)
 		}
+		if _, limited := (Catalog{Profiles: tc.profiles}).LimitedProfile(); limited != (tc.want == CatalogVersionLimits) {
+			t.Fatalf("limited profile lookup for version %d = %v", tc.want, limited)
+		}
 	}
 	// Adding limits writes v5; removing them writes the exact earlier bytes.
 	before := Catalog{Version: 2, Profiles: []WorkloadProfile{ownedVLLMProfile()}}
@@ -194,7 +229,7 @@ func TestLowestCatalogVersionRoundTrip(t *testing.T) {
 	limited := before.Clone()
 	limited.Profiles[0].NativeModel.Owned.Limits = fullLimits()
 	limited.Version = LowestCatalogVersion(limited)
-	if limited.Version != 5 || !limited.CatalogHasLimits() || before.CatalogHasLimits() {
+	if limited.Version != 5 || !limited.HasLimits() || before.HasLimits() {
 		t.Fatalf("limited catalog version %d", limited.Version)
 	}
 	restored := limited.Clone()

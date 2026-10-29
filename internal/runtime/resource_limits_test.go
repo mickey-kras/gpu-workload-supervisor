@@ -89,31 +89,100 @@ func TestOwnedLimitsParseOnlyAtRenderedPosition(t *testing.T) {
 	if _, err := removeOwnedLimitLines([]byte("[Service]\nExecStart=/x\n"), n.Owned.Limits); !errors.Is(err, ErrLaunchUnsupported) {
 		t.Fatalf("missing header = %v", err)
 	}
+	// The single-header guard holds on its own, before the shared parser runs.
+	twice := strings.Replace(string(raw), ownedServiceHeader, ownedServiceHeader+block+ownedServiceHeader, 1)
+	if _, err := removeOwnedLimitLines([]byte(twice), n.Owned.Limits); !errors.Is(err, ErrLaunchUnsupported) {
+		t.Fatalf("second service header = %v", err)
+	}
 }
 
-func TestAdoptedGrammarRejectsLimitDirectives(t *testing.T) {
+func TestOnlyOwnedGrammarRejectsLimitDirectives(t *testing.T) {
 	n := control.NativeModel{Runtime: "vllm", Endpoint: "http://127.0.0.1:9100", Model: "/models/v"}
+	p, raw := limitedOwnedProfile(t)
+	exec := string(raw[strings.Index(string(raw), "ExecStart="):])
 	for _, line := range []string{"OOMPolicy=stop", "OOMScoreAdjust=500", "MemoryHigh=1G", "MemoryMax=2G", "MemorySwapMax=0",
 		"TasksMax=64", "CPUWeight=50", "CPUQuota=100%", "IOWeight=100", "IOReadBandwidthMax=/dev/sda 1M",
-		"IOWriteBandwidthMax=/dev/sda 1M", "IOReadIOPSMax=/dev/sda 100", "IOWriteIOPSMax=/dev/sda 100"} {
-		raw := "[Service]\nType=simple\n" + line + "\nExecStart=/usr/bin/vllm serve /models/v --host 127.0.0.1 --port 9100\n"
-		if err := qualifyFixtureLaunch([]byte(raw), n); !errors.Is(err, ErrLaunchUnsupported) {
-			t.Fatalf("adopted %s accepted: %v", line, err)
+		"IOWriteBandwidthMax=/dev/sda 1M", "IOReadIOPSMax=/dev/sda 100", "IOWriteIOPSMax=/dev/sda 100",
+		"MemoryLimit=2G", "CPUShares=512", "BlockIOWeight=100", "StartupCPUWeight=50", "StartupMemoryMax=2G", "MemoryZSwapMax=0"} {
+		// The adopted and imported grammar stays as it was: these settings
+		// are harmless there because adopted units get no supervisor limits.
+		adopted := "[Service]\nType=simple\n" + line + "\nExecStart=/usr/bin/vllm serve /models/v --host 127.0.0.1 --port 9100\n"
+		if _, err := parseOwnedLaunchUnit([]byte(adopted), n); err != nil {
+			t.Fatalf("adopted %s rejected: %v", line, err)
+		}
+		owned := strings.Replace(string(raw), exec, line+"\n"+exec, 1)
+		if err := qualifyFixtureLaunch([]byte(owned), *p.NativeModel); !errors.Is(err, ErrLaunchUnsupported) || !strings.Contains(err.Error(), strings.Split(line, "=")[0]) {
+			t.Fatalf("owned %s = %v", line, err)
 		}
 	}
-	if resourceLimitDirective("Description") {
+	if resourceLimitDirective("Description") || resourceLimitDirective("StartupDescription") {
 		t.Fatal("unrelated directive classified as a limit")
 	}
 }
 
-func TestUnitWithLimitsDoesNotLaunchUntilEnforced(t *testing.T) {
-	p, _ := limitedOwnedProfile(t)
-	if err := requireEnforceableLimits(p); !errors.Is(err, ErrLimitsNotEnforced) {
-		t.Fatalf("limits accepted for launch: %v", err)
+// limitedManager adds a verifiable owned unit with limits next to the
+// stopped text and media fixtures.
+func limitedManager(t *testing.T) (*SystemdManager, *fakeRunner, control.WorkloadProfile) {
+	t.Helper()
+	p, raw := limitedOwnedProfile(t)
+	dir := t.TempDir()
+	p.NativeModel.LaunchFile = filepath.Join(dir, p.Unit)
+	if err := os.WriteFile(p.NativeModel.LaunchFile, raw, 0600); err != nil {
+		t.Fatal(err)
 	}
-	m := &SystemdManager{}
-	if err := m.verifyNativeBinding(context.Background(), p); !errors.Is(err, ErrLimitsNotEnforced) {
-		t.Fatalf("binding verification accepted limits: %v", err)
+	p.Label, p.Adapter, p.Cgroup, p.HealthURL = "Vision", "systemd", "/workloads/app.slice/"+p.Unit, "http://127.0.0.1:9100/health"
+	r := stoppedRunner()
+	m := strictManager(t, r)
+	catalog := m.config.Catalog.Clone()
+	catalog.Version = control.CatalogVersionLimits
+	catalog.Profiles = append(catalog.Profiles, p)
+	m.config.Catalog = &catalog
+	m.config.OwnedUnitDir = dir
+	m.nativeExecutableValidator = fixtureExecutableValidator
+	launch, err := parseOwnedLaunchUnit(raw, *p.NativeModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	show := "/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload --property=ExecStartPre --property=ExecStart -- " + p.Unit
+	r.outputs[show] = []byte("ExecStart={ path=" + strings.Fields(launch.execStart)[0] + " ; argv[]=" + launch.execStart + " ; }\nFragmentPath=" + p.NativeModel.LaunchFile + "\nDropInPaths=\nNeedDaemonReload=no\n")
+	r.outputs["/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- "+p.Unit] = stoppedOutput()
+	for _, group := range []string{"text.service", "media.service", "app.slice/" + p.Unit} {
+		writeEvents(t, filepath.Join(m.cgroups.root, "workloads"), group, "populated 0\n")
+	}
+	return m, r, p
+}
+
+func TestUnitWithLimitsDoesNotLaunchUntilEnforced(t *testing.T) {
+	m, r, p := limitedManager(t)
+	ctx := context.Background()
+	// The gate covers only the limited profile's own start and health.
+	// Preflight, release for any target and other profiles stay available,
+	// so setup can still remove the limits.
+	if err := m.verifyNativeBinding(ctx, p); err != nil {
+		t.Fatalf("binding verification of a limited unit = %v", err)
+	}
+	if err := m.Preflight(ctx); err != nil {
+		t.Fatalf("preflight with a limited unit = %v", err)
+	}
+	for _, target := range []control.Workload{control.WorkloadIdle, control.WorkloadText, p.ID} {
+		if err := m.ReleasedFor(ctx, target); err != nil {
+			t.Fatalf("release for %s with a limited unit = %v", target, err)
+		}
+	}
+	calls := len(r.calls)
+	for name, call := range map[string]func() error{
+		"start":  func() error { return m.Start(ctx, p.ID) },
+		"health": func() error { return m.Healthy(ctx, p.ID) },
+	} {
+		err := call()
+		if !errors.Is(err, ErrLimitsNotEnforced) || !strings.Contains(err.Error(), string(p.ID)) || !strings.Contains(err.Error(), p.Unit) {
+			t.Fatalf("%s of a limited unit = %v", name, err)
+		}
+	}
+	for _, call := range r.calls[calls:] {
+		if strings.Contains(call, " start ") {
+			t.Fatalf("limited unit started: %v", r.calls[calls:])
+		}
 	}
 	plain := ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100})
 	if err := requireEnforceableLimits(plain); err != nil {

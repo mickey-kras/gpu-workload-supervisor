@@ -12,6 +12,14 @@ import (
 
 var ErrOwnedRender = errors.New("owned launch cannot be rendered to the supported unit subset")
 
+// ErrLimitsNotEnforced keeps a unit with limits from starting until the
+// controller, host cap and cgroup readback checks of the limits design exist.
+// systemd starts a unit even when it cannot apply a limit, so launching
+// without those checks would claim protection that may be absent. Only the
+// start and health of that profile fail; other profiles, preflight, release
+// and setup do not.
+var ErrLimitsNotEnforced = errors.New("resource limits are configured, but this build cannot verify them; remove the limits or the workload through setup, or restore a backup")
+
 // ownedServiceHeader is the fixed [Service] opening. Limit lines follow it
 // directly, so the strict parser can remove them at one exact position.
 const ownedServiceHeader = "\n[Service]\nType=simple\nRestart=no\n"
@@ -109,8 +117,9 @@ func ownedDependencies(unit, peers string) string {
 }
 
 // Keep the adopted grammar unchanged. Only an owned spec may contribute these
-// exact generated dependency lines; duplicate, extra, moved or changed lines
-// are left to the strict parser to reject.
+// exact generated dependency and limit lines; duplicate, extra, moved or
+// changed lines are left to the strict parser to reject. The owned grammar
+// alone rejects any resource control outside the rendered limits block.
 func parseOwnedLaunchUnit(raw []byte, n control.NativeModel) (parsedLaunchUnit, error) {
 	if n.Owned == nil {
 		return parseLaunchUnit(raw)
@@ -132,11 +141,18 @@ func parseOwnedLaunchUnit(raw []byte, n control.NativeModel) (parsedLaunchUnit, 
 	if err != nil {
 		return parsedLaunchUnit{}, err
 	}
-	return parseLaunchUnit(raw)
+	parsed, err := parseLaunchUnit(raw)
+	if err != nil {
+		return parsed, err
+	}
+	if len(parsed.limitDirectives) != 0 {
+		return parsedLaunchUnit{}, fmt.Errorf("%w: resource control %s outside the rendered limits", ErrLaunchUnsupported, parsed.limitDirectives[0])
+	}
+	return parsed, nil
 }
 
 // removeOwnedLimitLines accepts limit directives only as the exact rendered
-// block after the fixed [Service] header. The shared grammar rejects any
+// block after the fixed [Service] header. parseOwnedLaunchUnit rejects any
 // limit directive left elsewhere, so a moved, changed or extra line fails.
 func removeOwnedLimitLines(raw []byte, limits control.ResourceLimits) ([]byte, error) {
 	block := limits.RenderLines()
@@ -152,15 +168,12 @@ func removeOwnedLimitLines(raw []byte, limits control.ResourceLimits) ([]byte, e
 	return []byte(text[:start] + text[start+len(block):]), nil
 }
 
-// ErrLimitsNotEnforced keeps a unit with limits from launching until the
-// controller, host cap and cgroup readback checks of the limits design exist.
-// systemd starts a unit even when it cannot apply a limit, so launching
-// without those checks would claim protection that may be absent.
-var ErrLimitsNotEnforced = errors.New("resource limits are configured, but this build cannot verify them; remove the limits through setup")
-
+// requireEnforceableLimits is the launch gate. Start and Healthy call it for
+// their own profile only, so a limited unit cannot block other workloads or
+// the setup change that removes it.
 func requireEnforceableLimits(p control.WorkloadProfile) error {
-	if p.NativeModel != nil && p.NativeModel.Owned != nil && !p.NativeModel.Owned.Limits.IsZero() {
-		return ErrLimitsNotEnforced
+	if p.HasLimits() {
+		return fmt.Errorf("%s (%s): %w", p.ID, p.Unit, ErrLimitsNotEnforced)
 	}
 	return nil
 }

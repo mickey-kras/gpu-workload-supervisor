@@ -3,6 +3,9 @@ package setup
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
@@ -37,8 +40,10 @@ func TestPreparedCatalogUsesLowestVersion(t *testing.T) {
 	if limited.Catalog.Version != control.CatalogVersionLimits || limited.Catalog.Profiles[0].NativeModel.LaunchSHA256 == profile.NativeModel.LaunchSHA256 {
 		t.Fatalf("limits did not raise the version or the fingerprint: %+v", limited.Catalog.Profiles[0].NativeModel)
 	}
-	if err := Validate(limited); err != nil {
-		t.Fatalf("v5 request rejected: %v", err)
+	// This release cannot verify limits, so setup refuses them before any
+	// unit write and names the workload.
+	if err := Validate(limited); !errors.Is(err, ErrLimitsNotInSetup) || !strings.Contains(err.Error(), "vision") {
+		t.Fatalf("v5 request with limits = %v", err)
 	}
 
 	restored := limited
@@ -56,6 +61,51 @@ func TestPreparedCatalogUsesLowestVersion(t *testing.T) {
 	unit, err := gpuruntime.RenderOwnedUnit(restored.Catalog.Profiles[0])
 	if err != nil || !bytes.Equal(unit, legacyUnit) {
 		t.Fatalf("rollback unit bytes differ: %v", err)
+	}
+	// The request that removes the limits passes, so setup can recover a
+	// catalog with limits that a later release wrote.
+	if err := Validate(restored); err != nil {
+		t.Fatalf("request without limits rejected: %v", err)
+	}
+}
+
+func TestSetupRejectsLimitsBeforeUnitWrites(t *testing.T) {
+	backend, home, _ := fixture(t)
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+		t.Fatal("setup reached the runtime with limits")
+		return nil, nil
+	}
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	request := ownedFixtureRequest(t, home, profile)
+	request.Catalog.Version = control.CatalogVersionLimits
+	request.Catalog.Profiles[0].NativeModel.Owned.Limits = control.ResourceLimits{Version: 1, TasksMax: 4096}
+	refingerprint(t, &request.Catalog.Profiles[0])
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Decode(bytes.NewReader(raw)); !errors.Is(err, ErrLimitsNotInSetup) {
+		t.Fatalf("decode with limits = %v", err)
+	}
+	if _, err := backend.Plan(home, request); !errors.Is(err, ErrLimitsNotInSetup) {
+		t.Fatalf("preview with limits = %v", err)
+	}
+	if err := backend.Apply(t.Context(), home, request); !errors.Is(err, ErrLimitsNotInSetup) {
+		t.Fatalf("apply with limits = %v", err)
+	}
+	if _, err := os.Stat(request.Catalog.Profiles[0].NativeModel.LaunchFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unit written for a rejected request: %v", err)
+	}
+	// Empty forms fail in the setup decoder too, not only in the catalog
+	// decoder, so a key that omitzero would drop is never accepted.
+	for _, empty := range []string{`{}`, `null`, `{"version":0}`} {
+		smuggled := strings.Replace(string(raw), `"limits":{"version":1,"tasksMax":4096}`, `"limits":`+empty, 1)
+		if smuggled == string(raw) {
+			t.Fatal("fixture has no limits key")
+		}
+		if _, err := Decode(strings.NewReader(smuggled)); !errors.Is(err, control.ErrEmptyLimits) {
+			t.Fatalf("decode with limits %s = %v", empty, err)
+		}
 	}
 }
 

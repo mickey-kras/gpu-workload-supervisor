@@ -101,6 +101,9 @@ func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) e
 	if p.Trainer != nil {
 		return errors.New("finite trainer requires an admitted job")
 	}
+	if err := requireEnforceableLimits(p); err != nil {
+		return err
+	}
 	if err := m.verifyNativeBinding(ctx, p); err != nil {
 		return err
 	}

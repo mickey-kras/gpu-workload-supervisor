@@ -119,6 +119,16 @@ The current migration guard rejects a newer schema. Compatible schema
 numbers alone do not prove compatible fencing, handoff locking, or completion
 semantics. Do not edit migration metadata to force an older binary to open state.
 
+Older binaries reject catalog version 5. Remove all resource limits before you
+stop the components and install an older binary. Setup then writes the lowest
+version that the remaining catalog needs. Make sure that the catalog version
+went down.
+
+The setup application of this release has no control for limits. With this
+release, remove each workload that has limits in setup, or send `gpu-setup apply`
+a request without the `limits` key. A backup restore from
+before the limits is the other path.
+
 For a supported rollback, stop and block all components as above. Preserve the
 failed deployment's database for investigation. Select the already verified
 binary and configuration plus its matching pre-upgrade backup. Managed setup backups
@@ -133,11 +143,6 @@ handoff and lifetime locks with a newer controller. Reconcile and check closed-s
 recovery before resuming execution.
 
 Refresh client fences after restoration.
-
-Older binaries reject catalog version 5. Before you install an older binary,
-remove all resource limits through setup and confirm that the catalog version
-went down. Setup then writes the lowest version that the remaining catalog
-needs. A backup restore is the other path.
 Rollback does not recover work and audit updates newer than the backup.
 If the previous release cannot safely do this procedure, leave admission
 closed and repair forward with a compatible release.

@@ -4,12 +4,21 @@
 
 This record gives the design for
 [#584](https://github.com/mickey-kras/gpu-workload-supervisor/issues/584).
-The current release has the schema part of this feature. Catalog version 5
-accepts `limits` on an owned launch specification, and the renderer and the
-strict parser carry them. A unit with limits does not launch yet: the
-controller, host cap and cgroup readback checks below are not in this release.
-`requiredMiB` stays a VRAM demand estimate before launch, not an enforced
-ceiling. GPU VRAM enforcement is out of scope.
+The current release has only the schema part of this feature:
+
+- Catalog version 5 accepts `limits` on an owned inference launch
+  specification. The renderer and the strict parser carry them.
+- The supervisor does not start a unit with limits and does not report it as
+  healthy. This gate does not change other workloads, preflight or release
+  checks.
+- Setup cannot write limits. It rejects a request with limits before it writes
+  a unit, and it accepts a request that removes them.
+
+Later changes add the other parts of this design. The current release does not
+have trainer binding limits or draft and setup support for limits. It also does
+not have the **Resource checks** page, the host cap, or the controller and
+cgroup readback checks. `requiredMiB` stays a VRAM demand estimate before launch, not
+an enforced ceiling. GPU VRAM enforcement is out of scope.
 
 ## Method
 
@@ -474,9 +483,11 @@ IOWriteIOPSMax=/dev/<kernel name> <count>
 The strict launch parser accepts these lines only through the owned-unit path:
 `parseOwnedLaunchUnit` for owned inference units, and the exact trainer form
 for trainers. The parser removes the exact rendered block before the shared
-grammar reads the rest, as it does for owned dependency lines. The adopted and
-imported launch grammar does not accept any limit directive. The feature uses
-no drop-ins on owned units.
+grammar reads the rest, as it does for owned dependency lines. The owned-unit
+path rejects a resource control in any other position, including the legacy
+and `Startup` forms. The adopted and imported launch grammar does not change.
+It accepts these directives as before, because those units get no limits from
+the supervisor. The feature uses no drop-ins on owned units.
 
 ## Drift checks
 

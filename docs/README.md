@@ -24,7 +24,7 @@ Start with [deployment](DEPLOYMENT.md), [boot reconciliation](OPERATIONS.md#boot
 ## Understand and integrate
 
 - [Architecture](ARCHITECTURE.md)
-- [Host-protection resource limits](RESOURCE-LIMITS.md): design for an opt-in host cap and limits on owned units. Not implemented
+- [Host-protection resource limits](RESOURCE-LIMITS.md): design for an opt-in host cap and limits on owned units. Catalog version 5 accepts the schema. A unit with limits does not start yet
 - [Proxy adapter contract](PROXY-CONTRACT.md): runtime evidence required before you enable execution
 - [Demand activation and inactivity idle](AUTO-IDLE.md): durable policy, settings, activation and a 60-second timer. The policy defaults to Off. A qualified evidence provider is necessary to enable it
 

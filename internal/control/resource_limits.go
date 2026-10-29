@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -12,11 +13,20 @@ import (
 // ResourceLimitsVersion is the only accepted resource limits contract.
 const ResourceLimitsVersion = 1
 
+// CatalogVersionTrainer is the first catalog version that accepts trainer
+// bindings.
+const CatalogVersionTrainer = 4
+
 // CatalogVersionLimits is the first catalog version that accepts limits.
 const CatalogVersionLimits = 5
 
 // ErrLimitsRequireV5 rejects limits in a catalog version that predates them.
 var ErrLimitsRequireV5 = errors.New("resource limits require catalog version 5")
+
+// ErrEmptyLimits rejects a present but null, empty or all-zero limits object.
+// omitzero would otherwise decode it to the absent form and drop the key, so
+// the accepted bytes could not round-trip.
+var ErrEmptyLimits = errors.New("resource limits object must not be empty")
 
 // ResourceLimits are opt-in systemd resource controls for one owned unit. The
 // type is a comparable value struct: profiles that share a unit compare their
@@ -59,6 +69,24 @@ var (
 	limitDevicePath   = regexp.MustCompile(`^/dev/[a-z][a-z0-9]{0,31}$`)
 	limitDeviceNumber = regexp.MustCompile(`^[0-9]{1,7}:[0-9]{1,7}$`)
 )
+
+// UnmarshalJSON decodes the limits object strictly in every catalog decoder,
+// including setup requests, and rejects the empty forms with ErrEmptyLimits.
+// An absent key never reaches this method.
+func (l *ResourceLimits) UnmarshalJSON(raw []byte) error {
+	type plain ResourceLimits
+	var decoded plain
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&decoded); err != nil {
+		return err
+	}
+	if ResourceLimits(decoded).IsZero() {
+		return ErrEmptyLimits
+	}
+	*l = ResourceLimits(decoded)
+	return nil
+}
 
 // IsZero reports an absent limits object.
 func (l ResourceLimits) IsZero() bool {
@@ -147,20 +175,19 @@ func (l ResourceLimits) RenderLines() string {
 	}
 	var b strings.Builder
 	b.WriteString("OOMPolicy=stop\nOOMScoreAdjust=500\n")
-	writeMiB := func(key string, v uint64) {
-		if v != 0 {
-			b.WriteString(key + "=" + strconv.FormatUint(v, 10) + "M\n")
-		}
+	write := func(key string, v uint64, suffix string) {
+		b.WriteString(key + "=" + strconv.FormatUint(v, 10) + suffix + "\n")
 	}
 	writeValue := func(key string, v uint64, suffix string) {
 		if v != 0 {
-			b.WriteString(key + "=" + strconv.FormatUint(v, 10) + suffix + "\n")
+			write(key, v, suffix)
 		}
 	}
-	writeMiB("MemoryHigh", l.MemoryHighMiB)
-	writeMiB("MemoryMax", l.MemoryMaxMiB)
+	writeValue("MemoryHigh", l.MemoryHighMiB, "M")
+	writeValue("MemoryMax", l.MemoryMaxMiB, "M")
+	// A memory maximum always renders a swap limit, which can be 0.
 	if swap, ok := l.SwapLimitMiB(); ok {
-		b.WriteString("MemorySwapMax=" + strconv.FormatUint(swap, 10) + "M\n")
+		write("MemorySwapMax", swap, "M")
 	}
 	writeValue("TasksMax", l.TasksMax, "")
 	writeValue("CPUWeight", l.CPUWeight, "")
@@ -177,14 +204,25 @@ func (l ResourceLimits) RenderLines() string {
 	return b.String()
 }
 
-// CatalogHasLimits reports whether any owned launch carries limits.
-func (c Catalog) CatalogHasLimits() bool {
+// HasLimits reports whether the profile's owned launch carries limits. It is
+// the one test for every version rule, store guard and launch gate.
+func (p WorkloadProfile) HasLimits() bool {
+	return p.NativeModel != nil && p.NativeModel.Owned != nil && !p.NativeModel.Owned.Limits.IsZero()
+}
+
+// HasLimits reports whether any owned launch carries limits.
+func (c Catalog) HasLimits() bool {
+	return slices.ContainsFunc(c.Profiles, WorkloadProfile.HasLimits)
+}
+
+// LimitedProfile returns the first profile with limits, if any.
+func (c Catalog) LimitedProfile() (WorkloadProfile, bool) {
 	for _, p := range c.Profiles {
-		if p.NativeModel != nil && p.NativeModel.Owned != nil && !p.NativeModel.Owned.Limits.IsZero() {
-			return true
+		if p.HasLimits() {
+			return p, true
 		}
 	}
-	return false
+	return WorkloadProfile{}, false
 }
 
 // LowestCatalogVersion is the one version rule for every catalog writer:
@@ -193,41 +231,13 @@ func LowestCatalogVersion(c Catalog) int {
 	version := 1
 	for _, p := range c.Profiles {
 		switch {
-		case p.NativeModel != nil && p.NativeModel.Owned != nil && !p.NativeModel.Owned.Limits.IsZero():
+		case p.HasLimits():
 			return CatalogVersionLimits
 		case p.Trainer != nil:
-			version = max(version, 4)
+			version = max(version, CatalogVersionTrainer)
 		case p.NativeModel != nil && p.NativeModel.Owned != nil:
 			version = max(version, 2)
 		}
 	}
 	return version
-}
-
-// rejectEmptyLimits refuses a present but empty or all-zero limits object.
-// omitzero would otherwise decode it to the absent form and drop the key, so
-// the accepted bytes could not round-trip.
-func rejectEmptyLimits(raw []byte) error {
-	var probe struct {
-		Profiles []struct {
-			NativeModel *struct {
-				Owned *struct {
-					Limits json.RawMessage `json:"limits"`
-				} `json:"owned"`
-			} `json:"nativeModel"`
-		} `json:"profiles"`
-	}
-	if json.Unmarshal(raw, &probe) != nil {
-		return nil // The strict decode reports malformed catalogs.
-	}
-	for _, p := range probe.Profiles {
-		if p.NativeModel == nil || p.NativeModel.Owned == nil || p.NativeModel.Owned.Limits == nil {
-			continue
-		}
-		var limits ResourceLimits
-		if bytes.Equal(bytes.TrimSpace(p.NativeModel.Owned.Limits), []byte("null")) || json.Unmarshal(p.NativeModel.Owned.Limits, &limits) != nil || limits.IsZero() {
-			return errors.New("resource limits object must not be empty")
-		}
-	}
-	return nil
 }

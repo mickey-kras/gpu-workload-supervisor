@@ -28,10 +28,17 @@ export class ReviewedConfiguration {
     }
 }
 
+// Mirror of control.WorkloadProfile.HasLimits: an empty, null or all-zero
+// limits object is absent, and the backend decoder rejects it.
+function hasLimits(profile) {
+    const limits = profile.nativeModel?.owned?.limits;
+    return limits !== null && typeof limits === 'object' && Object.values(limits).some(Boolean);
+}
+
 // Mirror of control.LowestCatalogVersion: the lowest catalog version that the
 // profiles need. The backend recomputes it before preview and apply.
 export function lowestCatalogVersion(profiles) {
-    if (profiles.some(profile => profile.nativeModel?.owned?.limits))
+    if (profiles.some(hasLimits))
         return 5;
     if (profiles.some(profile => profile.trainer))
         return 4;
