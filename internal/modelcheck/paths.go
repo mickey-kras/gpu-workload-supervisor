@@ -9,14 +9,18 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/llmtraining"
 )
 
-// textKeys hold text or token strings, never file paths. The chat template
-// check covers chat_template. _name_or_path and name_or_path hold a hub ID or
-// the folder that saved the model; with the hub offline, no loader reads it.
+// textKeys hold token text, never file paths. Strings anywhere below
+// chat_template are template text; the chat template check covers them.
+// _name_or_path and name_or_path are labels: transformers and vLLM record
+// them and do not load files from them.
 var textKeys = map[string]bool{
-	"chat_template": true, "content": true, "_name_or_path": true, "name_or_path": true,
+	"content": true, "_name_or_path": true, "name_or_path": true,
 	"additional_special_tokens": true, "bos_token": true, "eos_token": true, "unk_token": true,
 	"pad_token": true, "sep_token": true, "cls_token": true, "mask_token": true, "extra_special_tokens": true,
 }
+
+// templateKey roots a subtree of template text.
+const templateKey = "chat_template"
 
 // fileNamePattern matches a bare name of a model, tokenizer or code file.
 var fileNamePattern = regexp.MustCompile(`(?i)^[a-z0-9_.-]+\.(json|jinja|model|txt|spm|vocab|bpe|tiktoken|safetensors|bin|pt|pth|ckpt|pkl|py|msgpack|h5|onnx|gguf|npz|tflite)$`)
@@ -24,10 +28,10 @@ var fileNamePattern = regexp.MustCompile(`(?i)^[a-z0-9_.-]+\.(json|jinja|model|t
 // checkPathValues closes the class of file path redirects. In every JSON
 // file except token data, a string value at any depth must not be an
 // absolute path, a home path, a relative path that starts with "./", a path
-// with "..", or a backslash path. A bare file name must name a bound file. The
-// known file path keys at the top level must be null or a bound file name.
-// tokenizer.json is token data that the tokenizers library parses without
-// file names, so the rule does not apply to it.
+// with "..", or a backslash path. A bare file name must name a bound file
+// that a loader reads. The known file path keys at the top level must be null
+// or such a file name. Neither rule applies to tokenizer.json: the tokenizers
+// library parses it as token data without file names.
 func checkPathValues(name string, raw []byte, digests map[string]string) string {
 	if name == "tokenizer.json" {
 		return ""
@@ -36,7 +40,13 @@ func checkPathValues(name string, raw []byte, digests map[string]string) string 
 	if json.Unmarshal(raw, &value) != nil {
 		return ReasonInvalidJSON
 	}
-	if !safeValues("", value, digests) {
+	loadable := map[string]string{}
+	for file, digest := range digests {
+		if !unloadedNames[file] {
+			loadable[file] = digest
+		}
+	}
+	if !safeValues("", false, value, loadable) {
 		return ReasonFilePathRedirect
 	}
 	if object, ok := value.(map[string]any); ok {
@@ -45,35 +55,38 @@ func checkPathValues(name string, raw []byte, digests map[string]string) string 
 			encoded, _ := json.Marshal(member)
 			top[key] = encoded
 		}
-		if !llmtraining.ValidFilePathValues(top, digests) {
+		if !llmtraining.ValidFilePathValues(top, loadable) {
 			return ReasonFilePathRedirect
 		}
 	}
 	return ""
 }
 
-func safeValues(key string, value any, digests map[string]string) bool {
+func safeValues(key string, template bool, value any, digests map[string]string) bool {
+	template = template || key == templateKey
 	switch v := value.(type) {
 	case map[string]any:
 		for member, child := range v {
-			if !safeValues(member, child, digests) {
+			if !safeValues(member, template, child, digests) {
 				return false
 			}
 		}
 	case []any:
 		for _, child := range v {
-			if !safeValues(key, child, digests) {
+			if !safeValues(key, template, child, digests) {
 				return false
 			}
 		}
 	case string:
-		return textKeys[key] || safePathValue(v, digests)
+		return template || textKeys[key] || safePathValue(v, digests)
 	}
 	return true
 }
 
 func safePathValue(value string, digests map[string]string) bool {
 	switch {
+	case unloadedNames[value]:
+		return false
 	case strings.HasPrefix(value, "/"), strings.HasPrefix(value, "~"), strings.HasPrefix(value, "./"),
 		strings.HasPrefix(value, `\`), strings.Contains(value, ".."):
 		return false

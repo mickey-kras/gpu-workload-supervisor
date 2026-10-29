@@ -1,0 +1,13 @@
+{
+  "size": {
+    "longest_edge": 1024,
+    "shortest_edge": 64
+  },
+  "image_mean": [
+    0.5,
+    0.5,
+    0.5
+  ],
+  "processor_class": "Qwen3VLProcessor",
+  "image_processor_type": "Qwen2VLImageProcessorFast"
+}

@@ -22,7 +22,7 @@ blocks requests when a transition fails.
 - Controller: ownership and transitions.
 - Proxy: admission and forwarding. No content policy.
 - Brokers and gateways: external. Not installed by setup.
-- Model checks: in the supervisor. See [model checks](docs/MODEL-CHECKS.md) (#585).
+- Model checks: planned in the supervisor (#585). The file allowlist and upstream identity checks exist, but no command runs them yet. See [model checks](docs/MODEL-CHECKS.md).
 
 [Architecture](docs/ARCHITECTURE.md).
 

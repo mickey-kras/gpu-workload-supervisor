@@ -38,9 +38,11 @@ var allowedNames = map[string]bool{
 	"special_tokens_map.json": true, "added_tokens.json": true,
 	"vocab.json": true, "vocab.txt": true, "merges.txt": true,
 	"chat_template.jinja": true, "chat_template.json": true,
-	// Documentation and git attributes that no loader reads.
-	"README": true, "README.md": true, "LICENSE": true, "LICENSE.md": true, ".gitattributes": true,
 }
+
+// unloadedNames are documentation and git attribute files. They are allowed
+// and bound, but never parsed or shown, so no value can name them.
+var unloadedNames = map[string]bool{"README": true, "README.md": true, "LICENSE": true, "LICENSE.md": true, ".gitattributes": true}
 
 // rejectedExtensions name code and pickle formats. The allowlist rejects
 // them anyway; the reason makes the report clear.
@@ -100,7 +102,7 @@ func allowed(name string) string {
 		return ReasonAdapterRedirect
 	case rejectedExtensions[path.Ext(name)]:
 		return ReasonCodeOrPickleFile
-	case strings.HasSuffix(name, ".safetensors"), strings.HasSuffix(name, ".safetensors.index.json"), allowedNames[name]:
+	case strings.HasSuffix(name, ".safetensors"), strings.HasSuffix(name, ".safetensors.index.json"), allowedNames[name], unloadedNames[name]:
 		return ""
 	}
 	return ReasonUnlistedFile

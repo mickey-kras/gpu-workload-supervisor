@@ -762,8 +762,8 @@ func TestHubLoginTokenGoesOnlyToTheHub(t *testing.T) {
 	h := newHub(t, upstreamOf(files))
 	record := run(t, h.checker(), writeModel(t, files))
 	raw, err := MarshalRecord(record)
-	if err != nil || strings.Contains(string(raw), "secret") {
-		t.Fatal("the token must never reach the record", err)
+	if err != nil || strings.Contains(string(raw), "secret") || record.Checks[1].Outcome != OutcomePassed {
+		t.Fatal("the token must reach the hub and never the record", err)
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -775,13 +775,64 @@ func TestHubLoginTokenGoesOnlyToTheHub(t *testing.T) {
 			t.Fatalf("request authorization = %q", auth)
 		}
 	}
-	t.Setenv("HF_TOKEN", "hf_from env")
-	if hubToken() != "hf_secrettoken" {
-		t.Fatal("a token with a space must be refused for the login file")
+}
+
+func TestHubTokenLookupOrder(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "path-token"), "hf_path")
+	write(t, filepath.Join(dir, "home", "token"), "hf_home")
+	write(t, filepath.Join(dir, "cache", "huggingface", "token"), "hf_cache")
+	write(t, filepath.Join(dir, "large"), strings.Repeat("a", maxTokenBytes+1))
+	write(t, filepath.Join(dir, "spaced"), "hf bad")
+	if err := os.Symlink(filepath.Join(dir, "path-token"), filepath.Join(dir, "linked")); err != nil {
+		t.Fatal(err)
 	}
-	t.Setenv("HF_TOKEN", "hf_fromenv")
-	if hubToken() != "hf_fromenv" {
-		t.Fatal("HF_TOKEN must come first")
+	for name, tc := range map[string]struct {
+		env   map[string]string
+		token string
+		err   bool
+	}{
+		"HF_TOKEN first":            {map[string]string{"HF_TOKEN": "hf_env", "HF_TOKEN_PATH": filepath.Join(dir, "path-token")}, "hf_env", false},
+		"unusable HF_TOKEN":         {map[string]string{"HF_TOKEN": "hf bad", "HF_HOME": filepath.Join(dir, "home")}, "", true},
+		"HF_TOKEN_PATH second":      {map[string]string{"HF_TOKEN_PATH": filepath.Join(dir, "path-token"), "HF_HOME": filepath.Join(dir, "home")}, "hf_path", false},
+		"relative HF_TOKEN_PATH":    {map[string]string{"HF_TOKEN_PATH": "path-token"}, "", true},
+		"missing HF_TOKEN_PATH":     {map[string]string{"HF_TOKEN_PATH": filepath.Join(dir, "absent")}, "", true},
+		"linked HF_TOKEN_PATH":      {map[string]string{"HF_TOKEN_PATH": filepath.Join(dir, "linked")}, "", true},
+		"token above the limit":     {map[string]string{"HF_TOKEN_PATH": filepath.Join(dir, "large")}, "", true},
+		"token with a space":        {map[string]string{"HF_TOKEN_PATH": filepath.Join(dir, "spaced")}, "", true},
+		"HF_HOME third":             {map[string]string{"HF_HOME": filepath.Join(dir, "home"), "XDG_CACHE_HOME": filepath.Join(dir, "cache")}, "hf_home", false},
+		"HF_HOME without a login":   {map[string]string{"HF_HOME": filepath.Join(dir, "absent"), "XDG_CACHE_HOME": filepath.Join(dir, "cache")}, "", false},
+		"relative HF_HOME":          {map[string]string{"HF_HOME": "home"}, "", true},
+		"cache fourth":              {map[string]string{"XDG_CACHE_HOME": filepath.Join(dir, "cache")}, "hf_cache", false},
+		"default cache under HOME":  {map[string]string{"XDG_CACHE_HOME": "relative", "HOME": dir}, "", false},
+		"no login in the cache dir": {map[string]string{"XDG_CACHE_HOME": filepath.Join(dir, "absent")}, "", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, key := range []string{"HF_TOKEN", "HF_TOKEN_PATH", "HF_HOME", "XDG_CACHE_HOME"} {
+				t.Setenv(key, "")
+			}
+			for key, value := range tc.env {
+				t.Setenv(key, value)
+			}
+			token, err := hubToken()
+			if token != tc.token || (err != nil) != tc.err {
+				t.Fatalf("token = %q, err = %v", token, err)
+			}
+			if err != nil && (strings.Contains(err.Error(), dir) || strings.Contains(err.Error(), "hf_")) {
+				t.Fatal("the error must hold no path or token")
+			}
+		})
+	}
+}
+
+func TestUnusableTokenIsAnError(t *testing.T) {
+	t.Setenv("HF_TOKEN", "")
+	t.Setenv("HF_TOKEN_PATH", "relative")
+	files := modelFiles()
+	h := newHub(t, upstreamOf(files))
+	record := run(t, h.checker(), writeModel(t, files))
+	if record.Checks[1] != (Check{CheckIdentity, OutcomeError, ReasonTokenUnusable}) || h.requests.Load() != 0 {
+		t.Fatalf("identity = %+v; an unusable token must not fall back to an anonymous request", record.Checks[1])
 	}
 }
 
@@ -835,7 +886,7 @@ func TestUnreadableShardIndexIsAnError(t *testing.T) {
 }
 
 func TestRealModelConfigurationsPass(t *testing.T) {
-	models, err := os.ReadDir("testdata/real")
+	models, err := os.ReadDir("testdata/shapes")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -845,12 +896,12 @@ func TestRealModelConfigurationsPass(t *testing.T) {
 		}
 		t.Run(model.Name(), func(t *testing.T) {
 			files := map[string]string{"model.safetensors": "weights"}
-			entries, err := os.ReadDir(filepath.Join("testdata/real", model.Name()))
+			entries, err := os.ReadDir(filepath.Join("testdata/shapes", model.Name()))
 			if err != nil {
 				t.Fatal(err)
 			}
 			for _, entry := range entries {
-				raw, err := os.ReadFile(filepath.Join("testdata/real", model.Name(), entry.Name()))
+				raw, err := os.ReadFile(filepath.Join("testdata/shapes", model.Name(), entry.Name()))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -875,6 +926,9 @@ func TestPathValuesAreRejectedAtAnyDepth(t *testing.T) {
 		"unbound file name":     {"config.json", `{"tokenizer":"other.model"}`},
 		"file in a folder":      {"config.json", `{"weights":"sub/model.safetensors"}`},
 		"top level vocab value": {"tokenizer_config.json", `{"vocab":"absent.json"}`},
+		"documentation file":    {"tokenizer_config.json", `{"tokenizer_file":"README.md"}`},
+		"license in a value":    {"config.json", `{"notes":{"text":"LICENSE"}}`},
+		"path list":             {"config.json", `{"files":["ok","../x"]}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			files := modelFiles()
@@ -895,7 +949,7 @@ func TestPathValuesAreRejectedAtAnyDepth(t *testing.T) {
 		t.Fatalf("source.spm is not on the allowlist, so it must fail as unlisted: %+v", record.Checks[0])
 	}
 	delete(files, "source.spm")
-	files["tokenizer_config.json"] = `{"vocab_file":"vocab.json","name_or_path":"/home/user/model","_name_or_path":"org/name","chat_template":"{{ '../x' }}","eos_token":"..."}`
+	files["tokenizer_config.json"] = `{"vocab_file":"vocab.json","name_or_path":"/home/user/model","_name_or_path":"org/name","chat_template":[{"name":"default","template":"{{ '../x' }}"}],"eos_token":"...","additional_special_tokens":["...","~x","/ok"]}`
 	files["vocab.json"] = `{}`
 	record = run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
 	if record.Checks[0].Outcome != OutcomePassed {
@@ -929,5 +983,24 @@ func TestEverySharedLoaderKeyIsRejected(t *testing.T) {
 				t.Fatalf("%s: allowlist = %+v", key, record.Checks[0])
 			}
 		})
+	}
+}
+
+func TestSizeDifferenceOfAChangedFileIsAnError(t *testing.T) {
+	files := modelFiles()
+	root := writeModel(t, files)
+	digests, _, err := Inventory(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := map[string]UpstreamFile{}
+	for _, entry := range upstreamOf(files) {
+		upstream[entry.Path] = entry
+	}
+	only := map[string]string{"config.json": digests["config.json"]}
+	write(t, filepath.Join(root, "config.json"), `{"architectures":["Qwen3ForCausalLM"],"model_type":"qwen3","extra":1}`)
+	reason, err := checkIdentity(root, only, upstream)
+	if got := outcome(CheckIdentity, reason, err); got != (Check{CheckIdentity, OutcomeError, ReasonFilesChanged}) {
+		t.Fatalf("a changed file of another size = %+v, want files-changed", got)
 	}
 }

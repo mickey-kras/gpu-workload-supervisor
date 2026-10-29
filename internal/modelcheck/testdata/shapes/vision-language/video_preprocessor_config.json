@@ -1,0 +1,8 @@
+{
+  "size": {
+    "longest_edge": 1024,
+    "shortest_edge": 64
+  },
+  "processor_class": "Qwen3VLProcessor",
+  "video_processor_type": "Qwen3VLVideoProcessor"
+}

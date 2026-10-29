@@ -81,6 +81,8 @@ const (
 	ReasonUpstreamUnreachable = "upstream-unreachable"
 	ReasonUpstreamMoved       = "upstream-moved"
 	ReasonHistoryTooLong      = "upstream-history-too-long"
+	// ReasonTokenUnusable: a hub login token is configured but cannot be used.
+	ReasonTokenUnusable = "hub-token-unusable"
 	// ReasonNotOnBranch is a finding: no branch or tag reaches the revision.
 	ReasonNotOnBranch = "revision-not-on-branch"
 )
@@ -120,7 +122,11 @@ func HubListing(client *http.Client, hub string) Listing {
 		if !source.valid() || err != nil || base.Scheme != "https" {
 			return nil, listingError(ReasonUpstreamInvalid)
 		}
-		h := hubClient{client: &strict, base: base, token: hubToken()}
+		token, err := hubToken()
+		if err != nil {
+			return nil, listingError(ReasonTokenUnusable)
+		}
+		h := hubClient{client: &strict, base: base, token: token}
 		if err := h.onBranch(ctx, source.Revision); err != nil {
 			return nil, err
 		}
@@ -386,8 +392,8 @@ func checkIdentity(root string, digests map[string]string, upstream map[string]U
 }
 
 // gitBlobID hashes "blob <size>\x00" and the content. A local size other
-// than the upstream size gives an empty ID, which is a mismatch, before any
-// read. The content must still match the inventory.
+// than the upstream size gives an empty ID, which is a mismatch, when the
+// bytes still match the inventory. Else the file changed: errChanged.
 func gitBlobID(file string, size int64, digest string) (string, error) {
 	f, err := openRegular(file)
 	if err != nil {
@@ -399,6 +405,14 @@ func gitBlobID(file string, size int64, digest string) (string, error) {
 		return "", errUnreadable
 	}
 	if info.Size() != size {
+		// A size difference is a mismatch only for the inventoried bytes.
+		h := sha256.New()
+		if _, err := io.Copy(h, f); err != nil {
+			return "", errUnreadable
+		}
+		if hex.EncodeToString(h.Sum(nil)) != digest {
+			return "", errChanged
+		}
 		return "", nil
 	}
 	content, err := io.ReadAll(io.LimitReader(f, size+1))

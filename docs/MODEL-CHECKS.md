@@ -2,17 +2,16 @@
 
 [Documentation](README.md) | [Architecture](ARCHITECTURE.md)
 
-The supervisor checks each LLM before use
+The supervisor will check each LLM before use
 ([#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585)).
-Only a model with the status `passed` is clean. These checks are a defensive
+No command runs the checks yet. Only a model with the status `passed` is clean. These checks are a defensive
 layer. They do not prove that a model is safe. A clean result does not mean
 that a modified model behaves like its original.
 
 This page describes the checks that exist now. The chat template check, the
 behavioral scan, the scan job, model selection in the desktop UI and the gate
 of [#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583)
-are not available yet. No command runs the checks yet. Thus no model can get
-`passed` yet. A model that passes the available checks stays `not_scanned`.
+are not available yet. Thus no model can get `passed` yet. A model that passes the available checks stays `not_scanned`.
 
 ## Model and source
 
@@ -114,12 +113,20 @@ has one of these forms:
 - A file name in a subdirectory, such as `sub/x.json`. A model has no
   subdirectories.
 
-The rule does not apply to token text and chat templates: the keys
-`chat_template`, `content` and the special token keys. It also does not apply
-to `_name_or_path` and `name_or_path`, which hold a hub ID or the folder that
-saved the model. With the hub offline, no loader reads them. The rule does not
-apply to `tokenizer.json`, because the tokenizers library reads no file names
-from it.
+The rule skips token text and chat templates:
+
+- All values below the key `chat_template`, also in its list form.
+- The values of `content` and of the special token keys, also in lists.
+
+The rule also skips `_name_or_path` and `name_or_path`. These keys hold a hub
+ID or the folder that saved the model. The transformers library and vLLM keep
+these values as labels and load no files from them. The rule for file path
+keys and this rule skip `tokenizer.json`, because the tokenizers library reads
+no file names from it.
+
+No value can name `README`, `README.md`, `LICENSE`, `LICENSE.md` or
+`.gitattributes`. The supervisor binds these files but never parses or shows
+them.
 
 The check rejects these values with the reason `file-path-redirect`, because
 a loader can read a file that the checks did not bind. Look at the release
@@ -163,12 +170,22 @@ the same path on the same host. A listing that has no other deadline stops
 after 10 minutes.
 
 For a gated or private repository, the supervisor uses the token of an
-existing Hugging Face login. It looks for the token in this order:
+existing Hugging Face login. The first location that you configure decides.
+The supervisor does not try a later location:
 
-1. The `HF_TOKEN` variable.
-2. The file at `HF_TOKEN_PATH`.
-3. The file `token` in `HF_HOME`.
-4. The default token file of the login command.
+1. The `HF_TOKEN` variable, when it has a value.
+2. The file at `HF_TOKEN_PATH`, when the variable has a value. The path must
+   be absolute.
+3. The file `token` in `HF_HOME`, when the variable has a value. The path must
+   be absolute.
+4. The file `huggingface/token` in `XDG_CACHE_HOME` when that path is absolute,
+   else in `~/.cache`.
+
+In step 3 or 4, a missing file means that you did not log in. The request
+then has no token. A token file must be a regular file, not a link, of at most
+4096 bytes. If the supervisor cannot use a token that you configured, the check
+gives `error` with the reason `hub-token-unusable`. The reason holds no token
+or path. The supervisor then sends no request.
 
 It sends the token only to the hub. It never stores, logs or shows the token.
 
@@ -181,6 +198,7 @@ A failed listing gives `error` with one of these reasons:
 | `upstream-moved` | The hub sent a redirect, for example for a renamed repository. Use its current name in the source |
 | `upstream-unreachable` | A network failure, a server error, a timeout or rate limiting. Try again later |
 | `upstream-invalid` | The listing breaks the rules above |
+| `hub-token-unusable` | The supervisor cannot use the hub login token that you configured. See above |
 
 ## Results
 
