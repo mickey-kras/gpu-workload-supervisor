@@ -45,8 +45,18 @@ var allowedNames = map[string]bool{
 // them anyway; the reason makes the report clear.
 var rejectedExtensions = map[string]bool{".py": true, ".bin": true, ".pt": true, ".pth": true, ".pkl": true, ".ckpt": true}
 
-// remoteCodeKeys make a loader import code or load other weights.
-var remoteCodeKeys = map[string]bool{"auto_map": true, "auto_mapping": true, "custom_pipelines": true}
+// redirectKeys make a loader import code or load another model. vLLM reads
+// speculators_config and then loads the verifier model that it names. Review
+// new loader versions for more keys of this kind.
+var redirectKeys = map[string]string{
+	"auto_map": ReasonRemoteCode, "auto_mapping": ReasonRemoteCode, "custom_pipelines": ReasonRemoteCode,
+	"speculators_config": ReasonModelRedirect,
+}
+
+// filePathKeys name tokenizer and processor files. A value must be null or
+// the bare name of an inventoried file, so a loader cannot read a file that
+// the checks did not bind.
+var filePathKeys = []string{"tokenizer_file", "vocab_file", "merges_file", "spm_file", "added_tokens_file"}
 
 // adapterConfig makes a loader load the base model that it names, which
 // this check never saw.
@@ -60,13 +70,16 @@ const (
 	ReasonNestedFile       = "nested-file"
 	ReasonAdapterRedirect  = "adapter-redirect"
 	ReasonRemoteCode       = "remote-code-mapping"
+	ReasonModelRedirect    = "model-redirect"
+	ReasonFilePathRedirect = "file-path-redirect"
 	ReasonInvalidJSON      = "invalid-json"
+	ReasonJSONTooLarge     = "json-file-too-large"
 	ReasonNoWeights        = "no-safetensors-weights"
 	ReasonNoConfiguration  = "no-model-configuration"
 )
 
 var (
-	errRemoteCode = errors.New("remote code key")
+	errRedirect = errors.New("redirect key")
 	// errChanged marks a file that changed after the inventory.
 	errChanged = errors.New("model files changed during the check")
 	// errUnreadable marks a file that the check could not read.
@@ -109,7 +122,7 @@ func checkAllowlist(root string, digests map[string]string) (string, error) {
 		if !strings.HasSuffix(name, ".json") {
 			continue
 		}
-		reason, err := checkJSON(filepath.Join(root, name), digests[name])
+		reason, err := checkJSON(filepath.Join(root, name), digests)
 		if err != nil || reason != "" {
 			return reason, err
 		}
@@ -117,7 +130,7 @@ func checkAllowlist(root string, digests map[string]string) (string, error) {
 	return "", nil
 }
 
-func checkJSON(file, digest string) (string, error) {
+func checkJSON(file string, digests map[string]string) (string, error) {
 	f, err := openRegular(file)
 	if err != nil {
 		return "", err
@@ -128,20 +141,22 @@ func checkJSON(file, digest string) (string, error) {
 		return "", errUnreadable
 	}
 	if len(raw) > MaxJSONFileBytes {
-		return ReasonInvalidJSON, nil
+		return ReasonJSONTooLarge, nil
 	}
-	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != digest {
+	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != digests[filepath.Base(file)] {
 		return "", errChanged
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
+	redirect := ""
 	err = strictjson.Walk(d, func(key string) error {
-		if remoteCodeKeys[key] {
-			return errRemoteCode
+		if reason := redirectKeys[key]; reason != "" {
+			redirect = reason
+			return errRedirect
 		}
 		return nil
 	})
-	if errors.Is(err, errRemoteCode) {
-		return ReasonRemoteCode, nil
+	if errors.Is(err, errRedirect) {
+		return redirect, nil
 	}
 	if err != nil {
 		return ReasonInvalidJSON, nil
@@ -149,7 +164,26 @@ func checkJSON(file, digest string) (string, error) {
 	if _, err := d.Token(); err != io.EOF {
 		return ReasonInvalidJSON, nil
 	}
-	return "", nil
+	return filePaths(raw, digests), nil
+}
+
+// filePaths checks the file path keys of a top-level JSON object.
+func filePaths(raw []byte, digests map[string]string) string {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(raw, &object) != nil {
+		return ""
+	}
+	for _, key := range filePathKeys {
+		value, present := object[key]
+		if !present || string(value) == "null" {
+			continue
+		}
+		var name string
+		if json.Unmarshal(value, &name) != nil || strings.Contains(name, "/") || digests[name] == "" {
+			return ReasonFilePathRedirect
+		}
+	}
+	return ""
 }
 
 func sortedNames(files map[string]string) []string {

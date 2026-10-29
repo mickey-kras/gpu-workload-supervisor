@@ -34,6 +34,8 @@ SHA-256 of each file. It uses the shared file digest and shard index rules of
 `internal/llmtraining`:
 
 - A model has at most 4096 files. A model with more files is `unsupported`.
+- If the supervisor cannot read the model directory or a file during the
+  inventory, it stores no result. The model stays `not_scanned`.
 - A symbolic link or a file that is not a regular file is a finding.
 - A subdirectory is a finding. The only exception is the `.cache` directory of
   the download tool, see below.
@@ -79,10 +81,23 @@ The check rejects code files (`*.py`) and pickle formats (`.bin`, `.pt`,
 loader then loads a base model that the checks did not see. It rejects all
 other files.
 
-The check reads each JSON file, at most 128 MiB. It rejects a file that is not
-one strict JSON value and a duplicate key. It also rejects the keys
-`auto_map`, `auto_mapping` and `custom_pipelines` at any depth. These keys
-make a loader import code.
+The check reads each JSON file. A JSON file above 128 MiB makes the model
+`unsupported`. The check rejects a file that is not one strict JSON value and
+a duplicate key. It also rejects these keys at any depth:
+
+- `auto_map`, `auto_mapping` and `custom_pipelines`. These keys make a loader
+  import code.
+- `speculators_config`. With this key, vLLM loads another model that the
+  checks did not see.
+
+The keys `tokenizer_file`, `vocab_file`, `merges_file`, `spm_file` and
+`added_tokens_file` at the top level of a JSON file must be `null` or the
+name of a file in the model directory. Else the check rejects the file,
+because a loader can read a file that the checks did not bind.
+
+New loader versions can add keys that load code, other models or other
+files. Look at the release notes of each new vLLM and transformers version for
+such keys.
 
 A model without `.safetensors` weights or without `config.json` is
 `unsupported`.
@@ -96,15 +111,23 @@ Hugging Face API. Each local file must be in that tree:
   equal to the local SHA-256.
 - For another file, the local size must be equal to the upstream size. Then
   the git blob ID (SHA-1) of the local bytes must be equal to the upstream git
-  blob ID. The source publishes no other digest for these files.
+  blob ID. The source publishes no other digest for these files. A file that
+  is not in LFS can be at most 64 MiB. A larger file is a mismatch.
 
 The upstream tree can have more files than the local directory.
 
 The supervisor reads at most 64 pages of at most 16 MiB each, over HTTPS. It
 does not follow redirects. It follows only next-page links to the same tree.
 The check supports only public repositories now. A failed listing gives
-`error` with one of these reasons: `upstream-not-found`, `upstream-denied`,
-`upstream-unreachable` or `upstream-invalid`.
+`error` with one of these reasons:
+
+| Reason | Cause |
+| --- | --- |
+| `upstream-not-found` | The repository or the commit does not exist |
+| `upstream-denied` | The hub refused access |
+| `upstream-moved` | The hub sent a redirect, for example for a renamed repository. Use its current name in the source |
+| `upstream-unreachable` | A network failure, a server error, a timeout or rate limiting. Try again later |
+| `upstream-invalid` | The listing breaks the rules above |
 
 ## Results
 
@@ -112,8 +135,8 @@ The check supports only public repositories now. A failed listing gives
 | --- | --- |
 | `passed` | All checks passed. Only this status is clean |
 | `findings` | A check found a problem in the files, for example a rejected file, a remote code key, invalid JSON or an identity mismatch |
-| `error` | A check did not complete, for example because of an unreadable file, a failed upstream listing or a file that changed during the check |
-| `unsupported` | The checks do not support the model, for example a model without `.safetensors` weights |
+| `error` | A check did not complete. Causes are a file that became unreadable after the inventory, a failed upstream listing or a file that changed during the check |
+| `unsupported` | The checks do not support the model, for example a model without `.safetensors` weights or with a JSON file above the limit |
 | `not_scanned` | A check did not run, the files changed after the check, the checker changed, or there is no result |
 
 The supervisor keeps one result for each model in its private state database,
@@ -130,9 +153,10 @@ as bounded strict JSON of at most 4 MiB. A result holds these items:
 Reason codes never hold paths or file content.
 
 The supervisor calculates the status again from the files on disk. If a file
-digest, the directory, the source or the checker version differs from the
-result, the status is `not_scanned`. Thus a new checker version checks each
-model again.
+digest, the directory, the source, the checker version or the configuration
+(for example the hub) differs from the result, the status is `not_scanned`. A
+result of another record version is also `not_scanned`. Thus a new checker
+version checks each model again.
 
 A canceled check stores no result. The model stays `not_scanned`.
 

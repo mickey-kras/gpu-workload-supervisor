@@ -2,7 +2,9 @@ package llmtraining
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -200,5 +202,23 @@ func TestMaterializeInventoryLimitsAndDigestErrors(t *testing.T) {
 	}
 	if _, err := inventoryLocalFiles(filepath.Join(root, "entry")); err == nil {
 		t.Fatal("accepted file as inventory")
+	}
+}
+
+func TestFileDigestNeedsACleanAbsolutePath(t *testing.T) {
+	root := t.TempDir()
+	want := writeFixture(t, filepath.Join(root, "one.safetensors"), "shard")
+	if digest, err := FileDigest(context.Background(), filepath.Join(root, "one.safetensors")); err != nil || digest != want {
+		t.Fatal("file digest differs from the fixture digest", err)
+	}
+	for _, path := range []string{"relative", root + "/", "/"} {
+		if _, err := FileDigest(context.Background(), path); err == nil {
+			t.Fatalf("file %q was accepted", path)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := FileDigest(ctx, filepath.Join(root, "one.safetensors")); !errors.Is(err, context.Canceled) {
+		t.Fatal("a canceled digest must stop", err)
 	}
 }

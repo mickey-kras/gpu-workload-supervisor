@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
@@ -16,10 +17,10 @@ type Request struct {
 	Source Source
 }
 
-// Checker runs the checks. Listing reads the upstream tree from Hub.
+// Checker runs the checks. It reads the upstream tree from Hub with Client.
 // Version names this checker in each record; a new version checks again.
 type Checker struct {
-	Listing Listing
+	Client  *http.Client
 	Hub     string
 	Version string
 	Now     func() time.Time
@@ -31,13 +32,16 @@ type Checker struct {
 // passes the first checks stays not scanned. A canceled run gives no
 // record, so the model stays not scanned.
 func (c Checker) Run(ctx context.Context, r Request) (Record, error) {
-	if c.Listing == nil || !checkerPattern.MatchString(c.Version) || !strings.HasPrefix(c.Hub, "https://") {
-		return Record{}, errors.New("model checker needs a listing, an HTTPS hub and a version")
+	if c.Client == nil || !checkerPattern.MatchString(c.Version) || !currentConfiguration(c.Hub).valid() {
+		return Record{}, errors.New("model checker needs a client, an HTTPS hub and a version")
 	}
 	if !modelPattern.MatchString(r.Model) || !cleanAbsolute(r.Root) || !r.Source.valid() {
 		return Record{}, errors.New("model check needs a model ID, a clean absolute root and a pinned source")
 	}
-	files, reason, err := Inventory(r.Root)
+	files, reason, err := Inventory(ctx, r.Root)
+	if ctx.Err() != nil {
+		return Record{}, errors.New("model check was canceled")
+	}
 	if err != nil && !errors.Is(err, errChanged) {
 		return Record{}, fmt.Errorf("model files cannot be inventoried: %w", err)
 	}
@@ -57,7 +61,7 @@ func (c Checker) Run(ctx context.Context, r Request) (Record, error) {
 	for _, name := range checkOrder[len(results):] {
 		results = append(results, Check{Name: name, Outcome: OutcomeNotRun})
 	}
-	if errors.Is(ctx.Err(), context.Canceled) {
+	if ctx.Err() != nil {
 		return Record{}, errors.New("model check was canceled")
 	}
 	record.Checks, record.Status, record.Coverage = results, statusOf(results), coverageOf(results)
@@ -72,7 +76,7 @@ func (c Checker) now() time.Time {
 }
 
 func (c Checker) identity(ctx context.Context, r Request, files map[string]string) Check {
-	upstream, err := c.Listing(ctx, r.Source)
+	upstream, err := HubListing(c.Client, c.Hub)(ctx, r.Source)
 	if err != nil {
 		return outcome(CheckIdentity, "", err)
 	}
@@ -82,7 +86,7 @@ func (c Checker) identity(ctx context.Context, r Request, files map[string]strin
 
 // unsupportedReasons are the reasons that describe a model that the checks
 // do not support, not a problem in its files.
-var unsupportedReasons = map[string]bool{ReasonNoWeights: true, ReasonNoConfiguration: true, ReasonTooManyFiles: true, ReasonShardTooLarge: true}
+var unsupportedReasons = map[string]bool{ReasonNoWeights: true, ReasonNoConfiguration: true, ReasonTooManyFiles: true, ReasonShardTooLarge: true, ReasonJSONTooLarge: true}
 
 // outcome maps a reason to a failed or unsupported check and an error to an
 // error check. The error reason keeps its cause as a fixed code. A file that

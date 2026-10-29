@@ -10,7 +10,7 @@
 | Proxy and adapters | Route gating, forwarding, optional requester authentication, work registration and terminal evidence |
 | External broker | Workflow steps, retries, checkpoints, cancellation and results |
 | External gateway | Gateway authentication, request and response policy and content validation |
-| Model checks | File allowlist, upstream identity, chat template check, behavioral scan and results bound to file digests ([#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585)) |
+| Model checks | File allowlist, upstream identity and results bound to file digests. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans the chat template check and the behavioral scan |
 
 - Controller: control metadata only. No prompts or responses.
 - Proxy: payload forwarding, bounded protocol validation and exact-body authorization. Optional [requester authentication](REQUESTER-INGRESS.md) before workflow authorization. No semantic content policy.

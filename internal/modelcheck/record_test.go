@@ -1,6 +1,7 @@
 package modelcheck
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -42,7 +43,7 @@ func TestRecordRoundTripsStrictly(t *testing.T) {
 		"relative root":        strings.Replace(text, `"root":"/`, `"root":"`, 1),
 		"differently spelled":  strings.Replace(text, `"checker":`, `"Checker":`, 1),
 		"coverage not derived": strings.Replace(text, `"coverage":"partial"`, `"coverage":"complete"`, 1),
-		"other configuration":  strings.Replace(text, `"maxModelFiles":4096`, `"maxModelFiles":10`, 1),
+		"other configuration":  strings.Replace(text, `"maxModelFiles":4096`, `"maxModelFiles":0`, 1),
 		"plain HTTP hub":       strings.Replace(text, `"hub":"https://`, `"hub":"http://`, 1),
 		"reason with content":  strings.Replace(text, `"outcome":"not_run"`, `"outcome":"not_run","reason":"/private/path"`, 1),
 	} {
@@ -97,5 +98,13 @@ func TestMarshalRecordRefusesInvalidRecords(t *testing.T) {
 				t.Fatal("an invalid record was encoded")
 			}
 		})
+	}
+}
+
+func TestNewerRecordVersionIsStale(t *testing.T) {
+	_, raw := validRecord(t)
+	newer := strings.Replace(string(raw), `"version":1`, `"version":2`, 1)
+	if _, err := ReadRecord([]byte(newer)); !errors.Is(err, ErrStaleRecord) {
+		t.Fatal("a newer record version must read as stale", err)
 	}
 }

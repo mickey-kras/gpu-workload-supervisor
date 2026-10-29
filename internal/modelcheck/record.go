@@ -18,8 +18,16 @@ import (
 // RecordVersion is the only result format.
 const RecordVersion = 1
 
-// MaxRecordBytes bounds one stored result.
-const MaxRecordBytes = 4 << 20
+// MaxRecordBytes bounds one stored result. maxRecordFiles bounds its file
+// entries; it is above MaxModelFiles, so a later limit change stays readable.
+const (
+	MaxRecordBytes = 4 << 20
+	maxRecordFiles = 2 * MaxModelFiles
+)
+
+// ErrStaleRecord marks a well-formed result of another record version. Its
+// model is not scanned for this checker.
+var ErrStaleRecord = errors.New("model check record has another version")
 
 // Status is the overall result. Only StatusPassed is clean.
 type Status string
@@ -55,12 +63,19 @@ const (
 type Configuration struct {
 	Hub              string `json:"hub"`
 	MaxJSONFileBytes int64  `json:"maxJSONFileBytes"`
+	MaxGitBlobBytes  int64  `json:"maxGitBlobBytes"`
 	MaxModelFiles    int    `json:"maxModelFiles"`
 }
 
 // currentConfiguration is the configuration that this checker applies.
 func currentConfiguration(hub string) Configuration {
-	return Configuration{Hub: hub, MaxJSONFileBytes: MaxJSONFileBytes, MaxModelFiles: MaxModelFiles}
+	return Configuration{Hub: hub, MaxJSONFileBytes: MaxJSONFileBytes, MaxGitBlobBytes: MaxGitBlobBytes, MaxModelFiles: MaxModelFiles}
+}
+
+// valid checks the structure only. Current compares the values, so a
+// result from another configuration reads as not scanned, not as invalid.
+func (c Configuration) valid() bool {
+	return strings.HasPrefix(c.Hub, "https://") && len(c.Hub) <= 256 && c.MaxJSONFileBytes > 0 && c.MaxGitBlobBytes > 0 && c.MaxModelFiles > 0
 }
 
 // Check names, in the order that they run. Each must pass.
@@ -117,9 +132,9 @@ func (r Record) Validate() error {
 		return errors.New("model check record needs every check in order")
 	}
 	if !validFiles(r.Files, r.Checks[0].Outcome == OutcomePassed) {
-		return fmt.Errorf("model check record needs valid file entries, at most %d", MaxModelFiles)
+		return fmt.Errorf("model check record needs valid file entries, at most %d", maxRecordFiles)
 	}
-	if r.Configuration != currentConfiguration(r.Configuration.Hub) || !strings.HasPrefix(r.Configuration.Hub, "https://") || len(r.Configuration.Hub) > 256 {
+	if !r.Configuration.valid() {
 		return errors.New("model check record has an invalid configuration")
 	}
 	if coverageOf(r.Checks) != r.Coverage {
@@ -134,7 +149,7 @@ func (r Record) Validate() error {
 // validFiles needs at least one file once the allowlist passed. A failed
 // inventory can stop before the first file.
 func validFiles(files map[string]string, complete bool) bool {
-	if files == nil || (complete && len(files) == 0) || len(files) > MaxModelFiles {
+	if files == nil || (complete && len(files) == 0) || len(files) > maxRecordFiles {
 		return false
 	}
 	for name, digest := range files {
@@ -199,6 +214,12 @@ func MarshalRecord(r Record) ([]byte, error) {
 // ReadRecord decodes one bounded strict record. Unknown, duplicate, null and
 // differently spelled fields are rejected.
 func ReadRecord(raw []byte) (Record, error) {
+	var version struct {
+		Version int `json:"version"`
+	}
+	if len(raw) <= MaxRecordBytes && json.Unmarshal(raw, &version) == nil && version.Version > RecordVersion {
+		return Record{}, ErrStaleRecord
+	}
 	var record Record
 	if len(raw) > MaxRecordBytes || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), MaxRecordBytes, &record) != nil {
 		return Record{}, errors.New("model check record is not bounded strict JSON")
@@ -215,11 +236,13 @@ func ReadRecord(raw []byte) (Record, error) {
 }
 
 // Current gives the status that applies to the model files on disk now. A
-// record for other digests, another root, another source or another checker
-// version leaves the model not scanned: results never carry over to changed
-// or other models, and a new checker checks again.
-func Current(r *Record, model, root string, source Source, checker string, files map[string]string) Status {
-	if r == nil || r.Model != model || r.Root != root || r.Source != source || r.Checker != checker || !reflect.DeepEqual(r.Files, files) {
+// record for other digests, another root, another source, another checker
+// version or another configuration, such as another hub, leaves the model
+// not scanned: results never carry over to changed or other models, and a
+// new checker checks again.
+func Current(r *Record, model, root string, source Source, checker Checker, files map[string]string) Status {
+	if r == nil || r.Model != model || r.Root != root || r.Source != source || r.Checker != checker.Version ||
+		r.Configuration != currentConfiguration(checker.Hub) || !reflect.DeepEqual(r.Files, files) {
 		return StatusNotScanned
 	}
 	return r.Status

@@ -24,10 +24,11 @@ const (
 	maxListingPages     = 64
 	maxListingPageBytes = 16 << 20
 	maxUpstreamFiles    = 32768
-	// maxGitBlobBytes bounds files that the identity check hashes as git
-	// blobs. The hub stores larger files in LFS, which publishes SHA-256.
-	maxGitBlobBytes = 64 << 20
 )
+
+// MaxGitBlobBytes bounds files that the identity check hashes as git blobs.
+// The hub stores larger files in LFS, which publishes SHA-256. Tests lower it.
+var MaxGitBlobBytes int64 = 64 << 20
 
 var (
 	repoPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}$`)
@@ -73,6 +74,7 @@ const (
 	ReasonUpstreamDenied      = "upstream-denied"
 	ReasonUpstreamInvalid     = "upstream-invalid"
 	ReasonUpstreamUnreachable = "upstream-unreachable"
+	ReasonUpstreamMoved       = "upstream-moved"
 )
 
 // upstreamError keeps the reason of a failed listing.
@@ -80,7 +82,7 @@ type upstreamError struct{ reason string }
 
 func (e upstreamError) Error() string { return "upstream listing failed: " + e.reason }
 
-func failed(reason string) error { return upstreamError{reason: reason} }
+func listingError(reason string) error { return upstreamError{reason: reason} }
 
 // HubListing reads the recursive tree of a source from a hub API over
 // HTTPS. It refuses redirects, follows only next-page links to the same tree
@@ -91,17 +93,17 @@ func HubListing(client *http.Client, hub string) Listing {
 	strict.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return func(ctx context.Context, source Source) (map[string]UpstreamFile, error) {
 		if !source.valid() {
-			return nil, failed(ReasonUpstreamInvalid)
+			return nil, listingError(ReasonUpstreamInvalid)
 		}
 		first, err := url.Parse(hub + "/api/models/" + source.Repo + "/tree/" + source.Revision + "?recursive=true")
 		if err != nil || first.Scheme != "https" {
-			return nil, failed(ReasonUpstreamInvalid)
+			return nil, listingError(ReasonUpstreamInvalid)
 		}
 		files := map[string]UpstreamFile{}
 		next := first.String()
 		for page := 0; next != ""; page++ {
 			if page == maxListingPages {
-				return nil, failed(ReasonUpstreamInvalid)
+				return nil, listingError(ReasonUpstreamInvalid)
 			}
 			if next, err = readPage(ctx, &strict, first, next, files); err != nil {
 				return nil, err
@@ -114,24 +116,24 @@ func HubListing(client *http.Client, hub string) Listing {
 func readPage(ctx context.Context, client *http.Client, first *url.URL, page string, files map[string]UpstreamFile) (string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, page, nil)
 	if err != nil {
-		return "", failed(ReasonUpstreamInvalid)
+		return "", listingError(ReasonUpstreamInvalid)
 	}
 	request.Header.Set("Accept", "application/json")
 	response, err := client.Do(request)
 	if err != nil {
-		return "", failed(ReasonUpstreamUnreachable)
+		return "", listingError(ReasonUpstreamUnreachable)
 	}
 	defer response.Body.Close()
 	if reason := statusReason(response.StatusCode); reason != "" {
-		return "", failed(reason)
+		return "", listingError(reason)
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxListingPageBytes+1))
 	if err != nil {
-		return "", failed(ReasonUpstreamUnreachable)
+		return "", listingError(ReasonUpstreamUnreachable)
 	}
 	var entries []UpstreamFile
 	if len(raw) > maxListingPageBytes || !utf8.Valid(raw) || json.Unmarshal(raw, &entries) != nil {
-		return "", failed(ReasonUpstreamInvalid)
+		return "", listingError(ReasonUpstreamInvalid)
 	}
 	for _, entry := range entries {
 		if err := addUpstream(files, entry); err != nil {
@@ -149,7 +151,9 @@ func statusReason(status int) string {
 		return ReasonUpstreamNotFound
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return ReasonUpstreamDenied
-	case status >= 500:
+	case status >= 300 && status < 400:
+		return ReasonUpstreamMoved
+	case status >= 500 || status == http.StatusTooManyRequests || status == http.StatusRequestTimeout:
 		return ReasonUpstreamUnreachable
 	}
 	return ReasonUpstreamInvalid
@@ -161,10 +165,10 @@ func addUpstream(files map[string]UpstreamFile, entry UpstreamFile) error {
 	}
 	lfs := entry.LFS == nil || (sha256Pattern.MatchString(entry.LFS.OID) && entry.LFS.Size >= 0)
 	if entry.Type != "file" || !filepath.IsLocal(entry.Path) || !sha1Pattern.MatchString(entry.OID) || entry.Size < 0 || !lfs {
-		return failed(ReasonUpstreamInvalid)
+		return listingError(ReasonUpstreamInvalid)
 	}
 	if _, duplicate := files[entry.Path]; duplicate || len(files) >= maxUpstreamFiles {
-		return failed(ReasonUpstreamInvalid)
+		return listingError(ReasonUpstreamInvalid)
 	}
 	files[entry.Path] = entry
 	return nil
@@ -178,7 +182,7 @@ func nextPage(first *url.URL, header string) (string, error) {
 	}
 	next, err := url.Parse(match[1])
 	if err != nil || next.Scheme != first.Scheme || next.Host != first.Host || next.Path != first.Path {
-		return "", failed(ReasonUpstreamInvalid)
+		return "", listingError(ReasonUpstreamInvalid)
 	}
 	return next.String(), nil
 }
@@ -207,7 +211,7 @@ func checkIdentity(root string, digests map[string]string, upstream map[string]U
 			}
 			continue
 		}
-		if entry.Size > maxGitBlobBytes {
+		if entry.Size > MaxGitBlobBytes {
 			return ReasonIdentityMismatch, nil
 		}
 		blob, err := gitBlobID(filepath.Join(root, name), entry.Size, digest)

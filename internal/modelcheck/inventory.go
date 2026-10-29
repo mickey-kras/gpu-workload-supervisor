@@ -1,6 +1,7 @@
 package modelcheck
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -36,8 +37,9 @@ const toolMetadata = ".cache"
 // Inventory gives the SHA-256 of each model file at the top level of root,
 // as the supervisor calculates it. A reason that is not empty is a problem
 // with the files: the digests then stop at the problem, in name order. An
-// error means that the inventory could not complete.
-func Inventory(root string) (map[string]string, string, error) {
+// error means that the inventory could not complete. A canceled ctx stops
+// it, also inside one large file.
+func Inventory(ctx context.Context, root string) (map[string]string, string, error) {
 	if !cleanAbsolute(root) {
 		return nil, "", errors.New("model root must be a clean absolute path")
 	}
@@ -50,7 +52,10 @@ func Inventory(root string) (map[string]string, string, error) {
 	}
 	files := map[string]string{}
 	for _, entry := range entries {
-		reason, err := addEntry(root, entry, files)
+		if err := ctx.Err(); err != nil {
+			return nil, "", err
+		}
+		reason, err := addEntry(ctx, root, entry, files)
 		if err != nil || reason != "" {
 			return files, reason, err
 		}
@@ -62,7 +67,7 @@ func Inventory(root string) (map[string]string, string, error) {
 	return files, reason, err
 }
 
-func addEntry(root string, entry os.DirEntry, files map[string]string) (string, error) {
+func addEntry(ctx context.Context, root string, entry os.DirEntry, files map[string]string) (string, error) {
 	name := entry.Name()
 	switch {
 	case entry.IsDir() && name == toolMetadata:
@@ -72,7 +77,10 @@ func addEntry(root string, entry os.DirEntry, files map[string]string) (string, 
 	case !entry.Type().IsRegular():
 		return ReasonLinkOrNonRegular, nil
 	}
-	digest, err := llmtraining.FileDigest(filepath.Join(root, name))
+	digest, err := llmtraining.FileDigest(ctx, filepath.Join(root, name))
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
 	if err != nil {
 		return "", fmt.Errorf("model file is unreadable: %w", err)
 	}

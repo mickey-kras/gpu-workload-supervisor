@@ -135,7 +135,7 @@ func (h *hub) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *hub) checker() Checker {
-	return Checker{Listing: HubListing(h.server.Client(), h.server.URL), Hub: h.server.URL, Version: "test-1", Now: testNow}
+	return Checker{Client: h.server.Client(), Hub: h.server.URL, Version: "test-1", Now: testNow}
 }
 
 func run(t *testing.T, c Checker, root string) Record {
@@ -169,24 +169,31 @@ func TestAllowlistRejectsFiles(t *testing.T) {
 		file, content string
 		reason        string
 	}{
-		"python code":        {"modeling.py", "import os", ReasonCodeOrPickleFile},
-		"pickle weights":     {"pytorch_model.bin", "pickle", ReasonCodeOrPickleFile},
-		"torch weights":      {"model.pt", "pickle", ReasonCodeOrPickleFile},
-		"torch state":        {"model.pth", "pickle", ReasonCodeOrPickleFile},
-		"pickle":             {"model.pkl", "pickle", ReasonCodeOrPickleFile},
-		"checkpoint":         {"model.ckpt", "pickle", ReasonCodeOrPickleFile},
-		"unlisted file":      {"notes.txt", "text", ReasonUnlistedFile},
-		"nested file":        {"original/config.json", "{}", ReasonNestedFile},
-		"other cache file":   {".cache/other/file", "x", ReasonUnlistedFile},
-		"adapter redirect":   {"adapter_config.json", `{"base_model_name_or_path":"other/base"}`, ReasonAdapterRedirect},
-		"auto_map":           {"config.json", `{"auto_map":{"AutoModel":"x.Model"}}`, ReasonRemoteCode},
-		"nested auto_map":    {"tokenizer_config.json", `{"a":[{"b":{"auto_map":1}}]}`, ReasonRemoteCode},
-		"auto_mapping":       {"generation_config.json", `{"auto_mapping":{}}`, ReasonRemoteCode},
-		"custom_pipelines":   {"config.json", `{"custom_pipelines":{"x":{}}}`, ReasonRemoteCode},
-		"duplicate JSON key": {"generation_config.json", `{"a":1,"a":2}`, ReasonInvalidJSON},
-		"trailing value":     {"generation_config.json", `{}{}`, ReasonInvalidJSON},
-		"malformed JSON":     {"generation_config.json", `{"a":`, ReasonInvalidJSON},
-		"oversized JSON":     {"tokenizer.json", `{"a":"` + strings.Repeat("x", MaxJSONFileBytes) + `"}`, ReasonInvalidJSON},
+		"python code":         {"modeling.py", "import os", ReasonCodeOrPickleFile},
+		"pickle weights":      {"pytorch_model.bin", "pickle", ReasonCodeOrPickleFile},
+		"torch weights":       {"model.pt", "pickle", ReasonCodeOrPickleFile},
+		"torch state":         {"model.pth", "pickle", ReasonCodeOrPickleFile},
+		"pickle":              {"model.pkl", "pickle", ReasonCodeOrPickleFile},
+		"checkpoint":          {"model.ckpt", "pickle", ReasonCodeOrPickleFile},
+		"unlisted file":       {"notes.txt", "text", ReasonUnlistedFile},
+		"nested file":         {"original/config.json", "{}", ReasonNestedFile},
+		"other cache file":    {".cache/other/file", "x", ReasonUnlistedFile},
+		"adapter redirect":    {"adapter_config.json", `{"base_model_name_or_path":"other/base"}`, ReasonAdapterRedirect},
+		"auto_map":            {"config.json", `{"auto_map":{"AutoModel":"x.Model"}}`, ReasonRemoteCode},
+		"nested auto_map":     {"tokenizer_config.json", `{"a":[{"b":{"auto_map":1}}]}`, ReasonRemoteCode},
+		"auto_mapping":        {"generation_config.json", `{"auto_mapping":{}}`, ReasonRemoteCode},
+		"custom_pipelines":    {"config.json", `{"custom_pipelines":{"x":{}}}`, ReasonRemoteCode},
+		"duplicate JSON key":  {"generation_config.json", `{"a":1,"a":2}`, ReasonInvalidJSON},
+		"trailing value":      {"generation_config.json", `{}{}`, ReasonInvalidJSON},
+		"malformed JSON":      {"generation_config.json", `{"a":`, ReasonInvalidJSON},
+		"speculators config":  {"config.json", `{"speculators_config":{"verifier":{"name_or_path":"other/model"}}}`, ReasonModelRedirect},
+		"tokenizer file path": {"tokenizer_config.json", `{"tokenizer_file":"/elsewhere/tokenizer.json"}`, ReasonFilePathRedirect},
+		"absent vocab file":   {"tokenizer_config.json", `{"vocab_file":"absent.json"}`, ReasonFilePathRedirect},
+		"numeric merges file": {"tokenizer_config.json", `{"merges_file":1}`, ReasonFilePathRedirect},
+		"near-miss license":   {"LICENSE.txt", "text", ReasonUnlistedFile},
+		"near-miss readme":    {"readme.md", "text", ReasonUnlistedFile},
+		"other readme":        {"README.rst", "text", ReasonUnlistedFile},
+		"license variant":     {"LICENSE-APACHE", "text", ReasonUnlistedFile},
 	} {
 		t.Run(name, func(t *testing.T) {
 			files := modelFiles()
@@ -333,61 +340,77 @@ func TestChecksAreDeterministic(t *testing.T) {
 }
 
 func TestIdentityMismatchIsAFinding(t *testing.T) {
-	for name, change := range map[string]func(t *testing.T, root string, entries []UpstreamFile) []UpstreamFile{
-		"changed weights": func(_ *testing.T, _ string, entries []UpstreamFile) []UpstreamFile {
+	setSize := func(path string, size int64) func(*testing.T, string, []UpstreamFile) []UpstreamFile {
+		return func(_ *testing.T, _ string, entries []UpstreamFile) []UpstreamFile {
+			for i := range entries {
+				if entries[i].Path == path {
+					entries[i].Size = size
+				}
+			}
+			return entries
+		}
+	}
+	for name, tc := range map[string]struct {
+		change func(t *testing.T, root string, entries []UpstreamFile) []UpstreamFile
+		reason string
+	}{
+		"changed weights": {func(_ *testing.T, _ string, entries []UpstreamFile) []UpstreamFile {
 			for i := range entries {
 				if entries[i].LFS != nil {
 					entries[i].LFS.OID = sha256Hex("other weights")
 				}
 			}
 			return entries
-		},
-		"changed small file": func(_ *testing.T, _ string, entries []UpstreamFile) []UpstreamFile {
+		}, ReasonIdentityMismatch},
+		"changed small file": {func(_ *testing.T, _ string, entries []UpstreamFile) []UpstreamFile {
 			for i := range entries {
 				if entries[i].Path == "chat_template.jinja" {
 					entries[i].OID = blobID("{{ poisoned }}")
 				}
 			}
 			return entries
-		},
-		"other size": func(_ *testing.T, _ string, entries []UpstreamFile) []UpstreamFile {
-			for i := range entries {
-				if entries[i].Path == "config.json" {
-					entries[i].Size++
-				}
-			}
-			return entries
-		},
-		"upstream blob above the blob limit": func(_ *testing.T, _ string, entries []UpstreamFile) []UpstreamFile {
-			for i := range entries {
-				if entries[i].Path == "tokenizer.json" {
-					entries[i].Size = maxGitBlobBytes + 1
-				}
-			}
-			return entries
-		},
-		"local file larger than the upstream blob": func(t *testing.T, root string, entries []UpstreamFile) []UpstreamFile {
+		}, ReasonIdentityMismatch},
+		"other size":                {setSize("config.json", int64(len(modelFiles()["config.json"])+1)), ReasonIdentityMismatch},
+		"upstream blob above limit": {setSize("tokenizer.json", MaxGitBlobBytes+1), ReasonIdentityMismatch},
+		"local file larger than blob": {func(t *testing.T, root string, entries []UpstreamFile) []UpstreamFile {
 			write(t, filepath.Join(root, "tokenizer.json"), `{"model":{"vocab":{"a":1,"b":2}}}`)
 			return entries
-		},
-		"file not upstream": func(_ *testing.T, _ string, entries []UpstreamFile) []UpstreamFile {
+		}, ReasonIdentityMismatch},
+		"file not upstream": {func(_ *testing.T, _ string, entries []UpstreamFile) []UpstreamFile {
 			for i := range entries {
 				if entries[i].Path == "generation_config.json" {
 					return append(entries[:i], entries[i+1:]...)
 				}
 			}
 			return entries
-		},
+		}, ReasonNotUpstream},
 	} {
 		t.Run(name, func(t *testing.T) {
 			files := modelFiles()
 			root := writeModel(t, files)
-			entries := change(t, root, upstreamOf(files))
+			entries := tc.change(t, root, upstreamOf(files))
 			record := run(t, newHub(t, entries).checker(), root)
-			if record.Status != StatusFindings || record.Checks[1].Outcome != OutcomeFailed || record.Checks[2].Outcome != OutcomeNotRun {
+			if record.Status != StatusFindings || record.Checks[1] != (Check{CheckIdentity, OutcomeFailed, tc.reason}) || record.Checks[2].Outcome != OutcomeNotRun {
 				t.Fatalf("identity = %+v", record.Checks[1])
 			}
 		})
+	}
+}
+
+func TestIdentityRefusesBlobsAboveTheLimitBeforeReading(t *testing.T) {
+	original := MaxGitBlobBytes
+	MaxGitBlobBytes = 4
+	t.Cleanup(func() { MaxGitBlobBytes = original })
+	content := "a matching blob above the limit"
+	root := t.TempDir()
+	write(t, filepath.Join(root, "notes.json"), content)
+	upstream := map[string]UpstreamFile{"notes.json": {Type: "file", Path: "notes.json", OID: blobID(content), Size: int64(len(content))}}
+	if err := os.Remove(filepath.Join(root, "notes.json")); err != nil {
+		t.Fatal(err)
+	}
+	reason, err := checkIdentity(root, map[string]string{"notes.json": sha256Hex(content)}, upstream)
+	if reason != ReasonIdentityMismatch || err != nil {
+		t.Fatalf("a matching blob above the limit = %q, %v; want a mismatch without a read", reason, err)
 	}
 }
 
@@ -400,7 +423,9 @@ func TestUpstreamFailuresAreErrors(t *testing.T) {
 		"not found":     {func(h *hub) { h.status = http.StatusNotFound }, ReasonUpstreamNotFound},
 		"denied":        {func(h *hub) { h.status = http.StatusForbidden }, ReasonUpstreamDenied},
 		"server error":  {func(h *hub) { h.status = http.StatusBadGateway }, ReasonUpstreamUnreachable},
-		"redirect":      {func(h *hub) { h.status = http.StatusFound; h.redirect = true }, ReasonUpstreamInvalid},
+		"redirect":      {func(h *hub) { h.status = http.StatusFound; h.redirect = true }, ReasonUpstreamMoved},
+		"rate limited":  {func(h *hub) { h.status = http.StatusTooManyRequests }, ReasonUpstreamUnreachable},
+		"bad request":   {func(h *hub) { h.status = http.StatusBadRequest }, ReasonUpstreamInvalid},
 		"malformed":     {func(h *hub) { h.body = `[{"type":` }, ReasonUpstreamInvalid},
 		"invalid entry": {func(h *hub) { h.body = `[{"type":"file","path":"../x","oid":"` + zero + `","size":1}]` }, ReasonUpstreamInvalid},
 		"invalid LFS digest": {func(h *hub) {
@@ -506,7 +531,7 @@ func TestRunRefusesBadRequestsAndCancel(t *testing.T) {
 			t.Fatalf("request %+v was accepted", request)
 		}
 	}
-	for _, checker := range []Checker{{Hub: h.server.URL, Version: "test-1"}, {Listing: h.checker().Listing, Hub: "http://hub", Version: "test-1"}, {Listing: h.checker().Listing, Hub: h.server.URL}} {
+	for _, checker := range []Checker{{Hub: h.server.URL, Version: "test-1"}, {Client: h.server.Client(), Hub: "http://hub", Version: "test-1"}, {Client: h.server.Client(), Hub: h.server.URL}} {
 		if _, err := checker.Run(context.Background(), Request{Model: "example", Root: root, Source: testSource}); err == nil {
 			t.Fatalf("checker %+v was accepted", checker)
 		}
@@ -516,35 +541,42 @@ func TestRunRefusesBadRequestsAndCancel(t *testing.T) {
 	if _, err := h.checker().Run(ctx, Request{Model: "example", Root: root, Source: testSource}); err == nil {
 		t.Fatal("a canceled check gave a result; the model must stay not scanned")
 	}
+	if _, _, err := Inventory(ctx, root); !errors.Is(err, context.Canceled) {
+		t.Fatal("a canceled inventory must stop before hashing", err)
+	}
 }
 
 func TestFileChangeResetsToNotScanned(t *testing.T) {
 	files := modelFiles()
 	root := writeModel(t, files)
-	record := run(t, newHub(t, upstreamOf(files)).checker(), root)
+	checker := newHub(t, upstreamOf(files)).checker()
+	record := run(t, checker, root)
 	record.Checks[2].Outcome, record.Checks[3].Outcome = OutcomePassed, OutcomePassed
 	record.Status, record.Coverage = statusOf(record.Checks), coverageOf(record.Checks)
 	if record.Status != StatusPassed || record.Coverage != CoverageComplete {
 		t.Fatal("all checks passing must give passed and complete coverage")
 	}
-	fresh, reason, err := Inventory(root)
-	if err != nil || reason != "" || Current(&record, "example", root, testSource, "test-1", fresh) != StatusPassed {
+	fresh, reason, err := Inventory(context.Background(), root)
+	if err != nil || reason != "" || Current(&record, "example", root, testSource, checker, fresh) != StatusPassed {
 		t.Fatal("an unchanged model must keep its status", err)
 	}
 	write(t, filepath.Join(root, "generation_config.json"), `{"changed":true}`)
-	changed, _, err := Inventory(root)
+	changed, _, err := Inventory(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	other := testSource
 	other.Revision = strings.Repeat("b", 40)
+	newer, otherHub := checker, checker
+	newer.Version, otherHub.Hub = "test-2", "https://mirror.invalid"
 	for name, status := range map[string]Status{
-		"changed file":  Current(&record, "example", root, testSource, "test-1", changed),
-		"other model":   Current(&record, "other", root, testSource, "test-1", fresh),
-		"other root":    Current(&record, "example", root+"2", testSource, "test-1", fresh),
-		"other source":  Current(&record, "example", root, other, "test-1", fresh),
-		"other checker": Current(&record, "example", root, testSource, "test-2", fresh),
-		"no record":     Current(nil, "example", root, testSource, "test-1", fresh),
+		"changed file":  Current(&record, "example", root, testSource, checker, changed),
+		"other model":   Current(&record, "other", root, testSource, checker, fresh),
+		"other root":    Current(&record, "example", root+"2", testSource, checker, fresh),
+		"other source":  Current(&record, "example", root, other, checker, fresh),
+		"other checker": Current(&record, "example", root, testSource, newer, fresh),
+		"other hub":     Current(&record, "example", root, testSource, otherHub, fresh),
+		"no record":     Current(nil, "example", root, testSource, checker, fresh),
 	} {
 		if status != StatusNotScanned {
 			t.Fatalf("%s: status = %s, want not_scanned", name, status)
@@ -555,7 +587,7 @@ func TestFileChangeResetsToNotScanned(t *testing.T) {
 func TestFilesChangedDuringTheCheckAreErrors(t *testing.T) {
 	files := modelFiles()
 	root := writeModel(t, files)
-	digests, _, err := Inventory(root)
+	digests, _, err := Inventory(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,5 +616,24 @@ func TestFilesChangedDuringTheCheckAreErrors(t *testing.T) {
 	write(t, filepath.Join(root, "model.safetensors.index.json"), indexJSON+" ")
 	if _, err := checkShardIndexes(root, digests); !errors.Is(err, errChanged) {
 		t.Fatal("a shard index changed after the inventory must be an error", err)
+	}
+}
+
+func TestOversizedJSONIsUnsupported(t *testing.T) {
+	files := modelFiles()
+	files["tokenizer.json"] = `{"a":"` + strings.Repeat("x", MaxJSONFileBytes) + `"}`
+	record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+	if record.Checks[0] != (Check{CheckAllowlist, OutcomeUnsupported, ReasonJSONTooLarge}) || record.Status != StatusUnsupported {
+		t.Fatalf("allowlist = %+v", record.Checks[0])
+	}
+}
+
+func TestFilePathKeysAcceptNullAndInventoriedNames(t *testing.T) {
+	files := modelFiles()
+	files["tokenizer_config.json"] = `{"tokenizer_file":null,"vocab_file":"vocab.json"}`
+	files["vocab.json"] = `{}`
+	record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+	if record.Checks[0].Outcome != OutcomePassed {
+		t.Fatalf("allowlist = %+v", record.Checks[0])
 	}
 }

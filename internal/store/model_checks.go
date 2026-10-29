@@ -27,8 +27,9 @@ func (s *Store) PutModelCheck(ctx context.Context, record modelcheck.Record) err
 	return err
 }
 
-// ModelCheck reads the stored result of one model. A stored result that is
-// not valid is an error, never a pass.
+// ModelCheck reads the stored result of one model. A result of another
+// record version gives ErrNoModelCheck, so the model is not scanned. A stored
+// result that is not valid is an error, never a pass.
 func (s *Store) ModelCheck(ctx context.Context, model string) (modelcheck.Record, error) {
 	var raw []byte
 	err := s.db.QueryRowContext(ctx, `SELECT payload FROM model_checks WHERE model=?`, model).Scan(&raw)
@@ -39,6 +40,10 @@ func (s *Store) ModelCheck(ctx context.Context, model string) (modelcheck.Record
 		return modelcheck.Record{}, err
 	}
 	record, err := modelcheck.ReadRecord(raw)
+	if errors.Is(err, modelcheck.ErrStaleRecord) {
+		// A result of another record version does not apply: not scanned.
+		return modelcheck.Record{}, ErrNoModelCheck
+	}
 	if err != nil || record.Model != model {
 		return modelcheck.Record{}, errors.New("stored model check result is invalid")
 	}
