@@ -5,10 +5,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/vllmkey"
 )
 
 // strictVLLMRuntime models the runtime qualification: a vLLM binding without
@@ -174,5 +176,55 @@ func TestOwnedKeyFileMustLiveUnderTheSetupHome(t *testing.T) {
 	plan := unitPlan{keys: map[string]string{}}
 	if err := pinOwnedFiles(profile, home, plan); !errors.Is(err, ErrOwnedEnvironmentFileOutsideHome) {
 		t.Fatalf("foreign key file accepted: %v", err)
+	}
+}
+
+func TestCommittedDeleteReplayRemovesTheKeyFile(t *testing.T) {
+	b, home, request := fixture(t)
+	b.runCommand = fakeOwnedCommandFor(home)
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	if err := os.MkdirAll(ownedUnitDirectory(home), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	gone, kept := control.OwnedUnitName("gone"), control.OwnedUnitName("kept")
+	content := []byte("[Service]\nExecStart=/usr/bin/true\n")
+	if err := os.WriteFile(filepath.Join(ownedUnitDirectory(home), kept), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []control.Workload{"gone", "kept"} {
+		if err := vllmkey.Ensure(OwnedEnvironmentFile(home, id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	journal := unitJournal{Version: 1, StatePath: request.Profile.StatePath, Deletes: map[string]string{gone: digest(content), kept: digest(content)}, Phase: ownedJournalCommitted}
+	if err := b.replayCommittedDeletes(t.Context(), home, root, request, journal); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []control.Workload{"gone", "kept"} {
+		if _, err := os.Lstat(OwnedEnvironmentFile(home, id)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("key file of %s survived the committed delete: %v", id, err)
+		}
+	}
+}
+
+func TestAdoptionComparesTheLoadedEnvironmentFile(t *testing.T) {
+	b, _, request, values := gpuCorrectionFixture(t)
+	const uuid = "GPU-11111111-2222-3333-4444-555555555555"
+	raw, err := os.ReadFile(values["FragmentPath"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(values["FragmentPath"], []byte(strings.Replace(string(raw), "CUDA_VISIBLE_DEVICES=0", "CUDA_VISIBLE_DEVICES="+uuid, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	values["Environment"] = "CUDA_VISIBLE_DEVICES=" + uuid + " HF_HUB_OFFLINE=1"
+	// The launch checks pass; this fixture has no placement evidence, so
+	// adoption stops at the later placement step.
+	if _, err := b.configurationFromMetadata(t.Context(), request.App, request.Unit, values); err == nil || strings.Contains(err.Error(), "EnvironmentFile") || !strings.Contains(err.Error(), "placement") {
+		t.Fatalf("matching launch rejected before placement: %v", err)
+	}
+	values["EnvironmentFiles"] = "/other/vllm.env (ignore_errors=no)"
+	if _, err := b.configurationFromMetadata(t.Context(), request.App, request.Unit, values); err == nil || !strings.Contains(err.Error(), "EnvironmentFile") {
+		t.Fatalf("loaded EnvironmentFile drift accepted: %v", err)
 	}
 }

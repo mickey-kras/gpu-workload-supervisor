@@ -240,29 +240,14 @@ func (b Backend) replayCommittedDeletes(ctx context.Context, home, root string, 
 	var reloaded []string
 	removed := false
 	for name, proof := range journal.Deletes {
-		path := filepath.Join(ownedUnitDirectory(home), name)
-		current, err := privateRead(path)
-		if errors.Is(err, os.ErrNotExist) {
-			// The delete already ran; systemd may still have the unit cached,
-			// so the reload below must still happen.
-			reloaded = append(reloaded, name)
-			continue
-		}
+		deleted, err := replayCommittedDelete(home, name, proof)
 		if err != nil {
 			return err
 		}
-		// A committed delete is finished even when the new request re-adds
-		// the unit: the accepted catalog already excludes it, so preserving
-		// the file would leave it unjournaled if this attempt then fails.
-		// The resumed plan recreates the unit from the request instead.
-		if digest(current) != proof {
-			return fmt.Errorf(ownedUnitErrorFormat, ErrOwnedUnitModified, name)
-		}
-		if err := provenDelete(path, proof); err != nil {
-			return err
-		}
+		// A delete that already ran still needs the reload below: systemd may
+		// still have the unit cached.
 		reloaded = append(reloaded, name)
-		removed = true
+		removed = removed || deleted
 	}
 	if removed {
 		if err := syncDir(ownedUnitDirectory(home)); err != nil {
@@ -275,6 +260,29 @@ func (b Backend) replayCommittedDeletes(ctx context.Context, home, root string, 
 		}
 	}
 	return clearOwnedUnitJournal(root)
+}
+
+// replayCommittedDelete removes one committed unit with content proof, and its
+// key file. A committed delete is finished even when the new request re-adds
+// the unit: the accepted catalog already excludes it, so preserving the file
+// would leave it unjournaled if this attempt then fails. The resumed plan
+// recreates the unit and its key from the request instead.
+func replayCommittedDelete(home, name, proof string) (bool, error) {
+	path := filepath.Join(ownedUnitDirectory(home), name)
+	current, err := privateRead(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	deleted := err == nil
+	if deleted {
+		if digest(current) != proof {
+			return false, fmt.Errorf(ownedUnitErrorFormat, ErrOwnedUnitModified, name)
+		}
+		if err := provenDelete(path, proof); err != nil {
+			return false, err
+		}
+	}
+	return deleted, removeOwnedKey(home, name)
 }
 
 // catalogMatchesRequest reports whether the committed catalog already equals

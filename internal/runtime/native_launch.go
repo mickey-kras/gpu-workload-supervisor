@@ -152,8 +152,9 @@ func (u *parsedLaunchUnit) applyDirective(section, key, value string) error {
 	case "[Service]EnvironmentFile":
 		// Only the private API key file of a hardened vLLM launch is supported.
 		// Its content is checked when the launch qualifies.
-		if !filepath.IsAbs(value) || filepath.Clean(value) != value || strings.ContainsAny(value, launchExpansionCharacters+" \t") {
-			return fmt.Errorf("%w: EnvironmentFile requires one literal absolute path", ErrLaunchUnsupported)
+		// systemd expands glob characters in EnvironmentFile paths.
+		if !filepath.IsAbs(value) || filepath.Clean(value) != value || strings.ContainsAny(value, launchExpansionCharacters+" \t*?[]") {
+			return fmt.Errorf("%w: EnvironmentFile requires one literal absolute path without glob characters", ErrLaunchUnsupported)
 		}
 		u.environmentFile = value
 	default:

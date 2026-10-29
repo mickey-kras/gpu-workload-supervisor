@@ -16,6 +16,9 @@ import (
 )
 
 var ErrModelIdentity = errors.New("native model identity mismatch")
+
+// checkKeyListener is a test hook for the listener owner check.
+var checkKeyListener = vllmkey.CheckListener
 var ErrLaunchChanged = errors.New("native launch binding changed")
 
 // ErrAPIKeyRejected tells that vLLM did not accept the key from the key file
@@ -255,7 +258,7 @@ func (m *SystemdManager) fetchModelList(ctx context.Context, n control.NativeMod
 	}
 	// Send the key only to a listener of the desktop user, never to a
 	// process of another user that holds the port.
-	if err := vllmkey.CheckListener(n.Endpoint); err != nil {
+	if err := checkKeyListener(n.Endpoint); err != nil {
 		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, n.Endpoint+"/v1/models", nil)

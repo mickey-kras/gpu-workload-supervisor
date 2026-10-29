@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/vllmkey"
 )
 
 func hardenedQualification(t *testing.T, lines, args string, n control.NativeModel) error {
@@ -543,5 +544,46 @@ func TestLoadedEnvironmentFileDriftBlocksTheBinding(t *testing.T) {
 	r.outputs[cmd] = []byte(strings.Replace(string(r.outputs[cmd]), "EnvironmentFiles="+p.NativeModel.EnvironmentFile, "EnvironmentFiles=/other/vllm.env", 1))
 	if err := m.verifyNativeBinding(context.Background(), p); err == nil || !strings.Contains(err.Error(), "EnvironmentFile") {
 		t.Fatalf("loaded EnvironmentFile drift accepted: %v", err)
+	}
+}
+
+func TestReadinessSendsNoKeyToForeignListener(t *testing.T) {
+	var authorizations []string
+	server := httptest.NewServer(servingAPI(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":[{"id":"selected"}]}`)
+	}))
+	defer server.Close()
+	recording := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			authorizations = append(authorizations, r.Header.Get("Authorization"))
+		}
+		server.Config.Handler.ServeHTTP(w, r)
+	}))
+	defer recording.Close()
+	saved := checkKeyListener
+	checkKeyListener = func(string) error { return vllmkey.ErrForeignListener }
+	t.Cleanup(func() { checkKeyListener = saved })
+	m := &SystemdManager{client: recording.Client()}
+	if err := m.nativeReady(context.Background(), servingBinding(t, recording.URL, "selected")); !errors.Is(err, vllmkey.ErrForeignListener) {
+		t.Fatalf("foreign listener accepted: %v", err)
+	}
+	if len(authorizations) != 0 {
+		t.Fatalf("the key reached a foreign listener: %d requests", len(authorizations))
+	}
+}
+
+func TestEnvironmentFileRejectsGlobCharacters(t *testing.T) {
+	dir := t.TempDir()
+	literal := filepath.Join(dir, "vllm-[a].env")
+	if err := os.WriteFile(literal, []byte(vllmkey.Name+"="+strings.Repeat("k", 43)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{literal, filepath.Join(dir, "*.env"), filepath.Join(dir, "vllm?.env")} {
+		if _, err := parseLaunchUnit([]byte("[Service]\nEnvironmentFile=" + path + "\n")); !errors.Is(err, ErrLaunchUnsupported) {
+			t.Fatalf("%s accepted: %v", path, err)
+		}
+		if _, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nEnvironmentFile=" + path + "\nExecStart=/usr/bin/true x\n")}); !errors.Is(err, ErrLaunchUnsupported) {
+			t.Fatalf("%s accepted in an adopted launch: %v", path, err)
+		}
 	}
 }

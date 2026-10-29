@@ -47,7 +47,10 @@ func ensureOwnedKey(plan unitPlan, name string) error {
 	return nil
 }
 
-// removeCreatedKeys removes the key files that a failed apply created.
+// removeCreatedKeys removes the key files that a failed apply created. After
+// a crash before the commit, a created key file stays without a journal
+// entry. It is harmless: the next apply for the workload reuses the usable
+// file, and removing the workload removes it.
 func removeCreatedKeys(plan unitPlan) {
 	for name := range plan.createdKeys {
 		_ = os.Remove(plan.keys[name])

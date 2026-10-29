@@ -148,7 +148,8 @@ not qualify, and the workload stays unavailable:
   file. A changed template file stops the qualification until you run setup
   again.
 - `Environment=HF_HUB_OFFLINE=1`. vLLM loads the model only from local files.
-- `EnvironmentFile=<absolute path>`. This private file holds the API key as one
+- `EnvironmentFile=<absolute path>`, without the glob characters `*`, `?`, `[`
+  and `]`. This private file holds the API key as one
   line, `VLLM_API_KEY=<key>`. The key has 32 to 256 URL-safe characters. The
   desktop user must own the file. Set the file mode to `0600`. Do not put the key
   on the command line or in an `Environment=` line.
@@ -179,7 +180,10 @@ For a supervisor-managed launch, setup pins `chat_template.jinja` in the model
 folder. When you apply, setup creates the private key file under
 `~/.config/gpu-workload-supervisor/vllm/`. Preview and review never create it.
 Setup keeps a usable key file and never replaces a file that it cannot use.
-When you remove the workload, setup removes its key file. For an existing
+
+When you remove the workload, setup removes its key file. If setup stops
+before it commits, a new key file can stay. The next apply for the workload
+uses it. For an existing
 launch, setup reads the template path and the key file path from the launch.
 
 The workload proxy reads the key file for each request and sends the key to
@@ -204,7 +208,9 @@ computer, including programs of other users. Programs of the same desktop
 user can also read the key file. The supervisor trusts that user.
 
 Bindings from an earlier release do not record these settings, and they do
-not qualify. They do not block setup: you can remove them or configure them again.
+not qualify. The workload proxy of such a binding does not start until you
+configure the binding again. The bindings do not block setup: you can remove
+them or configure them again.
 
 - For a supervisor-managed binding, add `chat_template.jinja` to the model
   folder. Open the setup application and configure the model again. Setup generates the

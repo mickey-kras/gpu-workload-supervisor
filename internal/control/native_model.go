@@ -61,6 +61,10 @@ func (n NativeModel) validateHardening() error {
 			return errors.New("chat template and API key file must be absolute clean literal paths")
 		}
 	}
+	// systemd expands glob characters in EnvironmentFile paths.
+	if strings.ContainsAny(n.EnvironmentFile, "*?[]") {
+		return errors.New("the API key file path must not contain glob characters")
+	}
 	if n.ChatTemplate == n.EnvironmentFile {
 		return errors.New("chat template and API key file must differ")
 	}

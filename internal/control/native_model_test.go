@@ -163,6 +163,7 @@ func TestNativeModelHardeningSettings(t *testing.T) {
 		"expanded key file":   func(n *NativeModel) { n.EnvironmentFile = "/home/%u/a.env" },
 		"spaced template":     func(n *NativeModel) { n.ChatTemplate = "/models/a b/chat_template.jinja" },
 		"template is the key": func(n *NativeModel) { n.ChatTemplate = n.EnvironmentFile },
+		"glob key file":       func(n *NativeModel) { n.EnvironmentFile = "/home/u/vllm-[a].env" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			n := hardened()
