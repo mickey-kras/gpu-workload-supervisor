@@ -245,7 +245,7 @@ func (m *SystemdManager) nativeReady(ctx context.Context, n control.NativeModel)
 }
 
 func (m *SystemdManager) fetchModelList(ctx context.Context, n control.NativeModel) ([]byte, error) {
-	key, err := vllmkey.Read(n.APIKeyFile)
+	key, err := vllmkey.Read(n.EnvironmentFile)
 	if err != nil {
 		return nil, err
 	}

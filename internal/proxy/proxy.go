@@ -195,7 +195,7 @@ func upstreamTransport(config Config, native *control.NativeModel) http.RoundTri
 		transport = direct
 	}
 	if native != nil {
-		transport = upstreamKeyTransport{keyFile: native.APIKeyFile, base: transport}
+		transport = upstreamKeyTransport{keyFile: native.EnvironmentFile, base: transport}
 	}
 	return transport
 }

@@ -57,7 +57,7 @@ func TestPreviewAutomaticGPUCorrectionPreservesEffectiveLaunchAndSources(t *test
 			if result.Command != command || result.Endpoint != endpoint || result.WorkingDirectory != home {
 				t.Fatalf("effective launch changed: %+v", result)
 			}
-			if app == "vllm" && (result.Model != model || result.ChatTemplate != hardened.template || result.ChatTemplateSHA256 != hardened.templateSHA256 || result.APIKeyFile != hardened.keyFile) {
+			if app == "vllm" && (result.Model != model || result.ChatTemplate != hardened.template || result.ChatTemplateSHA256 != hardened.templateSHA256 || result.EnvironmentFile != hardened.keyFile) {
 				t.Fatalf("model or hardened settings = %+v", result)
 			}
 			if result.SHA256 != fmt.Sprintf("%x", sha256.Sum256([]byte(original))) {

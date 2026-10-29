@@ -141,7 +141,7 @@ func nativeFixture(t *testing.T, family, endpoint string) (*SystemdManager, *fak
 	m.nativeExecutableValidator = fixtureExecutableValidator
 	cmd := "/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload --property=ExecStartPre --property=ExecStart --property=Environment --property=EnvironmentFiles -- speech.service"
 	launch, _ := parseLaunchUnit(data)
-	r.outputs[cmd] = []byte("ExecStart={ path=" + strings.Fields(launch.execStart)[0] + " ; argv[]=" + launch.execStart + " ; }\nFragmentPath=" + path + "\nDropInPaths=\nNeedDaemonReload=no\nEnvironment=HF_HUB_OFFLINE=1\nEnvironmentFiles=" + n.APIKeyFile + " (ignore_errors=no)\n")
+	r.outputs[cmd] = []byte("ExecStart={ path=" + strings.Fields(launch.execStart)[0] + " ; argv[]=" + launch.execStart + " ; }\nFragmentPath=" + path + "\nDropInPaths=\nNeedDaemonReload=no\nEnvironment=HF_HUB_OFFLINE=1\nEnvironmentFiles=" + n.EnvironmentFile + " (ignore_errors=no)\n")
 	return m, r, p, cmd
 }
 func TestNativeLaunchBindingVerification(t *testing.T) {

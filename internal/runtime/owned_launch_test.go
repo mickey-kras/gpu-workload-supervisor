@@ -31,7 +31,7 @@ func ownedRenderProfile(runtimeName, id string, owned *control.OwnedLaunch) cont
 			// Fixed hardened settings; tests that qualify on disk bind real files.
 			ChatTemplate:       owned.ModelPath + "/chat_template.jinja",
 			ChatTemplateSHA256: strings.Repeat("a", 64),
-			APIKeyFile:         "/home/u/.config/gpu-workload-supervisor/vllm/" + id + ".env",
+			EnvironmentFile:    "/home/u/.config/gpu-workload-supervisor/vllm/" + id + ".env",
 		},
 	}
 }
@@ -115,7 +115,7 @@ func TestRenderOwnedUnitRoundTripQualifies(t *testing.T) {
 
 func TestRenderOwnedUnitRequiresHardenedSettings(t *testing.T) {
 	p := ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100})
-	p.NativeModel.APIKeyFile = ""
+	p.NativeModel.EnvironmentFile = ""
 	if _, err := RenderOwnedUnit(p); !errors.Is(err, ErrOwnedRender) {
 		t.Fatalf("unhardened owned profile rendered: %v", err)
 	}

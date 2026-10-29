@@ -105,7 +105,7 @@ func TestCUDAUUIDSourceBindingCannotBeOmittedOrDrifted(t *testing.T) {
 	p := control.WorkloadProfile{ID: "chosen", Unit: "bound.service", NativeModel: &n}
 	query := "/usr/bin/nvidia-smi --query-gpu=uuid --format=csv,noheader -i 2"
 	show := "/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload --property=ExecStartPre --property=ExecStart --property=Environment --property=EnvironmentFiles -- bound.service"
-	r := &fakeRunner{outputs: map[string][]byte{query: []byte(testPhysicalUUID + "\n"), show: []byte("FragmentPath=" + path + "\nDropInPaths=\nNeedDaemonReload=no\nExecStart={ path=" + strings.Fields(launch.Command)[0] + " ; argv[]=" + launch.Command + " ; }\nEnvironment=HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=" + testPhysicalUUID + "\nEnvironmentFiles=" + n.APIKeyFile + " (ignore_errors=no)\n")}}
+	r := &fakeRunner{outputs: map[string][]byte{query: []byte(testPhysicalUUID + "\n"), show: []byte("FragmentPath=" + path + "\nDropInPaths=\nNeedDaemonReload=no\nExecStart={ path=" + strings.Fields(launch.Command)[0] + " ; argv[]=" + launch.Command + " ; }\nEnvironment=HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=" + testPhysicalUUID + "\nEnvironmentFiles=" + n.EnvironmentFile + " (ignore_errors=no)\n")}}
 	m := &SystemdManager{config: SystemdConfig{GPUIndex: 2, NvidiaSMIPath: "/usr/bin/nvidia-smi", SystemctlPath: "/usr/bin/true", Catalog: &control.Catalog{Profiles: []control.WorkloadProfile{p}}}, runner: r, nativeExecutableValidator: fixtureExecutableValidator}
 	if err := m.verifyNativeBinding(context.Background(), p); err != nil {
 		t.Fatal("physical identity binding", err)

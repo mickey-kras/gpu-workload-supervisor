@@ -33,7 +33,7 @@ func gpuCorrectionFixture(t *testing.T) (Backend, string, GPUCorrectionRequest, 
 	if err := os.WriteFile(template, []byte("{{ messages }}"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	keyFile := OwnedAPIKeyFile(home, "llm")
+	keyFile := OwnedEnvironmentFile(home, "llm")
 	if err := vllmkey.Ensure(keyFile); err != nil {
 		t.Fatal(err)
 	}

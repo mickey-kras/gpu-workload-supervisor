@@ -17,7 +17,7 @@ func TestFingerprintProtocol(t *testing.T) {
 		if path != "/trusted/model.service" || binding.Model != "chosen" {
 			return binding, "", errors.New("invalid binding")
 		}
-		binding.ChatTemplate, binding.ChatTemplateSHA256, binding.APIKeyFile = "/models/a/chat_template.jinja", "digest", "/home/u/vllm.env"
+		binding.ChatTemplate, binding.ChatTemplateSHA256, binding.EnvironmentFile = "/models/a/chat_template.jinja", "digest", "/home/u/vllm.env"
 		return binding, "computed", nil
 	}
 	input := `{"binding":{"launchFile":"/trusted/model.service","model":"chosen"}}`
@@ -25,7 +25,10 @@ func TestFingerprintProtocol(t *testing.T) {
 	if err := actions.run([]string{"fingerprint"}, strings.NewReader(input), &output); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), `"sha256":"computed","chatTemplate":"/models/a/chat_template.jinja","chatTemplateSHA256":"digest","apiKeyFile":"/home/u/vllm.env"`) {
+	if strings.Contains(strings.ToLower(output.String()), "api") {
+		t.Fatal("fingerprint output names an API key field", output.String())
+	}
+	if !strings.Contains(output.String(), `"sha256":"computed","chatTemplate":"/models/a/chat_template.jinja","chatTemplateSHA256":"digest","environmentFile":"/home/u/vllm.env"`) {
 		t.Fatal(output.String())
 	}
 	for _, invalid := range []string{`{`, `{}`, input + ` {}`, `{"extra":1}`, strings.Repeat(" ", 16385)} {

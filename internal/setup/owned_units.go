@@ -23,9 +23,9 @@ const (
 )
 
 var (
-	ErrOwnedUnitCollision         = errors.New("owned unit path exists with foreign content")
-	ErrOwnedLaunchFileOutsideHome = errors.New("owned launch file must live under the setup home systemd user directory")
-	ErrOwnedAPIKeyFileOutsideHome = errors.New("owned vLLM API key file must live under the setup home configuration directory")
+	ErrOwnedUnitCollision              = errors.New("owned unit path exists with foreign content")
+	ErrOwnedLaunchFileOutsideHome      = errors.New("owned launch file must live under the setup home systemd user directory")
+	ErrOwnedEnvironmentFileOutsideHome = errors.New("owned vLLM API key file must live under the setup home configuration directory")
 )
 
 // syncDir makes directory entries (unit writes, unlinks, journal retirement)
@@ -505,11 +505,11 @@ func (b Backend) planOwnedUnitWrites(req Request, home string, plan unitPlan) er
 		if p.NativeModel.LaunchFile != filepath.Join(ownedUnitDirectory(home), p.Unit) {
 			return fmt.Errorf(ownedUnitErrorFormat, ErrOwnedLaunchFileOutsideHome, p.Unit)
 		}
-		if p.NativeModel.APIKeyFile != OwnedAPIKeyFile(home, p.ID) {
-			return fmt.Errorf(ownedUnitErrorFormat, ErrOwnedAPIKeyFileOutsideHome, p.Unit)
+		if p.NativeModel.EnvironmentFile != OwnedEnvironmentFile(home, p.ID) {
+			return fmt.Errorf(ownedUnitErrorFormat, ErrOwnedEnvironmentFileOutsideHome, p.Unit)
 		}
 		// The key file is private and is kept when it already exists.
-		if err := vllmkey.Ensure(p.NativeModel.APIKeyFile); err != nil {
+		if err := vllmkey.Ensure(p.NativeModel.EnvironmentFile); err != nil {
 			return err
 		}
 		// Qualify against this host before anything becomes durable: the

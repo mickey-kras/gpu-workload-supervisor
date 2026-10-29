@@ -291,7 +291,7 @@ func TestServingVersionReadiness(t *testing.T) {
 	}
 	version, status = `{"version":"0.14.1"}`, http.StatusOK
 	missingKey := n
-	missingKey.APIKeyFile = filepath.Join(t.TempDir(), "missing.env")
+	missingKey.EnvironmentFile = filepath.Join(t.TempDir(), "missing.env")
 	if err := m.nativeReady(context.Background(), missingKey); err == nil {
 		t.Fatal("readiness without the API key file accepted")
 	}
@@ -344,9 +344,9 @@ func TestBindHardenedNativeLaunchReadsAdoptedSettings(t *testing.T) {
 	n := servingBinding(t, "http://127.0.0.1:9000", "selected")
 	recorded := n
 	unbound := n
-	unbound.ChatTemplate, unbound.ChatTemplateSHA256, unbound.APIKeyFile = "", "", "/stale/key.env"
+	unbound.ChatTemplate, unbound.ChatTemplateSHA256, unbound.EnvironmentFile = "", "", "/stale/key.env"
 	bound, _, err := BindHardenedNativeLaunch(n.LaunchFile, unbound)
-	if bound.ChatTemplate != recorded.ChatTemplate || bound.ChatTemplateSHA256 != recorded.ChatTemplateSHA256 || bound.APIKeyFile != recorded.APIKeyFile {
+	if bound.ChatTemplate != recorded.ChatTemplate || bound.ChatTemplateSHA256 != recorded.ChatTemplateSHA256 || bound.EnvironmentFile != recorded.EnvironmentFile {
 		t.Fatalf("settings not read from the launch: %+v", bound)
 	}
 	// Executable trust depends on the account that runs the test.
@@ -376,5 +376,20 @@ func TestBindHardenedNativeLaunchReadsAdoptedSettings(t *testing.T) {
 				t.Fatalf("template read from %s: %+v", name, binding)
 			}
 		})
+	}
+}
+
+// The rendered unit and its digest name only the key file path. The key stays
+// in the private file.
+func TestOwnedRenderHoldsKeyFilePathNotKey(t *testing.T) {
+	h := newHardenedFixture(t)
+	p := ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100})
+	p.NativeModel = ptrNativeModel(h.bind(*p.NativeModel))
+	raw, err := RenderOwnedUnit(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "EnvironmentFile="+h.keyFile+"\n") || strings.Contains(string(raw), strings.Repeat("k", 43)) {
+		t.Fatalf("rendered unit:\n%s", raw)
 	}
 }

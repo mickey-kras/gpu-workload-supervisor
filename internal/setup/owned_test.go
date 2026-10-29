@@ -2,14 +2,17 @@ package setup
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/vllmkey"
 )
 
 func ownedDraft(id string, port uint16) Draft {
@@ -59,7 +62,7 @@ func TestOwnedProfileSynthesis(t *testing.T) {
 	if profile.NativeModel.LaunchSHA256 != digest(raw) || profile.NativeModel.Endpoint != "http://127.0.0.1:9100" {
 		t.Fatal("fingerprint or endpoint wrong")
 	}
-	if profile.NativeModel.Model != testModelPath("vision") || profile.NativeModel.ChatTemplate != filepath.Join(testModelPath("vision"), ownedChatTemplateName) || len(profile.NativeModel.ChatTemplateSHA256) != 64 || profile.NativeModel.APIKeyFile != filepath.Join(home, ".config/gpu-workload-supervisor/vllm/vision.env") {
+	if profile.NativeModel.Model != testModelPath("vision") || profile.NativeModel.ChatTemplate != filepath.Join(testModelPath("vision"), ownedChatTemplateName) || len(profile.NativeModel.ChatTemplateSHA256) != 64 || profile.NativeModel.EnvironmentFile != filepath.Join(home, ".config/gpu-workload-supervisor/vllm/vision.env") {
 		t.Fatalf("model identity or hardened settings %+v", profile.NativeModel)
 	}
 	ollama := ownedDraft("chat", 11434)
@@ -577,4 +580,31 @@ func openStoreAt(t *testing.T, path string) *store.Store {
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+// Setup creates the key on apply; the owned profile, its JSON and its unit
+// digest carry only the key file path.
+func TestOwnedProfileHoldsKeyFilePathNotKey(t *testing.T) {
+	home := t.TempDir()
+	profile, raw, err := OwnedProfile(ownedDraft("vision", 9100), "/user.slice/user-1000.slice/user@1000.service", home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vllmkey.Ensure(profile.NativeModel.EnvironmentFile); err != nil {
+		t.Fatal(err)
+	}
+	key, err := vllmkey.Read(profile.NativeModel.EnvironmentFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(profile)
+	again, rendered, err := OwnedProfile(ownedDraft("vision", 9100), "/user.slice/user-1000.slice/user@1000.service", home)
+	if err != nil || digest(rendered) != digest(raw) || again.NativeModel.LaunchSHA256 != profile.NativeModel.LaunchSHA256 {
+		t.Fatal("the key changed the rendered unit or its digest", err)
+	}
+	for _, data := range [][]byte{raw, encoded} {
+		if strings.Contains(string(data), key) {
+			t.Fatal("profile or unit contains the key")
+		}
+	}
 }

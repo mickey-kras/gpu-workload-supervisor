@@ -16,7 +16,7 @@ func TestNativePolicyCatalogVersionGuard(t *testing.T) {
 	defer upstream.Close()
 	u, _ := url.Parse(upstream.URL)
 	profile := func(version int) control.CatalogSnapshot {
-		return control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: version, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: upstream.URL, APIKeyFile: proxyKeyFile(t)}}}}}
+		return control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: version, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: upstream.URL, EnvironmentFile: proxyKeyFile(t)}}}}}
 	}
 	for _, version := range []int{1, 2, 4} {
 		s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: profile(version)}

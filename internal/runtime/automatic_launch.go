@@ -36,7 +36,7 @@ type AutomaticLaunch struct {
 	DropIns                          []control.LaunchSource
 	// Hardened vLLM settings read from the launch.
 	ChatTemplate, ChatTemplateSHA256 string
-	APIKeyFile                       string
+	EnvironmentFile                  string
 }
 
 func InspectAutomaticLaunchSources(path, app string, dropInPaths []string) (AutomaticLaunch, error) {
@@ -183,14 +183,14 @@ func inspectServerLaunch(u parsedLaunchUnit, args []string, app string, result *
 	if result.Model == "" {
 		result.Model = f.model
 	}
-	result.ChatTemplate, result.APIKeyFile = f.chatTemplate, u.environmentFile
+	result.ChatTemplate, result.EnvironmentFile = f.chatTemplate, u.environmentFile
 	if f.chatTemplate != "" {
 		// A template that cannot be read is reported by the qualification.
 		if digest, err := ChatTemplateSHA256(f.chatTemplate); err == nil {
 			result.ChatTemplateSHA256 = digest
 		}
 	}
-	n := control.NativeModel{GPUUUID: u.gpuUUID, Runtime: app, Model: result.Model, Endpoint: result.Endpoint, ChatTemplate: result.ChatTemplate, ChatTemplateSHA256: result.ChatTemplateSHA256, APIKeyFile: result.APIKeyFile}
+	n := control.NativeModel{GPUUUID: u.gpuUUID, Runtime: app, Model: result.Model, Endpoint: result.Endpoint, ChatTemplate: result.ChatTemplate, ChatTemplateSHA256: result.ChatTemplateSHA256, EnvironmentFile: result.EnvironmentFile}
 	return qualifyParsedMainCommand(u, n, func(string) error { return nil })
 }
 

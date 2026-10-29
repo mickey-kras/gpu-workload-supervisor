@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,7 +21,7 @@ func TestRenderOwnedGoldenOutput(t *testing.T) {
 	actions.managerCgroup = func(context.Context, string) (string, error) {
 		return "/user.slice/user-1000.slice/user@1000.service", nil
 	}
-	input := `{"draft":{"id":"vision","label":"Vision","app":"vllm","binding":{"instance":"owned","owned":{"modelPath":"/models/vision","port":9100,"maxModelLen":8192}}},"managerCgroup":"/user.slice/user-1000.slice/user@1000.service"}`
+	input := `{"draft":{"id":"vision","label":"Vision","app":"vllm","binding":{"instance":"owned","owned":{"modelPath":"` + renderModelPath(t) + `","port":9100,"maxModelLen":8192}}},"managerCgroup":"/user.slice/user-1000.slice/user@1000.service"}`
 	var output bytes.Buffer
 	if err := actions.run([]string{"render-owned"}, strings.NewReader(input), &output); err != nil {
 		t.Fatal(err)
@@ -86,7 +87,7 @@ func TestRenderOwnedVerifiesManagerCgroupAgainstHost(t *testing.T) {
 	actions.managerCgroup = func(context.Context, string) (string, error) {
 		return "/user.slice/user-1000.slice/user@1000.service", nil
 	}
-	input := `{"draft":{"id":"vision","label":"Vision","app":"vllm","binding":{"instance":"owned","owned":{"modelPath":"/models/vision","port":9100}}},"managerCgroup":"/user.slice/user-1000.slice/user@1000.service"}`
+	input := `{"draft":{"id":"vision","label":"Vision","app":"vllm","binding":{"instance":"owned","owned":{"modelPath":"` + renderModelPath(t) + `","port":9100}}},"managerCgroup":"/user.slice/user-1000.slice/user@1000.service"}`
 	if err := actions.renderOwned(context.Background(), home, strings.NewReader(input), &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
@@ -139,4 +140,18 @@ func TestRenderOwnedHonorsCallerContext(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("render-owned ignored caller context: %v", err)
 	}
+}
+
+// renderModelPath returns a model folder with the chat template that an owned
+// vLLM launch pins.
+func renderModelPath(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "vision")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "chat_template.jinja"), []byte("{{ messages }}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

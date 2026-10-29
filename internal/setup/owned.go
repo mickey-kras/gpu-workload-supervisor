@@ -105,7 +105,7 @@ func OwnedProfile(d Draft, managerCgroup, home string) (control.WorkloadProfile,
 			// the API key from a private file that setup creates on apply.
 			ChatTemplate:       template,
 			ChatTemplateSHA256: templateSHA256,
-			APIKeyFile:         OwnedAPIKeyFile(home, id),
+			EnvironmentFile:    OwnedEnvironmentFile(home, id),
 		},
 	}
 	profile.Cgroup = gpuruntime.OwnedCgroup(managerCgroup, profile)
@@ -124,9 +124,9 @@ func OwnedProfile(d Draft, managerCgroup, home string) (control.WorkloadProfile,
 // owned vLLM launch pins.
 const ownedChatTemplateName = "chat_template.jinja"
 
-// OwnedAPIKeyFile is the private file that holds the vLLM API key of an owned
+// OwnedEnvironmentFile is the private file that holds the vLLM API key of an owned
 // workload.
-func OwnedAPIKeyFile(home string, id control.Workload) string {
+func OwnedEnvironmentFile(home string, id control.Workload) string {
 	return filepath.Join(home, ".config/gpu-workload-supervisor/vllm", string(id)+".env")
 }
 

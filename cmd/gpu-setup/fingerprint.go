@@ -30,8 +30,8 @@ func (a setupActions) fingerprint(input io.Reader, output io.Writer) error {
 		SHA256             string `json:"sha256"`
 		ChatTemplate       string `json:"chatTemplate"`
 		ChatTemplateSHA256 string `json:"chatTemplateSHA256"`
-		APIKeyFile         string `json:"apiKeyFile"`
-	}{hash, binding.ChatTemplate, binding.ChatTemplateSHA256, binding.APIKeyFile})
+		EnvironmentFile    string `json:"environmentFile"`
+	}{hash, binding.ChatTemplate, binding.ChatTemplateSHA256, binding.EnvironmentFile})
 }
 
 // renderOwned previews the derived owned launch identity and deterministic

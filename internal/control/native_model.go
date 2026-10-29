@@ -30,22 +30,23 @@ type NativeModel struct {
 	DropIns      []LaunchSource `json:"dropIns,omitempty"`
 	Owned        *OwnedLaunch   `json:"owned,omitempty"`
 	// ChatTemplate and ChatTemplateSHA256 pin the --chat-template file of the
-	// launch. APIKeyFile is the private EnvironmentFile that holds VLLM_API_KEY.
+	// launch. EnvironmentFile is the path of the private systemd EnvironmentFile
+	// that sets VLLM_API_KEY; the binding never holds the key itself.
 	// The catalog accepts a profile without them, but a launch without them
 	// never qualifies: setup records them for every new vLLM binding.
 	ChatTemplate       string `json:"chatTemplate,omitempty"`
 	ChatTemplateSHA256 string `json:"chatTemplateSHA256,omitempty"`
-	APIKeyFile         string `json:"apiKeyFile,omitempty"`
+	EnvironmentFile    string `json:"environmentFile,omitempty"`
 }
 
 // Hardened reports whether the binding records the pinned chat template and
 // the API key file that a hardened vLLM launch needs.
 func (n NativeModel) Hardened() bool {
-	return n.ChatTemplate != "" && n.ChatTemplateSHA256 != "" && n.APIKeyFile != ""
+	return n.ChatTemplate != "" && n.ChatTemplateSHA256 != "" && n.EnvironmentFile != ""
 }
 
 func (n NativeModel) validateHardening() error {
-	if n.ChatTemplate == "" && n.ChatTemplateSHA256 == "" && n.APIKeyFile == "" {
+	if n.ChatTemplate == "" && n.ChatTemplateSHA256 == "" && n.EnvironmentFile == "" {
 		return nil
 	}
 	if !n.Hardened() {
@@ -55,12 +56,12 @@ func (n NativeModel) validateHardening() error {
 	if err != nil || len(hash) != 32 || strings.ToLower(n.ChatTemplateSHA256) != n.ChatTemplateSHA256 {
 		return errors.New("invalid chat template SHA256")
 	}
-	for _, path := range []string{n.ChatTemplate, n.APIKeyFile} {
+	for _, path := range []string{n.ChatTemplate, n.EnvironmentFile} {
 		if !filepath.IsAbs(path) || filepath.Clean(path) != path || !grammarExpressible(path) {
 			return errors.New("chat template and API key file must be absolute clean literal paths")
 		}
 	}
-	if n.ChatTemplate == n.APIKeyFile {
+	if n.ChatTemplate == n.EnvironmentFile {
 		return errors.New("chat template and API key file must differ")
 	}
 	return nil

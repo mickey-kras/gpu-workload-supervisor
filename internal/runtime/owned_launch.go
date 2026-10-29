@@ -37,7 +37,7 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 		return nil, fmt.Errorf("%w: profile %s has no hardened vLLM settings; run setup again for this model", ErrOwnedRender, p.ID)
 	}
 	b.WriteString("Environment=" + offlineHubName + "=1\n")
-	b.WriteString("EnvironmentFile=" + n.APIKeyFile + "\n")
+	b.WriteString("EnvironmentFile=" + n.EnvironmentFile + "\n")
 	var execStart string
 	executable := n.Owned.Executable
 	if executable == "" {

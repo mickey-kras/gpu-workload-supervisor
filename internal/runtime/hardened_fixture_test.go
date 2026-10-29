@@ -53,7 +53,7 @@ func (h hardenedFixture) loaded() string {
 }
 
 func (h hardenedFixture) bind(n control.NativeModel) control.NativeModel {
-	n.ChatTemplate, n.ChatTemplateSHA256, n.APIKeyFile = h.template, h.templateSHA256, h.keyFile
+	n.ChatTemplate, n.ChatTemplateSHA256, n.EnvironmentFile = h.template, h.templateSHA256, h.keyFile
 	return n
 }
 

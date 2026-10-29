@@ -146,7 +146,7 @@ func TestStoredCatalogWithRemovedRuntimeIsRejected(t *testing.T) {
 func TestNativeModelHardeningSettings(t *testing.T) {
 	digest := strings.Repeat("b", 64)
 	hardened := func() *NativeModel {
-		return &NativeModel{Runtime: "vllm", Instance: "local", Model: "a", Endpoint: "http://127.0.0.1:8080", LaunchFile: "/units/a.service", LaunchSHA256: strings.Repeat("a", 64), ChatTemplate: "/models/a/chat_template.jinja", ChatTemplateSHA256: digest, APIKeyFile: "/home/u/.config/gpu-workload-supervisor/vllm/a.env"}
+		return &NativeModel{Runtime: "vllm", Instance: "local", Model: "a", Endpoint: "http://127.0.0.1:8080", LaunchFile: "/units/a.service", LaunchSHA256: strings.Repeat("a", 64), ChatTemplate: "/models/a/chat_template.jinja", ChatTemplateSHA256: digest, EnvironmentFile: "/home/u/.config/gpu-workload-supervisor/vllm/a.env"}
 	}
 	c := validCatalog()
 	c.Profiles[0].NativeModel = hardened()
@@ -154,15 +154,15 @@ func TestNativeModelHardeningSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, change := range map[string]func(*NativeModel){
-		"template only":       func(n *NativeModel) { n.ChatTemplateSHA256, n.APIKeyFile = "", "" },
-		"no key file":         func(n *NativeModel) { n.APIKeyFile = "" },
+		"template only":       func(n *NativeModel) { n.ChatTemplateSHA256, n.EnvironmentFile = "", "" },
+		"no key file":         func(n *NativeModel) { n.EnvironmentFile = "" },
 		"short digest":        func(n *NativeModel) { n.ChatTemplateSHA256 = "abc" },
 		"uppercase digest":    func(n *NativeModel) { n.ChatTemplateSHA256 = strings.Repeat("B", 64) },
 		"relative template":   func(n *NativeModel) { n.ChatTemplate = "chat_template.jinja" },
-		"unclean key file":    func(n *NativeModel) { n.APIKeyFile = "/home/u/../u/a.env" },
-		"expanded key file":   func(n *NativeModel) { n.APIKeyFile = "/home/%u/a.env" },
+		"unclean key file":    func(n *NativeModel) { n.EnvironmentFile = "/home/u/../u/a.env" },
+		"expanded key file":   func(n *NativeModel) { n.EnvironmentFile = "/home/%u/a.env" },
 		"spaced template":     func(n *NativeModel) { n.ChatTemplate = "/models/a b/chat_template.jinja" },
-		"template is the key": func(n *NativeModel) { n.ChatTemplate = n.APIKeyFile },
+		"template is the key": func(n *NativeModel) { n.ChatTemplate = n.EnvironmentFile },
 	} {
 		t.Run(name, func(t *testing.T) {
 			n := hardened()
@@ -174,13 +174,13 @@ func TestNativeModelHardeningSettings(t *testing.T) {
 		})
 	}
 	n := hardened()
-	n.ChatTemplate, n.ChatTemplateSHA256, n.APIKeyFile = "", "", ""
+	n.ChatTemplate, n.ChatTemplateSHA256, n.EnvironmentFile = "", "", ""
 	c.Profiles[0].NativeModel = n
 	if err := c.Validate(); err != nil || n.Hardened() {
 		t.Fatal("a catalog without hardened settings must stay readable", err)
 	}
 	raw, _ := json.Marshal(hardened())
-	if !strings.Contains(string(raw), `"chatTemplateSHA256":"`+digest+`"`) || !strings.Contains(string(raw), `"apiKeyFile":`) {
+	if !strings.Contains(string(raw), `"chatTemplateSHA256":"`+digest+`"`) || !strings.Contains(string(raw), `"environmentFile":`) {
 		t.Fatalf("JSON field names: %s", raw)
 	}
 }

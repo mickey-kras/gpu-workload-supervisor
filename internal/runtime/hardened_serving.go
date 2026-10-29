@@ -64,15 +64,15 @@ func qualifyHardenedServing(flags serverFlags, unit parsedLaunchUnit, n control.
 	switch {
 	case unit.environmentFile == "":
 		problems.add(fmt.Errorf("%w: vLLM requires EnvironmentFile with a private file that sets %s", ErrLaunchUnsupported, vllmkey.Name))
-	case unit.environmentFile != n.APIKeyFile:
+	case unit.environmentFile != n.EnvironmentFile:
 		problems.add(fmt.Errorf("%w: the API key file is not the one that setup recorded; run setup again for this model", ErrLaunchUnsupported))
 	default:
-		problems.add(checkAPIKeyFile(n.APIKeyFile))
+		problems.add(checkEnvironmentFile(n.EnvironmentFile))
 	}
 	return problems.err()
 }
 
-func checkAPIKeyFile(path string) error {
+func checkEnvironmentFile(path string) error {
 	if _, err := trustPath(path, kindFile); err != nil {
 		return fmt.Errorf("%w: API key file: %s", ErrLaunchUnsupported, reasonText(err))
 	}
@@ -278,7 +278,7 @@ func servingModelDirectory(n control.NativeModel) (string, error) {
 // owned binding keeps the settings that setup recorded.
 func BindHardenedNativeLaunch(path string, binding control.NativeModel) (control.NativeModel, string, error) {
 	if binding.Owned == nil {
-		binding.ChatTemplate, binding.ChatTemplateSHA256, binding.APIKeyFile = "", "", ""
+		binding.ChatTemplate, binding.ChatTemplateSHA256, binding.EnvironmentFile = "", "", ""
 		if sources, err := readLaunchSources(path, binding.DropIns); err == nil {
 			readHardenedSettings(sources, &binding)
 		}
@@ -294,7 +294,7 @@ func readHardenedSettings(sources [][]byte, binding *control.NativeModel) {
 	if err != nil {
 		return
 	}
-	binding.APIKeyFile = unit.environmentFile
+	binding.EnvironmentFile = unit.environmentFile
 	args := splitExecWords(unit.execStart)
 	if len(args) < 3 {
 		return

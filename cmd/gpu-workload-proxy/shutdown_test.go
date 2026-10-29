@@ -32,7 +32,7 @@ func (s *shutdownNativeStore) State(context.Context) (control.State, error) {
 }
 func (s *shutdownNativeStore) Catalog(context.Context) (control.CatalogSnapshot, error) {
 	return control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{
-		{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: s.endpoint, APIKeyFile: s.keyFile}},
+		{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: s.endpoint, EnvironmentFile: s.keyFile}},
 	}}}, nil
 }
 func (s *shutdownNativeStore) AdmitWorkTokenAtCatalog(context.Context, string, string, control.Workload, control.Fence, string) (string, error) {

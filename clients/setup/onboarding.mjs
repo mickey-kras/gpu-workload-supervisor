@@ -49,7 +49,7 @@ export class ApplicationDraft {
 // from the launch: the pinned chat template and the API key file.
 export function recordFingerprint(nativeModel, result) {
     nativeModel.launchSHA256 = result.sha256;
-    for (const key of ['chatTemplate', 'chatTemplateSHA256', 'apiKeyFile']) {
+    for (const key of ['chatTemplate', 'chatTemplateSHA256', 'environmentFile']) {
         if (result[key]) nativeModel[key] = result[key];
         else delete nativeModel[key];
     }
