@@ -144,10 +144,10 @@ func inspectSnapshots(r Recipe) error {
 	if err := inspectShardIndexes(r.Model.Inventory); err != nil {
 		return err
 	}
-	if err := inspectConfig(filepath.Join(r.Model.Inventory.Root, "config.json"), true); err != nil {
+	if err := inspectConfig(filepath.Join(r.Model.Inventory.Root, "config.json"), true, r.Model.Inventory.Files); err != nil {
 		return err
 	}
-	return inspectConfig(filepath.Join(r.Tokenizer.Inventory.Root, "tokenizer_config.json"), false)
+	return inspectConfig(filepath.Join(r.Tokenizer.Inventory.Root, "tokenizer_config.json"), false, r.Tokenizer.Inventory.Files)
 }
 
 func inspectShardIndexes(inventory Inventory) error {
@@ -219,7 +219,7 @@ func hasAnyKey(object map[string]json.RawMessage, keys []string) bool {
 	return false
 }
 
-func inspectConfig(path string, model bool) error {
+func inspectConfig(path string, model bool, files map[string]string) error {
 	f, err := openRegular(path)
 	if err != nil {
 		return errors.New("candidate asset configuration is unreadable")
@@ -230,29 +230,36 @@ func inspectConfig(path string, model bool) error {
 	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &config) != nil || config == nil {
 		return errors.New("candidate asset configuration is invalid")
 	}
-	if hasAnyKey(config, RemoteCodeKeys) {
-		return errors.New("candidate remote-code mappings are unsupported")
+	if err := inspectLoaderKeys(config, model, files); err != nil {
+		return err
 	}
 	if !model {
-		if _, exists := config["fast_tokenizer_files"]; exists {
-			return errors.New("candidate tokenizer filename overrides are unsupported")
-		}
 		return nil
 	}
 	if _, exists := config["quantization_config"]; exists {
 		return errors.New("candidate requires original unquantized training weights")
 	}
-	if _, exists := config["transformers_weights"]; exists {
-		return errors.New("candidate weight filename overrides are unsupported")
-	}
-	for _, key := range []string{"configuration_files", "attribute_map", "__dict__"} {
-		if _, exists := config[key]; exists {
-			return errors.New("candidate model configuration indirection is unsupported")
-		}
-	}
 	var family string
 	if json.Unmarshal(config["model_type"], &family) != nil || family != "llama" {
 		return errors.New("candidate supports only the llama model family")
+	}
+	return nil
+}
+
+// inspectLoaderKeys applies the shared loader key lists to the top level
+// of a model or tokenizer configuration.
+func inspectLoaderKeys(config map[string]json.RawMessage, model bool, files map[string]string) error {
+	switch {
+	case hasAnyKey(config, RemoteCodeKeys):
+		return errors.New("candidate remote-code mappings are unsupported")
+	case hasAnyKey(config, ModelRedirectKeys):
+		return errors.New("candidate model configuration indirection is unsupported")
+	case hasAnyKey(config, FileRedirectKeys) && model:
+		return errors.New("candidate weight filename overrides are unsupported")
+	case hasAnyKey(config, FileRedirectKeys):
+		return errors.New("candidate tokenizer filename overrides are unsupported")
+	case !ValidFilePathValues(config, files):
+		return errors.New("candidate tokenizer file names must name inventoried files")
 	}
 	return nil
 }

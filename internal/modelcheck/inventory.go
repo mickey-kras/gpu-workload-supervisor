@@ -3,7 +3,6 @@ package modelcheck
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -42,6 +41,9 @@ const toolMetadata = ".cache"
 func Inventory(ctx context.Context, root string) (map[string]string, string, error) {
 	if !cleanAbsolute(root) {
 		return nil, "", errors.New("model root must be a clean absolute path")
+	}
+	if err := noParentLinks(root); err != nil {
+		return nil, "", err
 	}
 	entries, err := readDirectory(root, MaxModelFiles+1)
 	if errors.Is(err, errTooManyEntries) {
@@ -82,7 +84,7 @@ func addEntry(ctx context.Context, root string, entry os.DirEntry, files map[str
 		return "", ctxErr
 	}
 	if err != nil {
-		return "", fmt.Errorf("model file is unreadable: %w", err)
+		return "", errUnreadable
 	}
 	files[name] = digest
 	return "", nil
@@ -154,6 +156,21 @@ func checkShardIndexes(root string, files map[string]string) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// noParentLinks applies one link rule to the root: no part of its path can
+// be a link. The file reads then refuse only links in the model directory.
+func noParentLinks(root string) error {
+	for current := root; current != "/"; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if err != nil {
+			return errors.New("model root path is missing")
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("model root path contains a link")
+		}
+	}
+	return nil
 }
 
 var errTooManyEntries = errors.New("model directory has too many entries")

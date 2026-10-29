@@ -29,8 +29,11 @@ const (
 )
 
 // MaxGitBlobBytes bounds files that the identity check hashes as git blobs.
-// The hub stores larger files in LFS, which publishes SHA-256. Tests lower it.
-var MaxGitBlobBytes int64 = 64 << 20
+// The hub stores larger files in LFS, which publishes SHA-256.
+const MaxGitBlobBytes = 64 << 20
+
+// maxGitBlobBytes is the effective limit. Tests lower it.
+var maxGitBlobBytes int64 = MaxGitBlobBytes
 
 var (
 	repoPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}$`)
@@ -179,22 +182,34 @@ func (h hubClient) onBranch(ctx context.Context, revision string) error {
 		}
 		return err
 	}
-	for _, ref := range append(append([]hubRef(nil), refs.Branches...), refs.Tags...) {
-		if ref.TargetCommit == revision {
-			return nil
-		}
+	head, err := headOf(refs.Branches, refs.Tags, revision)
+	if err != nil || head {
+		return err
 	}
 	budget := maxHistoryPages
 	for _, branch := range refs.Branches {
-		if branch.Name == "" {
-			return listingError(ReasonUpstreamInvalid)
-		}
 		found, err := h.history(ctx, branch.Name, revision, &budget)
 		if err != nil || found {
 			return err
 		}
 	}
 	return errNotOnBranch
+}
+
+// headOf needs at least one branch and a name and a commit for each ref. It
+// reports whether a branch or a tag points at the revision.
+func headOf(branches, tags []hubRef, revision string) (bool, error) {
+	if len(branches) == 0 {
+		return false, listingError(ReasonUpstreamInvalid)
+	}
+	head := false
+	for _, ref := range append(append([]hubRef(nil), branches...), tags...) {
+		if ref.Name == "" || !sha1Pattern.MatchString(ref.TargetCommit) {
+			return false, listingError(ReasonUpstreamInvalid)
+		}
+		head = head || ref.TargetCommit == revision
+	}
+	return head, nil
 }
 
 // history looks for the revision in the commit history of one branch.
@@ -356,7 +371,7 @@ func checkIdentity(root string, digests map[string]string, upstream map[string]U
 			}
 			continue
 		}
-		if entry.Size > MaxGitBlobBytes {
+		if entry.Size > maxGitBlobBytes {
 			return ReasonIdentityMismatch, nil
 		}
 		blob, err := gitBlobID(filepath.Join(root, name), entry.Size, digest)

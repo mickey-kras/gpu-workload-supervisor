@@ -171,26 +171,7 @@ func checkJSON(file string, digests map[string]string) (string, error) {
 	if _, err := d.Token(); err != io.EOF {
 		return ReasonInvalidJSON, nil
 	}
-	return filePaths(raw, digests), nil
-}
-
-// filePaths checks the file path keys of a top-level JSON object.
-func filePaths(raw []byte, digests map[string]string) string {
-	var object map[string]json.RawMessage
-	if json.Unmarshal(raw, &object) != nil {
-		return ""
-	}
-	for _, key := range llmtraining.FilePathKeys {
-		value, present := object[key]
-		if !present || string(value) == "null" {
-			continue
-		}
-		var name string
-		if json.Unmarshal(value, &name) != nil || strings.Contains(name, "/") || digests[name] == "" {
-			return ReasonFilePathRedirect
-		}
-	}
-	return ""
+	return checkPathValues(filepath.Base(file), raw, digests), nil
 }
 
 func sortedNames(files map[string]string) []string {

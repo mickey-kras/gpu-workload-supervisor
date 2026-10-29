@@ -19,6 +19,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/llmtraining"
 	"time"
 )
 
@@ -98,8 +100,9 @@ type hub struct {
 	errorCode string
 	link      string
 	body      string
-	head      string
-	history   []string
+	branches  []hubRef
+	tags      []hubRef
+	histories map[string][]string
 	stalled   chan struct{}
 	mu        sync.Mutex
 	auth      []string
@@ -107,7 +110,7 @@ type hub struct {
 
 func newHub(t *testing.T, entries []UpstreamFile) *hub {
 	t.Helper()
-	h := &hub{entries: entries, status: http.StatusOK, head: testSource.Revision}
+	h := &hub{entries: entries, status: http.StatusOK, branches: []hubRef{{Name: "main", TargetCommit: testSource.Revision}}, tags: []hubRef{}}
 	h.server = httptest.NewTLSServer(http.HandlerFunc(h.serve))
 	t.Cleanup(h.server.Close)
 	return h
@@ -121,12 +124,13 @@ func (h *hub) serve(w http.ResponseWriter, r *http.Request) {
 	base := "/api/models/" + testSource.Repo
 	switch {
 	case r.URL.Path == base+"/refs":
-		raw, _ := json.Marshal(map[string]any{"branches": []hubRef{{Name: "main", TargetCommit: h.head}}, "tags": []hubRef{}})
+		raw, _ := json.Marshal(map[string]any{"branches": h.branches, "tags": h.tags})
 		_, _ = w.Write(raw)
-	case r.URL.Path == base+"/commits/main":
-		h.page(w, r, len(h.history), func(start, end int) any {
+	case strings.HasPrefix(r.URL.Path, base+"/commits/"):
+		history := h.histories[strings.TrimPrefix(r.URL.Path, base+"/commits/")]
+		h.page(w, r, len(history), func(start, end int) any {
 			commits := []map[string]string{}
-			for _, id := range h.history[start:end] {
+			for _, id := range history[start:end] {
 				commits = append(commits, map[string]string{"id": id})
 			}
 			return commits
@@ -443,9 +447,9 @@ func TestIdentityMismatchIsAFinding(t *testing.T) {
 }
 
 func TestIdentityRefusesBlobsAboveTheLimitBeforeReading(t *testing.T) {
-	original := MaxGitBlobBytes
-	MaxGitBlobBytes = 4
-	t.Cleanup(func() { MaxGitBlobBytes = original })
+	original := maxGitBlobBytes
+	maxGitBlobBytes = 4
+	t.Cleanup(func() { maxGitBlobBytes = original })
 	content := "a matching blob above the limit"
 	root := t.TempDir()
 	write(t, filepath.Join(root, "notes.json"), content)
@@ -700,23 +704,34 @@ func TestFilePathKeysAcceptNullAndInventoriedNames(t *testing.T) {
 func TestRevisionMustBeOnABranch(t *testing.T) {
 	files := modelFiles()
 	other := func(i int) string { return fmt.Sprintf("%040x", i+1) }
+	long := make([]string, 2*maxHistoryPages+1)
+	for i := range long {
+		long[i] = other(i)
+	}
+	main := hubRef{Name: "main", TargetCommit: other(99)}
 	for name, tc := range map[string]struct {
-		history []string
-		check   Check
+		branches  []hubRef
+		tags      []hubRef
+		histories map[string][]string
+		check     Check
 	}{
-		"in branch history":          {[]string{other(0), other(1), testSource.Revision}, Check{CheckIdentity, OutcomePassed, ""}},
-		"only on a pull request ref": {[]string{other(0), other(1), other(2)}, Check{CheckIdentity, OutcomeFailed, ReasonNotOnBranch}},
-		"history above the bound": {func() []string {
-			ids := make([]string, 2*maxHistoryPages+1)
-			for i := range ids {
-				ids[i] = other(i)
-			}
-			return ids
-		}(), Check{CheckIdentity, OutcomeError, ReasonHistoryTooLong}},
+		"branch head":                {[]hubRef{{Name: "main", TargetCommit: testSource.Revision}}, nil, nil, Check{CheckIdentity, OutcomePassed, ""}},
+		"tag head":                   {[]hubRef{main}, []hubRef{{Name: "v1", TargetCommit: testSource.Revision}}, map[string][]string{"main": {other(1)}}, Check{CheckIdentity, OutcomePassed, ""}},
+		"in branch history":          {[]hubRef{main}, nil, map[string][]string{"main": {other(0), other(1), testSource.Revision}}, Check{CheckIdentity, OutcomePassed, ""}},
+		"in a second branch":         {[]hubRef{main, {Name: "release/1", TargetCommit: other(98)}}, nil, map[string][]string{"main": {other(1)}, "release/1": {testSource.Revision}}, Check{CheckIdentity, OutcomePassed, ""}},
+		"only on a pull request ref": {[]hubRef{main}, nil, map[string][]string{"main": {other(0), other(1), other(2)}}, Check{CheckIdentity, OutcomeFailed, ReasonNotOnBranch}},
+		"history above the bound":    {[]hubRef{main}, nil, map[string][]string{"main": long}, Check{CheckIdentity, OutcomeError, ReasonHistoryTooLong}},
+		"budget across branches":     {[]hubRef{main, {Name: "dev", TargetCommit: other(97)}}, nil, map[string][]string{"main": long[:2*maxHistoryPages-1], "dev": {other(5), testSource.Revision}}, Check{CheckIdentity, OutcomeError, ReasonHistoryTooLong}},
+		"no branches":                {[]hubRef{}, nil, nil, Check{CheckIdentity, OutcomeError, ReasonUpstreamInvalid}},
+		"branch without a name":      {[]hubRef{{Name: "", TargetCommit: other(1)}}, nil, nil, Check{CheckIdentity, OutcomeError, ReasonUpstreamInvalid}},
+		"branch without a target":    {[]hubRef{{Name: "main"}}, nil, nil, Check{CheckIdentity, OutcomeError, ReasonUpstreamInvalid}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHub(t, upstreamOf(files))
-			h.head, h.history = other(99), tc.history
+			h.branches, h.histories = tc.branches, tc.histories
+			if tc.tags != nil {
+				h.tags = tc.tags
+			}
 			record := run(t, h.checker(), writeModel(t, files))
 			if record.Checks[1] != tc.check {
 				t.Fatalf("identity = %+v, want %+v", record.Checks[1], tc.check)
@@ -816,5 +831,103 @@ func TestUnreadableShardIndexIsAnError(t *testing.T) {
 	}
 	if _, err := checkShardIndexes(root, digests); !errors.Is(err, errUnreadable) {
 		t.Fatal("an index that becomes a link must be an error, not a finding", err)
+	}
+}
+
+func TestRealModelConfigurationsPass(t *testing.T) {
+	models, err := os.ReadDir("testdata/real")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range models {
+		if !model.IsDir() {
+			continue
+		}
+		t.Run(model.Name(), func(t *testing.T) {
+			files := map[string]string{"model.safetensors": "weights"}
+			entries, err := os.ReadDir(filepath.Join("testdata/real", model.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range entries {
+				raw, err := os.ReadFile(filepath.Join("testdata/real", model.Name(), entry.Name()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				files[entry.Name()] = string(raw)
+			}
+			record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+			if record.Checks[0].Outcome != OutcomePassed || record.Checks[1].Outcome != OutcomePassed {
+				t.Fatalf("a real configuration was rejected: %+v", record.Checks[:2])
+			}
+		})
+	}
+}
+
+func TestPathValuesAreRejectedAtAnyDepth(t *testing.T) {
+	for name, tc := range map[string]struct{ file, content string }{
+		"marian source spm":     {"tokenizer_config.json", `{"source_spm":"/etc/model.spm","target_spm":"target.spm"}`},
+		"nested absolute path":  {"config.json", `{"text_config":{"weights":"/srv/other.safetensors"}}`},
+		"parent path":           {"generation_config.json", `{"a":["x","../other/config.json"]}`},
+		"home path":             {"processor_config.json", `{"chat":"~/template.jinja"}`},
+		"relative dot path":     {"preprocessor_config.json", `{"file":"./x"}`},
+		"backslash path":        {"config.json", `{"file":"\\\\host\\share"}`},
+		"unbound file name":     {"config.json", `{"tokenizer":"other.model"}`},
+		"file in a folder":      {"config.json", `{"weights":"sub/model.safetensors"}`},
+		"top level vocab value": {"tokenizer_config.json", `{"vocab":"absent.json"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			files := modelFiles()
+			files[tc.file] = tc.content
+			record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+			if record.Checks[0] != (Check{CheckAllowlist, OutcomeFailed, ReasonFilePathRedirect}) {
+				t.Fatalf("allowlist = %+v", record.Checks[0])
+			}
+		})
+	}
+	files := modelFiles()
+	files["tokenizer_config.json"] = `{"source_spm":"source.spm","name_or_path":"/home/user/model","_name_or_path":"org/name","chat_template":"{{ '../x' }}","eos_token":"..."}`
+	files["source.spm"] = "spm"
+	delete(files, "tokenizer.json")
+	files["tokenizer.json"] = `{"model":{"merges":["Ġ ..","/ ~"]}}`
+	record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+	if record.Checks[0].Outcome != OutcomeFailed || record.Checks[0].Reason != ReasonUnlistedFile {
+		t.Fatalf("source.spm is not on the allowlist, so it must fail as unlisted: %+v", record.Checks[0])
+	}
+	delete(files, "source.spm")
+	files["tokenizer_config.json"] = `{"vocab_file":"vocab.json","name_or_path":"/home/user/model","_name_or_path":"org/name","chat_template":"{{ '../x' }}","eos_token":"..."}`
+	files["vocab.json"] = `{}`
+	record = run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+	if record.Checks[0].Outcome != OutcomePassed {
+		t.Fatalf("text keys, bound names and token data must pass: %+v", record.Checks[0])
+	}
+}
+
+func TestEverySharedLoaderKeyIsRejected(t *testing.T) {
+	for reason, keys := range map[string][]string{
+		ReasonRemoteCode:       llmtraining.RemoteCodeKeys,
+		ReasonModelRedirect:    llmtraining.ModelRedirectKeys,
+		ReasonFilePathRedirect: llmtraining.FileRedirectKeys,
+	} {
+		for _, key := range keys {
+			t.Run(key, func(t *testing.T) {
+				files := modelFiles()
+				files["generation_config.json"] = `{"outer":[{"` + key + `":{}}]}`
+				record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+				if record.Checks[0] != (Check{CheckAllowlist, OutcomeFailed, reason}) {
+					t.Fatalf("nested %s: allowlist = %+v", key, record.Checks[0])
+				}
+			})
+		}
+	}
+	for _, key := range llmtraining.FilePathKeys {
+		t.Run(key, func(t *testing.T) {
+			files := modelFiles()
+			files["tokenizer_config.json"] = `{"` + key + `":"absent-name"}`
+			record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+			if record.Checks[0] != (Check{CheckAllowlist, OutcomeFailed, ReasonFilePathRedirect}) {
+				t.Fatalf("%s: allowlist = %+v", key, record.Checks[0])
+			}
+		})
 	}
 }

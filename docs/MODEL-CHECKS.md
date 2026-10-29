@@ -34,8 +34,11 @@ SHA-256 of each file. It uses the shared file digest and shard index rules of
 `internal/llmtraining`:
 
 - A model has at most 4096 files. A model with more files is `unsupported`.
-- If the supervisor cannot read the model directory or a file during the
-  inventory, it stores no result. The model stays `not_scanned`.
+- No part of the path to the model directory can be a link. If the path has a
+  link, or the supervisor cannot read the model directory, it stores no result.
+  The model stays `not_scanned`.
+- A file that the supervisor cannot read gives `error` with the reason
+  `unreadable`.
 - A symbolic link or a file that is not a regular file is a finding.
 - A subdirectory is a finding. The only exception is the `.cache` directory of
   the download tool, see below.
@@ -94,15 +97,33 @@ a duplicate key. It also rejects these keys at any depth:
 - `fast_tokenizer_files` and `transformers_weights`. These keys give other
   file names for tokenizer files or weights.
 
-The keys `tokenizer_file`, `vocab_file`, `merges_file`, `spm_file` and
-`added_tokens_file` at the top level of a JSON file must be `null` or the
-name of a file in the model directory. Else the check rejects the file,
-because a loader can read a file that the checks did not bind.
+The file path keys at the top level of a JSON file must be `null` or the name
+of a file in the model directory. These keys include `tokenizer_file`,
+`vocab_file`, `merges_file`, `source_spm` and the other file names of the
+tokenizer classes in transformers.
 
-The training candidate inspection uses the same key lists
-(`internal/llmtraining/loader_keys.go`). The lists are not complete. Loaders
-can have other keys of this kind, and new loader versions can add more. Look at
-the release notes of each new vLLM and transformers version for such keys.
+The key lists are in `internal/llmtraining/loader_keys.go`. The training
+candidate inspection uses them too. The lists are not complete, so the check
+also applies one rule to all string values at any depth. A value fails when it
+has one of these forms:
+
+- An absolute path, a path that starts with `~`, `./` or a backslash, or a
+  path that contains `..`.
+- The name of a model, tokenizer or code file, such as `x.model`, that is not
+  in the model directory.
+- A file name in a subdirectory, such as `sub/x.json`. A model has no
+  subdirectories.
+
+The rule does not apply to token text and chat templates: the keys
+`chat_template`, `content` and the special token keys. It also does not apply
+to `_name_or_path` and `name_or_path`, which hold a hub ID or the folder that
+saved the model. With the hub offline, no loader reads them. The rule does not
+apply to `tokenizer.json`, because the tokenizers library reads no file names
+from it.
+
+The check rejects these values with the reason `file-path-redirect`, because
+a loader can read a file that the checks did not bind. Look at the release
+notes of each new vLLM and transformers version for new keys of this kind.
 
 A model without `.safetensors` weights or without `config.json` is
 `unsupported`.
@@ -126,7 +147,9 @@ The pinned commit must be on a branch or a tag of the repository. A commit
 that only a pull request of the hub reaches does not pass, because any hub
 user can make such a commit. The supervisor reads the branches and tags of the
 repository. If no branch or tag points at the commit, it reads the commit
-history of each branch, at most 64 pages in total. The result is one of these:
+history of each branch, at most 64 pages in total. A refs list without
+branches, or a branch or tag without a name or a commit, gives `error` with
+the reason `upstream-invalid`. Else the result is one of these:
 
 - The commit is in the history: the check continues.
 - The commit is not in the history: `findings` with the reason

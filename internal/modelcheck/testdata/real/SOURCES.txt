@@ -1,0 +1,1 @@
+These files are configuration files of public models: Qwen3-8B, Mistral-7B-Instruct-v0.3, Llama-3.1-8B-Instruct, gemma-3-4b-it and Qwen3.5-9B. Some are shortened. The tests check that the model checks accept them.
