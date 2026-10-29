@@ -1,4 +1,4 @@
-import {applications, profileIDFromModel} from './onboarding.mjs';
+import {applications, profileIDFromModel, recordFingerprint} from './onboarding.mjs';
 
 export function addOwnedEditor({Adw, Gtk, group, draftGroup, draft, initial, command, bind, changed, taken, status, reportError, parent, removed, isSyncing, edited}) {
     const launch = new Adw.PreferencesGroup({title: 'Supervisor-managed launch',
@@ -95,7 +95,7 @@ export function addBindingEditor({Adw, Gtk, group, draftGroup, draft, initial, s
         try {
             if (profile.nativeModel) {
                 const result = JSON.parse(await command(['/usr/bin/gpu-setup', 'fingerprint'], JSON.stringify({binding: profile.nativeModel})));
-                profile.nativeModel.launchSHA256 = result.sha256;
+                recordFingerprint(profile.nativeModel, result);
                 if (generation !== draft.generation) { status.label = 'Draft changed during verification. Verify the updated binding.'; return; }
                 fields.launchSHA256.text = result.sha256;
             }

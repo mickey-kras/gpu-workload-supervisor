@@ -26,9 +26,10 @@ func TestPreviewPreflightChecksAdoptedBindingsWithPendingOwnedLaunch(t *testing.
 	t.Cleanup(func() { ownedBinaryDirectory = previous })
 	for _, failure := range []string{"none", "missing launch", "drifted launch", "missing unit", "missing cgroup"} {
 		t.Run(failure, func(t *testing.T) {
-			m, r, adopted, fragmentCommand := nativeFixture(t, "vllm", "http://localhost:9000")
+			m, r, adopted, fragmentCommand := nativeFixture(t, "vllm", "http://127.0.0.1:9000")
 			m.config.OwnedUnitDir = t.TempDir()
 			owned := ownedRenderProfile("vllm", "chat", &control.OwnedLaunch{ModelPath: model, Port: 9100, Alias: "selected"})
+			owned.NativeModel = ptrNativeModel(newHardenedFixture(t).bind(*owned.NativeModel))
 			owned.Label, owned.Adapter, owned.HealthURL = "Chat", "systemd", "http://127.0.0.1:9100/health"
 			owned.Cgroup = OwnedCgroup("/workloads", owned)
 			raw, err := RenderOwnedUnit(owned)

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/vllmkey"
 	"io"
 	"net/http"
 	"strings"
@@ -124,6 +125,9 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 	if err := CheckLoadedEnvironment(values["Environment"], launch.environmentValues); err != nil {
 		return err
 	}
+	if err := CheckLoadedEnvironmentFiles(values["EnvironmentFiles"], launch.environmentFile); err != nil {
+		return err
+	}
 	if values["NeedDaemonReload"] != "no" {
 		return ErrLaunchChanged
 	}
@@ -145,6 +149,9 @@ func nativeBindingShowArguments(unit string, launch parsedLaunchUnit) []string {
 	}
 	if len(launch.environmentValues) > 0 {
 		args = append(args, "--property=Environment")
+	}
+	if launch.environmentFile != "" {
+		args = append(args, "--property=EnvironmentFiles")
 	}
 	args = append(args, "--", unit)
 	return args
@@ -227,6 +234,9 @@ func (m *SystemdManager) nativeReady(ctx context.Context, n control.NativeModel)
 	if err := m.getHealthy(ctx, n.Endpoint+"/health"); err != nil {
 		return err
 	}
+	if err := m.checkServingVersion(ctx, n); err != nil {
+		return err
+	}
 	b, err := m.fetchModelList(ctx, n)
 	if err != nil {
 		return err
@@ -235,10 +245,15 @@ func (m *SystemdManager) nativeReady(ctx context.Context, n control.NativeModel)
 }
 
 func (m *SystemdManager) fetchModelList(ctx context.Context, n control.NativeModel) ([]byte, error) {
+	key, err := vllmkey.Read(n.APIKeyFile)
+	if err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, n.Endpoint+"/v1/models", nil)
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := m.client.Do(req)
 	if err != nil {
 		return nil, &safeHTTPRequestError{cause: err}

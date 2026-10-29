@@ -258,3 +258,21 @@ func TestApplicationAliasSelectionDefersToExecutableTrust(t *testing.T) {
 		t.Fatalf("missing selection behavior changed: %+v %v calls=%d", got, err, calls)
 	}
 }
+
+func TestProbeKeyProtectedVLLMKeepsModelsUnknown(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/version" {
+			_, _ = w.Write([]byte(`{"version":"0.14.1"}`))
+			return
+		}
+		if r.Header.Get("Authorization") != "" {
+			t.Error("discovery sent credentials")
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer s.Close()
+	got, err := Probe(context.Background(), ProbeRequest{App: "vllm", Endpoint: s.URL})
+	if err != nil || got.InstanceStatus != "available" || got.InventoryStatus != "unknown" || got.Version != "0.14.1" || len(got.Models) != 0 || !strings.Contains(got.NextStep, "API key") {
+		t.Fatalf("%+v %v", got, err)
+	}
+}

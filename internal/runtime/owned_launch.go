@@ -33,6 +33,11 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 	b.WriteString("[Unit]\nDescription=Supervisor-owned " + n.Runtime + " launch for " + string(p.ID) + "\n")
 	b.WriteString(ownedDependencies(p.Unit, n.Owned.Conflicts))
 	b.WriteString("\n[Service]\nType=simple\nRestart=no\n")
+	if !n.Hardened() {
+		return nil, fmt.Errorf("%w: profile %s has no hardened vLLM settings; run setup again for this model", ErrOwnedRender, p.ID)
+	}
+	b.WriteString("Environment=" + offlineHubName + "=1\n")
+	b.WriteString("EnvironmentFile=" + n.APIKeyFile + "\n")
 	var execStart string
 	executable := n.Owned.Executable
 	if executable == "" {
@@ -43,7 +48,7 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 	}
 	switch n.Runtime {
 	case "vllm":
-		execStart = executable + " serve " + n.Owned.ModelPath + " --host 127.0.0.1 --port " + strconv.Itoa(int(n.Owned.Port))
+		execStart = executable + " serve " + n.Owned.ModelPath + " --host " + hardenedBindHost + " --port " + strconv.Itoa(int(n.Owned.Port)) + " --load-format safetensors --chat-template " + n.ChatTemplate
 		if n.Owned.MaxModelLen != 0 {
 			execStart += " --max-model-len " + strconv.FormatUint(uint64(n.Owned.MaxModelLen), 10)
 		}

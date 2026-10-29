@@ -20,13 +20,18 @@ func (a setupActions) fingerprint(input io.Reader, output io.Writer) error {
 	if err := strictjson.DecodeLimited(input, 16384, &request); err != nil {
 		return err
 	}
-	hash, err := a.inspect(request.Binding.LaunchFile, request.Binding)
+	binding, hash, err := a.inspect(request.Binding.LaunchFile, request.Binding)
 	if err != nil {
 		return err
 	}
+	// The hardened vLLM settings come from the launch; the client records
+	// them with the fingerprint.
 	return json.NewEncoder(output).Encode(struct {
-		SHA256 string `json:"sha256"`
-	}{hash})
+		SHA256             string `json:"sha256"`
+		ChatTemplate       string `json:"chatTemplate"`
+		ChatTemplateSHA256 string `json:"chatTemplateSHA256"`
+		APIKeyFile         string `json:"apiKeyFile"`
+	}{hash, binding.ChatTemplate, binding.ChatTemplateSHA256, binding.APIKeyFile})
 }
 
 // renderOwned previews the derived owned launch identity and deterministic

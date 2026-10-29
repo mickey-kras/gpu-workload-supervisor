@@ -111,6 +111,11 @@ func (u *parsedLaunchUnit) qualifyEnvironmentValue(name, value string) error {
 			return environmentError(name, "nonempty code-loading overrides are unsupported")
 		}
 		return nil
+	case "VLLM_API_KEY":
+		// An inline key is visible in loaded unit metadata.
+		return environmentError(name, "set the API key only in the private EnvironmentFile")
+	case "VLLM_ALLOW_RUNTIME_LORA_UPDATING":
+		return environmentError(name, "runtime adapter loading is unsupported")
 	default:
 		return nil
 	}
@@ -209,4 +214,18 @@ func sortedEnvironmentKeys(values map[string]string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// CheckLoadedEnvironmentFiles requires that the loaded unit reads exactly the
+// inspected EnvironmentFile, or none. systemctl show prints each file with
+// its ignore_errors flag.
+func CheckLoadedEnvironmentFiles(output, expected string) error {
+	want := ""
+	if expected != "" {
+		want = expected + " (ignore_errors=no)"
+	}
+	if strings.TrimSpace(output) != want {
+		return fmt.Errorf("%w: loaded EnvironmentFile differs from inspected source; reload and refresh the binding", ErrLaunchUnsupported)
+	}
+	return nil
 }

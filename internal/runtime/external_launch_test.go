@@ -19,7 +19,7 @@ import (
 func TestAdoptedDropInLaunchStartStopIdentityAndDrift(t *testing.T) {
 	workingDirectory := t.TempDir()
 	identity := "selected"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(servingAPI(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/models" {
 			fmt.Fprintf(w, `{"data":[{"id":%q}]}`, identity)
 		}
@@ -48,8 +48,8 @@ func TestAdoptedDropInLaunchStartStopIdentityAndDrift(t *testing.T) {
 	}
 	p.NativeModel.DropIns = launch.DropIns
 	m.config.Catalog.Profiles[2] = p
-	cmd = strings.Replace(cmd, " -- ", " --property=WorkingDirectory -- ", 1)
-	runner.outputs[cmd] = []byte("WorkingDirectory=" + workingDirectory + "\nFragmentPath=" + p.NativeModel.LaunchFile + "\nDropInPaths=" + drop + "\nNeedDaemonReload=no\nExecStart={ path=" + strings.Fields(command)[0] + " ; argv[]=" + command + " ; ignore_errors=no ; }\nExecStartPre={ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; }\nExecStartPre={ path=/usr/bin/test ; argv[]=/usr/bin/test -f " + model + " ; ignore_errors=no ; }\n")
+	cmd = strings.Replace(cmd, " --property=Environment ", " --property=WorkingDirectory --property=Environment ", 1)
+	runner.outputs[cmd] = []byte("Environment=HF_HUB_OFFLINE=1\nEnvironmentFiles=" + p.NativeModel.APIKeyFile + " (ignore_errors=no)\nWorkingDirectory=" + workingDirectory + "\nFragmentPath=" + p.NativeModel.LaunchFile + "\nDropInPaths=" + drop + "\nNeedDaemonReload=no\nExecStart={ path=" + strings.Fields(command)[0] + " ; argv[]=" + command + " ; ignore_errors=no ; }\nExecStartPre={ path=/usr/bin/true ; argv[]=/usr/bin/true ; ignore_errors=no ; }\nExecStartPre={ path=/usr/bin/test ; argv[]=/usr/bin/test -f " + model + " ; ignore_errors=no ; }\n")
 	ctx := context.Background()
 	if err := m.Start(ctx, p.ID); err != nil {
 		t.Fatal(err)

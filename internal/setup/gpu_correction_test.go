@@ -10,6 +10,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/vllmkey"
 )
 
 func gpuCorrectionFixture(t *testing.T) (Backend, string, GPUCorrectionRequest, map[string]string) {
@@ -28,13 +29,21 @@ func gpuCorrectionFixture(t *testing.T) (Backend, string, GPUCorrectionRequest, 
 	if err := os.Mkdir(model, 0700); err != nil {
 		t.Fatal(err)
 	}
-	command := executable + " serve " + model + " --host 127.0.0.1 --port 8080"
-	unit := "llm.service"
-	fragment := filepath.Join(unitRoot, unit)
-	if err := os.WriteFile(fragment, []byte("[Service]\nType=exec\nRestart=no\nEnvironment=CUDA_VISIBLE_DEVICES=0\nExecStart="+command+"\n"), 0600); err != nil {
+	template := filepath.Join(model, ownedChatTemplateName)
+	if err := os.WriteFile(template, []byte("{{ messages }}"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	values := map[string]string{"Id": unit, "LoadState": "loaded", "ActiveState": "inactive", "SubState": "dead", "NeedDaemonReload": "no", "FragmentPath": fragment, "ExecStart": "{ path=" + executable + " ; argv[]=" + command + " ; }", "Environment": "CUDA_VISIBLE_DEVICES=0", "ControlGroup": "/manager/app.slice/llm.service", "Slice": "app.slice"}
+	keyFile := OwnedAPIKeyFile(home, "llm")
+	if err := vllmkey.Ensure(keyFile); err != nil {
+		t.Fatal(err)
+	}
+	command := executable + " serve " + model + " --host 127.0.0.1 --port 8080 --load-format safetensors --chat-template " + template
+	unit := "llm.service"
+	fragment := filepath.Join(unitRoot, unit)
+	if err := os.WriteFile(fragment, []byte("[Service]\nType=exec\nRestart=no\nEnvironment=CUDA_VISIBLE_DEVICES=0\nEnvironment=HF_HUB_OFFLINE=1\nEnvironmentFile="+keyFile+"\nExecStart="+command+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]string{"Id": unit, "LoadState": "loaded", "ActiveState": "inactive", "SubState": "dead", "NeedDaemonReload": "no", "FragmentPath": fragment, "ExecStart": "{ path=" + executable + " ; argv[]=" + command + " ; }", "Environment": "CUDA_VISIBLE_DEVICES=0 HF_HUB_OFFLINE=1", "EnvironmentFiles": keyFile + " (ignore_errors=no)", "ControlGroup": "/manager/app.slice/llm.service", "Slice": "app.slice"}
 	b := Backend{gpuInventory: func(context.Context) ([]string, string) {
 		return []string{"GPU-11111111-2222-3333-4444-555555555555"}, "available"
 	}}
@@ -121,7 +130,7 @@ func TestGPUCorrectionAppliesAndRechecksWithoutStartingService(t *testing.T) {
 	b.runCommand = func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		if len(args) == 2 && args[1] == "daemon-reload" {
 			values["DropInPaths"] = path
-			values["Environment"] = "CUDA_VISIBLE_DEVICES=GPU-11111111-2222-3333-4444-555555555555"
+			values["Environment"] = "CUDA_VISIBLE_DEVICES=GPU-11111111-2222-3333-4444-555555555555 HF_HUB_OFFLINE=1"
 			return nil, nil
 		}
 		if args[len(args)-1] == "-.slice" {

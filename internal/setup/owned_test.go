@@ -19,7 +19,7 @@ func ownedDraft(id string, port uint16) Draft {
 		App:   "vllm",
 		Binding: &DraftBinding{
 			Instance: "owned",
-			Owned:    &DraftOwnedLaunch{ModelPath: "/models/" + id, Port: port},
+			Owned:    &DraftOwnedLaunch{ModelPath: testModelPath(id), Port: port},
 		},
 	}
 }
@@ -59,8 +59,8 @@ func TestOwnedProfileSynthesis(t *testing.T) {
 	if profile.NativeModel.LaunchSHA256 != digest(raw) || profile.NativeModel.Endpoint != "http://127.0.0.1:9100" {
 		t.Fatal("fingerprint or endpoint wrong")
 	}
-	if profile.NativeModel.Model != "/models/vision" {
-		t.Fatalf("model identity %q", profile.NativeModel.Model)
+	if profile.NativeModel.Model != testModelPath("vision") || profile.NativeModel.ChatTemplate != filepath.Join(testModelPath("vision"), ownedChatTemplateName) || len(profile.NativeModel.ChatTemplateSHA256) != 64 || profile.NativeModel.APIKeyFile != filepath.Join(home, ".config/gpu-workload-supervisor/vllm/vision.env") {
+		t.Fatalf("model identity or hardened settings %+v", profile.NativeModel)
 	}
 	ollama := ownedDraft("chat", 11434)
 	ollama.App = "ollama"

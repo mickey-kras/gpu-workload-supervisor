@@ -13,18 +13,19 @@ func TestFingerprintProtocol(t *testing.T) {
 	actions := systemActions()
 	actions.home = func() (string, error) { return t.TempDir(), nil }
 	actions.euid = func() int { return 1000 }
-	actions.inspect = func(path string, binding control.NativeModel) (string, error) {
+	actions.inspect = func(path string, binding control.NativeModel) (control.NativeModel, string, error) {
 		if path != "/trusted/model.service" || binding.Model != "chosen" {
-			return "", errors.New("invalid binding")
+			return binding, "", errors.New("invalid binding")
 		}
-		return "computed", nil
+		binding.ChatTemplate, binding.ChatTemplateSHA256, binding.APIKeyFile = "/models/a/chat_template.jinja", "digest", "/home/u/vllm.env"
+		return binding, "computed", nil
 	}
 	input := `{"binding":{"launchFile":"/trusted/model.service","model":"chosen"}}`
 	var output bytes.Buffer
 	if err := actions.run([]string{"fingerprint"}, strings.NewReader(input), &output); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), `"sha256":"computed"`) {
+	if !strings.Contains(output.String(), `"sha256":"computed","chatTemplate":"/models/a/chat_template.jinja","chatTemplateSHA256":"digest","apiKeyFile":"/home/u/vllm.env"`) {
 		t.Fatal(output.String())
 	}
 	for _, invalid := range []string{`{`, `{}`, input + ` {}`, `{"extra":1}`, strings.Repeat(" ", 16385)} {

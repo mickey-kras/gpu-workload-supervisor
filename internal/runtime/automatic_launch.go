@@ -34,6 +34,9 @@ type AutomaticLaunch struct {
 	GPUUUID                          string
 	PreCommands                      []string
 	DropIns                          []control.LaunchSource
+	// Hardened vLLM settings read from the launch.
+	ChatTemplate, ChatTemplateSHA256 string
+	APIKeyFile                       string
 }
 
 func InspectAutomaticLaunchSources(path, app string, dropInPaths []string) (AutomaticLaunch, error) {
@@ -152,26 +155,43 @@ func inspectParsedAutomaticLaunch(u parsedLaunchUnit, raw []byte, app string, va
 	}
 	result := AutomaticLaunch{HomeWorkingDirectory: u.homeWorkingDirectory, WorkingDirectory: u.workingDirectory, LoadedProperties: u.loadedProperties, Environment: u.environmentValues, GPUUUID: u.gpuUUID, Command: u.execStart, PreCommands: u.preCommands, SHA256: fmt.Sprintf("%x", sha256.Sum256(raw))}
 	if app == "comfyui" {
+		if u.environmentFile != "" {
+			problems.add(fmt.Errorf("%w: EnvironmentFile is supported only for the vLLM API key", ErrLaunchUnsupported))
+		}
 		endpoint, err := comfyLaunchEndpoint(args)
 		result.Endpoint = endpoint
 		problems.add(err)
 		problems.add(validateComfyScript(args[1]))
 	} else {
-		f, err := parseServerCommand(args, app)
-		problems.add(err)
-		if err == nil {
-			result.Endpoint = loopbackHTTPPrefix + net.JoinHostPort(f.bindHost, f.port)
-			result.Model = f.alias
-			if result.Model == "" {
-				result.Model = f.model
-			}
-			problems.add(qualifyParsedMainCommand(u, control.NativeModel{GPUUUID: u.gpuUUID, Runtime: app, Model: result.Model, Endpoint: result.Endpoint}, func(string) error { return nil }))
-		}
+		problems.add(inspectServerLaunch(u, args, app, &result))
 	}
 	if err := problems.err(); err != nil {
 		return AutomaticLaunch{}, err
 	}
 	return result, nil
+}
+
+// inspectServerLaunch reads the binding of an existing vLLM launch, including
+// its hardened settings, and qualifies the launch with that binding.
+func inspectServerLaunch(u parsedLaunchUnit, args []string, app string, result *AutomaticLaunch) error {
+	f, err := parseServerCommand(args, app)
+	if err != nil {
+		return err
+	}
+	result.Endpoint = loopbackHTTPPrefix + net.JoinHostPort(f.bindHost, f.port)
+	result.Model = f.alias
+	if result.Model == "" {
+		result.Model = f.model
+	}
+	result.ChatTemplate, result.APIKeyFile = f.chatTemplate, u.environmentFile
+	if f.chatTemplate != "" {
+		// A template that cannot be read is reported by the qualification.
+		if digest, err := ChatTemplateSHA256(f.chatTemplate); err == nil {
+			result.ChatTemplateSHA256 = digest
+		}
+	}
+	n := control.NativeModel{GPUUUID: u.gpuUUID, Runtime: app, Model: result.Model, Endpoint: result.Endpoint, ChatTemplate: result.ChatTemplate, ChatTemplateSHA256: result.ChatTemplateSHA256, APIKeyFile: result.APIKeyFile}
+	return qualifyParsedMainCommand(u, n, func(string) error { return nil })
 }
 
 func comfyLaunchEndpoint(args []string) (string, error) {

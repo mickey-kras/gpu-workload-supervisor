@@ -142,3 +142,45 @@ func TestStoredCatalogWithRemovedRuntimeIsRejected(t *testing.T) {
 		t.Fatalf("validation did not name the removed runtime: %v", err)
 	}
 }
+
+func TestNativeModelHardeningSettings(t *testing.T) {
+	digest := strings.Repeat("b", 64)
+	hardened := func() *NativeModel {
+		return &NativeModel{Runtime: "vllm", Instance: "local", Model: "a", Endpoint: "http://127.0.0.1:8080", LaunchFile: "/units/a.service", LaunchSHA256: strings.Repeat("a", 64), ChatTemplate: "/models/a/chat_template.jinja", ChatTemplateSHA256: digest, APIKeyFile: "/home/u/.config/gpu-workload-supervisor/vllm/a.env"}
+	}
+	c := validCatalog()
+	c.Profiles[0].NativeModel = hardened()
+	if err := c.Validate(); err != nil || !c.Profiles[0].NativeModel.Hardened() {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]func(*NativeModel){
+		"template only":       func(n *NativeModel) { n.ChatTemplateSHA256, n.APIKeyFile = "", "" },
+		"no key file":         func(n *NativeModel) { n.APIKeyFile = "" },
+		"short digest":        func(n *NativeModel) { n.ChatTemplateSHA256 = "abc" },
+		"uppercase digest":    func(n *NativeModel) { n.ChatTemplateSHA256 = strings.Repeat("B", 64) },
+		"relative template":   func(n *NativeModel) { n.ChatTemplate = "chat_template.jinja" },
+		"unclean key file":    func(n *NativeModel) { n.APIKeyFile = "/home/u/../u/a.env" },
+		"expanded key file":   func(n *NativeModel) { n.APIKeyFile = "/home/%u/a.env" },
+		"spaced template":     func(n *NativeModel) { n.ChatTemplate = "/models/a b/chat_template.jinja" },
+		"template is the key": func(n *NativeModel) { n.ChatTemplate = n.APIKeyFile },
+	} {
+		t.Run(name, func(t *testing.T) {
+			n := hardened()
+			change(n)
+			c.Profiles[0].NativeModel = n
+			if c.Validate() == nil {
+				t.Fatal("invalid hardened settings accepted")
+			}
+		})
+	}
+	n := hardened()
+	n.ChatTemplate, n.ChatTemplateSHA256, n.APIKeyFile = "", "", ""
+	c.Profiles[0].NativeModel = n
+	if err := c.Validate(); err != nil || n.Hardened() {
+		t.Fatal("a catalog without hardened settings must stay readable", err)
+	}
+	raw, _ := json.Marshal(hardened())
+	if !strings.Contains(string(raw), `"chatTemplateSHA256":"`+digest+`"`) || !strings.Contains(string(raw), `"apiKeyFile":`) {
+		t.Fatalf("JSON field names: %s", raw)
+	}
+}

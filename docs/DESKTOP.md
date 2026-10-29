@@ -225,8 +225,12 @@ pre-start commands to system `true`/`false` with an optional `--`. The other
 allowed form is `test` with one file predicate (`-e`, `-f`, `-d`, `-r`, `-w`,
 `-x`, or `-s`) and an absolute, clean path. Setup keeps originals and refuses unsupported
 commands, and keeps the supported vLLM `--max-model-len` and
-`--served-model-name` options. Generating a managed launch uses its distinct
-restricted format.
+`--served-model-name` options.
+
+A vLLM launch must also use the hardened
+settings in [WORKLOADS.md](WORKLOADS.md#hardened-vllm-launch). Generating a
+managed launch uses its distinct restricted format with these settings. The
+model folder must contain `chat_template.jinja`.
 
 ## Upgrade and interrupted activation
 

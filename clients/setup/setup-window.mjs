@@ -11,7 +11,7 @@ import {createShell, createSettings, createApplicationCards, createFooter} from 
 import {ReviewedConfiguration} from './review.mjs';
 import {createProfileEditor} from './profile-ui.mjs';
 import {addDraftEditor} from './discovery-ui.mjs';
-import {applications, candidateDiagnostics} from './onboarding.mjs';
+import {applications, candidateDiagnostics, recordFingerprint} from './onboarding.mjs';
 
 // The caller supplies transport; fixture callers never invoke the production subprocess.
 export function createSetupWindow(options) { const ui = new SetupWindow(options); ui.start(); return ui; }
@@ -243,7 +243,7 @@ class SetupWindow {
                 for (const profile of snapshot.catalog.profiles) {
                     if (!profile.nativeModel || profile.nativeModel.owned) continue;
                     const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'fingerprint'], JSON.stringify({binding: profile.nativeModel})));
-                    profile.nativeModel.launchSHA256 = result.sha256;
+                    recordFingerprint(profile.nativeModel, result);
                 }
                 candidate.request = JSON.stringify(snapshot);
             }

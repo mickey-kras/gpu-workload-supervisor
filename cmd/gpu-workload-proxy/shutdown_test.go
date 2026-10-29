@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -14,11 +16,13 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	workloadproxy "github.com/mickey-kras/gpu-workload-supervisor/internal/proxy"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/vllmkey"
 )
 
 type shutdownNativeStore struct {
 	workloadproxy.StateStore
 	endpoint string
+	keyFile  string
 	started  chan struct{}
 	release  chan struct{}
 }
@@ -28,7 +32,7 @@ func (s *shutdownNativeStore) State(context.Context) (control.State, error) {
 }
 func (s *shutdownNativeStore) Catalog(context.Context) (control.CatalogSnapshot, error) {
 	return control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{
-		{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: s.endpoint}},
+		{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: s.endpoint, APIKeyFile: s.keyFile}},
 	}}}, nil
 }
 func (s *shutdownNativeStore) AdmitWorkTokenAtCatalog(context.Context, string, string, control.Workload, control.Fence, string) (string, error) {
@@ -60,7 +64,7 @@ func TestShutdownProxyDrainsHTTPBeforeNativePersistence(t *testing.T) {
 		_, _ = io.WriteString(w, "data: [DONE]\n\n")
 	}))
 	defer upstream.Close()
-	s := &shutdownNativeStore{endpoint: upstream.URL, started: make(chan struct{}), release: make(chan struct{})}
+	s := &shutdownNativeStore{endpoint: upstream.URL, keyFile: shutdownKeyFile(t), started: make(chan struct{}), release: make(chan struct{})}
 	var releaseWrite sync.Once
 	defer releaseWrite.Do(func() { close(s.release) })
 	target, _ := url.Parse(upstream.URL)
@@ -118,4 +122,14 @@ func TestShutdownProxyDrainsHTTPBeforeNativePersistence(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("native persistence did not drain")
 	}
+}
+
+// shutdownKeyFile writes the private vLLM API key file that the proxy reads.
+func shutdownKeyFile(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "vllm.env")
+	if err := os.WriteFile(path, []byte(vllmkey.Name+"="+strings.Repeat("s", 43)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

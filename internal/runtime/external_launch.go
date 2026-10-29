@@ -147,6 +147,13 @@ func (d *externalLaunchDirectives) applyLine(section, line string) error {
 		d.pre = appendLaunchAssignment(d.pre, value)
 	case "[Service]Environment":
 		return d.applyEnvironment(value)
+	case "[Service]EnvironmentFile":
+		// systemd appends every EnvironmentFile assignment and an empty one
+		// resets the list. Only one assignment in all sources is supported.
+		if _, exists := d.scalars[section+key]; exists || value == "" {
+			return fmt.Errorf("%w: only one EnvironmentFile assignment is supported", ErrLaunchUnsupported)
+		}
+		d.scalars[section+key] = value
 	case unitWantsDirective:
 		return d.applyWants(value)
 	default:

@@ -126,7 +126,50 @@ The controller stops the old unit and verifies GPU release before it starts the 
 unit. Re-selecting an active workload does not restart that unit. Opposing units
 stay reconciled.
 
-Native readiness queries `/health` and `/v1/models`.
+Native readiness queries `/health`, `/version` and `/v1/models`. The
+`/v1/models` request sends the API key from the key file of the binding.
+
+### Hardened vLLM launch
+
+Every vLLM launch must use these settings. A launch without one of them does
+not qualify, and the workload stays unavailable:
+
+- `--host 127.0.0.1`. vLLM listens only on the loopback address.
+- `--load-format safetensors`. vLLM loads only safetensors weights.
+- `--chat-template <absolute path>`. Setup records the SHA-256 of the template
+  file. A changed template file stops the qualification until you run setup
+  again.
+- `Environment=HF_HUB_OFFLINE=1`. vLLM loads the model only from local files.
+- `EnvironmentFile=<absolute path>`. This private file holds the API key as one
+  line, `VLLM_API_KEY=<key>`. The key has 32 to 256 URL-safe characters. The
+  desktop user must own the file. Set the file mode to `0600`. Do not put the key
+  on the command line or in an `Environment=` line.
+
+The option allowlist keeps the other vLLM options off. Thus remote code,
+request-supplied chat templates, prompt-embedding input, an API key on the
+command line and runtime adapter loading stay off. Setup also rejects
+`VLLM_ALLOW_RUNTIME_LORA_UPDATING` in the environment.
+
+The minimum vLLM version is 0.14.1. A model with an NVFP4 quantization in
+`config.json` or `hf_quant_config.json` needs vLLM 0.27.0 or later. Readiness
+reads `/version` and keeps the workload unavailable on an older version or a
+pre-release of the minimum version. Use a vLLM version that has no known
+critical or high security advisory.
+
+For a supervisor-managed launch, setup pins `chat_template.jinja` in the model
+folder and creates the private key file under
+`~/.config/gpu-workload-supervisor/vllm/` when you apply. Setup keeps a usable
+key file and never replaces a file that it cannot use. For an existing launch,
+setup reads the template path and the key file path from the launch.
+
+The workload proxy reads the key file for each request and sends the key to
+vLLM. It replaces any `Authorization` header from the client. The key protects
+the `/v1` routes of vLLM. Other vLLM routes, such as `/health` and `/version`,
+do not need the key. Programs of the same desktop user can read the key file.
+The supervisor trusts that user.
+
+Bindings from an earlier release do not record these settings. Run setup
+again for each vLLM workload after you add the settings to its launch.
 
 Stop the workload proxies before applying a catalog change. Setup and CLI configure both
 enforce the proxy lifetime lock, including in-flight requests.
@@ -138,7 +181,7 @@ Launch-file constraints:
 - The desktop user or root must own executables, scripts, launch sources, validated environment and data paths and their traversed directory ancestry. These items must not be world-writable. Setup allows group write only for groups the desktop user belongs to. This single-admin host policy trusts members of its own groups.
   These checks do not isolate workloads from group members who can change them.
   Setup resolves symlinks with ownership and permission checks on every traversed path. It rejects broken links and excessive link chains.
-- Setup rejects shell wrappers, environment files, uninspected execution hooks, filesystem remapping directives and command substitution. Setup supports bounded direct `ExecStartPre` system checks and inspects them without running them.
+- Setup rejects shell wrappers, environment files other than the vLLM key file, uninspected execution hooks, filesystem remapping directives and command substitution. Setup supports bounded direct `ExecStartPre` system checks and inspects them without running them.
 - Setup does not change or install application or model files.
 - The vLLM runtime needs an existing local model directory. These model checks prove existence and type, not
   ownership, permissions or content safety.
@@ -153,7 +196,7 @@ code-loading overrides such as `LD_PRELOAD`, `LD_AUDIT` and `PYTHONHOME` stay
 unsupported.
 
 Setup keeps other literal variables. It does not certify their application-specific
-behavior. Unsupported expansion and environment files remain rejected.
+behavior. Unsupported expansion and other environment files remain rejected.
 
 Directory checks do not inspect ownership, permissions or contents of loaded modules or
 libraries. The operator stays responsible for trusted local installation and
