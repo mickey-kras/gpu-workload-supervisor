@@ -13,6 +13,10 @@ import (
 // ResourceLimitsVersion is the only accepted resource limits contract.
 const ResourceLimitsVersion = 1
 
+// CatalogVersionOwned is the first catalog version that accepts owned launch
+// specifications.
+const CatalogVersionOwned = 2
+
 // CatalogVersionTrainer is the first catalog version that accepts trainer
 // bindings.
 const CatalogVersionTrainer = 4
@@ -236,7 +240,7 @@ func LowestCatalogVersion(c Catalog) int {
 		case p.Trainer != nil:
 			version = max(version, CatalogVersionTrainer)
 		case p.NativeModel != nil && p.NativeModel.Owned != nil:
-			version = max(version, 2)
+			version = max(version, CatalogVersionOwned)
 		}
 	}
 	return version

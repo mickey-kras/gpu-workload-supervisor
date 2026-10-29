@@ -29,10 +29,10 @@ func (c *Controller) ActivateWorkload(ctx context.Context, target control.Worklo
 	if p, ok := c.config.Catalog.Catalog.Profile(target); ok && p.Trainer != nil {
 		return control.State{}, fmt.Errorf("finite trainer requires training-start")
 	}
-	if err := c.refuseLimitedTarget(target); err != nil {
+	if err := c.checkCatalog(ctx); err != nil {
 		return control.State{}, err
 	}
-	if err := c.checkCatalog(ctx); err != nil {
+	if err := c.refuseLimitedTarget(target); err != nil {
 		return control.State{}, err
 	}
 	current, err := c.store.State(ctx)

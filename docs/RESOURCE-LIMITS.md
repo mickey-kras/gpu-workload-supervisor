@@ -10,7 +10,8 @@ The current release has only the schema part of this feature:
   specification. The renderer and the strict parser carry them.
 - The supervisor refuses a switch to a unit with limits before it stops the
   current workload. The runtime also does not start the unit or report it as
-  healthy. This gate does not change other workloads, preflight or release
+  healthy. Reconciliation does not keep a running unit with limits. It stops
+  the unit and goes to idle. This gate does not change other workloads, preflight or release
   checks.
 - Setup cannot write limits. It rejects a request with limits before it writes
   a unit, and it accepts a request that removes them.

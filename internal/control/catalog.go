@@ -163,7 +163,7 @@ func (c Catalog) Validate() error {
 	if err := c.validateSize(); err != nil {
 		return err
 	}
-	if c.Version != 1 && c.Version != 2 && c.Version != CatalogVersionTrainer && c.Version != CatalogVersionLimits {
+	if c.Version != 1 && c.Version != CatalogVersionOwned && c.Version != CatalogVersionTrainer && c.Version != CatalogVersionLimits {
 		return errors.New("unsupported catalog version")
 	}
 	if c.Disabled {

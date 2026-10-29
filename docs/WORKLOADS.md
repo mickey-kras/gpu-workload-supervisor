@@ -50,8 +50,8 @@ that the catalog needs.
 Setup cannot write limits yet. It rejects a request with limits, and it accepts a
 request that removes them. The controller, host cap and cgroup readback checks
 are not in this release. Thus the supervisor refuses a switch to a unit with
-limits before it stops the current workload. This gate does not change other
-workloads.
+limits before it stops the current workload. Reconciliation stops a running unit
+with limits and goes to idle. This gate does not change other workloads.
 
 Catalog versions are separate from database schema versions and upstream runtime and
 API versions.
