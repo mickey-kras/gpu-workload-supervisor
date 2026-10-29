@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -16,11 +18,8 @@ import (
 // RecordVersion is the only result format.
 const RecordVersion = 1
 
-// Bounds of one stored result.
-const (
-	MaxRecordBytes = 4 << 20
-	MaxModelFiles  = 4096
-)
+// MaxRecordBytes bounds one stored result.
+const MaxRecordBytes = 4 << 20
 
 // Status is the overall result. Only StatusPassed is clean.
 type Status string
@@ -44,6 +43,26 @@ const (
 	OutcomeNotRun      Outcome = "not_run"
 )
 
+// Coverage tells whether every check ran.
+type Coverage string
+
+const (
+	CoverageComplete Coverage = "complete"
+	CoveragePartial  Coverage = "partial"
+)
+
+// Configuration is the effective configuration of the checks.
+type Configuration struct {
+	Hub              string `json:"hub"`
+	MaxJSONFileBytes int64  `json:"maxJSONFileBytes"`
+	MaxModelFiles    int    `json:"maxModelFiles"`
+}
+
+// currentConfiguration is the configuration that this checker applies.
+func currentConfiguration(hub string) Configuration {
+	return Configuration{Hub: hub, MaxJSONFileBytes: MaxJSONFileBytes, MaxModelFiles: MaxModelFiles}
+}
+
 // Check names, in the order that they run. Each must pass.
 const (
 	CheckAllowlist = "file-allowlist"
@@ -66,15 +85,17 @@ type Check struct {
 // SHA-256 of every model file. A record for other files, another root or
 // another source does not apply.
 type Record struct {
-	Version   int               `json:"version"`
-	Model     string            `json:"model"`
-	Root      string            `json:"root"`
-	Source    Source            `json:"source"`
-	Files     map[string]string `json:"files"`
-	Status    Status            `json:"status"`
-	Checks    []Check           `json:"checks"`
-	Checker   string            `json:"checker"`
-	CheckedAt time.Time         `json:"checkedAt"`
+	Version       int               `json:"version"`
+	Model         string            `json:"model"`
+	Root          string            `json:"root"`
+	Source        Source            `json:"source"`
+	Files         map[string]string `json:"files"`
+	Status        Status            `json:"status"`
+	Coverage      Coverage          `json:"coverage"`
+	Checks        []Check           `json:"checks"`
+	Checker       string            `json:"checker"`
+	Configuration Configuration     `json:"configuration"`
+	CheckedAt     time.Time         `json:"checkedAt"`
 }
 
 var (
@@ -92,11 +113,17 @@ func (r Record) Validate() error {
 	if r.CheckedAt.IsZero() || r.CheckedAt.Location() != time.UTC {
 		return errors.New("model check record needs a UTC check time")
 	}
-	if !validFiles(r.Files) {
-		return errors.New("model check record needs 1 to 4096 valid file entries")
-	}
 	if !validChecks(r.Checks) {
 		return errors.New("model check record needs every check in order")
+	}
+	if !validFiles(r.Files, r.Checks[0].Outcome == OutcomePassed) {
+		return fmt.Errorf("model check record needs valid file entries, at most %d", MaxModelFiles)
+	}
+	if r.Configuration != currentConfiguration(r.Configuration.Hub) || !strings.HasPrefix(r.Configuration.Hub, "https://") || len(r.Configuration.Hub) > 256 {
+		return errors.New("model check record has an invalid configuration")
+	}
+	if coverageOf(r.Checks) != r.Coverage {
+		return errors.New("model check record coverage does not follow from its checks")
 	}
 	if statusOf(r.Checks) != r.Status {
 		return errors.New("model check record status does not follow from its checks")
@@ -104,8 +131,10 @@ func (r Record) Validate() error {
 	return nil
 }
 
-func validFiles(files map[string]string) bool {
-	if len(files) == 0 || len(files) > MaxModelFiles {
+// validFiles needs at least one file once the allowlist passed. A failed
+// inventory can stop before the first file.
+func validFiles(files map[string]string, complete bool) bool {
+	if files == nil || (complete && len(files) == 0) || len(files) > MaxModelFiles {
 		return false
 	}
 	for name, digest := range files {
@@ -146,6 +175,15 @@ func statusOf(checks []Check) Status {
 	return StatusPassed
 }
 
+func coverageOf(checks []Check) Coverage {
+	for _, check := range checks {
+		if check.Outcome == OutcomeNotRun {
+			return CoveragePartial
+		}
+	}
+	return CoverageComplete
+}
+
 // MarshalRecord encodes a valid record within MaxRecordBytes.
 func MarshalRecord(r Record) ([]byte, error) {
 	if err := r.Validate(); err != nil {
@@ -177,10 +215,11 @@ func ReadRecord(raw []byte) (Record, error) {
 }
 
 // Current gives the status that applies to the model files on disk now. A
-// record for other digests, another root or another source leaves the
-// model not scanned: results never carry over to changed or other models.
-func Current(r *Record, model, root string, source Source, files map[string]string) Status {
-	if r == nil || r.Model != model || r.Root != root || r.Source != source || !reflect.DeepEqual(r.Files, files) {
+// record for other digests, another root, another source or another checker
+// version leaves the model not scanned: results never carry over to changed
+// or other models, and a new checker checks again.
+func Current(r *Record, model, root string, source Source, checker string, files map[string]string) Status {
+	if r == nil || r.Model != model || r.Root != root || r.Source != source || r.Checker != checker || !reflect.DeepEqual(r.Files, files) {
 		return StatusNotScanned
 	}
 	return r.Status

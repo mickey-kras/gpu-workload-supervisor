@@ -4,13 +4,17 @@ import (
 	"context"
 	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -86,7 +90,9 @@ type hub struct {
 	server   *httptest.Server
 	entries  []UpstreamFile
 	requests atomic.Int32
+	strays   atomic.Int32
 	status   int
+	redirect bool
 	link     string
 	body     string
 }
@@ -102,10 +108,14 @@ func newHub(t *testing.T, entries []UpstreamFile) *hub {
 func (h *hub) serve(w http.ResponseWriter, r *http.Request) {
 	h.requests.Add(1)
 	if r.URL.Path != "/api/models/"+testSource.Repo+"/tree/"+testSource.Revision || r.URL.Query().Get("recursive") != "true" {
+		h.strays.Add(1)
 		http.NotFound(w, r)
 		return
 	}
 	if h.body != "" || h.status != http.StatusOK {
+		if h.redirect {
+			w.Header().Set("Location", "/elsewhere")
+		}
 		w.WriteHeader(h.status)
 		_, _ = w.Write([]byte(h.body))
 		return
@@ -125,7 +135,7 @@ func (h *hub) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *hub) checker() Checker {
-	return Checker{Listing: HubListing(h.server.Client(), h.server.URL), Version: "test-1", Now: testNow}
+	return Checker{Listing: HubListing(h.server.Client(), h.server.URL), Hub: h.server.URL, Version: "test-1", Now: testNow}
 }
 
 func run(t *testing.T, c Checker, root string) Record {
@@ -140,46 +150,43 @@ func run(t *testing.T, c Checker, root string) Record {
 func TestRunBindsPassingFileChecksToDigests(t *testing.T) {
 	files := modelFiles()
 	root := writeModel(t, files)
-	h := newHub(t, append(upstreamOf(files), UpstreamFile{Type: "file", Path: "README.md", OID: blobID("readme"), Size: 6}))
+	h := newHub(t, append(upstreamOf(files), UpstreamFile{Type: "file", Path: "extra.md", OID: blobID("extra"), Size: 5}))
 	record := run(t, h.checker(), root)
-	if record.Status != StatusNotScanned {
-		t.Fatalf("status = %s; the later checks did not run", record.Status)
-	}
 	want := []Check{{CheckAllowlist, OutcomePassed, ""}, {CheckIdentity, OutcomePassed, ""}, {CheckTemplate, OutcomeNotRun, ""}, {CheckBehavior, OutcomeNotRun, ""}}
-	for i, check := range want {
-		if record.Checks[i] != check {
-			t.Fatalf("check %d = %+v, want %+v", i, record.Checks[i], check)
-		}
+	if !slices.Equal(record.Checks, want) || record.Status != StatusNotScanned || record.Coverage != CoveragePartial {
+		t.Fatalf("checks = %+v, status %s, coverage %s", record.Checks, record.Status, record.Coverage)
 	}
 	if len(record.Files) != len(files) || record.Files["config.json"] != sha256Hex(files["config.json"]) {
 		t.Fatal("record must bind the SHA-256 of every model file")
 	}
-	if record.CheckedAt != testNow() || record.Checker != "test-1" || h.requests.Load() < 4 {
+	if record.CheckedAt != testNow() || record.Checker != "test-1" || record.Configuration != currentConfiguration(h.server.URL) || h.requests.Load() < 4 {
 		t.Fatalf("unexpected record metadata or paging: %+v, %d requests", record, h.requests.Load())
-	}
-	if Current(&record, "example", root, testSource, record.Files) != StatusNotScanned {
-		t.Fatal("current status must follow the record")
 	}
 }
 
 func TestAllowlistRejectsFiles(t *testing.T) {
 	for name, tc := range map[string]struct {
 		file, content string
-		outcome       Outcome
 		reason        string
 	}{
-		"python code":         {"modeling.py", "import os", OutcomeFailed, ReasonCodeOrPickleFile},
-		"pickle weights":      {"pytorch_model.bin", "pickle", OutcomeFailed, ReasonCodeOrPickleFile},
-		"torch weights":       {"model.pt", "pickle", OutcomeFailed, ReasonCodeOrPickleFile},
-		"checkpoint":          {"model.ckpt", "pickle", OutcomeFailed, ReasonCodeOrPickleFile},
-		"unlisted file":       {"README.md", "text", OutcomeFailed, ReasonUnlistedFile},
-		"nested file":         {"original/config.json", "{}", OutcomeFailed, ReasonNestedFile},
-		"auto_map in config":  {"config.json", `{"auto_map":{"AutoModel":"x.Model"}}`, OutcomeFailed, ReasonRemoteCode},
-		"nested auto_map":     {"tokenizer_config.json", `{"a":[{"b":{"auto_map":1}}]}`, OutcomeFailed, ReasonRemoteCode},
-		"duplicate JSON key":  {"generation_config.json", `{"a":1,"a":2}`, OutcomeFailed, ReasonInvalidJSON},
-		"trailing JSON value": {"generation_config.json", `{}{}`, OutcomeFailed, ReasonInvalidJSON},
-		"malformed JSON":      {"generation_config.json", `{"a":`, OutcomeFailed, ReasonInvalidJSON},
-		"oversized JSON":      {"tokenizer.json", strings.Repeat(" ", MaxJSONFileBytes+1), OutcomeFailed, ReasonInvalidJSON},
+		"python code":        {"modeling.py", "import os", ReasonCodeOrPickleFile},
+		"pickle weights":     {"pytorch_model.bin", "pickle", ReasonCodeOrPickleFile},
+		"torch weights":      {"model.pt", "pickle", ReasonCodeOrPickleFile},
+		"torch state":        {"model.pth", "pickle", ReasonCodeOrPickleFile},
+		"pickle":             {"model.pkl", "pickle", ReasonCodeOrPickleFile},
+		"checkpoint":         {"model.ckpt", "pickle", ReasonCodeOrPickleFile},
+		"unlisted file":      {"notes.txt", "text", ReasonUnlistedFile},
+		"nested file":        {"original/config.json", "{}", ReasonNestedFile},
+		"other cache file":   {".cache/other/file", "x", ReasonUnlistedFile},
+		"adapter redirect":   {"adapter_config.json", `{"base_model_name_or_path":"other/base"}`, ReasonAdapterRedirect},
+		"auto_map":           {"config.json", `{"auto_map":{"AutoModel":"x.Model"}}`, ReasonRemoteCode},
+		"nested auto_map":    {"tokenizer_config.json", `{"a":[{"b":{"auto_map":1}}]}`, ReasonRemoteCode},
+		"auto_mapping":       {"generation_config.json", `{"auto_mapping":{}}`, ReasonRemoteCode},
+		"custom_pipelines":   {"config.json", `{"custom_pipelines":{"x":{}}}`, ReasonRemoteCode},
+		"duplicate JSON key": {"generation_config.json", `{"a":1,"a":2}`, ReasonInvalidJSON},
+		"trailing value":     {"generation_config.json", `{}{}`, ReasonInvalidJSON},
+		"malformed JSON":     {"generation_config.json", `{"a":`, ReasonInvalidJSON},
+		"oversized JSON":     {"tokenizer.json", `{"a":"` + strings.Repeat("x", MaxJSONFileBytes) + `"}`, ReasonInvalidJSON},
 	} {
 		t.Run(name, func(t *testing.T) {
 			files := modelFiles()
@@ -187,7 +194,7 @@ func TestAllowlistRejectsFiles(t *testing.T) {
 			root := writeModel(t, files)
 			h := newHub(t, upstreamOf(files))
 			record := run(t, h.checker(), root)
-			if record.Checks[0] != (Check{CheckAllowlist, tc.outcome, tc.reason}) || record.Status != StatusFindings {
+			if record.Checks[0] != (Check{CheckAllowlist, OutcomeFailed, tc.reason}) || record.Status != StatusFindings {
 				t.Fatalf("allowlist = %+v, status %s", record.Checks[0], record.Status)
 			}
 			if record.Checks[1].Outcome != OutcomeNotRun || h.requests.Load() != 0 {
@@ -197,50 +204,137 @@ func TestAllowlistRejectsFiles(t *testing.T) {
 	}
 }
 
+func TestAllowlistAcceptsLargeValidJSONAndUnloadedFiles(t *testing.T) {
+	files := modelFiles()
+	files["tokenizer.json"] = `{"a":"` + strings.Repeat("x", 2<<20) + `"}`
+	for _, name := range []string{"README", "README.md", "LICENSE", "LICENSE.md", ".gitattributes"} {
+		files[name] = "text"
+	}
+	record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+	if record.Checks[0].Outcome != OutcomePassed || record.Checks[1].Outcome != OutcomePassed || len(record.Files) != len(files) {
+		t.Fatalf("checks = %+v", record.Checks)
+	}
+}
+
 func TestAllowlistNeedsASafetensorsModel(t *testing.T) {
-	for name, remove := range map[string]string{"no weights": ".safetensors", "no configuration": "config.json"} {
+	for name, tc := range map[string]struct{ remove, reason string }{
+		"no weights":       {".safetensors", ReasonNoWeights},
+		"no configuration": {"config.json", ReasonNoConfiguration},
+	} {
 		t.Run(name, func(t *testing.T) {
 			files := modelFiles()
 			for file := range files {
-				if strings.HasSuffix(file, remove) || file == "model.safetensors.index.json" {
+				if strings.HasSuffix(file, tc.remove) || file == "model.safetensors.index.json" {
 					delete(files, file)
 				}
 			}
 			record := run(t, newHub(t, nil).checker(), writeModel(t, files))
-			if record.Status != StatusUnsupported || record.Checks[0].Outcome != OutcomeUnsupported {
-				t.Fatalf("status = %s", record.Status)
+			if record.Status != StatusUnsupported || record.Checks[0] != (Check{CheckAllowlist, OutcomeUnsupported, tc.reason}) {
+				t.Fatalf("allowlist = %+v", record.Checks[0])
 			}
 		})
 	}
 }
 
-func TestRunRefusesInvalidInventories(t *testing.T) {
-	for name, change := range map[string]func(t *testing.T, root string){
-		"symbolic link": func(t *testing.T, root string) {
+func TestInventoryRejectionsAreStored(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change  func(t *testing.T, root string)
+		outcome Outcome
+		reason  string
+	}{
+		"symbolic link": {func(t *testing.T, root string) {
 			if err := os.Symlink("config.json", filepath.Join(root, "linked.json")); err != nil {
 				t.Fatal(err)
 			}
-		},
-		"shard index names a missing shard": func(t *testing.T, root string) {
+		}, OutcomeFailed, ReasonLinkOrNonRegular},
+		"shard index names a missing shard": {func(t *testing.T, root string) {
 			write(t, filepath.Join(root, "model.safetensors.index.json"), `{"weight_map":{"a":"absent.safetensors"}}`)
-		},
-		"shard index names other weights": func(t *testing.T, root string) {
+		}, OutcomeFailed, ReasonInvalidShard},
+		"shard index names other weights": {func(t *testing.T, root string) {
 			write(t, filepath.Join(root, "model.safetensors.index.json"), `{"weight_map":{"a":"config.json"}}`)
-		},
+		}, OutcomeFailed, ReasonInvalidShard},
+		"shard index above the JSON limit": {func(t *testing.T, root string) {
+			write(t, filepath.Join(root, "model.safetensors.index.json"), `{"weight_map":{"a":"model-00001-of-00002.safetensors"},"m":"`+strings.Repeat("x", MaxJSONFileBytes)+`"}`)
+		}, OutcomeUnsupported, ReasonShardTooLarge},
+		"too many files": {func(t *testing.T, root string) {
+			for i := 0; i <= MaxModelFiles; i++ {
+				write(t, filepath.Join(root, fmt.Sprintf("extra-%04d.safetensors", i)), "w")
+			}
+		}, OutcomeUnsupported, ReasonTooManyFiles},
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := writeModel(t, modelFiles())
-			change(t, root)
-			if _, err := newHub(t, nil).checker().Run(context.Background(), Request{Model: "example", Root: root, Source: testSource}); err == nil {
-				t.Fatal("an invalid inventory was checked")
+			tc.change(t, root)
+			h := newHub(t, nil)
+			record := run(t, h.checker(), root)
+			if record.Checks[0] != (Check{CheckAllowlist, tc.outcome, tc.reason}) || h.requests.Load() != 0 {
+				t.Fatalf("allowlist = %+v", record.Checks[0])
+			}
+			if _, err := MarshalRecord(record); err != nil {
+				t.Fatal("an inventory rejection must be a storable record", err)
 			}
 		})
+	}
+}
+
+func TestLargeShardIndexIsAccepted(t *testing.T) {
+	files := modelFiles()
+	files["model.safetensors.index.json"] = `{"metadata":{"pad":"` + strings.Repeat("x", 2<<20) + `"},"weight_map":{"a":"model-00001-of-00002.safetensors"}}`
+	record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+	if record.Checks[0].Outcome != OutcomePassed {
+		t.Fatalf("an index above 1 MiB must pass: %+v", record.Checks[0])
+	}
+}
+
+func TestDownloadToolMetadataIsSkipped(t *testing.T) {
+	files := modelFiles()
+	root := writeModel(t, files)
+	write(t, filepath.Join(root, ".cache", "huggingface", ".gitignore"), "*")
+	for name := range files {
+		write(t, filepath.Join(root, ".cache", "huggingface", "download", name+".metadata"), "commit\netag\n")
+	}
+	write(t, filepath.Join(root, ".cache", "huggingface", "download", "config.json.lock"), "")
+	record := run(t, newHub(t, upstreamOf(files)).checker(), root)
+	if record.Checks[0].Outcome != OutcomePassed || record.Checks[1].Outcome != OutcomePassed || len(record.Files) != len(files) {
+		t.Fatalf("the download metadata must be skipped and never bound: %+v", record)
+	}
+	for name, path := range map[string]string{
+		"code in download": filepath.Join(".cache", "huggingface", "download", "evil.py"),
+		"nested download":  filepath.Join(".cache", "huggingface", "download", "sub", "x.metadata"),
+		"other tool cache": filepath.Join(".cache", "torch", "x"),
+		"other file":       filepath.Join(".cache", "huggingface", "token"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			other := writeModel(t, files)
+			write(t, filepath.Join(other, path), "x")
+			record := run(t, newHub(t, upstreamOf(files)).checker(), other)
+			if record.Checks[0] != (Check{CheckAllowlist, OutcomeFailed, ReasonUnlistedFile}) {
+				t.Fatalf("allowlist = %+v", record.Checks[0])
+			}
+		})
+	}
+}
+
+func TestChecksAreDeterministic(t *testing.T) {
+	files := modelFiles()
+	files["a.py"], files["b.bin"], files["notes.txt"] = "x", "x", "x"
+	files["config.json"] = `{"auto_map":{}}`
+	root := writeModel(t, files)
+	h := newHub(t, upstreamOf(files))
+	first := run(t, h.checker(), root)
+	for i := 0; i < 20; i++ {
+		if again := run(t, h.checker(), root); !slices.Equal(again.Checks, first.Checks) {
+			t.Fatalf("run %d gave %+v, first %+v", i, again.Checks, first.Checks)
+		}
+	}
+	if first.Checks[0].Reason != ReasonCodeOrPickleFile {
+		t.Fatalf("the first problem in name order must win: %+v", first.Checks[0])
 	}
 }
 
 func TestIdentityMismatchIsAFinding(t *testing.T) {
-	for name, change := range map[string]func(entries []UpstreamFile) []UpstreamFile{
-		"changed weights": func(entries []UpstreamFile) []UpstreamFile {
+	for name, change := range map[string]func(t *testing.T, root string, entries []UpstreamFile) []UpstreamFile{
+		"changed weights": func(_ *testing.T, _ string, entries []UpstreamFile) []UpstreamFile {
 			for i := range entries {
 				if entries[i].LFS != nil {
 					entries[i].LFS.OID = sha256Hex("other weights")
@@ -248,7 +342,7 @@ func TestIdentityMismatchIsAFinding(t *testing.T) {
 			}
 			return entries
 		},
-		"changed small file": func(entries []UpstreamFile) []UpstreamFile {
+		"changed small file": func(_ *testing.T, _ string, entries []UpstreamFile) []UpstreamFile {
 			for i := range entries {
 				if entries[i].Path == "chat_template.jinja" {
 					entries[i].OID = blobID("{{ poisoned }}")
@@ -256,7 +350,7 @@ func TestIdentityMismatchIsAFinding(t *testing.T) {
 			}
 			return entries
 		},
-		"other size": func(entries []UpstreamFile) []UpstreamFile {
+		"other size": func(_ *testing.T, _ string, entries []UpstreamFile) []UpstreamFile {
 			for i := range entries {
 				if entries[i].Path == "config.json" {
 					entries[i].Size++
@@ -264,7 +358,19 @@ func TestIdentityMismatchIsAFinding(t *testing.T) {
 			}
 			return entries
 		},
-		"file not upstream": func(entries []UpstreamFile) []UpstreamFile {
+		"upstream blob above the blob limit": func(_ *testing.T, _ string, entries []UpstreamFile) []UpstreamFile {
+			for i := range entries {
+				if entries[i].Path == "tokenizer.json" {
+					entries[i].Size = maxGitBlobBytes + 1
+				}
+			}
+			return entries
+		},
+		"local file larger than the upstream blob": func(t *testing.T, root string, entries []UpstreamFile) []UpstreamFile {
+			write(t, filepath.Join(root, "tokenizer.json"), `{"model":{"vocab":{"a":1,"b":2}}}`)
+			return entries
+		},
+		"file not upstream": func(_ *testing.T, _ string, entries []UpstreamFile) []UpstreamFile {
 			for i := range entries {
 				if entries[i].Path == "generation_config.json" {
 					return append(entries[:i], entries[i+1:]...)
@@ -275,7 +381,9 @@ func TestIdentityMismatchIsAFinding(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			files := modelFiles()
-			record := run(t, newHub(t, change(upstreamOf(files))).checker(), writeModel(t, files))
+			root := writeModel(t, files)
+			entries := change(t, root, upstreamOf(files))
+			record := run(t, newHub(t, entries).checker(), root)
 			if record.Status != StatusFindings || record.Checks[1].Outcome != OutcomeFailed || record.Checks[2].Outcome != OutcomeNotRun {
 				t.Fatalf("identity = %+v", record.Checks[1])
 			}
@@ -284,34 +392,84 @@ func TestIdentityMismatchIsAFinding(t *testing.T) {
 }
 
 func TestUpstreamFailuresAreErrors(t *testing.T) {
-	for name, change := range map[string]func(h *hub){
-		"not found": func(h *hub) { h.status = http.StatusNotFound },
-		"malformed": func(h *hub) { h.body = `[{"type":` },
-		"invalid entry": func(h *hub) {
-			h.body = `[{"type":"file","path":"../x","oid":"` + strings.Repeat("0", 40) + `","size":1}]`
-		},
-		"invalid LFS digest": func(h *hub) {
-			h.body = `[{"type":"file","path":"x","oid":"` + strings.Repeat("0", 40) + `","size":1,"lfs":{"oid":"zz","size":1}}]`
-		},
-		"duplicate path":  func(h *hub) { h.entries = append(h.entries, h.entries[0], h.entries[0]) },
-		"other-host link": func(h *hub) { h.link = `<https://example.invalid/api/models/x/tree/y>; rel="next"` },
-		"oversized page":  func(h *hub) { h.body = "[" + strings.Repeat(" ", maxListingPageBytes) + "]" },
-		"unknown entry type": func(h *hub) {
-			h.body = `[{"type":"symlink","path":"x","oid":"` + strings.Repeat("0", 40) + `","size":1}]`
-		},
-		"negative entry size": func(h *hub) {
-			h.body = `[{"type":"file","path":"x","oid":"` + strings.Repeat("0", 40) + `","size":-1}]`
-		},
+	zero := strings.Repeat("0", 40)
+	for name, tc := range map[string]struct {
+		change func(h *hub)
+		reason string
+	}{
+		"not found":     {func(h *hub) { h.status = http.StatusNotFound }, ReasonUpstreamNotFound},
+		"denied":        {func(h *hub) { h.status = http.StatusForbidden }, ReasonUpstreamDenied},
+		"server error":  {func(h *hub) { h.status = http.StatusBadGateway }, ReasonUpstreamUnreachable},
+		"redirect":      {func(h *hub) { h.status = http.StatusFound; h.redirect = true }, ReasonUpstreamInvalid},
+		"malformed":     {func(h *hub) { h.body = `[{"type":` }, ReasonUpstreamInvalid},
+		"invalid entry": {func(h *hub) { h.body = `[{"type":"file","path":"../x","oid":"` + zero + `","size":1}]` }, ReasonUpstreamInvalid},
+		"invalid LFS digest": {func(h *hub) {
+			h.body = `[{"type":"file","path":"x","oid":"` + zero + `","size":1,"lfs":{"oid":"zz","size":1}}]`
+		}, ReasonUpstreamInvalid},
+		"duplicate path":      {func(h *hub) { h.entries = append(h.entries, h.entries[0], h.entries[0]) }, ReasonUpstreamInvalid},
+		"oversized page":      {func(h *hub) { h.body = "[" + strings.Repeat(" ", maxListingPageBytes) + "]" }, ReasonUpstreamInvalid},
+		"unknown entry type":  {func(h *hub) { h.body = `[{"type":"symlink","path":"x","oid":"` + zero + `","size":1}]` }, ReasonUpstreamInvalid},
+		"negative entry size": {func(h *hub) { h.body = `[{"type":"file","path":"x","oid":"` + zero + `","size":-1}]` }, ReasonUpstreamInvalid},
 	} {
 		t.Run(name, func(t *testing.T) {
 			files := modelFiles()
 			h := newHub(t, upstreamOf(files))
-			change(h)
+			tc.change(h)
 			record := run(t, h.checker(), writeModel(t, files))
-			if record.Status != StatusError || record.Checks[1] != (Check{CheckIdentity, OutcomeError, "upstream-unavailable"}) {
+			if record.Status != StatusError || record.Checks[1] != (Check{CheckIdentity, OutcomeError, tc.reason}) {
 				t.Fatalf("identity = %+v", record.Checks[1])
 			}
+			if h.strays.Load() != 0 {
+				t.Fatal("the listing followed a redirect")
+			}
 		})
+	}
+}
+
+// trustBoth gives a client that trusts both TLS test servers, so a refused
+// link fails because of the same-origin rule, not because of TLS.
+func trustBoth(a, b *httptest.Server) *http.Client {
+	pool := x509.NewCertPool()
+	pool.AddCert(a.Certificate())
+	pool.AddCert(b.Certificate())
+	return &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}}
+}
+
+func TestNextLinksStayOnTheSameTree(t *testing.T) {
+	files := modelFiles()
+	entries := upstreamOf(files)
+	other := newHub(t, entries)
+	plain := httptest.NewServer(http.HandlerFunc(other.serve))
+	t.Cleanup(plain.Close)
+	tree := "/api/models/" + testSource.Repo + "/tree/" + testSource.Revision
+	for name, link := range map[string]string{
+		"other host":   "<" + other.server.URL + tree + "?recursive=true&cursor=2>; rel=\"next\"",
+		"other path":   "<%s/api/models/" + testSource.Repo + "/tree/main?recursive=true&cursor=2>; rel=\"next\"",
+		"other scheme": "<" + plain.URL + tree + "?recursive=true&cursor=2>; rel=\"next\"",
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHub(t, entries)
+			h.link = strings.Replace(link, "%s", h.server.URL, 1)
+			before := other.requests.Load()
+			_, err := HubListing(trustBoth(h.server, other.server), h.server.URL)(context.Background(), testSource)
+			if !errors.Is(err, upstreamError{reason: ReasonUpstreamInvalid}) || other.requests.Load() != before || h.strays.Load() != 0 {
+				t.Fatalf("a next link to another location was followed or misreported: %v", err)
+			}
+		})
+	}
+	h := newHub(t, entries)
+	if listing, err := HubListing(trustBoth(h.server, other.server), h.server.URL)(context.Background(), testSource); err != nil || len(listing) != len(entries) {
+		t.Fatal("same-tree next links must be followed", err)
+	}
+}
+
+func TestHubListingNeedsHTTPS(t *testing.T) {
+	files := modelFiles()
+	h := newHub(t, upstreamOf(files))
+	plain := httptest.NewServer(http.HandlerFunc(h.serve))
+	t.Cleanup(plain.Close)
+	if _, err := HubListing(plain.Client(), plain.URL)(context.Background(), testSource); err == nil || h.requests.Load() != 0 {
+		t.Fatal("a plain HTTP hub was used")
 	}
 }
 
@@ -329,11 +487,8 @@ func TestHubListingBoundsPagesAndSource(t *testing.T) {
 			t.Fatalf("source %+v was accepted", source)
 		}
 	}
-	if _, err := HubListing(http.DefaultClient, "http://127.0.0.1:1")(context.Background(), testSource); err == nil {
-		t.Fatal("a plain HTTP hub was accepted")
-	}
-	if _, err := HubListing(h.server.Client(), "https://127.0.0.1:1")(context.Background(), testSource); err == nil {
-		t.Fatal("an unreachable hub was accepted")
+	if _, err := HubListing(h.server.Client(), "https://127.0.0.1:1")(context.Background(), testSource); !errors.Is(err, upstreamError{reason: ReasonUpstreamUnreachable}) {
+		t.Fatal("an unreachable hub must report unreachable", err)
 	}
 }
 
@@ -345,15 +500,21 @@ func TestRunRefusesBadRequestsAndCancel(t *testing.T) {
 		{Model: "", Root: root, Source: testSource},
 		{Model: "example", Root: "model", Source: testSource},
 		{Model: "example", Root: root, Source: Source{Repo: testSource.Repo}},
+		{Model: "example", Root: filepath.Join(root, "absent"), Source: testSource},
 	} {
 		if _, err := h.checker().Run(context.Background(), request); err == nil {
 			t.Fatalf("request %+v was accepted", request)
 		}
 	}
+	for _, checker := range []Checker{{Hub: h.server.URL, Version: "test-1"}, {Listing: h.checker().Listing, Hub: "http://hub", Version: "test-1"}, {Listing: h.checker().Listing, Hub: h.server.URL}} {
+		if _, err := checker.Run(context.Background(), Request{Model: "example", Root: root, Source: testSource}); err == nil {
+			t.Fatalf("checker %+v was accepted", checker)
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := h.checker().Run(ctx, Request{Model: "example", Root: root, Source: testSource}); err == nil {
-		t.Fatal("a cancelled check gave a result; the model must stay not scanned")
+		t.Fatal("a canceled check gave a result; the model must stay not scanned")
 	}
 }
 
@@ -362,27 +523,28 @@ func TestFileChangeResetsToNotScanned(t *testing.T) {
 	root := writeModel(t, files)
 	record := run(t, newHub(t, upstreamOf(files)).checker(), root)
 	record.Checks[2].Outcome, record.Checks[3].Outcome = OutcomePassed, OutcomePassed
-	record.Status = statusOf(record.Checks)
-	if record.Status != StatusPassed {
-		t.Fatal("all checks passing must give passed")
+	record.Status, record.Coverage = statusOf(record.Checks), coverageOf(record.Checks)
+	if record.Status != StatusPassed || record.Coverage != CoverageComplete {
+		t.Fatal("all checks passing must give passed and complete coverage")
 	}
-	fresh, err := Inventory(root)
-	if err != nil || Current(&record, "example", root, testSource, fresh) != StatusPassed {
+	fresh, reason, err := Inventory(root)
+	if err != nil || reason != "" || Current(&record, "example", root, testSource, "test-1", fresh) != StatusPassed {
 		t.Fatal("an unchanged model must keep its status", err)
 	}
 	write(t, filepath.Join(root, "generation_config.json"), `{"changed":true}`)
-	changed, err := Inventory(root)
+	changed, _, err := Inventory(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	other := testSource
 	other.Revision = strings.Repeat("b", 40)
 	for name, status := range map[string]Status{
-		"changed file": Current(&record, "example", root, testSource, changed),
-		"other model":  Current(&record, "other", root, testSource, fresh),
-		"other root":   Current(&record, "example", root+"2", testSource, fresh),
-		"other source": Current(&record, "example", root, other, fresh),
-		"no record":    Current(nil, "example", root, testSource, fresh),
+		"changed file":  Current(&record, "example", root, testSource, "test-1", changed),
+		"other model":   Current(&record, "other", root, testSource, "test-1", fresh),
+		"other root":    Current(&record, "example", root+"2", testSource, "test-1", fresh),
+		"other source":  Current(&record, "example", root, other, "test-1", fresh),
+		"other checker": Current(&record, "example", root, testSource, "test-2", fresh),
+		"no record":     Current(nil, "example", root, testSource, "test-1", fresh),
 	} {
 		if status != StatusNotScanned {
 			t.Fatalf("%s: status = %s, want not_scanned", name, status)
@@ -393,7 +555,7 @@ func TestFileChangeResetsToNotScanned(t *testing.T) {
 func TestFilesChangedDuringTheCheckAreErrors(t *testing.T) {
 	files := modelFiles()
 	root := writeModel(t, files)
-	digests, err := Inventory(root)
+	digests, _, err := Inventory(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,6 +568,7 @@ func TestFilesChangedDuringTheCheckAreErrors(t *testing.T) {
 	for _, entry := range upstreamOf(files) {
 		upstream[entry.Path] = entry
 	}
+	upstream["config.json"] = UpstreamFile{Type: "file", Path: "config.json", OID: blobID(`{"architectures":["Other"]}`), Size: int64(len(`{"architectures":["Other"]}`))}
 	only := map[string]string{"config.json": digests["config.json"]}
 	reason, err = checkIdentity(root, only, upstream)
 	if got := outcome(CheckIdentity, reason, err); got.Reason != "files-changed" {
@@ -417,5 +580,9 @@ func TestFilesChangedDuringTheCheckAreErrors(t *testing.T) {
 	reason, err = checkIdentity(root, only, upstream)
 	if got := outcome(CheckIdentity, reason, err); got.Reason != "unreadable" {
 		t.Fatalf("identity after removal = %+v", got)
+	}
+	write(t, filepath.Join(root, "model.safetensors.index.json"), indexJSON+" ")
+	if _, err := checkShardIndexes(root, digests); !errors.Is(err, errChanged) {
+		t.Fatal("a shard index changed after the inventory must be an error", err)
 	}
 }

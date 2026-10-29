@@ -10,13 +10,13 @@
 | Proxy and adapters | Route gating, forwarding, optional requester authentication, work registration and terminal evidence |
 | External broker | Workflow steps, retries, checkpoints, cancellation and results |
 | External gateway | Gateway authentication, request and response policy and content validation |
-| External ingestion tools | Model scanning, reports, signing and promotion |
+| Model checks | File allowlist, upstream identity, chat template check, behavioral scan and results bound to file digests ([#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585)) |
 
 - Controller: control metadata only. No prompts or responses.
 - Proxy: payload forwarding, bounded protocol validation and exact-body authorization. Optional [requester authentication](REQUESTER-INGRESS.md) before workflow authorization. No semantic content policy.
 - Demand records: admission evidence. No workflow scheduling or replay of ambiguous execution.
 - Integrations: keep admission, terminal evidence and runtime-bypass prevention.
-- Setup: no broker, gateway or scanner installation.
+- Setup: no broker or gateway installation. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans a setup step that installs the pinned scanner after you confirm it.
 - [Trainer adapters](TRAINING.md): recipes and checkpoint contents. Controller: finite-job lifecycle.
 
 ## Model checks
@@ -55,6 +55,8 @@ admission=closed
 | `gpu-workload-proxy` | Admission and completion |
 | `gpu-operator` | Embedded supervisor transitions |
 | `gpu-setup` | Accepted catalog |
+
+The `model_checks` table holds the [model check](MODEL-CHECKS.md) results. No executable writes it yet.
 
 Any writer can apply migrations when opening the database. Make a backup before you change binaries.
 

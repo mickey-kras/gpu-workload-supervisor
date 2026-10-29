@@ -1,70 +1,51 @@
 package llmtraining
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestInventoryDirectoryBindsEveryFileAndShardIndex(t *testing.T) {
+func TestFileDigestNeedsACleanAbsolutePath(t *testing.T) {
 	root := t.TempDir()
-	want := map[string]string{
-		"config.json":                  writeFixture(t, filepath.Join(root, "config.json"), "{}"),
-		"one.safetensors":              writeFixture(t, filepath.Join(root, "one.safetensors"), "shard"),
-		"model.safetensors.index.json": writeFixture(t, filepath.Join(root, "model.safetensors.index.json"), `{"weight_map":{"a":"one.safetensors"}}`),
-	}
-	inventory, err := InventoryDirectory(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if inventory.Root != root || len(inventory.Files) != len(want) {
-		t.Fatalf("unexpected inventory %+v", inventory)
-	}
-	for name, digest := range want {
-		if inventory.Files[name] != digest {
-			t.Fatalf("file %s has digest %s, want %s", name, inventory.Files[name], digest)
-		}
-	}
-	if digest, err := FileDigest(filepath.Join(root, "one.safetensors")); err != nil || digest != want["one.safetensors"] {
-		t.Fatal("file digest differs from the inventory digest", err)
-	}
-	writeFixture(t, filepath.Join(root, "extra.safetensors.index.json"), `{"weight_map":{"a":"absent.safetensors"}}`)
-	if _, err := InventoryDirectory(root); err == nil {
-		t.Fatal("a shard index that names an absent shard was accepted")
+	want := writeFixture(t, filepath.Join(root, "one.safetensors"), "shard")
+	if digest, err := FileDigest(filepath.Join(root, "one.safetensors")); err != nil || digest != want {
+		t.Fatal("file digest differs from the fixture digest", err)
 	}
 	for _, path := range []string{"relative", root + "/", "/"} {
-		if _, err := InventoryDirectory(path); err == nil {
-			t.Fatalf("root %q was accepted", path)
-		}
 		if _, err := FileDigest(path); err == nil {
 			t.Fatalf("file %q was accepted", path)
 		}
 	}
-	empty := t.TempDir()
-	if _, err := InventoryDirectory(empty); err == nil {
-		t.Fatal("an empty inventory was accepted")
-	}
-	if err := os.Symlink(root, filepath.Join(empty, "link")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := InventoryDirectory(filepath.Join(empty, "link")); err == nil {
-		t.Fatal("a linked root was accepted")
-	}
 }
 
-func TestShardIndexMustMatchItsInventoryDigest(t *testing.T) {
+func TestCheckShardIndexBindsDigestAndLimit(t *testing.T) {
 	root := t.TempDir()
+	index := `{"weight_map":{"a":"one.safetensors"}}`
 	inventory := Inventory{Root: root, Files: map[string]string{
 		"one.safetensors":              writeFixture(t, filepath.Join(root, "one.safetensors"), "shard"),
-		"model.safetensors.index.json": writeFixture(t, filepath.Join(root, "model.safetensors.index.json"), `{"weight_map":{"a":"one.safetensors"}}`),
+		"model.safetensors.index.json": writeFixture(t, filepath.Join(root, "model.safetensors.index.json"), index),
 	}}
-	if err := inspectShardIndexes(inventory); err != nil {
+	if err := CheckShardIndex(inventory, "model.safetensors.index.json", int64(len(index))); err != nil {
 		t.Fatal(err)
+	}
+	if err := CheckShardIndex(inventory, "model.safetensors.index.json", int64(len(index))-1); !errors.Is(err, ErrShardIndexTooLarge) {
+		t.Fatal("an index above the limit must report its size", err)
+	}
+	large := `{"weight_map":{"a":"one.safetensors"},"metadata":{"pad":"` + strings.Repeat("x", 1<<20) + `"}}`
+	inventory.Files["model.safetensors.index.json"] = writeFixture(t, filepath.Join(root, "model.safetensors.index.json"), large)
+	if err := CheckShardIndex(inventory, "model.safetensors.index.json", 2<<20); err != nil {
+		t.Fatal("a caller limit above 1 MiB must admit a larger index", err)
+	}
+	if err := inspectShardIndexes(inventory); !errors.Is(err, ErrShardIndexTooLarge) {
+		t.Fatal("training keeps its 1 MiB limit", err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "model.safetensors.index.json"), []byte(`{"weight_map":{"b":"one.safetensors"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := inspectShardIndexes(inventory); err == nil {
-		t.Fatal("a shard index changed after the inventory was accepted")
+	if err := inspectShardIndexes(inventory); !errors.Is(err, ErrShardIndexChanged) {
+		t.Fatal("a shard index changed after the inventory was accepted", err)
 	}
 }

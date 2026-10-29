@@ -21,7 +21,9 @@ func modelCheckRecord(model string) modelcheck.Record {
 		Version: modelcheck.RecordVersion, Model: model, Root: "/models/example",
 		Source: modelcheck.Source{Repo: "example-org/example-model", Revision: strings.Repeat("a", 40)},
 		Files:  map[string]string{"config.json": strings.Repeat("b", 64)},
-		Status: modelcheck.StatusNotScanned, Checks: checks, Checker: "test-1",
+		Status: modelcheck.StatusNotScanned, Coverage: modelcheck.CoveragePartial,
+		Configuration: modelcheck.Configuration{Hub: "https://huggingface.co", MaxJSONFileBytes: modelcheck.MaxJSONFileBytes, MaxModelFiles: modelcheck.MaxModelFiles},
+		Checks:        checks, Checker: "test-1",
 		CheckedAt: time.Date(2026, 10, 29, 9, 0, 0, 0, time.UTC),
 	}
 }

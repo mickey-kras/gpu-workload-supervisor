@@ -161,19 +161,40 @@ func inspectShardIndexes(inventory Inventory) error {
 	return nil
 }
 
+// Shard index errors that callers can tell apart.
+var (
+	ErrShardIndexTooLarge = errors.New("shard index exceeds its size limit")
+	ErrShardIndexChanged  = errors.New("shard index changed after the inventory")
+)
+
+// trainingShardIndexBytes bounds the shard index of a training candidate.
+const trainingShardIndexBytes = 1 << 20
+
 func inspectShardIndex(inventory Inventory, name string) error {
+	return CheckShardIndex(inventory, name, trainingShardIndexBytes)
+}
+
+// CheckShardIndex reads the shard index name of inventory, at most limit
+// bytes. Its bytes must match the inventory digest, and each weight_map entry
+// must name an inventoried safetensors file.
+func CheckShardIndex(inventory Inventory, name string, limit int64) error {
 	f, err := openRegular(filepath.Join(inventory.Root, name))
 	if err != nil {
 		return errors.New("candidate shard index is unreadable")
 	}
 	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
-	digest := sha256.Sum256(raw)
-	if err == nil && hex.EncodeToString(digest[:]) != inventory.Files[name] {
-		return errors.New("candidate shard index digest mismatch")
+	raw, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return errors.New("candidate shard index is unreadable")
+	}
+	if int64(len(raw)) > limit {
+		return ErrShardIndexTooLarge
+	}
+	if digest := sha256.Sum256(raw); hex.EncodeToString(digest[:]) != inventory.Files[name] {
+		return ErrShardIndexChanged
 	}
 	var index map[string]json.RawMessage
-	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &index) != nil {
+	if !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), limit, &index) != nil {
 		return errors.New("candidate shard index is invalid")
 	}
 	var weights map[string]string

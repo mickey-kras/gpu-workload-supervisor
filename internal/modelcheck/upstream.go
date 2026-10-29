@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -68,24 +67,43 @@ type LFSEntry struct {
 // Listing gives the upstream files of a source, by path.
 type Listing func(ctx context.Context, source Source) (map[string]UpstreamFile, error)
 
-// HubListing reads the recursive tree of a source from a hub API. It follows
-// only next-page links to the same tree URL and bounds every page.
+// Reasons for a failed upstream listing.
+const (
+	ReasonUpstreamNotFound    = "upstream-not-found"
+	ReasonUpstreamDenied      = "upstream-denied"
+	ReasonUpstreamInvalid     = "upstream-invalid"
+	ReasonUpstreamUnreachable = "upstream-unreachable"
+)
+
+// upstreamError keeps the reason of a failed listing.
+type upstreamError struct{ reason string }
+
+func (e upstreamError) Error() string { return "upstream listing failed: " + e.reason }
+
+func failed(reason string) error { return upstreamError{reason: reason} }
+
+// HubListing reads the recursive tree of a source from a hub API over
+// HTTPS. It refuses redirects, follows only next-page links to the same tree
+// URL and bounds every page. A redirected repository needs its current name
+// in the source.
 func HubListing(client *http.Client, hub string) Listing {
+	strict := *client
+	strict.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return func(ctx context.Context, source Source) (map[string]UpstreamFile, error) {
 		if !source.valid() {
-			return nil, errors.New("model source needs a repository and a 40-hex commit")
+			return nil, failed(ReasonUpstreamInvalid)
 		}
 		first, err := url.Parse(hub + "/api/models/" + source.Repo + "/tree/" + source.Revision + "?recursive=true")
 		if err != nil || first.Scheme != "https" {
-			return nil, errors.New("model hub URL is invalid")
+			return nil, failed(ReasonUpstreamInvalid)
 		}
 		files := map[string]UpstreamFile{}
 		next := first.String()
 		for page := 0; next != ""; page++ {
 			if page == maxListingPages {
-				return nil, errors.New("upstream listing has too many pages")
+				return nil, failed(ReasonUpstreamInvalid)
 			}
-			if next, err = readPage(ctx, client, first, next, files); err != nil {
+			if next, err = readPage(ctx, &strict, first, next, files); err != nil {
 				return nil, err
 			}
 		}
@@ -96,24 +114,24 @@ func HubListing(client *http.Client, hub string) Listing {
 func readPage(ctx context.Context, client *http.Client, first *url.URL, page string, files map[string]UpstreamFile) (string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, page, nil)
 	if err != nil {
-		return "", errors.New("upstream listing request is invalid")
+		return "", failed(ReasonUpstreamInvalid)
 	}
 	request.Header.Set("Accept", "application/json")
 	response, err := client.Do(request)
 	if err != nil {
-		return "", errors.New("upstream listing is unreachable")
+		return "", failed(ReasonUpstreamUnreachable)
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("upstream listing failed with HTTP status %d", response.StatusCode)
+	if reason := statusReason(response.StatusCode); reason != "" {
+		return "", failed(reason)
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxListingPageBytes+1))
-	if err != nil || len(raw) > maxListingPageBytes || !utf8.Valid(raw) {
-		return "", errors.New("upstream listing is unreadable or too large")
+	if err != nil {
+		return "", failed(ReasonUpstreamUnreachable)
 	}
 	var entries []UpstreamFile
-	if err := json.Unmarshal(raw, &entries); err != nil {
-		return "", errors.New("upstream listing is not valid JSON")
+	if len(raw) > maxListingPageBytes || !utf8.Valid(raw) || json.Unmarshal(raw, &entries) != nil {
+		return "", failed(ReasonUpstreamInvalid)
 	}
 	for _, entry := range entries {
 		if err := addUpstream(files, entry); err != nil {
@@ -123,16 +141,30 @@ func readPage(ctx context.Context, client *http.Client, first *url.URL, page str
 	return nextPage(first, response.Header.Get("Link"))
 }
 
+func statusReason(status int) string {
+	switch {
+	case status == http.StatusOK:
+		return ""
+	case status == http.StatusNotFound:
+		return ReasonUpstreamNotFound
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return ReasonUpstreamDenied
+	case status >= 500:
+		return ReasonUpstreamUnreachable
+	}
+	return ReasonUpstreamInvalid
+}
+
 func addUpstream(files map[string]UpstreamFile, entry UpstreamFile) error {
 	if entry.Type == "directory" {
 		return nil
 	}
 	lfs := entry.LFS == nil || (sha256Pattern.MatchString(entry.LFS.OID) && entry.LFS.Size >= 0)
 	if entry.Type != "file" || !filepath.IsLocal(entry.Path) || !sha1Pattern.MatchString(entry.OID) || entry.Size < 0 || !lfs {
-		return errors.New("upstream listing has an invalid entry")
+		return failed(ReasonUpstreamInvalid)
 	}
 	if _, duplicate := files[entry.Path]; duplicate || len(files) >= maxUpstreamFiles {
-		return errors.New("upstream listing has duplicate or too many entries")
+		return failed(ReasonUpstreamInvalid)
 	}
 	files[entry.Path] = entry
 	return nil
@@ -146,7 +178,7 @@ func nextPage(first *url.URL, header string) (string, error) {
 	}
 	next, err := url.Parse(match[1])
 	if err != nil || next.Scheme != first.Scheme || next.Host != first.Host || next.Path != first.Path {
-		return "", errors.New("upstream listing links to another location")
+		return "", failed(ReasonUpstreamInvalid)
 	}
 	return next.String(), nil
 }
@@ -157,12 +189,14 @@ const (
 	ReasonIdentityMismatch = "upstream-identity-mismatch"
 )
 
-// checkIdentity needs each local file to match the upstream git object at
-// the pinned revision. An LFS file matches by its SHA-256, which is the
-// inventory digest. Other files match by their git blob ID, which this
-// function computes from the same bytes as a fresh SHA-256.
+// checkIdentity needs each local file, in name order, to match the upstream
+// git object at the pinned revision. An LFS file matches by its SHA-256,
+// which is the inventory digest. Other files match by their git blob ID
+// (SHA-1). gitBlobID hashes the same bytes after it confirms that they still
+// match the inventory SHA-256.
 func checkIdentity(root string, digests map[string]string, upstream map[string]UpstreamFile) (string, error) {
-	for name, digest := range digests {
+	for _, name := range sortedNames(digests) {
+		digest := digests[name]
 		entry, found := upstream[name]
 		if !found {
 			return ReasonNotUpstream, nil
@@ -180,30 +214,35 @@ func checkIdentity(root string, digests map[string]string, upstream map[string]U
 		if err != nil {
 			return "", err
 		}
-		if blob != entry.OID {
+		if blob == "" || blob != entry.OID {
 			return ReasonIdentityMismatch, nil
 		}
 	}
 	return "", nil
 }
 
-// gitBlobID hashes "blob <size>\x00" and the content. A size other than the
-// upstream size is a mismatch. The content must still match the inventory.
+// gitBlobID hashes "blob <size>\x00" and the content. A local size other
+// than the upstream size gives an empty ID, which is a mismatch, before any
+// read. The content must still match the inventory.
 func gitBlobID(file string, size int64, digest string) (string, error) {
 	f, err := openRegular(file)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	content, err := io.ReadAll(io.LimitReader(f, maxGitBlobBytes+1))
+	info, err := f.Stat()
 	if err != nil {
-		return "", errors.New("model file is unreadable")
+		return "", errUnreadable
+	}
+	if info.Size() != size {
+		return "", nil
+	}
+	content, err := io.ReadAll(io.LimitReader(f, size+1))
+	if err != nil {
+		return "", errUnreadable
 	}
 	if sum := sha256.Sum256(content); hex.EncodeToString(sum[:]) != digest {
 		return "", errChanged
-	}
-	if int64(len(content)) != size {
-		return "", nil
 	}
 	// Git blob IDs are SHA-1; the source publishes no other digest for small files.
 	h := sha1.New()

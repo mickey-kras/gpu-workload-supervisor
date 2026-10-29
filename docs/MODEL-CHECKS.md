@@ -24,22 +24,39 @@ A model is one local directory and its upstream source:
   quantized, merged or otherwise modified model is another model too. Results
   never carry over.
 
-The model ID is 1 to 128 characters: letters, digits, `.`, `_` and `-`.
+The model ID is 1 to 128 ASCII characters: letters, digits, `.`, `_` and `-`.
+The first character is a letter or a digit.
 
 ## Inventory
 
-The supervisor walks the model directory with the shared training inventory
-rules of `internal/llmtraining`. It calculates the SHA-256 of each file:
+The supervisor reads the top level of the model directory and calculates the
+SHA-256 of each file. It uses the shared file digest and shard index rules of
+`internal/llmtraining`:
 
-- A symbolic link or a file that is not a regular file stops the check.
-- A model has 1 to 4096 files.
-- Each `*.safetensors.index.json` file must match its inventory digest. Each
-  `weight_map` entry must name an inventoried `.safetensors` file.
+- A model has at most 4096 files. A model with more files is `unsupported`.
+- A symbolic link or a file that is not a regular file is a finding.
+- A subdirectory is a finding. The only exception is the `.cache` directory of
+  the download tool, see below.
+- Each `*.safetensors.index.json` file is strict JSON of at most 128 MiB. It
+  must have a `weight_map` that is not empty. Each entry must name a
+  `.safetensors` file in the inventory. A larger index makes the model
+  `unsupported`.
+
+The `hf download` command with the `--local-dir` option writes a `.cache`
+directory into the model directory. The inventory skips it, and the result
+does not include it. No loader reads it. The `.cache` directory can hold only
+these items:
+
+- `.cache/huggingface/.gitignore`.
+- Regular `*.metadata` and `*.lock` files in `.cache/huggingface/download`.
+
+Any other item in `.cache` is a finding.
 
 ## Checks
 
 The checks run in this order. Each must pass. A check that does not pass stops
-the checks after it.
+the checks after it. Each check reads the files in name order, so the same
+files give the same result.
 
 ### File allowlist
 
@@ -54,16 +71,18 @@ these files:
   `special_tokens_map.json`, `added_tokens.json`, `vocab.json`, `vocab.txt`
   and `merges.txt`.
 - Chat template: `chat_template.jinja` and `chat_template.json`.
-- Adapter configuration: `adapter_config.json`.
+- Files that no loader reads: `README`, `README.md`, `LICENSE`, `LICENSE.md`
+  and `.gitattributes`.
 
 The check rejects code files (`*.py`) and pickle formats (`.bin`, `.pt`,
-`.pth`, `.pkl` and `.ckpt`). It rejects all other files, such as `README.md`,
-and files in subdirectories. Download only the allowed files, for example with
-the `--include` option of the download command of Hugging Face.
+`.pth`, `.pkl` and `.ckpt`). It rejects `adapter_config.json`, because a
+loader then loads a base model that the checks did not see. It rejects all
+other files.
 
 The check reads each JSON file, at most 128 MiB. It rejects a file that is not
-one strict JSON value, a duplicate key and an `auto_map` key at any depth. An
-`auto_map` key makes a loader import code.
+one strict JSON value and a duplicate key. It also rejects the keys
+`auto_map`, `auto_mapping` and `custom_pipelines` at any depth. These keys
+make a loader import code.
 
 A model without `.safetensors` weights or without `config.json` is
 `unsupported`.
@@ -75,41 +94,48 @@ Hugging Face API. Each local file must be in that tree:
 
 - For an LFS file, such as weights, the SHA-256 in the LFS pointer must be
   equal to the local SHA-256.
-- For another file, the git blob ID (SHA-1) must be equal to the git blob ID
-  of the local bytes. The source publishes no other digest for these files.
+- For another file, the local size must be equal to the upstream size. Then
+  the git blob ID (SHA-1) of the local bytes must be equal to the upstream git
+  blob ID. The source publishes no other digest for these files.
 
 The upstream tree can have more files than the local directory.
 
 The supervisor reads at most 64 pages of at most 16 MiB each, over HTTPS. It
-follows only next-page links to the same tree. Public repositories only. A
-failed or invalid listing gives `error`.
+does not follow redirects. It follows only next-page links to the same tree.
+The check supports only public repositories now. A failed listing gives
+`error` with one of these reasons: `upstream-not-found`, `upstream-denied`,
+`upstream-unreachable` or `upstream-invalid`.
 
 ## Results
 
 | Status | Cause |
 | --- | --- |
 | `passed` | All checks passed. Only this status is clean |
-| `findings` | A check found a problem: a rejected file, `auto_map`, invalid JSON or an identity mismatch |
-| `error` | A check failed, the upstream listing failed or a file changed during the check |
-| `unsupported` | The model has no `.safetensors` weights or no `config.json` |
-| `not_scanned` | A check did not run, the files changed after the check, or there is no result |
+| `findings` | A check found a problem in the files, for example a rejected file, a remote code key, invalid JSON or an identity mismatch |
+| `error` | A check did not complete, for example because of an unreadable file, a failed upstream listing or a file that changed during the check |
+| `unsupported` | The checks do not support the model, for example a model without `.safetensors` weights |
+| `not_scanned` | A check did not run, the files changed after the check, the checker changed, or there is no result |
 
 The supervisor keeps one result for each model in its private state database,
 as bounded strict JSON of at most 4 MiB. A result holds these items:
 
 - The model ID, the directory and the source.
 - The SHA-256 of each file.
-- The outcome and the reason code of each check.
-- The checker version and the check time.
+- The status, the coverage, and the outcome and reason code of each check.
+  Coverage `complete` means that all checks ran. Coverage `partial` means
+  that one or more checks did not run.
+- The checker version and the configuration: the hub URL and the file limits.
+- The check time.
 
 Reason codes never hold paths or file content.
 
 The supervisor calculates the status again from the files on disk. If a file
-digest, the directory or the source differs from the result, the status is
-`not_scanned`.
+digest, the directory, the source or the checker version differs from the
+result, the status is `not_scanned`. Thus a new checker version checks each
+model again.
 
 A canceled check stores no result. The model stays `not_scanned`.
 
-No signatures or keys protect the results. The supervisor and you share one
-trusted UID (see [SECURITY.md](../SECURITY.md)). A process with that UID can
-forge a result. This is an accepted limit.
+No signatures or keys protect the results. The deployment trusts processes
+with the service UID (see [SECURITY.md](../SECURITY.md)). A process with that
+UID can forge a result. This is an accepted limit.
