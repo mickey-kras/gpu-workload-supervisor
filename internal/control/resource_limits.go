@@ -13,17 +13,6 @@ import (
 // ResourceLimitsVersion is the only accepted resource limits contract.
 const ResourceLimitsVersion = 1
 
-// CatalogVersionOwned is the first catalog version that accepts owned launch
-// specifications.
-const CatalogVersionOwned = 2
-
-// CatalogVersionTrainer is the first catalog version that accepts trainer
-// bindings.
-const CatalogVersionTrainer = 4
-
-// CatalogVersionLimits is the first catalog version that accepts limits.
-const CatalogVersionLimits = 5
-
 // ErrLimitsRequireV5 rejects limits in a catalog version that predates them.
 var ErrLimitsRequireV5 = errors.New("resource limits require catalog version 5")
 
@@ -209,7 +198,8 @@ func (l ResourceLimits) RenderLines() string {
 }
 
 // HasLimits reports whether the profile's owned launch carries limits. It is
-// the one test for every version rule, store guard and launch gate.
+// the one test for every version rule, store guard and launch gate. The setup
+// client mirrors it in clients/setup/review.mjs.
 func (p WorkloadProfile) HasLimits() bool {
 	return p.NativeModel != nil && p.NativeModel.Owned != nil && !p.NativeModel.Owned.Limits.IsZero()
 }
@@ -227,21 +217,4 @@ func (c Catalog) LimitedProfile() (WorkloadProfile, bool) {
 		}
 	}
 	return WorkloadProfile{}, false
-}
-
-// LowestCatalogVersion is the one version rule for every catalog writer:
-// 5 with limits, 4 with a trainer binding, 2 with an owned launch, else 1.
-func LowestCatalogVersion(c Catalog) int {
-	version := 1
-	for _, p := range c.Profiles {
-		switch {
-		case p.HasLimits():
-			return CatalogVersionLimits
-		case p.Trainer != nil:
-			version = max(version, CatalogVersionTrainer)
-		case p.NativeModel != nil && p.NativeModel.Owned != nil:
-			version = max(version, CatalogVersionOwned)
-		}
-	}
-	return version
 }

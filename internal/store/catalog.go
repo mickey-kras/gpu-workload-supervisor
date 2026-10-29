@@ -120,7 +120,7 @@ func validateCatalogVersionTransition(old, next control.Catalog) error {
 	if next.Version < control.CatalogVersionLimits && next.HasLimits() {
 		return control.ErrLimitsRequireV5
 	}
-	if old.Version != control.CatalogVersionOwned || next.Version != 1 {
+	if old.Version != control.CatalogVersionOwned || next.Version != control.CatalogVersionLegacy {
 		return nil
 	}
 	for _, p := range next.Profiles {

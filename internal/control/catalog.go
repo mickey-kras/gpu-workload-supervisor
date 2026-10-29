@@ -99,6 +99,40 @@ func DecodeCatalog(r io.Reader) (Catalog, error) {
 	return DecodeCatalogBytes(raw)
 }
 
+// CatalogVersionLegacy is the first catalog version. It has no owned launch
+// specifications.
+const CatalogVersionLegacy = 1
+
+// CatalogVersionOwned is the first catalog version that accepts owned launch
+// specifications.
+const CatalogVersionOwned = 2
+
+// CatalogVersionTrainer is the first catalog version that accepts trainer
+// bindings.
+const CatalogVersionTrainer = 4
+
+// CatalogVersionLimits is the first catalog version that accepts limits.
+const CatalogVersionLimits = 5
+
+// LowestCatalogVersion is the one version rule for every catalog writer:
+// 5 with limits, 4 with a trainer binding, 2 with an owned launch, else 1.
+// The setup client mirrors it in clients/setup/review.mjs; the backend
+// recomputes the version before preview and apply.
+func LowestCatalogVersion(c Catalog) int {
+	version := CatalogVersionLegacy
+	for _, p := range c.Profiles {
+		switch {
+		case p.HasLimits():
+			return CatalogVersionLimits
+		case p.Trainer != nil:
+			version = max(version, CatalogVersionTrainer)
+		case p.NativeModel != nil && p.NativeModel.Owned != nil:
+			version = max(version, CatalogVersionOwned)
+		}
+	}
+	return version
+}
+
 // DecodeCatalogBytes is the single strict decode path for catalog bytes from
 // any source, including the database blob: duplicate-key check, unknown-field
 // rejection, a single JSON value, and full validation.
@@ -163,7 +197,7 @@ func (c Catalog) Validate() error {
 	if err := c.validateSize(); err != nil {
 		return err
 	}
-	if c.Version != 1 && c.Version != CatalogVersionOwned && c.Version != CatalogVersionTrainer && c.Version != CatalogVersionLimits {
+	if c.Version != CatalogVersionLegacy && c.Version != CatalogVersionOwned && c.Version != CatalogVersionTrainer && c.Version != CatalogVersionLimits {
 		return errors.New("unsupported catalog version")
 	}
 	if c.Disabled {
@@ -211,7 +245,7 @@ func (c Catalog) validateProfiles() error {
 		if c.Version < CatalogVersionLimits && p.HasLimits() {
 			return ErrLimitsRequireV5
 		}
-		if c.Version == 1 && p.NativeModel != nil && p.NativeModel.Owned != nil {
+		if c.Version == CatalogVersionLegacy && p.NativeModel != nil && p.NativeModel.Owned != nil {
 			return ErrOwnedRequiresV2
 		}
 		if err := p.validate(); err != nil {

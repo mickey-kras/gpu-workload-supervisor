@@ -711,9 +711,10 @@ Every catalog writer uses one version rule:
   recorded activation, it keeps the recorded catalog bytes, including the
   version. It lowers the version only in a later write, after maintenance is
   clear.
-- The function replaces the client rule in `clients/setup/setup-window.mjs`,
-  which only raises the version, and the literal version 2 in
-  `internal/setup/owned.go`.
+- The function replaces the literal version 2 in `internal/setup/owned.go`.
+  The client keeps a mirror of the rule in `clients/setup/review.mjs`, which
+  replaces the old rule in `clients/setup/setup-window.mjs` that only raised
+  the version. The backend recomputes the version before preview and apply.
 - A draft with no `limits` stays draft version 1, and a new binary still reads
   it. A draft with `limits` uses the next draft version. Setup rejects a
   version 1 body that contains `limits` before unmarshal, so unmarshal cannot

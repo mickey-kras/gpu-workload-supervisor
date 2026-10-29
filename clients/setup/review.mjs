@@ -35,8 +35,9 @@ function hasLimits(profile) {
     return limits !== null && typeof limits === 'object' && Object.values(limits).some(Boolean);
 }
 
-// Mirror of control.LowestCatalogVersion: the lowest catalog version that the
-// profiles need. The backend recomputes it before preview and apply.
+// Mirror of control.LowestCatalogVersion in internal/control/catalog.go: the
+// lowest catalog version that the profiles need. The backend recomputes it
+// before preview and apply.
 export function lowestCatalogVersion(profiles) {
     if (profiles.some(hasLimits))
         return 5;

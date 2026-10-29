@@ -15,9 +15,12 @@ var ErrOwnedRender = errors.New("owned launch cannot be rendered to the supporte
 // ErrLimitsNotEnforced keeps a unit with limits from starting until the
 // controller, host cap and cgroup readback checks of the limits design exist.
 // systemd starts a unit even when it cannot apply a limit, so launching
-// without those checks would claim protection that may be absent. Only the
-// start and health of that profile fail; other profiles, preflight, release
-// and setup do not.
+// without those checks would claim protection that may be absent. The
+// supervisor refuses a switch or activation to that profile before any
+// unload, Start and Healthy refuse it as a backstop, and reconciliation does
+// not retain it. Other profiles, preflight and release are not affected.
+// Setup rejects limits separately (ErrLimitsNotInSetup) but accepts a request
+// that removes them.
 var ErrLimitsNotEnforced = errors.New("resource limits are configured, but this build cannot verify them; remove the workload through setup, or restore a backup")
 
 // ownedServiceHeader is the fixed [Service] opening. Limit lines follow it
