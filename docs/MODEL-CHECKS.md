@@ -59,7 +59,7 @@ these files:
 The check rejects code files (`*.py`) and pickle formats (`.bin`, `.pt`,
 `.pth`, `.pkl` and `.ckpt`). It rejects all other files, such as `README.md`,
 and files in subdirectories. Download only the allowed files, for example with
-the `--include` option of the Hugging Face download command.
+the `--include` option of the download command of Hugging Face.
 
 The check reads each JSON file, at most 128 MiB. It rejects a file that is not
 one strict JSON value, a duplicate key and an `auto_map` key at any depth. An
@@ -95,16 +95,20 @@ failed or invalid listing gives `error`.
 | `not_scanned` | A check did not run, the files changed after the check, or there is no result |
 
 The supervisor keeps one result for each model in its private state database,
-as bounded strict JSON of at most 4 MiB. A result holds the model ID, the
-directory, the source, the SHA-256 of each file, the outcome and reason code of
-each check, the checker version and the check time. Reason codes never hold
-paths or file content.
+as bounded strict JSON of at most 4 MiB. A result holds these items:
+
+- The model ID, the directory and the source.
+- The SHA-256 of each file.
+- The outcome and the reason code of each check.
+- The checker version and the check time.
+
+Reason codes never hold paths or file content.
 
 The supervisor calculates the status again from the files on disk. If a file
 digest, the directory or the source differs from the result, the status is
 `not_scanned`.
 
-A cancelled check stores no result. The model stays `not_scanned`.
+A canceled check stores no result. The model stays `not_scanned`.
 
 No signatures or keys protect the results. The supervisor and you share one
 trusted UID (see [SECURITY.md](../SECURITY.md)). A process with that UID can
