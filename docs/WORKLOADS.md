@@ -179,12 +179,15 @@ advisory.
 For a supervisor-managed launch, setup pins `chat_template.jinja` in the model
 folder. When you apply, setup creates the private key file under
 `~/.config/gpu-workload-supervisor/vllm/`. Preview and review never create it.
-Setup keeps a usable key file and never replaces a file that it cannot use.
+Setup keeps a usable key file and never replaces a file that it cannot use. For
+an existing launch, setup reads the template path and the key file path from
+the launch.
 
-When you remove the workload, setup removes its key file. If setup stops
+When you remove a supervisor-managed workload, setup removes its key file.
+Setup does not remove the key file of an existing launch. If setup stops
 before it commits, a new key file can stay. The next apply for the workload
-uses it. For an existing
-launch, setup reads the template path and the key file path from the launch.
+uses it. If the key file of a supervisor-managed workload is missing, the next
+apply creates a new one.
 
 The workload proxy reads the key file for each request and sends the key to
 vLLM. It replaces any `Authorization` header from the client. Readiness and the

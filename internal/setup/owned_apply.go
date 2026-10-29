@@ -619,14 +619,27 @@ func (work activationWork) retiredBindingPlan() unitPlan {
 	return plan
 }
 
-// hasRetiredBinding reports an accepted catalog with a binding that can no
-// longer run. Its accepted runtime is observed without native bindings, so
-// the binding cannot block the apply that removes or replaces it.
+// hasRetiredBinding reports an accepted catalog with a binding that cannot
+// run now: a retired binding, or an owned vLLM binding whose key file is
+// missing. Its accepted runtime is observed without native bindings, so the
+// binding cannot block the apply that removes it or writes it again. Apply
+// creates a missing key file before it writes the unit, and the candidate
+// runtime is verified after the writes.
 func hasRetiredBinding(c control.Catalog) bool {
 	for _, p := range c.Profiles {
-		if p.RetiredBinding() {
+		if p.RetiredBinding() || ownedKeyMissing(p) {
 			return true
 		}
 	}
 	return false
+}
+
+// ownedKeyMissing reports an owned vLLM binding whose key file does not
+// exist. A key file that exists but is not usable still blocks.
+func ownedKeyMissing(p control.WorkloadProfile) bool {
+	if p.NativeModel == nil || p.NativeModel.Owned == nil || !p.NativeModel.Hardened() {
+		return false
+	}
+	_, err := os.Lstat(p.NativeModel.EnvironmentFile)
+	return errors.Is(err, os.ErrNotExist)
 }

@@ -228,3 +228,121 @@ func TestAdoptionComparesTheLoadedEnvironmentFile(t *testing.T) {
 		t.Fatalf("loaded EnvironmentFile drift accepted: %v", err)
 	}
 }
+
+// keyCheckingRuntime models the runtime qualification of the key file: an
+// owned vLLM binding without its key file never passes preflight.
+func keyCheckingRuntime(request Request) (gpuruntime.Manager, error) {
+	for _, p := range request.Catalog.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Owned != nil {
+			if _, err := vllmkey.Read(p.NativeModel.EnvironmentFile); err != nil {
+				return idleRuntime{err: err}, nil
+			}
+		}
+	}
+	return idleRuntime{}, nil
+}
+
+func acceptedOwnedWithoutKey(t *testing.T) (Backend, string, Request, control.WorkloadProfile) {
+	t.Helper()
+	b, home, request := fixture(t)
+	b.runCommand = fakeOwnedCommandFor(home)
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	if err := b.Apply(t.Context(), home, request); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := ReadCatalog(t.Context(), request.Profile.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.ExpectedRevision = snapshot.Revision
+	if err := os.Remove(profile.NativeModel.EnvironmentFile); err != nil {
+		t.Fatal(err)
+	}
+	b.makeRuntime = keyCheckingRuntime
+	return b, home, request, profile
+}
+
+func TestMissingOwnedKeyFileIsRecreatedBySetup(t *testing.T) {
+	b, home, request, profile := acceptedOwnedWithoutKey(t)
+	if err := b.Apply(t.Context(), home, request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vllmkey.Read(profile.NativeModel.EnvironmentFile); err != nil {
+		t.Fatal("key file not recreated", err)
+	}
+}
+
+func TestOwnedWorkloadWithMissingKeyFileCanBeRemoved(t *testing.T) {
+	b, home, request, profile := acceptedOwnedWithoutKey(t)
+	request.Catalog = control.Catalog{Version: 2, Disabled: true}
+	if err := b.Apply(t.Context(), home, request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(ownedUnitDirectory(home), profile.Unit)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("unit survived removal", err)
+	}
+}
+
+func TestUnusableOwnedKeyFileStillBlocks(t *testing.T) {
+	b, home, request, profile := acceptedOwnedWithoutKey(t)
+	if err := os.WriteFile(profile.NativeModel.EnvironmentFile, []byte("unusable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Apply(t.Context(), home, request); err == nil {
+		t.Fatal("unusable key file accepted")
+	}
+	raw, _ := os.ReadFile(profile.NativeModel.EnvironmentFile)
+	if string(raw) != "unusable" {
+		t.Fatal("setup replaced an unusable key file")
+	}
+}
+
+func TestFailedApplyRemovesOnlyTheKeyFilesItCreated(t *testing.T) {
+	b, home, request := fixture(t)
+	b.runCommand = fakeOwnedCommandFor(home)
+	kept, _ := ownedFixtureProfile(t, home, "kept", 9100)
+	created, _ := ownedFixtureProfile(t, home, "created", 9101)
+	created.NativeModel.Instance = "second"
+	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{kept}}
+	if err := b.Apply(t.Context(), home, request); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := ReadCatalog(t.Context(), request.Profile.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keptKey, _ := os.ReadFile(kept.NativeModel.EnvironmentFile)
+	request.ExpectedRevision = snapshot.Revision
+	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{kept, created}}
+	request.Catalog.Profiles[0].NativeModel.Owned.Conflicts = request.Catalog.OwnedConflictUnits(request.Catalog.Profiles[0])
+	request.Catalog.Profiles[1].NativeModel.Owned.Conflicts = request.Catalog.OwnedConflictUnits(request.Catalog.Profiles[1])
+	for i := range request.Catalog.Profiles {
+		raw, err := gpuruntime.RenderOwnedUnit(request.Catalog.Profiles[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Catalog.Profiles[i].NativeModel.LaunchSHA256 = digest(raw)
+	}
+	createdDuringApply := false
+	b.makeRuntime = func(r Request) (gpuruntime.Manager, error) {
+		if _, candidate := r.Catalog.Profile(created.ID); candidate {
+			_, err := os.Stat(created.NativeModel.EnvironmentFile)
+			createdDuringApply = createdDuringApply || err == nil
+			return idleRuntime{err: errors.New("candidate verification failed")}, nil
+		}
+		return idleRuntime{}, nil
+	}
+	if err := b.Apply(t.Context(), home, request); err == nil {
+		t.Fatal("failing apply succeeded")
+	}
+	if !createdDuringApply {
+		t.Fatal("the apply failed before it created the key file")
+	}
+	if _, err := os.Lstat(created.NativeModel.EnvironmentFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("key file of the failed apply survived", err)
+	}
+	if now, err := os.ReadFile(kept.NativeModel.EnvironmentFile); err != nil || string(now) != string(keptKey) {
+		t.Fatal("existing key file changed", err)
+	}
+}

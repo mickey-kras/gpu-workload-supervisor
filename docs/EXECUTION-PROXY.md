@@ -184,9 +184,10 @@ trailers. The proxy does not allow upstream URL credentials.
 
 For a native vLLM binding, the proxy then sets the upstream `Authorization`
 header. Its value is the API key from the key file of the binding. This occurs
-in all ingress modes. It replaces any `Authorization` header from the client. It sends the
-key only when the desktop user owns each listening socket for 127.0.0.1 on the
-vLLM port. See [Hardened vLLM launch](WORKLOADS.md#hardened-vllm-launch).
+in all ingress modes. It replaces any `Authorization` header from the client.
+It sends the key only when the desktop user owns each listening socket for
+127.0.0.1 on the vLLM port. See
+[Hardened vLLM launch](WORKLOADS.md#hardened-vllm-launch).
 
 The proxy drops metadata names and values that contain either known ingress
 credential or the admitted registration token. It uses case-insensitive

@@ -254,7 +254,8 @@ During activation:
 - Setup holds both controller and exclusive proxy gates and verifies GPU release for the existing and proposed committed mappings before snapshotting state.
 - Each activation keeps an integrity-checked snapshot under the private `backups/activation-*` directory. It contains previous binary checksums, profile, accepted catalog, deployment marker, state, and the exact accepted supervisor-owned unit files together. `owned-units.json` records their SHA-256 hashes. The
   private `owned-units/` directory holds their bytes. Keep the complete tuple
-  for rollback.
+  for rollback. The snapshot does not hold the API key files of vLLM. After a
+  rollback, run setup again to create missing key files.
 - Reopening setup after an interruption recovers the exact pending request.
   Post-commit failures resume forward, and setup never rolls back a known committed catalog.
 - Setup rejects a stale preview before maintenance starts.

@@ -40,6 +40,9 @@ and validate the deployment before accepting work.
 
 ## Restore a backup
 
+A backup does not hold the API key files of vLLM. After a restore, run setup again.
+Setup creates a missing key file for each supervisor-managed vLLM workload.
+
 The lease incarnation in a SQLite backup can be older than the live database. A restored fence is unsafe until `restore-state` rotates it. This procedure is for an operator restoring a consistent backup, not for an ordinary process restart.
 
 1. Stop every execution proxy, controller automation, and workload runtime using this state database. Wait for admitted jobs to finish or stop them. Prevent another process from starting these components during the restore. The controller lock serializes commands, and `restore-state` also refuses to run while a proxy holds its lifetime lock. Neither lock stops proxies or runtimes or protects the earlier backup replacement.
