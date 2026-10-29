@@ -4,9 +4,12 @@
 
 This record gives the design for
 [#584](https://github.com/mickey-kras/gpu-workload-supervisor/issues/584).
-The current release does not have this feature. It renders no resource-control
-directives, and `requiredMiB` stays a VRAM demand estimate before launch, not
-an enforced ceiling. GPU VRAM enforcement is out of scope.
+The current release has the schema part of this feature. Catalog version 5
+accepts `limits` on an owned launch specification, and the renderer and the
+strict parser carry them. A unit with limits does not launch yet: the
+controller, host cap and cgroup readback checks below are not in this release.
+`requiredMiB` stays a VRAM demand estimate before launch, not an enforced
+ceiling. GPU VRAM enforcement is out of scope.
 
 ## Method
 

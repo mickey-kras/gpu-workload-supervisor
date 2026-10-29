@@ -92,6 +92,9 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 	if p.Trainer != nil {
 		return m.verifyTrainerBinding(ctx, p)
 	}
+	if err := requireEnforceableLimits(p); err != nil {
+		return err
+	}
 	if err := m.verifyProfileGPU(ctx, p); err != nil {
 		return err
 	}

@@ -133,6 +133,11 @@ handoff and lifetime locks with a newer controller. Reconcile and check closed-s
 recovery before resuming execution.
 
 Refresh client fences after restoration.
+
+Older binaries reject catalog version 5. Before you install an older binary,
+remove all resource limits through setup and confirm that the catalog version
+went down. Setup then writes the lowest version that the remaining catalog
+needs. A backup restore is the other path.
 Rollback does not recover work and audit updates newer than the backup.
 If the previous release cannot safely do this procedure, leave admission
 closed and repair forward with a compatible release.

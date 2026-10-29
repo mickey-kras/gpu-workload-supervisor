@@ -12,6 +12,10 @@ import (
 
 var ErrOwnedRender = errors.New("owned launch cannot be rendered to the supported unit subset")
 
+// ownedServiceHeader is the fixed [Service] opening. Limit lines follow it
+// directly, so the strict parser can remove them at one exact position.
+const ownedServiceHeader = "\n[Service]\nType=simple\nRestart=no\n"
+
 // Owned binaries are packaged executables; the deterministic render names the
 // packaged path and the round-trip qualification proves it is trusted. It is a
 // variable only so tests can render against fixture executables.
@@ -32,7 +36,7 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 	}
 	b.WriteString("[Unit]\nDescription=Supervisor-owned " + n.Runtime + " launch for " + string(p.ID) + "\n")
 	b.WriteString(ownedDependencies(p.Unit, n.Owned.Conflicts))
-	b.WriteString("\n[Service]\nType=simple\nRestart=no\n")
+	b.WriteString(ownedServiceHeader + n.Owned.Limits.RenderLines())
 	var execStart string
 	executable := n.Owned.Executable
 	if executable == "" {
@@ -124,5 +128,39 @@ func parseOwnedLaunchUnit(raw []byte, n control.NativeModel) (parsedLaunchUnit, 
 		}
 		raw = []byte(lines[0] + "\n" + lines[1] + "\n" + strings.TrimPrefix(lines[2], dependencies))
 	}
+	raw, err := removeOwnedLimitLines(raw, n.Owned.Limits)
+	if err != nil {
+		return parsedLaunchUnit{}, err
+	}
 	return parseLaunchUnit(raw)
+}
+
+// removeOwnedLimitLines accepts limit directives only as the exact rendered
+// block after the fixed [Service] header. The shared grammar rejects any
+// limit directive left elsewhere, so a moved, changed or extra line fails.
+func removeOwnedLimitLines(raw []byte, limits control.ResourceLimits) ([]byte, error) {
+	block := limits.RenderLines()
+	if block == "" {
+		return raw, nil
+	}
+	text := string(raw)
+	at := strings.Index(text, ownedServiceHeader)
+	if at < 0 || strings.Count(text, ownedServiceHeader) != 1 || !strings.HasPrefix(text[at+len(ownedServiceHeader):], block) {
+		return nil, ErrLaunchUnsupported
+	}
+	start := at + len(ownedServiceHeader)
+	return []byte(text[:start] + text[start+len(block):]), nil
+}
+
+// ErrLimitsNotEnforced keeps a unit with limits from launching until the
+// controller, host cap and cgroup readback checks of the limits design exist.
+// systemd starts a unit even when it cannot apply a limit, so launching
+// without those checks would claim protection that may be absent.
+var ErrLimitsNotEnforced = errors.New("resource limits are configured, but this build cannot verify them; remove the limits through setup")
+
+func requireEnforceableLimits(p control.WorkloadProfile) error {
+	if p.NativeModel != nil && p.NativeModel.Owned != nil && !p.NativeModel.Owned.Limits.IsZero() {
+		return ErrLimitsNotEnforced
+	}
+	return nil
 }

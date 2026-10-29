@@ -189,6 +189,17 @@ func unsupportedLaunchDirective(key string) bool {
 		// the service's filesystem namespace.
 		return true
 	}
+	return resourceLimitDirective(key)
+}
+
+// resourceLimitDirective names the resource controls that only an owned
+// unit's exact rendered limits block may carry. Adopted and imported units
+// get no limits, so the shared grammar rejects these keys.
+func resourceLimitDirective(key string) bool {
+	switch key {
+	case "OOMPolicy", "OOMScoreAdjust", "MemoryHigh", "MemoryMax", "MemorySwapMax", "TasksMax", "CPUWeight", "CPUQuota", "IOWeight", "IOReadBandwidthMax", "IOWriteBandwidthMax", "IOReadIOPSMax", "IOWriteIOPSMax":
+		return true
+	}
 	return false
 }
 
