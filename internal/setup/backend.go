@@ -73,7 +73,22 @@ func Decode(reader io.Reader) (Request, error) {
 	}
 	return request, Validate(candidate)
 }
+
+// Validate is the write gate of preview and apply. It adds the limits
+// rejection to the request shape check.
 func Validate(request Request) error {
+	if err := validateShape(request); err != nil {
+		return err
+	}
+	if p, ok := request.Catalog.LimitedProfile(); ok {
+		return fmt.Errorf("workload %s: %w", p.ID, ErrLimitsNotInSetup)
+	}
+	return nil
+}
+
+// validateShape checks the request without the limits rejection. Read-only
+// paths use it, so a limited profile does not block an unrelated workload.
+func validateShape(request Request) error {
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		return err
@@ -86,9 +101,6 @@ func Validate(request Request) error {
 	}
 	if err := request.Profile.ValidateConfiguration(); err != nil {
 		return err
-	}
-	if p, ok := request.Catalog.LimitedProfile(); ok {
-		return fmt.Errorf("workload %s: %w", p.ID, ErrLimitsNotInSetup)
 	}
 	return request.Catalog.Validate()
 }

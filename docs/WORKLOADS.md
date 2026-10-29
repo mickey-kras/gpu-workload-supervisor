@@ -48,9 +48,10 @@ binding, 2 with an owned launch, and 1 otherwise. Setup writes the lowest versio
 that the catalog needs.
 
 Setup cannot write limits yet. It rejects a request with limits, and it accepts a
-request that removes them. The supervisor does not start a unit with limits,
-because the controller, host cap and cgroup readback checks are not in this
-release. This gate does not change other workloads.
+request that removes them. The controller, host cap and cgroup readback checks
+are not in this release. Thus the supervisor refuses a switch to a unit with
+limits before it stops the current workload. This gate does not change other
+workloads.
 
 Catalog versions are separate from database schema versions and upstream runtime and
 API versions.

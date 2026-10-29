@@ -1,7 +1,7 @@
 # Finite training jobs
 
-Training uses a separate catalog version 4 binding. Catalog versions 1 and 2
-stay supported. Version 3 remains reserved. Inference `nativeModel` bindings
+Training uses a separate trainer binding, which needs catalog version 4 or 5.
+Catalog versions 1 and 2 stay supported. Version 3 remains reserved. Inference `nativeModel` bindings
 cannot launch training.
 
 The trainer adapter owns its recipe, datasets, metrics, checkpoints, evaluation

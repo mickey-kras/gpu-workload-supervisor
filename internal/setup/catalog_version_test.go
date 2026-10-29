@@ -2,9 +2,11 @@ package setup
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -117,4 +119,107 @@ func refingerprint(t *testing.T, p *control.WorkloadProfile) {
 		t.Fatal(err)
 	}
 	p.NativeModel.LaunchSHA256 = digest(raw)
+}
+
+// acceptLimitedCatalog stands in for a later release: it commits limits on
+// the applied owned profile and writes the unit with the limits block.
+func acceptLimitedCatalog(t *testing.T, home string, r Request) control.WorkloadProfile {
+	t.Helper()
+	ctx := context.Background()
+	s := openStoreAt(t, r.Profile.StatePath)
+	defer s.Close()
+	snap, err := s.Catalog(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limited := snap.Catalog.Clone()
+	limited.Version = control.CatalogVersionLimits
+	limited.Profiles[0].NativeModel.Owned.Limits = control.ResourceLimits{Version: 1, TasksMax: 4096}
+	refingerprint(t, &limited.Profiles[0])
+	raw, err := gpuruntime.RenderOwnedUnit(limited.Profiles[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ownedUnitDirectory(home), limited.Profiles[0].Unit), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ReplaceCatalog(ctx, snap.Revision, limited); err != nil {
+		t.Fatal(err)
+	}
+	return limited.Profiles[0]
+}
+
+func acceptedRevision(t *testing.T, r Request) control.CatalogSnapshot {
+	t.Helper()
+	s := openStoreAt(t, r.Profile.StatePath)
+	defer s.Close()
+	snap, err := s.Catalog(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snap
+}
+
+func TestSetupRemovesLimitsThatALaterReleaseWrote(t *testing.T) {
+	for name, keep := range map[string]bool{"remove the workload": false, "keep it without limits": true} {
+		t.Run(name, func(t *testing.T) {
+			backend, home, r := fixture(t)
+			backend.runCommand = fakeOwnedCommandFor(home)
+			profile, plainUnit := ownedFixtureProfile(t, home, "vision", 9100)
+			r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+			ctx := context.Background()
+			if err := backend.Apply(ctx, home, r); err != nil {
+				t.Fatal(err)
+			}
+			limited := acceptLimitedCatalog(t, home, r)
+			r.ExpectedRevision = acceptedRevision(t, r).Revision
+			// Editing the limited workload in place is refused before writes.
+			r.Catalog = control.Catalog{Version: 5, Profiles: []control.WorkloadProfile{limited}}
+			if err := backend.Apply(ctx, home, r); !errors.Is(err, ErrLimitsNotInSetup) {
+				t.Fatalf("apply that keeps limits = %v", err)
+			}
+			want := 1
+			r.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health"}}}
+			if keep {
+				want = 2
+				r.Catalog = control.Catalog{Version: 5, Profiles: []control.WorkloadProfile{profile}}
+			}
+			if _, err := backend.Plan(home, r); err != nil {
+				t.Fatalf("preview that removes limits: %v", err)
+			}
+			if err := backend.Apply(ctx, home, r); err != nil {
+				t.Fatalf("apply that removes limits: %v", err)
+			}
+			accepted := acceptedRevision(t, r).Catalog
+			if accepted.Version != want || accepted.HasLimits() {
+				t.Fatalf("catalog after removal: version %d, limits %v", accepted.Version, accepted.HasLimits())
+			}
+			unit, err := os.ReadFile(filepath.Join(ownedUnitDirectory(home), profile.Unit))
+			if keep && (err != nil || !bytes.Equal(unit, plainUnit)) {
+				t.Fatalf("unit without limits not restored: %v", err)
+			}
+			if !keep && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("removed workload unit remains: %v", err)
+			}
+		})
+	}
+}
+
+func TestTrainerInspectionIgnoresAnUnrelatedLimitedProfile(t *testing.T) {
+	b, request := trainerInspectionRequest(t)
+	limited, _ := ownedFixtureProfile(t, t.TempDir(), "vision", 9100)
+	limited.NativeModel.Owned.Limits = control.ResourceLimits{Version: 1, TasksMax: 4096}
+	refingerprint(t, &limited)
+	request.Catalog.Version = control.CatalogVersionLimits
+	request.Catalog.Profiles = append(request.Catalog.Profiles, limited)
+	inspected := false
+	b.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+		return trainerInspector{inspect: func(context.Context, control.Workload) error { inspected = true; return nil }}, nil
+	}
+	if _, err := b.InspectTrainer(context.Background(), request, "trainer"); err != nil || !inspected {
+		t.Fatalf("trainer inspection with a limited profile = %v, inspected %v", err, inspected)
+	}
+	if err := Validate(request); !errors.Is(err, ErrLimitsNotInSetup) {
+		t.Fatalf("write gate accepted limits: %v", err)
+	}
 }

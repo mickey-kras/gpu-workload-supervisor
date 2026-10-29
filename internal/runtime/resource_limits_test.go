@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -63,6 +64,22 @@ func TestRenderOwnedUnitWithLimitsGolden(t *testing.T) {
 	}
 }
 
+// ownedUnitWithoutLimits renders p with its limits removed.
+func ownedUnitWithoutLimits(t *testing.T, p control.WorkloadProfile) (control.WorkloadProfile, []byte) {
+	t.Helper()
+	n := *p.NativeModel
+	o := *n.Owned
+	o.Limits = control.ResourceLimits{}
+	n.Owned = &o
+	p.NativeModel = &n
+	raw, err := RenderOwnedUnit(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.NativeModel.LaunchSHA256 = fmt.Sprintf("%x", sha256.Sum256(raw))
+	return p, raw
+}
+
 func TestOwnedLimitsParseOnlyAtRenderedPosition(t *testing.T) {
 	p, raw := limitedOwnedProfile(t)
 	n := *p.NativeModel
@@ -113,6 +130,19 @@ func TestOnlyOwnedGrammarRejectsLimitDirectives(t *testing.T) {
 		owned := strings.Replace(string(raw), exec, line+"\n"+exec, 1)
 		if err := qualifyFixtureLaunch([]byte(owned), *p.NativeModel); !errors.Is(err, ErrLaunchUnsupported) || !strings.Contains(err.Error(), strings.Split(line, "=")[0]) {
 			t.Fatalf("owned %s = %v", line, err)
+		}
+	}
+	// An owned unit without limits rejects the same lines: the ban does not
+	// depend on a limits block.
+	plain, plainRaw := ownedUnitWithoutLimits(t, p)
+	plainExec := string(plainRaw[strings.Index(string(plainRaw), "ExecStart="):])
+	if err := qualifyFixtureLaunch(plainRaw, *plain.NativeModel); err != nil {
+		t.Fatalf("owned unit without limits does not qualify: %v", err)
+	}
+	for _, line := range []string{"MemoryMax=2G", "CPUQuota=10%", "OOMPolicy=continue", "StartupCPUWeight=50"} {
+		owned := strings.Replace(string(plainRaw), plainExec, line+"\n"+plainExec, 1)
+		if err := qualifyFixtureLaunch([]byte(owned), *plain.NativeModel); !errors.Is(err, ErrLaunchUnsupported) || !strings.Contains(err.Error(), strings.Split(line, "=")[0]) {
+			t.Fatalf("owned unit without limits accepted %s: %v", line, err)
 		}
 	}
 	if resourceLimitDirective("Description") || resourceLimitDirective("StartupDescription") {
@@ -183,6 +213,17 @@ func TestUnitWithLimitsDoesNotLaunchUntilEnforced(t *testing.T) {
 		if strings.Contains(call, " start ") {
 			t.Fatalf("limited unit started: %v", r.calls[calls:])
 		}
+	}
+	// Another profile still starts and gets a health check without the gate.
+	calls = len(r.calls)
+	if err := m.Start(ctx, control.WorkloadText); errors.Is(err, ErrLimitsNotEnforced) {
+		t.Fatalf("start of an unlimited profile = %v", err)
+	}
+	if !slices.ContainsFunc(r.calls[calls:], func(call string) bool { return strings.HasSuffix(call, " start -- text.service") }) {
+		t.Fatalf("unlimited profile not started: %v", r.calls[calls:])
+	}
+	if err := m.Healthy(ctx, control.WorkloadText); errors.Is(err, ErrLimitsNotEnforced) {
+		t.Fatalf("health of an unlimited profile = %v", err)
 	}
 	plain := ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100})
 	if err := requireEnforceableLimits(plain); err != nil {

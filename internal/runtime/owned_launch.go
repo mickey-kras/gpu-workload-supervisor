@@ -18,7 +18,7 @@ var ErrOwnedRender = errors.New("owned launch cannot be rendered to the supporte
 // without those checks would claim protection that may be absent. Only the
 // start and health of that profile fail; other profiles, preflight, release
 // and setup do not.
-var ErrLimitsNotEnforced = errors.New("resource limits are configured, but this build cannot verify them; remove the limits or the workload through setup, or restore a backup")
+var ErrLimitsNotEnforced = errors.New("resource limits are configured, but this build cannot verify them; remove the workload through setup, or restore a backup")
 
 // ownedServiceHeader is the fixed [Service] opening. Limit lines follow it
 // directly, so the strict parser can remove them at one exact position.

@@ -124,10 +124,12 @@ stop the components and install an older binary. Setup then writes the lowest
 version that the remaining catalog needs. Make sure that the catalog version
 went down.
 
-The setup application of this release has no control for limits. With this
-release, remove each workload that has limits in setup, or send `gpu-setup apply`
-a request without the `limits` key. A backup restore from
-before the limits is the other path.
+The setup application of this release has no control for limits. To remove
+limits with this release, do one of these steps:
+
+- In the setup application, remove each workload that has limits and apply.
+  Then add the workload again without limits if you need it.
+- Restore a backup from before you added the limits.
 
 For a supported rollback, stop and block all components as above. Preserve the
 failed deployment's database for investigation. Select the already verified

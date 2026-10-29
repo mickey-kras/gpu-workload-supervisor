@@ -8,7 +8,8 @@ The current release has only the schema part of this feature:
 
 - Catalog version 5 accepts `limits` on an owned inference launch
   specification. The renderer and the strict parser carry them.
-- The supervisor does not start a unit with limits and does not report it as
+- The supervisor refuses a switch to a unit with limits before it stops the
+  current workload. The runtime also does not start the unit or report it as
   healthy. This gate does not change other workloads, preflight or release
   checks.
 - Setup cannot write limits. It rejects a request with limits before it writes

@@ -6,6 +6,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
@@ -54,6 +55,9 @@ type transitionOptions struct {
 func (c *Controller) transitionConditional(ctx context.Context, target control.Workload, initiator string, options transitionOptions) (control.State, error) {
 	if p, ok := c.config.Catalog.Catalog.Profile(target); ok && p.Trainer != nil {
 		return control.State{}, fmt.Errorf("finite trainer requires training-start")
+	}
+	if err := c.refuseLimitedTarget(target); err != nil {
+		return control.State{}, err
 	}
 	if !c.configuredTarget(target) {
 		return control.State{}, fmt.Errorf("invalid target workload %q", target)
@@ -236,4 +240,14 @@ func (c *Controller) executeTransition(ctx context.Context, transition store.Tra
 	finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.FinalizeTimeout)
 	defer cancel()
 	return c.store.FinishTransition(finalizeCtx, transition.ID, "committed", state.Version, final)
+}
+
+// refuseLimitedTarget refuses a unit with limits before any unload or other
+// effect, so the current workload keeps running. The runtime Start and
+// Healthy gate stays as the backstop.
+func (c *Controller) refuseLimitedTarget(target control.Workload) error {
+	if p, ok := c.config.Catalog.Catalog.Profile(target); ok && p.HasLimits() {
+		return fmt.Errorf("%s (%s): %w", p.ID, p.Unit, gpuruntime.ErrLimitsNotEnforced)
+	}
+	return nil
 }
