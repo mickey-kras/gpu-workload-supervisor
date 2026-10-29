@@ -83,54 +83,68 @@ The check rejects code files (`*.py`) and pickle formats (`.bin`, `.pt`,
 loader then loads a base model that the checks did not see. It rejects all
 other files.
 
-The check reads each JSON file. A JSON file above 128 MiB makes the model
-`unsupported`. The check rejects a file that is not one strict JSON value and
-a duplicate key. It also rejects these keys at any depth:
+The check reads each JSON file in one pass, as a stream. A JSON file above
+128 MiB makes the model `unsupported`. The check rejects a file that is not
+valid UTF-8 or not one strict JSON value, and a duplicate key. It also rejects
+these keys at any depth outside token data:
 
-- `auto_map`, `auto_mapping` and `custom_pipelines`. These keys make a loader
-  import code.
-- `speculators_config`, `configuration_files`, `attribute_map` and
-  `__dict__`. With these keys, a loader loads another model or changes how it
-  reads the configuration. For example, vLLM loads the model that
-  `speculators_config` names.
-- `fast_tokenizer_files` and `transformers_weights`. These keys give other
-  file names for tokenizer files or weights.
+- `auto_map`, `auto_mapping` and `custom_pipelines` (`remote-code-mapping`).
+  These keys make a loader import code.
+- `speculators_config`, `configuration_files`, `attribute_map`, `__dict__`,
+  `audio_model_id` and `text_model_id` (`model-redirect`). With these keys, a
+  loader loads another model or changes how it reads the configuration. For
+  example, vLLM loads the models that `speculators_config`, `audio_model_id`
+  and `text_model_id` name.
+- `fast_tokenizer_files` and `transformers_weights` (`file-path-redirect`).
+  These keys give other file names for tokenizer files or weights.
 
-The file path keys at the top level of a JSON file must be `null` or the name
-of a file in the model directory. These keys include `tokenizer_file`,
-`vocab_file`, `merges_file`, `source_spm` and the other file names of the
-tokenizer classes in transformers.
+Token data has keys that are tokens, so a token such as `auto_map` is not a
+configuration key:
+
+- `vocab.json` and `added_tokens.json` hold token maps. The check applies no
+  key or value rule to them.
+- Below the top level, the values of the keys `vocab`, `merges`,
+  `special_tokens` and `added_tokens_decoder` hold token data. The check
+  applies no key or value rule to them.
+
+At the top level of a JSON file, each file path key must be `null` or the
+name of a loaded file in the model directory. The name cannot have `/` or a
+backslash. Else the reason is `file-path-redirect`. These keys include `tokenizer_file`, `vocab_file`,
+`merges_file`, `source_spm` and the other file names of the tokenizer classes
+in transformers.
 
 The key lists are in `internal/llmtraining/loader_keys.go`. The training
 candidate inspection uses them too. The lists are not complete, so the check
-also applies one rule to all string values at any depth. A value fails when it
-has one of these forms:
+also applies one rule to all other string values at any depth. A value fails
+when it has one of these forms:
 
-- An absolute path, a path that starts with `~`, `./` or a backslash, or a
-  path that contains `..`.
-- The name of a model, tokenizer or code file, such as `x.model`, that is not
-  in the model directory.
-- A file name in a subdirectory, such as `sub/x.json`. A model has no
-  subdirectories.
+- It contains `..`, or it starts with `/`, `~`, `./` or a backslash
+  (`file-path-redirect`).
+- It is `README`, `README.md`, `LICENSE`, `LICENSE.md` or `.gitattributes`
+  (`file-path-redirect`). The supervisor binds these files but never parses or
+  shows them.
+- It is the name of a model, tokenizer or code file, such as `x.model`, that is
+  not in the model directory (`file-path-redirect`).
+- It is a file name in a subdirectory, such as `sub/x.json`
+  (`file-path-redirect`). A model has no subdirectories.
+- It contains `://`, or it has the shape of a hub repository ID, such as
+  `org/name` (`model-redirect`). A loader can download such a model.
 
-The rule skips token text and chat templates:
+The rule skips these values:
 
-- All values below the key `chat_template`, also in its list form.
-- The values of `content` and of the special token keys, also in lists.
+- All values below the key `chat_template`, also in its list form. The chat
+  template check covers them.
+- The values of the keys in `textKeys` in `internal/modelcheck/paths.go`:
+  `content`, `additional_special_tokens`, `extra_special_tokens`,
+  `bos_token`, `eos_token`, `unk_token`, `pad_token`, `sep_token`,
+  `cls_token` and `mask_token`, also in lists.
+- The values of `_name_or_path` and `name_or_path`. These keys hold a hub ID
+  or the folder that saved the model. The transformers library and vLLM keep
+  these values as labels and load no files or models from them.
 
-The rule also skips `_name_or_path` and `name_or_path`. These keys hold a hub
-ID or the folder that saved the model. The transformers library and vLLM keep
-these values as labels and load no files from them. The rule for file path
-keys and this rule skip `tokenizer.json`, because the tokenizers library reads
-no file names from it.
-
-No value can name `README`, `README.md`, `LICENSE`, `LICENSE.md` or
-`.gitattributes`. The supervisor binds these files but never parses or shows
-them.
-
-The check rejects these values with the reason `file-path-redirect`, because
-a loader can read a file that the checks did not bind. Look at the release
-notes of each new vLLM and transformers version for new keys of this kind.
+The rule for file path keys and the value rule skip `tokenizer.json`, because
+the tokenizers library reads no file names from it. Look at the release notes
+of each new vLLM and transformers version for new keys of this kind.
 
 A model without `.safetensors` weights or without `config.json` is
 `unsupported`.

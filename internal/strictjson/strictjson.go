@@ -44,22 +44,10 @@ func DecodeLimited(r io.Reader, max int64, v any) error {
 // Check consumes one JSON value from d and rejects duplicate object keys at
 // any depth, including inside arrays. Nesting is limited as in encoding/json.
 func Check(d *json.Decoder) error {
-	return Walk(d, nil)
+	return check(d, 0)
 }
 
-// Walk is Check that also gives each object key, at any depth, to visit.
-// A visit error stops the walk and is returned unchanged.
-func Walk(d *json.Decoder, visit func(key string) error) error {
-	return walker{d: d, visit: visit}.value(0)
-}
-
-type walker struct {
-	d     *json.Decoder
-	visit func(string) error
-}
-
-func (w walker) value(depth int) error {
-	d := w.d
+func check(d *json.Decoder, depth int) error {
 	token, err := d.Token()
 	if err != nil {
 		return err
@@ -73,16 +61,15 @@ func (w walker) value(depth int) error {
 	}
 	switch delim {
 	case '{':
-		return w.object(depth + 1)
+		return checkObject(d, depth+1)
 	case '[':
-		return w.array(depth + 1)
+		return checkArray(d, depth+1)
 	default:
 		return errors.New("invalid JSON value")
 	}
 }
 
-func (w walker) object(depth int) error {
-	d := w.d
+func checkObject(d *json.Decoder, depth int) error {
 	seen := map[string]bool{}
 	for d.More() {
 		key, err := d.Token()
@@ -94,12 +81,7 @@ func (w walker) object(depth int) error {
 			return ErrDuplicateKey
 		}
 		seen[name] = true
-		if w.visit != nil {
-			if err := w.visit(name); err != nil {
-				return err
-			}
-		}
-		if err := w.value(depth); err != nil {
+		if err := check(d, depth); err != nil {
 			return err
 		}
 	}
@@ -107,10 +89,9 @@ func (w walker) object(depth int) error {
 	return err
 }
 
-func (w walker) array(depth int) error {
-	d := w.d
+func checkArray(d *json.Decoder, depth int) error {
 	for d.More() {
-		if err := w.value(depth); err != nil {
+		if err := check(d, depth); err != nil {
 			return err
 		}
 	}

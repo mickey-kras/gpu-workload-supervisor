@@ -17,8 +17,9 @@ var (
 	RemoteCodeKeys = []string{"auto_map", "auto_mapping", "custom_pipelines"}
 	// ModelRedirectKeys make a loader load another model or change how it
 	// reads the configuration. vLLM loads the verifier model that
-	// speculators_config names.
-	ModelRedirectKeys = []string{"speculators_config", "configuration_files", "attribute_map", "__dict__"}
+	// speculators_config names, and the models that audio_model_id and
+	// text_model_id name.
+	ModelRedirectKeys = []string{"speculators_config", "configuration_files", "attribute_map", "__dict__", "audio_model_id", "text_model_id"}
 	// FileRedirectKeys give other file names for weights or tokenizer files.
 	FileRedirectKeys = []string{"fast_tokenizer_files", "transformers_weights"}
 	// FilePathKeys name single tokenizer files, including the

@@ -117,23 +117,3 @@ func TestDecodeLimitedRejectsUnknownDuplicateAndOversizeInput(t *testing.T) {
 		t.Fatal("read failure ignored")
 	}
 }
-
-func TestWalkVisitsKeysAtAnyDepth(t *testing.T) {
-	var keys []string
-	err := Walk(json.NewDecoder(strings.NewReader(`{"a":[{"b":{"c":1}}],"d":2}`)), func(key string) error {
-		keys = append(keys, key)
-		return nil
-	})
-	if err != nil || strings.Join(keys, ",") != "a,b,c,d" {
-		t.Fatalf("keys = %v, err = %v", keys, err)
-	}
-	stop := errors.New("stop")
-	if err := Walk(json.NewDecoder(strings.NewReader(`{"a":{"stop":1}}`)), func(key string) error {
-		if key == "stop" {
-			return stop
-		}
-		return nil
-	}); !errors.Is(err, stop) {
-		t.Fatal("a visit error must stop the walk", err)
-	}
-}

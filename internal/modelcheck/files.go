@@ -6,10 +6,8 @@
 package modelcheck
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"io"
 	"maps"
@@ -18,9 +16,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/llmtraining"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 	"golang.org/x/sys/unix"
 )
 
@@ -88,7 +86,6 @@ const (
 )
 
 var (
-	errRedirect = errors.New("redirect key")
 	// errChanged marks a file that changed after the inventory.
 	errChanged = errors.New("model files changed during the check")
 	// errUnreadable marks a file that the check could not read.
@@ -155,25 +152,10 @@ func checkJSON(file string, digests map[string]string) (string, error) {
 	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != digests[filepath.Base(file)] {
 		return "", errChanged
 	}
-	d := json.NewDecoder(bytes.NewReader(raw))
-	redirect := ""
-	err = strictjson.Walk(d, func(key string) error {
-		if reason := redirectKeys[key]; reason != "" {
-			redirect = reason
-			return errRedirect
-		}
-		return nil
-	})
-	if errors.Is(err, errRedirect) {
-		return redirect, nil
-	}
-	if err != nil {
+	if !utf8.Valid(raw) {
 		return ReasonInvalidJSON, nil
 	}
-	if _, err := d.Token(); err != io.EOF {
-		return ReasonInvalidJSON, nil
-	}
-	return checkPathValues(filepath.Base(file), raw, digests), nil
+	return scanJSON(filepath.Base(file), raw, digests), nil
 }
 
 func sortedNames(files map[string]string) []string {

@@ -784,6 +784,7 @@ func TestHubTokenLookupOrder(t *testing.T) {
 	write(t, filepath.Join(dir, "cache", "huggingface", "token"), "hf_cache")
 	write(t, filepath.Join(dir, "large"), strings.Repeat("a", maxTokenBytes+1))
 	write(t, filepath.Join(dir, "spaced"), "hf bad")
+	write(t, filepath.Join(dir, "user", ".cache", "huggingface", "token"), "hf_default")
 	if err := os.Symlink(filepath.Join(dir, "path-token"), filepath.Join(dir, "linked")); err != nil {
 		t.Fatal(err)
 	}
@@ -804,7 +805,8 @@ func TestHubTokenLookupOrder(t *testing.T) {
 		"HF_HOME without a login":   {map[string]string{"HF_HOME": filepath.Join(dir, "absent"), "XDG_CACHE_HOME": filepath.Join(dir, "cache")}, "", false},
 		"relative HF_HOME":          {map[string]string{"HF_HOME": "home"}, "", true},
 		"cache fourth":              {map[string]string{"XDG_CACHE_HOME": filepath.Join(dir, "cache")}, "hf_cache", false},
-		"default cache under HOME":  {map[string]string{"XDG_CACHE_HOME": "relative", "HOME": dir}, "", false},
+		"default cache under HOME":  {map[string]string{"XDG_CACHE_HOME": "relative", "HOME": filepath.Join(dir, "user")}, "hf_default", false},
+		"no default cache file":     {map[string]string{"XDG_CACHE_HOME": "", "HOME": dir}, "", false},
 		"no login in the cache dir": {map[string]string{"XDG_CACHE_HOME": filepath.Join(dir, "absent")}, "", false},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -927,6 +929,7 @@ func TestPathValuesAreRejectedAtAnyDepth(t *testing.T) {
 		"file in a folder":      {"config.json", `{"weights":"sub/model.safetensors"}`},
 		"top level vocab value": {"tokenizer_config.json", `{"vocab":"absent.json"}`},
 		"documentation file":    {"tokenizer_config.json", `{"tokenizer_file":"README.md"}`},
+		"top level path object": {"tokenizer_config.json", `{"vocab_file":{"a":1}}`},
 		"license in a value":    {"config.json", `{"notes":{"text":"LICENSE"}}`},
 		"path list":             {"config.json", `{"files":["ok","../x"]}`},
 	} {
@@ -1002,5 +1005,67 @@ func TestSizeDifferenceOfAChangedFileIsAnError(t *testing.T) {
 	reason, err := checkIdentity(root, only, upstream)
 	if got := outcome(CheckIdentity, reason, err); got != (Check{CheckIdentity, OutcomeError, ReasonFilesChanged}) {
 		t.Fatalf("a changed file of another size = %+v, want files-changed", got)
+	}
+}
+
+func TestInvalidUTF8IsInvalidJSON(t *testing.T) {
+	files := modelFiles()
+	files["generation_config.json"] = "{\"a\":\"\xff\"}"
+	record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+	if record.Checks[0] != (Check{CheckAllowlist, OutcomeFailed, ReasonInvalidJSON}) {
+		t.Fatalf("allowlist = %+v", record.Checks[0])
+	}
+}
+
+func TestTokenDataIsNotReadAsConfigurationKeys(t *testing.T) {
+	files := modelFiles()
+	files["tokenizer.json"] = `{"model":{"type":"BPE","vocab":{"auto_map":1,"__dict__":2,"speculators_config":3},"merges":["auto_map x"]},` +
+		`"post_processor":{"special_tokens":{"custom_pipelines":{"id":"custom_pipelines","ids":[4],"tokens":["custom_pipelines"]}}},` +
+		`"added_tokens":[{"id":5,"content":"auto_map"}]}`
+	files["vocab.json"] = `{"auto_map":1,"__dict__":2,"transformers_weights":3}`
+	files["added_tokens.json"] = `{"custom_pipelines":4}`
+	files["tokenizer_config.json"] = `{"added_tokens_decoder":{"5":{"content":"auto_map"}}}`
+	record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+	if record.Checks[0].Outcome != OutcomePassed {
+		t.Fatalf("tokens that look like configuration keys must pass: %+v", record.Checks[0])
+	}
+	files["tokenizer.json"] = `{"model":{"type":"BPE","vocab":{}},"auto_map":{}}`
+	record = run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+	if record.Checks[0] != (Check{CheckAllowlist, OutcomeFailed, ReasonRemoteCode}) {
+		t.Fatalf("a configuration key outside token data must still fail: %+v", record.Checks[0])
+	}
+}
+
+func TestHubModelIDsAndURLsAreRedirects(t *testing.T) {
+	for name, tc := range map[string]struct{ file, content string }{
+		"ultravox audio model": {"config.json", `{"audio_model_id":"openai/whisper-large-v3"}`},
+		"ultravox text model":  {"config.json", `{"text_model_id":"org/llm"}`},
+		"repo ID in a value":   {"config.json", `{"text_config":{"backbone":"org/other-model"}}`},
+		"URL in a value":       {"generation_config.json", `{"source":"https://example.invalid/weights"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			files := modelFiles()
+			files[tc.file] = tc.content
+			record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+			if record.Checks[0] != (Check{CheckAllowlist, OutcomeFailed, ReasonModelRedirect}) {
+				t.Fatalf("allowlist = %+v", record.Checks[0])
+			}
+		})
+	}
+	files := modelFiles()
+	files["config.json"] = `{"_name_or_path":"org/name","architectures":["Qwen3ForCausalLM"],"model_type":"qwen3"}`
+	record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+	if record.Checks[0].Outcome != OutcomePassed {
+		t.Fatalf("a label may hold a hub ID: %+v", record.Checks[0])
+	}
+}
+
+func TestTokenMapsSkipThePathRules(t *testing.T) {
+	files := modelFiles()
+	files["vocab.json"] = `{"vocab":0,"vocab_file":1,"../x":2,"/":3,"org/name":4}`
+	files["added_tokens.json"] = `{"source_spm":5,"auto_map":6}`
+	record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+	if record.Checks[0].Outcome != OutcomePassed {
+		t.Fatalf("token maps must skip the key and value rules: %+v", record.Checks[0])
 	}
 }
