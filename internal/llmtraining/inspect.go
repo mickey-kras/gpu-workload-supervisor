@@ -168,6 +168,10 @@ func inspectShardIndex(inventory Inventory, name string) error {
 	}
 	defer f.Close()
 	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+	digest := sha256.Sum256(raw)
+	if err == nil && hex.EncodeToString(digest[:]) != inventory.Files[name] {
+		return errors.New("candidate shard index digest mismatch")
+	}
 	var index map[string]json.RawMessage
 	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &index) != nil {
 		return errors.New("candidate shard index is invalid")

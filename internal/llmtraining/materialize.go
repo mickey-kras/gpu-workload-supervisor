@@ -130,6 +130,33 @@ func inventoryRecipe(r *Recipe) error {
 	return nil
 }
 
+// InventoryDirectory walks root and binds every regular file below it. It
+// rejects links, nonregular files, invalid paths and shard indexes that do not
+// reference inventoried safetensors weights. The result records observed
+// bytes only; it does not authenticate their source.
+func InventoryDirectory(root string) (Inventory, error) {
+	if !absolute(root) {
+		return Inventory{}, errors.New("inventory requires a clean absolute root")
+	}
+	files, err := inventoryLocalFiles(root)
+	if err != nil {
+		return Inventory{}, err
+	}
+	inventory := Inventory{Root: root, Files: files}
+	if err := inventory.validate(); err != nil {
+		return Inventory{}, err
+	}
+	return inventory, inspectShardIndexes(inventory)
+}
+
+// FileDigest is the lowercase hex SHA-256 of one regular, unlinked file.
+func FileDigest(path string) (string, error) {
+	if !absolute(path) {
+		return "", errors.New("file digest requires a clean absolute path")
+	}
+	return localDigest(path, 1<<40)
+}
+
 func inventoryLocalFiles(root string) (map[string]string, error) {
 	if err := noLinks(root); err != nil {
 		return nil, err

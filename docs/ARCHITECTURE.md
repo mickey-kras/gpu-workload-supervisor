@@ -21,8 +21,9 @@
 
 ## Model checks
 
-The supervisor does not check models yet.
-[#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans a scan of each LLM before its first use.
+[Model checks](MODEL-CHECKS.md) has the file allowlist, the upstream identity check and the result store.
+No command runs them yet.
+[#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans the other checks and a scan of each LLM before its first use.
 [#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583) plans to show the result and to stop models that did not pass.
 These checks are a defensive layer. They do not prove that a model is safe.
 
