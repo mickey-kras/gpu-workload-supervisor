@@ -23,7 +23,7 @@ blocks requests when a transition fails.
 - Proxy: admission and forwarding. No content policy.
 - Brokers, gateways and scanners: external. Not installed by setup.
 
-[Architecture](docs/ARCHITECTURE.md).
+[Architecture](docs/INTEGRATION.md).
 
 ## Requires
 
@@ -38,7 +38,7 @@ Setup detects and adopts supported systemd user services without rewriting their
 source files. For GPU correction, preview first: the explicit `apply` action
 creates a drop-in for an eligible stopped service and does not start it.
 
-[Desktop setup](docs/DESKTOP.md).
+[Desktop setup](docs/OPERATIONS.md).
 
 ## Setup checks
 
@@ -50,13 +50,13 @@ Setup checks symlinks and their traversed ancestors, and reports broken symlinks
 by name. It preserves supported direct commands and their arguments, and still
 checks endpoint, model, GPU identity, environment and effective loaded settings.
 Shell commands, environment files and uninspected operational directives remain
-unsupported. See [launch constraints](docs/WORKLOADS.md).
+unsupported. See [launch constraints](docs/INTEGRATION.md).
 
 ## Docs
 
 - [Deploy and qualify a host](docs/DEPLOYMENT.md)
 - [Switch workloads, recover](docs/OPERATIONS.md)
-- [Backup and restore](docs/RESTORING.md)
+- [Backup and restore](docs/OPERATIONS.md)
 - [All documentation](docs/README.md)
 
 [MIT license](LICENSE).
