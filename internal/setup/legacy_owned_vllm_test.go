@@ -85,7 +85,7 @@ func TestLegacyOwnedVLLMBindingCanBeRemoved(t *testing.T) {
 
 func TestLegacyAdoptedVLLMBindingDoesNotBlockRemoval(t *testing.T) {
 	c := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "chat", NativeModel: &control.NativeModel{Runtime: "vllm"}}}}
-	if !hasRemovedRuntime(c) || removalObservationCatalog(c).Profiles[0].NativeModel != nil {
+	if !hasRetiredBinding(c) || removalObservationCatalog(c).Profiles[0].NativeModel != nil {
 		t.Fatal("legacy adopted binding observed for execution")
 	}
 	runtime, _ := strictVLLMRuntime(Request{Catalog: removalObservationCatalog(c)})

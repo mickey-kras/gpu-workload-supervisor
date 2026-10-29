@@ -28,9 +28,10 @@ var loopbackListeners = map[string]map[string]bool{
 	"tcp6": {strings.Repeat("0", 32): true, "0000000000000000FFFF00000100007F": true},
 }
 
-// CheckListener requires that every socket that listens for connections to
-// 127.0.0.1 on the port of endpoint belongs to the current user, and that at
-// least one does. It reads /proc/net/tcp and /proc/net/tcp6.
+// CheckListener requires that the current user owns every socket that
+// receives connections to 127.0.0.1 on the port of endpoint, and that one
+// exists. It reads /proc/net/tcp and, when no IPv4 socket listens on the
+// port, /proc/net/tcp6.
 func CheckListener(endpoint string) error {
 	parsed, err := url.Parse(endpoint)
 	if err != nil || parsed.Hostname() != "127.0.0.1" {
@@ -42,23 +43,24 @@ func CheckListener(endpoint string) error {
 	}
 	wantPort := fmt.Sprintf("%04X", port)
 	uid := strconv.Itoa(effectiveUID())
-	found := false
+	// The kernel prefers an IPv4 listener for a connection to 127.0.0.1, so
+	// the IPv6 table counts only when no IPv4 listener exists.
 	for _, table := range []string{"tcp", "tcp6"} {
 		owners, err := listenerOwners(table, wantPort)
 		if err != nil {
 			return err
 		}
+		if len(owners) == 0 {
+			continue
+		}
 		for _, owner := range owners {
 			if owner != uid {
 				return fmt.Errorf("%w: user %s also listens on port %d", ErrForeignListener, owner, port)
 			}
-			found = true
 		}
+		return nil
 	}
-	if !found {
-		return fmt.Errorf("%w: nothing listens on port %d", ErrForeignListener, port)
-	}
-	return nil
+	return fmt.Errorf("%w: nothing listens on port %d", ErrForeignListener, port)
 }
 
 func listenerOwners(table, port string) ([]string, error) {

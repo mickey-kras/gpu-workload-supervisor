@@ -160,10 +160,53 @@ func TestReadErrorsNameTheFileAndTheReason(t *testing.T) {
 		t.Fatalf("mode error = %v", err)
 	}
 	missing := filepath.Join(t.TempDir(), "missing.env")
-	if _, err := Read(missing); err == nil || !strings.Contains(err.Error(), "run setup again") {
+	if _, err := Read(missing); err == nil || !strings.Contains(err.Error(), "mode 0600") || !strings.Contains(err.Error(), "supervisor-managed") {
 		t.Fatalf("missing file error = %v", err)
 	}
 	if err := Ensure(open); err == nil || !strings.Contains(err.Error(), "0600") || !strings.Contains(err.Error(), "correct or remove") {
 		t.Fatalf("Ensure error = %v", err)
+	}
+}
+
+func TestEnsureSyncsNewDirectoriesAndReportsSyncFailures(t *testing.T) {
+	root := t.TempDir()
+	var synced []string
+	saved := syncDirectory
+	syncDirectory = func(dir string) error { synced = append(synced, dir); return saved(dir) }
+	t.Cleanup(func() { syncDirectory = saved })
+	path := filepath.Join(root, "a", "b", "vllm.env")
+	if err := Ensure(path); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{root: true, filepath.Join(root, "a"): true, filepath.Join(root, "a", "b"): true}
+	for _, dir := range synced {
+		delete(want, dir)
+	}
+	if len(want) != 0 {
+		t.Fatalf("directories not synced: %v (synced %v)", want, synced)
+	}
+	for _, failing := range []string{filepath.Join(root, "c"), filepath.Join(root, "d", "e")} {
+		syncDirectory = func(dir string) error {
+			if dir == failing {
+				return errors.New("sync failed")
+			}
+			return nil
+		}
+		if err := Ensure(filepath.Join(failing, "vllm.env")); err == nil {
+			t.Fatalf("sync failure of %s ignored", failing)
+		}
+	}
+	syncDirectory = func(dir string) error {
+		if dir == root {
+			return errors.New("sync failed")
+		}
+		return nil
+	}
+	if err := Ensure(filepath.Join(root, "f", "vllm.env")); err == nil {
+		t.Fatal("parent sync failure ignored")
+	}
+	syncDirectory = saved
+	if err := syncDirectory(filepath.Join(root, "missing")); err == nil {
+		t.Fatal("missing directory synced")
 	}
 }

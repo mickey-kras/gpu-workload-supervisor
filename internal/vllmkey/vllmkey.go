@@ -43,7 +43,7 @@ func Read(path string) (string, error) {
 	}
 	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("%w: %s does not exist; run setup again to create it", ErrInvalid, path)
+		return "", fmt.Errorf("%w: %s does not exist; create it with mode 0600 and one line %s=<key>, or run setup again for a supervisor-managed model", ErrInvalid, path, Name)
 	}
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
@@ -104,7 +104,7 @@ func Ensure(path string) error {
 		return fmt.Errorf("%w; correct or remove the file, then run setup again", readErr)
 	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := makeDirectories(dir); err != nil {
 		return fmt.Errorf("create the key directory for %s: %w", path, err)
 	}
 	secret := make([]byte, 32)
@@ -130,12 +130,42 @@ func publish(dir, path string, content []byte) error {
 	if err := os.Link(name, path); err != nil {
 		return fmt.Errorf("publish key file: %w", err)
 	}
-	if directory, err := os.Open(dir); err == nil {
-		_ = directory.Sync()
-		_ = directory.Close()
+	if err := syncDirectory(dir); err != nil {
+		return fmt.Errorf("publish key file: %w", err)
 	}
 	_, err = Read(path)
 	return err
+}
+
+// makeDirectories creates the missing directories of dir with mode 0700 and
+// makes each new entry durable in its parent.
+func makeDirectories(dir string) error {
+	var missing []string
+	for current := dir; ; current = filepath.Dir(current) {
+		if _, err := os.Lstat(current); err == nil || current == filepath.Dir(current) {
+			break
+		}
+		missing = append(missing, current)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	for _, created := range missing {
+		if err := syncDirectory(filepath.Dir(created)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// syncDirectory makes the entries of a directory durable. Test hook.
+var syncDirectory = func(dir string) error {
+	directory, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 
 func writeSynced(file *os.File, content []byte) error {

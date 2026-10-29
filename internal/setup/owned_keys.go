@@ -38,11 +38,14 @@ func ensureOwnedKey(plan unitPlan, name string) error {
 	}
 	_, err := os.Lstat(path)
 	missing := errors.Is(err, os.ErrNotExist)
-	if err := vllmkey.Ensure(path); err != nil {
-		return fmt.Errorf("%s: %w", name, err)
-	}
-	if missing && plan.createdKeys != nil {
+	ensureErr := vllmkey.Ensure(path)
+	// A key file that this apply created is recorded even when a later step
+	// of Ensure failed, so the rollback removes it.
+	if _, err := os.Lstat(path); missing && err == nil && plan.createdKeys != nil {
 		plan.createdKeys[name] = true
+	}
+	if ensureErr != nil {
+		return fmt.Errorf("%s: %w", name, ensureErr)
 	}
 	return nil
 }

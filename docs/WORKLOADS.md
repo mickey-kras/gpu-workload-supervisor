@@ -242,6 +242,9 @@ empty search entries. `LD_LIBRARY_PATH` additionally treats semicolons as separa
 code-loading overrides such as `LD_PRELOAD`, `LD_AUDIT` and `PYTHONHOME` stay
 unsupported.
 
+Setup rejects `VLLM_API_KEY` in `Environment=`. Other `VLLM_` variables must
+be on the allowlist in [Hardened vLLM launch](#hardened-vllm-launch).
+
 Setup keeps other literal variables. It does not certify their application-specific
 behavior. Unsupported expansion and other environment files remain rejected.
 

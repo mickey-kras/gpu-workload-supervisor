@@ -30,7 +30,10 @@ Setup does not strip them from external files.
 
 The hardened vLLM fields follow the same rule. A binding without them keeps
 its exact earlier unit bytes and fingerprint, so setup can remove or replace
-the unit. Such a binding never qualifies for execution.
+the unit. Such a binding never qualifies for execution. Unlike the
+`owned.conflicts` upgrade, setup does not upgrade it. Configure the model again
+or remove it, as [Hardened vLLM launch](WORKLOADS.md#hardened-vllm-launch)
+describes.
 
 Pending activations keep their original unit hashes through exact replay.
 After recovery completes, setup offers the upgrade in a later preview. Runtime

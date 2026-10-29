@@ -397,7 +397,7 @@ func (work activationWork) verifyAcceptedRuntime(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := verifyActivationBindings(ctx, manager, work.removedRuntimePlan()); err != nil {
+	if err := verifyActivationBindings(ctx, manager, work.retiredBindingPlan()); err != nil {
 		return err
 	}
 	return manager.ReleasedFor(ctx, control.WorkloadIdle)
@@ -587,7 +587,7 @@ func verifyActivationBindings(ctx context.Context, manager gpuruntime.Manager, p
 }
 
 func removalObservationCatalog(c control.Catalog) control.Catalog {
-	if !hasRemovedRuntime(c) {
+	if !hasRetiredBinding(c) {
 		return c
 	}
 	c = c.Clone()
@@ -605,9 +605,9 @@ func removalObservationCatalog(c control.Catalog) control.Catalog {
 	return c
 }
 
-func (work activationWork) removedRuntimePlan() unitPlan {
+func (work activationWork) retiredBindingPlan() unitPlan {
 	plan := unitPlan{proven: map[string]string{}}
-	if !hasRemovedRuntime(work.accepted.Catalog) {
+	if !hasRetiredBinding(work.accepted.Catalog) {
 		return plan
 	}
 	for _, p := range work.accepted.Catalog.Profiles {
@@ -619,10 +619,10 @@ func (work activationWork) removedRuntimePlan() unitPlan {
 	return plan
 }
 
-// hasRemovedRuntime reports an accepted catalog with a binding that can no
+// hasRetiredBinding reports an accepted catalog with a binding that can no
 // longer run. Its accepted runtime is observed without native bindings, so
 // the binding cannot block the apply that removes or replaces it.
-func hasRemovedRuntime(c control.Catalog) bool {
+func hasRetiredBinding(c control.Catalog) bool {
 	for _, p := range c.Profiles {
 		if p.RetiredBinding() {
 			return true
