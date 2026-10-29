@@ -39,37 +39,47 @@ var (
 // assignment.
 func Read(path string) (string, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return "", fmt.Errorf("%w: path must be absolute and clean", ErrInvalid)
+		return "", fmt.Errorf("%w: %s: path must be absolute and clean", ErrInvalid, path)
 	}
 	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("%w: %s does not exist; run setup again to create it", ErrInvalid, path)
+	}
 	if err != nil {
-		return "", fmt.Errorf("%w: open failed; run setup again to create it", ErrInvalid)
+		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return "", fmt.Errorf("%w: metadata could not be read", ErrInvalid)
+		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if err := checkOwnership(info); err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %s: %w", ErrInvalid, path, err)
 	}
 	raw, err := io.ReadAll(io.LimitReader(file, maxFileBytes+1))
-	if err != nil || len(raw) > maxFileBytes {
-		return "", fmt.Errorf("%w: content could not be read or is too large", ErrInvalid)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s: %w", ErrInvalid, path, err)
 	}
-	return parse(raw)
+	if len(raw) > maxFileBytes {
+		return "", fmt.Errorf("%w: %s: the file is larger than %d bytes", ErrInvalid, path, maxFileBytes)
+	}
+	key, err := parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s: %w", ErrInvalid, path, err)
+	}
+	return key, nil
 }
 
 func checkOwnership(info os.FileInfo) error {
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("%w: not a regular file", ErrInvalid)
+		return errors.New("not a regular file")
 	}
 	if info.Mode().Perm() != 0o600 {
-		return fmt.Errorf("%w: permissions must be 0600", ErrInvalid)
+		return errors.New("the file mode must be 0600")
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || int(stat.Uid) != effectiveUID() {
-		return fmt.Errorf("%w: the current user must own the file", ErrInvalid)
+		return errors.New("the current user must own the file")
 	}
 	return nil
 }
@@ -78,7 +88,7 @@ func parse(raw []byte) (string, error) {
 	content := strings.TrimSuffix(string(raw), "\n")
 	value, ok := strings.CutPrefix(content, Name+"=")
 	if !ok || !token.MatchString(value) {
-		return "", fmt.Errorf("%w: the file must hold one line %s=<key> with 32 to 256 URL-safe characters", ErrInvalid, Name)
+		return "", fmt.Errorf("the file must hold one line %s=<key> with 32 to 256 URL-safe characters", Name)
 	}
 	return value, nil
 }
@@ -86,15 +96,16 @@ func parse(raw []byte) (string, error) {
 // Ensure keeps a usable key file and creates a new private key file when none
 // exists. It never replaces a file that exists but is not usable.
 func Ensure(path string) error {
-	if _, err := Read(path); err == nil {
+	_, readErr := Read(path)
+	if readErr == nil {
 		return nil
 	}
 	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%w: an existing file is not usable; correct or remove it, then run setup again", ErrInvalid)
+		return fmt.Errorf("%w; correct or remove the file, then run setup again", readErr)
 	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create key directory: %w", err)
+		return fmt.Errorf("create the key directory for %s: %w", path, err)
 	}
 	secret := make([]byte, 32)
 	if _, err := randomRead(secret); err != nil {

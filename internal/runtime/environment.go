@@ -114,11 +114,31 @@ func (u *parsedLaunchUnit) qualifyEnvironmentValue(name, value string) error {
 	case "VLLM_API_KEY":
 		// An inline key is visible in loaded unit metadata.
 		return environmentError(name, "set the API key only in the private EnvironmentFile")
-	case "VLLM_ALLOW_RUNTIME_LORA_UPDATING":
-		return environmentError(name, "runtime adapter loading is unsupported")
 	default:
-		return nil
+		return qualifyVLLMSetting(name)
 	}
+}
+
+// allowedVLLMSettings lists the vLLM environment settings that only change
+// logging, telemetry or scheduling. Other VLLM_ settings can open routes
+// outside /v1 (VLLM_SERVER_DEV_MODE), load code (VLLM_PLUGINS), accept unsafe
+// input (VLLM_ALLOW_INSECURE_SERIALIZATION) or load adapters at run time
+// (VLLM_ALLOW_RUNTIME_LORA_UPDATING), so they stay unsupported.
+var allowedVLLMSettings = map[string]bool{
+	"VLLM_LOGGING_LEVEL":              true,
+	"VLLM_CONFIGURE_LOGGING":          true,
+	"VLLM_NO_USAGE_STATS":             true,
+	"VLLM_DO_NOT_TRACK":               true,
+	"VLLM_WORKER_MULTIPROC_METHOD":    true,
+	"VLLM_ATTENTION_BACKEND":          true,
+	"VLLM_ENGINE_ITERATION_TIMEOUT_S": true,
+}
+
+func qualifyVLLMSetting(name string) error {
+	if strings.HasPrefix(name, "VLLM_") && !allowedVLLMSettings[name] {
+		return environmentError(name, "this vLLM setting is not on the supported list")
+	}
+	return nil
 }
 
 func qualifyEnvironmentSearchPaths(name, value string) error {

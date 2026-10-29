@@ -40,6 +40,12 @@ Finite trainer bindings need v4. See [Finite training jobs](TRAINING.md). The va
 rejects unsupported versions (including v3), unknown fields and fields outside
 their supported version.
 
+The hardened vLLM fields `chatTemplate`, `chatTemplateSHA256` and
+`environmentFile` are valid in v1, v2 and v4 catalogs. They do not change the
+catalog version. Earlier releases reject them as unknown fields. To go back to
+an earlier release, restore a verified backup as
+[RESTORING.md](RESTORING.md) describes.
+
 Catalog versions are separate from database schema versions and upstream runtime and
 API versions.
 
@@ -118,7 +124,9 @@ downgrade a live database.
 
 A `systemd` profile can include `nativeModel` with `runtime` `vllm`, `instance`,
 exact API `model`, loopback base `endpoint`, absolute `launchFile`, and its
-`launchSHA256`. Model names are case-sensitive. Each workload needs its own
+`launchSHA256`. A vLLM binding also records `chatTemplate`, its
+`chatTemplateSHA256` and the `environmentFile` path of the key file. Setup
+fills these fields. A binding without them never qualifies. Model names are case-sensitive. Each workload needs its own
 existing unit and non-overlapping cgroup.
 
 Two models in the same runtime instance can use different units on the same endpoint.
@@ -147,29 +155,62 @@ not qualify, and the workload stays unavailable:
 
 The option allowlist keeps the other vLLM options off. Thus remote code,
 request-supplied chat templates, prompt-embedding input, an API key on the
-command line and runtime adapter loading stay off. Setup also rejects
-`VLLM_ALLOW_RUNTIME_LORA_UPDATING` in the environment.
+command line and runtime adapter loading stay off.
 
-The minimum vLLM version is 0.14.1. A model with an NVFP4 quantization in
-`config.json` or `hf_quant_config.json` needs vLLM 0.27.0 or later. Readiness
-reads `/version` and keeps the workload unavailable on an older version or a
-pre-release of the minimum version. Use a vLLM version that has no known
-critical or high security advisory.
+In `Environment=` lines, setup accepts only these `VLLM_` settings:
+`VLLM_LOGGING_LEVEL`, `VLLM_CONFIGURE_LOGGING`, `VLLM_NO_USAGE_STATS`,
+`VLLM_DO_NOT_TRACK`, `VLLM_WORKER_MULTIPROC_METHOD`, `VLLM_ATTENTION_BACKEND`
+and `VLLM_ENGINE_ITERATION_TIMEOUT_S`. Setup rejects all other `VLLM_`
+settings, for example `VLLM_SERVER_DEV_MODE`, `VLLM_PLUGINS`,
+`VLLM_ALLOW_INSECURE_SERIALIZATION` and `VLLM_ALLOW_RUNTIME_LORA_UPDATING`.
+Setup does not read the environment of the user systemd manager. Do not set
+`VLLM_` settings there (`systemctl --user set-environment`), because each user
+service gets them.
+
+The minimum vLLM version is 0.14.1. A model whose `config.json` or
+`hf_quant_config.json` names NVFP4 needs vLLM 0.27.0 or later. Other FP4
+schemes, such as MXFP4, need only 0.14.1. Readiness reads `/version` and keeps
+the workload unavailable on an older version or a pre-release of the minimum
+version. Setup does not check the version, because vLLM does not run during
+setup. Use a vLLM version that has no known critical or high security
+advisory.
 
 For a supervisor-managed launch, setup pins `chat_template.jinja` in the model
-folder and creates the private key file under
-`~/.config/gpu-workload-supervisor/vllm/` when you apply. Setup keeps a usable
-key file and never replaces a file that it cannot use. For an existing launch,
-setup reads the template path and the key file path from the launch.
+folder. When you apply, setup creates the private key file under
+`~/.config/gpu-workload-supervisor/vllm/`. Preview and review never create it.
+Setup keeps a usable key file and never replaces a file that it cannot use.
+When you remove the workload, setup removes its key file. For an existing
+launch, setup reads the template path and the key file path from the launch.
 
 The workload proxy reads the key file for each request and sends the key to
-vLLM. It replaces any `Authorization` header from the client. The key protects
-the `/v1` routes of vLLM. Other vLLM routes, such as `/health` and `/version`,
-do not need the key. Programs of the same desktop user can read the key file.
-The supervisor trusts that user.
+vLLM. It replaces any `Authorization` header from the client. Readiness and the
+proxy send the key only when the desktop user owns each listening socket for
+127.0.0.1 on the vLLM port. Thus a program of another user that holds the
+port does not get the key. A small time remains between this check and the
+connection.
 
-Bindings from an earlier release do not record these settings. Run setup
-again for each vLLM workload after you add the settings to its launch.
+When the key file is missing or unusable, or another user holds the port, the
+proxy does not forward the request. The client gets `502 Bad Gateway`, and the
+proxy log names the cause. Correct the key file or stop the other program. If
+vLLM rejects the key, readiness reports that the key differs from the key of
+the running vLLM. Restart the workload, or run setup again if the key file
+changed.
+
+The key protects only the `/v1` routes of vLLM. Other vLLM routes do not need
+the key, for example `/health`, `/version`, `/invocations`, `/tokenize`,
+`/detokenize`, `/pooling`, `/score`, `/classify` and `/v2/rerank`. Some of them
+run the model. The loopback listener limits these routes to programs on this
+computer, including programs of other users. Programs of the same desktop
+user can also read the key file. The supervisor trusts that user.
+
+Bindings from an earlier release do not record these settings, and they do
+not qualify. They do not block setup: you can remove them or configure them again.
+
+- For a supervisor-managed binding, add `chat_template.jinja` to the model
+  folder. Open the setup application and configure the model again. Setup generates the
+  hardened launch.
+- For an existing launch, add the settings to its unit and reload systemd.
+  Run setup again for the workload.
 
 Stop the workload proxies before applying a catalog change. Setup and CLI configure both
 enforce the proxy lifetime lock, including in-flight requests.

@@ -49,8 +49,9 @@ policy trusts members of your own groups.
 Setup checks symlinks and their traversed ancestors, and reports broken symlinks
 by name. It preserves supported direct commands and their arguments, and still
 checks endpoint, model, GPU identity, environment and effective loaded settings.
-Shell commands, environment files and uninspected operational directives remain
-unsupported. See [launch constraints](docs/WORKLOADS.md).
+Shell commands and uninspected operational directives remain unsupported. The
+only supported environment file is the private API key file that every vLLM
+launch needs. See [launch constraints](docs/WORKLOADS.md).
 
 ## Docs
 

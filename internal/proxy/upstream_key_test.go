@@ -35,7 +35,16 @@ func (r *recordingTransport) RoundTrip(request *http.Request) (*http.Response, e
 	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{}")), Header: http.Header{}, Request: request}, nil
 }
 
+// allowUpstreamListener replaces the listener check for fake upstreams.
+func allowUpstreamListener(t *testing.T, err error) {
+	t.Helper()
+	saved := checkUpstreamListener
+	checkUpstreamListener = func(string) error { return err }
+	t.Cleanup(func() { checkUpstreamListener = saved })
+}
+
 func TestUpstreamKeyTransportReplacesClientAuthorization(t *testing.T) {
+	allowUpstreamListener(t, nil)
 	base := &recordingTransport{}
 	transport := upstreamKeyTransport{keyFile: proxyKeyFile(t), base: base}
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:9000/v1/models", nil)
@@ -60,6 +69,64 @@ func TestUpstreamKeyTransportFailsClosedWithoutKey(t *testing.T) {
 	}
 	if len(base.headers) != 0 {
 		t.Fatal("request without the key reached the upstream")
+	}
+}
+
+func TestUpstreamKeyTransportRefusesForeignListener(t *testing.T) {
+	allowUpstreamListener(t, vllmkey.ErrForeignListener)
+	base := &recordingTransport{}
+	transport := upstreamKeyTransport{keyFile: proxyKeyFile(t), base: base}
+	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:9000/v1/models", nil)
+	if _, err := transport.RoundTrip(request); !errors.Is(err, errUpstreamKey) || !errors.Is(err, vllmkey.ErrForeignListener) {
+		t.Fatalf("error = %v", err)
+	}
+	if len(base.headers) != 0 {
+		t.Fatal("the key reached a foreign listener")
+	}
+}
+
+// Read routes copy request trailers while the body streams, so the key
+// transport must keep the trailer map of the request that it forwards.
+func TestAdapterNativeProxyKeepsTrailersAndSendsOnlyTheKey(t *testing.T) {
+	var authorization, trailer string
+	fixture := newTerminalFixtureWith(t, "vllm", "/v1/completions", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		authorization, trailer = r.Header.Get("Authorization"), r.Trailer.Get("X-Result")
+		_, _ = io.WriteString(w, `{"data":[{"id":"selected"}]}`)
+	}))
+	target, _ := url.Parse(fixture.upstream.URL)
+	config := adapterConfig(target)
+	config.ExecutionRoutes = []Route{{"POST", "/v1/completions"}}
+	config.ReadOnlyRoutes, config.PassthroughRoutes = []Route{{"GET", "/v1/models"}}, nil
+	handler, err := NewWithContext(context.Background(), fixture.store, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	request, _ := http.NewRequest(http.MethodGet, server.URL+"/v1/models", strings.NewReader("payload"))
+	request.ContentLength = -1
+	request.Header.Set(ExecutionCredentialHeader, executionCredential)
+	request.Header.Set("Authorization", "Bearer client-secret")
+	request.Trailer = http.Header{"X-Result": {"safe-input"}}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || authorization != "Bearer "+proxyTestKey || trailer != "safe-input" {
+		t.Fatalf("status %d, upstream Authorization %q, trailer %q", response.StatusCode, authorization, trailer)
+	}
+}
+
+func TestNativeProxyRequiresKeyFileAtStart(t *testing.T) {
+	upstream := httptest.NewServer(http.NotFoundHandler())
+	defer upstream.Close()
+	u, _ := url.Parse(upstream.URL)
+	s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: upstream.URL}}}}}}
+	if _, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/v1/completions"}}}); err == nil || !strings.Contains(err.Error(), "run setup again") {
+		t.Fatalf("binding without a key file accepted: %v", err)
 	}
 }
 

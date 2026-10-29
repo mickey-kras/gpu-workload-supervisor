@@ -611,9 +611,12 @@ func (work activationWork) removedRuntimePlan() unitPlan {
 	return plan
 }
 
+// hasRemovedRuntime reports an accepted catalog with a binding that can no
+// longer run. Its accepted runtime is observed without native bindings, so
+// the binding cannot block the apply that removes or replaces it.
 func hasRemovedRuntime(c control.Catalog) bool {
 	for _, p := range c.Profiles {
-		if p.RemovedRuntime() {
+		if p.RetiredBinding() {
 			return true
 		}
 	}

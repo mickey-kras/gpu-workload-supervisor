@@ -42,9 +42,6 @@ export class ApplicationDraft {
     snapshot() { return {...this.input}; }
 }
 
-// Slugs mirror the backend's ValidWorkloadID rule; null means keep the draft UUID.
-// Trimming is index-based (plain scans and slices) so derivation stays linear and
-// carries no backtracking regexes (SonarQube javascript:S5852).
 // The fingerprint result also carries the hardened vLLM settings that it read
 // from the launch: the pinned chat template and the API key file.
 export function recordFingerprint(nativeModel, result) {
@@ -55,6 +52,9 @@ export function recordFingerprint(nativeModel, result) {
     }
 }
 
+// Slugs mirror the backend's ValidWorkloadID rule; null means keep the draft UUID.
+// Trimming is index-based (plain scans and slices) so derivation stays linear and
+// carries no backtracking regexes (SonarQube javascript:S5852).
 export function profileIDFromModel(app, model) {
     if (!model) return null;
     let slug = `${app}-${model}`.toLowerCase().replaceAll(/[^a-z0-9_]+/g, '-');

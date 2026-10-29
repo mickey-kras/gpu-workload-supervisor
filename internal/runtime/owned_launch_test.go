@@ -113,11 +113,22 @@ func TestRenderOwnedUnitRoundTripQualifies(t *testing.T) {
 	}
 }
 
-func TestRenderOwnedUnitRequiresHardenedSettings(t *testing.T) {
+// A binding from an earlier release keeps its exact earlier unit bytes, so
+// setup can prove the unit for removal or replacement, but it never qualifies.
+func TestRenderOwnedUnitKeepsLegacyBytesButNeverQualifies(t *testing.T) {
 	p := ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100})
-	p.NativeModel.EnvironmentFile = ""
-	if _, err := RenderOwnedUnit(p); !errors.Is(err, ErrOwnedRender) {
-		t.Fatalf("unhardened owned profile rendered: %v", err)
+	p.NativeModel.ChatTemplate, p.NativeModel.ChatTemplateSHA256, p.NativeModel.EnvironmentFile = "", "", ""
+	raw, err := RenderOwnedUnit(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := "[Unit]\nDescription=Supervisor-owned vllm launch for vision\n\n[Service]\nType=simple\nRestart=no\n" +
+		"ExecStart=/usr/bin/vllm serve /models/v --host 127.0.0.1 --port 9100\n"
+	if string(raw) != legacy {
+		t.Fatalf("legacy render drift:\n%s", raw)
+	}
+	if err := qualifyNativeLaunchWithValidator(raw, *p.NativeModel, func(string) error { return nil }); err == nil || !strings.Contains(err.Error(), "earlier release") {
+		t.Fatalf("legacy owned binding qualified: %v", err)
 	}
 }
 

@@ -39,6 +39,9 @@ func qualifyNativeLaunchWithValidator(raw []byte, n control.NativeModel, validat
 }
 
 func qualifyParsedLaunch(unit parsedLaunchUnit, n control.NativeModel, validate func(string) error) error {
+	if err := errEarlierOwnedBinding(n); err != nil {
+		return err
+	}
 	if err := unit.validatePreCommands(validate); err != nil {
 		return err
 	}
@@ -75,6 +78,8 @@ type parsedLaunchUnit struct {
 	environment          map[string]bool
 	environmentValues    map[string]string
 	environmentFile      string
+	// keyFilePending marks an owned launch whose key file apply creates.
+	keyFilePending bool
 }
 
 func parseLaunchUnit(raw []byte) (parsedLaunchUnit, error) {

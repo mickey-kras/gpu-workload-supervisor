@@ -84,7 +84,7 @@ func OwnedProfile(d Draft, managerCgroup, home string) (control.WorkloadProfile,
 	template := filepath.Join(owned.ModelPath, ownedChatTemplateName)
 	templateSHA256, err := gpuruntime.ChatTemplateSHA256(template)
 	if err != nil {
-		return control.WorkloadProfile{}, nil, fmt.Errorf("the model folder needs a readable %s chat template file: %w", ownedChatTemplateName, err)
+		return control.WorkloadProfile{}, nil, fmt.Errorf("add %s to the model folder: %w", ownedChatTemplateName, err)
 	}
 	unit := control.OwnedUnitName(id)
 	endpoint := "http://127.0.0.1:" + strconv.Itoa(int(owned.Port))

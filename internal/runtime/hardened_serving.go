@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/vllmkey"
@@ -66,13 +67,15 @@ func qualifyHardenedServing(flags serverFlags, unit parsedLaunchUnit, n control.
 		problems.add(fmt.Errorf("%w: vLLM requires EnvironmentFile with a private file that sets %s", ErrLaunchUnsupported, vllmkey.Name))
 	case unit.environmentFile != n.EnvironmentFile:
 		problems.add(fmt.Errorf("%w: the API key file is not the one that setup recorded; run setup again for this model", ErrLaunchUnsupported))
+	case unit.keyFilePending:
+		// Apply creates the key file in a trusted private directory.
 	default:
-		problems.add(checkEnvironmentFile(n.EnvironmentFile))
+		problems.add(checkKeyFile(n.EnvironmentFile))
 	}
 	return problems.err()
 }
 
-func checkEnvironmentFile(path string) error {
+func checkKeyFile(path string) error {
 	if _, err := trustPath(path, kindFile); err != nil {
 		return fmt.Errorf("%w: API key file: %s", ErrLaunchUnsupported, reasonText(err))
 	}
@@ -114,7 +117,10 @@ func checkChatTemplate(path, expected string) error {
 
 type servingVersion [3]uint64
 
-var servingVersionPattern = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)(.*)$`)
+var (
+	servingVersionPattern = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)(.*)$`)
+	extraReleaseSegments  = regexp.MustCompile(`^(\.[0-9]+)+`)
+)
 
 // parseServingVersion reads a PEP 440 style vLLM version. A local version
 // (+...) or a post release is a release of that version; any other suffix is
@@ -132,7 +138,8 @@ func parseServingVersion(text string) (servingVersion, bool, error) {
 		}
 		version[i] = value
 	}
-	suffix := match[4]
+	// More release segments, such as 0.14.1.1, are a later release.
+	suffix := extraReleaseSegments.ReplaceAllString(match[4], "")
 	release := suffix == "" || strings.HasPrefix(suffix, "+") || strings.HasPrefix(suffix, ".post") || strings.HasPrefix(suffix, "post")
 	return version, release, nil
 }
@@ -150,9 +157,9 @@ func (v servingVersion) String() string {
 	return fmt.Sprintf("%d.%d.%d", v[0], v[1], v[2])
 }
 
-// checkServingVersion compares the reported vLLM version with the minimum for
-// the model: 0.14.1, or 0.27.0 for an NVFP4 build.
-func checkServingVersion(reported string, nvfp4 bool) error {
+// compareServingVersion compares the reported vLLM version with the minimum
+// for the model: 0.14.1, or 0.27.0 for an NVFP4 build.
+func compareServingVersion(reported string, nvfp4 bool) error {
 	version, release, err := parseServingVersion(reported)
 	if err != nil {
 		return err
@@ -168,7 +175,7 @@ func checkServingVersion(reported string, nvfp4 bool) error {
 }
 
 // modelUsesNVFP4 reads the quantization settings of a model directory. A
-// model whose settings name an FP4 scheme needs the NVFP4 minimum version.
+// model whose settings name NVFP4 needs the NVFP4 minimum version.
 func modelUsesNVFP4(dir string) (bool, error) {
 	config, err := readModelMetadata(filepath.Join(dir, "config.json"))
 	if err != nil {
@@ -185,15 +192,21 @@ func modelUsesNVFP4(dir string) (bool, error) {
 		return false, err
 	}
 	for _, raw := range [][]byte{fields.Quantization, quant} {
-		if bytes.Contains(bytes.ToLower(raw), []byte("fp4")) {
+		lower := bytes.ToLower(raw)
+		// NVFP4 checkpoints name "nvfp4" (compressed-tensors format,
+		// ModelOpt quant_algo) or the ModelOpt method "modelopt_fp4".
+		// MXFP4 and other FP4 schemes keep the general minimum.
+		if bytes.Contains(lower, []byte("nvfp4")) || bytes.Contains(lower, []byte("modelopt_fp4")) {
 			return true, nil
 		}
 	}
 	return false, nil
 }
 
+// readModelMetadata opens without blocking and reads only a regular file, so
+// a FIFO or device in the model folder cannot stall readiness.
 func readModelMetadata(path string) ([]byte, error) {
-	file, err := os.Open(path)
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -201,6 +214,9 @@ func readModelMetadata(path string) ([]byte, error) {
 		return nil, fmt.Errorf("%w: model metadata could not be read", ErrModelUnavailable)
 	}
 	defer file.Close()
+	if info, err := file.Stat(); err != nil || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%w: %s is not a regular file", ErrModelUnavailable, filepath.Base(path))
+	}
 	raw, err := io.ReadAll(io.LimitReader(file, maxModelMetaBytes+1))
 	if err != nil || len(raw) > maxModelMetaBytes {
 		return nil, fmt.Errorf("%w: model metadata could not be read or exceeds 4 MiB", ErrModelUnavailable)
@@ -208,9 +224,9 @@ func readModelMetadata(path string) ([]byte, error) {
 	return raw, nil
 }
 
-// checkServingVersion reads /version from the running vLLM and compares it
+// fetchServingVersion reads /version from the running vLLM and compares it
 // with the minimum for the bound model. /version needs no API key.
-func (m *SystemdManager) checkServingVersion(ctx context.Context, n control.NativeModel) error {
+func (m *SystemdManager) fetchServingVersion(ctx context.Context, n control.NativeModel) error {
 	dir, err := servingModelDirectory(n)
 	if err != nil {
 		return err
@@ -244,7 +260,7 @@ func (m *SystemdManager) checkServingVersion(ctx context.Context, n control.Nati
 	if json.Unmarshal(raw, &body) != nil {
 		return fmt.Errorf("%w: version response is not valid JSON", ErrServingVersion)
 	}
-	return checkServingVersion(body.Version, nvfp4)
+	return compareServingVersion(body.Version, nvfp4)
 }
 
 // servingModelDirectory returns the model directory of a bound launch: the
@@ -277,13 +293,17 @@ func servingModelDirectory(n control.NativeModel) (string, error) {
 // and the EnvironmentFile path. It then qualifies the launch with them. An
 // owned binding keeps the settings that setup recorded.
 func BindHardenedNativeLaunch(path string, binding control.NativeModel) (control.NativeModel, string, error) {
+	return bindHardenedNativeLaunch(path, binding, validateNativeExecutable)
+}
+
+func bindHardenedNativeLaunch(path string, binding control.NativeModel, validate func(string) error) (control.NativeModel, string, error) {
 	if binding.Owned == nil {
 		binding.ChatTemplate, binding.ChatTemplateSHA256, binding.EnvironmentFile = "", "", ""
 		if sources, err := readLaunchSources(path, binding.DropIns); err == nil {
 			readHardenedSettings(sources, &binding)
 		}
 	}
-	hash, err := InspectQualifiedNativeLaunch(path, binding)
+	hash, err := inspectQualifiedNativeLaunch(path, binding, validate)
 	return binding, hash, err
 }
 
@@ -307,4 +327,13 @@ func readHardenedSettings(sources [][]byte, binding *control.NativeModel) {
 	if digest, err := ChatTemplateSHA256(flags.chatTemplate); err == nil {
 		binding.ChatTemplateSHA256 = digest
 	}
+}
+
+// errEarlierOwnedBinding reports a supervisor-managed binding from an earlier
+// release. It has no hardened settings and never qualifies.
+func errEarlierOwnedBinding(n control.NativeModel) error {
+	if n.Owned != nil && !n.Hardened() {
+		return fmt.Errorf("%w: this supervisor-managed vLLM binding is from an earlier release; run setup again for this model or remove it", ErrLaunchUnsupported)
+	}
+	return nil
 }

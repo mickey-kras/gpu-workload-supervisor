@@ -3,6 +3,7 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -33,11 +34,14 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 	b.WriteString("[Unit]\nDescription=Supervisor-owned " + n.Runtime + " launch for " + string(p.ID) + "\n")
 	b.WriteString(ownedDependencies(p.Unit, n.Owned.Conflicts))
 	b.WriteString("\n[Service]\nType=simple\nRestart=no\n")
-	if !n.Hardened() {
-		return nil, fmt.Errorf("%w: profile %s has no hardened vLLM settings; run setup again for this model", ErrOwnedRender, p.ID)
+	// A binding from an earlier release has no hardened settings. It keeps
+	// its exact earlier bytes and fingerprint, so setup can prove and remove
+	// or replace the unit; qualification rejects it for execution.
+	hardened := n.Hardened()
+	if hardened {
+		b.WriteString("Environment=" + offlineHubName + "=1\n")
+		b.WriteString("EnvironmentFile=" + n.EnvironmentFile + "\n")
 	}
-	b.WriteString("Environment=" + offlineHubName + "=1\n")
-	b.WriteString("EnvironmentFile=" + n.EnvironmentFile + "\n")
 	var execStart string
 	executable := n.Owned.Executable
 	if executable == "" {
@@ -48,7 +52,10 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 	}
 	switch n.Runtime {
 	case "vllm":
-		execStart = executable + " serve " + n.Owned.ModelPath + " --host " + hardenedBindHost + " --port " + strconv.Itoa(int(n.Owned.Port)) + " --load-format safetensors --chat-template " + n.ChatTemplate
+		execStart = executable + " serve " + n.Owned.ModelPath + " --host " + hardenedBindHost + " --port " + strconv.Itoa(int(n.Owned.Port))
+		if hardened {
+			execStart += " --load-format safetensors --chat-template " + n.ChatTemplate
+		}
 		if n.Owned.MaxModelLen != 0 {
 			execStart += " --max-model-len " + strconv.FormatUint(uint64(n.Owned.MaxModelLen), 10)
 		}
@@ -88,6 +95,30 @@ func QualifyOwnedUnit(p control.WorkloadProfile) error {
 		return err
 	}
 	return renderMustQualify(raw, *p.NativeModel)
+}
+
+// QualifyOwnedUnitBeforeKey qualifies an owned launch like QualifyOwnedUnit,
+// except that its private key file can be missing: apply creates it before
+// it writes the unit. An existing key file must be usable.
+func QualifyOwnedUnitBeforeKey(p control.WorkloadProfile) error {
+	if p.NativeModel == nil || p.NativeModel.Owned == nil {
+		return nil
+	}
+	raw, err := RenderOwnedUnit(p)
+	if err != nil {
+		return err
+	}
+	unit, err := parseOwnedLaunchUnit(raw, *p.NativeModel)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrOwnedRender, err)
+	}
+	if _, err := os.Lstat(p.NativeModel.EnvironmentFile); errors.Is(err, os.ErrNotExist) {
+		unit.keyFilePending = true
+	}
+	if err := qualifyParsedLaunch(unit, *p.NativeModel, validateNativeExecutable); err != nil {
+		return fmt.Errorf("%w: %v", ErrOwnedRender, err)
+	}
+	return nil
 }
 
 // A total lexical order gives every conflicting pair one ordering edge and no

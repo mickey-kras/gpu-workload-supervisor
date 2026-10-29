@@ -189,7 +189,7 @@ does not recursively discover files.
 | Application | Read-only observations |
 | --- | --- |
 | ComfyUI | `/system_stats` version. Workflows select models, no model picker |
-| vLLM | `/version` and `/v1/models`. Same-root aliases grouped. Model references in simple launches |
+| vLLM | `/version` and `/v1/models`. Same-root aliases grouped. Model references in simple launches. With an API key, models are `unknown` |
 
 Missing optional APIs report `unsupported` or unknown loaded state. Unreachable
 instances never become successful empty inventories. A verified stopped unit is
@@ -227,10 +227,10 @@ allowed form is `test` with one file predicate (`-e`, `-f`, `-d`, `-r`, `-w`,
 commands, and keeps the supported vLLM `--max-model-len` and
 `--served-model-name` options.
 
-A vLLM launch must also use the hardened
-settings in [WORKLOADS.md](WORKLOADS.md#hardened-vllm-launch). Generating a
-managed launch uses its distinct restricted format with these settings. The
-model folder must contain `chat_template.jinja`.
+A vLLM launch must also use the hardened settings in
+[WORKLOADS.md](WORKLOADS.md#hardened-vllm-launch). Generating a managed launch
+uses its distinct restricted format with these settings. The model folder must
+contain `chat_template.jinja`.
 
 ## Upgrade and interrupted activation
 

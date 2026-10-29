@@ -14,7 +14,6 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/vllmkey"
 )
 
 const (
@@ -52,6 +51,11 @@ type unitPlan struct {
 	prior   map[string][]byte
 	absent  map[string]bool
 	written map[string]bool
+	// keys maps an owned vLLM unit to its private key file. Apply creates a
+	// missing key file before it writes the unit; createdKeys records them
+	// so a rollback removes only the key files that this apply created.
+	keys        map[string]string
+	createdKeys map[string]bool
 }
 
 func (p unitPlan) empty() bool {
@@ -142,7 +146,7 @@ func (b Backend) planOwnedUnits(req Request, accepted control.CatalogSnapshot, h
 	if err := rejectLegacyOwnedReplacement(accepted.Catalog, req.Catalog); err != nil {
 		return unitPlan{}, err
 	}
-	plan := unitPlan{Writes: map[string][]byte{}, proven: map[string]string{}, prior: map[string][]byte{}, absent: map[string]bool{}, written: map[string]bool{}}
+	plan := unitPlan{Writes: map[string][]byte{}, proven: map[string]string{}, prior: map[string][]byte{}, absent: map[string]bool{}, written: map[string]bool{}, keys: map[string]string{}, createdKeys: map[string]bool{}}
 	entries, err := acceptedOwnedUnitEntries(accepted.Catalog, home)
 	if err != nil {
 		return plan, err
@@ -271,6 +275,9 @@ func (b Backend) applyOwnedUnitWrites(ctx context.Context, home string, plan uni
 	}
 	sort.Strings(names)
 	for _, name := range names {
+		if err := ensureOwnedKey(plan, name); err != nil {
+			return err
+		}
 		if err := applyOwnedUnitWrite(dir, name, plan, j); err != nil {
 			return err
 		}
@@ -381,6 +388,7 @@ func provenDelete(path, proof string) error {
 // write are foreign modifications and are never destroyed.
 func (b Backend) rollbackOwnedUnitWrites(ctx context.Context, home, systemctl string, plan unitPlan) error {
 	dir := ownedUnitDirectory(home)
+	defer removeCreatedKeys(plan)
 	var failed []string
 	changed := false
 	for _, name := range plan.writeNames() {
@@ -431,13 +439,13 @@ func (b Backend) applyOwnedUnitDeletes(ctx context.Context, home string, j unitJ
 	for _, name := range names {
 		path := filepath.Join(dir, name)
 		err := provenDelete(path, j.Deletes[name])
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		removed = true
+		removed = removed || err == nil
+		if err := removeOwnedKey(home, name); err != nil {
+			return err
+		}
 	}
 	if removed {
 		return syncDir(dir)
@@ -493,23 +501,15 @@ func mkdirTrusted(path string) error {
 func (b Backend) planOwnedUnitWrites(req Request, home string, plan unitPlan) error {
 	qualify := b.qualifyOwned
 	if qualify == nil {
-		qualify = gpuruntime.QualifyOwnedUnit
+		// Planning also serves the read-only binding check, so it never
+		// creates the key file: a missing key file is created on apply.
+		qualify = gpuruntime.QualifyOwnedUnitBeforeKey
 	}
 	for _, p := range req.Catalog.Profiles {
 		if p.NativeModel == nil || p.NativeModel.Owned == nil {
 			continue
 		}
-		// The catalog layer checks only the suffix (it is host-independent);
-		// here the exact home is known, so pin the launch file to it before
-		// writing or committing anything.
-		if p.NativeModel.LaunchFile != filepath.Join(ownedUnitDirectory(home), p.Unit) {
-			return fmt.Errorf(ownedUnitErrorFormat, ErrOwnedLaunchFileOutsideHome, p.Unit)
-		}
-		if p.NativeModel.EnvironmentFile != OwnedEnvironmentFile(home, p.ID) {
-			return fmt.Errorf(ownedUnitErrorFormat, ErrOwnedEnvironmentFileOutsideHome, p.Unit)
-		}
-		// The key file is private and is kept when it already exists.
-		if err := vllmkey.Ensure(p.NativeModel.EnvironmentFile); err != nil {
+		if err := pinOwnedFiles(p, home, plan); err != nil {
 			return err
 		}
 		// Qualify against this host before anything becomes durable: the

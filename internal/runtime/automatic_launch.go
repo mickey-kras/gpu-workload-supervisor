@@ -35,8 +35,9 @@ type AutomaticLaunch struct {
 	PreCommands                      []string
 	DropIns                          []control.LaunchSource
 	// Hardened vLLM settings read from the launch.
-	ChatTemplate, ChatTemplateSHA256 string
-	EnvironmentFile                  string
+	ChatTemplate       string
+	ChatTemplateSHA256 string
+	EnvironmentFile    string
 }
 
 func InspectAutomaticLaunchSources(path, app string, dropInPaths []string) (AutomaticLaunch, error) {

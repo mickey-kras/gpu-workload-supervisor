@@ -149,3 +149,21 @@ func TestPublishReportsFailures(t *testing.T) {
 		t.Fatal("writeSynced accepted a closed file")
 	}
 }
+
+func TestReadErrorsNameTheFileAndTheReason(t *testing.T) {
+	large := writeKeyFile(t, Name+"="+strings.Repeat("a", 43)+strings.Repeat("\n", 600), 0o600)
+	if _, err := Read(large); err == nil || !strings.Contains(err.Error(), "larger than 512 bytes") || !strings.Contains(err.Error(), large) {
+		t.Fatalf("size limit error = %v", err)
+	}
+	open := writeKeyFile(t, Name+"="+strings.Repeat("a", 43), 0o644)
+	if _, err := Read(open); err == nil || !strings.Contains(err.Error(), "0600") || !strings.Contains(err.Error(), open) {
+		t.Fatalf("mode error = %v", err)
+	}
+	missing := filepath.Join(t.TempDir(), "missing.env")
+	if _, err := Read(missing); err == nil || !strings.Contains(err.Error(), "run setup again") {
+		t.Fatalf("missing file error = %v", err)
+	}
+	if err := Ensure(open); err == nil || !strings.Contains(err.Error(), "0600") || !strings.Contains(err.Error(), "correct or remove") {
+		t.Fatalf("Ensure error = %v", err)
+	}
+}

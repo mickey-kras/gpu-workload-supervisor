@@ -18,6 +18,10 @@ import (
 var ErrModelIdentity = errors.New("native model identity mismatch")
 var ErrLaunchChanged = errors.New("native launch binding changed")
 
+// ErrAPIKeyRejected tells that vLLM did not accept the key from the key file
+// of the binding: the running vLLM uses another key.
+var ErrAPIKeyRejected = errors.New("vLLM rejected the API key from the key file; restart the workload, or run setup again if the key file changed")
+
 // InspectQualifiedNativeLaunch checks the supported launch subset before
 // returning the fingerprint recorded by onboarding. It does not execute it.
 func InspectQualifiedNativeLaunch(path string, binding control.NativeModel) (string, error) {
@@ -234,7 +238,7 @@ func (m *SystemdManager) nativeReady(ctx context.Context, n control.NativeModel)
 	if err := m.getHealthy(ctx, n.Endpoint+"/health"); err != nil {
 		return err
 	}
-	if err := m.checkServingVersion(ctx, n); err != nil {
+	if err := m.fetchServingVersion(ctx, n); err != nil {
 		return err
 	}
 	b, err := m.fetchModelList(ctx, n)
@@ -249,6 +253,11 @@ func (m *SystemdManager) fetchModelList(ctx context.Context, n control.NativeMod
 	if err != nil {
 		return nil, err
 	}
+	// Send the key only to a listener of the desktop user, never to a
+	// process of another user that holds the port.
+	if err := vllmkey.CheckListener(n.Endpoint); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, n.Endpoint+"/v1/models", nil)
 	if err != nil {
 		return nil, err
@@ -259,6 +268,9 @@ func (m *SystemdManager) fetchModelList(ctx context.Context, n control.NativeMod
 		return nil, &safeHTTPRequestError{cause: err}
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, ErrAPIKeyRejected
+	}
 	if resp.StatusCode != http.StatusOK {
 		// 5xx is a transient daemon condition retried by the poll loop; 4xx
 		// contradicts the bound model identity and is permanent.

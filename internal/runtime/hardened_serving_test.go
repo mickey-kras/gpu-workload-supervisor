@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
@@ -89,6 +90,10 @@ func TestHardenedServingRejectsUnsafeUnitSettings(t *testing.T) {
 	for name, source := range map[string]string{
 		"inline key":        "[Service]\nEnvironment=VLLM_API_KEY=" + strings.Repeat("k", 43) + "\n",
 		"runtime adapters":  "[Service]\nEnvironment=VLLM_ALLOW_RUNTIME_LORA_UPDATING=True\n",
+		"dev mode":          "[Service]\nEnvironment=VLLM_SERVER_DEV_MODE=1\n",
+		"insecure input":    "[Service]\nEnvironment=VLLM_ALLOW_INSECURE_SERIALIZATION=1\n",
+		"plugins":           "[Service]\nEnvironment=VLLM_PLUGINS=example\n",
+		"unknown setting":   "[Service]\nEnvironment=VLLM_FUTURE_SWITCH=1\n",
 		"relative key file": "[Service]\nEnvironmentFile=vllm.env\n",
 		"optional key file": "[Service]\nEnvironmentFile=-" + h.keyFile + "\n",
 		"expanded key file": "[Service]\nEnvironmentFile=%h/vllm.env\n",
@@ -151,6 +156,8 @@ func TestParseServingVersion(t *testing.T) {
 		{"0.14.1.post1", true, servingVersion{0, 14, 1}},
 		{"0.14.1rc1", false, servingVersion{0, 14, 1}},
 		{"0.14.1.dev5+gabc", false, servingVersion{0, 14, 1}},
+		{"0.14.1.1", true, servingVersion{0, 14, 1}},
+		{"0.14.1.1rc1", false, servingVersion{0, 14, 1}},
 	}
 	for _, tc := range cases {
 		version, release, err := parseServingVersion(tc.text)
@@ -184,7 +191,7 @@ func TestCheckServingVersionFloors(t *testing.T) {
 		{"0.27.0", true, true},
 		{"bad", false, false},
 	} {
-		err := checkServingVersion(tc.version, tc.nvfp4)
+		err := compareServingVersion(tc.version, tc.nvfp4)
 		if (err == nil) != tc.ok {
 			t.Fatalf("%s nvfp4=%v: %v", tc.version, tc.nvfp4, err)
 		}
@@ -212,6 +219,7 @@ func TestModelUsesNVFP4(t *testing.T) {
 		"bf16":            {map[string]string{"config.json": `{"torch_dtype":"bfloat16"}`}, false},
 		"fp8":             {map[string]string{"config.json": `{"quantization_config":{"quant_method":"fp8"}}`}, false},
 		"compressed fp4":  {map[string]string{"config.json": `{"quantization_config":{"format":"nvfp4-pack-quantized"}}`}, true},
+		"mxfp4":           {map[string]string{"config.json": `{"quantization_config":{"quant_method":"mxfp4"}}`}, false},
 		"modelopt fp4":    {map[string]string{"config.json": `{"quantization_config":{"quant_method":"modelopt_fp4"}}`}, true},
 		"hf quant config": {map[string]string{"config.json": `{}`, "hf_quant_config.json": `{"quantization":{"quant_algo":"NVFP4"}}`}, true},
 		"fp4 elsewhere":   {map[string]string{"config.json": `{"name":"fp4-notes"}`}, false},
@@ -232,6 +240,13 @@ func TestModelUsesNVFP4(t *testing.T) {
 	unreadable := t.TempDir()
 	if err := os.Mkdir(filepath.Join(unreadable, "config.json"), 0o700); err != nil {
 		t.Fatal(err)
+	}
+	fifo := t.TempDir()
+	if err := syscall.Mkfifo(filepath.Join(fifo, "config.json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := modelUsesNVFP4(fifo); !errors.Is(err, ErrModelUnavailable) {
+		t.Fatalf("FIFO config accepted: %v", err)
 	}
 	if _, err := modelUsesNVFP4(unreadable); !errors.Is(err, ErrModelUnavailable) {
 		t.Fatalf("directory config accepted: %v", err)
@@ -303,12 +318,12 @@ func TestServingVersionReadiness(t *testing.T) {
 	closed := &SystemdManager{client: http.DefaultClient}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := closed.checkServingVersion(ctx, n); err == nil {
+	if err := closed.fetchServingVersion(ctx, n); err == nil {
 		t.Fatal("canceled version check accepted")
 	}
 	bad := n
 	bad.Endpoint = "://invalid"
-	if err := closed.checkServingVersion(context.Background(), bad); err == nil {
+	if err := closed.fetchServingVersion(context.Background(), bad); err == nil {
 		t.Fatal("invalid endpoint accepted")
 	}
 }
@@ -391,5 +406,142 @@ func TestOwnedRenderHoldsKeyFilePathNotKey(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "EnvironmentFile="+h.keyFile+"\n") || strings.Contains(string(raw), strings.Repeat("k", 43)) {
 		t.Fatalf("rendered unit:\n%s", raw)
+	}
+}
+
+func TestQualifyOwnedUnitBeforeKeyAllowsOnlyMissingKey(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "vllm"), []byte("#!/bin/false\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	saved := ownedBinaryDirectory
+	ownedBinaryDirectory = dir
+	t.Cleanup(func() { ownedBinaryDirectory = saved })
+	model := filepath.Join(dir, "model")
+	if err := os.Mkdir(model, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	h := newHardenedFixture(t)
+	p := ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: model, Port: 9100})
+	p.NativeModel = ptrNativeModel(h.bind(*p.NativeModel))
+	p.NativeModel.Model = model
+	missing := *p.NativeModel
+	missing.EnvironmentFile = filepath.Join(t.TempDir(), "created-on-apply.env")
+	p.NativeModel = &missing
+	if err := QualifyOwnedUnitBeforeKey(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := QualifyOwnedUnit(p); err == nil {
+		t.Fatal("full qualification accepted a missing key file")
+	}
+	if err := os.WriteFile(missing.EnvironmentFile, []byte("unusable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := QualifyOwnedUnitBeforeKey(p); err == nil {
+		t.Fatal("unusable existing key file accepted")
+	}
+	if err := QualifyOwnedUnitBeforeKey(control.WorkloadProfile{}); err != nil {
+		t.Fatal(err)
+	}
+	broken := p
+	broken.NativeModel = ptrNativeModel(*p.NativeModel)
+	broken.NativeModel.Owned = &control.OwnedLaunch{ModelPath: model, Port: 9100, Executable: "/bin/sh"}
+	if err := QualifyOwnedUnitBeforeKey(broken); err == nil {
+		t.Fatal("unsupported executable accepted")
+	}
+}
+
+func TestAllowedVLLMSettingsQualify(t *testing.T) {
+	unit, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nEnvironment=VLLM_LOGGING_LEVEL=INFO VLLM_NO_USAGE_STATS=1 OTHER_SETTING=1\nExecStart=/usr/bin/true x\n")})
+	if err != nil || unit.environmentValues["VLLM_LOGGING_LEVEL"] != "INFO" {
+		t.Fatalf("supported vLLM settings rejected: %v", err)
+	}
+}
+
+func TestAdoptedLaunchQualifiesWithTheSettingsItDeclares(t *testing.T) {
+	n := servingBinding(t, "http://127.0.0.1:9000", "selected")
+	raw, err := os.ReadFile(n.LaunchFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unbound := n
+	unbound.ChatTemplate, unbound.ChatTemplateSHA256, unbound.EnvironmentFile = "", "", ""
+	bound, hash, err := bindHardenedNativeLaunch(n.LaunchFile, unbound, fixtureExecutableValidator)
+	if err != nil || hash != sha256Hex(raw) || bound.ChatTemplate != n.ChatTemplate || bound.ChatTemplateSHA256 != n.ChatTemplateSHA256 || bound.EnvironmentFile != n.EnvironmentFile {
+		t.Fatalf("adopted launch did not qualify: %v %+v", err, bound)
+	}
+}
+
+func TestKeyFileNeedsTrustedDirectories(t *testing.T) {
+	h := newHardenedFixture(t)
+	if err := checkKeyFile(h.keyFile); err != nil {
+		t.Fatal(err)
+	}
+	open := filepath.Join(t.TempDir(), "open")
+	if err := os.Mkdir(open, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	key := filepath.Join(open, "vllm.env")
+	raw, _ := os.ReadFile(h.keyFile)
+	if err := os.WriteFile(key, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(open, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkKeyFile(key); err == nil || !strings.Contains(err.Error(), "API key file") {
+		t.Fatalf("key file in a world-writable directory accepted: %v", err)
+	}
+}
+
+func TestReadinessReportsRejectedKeyAndUsesNVFP4Floor(t *testing.T) {
+	version := `{"version":"0.26.0"}`
+	server := httptest.NewServer(servingAPI(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":[{"id":"selected"}]}`)
+	}))
+	defer server.Close()
+	versioned := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/version" {
+			fmt.Fprint(w, version)
+			return
+		}
+		server.Config.Handler.ServeHTTP(w, r)
+	}))
+	defer versioned.Close()
+	m := &SystemdManager{client: versioned.Client()}
+	n := servingBinding(t, versioned.URL, "selected")
+	if err := m.nativeReady(context.Background(), n); err != nil {
+		t.Fatal("a model without NVFP4 needs only 0.14.1:", err)
+	}
+	model, err := servingModelDirectory(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(model, "config.json"), []byte(`{"quantization_config":{"quant_method":"modelopt_fp4"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.nativeReady(context.Background(), n); !errors.Is(err, ErrServingVersion) || !strings.Contains(err.Error(), "0.27.0") {
+		t.Fatalf("NVFP4 model below 0.27.0 accepted: %v", err)
+	}
+	version = `{"version":"0.27.0"}`
+	if err := m.nativeReady(context.Background(), n); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(n.EnvironmentFile, []byte("VLLM_API_KEY="+strings.Repeat("x", 43)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.nativeReady(context.Background(), n); !errors.Is(err, ErrAPIKeyRejected) {
+		t.Fatalf("rejected key reported as %v", err)
+	}
+}
+
+func TestLoadedEnvironmentFileDriftBlocksTheBinding(t *testing.T) {
+	m, r, p, cmd := nativeFixture(t, "vllm", "http://127.0.0.1:9000")
+	if err := m.verifyNativeBinding(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	r.outputs[cmd] = []byte(strings.Replace(string(r.outputs[cmd]), "EnvironmentFiles="+p.NativeModel.EnvironmentFile, "EnvironmentFiles=/other/vllm.env", 1))
+	if err := m.verifyNativeBinding(context.Background(), p); err == nil || !strings.Contains(err.Error(), "EnvironmentFile") {
+		t.Fatalf("loaded EnvironmentFile drift accepted: %v", err)
 	}
 }
