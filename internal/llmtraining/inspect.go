@@ -147,6 +147,9 @@ func inspectSnapshots(r Recipe) error {
 	if err := inspectConfig(filepath.Join(r.Model.Inventory.Root, "config.json"), true); err != nil {
 		return err
 	}
+	if err := inspectProcessors(r.Tokenizer.Inventory); err != nil {
+		return err
+	}
 	return inspectConfig(filepath.Join(r.Tokenizer.Inventory.Root, "tokenizer_config.json"), false)
 }
 
@@ -162,15 +165,9 @@ func inspectShardIndexes(inventory Inventory) error {
 }
 
 func inspectShardIndex(inventory Inventory, name string) error {
-	f, err := openRegular(filepath.Join(inventory.Root, name))
+	index, err := readJSONObject(filepath.Join(inventory.Root, name), "candidate shard index")
 	if err != nil {
-		return errors.New("candidate shard index is unreadable")
-	}
-	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
-	var index map[string]json.RawMessage
-	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &index) != nil {
-		return errors.New("candidate shard index is invalid")
+		return err
 	}
 	var weights map[string]string
 	if json.Unmarshal(index["weight_map"], &weights) != nil || len(weights) == 0 {
@@ -184,16 +181,26 @@ func inspectShardIndex(inventory Inventory, name string) error {
 	return nil
 }
 
-func inspectConfig(path string, model bool) error {
+// readJSONObject reads one bounded, strict UTF-8 JSON object from a regular
+// file. The errors name the file kind, never its path or content.
+func readJSONObject(path, kind string) (map[string]json.RawMessage, error) {
 	f, err := openRegular(path)
 	if err != nil {
-		return errors.New("candidate asset configuration is unreadable")
+		return nil, errors.New(kind + " is unreadable")
 	}
 	defer f.Close()
 	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
-	var config map[string]json.RawMessage
-	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &config) != nil || config == nil {
-		return errors.New("candidate asset configuration is invalid")
+	var object map[string]json.RawMessage
+	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &object) != nil || object == nil {
+		return nil, errors.New(kind + " is invalid")
+	}
+	return object, nil
+}
+
+func inspectConfig(path string, model bool) error {
+	config, err := readJSONObject(path, "candidate asset configuration")
+	if err != nil {
+		return err
 	}
 	if _, exists := config["auto_map"]; exists {
 		return errors.New("candidate remote-code mappings are unsupported")
@@ -215,11 +222,7 @@ func inspectConfig(path string, model bool) error {
 			return errors.New("candidate model configuration indirection is unsupported")
 		}
 	}
-	var family string
-	if json.Unmarshal(config["model_type"], &family) != nil || family != "llama" {
-		return errors.New("candidate supports only the llama model family")
-	}
-	return nil
+	return inspectArchitecture(config)
 }
 
 func inspectPaths(r Recipe) error {

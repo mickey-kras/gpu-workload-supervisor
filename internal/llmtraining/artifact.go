@@ -10,7 +10,6 @@ import (
 	"math"
 	"path/filepath"
 	"reflect"
-	"unicode/utf8"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
@@ -29,6 +28,9 @@ var artifactNames = map[string]bool{
 	"special_tokens_map.json": true, "added_tokens.json": true,
 	"generation_config.json": true, "config.json": true, "vocab.json": true,
 	"merges.txt": true, "vocab.txt": true, "chat_template.jinja": true,
+	// Training saves the processor of the image-text model; the export binds
+	// and checks it like the other configuration files.
+	processorConfigName: true, imageProcessorName: true, videoProcessorName: true,
 }
 
 type Provenance struct {
@@ -109,17 +111,7 @@ func hashArtifact(path string, remaining uint64) (string, uint64, error) {
 }
 
 func artifactConfig(path string) (map[string]json.RawMessage, error) {
-	f, err := openRegular(path)
-	if err != nil {
-		return nil, errors.New("training export configuration is unreadable")
-	}
-	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
-	var result map[string]json.RawMessage
-	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &result) != nil || result == nil {
-		return nil, errors.New("training export configuration is invalid")
-	}
-	return result, nil
+	return readJSONObject(path, "training export configuration")
 }
 
 func validateArtifactConfigs(r Recipe) error {
@@ -138,7 +130,7 @@ func validateArtifactConfigs(r Recipe) error {
 			return err
 		}
 	}
-	return nil
+	return checkExportProcessors(r.OutputDirectory)
 }
 
 func rejectArtifactRedirects(path string) error {

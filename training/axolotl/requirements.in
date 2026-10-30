@@ -54,6 +54,8 @@ torchao==0.18.0 ; sys_platform != 'darwin' and platform_machine != 'aarch64'
 fla-core==0.5.2 ; platform_machine != 'aarch64'
 flash-linear-attention==0.5.2 ; platform_machine != 'aarch64'
 torch==2.14.0
+# The Qwen3.5 processor loads a video processor, which needs torchvision.
+torchvision==0.29.0
 setuptools>=64
 wheel
 setuptools-scm>=8
