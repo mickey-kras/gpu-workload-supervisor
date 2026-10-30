@@ -1,0 +1,1 @@
+These files are small hand-written examples. They use the key layout of the configuration files of common open models (dense chat, sliding window, scaled RoPE and vision-language models). They copy no file from a model repository. The tests check that the model checks accept them.

@@ -1,0 +1,34 @@
+{
+  "add_bos_token": false,
+  "added_tokens_decoder": {
+    "2": {
+      "content": "<|end|>",
+      "lstrip": false,
+      "normalized": false,
+      "rstrip": false,
+      "single_word": false,
+      "special": true
+    },
+    "3": {
+      "content": "</tool_call>",
+      "lstrip": false,
+      "normalized": false,
+      "rstrip": false,
+      "single_word": false,
+      "special": false
+    }
+  },
+  "additional_special_tokens": [
+    "<|start|>",
+    "<|end|>"
+  ],
+  "bos_token": null,
+  "chat_template": "{%- for message in messages %}{{- '<|start|>' + message.role + '\\n' + message.content + '<|end|>\\n' }}{%- endfor %}{{- '<tool_call>\\n{\"name\": \"' }}",
+  "clean_up_tokenization_spaces": false,
+  "eos_token": "<|end|>",
+  "errors": "replace",
+  "model_max_length": 4096,
+  "pad_token": "<|end|>",
+  "tokenizer_class": "Qwen2Tokenizer",
+  "unk_token": null
+}

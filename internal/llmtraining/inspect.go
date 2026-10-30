@@ -3,6 +3,7 @@ package llmtraining
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -144,10 +145,10 @@ func inspectSnapshots(r Recipe) error {
 	if err := inspectShardIndexes(r.Model.Inventory); err != nil {
 		return err
 	}
-	if err := inspectConfig(filepath.Join(r.Model.Inventory.Root, "config.json"), true); err != nil {
+	if err := inspectConfig(filepath.Join(r.Model.Inventory.Root, "config.json"), true, r.Model.Inventory.Files); err != nil {
 		return err
 	}
-	return inspectConfig(filepath.Join(r.Tokenizer.Inventory.Root, "tokenizer_config.json"), false)
+	return inspectConfig(filepath.Join(r.Tokenizer.Inventory.Root, "tokenizer_config.json"), false, r.Tokenizer.Inventory.Files)
 }
 
 func inspectShardIndexes(inventory Inventory) error {
@@ -161,15 +162,44 @@ func inspectShardIndexes(inventory Inventory) error {
 	return nil
 }
 
+// Shard index errors that callers can tell apart.
+var (
+	ErrShardIndexTooLarge   = errors.New("shard index exceeds its size limit")
+	ErrShardIndexChanged    = errors.New("shard index changed after the inventory")
+	ErrShardIndexUnreadable = errors.New("candidate shard index is unreadable")
+)
+
+// trainingShardIndexBytes bounds the shard index of a training candidate.
+const trainingShardIndexBytes = 1 << 20
+
 func inspectShardIndex(inventory Inventory, name string) error {
+	return CheckShardIndex(context.Background(), inventory, name, trainingShardIndexBytes)
+}
+
+// CheckShardIndex reads the shard index name of inventory, at most limit
+// bytes. Its bytes must match the inventory digest, and each weight_map entry
+// must name an inventoried safetensors file. A canceled ctx stops the read.
+func CheckShardIndex(ctx context.Context, inventory Inventory, name string, limit int64) error {
 	f, err := openRegular(filepath.Join(inventory.Root, name))
 	if err != nil {
-		return errors.New("candidate shard index is unreadable")
+		return ErrShardIndexUnreadable
 	}
 	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+	raw, err := io.ReadAll(ContextReader(ctx, io.LimitReader(f, limit+1)))
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if err != nil {
+		return ErrShardIndexUnreadable
+	}
+	if int64(len(raw)) > limit {
+		return ErrShardIndexTooLarge
+	}
+	if digest := sha256.Sum256(raw); hex.EncodeToString(digest[:]) != inventory.Files[name] {
+		return ErrShardIndexChanged
+	}
 	var index map[string]json.RawMessage
-	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &index) != nil {
+	if !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), limit, &index) != nil {
 		return errors.New("candidate shard index is invalid")
 	}
 	var weights map[string]string
@@ -184,7 +214,16 @@ func inspectShardIndex(inventory Inventory, name string) error {
 	return nil
 }
 
-func inspectConfig(path string, model bool) error {
+func hasAnyKey(object map[string]json.RawMessage, keys []string) bool {
+	for _, key := range keys {
+		if _, exists := object[key]; exists {
+			return true
+		}
+	}
+	return false
+}
+
+func inspectConfig(path string, model bool, files map[string]string) error {
 	f, err := openRegular(path)
 	if err != nil {
 		return errors.New("candidate asset configuration is unreadable")
@@ -195,29 +234,36 @@ func inspectConfig(path string, model bool) error {
 	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &config) != nil || config == nil {
 		return errors.New("candidate asset configuration is invalid")
 	}
-	if _, exists := config["auto_map"]; exists {
-		return errors.New("candidate remote-code mappings are unsupported")
+	if err := inspectLoaderKeys(config, model, files); err != nil {
+		return err
 	}
 	if !model {
-		if _, exists := config["fast_tokenizer_files"]; exists {
-			return errors.New("candidate tokenizer filename overrides are unsupported")
-		}
 		return nil
 	}
 	if _, exists := config["quantization_config"]; exists {
 		return errors.New("candidate requires original unquantized training weights")
 	}
-	if _, exists := config["transformers_weights"]; exists {
-		return errors.New("candidate weight filename overrides are unsupported")
-	}
-	for _, key := range []string{"configuration_files", "attribute_map", "__dict__"} {
-		if _, exists := config[key]; exists {
-			return errors.New("candidate model configuration indirection is unsupported")
-		}
-	}
 	var family string
 	if json.Unmarshal(config["model_type"], &family) != nil || family != "llama" {
 		return errors.New("candidate supports only the llama model family")
+	}
+	return nil
+}
+
+// inspectLoaderKeys applies the shared loader key lists to the top level
+// of a model or tokenizer configuration.
+func inspectLoaderKeys(config map[string]json.RawMessage, model bool, files map[string]string) error {
+	switch {
+	case hasAnyKey(config, RemoteCodeKeys):
+		return errors.New("candidate remote-code mappings are unsupported")
+	case hasAnyKey(config, ModelRedirectKeys):
+		return errors.New("candidate model configuration indirection is unsupported")
+	case hasAnyKey(config, FileRedirectKeys) && model:
+		return errors.New("candidate weight filename overrides are unsupported")
+	case hasAnyKey(config, FileRedirectKeys):
+		return errors.New("candidate tokenizer filename overrides are unsupported")
+	case !ValidFilePathValues(config, files):
+		return errors.New("candidate tokenizer file names must name inventoried files")
 	}
 	return nil
 }

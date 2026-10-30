@@ -21,6 +21,7 @@ Start with desktop setup or host deployment. Complete host and adapter qualifica
 - [Proxy setup](INTEGRATION.md#configure-the-execution-proxy) and [adapter contracts](INTEGRATION.md#contract-for-execution-proxy-adapters)
 - [Local operator protocol](OPERATIONS.md#local-operator-protocol) and [requester ingress](OPERATIONS.md#optional-requester-ingress)
 - [Optional demand activation and inactivity policy](OPERATIONS.md#demand-activation-and-inactivity-idle-plan): defaults to Off and requires a qualified evidence provider
+- [Model checks](MODEL-CHECKS.md): file allowlist, upstream identity and results. No command runs them yet
 - [Resource-limit design](RESOURCE-LIMITS.md): not implemented
 
 ## Maintenance

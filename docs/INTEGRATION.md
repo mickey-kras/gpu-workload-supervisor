@@ -19,14 +19,14 @@
 | Proxy and adapters | Route gates, forwarding, bounded protocol checks, exact-body authorization, optional requester authentication, work registration and terminal evidence. No semantic content policy |
 | External broker | Workflow steps, retries, checkpoints, cancellation and results |
 | External gateway | Authentication, request and response policy and content validation |
-| External ingestion tools | Model scans, reports, signing and promotion |
+| [Model checks](MODEL-CHECKS.md) | File allowlist, upstream identity and results bound to file digests. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans the chat template check and the behavioral scan |
 | Trainer adapter | Recipes and checkpoint contents. The controller owns finite-job lifecycle |
 
-Demand records prove admission. They do not schedule workflows or replay uncertain execution. Integrations must preserve admission, terminal evidence and runtime-bypass prevention. Setup installs no broker, gateway or scanner. See [requester ingress](OPERATIONS.md#optional-requester-ingress) and [training](TRAINING.md#finite-training-jobs).
+Demand records prove admission. They do not schedule workflows or replay uncertain execution. Integrations must preserve admission, terminal evidence and runtime-bypass prevention. Setup installs no broker or gateway. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans a setup step that installs the pinned scanner after you confirm it. See [requester ingress](OPERATIONS.md#optional-requester-ingress) and [training](TRAINING.md#finite-training-jobs).
 
 ### Model checks
 
-The release has no model checks. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans a scan before first LLM use. [#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583) plans result display and rejection of failed models. These checks cannot prove model safety.
+[Model checks](MODEL-CHECKS.md) has the file allowlist, upstream identity check and result store. No command runs them yet. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans the other checks and a scan before first LLM use. [#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583) plans result display and rejection of failed models. These checks cannot prove model safety.
 
 ### State model
 
@@ -55,6 +55,8 @@ The journal records side-effect intent and observation.
 | `gpu-workload-proxy` | Admission and completion |
 | `gpu-operator` | Embedded supervisor transitions |
 | `gpu-setup` | Accepted catalog |
+
+The `model_checks` table holds [model check](MODEL-CHECKS.md) results. No executable writes it yet.
 
 Any writer can migrate an opened database. Make a backup before changing binaries.
 
