@@ -42,8 +42,26 @@ def reload_cpu(root):
     # Production reload intentionally requires CUDA/BF16; this fresh process tests
     # the same local safetensors/PEFT export contract using CPU float32.
     from peft import PeftModel
-    from transformers import AutoModelForImageTextToText, AutoTokenizer
+    from transformers import (
+        AutoModelForCausalLM,
+        AutoModelForImageTextToText,
+        AutoTokenizer,
+    )
     worker = worker_module()
+    # The text-only class names the layers model.layers.*, not the
+    # model.language_model.layers.* of the image-text model that training used.
+    # PEFT loads the adapter into it without an error; the worker check must not.
+    text_only = AutoModelForCausalLM.from_pretrained(root / "base", local_files_only=True,
+        trust_remote_code=False, use_safetensors=True, dtype=torch.float32)
+    text_only = PeftModel.from_pretrained(text_only, root / "adapter", local_files_only=True, is_trainable=False)
+    try:
+        worker.require_matching_adapter(text_only, root / "adapter")
+    except ValueError as error:
+        if "does not match the base model" not in str(error):
+            raise
+    else:
+        raise ValueError("the adapter check accepted the text-only class")
+    del text_only
     model = AutoModelForImageTextToText.from_pretrained(root / "base", local_files_only=True,
         trust_remote_code=False, use_safetensors=True, dtype=torch.float32)
     model = PeftModel.from_pretrained(model, root / "adapter", local_files_only=True, is_trainable=False)
@@ -85,7 +103,7 @@ def train_cpu(root):
     tokenizer.save_pretrained(root / "base")
     # A tiny model of the presets' image-text architecture: one linear-attention
     # and one full-attention layer, and a small vision tower.
-    text = {"vocab_size": len(vocab), "hidden_size": 32, "intermediate_size": 64, "num_hidden_layers": 2,
+    text_config = {"vocab_size": len(vocab), "hidden_size": 32, "intermediate_size": 64, "num_hidden_layers": 2,
         "num_attention_heads": 2, "num_key_value_heads": 1, "head_dim": 16,
         "layer_types": ["linear_attention", "full_attention"], "full_attention_interval": 2,
         "linear_conv_kernel_dim": 4, "linear_key_head_dim": 8, "linear_num_key_heads": 2,
@@ -95,7 +113,7 @@ def train_cpu(root):
                             "mrope_section": [1, 1, 0], "mrope_interleaved": True}}
     vision = {"depth": 1, "hidden_size": 16, "intermediate_size": 32, "num_heads": 2, "out_hidden_size": 32,
         "patch_size": 4, "spatial_merge_size": 2, "temporal_patch_size": 2, "num_position_embeddings": 16}
-    model = Qwen3_5ForConditionalGeneration(Qwen3_5Config(text_config=text, vision_config=vision, tie_word_embeddings=False))
+    model = Qwen3_5ForConditionalGeneration(Qwen3_5Config(text_config=text_config, vision_config=vision, tie_word_embeddings=False))
     model.save_pretrained(root / "base", safe_serialization=True)
     Qwen3VLProcessor(image_processor=Qwen2VLImageProcessor(patch_size=4, merge_size=2, temporal_patch_size=2),
         video_processor=Qwen3VLVideoProcessor(patch_size=4, merge_size=2, temporal_patch_size=2),

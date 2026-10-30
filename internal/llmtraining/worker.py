@@ -294,7 +294,12 @@ def require_matching_adapter(model, directory) -> None:
     saved = set(load_peft_weights(directory, device="cpu"))
     loaded = set(get_peft_model_state_dict(model))
     if not saved or saved != loaded:
-        raise ValueError("adapter does not match the base model")
+        unexpected, missing = sorted(saved - loaded), sorted(loaded - saved)
+        # Key names only, one sample each: no paths or tensor contents.
+        raise ValueError(
+            f"adapter does not match the base model: {len(saved)} saved and {len(loaded)} expected keys; "
+            f"{len(unexpected)} unexpected {unexpected[:1]}, {len(missing)} missing {missing[:1]}"
+        )
 
 
 def reload(config_path: Path, receipt: Path, progress: Path) -> None:

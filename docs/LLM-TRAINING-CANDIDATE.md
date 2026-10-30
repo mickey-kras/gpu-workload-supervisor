@@ -94,15 +94,21 @@ inventory.
 The command never imports the runtime, even to discover its version or plugins.
 
 The candidate supports only the image-text architecture of the primary model,
-so that an adapter matches the base model that vLLM serves. The model
+so that an adapter has the module layout of the primary model. The model
 `config.json` must have `model_type: "qwen3_5"`, the single architecture
 `Qwen3_5ForConditionalGeneration` and a `text_config` with `model_type:
 "qwen3_5_text"`. The candidate needs local `config.json`, at least one
-`.safetensors` file, and a separate `tokenizer_config.json`. The tokenizer
-snapshot also needs `preprocessor_config.json` and
-`video_preprocessor_config.json` with `processor_class: "Qwen3VLProcessor"`,
-because training loads the processor of the image-text model from it. Asset inventories allow only `.json`, `.safetensors`,
-`.model` and `.txt` files. The command rejects configurations with `auto_map`
+`.safetensors` file, and a separate `tokenizer_config.json`.
+
+The tokenizer snapshot also needs `preprocessor_config.json` and
+`video_preprocessor_config.json`, because training loads the processor of the
+image-text model from it. They must name `processor_class:
+"Qwen3VLProcessor"`, the image processor `Qwen2VLImageProcessorFast` or
+`Qwen2VLImageProcessor` and the video processor `Qwen3VLVideoProcessor`, without
+`auto_map`. A combined `processor_config.json` gets the same check. The
+tokenizer snapshot must not contain `chat_template.json` or `config.json`.
+Asset inventories allow only `.json`, `.safetensors`, `.model` and `.txt`
+files. The command rejects configurations with `auto_map`
 or model `quantization_config`.
 
 GGUF, pickle weights, prequantized input and custom model code are outside this
@@ -142,7 +148,9 @@ compatibility checks.
 
 The fixed configuration uses full-text completion, explicit held-out data, no
 sample packing, BF16, SDPA, gradient checkpointing, AdamW, a constant learning
-rate, and LoRA targets `q_proj`/`v_proj`. QLoRA enables Axolotl's NF4
+rate, and LoRA targets `q_proj`/`v_proj`. In this hybrid architecture, only the
+full-attention layers have these modules. `processor_config` names the
+tokenizer snapshot, which holds the image and video processor configuration. QLoRA enables Axolotl's NF4
 conversion with double quantization. LoRA leaves 4-bit and 8-bit loading off.
 The configuration requests evaluation and checkpoint saving at the final step.
 
@@ -168,8 +176,8 @@ immutable local assets:
 
 | Candidate | Adapter | Rank and alpha | Sequence | Microbatch and accumulation | Steps |
 | --- | --- | --- | --- | --- | --- |
-| Small Llama smoke model | LoRA | 8/16 | 128 | 1/1 | 2 |
-| Representative 7-8B Llama | QLoRA | 16/32 | 2048 | 1/4 | 100 |
+| Qwen3.5 0.8B smoke model | LoRA | 8/16 | 128 | 1/1 | 2 |
+| Qwen3.8 27B primary model | QLoRA | 16/32 | 2048 | 1/4 | 100 |
 
 Both use learning rate 0.0002 and seed 42. The qualification guide supplies
 real immutable asset revisions. Local files, datasets and explicit budgets

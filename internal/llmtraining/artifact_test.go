@@ -199,3 +199,26 @@ func TestImportPreparationRejectsUnsupportedTargetsAndDestinations(t *testing.T)
 		t.Fatal("accepted invalid recipe")
 	}
 }
+
+func TestExportBindsAndChecksTheSavedProcessor(t *testing.T) {
+	combined := `{"processor_class":"Qwen3VLProcessor","image_processor":` + qwenImageProcessor + `,"video_processor":` + qwenVideoProcessor + `}`
+	r, _ := completedArtifact(t)
+	writeFixture(t, filepath.Join(r.OutputDirectory, processorConfigName), combined)
+	files, err := artifactFiles(r)
+	if err != nil || files[processorConfigName] == "" {
+		t.Fatalf("saved processor not bound: %v %v", files, err)
+	}
+	for name, content := range map[string]string{
+		processorConfigName: `{"processor_class":"Qwen3VLProcessor","auto_map":{},"image_processor":` + qwenImageProcessor + `,"video_processor":` + qwenVideoProcessor + `}`,
+		imageProcessorName:  `{"processor_class":"Qwen3VLProcessor","image_processor_type":"OtherImageProcessor"}`,
+		videoProcessorName:  `{"processor_class":"OtherProcessor","video_processor_type":"Qwen3VLVideoProcessor"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, _ := completedArtifact(t)
+			writeFixture(t, filepath.Join(r.OutputDirectory, name), content)
+			if _, err := artifactFiles(r); err == nil || !strings.Contains(err.Error(), "training export processor configuration") {
+				t.Fatalf("unsupported saved processor accepted: %v", err)
+			}
+		})
+	}
+}

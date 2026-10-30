@@ -448,7 +448,7 @@ class WorkerTests(unittest.TestCase):
                     if matches:
                         worker.require_matching_adapter(MagicMock(), "saved")
                     else:
-                        with self.assertRaisesRegex(ValueError, "does not match the base model"):
+                        with self.assertRaisesRegex(ValueError, "does not match the base model: .* saved and .* expected keys"):
                             worker.require_matching_adapter(MagicMock(), "saved")
 
     def test_main_rejects_unsupported_python_before_runtime_preparation(self) -> None:

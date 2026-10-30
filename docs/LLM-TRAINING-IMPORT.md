@@ -30,8 +30,12 @@ Supported exports contain one `adapter_model.safetensors`, an
 `adapter_config.json`, a `tokenizer_config.json`, and at least one of
 `tokenizer.json` or `tokenizer.model`. The optional bound files are
 `special_tokens_map.json`, `added_tokens.json`, `generation_config.json`,
-`config.json`, `vocab.json`, `vocab.txt`, `merges.txt` and
-`chat_template.jinja`. Only these named files belong to the import plan.
+`config.json`, `vocab.json`, `vocab.txt`, `merges.txt`, `chat_template.jinja`
+and the saved processor files `processor_config.json`,
+`preprocessor_config.json` and `video_preprocessor_config.json`. Only these
+named files belong to the import plan. The processor files must name the
+Qwen3VLProcessor classes without `auto_map`.
+
 Checkpoints, caches, training arguments, README files and other training outputs
 are not import payloads. The command does not support sharded adapters, pickle
 adapters, template directories or configuration redirects to other code or

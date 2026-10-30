@@ -165,15 +165,9 @@ func inspectShardIndexes(inventory Inventory) error {
 }
 
 func inspectShardIndex(inventory Inventory, name string) error {
-	f, err := openRegular(filepath.Join(inventory.Root, name))
+	index, err := readJSONObject(filepath.Join(inventory.Root, name), "candidate shard index")
 	if err != nil {
-		return errors.New("candidate shard index is unreadable")
-	}
-	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
-	var index map[string]json.RawMessage
-	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &index) != nil {
-		return errors.New("candidate shard index is invalid")
+		return err
 	}
 	var weights map[string]string
 	if json.Unmarshal(index["weight_map"], &weights) != nil || len(weights) == 0 {
@@ -187,16 +181,26 @@ func inspectShardIndex(inventory Inventory, name string) error {
 	return nil
 }
 
-func inspectConfig(path string, model bool) error {
+// readJSONObject reads one bounded, strict UTF-8 JSON object from a regular
+// file. The errors name the file kind, never its path or content.
+func readJSONObject(path, kind string) (map[string]json.RawMessage, error) {
 	f, err := openRegular(path)
 	if err != nil {
-		return errors.New("candidate asset configuration is unreadable")
+		return nil, errors.New(kind + " is unreadable")
 	}
 	defer f.Close()
 	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
-	var config map[string]json.RawMessage
-	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &config) != nil || config == nil {
-		return errors.New("candidate asset configuration is invalid")
+	var object map[string]json.RawMessage
+	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &object) != nil || object == nil {
+		return nil, errors.New(kind + " is invalid")
+	}
+	return object, nil
+}
+
+func inspectConfig(path string, model bool) error {
+	config, err := readJSONObject(path, "candidate asset configuration")
+	if err != nil {
+		return err
 	}
 	if _, exists := config["auto_map"]; exists {
 		return errors.New("candidate remote-code mappings are unsupported")
@@ -219,67 +223,6 @@ func inspectConfig(path string, model bool) error {
 		}
 	}
 	return inspectArchitecture(config)
-}
-
-// Adapters must match the served base model, so candidates train only the
-// Qwen3.5 image-text architecture of the primary model.
-const (
-	modelFamily       = "qwen3_5"
-	modelTextFamily   = "qwen3_5_text"
-	modelArchitecture = "Qwen3_5ForConditionalGeneration"
-	processorClass    = "Qwen3VLProcessor"
-)
-
-func inspectArchitecture(config map[string]json.RawMessage) error {
-	var family string
-	var architectures []string
-	var text struct {
-		ModelType string `json:"model_type"`
-	}
-	if json.Unmarshal(config["model_type"], &family) != nil || family != modelFamily ||
-		json.Unmarshal(config["architectures"], &architectures) != nil || len(architectures) != 1 || architectures[0] != modelArchitecture ||
-		json.Unmarshal(config["text_config"], &text) != nil || text.ModelType != modelTextFamily {
-		return errors.New("candidate supports only the Qwen3.5 image-text architecture (" + modelArchitecture + ")")
-	}
-	return nil
-}
-
-// processorFiles are the image and video processor configurations in the
-// tokenizer snapshot. Training loads the processor of the image-text model
-// from them; they select no code.
-var processorFiles = []string{"preprocessor_config.json", "video_preprocessor_config.json"}
-
-func inspectProcessors(inventory Inventory) error {
-	for _, name := range processorFiles {
-		if inventory.Files[name] == "" {
-			return errors.New("candidate tokenizer snapshot requires " + name)
-		}
-		if err := inspectProcessor(filepath.Join(inventory.Root, name)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func inspectProcessor(path string) error {
-	f, err := openRegular(path)
-	if err != nil {
-		return errors.New("candidate processor configuration is unreadable")
-	}
-	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
-	var config map[string]json.RawMessage
-	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &config) != nil || config == nil {
-		return errors.New("candidate processor configuration is invalid")
-	}
-	if _, exists := config["auto_map"]; exists {
-		return errors.New("candidate remote-code mappings are unsupported")
-	}
-	var class string
-	if json.Unmarshal(config["processor_class"], &class) != nil || class != processorClass {
-		return errors.New("candidate processor must be " + processorClass)
-	}
-	return nil
 }
 
 func inspectPaths(r Recipe) error {

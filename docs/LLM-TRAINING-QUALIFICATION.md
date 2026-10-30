@@ -210,10 +210,14 @@ training runtime. Activation and inference paths do not run it.
 | `representative-qlora` | [Qwen3.8 27B](https://huggingface.co/Qwen/Qwen3.8-27B/tree/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0) | QLoRA 16/32, sequence 2048, batch 1, accumulation 4, 100 steps |
 
 Both presets use the image-text architecture of the primary model
-(`Qwen3_5ForConditionalGeneration`), so an adapter matches the base model that
-vLLM serves. Each revision is the head of the `main` branch at the time of
-pinning. `representative-qlora` trains the primary model itself. `smoke-lora`
-is the smallest model of the same architecture. Its adapter does not fit the
+(`Qwen3_5ForConditionalGeneration`). Thus an adapter has the module layout of
+the primary model. This does not cover the exact build that vLLM serves or its
+quantization. The serving import check of #453 must still compare the adapter
+with the selected base build. Each revision is the head of the `main` branch at
+the time of pinning.
+
+`representative-qlora` trains the original Qwen3.8 27B weights. `smoke-lora` is
+the smallest model of the same architecture. Its adapter does not fit the
 primary model.
 
 Both presets use learning rate 0.0002 and seed 42. The LoRA targets are
@@ -230,9 +234,14 @@ separate, new directories. With an already installed download client, use its
 [snapshot_download](https://huggingface.co/docs/huggingface_hub/guides/download)
 API with the exact `revision` above and `local_dir`. Allow only model
 `config.json`, `generation_config.json`, `model*.safetensors` and shard-index
-JSON, and tokenizer `tokenizer.json`, `tokenizer_config.json`,
-`preprocessor_config.json` and `video_preprocessor_config.json`. The two
-processor files are configuration only. They select no code.
+JSON, and tokenizer `tokenizer.json`, `tokenizer_config.json`, `vocab.json`,
+`merges.txt`, `preprocessor_config.json` and `video_preprocessor_config.json`.
+
+The candidate requires `processor_class: "Qwen3VLProcessor"` and the Qwen
+image and video processor classes in the two processor files, and it rejects
+`auto_map`. Thus the files load no remote code. Leave out `chat_template.jinja`:
+completion training uses no chat template, and the candidate inventories accept
+only `.json`, `.safetensors`, `.model` and `.txt` files.
 
 Exclude pickle weights and code. Before inventorying the new download
 directories, remove only the downloader's `.cache/huggingface` metadata.
