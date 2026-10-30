@@ -346,7 +346,7 @@ For each backend and size, keep the following evidence privately:
 | --- | --- |
 | Real training | Finite forward and backward execution and exactly the requested optimizer step count |
 | Quality boundary | Finite nonnegative held-out loss. Preserved split identity. No generated text in supervisor logs |
-| Reload | Separate process loads the exact base, adapter and config and saved tokenizer. Finite forward output and bounded continuation |
+| Reload | Separate process loads the exact base with the image-text class, the adapter, its config and the saved tokenizer. The adapter keys match the base modules. Finite forward output and bounded continuation |
 | Capacity | Peak cgroup RAM of the trainer unit and GPU VRAM, from the sources below. Free disk throughout. Retained checkpoints plus one in-progress save, cache and export |
 | Completion | Valid fenced completion accepted by reconcile. Recursive cgroup empty and GPU compute processes released |
 | Failure | Controlled interruption or failure never publishes success. Recovery releases admission only after verified cleanup |

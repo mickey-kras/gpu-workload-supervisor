@@ -149,8 +149,11 @@ compatibility checks.
 The fixed configuration uses full-text completion, explicit held-out data, no
 sample packing, BF16, SDPA, gradient checkpointing, AdamW, a constant learning
 rate, and LoRA targets `q_proj`/`v_proj`. In this hybrid architecture, only the
-full-attention layers have these modules. `processor_config` names the
-tokenizer snapshot, which holds the image and video processor configuration. QLoRA enables Axolotl's NF4
+full-attention layers have these modules.
+
+The worker loads the processor from the tokenizer snapshot, which holds the
+image and video processor configuration. Axolotl has no configuration key for
+this. QLoRA enables Axolotl's NF4
 conversion with double quantization. LoRA leaves 4-bit and 8-bit loading off.
 The configuration requests evaluation and checkpoint saving at the final step.
 

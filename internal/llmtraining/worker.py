@@ -263,6 +263,10 @@ def train(config_path: Path, receipt: Path, progress: Path, accelerator: bool = 
             return control
 
     cfg = load_cfg(str(config_path))
+    # Axolotl's schema has no processor_config key, and its default is the model
+    # directory. The processor files of the image-text model are in the
+    # tokenizer snapshot, which has no model config.json.
+    cfg.processor_config = getattr(cfg, "tokenizer_config", None)
     # Only the CPU smoke turns this off; the runner always checks the GPU.
     if accelerator:
         verify_accelerator(getattr(cfg, "load_in_4bit", None))

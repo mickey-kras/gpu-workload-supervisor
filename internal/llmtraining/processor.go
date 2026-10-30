@@ -72,62 +72,88 @@ func inspectProcessors(inventory Inventory) error {
 	return nil
 }
 
-// checkExportProcessors checks the processor files that training saved with
-// the adapter.
+// checkExportProcessors requires the processor that training saved with the
+// adapter, because training always loads one. It accepts a combined
+// processor_config.json, or both split files, and checks every file present.
 func checkExportProcessors(directory string) error {
+	present := map[string]bool{}
 	for _, name := range []string{imageProcessorName, videoProcessorName, processorConfigName} {
 		path := filepath.Join(directory, name)
 		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 			continue
 		}
+		present[name] = true
 		if err := checkProcessorFile(path, name, "training export"); err != nil {
 			return err
 		}
+	}
+	if present[imageProcessorName] != present[videoProcessorName] || (!present[processorConfigName] && !present[imageProcessorName]) {
+		return errors.New("training export requires a complete processor: " + processorConfigName + ", or both " + imageProcessorName + " and " + videoProcessorName)
 	}
 	return nil
 }
 
 // checkProcessorFile requires the Qwen3VLProcessor classes and no auto_map, so
 // the file selects only these processor classes of the locked transformers
-// and loads no remote code.
+// and loads no remote code. The error names the field that failed.
 func checkProcessorFile(path, name, owner string) error {
 	config, err := readJSONObject(path, owner+" processor configuration")
 	if err != nil {
 		return err
 	}
-	invalid := errors.New(owner + " processor configuration " + name + " must name the Qwen3VLProcessor classes without auto_map")
-	if !processorClasses(config, name) {
-		return invalid
+	if field := processorMismatch(config, name); field != "" {
+		return errors.New(owner + " processor configuration " + name + ": unsupported " + field + "; the processor must be Qwen3VLProcessor without auto_map")
 	}
 	return nil
 }
 
-func processorClasses(config map[string]json.RawMessage, name string) bool {
-	if _, exists := config["auto_map"]; exists || !stringIs(config["processor_class"], processorClass) {
-		return false
+// processorMismatch returns the first field that does not hold the expected
+// value, or "" when the file is accepted.
+func processorMismatch(config map[string]json.RawMessage, name string) string {
+	if _, exists := config["auto_map"]; exists {
+		return "auto_map"
+	}
+	if !stringIs(config["processor_class"], processorClass) {
+		return "processor_class"
 	}
 	switch name {
 	case imageProcessorName:
-		return imageClass(config)
+		return imageMismatch(config, "")
 	case videoProcessorName:
-		return videoClass(config)
+		return videoMismatch(config, "")
 	}
 	var image, video map[string]json.RawMessage
-	if json.Unmarshal(config["image_processor"], &image) != nil || json.Unmarshal(config["video_processor"], &video) != nil {
-		return false
+	if json.Unmarshal(config["image_processor"], &image) != nil || image == nil {
+		return "image_processor"
 	}
-	_, imageMap := image["auto_map"]
-	_, videoMap := video["auto_map"]
-	return !imageMap && !videoMap && imageClass(image) && videoClass(video)
+	if json.Unmarshal(config["video_processor"], &video) != nil || video == nil {
+		return "video_processor"
+	}
+	if field := imageMismatch(image, "image_processor."); field != "" {
+		return field
+	}
+	return videoMismatch(video, "video_processor.")
 }
 
-func imageClass(config map[string]json.RawMessage) bool {
+func imageMismatch(config map[string]json.RawMessage, prefix string) string {
+	if _, exists := config["auto_map"]; exists {
+		return prefix + "auto_map"
+	}
 	var class string
-	return json.Unmarshal(config["image_processor_type"], &class) == nil && slices.Contains(imageProcessorClasses, class)
+	if json.Unmarshal(config["image_processor_type"], &class) != nil || !slices.Contains(imageProcessorClasses, class) {
+		return prefix + "image_processor_type"
+	}
+	return ""
 }
 
-func videoClass(config map[string]json.RawMessage) bool {
-	return stringIs(config["video_processor_type"], videoProcessorClass)
+func videoMismatch(config map[string]json.RawMessage, prefix string) string {
+	if _, exists := config["auto_map"]; exists {
+		return prefix + "auto_map"
+	}
+	if !stringIs(config["video_processor_type"], videoProcessorClass) {
+		return prefix + "video_processor_type"
+	}
+	return ""
 }
 
 func stringIs(raw json.RawMessage, want string) bool {

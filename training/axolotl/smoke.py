@@ -100,7 +100,9 @@ def train_cpu(root):
     backend.pre_tokenizer = Whitespace()
     tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, pad_token="<pad>",
         unk_token="<unk>", bos_token="<bos>", eos_token="<eos>", model_max_length=32)
-    tokenizer.save_pretrained(root / "base")
+    # Production keeps the tokenizer and processor in a separate snapshot
+    # without config.json; the smoke uses the same layout.
+    tokenizer.save_pretrained(root / "tokenizer")
     # A tiny model of the presets' image-text architecture: one linear-attention
     # and one full-attention layer, and a small vision tower.
     text_config = {"vocab_size": len(vocab), "hidden_size": 32, "intermediate_size": 64, "num_hidden_layers": 2,
@@ -115,16 +117,18 @@ def train_cpu(root):
         "patch_size": 4, "spatial_merge_size": 2, "temporal_patch_size": 2, "num_position_embeddings": 16}
     model = Qwen3_5ForConditionalGeneration(Qwen3_5Config(text_config=text_config, vision_config=vision, tie_word_embeddings=False))
     model.save_pretrained(root / "base", safe_serialization=True)
+    if (root / "tokenizer" / "config.json").exists():
+        raise ValueError("the tokenizer snapshot must not contain config.json")
     Qwen3VLProcessor(image_processor=Qwen2VLImageProcessor(patch_size=4, merge_size=2, temporal_patch_size=2),
         video_processor=Qwen3VLVideoProcessor(patch_size=4, merge_size=2, temporal_patch_size=2),
-        tokenizer=tokenizer).save_pretrained(root / "base")
+        tokenizer=tokenizer).save_pretrained(root / "tokenizer")
     for name, text, count in (("train", "The small model learns a useful lesson today .", 8),
                               ("heldout", "The held out example .", 2)):
         (root / (name + ".jsonl")).write_text("".join(json.dumps({"text": text}) + "\n" for _ in range(count)))
     def dataset(name):
         return {"path": str(root / (name + ".jsonl")), "ds_type": "json", "type": "completion", "field": "text", "split": "train", "trust_remote_code": False}
     config = {
-        "base_model": str(root / "base"), "tokenizer_config": str(root / "base"), "processor_config": str(root / "base"),
+        "base_model": str(root / "base"), "tokenizer_config": str(root / "tokenizer"),
         "trust_remote_code": False, "datasets": [dataset("train")], "test_datasets": [dataset("heldout")],
         "dataset_prepared_path": str(root / "cache"), "output_dir": str(root / "adapter"),
         "adapter": "lora", "load_in_4bit": False, "load_in_8bit": False, "bf16": False, "fp16": False,
@@ -150,7 +154,8 @@ def train_cpu(root):
     if progress["step"] != 2 or not (vram is None or (isinstance(vram, int) and vram > 0)):
         raise ValueError("smoke progress has no final step or no valid VRAM peak field")
     assert_no_optional_imports()
-    subprocess.run([sys.executable, __file__, "--reload", str(root)], check=True, timeout=90)
+    # The CI step stops the whole smoke after 120 s; the reload takes seconds.
+    subprocess.run([sys.executable, __file__, "--reload", str(root)], check=True, timeout=60)
     print("CPU smoke passed: two LoRA steps, finite held-out loss and fresh-process adapter reload")
 
 

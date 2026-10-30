@@ -57,9 +57,15 @@ datasets or credentials. Keep private trainer artifacts for diagnosis.
 
 Training uses Axolotl's pinned model and trainer setup and native Trainer APIs.
 It must reach exactly the requested optimizer step, pass held-out evaluation
-with a finite nonnegative loss, and save its adapter and tokenizer. A separate
-Python process then loads the base and saved adapter and checks finite forward
-output and a bounded deterministic continuation. No generated text enters
+with a finite nonnegative loss, and save its adapter, tokenizer and processor.
+The worker loads the processor of the image-text model from the tokenizer
+snapshot.
+
+A separate Python process then loads the base with
+`AutoModelForImageTextToText`, the class that training used, and loads the
+saved adapter. The saved adapter keys must equal the adapter keys of the
+loaded model, else the reload fails. It then checks finite forward output and a
+bounded deterministic continuation. No generated text enters
 lifecycle evidence. Both phases stay in the trainer unit and therefore under
 the same admission.
 
@@ -69,7 +75,10 @@ the fenced `completed` receipt. The provenance binds source, raw recipe, model
 and tokenizer revisions and inventories, runtime inventory and entrypoint,
 embedded worker, invocation, exported file hashes and held-out loss. It
 contains no completion token. Adapter configuration, weights and saved
-tokenizer files must stay unchanged across reload.
+tokenizer and processor files must stay unchanged across reload. The export
+must hold a complete processor: `processor_config.json`, or both
+`preprocessor_config.json` and `video_preprocessor_config.json`, with the
+Qwen3VLProcessor classes.
 
 `exportBytes` bounds their combined size. A failed phase never publishes
 successful completion. Systemd failure or explicit recovery still supplies the

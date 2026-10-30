@@ -19,11 +19,26 @@ import (
 
 // Accepted fixtures of the primary model's image-text architecture.
 const (
-	qwenModelFields    = `"model_type":"qwen3_5","architectures":["Qwen3_5ForConditionalGeneration"],"text_config":{"model_type":"qwen3_5_text"}`
-	qwenModelConfig    = `{` + qwenModelFields + `}`
-	qwenImageProcessor = `{"processor_class":"Qwen3VLProcessor","image_processor_type":"Qwen2VLImageProcessorFast"}`
-	qwenVideoProcessor = `{"processor_class":"Qwen3VLProcessor","video_processor_type":"Qwen3VLVideoProcessor"}`
+	qwenModelFields = `"model_type":"qwen3_5","architectures":["Qwen3_5ForConditionalGeneration"],"text_config":{"model_type":"qwen3_5_text"}`
+	qwenModelConfig = `{` + qwenModelFields + `}`
 )
+
+// The processor fixtures are real files: the two processor files of the
+// pinned Qwen3.8 27B snapshot, and the processor_config.json that the locked
+// transformers saves after it loads them.
+var (
+	qwenImageProcessor = testdataText("qwen3.8-processor/preprocessor_config.json")
+	qwenVideoProcessor = testdataText("qwen3.8-processor/video_preprocessor_config.json")
+	qwenSavedProcessor = testdataText("qwen3.8-processor/saved_processor_config.json")
+)
+
+func testdataText(name string) string {
+	raw, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
 
 func writeFixture(t *testing.T, path, content string) string {
 	t.Helper()
@@ -164,24 +179,23 @@ func TestCompileModelFamilyUsesDecodedString(t *testing.T) {
 
 func TestCompileRequiresTheImageTextProcessor(t *testing.T) {
 	r := fixture(t)
-	plan, err := Compile(r, math.MaxUint64, math.MaxUint64)
-	if err != nil || plan.Config.Processor != r.Tokenizer.Inventory.Root {
-		t.Fatalf("processor not configured from the tokenizer snapshot: %q %v", plan.Config.Processor, err)
+	if _, err := Compile(r, math.MaxUint64, math.MaxUint64); err != nil {
+		t.Fatal(err)
 	}
-	const classes = "must name the Qwen3VLProcessor classes"
-	combined := `{"processor_class":"Qwen3VLProcessor","image_processor":` + qwenImageProcessor + `,"video_processor":` + qwenVideoProcessor + `}`
+	combined := qwenSavedProcessor
 	for name, tc := range map[string]struct{ file, content, want string }{
 		"missing image processor":     {imageProcessorName, "", "requires " + imageProcessorName},
 		"missing video processor":     {videoProcessorName, "", "requires " + videoProcessorName},
-		"other processor":             {imageProcessorName, `{"processor_class":"Qwen2VLProcessor","image_processor_type":"Qwen2VLImageProcessorFast"}`, classes},
-		"other image class":           {imageProcessorName, `{"processor_class":"Qwen3VLProcessor","image_processor_type":"SiglipImageProcessor"}`, classes},
-		"missing image class":         {imageProcessorName, `{"processor_class":"Qwen3VLProcessor"}`, classes},
-		"other video class":           {videoProcessorName, `{"processor_class":"Qwen3VLProcessor","video_processor_type":"LlavaVideoProcessor"}`, classes},
-		"remote code":                 {videoProcessorName, `{"processor_class":"Qwen3VLProcessor","video_processor_type":"Qwen3VLVideoProcessor","auto_map":{}}`, classes},
+		"other processor":             {imageProcessorName, `{"processor_class":"Qwen2VLProcessor","image_processor_type":"Qwen2VLImageProcessorFast"}`, "unsupported processor_class"},
+		"other image class":           {imageProcessorName, `{"processor_class":"Qwen3VLProcessor","image_processor_type":"SiglipImageProcessor"}`, "unsupported image_processor_type"},
+		"missing image class":         {imageProcessorName, `{"processor_class":"Qwen3VLProcessor"}`, "unsupported image_processor_type"},
+		"other video class":           {videoProcessorName, `{"processor_class":"Qwen3VLProcessor","video_processor_type":"LlavaVideoProcessor"}`, "unsupported video_processor_type"},
+		"remote code":                 {videoProcessorName, `{"processor_class":"Qwen3VLProcessor","video_processor_type":"Qwen3VLVideoProcessor","auto_map":{}}`, "unsupported auto_map"},
 		"invalid json":                {imageProcessorName, `{"processor_class":`, "is invalid"},
 		"combined processor accepted": {processorConfigName, combined, ""},
-		"combined remote code":        {processorConfigName, `{"processor_class":"Qwen3VLProcessor","image_processor":{"image_processor_type":"Qwen2VLImageProcessor","auto_map":{}},"video_processor":` + qwenVideoProcessor + `}`, classes},
-		"combined without video":      {processorConfigName, `{"processor_class":"Qwen3VLProcessor","image_processor":` + qwenImageProcessor + `}`, classes},
+		"combined remote code":        {processorConfigName, `{"processor_class":"Qwen3VLProcessor","image_processor":{"image_processor_type":"Qwen2VLImageProcessor","auto_map":{}},"video_processor":` + qwenVideoProcessor + `}`, "unsupported image_processor.auto_map"},
+		"combined other video class":  {processorConfigName, `{"processor_class":"Qwen3VLProcessor","image_processor":` + qwenImageProcessor + `,"video_processor":{"video_processor_type":"Other"}}`, "unsupported video_processor.video_processor_type"},
+		"combined without video":      {processorConfigName, `{"processor_class":"Qwen3VLProcessor","image_processor":` + qwenImageProcessor + `}`, "unsupported video_processor"},
 		"chat template json":          {"chat_template.json", `{"chat_template":"x"}`, "must not contain chat_template.json"},
 		"model config in tokenizer":   {"config.json", qwenModelConfig, "must not contain config.json"},
 	} {

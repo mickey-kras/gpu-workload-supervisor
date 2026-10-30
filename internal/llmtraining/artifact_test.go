@@ -201,23 +201,54 @@ func TestImportPreparationRejectsUnsupportedTargetsAndDestinations(t *testing.T)
 }
 
 func TestExportBindsAndChecksTheSavedProcessor(t *testing.T) {
-	combined := `{"processor_class":"Qwen3VLProcessor","image_processor":` + qwenImageProcessor + `,"video_processor":` + qwenVideoProcessor + `}`
+	// The export fixture holds the real processor_config.json of the locked
+	// transformers (see executionArtifactScript).
 	r, _ := completedArtifact(t)
-	writeFixture(t, filepath.Join(r.OutputDirectory, processorConfigName), combined)
 	files, err := artifactFiles(r)
 	if err != nil || files[processorConfigName] == "" {
 		t.Fatalf("saved processor not bound: %v %v", files, err)
 	}
-	for name, content := range map[string]string{
-		processorConfigName: `{"processor_class":"Qwen3VLProcessor","auto_map":{},"image_processor":` + qwenImageProcessor + `,"video_processor":` + qwenVideoProcessor + `}`,
-		imageProcessorName:  `{"processor_class":"Qwen3VLProcessor","image_processor_type":"OtherImageProcessor"}`,
-		videoProcessorName:  `{"processor_class":"OtherProcessor","video_processor_type":"Qwen3VLVideoProcessor"}`,
+	split := func(t *testing.T, r Recipe) {
+		if err := os.Remove(filepath.Join(r.OutputDirectory, processorConfigName)); err != nil {
+			t.Fatal(err)
+		}
+		writeFixture(t, filepath.Join(r.OutputDirectory, imageProcessorName), qwenImageProcessor)
+		writeFixture(t, filepath.Join(r.OutputDirectory, videoProcessorName), qwenVideoProcessor)
+	}
+	r, _ = completedArtifact(t)
+	split(t, r)
+	if _, err := artifactFiles(r); err != nil {
+		t.Fatal("split real processor files rejected:", err)
+	}
+	for name, change := range map[string]func(*testing.T, Recipe){
+		"auto_map": func(t *testing.T, r Recipe) {
+			writeFixture(t, filepath.Join(r.OutputDirectory, processorConfigName), strings.Replace(qwenSavedProcessor, "{", `{"auto_map":{},`, 1))
+		},
+		"image_processor_type": func(t *testing.T, r Recipe) {
+			split(t, r)
+			writeFixture(t, filepath.Join(r.OutputDirectory, imageProcessorName), strings.Replace(qwenImageProcessor, "Qwen2VLImageProcessorFast", "OtherImageProcessor", 1))
+		},
+		"processor_class": func(t *testing.T, r Recipe) {
+			split(t, r)
+			writeFixture(t, filepath.Join(r.OutputDirectory, videoProcessorName), strings.Replace(qwenVideoProcessor, `"Qwen3VLProcessor"`, `"OtherProcessor"`, 1))
+		},
+		"complete processor": func(t *testing.T, r Recipe) {
+			split(t, r)
+			if err := os.Remove(filepath.Join(r.OutputDirectory, videoProcessorName)); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"complete processor ": func(t *testing.T, r Recipe) {
+			if err := os.Remove(filepath.Join(r.OutputDirectory, processorConfigName)); err != nil {
+				t.Fatal(err)
+			}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r, _ := completedArtifact(t)
-			writeFixture(t, filepath.Join(r.OutputDirectory, name), content)
-			if _, err := artifactFiles(r); err == nil || !strings.Contains(err.Error(), "training export processor configuration") {
-				t.Fatalf("unsupported saved processor accepted: %v", err)
+			change(t, r)
+			if _, err := artifactFiles(r); err == nil || !strings.Contains(err.Error(), strings.TrimSpace(name)) {
+				t.Fatalf("unsupported saved processor accepted or unnamed: %v", err)
 			}
 		})
 	}

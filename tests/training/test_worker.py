@@ -338,7 +338,7 @@ class WorkerTests(unittest.TestCase):
                 trainer.evaluate.return_value = {"eval_loss": loss}
                 tokenizer: MagicMock = MagicMock()
                 saved: MagicMock = MagicMock()
-                cfg = SimpleNamespace(max_steps=2, output_dir=directory, load_in_4bit=False)
+                cfg = SimpleNamespace(max_steps=2, output_dir=directory, load_in_4bit=False, tokenizer_config="tokenizer")
 
                 def callback(value: object) -> None:
                     getattr(value, "on_step_end")(None, SimpleNamespace(global_step=steps), None)
@@ -382,6 +382,8 @@ class WorkerTests(unittest.TestCase):
                         self.assertEqual((root / "progress.json").read_bytes(), PROGRESS_GOLDEN.read_bytes())
                         self.assertEqual(json.loads(receipt.read_text())["step"], 2)
                         trainer.train.assert_called_once_with(resume_from_checkpoint=None)
+                        # The processor loads from the tokenizer snapshot, not the model directory.
+                        self.assertEqual(cfg.processor_config, "tokenizer")
                         trainer.evaluate.assert_called_once_with()
                         saved.assert_called_once()
                         self.assertEqual(json.loads((root / "progress.json").read_text())["step"], 2)
