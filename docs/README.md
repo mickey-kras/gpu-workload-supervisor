@@ -1,38 +1,32 @@
-<a id="gpu-workload-supervisor-documentation"></a>
-
 # Documentation for GPU Workload Supervisor
 
 [Repository](../README.md)
 
-Start with [deployment](DEPLOYMENT.md), [boot reconciliation](OPERATIONS.md#boot-and-explicit-recovery), and [proxy setup](EXECUTION-PROXY.md). Finish [host qualification](DEPLOYMENT.md#qualify-the-host) before you enable execution.
-
-<a id="deploy-and-operate"></a>
+Start with desktop setup or host deployment. Complete host and adapter qualification before you enable execution.
 
 ## Deploy and use
 
-- [GNOME desktop installation and setup](DESKTOP.md): setup application, application discovery, package activation, maintenance and rollback
-- [Deployment](DEPLOYMENT.md): runtime flags, cgroups, capacity checks and host qualification
-- [Operations](OPERATIONS.md): boot, switching, ownership, unfinished work and recovery
-- [Optional requester ingress](REQUESTER-INGRESS.md): authenticated workflow authorization, durable demand and nonpreemptive activation. Auto-idle remains Off
-- [Execution proxy](EXECUTION-PROXY.md): route configuration, admission and completion
-- [Configured workloads](WORKLOADS.md): catalog profiles, adapters and schema migration
-- [Finite training jobs](TRAINING.md): trainer binding, lifecycle evidence and recovery
-- [Local operator protocol](OPERATOR.md): on-demand `/usr/bin/gpu-operator` request process and shipped GNOME extension contract
-- [Backup, restore and rollback](RESTORING.md)
-- [Security policy](../SECURITY.md)
+| Task | Guide |
+| --- | --- |
+| Install the desktop tools | [Desktop setup](OPERATIONS.md#local-gnome-desktop-installation) |
+| Configure and qualify a host | [Deployment](DEPLOYMENT.md) |
+| Switch workloads or recover | [Operation and recovery](OPERATIONS.md#operate-and-recover-workloads) |
+| Upgrade, restore or roll back | [Backup and restore](OPERATIONS.md#make-a-backup-restore-and-roll-back-state) |
+| Prepare and qualify training | [Training](TRAINING.md) |
 
 ## Understand and integrate
 
-- [Architecture](ARCHITECTURE.md)
-- [Host-protection resource limits](RESOURCE-LIMITS.md): design for an opt-in host cap and limits on owned units. Not implemented
-- [Proxy adapter contract](PROXY-CONTRACT.md): runtime evidence required before you enable execution
-- [Demand activation and inactivity idle](AUTO-IDLE.md): durable policy, settings, activation and a 60-second timer. The policy defaults to Off. A qualified evidence provider is necessary to enable it
-
-<a id="maintain"></a>
+- [Architecture and ownership](INTEGRATION.md#state-and-responsibility)
+- [Workload configuration](INTEGRATION.md#configured-workloads)
+- [Proxy setup](INTEGRATION.md#configure-the-execution-proxy) and [adapter contracts](INTEGRATION.md#contract-for-execution-proxy-adapters)
+- [Local operator protocol](OPERATIONS.md#local-operator-protocol) and [requester ingress](OPERATIONS.md#optional-requester-ingress)
+- [Optional demand activation and inactivity policy](OPERATIONS.md#demand-activation-and-inactivity-idle-plan): defaults to Off and requires a qualified evidence provider
+- [Resource-limit design](RESOURCE-LIMITS.md): not implemented
 
 ## Maintenance
 
-- [Development and tests](DEVELOPMENT.md)
-- [Releasing](RELEASING.md) and [v0.1.5 operator notes](releases/v0.1.5.md)
+- [Development and tests](MAINTENANCE.md#development)
+- [Releases and publication recovery](MAINTENANCE.md#source-and-binary-releases)
+- [CI policy](MAINTENANCE.md#ci-policy-changes) and [build-tool updates](MAINTENANCE.md#build-tool-updates)
+- [Security policy](../SECURITY.md)
 - [License](../LICENSE)
-
