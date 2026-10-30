@@ -110,7 +110,7 @@ func checkChatTemplate(path, expected string) error {
 		return err
 	}
 	if actual != expected {
-		return fmt.Errorf("%w: chat template content changed; review it and run setup again", ErrLaunchChanged)
+		return fmt.Errorf("%w: chat template content changed; review the template, then run setup again to pin it or remove the workload", ErrLaunchChanged)
 	}
 	return nil
 }

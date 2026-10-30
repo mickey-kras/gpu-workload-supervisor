@@ -146,12 +146,14 @@ not qualify, and the workload stays unavailable:
 - `--load-format safetensors`. vLLM loads only safetensors weights.
 - `--chat-template <absolute path>`. Setup records the SHA-256 of the template
   file. A changed template file stops the qualification until you run setup
-  again.
+  again. The changed file does not block the setup that pins the new template
+  or removes the workload.
 - `Environment=HF_HUB_OFFLINE=1`. vLLM loads the model only from local files.
 - `EnvironmentFile=<absolute path>`, without the glob characters `*`, `?`, `[`
   and `]`. This private file holds the API key as one
   line, `VLLM_API_KEY=<key>`. The key has 32 to 256 URL-safe characters. The
-  desktop user must own the file. Set the file mode to `0600`. Do not put the key
+  path must name the file itself, not a symbolic link. The desktop user must
+  own the file. Set the file mode to `0600`. Do not put the key
   on the command line or in an `Environment=` line.
 
 The option allowlist keeps the other vLLM options off. Thus remote code,

@@ -85,7 +85,7 @@ func TestLegacyOwnedVLLMBindingCanBeRemoved(t *testing.T) {
 
 func TestLegacyAdoptedVLLMBindingDoesNotBlockRemoval(t *testing.T) {
 	c := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "chat", NativeModel: &control.NativeModel{Runtime: "vllm"}}}}
-	if !hasRetiredBinding(c) || removalObservationCatalog(c).Profiles[0].NativeModel != nil {
+	if !hasUnrunnableBinding(c) || removalObservationCatalog(c).Profiles[0].NativeModel != nil {
 		t.Fatal("legacy adopted binding observed for execution")
 	}
 	runtime, _ := strictVLLMRuntime(Request{Catalog: removalObservationCatalog(c)})
@@ -344,5 +344,80 @@ func TestFailedApplyRemovesOnlyTheKeyFilesItCreated(t *testing.T) {
 	}
 	if now, err := os.ReadFile(kept.NativeModel.EnvironmentFile); err != nil || string(now) != string(keptKey) {
 		t.Fatal("existing key file changed", err)
+	}
+}
+
+// templateCheckingRuntime models the runtime pin check: a vLLM binding whose
+// chat template has another digest never passes preflight.
+func templateCheckingRuntime(request Request) (gpuruntime.Manager, error) {
+	for _, p := range request.Catalog.Profiles {
+		if p.NativeModel != nil && p.NativeModel.Hardened() {
+			digest, err := gpuruntime.ChatTemplateSHA256(p.NativeModel.ChatTemplate)
+			if err != nil || digest != p.NativeModel.ChatTemplateSHA256 {
+				return idleRuntime{err: gpuruntime.ErrLaunchChanged}, nil
+			}
+		}
+	}
+	return idleRuntime{}, nil
+}
+
+func acceptedOwnedWithChangedTemplate(t *testing.T) (Backend, string, Request, control.WorkloadProfile) {
+	t.Helper()
+	b, home, request := fixture(t)
+	b.runCommand = fakeOwnedCommandFor(home)
+	profile, _ := ownedFixtureProfile(t, home, "templated", 9100)
+	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	if err := b.Apply(t.Context(), home, request); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := ReadCatalog(t.Context(), request.Profile.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.ExpectedRevision = snapshot.Revision
+	if err := os.WriteFile(profile.NativeModel.ChatTemplate, []byte("{{ changed }}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b.makeRuntime = templateCheckingRuntime
+	return b, home, request, profile
+}
+
+func TestChangedChatTemplateBindingCanBeReplaced(t *testing.T) {
+	b, home, request, stale := acceptedOwnedWithChangedTemplate(t)
+	if err := b.Apply(t.Context(), home, request); err == nil {
+		t.Fatal("stale template pin kept for execution")
+	}
+	replacement, _ := ownedFixtureProfile(t, home, "templated", 9100)
+	if replacement.NativeModel.ChatTemplateSHA256 == stale.NativeModel.ChatTemplateSHA256 {
+		t.Fatal("replacement did not pin the new template")
+	}
+	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{replacement}}
+	if err := b.Apply(t.Context(), home, request); err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := ReadCatalog(t.Context(), request.Profile.StatePath)
+	if err != nil || accepted.Catalog.Profiles[0].NativeModel.ChatTemplateSHA256 != replacement.NativeModel.ChatTemplateSHA256 {
+		t.Fatal("new template pin not accepted", err)
+	}
+}
+
+func TestChangedChatTemplateBindingCanBeRemoved(t *testing.T) {
+	b, home, request, stale := acceptedOwnedWithChangedTemplate(t)
+	request.Catalog = control.Catalog{Version: 2, Disabled: true}
+	if err := b.Apply(t.Context(), home, request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(ownedUnitDirectory(home), stale.Unit)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("unit survived removal", err)
+	}
+}
+
+func TestChatTemplateChangedDetection(t *testing.T) {
+	if chatTemplateChanged(control.WorkloadProfile{}) || chatTemplateChanged(control.WorkloadProfile{NativeModel: &control.NativeModel{Runtime: "vllm"}}) {
+		t.Fatal("binding without a template pin reported as changed")
+	}
+	missing := control.WorkloadProfile{NativeModel: &control.NativeModel{Runtime: "vllm", ChatTemplate: filepath.Join(t.TempDir(), "missing.jinja"), ChatTemplateSHA256: strings.Repeat("a", 64), EnvironmentFile: "/k.env"}}
+	if !chatTemplateChanged(missing) {
+		t.Fatal("missing template not reported")
 	}
 }

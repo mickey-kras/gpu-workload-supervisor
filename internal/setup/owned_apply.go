@@ -397,7 +397,7 @@ func (work activationWork) verifyAcceptedRuntime(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := verifyActivationBindings(ctx, manager, work.retiredBindingPlan()); err != nil {
+	if err := verifyActivationBindings(ctx, manager, work.unrunnableBindingPlan()); err != nil {
 		return err
 	}
 	return manager.ReleasedFor(ctx, control.WorkloadIdle)
@@ -587,7 +587,7 @@ func verifyActivationBindings(ctx context.Context, manager gpuruntime.Manager, p
 }
 
 func removalObservationCatalog(c control.Catalog) control.Catalog {
-	if !hasRetiredBinding(c) {
+	if !hasUnrunnableBinding(c) {
 		return c
 	}
 	c = c.Clone()
@@ -605,9 +605,9 @@ func removalObservationCatalog(c control.Catalog) control.Catalog {
 	return c
 }
 
-func (work activationWork) retiredBindingPlan() unitPlan {
+func (work activationWork) unrunnableBindingPlan() unitPlan {
 	plan := unitPlan{proven: map[string]string{}}
-	if !hasRetiredBinding(work.accepted.Catalog) {
+	if !hasUnrunnableBinding(work.accepted.Catalog) {
 		return plan
 	}
 	for _, p := range work.accepted.Catalog.Profiles {
@@ -619,19 +619,30 @@ func (work activationWork) retiredBindingPlan() unitPlan {
 	return plan
 }
 
-// hasRetiredBinding reports an accepted catalog with a binding that cannot
-// run now: a retired binding, or an owned vLLM binding whose key file is
-// missing. Its accepted runtime is observed without native bindings, so the
+// hasUnrunnableBinding reports an accepted catalog with a binding that cannot
+// run now: a retired binding, an owned vLLM binding whose key file is
+// missing, or a vLLM binding whose chat template changed. Its accepted runtime is observed without native bindings, so the
 // binding cannot block the apply that removes it or writes it again. Apply
 // creates a missing key file before it writes the unit, and the candidate
 // runtime is verified after the writes.
-func hasRetiredBinding(c control.Catalog) bool {
+func hasUnrunnableBinding(c control.Catalog) bool {
 	for _, p := range c.Profiles {
-		if p.RetiredBinding() || ownedKeyMissing(p) {
+		if p.RetiredBinding() || ownedKeyMissing(p) || chatTemplateChanged(p) {
 			return true
 		}
 	}
 	return false
+}
+
+// chatTemplateChanged reports a vLLM binding whose pinned chat template no
+// longer has the recorded digest. The apply that replaces the binding pins
+// the new template, and the candidate runtime validates that pin.
+func chatTemplateChanged(p control.WorkloadProfile) bool {
+	if p.NativeModel == nil || p.NativeModel.Runtime != "vllm" || !p.NativeModel.Hardened() {
+		return false
+	}
+	digest, err := gpuruntime.ChatTemplateSHA256(p.NativeModel.ChatTemplate)
+	return err != nil || digest != p.NativeModel.ChatTemplateSHA256
 }
 
 // ownedKeyMissing reports an owned vLLM binding whose key file does not
