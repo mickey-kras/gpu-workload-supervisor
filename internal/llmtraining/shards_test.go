@@ -1,6 +1,7 @@
 package llmtraining
 
 import (
+	"context"
 	"errors"
 	"math"
 	"os"
@@ -124,15 +125,15 @@ func TestCheckShardIndexBindsDigestAndLimit(t *testing.T) {
 		"one.safetensors":              writeFixture(t, filepath.Join(root, "one.safetensors"), "shard"),
 		"model.safetensors.index.json": writeFixture(t, filepath.Join(root, "model.safetensors.index.json"), index),
 	}}
-	if err := CheckShardIndex(inventory, "model.safetensors.index.json", int64(len(index))); err != nil {
+	if err := CheckShardIndex(context.Background(), inventory, "model.safetensors.index.json", int64(len(index))); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckShardIndex(inventory, "model.safetensors.index.json", int64(len(index))-1); !errors.Is(err, ErrShardIndexTooLarge) {
+	if err := CheckShardIndex(context.Background(), inventory, "model.safetensors.index.json", int64(len(index))-1); !errors.Is(err, ErrShardIndexTooLarge) {
 		t.Fatal("an index above the limit must report its size", err)
 	}
 	large := `{"weight_map":{"a":"one.safetensors"},"metadata":{"pad":"` + strings.Repeat("x", 1<<20) + `"}}`
 	inventory.Files["model.safetensors.index.json"] = writeFixture(t, filepath.Join(root, "model.safetensors.index.json"), large)
-	if err := CheckShardIndex(inventory, "model.safetensors.index.json", 2<<20); err != nil {
+	if err := CheckShardIndex(context.Background(), inventory, "model.safetensors.index.json", 2<<20); err != nil {
 		t.Fatal("a caller limit above 1 MiB must admit a larger index", err)
 	}
 	if err := inspectShardIndexes(inventory); !errors.Is(err, ErrShardIndexTooLarge) {

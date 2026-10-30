@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/llmtraining"
 )
 
 // DefaultHub is the model hub that publishes upstream git object IDs.
@@ -357,44 +359,97 @@ func nextPage(first *url.URL, header string) (string, error) {
 const (
 	ReasonNotUpstream      = "file-not-upstream"
 	ReasonIdentityMismatch = "upstream-identity-mismatch"
+	// ReasonNoSHA256 marks a loaded file that the checks do not parse and
+	// that upstream binds only by a git SHA-1 blob ID.
+	ReasonNoSHA256 = "no-upstream-sha256"
 )
+
+// textSuffixes are loaded text files. The check accepts their git SHA-1 blob
+// ID only for printable UTF-8 text, which collision blocks are not.
+var textSuffixes = []string{".txt", ".jinja"}
+
+// sha1Accepted tells whether a file without an LFS SHA-256 can match by its
+// git SHA-1 blob ID: a JSON file that the allowlist parses, a file that no
+// loader reads, or a printable text file. Binary loaded files, such as
+// tokenizer.model, need an LFS SHA-256.
+func sha1Accepted(name string) (accepted, text bool) {
+	if unloadedNames[name] || strings.HasSuffix(name, ".json") {
+		return true, false
+	}
+	for _, suffix := range textSuffixes {
+		if strings.HasSuffix(name, suffix) {
+			return true, true
+		}
+	}
+	return false, false
+}
 
 // checkIdentity needs each local file, in name order, to match the upstream
 // git object at the pinned revision. An LFS file matches by its SHA-256,
-// which is the inventory digest. Other files match by their git blob ID
-// (SHA-1). gitBlobID hashes the same bytes after it confirms that they still
-// match the inventory SHA-256.
-func checkIdentity(root string, digests map[string]string, upstream map[string]UpstreamFile) (string, error) {
+// which is the inventory digest. A file that sha1Accepted admits matches by
+// its git blob ID (SHA-1). gitBlobID hashes the same bytes after it confirms
+// that they still match the inventory SHA-256.
+func checkIdentity(ctx context.Context, root string, digests map[string]string, upstream map[string]UpstreamFile) (string, error) {
 	for _, name := range sortedNames(digests) {
-		digest := digests[name]
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		entry, found := upstream[name]
 		if !found {
 			return ReasonNotUpstream, nil
 		}
-		if entry.LFS != nil {
-			if entry.LFS.OID != digest {
-				return ReasonIdentityMismatch, nil
-			}
-			continue
-		}
-		if entry.Size > maxGitBlobBytes {
-			return ReasonIdentityMismatch, nil
-		}
-		blob, err := gitBlobID(filepath.Join(root, name), entry.Size, digest)
-		if err != nil {
-			return "", err
-		}
-		if blob == "" || blob != entry.OID {
-			return ReasonIdentityMismatch, nil
+		reason, err := fileIdentity(ctx, filepath.Join(root, name), digests[name], entry)
+		if err != nil || reason != "" {
+			return reason, err
 		}
 	}
 	return "", nil
 }
 
+// fileIdentity compares one local file with its upstream entry.
+func fileIdentity(ctx context.Context, file, digest string, entry UpstreamFile) (string, error) {
+	if entry.LFS != nil {
+		if entry.LFS.OID != digest {
+			return ReasonIdentityMismatch, nil
+		}
+		return "", nil
+	}
+	accepted, text := sha1Accepted(filepath.Base(file))
+	if !accepted {
+		return ReasonNoSHA256, nil
+	}
+	if entry.Size > maxGitBlobBytes {
+		return ReasonIdentityMismatch, nil
+	}
+	blob, err := gitBlobID(ctx, file, entry.Size, digest, text)
+	if err != nil {
+		return "", err
+	}
+	if blob == "" || blob != entry.OID {
+		return ReasonIdentityMismatch, nil
+	}
+	return "", nil
+}
+
 // gitBlobID hashes "blob <size>\x00" and the content. A local size other
-// than the upstream size gives an empty ID, which is a mismatch, when the
-// bytes still match the inventory. Else the file changed: errChanged.
-func gitBlobID(file string, size int64, digest string) (string, error) {
+// than the upstream size gives an empty ID at once, which is a mismatch. The
+// content must still match the inventory. With text set, content that is
+// not printable UTF-8 text gives an empty ID too.
+// printableText accepts UTF-8 text without control characters other than
+// tab, line feed and carriage return.
+func printableText(content []byte) bool {
+	if !utf8.Valid(content) {
+		return false
+	}
+	for _, r := range string(content) {
+		if r < 0x20 && r != '\t' && r != '\n' && r != '\r' || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func gitBlobID(ctx context.Context, file string, size int64, digest string, text bool) (string, error) {
 	f, err := openRegular(file)
 	if err != nil {
 		return "", err
@@ -405,22 +460,20 @@ func gitBlobID(file string, size int64, digest string) (string, error) {
 		return "", errUnreadable
 	}
 	if info.Size() != size {
-		// A size difference is a mismatch only for the inventoried bytes.
-		h := sha256.New()
-		if _, err := io.Copy(h, f); err != nil {
-			return "", errUnreadable
-		}
-		if hex.EncodeToString(h.Sum(nil)) != digest {
-			return "", errChanged
-		}
 		return "", nil
 	}
-	content, err := io.ReadAll(io.LimitReader(f, size+1))
+	content, err := io.ReadAll(llmtraining.ContextReader(ctx, io.LimitReader(f, size+1)))
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
 	if err != nil {
 		return "", errUnreadable
 	}
 	if sum := sha256.Sum256(content); hex.EncodeToString(sum[:]) != digest {
 		return "", errChanged
+	}
+	if text && !printableText(content) {
+		return "", nil
 	}
 	// Git blob IDs are SHA-1; the source publishes no other digest for small files.
 	h := sha1.New()

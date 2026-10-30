@@ -457,7 +457,7 @@ func TestIdentityRefusesBlobsAboveTheLimitBeforeReading(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "notes.json")); err != nil {
 		t.Fatal(err)
 	}
-	reason, err := checkIdentity(root, map[string]string{"notes.json": sha256Hex(content)}, upstream)
+	reason, err := checkIdentity(context.Background(), root, map[string]string{"notes.json": sha256Hex(content)}, upstream)
 	if reason != ReasonIdentityMismatch || err != nil {
 		t.Fatalf("a matching blob above the limit = %q, %v; want a mismatch without a read", reason, err)
 	}
@@ -655,7 +655,7 @@ func TestFilesChangedDuringTheCheckAreErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(root, "config.json"), `{"architectures":["Other"]}`)
-	reason, err := checkAllowlist(root, digests)
+	reason, err := checkAllowlist(context.Background(), root, digests)
 	if got := outcome(CheckAllowlist, reason, err); got.Reason != "files-changed" || got.Outcome != OutcomeError {
 		t.Fatalf("allowlist after change = %+v", got)
 	}
@@ -665,19 +665,19 @@ func TestFilesChangedDuringTheCheckAreErrors(t *testing.T) {
 	}
 	upstream["config.json"] = UpstreamFile{Type: "file", Path: "config.json", OID: blobID(`{"architectures":["Other"]}`), Size: int64(len(`{"architectures":["Other"]}`))}
 	only := map[string]string{"config.json": digests["config.json"]}
-	reason, err = checkIdentity(root, only, upstream)
+	reason, err = checkIdentity(context.Background(), root, only, upstream)
 	if got := outcome(CheckIdentity, reason, err); got.Reason != "files-changed" {
 		t.Fatalf("identity after change = %+v", got)
 	}
 	if err := os.Remove(filepath.Join(root, "config.json")); err != nil {
 		t.Fatal(err)
 	}
-	reason, err = checkIdentity(root, only, upstream)
+	reason, err = checkIdentity(context.Background(), root, only, upstream)
 	if got := outcome(CheckIdentity, reason, err); got.Reason != "unreadable" {
 		t.Fatalf("identity after removal = %+v", got)
 	}
 	write(t, filepath.Join(root, "model.safetensors.index.json"), indexJSON+" ")
-	if _, err := checkShardIndexes(root, digests); !errors.Is(err, errChanged) {
+	if _, err := checkShardIndexes(context.Background(), root, digests); !errors.Is(err, errChanged) {
 		t.Fatal("a shard index changed after the inventory must be an error", err)
 	}
 }
@@ -882,7 +882,7 @@ func TestUnreadableShardIndexIsAnError(t *testing.T) {
 	if err := os.Symlink("config.json", index); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := checkShardIndexes(root, digests); !errors.Is(err, errUnreadable) {
+	if _, err := checkShardIndexes(context.Background(), root, digests); !errors.Is(err, errUnreadable) {
 		t.Fatal("an index that becomes a link must be an error, not a finding", err)
 	}
 }
@@ -929,12 +929,16 @@ func TestPathValuesAreRejectedAtAnyDepth(t *testing.T) {
 		"file in a folder":      {"config.json", `{"weights":"sub/model.safetensors"}`},
 		"top level vocab value": {"tokenizer_config.json", `{"vocab":"absent.json"}`},
 		"documentation file":    {"tokenizer_config.json", `{"tokenizer_file":"README.md"}`},
+		"documentation value":   {"config.json", `{"notes":"LICENSE.md"}`},
 		"top level path object": {"tokenizer_config.json", `{"vocab_file":{"a":1}}`},
 		"license in a value":    {"config.json", `{"notes":{"text":"LICENSE"}}`},
 		"path list":             {"config.json", `{"files":["ok","../x"]}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			files := modelFiles()
+			// The documentation files are present, so only the rule for
+			// unloaded files can reject a value that names them.
+			files["README.md"], files["LICENSE.md"] = "text", "text"
 			files[tc.file] = tc.content
 			record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
 			if record.Checks[0] != (Check{CheckAllowlist, OutcomeFailed, ReasonFilePathRedirect}) {
@@ -989,22 +993,20 @@ func TestEverySharedLoaderKeyIsRejected(t *testing.T) {
 	}
 }
 
-func TestSizeDifferenceOfAChangedFileIsAnError(t *testing.T) {
+func TestSizeDifferenceIsAMismatchBeforeAnyRead(t *testing.T) {
 	files := modelFiles()
 	root := writeModel(t, files)
-	digests, _, err := Inventory(context.Background(), root)
-	if err != nil {
-		t.Fatal(err)
-	}
 	upstream := map[string]UpstreamFile{}
 	for _, entry := range upstreamOf(files) {
 		upstream[entry.Path] = entry
 	}
-	only := map[string]string{"config.json": digests["config.json"]}
-	write(t, filepath.Join(root, "config.json"), `{"architectures":["Qwen3ForCausalLM"],"model_type":"qwen3","extra":1}`)
-	reason, err := checkIdentity(root, only, upstream)
-	if got := outcome(CheckIdentity, reason, err); got != (Check{CheckIdentity, OutcomeError, ReasonFilesChanged}) {
-		t.Fatalf("a changed file of another size = %+v, want files-changed", got)
+	entry := upstream["config.json"]
+	entry.Size++
+	upstream["config.json"] = entry
+	// The digest is wrong on purpose: a size difference returns before any read.
+	reason, err := checkIdentity(context.Background(), root, map[string]string{"config.json": strings.Repeat("0", 64)}, upstream)
+	if reason != ReasonIdentityMismatch || err != nil {
+		t.Fatalf("a size difference = %q, %v; want a mismatch", reason, err)
 	}
 }
 
@@ -1067,5 +1069,66 @@ func TestTokenMapsSkipThePathRules(t *testing.T) {
 	record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
 	if record.Checks[0].Outcome != OutcomePassed {
 		t.Fatalf("token maps must skip the key and value rules: %+v", record.Checks[0])
+	}
+}
+
+func TestLoadedBinaryFilesNeedAnUpstreamSHA256(t *testing.T) {
+	files := modelFiles()
+	files["tokenizer.model"] = "binary sentencepiece"
+	files["merges.txt"] = "#version: 0.2\nĠ t\n"
+	entries := upstreamOf(files)
+	record := run(t, newHub(t, entries).checker(), writeModel(t, files))
+	if record.Checks[1] != (Check{CheckIdentity, OutcomeFailed, ReasonNoSHA256}) {
+		t.Fatalf("a binary file with only a git SHA-1 = %+v", record.Checks[1])
+	}
+	for i := range entries {
+		if entries[i].Path == "tokenizer.model" {
+			entries[i].LFS = &LFSEntry{OID: sha256Hex(files["tokenizer.model"]), Size: int64(len(files["tokenizer.model"]))}
+		}
+	}
+	record = run(t, newHub(t, entries).checker(), writeModel(t, files))
+	if record.Checks[1].Outcome != OutcomePassed {
+		t.Fatalf("an LFS binary and a text file with a git SHA-1 must pass: %+v", record.Checks[1])
+	}
+	files["merges.txt"] = "a b\x00\x01collision block"
+	entries = upstreamOf(files)
+	for i := range entries {
+		if entries[i].Path == "tokenizer.model" {
+			entries[i].LFS = &LFSEntry{OID: sha256Hex(files["tokenizer.model"]), Size: int64(len(files["tokenizer.model"]))}
+		}
+	}
+	record = run(t, newHub(t, entries).checker(), writeModel(t, files))
+	if record.Checks[1] != (Check{CheckIdentity, OutcomeFailed, ReasonIdentityMismatch}) {
+		t.Fatalf("a text file with control bytes must not match by SHA-1: %+v", record.Checks[1])
+	}
+}
+
+func TestChecksStopWhenCanceled(t *testing.T) {
+	files := modelFiles()
+	root := writeModel(t, files)
+	digests, _, err := Inventory(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := map[string]UpstreamFile{}
+	for _, entry := range upstreamOf(files) {
+		upstream[entry.Path] = entry
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := checkAllowlist(ctx, root, digests); !errors.Is(err, context.Canceled) {
+		t.Fatal("the allowlist must stop when canceled", err)
+	}
+	if _, err := checkIdentity(ctx, root, digests, upstream); !errors.Is(err, context.Canceled) {
+		t.Fatal("the identity check must stop when canceled", err)
+	}
+	if _, err := checkShardIndexes(ctx, root, digests); !errors.Is(err, context.Canceled) {
+		t.Fatal("the shard index check must stop when canceled", err)
+	}
+	if _, err := checkJSON(ctx, filepath.Join(root, "config.json"), digests); !errors.Is(err, context.Canceled) {
+		t.Fatal("a single JSON read must stop when canceled", err)
+	}
+	if _, err := gitBlobID(ctx, filepath.Join(root, "config.json"), int64(len(files["config.json"])), digests["config.json"], false); !errors.Is(err, context.Canceled) {
+		t.Fatal("a single blob read must stop when canceled", err)
 	}
 }

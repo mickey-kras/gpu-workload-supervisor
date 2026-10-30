@@ -97,18 +97,13 @@ The candidate supports only `model_type: "llama"`. It needs local
 `config.json`, at least one `.safetensors` file, and a separate
 `tokenizer_config.json`. Asset inventories allow only `.json`, `.safetensors`,
 `.model` and `.txt` files. The command rejects model `quantization_config`.
+
 At the top level of `config.json` and `tokenizer_config.json`, it applies the
-loader key lists of `internal/llmtraining/loader_keys.go`, which the
-[model checks](MODEL-CHECKS.md) also use:
-
-- Remote code keys: `auto_map`, `auto_mapping` and `custom_pipelines`.
-- Model redirect keys: `speculators_config`, `configuration_files`,
-  `attribute_map` and `__dict__`.
-- File redirect keys: `fast_tokenizer_files` and `transformers_weights`.
-- File path keys, such as `tokenizer_file`, `vocab_file`, `merges_file` and
-  `source_spm`. Each value must be `null` or the name of an inventoried file.
-
-These lists are not complete.
+loader key lists in
+[`internal/llmtraining/loader_keys.go`](../internal/llmtraining/loader_keys.go).
+The [model checks](MODEL-CHECKS.md#file-allowlist) use the same lists and
+describe them. A file path key must be `null` or the name of an inventoried
+file. These lists are not complete.
 
 GGUF, pickle weights, prequantized input and custom model code are outside this
 candidate. File names and configuration checks do not validate tensor shapes,

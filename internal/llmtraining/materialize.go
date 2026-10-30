@@ -140,6 +140,11 @@ func FileDigest(ctx context.Context, path string) (string, error) {
 	return localDigestContext(ctx, path, 1<<40)
 }
 
+// ContextReader gives a reader that stops when ctx ends.
+func ContextReader(ctx context.Context, r io.Reader) io.Reader {
+	return contextReader{ctx: ctx, r: r}
+}
+
 // contextReader stops a read when its context ends.
 type contextReader struct {
 	ctx context.Context

@@ -117,7 +117,7 @@ type Record struct {
 var (
 	modelPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 	checkerPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]{0,127}$`)
-	reasonPattern  = regexp.MustCompile(`^[a-z][a-z-]{0,63}$`)
+	reasonPattern  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
 	validOutcomes  = map[Outcome]bool{OutcomePassed: true, OutcomeFailed: true, OutcomeError: true, OutcomeUnsupported: true, OutcomeNotRun: true}
 )
 

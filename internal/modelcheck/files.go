@@ -6,6 +6,7 @@
 package modelcheck
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -109,7 +110,7 @@ func allowed(name string) string {
 // JSON file and rejects duplicate keys and remote code keys at any depth.
 // digests are the inventory SHA-256 values, so the bytes that it reads must
 // still match them.
-func checkAllowlist(root string, digests map[string]string) (string, error) {
+func checkAllowlist(ctx context.Context, root string, digests map[string]string) (string, error) {
 	names := sortedNames(digests)
 	weights := false
 	for _, name := range names {
@@ -128,7 +129,10 @@ func checkAllowlist(root string, digests map[string]string) (string, error) {
 		if !strings.HasSuffix(name, ".json") {
 			continue
 		}
-		reason, err := checkJSON(filepath.Join(root, name), digests)
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		reason, err := checkJSON(ctx, filepath.Join(root, name), digests)
 		if err != nil || reason != "" {
 			return reason, err
 		}
@@ -136,13 +140,16 @@ func checkAllowlist(root string, digests map[string]string) (string, error) {
 	return "", nil
 }
 
-func checkJSON(file string, digests map[string]string) (string, error) {
+func checkJSON(ctx context.Context, file string, digests map[string]string) (string, error) {
 	f, err := openRegular(file)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, MaxJSONFileBytes+1))
+	raw, err := io.ReadAll(llmtraining.ContextReader(ctx, io.LimitReader(f, MaxJSONFileBytes+1)))
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
 	if err != nil {
 		return "", errUnreadable
 	}

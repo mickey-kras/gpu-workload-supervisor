@@ -65,7 +65,7 @@ func Inventory(ctx context.Context, root string) (map[string]string, string, err
 	if len(files) > MaxModelFiles {
 		return files, ReasonTooManyFiles, nil
 	}
-	reason, err := checkShardIndexes(root, files)
+	reason, err := checkShardIndexes(ctx, root, files)
 	return files, reason, err
 }
 
@@ -137,14 +137,16 @@ func metadataLevel(directory string, accepts func(os.DirEntry) bool) (string, st
 	return next, "", nil
 }
 
-func checkShardIndexes(root string, files map[string]string) (string, error) {
+func checkShardIndexes(ctx context.Context, root string, files map[string]string) (string, error) {
 	inventory := llmtraining.Inventory{Root: root, Files: files}
 	for _, name := range sortedNames(files) {
 		if !strings.HasSuffix(name, ".safetensors.index.json") {
 			continue
 		}
-		err := llmtraining.CheckShardIndex(inventory, name, MaxJSONFileBytes)
+		err := llmtraining.CheckShardIndex(ctx, inventory, name, MaxJSONFileBytes)
 		switch {
+		case ctx.Err() != nil:
+			return "", ctx.Err()
 		case errors.Is(err, llmtraining.ErrShardIndexTooLarge):
 			return ReasonShardTooLarge, nil
 		case errors.Is(err, llmtraining.ErrShardIndexChanged):

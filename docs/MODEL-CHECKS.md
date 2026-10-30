@@ -161,6 +161,20 @@ Hugging Face API. Each local file must be in that tree:
   blob ID. The source publishes no other digest for these files. A file that
   is not in LFS can be at most 64 MiB. A larger file is a mismatch.
 
+Attackers can make SHA-1 collisions. Thus the check accepts a git blob ID only
+for these files:
+
+- JSON files. The allowlist parses them as strict UTF-8 JSON.
+- `README`, `README.md`, `LICENSE`, `LICENSE.md` and `.gitattributes`. No
+  loader reads them.
+- `.txt` and `.jinja` files with printable UTF-8 text only: no control
+  characters other than tab, line feed and carriage return. Else the result
+  is `upstream-identity-mismatch`.
+
+Any other file, such as `tokenizer.model`, must be in LFS upstream with a
+SHA-256. Else the check gives `findings` with the reason
+`no-upstream-sha256`.
+
 The upstream tree can have more files than the local directory. It can have
 at most 32768 files.
 
@@ -170,7 +184,7 @@ user can make such a commit. The supervisor reads the branches and tags of the
 repository. If no branch or tag points at the commit, it reads the commit
 history of each branch, at most 64 pages in total. A refs list without
 branches, or a branch or tag without a name or a commit, gives `error` with
-the reason `upstream-invalid`. Else the result is one of these:
+the reason `upstream-invalid`. Else the check gives one of these results:
 
 - The commit is in the history: the check continues.
 - The commit is not in the history: `findings` with the reason

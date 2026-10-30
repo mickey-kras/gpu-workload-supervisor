@@ -3,6 +3,7 @@ package llmtraining
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -172,19 +173,22 @@ var (
 const trainingShardIndexBytes = 1 << 20
 
 func inspectShardIndex(inventory Inventory, name string) error {
-	return CheckShardIndex(inventory, name, trainingShardIndexBytes)
+	return CheckShardIndex(context.Background(), inventory, name, trainingShardIndexBytes)
 }
 
 // CheckShardIndex reads the shard index name of inventory, at most limit
-// bytes. Its bytes must match the inventory digest, and each weight_map entry
+// bytes. A canceled ctx stops the read. Its bytes must match the inventory digest, and each weight_map entry
 // must name an inventoried safetensors file.
-func CheckShardIndex(inventory Inventory, name string, limit int64) error {
+func CheckShardIndex(ctx context.Context, inventory Inventory, name string, limit int64) error {
 	f, err := openRegular(filepath.Join(inventory.Root, name))
 	if err != nil {
 		return ErrShardIndexUnreadable
 	}
 	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, limit+1))
+	raw, err := io.ReadAll(ContextReader(ctx, io.LimitReader(f, limit+1)))
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
 	if err != nil {
 		return ErrShardIndexUnreadable
 	}

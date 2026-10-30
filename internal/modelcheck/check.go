@@ -51,7 +51,7 @@ func (c Checker) Run(ctx context.Context, r Request) (Record, error) {
 	}
 	allow := outcome(CheckAllowlist, reason, err)
 	if allow.Outcome == OutcomePassed {
-		reason, err := checkAllowlist(r.Root, files)
+		reason, err := checkAllowlist(ctx, r.Root, files)
 		allow = outcome(CheckAllowlist, reason, err)
 	}
 	results := []Check{allow}
@@ -80,7 +80,7 @@ func (c Checker) identity(ctx context.Context, r Request, files map[string]strin
 	if err != nil {
 		return outcome(CheckIdentity, "", err)
 	}
-	reason, err := checkIdentity(r.Root, files, upstream)
+	reason, err := checkIdentity(ctx, r.Root, files, upstream)
 	return outcome(CheckIdentity, reason, err)
 }
 
