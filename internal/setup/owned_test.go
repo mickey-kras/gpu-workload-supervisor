@@ -223,21 +223,21 @@ func TestOwnedUnitDeleteContentProof(t *testing.T) {
 		t.Fatal(err)
 	}
 	journal := unitJournal{Version: 1, Writes: map[string]string{}, Deletes: map[string]string{profile.Unit: digest(raw)}, Phase: ownedJournalCommitted}
-	if err := backend.applyOwnedUnitDeletes(context.Background(), home, journal); err != nil {
+	if err := backend.applyOwnedUnitDeletes(context.Background(), home, journal, control.Catalog{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("proven unit not deleted")
 	}
 	// Replay after a crash mid-delete: absence is done.
-	if err := backend.applyOwnedUnitDeletes(context.Background(), home, journal); err != nil {
+	if err := backend.applyOwnedUnitDeletes(context.Background(), home, journal, control.Catalog{}); err != nil {
 		t.Fatal(err)
 	}
 	// Divergent content is retained and reported.
 	if err := os.WriteFile(path, []byte("user edited"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := backend.applyOwnedUnitDeletes(context.Background(), home, journal); !errors.Is(err, ErrOwnedUnitModified) {
+	if err := backend.applyOwnedUnitDeletes(context.Background(), home, journal, control.Catalog{}); !errors.Is(err, ErrOwnedUnitModified) {
 		t.Fatalf("modified unit deleted: %v", err)
 	}
 	if _, err := os.Lstat(path); err != nil {

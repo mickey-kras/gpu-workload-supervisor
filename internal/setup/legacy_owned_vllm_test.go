@@ -156,7 +156,7 @@ func TestRollbackRemovesOnlyCreatedKeyFiles(t *testing.T) {
 	if err := ensureOwnedKey(unitPlan{keys: map[string]string{"x.service": filepath.Join(kept, "nested.env")}}, "x.service"); err == nil {
 		t.Fatal("key creation failure ignored")
 	}
-	if err := removeOwnedKey(t.TempDir(), control.OwnedUnitName("absent")); err != nil {
+	if err := removeOwnedKey(t.TempDir(), control.OwnedUnitName("absent"), control.Catalog{}); err != nil {
 		t.Fatal(err)
 	}
 	home := t.TempDir()
@@ -164,7 +164,7 @@ func TestRollbackRemovesOnlyCreatedKeyFiles(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(busy, "child"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := removeOwnedKey(home, control.OwnedUnitName("busy")); err == nil {
+	if err := removeOwnedKey(home, control.OwnedUnitName("busy"), control.Catalog{}); err == nil {
 		t.Fatal("key removal failure ignored")
 	}
 }
@@ -462,5 +462,45 @@ func TestNewOwnedVLLMWorkloadPassesPreviewThenApplyCreatesTheKey(t *testing.T) {
 	}
 	if _, err := vllmkey.Read(profile.NativeModel.EnvironmentFile); err != nil {
 		t.Fatal("apply did not create the key file", err)
+	}
+}
+
+// A key file that a binding of the committed catalog still names stays, in
+// the normal delete path and in the committed-delete replay.
+func TestRemovedOwnedUnitKeepsAKeyFileStillInUse(t *testing.T) {
+	for _, replay := range []bool{false, true} {
+		b, home, request := fixture(t)
+		b.runCommand = fakeOwnedCommandFor(home)
+		root := filepath.Join(home, ".config/gpu-workload-supervisor")
+		if err := os.MkdirAll(ownedUnitDirectory(home), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		name := control.OwnedUnitName("moved")
+		content := []byte("[Service]\nExecStart=/usr/bin/true\n")
+		if err := os.WriteFile(filepath.Join(ownedUnitDirectory(home), name), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		key := OwnedEnvironmentFile(home, "moved")
+		if err := vllmkey.Ensure(key); err != nil {
+			t.Fatal(err)
+		}
+		committed := control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{{ID: "moved", NativeModel: &control.NativeModel{Runtime: "vllm", EnvironmentFile: key}}}}
+		journal := unitJournal{Version: 1, StatePath: request.Profile.StatePath, Writes: map[string]string{}, Deletes: map[string]string{name: digest(content)}, Phase: ownedJournalCommitted}
+		var err error
+		if replay {
+			request.Catalog = committed
+			err = b.replayCommittedDeletes(t.Context(), home, root, request, journal)
+		} else {
+			err = b.applyOwnedUnitDeletes(t.Context(), home, journal, committed)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(ownedUnitDirectory(home), name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("replay=%v: unit survived", replay)
+		}
+		if _, err := vllmkey.Read(key); err != nil {
+			t.Fatalf("replay=%v: key file still in use was removed: %v", replay, err)
+		}
 	}
 }

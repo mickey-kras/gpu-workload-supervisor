@@ -60,10 +60,18 @@ func removeCreatedKeys(plan unitPlan) {
 	}
 }
 
-// removeOwnedKey removes the private key file of a removed owned unit.
-func removeOwnedKey(home, name string) error {
+// removeOwnedKey removes the private key file of a removed owned unit. It
+// keeps the file when a binding of the committed catalog still names it, for
+// example a workload that moved to an existing launch with the same key file.
+func removeOwnedKey(home, name string, committed control.Catalog) error {
 	id := strings.TrimSuffix(strings.TrimPrefix(name, control.OwnedUnitFilePrefix), ".service")
-	err := os.Remove(OwnedEnvironmentFile(home, control.Workload(id)))
+	path := OwnedEnvironmentFile(home, control.Workload(id))
+	for _, p := range committed.Profiles {
+		if p.NativeModel != nil && p.NativeModel.EnvironmentFile == path {
+			return nil
+		}
+	}
+	err := os.Remove(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove the key file of %s: %w", name, err)
 	}

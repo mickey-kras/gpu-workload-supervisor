@@ -168,7 +168,7 @@ func (b Backend) finalizeOwnedUnits(ctx context.Context, home, root string, requ
 	if journal.Phase != ownedJournalCommitted {
 		return errors.New("owned-units journal not pinned to the committed catalog")
 	}
-	if err := b.applyOwnedUnitDeletes(ctx, home, journal); err != nil {
+	if err := b.applyOwnedUnitDeletes(ctx, home, journal, request.Catalog); err != nil {
 		return err
 	}
 	if err := b.daemonReloadOwnedUnits(ctx, request.Profile.SystemctlPath, plan.unitNames()); err != nil {
@@ -240,7 +240,7 @@ func (b Backend) replayCommittedDeletes(ctx context.Context, home, root string, 
 	var reloaded []string
 	removed := false
 	for name, proof := range journal.Deletes {
-		deleted, err := replayCommittedDelete(home, name, proof)
+		deleted, err := replayCommittedDelete(home, name, proof, req.Catalog)
 		if err != nil {
 			return err
 		}
@@ -267,7 +267,7 @@ func (b Backend) replayCommittedDeletes(ctx context.Context, home, root string, 
 // the unit: the accepted catalog already excludes it, so preserving the file
 // would leave it unjournaled if this attempt then fails. The resumed plan
 // recreates the unit and its key from the request instead.
-func replayCommittedDelete(home, name, proof string) (bool, error) {
+func replayCommittedDelete(home, name, proof string, committed control.Catalog) (bool, error) {
 	path := filepath.Join(ownedUnitDirectory(home), name)
 	current, err := privateRead(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -282,7 +282,7 @@ func replayCommittedDelete(home, name, proof string) (bool, error) {
 			return false, err
 		}
 	}
-	return deleted, removeOwnedKey(home, name)
+	return deleted, removeOwnedKey(home, name, committed)
 }
 
 // catalogMatchesRequest reports whether the committed catalog already equals

@@ -428,7 +428,7 @@ func (b Backend) rollbackOwnedUnitWrites(ctx context.Context, home, systemctl st
 // rendered, re-reading immediately before removal. A digest mismatch retains
 // the file: the catalog is already committed without the profile, so the file
 // becomes an orphan the preflight scan flags for explicit operator recovery.
-func (b Backend) applyOwnedUnitDeletes(ctx context.Context, home string, j unitJournal) error {
+func (b Backend) applyOwnedUnitDeletes(ctx context.Context, home string, j unitJournal, committed control.Catalog) error {
 	dir := ownedUnitDirectory(home)
 	names := make([]string, 0, len(j.Deletes))
 	for name := range j.Deletes {
@@ -443,7 +443,7 @@ func (b Backend) applyOwnedUnitDeletes(ctx context.Context, home string, j unitJ
 			return err
 		}
 		removed = removed || err == nil
-		if err := removeOwnedKey(home, name); err != nil {
+		if err := removeOwnedKey(home, name, committed); err != nil {
 			return err
 		}
 	}
