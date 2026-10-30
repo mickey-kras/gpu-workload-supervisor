@@ -13,7 +13,7 @@ reconciliation succeeds. This does not enforce proxy startup automatically.
 
 Ordinary proxy restarts and CLI database opens preserve admission and fences. Backup
 restoration requires the explicit incarnation-rotation procedure before startup.
-See [startup and recovery](docs/OPERATIONS.md) and [restoration](docs/RESTORING.md).
+See [startup and recovery](docs/OPERATIONS.md#use-and-recover-workloads) and [restoration](docs/OPERATIONS.md#make-a-backup-restore-and-roll-back-state).
 A transition must record its intent before it causes a runtime side effect.
 
 Do not log credentials, workload payloads, or untrusted runtime output.
@@ -28,7 +28,7 @@ not replace:
 
 Trusted backends must not echo credentials or registration tokens in response
 bodies or logs. See
-[adapter ingress](docs/EXECUTION-PROXY.md#trusted-adapter-ingress).
+[adapter ingress](docs/INTEGRATION.md#trusted-adapter-ingress).
 
 Host service permissions and access to the SQLite state file are deployment
 controls. Review them for each runtime integration.

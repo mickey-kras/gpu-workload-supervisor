@@ -1,14 +1,12 @@
 # Deploy the supervisor
 
-[Documentation](README.md) | [Repository](../README.md)
-
 Linux with user-systemd and cgroup v2 is necessary.
-Before you change binaries, [make a backup of existing state](RESTORING.md#back-up-before-an-upgrade).
-Install a [verified release](RELEASING.md).
+Before you change binaries, [make a backup of existing state](OPERATIONS.md#back-up-before-an-upgrade).
+Install a [verified release](MAINTENANCE.md#source-and-binary-releases).
 
 ## Controller configuration
 
-Runtime identities, health endpoints, release behavior, and measured capacity requirements are deployment configuration. They live in a version 1 workload [catalog](WORKLOADS.md), accepted durably while holding the controller gate:
+Runtime identities, health endpoints, release behavior, and measured capacity requirements are deployment configuration. They live in a version 1 workload [catalog](INTEGRATION.md#configured-workloads), accepted durably while holding the controller gate:
 
 ```sh
 /PINNED/RELEASE/gpu-mode \
@@ -104,7 +102,7 @@ until Apply. Setup preserves adopted units and drop-ins.
 A manual opposing start can interrupt work. These dependencies give no
 authorization, admission, drain or GPU-release proof. Arbitrary external units
 remain outside the guarantee. Setup adds no custom `StartLimit*` policy. See
-[orchestrator decisions](ORCHESTRATOR-DECISION.md).
+[orchestrator decisions](INTEGRATION.md#orchestrator-decision).
 
 <a id="verify-workload-release"></a>
 
@@ -167,15 +165,14 @@ authorizes a service stop. `restore-state` requires no runtime policy.
 Remove `-release-max-used-mib`, including explicit `=0`, which the CLI rejects.
 Configure cgroup paths in the catalog: the release check uses cgroup evidence,
 never GPU memory accounting. Move the legacy runtime flags for each workload to
-profiles in the accepted [catalog](WORKLOADS.md), including unit, cgroup,
+profiles in the accepted [catalog](INTEGRATION.md#configured-workloads), including unit, cgroup,
 health endpoint, adapter and capacity requirement.
 
 Use `adapter: "systemd"` for service-stop behavior. Accept the catalog with
 `configure`. Updates need the current `-configuration-revision`. Runtime
 commands pin that durable catalog rather than reading edited files.
 
-The [v0.1.5 operator notes](releases/v0.1.5.md) describe that release only.
-Their per-workload flags are not current migration commands.
+The per-workload flags from v0.1.5 are not current migration commands.
 
 Stop the workload proxies and wait for their shutdown and drain to finish
 before changing the accepted catalog. Setup and `configure` enforce the proxy
@@ -206,7 +203,7 @@ The validator rejects invalid configuration:
 
 - A profile requirement plus headroom must not overflow.
 - Workload cgroups must not overlap.
-- One unit must not serve two profiles (see [WORKLOADS.md](WORKLOADS.md)).
+- One unit must not serve two profiles (see [configured workloads](INTEGRATION.md#configured-workloads)).
 - The `media-unload` adapter needs a release URL. The `systemd` adapter does
   not, but the validator still checks a supplied URL.
 - An unknown adapter is invalid.
@@ -272,4 +269,4 @@ ownership is active.
 
 ## Next
 
-[Reconcile at boot](OPERATIONS.md#boot-and-explicit-recovery), configure the [execution proxy](EXECUTION-PROXY.md), and check its [adapter contract](PROXY-CONTRACT.md). Keep execution closed until both host and adapter qualification are complete.
+[Reconcile at boot](OPERATIONS.md#boot-and-explicit-recovery), configure the [execution proxy](INTEGRATION.md#configure-the-execution-proxy), and check its [adapter contract](INTEGRATION.md#contract-for-execution-proxy-adapters). Keep execution closed until both host and adapter qualification are complete.
