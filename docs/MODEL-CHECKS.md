@@ -1,6 +1,6 @@
 # Model checks
 
-[Documentation](README.md) | [Architecture](ARCHITECTURE.md)
+[Documentation](README.md) | [Architecture](INTEGRATION.md#state-and-responsibility)
 
 The supervisor will check each LLM before use
 ([#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585)).

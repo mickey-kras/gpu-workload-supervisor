@@ -22,9 +22,9 @@ blocks requests when a transition fails.
 - Controller: ownership and transitions.
 - Proxy: admission and forwarding. No content policy.
 - Brokers and gateways: external. Not installed by setup.
-- Model checks: planned in the supervisor (#585). The file allowlist and upstream identity checks exist, but no command runs them yet. See [model checks](docs/MODEL-CHECKS.md).
+- [Model checks](docs/MODEL-CHECKS.md): file allowlist and upstream identity. No command runs them yet (#585).
 
-[Architecture](docs/ARCHITECTURE.md).
+[Architecture](docs/INTEGRATION.md#state-and-responsibility).
 
 ## Requires
 
@@ -39,7 +39,7 @@ Setup detects and adopts supported systemd user services without rewriting their
 source files. For GPU correction, preview first: the explicit `apply` action
 creates a drop-in for an eligible stopped service and does not start it.
 
-[Desktop setup](docs/DESKTOP.md).
+[Desktop setup](docs/OPERATIONS.md#local-gnome-desktop-installation).
 
 ## Setup checks
 
@@ -51,13 +51,13 @@ Setup checks symlinks and their traversed ancestors, and reports broken symlinks
 by name. It preserves supported direct commands and their arguments, and still
 checks endpoint, model, GPU identity, environment and effective loaded settings.
 Shell commands, environment files and uninspected operational directives remain
-unsupported. See [launch constraints](docs/WORKLOADS.md).
+unsupported. See [launch constraints](docs/INTEGRATION.md#configured-workloads).
 
 ## Docs
 
-- [Deploy and qualify a host](docs/DEPLOYMENT.md)
-- [Switch workloads, recover](docs/OPERATIONS.md)
-- [Backup and restore](docs/RESTORING.md)
+- [Deploy and qualify a host](docs/DEPLOYMENT.md#deploy-the-supervisor)
+- [Switch workloads, recover](docs/OPERATIONS.md#use-and-recover-workloads)
+- [Backup and restore](docs/OPERATIONS.md#make-a-backup-restore-and-roll-back-state)
 - [All documentation](docs/README.md)
 
 [MIT license](LICENSE).
