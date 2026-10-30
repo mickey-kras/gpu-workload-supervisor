@@ -1,34 +1,36 @@
 # Architecture and integration
 
+[Documentation](README.md) | [Deployment](DEPLOYMENT.md)
+
+- [Responsibilities and state](#state-and-responsibility)
+- [Configure workloads](#configured-workloads) and [native bindings](#native-model-bindings)
+- [Configure the proxy](#configure-the-execution-proxy), [credentials](#trusted-adapter-ingress), and [limits](#connection-limits)
+- [Qualify an adapter](#contract-for-execution-proxy-adapters), including [ComfyUI](#opt-in-comfyui-asynchronous-execution)
+- [Owned-unit backstops](#orchestrator-decision)
+- [Resource-limit design](RESOURCE-LIMITS.md): not implemented
+
 ## State and responsibility
 
 ### Boundaries
 
-| Part | Responsibility |
+| Part | Responsibility and boundary |
 | --- | --- |
-| Controller | Ownership, desired state, admission, fencing, transitions, journal, recovery and verified GPU release |
-| Proxy and adapters | Route gating, forwarding, optional requester authentication, work registration and terminal evidence |
+| Controller | Ownership, desired state, admission, fences, transitions, journal, recovery and verified GPU release. Control metadata only. No prompts or responses |
+| Proxy and adapters | Route gates, forwarding, bounded protocol checks, exact-body authorization, optional requester authentication, work registration and terminal evidence. No semantic content policy |
 | External broker | Workflow steps, retries, checkpoints, cancellation and results |
-| External gateway | Gateway authentication, request and response policy and content validation |
-| External ingestion tools | Model scanning, reports, signing and promotion |
+| External gateway | Authentication, request and response policy and content validation |
+| External ingestion tools | Model scans, reports, signing and promotion |
+| Trainer adapter | Recipes and checkpoint contents. The controller owns finite-job lifecycle |
 
-- Controller: control metadata only. No prompts or responses.
-- Proxy: payload forwarding, bounded protocol validation and exact-body authorization. Optional [requester authentication](OPERATIONS.md#optional-requester-ingress) before workflow authorization. No semantic content policy.
-- Demand records: admission evidence. No workflow scheduling or replay of ambiguous execution.
-- Integrations: keep admission, terminal evidence and runtime-bypass prevention.
-- Setup: no broker, gateway or scanner installation.
-- [Trainer adapters](TRAINING.md#finite-training-jobs): recipes and checkpoint contents. Controller: finite-job lifecycle.
+Demand records prove admission. They do not schedule workflows or replay uncertain execution. Integrations must preserve admission, terminal evidence and runtime-bypass prevention. Setup installs no broker, gateway or scanner. See [requester ingress](OPERATIONS.md#optional-requester-ingress) and [training](TRAINING.md#finite-training-jobs).
 
 ### Model checks
 
-The supervisor does not check models yet.
-[#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans a scan of each LLM before its first use.
-[#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583) plans to show the result and to stop models that did not pass.
-These checks are a defensive layer. They do not prove that a model is safe.
+The release has no model checks. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans a scan before first LLM use. [#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583) plans result display and rejection of failed models. These checks cannot prove model safety.
 
 ### State model
 
-New stores need reconciliation:
+A new store requires reconciliation:
 
 ```text
 owner=supervisor
@@ -39,1449 +41,40 @@ health=healthy
 admission=closed
 ```
 
-- Fence: store-incarnation UUID + monotonic epoch.
-- Fresh store: new incarnation. Explicit restore: rotate incarnation. Restart: preserve it.
-- Transition: rotate epoch before draining.
-- SQLite: WAL, full synchronous writes, foreign keys, one connection.
-- Journal: side-effect intent and observation.
-- Controller writes transitions. Proxy writes admission and completion.
+A fence combines a store-incarnation UUID and monotonic epoch. A fresh store creates an incarnation. Explicit restore rotates it.
+
+Restart preserves it. Transitions rotate the epoch before draining. SQLite uses WAL, full synchronous writes, foreign keys and one connection.
+
+The journal records side-effect intent and observation.
 
 ### State writers
 
-| Executable | Writes to `state.db` |
+| Writer | Responsibility |
 | --- | --- |
-| `gpu-mode` | Workload transitions |
+| `gpu-mode` | Transitions |
 | `gpu-workload-proxy` | Admission and completion |
 | `gpu-operator` | Embedded supervisor transitions |
 | `gpu-setup` | Accepted catalog |
 
-Any writer can apply migrations when opening the database. Make a backup before you change binaries.
+Any writer can migrate an opened database. Make a backup before changing binaries.
 
 ### Clients
 
-GNOME extension: `clients/gnome/`.
-[Installation](OPERATIONS.md#local-gnome-desktop-installation) |
-[Protocol](OPERATIONS.md#gnome-shell-extension-client).
+GNOME source: `clients/gnome/`. See [installation](OPERATIONS.md#local-gnome-desktop-installation) and [protocol](OPERATIONS.md#gnome-shell-extension-client).
 
 ### Overview assets
 
-Regenerate the README's light and dark SVGs. Do not edit them manually:
+Regenerate README light and dark SVGs. Do not edit them manually:
 
 ```sh
 python3 scripts/architecture-overview.py
 ```
 
-Keep topology aligned with `internal/{proxy,supervisor,store,runtime,control,operator}`.
-
-## Configure the execution proxy
-
-The proxy forwards explicitly classified non-execution routes and gates
-configured execution routes. Check the deployment against the [adapter
-contract](INTEGRATION.md#contract-for-execution-proxy-adapters) before enabling execution:
-
-```sh
-/PINNED/RELEASE/gpu-workload-proxy \
-  -state /PRIVATE/DURABLE/STATE/state.db \
-  -listen 127.0.0.1:LISTEN_PORT \
-  -upstream http://127.0.0.1:PORT \
-  -workload media \
-  -execute-route POST:/execute \
-  -read-only-route GET:/monitor \
-  -completion-path /_gpu-workload-supervisor/v1/work/finish
-```
-
-### Admission
-
-During supervisor ownership, gated requests need:
-
-- a unique request ID
-- the current lease incarnation and epoch
-- stable compatible workload state
-- healthy state
-- open admission
-
-Default headers:
-
-- `X-Request-ID`
-- `X-Workload-Lease-Incarnation`
-- `X-Workload-Lease-Epoch`
-- `X-Workload-Registration-Token` (generated by the proxy for admitted execution)
-
-Header names are configurable with `-request-id-header`, `-job-id-header`,
-`-fence-id-header` and `-fence-epoch-header`. See [Shutdown](#shutdown) for
-`-shutdown-timeout` and the separate HTTP and native completion drain budgets.
-
-The proxy strips caller-supplied lease control headers before forwarding. For
-an admitted execution route, it forwards the validated, normalized request ID
-and lease fence in the configured headers. It also adds a fresh proxy-generated
-`X-Workload-Registration-Token` after hop-by-hop header filtering.
-
-The upstream therefore receives the registered tuple even if the caller
-nominated those headers in `Connection`. For configured read-only and
-passthrough routes and user-owned execution, the proxy strips control headers
-and registers no work.
-
-### Report completion
-
-The proxy registers work before forwarding. Work stays active after submission.
-In `trusted` ingress mode (the default), the proxy also returns the
-registration token to the caller in `X-Workload-Registration-Token`.
-
-Either the trusted upstream or trusted caller can report terminal work. Keep
-the token, request ID, and registered fence from the same admission, and send
-them to the configurable completion path:
-
-```json
-{
-  "requestId": "REQUEST_ID",
-  "registrationToken": "TOKEN_FROM_ADMISSION",
-  "fence": {
-    "incarnation": "LEASE_INCARNATION",
-    "epoch": 1
-  },
-  "outcome": "completed"
-}
-```
-
-The default completion path is `/_gpu-workload-supervisor/v1/work/finish`. A
-successful terminal update returns HTTP 204. For newly admitted work, the proxy
-rejects completion without the matching token.
-
-Registrations made before token support accept tokenless completion with
-their originally registered request ID and fence, even after the current fence
-rotates. Failures without verified terminal evidence leave work incomplete for
-explicit reconciliation.
-
-Proxies bound to a [native model](INTEGRATION.md#native-model-bindings) hand
-verified terminal evidence to a background persistence worker, so response
-forwarding does not wait for the completion write. Receiving terminal response
-bytes is not proof of durable completion.
-
-A trusted external callback can finish the same registration before the worker
-does. The first durable terminal outcome wins. Later matching callbacks and
-native retries are idempotent and preserve that result, including `abandoned`.
-
-Native persistence retries only the original request ID, workload, fence and
-registration token. It never replays execution. It makes at most three
-attempts, each with a 3-second budget, within a 10-second aggregate retry
-budget.
-
-Permanent tuple rejections stop retries immediately. The command logs failed
-writes using fixed reason codes (`retrying`, `rejected`, `exhausted`, or
-`canceled`) and the `attempts` count, without raw storage errors or request
-metadata. If persistence fails before a durable finish, the registration
-stays unfinished for explicit reconciliation, unless another trusted
-completion finished it first. This includes rejection, exhausted retries and
-cancellation. EOF, read errors and disconnects alone are never terminal
-evidence.
-
-Verified proof already handed off survives a client disconnect. Storage
-cancellation can take longer than its budget, as described under
-[Shutdown](#shutdown).
-
-### Retention
-
-The proxy prunes completed registrations and their transition snapshot links
-after 30 days by default. Use `-completed-work-retention` to change the period.
-The proxy retains active work and snapshots of transitions still in progress.
-
-After pruning, you can reuse a request ID, including under the same lease
-fence. The registration token prevents an old completion from finishing the new
-admission. The proxy protects completed legacy tokenless registrations under
-the current fence from pruning until that fence rotates.
-
-Rotation does not revoke completion of unfinished legacy work.
-
-### Route and listener boundary
-
-All unclassified routes fail closed, including GET, HEAD and OPTIONS. After
-ingress authentication and request validation, unknown paths return HTTP 404.
-Recognized paths with an unconfigured method return HTTP 405 with an `Allow`
-header listing the explicitly configured methods, including POST for the
-completion path.
-
-Both return the JSON error `route_not_allowed`. Configure each verified
-read-only method and path with `-read-only-route`. The proxy does not infer
-HEAD from GET. Explicitly configure necessary non-execution editing mutations
-as passthrough routes.
-
-When upgrading from implicit safe-method forwarding, inventory and configure
-these routes first. A method or route name alone does not prove that a backend
-operation is read-only.
-
-The proxy restricts the listener to loopback because explicit user ownership
-bypasses supervisor lease registration. Any process that can write the state
-directory can drive user-mode execution. The service fully trusts processes
-that run as its UID (see [SECURITY.md](../SECURITY.md)).
-
-External exposure belongs to the deployment boundary. Optional [requester
-ingress](OPERATIONS.md#optional-requester-ingress) adds local requester and workflow authorization
-and durable demand. It does not give host isolation.
-
-The proxy is content-blind. Content inspection and domain policy belong to the
-caller.
-
-### Trusted adapter ingress
-
-Opt in with `-ingress-mode adapter -execution-credential-file /PRIVATE/execution.key
--completion-credential-file /PRIVATE/completion.key`. Both files must be
-absolute, clean paths to private regular files under trusted directories. The
-proxy UID must own them.
-
-They must have no symlinks or group or other permissions. Generate each
-credential independently from 32 bytes of cryptographic randomness, encoded as
-64 lowercase hexadecimal characters (the proxy allows one final newline).
-
-The proxy reads the files once at startup with a bounded read. Missing,
-malformed, equal or unsafe credentials reject startup. The proxy also rejects
-credential files with `trusted` mode.
-
-Rotate by replacing the files privately and restarting the proxy. Registrations
-keep their tuples.
-
-The authenticated deployment gateway supplies `X-Workload-Execution-Credential`
-on every execution, read-only and passthrough request. Only the trusted
-terminal adapter supplies `X-Workload-Completion-Credential` on completion
-POSTs. Wrong, missing, duplicated or combined credentials return HTTP 401
-before body parsing, state access or forwarding.
-
-Completion still requires the original registration tuple and verified terminal
-evidence. The execution credential cannot complete work, even if the client
-obtains that tuple.
-
-Adapter mode removes ingress credentials and `Authorization` and
-`Proxy-Authorization` from upstream request headers and trailers. It forwards
-admitted correlation to the trusted backend but suppresses registration tokens
-and credentials in client response headers, informational responses and
-trailers. The proxy does not allow upstream URL credentials.
-
-The proxy drops metadata names and values that contain either known ingress
-credential or the admitted registration token. It uses case-insensitive
-substring matching, including reflections under unrelated header names. This
-covers case normalization of hexadecimal credentials and UUID tokens.
-
-It does not decode other transformations. Trusted backends and adapters must
-not echo tokens in bodies or logs. The content-blind proxy does not inspect
-arbitrary response payloads.
-
-Native terminal observation stays internal to the proxy and keeps its
-existing rules.
-
-This adapter mode is a local prerequisite, not a remote authentication gateway.
-Optional [requester ingress](OPERATIONS.md#optional-requester-ingress) provides local identity and
-immutable-workflow authorization. Keep the listener on loopback.
-
-Without that option, the deployment gateway must independently authenticate
-requesters. It must enforce identity, CSRF, policy and appropriate request
-limits. It must keep its execution credential from clients.
-
-The terminal credential belongs only to the trusted adapter. Separately stop
-direct runtime bypass and isolate the identities of host services.
-
-A credential does not show those controls or qualify deployment. Idle policy
-stays Off until its separate evidence and host qualification exist.
-
-### Connection limits
-
-Upstream traffic connects directly. The proxy and runtime health probes use
-private HTTP transports and ignore `HTTP_PROXY`, `HTTPS_PROXY`, and
-`NO_PROXY`. Keep the upstream on a trusted network.
-
-Registration tokens are completion capabilities. Custom transports supplied by
-Go callers must enforce the same trust boundary.
-
-The listener defaults to a 10-second header timeout and a 2-minute idle
-keep-alive timeout (`-read-header-timeout` and `-idle-timeout`). It has no
-total request-body read or response-write deadline, so uploads and long streams
-complete. The proxy limits concurrent requests to 128 by default
-(`-max-inflight`).
-
-It reserves 16 distinct slots for POST completion reports at the configured
-completion path (`-max-completion-inflight`). Both limits must be positive.
-Saturation returns HTTP 503 with `proxy_capacity_exceeded` and `Retry-After: 1`
-before work registration or forwarding.
-
-A non-POST request to the completion path uses the ordinary limit. Active
-streams keep their ordinary HTTP slots until the handler returns. Neither limit
-imposes a total stream deadline.
-
-After shutdown begins, new requests instead get HTTP 503 with the JSON
-error `proxy_shutting_down` and no `Retry-After` header. The process drains its
-work. Clients must wait for service availability, with no promised retry
-interval.
-
-Capacity rejections use the same JSON error envelope
-(`{"error":"proxy_capacity_exceeded"}`). Their `Retry-After: 1` suggests
-waiting one second before retrying and does not guarantee a free slot.
-
-For supervisor-owned native execution, `-max-inflight` also sets a distinct cap
-on native reservations. Each reservation starts before work registration and
-remains occupied until the response ends without terminal proof or its native
-persistence worker finishes. A pending completion write retains its reservation
-after the HTTP handler returns.
-
-Native execution can therefore get a capacity HTTP 503 even with zero
-active HTTP requests. Once persistence finishes, any still-open response stream
-continues to occupy its ordinary HTTP slot. Size the limit for both expected
-streams and storage write delays.
-
-Completion callbacks keep their separately reserved slots.
-
-Keep clients trusted, or enforce workload-appropriate per-client connection,
-request-body, and rate limits at an authenticated front proxy before exposing
-this service. The in-process caps do not bound idle connections or bytes per
-stream.
-
-The proxy limits upstream dialing to 30 seconds and TLS handshakes to 10
-seconds. After the proxy uploads the complete request body, response headers
-must arrive within 10 minutes by default. Set
-`-upstream-response-header-timeout` to a positive duration, such as `20m`,
-above the longest expected model load or non-streaming inference time for the
-workload. This timeout returns HTTP 502 and releases the ordinary request slot
-when an upstream accepts a request but never sends response headers.
-
-Response bodies, including streaming bodies, have no total deadline. Client
-cancellation and proxy shutdown cancel the upstream request. Health probes keep
-their distinct `-health-timeout` budget.
-
-A timeout or disconnect never proves work finished or abandoned and does not
-clear its registration. Uncertain backend work still needs terminal evidence
-or explicit reconciliation. Custom transports supplied by Go callers own their
-response-header timeout policy.
-
-### Shutdown
-
-`-shutdown-timeout` defaults to 30 seconds and supplies two separate budgets:
-first for graceful HTTP shutdown, then a fresh budget for draining accepted
-native completion workers. The proxy stops new HTTP admission and tries to
-drain HTTP producers before it seals native proof submission. This lets
-terminal evidence observed during HTTP draining reach persistence. Signal
-shutdown and listener failure use this same ordering.
-
-If the native drain budget expires, the proxy cancels further retries. It waits
-for active workers to exit before closing the state store or releasing the
-shared recovery-exclusion lock. SQLite busy handling can outlast cancellation.
-
-Go callers' custom failure-report callbacks must also return promptly.
-Consequently, `-shutdown-timeout` is not a hard process wall-clock bound: the
-HTTP and native budgets are separate, and the proxy joins active workers after
-cancellation. Allow for both phases and their cleanup when configuring a
-service stop grace.
-
-Forcing process termination before persistence finishes can leave verified work
-unfinished for explicit reconciliation.
-
-## Orchestrator decision
-
-The durable state machine, lease fencing, fail-closed admission and drain remain
-our control authority. Runtime readiness, capacity and cgroup and GPU-release checks
-remain required evidence. Unit ordering or completion cannot replace them.
-
-Issue #397 adds systemd backstops to distinct supervisor-owned units in the
-configured catalog. Setup derives `Conflicts=` for other owned units and `After=`
-only for lexically earlier peers, giving each pair one ordering edge without
-cycles. The [contract for systemd units](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html#Conflicts=)
-orders a conflicting stop before a start in either direction.
-`Restart=no` remains. This change adds no `StartLimit*` policy.
-
-These backstops cannot authorize a handoff or drain admitted work. Manually
-starting an opposing owned unit can interrupt current work. Arbitrary external
-units are outside this guarantee. Setup preserves adopted units and their drop-ins.
-
-The optional `owned.conflicts` field pins dependencies into the existing owned
-render, spec and fingerprint chain. As with optional owned executable paths, absent
-metadata retains exact legacy version-2 unit bytes and fingerprints. Readers
-that do not recognize the field reject it through strict JSON decoding. Setup
-preview derives and displays replacement owned-unit writes. The explicit `apply` action
-upgrades legacy units through the existing rollback and recovery journal.
-
-Removing
-a peer or replacing it with a separately qualified adopted binding
-recomputes the remaining owned dependencies. An already guarded owned file does not qualify for adoption without changes.
-Dependency directives remain outside the strict external launch grammar.
-Setup does not strip them from external files.
-
-Pending activations keep their original unit hashes through exact replay.
-After recovery completes, setup offers the upgrade in a later preview. Runtime
-startup never silently rewrites accepted files. This additive feature needs no database migration.
-Each future schema change gets its own version with its feature.
-
-Size limits:
-
-| Data | Limit |
-| --- | --- |
-| Catalog canonical input, excluding derived owned conflicts | 256 KiB |
-| Derived allowance for the supported 32-unit peer graph | 96 KiB |
-| Full serialization on validation and readback | 352 KiB |
-| Setup requests | 416 KiB |
-
-Other fields cannot consume the derived allowance. The request limit reserves
-64 KiB for the deployment profile and request envelope around a maximum catalog.
-
-`requiredMiB` is a demand estimate, not an enforced memory ceiling.
-Host evidence and hardware and build identifiers stay outside this decision record.
-
-<a id="execution-proxy-adapter-contract"></a>
-
-## Contract for execution proxy adapters
-
-The supervisor is content-blind. Its generic tests qualify admission,
-correlation, forwarding and ownership behavior. They do not qualify any runtime
-deployment.
-
-Keep execution disabled until you check the exact deployed runtime version,
-route inventory, and terminal completion semantics. Requalify after a runtime,
-adapter, proxy or ingress change affecting this contract.
-
-### Route inventory and migration
-
-Each proxy needs a deployment-owned inventory with runtime version and artifact
-identity, adapter version, exact HTTP method and path, classification, and
-verification evidence. Configure every route the deployment exposes:
-
-| Classification | Flag | Requirement |
-| --- | --- | --- |
-| Execution | `-execute-route METHOD:/path` | Any route that can start work, including GET, must use admission. |
-| Read-only | `-read-only-route GET:/path` | Verified non-executing GET, HEAD or OPTIONS. Repeat per method and path. |
-| Editing or monitoring mutation | `-passthrough-route METHOD:/path` | Verified not to start work, change ownership, or bypass admission. |
-
-Routes must use canonical absolute paths: no trailing slash except `/`,
-repeated slashes, or dot segments. Noncanonical decoded request paths return
-HTTP 400 with `path_not_canonical`. After ingress authentication and request
-validation, canonical unknown paths return HTTP 404.
-
-Recognized paths with an unconfigured method return HTTP 405 with an `Allow`
-header listing the explicitly configured methods, including POST for the
-completion path. Both route rejections use the JSON error `route_not_allowed`.
-Neither invalid paths nor route rejections reach upstream.
-
-There are no implicit GET, HEAD or OPTIONS routes, wildcard routes, or
-automatic HEAD classification. The proxy rejects overlapping classifications.
-Explicit non-execution routes remain available while execution admission stays
-closed, if the upstream is reachable.
-
-**Migration:** earlier proxies automatically forwarded unclassified GET, HEAD
-and OPTIONS. Inventory these routes and add explicit `-read-only-route` entries
-before upgrading. Preserve verified editing mutations as explicit passthrough
-entries.
-
-Do not restore broad forwarding to make a UI work. First check its route
-semantics.
-
-Matching uses the exact method and decoded URL path. The proxy forwards query
-strings, escaped path variants, bodies and message payloads without semantic
-inspection. Classify the whole route by its most privileged behavior: a
-monitoring path that can enqueue through a query parameter is execution, never
-read-only.
-
-Check the aliases, trailing slashes, encoded paths, upstream base paths,
-redirects and HTTP upgrades. Do not classify WebSocket or other upgraded
-channels that can submit work as read-only monitoring. A trusted adapter must
-split or gate such operations when one HTTP route cannot safely represent one
-admission and completion lifecycle.
-
-Route names and HTTP method conventions are not proof of behavior.
-
-### Admission and completion
-
-During supervisor ownership, the proxy commits a registration before dispatch.
-The trusted upstream receives the normalized request ID, admitted fence
-incarnation and epoch, and fresh registration token. Keep that tuple unchanged
-through submission, streaming, backend tracking and terminal confirmation. Job
-identifiers and backend state interpretation belong to the adapter, not this
-supervisor.
-
-New supervisor-owned request IDs must be valid UTF-8 and contain at most 8192
-bytes after the proxy removes leading and trailing whitespace. Oversized IDs
-return HTTP 400 with `request_id_too_long`. Invalid UTF-8 returns
-`request_id_invalid`, before any registration or upstream dispatch.
-
-This byte limit allows worst-case JSON escaping (six bytes per input byte). The
-escaped ID, fence, registration token and outcome fit within the completion
-body limit of 64 KiB. Use the normalized ID unchanged in the callback. Avoid
-excessive JSON whitespace.
-
-Existing registrations keep their completion behavior.
-
-The callback contract uses the configured completion path (default `POST
-/_gpu-workload-supervisor/v1/work/finish`):
-
-```json
-{
-  "requestId": "ADMITTED_REQUEST_ID",
-  "registrationToken": "ADMITTED_TOKEN",
-  "fence": {"incarnation": "ADMITTED_INCARNATION", "epoch": 1},
-  "outcome": "completed"
-}
-```
-
-| Runtime behavior | Required terminal evidence |
-| --- | --- |
-| Synchronous response | Version-specific proof that execution ended. Then explicit callback. |
-| Asynchronous enqueue | Correlated terminal backend state. Acceptance or job ID is insufficient. |
-| Streaming response | Verified terminal execution event. EOF or disconnect alone is insufficient. |
-| Rejection or cancellation | Proof the admitted work cannot still run before reporting `abandoned`. |
-
-Execution dispatch removes `GetBody` and caller-supplied `Idempotency-Key` and
-`X-Idempotency-Key` replay hints. It uses a non-rewindable body. This includes
-empty execution requests and routes that use GET, HEAD, OPTIONS or TRACE.
-
-The standard upstream transport does not automatically replay execution after
-an ambiguous connection failure. The transport preserves payload bytes and
-sends known-empty HTTP/1 execution requests without chunked framing.
-
-Read-only and passthrough routes keep ordinary connection reuse and transport
-behavior. This is not a backend deduplication guarantee: clients must not
-resubmit ambiguous execution under a fresh request ID.
-
-HTTP 200, 202, error responses, streaming EOF, transport failures and
-cancellation never automatically finish registrations. A callback succeeds with
-HTTP 204. The proxy rejects missing or forged tokens and mismatched registered
-fences or workloads.
-
-For a duplicate callback with the original matching tuple, the proxy returns
-HTTP 204 for either valid outcome. The first stored outcome remains unchanged.
-An unknown request returns 404.
-
-Callback responses are not independent proof of terminal execution. Completion
-uses the originally registered fence, including when the current fence rotated
-during draining. Old tokens cannot complete a later reuse of the ID.
-
-The token is a completion capability, not proof that execution ended. In
-`trusted` ingress mode (the default), upstream HTTP responses return it to the
-trusted caller. Opt-in [adapter
-ingress](INTEGRATION.md#trusted-adapter-ingress) instead suppresses it from
-client response metadata and requires separate execution and completion
-credentials.
-
-Only the trusted terminal adapter holds completion authority. The generic
-upstream receives the tuple in both modes and must not expose it through bodies
-or logs. Optional [requester ingress](OPERATIONS.md#optional-requester-ingress) adds requester and
-workflow authorization before durable demand and admission.
-
-Otherwise authenticate at the deployment gateway. Direct runtime bypass
-prevention remains a deployment control. Legacy tokenless registrations accept
-completion with the original registered request ID and fence, even after the
-current fence rotates.
-
-Rotation only lifts the pruning protection for completed legacy rows. It does
-not revoke unfinished work. New adapters must use registration tokens.
-
-### Opt-in ComfyUI asynchronous execution
-
-`-comfyui-contract comfyui-a7169322485d0049380fb207fa17e9fb3ec40486` selects
-the source-qualified lifecycle contract from `Comfy-Org/ComfyUI` commit
-`a7169322485d0049380fb207fa17e9fb3ec40486`. The default configuration disables
-it. It requires `-ingress-mode adapter`, separate ingress credentials, a
-non-native configured workload and exactly `-execute-route POST:/prompt`.
-
-This flag records an explicit deployment qualification assertion. It does not
-detect or attest the installed runtime version. Check the exact deployed
-runtime and artifact and custom nodes against the [source-derived
-fixtures](../internal/proxy/testdata/comfyui/README.md) before setting it.
-
-Requalify after changes. The adapter does not support older servers that ignore
-caller `prompt_id`.
-
-Use plain HTTP and a loopback root URL for the runtime, with no credentials,
-query, fragment or encoded or base path. Optional monitoring routes are only
-`GET:/prompt`, `GET:/queue` and `GET:/history`. The adapter does not support
-passthrough, job-ID headers, other execution routes or WebSocket submission
-channels.
-
-It rejects query-bearing and encoded-body requests. The trusted gateway (or
-optional requester policy with an approved exact-body digest) must authorize
-callers and graphs. Deployment review must validate custom nodes and input and
-output locations before submitting.
-
-JSON-envelope validation in the proxy does not prove graph safety. Automation
-receives a gateway job handle, not raw ComfyUI execution access or proxy
-ingress credentials. Deployment isolation must prevent direct runtime bypass
-for every caller and alternate channel.
-
-For Supervisor-owned execution the proxy generates fresh UUIDs for `prompt_id`
-and `extra_data.gpu_workload_supervisor.attemptId`, replacing caller lifecycle
-values. In one SQLite transaction, the proxy commits admission, original fence
-and token and those UUIDs before any `POST /prompt` dispatch. The registration
-tuple stays inside the supervisor.
-
-Raw ComfyUI gets only graph data and non-secret correlation IDs. This
-adapter stores no graph, input, output, job payload or artifact.
-
-Acceptance or a transport or client disconnect leaves work unfinished. A single
-process-lifetime reconciler polls `GET /history/{prompt_id}` and checks exact
-case-sensitive prompt, correlation and status fields. Only `status_str: "success"`
-with `completed: true`, the original prompt UUID and attemptId, followed by
-absence of that prompt UUID from **both** well-formed `/queue` lists completes
-the original registration.
-
-Empty history paired with exactly one valid queued or running entry matching
-both UUIDs is ordinary pending work: it remains unfinished without an error
-report. These conditions leave work unresolved and produce diagnostic reasons
-without tokens or payloads:
-
-- Error or cancellation histories.
-- Missing or pruned history with no correlated queue identity.
-- Malformed or oversized replies, redirects or unavailable runtimes.
-- Failed completion commits.
-
-Success history proves execution termination under this qualified contract. It
-does not prove driver VRAM release or artifact validity.
-
-The adapter reads at most 16 MiB per envelope or reply and admits at most 4096
-unfinished ComfyUI attempts. It polls at most 64 records per pass with a
-10-second pass and 2-second budget for each record. A rotating cursor prevents
-unresolved older attempts from starving other work.
-
-Shutdown cancels polling before closing durable state. User-mode forwarding
-retains the shared handoff gate and runtime stop and release checks. It creates
-no Supervisor work registrations.
-
-Normal restart polls persisted UUIDs and never sends `/prompt` again. A
-repeated request ID conflicts while its registration remains retained.
-**Never** retry an ambiguous enqueue under a fresh request ID only because a
-response is missing.
-
-The proxy removes `GetBody` and idempotency replay hints from upstream
-submission. After a pre-admission rejection, the proxy dispatched no execution.
-Get valid admission before submitting again.
-
-After admission, use terminal backend evidence or the verified `resolve-work`
-procedure when you cannot resolve uncertainty. Start a new execution only after
-that disposition proves earlier execution cannot still run. Restart or missing
-queue entries alone is not such proof.
-
-Schema v14 adds lifecycle metadata referencing `registered_work` with cascading
-deletion under existing bounded completed-work retention. It preserves prior
-registrations, fences, tokens, settings and outcomes. Legacy unfinished work
-gets no inferred runtime identity and remains unfinished.
-
-Older binaries reject v14. Rollback requires the verified binary and
-configuration and pre-upgrade backup procedure in [restoring](OPERATIONS.md#make-a-backup-restore-and-roll-back-state),
-never editing schema metadata. Enabling this adapter does not change workload
-configuration or enable automatic idle policy.
-
-### Failure, restart and ownership
-
-If either party cannot know whether work started or ended, leave it unfinished.
-Client disconnects, truncated upstream streams and proxy shutdown preserve
-durable registration state. Normal restart preserves its original correlation.
-
-A trusted adapter can finish it later using terminal evidence and the original
-tuple. If the token is missing or state stays ambiguous, use the verified
-`resolve-work` procedure in
-[operations](OPERATIONS.md#ownership-and-unfinished-work). Stop all proxy
-instances. Stop the runtimes. Check the release. Then record an audited
-abandonment.
-
-Ordinary recovery is not proof that orphaned work finished.
-
-User mode allows manual execution of the selected healthy workload without
-lease registration. Forwarding holds the shared handoff gate. Ownership changes
-close execution, stop user runtimes and wait for forwarding to exit before
-starting the target.
-
-An enqueue response ending HTTP does not prove the backend is idle: stopping
-and release verification still apply. Timeout or failed handoff keeps admission
-closed and never restarts stopped user work. Non-execution editing or
-monitoring routes must remain safe even during this interval.
-
-### Deployment qualification record
-
-Record the evidence for all of the following before enabling execution:
-
-- Exact runtime, adapter and proxy versions and reviewed method and path
-  classifications, including query, body and escaped-path variants and upgraded
-  execution channels.
-- Synchronous, asynchronous and streaming terminal semantics, with durable
-  tuple correlation and no early completion after acceptance or disconnection.
-- Stale fences, closed admission, duplicate or forged callbacks, closure and
-  drain ordering, client, upstream and proxy failures, restart, orphan
-  resolution, and User-mode handoff.
-- Deployment controls prevent direct runtime execution bypass for every
-  relevant caller and alternate endpoint or channel. A loopback listener alone
-  does not enforce this.
-- Trusted authentication and ingress, callback access, token handling and host
-  and network isolation. These are deployment responsibilities, not supervisor
-  features.
-
-Repository evidence: `internal/proxy/contract_integration_test.go`,
-`internal/supervisor/proxy_handoff_test.go` and
-`internal/supervisor/orphan_recovery_test.go`. The real-systemd qualification
-suite covers runtime lifecycle and release behavior, not backend routes or job
-semantics.
-
-## Host-protection resource limits (#584)
-
-This record gives the design for
-[#584](https://github.com/mickey-kras/gpu-workload-supervisor/issues/584).
-The current release does not have this feature. It renders no resource-control
-directives, and `requiredMiB` stays a VRAM demand estimate before launch, not
-an enforced ceiling. GPU VRAM enforcement is out of scope.
-
-### Method
-
-Statements marked "from systemd sources" come from the source files at tags
-`v252`, `v255` and `v259`. The links give the exact lines. Kernel statements
-come from the [cgroup v2 guide](https://docs.kernel.org/admin-guide/cgroup-v2.html).
-The kernel guide has no version pin, so qualification on each host kernel must
-confirm those statements. No running user manager was available, so the spike
-started no probe unit. The [qualification procedure](#qualification-procedure)
-gives the host checks that must confirm each claim before an operator enables
-limits.
-
-This record keeps one offline parse check. It passes valid and invalid values
-the same way. With systemd 255, `systemd-analyze verify` printed no warning and
-exited with status 0 for the unit below. The same command with
-`MemoryMax=bogus` additionally exited 0 with only a warning. Thus the renderer
-must emit only validated values, and the loaded-property check must confirm
-each value.
-
-```sh
-systemd-analyze verify ./gws-limits-probe.service
-```
-
-```ini
-[Unit]
-Description=Resource limit directive probe
-[Service]
-Type=exec
-Restart=no
-OOMPolicy=stop
-MemoryHigh=49152M
-MemoryMax=57344M
-MemorySwapMax=0
-TasksMax=4096
-CPUWeight=100
-CPUQuota=800%
-IOWeight=100
-IOReadBandwidthMax=/dev/nvme0n1 524288000
-IOWriteBandwidthMax=/dev/nvme0n1 262144000
-IOReadIOPSMax=/dev/nvme0n1 20000
-IOWriteIOPSMax=/dev/nvme0n1 10000
-ExecStart=/bin/true
-```
-
-### Trust model
-
-There are two layers. They protect against different failures.
-
-| Layer | Owner | Guarantee | Outside the guarantee |
-| --- | --- | --- | --- |
-| Host cap on `user-UID.slice` | Root | The cap bounds every process inside the slice, also hostile code | Each other way for the service UID to start processes outside the slice. Examples are `cron`, `at`, the `docker`, `podman` and `libvirt` groups, `sudo` or `polkit` grants for a system manager, and other system services. Workloads inside the slice share the cap with no isolation from each other |
-| Unit limits on each owned unit | Service UID | Protection against runaway workloads | Hostile code at the service UID |
-
-Code that runs as the service UID can change the limits of its own owned units.
-It can stop the supervisor, edit the unit files and reload the user manager.
-The [security policy](../SECURITY.md) already treats the service UID as
-trusted, so unit limits are protection against accidents, not a security
-boundary. Isolation between workloads with separate service accounts is out of
-scope.
-
-The slice contains `user@UID.service` and the session scopes of the UID, for
-example from `sshd` or a display manager
-([v252](https://github.com/systemd/systemd/blob/v252/man/user%40.service.xml#L59),
-[v255](https://github.com/systemd/systemd/blob/v255/man/user%40.service.xml#L59),
-[v259](https://github.com/systemd/systemd/blob/v259/man/user%40.service.xml#L60)).
-From systemd sources, delegation makes only `cgroup.procs`,
-`cgroup.subtree_control` and `cgroup.threads` writable by the user. At `v259`,
-`memory.oom.group` and `memory.reclaim` are additionally writable
-([v252](https://github.com/systemd/systemd/blob/v252/src/shared/cgroup-setup.c#L399),
-[v255](https://github.com/systemd/systemd/blob/v255/src/shared/cgroup-setup.c#L400),
-[v259](https://github.com/systemd/systemd/blob/v259/src/shared/cgroup-setup.c#L194)).
-systemd does not delegate the slice, so root owns all of its limit files. The
-kernel guide states that a delegatee cannot escape the limits of its parent.
-
-Setup does not try to prove that no escape exists. It checks the common routes
-it can see:
-
-| Route | Check | Result |
-| --- | --- | --- |
-| `cron` | Spools, system crontabs, and cronie allow or deny rules, as below | Fail closed, and the error names the file or spool |
-| `at` | The same allow or deny rule, plus queued jobs, as below | Fail closed, and the error names the file or job |
-| Groups and sockets | Membership in `docker`, `podman`, `libvirt`, `lxd`, `incus`, `sudo`, `wheel` or `disk`, or a daemon socket this UID can open | Fail closed, and the error names each group or socket |
-| `sudo` | Any rule from `sudo -l -U`, or a policy setup cannot read | Fail closed, and the error names each rule or that setup cannot read the policy |
-| `polkit` | A rule that lets this UID start a system unit, or a policy setup cannot read | Fail closed, and the error names the rule or that setup cannot read the policy |
-| System units | A loaded system unit with `User=` set to the service UID | Fail closed, and the error names each unit |
-
-The cron check does not stop at the daemon. Setup fails closed when a user
-crontab exists under `/var/spool/cron` or `/var/spool/cron/crontabs`. It also
-fails when `/etc/crontab` or a file in `/etc/cron.d` runs as this UID by name
-or numeric id. An absent cron binary does not skip that scan. The error names
-the spool or the file.
-
-Allow and deny files, and every parent directory, must be root-owned regular
-files. They must not have group or other write, or an ACL that lets this UID
-write. Setup walks them with `O_NOFOLLOW`.
-
-An unreadable `cron.allow` counts as absent. A
-line counts only when it is the precise user name and ends in a newline, with no
-trailing space or CR. The check passes only when those spools and system
-entries are empty. It also needs either a readable `cron.allow` that omits the
-user, or only `cron.deny` listing the user.
-
-The `at` check uses the same allow and deny rule, with `at.allow` and
-`at.deny`. Setup additionally fails closed when a queued job for this UID exists. An
-absent `at` binary does not skip that scan. The error names the allow file or
-the queued job.
-
-A socket check reads the mode and ACL of the docker, podman, and libvirt
-sockets. Group membership alone is not the whole check.
-
-### Host cap
-
-The host cap is one manual root step with two system drop-ins. The UID 1000
-sample below shows them: the first drop-in caps the slice, the second
-delegates `io` to the user manager.
-
-```ini
-# /etc/systemd/system/user-1000.slice.d/50-gws-host-cap.conf
-[Slice]
-MemoryHigh=57344M
-MemoryMax=61440M
-MemorySwapMax=0
-TasksMax=16384
-CPUQuota=1400%
-IOReadBandwidthMax=/dev/nvme0n1 1000000000
-IOWriteBandwidthMax=/dev/nvme0n1 500000000
-```
-
-```ini
-# /etc/systemd/system/user@1000.service.d/50-gws-delegate-io.conf
-[Service]
-Delegate=io
-```
-
-The `user@.service` manual names drop-ins for `user-UID.slice` as the place for
-the limits of one user
-([v252](https://github.com/systemd/systemd/blob/v252/man/user%40.service.xml#L80),
-[v255](https://github.com/systemd/systemd/blob/v255/man/user%40.service.xml#L80),
-[v259](https://github.com/systemd/systemd/blob/v259/man/user%40.service.xml#L81)).
-From systemd sources, a controller list in `Delegate=` adds to the earlier list
-([v252](https://github.com/systemd/systemd/blob/v252/src/core/load-fragment.c#L3974),
-[v255](https://github.com/systemd/systemd/blob/v255/src/core/load-fragment.c#L4018),
-[v259](https://github.com/systemd/systemd/blob/v259/src/core/load-fragment.c#L3991)).
-Thus `Delegate=io` keeps the default `pids memory cpu`.
-
-To install or change the drop-ins, the operator first stops all work: the
-supervisor must report verified idle release, and external service management
-stays paused. Then the administrator runs `systemctl daemon-reload`.
-
-The slice limits apply at the reload. Only a new `Delegate=` value needs a
-restart of `user@UID.service`, which stops the supervisor and every owned unit.
-If a restart occurs without idle release, the existing [boot
-reconciliation](OPERATIONS.md#boot-and-explicit-recovery) rules apply.
-
-#### Known drop-ins
-
-Upstream systemd ships vendor drop-ins for both units at all three versions.
-`user-.slice.d/10-defaults.conf` sets `TasksMax=33%` and `StopWhenUnneeded=yes`
-([v252](https://github.com/systemd/systemd/blob/v252/units/user-.slice.d/10-defaults.conf),
-[v255](https://github.com/systemd/systemd/blob/v255/units/user-.slice.d/10-defaults.conf),
-[v259](https://github.com/systemd/systemd/blob/v259/units/user-.slice.d/10-defaults.conf)).
-`user@.service.d/10-login-barrier.conf` adds an ordering dependency
-([v252](https://github.com/systemd/systemd/blob/v252/units/user%40.service.d/10-login-barrier.conf),
-[v255](https://github.com/systemd/systemd/blob/v255/units/user%40.service.d/10-login-barrier.conf),
-[v259](https://github.com/systemd/systemd/blob/v259/units/user%40.service.d/10-login-barrier.conf)).
-Distributions can add more files in the same directories.
-
-The known set for each unit has these members:
-
-1. The two drop-ins of the host cap, with the exact names above.
-2. Vendor drop-ins under `/usr/lib/systemd/system` or `/lib/systemd/system`.
-   The package manager must report each one as a file of the systemd package
-   with no local change. Root owns the file and every parent directory, with no
-   group or other write.
-
-Each other file in `DropInPaths` is unknown. An unknown file fails closed, and
-the error names its path. The drop-in names start with `50-`, so they sort
-after `10-defaults.conf`. systemd reads drop-ins in name order (per the
-`systemd.unit` manual), so the host-cap `TasksMax` replaces the vendor
-`TasksMax=33%`. The checks of the effective properties and cgroup files below
-decide the result, whatever drop-ins exist. Unit tests use a fixture with the
-vendor drop-ins and a fake package manager.
-
-#### Host cap checks
-
-Every unit with limits needs the host cap. Setup shows the precise drop-ins with
-the selected values. Setup and runtime preflight check these items before setup
-accepts a unit with limits and before each launch of one:
-
-1. Each drop-in of the host cap is a regular file, not a symlink. The walk
-   uses `O_NOFOLLOW`. Root owns the file and every parent directory through
-   `/etc`. Every parent is a real directory. None has group or other write, or
-   an ACL or capability that lets the service UID write.
-2. `systemctl show` for the slice and for `user@UID.service` lists only known
-   drop-ins in `DropInPaths` and reports the expected limit properties and
-   `NeedDaemonReload=no`.
-3. The slice path comes only from the system manager `ControlGroup`. Root owns
-   each limit file there, with no group or other write and no ACL for the
-   service UID. The user-manager cgroup and the unit cgroup are descendants of
-   that slice. The slice shows a finite `memory.max`, a finite `pids.max`, a
-   finite `cpu.max`, and `memory.swap.max` of 0. When swap is off and swap
-   accounting is impossible, setup accepts a missing file.
-4. When a unit uses an I/O control, the `cgroup.controllers` file in the root
-   cgroup of the user manager lists `io`.
-5. Every escape check of the trust model passes, including `cron` and `at`.
-
-A missing item or a different value fails closed. The error names the drop-in
-path and the property or file that differs. Profiles without limits do not need
-the host cap.
-
-#### Reserve and pressure
-
-The host cap limits the supervisor, the proxy and every workload of the UID
-together. Setup rejects unit limits that do not leave a reserve under the host
-cap. Unit `MemoryHigh` and unit `MemoryMax` must each be at most the slice
-`MemoryHigh` minus the memory reserve. Each other unit control must be at most
-the same control's host-cap value minus its reserve.
-
-When a unit with limits does not set a control that the host cap sets, setup
-fills in a default and shows it. Setup does not fill `MemoryHigh` or
-`MemoryMax`: the operator sets both from the measured model size. `MemoryMax`
-must stay above `MemoryHigh`, and both must stay at most the memory ceiling.
-
-For every other control, the default is the host cap value minus the reserve.
-Setup rounds a percent reserve down to a whole byte or a whole operation before
-that subtraction. If the default is outside the schema range, setup rejects the
-unit and writes no `limits` for it. Setup does not store 0: the value struct
-cannot tell 0 from an absent field. The same rounding is the maximum setup
-accepts.
-
-The memory ceiling is the slice `MemoryHigh` minus the memory reserve. It does
-not use the slice `MemoryMax`. With the example host cap, the ceiling is
-55296 MiB. The slice `MemoryMax` minus the reserve is 59392 MiB, which is above
-the ceiling and therefore not a legal unit value. A unit `MemoryMax` of
-55296 MiB additionally fails admission while the slice uses any memory.
-
-Setup reads `memory.current` before it accepts memory values. A failed read
-fails closed. Setup does not treat it as zero. The page shows the measured
-usage and the ceiling next to the fields. The operator's `MemoryMax` must leave
-room for that usage under the admission check below. [Memory sizing for mapped
-models](#memory-sizing-for-mapped-models) still requires `MemoryHigh` above the
-model file size plus the measured working set.
-
-| Control | Proposed reserve |
-| --- | --- |
-| `MemoryHigh`, `MemoryMax` | 2048 MiB |
-| `MemorySwapMax` | 0 |
-| `TasksMax` | 512 |
-| `CPUQuota` | 100% |
-| I/O bandwidth and IOPS caps | 10% of the host cap, rounded down |
-
-Memory can stay charged to the slice after a unit stops, for example files in
-`/dev/shm` and other `tmpfs` mounts. The kernel guide states that the kernel
-charges a memory area to the cgroup that instantiated it, until a process
-releases the area.
-
-Before admission of a unit with limits, the supervisor reads `memory.current`
-of the slice. A failed read fails closed. Setup does not use zero for that
-read. The value plus the unit's `MemoryMax` plus the reserve must be at most
-the slice `MemoryHigh`. Otherwise admission fails closed. The error names the
-measured usage, the ceiling, and `/dev/shm` and `tmpfs` as common causes.
-
-Admission does not divide the ceiling across units: a second unit launches only
-when its own `MemoryMax` still fits beside the memory already charged.
-
-A unit with limits renders `OOMScoreAdjust=500`, so an OOM kill at the slice
-level selects a workload before the supervisor and the proxy. From systemd
-sources, systemd sets `memory.oom.group` to 1 only for `OOMPolicy=kill`
-([v252](https://github.com/systemd/systemd/blob/v252/src/core/service.c#L778),
-[v255](https://github.com/systemd/systemd/blob/v255/src/core/service.c#L846),
-[v259](https://github.com/systemd/systemd/blob/v259/src/core/service.c#L909)).
-The required `OOMPolicy=stop` keeps it at 0. Instead, systemd stops the
-remaining processes of the unit after the first kill.
-
-The design does not render `RemoveIPC=` or `PrivateIPC=`. The systemd manual
-states that `RemoveIPC=` has an effect only with `User=`, `Group=` or
-`DynamicUser=`, and that `PrivateIPC=` has no effect on POSIX shared memory.
-In a user manager, every unit runs as the same UID.
-
-### Controller checks
-
-The user manager receives only the delegated controllers. The upstream unit sets
-`Delegate=pids memory cpu` at all three versions
-([v252](https://github.com/systemd/systemd/blob/v252/units/user%40.service.in#L24),
-[v255](https://github.com/systemd/systemd/blob/v255/units/user%40.service.in#L24),
-[v259](https://github.com/systemd/systemd/blob/v259/units/user%40.service.in#L28)).
-The `io` controller needs the second drop-in of the host cap.
-
-From systemd sources, the user manager reads its supported controllers from
-`cgroup.controllers` in its root cgroup
-([v252](https://github.com/systemd/systemd/blob/v252/src/basic/cgroup-util.c#L1967),
-[v255](https://github.com/systemd/systemd/blob/v255/src/basic/cgroup-util.c#L2052),
-[v259](https://github.com/systemd/systemd/blob/v259/src/basic/cgroup-util.c#L1659)).
-It removes unsupported controllers from each unit's mask
-([v252](https://github.com/systemd/systemd/blob/v252/src/core/cgroup.c#L1919),
-[v255](https://github.com/systemd/systemd/blob/v255/src/core/cgroup.c#L2213),
-[v259](https://github.com/systemd/systemd/blob/v259/src/core/cgroup.c#L1852)).
-The unit still starts, and systemd does not apply the limit.
-
-systemd only logs a failed attribute write
-([v252](https://github.com/systemd/systemd/blob/v252/src/core/cgroup.c#L109),
-[v255](https://github.com/systemd/systemd/blob/v255/src/core/cgroup.c#L115),
-[v259](https://github.com/systemd/systemd/blob/v259/src/core/cgroup.c#L126)),
-and `systemctl show` reports the configured value in both cases. Thus a loaded
-property is not enforcement evidence.
-
-| Controller | Controls |
-| --- | --- |
-| `memory` | `MemoryHigh`, `MemoryMax`, `MemorySwapMax` |
-| `pids` | `TasksMax` |
-| `cpu` | `CPUWeight`, `CPUQuota` |
-| `io` | `IOReadBandwidthMax`, `IOWriteBandwidthMax`, `IOReadIOPSMax`, `IOWriteIOPSMax`, `IOWeight` |
-
-The checks separate two different failures:
-
-- **Controller not enabled.** The unit's own `cgroup.controllers` does not list
-  the controller, so the kernel shows none of its files. This is a delegation
-  failure. The setup error names the controller and the host cap step.
-- **Interface file missing.** The unit's `cgroup.controllers` lists the
-  controller, but one file is absent, for example `memory.swap.max` when kernel
-  swap accounting is off. From systemd sources, systemd treats a missing
-  `memory.swap.max` as an expected case
-  ([v252](https://github.com/systemd/systemd/blob/v252/src/core/cgroup.c#L397),
-  [v255](https://github.com/systemd/systemd/blob/v255/src/core/cgroup.c#L438),
-  [v259](https://github.com/systemd/systemd/blob/v259/src/core/cgroup.c#L403)).
-  The setup error names the file and the kernel feature.
-
-Both failures fail closed.
-
-Swap accounting needs a check before setup accepts the unit, because setup adds
-`MemorySwapMax=0` when the unit has `MemoryMax`. Setup reads `memory.swap.max`
-in the root cgroup of the user manager. If the file is absent, setup rejects
-the unit. The error names the automatic `MemorySwapMax=0` and tells the
-operator to enable swap accounting or to remove `MemoryMax`.
-
-### Unit limits
-
-Limits belong to the owned unit, not to the profile. Adopted units get no
-limits. To limit one, an operator converts it to an owned unit through setup
-preview and apply. Trainers come first, then inference units.
-
-Profiles that share one owned Ollama unit each carry a copy of the owned launch
-specification (`nativeModel.owned`). The catalog validator requires equal
-specifications for a shared unit. The `limits` type must be a comparable value
-struct with no pointer, slice or map field. Then the existing equality check
-and catalog clone stay correct. Tests must cover two shared profiles with equal
-limits and with different limits.
-
-| Control | Catalog value | Readback file and value |
-| --- | --- | --- |
-| `MemoryHigh` | MiB | `memory.high`, bytes |
-| `MemoryMax` | MiB | `memory.max`, bytes |
-| `MemorySwapMax` | MiB. 0 when the unit has `MemoryMax` and no swap value | `memory.swap.max`, bytes |
-| `TasksMax` | Count | `pids.max` |
-| `CPUWeight` | 1 to 10000 | `cpu.weight` |
-| `CPUQuota` | Percent | `cpu.max`, `P*1000 100000` |
-| `IOReadBandwidthMax`, `IOWriteBandwidthMax` | Bytes per second, one device | `io.max` line of the device |
-| `IOReadIOPSMax`, `IOWriteIOPSMax` | Operations per second, one device | `io.max` line of the device |
-| `IOWeight` with iocost | 1 to 10000 | `io.weight`, `default N` |
-| `IOWeight` with BFQ | 1 to 10000 | `io.weight`, `default N`, and `io.bfq.weight`, `default B` |
-
-MiB values are multiples of the page size, and systemd uses base 1024 for the
-`M` suffix. For `CPUQuota`, the readback uses the default period
-([v252](https://github.com/systemd/systemd/blob/v252/src/core/cgroup.c#L968),
-[v255](https://github.com/systemd/systemd/blob/v255/src/core/cgroup.c#L1216),
-[v259](https://github.com/systemd/systemd/blob/v259/src/core/cgroup.c#L1146)).
-The pids controller counts tasks, including threads. CUDA runtimes create many
-threads, so a low `TasksMax` stops normal startup.
-
-`MemorySwapMax` needs `MemoryMax` in this design, a deliberate narrowing of the
-issue. The value struct cannot show the difference between an absent value and
-0, so this rule gives both the same rendering.
-
-#### I/O devices
-
-From systemd sources, systemd follows `slaves` to the originating device of a
-device-mapper stack
-([v252](https://github.com/systemd/systemd/blob/v252/src/core/cgroup.c#L855),
-[v255](https://github.com/systemd/systemd/blob/v255/src/core/cgroup.c#L1101),
-[v259](https://github.com/systemd/systemd/blob/v259/src/core/cgroup.c#L1034)).
-It leaves a node that already has a request queue as it is. If the lookup
-fails, systemd skips the limit with a warning
-([v252](https://github.com/systemd/systemd/blob/v252/src/core/cgroup.c#L1169),
-[v255](https://github.com/systemd/systemd/blob/v255/src/core/cgroup.c#L1417),
-[v259](https://github.com/systemd/systemd/blob/v259/src/core/cgroup.c#L1265)).
-
-Setup accepts only a leaf block device. The operator selects the disk. Setup
-resolves it to its major and minor numbers and requires `S_ISBLK`, a `queue`
-directory, no `partition` file, and an empty `slaves` directory under
-`/sys/dev/block/MAJ:MIN`. Setup rejects the device if it cannot read `slaves`
-or if that directory has entries. These entries identify backing devices in
-device-mapper, md, bcache, and multipath stacks.
-
-Setup reads the kernel name from `DEVNAME` in the `uevent` file under
-`/sys/dev/block/MAJ:MIN`.
-
-Host qualification must show that the device throttles a write. A matching
-`io.max` line is not enough.
-
-The catalog stores the canonical path `/dev/<kernel name>` and the numbers.
-The renderer writes that canonical path, so systemd and the checks resolve the
-same node. Each launch checks that the path is a root-owned block device node
-with the recorded numbers. The launch parser compares the device token byte for
-byte with the catalog value.
-
-systemd writes all four keys on the device line, with `max` for a key that the
-unit does not set. The readback requires the exact line. An example for device
-259:0 with only a read bandwidth cap:
-
-```text
-259:0 rbps=524288000 wbps=max riops=max wiops=max
-```
-
-`IOWeight` has an effect only when the device uses the BFQ scheduler or the
-iocost controller. The kernel guide names these two as the providers of weight
-distribution. Setup reads `/sys/dev/block/MAJ:MIN/queue/scheduler` for `[bfq]`
-and the root `io.cost.qos` line for `enable=1`. Setup reports which one
-applies, or rejects `IOWeight` when neither applies.
-
-With BFQ, systemd additionally writes `io.bfq.weight` with a value in the range 1 to
-1000
-([v252](https://github.com/systemd/systemd/blob/v252/src/core/cgroup.c#L1073),
-[v255](https://github.com/systemd/systemd/blob/v255/src/core/cgroup.c#L1321),
-[v259](https://github.com/systemd/systemd/blob/v259/src/core/cgroup.c#L1190)).
-From systemd sources, the value B is N for N up to 100. Above 100, it is
-`100 + (N - 100) * 900 / 9900` in integer arithmetic
-([v252](https://github.com/systemd/systemd/blob/v252/src/basic/cgroup-util.h#L138),
-[v255](https://github.com/systemd/systemd/blob/v255/src/basic/cgroup-util.h#L139),
-[v259](https://github.com/systemd/systemd/blob/v259/src/basic/cgroup-util.h#L107)).
-With BFQ, the readback requires both files. With iocost, it requires
-`io.weight` only.
-
-### Rendering and grammar
-
-A unit with limits always renders `OOMPolicy=stop`. The default comes from
-`DefaultOOMPolicy=`, which is `stop`, but the user manager reads it from its
-own configuration
-([v252](https://github.com/systemd/systemd/blob/v252/src/core/main.c#L662),
-[v255](https://github.com/systemd/systemd/blob/v255/src/core/main.c#L686),
-[v259](https://github.com/systemd/systemd/blob/v259/src/core/main.c#L811)).
-An explicit value removes the dependency on host configuration.
-
-The renderer adds these lines directly after `Restart=no`. It writes only the
-configured lines, in this order:
-
-```ini
-OOMPolicy=stop
-OOMScoreAdjust=500
-MemoryHigh=<MiB>M
-MemoryMax=<MiB>M
-MemorySwapMax=<MiB>M
-TasksMax=<count>
-CPUWeight=<weight>
-CPUQuota=<percent>%
-IOWeight=<weight>
-IOReadBandwidthMax=/dev/<kernel name> <bytes>
-IOWriteBandwidthMax=/dev/<kernel name> <bytes>
-IOReadIOPSMax=/dev/<kernel name> <count>
-IOWriteIOPSMax=/dev/<kernel name> <count>
-```
-
-The strict launch parser accepts these lines only through the owned-unit path:
-`parseOwnedLaunchUnit` for owned inference units, and the exact trainer form
-for trainers. The parser removes the exact rendered block before the shared
-grammar reads the rest, as it does for owned dependency lines. The adopted and
-imported launch grammar does not accept any limit directive. The feature uses
-no drop-ins on owned units.
-
-### Drift checks
-
-All checks fail closed.
-
-1. **Before setup accepts a unit with limits and before each launch.** The
-   `cgroup.controllers` file in the root cgroup of the user manager lists each
-   required controller. The checks of the host cap pass.
-2. **Before admission.** The memory pressure check of the slice passes.
-3. **At launch.** The loaded unit properties match the catalog, `OOMPolicy`
-   and `OOMScoreAdjust` included. `DropInPaths` is empty, and
-   `NeedDaemonReload=no`.
-4. **After start and at each reconcile.** The unit's cgroup files hold the
-   exact values in the table above.
-
-The readback in item 4 runs while the recursive cgroup of the unit contains
-processes, including a trainer in the `exited` state with remaining processes.
-The supervisor must record one successful populated readback for the invocation
-before it binds `completed`. If the first observation finds an empty or absent
-cgroup, the job stays pending. Explicit `training-recover` then records
-`interrupted` when the job does not have a cause yet. The supervisor ignores a
-cgroup that disappears during a later read only after that first sample, or
-when a new read shows a different invocation.
-
-The readback has two failure types. A value mismatch is drift. A read error or
-a missing file is a readback failure. After a readback failure, the supervisor
-reads `ActiveState`, `SubState`, `InvocationID` and `MainPID` again. The
-failure counts when that second read shows the same invocation still active or
-exited with a populated cgroup. It also counts when the second read itself
-fails.
-
-A counted failure stops the unit and returns a typed error. The supervisor does
-not record a successful launch. The error names drift or readback failure, plus
-the controller, the path, and the errno. The supervisor stores that cause on
-the job. A later reconcile or `training-recover` keeps it and does not replace
-it with a bare `interrupted`.
-
-A unit test covers a cgroup that goes away between the state check and the
-read.
-
-Drift and a counted readback failure stop the unit, and the error names the
-type. The results are:
-
-- **Trainer.** The command that finds the failure stops the unit and does not
-  retry the launch. That command is `training-start` after start or
-  `training-reconcile` later. Reconcile does not bind `completed`, an exception to reconcile only
-  reading evidence. A stored cause stays on the job for `training-recover`.
-  Drift never gives `completed`. The implementation updates `docs/TRAINING.md`
-  to match.
-- **Inference.** The supervisor stops the unit. The activation or the stable
-  state fails under the existing health, transition and recovery rules.
-
-### Outcome classes
-
-A resource threshold is not always a kill.
-
-| Signal | Class | Evidence | Effect on the unit |
-| --- | --- | --- | --- |
-| Usage above `MemoryHigh` | Throttle | `memory.events` `high` | Reclaim and delay. The OOM killer does not run |
-| Usage at `MemoryMax`, reclaim succeeds | Throttle | `memory.events` `max` | Delay. File-backed model pages can refault |
-| Usage at `MemoryMax`, reclaim fails | Kill | `memory.events` `oom_kill`, `Result=oom-kill` | Stop with `OOMPolicy=stop` |
-| Some kernel allocations at `MemoryMax` | Allocation failure | `ENOMEM` in the process | The process decides, often an exit |
-| Fork or thread creation at `TasksMax` | Task-creation failure | `pids.events` `max`, `EAGAIN` | The process decides. No kill |
-| CPU use at `CPUQuota` | Throttle | `cpu.stat` `nr_throttled` | Delay only |
-| I/O at a bandwidth or IOPS cap | Throttle | `io.stat` | Delay only |
-| `CPUWeight`, `IOWeight` | Share | None | Delay under contention only |
-
-Sources: the kernel guide sections for `memory.high`, `memory.max`,
-`memory.events`, `pids.max`, `cpu.max` and `io.max`.
-
-From systemd sources, an OOM kill with `OOMPolicy=stop` stops a running or
-exited service with the `oom-kill` result
-([v252](https://github.com/systemd/systemd/blob/v252/src/core/service.c#L3415),
-[v255](https://github.com/systemd/systemd/blob/v255/src/core/service.c#L3648),
-[v259](https://github.com/systemd/systemd/blob/v259/src/core/service.c#L4049)).
-
-The supervisor makes decisions from systemd unit state and the existing
-evidence contracts only. The event counters are diagnostics, never completion
-or release evidence. A counter also goes away when systemd removes the empty
-cgroup.
-
-### Trainers
-
-- A throttled trainer stays active. Reconcile reports that the trainer did not
-  exit. Throttling never gives completion.
-- A fenced `oom-kill` result is terminal `failed` evidence, as are
-  `exit-code`, `signal` and `core-dump`. A task-creation or allocation failure
-  normally becomes one of these results.
-- `OOMPolicy=stop` also covers the `RemainAfterExit=yes` exited state. An OOM
-  kill of a remaining process after the adapter exits still gives
-  `Result=oom-kill`. If reconcile did not bind an outcome before, the systemd
-  failure wins over a `completed` terminal file.
-- A limit kill is a job outcome, not an error latch. After release
-  verification, admission returns to idle under the existing training rules.
-
-### Inference services
-
-Inference keeps its existing health, transition and recovery rules. A limit
-kill stops the owned unit, and the health check then fails. A throttle can
-delay readiness or a response. The existing health deadlines and proxy terminal
-evidence apply without change. Inference adds no new state, phase or result.
-
-### Memory sizing for mapped models
-
-llama.cpp maps the GGUF file of a model into memory. The kernel guide states
-that the kernel charges a memory area to the cgroup that instantiated it. Thus
-the kernel charges the page cache of a model to the unit that reads the model
-first. A `MemoryHigh` below the model size plus the working set causes reclaim
-and refaults during the load. The load can then exceed the readiness deadline
-without a kill.
-
-Set `MemoryHigh` above the model file size plus the measured working set, and
-set `MemoryMax` above `MemoryHigh`. Measure both on the host during
-qualification.
-
-### Checks before admission release
-
-A limit kill is not release evidence. After any termination, release stays on
-the existing contract for that unit. Capacity is not an inference release
-check.
-
-Trainer release needs all of these, in order. The unit is `inactive` and
-`dead`. The recursive cgroup is empty or absent. No GPU compute process stays
-on the trainer GPU. Capacity is then available for the next admission.
-
-Inference release needs `inactive` and `dead`, then `cgroup.events` `populated`
-0 or an absent cgroup. It does not query compute apps. A shared owned Ollama
-unit can stay `active/running` with an empty loaded-model list. That is the
-existing idle release for that unit. A limit kill of that daemon still has to
-reach `inactive/dead` before release.
-
-A process in an uninterruptible driver wait can keep the cgroup populated after
-the kill. Admission then stays closed. Failed cleanup stays fail-closed under
-the existing recovery rules.
-
-### Lifecycle
-
-`Restart=no` stays. The feature adds no `StartLimit*` policy, no automatic
-restart and no lifecycle phase. Idle release stops non-shared units. A shared
-owned Ollama daemon can stay `active/running` with an empty model list, its
-existing idle state. Before setup renders or reloads limit lines, that daemon
-must be `inactive/dead`. `daemon-reload` would otherwise apply the new cgroup
-values to the live daemon.
-
-### Desktop
-
-The setup application shows limits on the existing **Resource checks** page of
-**Advanced settings**. Limits are off by default for each unit. When the user
-enables limits, setup fills defaults for every host-cap control except
-`MemoryHigh` and `MemoryMax`, which the operator sets. The page shows the
-memory ceiling and the current slice usage next to the fields.
-
-The page shows memory in GiB, CPU in cores and tasks as a count. I/O controls
-and `IOWeight` are in a separate, closed section.
-
-The page shows one host cap status:
-
-| Status | Text | Action |
-| --- | --- | --- |
-| Present | Host protection is active for this account | None |
-| Absent | This account has no host protection. An administrator must run one step as root | Show the exact drop-ins and commands, with a copy button |
-| Different | Host protection settings do not match. An administrator must update them | Show each different value and the exact step |
-| Escape | Programs from this account can run outside host protection | Name each route. Do not accept limits |
-
-Status Present requires the hard slice ceilings and a passing escape check. An
-open escape route is not Present.
-
-Each fail-closed error class has plain-language text:
-
-| Error class | Text |
-| --- | --- |
-| Controller not enabled | This computer does not let the account limit `<controller>`. An administrator must change the account settings |
-| Interface file missing | The system cannot apply `<control>`. `<kernel feature>` is off on this computer |
-| Host cap absent or different | The host protection of this account is missing or different. See the step on this page |
-| Reserve violation | This limit leaves too little room for the supervisor. Use `<value>` or less |
-| Escape route | Programs from this account can run outside host protection through `<route>`. Setup did not save limits |
-| Memory pressure | Slice memory does not fit this limit. `<usage>` MiB is in use, and the ceiling is `<ceiling>` MiB |
-| Memory usage unknown | Setup cannot read the memory already in use. Setup did not save limits |
-| Drift | A limit changed after start. The supervisor stopped the workload. `<control>` was `<actual>`, not `<expected>` |
-| Readback failure | Setup cannot read `<path>` (`<errno>`). The supervisor stopped the workload |
-| `IOWeight` not applicable | The selected disk does not support I/O weight |
-
-### Schema
-
-- Catalog version 5 accepts all content of version 4, which includes the
-  version 2 owned launches. It adds `limits` on the owned launch specification
-  (`nativeModel.owned`) and on the trainer binding.
-- In version 5, a trainer binding with limits uses binding version 2. A trainer
-  binding without limits keeps binding version 1 and its precise bytes. Version 4
-  accepts only binding version 1. The job file and terminal file versions stay 1.
-- `limits` is strict JSON with bounded values. It has a `version` field and
-  needs at least one control. The decoder rejects unknown fields and an empty
-  or all-zero `limits` object, so an absent object is the only legacy form.
-- Setup writes version 5 only when at least one unit has limits. Otherwise it
-  keeps the exact legacy bytes and fingerprints.
-- Limits pass through render, spec, fingerprint and rollback verification.
-- The catalog version table in [configured workloads](INTEGRATION.md#configured-workloads) gets a version 5 row.
-
-Every catalog reader must accept version 5:
-
-- `Validate` of `control.Catalog` accepts version 5. Its gate for trainer
-  bindings accepts version 4 and version 5.
-- The proxy reads the catalog without `Validate`. Its `supportedCatalogVersion`
-  guard must accept version 5. A test must send a version 5 catalog through the
-  proxy.
-- `Validate` rejects `limits` unless the catalog version is 5, and rejects
-  trainer binding version 2 unless the catalog version is 5.
-- The store guard for version changes already permits a change to version 5.
-  It still rejects a change from version 5 to a lower version while `limits`
-  remain. An older binary is safe only when the blob has no `limits` key. A
-  lower version number is not enough, because that binary rejects an unknown
-  field at version 2 or 4.
-
-Every catalog writer uses one version rule:
-
-- One Go function computes the lowest version that a catalog needs. The result
-  is 5 with any limits, 4 with a trainer binding, 2 with an owned launch, and 1
-  otherwise. Setup preview and apply both use it. While setup resumes a
-  recorded activation, it keeps the recorded catalog bytes, including the
-  version. It lowers the version only in a later write, after maintenance is
-  clear.
-- The function replaces the client rule in `clients/setup/setup-window.mjs`,
-  which only raises the version, and the literal version 2 in
-  `internal/setup/owned.go`.
-- A draft with no `limits` stays draft version 1, and a new binary still reads
-  it. A draft with `limits` uses the next draft version. Setup rejects a
-  version 1 body that contains `limits` before unmarshal, so unmarshal cannot
-  drop the field. The client `save-drafts` path uses the same rule.
-  `ReadDrafts` today uses `json.Unmarshal`, which would drop the field.
-- The test of version 2 to version 5 and back to the same version 2 bytes uses
-  this function.
-
-Older binaries reject version 5. To roll back, an operator first removes the
-limits through setup and confirms that the catalog version went down. Only then
-does the operator install the older binary. A backup restore is the other path.
-The implementation adds these steps to [the restore procedure](OPERATIONS.md#make-a-backup-restore-and-roll-back-state).
-
-When the catalog before the limits also used its lowest version, the result has
-the exact earlier bytes. A catalog with a higher version than it needs gets the
-lower version at the next setup write after maintenance is clear. Its unit
-bytes and fingerprints stay the same. The write does not occur while an
-activation resume is open.
-
-Proposed bounds:
-
-| Field | Range | Rule |
-| --- | --- | --- |
-| `memoryHighMiB` | 256 to 16777216 | Less than `memoryMaxMiB` when the unit has both |
-| `memoryMaxMiB` | 256 to 16777216 | None |
-| `memorySwapMaxMiB` | 0 to 16777216 | Needs `memoryMaxMiB`. 0 when absent |
-| `tasksMax` | 64 to 4194304 | None |
-| `cpuWeight` | 1 to 10000 | None |
-| `cpuQuotaPercent` | 1 to 102400 | None |
-| `ioDevice` | `^/dev/[a-z][a-z0-9]{0,31}$` | Required with any I/O field. Setup writes the canonical kernel name |
-| `ioDeviceNumber` | `MAJ:MIN` | Required with `ioDevice`. Setup writes it |
-| `ioReadBandwidthMax`, `ioWriteBandwidthMax` | 1048576 to 1099511627776 | Bytes per second |
-| `ioReadIOPSMax`, `ioWriteIOPSMax` | 100 to 10000000 | Operations per second |
-| `ioWeight` | 1 to 10000 | Needs BFQ or iocost on `ioDevice` |
-
-### Qualification procedure
-
-Run each probe as the service UID on hosts with systemd 252, 255 and 259.
-Install `stress-ng` from the distribution package first. Use the cgroup of each
-probe unit, which `systemctl --user show -P ControlGroup` gives. Record the
-systemd, kernel and `stress-ng` versions and the distribution in the private
-host evidence, not in this record. Read each cgroup file while the probe unit
-is active. Stop and reset each probe unit after the check.
-
-| Claim | Probe | Expected result |
-| --- | --- | --- |
-| Default delegation | `cat` the `cgroup.controllers` file of the user manager root. Run `systemctl show -p DropInPaths user-UID.slice` | `cpu memory pids`, and `io` after the host cap. `DropInPaths` lists the vendor `10-defaults.conf` |
-| A missing controller is silent | Before the `io` drop-in: `systemd-run --user --unit=gws-q-io -p IOReadBandwidthMax="/dev/DISK 1M" sleep 600` | The unit is active. `io.max` is absent. `systemctl --user show -p IOReadBandwidthMax gws-q-io` gives `IOReadBandwidthMax=/dev/DISK 1048576` |
-| Values apply | `systemd-run --user --unit=gws-q-mem -p MemoryHigh=256M -p MemoryMax=512M -p MemorySwapMax=0 -p TasksMax=64 -p CPUQuota=50% -p OOMPolicy=stop -p OOMScoreAdjust=500 sleep 600` | `memory.high` 268435456, `memory.max` 536870912, `memory.swap.max` 0, `pids.max` 64, `cpu.max` `50000 100000` |
-| Loaded properties | `systemctl --user show -p MemoryMax -p TasksMax -p CPUQuotaPerSecUSec -p OOMPolicy -p OOMScoreAdjust gws-q-mem` | `MemoryMax=536870912`, `TasksMax=64`, `CPUQuotaPerSecUSec=500ms`, `OOMPolicy=stop`, `OOMScoreAdjust=500` |
-| A bus client rejects an invalid value | `systemd-run --user -p MemoryMax=bogus true` | A nonzero exit status and no unit |
-| Memory throttle | `systemd-run --user --unit=gws-q-high -p MemoryHigh=64M -p MemorySwapMax=0 stress-ng --vm 1 --vm-bytes 128M --timeout 30s` | During the run: `ActiveState=active`, `memory.events` `high` above 0 and `oom_kill` 0 |
-| CPU throttle | `systemd-run --user --unit=gws-q-cpu -p CPUQuota=10% stress-ng --cpu 1 --timeout 30s` | During the run: `cpu.stat` `nr_throttled` above 0 |
-| OOM kill | `systemd-run --user --unit=gws-q-oom -p MemoryMax=64M -p MemorySwapMax=0 -p OOMPolicy=stop stress-ng --vm 1 --vm-bytes 256M --timeout 60s` | `Result=oom-kill` and `ActiveState=failed` |
-| OOM kill in the exited state | `systemd-run --user --unit=gws-q-exited -p Type=exec -p RemainAfterExit=yes -p MemoryMax=64M -p MemorySwapMax=0 -p OOMPolicy=stop sh -c 'stress-ng --vm 1 --vm-bytes 256M --timeout 60s & exit 0'` | After the main process exits with status 0: `Result=oom-kill` and `ActiveState=failed` |
-| Task-creation failure | `systemd-run --user --unit=gws-q-pids -p TasksMax=16 sh -c 'for i in $(seq 64); do (sleep 600 &) 2>/dev/null \|\| true; done; exec sleep 600'` | During the run: `ActiveState=active` and `pids.events` `max` above 0 |
-| Host cap holds | As the service UID, write `max` to each capped file of the slice and of `user@UID.service`: `memory.high`, `memory.max`, `memory.swap.max`, `pids.max`, `cpu.max` and `io.max` | Each write fails with `EACCES` |
-| I/O cap holds | On the selected leaf disk, write a file larger than the read cap | The device throttles the write. An `io.max` line alone does not pass |
-| BFQ weight | On a BFQ device: `systemd-run --user --unit=gws-q-bfq -p IOWeight=1000 sleep 600` | `io.weight` `default 1000` and `io.bfq.weight` `default 181` |
-
-Each test category of #584 maps to one level:
-
-| Test category | Level |
-| --- | --- |
-| Rendered values, fingerprint stability, legacy bytes, rollback bytes | Unit tests with golden files |
-| Loaded values, drift, missing controllers, missing host cap, known drop-ins | Unit tests with a fake command runner and a fixture cgroup tree, then host qualification |
-| Throttling without false completion, terminal failure | Unit tests with recorded unit states, then the throttle and OOM probes above |
-| Cleanup and recovery failure | Unit tests with a fixture cgroup tree that stays populated |
-| Applied cgroup values, OOM kill, host cap ownership | Host qualification only. These need a real user manager |
+Match `internal/{proxy,supervisor,store,runtime,control,operator}` topology.
 
 ## Configured workloads
 
-An enabled catalog is a supported-version JSON object containing 1-32 `profiles`:
+An enabled catalog contains 1-32 profiles:
 
 ```json
 {
@@ -1501,78 +94,42 @@ An enabled catalog is a supported-version JSON object containing 1-32 `profiles`
 }
 ```
 
-Catalog versions advance per feature, rather than bundling unrelated additions into one
-schema change:
+| Version | Supported content |
+| --- | --- |
+| 1 | Workload profiles and native model bindings |
+| 2 | Version 1 plus owned native launches |
+| 3 | Reserved. Rejected |
+| 4 | Finite trainer bindings and fenced jobs. Supports owned launches |
+| Later | Rejected until a separate feature adds support |
 
-| Version | Feature boundary | Status |
-| --- | --- | --- |
-| 1 | Existing workload profiles and native model bindings | Supported |
-| 2 | Adds owned native launch specifications | Supported |
-| 3 | Reserved | Not supported |
-| 4 | Finite trainer bindings and fenced job lifecycle | Supported |
-| Later | Later features receive separate version changes | Not yet supported |
+Unchanged v1/v2 profiles need no migration. Owned launches need v2/v4. Trainers need v4. Catalog, database and upstream API versions are independent. The validator rejects unsupported versions and fields outside their version.
 
-Existing v1 and v2 catalogs remain valid under their current rules. Unchanged profiles
-need no migration or version bump. Owned launch specifications need v2 or v4.
+Setup removal of the last application writes `{"version":1,"profiles":[],"disabled":true}`. Empty enabled catalogs and disabled catalogs with profiles are invalid. Adding an application clears `disabled` and restores normal requirements.
 
-Finite trainer bindings need v4. See [Finite training jobs](TRAINING.md#finite-training-jobs). The validator
-rejects unsupported versions (including v3), unknown fields and fields outside
-their supported version.
+| Field or input | Constraint |
+| --- | --- |
+| ID | At most 64 lowercase ASCII letters, digits, `_` or `-`. Starts with a letter. The catalog reserves `idle` and `unknown` |
+| Label | At most 80 characters and 128 UTF-8 bytes. Visible non-whitespace text. No control or bidirectional override or isolation characters |
+| Unit and cgroup | Unique units and absolute, clean, non-root, non-overlapping cgroups |
+| Endpoint | Loopback HTTP(S). No credentials or fragments |
+| JSON | No unknown fields, duplicate keys or trailing values |
+| Size | 256 KiB canonical input. Only valid derived owned conflicts can use another 96 KiB. Full file limit: 352 KiB |
 
-Catalog versions are separate from database schema versions and upstream runtime and
-API versions.
+`systemd` stops the unit and verifies recursive cgroup release. Compatibility `media-unload` additionally requires `releaseURL`. HTTP unload success never proves GPU release. A live opposing unload runtime blocks admission until independently stopped. The controller checks every opposing runtime before target start.
 
-Removing the final application through setup writes an explicit disabled catalog, such
-as `{"version":1,"profiles":[],"disabled":true}`, with no configured workloads. Empty
-catalogs without `disabled: true` and disabled catalogs containing profiles are invalid.
-Adding an application clears `disabled` and restores the ordinary profile requirements.
+`requiredMiB` optionally enables NVIDIA capacity checks with trusted `-nvidia-smi` and optional headroom. It is not an enforced ceiling. Default `bootPolicy: "stop-to-idle"` stops at reconciliation. `retain` preserves an already running healthy workload without starting it.
 
-IDs contain at most 64 lowercase ASCII letters, digits, underscores and hyphens,
-starting with a letter. The catalog reserves `idle` and `unknown`. Labels contain at
-most 80 characters and 128 UTF-8 bytes, contain visible non-whitespace text, and exclude
-control characters and bidirectional override or isolation characters.
+Multiple running `retain` profiles fail closed. Healthy retained registrations keep tokens, fence and admission. Legacy behavior uses `retain` for Text and `stop-to-idle` for Media.
 
-Unit names and cgroups must be unique. Cgroups must be absolute, clean, non-root and
-non-overlapping. Endpoints must use HTTP(S) on loopback without credentials or
-fragments.
-
-The validator rejects unknown fields, duplicate JSON keys, trailing values and files
-larger than 352 KiB. Canonical catalog data excluding derived owned conflicts remains
-capped at 256 KiB. Only the valid owned peer graph can use the extra 96 KiB allowance.
-
-The `systemd` adapter stops the unit and verifies its recursive cgroup is empty. The
-compatibility `media-unload` adapter also needs `releaseURL`. HTTP unload success
-never proves GPU release.
-
-A live opposing unload runtime remains fail-closed until independently stopped. The
-controller checks every configured opposing runtime before it starts a target.
-`requiredMiB` optionally enables the existing NVIDIA capacity check, with trusted
-`-nvidia-smi` and optional headroom flags.
-
-`bootPolicy` defaults to `stop-to-idle`. Explicit `retain` preserves an already running
-healthy workload during reconciliation. It never starts it.
-
-Multiple running `retain` profiles fail closed. Healthy retained registrations keep their
-completion tokens, fence and admission. To reproduce the legacy boot behavior, use
-`retain` for Text and `stop-to-idle` for Media.
-
-Accept configuration explicitly while holding the controller gate. Examples abbreviate
-the [pinned absolute binary path](DEPLOYMENT.md#controller-configuration) as `gpu-mode`:
+Accept configuration under the controller gate. Examples abbreviate the [pinned absolute executable](DEPLOYMENT.md#controller-configuration):
 
 ```sh
 gpu-mode -state /absolute/state.db -catalog /absolute/workloads.json configure
 ```
 
-The result contains an opaque `revision`. Later updates must supply it using
-`-configuration-revision REVISION`. A successful update atomically persists the catalog,
-history and revision and advances the state version.
+Supply the returned opaque revision as `-configuration-revision REVISION` on updates. Successful updates atomically store catalog, history and revision and advance state version. Stale updates fail. Updates cannot remove or change profiles referenced by active or desired state, unfinished work or unfinished transitions. Reach safe Idle before initial adoption of live legacy state.
 
-The store rejects stale requests. It also rejects updates that remove or change a
-profile referenced by active or desired state, unfinished work or unfinished
-transitions. Initial adoption of live legacy state requires first reaching safe Idle
-using existing controls.
-
-Runtime commands use the durable snapshot, never silently re-read a catalog file:
+Runtime commands use the durable snapshot, never an implicit catalog-file reload:
 
 ```sh
 gpu-mode -state /absolute/state.db -systemctl /usr/bin/systemctl reconcile
@@ -1580,176 +137,306 @@ gpu-mode -state /absolute/state.db -systemctl /usr/bin/systemctl -target speech 
 gpu-mode -state /absolute/state.db -systemctl /usr/bin/systemctl status
 ```
 
-Flags precede the command, following Go's flag parser. Select workloads only through
-`switch -target`. Targets must be present in the effective catalog.
+Flags precede the command. Select catalog targets through `switch` with `-target`. Proxies accept configured IDs. SQLite checks the accepted catalog and active allocation. Adding workloads never expands existing principal grants.
 
-Proxies accept configured workload IDs and SQLite validates registration against the
-accepted catalog and active allocation. Automation grants remain explicit: adding a
-workload never grants an existing principal permission to choose it.
-
-Schema v11 rebuilds workload-constrained tables transactionally, retaining state,
-fences, registrations, tokens, transitions, events and relationships. Older binaries
-reject this schema. Rollback follows [the restore procedure](OPERATIONS.md#make-a-backup-restore-and-roll-back-state), using a compatible
-verified backup and binary and configuration pair. Never edit schema metadata or
-downgrade a live database.
+Database schema v11 transactionally rebuilds workload-constrained tables, preserving state, fences, registrations, tokens, transitions, events and relationships. Older binaries reject it. [Rollback](OPERATIONS.md#make-a-backup-restore-and-roll-back-state) requires a compatible verified backup, binary and configuration. Never edit schema metadata or downgrade a live database.
 
 ### Native model bindings
 
-A `systemd` profile can include `nativeModel` with `runtime` `vllm`, `instance`,
-exact API `model`, loopback base `endpoint`, absolute `launchFile`, and its
-`launchSHA256`. Model names are case-sensitive. Each workload needs its own
-existing unit and non-overlapping cgroup.
+A `systemd` profile can bind `nativeModel`: `runtime: "vllm"`, `instance`, exact case-sensitive API `model`, loopback base `endpoint`, absolute `launchFile` and `launchSHA256`. Each workload needs an existing unit and non-overlapping cgroup. Different models can use separate units on one runtime endpoint.
 
-Two models in the same runtime instance can use different units on the same endpoint.
-The controller stops the old unit and verifies GPU release before it starts the next
-unit. Re-selecting an active workload does not restart that unit. Opposing units
-stay reconciled.
+Switching stops the old unit and verifies release before starting the next. Reselecting an active workload does not restart it. Opposing units remain reconciled.
 
-Native readiness queries `/health` and `/v1/models`.
+Readiness queries `/health` and `/v1/models` and requires exactly the selected model. For catalog changes, follow the [proxy drain and restart procedure](DEPLOYMENT.md#migrate-release-checks).
 
-Stop the workload proxies before applying a catalog change. Setup and CLI configure both
-enforce the proxy lifetime lock, including in-flight requests.
+| Launch item | Qualification |
+| --- | --- |
+| Source | Matches the systemd fragment. No pending reload. Supported direct-command subset. Supported drop-ins remain unchanged and hash-checked. Ambiguous or unsupported drop-ins fail |
+| Paths | Executables, scripts, sources, validated environment and data paths and every traversed ancestor belong to the desktop user or root. No world write. Group write requires user membership. Symlinks receive the same checks. Broken or excessive chains fail |
+| Commands | No shell wrappers, environment files, command substitution, uninspected hooks or filesystem remapping. Bounded direct `ExecStartPre` system checks receive inspection only |
+| Model | Existing local vLLM directory. This proves existence and type, not model ownership, permissions or safety |
+| Files | Setup neither changes nor installs application and model files |
 
-Launch-file constraints:
+This single-admin policy trusts the user's groups. It does not isolate workloads from members who can change them.
 
-- The launch file must match systemd's fragment with no pending daemon
-  reload, and use the supported direct-command subset. Setup adopts supported drop-ins without changes and verifies them by hash. It still rejects unsupported or ambiguous drop-in configuration.
-- The desktop user or root must own executables, scripts, launch sources, validated environment and data paths and their traversed directory ancestry. These items must not be world-writable. Setup allows group write only for groups the desktop user belongs to. This single-admin host policy trusts members of its own groups.
-  These checks do not isolate workloads from group members who can change them.
-  Setup resolves symlinks with ownership and permission checks on every traversed path. It rejects broken links and excessive link chains.
-- Setup rejects shell wrappers, environment files, uninspected execution hooks, filesystem remapping directives and command substitution. Setup supports bounded direct `ExecStartPre` system checks and inspects them without running them.
-- Setup does not change or install application or model files.
-- The vLLM runtime needs an existing local model directory. These model checks prove existence and type, not
-  ownership, permissions or content safety.
+`Environment=` accepts literal values, including a quoted whole assignment. HOME, cache, temporary-directory and token paths must exist and pass trust checks. Setup never reads tokens. `PATH`, `LD_LIBRARY_PATH` and `PYTHONPATH` need trusted absolute directories without empty entries.
 
-Adopted `Environment=` assignments support literal values, including quotes around a
-whole assignment. HOME, cache, temporary-directory and token-path settings need existing
-trusted paths. Setup never reads token contents.
+Semicolons also separate `LD_LIBRARY_PATH`. Nonempty `LD_PRELOAD`, `LD_AUDIT` and `PYTHONHOME` remain unsupported. Other literal variables remain unchanged without behavior certification.
 
-`PATH`, `LD_LIBRARY_PATH` and `PYTHONPATH` need trusted absolute directories and reject
-empty search entries. `LD_LIBRARY_PATH` additionally treats semicolons as separators. Nonempty
-code-loading overrides such as `LD_PRELOAD`, `LD_AUDIT` and `PYTHONHOME` stay
-unsupported.
+Unsupported expansion and environment files fail.
 
-Setup keeps other literal variables. It does not certify their application-specific
-behavior. Unsupported expansion and environment files remain rejected.
+Directory checks do not certify loaded module and library contents, ownership, permissions, dependency resolution or plugins. The operator owns installation trust. Setup checks effective loaded assignments and preserves source files. It neither loads libraries nor removes required settings to pass.
 
-Directory checks do not inspect ownership, permissions or contents of loaded modules or
-libraries. The operator stays responsible for trusted local installation and
-dependency contents. Setup preserves the source files and checks their effective loaded
-assignments.
+Literal or `%h` `WorkingDirectory=` uses the same directory, symlink and ancestor checks. Exact loaded paths must match at setup and start.
 
-Literal and `%h` `WorkingDirectory=` settings use the same existing-directory trust
-checks. Setup checks symlink targets and every traversed ancestor for foreign ownership
-and world write permissions. Their exact effective loaded paths must match inspection
-during setup and start.
+Supported existing settings are `Wants=network-online.target`, `KillSignal=SIGINT`, `NoNewPrivileges=true`, `PrivateTmp=true` or `false`, `ProtectHome=read-only` and `ProtectSystem=strict`. Setup and execution compare loaded properties with preserved sources. `Wants=` is additive. Empty assignments do not clear dependencies.
 
-Existing services can keep `Wants=network-online.target`, `KillSignal=SIGINT`,
-`NoNewPrivileges=true`, `PrivateTmp=true` or `false`, `ProtectHome=read-only`, and
-`ProtectSystem=strict`. Setup and execution check their effective loaded properties
-against the preserved sources. `Wants=` uses systemd's additive dependency behavior.
+Other targets fail. Compatible syntax does not prove the application works inside the sandbox. Existing `Type=` and `Restart=` remain, including `Restart=on-failure`.
 
-Empty assignments do not remove earlier dependencies. Other dependency targets remain
-unsupported. These settings qualify compatible syntax and keep isolation settings.
+Account for automatic restarts outside admission.
 
-They do not prove the application can run within that sandbox. Setup preserves existing
-`Type=` and `Restart=` values, including `Restart=on-failure`. Automatic restarts can
-run outside controller admission. Account for that in deployment.
+ComfyUI supports `--base-directory`, `--output-directory`, `--temp-directory`, `--user-directory`, `--extra-model-paths-config` and `--enable-manager`. Directories must exist and pass trust checks. Explicit configuration files must pass trust checks and be readable regular files.
 
-ComfyUI direct commands can keep `--base-directory`, `--output-directory`,
-`--temp-directory`, `--user-directory`, `--extra-model-paths-config` and
-`--enable-manager`. Directory options need existing trusted directories. Each explicit
-configuration file needs an existing trusted readable regular file.
+Symlinks receive the same checks. Recognized endpoint and path flags accept separate values or `--option=value`, but no abbreviations or endpoint-changing TLS flags. The endpoint must use loopback HTTP.
 
-Symlinks undergo the same path checks. Recognized endpoint and path options support
-`--option=value` as well as separate values. Setup does not support endpoint-changing
-TLS flags or abbreviations of qualified endpoint and path options.
+`--cuda-device`, `--default-device` and their abbreviations fail because they override inspected GPU selection. Preserve repeated options and multiple files, up to 256 arguments and 32 configuration files per option. Other arguments remain without behavior certification.
 
-The endpoint must use loopback HTTP. Setup rejects `--cuda-device`, `--default-device`
-and their abbreviations because they override the inspected `CUDA_VISIBLE_DEVICES`
-selection. Setup preserves multiple files and repeated configuration options (at most
-256 arguments and 32 configuration files per option).
+Setup checks the configuration metadata, not YAML or referenced model or custom-node contents. Manager inspection preserves the argument under the trusted-principal script model. It never runs or imports plugins or certifies downloads, scheduled installs, plugins or models.
 
-Setup retains other ComfyUI arguments but does not certify their
-behavior. Configuration qualification checks the file's metadata, without parsing YAML
-or certifying referenced model or custom-node content.
+Deployment must protect management endpoints and direct runtime access. Execution checks exact arguments and source fingerprints. See upstream [arguments](https://github.com/Comfy-Org/ComfyUI/blob/master/comfy/cli_args.py) and [startup](https://github.com/Comfy-Org/ComfyUI/blob/master/main.py).
 
-Manager qualification preserves the argument under the existing trusted
-desktop-principal script model. Inspection never imports or runs plugins. It does not
-certify manager downloads, scheduled installations, plugin behavior or model safety.
+`CUDA_VISIBLE_DEVICES` must contain one full physical GPU UUID, stored as `gpuUUID`. Preflight, startup, readiness and release compare it with the configured NVIDIA GPU. Numeric indices, prefixes, multiple devices and MIG mappings fail.
 
-Protect management endpoints and direct runtime access as part of deployment
-qualification. Exact original arguments and source fingerprints remain bound and checked
-before execution. The upstream [ComfyUI command
-definitions](https://github.com/Comfy-Org/ComfyUI/blob/master/comfy/cli_args.py) and
-[startup handling](https://github.com/Comfy-Org/ComfyUI/blob/master/main.py) describe
-these options. The supervisor preserves their behavior.
+Setup never rewrites the setting to pass. Numeric visibility leaves the installation installed but GPU identity unresolved and adoption blocked. NVIDIA indices are not CUDA ordinals.
 
-Trusting library-search directories does not certify dynamic-loader resolution,
-transitive dependencies or plugin behavior. Setup neither loads libraries nor removes
-required settings to make checks pass.
+One device at index zero, missing `CUDA_DEVICE_ORDER` in filtered metadata or adding an ordering setting does not prove mapping. Unit metadata omits possible inherited and environment-file overrides. Setup neither has same-context CUDA enumeration nor launches a runtime to infer it.
 
-`CUDA_VISIBLE_DEVICES` supports one full physical GPU UUID, recorded as `gpuUUID` in the
-binding. The supervisor checks it against the configured NVIDIA GPU at preflight,
-startup, readiness and release. Numeric indices, UUID prefixes, multiple devices and MIG mappings stay
-unsupported. Setup never removes or rewrites the setting to make adoption pass.
+To qualify numeric visibility, approve an external service change to the configured full UUID, reload the user manager, and refresh the binding. Setup preserves the original files. See [CUDA visibility](https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/environment-variables.html), [NVIDIA indices](https://docs.nvidia.com/deploy/nvidia-smi/index.html), and [systemd environment sources](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html).
 
-Numeric CUDA visibility has an explicit unsupported disposition: a discovered
-installation remains installed, but its GPU identity stays unresolved and setup blocks
-adoption. NVIDIA inventory indices are not CUDA logical ordinals. One inventory device
-at index zero and no `CUDA_DEVICE_ORDER` in filtered unit metadata are insufficient
-evidence.
+Owned launches can set absolute `owned.executable`, which must identify the runtime and pass executable trust checks. Omission keeps `/usr/bin`. Model selection, a side-effect-free preview and explicit activation remain required.
 
-They do not prove application ordering, inherited environment, environment-file
-overrides or CUDA-visible device mapping. Metadata-only setup has no authoritative
-same-context CUDA enumeration evidence and never starts a runtime to infer that mapping.
-Adding an ordering setting alone does not qualify the numeric selection.
+Native proxies need a matching upstream, supported inference route and exact JSON `model`. They reject lifetime overrides, ambiguous keys, query parameters and encoded bodies. Catalog revision changes stop new admission. Supervisor-owned native execution observes terminal response evidence:
 
-To adopt this installation, review and approve a change to use the configured GPU's full
-UUID in its external service. Reload the user systemd manager. Refresh the binding.
+| Response | Terminal evidence |
+| --- | --- |
+| OpenAI chat and completion stream | `data: [DONE]` |
+| Non-streaming completion | Every choice has non-null `finish_reason` |
+| Embeddings | Complete result body parses |
 
-Setup preserves the original files and settings.
-
-The [NVIDIA CUDA environment-variable
-reference](https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/environment-variables.html)
-defines CUDA ordering and visibility. For management indices, see the [NVIDIA
-reference](https://docs.nvidia.com/deploy/nvidia-smi/index.html). The [systemd execution
-environment
-reference](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html)
-describes other environment sources. Do not treat the unit's `Environment` property as a
-complete process-environment snapshot.
-
-Supervisor-managed native launches can specify an absolute `owned.executable` path. It
-must identify the selected runtime and pass the same executable trust checks. Omitting
-it retains the standard `/usr/bin` location. You must still select a model, review the
-side-effect-free preview and explicitly confirm activation.
-
-Readiness requires native health plus exactly the chosen model identity. A native proxy accepts only supported inference routes with the
-exact JSON `model`. It rejects lifetime overrides, ambiguous keys, query parameters and encoded bodies. When
-its catalog revision changes, it stops accepting new requests. Its upstream must match
-the binding.
-
-Supervisor-mode execution of a native binding finishes itself: the proxy observes the
-upstream response and completes the registration on verified terminal evidence.
-OpenAI-compatible chat and completion streams end with a `data: [DONE]` event.
-
-Non-streaming responses end when every choice carries a non-null `finish_reason`.
-Embedding responses end when the complete result body parses.
-
-EOF, disconnects, errors and ambiguous bodies never complete work. Unproven
-registrations stay unfinished for explicit reconciliation, and an external completion
-callback remains accepted first-come. Direct access to native API ports bypasses proxy
-enforcement and must remain outside the managed execution path.
-
-You must still qualify the real GPU, systemd and runtime on the deployment host. HTTP
-and lifecycle fixtures are not hardware qualification.
+EOF, disconnects, errors and ambiguous bodies leave work unfinished. External completion remains first-come. Direct native-port access bypasses enforcement and must stay outside managed execution. Real GPU, systemd and runtime host qualification remains mandatory. HTTP and lifecycle fixtures are insufficient.
 
 ### ComfyUI execution completion
 
-A non-native configured workload can opt into the proxy's [qualified ComfyUI
-asynchronous adapter](INTEGRATION.md#opt-in-comfyui-asynchronous-execution). This
-adds durable enqueue and completion correlation without a catalog version change, launch
-discovery, graph storage, scheduler or automatic idle setting. Existing systemd workload
-lifecycle, readiness, drain and GPU release verification still apply. Qualify trusted
-ingress, gateway graph validation and direct-runtime isolation separately on the
-deployment host.
+Non-native workloads can use the [asynchronous adapter](#opt-in-comfyui-asynchronous-execution) without a catalog version change. It adds durable correlation, not launch discovery, graph storage, scheduling or auto-idle. Existing lifecycle, readiness, drain and release checks remain. Separately qualify ingress, graph validation and runtime isolation.
+
+## Configure the execution proxy
+
+Qualify the [adapter contract](#contract-for-execution-proxy-adapters) before enabling execution. Explicit routes distinguish gated execution from non-execution forwarding:
+
+```sh
+/PINNED/RELEASE/gpu-workload-proxy \
+  -state /PRIVATE/DURABLE/STATE/state.db \
+  -listen 127.0.0.1:LISTEN_PORT \
+  -upstream http://127.0.0.1:PORT \
+  -workload media \
+  -execute-route POST:/execute \
+  -read-only-route GET:/monitor \
+  -completion-path /_gpu-workload-supervisor/v1/work/finish
+```
+
+### Admission
+
+Supervisor-owned execution requires a unique request ID, current lease incarnation and epoch, stable compatible workload, healthy state and open admission. Registration commits before dispatch.
+
+| Header | Configuration |
+| --- | --- |
+| `X-Request-ID` | `-request-id-header` |
+| Job correlation header | `-job-id-header` |
+| `X-Workload-Lease-Incarnation` | `-fence-id-header` |
+| `X-Workload-Lease-Epoch` | `-fence-epoch-header` |
+| `X-Workload-Registration-Token` | Fresh proxy-generated completion capability |
+
+The proxy strips the caller control headers, then adds the normalized admitted ID, fence and token after hop-by-hop filtering. `Connection` nominations cannot remove that tuple. Read-only, passthrough and user-owned execution strip the control headers and register no work.
+
+New request IDs under supervisor ownership must be valid UTF-8 and at most 8192 bytes after trimming outer whitespace. Invalid IDs return HTTP 400 `request_id_invalid`. Oversize IDs return `request_id_too_long`, before registration or dispatch.
+
+Six-byte worst-case JSON escaping still fits the ID, fence, token and outcome in the 64 KiB completion body. Preserve the normalized ID and avoid excessive JSON whitespace. Existing registrations keep their completion behavior.
+
+### Report completion
+
+Submission does not finish work. Trusted upstreams or callers report verified terminal evidence using the original ID, token and fence:
+
+```json
+{
+  "requestId": "REQUEST_ID",
+  "registrationToken": "TOKEN_FROM_ADMISSION",
+  "fence": {
+    "incarnation": "LEASE_INCARNATION",
+    "epoch": 1
+  },
+  "outcome": "completed"
+}
+```
+
+Default path: `POST /_gpu-workload-supervisor/v1/work/finish`. Success returns 204. Unknown IDs return 404.
+
+Missing or forged tokens or mismatched registered fences or workloads fail. Matching duplicate callbacks return 204 for either valid outcome. The first durable outcome wins, including `abandoned`.
+
+Use the original fence even after rotation. Old tokens cannot finish a reused ID. A capability or callback response does not prove execution ended.
+
+In default `trusted` mode, the proxy returns tokens to callers in `X-Workload-Registration-Token`. [Adapter mode](#trusted-adapter-ingress) suppresses client metadata and separates credentials. Legacy tokenless registrations accept their original ID and fence after rotation. New adapters must use tokens.
+
+Native proof passes to a background persistence worker without blocking response forwarding. Terminal bytes alone do not prove a durable write. A trusted callback can finish first.
+
+Matching native retries preserve that result. Workers retry only the original ID and workload and fence and token, never execution: at most three attempts, 3 seconds each, within 10 seconds total. Permanent tuple rejection stops retries.
+
+Logs contain fixed reason codes `retrying`, `rejected`, `exhausted` or `canceled` and `attempts`, not raw storage errors or request metadata.
+
+Proof handed off before disconnect survives it. Rejection, exhaustion or cancellation leaves work unfinished unless another trusted completion won. EOF and read errors and disconnects alone are not terminal proof. See [shutdown](#shutdown) for cancellation that exceeds its budget.
+
+### Retention
+
+Default `-completed-work-retention` is 30 days. Pruning removes completed rows and transition snapshot links, not active work or in-progress transition snapshots. Pruned IDs can recur under the same fence.
+
+Tokens prevent a stale completion. Completed legacy tokenless rows remain protected until fence rotation. Rotation does not revoke unfinished legacy completion.
+
+### Route and listener boundary
+
+Use loopback only: user ownership bypasses lease registration, state-directory writers can drive user execution, and the service trusts its UID. [Requester ingress](OPERATIONS.md#optional-requester-ingress) adds local identity, workflow authorization and durable demand, not host isolation. External exposure, runtime-bypass prevention and content policy remain deployment responsibilities. See [security](../SECURITY.md).
+
+| Route class | Flag | Required evidence |
+| --- | --- | --- |
+| Execution | `-execute-route METHOD:/path` | Any work-starting operation, including GET |
+| Read-only | `-read-only-route GET:/path` | Non-executing GET, HEAD or OPTIONS, configured separately |
+| Editing and monitoring mutation | `-passthrough-route METHOD:/path` | Cannot start work, change ownership or bypass admission |
+
+Classifications cannot overlap. No wildcards, implicit safe methods or automatic HEAD exist. Before upgrading implicit GET and HEAD and OPTIONS forwarding, inventory routes and add explicit entries, including safe editing mutations. Do not restore broad forwarding for UI compatibility.
+
+After authentication and validation, noncanonical decoded paths return 400 `path_not_canonical`. Canonical unknown paths return 404 `route_not_allowed`. Recognized paths with unconfigured methods return 405 with the same error and configured methods in `Allow`, including completion POST.
+
+Canonical paths are absolute, with no repeated slashes, dot segments or trailing slash except `/`. Rejected routes never reach upstream. Explicit non-execution routes remain available with admission closed if upstream responds.
+
+### Trusted adapter ingress
+
+Enable `-ingress-mode adapter -execution-credential-file /PRIVATE/execution.key -completion-credential-file /PRIVATE/completion.key`. Each absolute clean path must identify a private regular file owned by the proxy UID under trusted directories. No symlinks or group or other permissions.
+
+Generate independent 32-byte random credentials as 64 lowercase hex characters. The parser accepts one final newline. Startup reads once with a bound and rejects missing, malformed, equal or unsafe files, or credential files in `trusted` mode.
+
+Rotate by private replacement and proxy restart. Registration tuples persist.
+
+The authenticated gateway sends `X-Workload-Execution-Credential` for execution, read-only and passthrough requests. Only the terminal adapter sends `X-Workload-Completion-Credential` for completion POSTs. Missing, wrong, duplicate or combined credentials return 401 before parsing, state access or forwarding. Execution credentials cannot finish work even with its tuple. Completion still requires terminal proof.
+
+Adapter mode strips ingress credentials, `Authorization` and `Proxy-Authorization` from upstream headers and trailers. URL credentials are forbidden. Admitted correlation reaches trusted upstreams.
+
+Client headers, informational responses and trailers suppress tokens and credentials, including unrelated metadata names and values containing them. Matching is case-insensitive substring matching, covering hex and UUID case changes, not other transformations. Backends and adapters must never echo secrets in bodies and logs.
+
+Payloads remain uninspected. Native terminal observation remains internal and unchanged.
+
+This mode is local, not a remote gateway. Without requester ingress, the gateway must authenticate requesters and enforce identity, CSRF, policy and appropriate limits. Keep execution credentials from clients, completion credentials only at the adapter, host service identities isolated and direct-runtime access blocked. Credentials alone do not qualify deployment. Idle stays Off pending separate evidence and host qualification.
+
+### Connection limits
+
+Private upstream and health transports connect directly, ignoring `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`. Keep upstream trusted. Go callers' custom transports must preserve capability isolation and own their response-header timeout policy.
+
+| Limit | Default and behavior |
+| --- | --- |
+| `-read-header-timeout` | 10 seconds |
+| `-idle-timeout` | 2-minute idle keep-alive |
+| `-max-inflight` | 128 ordinary requests. Positive |
+| `-max-completion-inflight` | 16 separate completion POST slots. Positive |
+| Dial and TLS handshake | 30 seconds / 10 seconds |
+| `-upstream-response-header-timeout` | Positive. 10 minutes after complete upload. Set the timeout above model-load and non-streaming time, for example `20m` |
+| Request bodies and response streams | No total read or write deadline |
+
+Saturation returns 503 `{"error":"proxy_capacity_exceeded"}` with `Retry-After: 1` before registration and forwarding. This suggests a delay, not capacity assurance. Non-POST completion-path requests use ordinary slots.
+
+Streams keep HTTP slots until handlers return. Header timeout returns 502 and releases the ordinary slot. Cancellation or shutdown cancels upstream.
+
+Probes keep their separate `-health-timeout`. None proves terminal work or clears registrations.
+
+Supervisor-native execution also reserves one of `-max-inflight` native slots before registration. It holds that reservation until an unproven response ends or persistence finishes. Pending persistence can reject new work with zero HTTP requests.
+
+A stream still open after persistence retains its HTTP slot. Size for streams and write delays. Completion callback slots remain separate.
+
+Caps bound neither idle connections nor bytes per stream: use trusted clients or authenticated front-proxy connection and body and rate limits.
+
+### Shutdown
+
+New requests return 503 `proxy_shutting_down` without `Retry-After`. Await service availability. Default `-shutdown-timeout=30s` gives separate full budgets to graceful HTTP drain and then native worker drain. Signals and listener failure stop admission, drain producers, then seal proof submission, allowing terminal proof during HTTP drain.
+
+Native timeout cancels retries, but shutdown joins active workers before closing SQLite or releasing the shared recovery-exclusion lock. SQLite busy handling can exceed cancellation. Custom failure callbacks from Go callers must return promptly.
+
+This is not a hard process deadline. Service stop grace must cover both budgets and cleanup. Forced termination can leave verified work unfinished.
+
+<a id="execution-proxy-adapter-contract"></a>
+
+## Contract for execution proxy adapters
+
+Generic tests cover admission, correlation, forwarding and ownership, not deployed runtimes. Disable execution until exact runtime version, route inventory and terminal semantics pass qualification. Requalify after relevant runtime, adapter, proxy or ingress changes.
+
+### Route inventory and migration
+
+Record the runtime version and artifact, adapter version, exact methods and paths, classifications and evidence. Apply the [route rules](#route-and-listener-boundary). Matching uses exact method and decoded path.
+
+Query strings, escaped variants, bodies and payloads pass without semantic inspection. Classify by the most privileged possible behavior, including query-triggered enqueue. Check the aliases, trailing slashes, encoding, base paths, redirects and upgrades.
+
+Work-submitting WebSockets are not read-only. Split or gate channels when one HTTP route cannot represent one admission and completion lifecycle. Names and method conventions prove nothing.
+
+### Admission and completion
+
+Preserve the admitted tuple through submission, streaming, tracking and terminal confirmation. Adapters own backend job IDs and interpretation. Follow [completion](#report-completion):
+
+| Runtime behavior | Proof before completion |
+| --- | --- |
+| Synchronous | Version-specific execution termination, then callback |
+| Asynchronous | Correlated terminal state, not acceptance or job ID |
+| Streaming | Terminal execution event, not EOF or disconnect |
+| Rejection or cancellation | Work cannot still run before `abandoned` |
+
+Execution removes `GetBody`, `Idempotency-Key` and `X-Idempotency-Key` and uses non-rewindable bodies, including empty requests and GET, HEAD, OPTIONS and TRACE. Standard transports never automatically replay ambiguous execution. Payload bytes remain unchanged and known-empty HTTP/1 requests avoid chunked framing. Other routes keep ordinary reuse and transport behavior. This does not deduplicate backend work: never resubmit uncertain execution with a fresh ID.
+
+HTTP 200, HTTP 202 and error responses, EOF, cancellation and transport failure are not completion. Only trusted terminal adapters hold completion authority. Generic upstreams receive tuples in both modes and must not expose them. Authenticate at requester ingress or the deployment gateway and prevent direct bypass.
+
+### Opt-in ComfyUI asynchronous execution
+
+`-comfyui-contract comfyui-a7169322485d0049380fb207fa17e9fb3ec40486` asserts deployment qualification against `Comfy-Org/ComfyUI` commit `a7169322485d0049380fb207fa17e9fb3ec40486`. Default: disabled. It neither detects nor attests installed versions. Check the exact runtime, artifact and custom nodes against [source fixtures](../internal/proxy/testdata/comfyui/README.md), then requalify after changes. The adapter rejects servers that ignore caller `prompt_id`.
+
+Use adapter ingress, separate credentials, a non-native workload and exactly `-execute-route POST:/prompt`. Runtime URL: a root URL on loopback with plain HTTP, without credentials, query, fragment, encoding or base path. Optional monitoring: only `GET:/prompt`, `GET:/queue`, `GET:/history`. No passthrough, job-ID headers, other execution routes, WebSocket submission, query-bearing requests or encoded bodies.
+
+The gateway or requester policy with approved exact-body digest authorizes callers and graphs. Review custom nodes and input and output locations. Envelope validation is not graph safety. Automation receives gateway handles, not raw runtime access or ingress credentials. Isolate every caller and alternate channel against bypass.
+
+For supervisor ownership, generate fresh `prompt_id` and `extra_data.gpu_workload_supervisor.attemptId` UUIDs, replacing caller lifecycle values. One transaction stores admission, original fence, token and UUIDs before dispatch. Keep tuples internal. Raw ComfyUI receives graph data and non-secret IDs only. Store no graphs, inputs, outputs, payloads or artifacts.
+
+One process-lifetime reconciler polls `GET /history/{prompt_id}`. Completion requires exact case-sensitive prompt, correlation and status fields: `status_str: "success"`, `completed: true`, original prompt UUID and attemptId, then absence from both well-formed `/queue` lists. Success proves execution termination, not driver release or artifact validity.
+
+Empty history plus exactly one valid queued or running entry matching both UUIDs is normal pending work without error. Error or cancellation histories and missing or pruned history without correlated queue identity remain unresolved. So do malformed or oversized replies, redirects, unavailable runtime and failed commits. Diagnostics name reasons, never tokens or payloads.
+
+Limits: 16 MiB per envelope and reply. 4096 unfinished attempts. 64 records per pass. 10 seconds per pass and 2 seconds per record. The cursor rotates to prevent starvation.
+
+Shutdown cancels polling before closing state. User forwarding keeps handoff, stop and release gates without supervisor registrations.
+
+Acceptance or disconnect leaves work unfinished. Restart polls stored IDs without replaying `/prompt`. Retained request IDs conflict.
+
+Pre-admission rejection dispatched nothing: get valid admission before retry. After admission, terminal proof or verified `resolve-work` must show earlier execution cannot run before a new execution. Restart or absent queue entries is insufficient.
+
+Submission removes replay hints as above.
+
+Schema v14 adds lifecycle metadata linked to `registered_work`, with cascading deletion under bounded completed-work retention. It preserves registrations, fences, tokens, settings and outcomes. Legacy unfinished work gains no inferred runtime identity.
+
+Older binaries reject v14. Use verified binary and configuration and pre-upgrade [backup rollback](OPERATIONS.md#make-a-backup-restore-and-roll-back-state), never schema edits. Enablement changes neither catalog configuration nor idle policy.
+
+### Failure, restart and ownership
+
+Uncertain start or end stays unfinished through disconnect, truncation, shutdown and restart, preserving correlation. Trusted adapters can later finish with original tuple and proof. Missing tokens or ambiguity need [orphan resolution](OPERATIONS.md#ownership-and-unfinished-work): stop all proxies and runtimes, check release, then record audited abandonment. Ordinary recovery is not terminal proof.
+
+User mode allows selected healthy workloads without lease registration, under the shared handoff gate. Ownership changes close execution, stop user runtimes and await forwarding exit before target start. HTTP enqueue completion is not backend idle. Failed or timed-out handoff keeps admission closed and never restarts stopped user work. Non-execution routes must remain safe during handoff.
+
+### Deployment qualification record
+
+Before enablement, record exact runtime, adapter and proxy versions and route variants, including upgraded channels. Check the terminal semantics and durable correlation without early completion after acceptance or disconnect. Test stale fences, closed admission, duplicate or forged callbacks, closure and drain ordering, client, upstream and proxy failures, restart, orphan resolution and user handoff. Prove bypass prevention for every caller and channel, authentication, callback access, token handling and host and network isolation. Loopback alone proves none of this.
+
+Repository evidence: `internal/proxy/contract_integration_test.go`, `internal/supervisor/proxy_handoff_test.go`, `internal/supervisor/orphan_recovery_test.go`. Real-systemd tests qualify lifecycle and release, not routes or job semantics.
+
+## Orchestrator decision
+
+The state machine, fences, admission and drain remain authoritative. Unit ordering and completion cannot replace readiness, capacity, cgroup or GPU-release evidence.
+
+[#397](https://github.com/mickey-kras/gpu-workload-supervisor/issues/397) adds catalog-derived `Conflicts=` between owned units and `After=` only toward lexically earlier peers. One edge per pair avoids cycles. [systemd](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html#Conflicts=) stops conflicts before start in either direction. Keep `Restart=no`.
+
+Add no `StartLimit*`. Manual opposing starts can interrupt work. Arbitrary external units are outside this backstop.
+
+Adopted units and drop-ins remain unchanged.
+
+Optional `owned.conflicts` joins render, spec and fingerprint validation. Absent metadata preserves exact legacy v2 bytes and fingerprints, as optional executable paths do. Unrecognizing readers reject it through strict JSON.
+
+Preview shows replacement writes. Explicit apply upgrades through rollback and recovery journaling. Removing a peer or replacing it with a qualified adopted binding recomputes dependencies.
+
+Guarded files cannot directly qualify for adoption: dependency directives remain outside external grammar and setup never strips them.
+
+Pending activation replays original hashes exactly. Only a later preview after recovery offers upgrades. Startup never rewrites accepted files.
+
+No database migration. Future features get separate schema versions. Catalog limits remain 256 KiB plus 96 KiB for the supported 32-unit graph.
+
+Other fields cannot use that allowance. Full validation and readback allows 352 KiB. Setup requests allow 416 KiB, reserving 64 KiB for profile and envelope.
+
+Keep host evidence and hardware or build identifiers outside the repository. Resource enforcement remains an [unimplemented design](RESOURCE-LIMITS.md).
