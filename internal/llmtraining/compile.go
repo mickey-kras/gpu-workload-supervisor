@@ -23,6 +23,7 @@ type Config struct {
 	BaseModel             string          `json:"base_model"`
 	Revision              string          `json:"revision_of_model"`
 	Tokenizer             string          `json:"tokenizer_config"`
+	Processor             string          `json:"processor_config"`
 	TrustRemoteCode       bool            `json:"trust_remote_code"`
 	Datasets              []ConfigDataset `json:"datasets"`
 	TestDatasets          []ConfigDataset `json:"test_datasets"`
@@ -123,7 +124,8 @@ func compileConfig(r Recipe) Config {
 	}
 	return Config{
 		BaseModel: r.Model.Inventory.Root, Revision: r.Model.Revision, Tokenizer: r.Tokenizer.Inventory.Root,
-		Datasets: []ConfigDataset{dataset(r.Train.Path)}, TestDatasets: []ConfigDataset{dataset(r.HeldOut.Path)},
+		Processor: r.Tokenizer.Inventory.Root,
+		Datasets:  []ConfigDataset{dataset(r.Train.Path)}, TestDatasets: []ConfigDataset{dataset(r.HeldOut.Path)},
 		DatasetPreparedPath: filepath.Join(r.OutputDirectory, "cache"), OutputDirectory: r.OutputDirectory,
 		Adapter: r.Adapter, Load4Bit: r.Adapter == "qlora", BF16: true,
 		Rank: r.Rank, Alpha: r.Alpha, Dropout: 0.05, Targets: []string{"q_proj", "v_proj"},

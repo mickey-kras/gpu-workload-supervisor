@@ -93,9 +93,15 @@ inventory.
 
 The command never imports the runtime, even to discover its version or plugins.
 
-The candidate supports only `model_type: "llama"`. It needs local
-`config.json`, at least one `.safetensors` file, and a separate
-`tokenizer_config.json`. Asset inventories allow only `.json`, `.safetensors`,
+The candidate supports only the image-text architecture of the primary model,
+so that an adapter matches the base model that vLLM serves. The model
+`config.json` must have `model_type: "qwen3_5"`, the single architecture
+`Qwen3_5ForConditionalGeneration` and a `text_config` with `model_type:
+"qwen3_5_text"`. The candidate needs local `config.json`, at least one
+`.safetensors` file, and a separate `tokenizer_config.json`. The tokenizer
+snapshot also needs `preprocessor_config.json` and
+`video_preprocessor_config.json` with `processor_class: "Qwen3VLProcessor"`,
+because training loads the processor of the image-text model from it. Asset inventories allow only `.json`, `.safetensors`,
 `.model` and `.txt` files. The command rejects configurations with `auto_map`
 or model `quantization_config`.
 

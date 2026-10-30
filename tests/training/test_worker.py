@@ -267,9 +267,9 @@ class WorkerTests(unittest.TestCase):
             peft.from_pretrained.return_value = model
             reload_modules = {
                 "torch": torch, "peft": module("peft", {"PeftModel": peft}),
-                "transformers": module("transformers", {"AutoModelForCausalLM": MagicMock(), "AutoTokenizer": tokenizer, "BitsAndBytesConfig": MagicMock()}),
+                "transformers": module("transformers", {"AutoModelForImageTextToText": MagicMock(), "AutoTokenizer": tokenizer, "BitsAndBytesConfig": MagicMock()}),
             }
-            with patch.dict(worker.sys.modules, reload_modules), patch.object(worker, "verify_accelerator"):
+            with patch.dict(worker.sys.modules, reload_modules), patch.object(worker, "verify_accelerator"), patch.object(worker, "require_matching_adapter"):
                 worker.reload(cfg_path, root / "reload-receipt.json", root / "progress.json")
             self.assertTrue(json.loads((root / "reload-receipt.json").read_text())["reloaded"])
 
@@ -415,10 +415,12 @@ class WorkerTests(unittest.TestCase):
                 modules = {
                     "torch": torch,
                     "peft": module("peft", {"PeftModel": peft}),
-                    "transformers": module("transformers", {"AutoModelForCausalLM": MagicMock(), "AutoTokenizer": tokenizer, "BitsAndBytesConfig": MagicMock()}),
+                    "transformers": module("transformers", {"AutoModelForImageTextToText": MagicMock(), "AutoTokenizer": tokenizer, "BitsAndBytesConfig": MagicMock()}),
                 }
                 receipt = root / "receipt.json"
-                with patch.dict(worker.sys.modules, modules), patch.object(worker, "verify_accelerator") as accelerator:
+                with patch.dict(worker.sys.modules, modules), patch.object(worker, "verify_accelerator") as accelerator, patch.object(
+                    worker, "require_matching_adapter"
+                ) as matching:
                     if finite and length > 1:
                         worker.reload(config, receipt, root / "progress.json")
                         accelerator.assert_called_once_with(quantized)
@@ -427,12 +429,27 @@ class WorkerTests(unittest.TestCase):
                         self.assertEqual((progress["phase"], progress["vramPeakBytes"]), ("reload", 6 << 30))
                         tokenizer.from_pretrained.assert_called_once_with("saved", local_files_only=True, trust_remote_code=False)
                         self.assertEqual(peft.from_pretrained.call_args.args[1], "saved")
+                        matching.assert_called_once_with(model, "saved")
                         model.assert_called_once_with(input_ids=input_ids)
                         model.generate.assert_called_once_with(input_ids=input_ids, max_new_tokens=8, do_sample=False)
                     else:
                         with self.assertRaises(ValueError):
                             worker.reload(config, receipt, root / "progress.json")
                         self.assertFalse(receipt.exists())
+
+    def test_reload_requires_adapter_keys_that_match_the_base_model(self) -> None:
+        keys = {"base_model.model.model.language_model.layers.1.self_attn.q_proj.lora_A.weight": 0}
+        for saved, loaded, matches in ((keys, keys, True), (keys, {}, False), ({}, {}, False),
+                                       (keys, {"base_model.model.model.layers.1.self_attn.q_proj.lora_A.weight": 0}, False)):
+            with self.subTest(saved=sorted(saved), loaded=sorted(loaded)):
+                utils = module("peft.utils", {"load_peft_weights": MagicMock(return_value=saved),
+                                              "get_peft_model_state_dict": MagicMock(return_value=loaded)})
+                with patch.dict(worker.sys.modules, {"peft": module("peft", {"utils": utils}), "peft.utils": utils}):
+                    if matches:
+                        worker.require_matching_adapter(MagicMock(), "saved")
+                    else:
+                        with self.assertRaisesRegex(ValueError, "does not match the base model"):
+                            worker.require_matching_adapter(MagicMock(), "saved")
 
     def test_main_rejects_unsupported_python_before_runtime_preparation(self) -> None:
         for phase in ("train", "reload"):

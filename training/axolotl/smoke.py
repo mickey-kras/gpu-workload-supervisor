@@ -21,6 +21,9 @@ for key in ("HF_HUB_OFFLINE", "HF_DATASETS_OFFLINE", "TRANSFORMERS_OFFLINE",
     os.environ[key] = "1"
 os.environ.update(WANDB_MODE="disabled", TOKENIZERS_PARALLELISM="false", CUDA_VISIBLE_DEVICES="", OMP_NUM_THREADS="1", AXOLOTL_DATASET_NUM_PROC="0")
 
+# Without a GPU, the Triton kernels of flash-linear-attention cannot run. Block the
+# package so transformers uses its Torch path for the linear-attention layers.
+sys.modules["fla"] = None
 import torch
 
 torch.set_num_threads(1)
@@ -39,11 +42,12 @@ def reload_cpu(root):
     # Production reload intentionally requires CUDA/BF16; this fresh process tests
     # the same local safetensors/PEFT export contract using CPU float32.
     from peft import PeftModel
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    worker_module()
-    model = AutoModelForCausalLM.from_pretrained(root / "base", local_files_only=True,
-        trust_remote_code=False, use_safetensors=True, torch_dtype=torch.float32)
+    from transformers import AutoModelForImageTextToText, AutoTokenizer
+    worker = worker_module()
+    model = AutoModelForImageTextToText.from_pretrained(root / "base", local_files_only=True,
+        trust_remote_code=False, use_safetensors=True, dtype=torch.float32)
     model = PeftModel.from_pretrained(model, root / "adapter", local_files_only=True, is_trainable=False)
+    worker.require_matching_adapter(model, root / "adapter")
     tokenizer = AutoTokenizer.from_pretrained(root / "adapter", local_files_only=True, trust_remote_code=False)
     model.eval()
     inputs = tokenizer("The small model learns", return_tensors="pt")
@@ -64,7 +68,14 @@ def train_cpu(root):
     from tokenizers import Tokenizer
     from tokenizers.models import WordLevel
     from tokenizers.pre_tokenizers import Whitespace
-    from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast
+    from transformers import (
+        PreTrainedTokenizerFast,
+        Qwen2VLImageProcessor,
+        Qwen3_5Config,
+        Qwen3_5ForConditionalGeneration,
+        Qwen3VLProcessor,
+        Qwen3VLVideoProcessor,
+    )
     torch.manual_seed(42)
     vocab = {word: i for i, word in enumerate("<pad> <unk> <bos> <eos> The small model learns a useful lesson today . held out example".split())}
     backend = Tokenizer(WordLevel(vocab, unk_token="<unk>"))
@@ -72,17 +83,30 @@ def train_cpu(root):
     tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, pad_token="<pad>",
         unk_token="<unk>", bos_token="<bos>", eos_token="<eos>", model_max_length=32)
     tokenizer.save_pretrained(root / "base")
-    model = LlamaForCausalLM(LlamaConfig(vocab_size=len(vocab), hidden_size=32, intermediate_size=64,
-        num_hidden_layers=1, num_attention_heads=2, num_key_value_heads=2, max_position_embeddings=64,
-        bos_token_id=2, eos_token_id=3, pad_token_id=0))
+    # A tiny model of the presets' image-text architecture: one linear-attention
+    # and one full-attention layer, and a small vision tower.
+    text = {"vocab_size": len(vocab), "hidden_size": 32, "intermediate_size": 64, "num_hidden_layers": 2,
+        "num_attention_heads": 2, "num_key_value_heads": 1, "head_dim": 16,
+        "layer_types": ["linear_attention", "full_attention"], "full_attention_interval": 2,
+        "linear_conv_kernel_dim": 4, "linear_key_head_dim": 8, "linear_num_key_heads": 2,
+        "linear_num_value_heads": 2, "linear_value_head_dim": 8, "max_position_embeddings": 64,
+        "bos_token_id": 2, "eos_token_id": 3, "pad_token_id": 0,
+        "rope_parameters": {"rope_type": "default", "rope_theta": 10000.0, "partial_rotary_factor": 0.25,
+                            "mrope_section": [1, 1, 0], "mrope_interleaved": True}}
+    vision = {"depth": 1, "hidden_size": 16, "intermediate_size": 32, "num_heads": 2, "out_hidden_size": 32,
+        "patch_size": 4, "spatial_merge_size": 2, "temporal_patch_size": 2, "num_position_embeddings": 16}
+    model = Qwen3_5ForConditionalGeneration(Qwen3_5Config(text_config=text, vision_config=vision, tie_word_embeddings=False))
     model.save_pretrained(root / "base", safe_serialization=True)
+    Qwen3VLProcessor(image_processor=Qwen2VLImageProcessor(patch_size=4, merge_size=2, temporal_patch_size=2),
+        video_processor=Qwen3VLVideoProcessor(patch_size=4, merge_size=2, temporal_patch_size=2),
+        tokenizer=tokenizer).save_pretrained(root / "base")
     for name, text, count in (("train", "The small model learns a useful lesson today .", 8),
                               ("heldout", "The held out example .", 2)):
         (root / (name + ".jsonl")).write_text("".join(json.dumps({"text": text}) + "\n" for _ in range(count)))
     def dataset(name):
         return {"path": str(root / (name + ".jsonl")), "ds_type": "json", "type": "completion", "field": "text", "split": "train", "trust_remote_code": False}
     config = {
-        "base_model": str(root / "base"), "tokenizer_config": str(root / "base"),
+        "base_model": str(root / "base"), "tokenizer_config": str(root / "base"), "processor_config": str(root / "base"),
         "trust_remote_code": False, "datasets": [dataset("train")], "test_datasets": [dataset("heldout")],
         "dataset_prepared_path": str(root / "cache"), "output_dir": str(root / "adapter"),
         "adapter": "lora", "load_in_4bit": False, "load_in_8bit": False, "bf16": False, "fp16": False,
@@ -108,7 +132,7 @@ def train_cpu(root):
     if progress["step"] != 2 or not (vram is None or (isinstance(vram, int) and vram > 0)):
         raise ValueError("smoke progress has no final step or no valid VRAM peak field")
     assert_no_optional_imports()
-    subprocess.run([sys.executable, __file__, "--reload", str(root)], check=True, timeout=45)
+    subprocess.run([sys.executable, __file__, "--reload", str(root)], check=True, timeout=90)
     print("CPU smoke passed: two LoRA steps, finite held-out loss and fresh-process adapter reload")
 
 

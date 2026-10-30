@@ -16,13 +16,20 @@ fsspec >=2026.6.0, Pillow >=13 and python-dotenv >=1.2.2. These are nine
 deliberate deviations from Axolotl's declared requirements: eight absent
 distributions and one version override.
 
+The input also adds torchvision 0.29.0, the release for Torch 2.14.0. The
+processor of the image-text presets loads a video processor that needs it.
+Axolotl does not declare torchvision, so this addition is not a deviation.
+
 CI checks these deviations exactly. More or changed deviations fail CI. The
 worker rejects the excluded distributions. Axolotl source and its installed
 dependency metadata remain unchanged. The worker uses no fork.
 
 The CPU smoke test exercises the worker's actual setup, train, evaluate and
-save sequence. It uses a tiny random model, two LoRA optimizer steps and a
-separate-process reload. It runs offline after installation and requires
+save sequence. It uses a tiny random model of the presets' image-text
+architecture, two LoRA optimizer steps and a separate-process reload. Without
+a GPU, the smoke blocks flash-linear-attention so that transformers uses its
+Torch path for the linear-attention layers. The reload checks that the saved
+adapter keys match the modules of the base model. It runs offline after installation and requires
 finite loss and logits. This verifies the subset's code path on dependency
 updates, not GPU suitability.
 
@@ -199,12 +206,19 @@ training runtime. Activation and inference paths do not run it.
 
 | Preset | Model and tokenizer snapshot | Parameters |
 | --- | --- | --- |
-| `smoke-lora` | [TinyLlama 1.1B](https://huggingface.co/TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T/tree/59f6f375b26bde864a6ca194a9a3044570490064) | LoRA 8/16, sequence 128, batch 1, accumulation 1, 2 steps |
-| `representative-qlora` | [Llama 3.1 8B, NousResearch distribution](https://huggingface.co/NousResearch/Meta-Llama-3.1-8B/tree/1f47e50cdbe801ad8a5174156ec3a0655108fb9f) | QLoRA 16/32, sequence 2048, batch 1, accumulation 4, 100 steps |
+| `smoke-lora` | [Qwen3.5 0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B/tree/2fc06364715b967f1860aea9cf38778875588b17) | LoRA 8/16, sequence 128, batch 1, accumulation 1, 2 steps |
+| `representative-qlora` | [Qwen3.8 27B](https://huggingface.co/Qwen/Qwen3.8-27B/tree/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0) | QLoRA 16/32, sequence 2048, batch 1, accumulation 4, 100 steps |
 
-Both presets use learning rate 0.0002 and seed 42. These weights support
-training, not GGUF inference. The presets pin the source revisions. This does
-not show memory fit or quality.
+Both presets use the image-text architecture of the primary model
+(`Qwen3_5ForConditionalGeneration`), so an adapter matches the base model that
+vLLM serves. Each revision is the head of the `main` branch at the time of
+pinning. `representative-qlora` trains the primary model itself. `smoke-lora`
+is the smallest model of the same architecture. Its adapter does not fit the
+primary model.
+
+Both presets use learning rate 0.0002 and seed 42. The LoRA targets are
+`q_proj` and `v_proj`, which only the full-attention layers have. The presets
+pin the source revisions. This does not show memory fit or quality.
 
 `assets.json` is the reference for qualification snapshots, not an input to
 materialization. Presets fix training parameters. Materialization accepts an
@@ -216,8 +230,9 @@ separate, new directories. With an already installed download client, use its
 [snapshot_download](https://huggingface.co/docs/huggingface_hub/guides/download)
 API with the exact `revision` above and `local_dir`. Allow only model
 `config.json`, `generation_config.json`, `model*.safetensors` and shard-index
-JSON, and tokenizer `tokenizer.json`, `tokenizer.model`,
-`tokenizer_config.json`, `special_tokens_map.json` and `added_tokens.json`.
+JSON, and tokenizer `tokenizer.json`, `tokenizer_config.json`,
+`preprocessor_config.json` and `video_preprocessor_config.json`. The two
+processor files are configuration only. They select no code.
 
 Exclude pickle weights and code. Before inventorying the new download
 directories, remove only the downloader's `.cache/huggingface` metadata.

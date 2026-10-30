@@ -65,7 +65,7 @@ func TestCompileRejectsWeightFilenameOverrides(t *testing.T) {
 		t.Run(weights, func(t *testing.T) {
 			r := fixture(t)
 			inventory := &r.Model.Inventory
-			inventory.Files["config.json"] = writeFixture(t, filepath.Join(inventory.Root, "config.json"), `{"model_type":"llama","transformers_weights":"other.safetensors.index.json"}`)
+			inventory.Files["config.json"] = writeFixture(t, filepath.Join(inventory.Root, "config.json"), `{"model_type":"qwen3_5","architectures":["Qwen3_5ForConditionalGeneration"],"text_config":{"model_type":"qwen3_5_text"},"transformers_weights":"other.safetensors.index.json"}`)
 			inventory.Files["other.safetensors.index.json"] = writeFixture(t, filepath.Join(inventory.Root, "other.safetensors.index.json"), `{"weight_map":{"a":`+weights+`}}`)
 			inventory.Files["one.safetensors"] = writeFixture(t, filepath.Join(inventory.Root, "one.safetensors"), "fixture shard")
 			if _, err := Compile(r, math.MaxUint64, math.MaxUint64); err == nil {
@@ -79,15 +79,15 @@ func TestCompileRejectsModelConfigurationIndirection(t *testing.T) {
 	for _, tc := range []struct {
 		name, config string
 	}{
-		{"alternate config", `{"model_type":"llama","configuration_files":["config.5.20.1.json"]}`},
-		{"attribute alias", `{"model_type":"llama","attribute_map":{"transformers_weights":"selected_weights"},"selected_weights":"other.safetensors.index.json"}`},
-		{"state injection", `{"model_type":"llama","__dict__":{"transformers_weights":"other.safetensors.index.json"}}`},
+		{"alternate config", `{"model_type":"qwen3_5","architectures":["Qwen3_5ForConditionalGeneration"],"text_config":{"model_type":"qwen3_5_text"},"configuration_files":["config.5.20.1.json"]}`},
+		{"attribute alias", `{"model_type":"qwen3_5","architectures":["Qwen3_5ForConditionalGeneration"],"text_config":{"model_type":"qwen3_5_text"},"attribute_map":{"transformers_weights":"selected_weights"},"selected_weights":"other.safetensors.index.json"}`},
+		{"state injection", `{"model_type":"qwen3_5","architectures":["Qwen3_5ForConditionalGeneration"],"text_config":{"model_type":"qwen3_5_text"},"__dict__":{"transformers_weights":"other.safetensors.index.json"}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := fixture(t)
 			inventory := &r.Model.Inventory
 			inventory.Files["config.json"] = writeFixture(t, filepath.Join(inventory.Root, "config.json"), tc.config)
-			inventory.Files["config.5.20.1.json"] = writeFixture(t, filepath.Join(inventory.Root, "config.5.20.1.json"), `{"model_type":"llama","transformers_weights":"other.safetensors.index.json"}`)
+			inventory.Files["config.5.20.1.json"] = writeFixture(t, filepath.Join(inventory.Root, "config.5.20.1.json"), `{"model_type":"qwen3_5","architectures":["Qwen3_5ForConditionalGeneration"],"text_config":{"model_type":"qwen3_5_text"},"transformers_weights":"other.safetensors.index.json"}`)
 			inventory.Files["other.safetensors.index.json"] = writeFixture(t, filepath.Join(inventory.Root, "other.safetensors.index.json"), `{"weight_map":{"a":"model.safetensors"}}`)
 			if _, err := Compile(r, math.MaxUint64, math.MaxUint64); err == nil || !strings.Contains(err.Error(), "model configuration indirection is unsupported") {
 				t.Fatal("accepted indirect model configuration or returned unrelated error", err)

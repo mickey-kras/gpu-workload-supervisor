@@ -287,12 +287,26 @@ def train(config_path: Path, receipt: Path, progress: Path, accelerator: bool = 
     publish(receipt, {"version": 1, "phase": "train", "step": cfg.max_steps, "evalLoss": loss, "reloaded": False})
 
 
+def require_matching_adapter(model, directory) -> None:
+    """Reject an adapter whose saved keys differ from the modules of the base model."""
+    from peft.utils import get_peft_model_state_dict, load_peft_weights
+
+    saved = set(load_peft_weights(directory, device="cpu"))
+    loaded = set(get_peft_model_state_dict(model))
+    if not saved or saved != loaded:
+        raise ValueError("adapter does not match the base model")
+
+
 def reload(config_path: Path, receipt: Path, progress: Path) -> None:
     cfg: dict[str, object] = json.loads(config_path.read_text(encoding="utf-8"))
     verify_accelerator(cfg.get("load_in_4bit"))
     import torch
     from peft import PeftModel
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    from transformers import (
+        AutoModelForImageTextToText,
+        AutoTokenizer,
+        BitsAndBytesConfig,
+    )
 
     quantization = None
     if cfg["load_in_4bit"]:
@@ -302,7 +316,9 @@ def reload(config_path: Path, receipt: Path, progress: Path) -> None:
             bnb_4bit_use_double_quant=True,
             bnb_4bit_compute_dtype=torch.bfloat16,
         )
-    base = AutoModelForCausalLM.from_pretrained(
+    # Load the image-text class that training used and that vLLM serves, so the
+    # adapter keys name the same modules.
+    base = AutoModelForImageTextToText.from_pretrained(
         cfg["base_model"],
         local_files_only=True,
         trust_remote_code=False,
@@ -313,6 +329,7 @@ def reload(config_path: Path, receipt: Path, progress: Path) -> None:
         quantization_config=quantization,
     )
     model = PeftModel.from_pretrained(base, cfg["output_dir"], is_trainable=False, local_files_only=True)
+    require_matching_adapter(model, cfg["output_dir"])
     tokenizer = AutoTokenizer.from_pretrained(cfg["output_dir"], local_files_only=True, trust_remote_code=False)
     model.eval()
     tokens = tokenizer("The", return_tensors="pt").to(model.device)
