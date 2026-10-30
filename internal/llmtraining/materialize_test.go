@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -220,5 +221,28 @@ func TestFileDigestNeedsACleanAbsolutePath(t *testing.T) {
 	cancel()
 	if _, err := FileDigest(ctx, filepath.Join(root, "one.safetensors")); !errors.Is(err, context.Canceled) {
 		t.Fatal("a canceled digest must stop", err)
+	}
+}
+
+// cancelAfterFirst cancels its context after the first chunk.
+type cancelAfterFirst struct {
+	cancel context.CancelFunc
+	reads  int
+}
+
+func (c *cancelAfterFirst) Read(p []byte) (int, error) {
+	c.reads++
+	if c.reads == 1 {
+		c.cancel()
+	}
+	return copy(p, "chunk"), nil
+}
+
+func TestContextReaderStopsMidRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	source := &cancelAfterFirst{cancel: cancel}
+	raw, err := io.ReadAll(ContextReader(ctx, source))
+	if !errors.Is(err, context.Canceled) || string(raw) != "chunk" || source.reads != 1 {
+		t.Fatalf("read %q in %d reads, err %v; want one chunk and a cancel", raw, source.reads, err)
 	}
 }

@@ -431,10 +431,6 @@ func fileIdentity(ctx context.Context, file, digest string, entry UpstreamFile) 
 	return "", nil
 }
 
-// gitBlobID hashes "blob <size>\x00" and the content. A local size other
-// than the upstream size gives an empty ID at once, which is a mismatch. The
-// content must still match the inventory. With text set, content that is
-// not printable UTF-8 text gives an empty ID too.
 // printableText accepts UTF-8 text without control characters other than
 // tab, line feed and carriage return.
 func printableText(content []byte) bool {
@@ -449,6 +445,10 @@ func printableText(content []byte) bool {
 	return true
 }
 
+// gitBlobID hashes "blob <size>\x00" and the content. A local size other
+// than the upstream size gives an empty ID at once, which is a mismatch. The
+// content must still match the inventory. With text set, content that is
+// not printable UTF-8 text gives an empty ID too.
 func gitBlobID(ctx context.Context, file string, size int64, digest string, text bool) (string, error) {
 	f, err := openRegular(file)
 	if err != nil {

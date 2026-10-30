@@ -177,8 +177,8 @@ func inspectShardIndex(inventory Inventory, name string) error {
 }
 
 // CheckShardIndex reads the shard index name of inventory, at most limit
-// bytes. A canceled ctx stops the read. Its bytes must match the inventory digest, and each weight_map entry
-// must name an inventoried safetensors file.
+// bytes. Its bytes must match the inventory digest, and each weight_map entry
+// must name an inventoried safetensors file. A canceled ctx stops the read.
 func CheckShardIndex(ctx context.Context, inventory Inventory, name string, limit int64) error {
 	f, err := openRegular(filepath.Join(inventory.Root, name))
 	if err != nil {

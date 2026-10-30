@@ -1132,3 +1132,24 @@ func TestChecksStopWhenCanceled(t *testing.T) {
 		t.Fatal("a single blob read must stop when canceled", err)
 	}
 }
+
+func TestIdentityNeedsSHA256ForWeightsAndTextForTemplates(t *testing.T) {
+	files := modelFiles()
+	entries := upstreamOf(files)
+	for i := range entries {
+		if entries[i].Path == "model-00001-of-00002.safetensors" {
+			entries[i].LFS = nil
+			entries[i].OID = blobID(files[entries[i].Path])
+		}
+	}
+	record := run(t, newHub(t, entries).checker(), writeModel(t, files))
+	if record.Checks[1] != (Check{CheckIdentity, OutcomeFailed, ReasonNoSHA256}) {
+		t.Fatalf("weights without an LFS entry = %+v", record.Checks[1])
+	}
+	files = modelFiles()
+	files["chat_template.jinja"] = "{{ messages }}\x07"
+	record = run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+	if record.Checks[1] != (Check{CheckIdentity, OutcomeFailed, ReasonIdentityMismatch}) {
+		t.Fatalf("a template with a control byte and a matching blob ID = %+v", record.Checks[1])
+	}
+}

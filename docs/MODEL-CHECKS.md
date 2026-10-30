@@ -234,7 +234,7 @@ A failed listing gives `error` with one of these reasons:
 | --- | --- |
 | `passed` | All checks passed. Only this status is clean |
 | `findings` | A check found a problem in the files, for example a rejected file, a remote code key, invalid JSON or an identity mismatch |
-| `error` | A check did not complete. Causes are a file that became unreadable after the inventory (`unreadable`), a failed upstream listing or a file that changed during the check (`files-changed`) |
+| `error` | A check did not complete. Causes are a file that the supervisor cannot read (`unreadable`), a failed upstream listing or a file that changed during the check (`files-changed`) |
 | `unsupported` | The checks do not support the model, for example a model without `.safetensors` weights or with a JSON file above the limit |
 | `not_scanned` | A check did not run, the files changed after the check, the checker changed, or there is no result |
 
