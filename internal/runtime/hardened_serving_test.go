@@ -616,7 +616,7 @@ func TestOwnedSpecKeyToleranceOnlyInPreview(t *testing.T) {
 	if err := m.verifyOwnedSpecBeforeKey(p); err != nil {
 		t.Fatal(err)
 	}
-	if keyFileMissing("") {
+	if KeyFileMissing("") {
 		t.Fatal("an empty path counts as a missing key file")
 	}
 }

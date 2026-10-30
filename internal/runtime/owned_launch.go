@@ -3,6 +3,7 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -107,15 +108,29 @@ func QualifyOwnedUnitBeforeKey(p control.WorkloadProfile) error {
 	if err != nil {
 		return err
 	}
-	unit, err := parseOwnedLaunchUnit(raw, *p.NativeModel)
+	return qualifyOwnedRender(raw, *p.NativeModel, validateNativeExecutable, true)
+}
+
+// qualifyOwnedRender qualifies a rendered owned unit. With keyMayBeMissing, a
+// missing key file passes, because apply creates it before it writes the
+// unit; an existing key file must be usable.
+func qualifyOwnedRender(raw []byte, n control.NativeModel, validate func(string) error, keyMayBeMissing bool) error {
+	unit, err := parseOwnedLaunchUnit(raw, n)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrOwnedRender, err)
 	}
-	unit.keyFilePending = keyFileMissing(p.NativeModel.EnvironmentFile)
-	if err := qualifyParsedLaunch(unit, *p.NativeModel, validateNativeExecutable); err != nil {
+	unit.keyFilePending = keyMayBeMissing && KeyFileMissing(n.EnvironmentFile)
+	if err := qualifyParsedLaunch(unit, n, validate); err != nil {
 		return fmt.Errorf("%w: %v", ErrOwnedRender, err)
 	}
 	return nil
+}
+
+// KeyFileMissing reports a key file path that names no file. Setup and the
+// runtime share this rule for a key file that apply creates.
+func KeyFileMissing(path string) bool {
+	_, err := os.Lstat(path)
+	return path != "" && errors.Is(err, os.ErrNotExist)
 }
 
 // A total lexical order gives every conflicting pair one ordering edge and no

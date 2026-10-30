@@ -149,8 +149,11 @@ not qualify, and the workload stays unavailable:
   again. A changed, missing or unreadable template file does not block the
   setup that pins the new template or removes the workload.
 - `Environment=HF_HUB_OFFLINE=1`. vLLM loads the model only from local files.
-- `EnvironmentFile=<absolute path>`, without the glob characters `*`, `?`, `[`
-  and `]`. This private file holds the API key as one
+- `EnvironmentFile=<path>`. The path must be one literal, clean, absolute
+  path. It must not contain `%` specifiers such as `%h`, `$`, quotes,
+  spaces, or the glob characters `*`, `?`, `[` and `]`. Setup accepts only
+  one `EnvironmentFile` line in the unit and its drop-ins, and the path must
+  not start with `-`. This private file holds the API key as one
   line, `VLLM_API_KEY=<key>`. The key has 32 to 256 letters, digits, `-` or
   `_`, without `=` padding. The path must name the file itself, not a
   symbolic link. The desktop user must

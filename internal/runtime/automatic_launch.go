@@ -184,13 +184,7 @@ func inspectServerLaunch(u parsedLaunchUnit, args []string, app string, result *
 	if result.Model == "" {
 		result.Model = f.model
 	}
-	result.ChatTemplate, result.EnvironmentFile = f.chatTemplate, u.environmentFile
-	if f.chatTemplate != "" {
-		// A template that cannot be read is reported by the qualification.
-		if digest, err := ChatTemplateSHA256(f.chatTemplate); err == nil {
-			result.ChatTemplateSHA256 = digest
-		}
-	}
+	result.ChatTemplate, result.ChatTemplateSHA256, result.EnvironmentFile = hardenedSettings(f, u)
 	n := control.NativeModel{GPUUUID: u.gpuUUID, Runtime: app, Model: result.Model, Endpoint: result.Endpoint, ChatTemplate: result.ChatTemplate, ChatTemplateSHA256: result.ChatTemplateSHA256, EnvironmentFile: result.EnvironmentFile}
 	return qualifyParsedMainCommand(u, n, func(string) error { return nil })
 }

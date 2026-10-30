@@ -314,19 +314,28 @@ func readHardenedSettings(sources [][]byte, binding *control.NativeModel) {
 	if err != nil {
 		return
 	}
-	binding.EnvironmentFile = unit.environmentFile
-	args := splitExecWords(unit.execStart)
-	if len(args) < 3 {
-		return
+	var flags serverFlags
+	if args := splitExecWords(unit.execStart); len(args) >= 3 {
+		// A launch that does not parse declares no template; the
+		// qualification reports the parse error.
+		if parsed, err := parseServerCommand(args, binding.Runtime); err == nil {
+			flags = parsed
+		}
 	}
-	flags, err := parseServerCommand(args, binding.Runtime)
-	if err != nil || flags.chatTemplate == "" {
-		return
+	binding.ChatTemplate, binding.ChatTemplateSHA256, binding.EnvironmentFile = hardenedSettings(flags, unit)
+}
+
+// hardenedSettings reads the hardened settings that a launch declares: the
+// --chat-template path, its current digest and the EnvironmentFile path. A
+// template that cannot be read gets no digest; the qualification reports it.
+func hardenedSettings(flags serverFlags, unit parsedLaunchUnit) (template, digest, environmentFile string) {
+	template, environmentFile = flags.chatTemplate, unit.environmentFile
+	if template != "" {
+		if sum, err := ChatTemplateSHA256(template); err == nil {
+			digest = sum
+		}
 	}
-	binding.ChatTemplate = flags.chatTemplate
-	if digest, err := ChatTemplateSHA256(flags.chatTemplate); err == nil {
-		binding.ChatTemplateSHA256 = digest
-	}
+	return template, digest, environmentFile
 }
 
 // errEarlierOwnedBinding reports a supervisor-managed binding from an earlier

@@ -28,17 +28,17 @@ recomputes the remaining owned dependencies. An already guarded owned file does 
 Dependency directives remain outside the strict external launch grammar.
 Setup does not strip them from external files.
 
-The hardened vLLM fields follow the same rule. A binding without them keeps
-its exact earlier unit bytes and fingerprint, so setup can remove or replace
-the unit. Such a binding never qualifies for execution. Unlike the
+Pending activations keep their original unit hashes through exact replay.
+After recovery completes, setup offers the `owned.conflicts` upgrade in a
+later preview. Runtime
+startup never silently rewrites accepted files. This additive feature needs no database migration.
+Each future schema change gets its own version with its feature.
+
+A vLLM binding without the hardened vLLM fields also keeps its exact earlier
+unit bytes and fingerprint, so setup can remove or replace the unit. Such a binding never qualifies for execution. Unlike the
 `owned.conflicts` upgrade, setup does not upgrade it. Configure the model again
 or remove it, as [Hardened vLLM launch](WORKLOADS.md#hardened-vllm-launch)
 describes.
-
-Pending activations keep their original unit hashes through exact replay.
-After recovery completes, setup offers the upgrade in a later preview. Runtime
-startup never silently rewrites accepted files. This additive feature needs no database migration.
-Each future schema change gets its own version with its feature.
 
 Size limits:
 

@@ -652,6 +652,5 @@ func ownedKeyMissing(p control.WorkloadProfile) bool {
 	if p.NativeModel == nil || p.NativeModel.Owned == nil || !p.NativeModel.Hardened() {
 		return false
 	}
-	_, err := os.Lstat(p.NativeModel.EnvironmentFile)
-	return errors.Is(err, os.ErrNotExist)
+	return gpuruntime.KeyFileMissing(p.NativeModel.EnvironmentFile)
 }
