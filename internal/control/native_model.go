@@ -67,6 +67,9 @@ type OwnedLaunch struct {
 	Port        uint16 `json:"port"`
 	MaxModelLen uint32 `json:"maxModelLen,omitempty"`
 	Alias       string `json:"alias,omitempty"`
+	// Limits are opt-in unit resource controls. Absent keeps the exact legacy
+	// unit bytes and fingerprints; present needs catalog version 5.
+	Limits ResourceLimits `json:"limits,omitzero"`
 }
 
 // ValidNativeModelIdentity applies the catalog's model-identity rule
@@ -161,6 +164,11 @@ func (n NativeModel) validateOwned() error {
 	}
 	if endpoint := "http://127.0.0.1:" + strconv.Itoa(int(o.Port)); n.Endpoint != endpoint {
 		return errors.New("owned launch endpoint must match the rendered loopback binding")
+	}
+	if !o.Limits.IsZero() {
+		if err := o.Limits.Validate(); err != nil {
+			return err
+		}
 	}
 	return n.validateOwnedModel()
 }

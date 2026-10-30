@@ -3,8 +3,11 @@ package operator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 	"path/filepath"
 	"testing"
 	"time"
@@ -128,5 +131,21 @@ func TestCatalogOutputSafety(t *testing.T) {
 		if validCatalog(Session{Revision: "rev", Workloads: ws}) {
 			t.Fatal(ws)
 		}
+	}
+}
+
+// A refused limited target is a definite outcome, so the response must not
+// read as an uncertain unavailable result.
+func TestServiceReportsRefusedLimitedTargetAsIncompatible(t *testing.T) {
+	b := &backendFixture{state: control.InitialState("inc", time.Now())}
+	b.state.Phase = control.PhaseStable
+	b.state.ActiveWorkload = control.WorkloadIdle
+	b.err = fmt.Errorf("%w: third (gws-owned-third.service): %w", supervisor.ErrLimitedTarget, gpuruntime.ErrLimitsNotEnforced)
+	s := Service{StatePath: filepath.Join(t.TempDir(), "state"), Open: func(context.Context) (Session, error) {
+		return Session{Backend: b, Revision: "rev", Workloads: []Workload{{"idle", "Idle"}, {"third", "Third"}}}, nil
+	}}
+	req := Request{ProtocolVersion: 1, RequestID: "r", Action: "user-switch", Target: "third", Expected: &Expected{"inc", "1", control.OwnerUser, "rev"}}
+	if r := s.Handle(req); r.Code != IncompatibleConfiguration || !b.called || r.Status != nil {
+		t.Fatalf("refused limited target = %+v", r)
 	}
 }

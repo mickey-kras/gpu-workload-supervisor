@@ -7,7 +7,7 @@
 - [Configure the proxy](#configure-the-execution-proxy), [credentials](#trusted-adapter-ingress), and [limits](#connection-limits)
 - [Qualify an adapter](#contract-for-execution-proxy-adapters), including [ComfyUI](#opt-in-comfyui-asynchronous-execution)
 - [Owned-unit backstops](#orchestrator-decision)
-- [Resource-limit design](RESOURCE-LIMITS.md): not implemented
+- [Resource-limit design](RESOURCE-LIMITS.md): catalog v5 accepts the schema. Units with limits do not start yet
 
 ## State and responsibility
 
@@ -100,9 +100,12 @@ An enabled catalog contains 1-32 profiles:
 | 2 | Version 1 plus owned native launches |
 | 3 | Reserved. Rejected |
 | 4 | Finite trainer bindings and fenced jobs. Supports owned launches |
+| 5 | Version 4 plus `limits` on owned launches. Units with limits do not start yet |
 | Later | Rejected until a separate feature adds support |
 
-Unchanged v1/v2 profiles need no migration. Owned launches need v2/v4. Trainers need v4. Catalog, database and upstream API versions are independent. The validator rejects unsupported versions and fields outside their version.
+Unchanged v1/v2 profiles need no migration. Owned launches need v2/v4/v5. Trainers need v4/v5. [Resource `limits`](RESOURCE-LIMITS.md) need v5. Catalog, database and upstream API versions are independent. The validator rejects unsupported versions and fields outside their version.
+
+Setup writes the lowest version the content needs: 5 with limits, 4 with trainers, 2 with owned launches, 1 otherwise. Setup cannot write limits yet: it rejects requests with limits and accepts requests that remove them. Controller, host cap and cgroup readback checks are not in this release. The supervisor refuses switches to units with limits before it stops the current workload. Reconciliation stops running units with limits and goes idle. This gate does not change other workloads.
 
 Setup removal of the last application writes `{"version":1,"profiles":[],"disabled":true}`. Empty enabled catalogs and disabled catalogs with profiles are invalid. Adding an application clears `disabled` and restores normal requirements.
 
@@ -439,4 +442,4 @@ No database migration. Future features get separate schema versions. Catalog lim
 
 Other fields cannot use that allowance. Full validation and readback allows 352 KiB. Setup requests allow 416 KiB, reserving 64 KiB for profile and envelope.
 
-Keep host evidence and hardware or build identifiers outside the repository. Resource enforcement remains an [unimplemented design](RESOURCE-LIMITS.md).
+Keep host evidence and hardware or build identifiers outside the repository. Resource enforcement is not in this release. See the [design](RESOURCE-LIMITS.md).

@@ -12,6 +12,21 @@ import (
 
 var ErrOwnedRender = errors.New("owned launch cannot be rendered to the supported unit subset")
 
+// ErrLimitsNotEnforced keeps a unit with limits from starting until the
+// controller, host cap and cgroup readback checks of the limits design exist.
+// systemd starts a unit even when it cannot apply a limit, so launching
+// without those checks would claim protection that may be absent. The
+// supervisor refuses a switch or activation to that profile before any
+// unload, Start and Healthy refuse it as a backstop, and reconciliation does
+// not retain it. Other profiles, preflight and release are not affected.
+// Setup rejects limits separately (ErrLimitsNotInSetup) but accepts a request
+// that removes them.
+var ErrLimitsNotEnforced = errors.New("resource limits are configured, but this build cannot verify them; remove the workload through setup, or restore a backup")
+
+// ownedServiceHeader is the fixed [Service] opening. Limit lines follow it
+// directly, so the strict parser can remove them at one exact position.
+const ownedServiceHeader = "\n[Service]\nType=simple\nRestart=no\n"
+
 // Owned binaries are packaged executables; the deterministic render names the
 // packaged path and the round-trip qualification proves it is trusted. It is a
 // variable only so tests can render against fixture executables.
@@ -32,7 +47,7 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 	}
 	b.WriteString("[Unit]\nDescription=Supervisor-owned " + n.Runtime + " launch for " + string(p.ID) + "\n")
 	b.WriteString(ownedDependencies(p.Unit, n.Owned.Conflicts))
-	b.WriteString("\n[Service]\nType=simple\nRestart=no\n")
+	b.WriteString(ownedServiceHeader + n.Owned.Limits.RenderLines())
 	var execStart string
 	executable := n.Owned.Executable
 	if executable == "" {
@@ -105,8 +120,9 @@ func ownedDependencies(unit, peers string) string {
 }
 
 // Keep the adopted grammar unchanged. Only an owned spec may contribute these
-// exact generated dependency lines; duplicate, extra, moved or changed lines
-// are left to the strict parser to reject.
+// exact generated dependency and limit lines; duplicate, extra, moved or
+// changed lines are left to the strict parser to reject. The owned grammar
+// alone rejects any resource control outside the rendered limits block.
 func parseOwnedLaunchUnit(raw []byte, n control.NativeModel) (parsedLaunchUnit, error) {
 	if n.Owned == nil {
 		return parseLaunchUnit(raw)
@@ -124,5 +140,44 @@ func parseOwnedLaunchUnit(raw []byte, n control.NativeModel) (parsedLaunchUnit, 
 		}
 		raw = []byte(lines[0] + "\n" + lines[1] + "\n" + strings.TrimPrefix(lines[2], dependencies))
 	}
-	return parseLaunchUnit(raw)
+	raw, err := removeOwnedLimitLines(raw, n.Owned.Limits)
+	if err != nil {
+		return parsedLaunchUnit{}, err
+	}
+	parsed, err := parseLaunchUnit(raw)
+	if err != nil {
+		return parsed, err
+	}
+	if len(parsed.limitDirectives) != 0 {
+		return parsedLaunchUnit{}, fmt.Errorf("%w: resource control %s outside the rendered limits", ErrLaunchUnsupported, parsed.limitDirectives[0])
+	}
+	return parsed, nil
+}
+
+// removeOwnedLimitLines accepts limit directives only as the exact rendered
+// block after the fixed [Service] header. parseOwnedLaunchUnit rejects any
+// limit directive left elsewhere, so a moved, changed or extra line fails.
+func removeOwnedLimitLines(raw []byte, limits control.ResourceLimits) ([]byte, error) {
+	block := limits.RenderLines()
+	if block == "" {
+		return raw, nil
+	}
+	text := string(raw)
+	at := strings.Index(text, ownedServiceHeader)
+	if at < 0 || strings.Count(text, ownedServiceHeader) != 1 || !strings.HasPrefix(text[at+len(ownedServiceHeader):], block) {
+		return nil, ErrLaunchUnsupported
+	}
+	start := at + len(ownedServiceHeader)
+	return []byte(text[:start] + text[start+len(block):]), nil
+}
+
+// RequireEnforceableLimits is the one launch gate. The supervisor calls it for
+// a switch target before any unload, and Start and Healthy call it for their
+// own profile as the backstop. A limited unit cannot block other workloads or
+// the setup change that removes it.
+func RequireEnforceableLimits(p control.WorkloadProfile) error {
+	if p.HasLimits() {
+		return fmt.Errorf("%s (%s): %w", p.ID, p.Unit, ErrLimitsNotEnforced)
+	}
+	return nil
 }

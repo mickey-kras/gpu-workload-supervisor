@@ -104,7 +104,9 @@ func OwnedProfile(d Draft, managerCgroup, home string) (control.WorkloadProfile,
 		return control.WorkloadProfile{}, nil, err
 	}
 	profile.NativeModel.LaunchSHA256 = digest(raw)
-	if err := (control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}).Validate(); err != nil {
+	single := control.Catalog{Profiles: []control.WorkloadProfile{profile}}
+	single.Version = control.LowestCatalogVersion(single)
+	if err := single.Validate(); err != nil {
 		return control.WorkloadProfile{}, nil, fmt.Errorf("owned profile synthesis: %w", err)
 	}
 	return profile, raw, nil
@@ -121,7 +123,15 @@ func ownedProfileModel(owned control.OwnedLaunch) string {
 // incoming spec/fingerprint. Accepted catalogs/files remain untouched until the
 // existing owned-unit transaction applies the reviewed writes.
 func prepareOwnedBackstops(request Request) (Request, error) {
+	// Normalization must not turn an unknown version into a known one.
+	if !control.SupportedCatalogVersion(request.Catalog.Version) {
+		return request, control.ErrUnsupportedCatalogVersion
+	}
 	request.Catalog = request.Catalog.Clone()
+	// Every writer uses the lowest version the content needs, so removing the
+	// last limits returns the exact earlier bytes. A resumed activation keeps
+	// its recorded request, which selectRecordedActivation chooses.
+	request.Catalog.Version = control.LowestCatalogVersion(request.Catalog)
 	for _, p := range request.Catalog.Profiles {
 		if p.NativeModel != nil && p.NativeModel.Owned != nil {
 			if _, err := ownedRenderChecked(p); err != nil {
