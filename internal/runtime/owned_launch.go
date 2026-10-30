@@ -3,7 +3,6 @@ package runtime
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -112,9 +111,7 @@ func QualifyOwnedUnitBeforeKey(p control.WorkloadProfile) error {
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrOwnedRender, err)
 	}
-	if _, err := os.Lstat(p.NativeModel.EnvironmentFile); errors.Is(err, os.ErrNotExist) {
-		unit.keyFilePending = true
-	}
+	unit.keyFilePending = keyFileMissing(p.NativeModel.EnvironmentFile)
 	if err := qualifyParsedLaunch(unit, *p.NativeModel, validateNativeExecutable); err != nil {
 		return fmt.Errorf("%w: %v", ErrOwnedRender, err)
 	}

@@ -88,7 +88,7 @@ func parse(raw []byte) (string, error) {
 	content := strings.TrimSuffix(string(raw), "\n")
 	value, ok := strings.CutPrefix(content, Name+"=")
 	if !ok || !token.MatchString(value) {
-		return "", fmt.Errorf("the file must hold one line %s=<key> with 32 to 256 URL-safe characters", Name)
+		return "", fmt.Errorf("the file must hold one line %s=<key>; the key has 32 to 256 letters, digits, '-' or '_', without '=' padding", Name)
 	}
 	return value, nil
 }

@@ -587,3 +587,36 @@ func TestEnvironmentFileRejectsGlobCharacters(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnedSpecKeyToleranceOnlyInPreview(t *testing.T) {
+	model := t.TempDir()
+	p := ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: model, Port: 9100})
+	p.NativeModel = ptrNativeModel(newHardenedFixture(t).bind(*p.NativeModel))
+	p.NativeModel.Model = model
+	p.Unit = control.OwnedUnitName("vision")
+	raw, err := RenderOwnedUnit(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.NativeModel.LaunchSHA256 = sha256Hex(raw)
+	accept := func(string) error { return nil }
+	if err := verifyOwnedSpecMode(p, accept, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(p.NativeModel.EnvironmentFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyOwnedSpecMode(p, accept, true); err != nil {
+		t.Fatal("preview rejected a key file that apply creates:", err)
+	}
+	if err := verifyOwnedSpecMode(p, accept, false); err == nil {
+		t.Fatal("full preflight accepted a missing key file")
+	}
+	m := &SystemdManager{nativeExecutableValidator: accept}
+	if err := m.verifyOwnedSpecBeforeKey(p); err != nil {
+		t.Fatal(err)
+	}
+	if keyFileMissing("") {
+		t.Fatal("an empty path counts as a missing key file")
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/vllmkey"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -80,6 +81,13 @@ func readVerifiedNativeLaunch(n control.NativeModel, validate func(string) error
 // launches: the deterministic re-render must exist, match the recorded digest,
 // and qualify under the shared grammar before the on-disk binding is checked.
 func verifyOwnedSpecWithValidator(p control.WorkloadProfile, validate func(string) error) error {
+	return verifyOwnedSpecMode(p, validate, false)
+}
+
+// verifyOwnedSpecMode verifies an owned spec. With keyMayBeMissing, a missing
+// key file passes, because apply creates it before it writes the unit; an
+// existing key file must be usable. Full Preflight after apply is strict.
+func verifyOwnedSpecMode(p control.WorkloadProfile, validate func(string) error, keyMayBeMissing bool) error {
 	if p.NativeModel == nil || p.NativeModel.Owned == nil {
 		return nil
 	}
@@ -90,10 +98,22 @@ func verifyOwnedSpecWithValidator(p control.WorkloadProfile, validate func(strin
 	if fmt.Sprintf("%x", sha256.Sum256(raw)) != p.NativeModel.LaunchSHA256 {
 		return fmt.Errorf("%w: rendered digest differs from the recorded launch fingerprint", ErrOwnedRender)
 	}
-	if err := qualifyNativeLaunchWithValidator(raw, *p.NativeModel, validate); err != nil {
+	unit, err := parseOwnedLaunchUnit(raw, *p.NativeModel)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrOwnedRender, err)
+	}
+	if keyMayBeMissing {
+		unit.keyFilePending = keyFileMissing(p.NativeModel.EnvironmentFile)
+	}
+	if err := qualifyParsedLaunch(unit, *p.NativeModel, validate); err != nil {
 		return fmt.Errorf("%w: %v", ErrOwnedRender, err)
 	}
 	return nil
+}
+
+func keyFileMissing(path string) bool {
+	_, err := os.Lstat(path)
+	return path != "" && errors.Is(err, os.ErrNotExist)
 }
 
 func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.WorkloadProfile) error {

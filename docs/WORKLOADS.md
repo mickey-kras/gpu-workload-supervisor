@@ -146,13 +146,14 @@ not qualify, and the workload stays unavailable:
 - `--load-format safetensors`. vLLM loads only safetensors weights.
 - `--chat-template <absolute path>`. Setup records the SHA-256 of the template
   file. A changed template file stops the qualification until you run setup
-  again. The changed file does not block the setup that pins the new template
-  or removes the workload.
+  again. A changed, missing or unreadable template file does not block the
+  setup that pins the new template or removes the workload.
 - `Environment=HF_HUB_OFFLINE=1`. vLLM loads the model only from local files.
 - `EnvironmentFile=<absolute path>`, without the glob characters `*`, `?`, `[`
   and `]`. This private file holds the API key as one
-  line, `VLLM_API_KEY=<key>`. The key has 32 to 256 URL-safe characters. The
-  path must name the file itself, not a symbolic link. The desktop user must
+  line, `VLLM_API_KEY=<key>`. The key has 32 to 256 letters, digits, `-` or
+  `_`, without `=` padding. The path must name the file itself, not a
+  symbolic link. The desktop user must
   own the file. Set the file mode to `0600`. Do not put the key
   on the command line or in an `Environment=` line.
 
@@ -184,6 +185,13 @@ folder. When you apply, setup creates the private key file under
 Setup keeps a usable key file and never replaces a file that it cannot use. For
 an existing launch, setup reads the template path and the key file path from
 the launch.
+
+For an existing launch, you create the key file. This command creates a
+usable file:
+
+```sh
+umask 077 && printf 'VLLM_API_KEY=%s\n' "$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')" > "$HOME/.config/vllm-api-key.env"
+```
 
 When you remove a supervisor-managed workload, setup removes its key file.
 Setup does not remove the key file of an existing launch. If setup stops

@@ -3,6 +3,7 @@ package vllmkey
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -208,5 +209,26 @@ func TestEnsureSyncsNewDirectoriesAndReportsSyncFailures(t *testing.T) {
 	syncDirectory = saved
 	if err := syncDirectory(filepath.Join(root, "missing")); err == nil {
 		t.Fatal("missing directory synced")
+	}
+}
+
+// keyFileCommand is the documented way to create a key file for an existing
+// launch (docs/WORKLOADS.md). KEY_FILE names the file.
+const keyFileCommand = `umask 077 && printf 'VLLM_API_KEY=%s\n' "$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')" > "$KEY_FILE"`
+
+func TestDocumentedKeyFileCommandCreatesAUsableFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vllm.env")
+	command := exec.Command("/bin/sh", "-c", keyFileCommand)
+	command.Env = append(os.Environ(), "KEY_FILE="+path)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %s", err, output)
+	}
+	key, err := Read(path)
+	if err != nil || len(key) != 43 {
+		t.Fatalf("documented key file is not usable: %q %v", key, err)
+	}
+	raw, _ := os.ReadFile(filepath.Join("..", "..", "docs", "WORKLOADS.md"))
+	if !strings.Contains(string(raw), strings.ReplaceAll(keyFileCommand, `"$KEY_FILE"`, `"$HOME/.config/vllm-api-key.env"`)) {
+		t.Fatal("docs/WORKLOADS.md does not show the tested command")
 	}
 }

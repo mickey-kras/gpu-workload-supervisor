@@ -361,11 +361,16 @@ func templateCheckingRuntime(request Request) (gpuruntime.Manager, error) {
 	return idleRuntime{}, nil
 }
 
-func acceptedOwnedWithChangedTemplate(t *testing.T) (Backend, string, Request, control.WorkloadProfile) {
+// acceptedOwnedWithChangedTemplate gives each test its own model folder and
+// resets its template, so tests stay independent in any order and count.
+func acceptedOwnedWithChangedTemplate(t *testing.T, id string) (Backend, string, Request, control.WorkloadProfile) {
 	t.Helper()
 	b, home, request := fixture(t)
 	b.runCommand = fakeOwnedCommandFor(home)
-	profile, _ := ownedFixtureProfile(t, home, "templated", 9100)
+	if err := os.WriteFile(filepath.Join(testModelPath(id), ownedChatTemplateName), []byte("{{ messages }}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profile, _ := ownedFixtureProfile(t, home, id, 9100)
 	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
 	if err := b.Apply(t.Context(), home, request); err != nil {
 		t.Fatal(err)
@@ -383,11 +388,11 @@ func acceptedOwnedWithChangedTemplate(t *testing.T) (Backend, string, Request, c
 }
 
 func TestChangedChatTemplateBindingCanBeReplaced(t *testing.T) {
-	b, home, request, stale := acceptedOwnedWithChangedTemplate(t)
+	b, home, request, stale := acceptedOwnedWithChangedTemplate(t, "template-replace")
 	if err := b.Apply(t.Context(), home, request); err == nil {
 		t.Fatal("stale template pin kept for execution")
 	}
-	replacement, _ := ownedFixtureProfile(t, home, "templated", 9100)
+	replacement, _ := ownedFixtureProfile(t, home, "template-replace", 9100)
 	if replacement.NativeModel.ChatTemplateSHA256 == stale.NativeModel.ChatTemplateSHA256 {
 		t.Fatal("replacement did not pin the new template")
 	}
@@ -402,7 +407,7 @@ func TestChangedChatTemplateBindingCanBeReplaced(t *testing.T) {
 }
 
 func TestChangedChatTemplateBindingCanBeRemoved(t *testing.T) {
-	b, home, request, stale := acceptedOwnedWithChangedTemplate(t)
+	b, home, request, stale := acceptedOwnedWithChangedTemplate(t, "template-remove")
 	request.Catalog = control.Catalog{Version: 2, Disabled: true}
 	if err := b.Apply(t.Context(), home, request); err != nil {
 		t.Fatal(err)
@@ -419,5 +424,43 @@ func TestChatTemplateChangedDetection(t *testing.T) {
 	missing := control.WorkloadProfile{NativeModel: &control.NativeModel{Runtime: "vllm", ChatTemplate: filepath.Join(t.TempDir(), "missing.jinja"), ChatTemplateSHA256: strings.Repeat("a", 64), EnvironmentFile: "/k.env"}}
 	if !chatTemplateChanged(missing) {
 		t.Fatal("missing template not reported")
+	}
+}
+
+// previewRuntime records whether the key file existed when the binding check
+// ran. The runtime's own PreflightAdopted tolerates a missing owned key file
+// (see TestPreviewPreflightChecksAdoptedBindingsWithPendingOwnedLaunch).
+type previewRuntime struct {
+	idleRuntime
+	key     string
+	present *bool
+}
+
+func (r previewRuntime) PreflightAdopted(context.Context, map[string]string) error {
+	_, err := os.Lstat(r.key)
+	*r.present = err == nil
+	return nil
+}
+
+func TestNewOwnedVLLMWorkloadPassesPreviewThenApplyCreatesTheKey(t *testing.T) {
+	b, home, request := fixture(t)
+	b.runCommand = fakeOwnedCommandFor(home)
+	profile, _ := ownedFixtureProfile(t, home, "fresh", 9100)
+	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	present := true
+	b.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+		return previewRuntime{key: profile.NativeModel.EnvironmentFile, present: &present}, nil
+	}
+	if err := b.verifyBindings(t.Context(), home, request); err != nil {
+		t.Fatal(err)
+	}
+	if present {
+		t.Fatal("the binding check ran with a key file that preview created")
+	}
+	if err := b.Apply(t.Context(), home, request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vllmkey.Read(profile.NativeModel.EnvironmentFile); err != nil {
+		t.Fatal("apply did not create the key file", err)
 	}
 }
