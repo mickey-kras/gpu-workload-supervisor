@@ -123,6 +123,10 @@ func ownedProfileModel(owned control.OwnedLaunch) string {
 // incoming spec/fingerprint. Accepted catalogs/files remain untouched until the
 // existing owned-unit transaction applies the reviewed writes.
 func prepareOwnedBackstops(request Request) (Request, error) {
+	// Normalization must not turn an unknown version into a known one.
+	if !control.SupportedCatalogVersion(request.Catalog.Version) {
+		return request, control.ErrUnsupportedCatalogVersion
+	}
 	request.Catalog = request.Catalog.Clone()
 	// Every writer uses the lowest version the content needs, so removing the
 	// last limits returns the exact earlier bytes. A resumed activation keeps

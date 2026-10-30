@@ -114,6 +114,14 @@ const CatalogVersionTrainer = 4
 // CatalogVersionLimits is the first catalog version that accepts limits.
 const CatalogVersionLimits = 5
 
+// ErrUnsupportedCatalogVersion rejects a catalog version that no reader knows.
+var ErrUnsupportedCatalogVersion = errors.New("unsupported catalog version")
+
+// SupportedCatalogVersion reports whether v is a known catalog version.
+func SupportedCatalogVersion(v int) bool {
+	return v == CatalogVersionLegacy || v == CatalogVersionOwned || v == CatalogVersionTrainer || v == CatalogVersionLimits
+}
+
 // LowestCatalogVersion is the one version rule for every catalog writer:
 // 5 with limits, 4 with a trainer binding, 2 with an owned launch, else 1.
 // The setup client mirrors it in clients/setup/review.mjs; the backend
@@ -197,8 +205,8 @@ func (c Catalog) Validate() error {
 	if err := c.validateSize(); err != nil {
 		return err
 	}
-	if c.Version != CatalogVersionLegacy && c.Version != CatalogVersionOwned && c.Version != CatalogVersionTrainer && c.Version != CatalogVersionLimits {
-		return errors.New("unsupported catalog version")
+	if !SupportedCatalogVersion(c.Version) {
+		return ErrUnsupportedCatalogVersion
 	}
 	if c.Disabled {
 		if len(c.Profiles) != 0 {

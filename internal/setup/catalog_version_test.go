@@ -223,3 +223,45 @@ func TestTrainerInspectionIgnoresAnUnrelatedLimitedProfile(t *testing.T) {
 		t.Fatalf("write gate accepted limits: %v", err)
 	}
 }
+
+func TestSetupRejectsUnsupportedVersionBeforeNormalizing(t *testing.T) {
+	backend, home, _ := fixture(t)
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+		t.Fatal("setup reached the runtime with an unsupported version")
+		return nil, nil
+	}
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	for _, version := range []int{0, 3, 6, -1} {
+		request := ownedFixtureRequest(t, home, profile)
+		request.Catalog.Version = version
+		raw, err := json.Marshal(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Decode(bytes.NewReader(raw)); !errors.Is(err, control.ErrUnsupportedCatalogVersion) {
+			t.Fatalf("decode with version %d = %v", version, err)
+		}
+		if _, err := backend.Plan(home, request); !errors.Is(err, control.ErrUnsupportedCatalogVersion) {
+			t.Fatalf("preview with version %d = %v", version, err)
+		}
+		if err := backend.Apply(t.Context(), home, request); !errors.Is(err, control.ErrUnsupportedCatalogVersion) {
+			t.Fatalf("apply with version %d = %v", version, err)
+		}
+		if _, err := os.Stat(request.Catalog.Profiles[0].NativeModel.LaunchFile); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("unit written for version %d: %v", version, err)
+		}
+	}
+	// An omitted version decodes as zero and fails the same way.
+	request := ownedFixtureRequest(t, home, profile)
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	omitted := strings.Replace(string(raw), `"catalog":{"version":2,`, `"catalog":{`, 1)
+	if omitted == string(raw) {
+		t.Fatal("fixture has no catalog version key")
+	}
+	if _, err := Decode(strings.NewReader(omitted)); !errors.Is(err, control.ErrUnsupportedCatalogVersion) {
+		t.Fatalf("decode without version = %v", err)
+	}
+}
