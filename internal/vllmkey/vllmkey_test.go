@@ -213,7 +213,7 @@ func TestEnsureSyncsNewDirectoriesAndReportsSyncFailures(t *testing.T) {
 }
 
 // keyFileCommand is the documented way to create a key file for an existing
-// launch (docs/WORKLOADS.md). KEY_FILE names the file.
+// launch (docs/INTEGRATION.md). KEY_FILE names the file.
 const keyFileCommand = `umask 077 && printf 'VLLM_API_KEY=%s\n' "$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')" > "$KEY_FILE"`
 
 func TestDocumentedKeyFileCommandCreatesAUsableFile(t *testing.T) {
@@ -227,8 +227,8 @@ func TestDocumentedKeyFileCommandCreatesAUsableFile(t *testing.T) {
 	if err != nil || len(key) != 43 {
 		t.Fatalf("documented key file is not usable: %q %v", key, err)
 	}
-	raw, _ := os.ReadFile(filepath.Join("..", "..", "docs", "WORKLOADS.md"))
+	raw, _ := os.ReadFile(filepath.Join("..", "..", "docs", "INTEGRATION.md"))
 	if !strings.Contains(string(raw), strings.ReplaceAll(keyFileCommand, `"$KEY_FILE"`, `"$HOME/.config/vllm-api-key.env"`)) {
-		t.Fatal("docs/WORKLOADS.md does not show the tested command")
+		t.Fatal("docs/INTEGRATION.md does not show the tested command")
 	}
 }

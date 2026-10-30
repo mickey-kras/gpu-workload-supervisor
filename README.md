@@ -23,7 +23,7 @@ blocks requests when a transition fails.
 - Proxy: admission and forwarding. No content policy.
 - Brokers, gateways and scanners: external. Not installed by setup.
 
-[Architecture](docs/ARCHITECTURE.md).
+[Architecture](docs/INTEGRATION.md#state-and-responsibility).
 
 ## Requires
 
@@ -38,7 +38,7 @@ Setup detects and adopts supported systemd user services without rewriting their
 source files. For GPU correction, preview first: the explicit `apply` action
 creates a drop-in for an eligible stopped service and does not start it.
 
-[Desktop setup](docs/DESKTOP.md).
+[Desktop setup](docs/OPERATIONS.md#local-gnome-desktop-installation).
 
 ## Setup checks
 
@@ -51,13 +51,14 @@ by name. It preserves supported direct commands and their arguments, and still
 checks endpoint, model, GPU identity, environment and effective loaded settings.
 Shell commands and uninspected operational directives remain unsupported. The
 only supported environment file is the private API key file that every vLLM
-launch needs. See [launch constraints](docs/WORKLOADS.md).
+launch needs. See [launch constraints](docs/INTEGRATION.md#configured-workloads)
+and the [hardened vLLM launch](docs/INTEGRATION.md#hardened-vllm-launch).
 
 ## Docs
 
-- [Deploy and qualify a host](docs/DEPLOYMENT.md)
-- [Switch workloads, recover](docs/OPERATIONS.md)
-- [Backup and restore](docs/RESTORING.md)
+- [Deploy and qualify a host](docs/DEPLOYMENT.md#deploy-the-supervisor)
+- [Switch workloads, recover](docs/OPERATIONS.md#use-and-recover-workloads)
+- [Backup and restore](docs/OPERATIONS.md#make-a-backup-restore-and-roll-back-state)
 - [All documentation](docs/README.md)
 
 [MIT license](LICENSE).
