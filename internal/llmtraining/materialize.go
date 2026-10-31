@@ -2,6 +2,7 @@ package llmtraining
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -130,6 +131,33 @@ func inventoryRecipe(r *Recipe) error {
 	return nil
 }
 
+// FileDigest is the lowercase hex SHA-256 of one regular file at a clean
+// absolute path without links. A canceled ctx stops the hashing.
+func FileDigest(ctx context.Context, path string) (string, error) {
+	if !absolute(path) {
+		return "", errors.New("file digest requires a clean absolute path")
+	}
+	return localDigestContext(ctx, path, 1<<40)
+}
+
+// ContextReader gives a reader that stops when ctx ends.
+func ContextReader(ctx context.Context, r io.Reader) io.Reader {
+	return contextReader{ctx: ctx, r: r}
+}
+
+// contextReader stops a read when its context ends.
+type contextReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c contextReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
+}
+
 func inventoryLocalFiles(root string) (map[string]string, error) {
 	if err := noLinks(root); err != nil {
 		return nil, err
@@ -179,6 +207,10 @@ func inventoryLocalEntries(root, directory string, entries []fs.DirEntry, files 
 }
 
 func localDigest(path string, limit int64) (string, error) {
+	return localDigestContext(context.Background(), path, limit)
+}
+
+func localDigestContext(ctx context.Context, path string, limit int64) (string, error) {
 	if err := noLinks(path); err != nil {
 		return "", err
 	}
@@ -192,7 +224,10 @@ func localDigest(path string, limit int64) (string, error) {
 		return "", errors.New("materialization input exceeds its file limit")
 	}
 	hash := sha256.New()
-	n, err := io.Copy(hash, io.LimitReader(f, limit+1))
+	n, err := io.Copy(hash, contextReader{ctx: ctx, r: io.LimitReader(f, limit+1)})
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
 	if err != nil || n > limit {
 		return "", errors.New("materialization input could not be hashed within its limit")
 	}

@@ -10,8 +10,6 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
-const temporaryDiscoverySlice string = "app.slice"
-
 var ErrTemporaryInvocationChanged = errors.New("temporary discovery invocation changed or start evidence is missing; inspect and stop the service manually, then retry cleanup")
 
 func (m *SystemdManager) temporaryProperties(ctx context.Context, unit string) (map[string]string, error) {
@@ -23,7 +21,7 @@ func (m *SystemdManager) temporaryProperties(ctx context.Context, unit string) (
 }
 
 func (m *SystemdManager) verifyTemporaryCleanup(ctx context.Context, v control.TemporaryDiscoveryCandidate) (map[string]string, error) {
-	if !automaticUnitName.MatchString(v.Unit) || strings.HasPrefix(v.Unit, control.OwnedUnitFilePrefix) || validateCgroup(v.Cgroup) != nil || v.SystemdSlice != temporaryDiscoverySlice {
+	if !automaticUnitName.MatchString(v.Unit) || strings.HasPrefix(v.Unit, control.OwnedUnitFilePrefix) || validateCgroup(v.Cgroup) != nil || v.SystemdSlice != "app.slice" {
 		return nil, ErrLaunchUnsupported
 	}
 	if err := control.ValidateLaunchSources(v.LaunchFile, v.DropIns); err != nil {
@@ -43,7 +41,7 @@ func (m *SystemdManager) verifyTemporaryCleanup(ctx context.Context, v control.T
 	if err := CheckNativeBindingSources(service, v.Unit, v.LaunchFile, v.DropIns); err != nil {
 		return nil, err
 	}
-	if service["NeedDaemonReload"] != "no" || service["Slice"] != temporaryDiscoverySlice {
+	if service["NeedDaemonReload"] != "no" || service["Slice"] != "app.slice" {
 		return nil, ErrLaunchChanged
 	}
 	if err := m.verifyTemporaryCleanupPlacement(ctx, v, service); err != nil {
@@ -95,7 +93,7 @@ func (m *SystemdManager) verifyTemporaryCleanupPlacement(ctx context.Context, v 
 	if err != nil {
 		return err
 	}
-	slice, err := m.temporaryProperties(ctx, temporaryDiscoverySlice)
+	slice, err := m.temporaryProperties(ctx, "app.slice")
 	if err != nil {
 		return err
 	}

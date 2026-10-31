@@ -2,7 +2,10 @@ package llmtraining
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -200,5 +203,46 @@ func TestMaterializeInventoryLimitsAndDigestErrors(t *testing.T) {
 	}
 	if _, err := inventoryLocalFiles(filepath.Join(root, "entry")); err == nil {
 		t.Fatal("accepted file as inventory")
+	}
+}
+
+func TestFileDigestNeedsACleanAbsolutePath(t *testing.T) {
+	root := t.TempDir()
+	want := writeFixture(t, filepath.Join(root, "one.safetensors"), "shard")
+	if digest, err := FileDigest(context.Background(), filepath.Join(root, "one.safetensors")); err != nil || digest != want {
+		t.Fatal("file digest differs from the fixture digest", err)
+	}
+	for _, path := range []string{"relative", root + "/", "/"} {
+		if _, err := FileDigest(context.Background(), path); err == nil {
+			t.Fatalf("file %q was accepted", path)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := FileDigest(ctx, filepath.Join(root, "one.safetensors")); !errors.Is(err, context.Canceled) {
+		t.Fatal("a canceled digest must stop", err)
+	}
+}
+
+// cancelAfterFirst cancels its context after the first chunk.
+type cancelAfterFirst struct {
+	cancel context.CancelFunc
+	reads  int
+}
+
+func (c *cancelAfterFirst) Read(p []byte) (int, error) {
+	c.reads++
+	if c.reads == 1 {
+		c.cancel()
+	}
+	return copy(p, "chunk"), nil
+}
+
+func TestContextReaderStopsMidRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	source := &cancelAfterFirst{cancel: cancel}
+	raw, err := io.ReadAll(ContextReader(ctx, source))
+	if !errors.Is(err, context.Canceled) || string(raw) != "chunk" || source.reads != 1 {
+		t.Fatalf("read %q in %d reads, err %v; want one chunk and a cancel", raw, source.reads, err)
 	}
 }

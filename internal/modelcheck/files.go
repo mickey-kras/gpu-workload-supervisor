@@ -1,0 +1,186 @@
+// Package modelcheck runs the model checks that come before a model can
+// serve: a file allowlist, the upstream identity of each file and, later, a
+// chat template check and a behavioral scan. It binds each result to the
+// exact SHA-256 digests of the model files. A result is not a proof of
+// model safety.
+package modelcheck
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"io"
+	"maps"
+	"os"
+	"path"
+	"path/filepath"
+	"slices"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/llmtraining"
+	"golang.org/x/sys/unix"
+)
+
+// MaxJSONFileBytes bounds each JSON file that the checks read, shard indexes
+// included. Large tokenizer files and the indexes of large mixture-of-experts
+// models are below this limit.
+const MaxJSONFileBytes = 128 << 20
+
+// allowedNames are the configuration, tokenizer and template files that a
+// safetensors model can hold, and files that no loader reads. Weights and shard indexes match by suffix.
+var allowedNames = map[string]bool{
+	"config.json": true, "generation_config.json": true, "hf_quant_config.json": true,
+	"preprocessor_config.json": true, "processor_config.json": true, "video_preprocessor_config.json": true,
+	"tokenizer.json": true, "tokenizer_config.json": true, "tokenizer.model": true,
+	"special_tokens_map.json": true, "added_tokens.json": true,
+	"vocab.json": true, "vocab.txt": true, "merges.txt": true,
+	"chat_template.jinja": true, "chat_template.json": true,
+}
+
+// unloadedNames are documentation and git attribute files. They are allowed
+// and bound, but never parsed or shown, so no value can name them.
+var unloadedNames = map[string]bool{"README": true, "README.md": true, "LICENSE": true, "LICENSE.md": true, ".gitattributes": true}
+
+// rejectedExtensions name code and pickle formats. The allowlist rejects
+// them anyway; the reason makes the report clear.
+var rejectedExtensions = map[string]bool{".py": true, ".bin": true, ".pt": true, ".pth": true, ".pkl": true, ".ckpt": true}
+
+// redirectKeys map the shared loader keys to their reasons. The checks
+// reject these keys at any depth of each JSON file.
+var redirectKeys = func() map[string]string {
+	keys := map[string]string{}
+	for reason, list := range map[string][]string{
+		ReasonRemoteCode:       llmtraining.RemoteCodeKeys,
+		ReasonModelRedirect:    llmtraining.ModelRedirectKeys,
+		ReasonFilePathRedirect: llmtraining.FileRedirectKeys,
+	} {
+		for _, key := range list {
+			keys[key] = reason
+		}
+	}
+	return keys
+}()
+
+// adapterConfig makes a loader load the base model that it names, which
+// this check never saw.
+const adapterConfig = "adapter_config.json"
+
+// Reasons for a failed allowlist check. They name the kind of problem,
+// never a path or file content.
+const (
+	ReasonCodeOrPickleFile = "code-or-pickle-file"
+	ReasonUnlistedFile     = "unlisted-file"
+	ReasonNestedFile       = "nested-file"
+	ReasonAdapterRedirect  = "adapter-redirect"
+	ReasonRemoteCode       = "remote-code-mapping"
+	ReasonModelRedirect    = "model-redirect"
+	ReasonFilePathRedirect = "file-path-redirect"
+	ReasonInvalidJSON      = "invalid-json"
+	ReasonJSONTooLarge     = "json-file-too-large"
+	// ReasonFilesChanged and ReasonUnreadable are error reasons.
+	ReasonFilesChanged    = "files-changed"
+	ReasonUnreadable      = "unreadable"
+	ReasonNoWeights       = "no-safetensors-weights"
+	ReasonNoConfiguration = "no-model-configuration"
+)
+
+var (
+	// errChanged marks a file that changed after the inventory.
+	errChanged = errors.New("model files changed during the check")
+	// errUnreadable marks a file that the check could not read.
+	errUnreadable = errors.New("model file is unreadable")
+)
+
+// allowed checks one top-level file name against the allowlist.
+func allowed(name string) string {
+	switch {
+	case name == adapterConfig:
+		return ReasonAdapterRedirect
+	case rejectedExtensions[path.Ext(name)]:
+		return ReasonCodeOrPickleFile
+	case strings.HasSuffix(name, ".safetensors"), strings.HasSuffix(name, ".safetensors.index.json"), allowedNames[name], unloadedNames[name]:
+		return ""
+	}
+	return ReasonUnlistedFile
+}
+
+// checkAllowlist checks the inventoried files in name order. It reads each
+// JSON file and rejects duplicate keys and remote code keys at any depth.
+// digests are the inventory SHA-256 values, so the bytes that it reads must
+// still match them.
+func checkAllowlist(ctx context.Context, root string, digests map[string]string) (string, error) {
+	names := sortedNames(digests)
+	weights := false
+	for _, name := range names {
+		if reason := allowed(name); reason != "" {
+			return reason, nil
+		}
+		weights = weights || strings.HasSuffix(name, ".safetensors")
+	}
+	if !weights {
+		return ReasonNoWeights, nil
+	}
+	if digests["config.json"] == "" {
+		return ReasonNoConfiguration, nil
+	}
+	for _, name := range names {
+		if !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		reason, err := checkJSON(ctx, filepath.Join(root, name), digests)
+		if err != nil || reason != "" {
+			return reason, err
+		}
+	}
+	return "", nil
+}
+
+func checkJSON(ctx context.Context, file string, digests map[string]string) (string, error) {
+	f, err := openRegular(file)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(llmtraining.ContextReader(ctx, io.LimitReader(f, MaxJSONFileBytes+1)))
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
+	if err != nil {
+		return "", errUnreadable
+	}
+	if len(raw) > MaxJSONFileBytes {
+		return ReasonJSONTooLarge, nil
+	}
+	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != digests[filepath.Base(file)] {
+		return "", errChanged
+	}
+	if !utf8.Valid(raw) {
+		return ReasonInvalidJSON, nil
+	}
+	return scanJSON(filepath.Base(file), raw, digests), nil
+}
+
+func sortedNames(files map[string]string) []string {
+	return slices.Sorted(maps.Keys(files))
+}
+
+// openRegular opens one regular file without following a final link and
+// without blocking on a FIFO.
+func openRegular(file string) (*os.File, error) {
+	fd, err := unix.Open(file, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, errUnreadable
+	}
+	f := os.NewFile(uintptr(fd), file)
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, errChanged
+	}
+	return f, nil
+}

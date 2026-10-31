@@ -1,0 +1,28 @@
+{
+  "architectures": [
+    "Qwen3_5ForConditionalGeneration"
+  ],
+  "model_type": "qwen3_5",
+  "text_config": {
+    "hidden_size": 64,
+    "layer_types": [
+      "linear_attention",
+      "full_attention"
+    ],
+    "model_type": "qwen3_5_text",
+    "mamba_ssm_dtype": "float32",
+    "rope_parameters": {
+      "mrope_section": [
+        1,
+        1,
+        2
+      ],
+      "rope_type": "default"
+    }
+  },
+  "transformers_version": "4.57.0.dev0",
+  "vision_config": {
+    "hidden_act": "gelu_pytorch_tanh",
+    "model_type": "qwen3_5"
+  }
+}

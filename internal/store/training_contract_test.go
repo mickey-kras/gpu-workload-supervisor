@@ -464,7 +464,7 @@ func TestTrainingContractMigrationPreservesV16Demand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`DROP TABLE training_claims; DROP TABLE training_jobs; DELETE FROM schema_migrations WHERE version=17`); err != nil {
+	if _, err := s.db.Exec(`DROP TABLE model_checks; DROP TABLE training_claims; DROP TABLE training_jobs; DELETE FROM schema_migrations WHERE version>=17`); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {

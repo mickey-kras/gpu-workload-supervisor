@@ -21,7 +21,8 @@ blocks requests when a transition fails.
 
 - Controller: ownership and transitions.
 - Proxy: admission and forwarding. No content policy.
-- Brokers, gateways and scanners: external. Not installed by setup.
+- Brokers and gateways: external. Not installed by setup.
+- [Model checks](docs/MODEL-CHECKS.md): file allowlist and upstream identity. No command runs them yet (#585).
 
 [Architecture](docs/INTEGRATION.md#state-and-responsibility).
 
