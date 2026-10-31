@@ -79,7 +79,7 @@ func TestExecutionDoesNotReplayAfterLostResponse(t *testing.T) {
 					case "adapter":
 						config.IngressMode, config.ExecutionCredential, config.CompletionCredential = IngressAdapter, executionCredential, completionCredential
 					case "native":
-						stateStore = &nativeStore{fakeStore: fakeStore{state: state}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: upstream.URL}}}}}}
+						stateStore = &nativeStore{fakeStore: fakeStore{state: state}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: upstream.URL, EnvironmentFile: proxyKeyFile(t)}}}}}}
 						baseStore = &stateStore.(*nativeStore).fakeStore
 					}
 					h, err := NewWithContext(context.Background(), stateStore, config)

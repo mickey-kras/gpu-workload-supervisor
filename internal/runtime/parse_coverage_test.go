@@ -231,11 +231,12 @@ func TestInspectQualifiedNativeLaunchFingerprintAndOwnedDropInRefusal(t *testing
 		t.Fatal(err)
 	}
 	launch := filepath.Join(t.TempDir(), "llm.service")
-	raw := "[Service]\nExecStart=" + executable + " serve " + model + " --host 127.0.0.1 --port 8080\n"
+	hardened := newHardenedFixture(t)
+	raw := "[Service]\n" + hardened.lines() + "ExecStart=" + executable + " serve " + model + " --host 127.0.0.1 --port 8080" + hardened.args() + "\n"
 	if err := os.WriteFile(launch, []byte(raw), 0644); err != nil {
 		t.Fatal(err)
 	}
-	binding := control.NativeModel{Runtime: "vllm", Endpoint: "http://127.0.0.1:8080", Model: model, LaunchFile: launch}
+	binding := hardened.bind(control.NativeModel{Runtime: "vllm", Endpoint: "http://127.0.0.1:8080", Model: model, LaunchFile: launch})
 	fingerprint, err := inspectQualifiedNativeLaunch(launch, binding, fixtureExecutableValidator)
 	if err != nil || fingerprint == "" {
 		t.Fatal("qualified native launch rejected", err)
@@ -254,13 +255,14 @@ func TestVLLMServerOptionGrammarAndEnvironmentDuplicates(t *testing.T) {
 	if err := os.Mkdir(model, 0755); err != nil {
 		t.Fatal(err)
 	}
-	valid := executable + " serve " + model + " --host 127.0.0.1 --port 8080 --max-model-len 32768 --served-model-name orca"
+	hardened := newHardenedFixture(t)
+	valid := executable + " serve " + model + " --host 127.0.0.1 --port 8080 --max-model-len 32768 --served-model-name orca" + hardened.args()
 	qualify := func(command string) error {
-		unit, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nExecStart=" + command + "\n")})
+		unit, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\n" + hardened.lines() + "ExecStart=" + command + "\n")})
 		if err != nil {
 			return err
 		}
-		return qualifyParsedLaunch(unit, control.NativeModel{Runtime: "vllm", Endpoint: "http://127.0.0.1:8080", Model: "orca"}, fixtureExecutableValidator)
+		return qualifyParsedLaunch(unit, hardened.bind(control.NativeModel{Runtime: "vllm", Endpoint: "http://127.0.0.1:8080", Model: "orca"}), fixtureExecutableValidator)
 	}
 	if err := qualify(valid); err != nil {
 		t.Fatal("supported vLLM options rejected", err)
@@ -271,6 +273,11 @@ func TestVLLMServerOptionGrammarAndEnvironmentDuplicates(t *testing.T) {
 		"--ctx-size 4096",
 		"--unknown-flag x",
 		"--model",
+		"--load-format pt",
+		"--load-format safetensors --load-format safetensors",
+		"--chat-template relative.jinja",
+		"--trust-remote-code true",
+		"--api-key secret",
 	} {
 		if err := qualify(executable + " serve " + model + " " + bad); err == nil {
 			t.Fatal("invalid vLLM option accepted:", bad)
@@ -295,7 +302,7 @@ func TestOwnedUnitRenderQualifyAndParseRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	owned := &control.OwnedLaunch{Executable: executable, ModelPath: model, Port: 8080, Alias: "orca"}
-	profile := control.WorkloadProfile{ID: "owned-model", Unit: "gpu-owned-model.service", NativeModel: &control.NativeModel{Runtime: "vllm", Endpoint: "http://127.0.0.1:8080", Model: "orca", Owned: owned}}
+	profile := control.WorkloadProfile{ID: "owned-model", Unit: "gpu-owned-model.service", NativeModel: ptrNativeModel(newHardenedFixture(t).bind(control.NativeModel{Runtime: "vllm", Endpoint: "http://127.0.0.1:8080", Model: "orca", Owned: owned}))}
 	if err := QualifyOwnedUnit(profile); err != nil {
 		t.Fatal("rendered owned unit failed qualification", err)
 	}
@@ -375,13 +382,14 @@ func TestVLLMServeGrammarAndModelDirectoryType(t *testing.T) {
 		t.Fatal(err)
 	}
 	modelDir := t.TempDir()
-	command := executable + " serve " + modelDir + " --host 127.0.0.1 --port 8000 --served-model-name q"
+	hardened := newHardenedFixture(t)
+	command := executable + " serve " + modelDir + " --host 127.0.0.1 --port 8000 --served-model-name q" + hardened.args()
 	qualify := func(cmd string) error {
-		unit, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\nExecStart=" + cmd + "\n")})
+		unit, err := parseExternalLaunchSources([][]byte{[]byte("[Service]\n" + hardened.lines() + "ExecStart=" + cmd + "\n")})
 		if err != nil {
 			return err
 		}
-		return qualifyParsedLaunch(unit, control.NativeModel{Runtime: "vllm", Endpoint: "http://127.0.0.1:8000", Model: "q"}, fixtureExecutableValidator)
+		return qualifyParsedLaunch(unit, hardened.bind(control.NativeModel{Runtime: "vllm", Endpoint: "http://127.0.0.1:8000", Model: "q"}), fixtureExecutableValidator)
 	}
 	if err := qualify(command); err != nil {
 		t.Fatal("vllm serve grammar rejected", err)
@@ -446,7 +454,7 @@ func TestOwnedSpecVerificationAndRemainingGrammarBranches(t *testing.T) {
 		t.Fatal(err)
 	}
 	owned := &control.OwnedLaunch{Executable: executable, ModelPath: model, Port: 8080, Alias: "orca"}
-	profile := control.WorkloadProfile{ID: "owned-model", Unit: "gpu-owned-model.service", NativeModel: &control.NativeModel{Runtime: "vllm", Endpoint: "http://127.0.0.1:8080", Model: "orca", Owned: owned}}
+	profile := control.WorkloadProfile{ID: "owned-model", Unit: "gpu-owned-model.service", NativeModel: ptrNativeModel(newHardenedFixture(t).bind(control.NativeModel{Runtime: "vllm", Endpoint: "http://127.0.0.1:8080", Model: "orca", Owned: owned}))}
 	raw, err := RenderOwnedUnit(profile)
 	if err != nil {
 		t.Fatal(err)
@@ -610,7 +618,7 @@ func TestIndependentBlockersAndDropInReadFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	owned := &control.OwnedLaunch{Executable: executable, ModelPath: model, Port: 8080, Alias: "orca", Conflicts: control.OwnedUnitFilePrefix + "peer.service"}
-	profile := control.WorkloadProfile{ID: "owned-model", Unit: "gpu-owned-model.service", NativeModel: &control.NativeModel{Runtime: "vllm", Endpoint: "http://127.0.0.1:8080", Model: "orca", Owned: owned}}
+	profile := control.WorkloadProfile{ID: "owned-model", Unit: "gpu-owned-model.service", NativeModel: ptrNativeModel(newHardenedFixture(t).bind(control.NativeModel{Runtime: "vllm", Endpoint: "http://127.0.0.1:8080", Model: "orca", Owned: owned}))}
 	if err := QualifyOwnedUnit(profile); err != nil {
 		t.Fatal("owned unit with peers failed qualification", err)
 	}

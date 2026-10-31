@@ -92,7 +92,7 @@ func validatePreparedInstallation(d Draft, found control.WorkloadProfile) error 
 }
 
 func (b Backend) showAutomaticRaw(ctx context.Context, unit string) ([]byte, error) {
-	out, err := b.runCommand(ctx, automaticSystemctlPath, "--user", "show", "--property=Id,LoadState,ExecStart,ExecStartPre,Environment,ControlGroup,ActiveState,SubState,FragmentPath,DropInPaths,NeedDaemonReload,Slice,WorkingDirectory,Wants,KillSignal,NoNewPrivileges,PrivateTmp,ProtectHome,ProtectSystem", "--no-pager", "--", unit)
+	out, err := b.runCommand(ctx, automaticSystemctlPath, "--user", "show", "--property=Id,LoadState,ExecStart,ExecStartPre,Environment,EnvironmentFiles,ControlGroup,ActiveState,SubState,FragmentPath,DropInPaths,NeedDaemonReload,Slice,WorkingDirectory,Wants,KillSignal,NoNewPrivileges,PrivateTmp,ProtectHome,ProtectSystem", "--no-pager", "--", unit)
 	if err != nil {
 		return nil, fmt.Errorf("could not inspect installation %s: %w", unit, err)
 	}
@@ -162,7 +162,8 @@ func (b Backend) configurationFromMetadata(ctx context.Context, app, unit string
 	problems = append(problems,
 		gpuruntime.CheckLoadedAccountHomeDirectory(values["WorkingDirectory"], launch.HomeWorkingDirectory),
 		gpuruntime.CheckLoadedLaunchProperties(values, launch.LoadedProperties),
-		gpuruntime.CheckLoadedEnvironment(values["Environment"], launch.Environment))
+		gpuruntime.CheckLoadedEnvironment(values["Environment"], launch.Environment),
+		gpuruntime.CheckLoadedEnvironmentFiles(values["EnvironmentFiles"], launch.EnvironmentFile))
 	if err := gpuruntime.CheckNativeBindingSources(values, unit, values["FragmentPath"], launch.DropIns); err != nil {
 		problems = append(problems, errors.New("loaded drop-in configuration differs from inspected source files"))
 	}
@@ -229,7 +230,7 @@ func bindInstallationLaunch(p *control.WorkloadProfile, values map[string]string
 		p.LaunchBinding = &control.LaunchBinding{GPUUUID: launch.GPUUUID, Runtime: app, Endpoint: launch.Endpoint, LaunchFile: values["FragmentPath"], LaunchSHA256: launch.SHA256, DropIns: launch.DropIns}
 	} else {
 		p.HealthURL = launch.Endpoint + "/health"
-		p.NativeModel = &control.NativeModel{GPUUUID: launch.GPUUUID, Runtime: app, Instance: "instance-" + candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"}).ID, Model: launch.Model, Endpoint: launch.Endpoint, LaunchFile: values["FragmentPath"], LaunchSHA256: launch.SHA256, DropIns: launch.DropIns}
+		p.NativeModel = &control.NativeModel{GPUUUID: launch.GPUUUID, Runtime: app, Instance: "instance-" + candidate(ProbeRequest{App: app, Reference: unit, ReferenceKind: "configuration"}).ID, Model: launch.Model, Endpoint: launch.Endpoint, LaunchFile: values["FragmentPath"], LaunchSHA256: launch.SHA256, DropIns: launch.DropIns, ChatTemplate: launch.ChatTemplate, ChatTemplateSHA256: launch.ChatTemplateSHA256, EnvironmentFile: launch.EnvironmentFile}
 	}
 }
 

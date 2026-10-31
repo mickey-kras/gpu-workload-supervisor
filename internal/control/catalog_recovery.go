@@ -14,6 +14,13 @@ func (p WorkloadProfile) RemovedRuntime() bool {
 	return p.NativeModel != nil && (p.NativeModel.Runtime == "ollama" || p.NativeModel.Runtime == "llama.cpp")
 }
 
+// RetiredBinding reports a binding that can no longer run: a removed runtime,
+// or a vLLM binding from an earlier release without the hardened settings.
+// Setup can still prove, remove or replace it.
+func (p WorkloadProfile) RetiredBinding() bool {
+	return p.RemovedRuntime() || (p.NativeModel != nil && p.NativeModel.Runtime == "vllm" && !p.NativeModel.Hardened())
+}
+
 // DecodeStoredCatalog permits removal of legacy profiles, never new execution.
 func DecodeStoredCatalog(raw []byte) (Catalog, error) {
 	if len(raw) > MaxCatalogBytes {

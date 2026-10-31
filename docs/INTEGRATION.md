@@ -104,6 +104,8 @@ An enabled catalog contains 1-32 profiles:
 
 Unchanged v1/v2 profiles need no migration. Owned launches need v2/v4. Trainers need v4. Catalog, database and upstream API versions are independent. The validator rejects unsupported versions and fields outside their version.
 
+The hardened vLLM fields `chatTemplate`, `chatTemplateSHA256` and `environmentFile` are valid in v1, v2 and v4 and do not change the version. Earlier releases reject them as unknown fields. To go back, [restore a verified backup](OPERATIONS.md#restore-a-backup).
+
 Setup removal of the last application writes `{"version":1,"profiles":[],"disabled":true}`. Empty enabled catalogs and disabled catalogs with profiles are invalid. Adding an application clears `disabled` and restores normal requirements.
 
 | Field or input | Constraint |
@@ -143,17 +145,17 @@ Database schema v11 transactionally rebuilds workload-constrained tables, preser
 
 ### Native model bindings
 
-A `systemd` profile can bind `nativeModel`: `runtime: "vllm"`, `instance`, exact case-sensitive API `model`, loopback base `endpoint`, absolute `launchFile` and `launchSHA256`. Each workload needs an existing unit and non-overlapping cgroup. Different models can use separate units on one runtime endpoint.
+A `systemd` profile can bind `nativeModel`: `runtime: "vllm"`, `instance`, exact case-sensitive API `model`, loopback base `endpoint`, absolute `launchFile` and `launchSHA256`. A vLLM binding also records `chatTemplate`, `chatTemplateSHA256` and the key-file `environmentFile`. Setup fills these fields. A binding without them never qualifies. Each workload needs an existing unit and non-overlapping cgroup. Different models can use separate units on one runtime endpoint.
 
 Switching stops the old unit and verifies release before starting the next. Reselecting an active workload does not restart it. Opposing units remain reconciled.
 
-Readiness queries `/health` and `/v1/models` and requires exactly the selected model. For catalog changes, follow the [proxy drain and restart procedure](DEPLOYMENT.md#migrate-release-checks).
+Readiness queries `/health`, `/version` and `/v1/models` and requires exactly the selected model. The `/v1/models` request sends the API key from the binding's key file. For catalog changes, follow the [proxy drain and restart procedure](DEPLOYMENT.md#migrate-release-checks).
 
 | Launch item | Qualification |
 | --- | --- |
 | Source | Matches the systemd fragment. No pending reload. Supported direct-command subset. Supported drop-ins remain unchanged and hash-checked. Ambiguous or unsupported drop-ins fail |
 | Paths | Executables, scripts, sources, validated environment and data paths and every traversed ancestor belong to the desktop user or root. No world write. Group write requires user membership. Symlinks receive the same checks. Broken or excessive chains fail |
-| Commands | No shell wrappers, environment files, command substitution, uninspected hooks or filesystem remapping. Bounded direct `ExecStartPre` system checks receive inspection only |
+| Commands | No shell wrappers, environment files other than the vLLM key file, command substitution, uninspected hooks or filesystem remapping. Bounded direct `ExecStartPre` system checks receive inspection only |
 | Model | Existing local vLLM directory. This proves existence and type, not model ownership, permissions or safety |
 | Files | Setup neither changes nor installs application and model files |
 
@@ -163,7 +165,7 @@ This single-admin policy trusts the user's groups. It does not isolate workloads
 
 Semicolons also separate `LD_LIBRARY_PATH`. Nonempty `LD_PRELOAD`, `LD_AUDIT` and `PYTHONHOME` remain unsupported. Other literal variables remain unchanged without behavior certification.
 
-Unsupported expansion and environment files fail.
+Setup rejects `VLLM_API_KEY` in `Environment=`. Other `VLLM_` variables need the [hardened launch allowlist](#hardened-vllm-launch). Unsupported expansion and other environment files fail.
 
 Directory checks do not certify loaded module and library contents, ownership, permissions, dependency resolution or plugins. The operator owns installation trust. Setup checks effective loaded assignments and preserves source files. It neither loads libraries nor removes required settings to pass.
 
@@ -204,6 +206,45 @@ Native proxies need a matching upstream, supported inference route and exact JSO
 | Embeddings | Complete result body parses |
 
 EOF, disconnects, errors and ambiguous bodies leave work unfinished. External completion remains first-come. Direct native-port access bypasses enforcement and must stay outside managed execution. Real GPU, systemd and runtime host qualification remains mandatory. HTTP and lifecycle fixtures are insufficient.
+
+### Hardened vLLM launch
+
+Every vLLM launch needs these settings. Without one, the launch does not qualify and the workload stays unavailable:
+
+| Setting | Requirement |
+| --- | --- |
+| `--host 127.0.0.1` | vLLM listens only on loopback |
+| `--load-format safetensors` | vLLM loads only safetensors weights |
+| `--chat-template <absolute path>` | Setup records the template SHA-256. A changed template stops qualification until setup runs again. A changed, missing or unreadable template does not block the setup that pins a new template or removes the workload |
+| `Environment=HF_HUB_OFFLINE=1` | vLLM loads the model only from local files |
+| `EnvironmentFile=<path>` | One literal, clean, absolute path. No `%` specifiers such as `%h`, `$`, quotes, spaces, `*`, `?`, `[` or `]`. No leading `-`. Only one `EnvironmentFile` line across unit and drop-ins. The path names the file, not a symbolic link |
+
+The key file holds one line, `VLLM_API_KEY=<key>`. The key has 32-256 letters, digits, `-` or `_`, without `=` padding. The desktop user owns the file, mode `0600`. Never put the key on the command line or in `Environment=`.
+
+The option allowlist keeps other vLLM options off: remote code, request-supplied chat templates, prompt-embedding input, command-line API keys and runtime adapter loading.
+
+`Environment=` accepts only these `VLLM_` settings: `VLLM_LOGGING_LEVEL`, `VLLM_CONFIGURE_LOGGING`, `VLLM_NO_USAGE_STATS`, `VLLM_DO_NOT_TRACK`, `VLLM_WORKER_MULTIPROC_METHOD`, `VLLM_ATTENTION_BACKEND` and `VLLM_ENGINE_ITERATION_TIMEOUT_S`. Setup rejects others, for example `VLLM_SERVER_DEV_MODE`, `VLLM_PLUGINS`, `VLLM_ALLOW_INSECURE_SERIALIZATION` and `VLLM_ALLOW_RUNTIME_LORA_UPDATING`. Setup does not read the user systemd manager environment. Do not set `VLLM_` settings there (`systemctl --user set-environment`): every user service gets them.
+
+Minimum vLLM: 0.14.1. NVFP4 in `config.json` or `hf_quant_config.json` needs 0.27.0 or later. Other FP4 schemes, such as MXFP4, need only 0.14.1. Readiness reads `/version` and keeps older versions and minimum-version pre-releases unavailable. Setup does not check the version, because vLLM does not run during setup. Use a version without known critical or high advisories.
+
+Managed launches pin `chat_template.jinja` from the model folder. The apply step creates the private key file under `~/.config/gpu-workload-supervisor/vllm/`. Preview and review never create it. Setup keeps a usable key file and never replaces one it cannot use. For an existing launch, setup reads both paths from the launch, and you create the key file. This command creates a usable file:
+
+```sh
+umask 077 && printf 'VLLM_API_KEY=%s\n' "$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')" > "$HOME/.config/vllm-api-key.env"
+```
+
+Removing a managed workload removes its key file. Setup never removes the key file of an existing launch. A stop before commit can leave a new key file, which the next apply uses. If a managed key file is missing, the next apply creates one.
+
+The workload proxy reads the key file for each request and sends the key to vLLM. It replaces any client `Authorization` header. Readiness and the proxy send the key only when the desktop user owns each 127.0.0.1 listening socket on the vLLM port. Another user's program on the port thus gets no key. A small window remains between this check and the connection.
+
+A missing or unusable key file, or another user on the port, stops forwarding. The client gets `502 Bad Gateway` and the proxy log names the cause. Correct the key file or stop the other program. If vLLM rejects the key, readiness reports a key mismatch with the running vLLM. Restart the workload, or run setup again after a key file change.
+
+The key protects only vLLM `/v1` routes. Other routes need no key, for example `/health`, `/version`, `/invocations`, `/tokenize`, `/detokenize`, `/pooling`, `/score`, `/classify` and `/v2/rerank`. Some run the model. The loopback listener limits them to programs on this computer, including other users' programs. Programs of the desktop user can also read the key file. The supervisor trusts that user.
+
+Bindings from an earlier release record none of these settings and do not qualify. Their workload proxy does not start until you configure them again. They do not block setup, which can remove or configure them again:
+
+- Managed binding: add `chat_template.jinja` to the model folder, open setup and configure the model again. Setup generates the hardened launch.
+- Existing launch: add the settings to its unit, reload systemd and run setup again for the workload.
 
 ### ComfyUI execution completion
 
@@ -307,6 +348,8 @@ Rotate by private replacement and proxy restart. Registration tuples persist.
 The authenticated gateway sends `X-Workload-Execution-Credential` for execution, read-only and passthrough requests. Only the terminal adapter sends `X-Workload-Completion-Credential` for completion POSTs. Missing, wrong, duplicate or combined credentials return 401 before parsing, state access or forwarding. Execution credentials cannot finish work even with its tuple. Completion still requires terminal proof.
 
 Adapter mode strips ingress credentials, `Authorization` and `Proxy-Authorization` from upstream headers and trailers. URL credentials are forbidden. Admitted correlation reaches trusted upstreams.
+
+For a native vLLM binding, the proxy then sets the upstream `Authorization` header from the binding's key file in every ingress mode. It replaces any client `Authorization` header. It sends the key only when the desktop user owns each 127.0.0.1 listening socket on the vLLM port. See [Hardened vLLM launch](#hardened-vllm-launch).
 
 Client headers, informational responses and trailers suppress tokens and credentials, including unrelated metadata names and values containing them. Matching is case-insensitive substring matching, covering hex and UUID case changes, not other transformations. Backends and adapters must never echo secrets in bodies and logs.
 
@@ -433,7 +476,9 @@ Preview shows replacement writes. Explicit apply upgrades through rollback and r
 
 Guarded files cannot directly qualify for adoption: dependency directives remain outside external grammar and setup never strips them.
 
-Pending activation replays original hashes exactly. Only a later preview after recovery offers upgrades. Startup never rewrites accepted files.
+Pending activation replays original hashes exactly. Only a later preview after recovery offers the `owned.conflicts` upgrade. Startup never rewrites accepted files.
+
+A vLLM binding without the hardened fields also keeps its exact earlier unit bytes and fingerprint, so setup can remove or replace the unit. It never qualifies for execution, and setup does not upgrade it. Configure the model again or remove it, as [Hardened vLLM launch](#hardened-vllm-launch) describes.
 
 No database migration. Future features get separate schema versions. Catalog limits remain 256 KiB plus 96 KiB for the supported 32-unit graph.
 

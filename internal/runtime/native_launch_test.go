@@ -15,8 +15,8 @@ import (
 func TestNativeLaunchFingerprintAndModelPath(t *testing.T) {
 	for _, family := range []string{"vllm"} {
 		t.Run(family, func(t *testing.T) {
-			n := control.NativeModel{Runtime: family, Endpoint: "http://localhost:9000", Model: "selected"}
-			raw := nativeLaunchFixture(t, family, n.Endpoint, n.Model)
+			n := control.NativeModel{Runtime: family, Endpoint: "http://127.0.0.1:9000", Model: "selected"}
+			raw := nativeLaunchFixture(t, &n)
 			path := filepath.Join(t.TempDir(), "model.service")
 			if err := os.WriteFile(path, raw, 0600); err != nil {
 				t.Fatal(err)
@@ -63,15 +63,16 @@ func TestNativeLaunchFingerprintAndModelPath(t *testing.T) {
 	}
 }
 
-// vllmLaunchFixture returns a qualifying direct vLLM launch on
-// localhost:9000 and its binding. The model directory exists.
+// vllmLaunchFixture returns a qualifying hardened direct vLLM launch on
+// 127.0.0.1:9000 and its binding. The model directory exists.
 func vllmLaunchFixture(t *testing.T) (string, control.NativeModel) {
 	t.Helper()
 	model := filepath.Join(t.TempDir(), "selected")
 	if err := os.Mkdir(model, 0755); err != nil {
 		t.Fatal(err)
 	}
-	return "[Service]\nExecStart=/usr/bin/vllm serve " + model + " --host localhost --port 9000\n", control.NativeModel{Runtime: "vllm", Endpoint: "http://localhost:9000", Model: model}
+	hardened := newHardenedFixture(t)
+	return "[Service]\n" + hardened.lines() + "ExecStart=/usr/bin/vllm serve " + model + " --host 127.0.0.1 --port 9000" + hardened.args() + "\n", hardened.bind(control.NativeModel{Runtime: "vllm", Endpoint: "http://127.0.0.1:9000", Model: model})
 }
 
 func qualifyFixtureLaunch(raw []byte, n control.NativeModel) error {
@@ -82,8 +83,8 @@ func inspectFixtureLaunch(path string, n control.NativeModel) (string, error) {
 }
 
 func TestNativeLaunchPreservesDocumentedOptionsAndPreparation(t *testing.T) {
-	n := control.NativeModel{Runtime: "vllm", Endpoint: "http://localhost:9000", Model: "selected"}
-	good := strings.TrimSpace(string(nativeLaunchFixture(t, n.Runtime, n.Endpoint, n.Model)))
+	n := control.NativeModel{Runtime: "vllm", Endpoint: "http://127.0.0.1:9000", Model: "selected"}
+	good := strings.TrimSpace(string(nativeLaunchFixture(t, &n)))
 	options := "--max-model-len 4096"
 	model := strings.Fields(strings.Split(good, "ExecStart=")[1])[2]
 	raw := []byte(good + " " + options + "\nExecStartPre=/usr/bin/test -d " + model + "\nExecStartPre=-/usr/bin/true\n")
@@ -123,7 +124,7 @@ func TestLoadedStartupPreparationMustMatchBoundCommands(t *testing.T) {
 }
 
 func TestNativeStartupPreparationRecheckedBeforeStart(t *testing.T) {
-	m, r, p, cmd := nativeFixture(t, "vllm", "http://localhost:9000")
+	m, r, p, cmd := nativeFixture(t, "vllm", "http://127.0.0.1:9000")
 	raw, err := os.ReadFile(p.NativeModel.LaunchFile)
 	if err != nil {
 		t.Fatal(err)

@@ -81,6 +81,11 @@ func OwnedProfile(d Draft, managerCgroup, home string) (control.WorkloadProfile,
 	}
 	model := ownedProfileModel(owned)
 	id := control.Workload(d.ID)
+	template := filepath.Join(owned.ModelPath, ownedChatTemplateName)
+	templateSHA256, err := gpuruntime.ChatTemplateSHA256(template)
+	if err != nil {
+		return control.WorkloadProfile{}, nil, fmt.Errorf("add %s to the model folder: %w", ownedChatTemplateName, err)
+	}
 	unit := control.OwnedUnitName(id)
 	endpoint := "http://127.0.0.1:" + strconv.Itoa(int(owned.Port))
 	profile := control.WorkloadProfile{
@@ -96,6 +101,11 @@ func OwnedProfile(d Draft, managerCgroup, home string) (control.WorkloadProfile,
 			Endpoint:   endpoint,
 			LaunchFile: filepath.Join(home, ".config/systemd/user", unit),
 			Owned:      &owned,
+			// The hardened launch pins the model's own chat template and reads
+			// the API key from a private file that setup creates on apply.
+			ChatTemplate:       template,
+			ChatTemplateSHA256: templateSHA256,
+			EnvironmentFile:    OwnedEnvironmentFile(home, id),
 		},
 	}
 	profile.Cgroup = gpuruntime.OwnedCgroup(managerCgroup, profile)
@@ -108,6 +118,16 @@ func OwnedProfile(d Draft, managerCgroup, home string) (control.WorkloadProfile,
 		return control.WorkloadProfile{}, nil, fmt.Errorf("owned profile synthesis: %w", err)
 	}
 	return profile, raw, nil
+}
+
+// ownedChatTemplateName is the chat template file in the model folder that an
+// owned vLLM launch pins.
+const ownedChatTemplateName = "chat_template.jinja"
+
+// OwnedEnvironmentFile is the private file that holds the vLLM API key of an owned
+// workload.
+func OwnedEnvironmentFile(home string, id control.Workload) string {
+	return filepath.Join(home, ".config/gpu-workload-supervisor/vllm", string(id)+".env")
 }
 
 func ownedProfileModel(owned control.OwnedLaunch) string {

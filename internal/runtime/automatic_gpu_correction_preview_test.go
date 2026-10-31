@@ -28,9 +28,12 @@ func TestPreviewAutomaticGPUCorrectionPreservesEffectiveLaunchAndSources(t *test
 			executable := filepath.Join(home, "vllm")
 			model := filepath.Join(home, "model")
 			writeCorrectionPreviewFile(t, filepath.Join(model, "config.json"), "{}")
-			command := executable + " serve " + model + " --host 127.0.0.1 --port 8080"
+			hardened := newHardenedFixture(t)
+			command := executable + " serve " + model + " --host 127.0.0.1 --port 8080" + hardened.args()
 			endpoint := "http://127.0.0.1:8080"
+			serviceLines := hardened.lines()
 			if app == "comfyui" {
+				serviceLines = ""
 				executable = filepath.Join(home, "python3")
 				script := filepath.Join(home, "ComfyUI", "main.py")
 				writeCorrectionPreviewFile(t, script, "raise RuntimeError('must not run')")
@@ -39,7 +42,7 @@ func TestPreviewAutomaticGPUCorrectionPreservesEffectiveLaunchAndSources(t *test
 			}
 			writeCorrectionPreviewFile(t, executable, "fixture, never executed")
 			fragment := filepath.Join(home, "app.service")
-			original := "[Service]\nType=exec\nRestart=no\nEnvironment=CUDA_VISIBLE_DEVICES=0\nExecStart=" + command + "\n"
+			original := "[Service]\nType=exec\nRestart=no\nEnvironment=CUDA_VISIBLE_DEVICES=0\n" + serviceLines + "ExecStart=" + command + "\n"
 			writeCorrectionPreviewFile(t, fragment, original)
 			dropIn := filepath.Join(home, "app.service.d", "10-existing.conf")
 			dropInContent := "[Service]\nEnvironment=CUDA_VISIBLE_DEVICES=1\nWorkingDirectory=" + home + "\n"
@@ -54,8 +57,8 @@ func TestPreviewAutomaticGPUCorrectionPreservesEffectiveLaunchAndSources(t *test
 			if result.Command != command || result.Endpoint != endpoint || result.WorkingDirectory != home {
 				t.Fatalf("effective launch changed: %+v", result)
 			}
-			if app == "vllm" && result.Model != model {
-				t.Fatalf("model = %q", result.Model)
+			if app == "vllm" && (result.Model != model || result.ChatTemplate != hardened.template || result.ChatTemplateSHA256 != hardened.templateSHA256 || result.EnvironmentFile != hardened.keyFile) {
+				t.Fatalf("model or hardened settings = %+v", result)
 			}
 			if result.SHA256 != fmt.Sprintf("%x", sha256.Sum256([]byte(original))) {
 				t.Fatal("fragment hash includes synthetic override")
@@ -113,7 +116,8 @@ func TestPreviewAutomaticGPUCorrectionReservesDropInSlot(t *testing.T) {
 			fragment := filepath.Join(home, "app.service")
 			writeCorrectionPreviewFile(t, executable, "fixture, never executed")
 			writeCorrectionPreviewFile(t, filepath.Join(model, "config.json"), "{}")
-			writeCorrectionPreviewFile(t, fragment, "[Service]\nEnvironment=CUDA_VISIBLE_DEVICES=0\nExecStart="+executable+" serve "+model+" --host 127.0.0.1 --port 8080\n")
+			hardened := newHardenedFixture(t)
+			writeCorrectionPreviewFile(t, fragment, "[Service]\nEnvironment=CUDA_VISIBLE_DEVICES=0\n"+hardened.lines()+"ExecStart="+executable+" serve "+model+" --host 127.0.0.1 --port 8080"+hardened.args()+"\n")
 			var paths []string
 			for i := range count {
 				path := filepath.Join(home, "app.service.d", fmt.Sprintf("%02d-existing.conf", i))

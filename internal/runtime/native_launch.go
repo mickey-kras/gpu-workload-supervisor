@@ -19,6 +19,8 @@ import (
 const (
 	flagMaxModelLen     = "--max-model-len"
 	flagServedModelName = "--served-model-name"
+	flagLoadFormat      = "--load-format"
+	flagChatTemplate    = "--chat-template"
 )
 
 var ErrModelUnavailable = errors.New("configured local model is unavailable")
@@ -37,6 +39,9 @@ func qualifyNativeLaunchWithValidator(raw []byte, n control.NativeModel, validat
 }
 
 func qualifyParsedLaunch(unit parsedLaunchUnit, n control.NativeModel, validate func(string) error) error {
+	if err := errEarlierOwnedBinding(n); err != nil {
+		return err
+	}
 	if err := unit.validatePreCommands(validate); err != nil {
 		return err
 	}
@@ -59,7 +64,7 @@ func qualifyParsedMainCommand(unit parsedLaunchUnit, n control.NativeModel, vali
 	if err != nil {
 		return ErrLaunchUnsupported
 	}
-	return qualifyServerLaunch(args, n, endpoint)
+	return qualifyServerLaunch(args, unit, n, endpoint)
 }
 
 type parsedLaunchUnit struct {
@@ -72,6 +77,9 @@ type parsedLaunchUnit struct {
 	gpuUUID              string
 	environment          map[string]bool
 	environmentValues    map[string]string
+	environmentFile      string
+	// keyFilePending marks an owned launch whose key file apply creates.
+	keyFilePending bool
 }
 
 func parseLaunchUnit(raw []byte) (parsedLaunchUnit, error) {
@@ -141,6 +149,14 @@ func (u *parsedLaunchUnit) applyDirective(section, key, value string) error {
 		u.execStart = value
 	case "[Service]Environment":
 		return u.applySafeEnvironment(value)
+	case "[Service]EnvironmentFile":
+		// Only the private API key file of a hardened vLLM launch is supported.
+		// Its content is checked when the launch qualifies.
+		// systemd expands glob characters in EnvironmentFile paths.
+		if !filepath.IsAbs(value) || filepath.Clean(value) != value || strings.ContainsAny(value, launchExpansionCharacters+" \t*?[]") {
+			return fmt.Errorf("%w: EnvironmentFile requires one literal absolute path without glob characters", ErrLaunchUnsupported)
+		}
+		u.environmentFile = value
 	default:
 		if unsupportedOperationalDirective(section, key) {
 			return fmt.Errorf("%w: unsupported operational directive %s", ErrLaunchUnsupported, key)
@@ -181,7 +197,7 @@ func unsupportedLaunchDirective(key string) bool {
 	case "Sockets":
 		// Socket associations implicitly activate units outside this service.
 		return true
-	case "EnvironmentFile", "UnsetEnvironment", "PassEnvironment", "PAMName":
+	case "UnsetEnvironment", "PassEnvironment", "PAMName":
 		// These can replace or remove recorded GPU/runtime environment values.
 		return true
 	case "RootDirectory", "RootImage", "BindPaths", "BindReadOnlyPaths", "TemporaryFileSystem", "MountImages", "ExtensionImages", "ExtensionDirectories":
@@ -234,7 +250,7 @@ func supportedPreCommand(args []string) bool {
 	return false
 }
 
-func qualifyServerLaunch(args []string, n control.NativeModel, endpoint *url.URL) error {
+func qualifyServerLaunch(args []string, unit parsedLaunchUnit, n control.NativeModel, endpoint *url.URL) error {
 	flags, err := parseServerCommand(args, n.Runtime)
 	if err != nil {
 		return err
@@ -259,14 +275,16 @@ func qualifyServerLaunch(args []string, n control.NativeModel, endpoint *url.URL
 	if alias != n.Model {
 		return ErrLaunchUnsupported
 	}
-	return nil
+	return qualifyHardenedServing(flags, unit, n)
 }
 
 type serverFlags struct {
-	model    string
-	alias    string
-	bindHost string
-	port     string
+	model        string
+	alias        string
+	bindHost     string
+	port         string
+	loadFormat   string
+	chatTemplate string
 }
 
 func parseServerCommand(args []string, runtimeName string) (serverFlags, error) {
@@ -301,7 +319,7 @@ func (f *serverFlags) parse(args []string) (serverFlags, error) {
 
 func diagnosticServerFlag(key string) string {
 	switch key {
-	case "--host", "--port", flagServedModelName, flagMaxModelLen:
+	case "--host", "--port", flagServedModelName, flagMaxModelLen, flagLoadFormat, flagChatTemplate:
 		return key
 	}
 	return "(unqualified option)"
@@ -319,6 +337,16 @@ func (f *serverFlags) apply(key, value string) error {
 		if v, err := strconv.ParseUint(value, 10, 32); err != nil || v == 0 {
 			return ErrLaunchUnsupported
 		}
+	case flagLoadFormat:
+		if value != "safetensors" {
+			return ErrLaunchUnsupported
+		}
+		f.loadFormat = value
+	case flagChatTemplate:
+		if !filepath.IsAbs(value) || filepath.Clean(value) != value {
+			return ErrLaunchUnsupported
+		}
+		f.chatTemplate = value
 	default:
 		return ErrLaunchUnsupported
 	}

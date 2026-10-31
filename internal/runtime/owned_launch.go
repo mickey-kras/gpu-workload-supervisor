@@ -3,6 +3,7 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -33,6 +34,14 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 	b.WriteString("[Unit]\nDescription=Supervisor-owned " + n.Runtime + " launch for " + string(p.ID) + "\n")
 	b.WriteString(ownedDependencies(p.Unit, n.Owned.Conflicts))
 	b.WriteString("\n[Service]\nType=simple\nRestart=no\n")
+	// A binding from an earlier release has no hardened settings. It keeps
+	// its exact earlier bytes and fingerprint, so setup can prove and remove
+	// or replace the unit; qualification rejects it for execution.
+	hardened := n.Hardened()
+	if hardened {
+		b.WriteString("Environment=" + offlineHubName + "=1\n")
+		b.WriteString("EnvironmentFile=" + n.EnvironmentFile + "\n")
+	}
 	var execStart string
 	executable := n.Owned.Executable
 	if executable == "" {
@@ -43,7 +52,10 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 	}
 	switch n.Runtime {
 	case "vllm":
-		execStart = executable + " serve " + n.Owned.ModelPath + " --host 127.0.0.1 --port " + strconv.Itoa(int(n.Owned.Port))
+		execStart = executable + " serve " + n.Owned.ModelPath + " --host " + hardenedBindHost + " --port " + strconv.Itoa(int(n.Owned.Port))
+		if hardened {
+			execStart += " --load-format safetensors --chat-template " + n.ChatTemplate
+		}
 		if n.Owned.MaxModelLen != 0 {
 			execStart += " --max-model-len " + strconv.FormatUint(uint64(n.Owned.MaxModelLen), 10)
 		}
@@ -83,6 +95,42 @@ func QualifyOwnedUnit(p control.WorkloadProfile) error {
 		return err
 	}
 	return renderMustQualify(raw, *p.NativeModel)
+}
+
+// QualifyOwnedUnitBeforeKey qualifies an owned launch like QualifyOwnedUnit,
+// except that its private key file can be missing: apply creates it before
+// it writes the unit. An existing key file must be usable.
+func QualifyOwnedUnitBeforeKey(p control.WorkloadProfile) error {
+	if p.NativeModel == nil || p.NativeModel.Owned == nil {
+		return nil
+	}
+	raw, err := RenderOwnedUnit(p)
+	if err != nil {
+		return err
+	}
+	return qualifyOwnedRender(raw, *p.NativeModel, validateNativeExecutable, true)
+}
+
+// qualifyOwnedRender qualifies a rendered owned unit. With keyMayBeMissing, a
+// missing key file passes, because apply creates it before it writes the
+// unit; an existing key file must be usable.
+func qualifyOwnedRender(raw []byte, n control.NativeModel, validate func(string) error, keyMayBeMissing bool) error {
+	unit, err := parseOwnedLaunchUnit(raw, n)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrOwnedRender, err)
+	}
+	unit.keyFilePending = keyMayBeMissing && KeyFileMissing(n.EnvironmentFile)
+	if err := qualifyParsedLaunch(unit, n, validate); err != nil {
+		return fmt.Errorf("%w: %v", ErrOwnedRender, err)
+	}
+	return nil
+}
+
+// KeyFileMissing reports a key file path that names no file. Setup and the
+// runtime share this rule for a key file that apply creates.
+func KeyFileMissing(path string) bool {
+	_, err := os.Lstat(path)
+	return path != "" && errors.Is(err, os.ErrNotExist)
 }
 
 // A total lexical order gives every conflicting pair one ordering edge and no

@@ -29,6 +29,46 @@ type NativeModel struct {
 	LaunchSHA256 string         `json:"launchSHA256"`
 	DropIns      []LaunchSource `json:"dropIns,omitempty"`
 	Owned        *OwnedLaunch   `json:"owned,omitempty"`
+	// ChatTemplate and ChatTemplateSHA256 pin the --chat-template file of the
+	// launch. EnvironmentFile is the path of the private systemd EnvironmentFile
+	// that sets VLLM_API_KEY; the binding never holds the key itself.
+	// The catalog accepts a profile without them, but a launch without them
+	// never qualifies: setup records them for every new vLLM binding.
+	ChatTemplate       string `json:"chatTemplate,omitempty"`
+	ChatTemplateSHA256 string `json:"chatTemplateSHA256,omitempty"`
+	EnvironmentFile    string `json:"environmentFile,omitempty"`
+}
+
+// Hardened reports whether the binding records the pinned chat template and
+// the API key file that a hardened vLLM launch needs.
+func (n NativeModel) Hardened() bool {
+	return n.ChatTemplate != "" && n.ChatTemplateSHA256 != "" && n.EnvironmentFile != ""
+}
+
+func (n NativeModel) validateHardening() error {
+	if n.ChatTemplate == "" && n.ChatTemplateSHA256 == "" && n.EnvironmentFile == "" {
+		return nil
+	}
+	if !n.Hardened() {
+		return errors.New("vLLM hardening needs the chat template, its SHA256 and the API key file together")
+	}
+	hash, err := hex.DecodeString(n.ChatTemplateSHA256)
+	if err != nil || len(hash) != 32 || strings.ToLower(n.ChatTemplateSHA256) != n.ChatTemplateSHA256 {
+		return errors.New("invalid chat template SHA256")
+	}
+	for _, path := range []string{n.ChatTemplate, n.EnvironmentFile} {
+		if !filepath.IsAbs(path) || filepath.Clean(path) != path || !grammarExpressible(path) {
+			return errors.New("chat template and API key file must be absolute clean literal paths")
+		}
+	}
+	// systemd expands glob characters in EnvironmentFile paths.
+	if strings.ContainsAny(n.EnvironmentFile, "*?[]") {
+		return errors.New("the API key file path must not contain glob characters")
+	}
+	if n.ChatTemplate == n.EnvironmentFile {
+		return errors.New("chat template and API key file must differ")
+	}
+	return nil
 }
 
 // LaunchSource binds one contributing systemd drop-in in loaded order.
@@ -123,6 +163,9 @@ func (n NativeModel) validate() error {
 	}
 	if n.GPUUUID != "" && !ValidGPUUUID(n.GPUUUID) {
 		return errors.New("invalid physical GPU UUID evidence")
+	}
+	if err := n.validateHardening(); err != nil {
+		return err
 	}
 	return n.validateOwned()
 }

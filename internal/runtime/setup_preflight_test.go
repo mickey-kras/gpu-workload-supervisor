@@ -24,11 +24,12 @@ func TestPreviewPreflightChecksAdoptedBindingsWithPendingOwnedLaunch(t *testing.
 	previous := ownedBinaryDirectory
 	ownedBinaryDirectory = binaryDir
 	t.Cleanup(func() { ownedBinaryDirectory = previous })
-	for _, failure := range []string{"none", "missing launch", "drifted launch", "missing unit", "missing cgroup"} {
+	for _, failure := range []string{"none", "missing key", "unusable key", "missing launch", "drifted launch", "missing unit", "missing cgroup"} {
 		t.Run(failure, func(t *testing.T) {
-			m, r, adopted, fragmentCommand := nativeFixture(t, "vllm", "http://localhost:9000")
+			m, r, adopted, fragmentCommand := nativeFixture(t, "vllm", "http://127.0.0.1:9000")
 			m.config.OwnedUnitDir = t.TempDir()
 			owned := ownedRenderProfile("vllm", "chat", &control.OwnedLaunch{ModelPath: model, Port: 9100, Alias: "selected"})
+			owned.NativeModel = ptrNativeModel(newHardenedFixture(t).bind(*owned.NativeModel))
 			owned.Label, owned.Adapter, owned.HealthURL = "Chat", "systemd", "http://127.0.0.1:9100/health"
 			owned.Cgroup = OwnedCgroup("/workloads", owned)
 			raw, err := RenderOwnedUnit(owned)
@@ -39,6 +40,15 @@ func TestPreviewPreflightChecksAdoptedBindingsWithPendingOwnedLaunch(t *testing.
 			m.config.Catalog.Version = 2
 			m.config.Catalog.Profiles = append(m.config.Catalog.Profiles, owned)
 			switch failure {
+			case "missing key":
+				// Apply creates the key file of a new owned launch.
+				if err := os.Remove(owned.NativeModel.EnvironmentFile); err != nil {
+					t.Fatal(err)
+				}
+			case "unusable key":
+				if err := os.Chmod(owned.NativeModel.EnvironmentFile, 0o644); err != nil {
+					t.Fatal(err)
+				}
 			case "missing launch":
 				if err := os.Remove(adopted.NativeModel.LaunchFile); err != nil {
 					t.Fatal(err)
@@ -53,7 +63,7 @@ func TestPreviewPreflightChecksAdoptedBindingsWithPendingOwnedLaunch(t *testing.
 				r.outputs[catalogShow("speech")] = []byte("LoadState=loaded\nActiveState=active\nSubState=running\nControlGroup=/workloads/speech.service\n")
 			}
 			err = m.PreflightAdopted(t.Context(), nil)
-			if (err != nil) != (failure != "none") {
+			if (err != nil) != (failure != "none" && failure != "missing key") {
 				t.Fatalf("preview preflight %q: %v", failure, err)
 			}
 			for _, call := range r.calls {

@@ -195,7 +195,7 @@ func TestRuntimeBindingRequiresLoadedAccountHomeWorkingDirectory(t *testing.T) {
 	if qualifyEnvironmentPath(account.HomeDir, false) != nil {
 		t.Skip("OS account home is not a qualified fixture path")
 	}
-	manager, runner, profile, show := nativeFixture(t, "vllm", "http://localhost:9000")
+	manager, runner, profile, show := nativeFixture(t, "vllm", "http://127.0.0.1:9000")
 	raw, err := os.ReadFile(profile.NativeModel.LaunchFile)
 	if err != nil {
 		t.Fatal(err)
@@ -205,7 +205,7 @@ func TestRuntimeBindingRequiresLoadedAccountHomeWorkingDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	profile.NativeModel.LaunchSHA256 = fmt.Sprintf("%x", sha256.Sum256(raw))
-	showWithDirectory := strings.Replace(show, " -- speech.service", " --property=WorkingDirectory -- speech.service", 1)
+	showWithDirectory := strings.Replace(show, " --property=Environment ", " --property=WorkingDirectory --property=Environment ", 1)
 	good := string(runner.outputs[show]) + "WorkingDirectory=" + account.HomeDir + "\n"
 	runner.outputs[showWithDirectory] = []byte(good)
 	if err := manager.verifyNativeBinding(context.Background(), profile); err != nil {

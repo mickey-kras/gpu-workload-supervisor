@@ -111,9 +111,34 @@ func (u *parsedLaunchUnit) qualifyEnvironmentValue(name, value string) error {
 			return environmentError(name, "nonempty code-loading overrides are unsupported")
 		}
 		return nil
+	case "VLLM_API_KEY":
+		// An inline key is visible in loaded unit metadata.
+		return environmentError(name, "set the API key only in the private EnvironmentFile")
 	default:
-		return nil
+		return qualifyVLLMSetting(name)
 	}
+}
+
+// allowedVLLMSettings lists the vLLM environment settings that only change
+// logging, telemetry or scheduling. Other VLLM_ settings can open routes
+// outside /v1 (VLLM_SERVER_DEV_MODE), load code (VLLM_PLUGINS), accept unsafe
+// input (VLLM_ALLOW_INSECURE_SERIALIZATION) or load adapters at run time
+// (VLLM_ALLOW_RUNTIME_LORA_UPDATING), so they stay unsupported.
+var allowedVLLMSettings = map[string]bool{
+	"VLLM_LOGGING_LEVEL":              true,
+	"VLLM_CONFIGURE_LOGGING":          true,
+	"VLLM_NO_USAGE_STATS":             true,
+	"VLLM_DO_NOT_TRACK":               true,
+	"VLLM_WORKER_MULTIPROC_METHOD":    true,
+	"VLLM_ATTENTION_BACKEND":          true,
+	"VLLM_ENGINE_ITERATION_TIMEOUT_S": true,
+}
+
+func qualifyVLLMSetting(name string) error {
+	if strings.HasPrefix(name, "VLLM_") && !allowedVLLMSettings[name] {
+		return environmentError(name, "this vLLM setting is not on the supported list")
+	}
+	return nil
 }
 
 func qualifyEnvironmentSearchPaths(name, value string) error {
@@ -209,4 +234,18 @@ func sortedEnvironmentKeys(values map[string]string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// CheckLoadedEnvironmentFiles requires that the loaded unit reads exactly the
+// inspected EnvironmentFile, or none. systemctl show prints each file with
+// its ignore_errors flag.
+func CheckLoadedEnvironmentFiles(output, expected string) error {
+	want := ""
+	if expected != "" {
+		want = expected + " (ignore_errors=no)"
+	}
+	if strings.TrimSpace(output) != want {
+		return fmt.Errorf("%w: loaded EnvironmentFile differs from inspected source; reload and refresh the binding", ErrLaunchUnsupported)
+	}
+	return nil
 }

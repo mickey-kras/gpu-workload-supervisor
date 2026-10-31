@@ -9,13 +9,21 @@ import (
 	"fmt"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/vllmkey"
 	"io"
 	"net/http"
 	"strings"
 )
 
 var ErrModelIdentity = errors.New("native model identity mismatch")
+
+// checkKeyListener is a test hook for the listener owner check.
+var checkKeyListener = vllmkey.CheckListener
 var ErrLaunchChanged = errors.New("native launch binding changed")
+
+// ErrAPIKeyRejected tells that vLLM did not accept the key from the key file
+// of the binding: the running vLLM uses another key.
+var ErrAPIKeyRejected = errors.New("vLLM rejected the API key from the key file; restart the workload, or run setup again if the key file changed")
 
 // InspectQualifiedNativeLaunch checks the supported launch subset before
 // returning the fingerprint recorded by onboarding. It does not execute it.
@@ -72,6 +80,13 @@ func readVerifiedNativeLaunch(n control.NativeModel, validate func(string) error
 // launches: the deterministic re-render must exist, match the recorded digest,
 // and qualify under the shared grammar before the on-disk binding is checked.
 func verifyOwnedSpecWithValidator(p control.WorkloadProfile, validate func(string) error) error {
+	return verifyOwnedSpecMode(p, validate, false)
+}
+
+// verifyOwnedSpecMode verifies an owned spec. With keyMayBeMissing, a missing
+// key file passes, because apply creates it before it writes the unit; an
+// existing key file must be usable. Full Preflight after apply is strict.
+func verifyOwnedSpecMode(p control.WorkloadProfile, validate func(string) error, keyMayBeMissing bool) error {
 	if p.NativeModel == nil || p.NativeModel.Owned == nil {
 		return nil
 	}
@@ -82,10 +97,7 @@ func verifyOwnedSpecWithValidator(p control.WorkloadProfile, validate func(strin
 	if fmt.Sprintf("%x", sha256.Sum256(raw)) != p.NativeModel.LaunchSHA256 {
 		return fmt.Errorf("%w: rendered digest differs from the recorded launch fingerprint", ErrOwnedRender)
 	}
-	if err := qualifyNativeLaunchWithValidator(raw, *p.NativeModel, validate); err != nil {
-		return fmt.Errorf("%w: %v", ErrOwnedRender, err)
-	}
-	return nil
+	return qualifyOwnedRender(raw, *p.NativeModel, validate, keyMayBeMissing)
 }
 
 func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.WorkloadProfile) error {
@@ -124,6 +136,9 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 	if err := CheckLoadedEnvironment(values["Environment"], launch.environmentValues); err != nil {
 		return err
 	}
+	if err := CheckLoadedEnvironmentFiles(values["EnvironmentFiles"], launch.environmentFile); err != nil {
+		return err
+	}
 	if values["NeedDaemonReload"] != "no" {
 		return ErrLaunchChanged
 	}
@@ -145,6 +160,9 @@ func nativeBindingShowArguments(unit string, launch parsedLaunchUnit) []string {
 	}
 	if len(launch.environmentValues) > 0 {
 		args = append(args, "--property=Environment")
+	}
+	if launch.environmentFile != "" {
+		args = append(args, "--property=EnvironmentFiles")
 	}
 	args = append(args, "--", unit)
 	return args
@@ -227,6 +245,9 @@ func (m *SystemdManager) nativeReady(ctx context.Context, n control.NativeModel)
 	if err := m.getHealthy(ctx, n.Endpoint+"/health"); err != nil {
 		return err
 	}
+	if err := m.fetchServingVersion(ctx, n); err != nil {
+		return err
+	}
 	b, err := m.fetchModelList(ctx, n)
 	if err != nil {
 		return err
@@ -235,15 +256,28 @@ func (m *SystemdManager) nativeReady(ctx context.Context, n control.NativeModel)
 }
 
 func (m *SystemdManager) fetchModelList(ctx context.Context, n control.NativeModel) ([]byte, error) {
+	key, err := vllmkey.Read(n.EnvironmentFile)
+	if err != nil {
+		return nil, err
+	}
+	// Send the key only to a listener of the desktop user, never to a
+	// process of another user that holds the port.
+	if err := checkKeyListener(n.Endpoint); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, n.Endpoint+"/v1/models", nil)
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := m.client.Do(req)
 	if err != nil {
 		return nil, &safeHTTPRequestError{cause: err}
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, ErrAPIKeyRejected
+	}
 	if resp.StatusCode != http.StatusOK {
 		// 5xx is a transient daemon condition retried by the poll loop; 4xx
 		// contradicts the bound model identity and is permanent.

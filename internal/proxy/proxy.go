@@ -155,14 +155,7 @@ func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (
 		return nil, err
 	}
 	reverseProxy := httputil.NewSingleHostReverseProxy(config.Upstream)
-	reverseProxy.Transport = config.Transport
-	if reverseProxy.Transport == nil {
-		transport := httptransport.NewDirect()
-		if config.ResponseHeaderTimeout > 0 {
-			transport.ResponseHeaderTimeout = config.ResponseHeaderTimeout
-		}
-		reverseProxy.Transport = transport
-	}
+	reverseProxy.Transport = upstreamTransport(config, native)
 	if config.IngressMode == IngressAdapter {
 		reverseProxy.Transport = ingressTransport{requesterCredentials: requesterSecrets(config.RequesterPolicy), base: reverseProxy.Transport, executionCredential: config.ExecutionCredential, completionCredential: config.CompletionCredential}
 	}
@@ -187,6 +180,24 @@ func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (
 		handler.nativeFinishes = newNativeFinishes(config.MaxNativeCompletions, config.ReportNativeCompletionFailure)
 	}
 	return handler, nil
+}
+
+// upstreamTransport returns the configured or direct transport. For a native
+// model it adds the vLLM API key. The ingress transport, when used, wraps it
+// and strips client credentials first.
+func upstreamTransport(config Config, native *control.NativeModel) http.RoundTripper {
+	transport := config.Transport
+	if transport == nil {
+		direct := httptransport.NewDirect()
+		if config.ResponseHeaderTimeout > 0 {
+			direct.ResponseHeaderTimeout = config.ResponseHeaderTimeout
+		}
+		transport = direct
+	}
+	if native != nil {
+		transport = upstreamKeyTransport{keyFile: native.EnvironmentFile, base: transport}
+	}
+	return transport
 }
 
 func validateConfig(config Config) (map[string]struct{}, map[string]struct{}, map[string]struct{}, string, error) {
