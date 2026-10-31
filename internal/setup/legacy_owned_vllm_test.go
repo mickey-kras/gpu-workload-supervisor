@@ -10,6 +10,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/vllmkey"
 )
 
@@ -502,5 +503,53 @@ func TestRemovedOwnedUnitKeepsAKeyFileStillInUse(t *testing.T) {
 		if _, err := vllmkey.Read(key); err != nil {
 			t.Fatalf("replay=%v: key file still in use was removed: %v", replay, err)
 		}
+	}
+}
+
+// A committed-delete journal can outlive its request: maintenance is clear, so
+// setup takes a different request. A key that the committed catalog still uses
+// must survive replay, even when the new request drops that workload.
+func TestCommittedDeleteReplayKeepsAKeyTheCommittedCatalogUses(t *testing.T) {
+	b, home, request := fixture(t)
+	b.runCommand = fakeOwnedCommandFor(home)
+	if err := b.Apply(t.Context(), home, request); err != nil {
+		t.Fatal(err)
+	}
+	key := OwnedEnvironmentFile(home, "moved")
+	if err := vllmkey.Ensure(key); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(t.Context(), request.Profile.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior, _ := s.Catalog(t.Context())
+	adopted := request.Catalog
+	adopted.Profiles = append([]control.WorkloadProfile(nil), request.Catalog.Profiles...)
+	adopted.Profiles[0].NativeModel = &control.NativeModel{Runtime: "vllm", Instance: "existing", Model: "selected", Endpoint: "http://127.0.0.1:8000",
+		LaunchFile: "/etc/systemd/user/text.service", LaunchSHA256: strings.Repeat("0", 64),
+		ChatTemplate: "/models/selected/chat_template.jinja", ChatTemplateSHA256: strings.Repeat("0", 64), EnvironmentFile: key}
+	_, err = s.ReplaceCatalog(t.Context(), prior.Revision, adopted)
+	s.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(home, ".config/gpu-workload-supervisor")
+	if err := os.MkdirAll(ownedUnitDirectory(home), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	name := control.OwnedUnitName("moved")
+	content := []byte("[Service]\nExecStart=/usr/bin/true\n")
+	if err := os.WriteFile(filepath.Join(ownedUnitDirectory(home), name), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The new request removes the adopted workload that uses the key.
+	request.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{}, Disabled: true}
+	journal := unitJournal{Version: 1, StatePath: request.Profile.StatePath, Writes: map[string]string{}, Deletes: map[string]string{name: digest(content)}, Phase: ownedJournalCommitted}
+	if err := b.replayCommittedDeletes(t.Context(), home, root, request, journal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := vllmkey.Read(key); err != nil {
+		t.Fatalf("key of a committed workload removed by replay: %v", err)
 	}
 }
