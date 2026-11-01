@@ -31,8 +31,8 @@ func nativePolicy(ctx context.Context, catalog CatalogStore, config Config) (*co
 		return nil, snapshot.Revision, nil
 	}
 	n := *p.NativeModel
-	if config.Upstream.String() != n.Endpoint || len(config.PassthroughRoutes) != 0 {
-		return nil, "", errors.New("native model requires matching upstream and no passthrough routes")
+	if err := checkNativeUpstream(n, config); err != nil {
+		return nil, "", err
 	}
 	for _, r := range config.ExecutionRoutes {
 		if !nativeExecutionRoute(r) {
@@ -45,6 +45,16 @@ func nativePolicy(ctx context.Context, catalog CatalogStore, config Config) (*co
 		}
 	}
 	return &n, snapshot.Revision, nil
+}
+
+func checkNativeUpstream(n control.NativeModel, config Config) error {
+	if n.EnvironmentFile == "" {
+		return errors.New("native vLLM binding has no API key file; run setup again for this model")
+	}
+	if config.Upstream.String() != n.Endpoint || len(config.PassthroughRoutes) != 0 {
+		return errors.New("native model requires matching upstream and no passthrough routes")
+	}
+	return nil
 }
 
 // supportedCatalogVersion is the proxy-side belt-and-braces guard: the proxy

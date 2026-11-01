@@ -17,7 +17,7 @@ func TestNativeUnsafeLaunchNotStarted(t *testing.T) {
 		"[Service]\nEnvironmentFile=/tmp/unverified-native.env\nExecStart=/usr/bin/vllm --model ${MODEL}\n",
 		"[Service]\nExecStartPre=/bin/sh -c 'touch /tmp/changed-app-config'\nExecStart=/usr/bin/vllm serve /models/selected\n",
 	} {
-		m, r, p, _ := nativeFixture(t, "vllm", "http://localhost:9000")
+		m, r, p, _ := nativeFixture(t, "vllm", "http://127.0.0.1:9000")
 		if err := os.WriteFile(p.NativeModel.LaunchFile, []byte(launch), 0600); err != nil {
 			t.Fatal(err)
 		}

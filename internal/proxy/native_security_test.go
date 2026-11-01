@@ -26,7 +26,7 @@ func TestNativeCaseFoldBypass(t *testing.T) {
 			w.WriteHeader(200)
 		}))
 		u, _ := url.Parse(upstream.URL)
-		s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: upstream.URL}}}}}}
+		s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: upstream.URL, EnvironmentFile: proxyKeyFile(t)}}}}}}
 		h, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/v1/completions"}}})
 		if err != nil {
 			t.Fatal(err)
@@ -53,7 +53,7 @@ func TestNativeReadonlyReloadBypass(t *testing.T) {
 	}))
 	defer upstream.Close()
 	u, _ := url.Parse(upstream.URL)
-	s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: upstream.URL}}}}}}
+	s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: upstream.URL, EnvironmentFile: proxyKeyFile(t)}}}}}}
 	s.state.Admission = control.AdmissionClosed
 	h, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/v1/completions"}}, ReadOnlyRoutes: []Route{{Method: "GET", Path: "/v1/models"}}})
 	if err != nil {

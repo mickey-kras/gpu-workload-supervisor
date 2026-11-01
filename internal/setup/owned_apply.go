@@ -168,7 +168,7 @@ func (b Backend) finalizeOwnedUnits(ctx context.Context, home, root string, requ
 	if journal.Phase != ownedJournalCommitted {
 		return errors.New("owned-units journal not pinned to the committed catalog")
 	}
-	if err := b.applyOwnedUnitDeletes(ctx, home, journal); err != nil {
+	if err := b.applyOwnedUnitDeletes(ctx, home, journal, request.Catalog); err != nil {
 		return err
 	}
 	if err := b.daemonReloadOwnedUnits(ctx, request.Profile.SystemctlPath, plan.unitNames()); err != nil {
@@ -231,50 +231,6 @@ func (b Backend) resumeOwnedUnitJournal(ctx context.Context, home string, req Re
 		// and replay the proven deletes now.
 	}
 	return b.replayCommittedDeletes(ctx, home, root, req, journal)
-}
-
-// replayCommittedDeletes replays a committed journal's proven deletes: units
-// the request still renders are kept, everything else is removed with content
-// proof, then systemd is refreshed and the journal retired.
-func (b Backend) replayCommittedDeletes(ctx context.Context, home, root string, req Request, journal unitJournal) error {
-	var reloaded []string
-	removed := false
-	for name, proof := range journal.Deletes {
-		path := filepath.Join(ownedUnitDirectory(home), name)
-		current, err := privateRead(path)
-		if errors.Is(err, os.ErrNotExist) {
-			// The delete already ran; systemd may still have the unit cached,
-			// so the reload below must still happen.
-			reloaded = append(reloaded, name)
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		// A committed delete is finished even when the new request re-adds
-		// the unit: the accepted catalog already excludes it, so preserving
-		// the file would leave it unjournaled if this attempt then fails.
-		// The resumed plan recreates the unit from the request instead.
-		if digest(current) != proof {
-			return fmt.Errorf(ownedUnitErrorFormat, ErrOwnedUnitModified, name)
-		}
-		if err := provenDelete(path, proof); err != nil {
-			return err
-		}
-		reloaded = append(reloaded, name)
-		removed = true
-	}
-	if removed {
-		if err := syncDir(ownedUnitDirectory(home)); err != nil {
-			return err
-		}
-	}
-	if len(reloaded) > 0 {
-		if err := b.daemonReloadOwnedUnits(ctx, req.Profile.SystemctlPath, reloaded); err != nil {
-			return err
-		}
-	}
-	return clearOwnedUnitJournal(root)
 }
 
 // catalogMatchesRequest reports whether the committed catalog already equals
@@ -389,7 +345,7 @@ func (work activationWork) verifyAcceptedRuntime(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := verifyActivationBindings(ctx, manager, work.removedRuntimePlan()); err != nil {
+	if err := verifyActivationBindings(ctx, manager, work.unrunnableBindingPlan()); err != nil {
 		return err
 	}
 	return manager.ReleasedFor(ctx, control.WorkloadIdle)
@@ -579,7 +535,7 @@ func verifyActivationBindings(ctx context.Context, manager gpuruntime.Manager, p
 }
 
 func removalObservationCatalog(c control.Catalog) control.Catalog {
-	if !hasRemovedRuntime(c) {
+	if !hasUnrunnableBinding(c) {
 		return c
 	}
 	c = c.Clone()
@@ -597,9 +553,9 @@ func removalObservationCatalog(c control.Catalog) control.Catalog {
 	return c
 }
 
-func (work activationWork) removedRuntimePlan() unitPlan {
+func (work activationWork) unrunnableBindingPlan() unitPlan {
 	plan := unitPlan{proven: map[string]string{}}
-	if !hasRemovedRuntime(work.accepted.Catalog) {
+	if !hasUnrunnableBinding(work.accepted.Catalog) {
 		return plan
 	}
 	for _, p := range work.accepted.Catalog.Profiles {
@@ -611,11 +567,38 @@ func (work activationWork) removedRuntimePlan() unitPlan {
 	return plan
 }
 
-func hasRemovedRuntime(c control.Catalog) bool {
+// hasUnrunnableBinding reports an accepted catalog with a binding that
+// cannot run now: a retired binding, an owned vLLM binding whose key file is
+// missing, or a vLLM binding whose chat template is changed, missing or
+// unreadable. The accepted runtime is then observed without native bindings,
+// so the binding cannot block the apply that removes it or writes it again.
+// Apply creates a missing key file before it writes the unit, and the
+// candidate runtime is verified after the writes.
+func hasUnrunnableBinding(c control.Catalog) bool {
 	for _, p := range c.Profiles {
-		if p.RemovedRuntime() {
+		if p.RetiredBinding() || ownedKeyMissing(p) || chatTemplateChanged(p) {
 			return true
 		}
 	}
 	return false
+}
+
+// chatTemplateChanged reports a vLLM binding whose pinned chat template is
+// missing, unreadable or has another digest. The apply that replaces the
+// binding pins the current template, and the candidate runtime validates it.
+func chatTemplateChanged(p control.WorkloadProfile) bool {
+	if p.NativeModel == nil || p.NativeModel.Runtime != "vllm" || !p.NativeModel.Hardened() {
+		return false
+	}
+	digest, err := gpuruntime.ChatTemplateSHA256(p.NativeModel.ChatTemplate)
+	return err != nil || digest != p.NativeModel.ChatTemplateSHA256
+}
+
+// ownedKeyMissing reports an owned vLLM binding whose key file does not
+// exist. A key file that exists but is not usable still blocks.
+func ownedKeyMissing(p control.WorkloadProfile) bool {
+	if p.NativeModel == nil || p.NativeModel.Owned == nil || !p.NativeModel.Hardened() {
+		return false
+	}
+	return gpuruntime.KeyFileMissing(p.NativeModel.EnvironmentFile)
 }

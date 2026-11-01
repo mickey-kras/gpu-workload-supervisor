@@ -15,8 +15,8 @@ func TestLaunchSemicolonArgumentsRejectedBeforeLoadedCommandVerification(t *test
 	for _, app := range []string{"vllm"} {
 		for _, field := range []string{"model path", "alias"} {
 			t.Run(app+"/"+field, func(t *testing.T) {
-				n := control.NativeModel{Runtime: app, Endpoint: "http://localhost:9000", Model: "selected"}
-				raw := string(nativeLaunchFixture(t, app, n.Endpoint, n.Model))
+				n := control.NativeModel{Runtime: app, Endpoint: "http://127.0.0.1:9000", Model: "selected"}
+				raw := string(nativeLaunchFixture(t, &n))
 				command := strings.TrimSpace(strings.Split(raw, "ExecStart=")[1])
 				args := strings.Fields(command)
 				modelPath := args[2]
@@ -61,8 +61,8 @@ func TestLaunchSemicolonArgumentsRejectedBeforeLoadedCommandVerification(t *test
 }
 
 func TestLaunchSemicolonPreparationAndDropInPathsRejected(t *testing.T) {
-	n := control.NativeModel{Runtime: "vllm", Endpoint: "http://localhost:9000", Model: "selected"}
-	raw := nativeLaunchFixture(t, n.Runtime, n.Endpoint, n.Model)
+	n := control.NativeModel{Runtime: "vllm", Endpoint: "http://127.0.0.1:9000", Model: "selected"}
+	raw := nativeLaunchFixture(t, &n)
 	if err := qualifyFixtureLaunch(append(raw, []byte("ExecStartPre=/usr/bin/test -f /models/a;b\n")...), n); !errors.Is(err, ErrLaunchUnsupported) {
 		t.Fatalf("delimiter in preparation operand accepted: %v", err)
 	}

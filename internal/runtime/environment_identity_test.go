@@ -82,8 +82,8 @@ func TestCUDAVisibilityBindsPhysicalIdentityForAdmissionAndRelease(t *testing.T)
 	}
 }
 func TestCUDAUUIDSourceBindingCannotBeOmittedOrDrifted(t *testing.T) {
-	n := control.NativeModel{Runtime: "vllm", Endpoint: "http://localhost:9000", Model: "selected", GPUUUID: testPhysicalUUID}
-	raw := append(nativeLaunchFixture(t, n.Runtime, n.Endpoint, n.Model), []byte("Environment=CUDA_VISIBLE_DEVICES="+testPhysicalUUID+"\n")...)
+	n := control.NativeModel{Runtime: "vllm", Endpoint: "http://127.0.0.1:9000", Model: "selected", GPUUUID: testPhysicalUUID}
+	raw := append(nativeLaunchFixture(t, &n), []byte("Environment=CUDA_VISIBLE_DEVICES="+testPhysicalUUID+"\n")...)
 	path := filepath.Join(t.TempDir(), "bound.service")
 	if err := os.WriteFile(path, raw, 0600); err != nil {
 		t.Fatal(err)
@@ -104,8 +104,8 @@ func TestCUDAUUIDSourceBindingCannotBeOmittedOrDrifted(t *testing.T) {
 	}
 	p := control.WorkloadProfile{ID: "chosen", Unit: "bound.service", NativeModel: &n}
 	query := "/usr/bin/nvidia-smi --query-gpu=uuid --format=csv,noheader -i 2"
-	show := "/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload --property=ExecStartPre --property=ExecStart --property=Environment -- bound.service"
-	r := &fakeRunner{outputs: map[string][]byte{query: []byte(testPhysicalUUID + "\n"), show: []byte("FragmentPath=" + path + "\nDropInPaths=\nNeedDaemonReload=no\nExecStart={ path=" + strings.Fields(launch.Command)[0] + " ; argv[]=" + launch.Command + " ; }\nEnvironment=CUDA_VISIBLE_DEVICES=" + testPhysicalUUID + "\n")}}
+	show := "/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload --property=ExecStartPre --property=ExecStart --property=Environment --property=EnvironmentFiles -- bound.service"
+	r := &fakeRunner{outputs: map[string][]byte{query: []byte(testPhysicalUUID + "\n"), show: []byte("FragmentPath=" + path + "\nDropInPaths=\nNeedDaemonReload=no\nExecStart={ path=" + strings.Fields(launch.Command)[0] + " ; argv[]=" + launch.Command + " ; }\nEnvironment=HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES=" + testPhysicalUUID + "\nEnvironmentFiles=" + n.EnvironmentFile + " (ignore_errors=no)\n")}}
 	m := &SystemdManager{config: SystemdConfig{GPUIndex: 2, NvidiaSMIPath: "/usr/bin/nvidia-smi", SystemctlPath: "/usr/bin/true", Catalog: &control.Catalog{Profiles: []control.WorkloadProfile{p}}}, runner: r, nativeExecutableValidator: fixtureExecutableValidator}
 	if err := m.verifyNativeBinding(context.Background(), p); err != nil {
 		t.Fatal("physical identity binding", err)
@@ -113,7 +113,7 @@ func TestCUDAUUIDSourceBindingCannotBeOmittedOrDrifted(t *testing.T) {
 	if err := m.ReleasedFor(context.Background(), p.ID); err != nil {
 		t.Fatal("release physical identity binding", err)
 	}
-	r.outputs[show] = []byte(strings.Replace(string(r.outputs[show]), "Environment=CUDA_VISIBLE_DEVICES="+testPhysicalUUID, "Environment=CUDA_VISIBLE_DEVICES=PRIVATE_LOADED_SECRET", 1))
+	r.outputs[show] = []byte(strings.Replace(string(r.outputs[show]), "CUDA_VISIBLE_DEVICES="+testPhysicalUUID, "CUDA_VISIBLE_DEVICES=PRIVATE_LOADED_SECRET", 1))
 	if err := m.ReleasedFor(context.Background(), p.ID); err == nil || strings.Contains(err.Error(), "PRIVATE_LOADED_SECRET") {
 		t.Fatal("release accepted or disclosed loaded environment drift", err)
 	}

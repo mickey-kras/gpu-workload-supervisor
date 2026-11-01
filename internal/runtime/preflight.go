@@ -59,7 +59,8 @@ func (m *SystemdManager) PreflightAdopted(ctx context.Context, removals map[stri
 	seen := map[string]bool{}
 	for _, p := range m.config.Catalog.Profiles {
 		if p.NativeModel != nil && p.NativeModel.Owned != nil {
-			if err := m.verifyOwnedSpec(p); err != nil {
+			// Apply creates a missing key file of an owned launch.
+			if err := m.verifyOwnedSpecBeforeKey(p); err != nil {
 				return err
 			}
 			continue
@@ -190,6 +191,14 @@ func (m *SystemdManager) ownedBindings() (map[string]bool, map[string]string) {
 		}
 	}
 	return managed, adopted
+}
+
+func (m *SystemdManager) verifyOwnedSpecBeforeKey(p control.WorkloadProfile) error {
+	validate := m.nativeExecutableValidator
+	if validate == nil {
+		validate = validateNativeExecutable
+	}
+	return verifyOwnedSpecMode(p, validate, true)
 }
 
 func (m *SystemdManager) verifyOwnedSpec(p control.WorkloadProfile) error {
