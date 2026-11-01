@@ -154,7 +154,7 @@ func validateRecoveryCatalog(c Catalog) error {
 	seen := map[string]WorkloadProfile{}
 	ids := map[Workload]bool{}
 	for _, p := range c.Profiles {
-		if c.Version == 1 && p.NativeModel != nil && p.NativeModel.Owned != nil {
+		if c.Version == CatalogVersionLegacy && p.NativeModel != nil && p.NativeModel.Owned != nil {
 			return ErrOwnedRequiresV2
 		}
 		if ids[p.ID] {

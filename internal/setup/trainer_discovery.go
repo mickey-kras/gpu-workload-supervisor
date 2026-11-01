@@ -26,7 +26,7 @@ func (b Backend) InspectTrainer(ctx context.Context, request Request, target con
 	if ctx.Err() != nil {
 		return result, errors.New("trainer inspection cancelled")
 	}
-	if err := Validate(request); err != nil {
+	if err := validateShape(request); err != nil {
 		return result, errors.New("invalid trainer inspection request")
 	}
 	p, ok := request.Catalog.Profile(target)

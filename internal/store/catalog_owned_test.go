@@ -149,3 +149,39 @@ func TestOwnedProfileReferencedByLiveState(t *testing.T) {
 		t.Fatalf("verbatim referenced owned profile rejected: %v", err)
 	}
 }
+
+func TestCatalogLimitsVersionTransitions(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	owned := ownedTestCatalog()
+	first, err := s.ReplaceCatalog(ctx, "", owned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limited := owned.Clone()
+	limited.Version = 5
+	limited.Profiles[0].NativeModel.Owned.Limits = control.ResourceLimits{Version: 1, MemoryMaxMiB: 8192, TasksMax: 4096}
+	second, err := s.ReplaceCatalog(ctx, first.Revision, limited)
+	if err != nil {
+		t.Fatalf("2→5 with limits rejected: %v", err)
+	}
+	read, err := s.Catalog(ctx)
+	if err != nil || read.Catalog.Profiles[0].NativeModel.Owned.Limits != limited.Profiles[0].NativeModel.Owned.Limits {
+		t.Fatalf("v5 limits did not round-trip: %v", err)
+	}
+	smuggled := limited.Clone()
+	smuggled.Version = 2
+	if err := validateCatalogVersionTransition(limited, smuggled); !errors.Is(err, control.ErrLimitsRequireV5) {
+		t.Fatalf("5→2 with limits guard = %v", err)
+	}
+	if _, err := s.ReplaceCatalog(ctx, second.Revision, smuggled); !errors.Is(err, control.ErrLimitsRequireV5) {
+		t.Fatalf("5→2 with limits stored: %v", err)
+	}
+	if _, err := s.ReplaceCatalog(ctx, second.Revision, owned); err != nil {
+		t.Fatalf("5→2 after removing limits rejected: %v", err)
+	}
+}
