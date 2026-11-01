@@ -1,8 +1,14 @@
-# Resource limits: unimplemented design
+# Resource limits: design and schema
 
 [Documentation](README.md). See [implemented integration](INTEGRATION.md).
 
-**Design for [#584](https://github.com/mickey-kras/gpu-workload-supervisor/issues/584). Not in the current release.** The release renders no resource-control directives. `requiredMiB` estimates launch VRAM demand. It enforces no ceiling. GPU VRAM enforcement and separate-account workload isolation are out of scope.
+**Design for [#584](https://github.com/mickey-kras/gpu-workload-supervisor/issues/584). The current release has only the schema part.**
+
+- Catalog v5 accepts `limits` on owned inference launches. The renderer and strict parser carry them.
+- The supervisor refuses switches to units with limits before it stops the current workload. The runtime does not start them or report them healthy. Reconciliation stops running units with limits and goes idle. This gate does not change other workloads, preflight or release checks.
+- Setup cannot write limits. It rejects requests with limits before unit writes and accepts requests that remove them.
+
+Later changes add trainer binding limits, draft and setup support, the **Resource checks** page, the host cap, and controller and cgroup readback checks. `requiredMiB` estimates launch VRAM demand. It enforces no ceiling. GPU VRAM enforcement and separate-account workload isolation are out of scope.
 
 - [Host protection](#host-cap)
 - [Unit limits](#unit-limits)
@@ -221,7 +227,7 @@ IOReadIOPSMax=/dev/<kernel name> <count>
 IOWriteIOPSMax=/dev/<kernel name> <count>
 ```
 
-Only `parseOwnedLaunchUnit` and the exact trainer form accept this block. Remove the exact rendered block before shared grammar parsing, as for owned dependencies. Adopted and imported grammar rejects limit directives. Use no owned-unit drop-ins.
+Only `parseOwnedLaunchUnit` and the exact trainer form accept this block. Remove the exact rendered block before shared grammar parsing, as for owned dependencies. The owned-unit path rejects resource controls in any other position, including legacy and `Startup` forms. Adopted and imported grammar still accepts these directives, because the supervisor gives those units no limits. Use no owned-unit drop-ins.
 
 ## Drift checks
 
@@ -325,13 +331,15 @@ All readers must support v5: `control.Catalog.Validate` and proxy `supportedCata
 
 Limits and trainer binding 2 need catalog 5. Store version guards already allow 5 but must reject lowering while limits remain. Older binaries reject the key even with catalogs 2 and 4.
 
-One Go function selects minimum version: 5 with limits,4 with trainers,2 with owned launches,1 otherwise. Preview and apply share it. Replace the only-raise rule in `clients/setup/setup-window.mjs` and literal 2 in `internal/setup/owned.go`. Pending activation resumes exact recorded bytes and version. Lower the version only on later writes after maintenance clears.
+One Go function selects minimum version: 5 with limits,4 with trainers,2 with owned launches,1 otherwise. Preview and apply share it. It replaces literal 2 in `internal/setup/owned.go`. Client mirror `clients/setup/review.mjs` replaces the only-raise rule in `clients/setup/setup-window.mjs`. The backend recomputes the version before preview and apply.
+
+Pending activation resumes exact recorded bytes and version. Lower the version only on later writes after maintenance clears.
 
 Drafts without limits remain v1 and readable by new binaries. Limited drafts use the next version. Reject v1 bodies containing limits before unmarshal.
 
 Current `ReadDrafts` uses `json.Unmarshal`, which would discard the field. Apply the same rule to client `save-drafts`. Test v2 to v5 and back to equal v2 bytes through the shared function.
 
-Rollback: remove limits in setup, confirm lower catalog version, then install the older binary. Verified backup restore is the alternative. Add this to [restore instructions](OPERATIONS.md#make-a-backup-restore-and-roll-back-state).
+Rollback: remove limits in setup, confirm lower catalog version, then install the older binary. Verified backup restore is the alternative. See [roll back a release](OPERATIONS.md#roll-back-a-release).
 
 If the original catalog used its minimum version, exact bytes return. Otherwise the next safe setup write lowers it without changing unit bytes and fingerprints. Never while activation resume remains open.
 

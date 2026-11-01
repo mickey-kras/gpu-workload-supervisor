@@ -2,10 +2,12 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
@@ -59,6 +61,9 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 		return control.State{}, fmt.Errorf("invalid target workload %q", target)
 	}
 	if err := c.checkCatalog(ctx); err != nil {
+		return control.State{}, err
+	}
+	if err := c.refuseLimitedTarget(target); err != nil {
 		return control.State{}, err
 	}
 	current, err := c.transitionSource(ctx, options)
@@ -236,4 +241,20 @@ func (c *Controller) executeTransition(ctx context.Context, transition store.Tra
 	finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.FinalizeTimeout)
 	defer cancel()
 	return c.store.FinishTransition(finalizeCtx, transition.ID, "committed", state.Version, final)
+}
+
+// ErrLimitedTarget marks the refusal of a unit with limits before any unload
+// or other effect. Only this refusal is a definite no-change outcome; the
+// runtime Start and Healthy backstop errors keep their usual meaning.
+var ErrLimitedTarget = errors.New("target refused before any change")
+
+// refuseLimitedTarget refuses a unit with limits before any unload or other
+// effect, so the current workload keeps running. The runtime Start and
+// Healthy gate stays as the backstop.
+func (c *Controller) refuseLimitedTarget(target control.Workload) error {
+	p, _ := c.config.Catalog.Catalog.Profile(target)
+	if err := gpuruntime.RequireEnforceableLimits(p); err != nil {
+		return fmt.Errorf("%w: %w", ErrLimitedTarget, err)
+	}
+	return nil
 }

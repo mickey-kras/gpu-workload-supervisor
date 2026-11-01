@@ -9,7 +9,7 @@ Training presets stay disabled until [GPU qualification](#llm-training-qualifica
 
 ## Finite training jobs
 
-Training needs a separate version 4 catalog binding. Versions 1/2 remain supported. Version 3 stays reserved. Do not use inference `nativeModel` bindings for training.
+Training needs a separate trainer binding in catalog version 4 or 5. Versions 1/2 remain supported. Version 3 stays reserved. Do not use inference `nativeModel` bindings for training.
 
 The adapter owns recipes, datasets, metrics, checkpoints, evaluation and export. Keep GPU work in its unit's recursive cgroup. The supervisor stores lifecycle identity, terminal evidence and unit memory peak, without job queues or automatic resume.
 
@@ -460,4 +460,6 @@ Only named files enter plans. Revalidate before copying or loading: snapshots ar
 
 Each result identifies workload and unit, `bindingStatus` and `qualificationStatus: "unqualified"`. `verified` means executable, recipe, exact unit source, loaded command and environment and physical GPU checks passed. It approves neither Python environment, measured capacity, kernels nor launch. Failures remain visible with generic guidance, without subprocess output or credentials.
 
-Validate requests before selected-binding observation. Never apply. Use the complete version 4 profile, including measured `requiredMiB`, UUID, unit, executable and recipe paths and digests and private lifecycle paths. Infer nothing from service names or envelopes. Inspection only observes files and loaded units: no trainer or preparation execution, service changes, installations, lifecycle writes, catalog changes or preset enablement. Repeat all launch checks at training start.
+Validate requests before selected-binding observation. Never apply. Use the complete catalog v4 or v5 trainer profile, including measured `requiredMiB`, UUID, unit, executable and recipe paths and digests and private lifecycle paths. Infer nothing from service names or envelopes. Inspection only observes files and loaded units: no trainer or preparation execution, service changes, installations, lifecycle writes, catalog changes or preset enablement. Repeat all launch checks at training start.
+
+Limits on another catalog profile do not block inspection.

@@ -72,6 +72,9 @@ type parsedLaunchUnit struct {
 	gpuUUID              string
 	environment          map[string]bool
 	environmentValues    map[string]string
+	// limitDirectives records resource controls. Only the owned grammar
+	// rejects them; the adopted grammar accepts them as before.
+	limitDirectives []string
 }
 
 func parseLaunchUnit(raw []byte) (parsedLaunchUnit, error) {
@@ -145,6 +148,9 @@ func (u *parsedLaunchUnit) applyDirective(section, key, value string) error {
 		if unsupportedOperationalDirective(section, key) {
 			return fmt.Errorf("%w: unsupported operational directive %s", ErrLaunchUnsupported, key)
 		}
+		if section == "[Service]" && resourceLimitDirective(key) {
+			u.limitDirectives = append(u.limitDirectives, key)
+		}
 		// Harmless unknown settings need not prevent inspection. Directives that
 		// add code, change the effective environment, or remap inspected paths do.
 	}
@@ -187,6 +193,20 @@ func unsupportedLaunchDirective(key string) bool {
 	case "RootDirectory", "RootImage", "BindPaths", "BindReadOnlyPaths", "TemporaryFileSystem", "MountImages", "ExtensionImages", "ExtensionDirectories":
 		// A trusted host executable/model path need not name the same file in
 		// the service's filesystem namespace.
+		return true
+	}
+	return false
+}
+
+// resourceLimitDirective names the resource controls, with their legacy and
+// Startup aliases, that only an owned unit's exact rendered limits block may
+// carry. The adopted and imported grammar keeps accepting them unchanged.
+func resourceLimitDirective(key string) bool {
+	switch strings.TrimPrefix(key, "Startup") {
+	case "OOMPolicy", "OOMScoreAdjust", "MemoryLimit", "MemoryMin", "MemoryLow", "MemoryHigh", "MemoryMax", "MemorySwapMax", "MemoryZSwapMax",
+		"TasksMax", "CPUShares", "CPUWeight", "CPUQuota", "CPUQuotaPeriodSec", "AllowedCPUs", "AllowedMemoryNodes",
+		"IOWeight", "IODeviceWeight", "IOReadBandwidthMax", "IOWriteBandwidthMax", "IOReadIOPSMax", "IOWriteIOPSMax",
+		"BlockIOWeight", "BlockIODeviceWeight", "BlockIOReadBandwidth", "BlockIOWriteBandwidth":
 		return true
 	}
 	return false

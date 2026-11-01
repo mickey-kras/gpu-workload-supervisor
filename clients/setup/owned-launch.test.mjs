@@ -13,10 +13,10 @@ const trainer = {id: 'trainer', label: 'Trainer', adapter: 'systemd', unit: 'tra
         launchFile: '/opt/trainer/unit.service', launchSHA256: 'a'.repeat(64), executable: '/opt/trainer/train', executableSHA256: 'b'.repeat(64),
         recipeFile: '/opt/trainer/recipe.json', recipeSHA256: 'c'.repeat(64), jobFile: '/opt/trainer/job.json', terminalFile: '/opt/trainer/terminal.json'}};
 
-for (const [version, expectedVersion] of [[1, 2], [2, 2], [4, 4]]) {
+for (const [version, expectedVersion, withTrainer] of [[1, 2, false], [2, 2, false], [4, 4, true], [4, 2, false]]) {
     for (const journey of ['continue', 'managed preview']) {
-        test(`catalog v${version} retains its minimum schema through ${journey}`, async () => {
-            const existing = version === 4 ? [trainer] : [];
+        test(`catalog v${version} ${withTrainer ? 'with' : 'without'} a trainer uses its lowest schema through ${journey}`, async () => {
+            const existing = withTrainer ? [trainer] : [];
             const catalog = {version, profiles: journey === 'continue' ? [...existing, owned] : existing, extra: {keep: true}};
             const ui = await launch({deferAction: 'unused', responses: {
                 discover: {request: {profile: {statePath: '/state.db', gpuIndex: 2}, catalog}, units: []},

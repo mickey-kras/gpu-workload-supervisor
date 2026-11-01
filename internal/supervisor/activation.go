@@ -32,6 +32,9 @@ func (c *Controller) ActivateWorkload(ctx context.Context, target control.Worklo
 	if err := c.checkCatalog(ctx); err != nil {
 		return control.State{}, err
 	}
+	if err := c.refuseLimitedTarget(target); err != nil {
+		return control.State{}, err
+	}
 	current, err := c.store.State(ctx)
 	if err != nil {
 		return control.State{}, err

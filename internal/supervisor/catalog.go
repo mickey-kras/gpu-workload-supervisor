@@ -110,7 +110,9 @@ func (c *Controller) observeForReconciliation(ctx context.Context, recovering bo
 func (c *Controller) retainedCatalogTarget(snap gpuruntime.Snapshot) (control.Workload, error) {
 	target := control.WorkloadIdle
 	for _, p := range c.config.Catalog.Catalog.Profiles {
-		if p.BootPolicy == "retain" && snap.Workloads[p.ID].Active {
+		// A unit with limits cannot pass the health gate in this build, so it
+		// is never retained: reconciliation stops it and settles on idle.
+		if p.BootPolicy == "retain" && snap.Workloads[p.ID].Active && gpuruntime.RequireEnforceableLimits(p) == nil {
 			if target != control.WorkloadIdle {
 				return control.WorkloadUnknown, ErrInvariant
 			}

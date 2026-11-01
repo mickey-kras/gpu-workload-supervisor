@@ -18,19 +18,19 @@ func TestNativePolicyCatalogVersionGuard(t *testing.T) {
 	profile := func(version int) control.CatalogSnapshot {
 		return control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: version, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: upstream.URL}}}}}
 	}
-	for _, version := range []int{1, 2, 4} {
+	for _, version := range []int{1, 2, 4, 5} {
 		s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: profile(version)}
 		if _, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/v1/completions"}}}); err != nil {
 			t.Fatalf("catalog version %d refused: %v", version, err)
 		}
 	}
-	for _, version := range []int{0, 3, 99} {
+	for _, version := range []int{0, 3, 6, 99} {
 		s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: profile(version)}
 		if _, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/v1/completions"}}}); err == nil {
 			t.Fatalf("catalog version %d accepted", version)
 		}
 	}
-	if !supportedCatalogVersion(1) || !supportedCatalogVersion(2) || supportedCatalogVersion(0) || supportedCatalogVersion(3) {
+	if !supportedCatalogVersion(1) || !supportedCatalogVersion(2) || supportedCatalogVersion(0) || supportedCatalogVersion(3) || !supportedCatalogVersion(5) || supportedCatalogVersion(6) {
 		t.Fatal("supportedCatalogVersion boundary wrong")
 	}
 }
@@ -45,6 +45,24 @@ func TestV4TrainerCatalogPreservesInferenceProxy(t *testing.T) {
 	}
 	req := httptest.NewRequest("POST", "/v1/completions", strings.NewReader(`{"model":"selected"}`))
 	req.Header.Set(DefaultRequestIDHeader, "v4-inference")
+	addLeaseHeaders(req, s.state.LeaseFence)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != 200 || *calls != 1 || len(s.admitted) != 1 {
+		t.Fatalf("inference broken: status=%d calls=%d admitted=%d", w.Code, *calls, len(s.admitted))
+	}
+}
+
+func TestV5LimitsCatalogPreservesInferenceProxy(t *testing.T) {
+	s, c, _, calls := nativeProxyFixture(t)
+	s.catalog.Catalog.Version = control.CatalogVersionLimits
+	s.catalog.Catalog.Profiles[0].NativeModel.Owned = &control.OwnedLaunch{Port: 9100, Limits: control.ResourceLimits{Version: 1, MemoryMaxMiB: 8192}}
+	h, err := NewWithContext(context.Background(), s, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "/v1/completions", strings.NewReader(`{"model":"selected"}`))
+	req.Header.Set(DefaultRequestIDHeader, "v5-inference")
 	addLeaseHeaders(req, s.state.LeaseFence)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)

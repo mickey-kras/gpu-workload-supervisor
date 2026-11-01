@@ -354,6 +354,10 @@ Failed query or no reserved job despite the error: keep stopped, investigate pat
 
 No automatic downgrade. Check the exact binary and database schema and behavioral compatibility before older binaries open state. The guard rejects newer schemas. Matching schema numbers prove no fencing, handoff or completion compatibility. Never edit migration metadata.
 
+Older binaries reject catalog v5. Before you stop components and install an older binary, remove all resource limits. Setup then writes the lowest version the catalog needs. Run `gpu-setup discover` and read `request.catalog.version`: 4 with trainers, 2 with owned launches, 1 otherwise. Version 5 means limits remain.
+
+This release's setup application has no limit controls. Remove each limited workload and apply, then add it again without limits if needed. Alternatively, restore a backup from before the limits.
+
 Stop and block components as above. Preserve the failed database for investigation. Select verified binaries and configuration and matching pre-upgrade backup, including managed owned-unit bytes and hashes. Follow [desktop restoration](#restore-and-rollback), protecting foreign or modified units and refreshing the user manager. Complete every restore step, including `restore-state`, with a binary qualified for that backup and protocol. Never mix proxies that lack required handoff or lifetime locks with newer controllers.
 
 Reconcile, check closed-state recovery and refresh client fences before execution. Rollback loses post-backup work and audit updates. If the previous release cannot do this safely, keep admission closed and repair forward.
@@ -394,7 +398,7 @@ Versions are canonical nonzero unsigned 64-bit decimal strings, never JavaScript
 
 Backend and client reject unknown request and response fields. Evolve peers together. Incompatible shapes need protocol-version changes. New actions can have separate shapes. Older backends return `invalid_request`.
 
-Status and mutations share the nonblocking controller gate: `busy` queues nothing. Error codes: `invalid_request`, `unsupported_version`, `incompatible_configuration`, `stale_state`, `wrong_owner`, `busy`, `recovery_required`, `timeout`, `unavailable`, `deferred`. Errors omit status except deferred activation. Invalid envelopes can have empty correlation IDs. Errors expose neither profile paths nor runtime output.
+Status and mutations share the nonblocking controller gate: `busy` queues nothing. Error codes: `invalid_request`, `unsupported_version`, `incompatible_configuration`, `stale_state`, `wrong_owner`, `busy`, `recovery_required`, `timeout`, `unavailable`, `deferred`. Errors omit status except deferred activation. Invalid envelopes can have empty correlation IDs. Errors expose neither profile paths nor runtime output. Switches or activations to units with resource limits fail with `incompatible_configuration` before any change.
 
 ### Operator settings
 
