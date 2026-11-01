@@ -76,7 +76,7 @@ func TestSpecialFilesNeverBlockPreparation(t *testing.T) {
 	if _, _, err := available(fifo + "missing"); err == nil {
 		t.Fatal("accepted missing storage")
 	}
-	if err := inspectConfig(fifo, false); err == nil {
+	if err := inspectConfig(fifo, false, nil); err == nil {
 		t.Fatal("accepted FIFO model config")
 	}
 	if err := matchFile(fifo, strings.Repeat("a", 64), 100); err == nil {

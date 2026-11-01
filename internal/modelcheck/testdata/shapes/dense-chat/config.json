@@ -1,0 +1,18 @@
+{
+  "architectures": [
+    "Qwen3ForCausalLM"
+  ],
+  "bos_token_id": 1,
+  "eos_token_id": 2,
+  "hidden_act": "silu",
+  "hidden_size": 64,
+  "model_type": "qwen3",
+  "num_hidden_layers": 2,
+  "rope_scaling": null,
+  "rope_theta": 10000,
+  "sliding_window": null,
+  "tie_word_embeddings": false,
+  "torch_dtype": "bfloat16",
+  "transformers_version": "4.51.0",
+  "vocab_size": 256
+}
