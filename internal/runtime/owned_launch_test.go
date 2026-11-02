@@ -28,6 +28,10 @@ func ownedRenderProfile(runtimeName, id string, owned *control.OwnedLaunch) cont
 			Endpoint:   endpoint,
 			LaunchFile: "/home/u/.config/systemd/user/" + control.OwnedUnitName(control.Workload(id)),
 			Owned:      owned,
+			// Fixed hardened settings; tests that qualify on disk bind real files.
+			ChatTemplate:       owned.ModelPath + "/chat_template.jinja",
+			ChatTemplateSHA256: strings.Repeat("a", 64),
+			EnvironmentFile:    "/home/u/.config/gpu-workload-supervisor/vllm/" + id + ".env",
 		},
 	}
 }
@@ -41,12 +45,14 @@ func TestRenderOwnedUnitGolden(t *testing.T) {
 		"vllm minimal": {
 			profile: ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100}),
 			want: "[Unit]\nDescription=Supervisor-owned vllm launch for vision\n\n[Service]\nType=simple\nRestart=no\n" +
-				"ExecStart=/usr/bin/vllm serve /models/v --host 127.0.0.1 --port 9100\n",
+				"Environment=HF_HUB_OFFLINE=1\nEnvironmentFile=/home/u/.config/gpu-workload-supervisor/vllm/vision.env\n" +
+				"ExecStart=/usr/bin/vllm serve /models/v --host 127.0.0.1 --port 9100 --load-format safetensors --chat-template /models/v/chat_template.jinja\n",
 		},
 		"vllm full": {
 			profile: ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100, MaxModelLen: 4096, Alias: "selected"}),
 			want: "[Unit]\nDescription=Supervisor-owned vllm launch for vision\n\n[Service]\nType=simple\nRestart=no\n" +
-				"ExecStart=/usr/bin/vllm serve /models/v --host 127.0.0.1 --port 9100 --max-model-len 4096 --served-model-name selected\n",
+				"Environment=HF_HUB_OFFLINE=1\nEnvironmentFile=/home/u/.config/gpu-workload-supervisor/vllm/vision.env\n" +
+				"ExecStart=/usr/bin/vllm serve /models/v --host 127.0.0.1 --port 9100 --load-format safetensors --chat-template /models/v/chat_template.jinja --max-model-len 4096 --served-model-name selected\n",
 		},
 		"external vllm": {
 			profile: control.WorkloadProfile{ID: "chat", NativeModel: &control.NativeModel{
@@ -95,6 +101,8 @@ func TestRenderOwnedUnitRoundTripQualifies(t *testing.T) {
 		defaultAlias,
 		ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: modelDir, Port: 9100, MaxModelLen: 4096, Alias: "selected"}),
 	} {
+		bound := newHardenedFixture(t).bind(*tc.NativeModel)
+		tc.NativeModel = &bound
 		raw, err := RenderOwnedUnit(tc)
 		if err != nil {
 			t.Fatal(err)
@@ -102,6 +110,25 @@ func TestRenderOwnedUnitRoundTripQualifies(t *testing.T) {
 		if err := qualifyFixtureLaunch(raw, *tc.NativeModel); err != nil {
 			t.Fatalf("%s render does not qualify: %v", tc.NativeModel.Runtime, err)
 		}
+	}
+}
+
+// A binding from an earlier release keeps its exact earlier unit bytes, so
+// setup can prove the unit for removal or replacement, but it never qualifies.
+func TestRenderOwnedUnitKeepsLegacyBytesButNeverQualifies(t *testing.T) {
+	p := ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100})
+	p.NativeModel.ChatTemplate, p.NativeModel.ChatTemplateSHA256, p.NativeModel.EnvironmentFile = "", "", ""
+	raw, err := RenderOwnedUnit(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := "[Unit]\nDescription=Supervisor-owned vllm launch for vision\n\n[Service]\nType=simple\nRestart=no\n" +
+		"ExecStart=/usr/bin/vllm serve /models/v --host 127.0.0.1 --port 9100\n"
+	if string(raw) != legacy {
+		t.Fatalf("legacy render drift:\n%s", raw)
+	}
+	if err := qualifyNativeLaunchWithValidator(raw, *p.NativeModel, func(string) error { return nil }); err == nil || !strings.Contains(err.Error(), "earlier release") {
+		t.Fatalf("legacy owned binding qualified: %v", err)
 	}
 }
 

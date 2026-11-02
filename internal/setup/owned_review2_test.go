@@ -905,7 +905,7 @@ func TestFinalizeDeletesSyncUnitDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	journal := unitJournal{Version: 1, StatePath: r.Profile.StatePath, Writes: map[string]string{}, Deletes: map[string]string{stale.Unit: digest(staleRaw)}, Phase: ownedJournalCommitted}
-	if err := backend.applyOwnedUnitDeletes(context.Background(), home, journal); err != nil {
+	if err := backend.applyOwnedUnitDeletes(context.Background(), home, journal, control.Catalog{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(synced) != 1 || synced[0] != dir {

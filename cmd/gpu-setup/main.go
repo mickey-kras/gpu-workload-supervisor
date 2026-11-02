@@ -27,7 +27,7 @@ type setupActions struct {
 	probe         func(context.Context, setup.ProbeRequest) (setup.ApplicationCandidate, error)
 	euid          func() int
 	verify        func(context.Context, setup.Request) error
-	inspect       func(string, control.NativeModel) (string, error)
+	inspect       func(string, control.NativeModel) (control.NativeModel, string, error)
 	managerCgroup func(context.Context, string) (string, error)
 }
 
@@ -42,7 +42,7 @@ func systemActions() setupActions {
 		prepare:       setup.Prepare,
 		euid:          os.Geteuid,
 		verify:        setup.VerifyBindings,
-		inspect:       runtime.InspectQualifiedNativeLaunch,
+		inspect:       runtime.BindHardenedNativeLaunch,
 		managerCgroup: setup.ManagerCgroup,
 	}
 }

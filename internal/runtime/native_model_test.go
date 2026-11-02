@@ -55,7 +55,7 @@ func TestNativeDirectServerReadinessPaths(t *testing.T) {
 		t.Run(family, func(t *testing.T) {
 			var mu sync.Mutex
 			var paths []string
-			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			s := httptest.NewServer(servingAPI(func(w http.ResponseWriter, r *http.Request) {
 				mu.Lock()
 				paths = append(paths, r.URL.Path)
 				mu.Unlock()
@@ -70,7 +70,7 @@ func TestNativeDirectServerReadinessPaths(t *testing.T) {
 			}))
 			defer s.Close()
 			m := &SystemdManager{client: s.Client()}
-			if err := m.nativeReady(context.Background(), control.NativeModel{Runtime: family, Model: "selected", Endpoint: s.URL}); err != nil {
+			if err := m.nativeReady(context.Background(), servingBinding(t, s.URL, "selected")); err != nil {
 				t.Fatal(err)
 			}
 			mu.Lock()
@@ -86,10 +86,10 @@ func TestNativeIdentityRejectsHealthyWrongModel(t *testing.T) {
 	for _, family := range []string{"vllm"} {
 		t.Run(family, func(t *testing.T) {
 			body := `{"data":[{"id":"other"}]}`
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
+			server := httptest.NewServer(servingAPI(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, body) }))
 			defer server.Close()
 			m := &SystemdManager{client: server.Client()}
-			n := control.NativeModel{Runtime: family, Model: "selected", Endpoint: server.URL}
+			n := servingBinding(t, server.URL, "selected")
 			if m.nativeReady(context.Background(), n) == nil {
 				t.Fatal("wrong model accepted")
 			}
@@ -106,11 +106,12 @@ func TestNativeIdentityRejectsHealthyWrongModel(t *testing.T) {
 }
 func TestNativeLaunchDrift(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "model.service")
-	data := nativeLaunchFixture(t, "vllm", "http://localhost:8080", "a")
+	n := control.NativeModel{Runtime: "vllm", Model: "a", Endpoint: "http://127.0.0.1:8080", LaunchFile: path}
+	data := nativeLaunchFixture(t, &n)
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	n := control.NativeModel{Runtime: "vllm", Model: "a", Endpoint: "http://localhost:8080", LaunchFile: path, LaunchSHA256: fmt.Sprintf("%x", sha256.Sum256(data))}
+	n.LaunchSHA256 = fmt.Sprintf("%x", sha256.Sum256(data))
 	if err := verifyNativeLaunchWithValidator(n, fixtureExecutableValidator); err != nil {
 		t.Fatal(err)
 	}
@@ -127,22 +128,24 @@ func nativeFixture(t *testing.T, family, endpoint string) (*SystemdManager, *fak
 	c := acceptanceCatalog()
 	p := c.Profiles[2]
 	path := filepath.Join(t.TempDir(), "speech.service")
-	data := nativeLaunchFixture(t, family, endpoint, "selected")
+	n := control.NativeModel{Runtime: family, Instance: "local", Model: "selected", Endpoint: endpoint, LaunchFile: path}
+	data := nativeLaunchFixture(t, &n)
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
+	n.LaunchSHA256 = fmt.Sprintf("%x", sha256.Sum256(data))
 	p.HealthURL = endpoint
-	p.NativeModel = &control.NativeModel{Runtime: family, Instance: "local", Model: "selected", Endpoint: endpoint, LaunchFile: path, LaunchSHA256: fmt.Sprintf("%x", sha256.Sum256(data))}
+	p.NativeModel = &n
 	c.Profiles[2] = p
 	m, r := acceptanceManager(t, c)
 	m.nativeExecutableValidator = fixtureExecutableValidator
-	cmd := "/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload --property=ExecStartPre --property=ExecStart -- speech.service"
+	cmd := "/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload --property=ExecStartPre --property=ExecStart --property=Environment --property=EnvironmentFiles -- speech.service"
 	launch, _ := parseLaunchUnit(data)
-	r.outputs[cmd] = []byte("ExecStart={ path=" + strings.Fields(launch.execStart)[0] + " ; argv[]=" + launch.execStart + " ; }\nFragmentPath=" + path + "\nDropInPaths=\nNeedDaemonReload=no\n")
+	r.outputs[cmd] = []byte("ExecStart={ path=" + strings.Fields(launch.execStart)[0] + " ; argv[]=" + launch.execStart + " ; }\nFragmentPath=" + path + "\nDropInPaths=\nNeedDaemonReload=no\nEnvironment=HF_HUB_OFFLINE=1\nEnvironmentFiles=" + n.EnvironmentFile + " (ignore_errors=no)\n")
 	return m, r, p, cmd
 }
 func TestNativeLaunchBindingVerification(t *testing.T) {
-	m, r, p, cmd := nativeFixture(t, "vllm", "http://localhost:9000")
+	m, r, p, cmd := nativeFixture(t, "vllm", "http://127.0.0.1:9000")
 	if err := m.verifyNativeBinding(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +186,7 @@ func TestNativeStartVerifiesSelectedModelWithoutRequests(t *testing.T) {
 		t.Run(family, func(t *testing.T) {
 			posts := 0
 			identity := true
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewServer(servingAPI(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method != http.MethodGet {
 					posts++
 					return
@@ -268,10 +271,10 @@ func TestNativeLaunchFIFOIsRejected(t *testing.T) {
 		t.Fatal("FIFO blocked launch verification")
 	}
 }
-func nativeLaunchFixture(t *testing.T, family, endpoint, model string) []byte {
+func nativeLaunchFixture(t *testing.T, n *control.NativeModel) []byte {
 	t.Helper()
-	if family != "vllm" {
-		t.Fatalf("unsupported fixture runtime %q", family)
+	if n.Runtime != "vllm" {
+		t.Fatalf("unsupported fixture runtime %q", n.Runtime)
 	}
 	dir, err := os.MkdirTemp("", "native-launch-test-")
 	if err != nil {
@@ -286,7 +289,7 @@ func nativeLaunchFixture(t *testing.T, family, endpoint, model string) []byte {
 	if err := os.WriteFile(exe, []byte("#!/bin/false\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	u, err := url.Parse(endpoint)
+	u, err := url.Parse(n.Endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,8 +297,10 @@ func nativeLaunchFixture(t *testing.T, family, endpoint, model string) []byte {
 	if err := os.Mkdir(local, 0700); err != nil {
 		t.Fatal(err)
 	}
-	command := exe + " serve " + local + " --served-model-name " + model
-	return []byte("[Service]\nExecStart=" + command + " --host " + u.Hostname() + " --port " + u.Port() + "\n")
+	hardened := newHardenedFixture(t)
+	*n = hardened.bind(*n)
+	command := exe + " serve " + local + " --served-model-name " + n.Model
+	return []byte("[Service]\n" + hardened.lines() + "ExecStart=" + command + " --host " + u.Hostname() + " --port " + u.Port() + hardened.args() + "\n")
 }
 
 // Real filesystem trust is tested independently; these fixtures model installed

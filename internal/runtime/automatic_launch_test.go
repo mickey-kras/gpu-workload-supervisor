@@ -15,11 +15,12 @@ func TestAutomaticLaunchEvidence(t *testing.T) {
 	if err := os.Mkdir(model, 0755); err != nil {
 		t.Fatal(err)
 	}
+	hardened := newHardenedFixture(t)
 	tests := []struct{ app, command, env, endpoint, model string }{
 		{"comfyui", "/usr/bin/python3 " + script, "", "http://127.0.0.1:8188", ""},
 		{"comfyui", "/usr/bin/python3 " + script + " --listen ::1 --port 9000 --disable-auto-launch", "", "http://[::1]:9000", ""},
-		{"vllm", "/usr/bin/vllm serve " + model + " --host 127.0.0.1 --port 8080 --served-model-name chat --max-model-len 4096", "", "http://127.0.0.1:8080", "chat"},
-		{"vllm", "/usr/bin/vllm serve " + dir + " --host 127.0.0.1 --port 8000", "", "http://127.0.0.1:8000", dir},
+		{"vllm", "/usr/bin/vllm serve " + model + " --host 127.0.0.1 --port 8080 --served-model-name chat --max-model-len 4096" + hardened.args(), hardened.lines(), "http://127.0.0.1:8080", "chat"},
+		{"vllm", "/usr/bin/vllm serve " + dir + " --host 127.0.0.1 --port 8000" + hardened.args(), hardened.lines(), "http://127.0.0.1:8000", dir},
 	}
 	for _, tt := range tests {
 		t.Run(tt.app+tt.endpoint, func(t *testing.T) {

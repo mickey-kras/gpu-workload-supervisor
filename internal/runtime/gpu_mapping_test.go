@@ -14,7 +14,7 @@ import (
 
 func TestFullUUIDMappingRemainsConsistentAcrossRuntimeGates(t *testing.T) {
 	httpCalls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(servingAPI(func(w http.ResponseWriter, r *http.Request) {
 		httpCalls++
 		if r.URL.Path == "/v1/models" {
 			fmt.Fprint(w, `{"data":[{"id":"selected"}]}`)
@@ -33,8 +33,8 @@ func TestFullUUIDMappingRemainsConsistentAcrossRuntimeGates(t *testing.T) {
 	p.NativeModel.GPUUUID = testPhysicalUUID
 	p.NativeModel.LaunchSHA256 = fmt.Sprintf("%x", sha256.Sum256(raw))
 	m.config.Catalog.Profiles[2] = p
-	showWithEnvironment := strings.Replace(show, " -- speech.service", " --property=Environment -- speech.service", 1)
-	loaded := append(append([]byte(nil), runner.outputs[show]...), []byte("Environment=CUDA_VISIBLE_DEVICES="+testPhysicalUUID+"\n")...)
+	showWithEnvironment := show
+	loaded := []byte(strings.Replace(string(runner.outputs[show]), "Environment=HF_HUB_OFFLINE=1", "Environment=HF_HUB_OFFLINE=1 CUDA_VISIBLE_DEVICES="+testPhysicalUUID, 1))
 	runner.outputs[showWithEnvironment] = loaded
 	query := fmt.Sprintf("%s --query-gpu=uuid --format=csv,noheader -i %d", m.config.NvidiaSMIPath, m.config.GPUIndex)
 	runner.outputs[query] = []byte(testPhysicalUUID + "\n")

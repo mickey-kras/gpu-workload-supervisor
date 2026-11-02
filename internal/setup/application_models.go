@@ -3,6 +3,7 @@ package setup
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 )
 
@@ -67,6 +68,14 @@ func (p applicationHTTP) vllm(ctx context.Context, result *ApplicationCandidate)
 		Data []servedModel `json:"data"`
 	}
 	if err := p.get(ctx, "/v1/models", &body); err != nil {
+		var status *probeHTTPError
+		if errors.As(err, &status) && status.code == http.StatusUnauthorized {
+			// A hardened vLLM requires its API key on /v1 routes. Discovery
+			// does not read keys, so the served models stay unknown.
+			result.InventoryStatus = "unknown"
+			result.NextStep = "This vLLM requires an API key, so its models are not listed. Select its existing launch settings and verify lifecycle control."
+			return nil
+		}
 		return err
 	}
 	if body.Data == nil {

@@ -210,7 +210,7 @@ func TestNativeHeaderTimeoutDoesNotSupplyTerminalEvidence(t *testing.T) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		<-r.Context().Done()
 	}))
-	transport := f.handler.proxy.Transport.(*http.Transport)
+	transport := f.handler.proxy.Transport.(upstreamKeyTransport).base.(*http.Transport)
 	transport.ResponseHeaderTimeout = 50 * time.Millisecond
 	t.Cleanup(transport.CloseIdleConnections)
 	response := f.execute(t, "/v1/completions", `{"model":"selected"}`)

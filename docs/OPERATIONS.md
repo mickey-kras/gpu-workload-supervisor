@@ -72,7 +72,7 @@ printf '%s' '{"app":"vllm","reference":"/models/model","referenceKind":"model-di
 | vLLM application alias | Target and every link hop must pass executable trust checks |
 | vLLM application-directory | Known filenames directly in selected directory and `bin`. No recursion, content inspection or execution |
 | ComfyUI | `/system_stats` version. No model picker |
-| vLLM | `/version`, `/v1/models`. Groups same-root aliases. Model references from simple launches |
+| vLLM | `/version`, `/v1/models`. Groups same-root aliases. Model references from simple launches. With an API key, models are `unknown` |
 | Optional API absent | `unsupported` or unknown loaded state |
 | Verified stopped unit / failed connection | `not-running` / `unreachable`. Never successful empty inventories. Retains saved references |
 
@@ -84,6 +84,8 @@ Discovery uses fixed GET routes, without redirects or ambient proxies, 1 MiB res
 
 External adoption checks effective units, ordered contributing-file hashes and pre-start commands. Allowed commands: system `true`/`false` with optional `--`, or `test` with one `-e`, `-f`, `-d`, `-r`, `-w`, `-x` or `-s` predicate and absolute clean path. Originals and vLLM `--max-model-len`/`--served-model-name` remain. Unsupported syntax, wrappers and escaped launches get guidance. Managed launches use a separate restricted format.
 
+Every vLLM launch also needs the [hardened settings](INTEGRATION.md#hardened-vllm-launch). The model folder must contain `chat_template.jinja`.
+
 ### Upgrade and interrupted activation
 
 Before package replacement, use active controls to finish or stop admitted jobs, reach stable healthy Idle with closed admission, stop proxies and prevent external restart. Installation and setup do not do this operator decision.
@@ -91,6 +93,8 @@ Before package replacement, use active controls to finish or stop admitted jobs,
 New entrypoints reject the previous activated release before opening or migrating state. Activate through setup. Changed releases need valid full semantic versions and a stable target with strictly higher major, minor or patch version. `0.1.7-SNAPSHOT-<hash>` can activate `0.1.8`, not `0.1.7` or another snapshot. Hashes prove no order. Exact-release reapplication, including snapshots, remains supported.
 
 Activation holds controller and exclusive-proxy gates and verifies GPU release for existing and proposed mappings before snapshotting. Private `backups/activation-*` contains integrity-checked previous binaries and checksums, profile, accepted catalog, deployment marker, state and exact accepted owned-unit bytes. `owned-units.json` records SHA-256 hashes. `owned-units/` holds bytes. Keep this complete rollback tuple.
+
+The snapshot excludes vLLM API key files. After rollback, run setup again to create missing key files.
 
 Setup rejects stale previews before maintenance. Reopening resumes the exact pending request. Post-commit failures proceed forward, never undo a committed catalog. Never delete maintenance or migration metadata to bypass failure.
 
@@ -289,6 +293,8 @@ After upgrading Supervisor state, reconcile with new pinned binary and matching 
 ### Restore a backup
 
 A backup's incarnation can predate live state. `restore-state` must rotate it before any proxy starts, after every backup installation, never ordinary restart.
+
+Backups exclude vLLM API key files. After a restore, run setup again. It creates a missing key file for each managed vLLM workload.
 
 1. Stop every proxy, controller automation and runtime sharing state. Finish or stop admitted jobs and prevent restart. Controller and proxy lifetime locks serialize commands, not earlier file replacement or external runtime stopping.
 2. Install a consistent backup at the configured private service-owned state path. Never copy live `.db` alone or leave another database's WAL or SHM files alongside it.

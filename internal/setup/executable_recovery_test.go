@@ -47,7 +47,7 @@ func TestCustomStoppedExecutableRecoveryKeepsQualificationAndConsentSeparate(t *
 				t.Fatal("installed/configured/reachable states conflated", selected, err)
 			}
 			draft := Draft{ID: "chosen", App: app, Label: "Existing application", Reference: replacement, ReferenceKind: "application", Binding: selected.Binding, Model: "existing:latest"}
-			draft.Binding.Owned.ModelPath = root
+			draft.Binding.Owned.ModelPath = testModelPath("recovery-" + app)
 			profile, rendered, err := OwnedProfile(draft, "/manager", root)
 			if err != nil || profile.NativeModel.Owned.Executable != replacement || len(rendered) == 0 {
 				t.Fatal("selection failed to reach the managed preview", err)
