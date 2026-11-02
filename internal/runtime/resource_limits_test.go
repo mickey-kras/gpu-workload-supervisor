@@ -30,6 +30,7 @@ func limitedOwnedProfile(t *testing.T) (control.WorkloadProfile, []byte) {
 	limits := control.ResourceLimits{Version: 1, MemoryHighMiB: 4096, MemoryMaxMiB: 8192, TasksMax: 4096, CPUQuotaPercent: 400,
 		IODevice: "/dev/nvme0n1", IODeviceNumber: "259:0", IOReadBandwidthMax: 1 << 30}
 	p := ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: modelDir, Port: 9100, Alias: "selected", Conflicts: "gws-owned-alpha.service", Limits: limits})
+	*p.NativeModel = newHardenedFixture(t).bind(*p.NativeModel)
 	raw, err := RenderOwnedUnit(p)
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +45,8 @@ func TestRenderOwnedUnitWithLimitsGolden(t *testing.T) {
 		"\n[Service]\nType=simple\nRestart=no\n" +
 		"OOMPolicy=stop\nOOMScoreAdjust=500\nMemoryHigh=4096M\nMemoryMax=8192M\nMemorySwapMax=0M\nTasksMax=4096\nCPUQuota=400%\n" +
 		"IOReadBandwidthMax=/dev/nvme0n1 1073741824\n" +
-		"ExecStart=" + ownedBinaryDirectory + "/vllm serve " + p.NativeModel.Owned.ModelPath + " --host 127.0.0.1 --port 9100 --served-model-name selected\n"
+		"Environment=HF_HUB_OFFLINE=1\nEnvironmentFile=" + p.NativeModel.EnvironmentFile + "\n" +
+		"ExecStart=" + ownedBinaryDirectory + "/vllm serve " + p.NativeModel.Owned.ModelPath + " --host 127.0.0.1 --port 9100 --load-format safetensors --chat-template " + p.NativeModel.ChatTemplate + " --served-model-name selected\n"
 	if string(raw) != want {
 		t.Fatalf("render drift:\n%s", raw)
 	}
@@ -173,8 +175,8 @@ func limitedManager(t *testing.T) (*SystemdManager, *fakeRunner, control.Workloa
 	if err != nil {
 		t.Fatal(err)
 	}
-	show := "/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload --property=ExecStartPre --property=ExecStart -- " + p.Unit
-	r.outputs[show] = []byte("ExecStart={ path=" + strings.Fields(launch.execStart)[0] + " ; argv[]=" + launch.execStart + " ; }\nFragmentPath=" + p.NativeModel.LaunchFile + "\nDropInPaths=\nNeedDaemonReload=no\n")
+	show := "/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload --property=ExecStartPre --property=ExecStart --property=Environment --property=EnvironmentFiles -- " + p.Unit
+	r.outputs[show] = []byte("ExecStart={ path=" + strings.Fields(launch.execStart)[0] + " ; argv[]=" + launch.execStart + " ; }\nFragmentPath=" + p.NativeModel.LaunchFile + "\nDropInPaths=\nNeedDaemonReload=no\nEnvironment=HF_HUB_OFFLINE=1\nEnvironmentFiles=" + p.NativeModel.EnvironmentFile + " (ignore_errors=no)\n")
 	r.outputs["/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- "+p.Unit] = stoppedOutput()
 	for _, group := range []string{"text.service", "media.service", "app.slice/" + p.Unit} {
 		writeEvents(t, filepath.Join(m.cgroups.root, "workloads"), group, "populated 0\n")
