@@ -80,7 +80,7 @@ type parsedLaunchUnit struct {
 	// limitDirectives records resource controls. Only the owned grammar
 	// rejects them; the adopted grammar accepts them as before.
 	limitDirectives []string
-	environmentFile      string
+	environmentFile string
 	// keyFilePending marks an owned launch whose key file apply creates.
 	keyFilePending bool
 }
