@@ -153,13 +153,7 @@ func (u *parsedLaunchUnit) applyDirective(section, key, value string) error {
 	case "[Service]Environment":
 		return u.applySafeEnvironment(value)
 	case "[Service]EnvironmentFile":
-		// Only the private API key file of a hardened vLLM launch is supported.
-		// Its content is checked when the launch qualifies.
-		// systemd expands glob characters in EnvironmentFile paths.
-		if !filepath.IsAbs(value) || filepath.Clean(value) != value || strings.ContainsAny(value, launchExpansionCharacters+" \t*?[]") {
-			return fmt.Errorf("%w: EnvironmentFile requires one literal absolute path without glob characters", ErrLaunchUnsupported)
-		}
-		u.environmentFile = value
+		return u.applyEnvironmentFile(value)
 	default:
 		if unsupportedOperationalDirective(section, key) {
 			return fmt.Errorf("%w: unsupported operational directive %s", ErrLaunchUnsupported, key)
@@ -170,6 +164,15 @@ func (u *parsedLaunchUnit) applyDirective(section, key, value string) error {
 		// Harmless unknown settings need not prevent inspection. Directives that
 		// add code, change the effective environment, or remap inspected paths do.
 	}
+	return nil
+}
+
+func (u *parsedLaunchUnit) applyEnvironmentFile(value string) error {
+	// systemd expands glob characters in EnvironmentFile paths.
+	if !filepath.IsAbs(value) || filepath.Clean(value) != value || strings.ContainsAny(value, launchExpansionCharacters+" \t*?[]") {
+		return fmt.Errorf("%w: EnvironmentFile requires one literal absolute path without glob characters", ErrLaunchUnsupported)
+	}
+	u.environmentFile = value
 	return nil
 }
 
