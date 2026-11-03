@@ -17,6 +17,7 @@ import (
 )
 
 const (
+	serviceSection      = "[Service]"
 	flagMaxModelLen     = "--max-model-len"
 	flagServedModelName = "--served-model-name"
 	flagLoadFormat      = "--load-format"
@@ -112,7 +113,7 @@ func parseLaunchUnit(raw []byte) (parsedLaunchUnit, error) {
 
 func launchSectionHeader(line string) (string, bool) {
 	switch line {
-	case "[Unit]", "[Service]", "[Install]":
+	case "[Unit]", serviceSection, "[Install]":
 		return line, true
 	}
 	return "", false
@@ -158,7 +159,7 @@ func (u *parsedLaunchUnit) applyDirective(section, key, value string) error {
 		if unsupportedOperationalDirective(section, key) {
 			return fmt.Errorf("%w: unsupported operational directive %s", ErrLaunchUnsupported, key)
 		}
-		if section == "[Service]" && resourceLimitDirective(key) {
+		if section == serviceSection && resourceLimitDirective(key) {
 			u.limitDirectives = append(u.limitDirectives, key)
 		}
 		// Harmless unknown settings need not prevent inspection. Directives that
@@ -178,7 +179,7 @@ func (u *parsedLaunchUnit) applyEnvironmentFile(value string) error {
 
 func unsupportedOperationalDirective(section, key string) bool {
 	switch section {
-	case "[Service]":
+	case serviceSection:
 		return unsupportedLaunchDirective(key)
 	case "[Unit]":
 		// Dependency and propagation edges can activate or control code outside

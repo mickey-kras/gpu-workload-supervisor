@@ -11,6 +11,8 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
+const ownedRenderErrorFormat = "%w: %v"
+
 var ErrOwnedRender = errors.New("owned launch cannot be rendered to the supported unit subset")
 
 // ErrLimitsNotEnforced keeps a unit with limits from starting until the
@@ -93,7 +95,7 @@ func OwnedCgroup(managerRoot string, p control.WorkloadProfile) string {
 // must pass the same qualification as an adopted unit on this host.
 func renderMustQualify(raw []byte, n control.NativeModel) error {
 	if err := qualifyNativeLaunchWithValidator(raw, n, validateNativeExecutable); err != nil {
-		return fmt.Errorf("%w: %v", ErrOwnedRender, err)
+		return fmt.Errorf(ownedRenderErrorFormat, ErrOwnedRender, err)
 	}
 	return nil
 }
@@ -132,11 +134,11 @@ func QualifyOwnedUnitBeforeKey(p control.WorkloadProfile) error {
 func qualifyOwnedRender(raw []byte, n control.NativeModel, validate func(string) error, keyMayBeMissing bool) error {
 	unit, err := parseOwnedLaunchUnit(raw, n)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrOwnedRender, err)
+		return fmt.Errorf(ownedRenderErrorFormat, ErrOwnedRender, err)
 	}
 	unit.keyFilePending = keyMayBeMissing && KeyFileMissing(n.EnvironmentFile)
 	if err := qualifyParsedLaunch(unit, n, validate); err != nil {
-		return fmt.Errorf("%w: %v", ErrOwnedRender, err)
+		return fmt.Errorf(ownedRenderErrorFormat, ErrOwnedRender, err)
 	}
 	return nil
 }
