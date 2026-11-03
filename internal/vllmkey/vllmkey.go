@@ -21,6 +21,8 @@ const Name = "VLLM_API_KEY"
 
 const maxFileBytes = 512
 
+const keyFileErrorFormat = "%w: %s: %w"
+
 var (
 	// ErrInvalid tells that the key file is missing, unsafe or malformed.
 	// Messages never contain the key.
@@ -54,18 +56,18 @@ func Read(path string) (string, error) {
 		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if err := checkOwnership(info); err != nil {
-		return "", fmt.Errorf("%w: %s: %w", ErrInvalid, path, err)
+		return "", fmt.Errorf(keyFileErrorFormat, ErrInvalid, path, err)
 	}
 	raw, err := io.ReadAll(io.LimitReader(file, maxFileBytes+1))
 	if err != nil {
-		return "", fmt.Errorf("%w: %s: %w", ErrInvalid, path, err)
+		return "", fmt.Errorf(keyFileErrorFormat, ErrInvalid, path, err)
 	}
 	if len(raw) > maxFileBytes {
 		return "", fmt.Errorf("%w: %s: the file is larger than %d bytes", ErrInvalid, path, maxFileBytes)
 	}
 	key, err := parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("%w: %s: %w", ErrInvalid, path, err)
+		return "", fmt.Errorf(keyFileErrorFormat, ErrInvalid, path, err)
 	}
 	return key, nil
 }

@@ -30,7 +30,7 @@ func ResolveAutomaticCgroup(unit string, service, slice, manager map[string]stri
 		}
 		return group, nil
 	}
-	if service["ActiveState"] != "inactive" || service["SubState"] != "dead" || service["Slice"] != "app.slice" || slice["Id"] != "app.slice" || slice["LoadState"] != "loaded" || slice["ActiveState"] != "active" || slice["SubState"] != "active" || slice["ControlGroup"] != root+"/app.slice" {
+	if service["ActiveState"] != "inactive" || service["SubState"] != "dead" || service["Slice"] != appSlice || slice["Id"] != appSlice || slice["LoadState"] != "loaded" || slice["ActiveState"] != "active" || slice["SubState"] != "active" || slice["ControlGroup"] != root+"/app.slice" {
 		return "", errors.New("stopped installation placement cannot be verified; configure its supported app.slice launch and retry")
 	}
 	return slice["ControlGroup"] + "/" + unit, nil

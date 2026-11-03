@@ -91,7 +91,7 @@ func parseExternalLaunchSourcesWithAccountHome(sources [][]byte, readHome func()
 	}
 	problems.add(unit.applyEffectiveCommands(directives))
 	for _, name := range directives.envOrder {
-		problems.add(unit.applyDirective("[Service]", "Environment", directives.env[name]))
+		problems.add(unit.applyDirective(serviceSection, "Environment", directives.env[name]))
 	}
 	keys := make([]string, 0, len(directives.scalars))
 	for directive := range directives.scalars {
@@ -331,7 +331,7 @@ func validExternalServiceValue(key, value string) bool {
 	case "RemainAfterExit":
 		return value == "no"
 	case "Slice":
-		return value == "app.slice"
+		return value == appSlice
 	}
 	return false
 }
