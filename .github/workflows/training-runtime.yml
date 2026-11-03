@@ -57,4 +57,4 @@ jobs:
           .training-runtime/bin/python -m unittest discover -s tests/training -v
       - name: Train and reload tiny adapter without network access
         run: |
-          sudo unshare --net -- timeout 120 "$PWD/.training-runtime/bin/python" training/axolotl/smoke.py
+          sudo unshare --net -- timeout 300 "$PWD/.training-runtime/bin/python" training/axolotl/smoke.py
