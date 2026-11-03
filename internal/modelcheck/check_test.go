@@ -147,7 +147,7 @@ func (h *hub) tree(w http.ResponseWriter, r *http.Request) {
 	if h.stalled != nil {
 		close(h.stalled)
 		<-r.Context().Done()
-		return
+		panic(http.ErrAbortHandler)
 	}
 	if h.body != "" || h.status != http.StatusOK {
 		if h.redirect {
