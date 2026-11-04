@@ -17,6 +17,52 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// Accepted fixtures of the primary model's image-text architecture.
+const (
+	qwenModelFields = `"model_type":"qwen3_5","architectures":["Qwen3_5ForConditionalGeneration"],"text_config":{"model_type":"qwen3_5_text"}`
+	qwenModelConfig = `{` + qwenModelFields + `}`
+)
+
+// The processor fixtures are real files. The two processor files come
+// verbatim from Qwen/Qwen3.8-27B at revision
+// 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0 (the representative-qlora pin):
+//
+//	preprocessor_config.json        sha256 27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516
+//	video_preprocessor_config.json  sha256 7768af27c1fafa9cc9011c1dc20067e03f8915e03b63504550e11d5066986d13
+//
+// The smoke-lora snapshot, Qwen/Qwen3.5-0.8B (pin
+// 2fc06364715b967f1860aea9cf38778875588b17), holds byte-identical files: their
+// sha256 values from the main branch on 2026-11-03 are the same, so these
+// fixtures cover both presets. To recheck, download both files at each pin and
+// compare sha256sum.
+// saved_processor_config.json is what the locked transformers saves after it
+// loads them; the CPU smoke compares its key structure with real output.
+const savedProcessorFixturePath = "qwen3.8-processor/saved_processor_config.json"
+
+var (
+	qwenImageProcessor = testdataText("qwen3.8-processor/preprocessor_config.json")
+	qwenVideoProcessor = testdataText("qwen3.8-processor/video_preprocessor_config.json")
+	qwenSavedProcessor = testdataText(savedProcessorFixturePath)
+)
+
+func testdataText(name string) string {
+	raw, err := os.ReadFile(testdataPath(name))
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
+
+// testdataPath is the absolute path of a testdata file, for scripts that run
+// in another directory.
+func testdataPath(name string) string {
+	path, err := filepath.Abs(filepath.Join("testdata", name))
+	if err != nil {
+		panic(err)
+	}
+	return path
+}
+
 func writeFixture(t *testing.T, path, content string) string {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
@@ -40,7 +86,7 @@ func fixture(t *testing.T) Recipe {
 		}
 		return i
 	}
-	r := Recipe{Version: 1, Model: Snapshot{Revision: strings.Repeat("a", 40), Inventory: inventory("model", map[string]string{"config.json": `{"model_type":"llama"}`, "model.safetensors": "fixture bytes, not a qualified model"})}, Tokenizer: Snapshot{Revision: strings.Repeat("b", 40), Inventory: inventory("tokenizer", map[string]string{"tokenizer_config.json": `{}`, "tokenizer.json": `{}`})}, Runtime: Runtime{Entrypoint: "axolotl", Inventory: inventory("runtime", map[string]string{"axolotl": "#!/bin/sh\nexit 99\n", "entry_points.txt": "[axolotl.plugins]\nexample = unapproved:Plugin\n"})}, OutputDirectory: filepath.Join(root, "output"), Adapter: "qlora", Rank: 8, Alpha: 16, SequenceLength: 128, MicroBatchSize: 1, GradientAccumulation: 1, MaxSteps: 2, LearningRate: 0.0002, Seed: 42, Budget: Budget{RAMBytes: 1, WeightsBytes: 1, CacheBytes: 1, CheckpointBytes: 1, RetainedCheckpoints: 2, ExportBytes: 1, ReserveBytes: 1}}
+	r := Recipe{Version: 1, Model: Snapshot{Revision: strings.Repeat("a", 40), Inventory: inventory("model", map[string]string{"config.json": qwenModelConfig, "model.safetensors": "fixture bytes, not a qualified model"})}, Tokenizer: Snapshot{Revision: strings.Repeat("b", 40), Inventory: inventory("tokenizer", map[string]string{"preprocessor_config.json": qwenImageProcessor, "video_preprocessor_config.json": qwenVideoProcessor, "tokenizer_config.json": `{}`, "tokenizer.json": `{}`})}, Runtime: Runtime{Entrypoint: "axolotl", Inventory: inventory("runtime", map[string]string{"axolotl": "#!/bin/sh\nexit 99\n", "entry_points.txt": "[axolotl.plugins]\nexample = unapproved:Plugin\n"})}, OutputDirectory: filepath.Join(root, "output"), Adapter: "qlora", Rank: 8, Alpha: 16, SequenceLength: 128, MicroBatchSize: 1, GradientAccumulation: 1, MaxSteps: 2, LearningRate: 0.0002, Seed: 42, Budget: Budget{RAMBytes: 1, WeightsBytes: 1, CacheBytes: 1, CheckpointBytes: 1, RetainedCheckpoints: 2, ExportBytes: 1, ReserveBytes: 1}}
 	if err := os.Mkdir(r.OutputDirectory, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -122,20 +168,27 @@ func TestCompileDeterministicCandidate(t *testing.T) {
 	}
 }
 
-func TestCompileModelFamilyUsesDecodedString(t *testing.T) {
+func TestCompileRequiresTheImageTextArchitecture(t *testing.T) {
+	const text = `"text_config":{"model_type":"qwen3_5_text"}`
+	const arch = `"architectures":["Qwen3_5ForConditionalGeneration"]`
 	for _, tc := range []struct {
 		name, config string
 		accepted     bool
 	}{
-		{"escaped llama", `{"model_type":"llam\u0061"}`, true},
-		{"escaped unknown", `{"model_type":"unkn\u006fwn"}`, false},
-		{"case sensitive", `{"model_type":"Llama"}`, false},
+		{"qwen3.5 image-text", `{"model_type":"qwen3_5",` + arch + `,` + text + `}`, true},
+		{"escaped family", `{"model_type":"qwen3\u005f5",` + arch + `,` + text + `}`, true},
+		{"llama", `{"model_type":"llama"}`, false},
+		{"text-only class", `{"model_type":"qwen3_5","architectures":["Qwen3_5ForCausalLM"],` + text + `}`, false},
+		{"two classes", `{"model_type":"qwen3_5","architectures":["Qwen3_5ForConditionalGeneration","Qwen3_5ForCausalLM"],` + text + `}`, false},
+		{"missing architectures", `{"model_type":"qwen3_5",` + text + `}`, false},
+		{"moe text", `{"model_type":"qwen3_5",` + arch + `,"text_config":{"model_type":"qwen3_5_moe_text"}}`, false},
+		{"moe checkpoint", `{"model_type":"qwen3_5_moe","architectures":["Qwen3_5MoeForConditionalGeneration"],"text_config":{"model_type":"qwen3_5_moe_text"}}`, false},
+		{"missing text config", `{"model_type":"qwen3_5",` + arch + `}`, false},
+		{"case sensitive", `{"model_type":"Qwen3_5",` + arch + `,` + text + `}`, false},
 		{"missing", `{}`, false},
 		{"null", `{"model_type":null}`, false},
 		{"number", `{"model_type":1}`, false},
-		{"boolean", `{"model_type":true}`, false},
-		{"object", `{"model_type":{}}`, false},
-		{"array", `{"model_type":["llama"]}`, false},
+		{"array", `{"model_type":["qwen3_5"],` + arch + `,` + text + `}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := fixture(t)
@@ -143,6 +196,64 @@ func TestCompileModelFamilyUsesDecodedString(t *testing.T) {
 			_, err := Compile(r, math.MaxUint64, math.MaxUint64)
 			if (err == nil) != tc.accepted {
 				t.Fatalf("model family accepted = %v, want %v: %v", err == nil, tc.accepted, err)
+			}
+		})
+	}
+}
+
+func TestCompileRequiresTheImageTextProcessor(t *testing.T) {
+	r := fixture(t)
+	if _, err := Compile(r, math.MaxUint64, math.MaxUint64); err != nil {
+		t.Fatal(err)
+	}
+	combined := qwenSavedProcessor
+	for _, tc := range []struct{ name, file, content, want string }{
+		{"missing image processor", imageProcessorName, "", "requires " + imageProcessorName},
+		{"missing video processor", videoProcessorName, "", "requires " + videoProcessorName},
+		{"other processor", imageProcessorName, `{"processor_class":"Qwen2VLProcessor","image_processor_type":"Qwen2VLImageProcessorFast"}`, "processor_class must be"},
+		{"other image class", imageProcessorName, `{"processor_class":"Qwen3VLProcessor","image_processor_type":"SiglipImageProcessor"}`, "image_processor_type must be"},
+		{"missing image class", imageProcessorName, `{"processor_class":"Qwen3VLProcessor"}`, "image_processor_type must be"},
+		{"other video class", videoProcessorName, `{"processor_class":"Qwen3VLProcessor","video_processor_type":"LlavaVideoProcessor"}`, "video_processor_type must be"},
+		{"remote code", videoProcessorName, `{"processor_class":"Qwen3VLProcessor","video_processor_type":"Qwen3VLVideoProcessor","auto_map":{}}`, "top level contains auto_map"},
+		{"invalid json", imageProcessorName, `{"processor_class":`, "configuration " + imageProcessorName + " is invalid"},
+		{"remote code mapping", imageProcessorName, strings.Replace(qwenImageProcessor, "{", `{"auto_mapping":{},`, 1), "top level contains auto_mapping, which the loader key lists reject"},
+		{"nested custom pipelines", processorConfigName, strings.Replace(qwenSavedProcessor, `"image_processor": {`, `"image_processor": {"extra":[{"custom_pipelines":{}}],`, 1), "image_processor contains custom_pipelines"},
+		{"nested model redirect", videoProcessorName, strings.Replace(qwenVideoProcessor, "{", `{"extra":{"attribute_map":{}},`, 1), "top level contains attribute_map"},
+		{"file redirect", videoProcessorName, strings.Replace(qwenVideoProcessor, "{", `{"fast_tokenizer_files":[],`, 1), "top level contains fast_tokenizer_files"},
+		{"nested file redirect", processorConfigName, strings.Replace(qwenSavedProcessor, `"video_processor": {`, `"video_processor": {"transformers_weights":"x",`, 1), "video_processor contains transformers_weights"},
+		{"image class hint", imageProcessorName, strings.Replace(qwenImageProcessor, "Qwen2VLImageProcessorFast", "Other", 1), "image_processor_type must be Qwen2VLImageProcessorFast or Qwen2VLImageProcessor"},
+		{"video class hint", videoProcessorName, strings.Replace(qwenVideoProcessor, `"Qwen3VLVideoProcessor"`, `"Other"`, 1), "video_processor_type must be Qwen3VLVideoProcessor"},
+		{"processor class hint", videoProcessorName, strings.Replace(qwenVideoProcessor, `"Qwen3VLProcessor"`, `"Other"`, 1), "processor_class must be Qwen3VLProcessor"},
+		{"combined processor accepted", processorConfigName, combined, ""},
+		{"combined remote code", processorConfigName, `{"processor_class":"Qwen3VLProcessor","image_processor":{"image_processor_type":"Qwen2VLImageProcessor","auto_map":{}},"video_processor":` + qwenVideoProcessor + `}`, "image_processor contains auto_map"},
+		{"combined other video class", processorConfigName, `{"processor_class":"Qwen3VLProcessor","image_processor":` + qwenImageProcessor + `,"video_processor":{"video_processor_type":"Other"}}`, "video_processor.video_processor_type must be"},
+		{"combined other processor class", processorConfigName, strings.Replace(qwenSavedProcessor, `"processor_class": "Qwen3VLProcessor"`, `"processor_class": "OtherProcessor"`, 1), "processor_config.json: processor_class must be Qwen3VLProcessor"},
+		{"combined top-level file path", processorConfigName, strings.Replace(qwenSavedProcessor, "{", `{"vocab_file":"missing.json",`, 1), "processor_config.json: top level file names must name inventoried files"},
+		{"combined top-level file redirect", processorConfigName, strings.Replace(qwenSavedProcessor, "{", `{"transformers_weights":"x",`, 1), "processor_config.json: top level contains transformers_weights"},
+		{"combined without video", processorConfigName, `{"processor_class":"Qwen3VLProcessor","image_processor":` + qwenImageProcessor + `}`, "video_processor must be an object"},
+		{"chat template json", "chat_template.json", `{"chat_template":"x"}`, "must not contain chat_template.json"},
+		{"model config in tokenizer", "config.json", qwenModelConfig, "must not contain config.json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := fixture(t)
+			path := filepath.Join(r.Tokenizer.Inventory.Root, tc.file)
+			if tc.content == "" {
+				delete(r.Tokenizer.Inventory.Files, tc.file)
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				r.Tokenizer.Inventory.Files[tc.file] = writeFixture(t, path, tc.content)
+			}
+			_, err := Compile(r, math.MaxUint64, math.MaxUint64)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
 		})
 	}
@@ -199,7 +310,7 @@ func TestCompileRejectsInvalidAssetConfigUTF8(t *testing.T) {
 			if asset == "tokenizer" {
 				inventory, name = &r.Tokenizer.Inventory, "tokenizer_config.json"
 			}
-			invalid := "{\"model_type\":\"llama\",\"private\":\"secret-\xff\"}"
+			invalid := "{" + qwenModelFields + ",\"private\":\"secret-\xff\"}"
 			inventory.Files[name] = writeFixture(t, filepath.Join(inventory.Root, name), invalid)
 			if _, err := Compile(r, math.MaxUint64, math.MaxUint64); err == nil || strings.Contains(err.Error(), "secret-") || strings.Contains(err.Error(), inventory.Root) {
 				t.Fatal("invalid asset UTF-8 accepted or disclosed", err)
@@ -339,10 +450,10 @@ func TestInputsRejectChangesAndUnsupportedAssets(t *testing.T) {
 			}
 		},
 		"prequantized": func(t *testing.T, r *Recipe) {
-			r.Model.Inventory.Files["config.json"] = writeFixture(t, filepath.Join(r.Model.Inventory.Root, "config.json"), `{"model_type":"llama","quantization_config":{}}`)
+			r.Model.Inventory.Files["config.json"] = writeFixture(t, filepath.Join(r.Model.Inventory.Root, "config.json"), `{`+qwenModelFields+`,"quantization_config":{}}`)
 		},
 		"remote code": func(t *testing.T, r *Recipe) {
-			r.Model.Inventory.Files["config.json"] = writeFixture(t, filepath.Join(r.Model.Inventory.Root, "config.json"), `{"model_type":"llama","auto_map":{}}`)
+			r.Model.Inventory.Files["config.json"] = writeFixture(t, filepath.Join(r.Model.Inventory.Root, "config.json"), `{`+qwenModelFields+`,"auto_map":{}}`)
 		},
 		"wrong family": func(t *testing.T, r *Recipe) {
 			r.Model.Inventory.Files["config.json"] = writeFixture(t, filepath.Join(r.Model.Inventory.Root, "config.json"), `{"model_type":"unknown"}`)
@@ -610,4 +721,22 @@ func TestPublishPlanTemporaryCleanupFailureRollsBack(t *testing.T) {
 	if _, err := os.Lstat(plan); !os.IsNotExist(err) {
 		t.Fatal("cleanup failure left final publication", err)
 	}
+}
+
+// compileWithFile replaces one file of a snapshot of the fixture recipe and
+// returns the Compile error.
+func compileWithFile(t *testing.T, model bool, name, content string) error {
+	t.Helper()
+	r := fixture(t)
+	inventory := &r.Tokenizer.Inventory
+	if model {
+		inventory = &r.Model.Inventory
+	}
+	path := filepath.Join(inventory.Root, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	inventory.Files[name] = writeFixture(t, path, content)
+	_, err := Compile(r, math.MaxUint64, math.MaxUint64)
+	return err
 }

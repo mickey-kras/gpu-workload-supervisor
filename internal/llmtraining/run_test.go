@@ -490,5 +490,11 @@ func executionArtifactScript(r Recipe) string {
 	return "if [ \"$5\" = train ]; then\n" +
 		"printf '%s' '{\"peft_type\":\"LORA\",\"task_type\":\"CAUSAL_LM\",\"base_model_name_or_path\":\"" + r.Model.Inventory.Root + "\"}' > '" + filepath.Join(r.OutputDirectory, "adapter_config.json") + "'\n" +
 		"printf '{}' > '" + filepath.Join(r.OutputDirectory, "tokenizer_config.json") + "'\n" +
-		"printf '{}' > '" + filepath.Join(r.OutputDirectory, "tokenizer.json") + "'\nfi\n"
+		"printf '{}' > '" + filepath.Join(r.OutputDirectory, "tokenizer.json") + "'\n" +
+		"cp '" + savedProcessorFixture + "' '" + filepath.Join(r.OutputDirectory, processorConfigName) + "'\n" +
+		"cp '" + testdataPath("smoke-output/saved_config.json") + "' '" + filepath.Join(r.OutputDirectory, modelConfigName) + "'\nfi\n"
 }
+
+// savedProcessorFixture is the processor_config.json that the locked
+// transformers saves; training saves it with the adapter.
+var savedProcessorFixture = testdataPath(savedProcessorFixturePath)

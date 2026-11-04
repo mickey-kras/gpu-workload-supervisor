@@ -1040,10 +1040,13 @@ func TestTokenDataIsNotReadAsConfigurationKeys(t *testing.T) {
 
 func TestHubModelIDsAndURLsAreRedirects(t *testing.T) {
 	for name, tc := range map[string]struct{ file, content string }{
-		"ultravox audio model": {"config.json", `{"audio_model_id":"openai/whisper-large-v3"}`},
-		"ultravox text model":  {"config.json", `{"text_model_id":"org/llm"}`},
-		"repo ID in a value":   {"config.json", `{"text_config":{"backbone":"org/other-model"}}`},
-		"URL in a value":       {"generation_config.json", `{"source":"https://example.invalid/weights"}`},
+		"ultravox audio model":  {"config.json", `{"audio_model_id":"openai/whisper-large-v3"}`},
+		"ultravox text model":   {"config.json", `{"text_model_id":"org/llm"}`},
+		"audio tokenizer":       {"config.json", `{"audio_tokenizer":"tokenizer"}`},
+		"audio tokenizer class": {"config.json", `{"audio_tokenizer_class":"Tokenizer"}`},
+		"audio tokenizer path":  {"config.json", `{"audio_tokenizer_name_or_path":"tokenizer"}`},
+		"repo ID in a value":    {"config.json", `{"text_config":{"backbone":"org/other-model"}}`},
+		"URL in a value":        {"generation_config.json", `{"source":"https://example.invalid/weights"}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			files := modelFiles()

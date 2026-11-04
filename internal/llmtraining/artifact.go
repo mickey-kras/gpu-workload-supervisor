@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"math"
 	"path/filepath"
 	"reflect"
-	"unicode/utf8"
+	"slices"
+	"strconv"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
@@ -21,14 +23,23 @@ const (
 	adapterConfigName   = "adapter_config.json"
 	adapterWeightsName  = "adapter_model.safetensors"
 	tokenizerConfigName = "tokenizer_config.json"
+	// modelConfigName is the model configuration in the model snapshot and the
+	// export.
+	modelConfigName = "config.json"
+	// generationConfigName is the generation configuration of the model
+	// snapshot.
+	generationConfigName = "generation_config.json"
 )
 
 var artifactNames = map[string]bool{
 	adapterWeightsName: true, adapterConfigName: true,
 	tokenizerConfigName: true, "tokenizer.json": true, "tokenizer.model": true,
 	"special_tokens_map.json": true, "added_tokens.json": true,
-	"generation_config.json": true, "config.json": true, "vocab.json": true,
+	generationConfigName: true, modelConfigName: true, "vocab.json": true,
 	"merges.txt": true, "vocab.txt": true, "chat_template.jinja": true,
+	// Training saves the processor of the image-text model; the export binds
+	// and checks it like the other configuration files.
+	processorConfigName: true, imageProcessorName: true, videoProcessorName: true,
 }
 
 type Provenance struct {
@@ -56,6 +67,17 @@ func digestJSON[T Inventory | Runtime](value T) (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
+// exportRejected names outputs that a loader reads but the provenance cannot
+// bind: pickle and sharded adapters, and the unbound loader files
+// (unboundLoaderNames).
+var exportRejected = func() map[string]bool {
+	rejected := map[string]bool{"adapter_model.bin": true, "adapter_model.safetensors.index.json": true}
+	for _, name := range unboundLoaderNames {
+		rejected[name] = true
+	}
+	return rejected
+}()
+
 func artifactFiles(r Recipe) (map[string]string, error) {
 	if err := privateExecutionDirectory(r.OutputDirectory); err != nil {
 		return nil, err
@@ -65,65 +87,151 @@ func artifactFiles(r Recipe) (map[string]string, error) {
 		return nil, err
 	}
 	files := make(map[string]string)
+	contents := make(map[string][]byte)
 	var total uint64
 	for _, entry := range entries {
-		name := entry.Name()
-		if !artifactNames[name] {
-			if name == "adapter_model.bin" || name == "adapter_model.safetensors.index.json" || name == "chat_templates" {
-				return nil, errors.New("unsupported training export layout")
-			}
-			continue
-		}
-		digest, size, err := hashArtifact(filepath.Join(r.OutputDirectory, name), r.Budget.ExportBytes-total)
+		size, err := bindArtifact(r, entry.Name(), r.Budget.ExportBytes-total, files, contents)
 		if err != nil {
 			return nil, err
 		}
 		total += size
-		files[name] = digest
 	}
 	if files[adapterWeightsName] == "" || files[adapterConfigName] == "" || files[tokenizerConfigName] == "" || (files["tokenizer.json"] == "" && files["tokenizer.model"] == "") {
 		return nil, errors.New("training export requires adapter weights, configuration and saved tokenizer")
 	}
-	if err := validateArtifactConfigs(r); err != nil {
+	if err := validateArtifactConfigs(r, files, contents); err != nil {
 		return nil, err
 	}
 	return files, nil
 }
 
-func hashArtifact(path string, remaining uint64) (string, uint64, error) {
+// bindArtifact hashes one export entry into files, keeps the bytes of the
+// export configurations in contents, and returns the bytes it used of the
+// budget. It skips names outside the export and rejects unbound loader files.
+func bindArtifact(r Recipe, name string, remaining uint64, files map[string]string, contents map[string][]byte) (uint64, error) {
+	if !artifactNames[name] {
+		if exportRejected[name] {
+			return 0, errors.New("unsupported training export layout: " + name)
+		}
+		return 0, nil
+	}
+	digest, content, err := hashArtifact(filepath.Join(r.OutputDirectory, name), remaining, exportJSONNames[name])
+	if errors.Is(err, errConfigurationTooLarge) {
+		return 0, errors.New("training export " + name + " is larger than " + strconv.Itoa(configurationBytes>>20) + " MiB")
+	}
+	if err != nil {
+		return 0, err
+	}
+	files[name] = digest
+	if content.raw != nil {
+		contents[name] = content.raw
+	}
+	exportHashed(name)
+	return uint64(content.size), nil
+}
+
+// exportStatted runs after an export entry is opened and its size checked.
+// Tests use it to grow a file before the copy.
+var exportStatted = func(string) {}
+
+// exportHashed runs after each export entry is hashed. Tests use it to change
+// a file after its digest, which validation must not see.
+var exportHashed = func(string) {}
+
+// exportJSONNames are the export configurations that the export validates.
+// It keeps their bytes while hashing, so it validates the bytes it binds.
+var exportJSONNames = map[string]bool{
+	adapterConfigName: true, tokenizerConfigName: true, modelConfigName: true,
+	imageProcessorName: true, videoProcessorName: true, processorConfigName: true,
+}
+
+// configurationBytes bounds each JSON configuration, as readJSONObject does.
+const configurationBytes = 1 << 20
+
+var errConfigurationTooLarge = errors.New("training export configuration exceeds its size limit")
+
+// limitedBuffer keeps the first limit bytes written to it and drops the rest
+// without an error, so the hash still covers the whole stream.
+type limitedBuffer struct {
+	bytes.Buffer
+	limit int
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if room := b.limit - b.Len(); room > 0 {
+		b.Buffer.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
+}
+
+// hashedArtifact is the size of a hashed artifact and, when kept, its bytes.
+type hashedArtifact struct {
+	size int64
+	raw  []byte
+}
+
+func hashArtifact(path string, remaining uint64, keep bool) (string, hashedArtifact, error) {
 	f, err := openRegular(path)
 	if err != nil {
-		return "", 0, errors.New("training export contains an unreadable or linked asset")
+		return "", hashedArtifact{}, errors.New("training export contains an unreadable or linked asset")
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil || info.Size() <= 0 || uint64(info.Size()) > remaining {
-		return "", 0, errors.New("training export exceeds its budget or contains an empty asset")
+		return "", hashedArtifact{}, errors.New("training export exceeds its budget or contains an empty asset")
+	}
+	exportStatted(path)
+	if keep && info.Size() > configurationBytes {
+		return "", hashedArtifact{}, errConfigurationTooLarge
 	}
 	h := sha256.New()
-	n, err := io.Copy(h, io.LimitReader(f, int64(min(remaining, 1<<40))+1))
+	// The kept copy holds at most one byte above the limit, so a file that
+	// grows during the copy still fails validation.
+	kept := &limitedBuffer{limit: configurationBytes + 1}
+	sink := io.Writer(h)
+	if keep {
+		sink = io.MultiWriter(h, kept)
+	}
+	n, err := io.Copy(sink, io.LimitReader(f, int64(min(remaining, 1<<40))+1))
 	if err != nil || n <= 0 || uint64(n) > remaining || n > 1<<40 {
-		return "", 0, errors.New("training export cannot be hashed within its budget")
+		return "", hashedArtifact{}, errors.New("training export cannot be hashed within its budget")
 	}
-	return hex.EncodeToString(h.Sum(nil)), uint64(n), nil
+	result := hashedArtifact{size: n}
+	if keep {
+		result.raw = kept.Bytes()
+	}
+	return hex.EncodeToString(h.Sum(nil)), result, nil
 }
 
-func artifactConfig(path string) (map[string]json.RawMessage, error) {
-	f, err := openRegular(path)
-	if err != nil {
-		return nil, errors.New("training export configuration is unreadable")
+// qloraQuantizationConfig is the quantization_config that the locked
+// transformers saves for the bitsandbytes NF4 settings that Axolotl requests
+// for QLoRA: 4-bit NF4, double quantization, bfloat16 compute and storage.
+const qloraQuantizationConfig = `{"_load_in_4bit":true,"_load_in_8bit":false,"bnb_4bit_compute_dtype":"bfloat16",
+"bnb_4bit_quant_storage":"bfloat16","bnb_4bit_quant_type":"nf4","bnb_4bit_use_double_quant":true,
+"llm_int8_enable_fp32_cpu_offload":false,"llm_int8_has_fp16_weight":false,"llm_int8_skip_modules":null,
+"llm_int8_threshold":6.0,"load_in_4bit":true,"load_in_8bit":false,"quant_method":"bitsandbytes"}`
+
+// qloraQuantizationMismatch describes how raw differs from
+// qloraQuantizationConfig, or returns "" when they are equal. It names only
+// expected field names, never content from the file.
+func qloraQuantizationMismatch(raw json.RawMessage) string {
+	var saved, expected map[string]any
+	if json.Unmarshal(raw, &saved) != nil || saved == nil || json.Unmarshal([]byte(qloraQuantizationConfig), &expected) != nil {
+		return "quantization_config must be an object"
 	}
-	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
-	var result map[string]json.RawMessage
-	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &result) != nil || result == nil {
-		return nil, errors.New("training export configuration is invalid")
+	for _, field := range slices.Sorted(maps.Keys(expected)) {
+		if value, exists := saved[field]; !exists || !reflect.DeepEqual(value, expected[field]) {
+			return "quantization_config field " + field + " differs from the bitsandbytes NF4 setting that QLoRA requests"
+		}
 	}
-	return result, nil
+	if len(saved) != len(expected) {
+		return "quantization_config has an extra field"
+	}
+	return ""
 }
 
-func validateArtifactConfigs(r Recipe) error {
-	config, err := artifactConfig(filepath.Join(r.OutputDirectory, adapterConfigName))
+func validateArtifactConfigs(r Recipe, files map[string]string, contents map[string][]byte) error {
+	config, err := parseJSONObject(contents[adapterConfigName], "training export configuration")
 	if err != nil {
 		return err
 	}
@@ -134,24 +242,65 @@ func validateArtifactConfigs(r Recipe) error {
 		}
 	}
 	for _, name := range []string{adapterConfigName, tokenizerConfigName} {
-		if err := rejectArtifactRedirects(filepath.Join(r.OutputDirectory, name)); err != nil {
+		if err := checkExportLoaderKeys(name, contents[name], files); err != nil {
 			return err
 		}
 	}
-	return nil
+	// Training always saves the model config.json (observed in the CPU smoke).
+	if files[modelConfigName] == "" {
+		return errors.New("training export requires " + modelConfigName)
+	}
+	if err := checkExportModelConfig(r, files, contents[modelConfigName]); err != nil {
+		return err
+	}
+	return checkExportProcessors(files, contents)
 }
 
-func rejectArtifactRedirects(path string) error {
-	config, err := artifactConfig(path)
+// checkExportModelConfig checks the model config.json that training saves
+// with the adapter. A processor loader reads it with the processor files, so
+// it gets the loader key lists and the architecture check. Unlike the
+// candidate, it can record the 4-bit loading that a QLoRA recipe requested.
+func checkExportModelConfig(r Recipe, files map[string]string, raw []byte) error {
+	owner := "training export " + modelConfigName
+	config, err := parseJSONObject(raw, owner)
 	if err != nil {
 		return err
 	}
-	for _, key := range []string{"auto_map", "auto_mapping", "fast_tokenizer_files", "tokenizer_file", "vocab_file", "merges_file"} {
-		if value, exists := config[key]; exists && !bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-			return errors.New("training export configuration redirects are unsupported")
+	if err := inspectLoaderKeys(owner, config, true, files); err != nil {
+		return err
+	}
+	// transformers reads quantization_config at the top level and in
+	// text_config. Only the top level can hold the QLoRA setting.
+	nested := maps.Clone(config)
+	delete(nested, quantizationConfigKey)
+	if _, key := deepLoaderKey(nested, []string{quantizationConfigKey}, modelSubConfigs); key != "" {
+		return errors.New(owner + " can have quantization_config only at the top level")
+	}
+	if raw, exists := config[quantizationConfigKey]; exists {
+		if r.Adapter != "qlora" {
+			return errors.New(owner + " quantization_config requires a QLoRA recipe")
+		}
+		if problem := qloraQuantizationMismatch(raw); problem != "" {
+			return errors.New(owner + " " + problem)
 		}
 	}
-	return nil
+	return inspectArchitecture(owner, config)
+}
+
+// checkExportLoaderKeys applies the shared loader key lists to a saved
+// adapter or tokenizer configuration, with file-path keys checked against the
+// bound export files. Saved configurations write unset fields as null, for
+// example the PEFT auto_mapping, so a null value is allowed.
+func checkExportLoaderKeys(name string, raw []byte, files map[string]string) error {
+	config, err := parseJSONObject(raw, "training export configuration")
+	if err != nil {
+		return err
+	}
+	set := maps.Clone(config)
+	maps.DeleteFunc(set, func(_ string, value json.RawMessage) bool {
+		return bytes.Equal(bytes.TrimSpace(value), []byte("null"))
+	})
+	return inspectLoaderKeys("training export "+name, set, false, files)
 }
 
 func newProvenance(r Recipe, job control.TrainingJob, invocation string, loss float64, files map[string]string) (Provenance, error) {

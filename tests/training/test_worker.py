@@ -53,6 +53,13 @@ def cuda_torch() -> MagicMock:
     return torch
 
 
+def qwen_processor_loader(name: str = "Qwen3VLProcessor") -> MagicMock:
+    """AutoProcessor stand-in whose from_pretrained returns a processor of the named class."""
+    loader: MagicMock = MagicMock()
+    loader.from_pretrained.return_value = type(name, (), {})()
+    return loader
+
+
 class WorkerTests(unittest.TestCase):
     def test_only_pinned_noneditable_runtime_is_accepted(self) -> None:
         for metadata in (
@@ -214,7 +221,7 @@ class WorkerTests(unittest.TestCase):
             trainer: MagicMock = MagicMock()
             trainer.state.global_step = 2
             trainer.evaluate.return_value = {"eval_loss": 1.0}
-            cfg = SimpleNamespace(max_steps=2, output_dir=directory, load_in_4bit=False)
+            cfg = SimpleNamespace(max_steps=2, output_dir=directory, load_in_4bit=False, tokenizer_config="tokenizer")
             trainer.add_callback.side_effect = lambda value: getattr(value, "on_step_end")(None, SimpleNamespace(global_step=2), None)
             modules = {
                 "axolotl": module("axolotl", {}), "axolotl.cli": module("axolotl.cli", {}),
@@ -223,10 +230,10 @@ class WorkerTests(unittest.TestCase):
                 "axolotl.common.datasets": module("axolotl.common.datasets", {"load_datasets": MagicMock()}),
                 "axolotl.train": module("axolotl.train", {
                     "save_initial_configs": MagicMock(), "save_trained_model": MagicMock(),
-                    "setup_model_and_trainer": MagicMock(return_value=(trainer, object(), MagicMock(), None, None)),
+                    "setup_model_and_trainer": MagicMock(return_value=(trainer, object(), MagicMock(), None, type("Qwen3VLProcessor", (), {})())),
                 }),
                 "transformers": module("transformers", {
-                    "TrainerCallback": object, "TrainerControl": object, "TrainerState": object, "TrainingArguments": object,
+                    "AutoProcessor": qwen_processor_loader(), "TrainerCallback": object, "TrainerControl": object, "TrainerState": object, "TrainingArguments": object,
                 }),
             }
             # Every sample fails, including the per-step sample in trainer.train.
@@ -267,9 +274,9 @@ class WorkerTests(unittest.TestCase):
             peft.from_pretrained.return_value = model
             reload_modules = {
                 "torch": torch, "peft": module("peft", {"PeftModel": peft}),
-                "transformers": module("transformers", {"AutoModelForCausalLM": MagicMock(), "AutoTokenizer": tokenizer, "BitsAndBytesConfig": MagicMock()}),
+                "transformers": module("transformers", {"AutoModelForImageTextToText": MagicMock(), "AutoTokenizer": tokenizer, "BitsAndBytesConfig": MagicMock()}),
             }
-            with patch.dict(worker.sys.modules, reload_modules), patch.object(worker, "verify_accelerator"):
+            with patch.dict(worker.sys.modules, reload_modules), patch.object(worker, "verify_accelerator"), patch.object(worker, "require_matching_adapter"):
                 worker.reload(cfg_path, root / "reload-receipt.json", root / "progress.json")
             self.assertTrue(json.loads((root / "reload-receipt.json").read_text())["reloaded"])
 
@@ -330,20 +337,31 @@ class WorkerTests(unittest.TestCase):
                 worker.main(arguments)
 
     def test_native_training_requires_requested_progress_and_valid_evaluation(self) -> None:
-        for steps, loss in ((2, 1.0), (1, 1.0), (2, float("nan")), (2, -1.0)):
-            with self.subTest(steps=steps, loss=loss), tempfile.TemporaryDirectory() as directory:
+        processor_class = type("Qwen3VLProcessor", (), {})
+        other_class = type("OtherProcessor", (), {})
+        for steps, loss, processor in ((2, 1.0, processor_class()), (1, 1.0, processor_class()), (2, float("nan"), processor_class()),
+                                       (2, -1.0, processor_class()), (2, 1.0, None), (2, 1.0, other_class())):
+            with self.subTest(steps=steps, loss=loss, processor=type(processor).__name__), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 trainer: MagicMock = MagicMock()
                 trainer.state.global_step = steps
                 trainer.evaluate.return_value = {"eval_loss": loss}
                 tokenizer: MagicMock = MagicMock()
                 saved: MagicMock = MagicMock()
-                cfg = SimpleNamespace(max_steps=2, output_dir=directory, load_in_4bit=False)
+                cfg = SimpleNamespace(max_steps=2, output_dir=directory, load_in_4bit=False, tokenizer_config="tokenizer")
 
                 def callback(value: object) -> None:
                     getattr(value, "on_step_end")(None, SimpleNamespace(global_step=steps), None)
 
                 trainer.add_callback.side_effect = callback
+                initial_configs: MagicMock = MagicMock()
+                processor_roots: list[object] = []
+
+                def setup(config: SimpleNamespace, *_: object) -> tuple[object, ...]:
+                    # Record the processor root that Axolotl reads at model setup.
+                    processor_roots.append(getattr(config, "processor_config", None))
+                    return (trainer, object(), tokenizer, None, processor)
+
                 modules = {
                     "axolotl": module("axolotl", {}),
                     "axolotl.cli": module("axolotl.cli", {}),
@@ -351,12 +369,12 @@ class WorkerTests(unittest.TestCase):
                     "axolotl.common": module("axolotl.common", {}),
                     "axolotl.common.datasets": module("axolotl.common.datasets", {"load_datasets": MagicMock()}),
                     "axolotl.train": module("axolotl.train", {
-                        "save_initial_configs": MagicMock(),
+                        "save_initial_configs": initial_configs,
                         "save_trained_model": saved,
-                        "setup_model_and_trainer": MagicMock(return_value=(trainer, object(), tokenizer, None, None)),
+                        "setup_model_and_trainer": MagicMock(side_effect=setup),
                     }),
                     "transformers": module("transformers", {
-                        "TrainerCallback": object, "TrainerControl": object,
+                        "AutoProcessor": qwen_processor_loader(), "TrainerCallback": object, "TrainerControl": object,
                         "TrainerState": object, "TrainingArguments": object,
                     }),
                 }
@@ -372,7 +390,7 @@ class WorkerTests(unittest.TestCase):
                 with patch.dict(worker.sys.modules, modules), patch.object(worker, "verify_accelerator") as accelerator, patch.object(
                     worker, "vram_peak", side_effect=sample
                 ):
-                    if steps == 2 and loss == 1.0:
+                    if steps == 2 and loss == 1.0 and processor is not None and type(processor) is processor_class:
                         worker.train(root / "config.json", receipt, root / "progress.json")
                         accelerator.assert_called_once_with(False)
                         # One sample per step, after evaluation and after the save.
@@ -382,6 +400,9 @@ class WorkerTests(unittest.TestCase):
                         self.assertEqual((root / "progress.json").read_bytes(), PROGRESS_GOLDEN.read_bytes())
                         self.assertEqual(json.loads(receipt.read_text())["step"], 2)
                         trainer.train.assert_called_once_with(resume_from_checkpoint=None)
+                        # Model setup loads the processor from the tokenizer snapshot,
+                        # not the model directory.
+                        self.assertEqual(processor_roots, [cfg.tokenizer_config])
                         trainer.evaluate.assert_called_once_with()
                         saved.assert_called_once()
                         self.assertEqual(json.loads((root / "progress.json").read_text())["step"], 2)
@@ -391,10 +412,65 @@ class WorkerTests(unittest.TestCase):
                             worker.train(root / "config.json", receipt, root / "progress.json")
                         self.assertFalse(receipt.exists())
                         saved.assert_not_called()
+                        if steps == 2 and loss == 1.0:
+                            # A wrong processor stops the run before it writes anything.
+                            with self.assertRaisesRegex(ValueError, "the Axolotl processor setup loaded no Qwen3VLProcessor"):
+                                worker.train(root / "config.json", receipt, root / "progress.json")
+                            trainer.train.assert_not_called()
+                            initial_configs.assert_not_called()
+
+    def test_training_checks_the_processor_before_the_model_loads(self) -> None:
+        cfg = SimpleNamespace(max_steps=2, output_dir="out", load_in_4bit=False, tokenizer_config="tokenizer")
+        setup: MagicMock = MagicMock()
+        datasets: MagicMock = MagicMock()
+        loader = qwen_processor_loader("OtherProcessor")
+        modules = {
+            "axolotl": module("axolotl", {}),
+            "axolotl.cli": module("axolotl.cli", {}),
+            "axolotl.cli.config": module("axolotl.cli.config", {"load_cfg": MagicMock(return_value=cfg)}),
+            "axolotl.common": module("axolotl.common", {}),
+            "axolotl.common.datasets": module("axolotl.common.datasets", {"load_datasets": datasets}),
+            "axolotl.train": module("axolotl.train", {
+                "save_initial_configs": MagicMock(), "save_trained_model": MagicMock(), "setup_model_and_trainer": setup,
+            }),
+            "transformers": module("transformers", {
+                "AutoProcessor": loader, "TrainerCallback": object, "TrainerControl": object, "TrainerState": object, "TrainingArguments": object,
+            }),
+        }
+        with tempfile.TemporaryDirectory() as directory, patch.dict(worker.sys.modules, modules), patch.object(worker, "verify_accelerator"):
+            root = Path(directory)
+            with self.assertRaisesRegex(ValueError, "the tokenizer snapshot loaded no Qwen3VLProcessor \\(got OtherProcessor\\)"):
+                worker.train(root / "config.json", root / "receipt.json", root / "progress.json")
+        loader.from_pretrained.assert_called_once_with("tokenizer", local_files_only=True, trust_remote_code=False)
+        datasets.assert_not_called()
+        setup.assert_not_called()
+
+    def test_training_requires_the_tokenizer_snapshot_as_processor_root(self) -> None:
+        cfg = SimpleNamespace(max_steps=2, output_dir="out", load_in_4bit=False)
+        setup: MagicMock = MagicMock()
+        modules = {
+            "axolotl": module("axolotl", {}),
+            "axolotl.cli": module("axolotl.cli", {}),
+            "axolotl.cli.config": module("axolotl.cli.config", {"load_cfg": MagicMock(return_value=cfg)}),
+            "axolotl.common": module("axolotl.common", {}),
+            "axolotl.common.datasets": module("axolotl.common.datasets", {"load_datasets": MagicMock()}),
+            "axolotl.train": module("axolotl.train", {
+                "save_initial_configs": MagicMock(), "save_trained_model": MagicMock(), "setup_model_and_trainer": setup,
+            }),
+            "transformers": module("transformers", {
+                "AutoProcessor": qwen_processor_loader(), "TrainerCallback": object, "TrainerControl": object, "TrainerState": object, "TrainingArguments": object,
+            }),
+        }
+        with tempfile.TemporaryDirectory() as directory, patch.dict(worker.sys.modules, modules), patch.object(worker, "verify_accelerator"):
+            root = Path(directory)
+            with self.assertRaisesRegex(ValueError, "tokenizer_config"):
+                worker.train(root / "config.json", root / "receipt.json", root / "progress.json")
+        setup.assert_not_called()
 
     def test_reload_uses_saved_adapter_and_tokenizer_and_requires_real_output(self) -> None:
-        for quantized, finite, length in ((False, True, 9), (True, True, 9), (True, False, 9), (True, True, 1)):
-            with self.subTest(quantized=quantized, finite=finite, length=length), tempfile.TemporaryDirectory() as directory:
+        for quantized, finite, length, matches in ((False, True, 9, True), (True, True, 9, True), (True, False, 9, True),
+                                                   (True, True, 1, True), (False, True, 9, False)):
+            with self.subTest(quantized=quantized, finite=finite, length=length, matches=matches), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 cfg = {"base_model": "base", "tokenizer_config": "original", "output_dir": "saved", "load_in_4bit": quantized, "max_steps": 2}
                 config = root / "config.json"
@@ -415,11 +491,13 @@ class WorkerTests(unittest.TestCase):
                 modules = {
                     "torch": torch,
                     "peft": module("peft", {"PeftModel": peft}),
-                    "transformers": module("transformers", {"AutoModelForCausalLM": MagicMock(), "AutoTokenizer": tokenizer, "BitsAndBytesConfig": MagicMock()}),
+                    "transformers": module("transformers", {"AutoModelForImageTextToText": MagicMock(), "AutoTokenizer": tokenizer, "BitsAndBytesConfig": MagicMock()}),
                 }
                 receipt = root / "receipt.json"
-                with patch.dict(worker.sys.modules, modules), patch.object(worker, "verify_accelerator") as accelerator:
-                    if finite and length > 1:
+                with patch.dict(worker.sys.modules, modules), patch.object(worker, "verify_accelerator") as accelerator, patch.object(
+                    worker, "require_matching_adapter", side_effect=None if matches else ValueError("adapter does not match")
+                ) as matching:
+                    if finite and length > 1 and matches:
                         worker.reload(config, receipt, root / "progress.json")
                         accelerator.assert_called_once_with(quantized)
                         self.assertTrue(json.loads(receipt.read_text())["reloaded"])
@@ -427,12 +505,40 @@ class WorkerTests(unittest.TestCase):
                         self.assertEqual((progress["phase"], progress["vramPeakBytes"]), ("reload", 6 << 30))
                         tokenizer.from_pretrained.assert_called_once_with("saved", local_files_only=True, trust_remote_code=False)
                         self.assertEqual(peft.from_pretrained.call_args.args[1], "saved")
+                        matching.assert_called_once_with(model, "saved")
                         model.assert_called_once_with(input_ids=input_ids)
                         model.generate.assert_called_once_with(input_ids=input_ids, max_new_tokens=8, do_sample=False)
                     else:
                         with self.assertRaises(ValueError):
                             worker.reload(config, receipt, root / "progress.json")
                         self.assertFalse(receipt.exists())
+
+    def test_reload_requires_adapter_keys_that_match_the_base_model(self) -> None:
+        keys = {"base_model.model.model.language_model.layers.1.self_attn.q_proj.lora_A.weight": 0}
+        for saved, loaded, matches in ((keys, keys, True), (keys, {}, False), ({}, {}, False),
+                                       (keys, {"base_model.model.model.layers.1.self_attn.q_proj.lora_A.weight": 0}, False)):
+            with self.subTest(saved=sorted(saved), loaded=sorted(loaded)):
+                utils = module("peft.utils", {"load_peft_weights": MagicMock(return_value=saved),
+                                              "get_peft_model_state_dict": MagicMock(return_value=loaded)})
+                with patch.dict(worker.sys.modules, {"peft": module("peft", {"utils": utils}), "peft.utils": utils}):
+                    if matches:
+                        worker.require_matching_adapter(MagicMock(), "saved")
+                    else:
+                        with self.assertRaisesRegex(ValueError, "does not match the base model: .* saved and .* expected keys"):
+                            worker.require_matching_adapter(MagicMock(), "saved")
+
+    def test_adapter_key_error_reports_missing_keys_without_paths(self) -> None:
+        present = "base_model.model.model.language_model.layers.3.self_attn.q_proj.lora_A.weight"
+        absent = "base_model.model.model.language_model.layers.3.self_attn.v_proj.lora_A.weight"
+        utils = module("peft.utils", {"load_peft_weights": MagicMock(return_value={present: 0}),
+                                      "get_peft_model_state_dict": MagicMock(return_value={present: 0, absent: 0})})
+        with patch.dict(worker.sys.modules, {"peft": module("peft", {"utils": utils}), "peft.utils": utils}):
+            with self.assertRaises(ValueError) as raised:
+                worker.require_matching_adapter(MagicMock(), "/private/distinctive-adapter-directory")
+        message = str(raised.exception)
+        self.assertIn("1 saved and 2 expected keys; 0 unexpected [], 1 missing", message)
+        self.assertIn(absent, message)
+        self.assertNotIn("distinctive-adapter-directory", message)
 
     def test_main_rejects_unsupported_python_before_runtime_preparation(self) -> None:
         for phase in ("train", "reload"):
@@ -481,7 +587,7 @@ class WorkerTests(unittest.TestCase):
                 "save_initial_configs": MagicMock(), "save_trained_model": MagicMock(), "setup_model_and_trainer": MagicMock(),
             }),
             "transformers": module("transformers", {
-                "TrainerCallback": object, "TrainerControl": object, "TrainerState": object, "TrainingArguments": object,
+                "AutoProcessor": qwen_processor_loader(), "TrainerCallback": object, "TrainerControl": object, "TrainerState": object, "TrainingArguments": object,
             }),
         }
         with tempfile.TemporaryDirectory() as directory, patch.dict(worker.sys.modules, modules), patch.object(
@@ -495,7 +601,7 @@ class WorkerTests(unittest.TestCase):
                 load_cfg.return_value = SimpleNamespace(load_in_4bit=value)
                 with self.subTest(value=value), self.assertRaisesRegex(ValueError, "load_in_4bit must be a boolean"):
                     worker.train(root / "config.json", root / "receipt.json", root / "progress.json")
-            load_cfg.return_value = SimpleNamespace(load_in_4bit=None)
+            load_cfg.return_value = SimpleNamespace(load_in_4bit=None, tokenizer_config="tokenizer")
             load_datasets.side_effect = RuntimeError("datasets reached")
             with patch.object(worker, "verify_accelerator") as accelerator, self.assertRaisesRegex(RuntimeError, "datasets reached"):
                 worker.train(root / "config.json", root / "receipt.json", root / "progress.json", accelerator=False)

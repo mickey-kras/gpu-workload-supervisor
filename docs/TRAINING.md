@@ -136,7 +136,8 @@ Strict JSON, at most 8 MiB. Reject unknown or duplicate keys, trailing values, r
 | --- | --- |
 | Inventory | Reject missing, extra, linked or nonregular files. At most 65536 enumerated entries, including empty directories but not root. At most 32768 declared files. Directory reads stop at remaining budget plus one overflow entry. Output emptiness reads one entry. |
 | Provenance | Inventory equality proves preparation-time bytes only, not revision origin, code or entry-point approval, external libraries or later immutability. Include runtime distribution metadata and entry-point declarations. |
-| Model and tokenizer | Only `model_type: "llama"`. Local `config.json`, at least one `.safetensors`, separate `tokenizer_config.json`. Asset extensions: `.json`, `.safetensors`, `.model`, `.txt`. Reject model `quantization_config`. Top-level keys of `config.json` and `tokenizer_config.json` must pass the [loader key lists](../internal/llmtraining/loader_keys.go). [Model checks](MODEL-CHECKS.md#file-allowlist) use and describe the same lists. A file path key is `null` or an inventoried file name. The lists are not complete. No GGUF, pickle, prequantized inputs or custom model code. Tensor shapes, tokenizer compatibility and model loading need qualification. |
+| Model and tokenizer | The planned primary model is a safetensors build of Qwen3.8-27B. Its serving build is still under evaluation ([#453](https://github.com/mickey-kras/gpu-workload-supervisor/issues/453)). Accept only the image-text architecture of that model: `model_type: "qwen3_5"`, the single architecture `Qwen3_5ForConditionalGeneration` and `text_config.model_type: "qwen3_5_text"`. Local `config.json`, at least one `.safetensors`, separate `tokenizer_config.json`. The model snapshot holds only `config.json`, `generation_config.json`, safetensors weights and shard indexes. Asset extensions: `.json`, `.safetensors`, `.model`, `.txt`. Reject model `quantization_config` at any depth, because transformers also reads it from `text_config`. Top-level keys of `config.json` and `tokenizer_config.json` must pass the [loader key lists](../internal/llmtraining/loader_keys.go). In the model `config.json`, the candidate rejects remote-code and model-redirect keys at any depth, and applies file-redirect and file-path keys also in `text_config` and `vision_config`. [Model checks](MODEL-CHECKS.md#file-allowlist) use and describe the same lists. A file path key is `null` or an inventoried file name. The lists are not complete. No GGUF, pickle, prequantized inputs or custom model code. Tensor shapes, tokenizer compatibility and model loading need qualification. |
+| Processor | The tokenizer snapshot must contain `preprocessor_config.json` and `video_preprocessor_config.json`. They must name `Qwen3VLProcessor`, the image processor `Qwen2VLImageProcessorFast` or `Qwen2VLImageProcessor` and the video processor `Qwen3VLVideoProcessor`. The [loader key lists](../internal/llmtraining/loader_keys.go) apply: remote-code and model-redirect keys at any depth, file-redirect and file-path keys at the top level and in `image_processor` and `video_processor`. A combined `processor_config.json` gets the same check. The tokenizer snapshot is also the processor root, so it holds only `tokenizer.json`, `tokenizer.model`, `tokenizer_config.json`, `special_tokens_map.json`, `added_tokens.json`, `vocab.json`, `merges.txt`, `vocab.txt` and the processor files. The processor loader reads other files there, such as `audio_tokenizer_config.json`, which names a class and a path to load. |
 | Datasets | UTF-8 JSONL with only `{"text":"..."}` records. Per split: 64 MiB, lines less than 64 KiB, at most 50000 records. Reject empty text and exact decoded-text overlap between splits. This is not semantic deduplication. |
 
 Tokenization can split long completion records. Row counts are not token counts. Keep datasets and artifacts outside public history.
@@ -155,7 +156,8 @@ The estimate includes existing weights and one in-progress save. Check the outpu
 
 | Configuration | Value |
 | --- | --- |
-| Common | Full-text completion, explicit held-out data, no packing, BF16, SDPA, gradient checkpointing, AdamW, constant learning rate, LoRA `q_proj`/`v_proj`. |
+| Common | Full-text completion, explicit held-out data, no packing, BF16, SDPA, gradient checkpointing, AdamW, constant learning rate, LoRA `q_proj`/`v_proj`. Only the full-attention layers of the hybrid architecture have these modules. |
+| Processor | Axolotl has no configuration key for the processor root. The worker requires `tokenizer_config` and sets the processor root to it, so Axolotl loads the processor from the tokenizer snapshot. The worker stops the run before training unless Axolotl loaded a `Qwen3VLProcessor`. |
 | Quantization | QLoRA: NF4 with double quantization. LoRA: neither 4-bit nor 8-bit loading. |
 | Evaluation and save | Final step. Upstream also evaluates before training. |
 | Resume | Off. `save_only_model: false` requests optimizer and training state, not proof of checkpoint-stop and resume correctness. |
@@ -182,7 +184,7 @@ Keep host identities, paths, datasets, generated text and raw evidence private. 
 
 ### Environment and backend decision
 
-[Dependency input](../training/axolotl/requirements.in) supplies the local SFT and LoRA worker subset, Torch 2.14.0 and build tools. It omits Gradio, Trackio, s3fs, gcsfs, adlfs, ocifs, lm_eval and openenv-core, and overrides python-dotenv. Floors: fsspec >=2026.6.0, Pillow >=13, python-dotenv >=1.2.2. CI permits exactly these nine deviations (eight absent distributions, one override).
+[Dependency input](../training/axolotl/requirements.in) supplies the local SFT and LoRA worker subset, Torch 2.14.0 and build tools. It omits Gradio, Trackio, s3fs, gcsfs, adlfs, ocifs, lm_eval and openenv-core, and overrides python-dotenv. Floors: fsspec >=2026.6.0, Pillow >=13, python-dotenv >=1.2.2. CI permits exactly these nine deviations (eight absent distributions, one override). The input also adds torchvision 0.29.0, the release for Torch 2.14.0, because the video processor of the presets needs it. Axolotl does not declare torchvision, so this addition is not a deviation.
 
 The worker rejects excluded distributions. Axolotl source and installed dependency metadata stay unchanged. No fork.
 
@@ -195,10 +197,12 @@ uv pip sync --python "${PYTHON:?}" --require-hashes training/axolotl/requirement
 uv pip install --python "$PYTHON" --no-deps --no-build-isolation \
   'axolotl @ git+https://github.com/axolotl-ai-cloud/axolotl.git@1f1eb05a391c43e65c1c5ee7ec6ea1b8a841d5d1'
 "$PYTHON" -I -S -B training/axolotl/check_environment.py
-sudo unshare --net -- timeout 120 "$PYTHON" training/axolotl/smoke.py
+sudo unshare --net -- timeout 300 "$PYTHON" training/axolotl/smoke.py
 ```
 
-Installation needs pinned-artifact access. CPU smoke exercises actual setup, train, evaluate and save, tiny random weights, two LoRA optimizer steps and separate-process reload with finite loss and logits. Its offline namespace and 120-second limit match CI. This tests dependency updates, not GPU suitability or production CUDA reload and generation.
+Installation needs pinned-artifact access. CPU smoke exercises actual setup, train, evaluate and save, two LoRA optimizer steps and separate-process reload with finite loss and logits. It uses tiny random weights of the presets' image-text architecture.
+
+The smoke runs on the CPU and blocks flash-linear-attention, so transformers uses its Torch path for the linear-attention layers. The smoke does not test the flash-linear-attention kernels. The reload checks that the saved adapter keys match the base modules. The smoke runs in an offline namespace with a 300-second limit, because a run with a cold file cache can take more than 120 seconds. This tests dependency updates, not GPU suitability or production CUDA reload and generation.
 
 `pip check` reports nine intentional deviations. Use the exact checker. Never ignore other failures or edit installed metadata.
 
@@ -281,14 +285,18 @@ Without usable GPU, the report shows `accelerator: "cpu"`. Every worker phase re
 
 | Preset | Model and tokenizer snapshot | Parameters |
 | --- | --- | --- |
-| `smoke-lora` | [TinyLlama 1.1B](https://huggingface.co/TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T/tree/59f6f375b26bde864a6ca194a9a3044570490064) | LoRA 8/16, sequence 128, batch 1, accumulation 1, 2 steps |
-| `representative-qlora` | [Llama 3.1 8B, NousResearch distribution](https://huggingface.co/NousResearch/Meta-Llama-3.1-8B/tree/1f47e50cdbe801ad8a5174156ec3a0655108fb9f) | QLoRA 16/32, sequence 2048, batch 1, accumulation 4, 100 steps |
+| `smoke-lora` | [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B/tree/2fc06364715b967f1860aea9cf38778875588b17) | LoRA 8/16, sequence 128, batch 1, accumulation 1, 2 steps |
+| `representative-qlora` | [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B/tree/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0) | QLoRA 16/32, sequence 2048, batch 1, accumulation 4, 100 steps |
+
+Both presets use the image-text architecture of the primary model: the pinned checkpoints Qwen3.5-0.8B and Qwen3.8-27B both declare `model_type` `qwen3_5` and `Qwen3_5ForConditionalGeneration`. Qwen3.5 MoE checkpoints (`qwen3_5_moe`) use another architecture, and the candidate rejects them. An adapter from either preset therefore has the module names of that architecture. This does not cover the exact build that vLLM serves or its quantization. The serving import check of [#453](https://github.com/mickey-kras/gpu-workload-supervisor/issues/453) must still compare the adapter with the selected base build. Each revision is the head of `main` at the time of pinning.
+
+`smoke-lora` is the smallest model of the same architecture. Its adapter does not fit the primary model.
 
 Both presets use learning rate 0.0002 and seed 42. These training weights are not GGUF. Source pins prove neither fit nor quality. `assets.json` guides qualification, not materialization.
 
 Presets fix parameters. Materialization accepts supplied full revisions and hashes local inventory bytes. Compare both revisions against the table. No placeholder revisions, fake inventories or memory claims.
 
-Follow model licenses. Download model and tokenizer into separate new directories through installed-client [snapshot_download](https://huggingface.co/docs/huggingface_hub/guides/download), with exact `revision` and `local_dir`. Allow model `config.json`, `generation_config.json`, `model*.safetensors`, shard-index JSON. Tokenizer `tokenizer.json`, `tokenizer.model`, `tokenizer_config.json`, `special_tokens_map.json`, `added_tokens.json`.
+Follow model licenses. Download model and tokenizer into separate new directories through installed-client [snapshot_download](https://huggingface.co/docs/huggingface_hub/guides/download), with exact `revision` and `local_dir`. Allow model `config.json`, `generation_config.json`, `model*.safetensors`, shard-index JSON. Tokenizer `tokenizer.json`, `tokenizer_config.json`, `vocab.json`, `merges.txt`, `preprocessor_config.json`, `video_preprocessor_config.json`. Leave out `chat_template.jinja`: completion training uses no chat template, and the tokenizer snapshot accepts only the files in the [Processor row](#recipe-version-1).
 
 Exclude pickle and code.
 
@@ -367,7 +375,7 @@ For each backend and model size, keep:
 | --- | --- |
 | Real training | Finite forward and backward execution and exactly the requested optimizer step count |
 | Quality boundary | Finite nonnegative held-out loss. Preserved split identity. No generated text in supervisor logs |
-| Reload | Separate process loads the exact base, adapter and config and saved tokenizer. Finite forward output and bounded continuation |
+| Reload | Separate process loads the exact base with the image-text class, the adapter, its config and the saved tokenizer. The adapter keys match the base modules. Finite forward output and bounded continuation |
 | Capacity | Peak cgroup RAM of the trainer unit and GPU VRAM, from the sources below. Free disk throughout. Retained checkpoints plus one in-progress save, cache and export |
 | Completion | Valid fenced completion accepted by reconcile. Recursive cgroup empty and GPU compute processes released |
 | Failure | Controlled interruption or failure never publishes success. Recovery releases admission only after verified cleanup |
@@ -396,9 +404,9 @@ Never expose completion credentials in worker files, arguments or environment.
 
 Discard the child stdout and stderr. Errors name failed phases without paths, data or credentials. Keep private artifacts for diagnosis and use the runtime check for rejection reasons.
 
-Axolotl setup and native Trainer APIs must reach the exact optimizer step, pass finite nonnegative held-out loss and save adapter and tokenizer. A separate process reloads base and adapter, checks finite forward output and bounded deterministic continuation. Both remain under the same unit and admission. No generated text enters evidence.
+Axolotl setup and native Trainer APIs must reach the exact optimizer step, pass finite nonnegative held-out loss and save adapter, tokenizer and processor. A separate process loads the base with `AutoModelForImageTextToText`, the class that training used, and loads the adapter. The saved adapter keys must equal the adapter keys of the loaded model. The process then checks finite forward output and bounded deterministic continuation. Both remain under the same unit and admission. No generated text enters evidence.
 
-After both phases succeed, validate export, write version 2 `supervisor-provenance.json`, then atomically publish fenced `completed`. Provenance binds source, raw recipe, asset revisions and inventories, runtime inventory and entrypoint, worker, invocation, export hashes and held-out loss. Never tokens. Adapter, config and tokenizer files must remain unchanged across reload. `exportBytes` bounds their combined size.
+After both phases succeed, validate export, write version 2 `supervisor-provenance.json`, then atomically publish fenced `completed`. Provenance binds source, raw recipe, asset revisions and inventories, runtime inventory and entrypoint, worker, invocation, export hashes and held-out loss. Never tokens. Adapter, config, tokenizer and processor files must remain unchanged across reload. `exportBytes` bounds their combined size.
 
 Failed phases publish no success. Systemd or recovery handles failure or interruption. Supervisor release and capacity checks remain independent.
 
@@ -447,9 +455,10 @@ Use version 2 provenance from the same worker and source revision and supervisor
 
 | Export | Required contract |
 | --- | --- |
-| Required | One `adapter_model.safetensors`, `adapter_config.json`, `tokenizer_config.json`, and `tokenizer.json` or `tokenizer.model`. |
-| Optional bound files | `special_tokens_map.json`, `added_tokens.json`, `generation_config.json`, `config.json`, `vocab.json`, `vocab.txt`, `merges.txt`, `chat_template.jinja`. |
-| Excluded | Checkpoints, caches, training arguments, README and other outputs. No sharded or pickle adapters, template directories or redirects to other code or files. |
+| Required | One `adapter_model.safetensors`, `adapter_config.json`, `tokenizer_config.json`, `config.json`, and `tokenizer.json` or `tokenizer.model`. Training always saves `config.json`. It must pass the loader key lists and the architecture check of the candidate `config.json`. Only a QLoRA recipe can have a `quantization_config`, only at the top level, and only the bitsandbytes NF4 setting that Axolotl requests for QLoRA. The CPU smoke builds that setting with the Axolotl loader and compares it with the stored value. A GPU run must still show that training saves the same value. |
+| Optional bound files | `special_tokens_map.json`, `added_tokens.json`, `generation_config.json`, `vocab.json`, `vocab.txt`, `merges.txt`, `chat_template.jinja`. |
+| Processor | Required: `processor_config.json`, or both `preprocessor_config.json` and `video_preprocessor_config.json`. The export check accepts a split file only with its pair. The files must name `Qwen3VLProcessor`, `Qwen2VLImageProcessorFast` or `Qwen2VLImageProcessor` and `Qwen3VLVideoProcessor`. The [loader key lists](../internal/llmtraining/loader_keys.go) apply as in the candidate check. |
+| Excluded | Checkpoints, caches, training arguments, README and other outputs. No sharded or pickle adapters, `chat_template.json`, `audio_tokenizer_config.json`, template directories (`chat_templates`, `additional_chat_templates`) or redirects to other code or files. The processor loader reads these files, and provenance cannot bind them. |
 | Adapter | Declare LoRA, causal language modeling and the recipe's precise local base path. |
 
 Only named files enter plans. Revalidate before copying or loading: snapshots are neither signatures nor protection from trusted-owner data and metadata rewrites. Keep paths and inventories private. Import executes no runtime, excludes datasets and tokens, and proves no finalization, GPU release, environment approval or serving fitness.
