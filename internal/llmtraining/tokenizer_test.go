@@ -24,7 +24,11 @@ func TestCompileRejectsTokenizerFilenameOverrides(t *testing.T) {
 			r := fixture(t)
 			inventory := &r.Tokenizer.Inventory
 			inventory.Files["tokenizer_config.json"] = writeFixture(t, filepath.Join(inventory.Root, "tokenizer_config.json"), tc.config)
-			inventory.Files["tokenizer.5.0.0.json"] = writeFixture(t, filepath.Join(inventory.Root, "tokenizer.5.0.0.json"), `{}`)
+			// The tokenizer snapshot allowlist rejects a versioned tokenizer file,
+			// so only the override cases add one.
+			if !tc.accepted {
+				inventory.Files["tokenizer.5.0.0.json"] = writeFixture(t, filepath.Join(inventory.Root, "tokenizer.5.0.0.json"), `{}`)
+			}
 			_, err := Compile(r, math.MaxUint64, math.MaxUint64)
 			if (err == nil) != tc.accepted {
 				t.Fatalf("tokenizer override accepted = %v, want %v: %v", err == nil, tc.accepted, err)

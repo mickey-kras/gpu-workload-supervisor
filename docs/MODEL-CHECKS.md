@@ -91,10 +91,13 @@ these keys at any depth outside token data:
 - `auto_map`, `auto_mapping` and `custom_pipelines` (`remote-code-mapping`).
   These keys make a loader import code.
 - `speculators_config`, `configuration_files`, `attribute_map`, `__dict__`,
-  `audio_model_id` and `text_model_id` (`model-redirect`). With these keys, a
-  loader loads another model or changes how it reads the configuration. For
-  example, vLLM loads the models that `speculators_config`, `audio_model_id`
-  and `text_model_id` name.
+  `audio_model_id`, `text_model_id`, `audio_tokenizer`,
+  `audio_tokenizer_class` and `audio_tokenizer_name_or_path`
+  (`model-redirect`). With these keys, a loader loads another model or changes
+  how it reads the configuration. For example, vLLM loads the models that
+  `speculators_config`, `audio_model_id` and `text_model_id` name. The
+  transformers processor loader loads the audio tokenizer class and path that
+  the `audio_tokenizer` keys name.
 - `fast_tokenizer_files` and `transformers_weights` (`file-path-redirect`).
   These keys give other file names for tokenizer files or weights.
 

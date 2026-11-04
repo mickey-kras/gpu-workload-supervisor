@@ -1,10 +1,10 @@
 {
   "smoke-lora": {
-    "repository": "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
-    "revision": "59f6f375b26bde864a6ca194a9a3044570490064"
+    "repository": "Qwen/Qwen3.5-0.8B",
+    "revision": "2fc06364715b967f1860aea9cf38778875588b17"
   },
   "representative-qlora": {
-    "repository": "NousResearch/Meta-Llama-3.1-8B",
-    "revision": "1f47e50cdbe801ad8a5174156ec3a0655108fb9f"
+    "repository": "Qwen/Qwen3.8-27B",
+    "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
   }
 }

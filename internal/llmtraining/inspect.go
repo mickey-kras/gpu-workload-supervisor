@@ -10,8 +10,10 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -19,7 +21,27 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// Adapters must match the architecture (module layout) of the primary model,
+// so candidates train only its qwen3_5 image-text architecture. The Qwen3.5
+// and Qwen3.8 checkpoints (Qwen/Qwen3.5-0.8B, Qwen/Qwen3.8-27B) both declare
+// this model_type and class.
+const (
+	modelFamily       = "qwen3_5"
+	modelTextFamily   = "qwen3_5_text"
+	modelArchitecture = "Qwen3_5ForConditionalGeneration"
+)
+
+// quantizationConfigKey makes transformers load quantized weights.
+const quantizationConfigKey = "quantization_config"
+
+// modelSubConfigs are the nested configurations from which transformers builds
+// the text and vision sub-models.
+var modelSubConfigs = []string{"text_config", "vision_config"}
+
 const safetensorsExtension = ".safetensors"
+
+// shardIndexSuffix ends the name of a safetensors shard index.
+const shardIndexSuffix = safetensorsExtension + ".index.json"
 
 // Inspect checks a snapshot in time. It neither locks these files against later
 // changes nor approves executable contents or dependencies outside the inventory.
@@ -124,10 +146,9 @@ func matchFile(path, digest string, limit int64) error {
 }
 
 func inspectSnapshots(r Recipe) error {
-	if r.Model.Inventory.Files["config.json"] == "" || r.Tokenizer.Inventory.Files["tokenizer_config.json"] == "" {
+	if r.Model.Inventory.Files[modelConfigName] == "" || r.Tokenizer.Inventory.Files[tokenizerConfigName] == "" {
 		return errors.New("candidate model or tokenizer configuration is missing")
 	}
-	weights := false
 	for _, inventory := range []Inventory{r.Model.Inventory, r.Tokenizer.Inventory} {
 		for path := range inventory.Files {
 			ext := filepath.Ext(path)
@@ -136,24 +157,82 @@ func inspectSnapshots(r Recipe) error {
 			}
 		}
 	}
-	for path := range r.Model.Inventory.Files {
-		weights = weights || strings.HasSuffix(path, safetensorsExtension)
-	}
-	if !weights {
+	if !hasSafetensors(r.Model.Inventory.Files) {
 		return errors.New("candidate requires safetensors training weights")
 	}
 	if err := inspectShardIndexes(r.Model.Inventory); err != nil {
 		return err
 	}
-	if err := inspectConfig(filepath.Join(r.Model.Inventory.Root, "config.json"), true, r.Model.Inventory.Files); err != nil {
+	if err := inspectConfig(filepath.Join(r.Model.Inventory.Root, modelConfigName), true, r.Model.Inventory.Files); err != nil {
 		return err
 	}
-	return inspectConfig(filepath.Join(r.Tokenizer.Inventory.Root, "tokenizer_config.json"), false, r.Tokenizer.Inventory.Files)
+	if err := inspectModelSnapshotNames(r.Model.Inventory); err != nil {
+		return err
+	}
+	if err := inspectProcessors(r.Tokenizer.Inventory); err != nil {
+		return err
+	}
+	if err := inspectConfig(filepath.Join(r.Tokenizer.Inventory.Root, tokenizerConfigName), false, r.Tokenizer.Inventory.Files); err != nil {
+		return err
+	}
+	return inspectTokenizerSnapshotNames(r.Tokenizer.Inventory)
+}
+
+// inspectTokenizerSnapshotNames allows only tokenizer and processor files in
+// the tokenizer snapshot, which is also the processor root. The processor
+// loader reads other files there, for example audio_tokenizer_config.json.
+func inspectTokenizerSnapshotNames(inventory Inventory) error {
+	for _, path := range slices.Sorted(maps.Keys(inventory.Files)) {
+		if !slices.Contains(tokenizerSnapshotNames, path) {
+			return errors.New("candidate tokenizer snapshot must not contain " + snapshotEntryName(path) + ", only " + strings.Join(tokenizerSnapshotNames, ", "))
+		}
+	}
+	return nil
+}
+
+func hasSafetensors(files map[string]string) bool {
+	for path := range files {
+		if strings.HasSuffix(path, safetensorsExtension) {
+			return true
+		}
+	}
+	return false
+}
+
+func inspectModelSnapshotNames(inventory Inventory) error {
+	for _, path := range slices.Sorted(maps.Keys(inventory.Files)) {
+		if !modelSnapshotFile(path) {
+			return errors.New("candidate model snapshot must not contain " + snapshotEntryName(path) + ", only " + modelConfigName + ", " + generationConfigName + ", safetensors weights and shard indexes")
+		}
+	}
+	return nil
+}
+
+// snapshotEntryName names an inventory path in an error. Inventory names are
+// private, so it names only a file from a fixed known set, and otherwise uses
+// a fixed phrase.
+func snapshotEntryName(path string) string {
+	switch {
+	case strings.Contains(path, "/"):
+		return "a nested file"
+	case path == generationConfigName || artifactNames[path] ||
+		slices.Contains(tokenizerSnapshotNames, path) || slices.Contains(unboundLoaderNames, path):
+		return path
+	}
+	return "an unlisted file"
+}
+
+// modelSnapshotFile reports whether path is a file that the model snapshot
+// may hold. Processor, tokenizer and template files belong in the tokenizer
+// snapshot, which the candidate checks for them.
+func modelSnapshotFile(path string) bool {
+	return path == modelConfigName || path == generationConfigName || strings.HasSuffix(path, safetensorsExtension) ||
+		(!strings.Contains(path, "/") && strings.HasSuffix(path, shardIndexSuffix))
 }
 
 func inspectShardIndexes(inventory Inventory) error {
 	for name := range inventory.Files {
-		if strings.HasSuffix(name, ".safetensors.index.json") {
+		if strings.HasSuffix(name, shardIndexSuffix) {
 			if err := inspectShardIndex(inventory, name); err != nil {
 				return err
 			}
@@ -214,56 +293,108 @@ func CheckShardIndex(ctx context.Context, inventory Inventory, name string, limi
 	return nil
 }
 
-func hasAnyKey(object map[string]json.RawMessage, keys []string) bool {
-	for _, key := range keys {
-		if _, exists := object[key]; exists {
-			return true
-		}
-	}
-	return false
-}
-
-func inspectConfig(path string, model bool, files map[string]string) error {
+// readJSONObject reads one bounded, strict UTF-8 JSON object from a regular
+// file. The errors name the file kind, never its path or content.
+func readJSONObject(path, kind string) (map[string]json.RawMessage, error) {
 	f, err := openRegular(path)
 	if err != nil {
-		return errors.New("candidate asset configuration is unreadable")
+		return nil, errors.New(kind + " is unreadable")
 	}
 	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
-	var config map[string]json.RawMessage
-	if err != nil || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), 1<<20, &config) != nil || config == nil {
-		return errors.New("candidate asset configuration is invalid")
+	raw, err := io.ReadAll(io.LimitReader(f, configurationBytes+1))
+	if err != nil {
+		return nil, errors.New(kind + " is invalid")
 	}
-	if err := inspectLoaderKeys(config, model, files); err != nil {
-		return err
+	return parseJSONObject(raw, kind)
+}
+
+// parseJSONObject decodes one bounded, strict UTF-8 JSON object. The errors
+// name the file kind, never its content.
+func parseJSONObject(raw []byte, kind string) (map[string]json.RawMessage, error) {
+	var object map[string]json.RawMessage
+	if len(raw) > configurationBytes || !utf8.Valid(raw) || strictjson.DecodeLimited(bytes.NewReader(raw), configurationBytes, &object) != nil || object == nil {
+		return nil, errors.New(kind + " is invalid")
 	}
-	if !model {
-		return nil
-	}
-	if _, exists := config["quantization_config"]; exists {
-		return errors.New("candidate requires original unquantized training weights")
-	}
+	return object, nil
+}
+
+func inspectArchitecture(owner string, config map[string]json.RawMessage) error {
 	var family string
-	if json.Unmarshal(config["model_type"], &family) != nil || family != "llama" {
-		return errors.New("candidate supports only the llama model family")
+	var architectures []string
+	// An exact-key map, not a tagged struct: encoding/json matches struct
+	// fields without regard to case, but transformers reads keys exactly.
+	var text map[string]json.RawMessage
+	if json.Unmarshal(config["model_type"], &family) != nil || family != modelFamily ||
+		json.Unmarshal(config["architectures"], &architectures) != nil || len(architectures) != 1 || architectures[0] != modelArchitecture ||
+		json.Unmarshal(config["text_config"], &text) != nil || !stringIs(text["model_type"], modelTextFamily) {
+		return errors.New(owner + " supports only the " + modelFamily + " image-text architecture (" + modelArchitecture + ")")
 	}
 	return nil
 }
 
-// inspectLoaderKeys applies the shared loader key lists to the top level
-// of a model or tokenizer configuration.
-func inspectLoaderKeys(config map[string]json.RawMessage, model bool, files map[string]string) error {
+func inspectConfig(path string, model bool, files map[string]string) error {
+	config, err := readJSONObject(path, "candidate asset configuration")
+	if err != nil {
+		return err
+	}
+	if err := inspectLoaderKeys("candidate", config, model, files); err != nil || !model {
+		return err
+	}
+	// Only the candidate rejects quantized base weights. The export config.json
+	// of a QLoRA run records the 4-bit loading that training requested.
+	// transformers also reads quantization_config from text_config.
+	if _, key := deepLoaderKey(config, []string{quantizationConfigKey}, modelSubConfigs); key != "" {
+		return errors.New("candidate requires original unquantized training weights")
+	}
+	return inspectArchitecture("candidate", config)
+}
+
+// inspectLoaderKeys applies the shared loader key lists to a model or
+// tokenizer configuration. owner starts each error message.
+func inspectLoaderKeys(owner string, config map[string]json.RawMessage, model bool, files map[string]string) error {
 	switch {
-	case hasAnyKey(config, RemoteCodeKeys):
-		return errors.New("candidate remote-code mappings are unsupported")
-	case hasAnyKey(config, ModelRedirectKeys):
-		return errors.New("candidate model configuration indirection is unsupported")
-	case hasAnyKey(config, FileRedirectKeys) && model:
-		return errors.New("candidate weight filename overrides are unsupported")
-	case hasAnyKey(config, FileRedirectKeys):
-		return errors.New("candidate tokenizer filename overrides are unsupported")
+	case topLevelKey(config, RemoteCodeKeys) != "":
+		return errors.New(owner + " remote-code mappings are unsupported")
+	case topLevelKey(config, ModelRedirectKeys) != "":
+		return errors.New(owner + " model configuration indirection is unsupported")
+	case topLevelKey(config, FileRedirectKeys) != "" && model:
+		return errors.New(owner + " weight filename overrides are unsupported")
+	case topLevelKey(config, FileRedirectKeys) != "":
+		return errors.New(owner + " tokenizer filename overrides are unsupported")
+	case !ValidFilePathValues(config, files) && model:
+		return errors.New(owner + " file names must name inventoried files")
 	case !ValidFilePathValues(config, files):
-		return errors.New("candidate tokenizer file names must name inventoried files")
+		return errors.New(owner + " tokenizer file names must name inventoried files")
+	}
+	if model {
+		return inspectSubConfigKeys(owner, config, files)
+	}
+	return nil
+}
+
+// inspectSubConfigKeys applies the loader key lists inside a composite model
+// configuration: remote-code and model-redirect keys at any depth, and
+// file-redirect and file-path keys in each sub-configuration.
+func inspectSubConfigKeys(owner string, config map[string]json.RawMessage, files map[string]string) error {
+	if problem := deepKeyProblem(deepLoaderKey(config, slices.Concat(RemoteCodeKeys, ModelRedirectKeys), modelSubConfigs)); problem != "" {
+		return errors.New(owner + " " + problem)
+	}
+	for _, name := range modelSubConfigs {
+		// The pinned configurations never use null here, so null is rejected.
+		raw, present := config[name]
+		if !present {
+			continue
+		}
+		var sub map[string]json.RawMessage
+		if json.Unmarshal(raw, &sub) != nil || sub == nil {
+			return errors.New(owner + " " + name + " must be an object")
+		}
+		if key := topLevelKey(sub, FileRedirectKeys); key != "" {
+			return errors.New(owner + " " + loaderKeyProblem(name, key))
+		}
+		if !ValidFilePathValues(sub, files) {
+			return errors.New(owner + " " + name + " file names must name inventoried files")
+		}
 	}
 	return nil
 }
