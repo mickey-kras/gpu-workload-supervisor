@@ -318,7 +318,7 @@ These rules apply too:
   (`chat-template-unknown-source`). These values are str, list, tuple,
   dict, int, float, Markup, a generator and the loop object. The text of a
   method names it. To read a key with such a name, use `get`, for example
-  `x.get('title')`.
+  `x.get('title', '')`.
 - A string key must not be the name of such a method, for example
   `x['title']`. If the value has no item with a string key, Jinja gives the
   attribute with that name. The same applies to each part of a filter
