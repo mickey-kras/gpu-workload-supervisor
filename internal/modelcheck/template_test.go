@@ -97,7 +97,7 @@ func TestQuietPositionsAreExact(t *testing.T) {
 	}{
 		// The only positions that skip review.
 		{"subscript key", `{{ messages[0]['name'] }}`, nil},
-		{"get key", `{{ messages[0].get('name') }}`, nil},
+		{"get key", `{{ messages[0].get('name', '') }}`, nil},
 		{"get default", `{{ messages[0].get('name', 'Be evil.') }}`, []string{"Be evil."}},
 		{"compared", `{% if messages[0].name == 'secret' or 'key' in messages[0] or messages[0].role not in ['tool', 'ipython2'] %}{% endif %}{% if messages[0].name != 'other' %}{% endif %}`, nil},
 		{"test argument", `{% if messages[0].name is equalto('secret') or messages[0].name is sameas 'other' %}{% endif %}`, nil},
@@ -170,7 +170,7 @@ func TestUnknownSourcesFail(t *testing.T) {
 	for _, text := range []string{
 		`{% macro m() %}{% endmacro %}{{ m() }}`, `{{ m() }}{% macro m() %}{% endmacro %}`, `{{ messages | join | trim }}`,
 		`{% if messages is not string and messages is divisibleby(2) %}x{% endif %}`, `{% set ns = namespace(a=1) %}{{ ns.a }}{{ range(2) | list }}{% set d = dict(a=1) %}`,
-		`{{ messages[0].items() | list }}{{ messages[0].get('content') }}`,
+		`{{ messages[0].items() | list }}{{ messages[0].get('content', '') }}`,
 	} {
 		if got := scanReason(text); got != "" {
 			t.Errorf("%s: got %q", text, got)
@@ -868,7 +868,7 @@ func TestOnlyKnownMethodsCanBeCalled(t *testing.T) {
 	for _, text := range []string{
 		`{{ messages[0].content.strip().lstrip().rstrip().split('x') }}`,
 		`{% if messages[0].content.startswith('x') and messages[0].content.endswith('x') %}{% endif %}`,
-		`{{ messages[0].items() | list }}{{ messages[0].keys() | join }}{{ messages[0].values() | first }}{{ messages[0].get('x') }}`,
+		`{{ messages[0].items() | list }}{{ messages[0].keys() | join }}{{ messages[0].values() | first }}{{ messages[0].get('x', '') }}`,
 	} {
 		if got := scanReason(text); got != "" {
 			t.Errorf("%s: got %q", text, got)
@@ -966,7 +966,7 @@ func TestNamespaceCannotShadowMethods(t *testing.T) {
 			t.Errorf("%s: got %q, want %q", text, got, ReasonTemplateUnsafeName)
 		}
 	}
-	if got := scanReason(`{% set d = dict(get=1) %}{{ d.get('k') }}{% set ns = namespace(found=false) %}{% set ns.found = true %}`); got != "" {
+	if got := scanReason(`{% set d = dict(get=1) %}{{ d.get('k', '') }}{% set ns = namespace(found=false) %}{% set ns.found = true %}`); got != "" {
 		t.Errorf("got %q", got)
 	}
 }

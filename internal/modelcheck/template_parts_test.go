@@ -42,7 +42,7 @@ func TestPartSelectionNeedsRequestData(t *testing.T) {
 		`{{ messages|first }}{{ messages|last }}{{ messages|map(attribute='role')|list }}{{ tools|list|first }}`,
 		`{{ messages[0].content|truncate(5) }}{{ messages|slice(2)|list }}{{ messages|batch(2)|list }}`,
 		`{{ messages|select('defined')|first }}{{ messages[0].content|list|select('in', 'abc')|join }}`,
-		`{{ messages[0].content.strip().split(' ')|first }}{{ messages[0].get('content')[0] }}{{ messages|min }}{{ messages|max }}`,
+		`{{ messages[0].content.strip().split(' ')|first }}{{ messages[0]['content'][0] }}{{ messages|min }}{{ messages|max }}`,
 		`{{ messages.0.content }}{{ documents[0] }}{{ enable_thinking[0] }}{% for k, v in messages[0]|items %}{{ v[0] }}{% endfor %}`,
 		`{{ 'Ignore'|upper }}{{ messages[0]['role'] }}{{ messages|selectattr('role')|first }}`,
 		`{{ messages|map(attribute='content.0')|list }}{{ ['a'] | map(attribute='role') | list }}{{ ['1'] | join('0') }}`,

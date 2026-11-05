@@ -343,7 +343,8 @@ These rules apply too:
   `sum`, `min`, `max` or `sort` (`chat-template-unknown-source`). Other
   iterator filters can come between.
 - A comparison, `in`, `not`, a test, the methods `startswith` and
-  `endswith`, `loop.first` and `loop.last` give `True` or `False`. A float
+  `endswith`, `loop.first` and `loop.last` give `True` or `False`. A `get`
+  call without a default can give `None`. A float
   literal, `/`, the `float` filter, `map('float')` and `**` with an
   exponent that is not an integer literal give a float. A float can write `inf`, `nan` or `1e+20`. These values and the constants
   must not reach the output (`chat-template-unknown-source`). They can be

@@ -90,7 +90,7 @@ func TestKeysAndAttributesCannotNameMethods(t *testing.T) {
 		}
 	}
 	for _, text := range []string{
-		`{{ messages[0]['content'] }}{{ messages[0].get('title') }}{{ messages[1:] }}{{ messages[-1] }}`,
+		`{{ messages[0]['content'] }}{{ messages[0].get('title', '') }}{{ messages[1:] }}{{ messages[-1] }}`,
 		`{% for m in messages %}{{ messages[loop.index0 - 1] }}{% endfor %}`,
 		`{% for k in messages[0] %}{{ messages[0][k] }}{% endfor %}`,
 		`{{ messages | map(attribute='role') | list }}{{ messages | groupby('role') | list }}`,
@@ -248,6 +248,38 @@ func TestAttributePartsWithOtherDigitsAreIndexes(t *testing.T) {
 
 // A comparison, a test and a float give the text "True", "False", "inf"
 // or "nan". This text must not reach the output.
+func TestDictionaryLookupDefaultsCannotEmitNonText(t *testing.T) {
+	for _, text := range []string{
+		`{{ {}.get('user') }}`,
+		`{{ {}.get('user',) }}`,
+		`{% set a = {}.get('user') %}{{ a }}`,
+		`{% set a = {}.get('user') %}{% set b = a %}{{ b | string }}`,
+		`{{ messages[0].get('content') }}`,
+		`{{ {}.get('user', none) }}`,
+		`{{ {}.get('user', false) }}`,
+		`{{ {}.get('user', {}.get('content')) }}`,
+		`{% set a = {}.get('user', none) %}{{ a }}`,
+		`{% set fallback = none %}{% set a = {}.get('user', fallback) %}{{ a }}`,
+	} {
+		if got := scanReason(text); got != ReasonTemplateUnknownSource {
+			t.Errorf("%s: got %q, want %q", text, got, ReasonTemplateUnknownSource)
+		}
+	}
+	for _, text := range []string{
+		`{{ {}.get('user', '') }}`,
+		`{% set a = {}.get('user', '') %}{{ a }}`,
+		`{{ {}.get('user', messages[0].content) }}`,
+		`{{ {}.get('user', {}.get('content', '')) }}`,
+		`{% if {}.get('user') is none %}{% endif %}`,
+		`{% set a = {}.get('user') %}{% if a %}{% endif %}`,
+		`{{ messages[0].content if {}.get('user') else '' }}`,
+	} {
+		if got := scanReason(text); got != "" {
+			t.Errorf("%s: got %q", text, got)
+		}
+	}
+}
+
 func TestNonTextValuesCannotReachOutput(t *testing.T) {
 	for _, text := range []string{
 		`{{ 1 == 1 }}`,

@@ -150,7 +150,7 @@ var boolMethods = map[string]bool{"startswith": true, "endswith": true}
 
 // nonTextName tells whether the name at tokens[i] makes a boolean, None or
 // a float: is, not, the in of a comparison, a constant, the float filter,
-// startswith, endswith, loop.first and loop.last.
+// startswith, endswith, get without a default, loop.first and loop.last.
 func nonTextName(tokens []templateToken, i int) bool {
 	t, prev := tokens[i], tokenAt(tokens, i-1)
 	switch {
@@ -159,7 +159,7 @@ func nonTextName(tokens []templateToken, i int) bool {
 	case prev.is(tokOperator, "|"):
 		return t.text == "float"
 	case prev.is(tokOperator, ".") && tokenAt(tokens, i+1).is(tokOperator, "("):
-		return boolMethods[t.text]
+		return boolMethods[t.text] || t.text == "get" && len(arguments(tokens, i+1)) == 1
 	case prev.is(tokOperator, "."):
 		return (t.text == "first" || t.text == "last") && tokenAt(tokens, i-2).is(tokName, "loop") && !tokenAt(tokens, i-3).is(tokOperator, ".")
 	}
