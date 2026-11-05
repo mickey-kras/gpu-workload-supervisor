@@ -5,7 +5,7 @@ import "slices"
 // This file keeps the Python text of a boolean, None and a float out of
 // the output. A comparison, a test, not and in give True or False. A float
 // literal, /, ** with an exponent that is not an integer literal and the
-// float filter give a float, and the text of a float can be "inf", "nan"
+// float and round filters can give a float, whose text can be "inf", "nan"
 // or "1e+20". loop.first and loop.last give True or False. This text is
 // not a literal, request data or a special token, and filters such as
 // string, title and replace can change it into other words. So these
@@ -149,7 +149,7 @@ func nonTextSource(tokens []templateToken, i int) bool {
 var boolMethods = map[string]bool{"startswith": true, "endswith": true}
 
 // nonTextName tells whether the name at tokens[i] makes a boolean, None or
-// a float: is, not, the in of a comparison, a constant, the float filter,
+// a float: is, not, the in of a comparison, a constant, float, round,
 // startswith, endswith, get without a default, loop.first and loop.last.
 func nonTextName(tokens []templateToken, i int) bool {
 	t, prev := tokens[i], tokenAt(tokens, i-1)
@@ -157,7 +157,7 @@ func nonTextName(tokens []templateToken, i int) bool {
 	case t.text == "is", t.text == "not", membership(tokens, i):
 		return true
 	case prev.is(tokOperator, "|"):
-		return t.text == "float"
+		return t.text == "float" || t.text == "round"
 	case prev.is(tokOperator, ".") && tokenAt(tokens, i+1).is(tokOperator, "("):
 		return boolMethods[t.text] || t.text == "get" && len(arguments(tokens, i+1)) == 1
 	case prev.is(tokOperator, "."):

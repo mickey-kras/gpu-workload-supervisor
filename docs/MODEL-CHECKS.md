@@ -345,8 +345,8 @@ These rules apply too:
 - A comparison, `in`, `not`, a test, the methods `startswith` and
   `endswith`, `loop.first` and `loop.last` give `True` or `False`. A `get`
   call without a default can give `None`. A float
-  literal, `/`, the `float` filter, `map('float')` and `**` with an
-  exponent that is not an integer literal give a float. A float can write `inf`, `nan` or `1e+20`. These values and the constants
+  literal, `/`, the `float` and `round` filters, `map('float')` and `**` with an
+  exponent that is not an integer literal can give a float. A float can write `inf`, `nan` or `1e+20`. These values and the constants
   must not reach the output (`chat-template-unknown-source`). They can be
   in an `if` or `elif` statement or in an inline `if` condition, also the
   `if` of `for`. They can also be in the value of `set` or in the iterable
