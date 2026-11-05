@@ -29,6 +29,7 @@ import torch
 torch.set_num_threads(1)
 
 
+CONFIG_NAME = "config.json"
 # The Go tests in internal/llmtraining read the same golden files.
 TESTDATA = Path(__file__).resolve().parents[2] / "internal/llmtraining/testdata"
 
@@ -127,7 +128,7 @@ def assert_saved_config(adapter):
     # Training saves the model config.json with the adapter, and the Go export
     # check reads it. The Go tests use the golden file smoke-output/saved_config.json
     # in internal/llmtraining/testdata; it must have the shape of real output.
-    saved = json.loads((adapter / "config.json").read_text())
+    saved = json.loads((adapter / CONFIG_NAME).read_text())
     text = saved.get("text_config")
     if saved.get("model_type") != "qwen3_5" or saved.get("architectures") != ["Qwen3_5ForConditionalGeneration"] \
             or not isinstance(text, dict) or text.get("model_type") != "qwen3_5_text":
@@ -203,7 +204,7 @@ def train_cpu(root):
         "patch_size": 4, "spatial_merge_size": 2, "temporal_patch_size": 2, "num_position_embeddings": 16}
     model = Qwen3_5ForConditionalGeneration(Qwen3_5Config(text_config=text_config, vision_config=vision, tie_word_embeddings=False))
     model.save_pretrained(root / "base", safe_serialization=True)
-    if (root / "tokenizer" / "config.json").exists():
+    if (root / "tokenizer" / CONFIG_NAME).exists():
         raise ValueError("the tokenizer snapshot must not contain config.json")
     Qwen3VLProcessor(image_processor=Qwen2VLImageProcessor(patch_size=4, merge_size=2, temporal_patch_size=2),
         video_processor=Qwen3VLVideoProcessor(patch_size=4, merge_size=2, temporal_patch_size=2),
@@ -229,7 +230,7 @@ def train_cpu(root):
         "wandb_mode": "disabled", "dataset_num_proc": 0, "dataloader_num_workers": 0,
         "use_cpu": True,
     }
-    config_path = root / "config.json"
+    config_path = root / CONFIG_NAME
     config_path.write_text(json.dumps(config))
     # The CPU smoke has no GPU by design; the supervised runner always checks the GPU.
     worker_module().train(config_path, root / "receipt.json", root / "progress.json", accelerator=False)
