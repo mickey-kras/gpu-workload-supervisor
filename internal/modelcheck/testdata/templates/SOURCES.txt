@@ -1,0 +1,14 @@
+These chat templates are copies of files in the TRL library, version 1.14.1,
+directory trl/chat_templates (https://github.com/huggingface/trl). The Apache
+License 2.0 applies to TRL. TRL keeps these files as copies of the chat
+templates of the model families that their names give. The files are not
+changed. Their SHA-256 values are the values in the RECORD file of the TRL
+1.14.1 wheel:
+
+gemma.jinja   ecd6ae513fe103f0eb62e8ab5bfa8d0fe45c1074fa398b089c93a7e70c15cfd6
+llama3.jinja  ba03a121d097859c7b5b9cd03af99aafe95275210d2876f642ad9929a150f122
+phi3.jinja    dcaee66df77bfbb789ec541fe713218da30225a526f1db97138fc39ee6dc56aa
+qwen3.jinja   a55ee1b1660128b7098723e0abcd92caa0788061051c62d51cbe87d9cf1974d8
+
+The structural template check must pass each file. The tests check the
+exact review list of each file.

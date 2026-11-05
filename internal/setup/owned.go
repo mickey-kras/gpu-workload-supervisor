@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,6 +56,22 @@ func managerCgroup(ctx context.Context, runCommand func(context.Context, string,
 	return cgroup, nil
 }
 
+// ownedTemplateError tells what to do when the managed launch cannot use
+// the chat template file of the model folder. A missing model folder is
+// not a missing template, so it gets its own message. A model without the
+// upstream file is not supported: its template is only in a JSON file, so
+// use an existing launch with --chat-template. Do not add the file by hand.
+func ownedTemplateError(template string, err error) error {
+	folder := filepath.Dir(template)
+	if info, statErr := os.Stat(folder); statErr != nil || !info.IsDir() {
+		return fmt.Errorf("the model folder %s does not exist or is not a folder: %w", folder, err)
+	}
+	if _, statErr := os.Lstat(template); errors.Is(statErr, fs.ErrNotExist) {
+		return fmt.Errorf("the managed launch needs the upstream %s in the model folder: %w. Do not add it by hand. For a model without it, use an existing launch with --chat-template, see docs/MODEL-CHECKS.md#result", ownedChatTemplateName, err)
+	}
+	return fmt.Errorf("the managed launch cannot use %s in the model folder: %w", ownedChatTemplateName, err)
+}
+
 // OwnedProfile synthesizes a catalog profile and its deterministic unit
 // rendering from an owned launch draft. The manager cgroup and home directory
 // are host facts only setup knows; control validation enforces the derived
@@ -84,7 +101,7 @@ func OwnedProfile(d Draft, managerCgroup, home string) (control.WorkloadProfile,
 	template := filepath.Join(owned.ModelPath, ownedChatTemplateName)
 	templateSHA256, err := gpuruntime.ChatTemplateSHA256(template)
 	if err != nil {
-		return control.WorkloadProfile{}, nil, fmt.Errorf("add %s to the model folder: %w", ownedChatTemplateName, err)
+		return control.WorkloadProfile{}, nil, ownedTemplateError(template, err)
 	}
 	unit := control.OwnedUnitName(id)
 	endpoint := "http://127.0.0.1:" + strconv.Itoa(int(owned.Port))
