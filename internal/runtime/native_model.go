@@ -124,7 +124,10 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 	args := nativeBindingShowArguments(p.Unit, launch)
 	b, err := m.runner.Run(ctx, m.config.SystemctlPath, args...)
 	if err != nil {
-		return ErrLaunchChanged
+		// The binding is unknown, not proven changed: keep the command
+		// failure so callers can retry it. The error keeps the
+		// ErrLaunchChanged class, but its text does not claim a change.
+		return SafeError("cannot inspect the launch binding: command failed", ErrLaunchChanged, errBindingCommand, err)
 	}
 	values, err := ParseUnitProperties(b)
 	if err != nil {

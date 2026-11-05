@@ -255,8 +255,8 @@ func validCatalog(s Session) bool {
 func errorCode(err error) Code {
 	switch {
 	case errors.Is(err, ErrIncompatibleConfiguration) || errors.Is(err, supervisor.ErrLimitedTarget):
-		// Only the refusal before any effect is a definite outcome. Runtime
-		// backstop errors after an effect keep their usual codes.
+		// Only the refusal before any effect is a definite outcome. Limit
+		// failures after an effect keep their usual codes.
 		return IncompatibleConfiguration
 	case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, supervisor.ErrDrainTimeout) || errors.Is(err, supervisor.ErrVerifyTimeout):
 		return Timeout

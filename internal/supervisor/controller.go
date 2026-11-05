@@ -252,6 +252,15 @@ func (c *Controller) pollUntil(ctx context.Context, deadline time.Time, probe fu
 	var lastErr error
 	for {
 		lastErr = probe(verifyCtx)
+		// A failed limit check of a started unit cannot pass on a retry,
+		// and a cancelled caller must not hide it: the failed transition
+		// or reconciliation then stops the unit. A transition does so
+		// through its rollback from a supervisor-owned source, or through
+		// stopFailedTarget from a user-owned one; reconciliation through
+		// stopFailedLimits.
+		if errors.Is(lastErr, gpuruntime.ErrLimitCheckFailed) {
+			return errors.Join(ctx.Err(), lastErr)
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -395,6 +404,10 @@ func closedReconciling(s control.State) control.State {
 
 func failureCode(err error) string {
 	switch {
+	case errors.Is(err, gpuruntime.ErrLimitCheckFailed):
+		// A definite limit failure of a started unit, also when the caller
+		// cancelled at the same time.
+		return "limit-check"
 	case errors.Is(err, context.Canceled):
 		return "canceled"
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, ErrDrainTimeout), errors.Is(err, ErrVerifyTimeout):

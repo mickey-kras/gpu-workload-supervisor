@@ -17,6 +17,13 @@ import (
 
 const missingOrBrokenLinkFormat = "%s: missing or broken link"
 
+// missingOrBrokenLink reports a failed status read of path. An I/O error
+// other than ENOENT, ELOOP or ENOTDIR gets the errBindingRead mark, but the
+// text stays the same.
+func missingOrBrokenLink(path string, err error) error {
+	return markBindingRead(fmt.Errorf(missingOrBrokenLinkFormat, path), err)
+}
+
 type pathKind int
 
 const (
@@ -124,7 +131,7 @@ func resolveTrustedPath(path string, rootOnly bool) (string, error) {
 		current := filepath.Join(prefix, part)
 		info, err := os.Lstat(current)
 		if err != nil {
-			return "", fmt.Errorf(missingOrBrokenLinkFormat, current)
+			return "", missingOrBrokenLink(current, err)
 		}
 		if err := checkPathComponent(current, info, len(pending) > 0, rootOnly); err != nil {
 			return "", err
@@ -151,7 +158,10 @@ func trustedLinkTarget(path string, hops int) (string, error) {
 		return "", fmt.Errorf("%s: symlink resolution exceeds 40 hops", path)
 	}
 	target, err := os.Readlink(path)
-	if err != nil || target == "" {
+	if err != nil {
+		return "", missingOrBrokenLink(path, err)
+	}
+	if target == "" {
 		return "", fmt.Errorf(missingOrBrokenLinkFormat, path)
 	}
 	return target, nil
@@ -182,7 +192,7 @@ func checkPathComponent(path string, info os.FileInfo, ancestor, rootOnly bool) 
 func checkResolvedLeaf(resolved string, kind pathKind) error {
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return fmt.Errorf(missingOrBrokenLinkFormat, resolved)
+		return missingOrBrokenLink(resolved, err)
 	}
 	switch kind {
 	case kindDir:

@@ -46,7 +46,14 @@ func (m *SystemdManager) verifyProfileGPU(ctx context.Context, p control.Workloa
 		return failure("physical GPU identity cannot be inspected")
 	}
 	out, err := m.runner.Run(ctx, m.config.NvidiaSMIPath, "--query-gpu=uuid", "--format=csv,noheader", "-i", strconv.Itoa(m.config.GPUIndex))
-	if err != nil || len(out) > 128 || !control.ValidGPUUUID(strings.TrimSpace(string(out))) {
+	if err != nil {
+		// The identity is unknown, not proven wrong: keep the command
+		// failure so callers can retry it. The error keeps the
+		// ErrLaunchUnsupported class and its text, and it names the query.
+		text := fmt.Sprintf("%s: CUDA_VISIBLE_DEVICES physical GPU identity could not be queried (nvidia-smi failed); retry", ErrLaunchUnsupported)
+		return SafeError(text, ErrLaunchUnsupported, errBindingCommand, err)
+	}
+	if len(out) > 128 || !control.ValidGPUUUID(strings.TrimSpace(string(out))) {
 		return failure("physical GPU identity query failed")
 	}
 	if strings.TrimSpace(string(out)) != uuid {

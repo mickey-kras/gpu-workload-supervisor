@@ -140,7 +140,7 @@ func TestServiceReportsRefusedLimitedTargetAsIncompatible(t *testing.T) {
 	b := &backendFixture{state: control.InitialState("inc", time.Now())}
 	b.state.Phase = control.PhaseStable
 	b.state.ActiveWorkload = control.WorkloadIdle
-	b.err = fmt.Errorf("%w: third (gws-owned-third.service): %w", supervisor.ErrLimitedTarget, gpuruntime.ErrLimitsNotEnforced)
+	b.err = fmt.Errorf("%w: third (gws-owned-third.service): %w", supervisor.ErrLimitedTarget, gpuruntime.ErrHostCap)
 	s := Service{StatePath: filepath.Join(t.TempDir(), "state"), Open: func(context.Context) (Session, error) {
 		return Session{Backend: b, Revision: "rev", Workloads: []Workload{{"idle", "Idle"}, {"third", "Third"}}}, nil
 	}}

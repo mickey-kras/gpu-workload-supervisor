@@ -8,6 +8,11 @@ import (
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 )
 
+// Status observes the runtime. It never starts or stops a workload. For a
+// supervisor-owned, stable, healthy state with open admission, a failed
+// health check, a limit failure included, latches the error state and
+// closes admission. The unit keeps running; recovery stops it. Other
+// states get no health check here.
 func (c *Controller) Status(ctx context.Context) (control.State, error) {
 	if err := c.checkCatalog(ctx); err != nil {
 		return control.State{}, err

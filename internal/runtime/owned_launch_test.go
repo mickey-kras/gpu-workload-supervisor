@@ -260,13 +260,13 @@ func TestOwnedCgroupMustDeriveFromManagerRoot(t *testing.T) {
 		"nested injection": "/workloads/other.slice/app.slice/" + owned.Unit,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := manager(cgroup).verifyManagerCgroup(t.Context()); err == nil {
+			if _, err := manager(cgroup).managerCgroup(t.Context()); err == nil {
 				t.Fatal("foreign owned cgroup accepted")
 			}
 		})
 	}
 	t.Run("exact derivation accepted", func(t *testing.T) {
-		if err := manager("/workloads/app.slice/" + owned.Unit).verifyManagerCgroup(t.Context()); err != nil {
+		if _, err := manager("/workloads/app.slice/" + owned.Unit).managerCgroup(t.Context()); err != nil {
 			t.Fatal(err)
 		}
 	})

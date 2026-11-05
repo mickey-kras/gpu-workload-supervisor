@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -39,7 +40,20 @@ func readTrustedLaunchSource(path string, rootOnly bool) ([]byte, error) {
 	}
 	defer file.Close()
 	raw, err := io.ReadAll(io.LimitReader(file, 1<<20+1))
-	if err != nil || len(raw) > 1<<20 {
+	if err != nil {
+		// An I/O error proves no change. As for a failed systemctl show,
+		// the error keeps the ErrLaunchChanged class, but its text does
+		// not claim a change. The read error names the path too, so the
+		// text names the path one time and takes only the errno from the
+		// PathError.
+		cause := err
+		var pathErr *os.PathError
+		if errors.As(err, &pathErr) {
+			cause = pathErr.Err
+		}
+		return nil, SafeError(fmt.Sprintf("cannot inspect the launch binding: %s could not be read: %v", path, cause), ErrLaunchChanged, errBindingRead, err)
+	}
+	if len(raw) > 1<<20 {
 		return nil, ErrLaunchChanged
 	}
 	return raw, nil
