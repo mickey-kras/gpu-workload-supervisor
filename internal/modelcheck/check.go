@@ -24,13 +24,15 @@ type Checker struct {
 	Hub     string
 	Version string
 	Now     func() time.Time
+	// Approver asks an operator to approve the literals of a chat template.
+	// Without it, a template with literals to review does not pass.
+	Approver Approver
 }
 
 // Run checks one model and gives a record bound to its file digests. A
-// check that does not pass stops the checks after it. The chat template
-// check and the behavioral scan are not available yet, so a model that
-// passes the first checks stays not scanned. A canceled run gives no
-// record, so the model stays not scanned.
+// check that does not pass stops the checks after it. The behavioral scan
+// is not available yet, so a model that passes the other checks stays not
+// scanned. A canceled run gives no record, so the model stays not scanned.
 func (c Checker) Run(ctx context.Context, r Request) (Record, error) {
 	if c.Client == nil || !checkerPattern.MatchString(c.Version) || !currentConfiguration(c.Hub).valid() {
 		return Record{}, errors.New("model checker needs a client, an HTTPS hub and a version")
@@ -58,6 +60,12 @@ func (c Checker) Run(ctx context.Context, r Request) (Record, error) {
 	if allow.Outcome == OutcomePassed {
 		results = append(results, c.identity(ctx, r, files))
 	}
+	if results[len(results)-1].Outcome == OutcomePassed {
+		check, fields := c.template(ctx, record, files)
+		record.ChatTemplateSHA256, record.TemplateFile = fields.pin, fields.file
+		record.TemplateReview, record.TemplateApproval = fields.review, fields.approval
+		results = append(results, check)
+	}
 	for _, name := range checkOrder[len(results):] {
 		results = append(results, Check{Name: name, Outcome: OutcomeNotRun})
 	}
@@ -66,6 +74,35 @@ func (c Checker) Run(ctx context.Context, r Request) (Record, error) {
 	}
 	record.Checks, record.Status, record.Coverage = results, statusOf(results), coverageOf(results)
 	return record, record.Validate()
+}
+
+// templateFields are the record fields that the template check gives.
+type templateFields struct {
+	pin, file string
+	review    []ReviewItem
+	approval  *TemplateApproval
+}
+
+// template runs the chat template check on the model of record. A template
+// with literals to review passes only with the approval of an operator. A
+// check that does not pass the structure, or an approval error, gives no
+// fields.
+func (c Checker) template(ctx context.Context, record Record, files map[string]string) (Check, templateFields) {
+	result, reason, err := checkTemplate(ctx, record.Root, files)
+	check := outcome(CheckTemplate, reason, err)
+	if check.Outcome != OutcomePassed {
+		return check, templateFields{}
+	}
+	fields := templateFields{pin: result.pin, file: result.file, review: result.review}
+	if len(result.review) == 0 {
+		return check, fields
+	}
+	record.ChatTemplateSHA256, record.TemplateFile, record.TemplateReview = fields.pin, fields.file, fields.review
+	check, fields.approval = c.askApproval(ctx, record.buildReviewRequest())
+	if check.Outcome == OutcomeError {
+		return check, templateFields{}
+	}
+	return check, fields
 }
 
 func (c Checker) now() time.Time {
@@ -86,7 +123,11 @@ func (c Checker) identity(ctx context.Context, r Request, files map[string]strin
 
 // unsupportedReasons are the reasons that describe a model that the checks
 // do not support, not a problem in its files.
-var unsupportedReasons = map[string]bool{ReasonNoWeights: true, ReasonNoConfiguration: true, ReasonTooManyFiles: true, ReasonShardTooLarge: true, ReasonJSONTooLarge: true}
+var unsupportedReasons = map[string]bool{
+	ReasonNoWeights: true, ReasonNoConfiguration: true, ReasonTooManyFiles: true, ReasonShardTooLarge: true, ReasonJSONTooLarge: true,
+	ReasonNoTemplate: true, ReasonNamedTemplates: true, ReasonTemplateTooLarge: true, ReasonTemplateTooComplex: true,
+	ReasonTemplateTooManyLiterals: true, ReasonTemplateReviewTooLarge: true,
+}
 
 // outcome maps a reason to a failed or unsupported check and an error to an
 // error check. The error reason keeps its cause as a fixed code. A file that
@@ -104,6 +145,9 @@ func outcome(name, reason string, err error) Check {
 		return Check{Name: name, Outcome: OutcomeError, Reason: ReasonUnreadable}
 	case unsupportedReasons[reason]:
 		return Check{Name: name, Outcome: OutcomeUnsupported, Reason: reason}
+	case reason == ReasonTemplateCheckFailed:
+		// A failure of the checker, not a problem in the files.
+		return Check{Name: name, Outcome: OutcomeError, Reason: reason}
 	case reason != "":
 		return Check{Name: name, Outcome: OutcomeFailed, Reason: reason}
 	}

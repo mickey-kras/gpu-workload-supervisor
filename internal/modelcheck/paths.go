@@ -13,18 +13,34 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/llmtraining"
 )
 
-// textKeys hold token text or labels, never file paths or model IDs. Strings
-// anywhere below chat_template are template text; the chat template check
-// covers them. _name_or_path and name_or_path are labels: transformers and
-// vLLM record them and do not load files or models from them.
+// textKeys hold token text or labels, never file paths or model IDs.
+// Strings below the top-level chat_template key of a template file are
+// template text. The chat template check covers them. _name_or_path and
+// name_or_path are labels. Transformers and vLLM record them and do not
+// load files or models from them.
 var textKeys = map[string]bool{
 	"content": true, "_name_or_path": true, "name_or_path": true,
 	"additional_special_tokens": true, "bos_token": true, "eos_token": true, "unk_token": true,
 	"pad_token": true, "sep_token": true, "cls_token": true, "mask_token": true, "extra_special_tokens": true,
 }
 
-// templateKey roots a subtree of template text.
+// templateKey roots a subtree of template text. Only the top level of the
+// files in templateHolders can hold it; the chat template check reads it
+// there.
 const templateKey = "chat_template"
+
+// templateHolders are the JSON files that can hold a chat template: the
+// JSON files of templateFiles, so that the template check reads each
+// template that the JSON scan accepts.
+var templateHolders = func() map[string]bool {
+	holders := map[string]bool{}
+	for _, name := range templateFiles {
+		if strings.HasSuffix(name, ".json") {
+			holders[name] = true
+		}
+	}
+	return holders
+}()
 
 // tokenMapFiles are token maps: their keys are tokens. No key or value rule
 // applies to them.
@@ -53,6 +69,7 @@ var errStop = errors.New("scan stopped")
 // building a tree of the value.
 type jsonScan struct {
 	d          *json.Decoder
+	name       string
 	digests    map[string]string
 	keyRules   bool
 	valueRules bool
@@ -71,7 +88,7 @@ func scanJSON(name string, raw []byte, digests map[string]string) string {
 			loadable[file] = digest
 		}
 	}
-	s := jsonScan{d: json.NewDecoder(bytes.NewReader(raw)), digests: loadable,
+	s := jsonScan{d: json.NewDecoder(bytes.NewReader(raw)), name: name, digests: loadable,
 		keyRules: !tokenMapFiles[name], valueRules: !tokenMapFiles[name] && name != "tokenizer.json"}
 	s.d.UseNumber()
 	err := s.value(scope{}, 0)
@@ -144,7 +161,7 @@ func (s *jsonScan) object(at scope, depth int) error {
 		seen[key] = true
 		child := scope{key: key, template: at.template || key == templateKey, data: at.data || (depth > 1 && tokenDataKeys[key])}
 		child.pathKey = depth == 1 && slices.Contains(llmtraining.FilePathKeys, key)
-		if reason := redirectKeys[key]; reason != "" && s.keyRules && !child.data {
+		if reason := s.keyReason(key, depth, child); reason != "" {
 			return s.stop(reason)
 		}
 		if err := s.value(child, depth); err != nil {
@@ -153,6 +170,18 @@ func (s *jsonScan) object(at scope, depth int) error {
 	}
 	_, err := s.d.Token()
 	return err
+}
+
+// keyReason applies the key rules: a chat_template key outside the top
+// level of a template file, and the redirect keys outside token data.
+func (s *jsonScan) keyReason(key string, depth int, at scope) string {
+	if !s.keyRules || at.data {
+		return ""
+	}
+	if key == templateKey && (depth != 1 || !templateHolders[s.name]) {
+		return ReasonMisplacedTemplate
+	}
+	return redirectKeys[key]
 }
 
 func (s *jsonScan) array(at scope, depth int) error {

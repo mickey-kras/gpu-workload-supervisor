@@ -608,3 +608,40 @@ func TestOwnedProfileHoldsKeyFilePathNotKey(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnedProfileTellsWhatToDoWithoutTheTemplate(t *testing.T) {
+	d := ownedDraft("no-template", 9150)
+	template := filepath.Join(d.Binding.Owned.ModelPath, ownedChatTemplateName)
+	if err := os.Remove(template); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.WriteFile(template, []byte("{{ messages }}"), 0o600) })
+	_, _, err := OwnedProfile(d, "/manager", t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "use an existing launch with --chat-template") {
+		t.Fatalf("a missing template must name the remedy: %v", err)
+	}
+	if err := os.Mkdir(template, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(template) })
+	_, _, err = OwnedProfile(d, "/manager", t.TempDir())
+	if err == nil || strings.Contains(err.Error(), "by hand") || strings.Contains(err.Error(), "--chat-template") {
+		t.Fatalf("a template that cannot be used must give its cause only: %v", err)
+	}
+}
+
+func TestOwnedProfileTellsAMissingModelFolder(t *testing.T) {
+	for name, folder := range map[string]string{"missing": filepath.Join(t.TempDir(), "missing"), "file": filepath.Join(t.TempDir(), "file")} {
+		if name == "file" {
+			if err := os.WriteFile(folder, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		d := ownedDraft("no-folder", 9151)
+		d.Binding.Owned.ModelPath = folder
+		_, _, err := OwnedProfile(d, "/manager", t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "the model folder "+folder) || strings.Contains(err.Error(), "--chat-template") {
+			t.Errorf("%s: a missing model folder must name the folder, not the template remedy: %v", name, err)
+		}
+	}
+}

@@ -1,8 +1,8 @@
 // Package modelcheck runs the model checks that come before a model can
-// serve: a file allowlist, the upstream identity of each file and, later, a
-// chat template check and a behavioral scan. It binds each result to the
-// exact SHA-256 digests of the model files. A result is not a proof of
-// model safety.
+// serve: a file allowlist, the upstream identity of each file, a static
+// chat template check and, later, a behavioral scan. It binds each result
+// to the exact SHA-256 digests of the model files. A result is not a proof
+// of model safety.
 package modelcheck
 
 import (
@@ -79,6 +79,9 @@ const (
 	ReasonFilePathRedirect = "file-path-redirect"
 	ReasonInvalidJSON      = "invalid-json"
 	ReasonJSONTooLarge     = "json-file-too-large"
+	// ReasonMisplacedTemplate marks a chat_template key that the chat
+	// template check does not read.
+	ReasonMisplacedTemplate = "misplaced-chat-template"
 	// ReasonFilesChanged and ReasonUnreadable are error reasons.
 	ReasonFilesChanged    = "files-changed"
 	ReasonUnreadable      = "unreadable"
@@ -141,28 +144,43 @@ func checkAllowlist(ctx context.Context, root string, digests map[string]string)
 }
 
 func checkJSON(ctx context.Context, file string, digests map[string]string) (string, error) {
-	f, err := openRegular(file)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	raw, err := io.ReadAll(llmtraining.ContextReader(ctx, io.LimitReader(f, MaxJSONFileBytes+1)))
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return "", ctxErr
-	}
-	if err != nil {
-		return "", errUnreadable
-	}
-	if len(raw) > MaxJSONFileBytes {
-		return ReasonJSONTooLarge, nil
-	}
-	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != digests[filepath.Base(file)] {
-		return "", errChanged
+	raw, reason, err := readBound(ctx, file, digests[filepath.Base(file)], MaxJSONFileBytes, ReasonJSONTooLarge)
+	if err != nil || reason != "" {
+		return reason, err
 	}
 	if !utf8.Valid(raw) {
 		return ReasonInvalidJSON, nil
 	}
 	return scanJSON(filepath.Base(file), raw, digests), nil
+}
+
+// readBound reads one file within limit and checks its digest. A larger
+// file gives the reason tooLarge. checkJSON and the chat template check
+// read files with it. scanTemplate checks the size of a template from a
+// JSON file.
+func readBound(ctx context.Context, file, digest string, limit int64, tooLarge string) ([]byte, string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
+	f, err := openRegular(file)
+	if err != nil {
+		return nil, "", err
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(llmtraining.ContextReader(ctx, io.LimitReader(f, limit+1)))
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, "", ctxErr
+	}
+	switch {
+	case err != nil:
+		return nil, "", errUnreadable
+	case int64(len(raw)) > limit:
+		return nil, tooLarge, nil
+	}
+	if sum := sha256.Sum256(raw); hex.EncodeToString(sum[:]) != digest {
+		return nil, "", errChanged
+	}
+	return raw, "", nil
 }
 
 func sortedNames(files map[string]string) []string {
