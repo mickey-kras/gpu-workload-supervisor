@@ -10,8 +10,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// escapeAccount is the service account of the escape route checks.
+// escapeAccount is the service account of the escape route scan.
 type escapeAccount struct {
+	// name is empty when /etc/passwd has no entry for uid.
 	name string
 	uid  int
 	// gids holds each group of the account: the primary group, each
@@ -20,6 +21,11 @@ type escapeAccount struct {
 	gids map[uint32]bool
 	// groups maps each /etc/group name to its group ID.
 	groups map[string]uint32
+}
+
+// is reports a user field that names the account, by name or by number.
+func (a escapeAccount) is(user string) bool {
+	return user != "" && (user == a.name || user == strconv.Itoa(a.uid))
 }
 
 // riskyGroups give root-equivalent control or raw disk access, so a
@@ -39,28 +45,32 @@ var daemonSockets = []string{
 	"/var/lib/incus/unix.socket",
 }
 
-// lookupAccount reads the name and the groups of the service UID from
-// /etc/passwd and /etc/group. The cron, at, group and sudo checks need the
-// name, so an account that setup cannot read opens a route.
-func (m *SystemdManager) lookupAccount(scan *routeScan) (escapeAccount, bool) {
-	account := escapeAccount{uid: m.host.uid, gids: map[uint32]bool{}, groups: map[string]uint32{}}
-	passwd, ok := m.readRoutePolicy(scan, "account", "/etc/passwd", false)
+// lookupAccount reads the name and the groups of the account from
+// /etc/passwd, /etc/group and this process. named is false when the scan
+// cannot find the name: the cron and at checks need it.
+func (s escapeScanner) lookupAccount(report *routeReport) (account escapeAccount, named bool) {
+	account = escapeAccount{uid: s.host.uid, gids: map[uint32]bool{}, groups: map[string]uint32{}}
+	// The process groups come first, so the group and socket checks see
+	// them also when a file below cannot be read.
+	gids, err := s.probe.processGroups()
+	if err != nil {
+		report.unchecked("groups", "the groups of this process ("+err.Error()+")")
+	}
+	for _, gid := range gids {
+		account.gids[gid] = true
+	}
+	passwd, ok := s.readRoutePolicy(report, "account", "/etc/passwd", false)
 	if !ok {
 		return account, false
 	}
-	name, gid, found := passwdEntry(string(passwd), m.host.uid)
+	name, gid, found := passwdEntry(string(passwd), s.host.uid)
 	if !found {
-		scan.add("account", fmt.Sprintf("/etc/passwd has no entry for uid %d, so setup cannot check the routes of its name", m.host.uid))
+		report.unchecked("account", fmt.Sprintf("the routes by name: /etc/passwd has no entry for uid %d", s.host.uid))
 		return account, false
 	}
 	account.name = name
 	account.gids[gid] = true
-	// A failed group read records its route. The checks of the name still
-	// run, so the error names each route.
-	group, ok := m.readRoutePolicy(scan, "groups", "/etc/group", false)
-	if !ok {
-		return account, true
-	}
+	group, _ := s.readRoutePolicy(report, "groups", "/etc/group", false)
 	for _, line := range strings.Split(string(group), "\n") {
 		fields := strings.Split(line, ":")
 		if len(fields) != 4 {
@@ -74,13 +84,6 @@ func (m *SystemdManager) lookupAccount(scan *routeScan) (escapeAccount, bool) {
 		if slices.Contains(strings.Split(fields[3], ","), name) {
 			account.gids[gid] = true
 		}
-	}
-	gids, err := m.escape.processGroups()
-	if err != nil {
-		scan.fail("groups", err)
-	}
-	for _, gid := range gids {
-		account.gids[gid] = true
 	}
 	return account, true
 }
@@ -105,47 +108,46 @@ func passwdEntry(passwd string, uid int) (string, uint32, bool) {
 	return "", 0, false
 }
 
-// checkGroups names each risky group of the account and each daemon
+// checkGroups reports each risky group of the account and each daemon
 // socket that the account can open.
-func (m *SystemdManager) checkGroups(scan *routeScan, account escapeAccount) {
+func (s escapeScanner) checkGroups(report *routeReport, account escapeAccount) {
 	for _, name := range riskyGroups {
 		if gid, ok := account.groups[name]; ok && account.gids[gid] {
-			scan.add("groups", "member of "+name)
+			report.add("groups", "member of "+name)
 		}
 	}
 	for _, socket := range daemonSockets {
-		m.checkSocket(scan, account, socket)
+		s.checkSocket(report, account, socket)
 	}
 }
 
-// checkSocket names a daemon socket that the account can open: its mode
-// lets the account write, or it has an ACL. A socket that the account
-// cannot reach is closed.
-func (m *SystemdManager) checkSocket(scan *routeScan, account escapeAccount, socket string) {
-	name := m.host.path(socket)
+// checkSocket reports a daemon socket that the account can open: its mode
+// lets the account write, or it has an ACL. The check follows a symlink to
+// the socket. A socket path that the account cannot reach is closed.
+func (s escapeScanner) checkSocket(report *routeReport, account escapeAccount, socket string) {
+	name := s.host.path(socket)
 	var stat unix.Stat_t
 	err := unix.Stat(name, &stat)
-	if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.EACCES) || errors.Is(err, unix.ENOTDIR) {
+	if policyAbsent(err) || deniedRead(err) || errors.Is(err, unix.ENOTDIR) {
 		return
 	}
 	if err != nil {
-		scan.fail("sockets", fmt.Errorf("%s: %w", socket, err))
+		report.unchecked("sockets", socket+" ("+err.Error()+")")
 		return
 	}
 	if stat.Mode&unix.S_IFMT != unix.S_IFSOCK {
 		return
 	}
-	if canWrite(stat, m.host.ownerOf(stat), account) {
-		scan.add("sockets", socket+" is writable by this account")
+	if canWrite(stat, s.host.ownerOf(stat), account) {
+		report.add("sockets", socket+" is writable by this account")
 		return
 	}
-	acl, err := m.escape.socketACL(name)
-	if err != nil {
-		scan.fail("sockets", fmt.Errorf("%s: %w", socket, err))
-		return
-	}
-	if acl {
-		scan.add("sockets", socket+" has an ACL")
+	acl, err := s.probe.socketACL(name)
+	switch {
+	case err != nil:
+		report.unchecked("sockets", socket+" ("+err.Error()+")")
+	case acl:
+		report.add("sockets", socket+" has an ACL")
 	}
 }
 

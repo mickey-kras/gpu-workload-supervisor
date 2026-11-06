@@ -59,16 +59,11 @@ type SystemdConfig struct {
 }
 
 type SystemdManager struct {
-	config  SystemdConfig
-	runner  CommandRunner
-	client  *http.Client
-	cgroups cgroupFS
-	host    limitHost
-	// escapeRoutes checks that no program of the service account can run
-	// outside the host cap. It is checkEscapeRoutes; tests replace it to
-	// reach the other checks.
-	escapeRoutes              func(context.Context, control.WorkloadProfile) error
-	escape                    escapeHost
+	config                    SystemdConfig
+	runner                    CommandRunner
+	client                    *http.Client
+	cgroups                   cgroupFS
+	host                      limitHost
 	nativeExecutableValidator func(string) error
 }
 
@@ -109,9 +104,7 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 	if runner == nil || client == nil {
 		return nil, errors.New("runner and HTTP client are required")
 	}
-	m := &SystemdManager{config: config, runner: runner, client: client, cgroups: cgroupFS{root: "/sys/fs/cgroup", verify: verifyUnifiedHierarchy}, host: defaultLimitHost(), escape: defaultEscapeHost()}
-	m.escapeRoutes = m.checkEscapeRoutes
-	return m, nil
+	return &SystemdManager{config: config, runner: runner, client: client, cgroups: cgroupFS{root: "/sys/fs/cgroup", verify: verifyUnifiedHierarchy}, host: defaultLimitHost()}, nil
 }
 
 func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) error {

@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -22,12 +21,6 @@ func TestLimitErrorsNameTheUnit(t *testing.T) {
 	}
 	if err := f.start(t); !errors.Is(err, ErrHostCap) || !strings.HasPrefix(err.Error(), prefix) || f.started() {
 		t.Fatalf("start with a slice property mismatch = %v", err)
-	}
-	f.m.escapeRoutes = func(context.Context, control.WorkloadProfile) error {
-		return fmt.Errorf("%w through cron: /etc/cron.deny does not deny alice", ErrEscapeRoute)
-	}
-	if err := f.start(t); !errors.Is(err, ErrEscapeRoute) || !strings.HasPrefix(err.Error(), prefix) || f.started() {
-		t.Fatalf("start with an open escape route = %v", err)
 	}
 }
 

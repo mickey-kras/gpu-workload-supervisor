@@ -50,52 +50,60 @@ func TestLimitProbesUseActionTimeout(t *testing.T) {
 	}
 }
 
-// openRoute is the refusal of an open escape route. The runtime text names
-// the route and its remedy, so the supervisor adds only recovery steps.
-var openRoute = fmt.Errorf("%w through cron: /etc/cron.deny does not deny alice; close each route, or remove the limits through setup", gpuruntime.ErrEscapeRoute)
+// limitCause is a definite launch check failure. Its text names its fix,
+// so the supervisor adds only the recovery and the switch to Idle.
+var limitCause = fmt.Errorf("%w: use 4096 MiB or less for memoryMaxMiB, or remove the limits through setup", gpuruntime.ErrLimitReserve)
 
-// routeRemedy ends the text of openRoute.
-const routeRemedy = "; close each route, or remove the limits through setup"
+// causeRemedy ends the text of limitCause.
+const causeRemedy = ", or remove the limits through setup"
 
-// From Idle, an open route refusal needs no next steps: its text has the
-// remedy.
-func TestOpenRouteRefusalFromIdle(t *testing.T) {
+// toIdle starts the step that switches to Idle before setup removes limits.
+const toIdle = "to remove the limits through setup, switch to Idle first: "
+
+// afterRecovery is the conditional switch of a supervisor-owned state
+// after recovery.
+const afterRecovery = toIdle + "if a workload other than Idle runs then, run `gpu-mode -target idle switch`"
+
+// From a healthy Idle, a refusal needs no next steps: its text has the
+// fix.
+func TestLimitCauseRefusalFromIdle(t *testing.T) {
 	ctx := context.Background()
 	c, r, _ := limitedController(t, limitedCatalog())
 	r.fakeRuntime.active = control.WorkloadIdle
 	if state, err := c.Reconcile(ctx); err != nil || state.ActiveWorkload != control.WorkloadIdle {
 		t.Fatalf("reconcile to Idle = %+v, %v", state, err)
 	}
-	r.launchErr = openRoute
+	r.launchErr = limitCause
 	_, err := c.Switch(ctx, "vision", "test")
-	if !errors.Is(err, ErrLimitedTarget) || !strings.HasSuffix(err.Error(), routeRemedy) || strings.Contains(err.Error(), "next steps") {
-		t.Fatalf("switch with an open route from Idle = %v", err)
+	if !errors.Is(err, ErrLimitedTarget) || !strings.HasSuffix(err.Error(), causeRemedy) || strings.Contains(err.Error(), "next steps") {
+		t.Fatalf("switch with a limit cause from Idle = %v", err)
 	}
 }
 
 // When the refusal cannot read the current state, it assumes a latched
-// state, so the next steps start with recover.
-func TestOpenRouteRefusalWithUnreadableState(t *testing.T) {
+// state with an unknown workload, so the next steps start with recover and
+// the switch to Idle.
+func TestLimitCauseRefusalWithUnreadableState(t *testing.T) {
 	ctx := context.Background()
 	c, r, _ := limitedController(t, limitedCatalog())
-	r.launchErr = openRoute
+	r.launchErr = limitCause
 	c.store = failingStore{storeGateway: c.store, stateErr: errors.New("database locked")}
 	err := c.refuseLimitedTarget(ctx, "vision")
-	if !errors.Is(err, ErrLimitedTarget) || !strings.HasSuffix(err.Error(), routeRemedy+"; next steps: first, run `gpu-mode recover`") {
-		t.Fatalf("open route refusal with an unreadable state = %v", err)
+	if !errors.Is(err, ErrLimitedTarget) || !strings.HasSuffix(err.Error(), causeRemedy+"; next steps: first, run `gpu-mode recover`; "+afterRecovery) {
+		t.Fatalf("limit cause refusal with an unreadable state = %v", err)
 	}
 }
 
 // With several rejected units, the next steps go on their own line, so they
 // apply to each unit and not only to the last one.
 func TestLimitRemedyOfSeveralUnits(t *testing.T) {
-	one := fmt.Errorf("%w: vision: %w", ErrLimitedUnitRejected, openRoute)
-	two := fmt.Errorf("%w: audio: %w", ErrLimitedUnitRejected, openRoute)
+	one := fmt.Errorf("%w: vision: %w", ErrLimitedUnitRejected, limitCause)
+	two := fmt.Errorf("%w: audio: %w", ErrLimitedUnitRejected, limitCause)
 	err := limitRemedy(errors.Join(errors.Join(nil, one), two), remedyState{latched: true, kept: control.WorkloadIdle})
 	if want := two.Error() + "\nnext steps: first, run `gpu-mode recover`"; !strings.HasSuffix(err.Error(), want) {
 		t.Fatalf("remedy of two units = %q", err)
 	}
-	if err := limitRemedy(errors.Join(nil, one), remedyState{latched: true, kept: control.WorkloadIdle}); !strings.HasSuffix(err.Error(), routeRemedy+"; next steps: first, run `gpu-mode recover`") {
+	if err := limitRemedy(errors.Join(nil, one), remedyState{latched: true, kept: control.WorkloadIdle}); !strings.HasSuffix(err.Error(), causeRemedy+"; next steps: first, run `gpu-mode recover`") {
 		t.Fatalf("remedy of one unit = %q", err)
 	}
 }
@@ -108,46 +116,44 @@ type seenState struct {
 
 func (s seenState) State(context.Context) (control.State, error) { return s.state, nil }
 
-// An open route refusal gives the gpu-mode commands that work for the
+// A limit cause refusal gives the gpu-mode commands that work for the
 // state: recover first for a latched state, also a healthy one in a
 // transition, and the user commands for a user-owned state. A state that
 // needs no recovery gets no next steps.
-func TestOpenRouteRefusalStepsFollowTheState(t *testing.T) {
+func TestLimitCauseRefusalStepsFollowTheState(t *testing.T) {
 	for name, c := range map[string]struct {
 		state control.State
 		want  string
 	}{
 		"healthy transition": {control.State{Owner: control.OwnerSupervisor, ActiveWorkload: control.WorkloadIdle, Phase: control.PhaseDraining, Health: control.HealthHealthy},
-			routeRemedy + "; next steps: first, run `gpu-mode recover`"},
+			causeRemedy + "; next steps: first, run `gpu-mode recover`"},
 		"user owned": {control.State{Owner: control.OwnerUser, ActiveWorkload: control.WorkloadText, Phase: control.PhaseStable, Health: control.HealthHealthy},
-			routeRemedy},
+			causeRemedy + "; next steps: " + toIdle + "run `gpu-mode -target idle user-switch`"},
 		"user owned and latched": {control.State{Owner: control.OwnerUser, ActiveWorkload: control.WorkloadText, Phase: control.PhaseReconciling, Health: control.HealthError},
-			"; next steps: first, run `gpu-mode -target text recover-user`"},
+			"; next steps: first, run `gpu-mode -target text recover-user`; " + toIdle + "if a workload other than Idle runs then, run `gpu-mode -target idle user-switch`"},
 		"user owned idle, latched": {control.State{Owner: control.OwnerUser, ActiveWorkload: control.WorkloadIdle, Phase: control.PhaseReconciling, Health: control.HealthError},
 			"; next steps: first, run `gpu-mode -target idle recover-user`"},
 		"user owned idle": {control.State{Owner: control.OwnerUser, ActiveWorkload: control.WorkloadIdle, Phase: control.PhaseStable, Health: control.HealthHealthy},
-			routeRemedy},
+			causeRemedy},
 		"user owned, unknown workload": {control.State{Owner: control.OwnerUser, ActiveWorkload: control.WorkloadUnknown, Phase: control.PhaseReconciling, Health: control.HealthError},
 			"; next steps: first, stop the running workload unit outside gpu-mode, then run `gpu-mode -target idle recover-user`"},
 		"supervisor owned limited unit, latched": {control.State{Owner: control.OwnerSupervisor, ActiveWorkload: "vision", Phase: control.PhaseReconciling, Health: control.HealthError},
-			routeRemedy + "; next steps: first, run `gpu-mode recover`"},
-		// The failed checks also refuse recover-user for the limited unit
-		// itself, so it stops outside gpu-mode first.
+			causeRemedy + "; next steps: first, run `gpu-mode recover`; " + afterRecovery},
 		"user owned limited unit, latched": {control.State{Owner: control.OwnerUser, ActiveWorkload: "vision", Phase: control.PhaseReconciling, Health: control.HealthError},
-			"; next steps: first, run `systemctl --user stop gws-owned-vision.service`, then run `gpu-mode -target idle recover-user`"},
+			"; next steps: first, run `gpu-mode -target vision recover-user`; " + toIdle + "if a workload other than Idle runs then, run `gpu-mode -target idle user-switch`"},
 	} {
 		c2, r, _ := limitedController(t, limitedCatalog())
-		r.launchErr = openRoute
+		r.launchErr = limitCause
 		c2.store = seenState{storeGateway: c2.store, state: c.state}
 		if err := c2.refuseLimitedTarget(context.Background(), "vision"); !errors.Is(err, ErrLimitedTarget) || !strings.HasSuffix(err.Error(), c.want) {
-			t.Errorf("%s: open route refusal = %v", name, err)
+			t.Errorf("%s: limit cause refusal = %v", name, err)
 		}
 	}
 }
 
-// A user-owned switch with an open route needs no recovery, so the error
-// ends with the remedy of the route.
-func TestUserSwitchOpenRouteRefusal(t *testing.T) {
+// A user-owned switch with a limit cause needs no recovery. The steps use
+// user-switch, which keeps the user ownership.
+func TestUserSwitchLimitCauseRefusal(t *testing.T) {
 	ctx := context.Background()
 	c, r, _ := limitedController(t, limitedCatalog())
 	if _, err := c.Reconcile(ctx); err != nil {
@@ -156,10 +162,10 @@ func TestUserSwitchOpenRouteRefusal(t *testing.T) {
 	if _, err := c.TransferToUser(ctx, control.WorkloadText, "test"); err != nil {
 		t.Fatal(err)
 	}
-	r.launchErr = openRoute
+	r.launchErr = limitCause
 	_, err := c.SwitchUser(ctx, "vision", "test")
-	if !errors.Is(err, ErrLimitedTarget) || !strings.HasSuffix(err.Error(), routeRemedy) {
-		t.Fatalf("user switch with an open route = %v", err)
+	if !errors.Is(err, ErrLimitedTarget) || !strings.HasSuffix(err.Error(), causeRemedy+"; next steps: "+toIdle+"run `gpu-mode -target idle user-switch`") {
+		t.Fatalf("user switch with a limit cause = %v", err)
 	}
 }
 
@@ -172,12 +178,12 @@ func TestFailedRecoverAfterRejectionNamesRecover(t *testing.T) {
 	c, r, s := limitedController(t, catalog)
 	r.fakeRuntime.active = control.WorkloadIdle
 	r.visionActive = true
-	r.protectionErr = fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, openRoute)
+	r.protectionErr = fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, limitCause)
 	stopErr := errors.New("stop refused")
 	r.visionStopErr = stopErr
 	_, err := c.Recover(ctx)
 	if !errors.Is(err, ErrLimitedUnitRejected) || !errors.Is(err, stopErr) ||
-		!strings.Contains(err.Error(), routeRemedy+"; next steps: first, run `gpu-mode recover`") {
+		!strings.Contains(err.Error(), causeRemedy+"; next steps: first, run `gpu-mode recover`") {
 		t.Fatalf("recover with a failed stop after a rejection = %v", err)
 	}
 	if state, err := s.State(ctx); err != nil || state.Health != control.HealthError {
@@ -207,10 +213,10 @@ func TestRejectionNamesOneClass(t *testing.T) {
 	c, r, _ := limitedController(t, catalog)
 	r.fakeRuntime.active = control.WorkloadIdle
 	r.visionActive = true
-	r.protectionErr = fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, openRoute)
+	r.protectionErr = fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, limitCause)
 	_, err := c.Reconcile(ctx)
 	if !errors.Is(err, ErrLimitedUnitRejected) || !errors.Is(err, gpuruntime.ErrLimitCheckFailed) || strings.Contains(err.Error(), gpuruntime.ErrLimitCheckFailed.Error()) ||
-		!strings.Contains(err.Error(), "failed a check: vision (gws-owned-vision.service): programs of this account can run outside host protection through cron") {
+		!strings.Contains(err.Error(), "failed a check: vision (gws-owned-vision.service): a resource limit is unset or leaves too little room for the supervisor: use 4096 MiB") {
 		t.Fatalf("reconcile rejection = %v", err)
 	}
 }
