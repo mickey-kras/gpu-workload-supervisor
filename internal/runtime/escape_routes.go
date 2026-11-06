@@ -3,8 +3,10 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -27,9 +29,22 @@ const maxEscapeRoutes = 32
 // CommandFunc runs one command and returns its combined output.
 type CommandFunc func(ctx context.Context, name string, args ...string) ([]byte, error)
 
+// The route values of an EscapeRoute.
+const (
+	routeAccount     = "account"
+	routeCron        = "cron"
+	routeAt          = "at"
+	routeGroups      = "groups"
+	routeSockets     = "sockets"
+	routePolkit      = "polkit"
+	routeSystemUnits = "system-units"
+	routeMore        = "more"
+)
+
 // ScanEscapeRoutes reports the escape routes of the calling account. It is
 // read-only and runs only on request, such as setup discovery. The runtime
-// and the supervisor never call it. run runs systemctl at systemctl.
+// and the supervisor never call it. run runs commands. systemctl is the
+// path of the systemctl binary. A scan always returns a non-nil list.
 func ScanEscapeRoutes(ctx context.Context, run CommandFunc, systemctl string) []EscapeRoute {
 	scanner := escapeScanner{host: defaultLimitHost(), probe: defaultEscapeProbe(), run: run, systemctl: systemctl}
 	return scanner.scan(ctx)
@@ -77,27 +92,29 @@ func processGroups() ([]uint32, error) {
 // extended attributes has none.
 func pathHasACL(name string) (bool, error) {
 	_, err := unix.Getxattr(name, "system.posix_acl_access", nil)
-	switch {
-	case err == nil:
-		return true, nil
-	case errors.Is(err, unix.ENODATA) || errors.Is(err, unix.EOPNOTSUPP):
-		return false, nil
-	default:
-		return false, err
-	}
+	return xattrPresent(err)
 }
 
-// scan runs each check and returns the bounded report.
+// scan runs each check and returns the bounded report. A spent context
+// stops the scan between checks, and the report says so.
 func (s escapeScanner) scan(ctx context.Context) []EscapeRoute {
 	var report routeReport
 	account, named := s.lookupAccount(&report)
-	if named {
-		s.checkCron(&report, account)
-		s.checkAt(&report, account)
+	checks := []func(){
+		func() { s.checkGroups(&report, account) },
+		func() { s.checkPolkit(&report) },
+		func() { s.checkSystemUnits(ctx, &report, account) },
 	}
-	s.checkGroups(&report, account)
-	s.checkPolkit(&report)
-	s.checkSystemUnits(ctx, &report, account)
+	if named {
+		checks = append([]func(){func() { s.checkCron(&report, account) }, func() { s.checkAt(&report, account) }}, checks...)
+	}
+	for _, check := range checks {
+		if err := ctx.Err(); err != nil {
+			report.unchecked(routeMore, "the other routes ("+err.Error()+")")
+			break
+		}
+		check()
+	}
 	return report.bounded()
 }
 
@@ -115,22 +132,47 @@ func (r *routeReport) unchecked(route, source string) {
 	r.add(route, "cannot check "+source)
 }
 
-// bounded returns at most maxEscapeRoutes findings.
+// bounded returns at most maxEscapeRoutes findings, never nil. The
+// "cannot check" items come first, so the truncation keeps them. The last
+// entry names the routes of the findings that it leaves out.
 func (r *routeReport) bounded() []EscapeRoute {
-	if len(r.items) <= maxEscapeRoutes {
-		return r.items
+	items := make([]EscapeRoute, 0, len(r.items))
+	for _, unchecked := range []bool{true, false} {
+		for _, item := range r.items {
+			if strings.HasPrefix(item.Item, "cannot check ") == unchecked {
+				items = append(items, item)
+			}
+		}
 	}
-	left := len(r.items) - (maxEscapeRoutes - 1)
-	return append(r.items[:maxEscapeRoutes-1:maxEscapeRoutes-1], EscapeRoute{Route: "more", Item: strconv.Itoa(left) + " more findings"})
+	if len(items) <= maxEscapeRoutes {
+		return items
+	}
+	kept, left := items[:maxEscapeRoutes-1], items[maxEscapeRoutes-1:]
+	var routes []string
+	for _, item := range left {
+		if !slices.Contains(routes, item.Route) {
+			routes = append(routes, item.Route)
+		}
+	}
+	more := strconv.Itoa(len(left)) + " more findings (" + strings.Join(routes, ", ") + ")"
+	return append(kept, EscapeRoute{Route: routeMore, Item: more})
 }
 
 // errNotRegular marks a policy file that is not a regular file.
 var errNotRegular = errors.New("not a regular file")
 
-// errPolicyTooLarge marks a policy file above policyLimit.
-var errPolicyTooLarge = errors.New("larger than 1 MiB")
-
+// policyLimit bounds the size of a policy file. errPolicyTooLarge names
+// the same limit.
 const policyLimit = 1 << 20
+
+// errPolicyTooLarge marks a policy file above policyLimit.
+var errPolicyTooLarge = fmt.Errorf("larger than %d MiB", policyLimit>>20)
+
+// maxDirEntries bounds the entries that the scan reads from one directory.
+const maxDirEntries = 1024
+
+// errTooManyEntries marks a directory with more than maxDirEntries entries.
+var errTooManyEntries = fmt.Errorf("more than %d entries", maxDirEntries)
 
 // openPolicy walks name from the host root without symlinks. With trusted,
 // each directory and the last component need the trusted owner, no group
@@ -195,17 +237,15 @@ func (s escapeScanner) readRoutePolicy(report *routeReport, route, name string, 
 	if err == nil {
 		return data, true
 	}
-	return nil, report.policyFailure(route, name, err)
+	report.policyFailure(route, name, err)
+	return nil, policyAbsent(err)
 }
 
-// policyFailure records a failed read of name. It returns true only for a
-// missing file, which adds nothing.
-func (r *routeReport) policyFailure(route, name string, err error) bool {
-	if policyAbsent(err) {
-		return true
+// policyFailure records a failed read of name. A missing file adds nothing.
+func (r *routeReport) policyFailure(route, name string, err error) {
+	if !policyAbsent(err) {
+		r.unchecked(route, policySource(name, err))
 	}
-	r.unchecked(route, policySource(name, err))
-	return false
 }
 
 // dirEntry is one entry of a policy directory and its owner.
@@ -215,18 +255,25 @@ type dirEntry struct {
 }
 
 // listPolicyDir lists a policy directory, walked without symlinks. A
-// missing directory gives no entries and true. A directory that the scan
-// cannot read gives false.
-func (s escapeScanner) listPolicyDir(report *routeReport, route, dir string) ([]dirEntry, bool) {
+// missing directory gives no entries. A directory that the scan cannot
+// read, or that has more than maxDirEntries entries, gives none and a
+// "cannot check" item.
+func (s escapeScanner) listPolicyDir(report *routeReport, route, dir string) []dirEntry {
 	fd, err := s.openPolicy(dir, unix.O_DIRECTORY, false)
 	if err != nil {
-		return nil, report.policyFailure(route, dir, err)
+		report.policyFailure(route, dir, err)
+		return nil
 	}
 	file := os.NewFile(uintptr(fd), dir)
 	defer file.Close()
-	names, err := file.Readdirnames(-1)
-	if err != nil {
-		return nil, report.policyFailure(route, dir, err)
+	names, err := file.Readdirnames(maxDirEntries + 1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		report.policyFailure(route, dir, err)
+		return nil
+	}
+	if len(names) > maxDirEntries {
+		report.policyFailure(route, dir, errTooManyEntries)
+		return nil
 	}
 	entries := make([]dirEntry, 0, len(names))
 	for _, name := range names {
@@ -237,9 +284,10 @@ func (s escapeScanner) listPolicyDir(report *routeReport, route, dir string) ([]
 			continue
 		}
 		if err != nil {
-			return nil, report.policyFailure(route, dir+"/"+name, err)
+			report.policyFailure(route, dir+"/"+name, err)
+			return nil
 		}
 		entries = append(entries, dirEntry{name: name, owner: s.host.ownerOf(stat)})
 	}
-	return entries, true
+	return entries
 }

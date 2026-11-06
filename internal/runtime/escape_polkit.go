@@ -19,16 +19,15 @@ var polkitActionPrefixes = []string{"org.freedesktop.systemd1.manage-unit", "org
 // that match actions in another way.
 func (s escapeScanner) checkPolkit(report *routeReport) {
 	for _, dir := range polkitRuleDirs {
-		entries, _ := s.listPolicyDir(report, "polkit", dir)
-		for _, entry := range entries {
+		for _, entry := range s.listPolicyDir(report, routePolkit, dir) {
 			if !strings.HasSuffix(entry.name, ".rules") {
 				continue
 			}
 			name := dir + "/" + entry.name
-			data, _ := s.readRoutePolicy(report, "polkit", name, false)
+			data, _ := s.readRoutePolicy(report, routePolkit, name, false)
 			for _, action := range polkitActionPrefixes {
 				if strings.Contains(string(data), action) {
-					report.add("polkit", name+" mentions "+action)
+					report.add(routePolkit, name+" mentions "+action)
 				}
 			}
 		}
@@ -42,7 +41,7 @@ func (s escapeScanner) checkPolkit(report *routeReport) {
 func (s escapeScanner) checkSystemUnits(ctx context.Context, report *routeReport, account escapeAccount) {
 	output, err := s.run(ctx, s.systemctl, "show", "--property=Id", "--property=User", "--", "*")
 	if err != nil {
-		report.unchecked("system units", "the loaded system units (systemctl show failed)")
+		report.unchecked(routeSystemUnits, "the loaded system units (systemctl show: "+firstLine(err.Error())+")")
 		return
 	}
 	for _, block := range strings.Split(string(output), "\n\n") {
@@ -55,7 +54,16 @@ func (s escapeScanner) checkSystemUnits(ctx context.Context, report *routeReport
 			}
 		}
 		if account.is(user) && id != s.host.managerUnit() {
-			report.add("system units", id+" runs as "+user)
+			report.add(routeSystemUnits, id+" runs as "+user)
 		}
 	}
+}
+
+// firstLine keeps the first line of a command error, at most 160 bytes.
+func firstLine(text string) string {
+	text, _, _ = strings.Cut(text, "\n")
+	if len(text) > 160 {
+		text = text[:160] + "..."
+	}
+	return text
 }

@@ -54,6 +54,12 @@ func defaultLimitHost() limitHost {
 // system without extended attributes has none.
 func hasXattr(fd int, attribute string) (bool, error) {
 	_, err := unix.Fgetxattr(fd, attribute, nil)
+	return xattrPresent(err)
+}
+
+// xattrPresent classifies the error of an extended attribute lookup. No
+// attribute, and a file system without extended attributes, give false.
+func xattrPresent(err error) (bool, error) {
 	switch {
 	case err == nil:
 		return true, nil

@@ -168,13 +168,17 @@ func TestCronAndAtRoutes(t *testing.T) {
 	}
 }
 
-// Without allow and deny files, cron and at are reported: the scan needs no
-// installed binary.
+// Without allow and deny files, Debian cron lets each user in, so cron is
+// reported. at then lets only root in, so its rule reports nothing. The
+// scan needs no installed binary.
 func TestCronAndAtWithoutRuleFiles(t *testing.T) {
 	f := newEscapeFixture(t)
 	remove(t, f.root, "/etc/cron.deny")
 	remove(t, f.root, "/etc/at.deny")
-	f.requireReport(t, "cron: neither /etc/cron.allow nor /etc/cron.deny denies alice", "at: neither /etc/at.allow nor /etc/at.deny denies alice")
+	lines := f.report()
+	if len(lines) != 1 || lines[0] != "cron: neither /etc/cron.allow nor /etc/cron.deny denies alice" {
+		t.Fatalf("escape routes without rule files = %q", lines)
+	}
 }
 
 // Spool entries and queued at jobs count by the owner too.
@@ -240,14 +244,14 @@ func TestUnreadableSources(t *testing.T) {
 		blocked string
 		want    []string
 	}{
-		"deny":               {nil, "/etc/cron.deny", []string{"cron: cannot check /etc/cron.deny (permission denied)"}},
-		"allow without deny": {map[string]string{"/etc/at.allow": "bob\n", "/etc/at.deny": "bob\n"}, "/etc/at.allow", []string{"at: /etc/at.deny does not deny alice"}},
-		"spool":              {map[string]string{"/var/spool/cron/crontabs/bob": ""}, "/var/spool/cron/crontabs", []string{"cron: cannot check /var/spool/cron/crontabs (permission denied)"}},
-		"at spool":           {map[string]string{"/var/spool/cron/atjobs/a1": ""}, "/var/spool/cron/atjobs", []string{"at: cannot check /var/spool/cron/atjobs (permission denied)"}},
-		"system crontab":     {map[string]string{"/etc/crontab": ""}, "/etc/crontab", []string{"cron: cannot check /etc/crontab (permission denied)"}},
-		"cron.d":             {map[string]string{"/etc/cron.d/job": ""}, "/etc/cron.d", []string{"cron: cannot check /etc/cron.d (permission denied)"}},
-		"passwd":             {nil, "/etc/passwd", []string{"account: cannot check /etc/passwd (permission denied)"}},
-		"polkit rules":       {map[string]string{"/etc/polkit-1/rules.d/x.rules": ""}, "/etc/polkit-1/rules.d", []string{"polkit: cannot check /etc/polkit-1/rules.d (permission denied)"}},
+		"deny":           {nil, "/etc/cron.deny", []string{"cron: cannot check /etc/cron.deny (permission denied)"}},
+		"allow":          {map[string]string{"/etc/at.allow": "bob\n"}, "/etc/at.allow", []string{"at: cannot check /etc/at.allow (permission denied)"}},
+		"spool":          {map[string]string{"/var/spool/cron/crontabs/bob": ""}, "/var/spool/cron/crontabs", []string{"cron: cannot check /var/spool/cron/crontabs (permission denied)"}},
+		"at spool":       {map[string]string{"/var/spool/cron/atjobs/a1": ""}, "/var/spool/cron/atjobs", []string{"at: cannot check /var/spool/cron/atjobs (permission denied)"}},
+		"system crontab": {map[string]string{"/etc/crontab": ""}, "/etc/crontab", []string{"cron: cannot check /etc/crontab (permission denied)"}},
+		"cron.d":         {map[string]string{"/etc/cron.d/job": ""}, "/etc/cron.d", []string{"cron: cannot check /etc/cron.d (permission denied)"}},
+		"passwd":         {nil, "/etc/passwd", []string{"account: cannot check /etc/passwd (permission denied)"}},
+		"polkit rules":   {map[string]string{"/etc/polkit-1/rules.d/x.rules": ""}, "/etc/polkit-1/rules.d", []string{"polkit: cannot check /etc/polkit-1/rules.d (permission denied)"}},
 		// The routes by name still run without /etc/group.
 		"group": {map[string]string{"/etc/cron.deny": ""}, "/etc/group", []string{"groups: cannot check /etc/group (permission denied)", "cron: /etc/cron.deny does not deny alice"}},
 	} {
@@ -262,13 +266,15 @@ func TestUnreadableSources(t *testing.T) {
 	}
 }
 
-// An unreadable allow file counts as absent: a deny file that lists the
-// account still closes the route.
-func TestUnreadableAllowFileCountsAsAbsent(t *testing.T) {
+// An allow file that the account cannot read can list the account, so a
+// deny file that lists it does not decide.
+func TestUnreadableAllowFileCannotBeChecked(t *testing.T) {
 	f := newEscapeFixture(t)
 	f.write(t, "/etc/cron.allow", "alice\n")
 	f.blocked[f.inode(t, "/etc/cron.allow")] = unix.EPERM
-	f.requireNone(t)
+	if lines := f.report(); len(lines) != 1 || lines[0] != "cron: cannot check /etc/cron.allow (operation not permitted)" {
+		t.Fatalf("escape routes with an unreadable cron.allow = %q", lines)
+	}
 }
 
 // Another read failure also gives "cannot check": the scan is advisory.
@@ -279,13 +285,20 @@ func TestReadFailureCannotCheck(t *testing.T) {
 }
 
 // Without the name of the account, the routes by name cannot be checked.
-// The routes by number still are.
+// The routes by number still are, and /etc/group still names the process
+// groups.
 func TestUnknownAccount(t *testing.T) {
 	f := newEscapeFixture(t)
 	f.write(t, "/etc/passwd", "root:x:0:0::/root:/bin/sh\nbad:x:"+strconv.Itoa(f.uid)+":x::/:/bin/sh\n")
+	f.write(t, "/etc/group", "docker:x:5001:alice\nwheel:x:5002:\n")
+	f.gids = []uint32{5002}
 	f.r.outputs[unitShow] = []byte("Id=job.service\nUser=" + strconv.Itoa(f.uid) + "\n\nId=other.service\nUser=\n")
-	f.requireReport(t, "account: cannot check the routes by name: /etc/passwd has no entry for uid", "system units: job.service runs as "+strconv.Itoa(f.uid))
-	if strings.Contains(strings.Join(f.report(), "\n"), "cron") {
+	f.requireReport(t, "account: cannot check cron, at and the member lists of /etc/group: /etc/passwd has no entry for uid",
+		"system-units: job.service runs as "+strconv.Itoa(f.uid), "groups: member of wheel")
+	if strings.Contains(strings.Join(f.report(), "\n"), "docker") {
+		t.Fatalf("escape routes without a name matched a member list: %q", f.report())
+	}
+	if strings.Contains("\n"+strings.Join(f.report(), "\n"), "\ncron:") {
 		t.Fatalf("escape routes without a name checked cron: %q", f.report())
 	}
 }
@@ -312,6 +325,20 @@ func TestGroupAndSocketRoutes(t *testing.T) {
 			f.socket(t, "/run/docker.sock", 0o600, false)
 			f.aclErr = unix.EIO
 		}, "sockets: cannot check /run/docker.sock (input/output error)"},
+		"symlinked socket": {func(t *testing.T, f *escapeFixture) {
+			f.socket(t, "/run/real.sock", 0o666, false)
+			if err := os.Symlink("real.sock", filepath.Join(f.root, "/run/docker.sock")); err != nil {
+				t.Fatal(err)
+			}
+		}, "sockets: /run/docker.sock is writable by this account"},
+		"socket symlink loop": {func(t *testing.T, f *escapeFixture) {
+			if err := os.MkdirAll(filepath.Join(f.root, "/run"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("docker.sock", filepath.Join(f.root, "/run/docker.sock")); err != nil {
+				t.Fatal(err)
+			}
+		}, "sockets: cannot check /run/docker.sock (too many levels of symbolic links)"},
 		"process groups failure": {func(t *testing.T, f *escapeFixture) { f.gidsErr = errors.New("no groups") }, "groups: cannot check the groups of this process (no groups)"},
 		// The process groups still count when /etc/group cannot be read.
 		"socket without /etc/group": {func(t *testing.T, f *escapeFixture) {
@@ -328,8 +355,8 @@ func TestGroupAndSocketRoutes(t *testing.T) {
 }
 
 // A socket that the account cannot write, a socket owned by the account
-// without owner write, a group socket without group write and a file that
-// is not a socket are closed.
+// without owner write, a group socket without group write, a file that is
+// not a socket and a file where a socket directory must be are closed.
 func TestClosedSockets(t *testing.T) {
 	f := newEscapeFixture(t)
 	f.socket(t, "/run/docker.sock", 0o600, false)
@@ -338,6 +365,8 @@ func TestClosedSockets(t *testing.T) {
 	f.socket(t, "/run/podman/podman.sock", 0o606, true)
 	f.write(t, "/var/lib/lxd/unix.socket", "")
 	chmod(t, f.root, "/var/lib/lxd/unix.socket", 0o666)
+	// A file where a socket directory must be hides the socket.
+	f.write(t, "/run/libvirt", "")
 	f.requireNone(t)
 }
 
@@ -376,22 +405,47 @@ func TestPolkitRules(t *testing.T) {
 func TestSystemUnitRoute(t *testing.T) {
 	f := newEscapeFixture(t)
 	f.r.outputs[unitShow] = []byte("Id=job.service\nUser=alice\n\nId=other.service\nUser=" + strconv.Itoa(f.uid) + "\n")
-	f.requireReport(t, "system units: job.service runs as alice", "system units: other.service runs as "+strconv.Itoa(f.uid))
+	f.requireReport(t, "system-units: job.service runs as alice", "system-units: other.service runs as "+strconv.Itoa(f.uid))
 	f.r.outputs[unitShow] = nil
-	f.r.errs[unitShow] = errors.New("bus")
-	f.requireReport(t, "system units: cannot check the loaded system units (systemctl show failed)")
+	f.r.errs[unitShow] = errors.New("bus\nsecond line")
+	f.requireReport(t, "system-units: cannot check the loaded system units (systemctl show: bus)")
+	f.r.errs[unitShow] = errors.New(strings.Repeat("x", 200))
+	f.requireReport(t, "(systemctl show: "+strings.Repeat("x", 160)+"...)")
 }
 
-// The report has at most maxEscapeRoutes entries. The last one gives the
-// number of findings left out.
+// The report has at most maxEscapeRoutes entries. "cannot check" items
+// come first, and the last entry gives the number and the routes of the
+// findings left out.
 func TestEscapeRouteReportIsBounded(t *testing.T) {
 	f := newEscapeFixture(t)
 	for i := range 40 {
 		f.write(t, "/etc/cron.d/job"+strconv.Itoa(i), "* * * * * alice x\n")
 	}
+	f.write(t, "/etc/at.deny", "")
+	f.r.errs[unitShow] = errors.New("bus")
 	routes := f.s.scan(context.Background())
-	if len(routes) != maxEscapeRoutes || routes[len(routes)-1] != (EscapeRoute{Route: "more", Item: "9 more findings"}) {
-		t.Fatalf("bounded report = %d entries, last %+v", len(routes), routes[len(routes)-1])
+	if len(routes) != maxEscapeRoutes || routes[0].Route != "system-units" ||
+		routes[len(routes)-1] != (EscapeRoute{Route: "more", Item: "11 more findings (cron, at)"}) {
+		t.Fatalf("bounded report = %d entries: %+v", len(routes), routes)
+	}
+	if routes := (&routeReport{}).bounded(); routes == nil || len(routes) != 0 {
+		t.Fatalf("empty report = %#v", routes)
+	}
+}
+
+// A directory with too many entries cannot be checked, and a spent
+// context stops the scan between checks.
+func TestEscapeRouteScanLimits(t *testing.T) {
+	f := newEscapeFixture(t)
+	for i := range maxDirEntries + 1 {
+		f.write(t, "/var/spool/cron/crontabs/e"+strconv.Itoa(i), "")
+	}
+	f.requireReport(t, "cron: cannot check /var/spool/cron/crontabs (more than 1024 entries)")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	routes := f.s.scan(ctx)
+	if len(routes) != 1 || routes[0] != (EscapeRoute{Route: "more", Item: "cannot check the other routes (context canceled)"}) || len(f.r.calls) != 1 {
+		t.Fatalf("scan on a spent context = %+v, calls %v", routes, f.r.calls)
 	}
 }
 

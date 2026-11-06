@@ -47,30 +47,28 @@ var daemonSockets = []string{
 
 // lookupAccount reads the name and the groups of the account from
 // /etc/passwd, /etc/group and this process. named is false when the scan
-// cannot find the name: the cron and at checks need it.
+// cannot find the name: the cron and at checks and the member lists of
+// /etc/group need it. The process groups and /etc/group still give the
+// group names without it.
 func (s escapeScanner) lookupAccount(report *routeReport) (account escapeAccount, named bool) {
 	account = escapeAccount{uid: s.host.uid, gids: map[uint32]bool{}, groups: map[string]uint32{}}
-	// The process groups come first, so the group and socket checks see
-	// them also when a file below cannot be read.
 	gids, err := s.probe.processGroups()
 	if err != nil {
-		report.unchecked("groups", "the groups of this process ("+err.Error()+")")
+		report.unchecked(routeGroups, "the groups of this process ("+err.Error()+")")
 	}
 	for _, gid := range gids {
 		account.gids[gid] = true
 	}
-	passwd, ok := s.readRoutePolicy(report, "account", "/etc/passwd", false)
-	if !ok {
-		return account, false
+	if passwd, ok := s.readRoutePolicy(report, routeAccount, "/etc/passwd", false); ok {
+		name, gid, found := passwdEntry(string(passwd), s.host.uid)
+		if found {
+			account.name, named = name, true
+			account.gids[gid] = true
+		} else {
+			report.unchecked(routeAccount, fmt.Sprintf("cron, at and the member lists of /etc/group: /etc/passwd has no entry for uid %d", s.host.uid))
+		}
 	}
-	name, gid, found := passwdEntry(string(passwd), s.host.uid)
-	if !found {
-		report.unchecked("account", fmt.Sprintf("the routes by name: /etc/passwd has no entry for uid %d", s.host.uid))
-		return account, false
-	}
-	account.name = name
-	account.gids[gid] = true
-	group, _ := s.readRoutePolicy(report, "groups", "/etc/group", false)
+	group, _ := s.readRoutePolicy(report, routeGroups, "/etc/group", false)
 	for _, line := range strings.Split(string(group), "\n") {
 		fields := strings.Split(line, ":")
 		if len(fields) != 4 {
@@ -81,11 +79,11 @@ func (s escapeScanner) lookupAccount(report *routeReport) (account escapeAccount
 			continue
 		}
 		account.groups[fields[0]] = gid
-		if slices.Contains(strings.Split(fields[3], ","), name) {
+		if named && slices.Contains(strings.Split(fields[3], ","), account.name) {
 			account.gids[gid] = true
 		}
 	}
-	return account, true
+	return account, named
 }
 
 // parseID parses a user or group ID.
@@ -113,7 +111,7 @@ func passwdEntry(passwd string, uid int) (string, uint32, bool) {
 func (s escapeScanner) checkGroups(report *routeReport, account escapeAccount) {
 	for _, name := range riskyGroups {
 		if gid, ok := account.groups[name]; ok && account.gids[gid] {
-			report.add("groups", "member of "+name)
+			report.add(routeGroups, "member of "+name)
 		}
 	}
 	for _, socket := range daemonSockets {
@@ -128,26 +126,26 @@ func (s escapeScanner) checkSocket(report *routeReport, account escapeAccount, s
 	name := s.host.path(socket)
 	var stat unix.Stat_t
 	err := unix.Stat(name, &stat)
-	if policyAbsent(err) || deniedRead(err) || errors.Is(err, unix.ENOTDIR) {
+	if policyAbsent(err) || errors.Is(err, unix.EACCES) || errors.Is(err, unix.ENOTDIR) {
 		return
 	}
 	if err != nil {
-		report.unchecked("sockets", socket+" ("+err.Error()+")")
+		report.unchecked(routeSockets, socket+" ("+err.Error()+")")
 		return
 	}
 	if stat.Mode&unix.S_IFMT != unix.S_IFSOCK {
 		return
 	}
 	if canWrite(stat, s.host.ownerOf(stat), account) {
-		report.add("sockets", socket+" is writable by this account")
+		report.add(routeSockets, socket+" is writable by this account")
 		return
 	}
 	acl, err := s.probe.socketACL(name)
 	switch {
 	case err != nil:
-		report.unchecked("sockets", socket+" ("+err.Error()+")")
+		report.unchecked(routeSockets, socket+" ("+err.Error()+")")
 	case acl:
-		report.add("sockets", socket+" has an ACL")
+		report.add(routeSockets, socket+" has an ACL")
 	}
 }
 

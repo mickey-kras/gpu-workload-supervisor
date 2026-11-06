@@ -1,12 +1,9 @@
 package runtime
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
-
-	"golang.org/x/sys/unix"
 )
 
 // cronSpools hold the crontabs of users. cronie names a crontab after its
@@ -18,35 +15,38 @@ var atSpools = []string{"/var/spool/at", "/var/spool/atjobs", "/var/spool/cron/a
 
 // checkCron reports the cron route unless the allow and deny rule denies
 // the account, and each spool or system crontab job of the account. It
-// needs no cron binary.
+// needs no cron binary. Without both rule files, Debian cron lets each
+// user use cron, so the scan reports the route.
 func (s escapeScanner) checkCron(report *routeReport, account escapeAccount) {
-	s.checkAccessRule(report, "cron", "/etc/cron.allow", "/etc/cron.deny", account.name)
+	s.checkAccessRule(report, routeCron, "/etc/cron.allow", "/etc/cron.deny", account.name, false)
 	for _, spool := range cronSpools {
-		s.checkSpool(report, "cron", spool, account)
+		s.checkSpool(report, routeCron, spool, account)
 	}
 	s.checkSystemCrontab(report, "/etc/crontab", account)
-	entries, _ := s.listPolicyDir(report, "cron", "/etc/cron.d")
-	for _, entry := range entries {
+	for _, entry := range s.listPolicyDir(report, routeCron, "/etc/cron.d") {
 		s.checkSystemCrontab(report, "/etc/cron.d/"+entry.name, account)
 	}
 }
 
 // checkAt reports the at route unless the allow and deny rule denies the
 // account, and each queued job of the account. It needs no at binary.
+// Without both rule files, at lets only root use it, so the scan reports
+// nothing for the rule.
 func (s escapeScanner) checkAt(report *routeReport, account escapeAccount) {
-	s.checkAccessRule(report, "at", "/etc/at.allow", "/etc/at.deny", account.name)
+	s.checkAccessRule(report, routeAt, "/etc/at.allow", "/etc/at.deny", account.name, true)
 	for _, spool := range atSpools {
-		s.checkSpool(report, "at", spool, account)
+		s.checkSpool(report, routeAt, spool, account)
 	}
 }
 
 // checkAccessRule applies the allow and deny rule of cron and at. The rule
 // denies the account only with a readable allow file that omits the name,
-// or with no allow file and a deny file that lists the name. An allow file
-// that the account cannot read counts as absent. Both files and their
-// parent directories need the trusted owner, no group or other write, no
-// ACL and no file capability.
-func (s escapeScanner) checkAccessRule(report *routeReport, route, allow, deny, name string) {
+// or with no allow file and a deny file that lists the name. rootOnly
+// tells that the program lets only root in when both files are missing.
+// Both files and their parent directories need the trusted owner, no
+// group or other write, no ACL and no file capability. A file that fails
+// these checks, or that the account cannot read, gives "cannot check".
+func (s escapeScanner) checkAccessRule(report *routeReport, route, allow, deny, name string, rootOnly bool) {
 	data, err := s.readPolicy(allow, true)
 	if err == nil {
 		if listsLoosely(string(data), name) {
@@ -54,23 +54,18 @@ func (s escapeScanner) checkAccessRule(report *routeReport, route, allow, deny, 
 		}
 		return
 	}
-	if !policyAbsent(err) && !deniedRead(err) {
+	if !policyAbsent(err) {
 		report.policyFailure(route, allow, err)
 		return
 	}
 	data, ok := s.readRoutePolicy(report, route, deny, true)
 	switch {
-	case !ok:
+	case !ok, data == nil && rootOnly:
 	case data == nil:
 		report.add(route, "neither "+allow+" nor "+deny+" denies "+name)
 	case !listsExactly(string(data), name):
 		report.add(route, deny+" does not deny "+name)
 	}
-}
-
-// deniedRead reports a read that the permissions refused.
-func deniedRead(err error) bool {
-	return errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM)
 }
 
 // listsExactly reports a line that is exactly name followed by a newline.
@@ -95,8 +90,7 @@ func listsLoosely(data, name string) bool {
 // checkSpool reports each spool entry that has the name or the owner of
 // the account. A missing spool is empty.
 func (s escapeScanner) checkSpool(report *routeReport, route, spool string, account escapeAccount) {
-	entries, _ := s.listPolicyDir(report, route, spool)
-	for _, entry := range entries {
+	for _, entry := range s.listPolicyDir(report, route, spool) {
 		if entry.name == account.name || entry.owner == uint32(account.uid) {
 			report.add(route, spool+"/"+entry.name)
 		}
@@ -106,10 +100,10 @@ func (s escapeScanner) checkSpool(report *routeReport, route, spool string, acco
 // checkSystemCrontab reports each job of a system crontab that runs as the
 // account, by name or by number.
 func (s escapeScanner) checkSystemCrontab(report *routeReport, name string, account escapeAccount) {
-	data, _ := s.readRoutePolicy(report, "cron", name, false)
+	data, _ := s.readRoutePolicy(report, routeCron, name, false)
 	for i, line := range strings.Split(string(data), "\n") {
 		if user, ok := crontabUser(line); ok && account.is(user) {
-			report.add("cron", fmt.Sprintf("%s line %d runs as %s", name, i+1, user))
+			report.add(routeCron, fmt.Sprintf("%s line %d runs as %s", name, i+1, user))
 		}
 	}
 }

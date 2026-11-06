@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1288,13 +1289,17 @@ func TestReadbackGroupGoneIsNotInterfaceMissing(t *testing.T) {
 }
 
 // Escape routes are advisory, so no runtime path reads them: a unit with
-// limits launches, passes its health check and is kept on a host where
-// every route is open. The host has no /etc/passwd, no cron or at deny
-// files and a cron spool entry of the account, and the default runtime
-// wiring is in use.
+// limits passes its launch checks, starts, passes the limit checks of a
+// health check and is kept on a host where the scan would report routes.
+// The host has no /etc/passwd and no cron or at deny files. The health
+// step calls checkStartedUnit, the limit part of Healthy, because the
+// fixture has no health endpoint.
 func TestLimitedUnitRunsWithoutEscapeRouteCheck(t *testing.T) {
+	m, err := newSystemdManager(testConfig(), &fakeRunner{}, http.DefaultClient)
+	if err != nil || m.host.ownerOf(unix.Stat_t{Uid: 7}) != 7 {
+		t.Fatalf("default runtime = %v", err)
+	}
 	f := newLimitFixture(t, fixtureLimits(), fixtureLoaded)
-	f.file(t, "/var/spool/cron/crontabs/alice", "* * * * * true\n")
 	ctx := context.Background()
 	// The checks run in this order: the unit runs after the start.
 	for _, step := range []struct {
