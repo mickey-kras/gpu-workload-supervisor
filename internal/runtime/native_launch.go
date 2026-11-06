@@ -287,7 +287,7 @@ func qualifyServerLaunch(args []string, unit parsedLaunchUnit, n control.NativeM
 		return fmt.Errorf("%w: select an existing local model file or directory and refresh its launch configuration", ErrModelUnavailable)
 	}
 	if err != nil {
-		return fmt.Errorf("%w: model metadata could not be inspected; check access to the configured local model", ErrLaunchUnsupported)
+		return markBindingRead(fmt.Errorf("%w: model metadata could not be inspected; check access to the configured local model", ErrLaunchUnsupported), err)
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("%w: model has the wrong file or directory type; select a compatible local model", ErrModelUnavailable)

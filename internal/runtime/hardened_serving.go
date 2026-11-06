@@ -77,10 +77,10 @@ func qualifyHardenedServing(flags serverFlags, unit parsedLaunchUnit, n control.
 
 func checkKeyFile(path string) error {
 	if _, err := trustPath(path, kindFile); err != nil {
-		return fmt.Errorf("%w: API key file: %s", ErrLaunchUnsupported, reasonText(err))
+		return markBindingRead(fmt.Errorf("%w: API key file: %s", ErrLaunchUnsupported, reasonText(err)), err)
 	}
 	if _, err := vllmkey.Read(path); err != nil {
-		return fmt.Errorf("%w: %w", ErrLaunchUnsupported, err)
+		return markBindingRead(fmt.Errorf("%w: %w", ErrLaunchUnsupported, err), err)
 	}
 	return nil
 }
@@ -89,16 +89,16 @@ func checkKeyFile(path string) error {
 func ChatTemplateSHA256(path string) (string, error) {
 	resolved, err := trustPath(path, kindFile)
 	if err != nil {
-		return "", fmt.Errorf("%w: chat template: %s", ErrLaunchUnsupported, reasonText(err))
+		return "", markBindingRead(fmt.Errorf("%w: chat template: %s", ErrLaunchUnsupported, reasonText(err)), err)
 	}
 	file, err := os.Open(resolved)
 	if err != nil {
-		return "", fmt.Errorf("%w: chat template could not be read", ErrLaunchUnsupported)
+		return "", markBindingRead(fmt.Errorf("%w: chat template could not be read", ErrLaunchUnsupported), err)
 	}
 	defer file.Close()
 	raw, err := io.ReadAll(io.LimitReader(file, maxTemplateBytes+1))
 	if err != nil || len(raw) > maxTemplateBytes {
-		return "", fmt.Errorf("%w: chat template could not be read or exceeds 1 MiB", ErrLaunchUnsupported)
+		return "", markBindingRead(fmt.Errorf("%w: chat template could not be read or exceeds 1 MiB", ErrLaunchUnsupported), err)
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil

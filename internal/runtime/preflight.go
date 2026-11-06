@@ -30,7 +30,7 @@ func (m *SystemdManager) preflight(ctx context.Context, removals map[string]stri
 	if err := m.preflightBindings(ctx); err != nil {
 		return err
 	}
-	if err := m.verifyManagerCgroup(ctx); err != nil {
+	if _, err := m.managerCgroup(ctx); err != nil {
 		return err
 	}
 	seen := map[string]bool{}
@@ -53,7 +53,7 @@ func (m *SystemdManager) preflight(ctx context.Context, removals map[string]stri
 // PreflightAdopted verifies existing bindings during a setup preview. Owned
 // units may not exist yet; Apply must run full Preflight after rendering them.
 func (m *SystemdManager) PreflightAdopted(ctx context.Context, removals map[string]string) error {
-	if err := m.verifyManagerCgroup(ctx); err != nil {
+	if _, err := m.managerCgroup(ctx); err != nil {
 		return err
 	}
 	seen := map[string]bool{}

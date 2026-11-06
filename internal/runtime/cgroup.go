@@ -113,48 +113,53 @@ func (fs cgroupFS) memoryPeak(group string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	peak, ok := control.CanonicalUint(strings.TrimSuffix(string(data), "\n"))
+	peak, ok := parseCgroupUint(data)
 	if !ok {
 		return 0, errors.New("malformed cgroup memory.peak")
 	}
 	return peak, nil
 }
 
+// parseCgroupUint parses a cgroup file that holds one canonical unsigned
+// integer and a newline.
+func parseCgroupUint(data []byte) (uint64, bool) {
+	return control.CanonicalUint(strings.TrimSuffix(string(data), "\n"))
+}
+
 var errCgroupRemoved = errors.New("cgroup is removed")
+
+// errControlFileAbsent marks a control file that an existing group does not
+// have, as opposed to a group or hierarchy that cannot be opened.
+var errControlFileAbsent = errors.New("the control file is absent")
 
 // read returns one bounded control file of an existing group.
 func (fs cgroupFS) read(group, name string) ([]byte, error) {
-	fd, err := unix.Open(fs.root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	return fs.readChecked(group, name, nil)
+}
+
+// readChecked runs check, when set, on the open file before it reads it, so
+// a caller can check the owner, mode and extended attributes of the same
+// file it reads.
+func (fs cgroupFS) readChecked(group, name string, check func(int) error) ([]byte, error) {
+	fd, err := fs.openGroup(group)
 	if err != nil {
-		return nil, fmt.Errorf("open cgroup hierarchy: %w", err)
+		return nil, err
 	}
 	defer func() { _ = unix.Close(fd) }()
-	if err := fs.verify(fd); err != nil {
-		return nil, fmt.Errorf("verify cgroup hierarchy: %w", err)
-	}
-	// Walk with directory descriptors and no symlinks, keeping removal distinct
-	// from inaccessible state. ENOENT here means the configured group is removed;
-	// ENOENT for a control file in an existing group is NOT proof of release.
-	for _, component := range strings.Split(strings.TrimPrefix(group, "/"), "/") {
-		next, err := unix.Openat(fd, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-		if errors.Is(err, unix.ENOENT) {
-			return nil, fmt.Errorf("inspect cgroup %s: %w", group, errCgroupRemoved)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("inspect cgroup %s: %w", group, err)
-		}
-		_ = unix.Close(fd)
-		fd = next
-		if err := fs.verify(fd); err != nil {
-			return nil, fmt.Errorf("verify cgroup %s: %w", group, err)
-		}
-	}
 	fileFD, err := unix.Openat(fd, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+	if errors.Is(err, unix.ENOENT) {
+		return nil, fmt.Errorf("read %s for %s: %w: %w", name, group, errControlFileAbsent, err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("read %s for %s: %w", name, group, err)
 	}
 	file := os.NewFile(uintptr(fileFD), name)
 	defer file.Close()
+	if check != nil {
+		if err := check(fileFD); err != nil {
+			return nil, fmt.Errorf("check %s for %s: %w", name, group, err)
+		}
+	}
 	data, err := io.ReadAll(io.LimitReader(file, 4097))
 	if err != nil {
 		return nil, fmt.Errorf("read %s for %s: %w", name, group, err)
@@ -163,6 +168,99 @@ func (fs cgroupFS) read(group, name string) ([]byte, error) {
 		return nil, fmt.Errorf("oversized %s", name)
 	}
 	return data, nil
+}
+
+// openGroup walks to an existing group with directory descriptors and no
+// symlinks, keeping removal distinct from inaccessible state. ENOENT here
+// means the configured group is removed; ENOENT for a control file in an
+// existing group is NOT proof of release. The group "/" names the hierarchy
+// root, and ENOENT of the root is never removal.
+func (fs cgroupFS) openGroup(group string) (int, error) {
+	var components []string
+	if group != "/" {
+		components = strings.Split(strings.TrimPrefix(group, "/"), "/")
+	}
+	fd, err := openNoFollow(fs.root, components, unix.O_DIRECTORY, fs.verify)
+	if err == nil {
+		return fd, nil
+	}
+	// openNoFollow returns only walk errors.
+	var walk *walkError
+	if !errors.As(err, &walk) {
+		return -1, err
+	}
+	switch {
+	case walk.path == "" && walk.verify:
+		return -1, fmt.Errorf("verify cgroup hierarchy: %w", walk.err)
+	case walk.path == "":
+		return -1, fmt.Errorf("open cgroup hierarchy: %w", walk.err)
+	case walk.verify:
+		return -1, fmt.Errorf("verify cgroup %s: %w", group, walk.err)
+	case errors.Is(walk.err, unix.ENOENT):
+		return -1, fmt.Errorf("inspect cgroup %s: %w", group, errCgroupRemoved)
+	default:
+		return -1, fmt.Errorf("inspect cgroup %s: %w", group, walk.err)
+	}
+}
+
+// errNonCanonicalPath marks an empty, "." or ".." component in a walk.
+var errNonCanonicalPath = errors.New("the path is not canonical")
+
+// walkError is a failure of openNoFollow. path is the part of the path that
+// the walk reached, with the failed component last, or empty for the root.
+// verify tells a verify failure from an open failure.
+type walkError struct {
+	path   string
+	verify bool
+	err    error
+}
+
+func (e *walkError) Error() string {
+	if e.path == "" {
+		return e.err.Error()
+	}
+	return e.path + ": " + e.err.Error()
+}
+
+func (e *walkError) Unwrap() error { return e.err }
+
+// openNoFollow opens root as a directory, then each component below it in
+// turn, without symlinks, and closes each parent. Each component but the
+// last opens as a directory; the last opens with lastFlags. verify runs on
+// the root and on each descriptor that it opens. It refuses an empty, "."
+// or ".." component, so a walk cannot leave its root. On error, it closes
+// every descriptor.
+func openNoFollow(root string, components []string, lastFlags int, verify func(int) error) (int, error) {
+	fd, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return -1, &walkError{err: err}
+	}
+	if err := verify(fd); err != nil {
+		_ = unix.Close(fd)
+		return -1, &walkError{verify: true, err: err}
+	}
+	for i, component := range components {
+		path := "/" + strings.Join(components[:i+1], "/")
+		if component == "" || component == "." || component == ".." {
+			_ = unix.Close(fd)
+			return -1, &walkError{path: path, err: fmt.Errorf("%w: path component %q", errNonCanonicalPath, component)}
+		}
+		flags := unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_CLOEXEC | unix.O_DIRECTORY
+		if i == len(components)-1 {
+			flags = unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_CLOEXEC | lastFlags
+		}
+		next, err := unix.Openat(fd, component, flags, 0)
+		_ = unix.Close(fd)
+		if err != nil {
+			return -1, &walkError{path: path, err: err}
+		}
+		fd = next
+		if err := verify(fd); err != nil {
+			_ = unix.Close(fd)
+			return -1, &walkError{path: path, verify: true, err: err}
+		}
+	}
+	return fd, nil
 }
 
 var errCgroupPopulated = errors.New("workload cgroup still contains processes (including descendants)")
