@@ -42,10 +42,12 @@ func limitRemedy(rejected error, from remedyState) error {
 		}
 		parts = append(parts, "first, "+text)
 	}
-	if step := from.idleStep(); step != "" && len(steps) != 0 {
-		parts = append(parts, "then, to remove the limits through setup, "+step)
-	} else if step != "" {
-		parts = append(parts, "to remove the limits through setup, first "+step)
+	if step := from.idleStep(); step != "" {
+		if len(steps) != 0 {
+			parts = append(parts, "then, to remove the limits through setup, "+step)
+		} else {
+			parts = append(parts, "to remove the limits through setup, first "+step)
+		}
 	}
 	if len(parts) == 0 {
 		return rejected
