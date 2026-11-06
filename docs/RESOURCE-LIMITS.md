@@ -97,21 +97,21 @@ Limits protect against runaway workloads and accidents. They do not contain host
 
 `gpu-setup discover` returns the report as the `escapeRoutes` list. A later #584 change shows it on the desktop resource page. The supervisor and the runtime never run the scan.
 
-Each entry has a `route` and an `item`. The route is one of `account`, `cron`, `at`, `groups`, `sockets`, `polkit`, `system-units` and `more`. An empty list means that the scan found nothing. `null` means that no scan ran.
+Each entry has a `route` and an `item`. The route is one of `account`, `cron`, `at`, `groups`, `sockets`, `polkit`, `system-units`, `incomplete` and `more`. An empty list means that the scan found nothing. `null` means that no scan ran. The list has each entry only one time.
 
-The list has at most 32 entries. The items about sources that the scan cannot check come first. When there are more findings, the last entry has the route `more` and gives their number and routes. A directory with more than 1024 entries gives "cannot check".
+The list has at most 32 entries. The items about sources that the scan cannot check come first. When there are more findings, the last entry has the route `more` and gives their number and routes. When discovery stops the scan early, an entry with the route `incomplete` says that the scan cannot check the rest of the routes. A directory with more than 1024 entries gives "cannot check".
 
 The scan runs as the desktop account, without root, and changes nothing. It runs no `sudo` or `pkcheck` command, because these commands ask for a password or write log entries for an account without rights. Membership in `sudo` or `wheel` is in the groups route.
 
 | Route | Scan |
 | --- | --- |
-| Account | `/etc/passwd` gives the name and primary group of the account. Without an entry, the scan reports that it cannot check cron, `at` and the member lists of `/etc/group` |
-| `cron` | The allow and deny rule below. The spools `/var/spool/cron` and `/var/spool/cron/crontabs`: an entry with the account name or the account owner. The jobs of `/etc/crontab` and each file in `/etc/cron.d` with the account name or UID in the user field |
+| Account | `/etc/passwd` gives the name and primary group of the account. Without an entry, or when the account cannot read the file, the scan reports that it cannot check cron, `at` and the member lists of `/etc/group` |
+| `cron` | The allow and deny rule below. The spools `/var/spool/cron` and `/var/spool/cron/crontabs`: an entry with the account name or the account owner. The jobs of `/etc/crontab` and each file in `/etc/cron.d` with the account name or UID in the user field. The scan skips the directories, hidden files and backup files that end in `~` in `/etc/cron.d`, because cron does not run them |
 | `at` | The allow and deny rule with `at.allow` and `at.deny`. Without both files, `at` lets only root in, so the rule gives no warning. The queues `/var/spool/at`, `/var/spool/atjobs` and `/var/spool/cron/atjobs`: an entry with the account name or the account owner |
 | Groups | Membership through the primary group, the member list of `/etc/group` or a group of the setup process. `/etc/group` gives the group names also without a `/etc/passwd` entry |
-| Sockets | The Docker, Podman, containerd, libvirt, LXD and Incus sockets. The scan follows a symlink to the socket. A socket that the account can reach is open when its mode lets the account write, or when it has an ACL. The scan ignores a socket path that the account cannot reach |
-| `polkit` | Each `.rules` file in `/etc/polkit-1/rules.d` and `/usr/share/polkit-1/rules.d` that mentions `org.freedesktop.systemd1.manage-unit`, `org.freedesktop.machine1` or `org.freedesktop.policykit.exec`. The rule can allow or deny the action, so the warning says only that the file mentions it |
-| System units | `systemctl show` of the loaded system units. `User=` with the account name or UID gives a warning. `user@UID.service` runs in the slice, so it gives none. The scan reads only property names and values, which `systemctl` does not translate. For a failed command, the report says that it cannot check the units, with the first line of the error |
+| Sockets | The Docker, Podman, containerd, libvirt, LXD and Incus sockets. The scan follows a symlink to the socket. A socket that the account can reach is open when its mode lets the account write, or when it has an ACL. The scan ignores a socket path that the account cannot reach, and a path that is not a socket |
+| `polkit` | Each `.rules` file in `/etc/polkit-1/rules.d`, `/run/polkit-1/rules.d`, `/usr/local/share/polkit-1/rules.d` and `/usr/share/polkit-1/rules.d` that mentions `org.freedesktop.systemd1.manage-unit`, `org.freedesktop.machine1` or `org.freedesktop.policykit.exec`. The rule can allow or deny the action, so the warning says only that the file mentions it |
+| System units | `systemctl show --all` of the loaded system units, also inactive ones such as timer-activated services. `User=` with the account name or UID gives a warning. `user@UID.service` runs in the slice, so it gives none. The scan reads only property names and values, which `systemctl` does not translate. For a failed command, the report says that it cannot check the units. It adds the first line of the error and of the `systemctl` output |
 
 The scan walks the cron, `at`, account and `polkit` files without symlinks. For a file or directory that the account cannot read, the scan reports "cannot check" and the path. It does the same for a symlink, a file where a directory must be and an allow or deny file that fails the trust checks.
 
@@ -121,7 +121,7 @@ The report says that it cannot check an allow file that the account cannot read,
 
 In a deny file, only the exact account name followed by a newline counts: no trailing space or carriage return. The rule denies the account only in two cases. First, a readable allow file omits the name. Second, no allow file exists, and a deny file lists the name. Without both files, Debian cron lets each user in, so cron gives a warning. An allow line with extra spaces or a carriage return counts as an allow.
 
-On many hosts, the account cannot read the cron or `at` spools. Then the report says that it cannot check them. The `polkit` warning is best effort. The scan does not read `.policy` defaults or rules that match actions in another way. When the account cannot read `/etc/polkit-1/rules.d`, the report says that it cannot check it. The scan reads only local account files, not other account databases.
+On many hosts, the account cannot read the cron or `at` spools. Then the report says that it cannot check them. The `polkit` warning is best effort. The scan does not read `.policy` defaults or rules that match actions in another way. When the account cannot read a `polkit` rules directory, the report says that it cannot check it. The scan reads only local account files, not other account databases.
 
 ## Host cap
 
@@ -409,6 +409,8 @@ Display ceiling and current usage beside fields. Show memory in GiB, CPU in core
 | Host cap absent or different | The host protection of this account is missing or different. See the step on this page |
 | Reserve violation | This limit leaves too little room for the supervisor. Use `<allowed>` or less, or remove the limits through setup. When no valid value fits, raise the slice cap to at least `<needed cap>`, or remove the limits through setup |
 | Escape route (warning) | Programs from this account can run outside host protection through `<route>`. Limits protect against runaway workloads, not against such programs |
+| Unchecked escape route (warning) | The scan `<item>`. A route can be open in a place that the scan cannot read |
+| Escape routes left out (warning) | `<item>` are not on this page |
 | Memory pressure | Slice memory does not fit this limit. `<usage>` MiB is in use. The `<cache>` MiB of page cache that the kernel can reclaim does not count. The start needs `<need>` MiB: `memoryMaxMiB` plus a 2048 MiB reserve. The ceiling is `<ceiling>` MiB. Check `/dev/shm` and `tmpfs` use |
 | Memory usage unknown | Setup cannot read the memory already in use. Setup did not save limits |
 | Drift | A limit changed after start. The supervisor stopped the workload. `<control>` was `<actual>`, not `<expected>` |
