@@ -170,10 +170,14 @@ type Backend struct {
 	qualifyOwned     func(control.WorkloadProfile) error
 	binaryDirectory  string
 	packageBinaryUID uint32
+	// escapeRoutes reports the advisory escape routes of this account for
+	// discovery; nil reports none.
+	escapeRoutes func(context.Context) []gpuruntime.EscapeRoute
 }
 
 func SystemBackend() Backend {
-	return Backend{makeRuntime: runtimeFor, runCommand: boundedCommand, probeApplication: Probe, discoverExecutables: installedExecutables, binaryDirectory: "/usr/bin"}
+	return Backend{makeRuntime: runtimeFor, runCommand: boundedCommand, probeApplication: Probe, discoverExecutables: installedExecutables, binaryDirectory: "/usr/bin",
+		escapeRoutes: scanEscapeRoutes}
 }
 
 func runtimeFor(request Request) (gpuruntime.Manager, error) {

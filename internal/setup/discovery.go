@@ -28,6 +28,9 @@ type Discovery struct {
 	Applications       []ApplicationCandidate `json:"applications"`
 	OwnedUnits         []OwnedUnitStatus      `json:"ownedUnits"`
 	Trainers           []TrainerCandidate     `json:"trainers"`
+	// EscapeRoutes are advisory: ways through which programs of this
+	// account can run outside host protection. They do not block limits.
+	EscapeRoutes []gpuruntime.EscapeRoute `json:"escapeRoutes,omitempty"`
 }
 
 // OwnedUnitStatus reports one supervisor-owned unit file so the UI can offer
@@ -80,12 +83,27 @@ func (b Backend) Discover(ctx context.Context, home string) (Discovery, error) {
 	b.discoverApplications(ctx, &result, units, home)
 	b.discoverTrainers(ctx, &result)
 	b.discoverGPUInventory(ctx, &result)
+	b.discoverEscapeRoutes(ctx, &result)
 	owned, err := discoverOwnedUnits(home, result.Request.Catalog)
 	if err != nil {
 		return result, err
 	}
 	result.OwnedUnits = owned
 	return result, nil
+}
+
+// discoverEscapeRoutes adds the advisory escape routes of this account.
+// A backend without the scan adds none.
+func (b Backend) discoverEscapeRoutes(ctx context.Context, result *Discovery) {
+	if b.escapeRoutes != nil {
+		result.EscapeRoutes = b.escapeRoutes(ctx)
+	}
+}
+
+// scanEscapeRoutes reports the escape routes of the desktop account. Setup
+// shows them as warnings. They do not block limits.
+func scanEscapeRoutes(ctx context.Context) []gpuruntime.EscapeRoute {
+	return gpuruntime.ScanEscapeRoutes(ctx, boundedCommand, "/usr/bin/systemctl")
 }
 
 // ErrOwnedUnitDiscovery marks an owned-unit directory that exists but cannot
