@@ -14,7 +14,7 @@
 - In a switch, a later definite failure ends the verification, and the supervisor stops the unit. From a supervisor-owned state, the rollback stops it. From a user-owned state, the failed transition stops it before it latches the error state.
 - A status check never stops a workload. It runs the health check only for a supervisor-owned, stable, healthy state with open admission. On a failed health check, it latches the error state and closes the admission.
 - Design decision: nothing reads the limits back on a schedule. This release does not stop a running unit with limits after a failed status check. The unit keeps running behind the closed admission until `recover`. The limit stop of the policy tick and its escalation come with the setup change for limits. See [limit checks](OPERATIONS.md#limit-checks).
-- Reconciliation keeps a running unit with limits and boot policy `retain` only after the checks pass. On a definite failure, it stops the unit and exits nonzero with the cause, so boot units that need a successful reconcile do not start. A definite failure in the readiness probe of a kept unit also stops it before the error state latches. The state keeps the workload that reconciliation kept, with error health and closed admission. The same write settles the state and latches the failure. Then run `recover` one time. If the unit runs, `recover` stops it and exits nonzero with the cause. It does not latch the error state again. If the unit does not run, `recover` settles the state and exits zero. Then remove the limits through setup. Setup removes them only from Idle.
+- Reconciliation keeps a running unit with limits and boot policy `retain` only after the checks pass. On a definite failure, it stops the unit and exits nonzero with the cause, so boot units that need a successful reconcile do not start. A definite failure in the readiness probe of a kept unit also stops it before the error state latches. The state keeps the workload that reconciliation kept, with error health and closed admission. The same write settles the state and latches the failure. Then run `recover` one time. It runs the checks again and keeps the unit when they pass. On a definite failure, it stops the unit and exits nonzero, without a second latch. A failure that proves nothing latches without a stop. If the unit does not run, `recover` settles the state and exits zero. Then fix the cause, or switch to Idle and remove the limits through setup.
 - Each failure class has one result:
 
   | Failure | Class |
@@ -83,7 +83,7 @@ Root's `user-UID.slice` cap bounds even hostile processes inside the slice, with
 
 The slice includes `user@UID.service` and UID session scopes from sshd and display managers. See source [1](#source-1). Delegation permits user writes to `cgroup.procs`, `cgroup.subtree_control`, `cgroup.threads`. V259 adds `memory.oom.group` and `memory.reclaim`. See source [2](#source-2). Systemd does not delegate the slice: root owns its limits, and the kernel prevents child escape above parent limits.
 
-Limits protect against runaway workloads and accidents. They do not contain hostile code that runs as the service UID. Some routes let a program of the account run outside the slice. Setup reports these routes as warnings. They do not block limits.
+Limits protect against runaway workloads and accidents. They do not contain hostile code that runs as the service UID. Some routes let a program of the account run outside the slice. `gpu-setup discover` reports these routes as warnings. They do not block limits.
 
 | Route | Warning |
 | --- | --- |
@@ -95,27 +95,33 @@ Limits protect against runaway workloads and accidents. They do not contain host
 
 ### Escape route report
 
-`gpu-setup discover` returns the report as the `escapeRoutes` list. Each entry has a `route` and an `item`. The list has at most 32 entries. When there are more findings, the last entry has the route `more` and gives their number. The supervisor and the runtime never run the scan.
+`gpu-setup discover` returns the report as the `escapeRoutes` list. A later #584 change shows it on the desktop resource page. The supervisor and the runtime never run the scan.
+
+Each entry has a `route` and an `item`. The route is one of `account`, `cron`, `at`, `groups`, `sockets`, `polkit`, `system-units` and `more`. An empty list means that the scan found nothing. `null` means that no scan ran.
+
+The list has at most 32 entries. The items about sources that the scan cannot check come first. When there are more findings, the last entry has the route `more` and gives their number and routes. A directory with more than 1024 entries gives "cannot check".
 
 The scan runs as the desktop account, without root, and changes nothing. It runs no `sudo` or `pkcheck` command, because these commands ask for a password or write log entries for an account without rights. Membership in `sudo` or `wheel` is in the groups route.
 
 | Route | Scan |
 | --- | --- |
-| Account | `/etc/passwd` gives the name and primary group of the account. Without an entry, the scan reports that it cannot check the routes by name |
+| Account | `/etc/passwd` gives the name and primary group of the account. Without an entry, the scan reports that it cannot check cron, `at` and the member lists of `/etc/group` |
 | `cron` | The allow and deny rule below. The spools `/var/spool/cron` and `/var/spool/cron/crontabs`: an entry with the account name or the account owner. The jobs of `/etc/crontab` and each file in `/etc/cron.d` with the account name or UID in the user field |
-| `at` | The allow and deny rule with `at.allow` and `at.deny`. The queues `/var/spool/at`, `/var/spool/atjobs` and `/var/spool/cron/atjobs`: an entry with the account name or the account owner |
-| Groups | Membership through the primary group, the member list of `/etc/group` or a group of the setup process |
+| `at` | The allow and deny rule with `at.allow` and `at.deny`. Without both files, `at` lets only root in, so the rule gives no warning. The queues `/var/spool/at`, `/var/spool/atjobs` and `/var/spool/cron/atjobs`: an entry with the account name or the account owner |
+| Groups | Membership through the primary group, the member list of `/etc/group` or a group of the setup process. `/etc/group` gives the group names also without a `/etc/passwd` entry |
 | Sockets | The Docker, Podman, containerd, libvirt, LXD and Incus sockets. The scan follows a symlink to the socket. A socket that the account can reach is open when its mode lets the account write, or when it has an ACL. The scan ignores a socket path that the account cannot reach |
 | `polkit` | Each `.rules` file in `/etc/polkit-1/rules.d` and `/usr/share/polkit-1/rules.d` that mentions `org.freedesktop.systemd1.manage-unit`, `org.freedesktop.machine1` or `org.freedesktop.policykit.exec`. The rule can allow or deny the action, so the warning says only that the file mentions it |
-| System units | `systemctl show` of the loaded system units. `User=` with the account name or UID gives a warning. `user@UID.service` runs in the slice, so it gives none. The scan reads only property names and values, which `systemctl` does not translate |
+| System units | `systemctl show` of the loaded system units. `User=` with the account name or UID gives a warning. `user@UID.service` runs in the slice, so it gives none. The scan reads only property names and values, which `systemctl` does not translate. For a failed command, the report says that it cannot check the units, with the first line of the error |
 
-The scan walks the cron, `at`, account and `polkit` files without symlinks. For a file or directory that the account cannot read, the scan reports "cannot check" and the path. It does the same for a symlink, a file where a directory must be and an untrusted rule file. A failed `systemctl` command also gives "cannot check".
+The scan walks the cron, `at`, account and `polkit` files without symlinks. For a file or directory that the account cannot read, the scan reports "cannot check" and the path. It does the same for a symlink, a file where a directory must be and an allow or deny file that fails the trust checks.
 
 Allow and deny files and their parent directories need root ownership, no group or other write, no ACL and no file capability. Files must be regular.
 
-An allow file that the account cannot read counts as absent. In a deny file, only the exact account name followed by a newline counts: no trailing space or carriage return. The rule denies the account only in two cases. First, a readable allow file omits the name. Second, no allow file exists, and a deny file lists the name. An allow line with extra spaces or a carriage return counts as an allow.
+The report says that it cannot check an allow file that the account cannot read, because that file can list the account.
 
-On many hosts, the account cannot read the cron or `at` spools. Then the report says that it cannot check them. The `polkit` warning is best effort. The scan does not read `.policy` defaults, `/etc/polkit-1/rules.d` when the account cannot read it, or rules that match actions in another way. The scan reads only local account files, not other account databases.
+In a deny file, only the exact account name followed by a newline counts: no trailing space or carriage return. The rule denies the account only in two cases. First, a readable allow file omits the name. Second, no allow file exists, and a deny file lists the name. Without both files, Debian cron lets each user in, so cron gives a warning. An allow line with extra spaces or a carriage return counts as an allow.
+
+On many hosts, the account cannot read the cron or `at` spools. Then the report says that it cannot check them. The `polkit` warning is best effort. The scan does not read `.policy` defaults or rules that match actions in another way. When the account cannot read `/etc/polkit-1/rules.d`, the report says that it cannot check it. The scan reads only local account files, not other account databases.
 
 ## Host cap
 
@@ -409,7 +415,7 @@ Display ceiling and current usage beside fields. Show memory in GiB, CPU in core
 | Readback failure | Setup cannot read `<path>` (`<errno>`). The supervisor stopped the workload |
 | `IOWeight` not applicable | `<number>` (`<device>`) does not support I/O weight (no BFQ or iocost). Without a device name in sysfs, the text gives the number only |
 
-Present requires hard slice ceilings. Escape routes do not change the status. Setup shows them as warnings beside it.
+Present requires hard slice ceilings. Escape routes do not change the status. The desktop page of a later #584 change shows them as warnings beside it.
 
 ## Schema
 

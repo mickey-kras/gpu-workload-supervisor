@@ -7,7 +7,7 @@
 - [Configure the proxy](#configure-the-execution-proxy), [credentials](#trusted-adapter-ingress), and [limits](#connection-limits)
 - [Qualify an adapter](#contract-for-execution-proxy-adapters), including [ComfyUI](#opt-in-comfyui-asynchronous-execution)
 - [Owned-unit backstops](#orchestrator-decision)
-- [Resource-limit design](RESOURCE-LIMITS.md): catalog v5 accepts the schema. The runtime checks the limits. Setup shows the escape routes of the account as warnings. Setup cannot write limits yet
+- [Resource-limit design](RESOURCE-LIMITS.md): catalog v5 accepts the schema. The runtime checks the limits. `gpu-setup discover` reports the escape routes of the account as warnings. Setup cannot write limits yet
 
 ## State and responsibility
 
