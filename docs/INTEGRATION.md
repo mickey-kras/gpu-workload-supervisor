@@ -7,7 +7,7 @@
 - [Configure the proxy](#configure-the-execution-proxy), [credentials](#trusted-adapter-ingress), and [limits](#connection-limits)
 - [Qualify an adapter](#contract-for-execution-proxy-adapters), including [ComfyUI](#opt-in-comfyui-asynchronous-execution)
 - [Owned-unit backstops](#orchestrator-decision)
-- [Resource-limit design](RESOURCE-LIMITS.md): catalog v5 accepts the schema. The runtime checks the escape routes and the limits. Setup cannot write limits yet
+- [Resource-limit design](RESOURCE-LIMITS.md): catalog v5 accepts the schema. The runtime checks the limits. Setup shows the escape routes of the account as warnings. Setup cannot write limits yet
 
 ## State and responsibility
 
@@ -111,7 +111,7 @@ Unchanged v1/v2 profiles need no migration. Owned launches need v2/v4/v5. Traine
 
 Setup writes the lowest version the content needs: 5 with limits, 4 with trainers, 2 with owned launches, 1 otherwise. Setup cannot write limits yet: it rejects requests with limits and accepts requests that remove them.
 
-This release has the runtime checks and the escape route checks. The escape route checks run first, and an open route refuses each unit with limits. Then, before the unload, the runtime checks the launch binding, controllers, host cap, reserve, device and loaded properties. The start also checks the slice memory, and health checks read the cgroup values back. See [runtime checks](RESOURCE-LIMITS.md#runtime-checks).
+This release has the runtime checks. Escape routes are advisory: setup discovery reports them, and they do not block limits. Before the unload, the runtime checks the launch binding, controllers, host cap, reserve, device and loaded properties. The start also checks the slice memory, and health checks read the cgroup values back. See [runtime checks](RESOURCE-LIMITS.md#runtime-checks).
 
 The hardened vLLM fields `chatTemplate`, `chatTemplateSHA256` and `environmentFile` are valid in v1, v2 and v4 and do not change the version. Earlier releases reject them as unknown fields. To go back, [restore a verified backup](OPERATIONS.md#restore-a-backup).
 
@@ -493,4 +493,4 @@ This release migrates the database to schema v19 for the `limit_stops` table. Fu
 
 Other fields cannot use that allowance. Full validation and readback allows 352 KiB. Setup requests allow 416 KiB, reserving 64 KiB for profile and envelope.
 
-Keep host evidence and hardware or build identifiers outside the repository. This release has the runtime checks of owned unit limits and the escape route checks. Setup support for limits is not in this release. See [resource limits](RESOURCE-LIMITS.md).
+Keep host evidence and hardware or build identifiers outside the repository. This release has the runtime checks of owned unit limits and the advisory escape route report. Setup support for limits is not in this release. See [resource limits](RESOURCE-LIMITS.md).

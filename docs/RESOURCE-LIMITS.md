@@ -2,10 +2,10 @@
 
 [Documentation](README.md). See [implemented integration](INTEGRATION.md).
 
-**Design for [#584](https://github.com/mickey-kras/gpu-workload-supervisor/issues/584). This release has the schema, the runtime checks and the escape route checks. Setup cannot write limits yet.**
+**Design for [#584](https://github.com/mickey-kras/gpu-workload-supervisor/issues/584). This release has the schema, the runtime checks and the advisory escape route report. Setup cannot write limits yet.**
 
 - Catalog v5 accepts `limits` on owned inference launches. The renderer and strict parser carry them.
-- The first check is the escape route check. It runs before the unload, at the start, at each health check and before reconciliation keeps a running unit. An open route refuses each unit with limits with `ErrEscapeRoute`. The error names each open route. A switch or activation then fails with `incompatible_configuration`. Reconciliation does not keep the unit, so it stops the unit. See [escape route checks](#escape-route-checks).
+- Escape routes are advisory warnings. Setup discovery reports them. They do not block limits, and no runtime check reads them. See [escape route report](#escape-route-report).
 - For a target with limits, the supervisor checks the launch binding. Then it checks the controllers, the host cap, the reserve, the I/O device and the loaded unit properties. It does this before it stops the current workload. If a check fails, the supervisor refuses the switch and changes nothing. See [runtime checks](#runtime-checks).
 - The start of the unit repeats these checks and also checks the slice memory. If a check fails, the unit does not start.
 - Design decision: a unit with limits needs `memoryMaxMiB`, `tasksMax` and `cpuQuotaPercent` to start. Systemd applies them as `MemoryMax`, `TasksMax` and `CPUQuota`. It also needs each I/O cap whose key the slice `io.max` caps. When the slice `io.max` caps a device other than the unit `ioDevice`, the unit cannot cap that device. The runtime then refuses the unit with `ErrLimitReserve`. The schema accepts limits without them, so setup can read and remove them.
@@ -28,8 +28,6 @@
   | `NeedDaemonReload` other than `no` on the slice or the user manager | Read failure. A package upgrade can set it until the next daemon-reload. It proves no wrong cap |
   | A failed read of a binding file, such as the unit file, a drop-in, the model, the chat template or the API key file | Read failure |
   | A missing chat template or API key file | Definite |
-  | An open escape route, or an escape route policy that setup cannot read or trust | Definite |
-  | A failed or timed-out command of the escape route checks, or another failed read of a route file | Read failure |
   | A missing model, or a model that is not a directory (`ErrModelUnavailable`) | Read failure. It is not a limit refusal |
   | Other command and read failures, such as a failed read of a slice or host file | Read failure |
 
@@ -85,45 +83,39 @@ Root's `user-UID.slice` cap bounds even hostile processes inside the slice, with
 
 The slice includes `user@UID.service` and UID session scopes from sshd and display managers. See source [1](#source-1). Delegation permits user writes to `cgroup.procs`, `cgroup.subtree_control`, `cgroup.threads`. V259 adds `memory.oom.group` and `memory.reclaim`. See source [2](#source-2). Systemd does not delegate the slice: root owns its limits, and the kernel prevents child escape above parent limits.
 
-Setup cannot prove absence of all escapes. These checks fail closed. Errors name each matching file, spool, job, rule, unit, group or socket, or identify an unreadable policy.
+Limits protect against runaway workloads and accidents. They do not contain hostile code that runs as the service UID. Some routes let a program of the account run outside the slice. Setup reports these routes as warnings. They do not block limits.
 
-| Route | Check |
+| Route | Warning |
 | --- | --- |
-| `cron` | Spools, system crontabs, and cronie allow or deny rules, as below |
-| `at` | The same allow or deny rule, plus queued jobs, as below |
-| Groups and sockets | Membership in `docker`, `podman`, `libvirt`, `lxd`, `incus`, `sudo`, `wheel` or `disk`, or a daemon socket this UID can open |
-| `sudo` | Any rule from `sudo -l -U`, or a policy setup cannot read |
-| `polkit` | A rule that lets this UID start a system unit, or a policy setup cannot read |
-| System units | A loaded system unit with `User=` set to the service UID |
+| `cron` | A spool entry, a system crontab job or an allow or deny rule that lets the account use cron |
+| `at` | A queued job or an allow or deny rule that lets the account use `at` |
+| Groups and sockets | Membership in `docker`, `podman`, `libvirt`, `lxd`, `incus`, `sudo`, `wheel` or `disk`, or a daemon socket that the account can open |
+| `polkit` | A rules file that mentions an action that starts system units, opens a host shell or runs a program as root |
+| System units | A loaded system unit with `User=` set to the service account |
 
-Scan `/var/spool/cron`, `/var/spool/cron/crontabs`, `/etc/crontab` and `/etc/cron.d` for UID jobs, by name or number, even without a cron binary. No user spool or system entry can remain. Also scan queued `at` jobs without relying on an installed binary.
+### Escape route report
 
-Allow and deny files and parent directories need root ownership, no group or other write or UID-write ACL. Walk with `O_NOFOLLOW`. Files must be regular.
+`gpu-setup discover` returns the report as the `escapeRoutes` list. Each entry has a `route` and an `item`. The list has at most 32 entries. When there are more findings, the last entry has the route `more` and gives their number. The supervisor and the runtime never run the scan.
 
-Unreadable `cron.allow` counts as absent. Only an exact username followed by newline counts: no trailing space or CR. Pass only with readable `cron.allow` omitting the user, or only `cron.deny` containing it.
+The scan runs as the desktop account, without root, and changes nothing. It runs no `sudo` or `pkcheck` command, because these commands ask for a password or write log entries for an account without rights. Membership in `sudo` or `wheel` is in the groups route.
 
-Apply the same rule to `at.allow` and `at.deny`. Inspect the socket modes and ACLs, not just group membership.
-
-### Escape route checks
-
-The runtime runs these checks one time for each launch check, health check and reconciliation check of a unit with limits. It runs all checks and names each open route.
-
-| Route | Implemented check |
+| Route | Scan |
 | --- | --- |
-| Account | `/etc/passwd` gives the name and primary group of the service UID. Without an entry, the route checks by name cannot run, so a route is open |
-| `cron` | The allow and deny rule of the trust model. The user spools `/var/spool/cron` and `/var/spool/cron/crontabs`: an entry with the account name or the account owner. The jobs of `/etc/crontab` and each file in `/etc/cron.d` with the account name or UID in the user field |
-| `at` | The allow and deny rule with `at.allow` and `at.deny`. The queues `/var/spool/at`, `/var/spool/atjobs` and `/var/spool/cron/atjobs`: a job with the account owner |
-| Groups | Membership through the primary group, the member list of `/etc/group` or a group of the supervisor process |
-| Sockets | The Docker, Podman, containerd, libvirt, LXD and Incus sockets. A socket is open when its mode lets the account write, or when it has an ACL |
-| `sudo` | `sudo -n -l -U <account>`. Each listed rule is open. Only the one-line denial of sudo closes the route. Other output is a policy that setup cannot read |
-| `polkit` | `pkcheck` for the supervisor process with `org.freedesktop.systemd1.manage-units` and `org.freedesktop.systemd1.manage-unit-files`. Exit status 0 opens the route. Exit status 1, 2 and 3 keep it closed. Without `pkcheck`, an installed polkit daemon is a policy that setup cannot read |
-| System units | `systemctl show` of the loaded system units. `User=` with the account name or UID is open. `user@UID.service` runs in the slice, so it does not count |
+| Account | `/etc/passwd` gives the name and primary group of the account. Without an entry, the scan reports that it cannot check the routes by name |
+| `cron` | The allow and deny rule below. The spools `/var/spool/cron` and `/var/spool/cron/crontabs`: an entry with the account name or the account owner. The jobs of `/etc/crontab` and each file in `/etc/cron.d` with the account name or UID in the user field |
+| `at` | The allow and deny rule with `at.allow` and `at.deny`. The queues `/var/spool/at`, `/var/spool/atjobs` and `/var/spool/cron/atjobs`: an entry with the account name or the account owner |
+| Groups | Membership through the primary group, the member list of `/etc/group` or a group of the setup process |
+| Sockets | The Docker, Podman, containerd, libvirt, LXD and Incus sockets. The scan follows a symlink to the socket. A socket that the account can reach is open when its mode lets the account write, or when it has an ACL. The scan ignores a socket path that the account cannot reach |
+| `polkit` | Each `.rules` file in `/etc/polkit-1/rules.d` and `/usr/share/polkit-1/rules.d` that mentions `org.freedesktop.systemd1.manage-unit`, `org.freedesktop.machine1` or `org.freedesktop.policykit.exec`. The rule can allow or deny the action, so the warning says only that the file mentions it |
+| System units | `systemctl show` of the loaded system units. `User=` with the account name or UID gives a warning. `user@UID.service` runs in the slice, so it gives none. The scan reads only property names and values, which `systemctl` does not translate |
 
-A file or directory that the account cannot read keeps its route open. A symlink, a file where a directory must be and an untrusted rule file also keep it open. These results are definite. An allow file that the account cannot read counts as absent.
+The scan walks the cron, `at`, account and `polkit` files without symlinks. For a file or directory that the account cannot read, the scan reports "cannot check" and the path. It does the same for a symlink, a file where a directory must be and an untrusted rule file. A failed `systemctl` command also gives "cannot check".
 
-A missing tool means no route through that tool. A command that fails, times out or gives an unknown exit status is a read failure. Another failed read of a route file is also a read failure. A read failure fails the launch, but it does not stop a running unit.
+Allow and deny files and their parent directories need root ownership, no group or other write, no ACL and no file capability. Files must be regular.
 
-On many hosts, the account cannot read the cron or `at` spools. Then the route stays open. An allow file that lists the account with extra spaces or a carriage return counts as an allow. The checks read only local files, not other account databases.
+An allow file that the account cannot read counts as absent. In a deny file, only the exact account name followed by a newline counts: no trailing space or carriage return. The rule denies the account only in two cases. First, a readable allow file omits the name. Second, no allow file exists, and a deny file lists the name. An allow line with extra spaces or a carriage return counts as an allow.
+
+On many hosts, the account cannot read the cron or `at` spools. Then the report says that it cannot check them. The `polkit` warning is best effort. The scan does not read `.policy` defaults, `/etc/polkit-1/rules.d` when the account cannot read it, or rules that match actions in another way. The scan reads only local account files, not other account databases.
 
 ## Host cap
 
@@ -169,7 +161,6 @@ Before accepting or launching limited units, setup and preflight must check:
 2. Known `DropInPaths`, expected limit properties and `NeedDaemonReload=no` for slice and user manager.
 3. Slice path from system-manager `ControlGroup` only. Root-owned limit files without group or other write or UID ACLs. Manager and unit cgroups descend from the slice. `memory.max`, `pids.max` and `cpu.max` are finite. `memory.swap.max=0`. Each unit with limits needs `MemoryMax`, so the checks need swap accounting. A missing `memory.swap.max` at the root of the user manager is `ErrLimitInterface`. A missing slice `memory.swap.max` is `ErrHostCap`.
 4. User-manager root `cgroup.controllers` includes `io` for I/O controls.
-5. Every escape check passes.
 
 Missing or different evidence fails closed with the drop-in path and differing property or file. Unlimited profiles need no cap. Setup displays exact drop-ins and selected values.
 
@@ -285,11 +276,10 @@ Only `parseOwnedLaunchUnit` and the exact trainer form accept this block. Remove
 
 ## Runtime checks
 
-The runtime applies these checks to units with limits. Units without limits do not change. Where this design differs from these checks, the checks describe the current release. The escape route checks in the first row run before the other checks.
+The runtime applies these checks to units with limits. Units without limits do not change. Where this design differs from these checks, the checks describe the current release. No check reads the escape routes.
 
 | Time | Check | Error |
 | --- | --- | --- |
-| Before unload, before start, each health check, before reconciliation keeps a unit | The [escape route checks](#escape-route-checks). An open route refuses the unit | `ErrEscapeRoute`, `ErrLimitReadback` |
 | Before unload, before start | `cgroup.controllers` of the user manager root lists each required controller. When the memory controller is in use, `memory.swap.max` is present there. With `IOWeight`, `io.weight` is present there | `ErrLimitController`, `ErrLimitInterface`, `ErrLimitReadback` |
 | Before unload, before start | Host cap. See the [host cap rules](#host-cap-rules) | `ErrHostCap`, `ErrLimitReserve`, `ErrLimitReadback` |
 | Before unload, before start | Each unit limit is at most its slice cap minus the [reserve](#reserve-and-pressure). The memory cap is the lower of slice `memory.high` and `memory.max` | `ErrLimitReserve` |
@@ -297,7 +287,7 @@ The runtime applies these checks to units with limits. Units without limits do n
 | Before unload, before start | Loaded properties match the catalog, with `OOMPolicy` and `OOMScoreAdjust`. The binding check requires no drop-ins and `NeedDaemonReload=no` | `ErrLimitProperties`, `ErrLaunchChanged`, `ErrLaunchUnsupported` |
 | Before start | The slice memory in use is `memory.current` minus the page cache (`active_file` plus `inactive_file` in `memory.stat`). That memory plus unit `MemoryMax` plus 2048 MiB is at most the lower of slice `memory.high` and `memory.max` | `ErrLimitMemory`, `ErrLimitReadback` |
 | After start | The controller, host cap, reserve, device and loaded property checks again. Then the readback, as in the next row | `ErrLimitController`, `ErrLimitInterface`, `ErrHostCap`, `ErrLimitReserve`, `ErrLimitDevice`, `ErrLimitProperties`, `ErrLimitReadback` and `ErrLimitDrift`. A definite failure also carries `ErrLimitCheckFailed` |
-| Each health check, before reconciliation keeps a unit | The escape route checks, the binding and the checks before unload again. Then the readback: the memory, pids and cpu files, unset controls included. With a CPU quota, `cpu.max.burst` is 0, or absent on a kernel without burst. `io.max` only with an I/O cap. `io.weight` only with `IOWeight`, and `io.bfq.weight` with BFQ | The errors of the rows above, and `ErrLimitDrift`. A definite failure also carries `ErrLimitCheckFailed` |
+| Each health check, before reconciliation keeps a unit | The binding and the checks before unload again. Then the readback: the memory, pids and cpu files, unset controls included. With a CPU quota, `cpu.max.burst` is 0, or absent on a kernel without burst. `io.max` only with an I/O cap. `io.weight` only with `IOWeight`, and `io.bfq.weight` with BFQ | The errors of the rows above, and `ErrLimitDrift`. A definite failure also carries `ErrLimitCheckFailed` |
 
 The catalog schema accepts limits without `memoryMaxMiB`, `tasksMax`, `cpuQuotaPercent` or the I/O caps that the slice caps, so setup can read and remove them. The launch checks refuse such a unit with `ErrLimitReserve`. The error names the missing memory, task and CPU fields first. After you set them, it names each missing I/O cap.
 
@@ -405,7 +395,6 @@ Display ceiling and current usage beside fields. Show memory in GiB, CPU in core
 | Present | Host protection is active for this account | None |
 | Absent | This account has no host protection. An administrator must run one step as root | Show the exact drop-ins and commands, with a copy button |
 | Different | Host protection settings do not match. An administrator must update them | Show each different value and the exact step |
-| Escape | Programs from this account can run outside host protection | Name each route. Do not accept limits |
 
 | Error class | Text |
 | --- | --- |
@@ -413,14 +402,14 @@ Display ceiling and current usage beside fields. Show memory in GiB, CPU in core
 | Interface file missing | The system cannot apply `<control>`. `<kernel feature>` is off on this computer |
 | Host cap absent or different | The host protection of this account is missing or different. See the step on this page |
 | Reserve violation | This limit leaves too little room for the supervisor. Use `<allowed>` or less, or remove the limits through setup. When no valid value fits, raise the slice cap to at least `<needed cap>`, or remove the limits through setup |
-| Escape route | Programs from this account can run outside host protection through `<route>`. Setup did not save limits |
+| Escape route (warning) | Programs from this account can run outside host protection through `<route>`. Limits protect against runaway workloads, not against such programs |
 | Memory pressure | Slice memory does not fit this limit. `<usage>` MiB is in use. The `<cache>` MiB of page cache that the kernel can reclaim does not count. The start needs `<need>` MiB: `memoryMaxMiB` plus a 2048 MiB reserve. The ceiling is `<ceiling>` MiB. Check `/dev/shm` and `tmpfs` use |
 | Memory usage unknown | Setup cannot read the memory already in use. Setup did not save limits |
 | Drift | A limit changed after start. The supervisor stopped the workload. `<control>` was `<actual>`, not `<expected>` |
 | Readback failure | Setup cannot read `<path>` (`<errno>`). The supervisor stopped the workload |
 | `IOWeight` not applicable | `<number>` (`<device>`) does not support I/O weight (no BFQ or iocost). Without a device name in sysfs, the text gives the number only |
 
-Present requires hard slice ceilings and passing escape checks. An open route cannot count as Present.
+Present requires hard slice ceilings. Escape routes do not change the status. Setup shows them as warnings beside it.
 
 ## Schema
 
