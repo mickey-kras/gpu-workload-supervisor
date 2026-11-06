@@ -407,7 +407,7 @@ func TestTransientRetainedFailureKeepsEarlierRejection(t *testing.T) {
 	gate := fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, openRoute)
 	for cause, steps := range map[error]string{
 		gpuruntime.ErrLimitDrift: "; next steps: first, run `gpu-mode recover`\n",
-		gate: routeRemedy + "; next steps: first, run `gpu-mode recover`\n",
+		gate:                     routeRemedy + "; next steps: first, run `gpu-mode recover`\n",
 	} {
 		transientAfterRejection(t, cause, steps)
 	}

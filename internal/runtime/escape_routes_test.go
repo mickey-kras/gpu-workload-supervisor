@@ -229,11 +229,17 @@ func TestUntrustedRuleFilesOpenRoutes(t *testing.T) {
 	}{
 		"owned by the account": {func(t *testing.T, f *escapeFixture) { f.accountOwned[f.inode(t, "/etc/cron.deny")] = true },
 			"cron: setup cannot read or trust /etc/cron.deny (untrusted file"},
-		"group write":      {func(t *testing.T, f *escapeFixture) { chmod(t, f.root, "/etc/cron.deny", 0o664) }, "/etc/cron.deny (untrusted file"},
-		"writable parent":  {func(t *testing.T, f *escapeFixture) { chmod(t, f.root, "/etc", 0o777) }, "cron: setup cannot read or trust /etc (untrusted file"},
-		"ACL":              {func(t *testing.T, f *escapeFixture) { f.acl[f.inode(t, "/etc/at.deny")] = true }, "at: setup cannot read or trust /etc/at.deny (untrusted file"},
-		"untrusted allow":  {func(t *testing.T, f *escapeFixture) { f.write(t, "/etc/at.allow", ""); chmod(t, f.root, "/etc/at.allow", 0o666) }, "at: setup cannot read or trust /etc/at.allow"},
-		"not regular":      {func(t *testing.T, f *escapeFixture) { remove(t, f.root, "/etc/cron.deny"); f.write(t, "/etc/cron.deny/x", "") }, "/etc/cron.deny (not a regular file)"},
+		"group write":     {func(t *testing.T, f *escapeFixture) { chmod(t, f.root, "/etc/cron.deny", 0o664) }, "/etc/cron.deny (untrusted file"},
+		"writable parent": {func(t *testing.T, f *escapeFixture) { chmod(t, f.root, "/etc", 0o777) }, "cron: setup cannot read or trust /etc (untrusted file"},
+		"ACL":             {func(t *testing.T, f *escapeFixture) { f.acl[f.inode(t, "/etc/at.deny")] = true }, "at: setup cannot read or trust /etc/at.deny (untrusted file"},
+		"untrusted allow": {func(t *testing.T, f *escapeFixture) {
+			f.write(t, "/etc/at.allow", "")
+			chmod(t, f.root, "/etc/at.allow", 0o666)
+		}, "at: setup cannot read or trust /etc/at.allow"},
+		"not regular": {func(t *testing.T, f *escapeFixture) {
+			remove(t, f.root, "/etc/cron.deny")
+			f.write(t, "/etc/cron.deny/x", "")
+		}, "/etc/cron.deny (not a regular file)"},
 		"too large":        {func(t *testing.T, f *escapeFixture) { f.write(t, "/etc/cron.deny", strings.Repeat("x", policyLimit+1)) }, "/etc/cron.deny (larger than 1 MiB)"},
 		"symlink":          {func(t *testing.T, f *escapeFixture) { symlinkRule(t, f, "/etc/cron.deny") }, "/etc/cron.deny (too many levels of symbolic links)"},
 		"symlink in spool": {func(t *testing.T, f *escapeFixture) { symlinkRule(t, f, "/var/spool/at") }, "at: setup cannot read or trust /var/spool/at"},
@@ -266,14 +272,14 @@ func TestUnreadablePoliciesOpenRoutes(t *testing.T) {
 		blocked string
 		want    string
 	}{
-		"deny":              {nil, "/etc/cron.deny", "cron: setup cannot read or trust /etc/cron.deny (permission denied)"},
+		"deny":               {nil, "/etc/cron.deny", "cron: setup cannot read or trust /etc/cron.deny (permission denied)"},
 		"allow without deny": {map[string]string{"/etc/at.allow": "bob\n"}, "/etc/at.allow", "at: /etc/at.deny does not deny alice"},
-		"spool":             {map[string]string{"/var/spool/cron/crontabs/bob": ""}, "/var/spool/cron/crontabs", "cron: setup cannot read or trust /var/spool/cron/crontabs (permission denied)"},
-		"at spool":          {map[string]string{"/var/spool/cron/atjobs/a1": ""}, "/var/spool/cron/atjobs", "at: setup cannot read or trust /var/spool/cron/atjobs (permission denied)"},
-		"system crontab":    {map[string]string{"/etc/crontab": ""}, "/etc/crontab", "cron: setup cannot read or trust /etc/crontab (permission denied)"},
-		"cron.d":            {map[string]string{"/etc/cron.d/job": ""}, "/etc/cron.d", "cron: setup cannot read or trust /etc/cron.d (permission denied)"},
-		"passwd":            {nil, "/etc/passwd", "account: setup cannot read or trust /etc/passwd (permission denied)"},
-		"group":             {nil, "/etc/group", "groups: setup cannot read or trust /etc/group (permission denied)"},
+		"spool":              {map[string]string{"/var/spool/cron/crontabs/bob": ""}, "/var/spool/cron/crontabs", "cron: setup cannot read or trust /var/spool/cron/crontabs (permission denied)"},
+		"at spool":           {map[string]string{"/var/spool/cron/atjobs/a1": ""}, "/var/spool/cron/atjobs", "at: setup cannot read or trust /var/spool/cron/atjobs (permission denied)"},
+		"system crontab":     {map[string]string{"/etc/crontab": ""}, "/etc/crontab", "cron: setup cannot read or trust /etc/crontab (permission denied)"},
+		"cron.d":             {map[string]string{"/etc/cron.d/job": ""}, "/etc/cron.d", "cron: setup cannot read or trust /etc/cron.d (permission denied)"},
+		"passwd":             {nil, "/etc/passwd", "account: setup cannot read or trust /etc/passwd (permission denied)"},
+		"group":              {nil, "/etc/group", "groups: setup cannot read or trust /etc/group (permission denied)"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newEscapeFixture(t)
@@ -313,13 +319,19 @@ func TestGroupAndSocketRoutes(t *testing.T) {
 		setup func(*testing.T, *escapeFixture)
 		want  string
 	}{
-		"listed member":   {func(t *testing.T, f *escapeFixture) { f.write(t, "/etc/group", "docker:x:5001:bob,alice\n") }, "groups: member of docker"},
-		"process group":   {func(t *testing.T, f *escapeFixture) { f.gids = []uint32{5002} }, "groups: member of wheel"},
-		"primary group":   {func(t *testing.T, f *escapeFixture) { f.write(t, "/etc/group", "disk:x:5000:\n") }, "groups: member of disk"},
-		"group socket":    {func(t *testing.T, f *escapeFixture) { f.socket(t, "/run/docker.sock", 0o660, 5000) }, "sockets: /run/docker.sock is writable by this account"},
-		"other socket":    {func(t *testing.T, f *escapeFixture) { f.socket(t, "/run/podman/podman.sock", 0o666, 1) }, "sockets: /run/podman/podman.sock is writable"},
-		"owned socket":    {func(t *testing.T, f *escapeFixture) { f.socket(t, "/var/lib/incus/unix.socket", 0o600, 1); f.ownSocket(t, "/var/lib/incus/unix.socket") }, "sockets: /var/lib/incus/unix.socket is writable"},
-		"socket with ACL": {func(t *testing.T, f *escapeFixture) { f.socket(t, "/run/libvirt/libvirt-sock", 0o600, 1); f.socketACL = true }, "sockets: /run/libvirt/libvirt-sock has an ACL"},
+		"listed member": {func(t *testing.T, f *escapeFixture) { f.write(t, "/etc/group", "docker:x:5001:bob,alice\n") }, "groups: member of docker"},
+		"process group": {func(t *testing.T, f *escapeFixture) { f.gids = []uint32{5002} }, "groups: member of wheel"},
+		"primary group": {func(t *testing.T, f *escapeFixture) { f.write(t, "/etc/group", "disk:x:5000:\n") }, "groups: member of disk"},
+		"group socket":  {func(t *testing.T, f *escapeFixture) { f.socket(t, "/run/docker.sock", 0o660, 5000) }, "sockets: /run/docker.sock is writable by this account"},
+		"other socket":  {func(t *testing.T, f *escapeFixture) { f.socket(t, "/run/podman/podman.sock", 0o666, 1) }, "sockets: /run/podman/podman.sock is writable"},
+		"owned socket": {func(t *testing.T, f *escapeFixture) {
+			f.socket(t, "/var/lib/incus/unix.socket", 0o600, 1)
+			f.ownSocket(t, "/var/lib/incus/unix.socket")
+		}, "sockets: /var/lib/incus/unix.socket is writable"},
+		"socket with ACL": {func(t *testing.T, f *escapeFixture) {
+			f.socket(t, "/run/libvirt/libvirt-sock", 0o600, 1)
+			f.socketACL = true
+		}, "sockets: /run/libvirt/libvirt-sock has an ACL"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newEscapeFixture(t)
