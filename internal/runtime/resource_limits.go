@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	limitPathErrorFormat   = "%w: %s: %w"
+	limitPathErrorFormat  = "%w: %s: %w"
 	swapAccountingFeature = "swap accounting"
 )
 
