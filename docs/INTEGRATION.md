@@ -7,7 +7,7 @@
 - [Configure the proxy](#configure-the-execution-proxy), [credentials](#trusted-adapter-ingress), and [limits](#connection-limits)
 - [Qualify an adapter](#contract-for-execution-proxy-adapters), including [ComfyUI](#opt-in-comfyui-asynchronous-execution)
 - [Owned-unit backstops](#orchestrator-decision)
-- [Resource-limit design](RESOURCE-LIMITS.md): catalog v5 accepts the schema. Units with limits do not start yet: this release has no escape route checks
+- [Resource-limit design](RESOURCE-LIMITS.md): catalog v5 accepts the schema. The runtime checks the escape routes and the limits. Setup cannot write limits yet
 
 ## State and responsibility
 
@@ -104,14 +104,14 @@ An enabled catalog contains 1-32 profiles:
 | 2 | Version 1 plus owned native launches |
 | 3 | Reserved. Rejected |
 | 4 | Finite trainer bindings and fenced jobs. Supports owned launches |
-| 5 | Version 4 plus `limits` on owned launches. Units with limits do not start yet: this release has no escape route checks |
+| 5 | Version 4 plus `limits` on owned launches. Setup cannot write limits yet |
 | Later | Rejected until a separate feature adds support |
 
 Unchanged v1/v2 profiles need no migration. Owned launches need v2/v4/v5. Trainers need v4/v5. [Resource `limits`](RESOURCE-LIMITS.md) need v5. Catalog, database and upstream API versions are independent. The validator rejects unsupported versions and fields outside their version.
 
 Setup writes the lowest version the content needs: 5 with limits, 4 with trainers, 2 with owned launches, 1 otherwise. Setup cannot write limits yet: it rejects requests with limits and accepts requests that remove them.
 
-This release has the runtime checks, but no unit with limits starts: the escape route checks are not in this release. The gate refuses each unit with limits first. The other checks run behind it. Before the unload, they check the launch binding, controllers, host cap, reserve, device and loaded properties. The start also checks the slice memory, and health checks read the cgroup values back. See [runtime checks](RESOURCE-LIMITS.md#runtime-checks).
+This release has the runtime checks and the escape route checks. The escape route checks run first, and an open route refuses each unit with limits. Then, before the unload, the runtime checks the launch binding, controllers, host cap, reserve, device and loaded properties. The start also checks the slice memory, and health checks read the cgroup values back. See [runtime checks](RESOURCE-LIMITS.md#runtime-checks).
 
 The hardened vLLM fields `chatTemplate`, `chatTemplateSHA256` and `environmentFile` are valid in v1, v2 and v4 and do not change the version. Earlier releases reject them as unknown fields. To go back, [restore a verified backup](OPERATIONS.md#restore-a-backup).
 
@@ -493,4 +493,4 @@ This release migrates the database to schema v19 for the `limit_stops` table. Fu
 
 Other fields cannot use that allowance. Full validation and readback allows 352 KiB. Setup requests allow 416 KiB, reserving 64 KiB for profile and envelope.
 
-Keep host evidence and hardware or build identifiers outside the repository. This release has the runtime checks of owned unit limits behind the escape route gate, so no unit with limits starts. Setup support for limits is not in this release. See [resource limits](RESOURCE-LIMITS.md).
+Keep host evidence and hardware or build identifiers outside the repository. This release has the runtime checks of owned unit limits and the escape route checks. Setup support for limits is not in this release. See [resource limits](RESOURCE-LIMITS.md).

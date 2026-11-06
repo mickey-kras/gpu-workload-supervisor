@@ -2,10 +2,10 @@
 
 [Documentation](README.md). See [implemented integration](INTEGRATION.md).
 
-**Design for [#584](https://github.com/mickey-kras/gpu-workload-supervisor/issues/584). This release has the schema and the runtime checks. Units with limits do not start yet.**
+**Design for [#584](https://github.com/mickey-kras/gpu-workload-supervisor/issues/584). This release has the schema, the runtime checks and the escape route checks. Setup cannot write limits yet.**
 
 - Catalog v5 accepts `limits` on owned inference launches. The renderer and strict parser carry them.
-- Design decision: units with limits do not start until the escape route checks exist. The first check refuses each unit with limits with `ErrEscapeRoutesUnchecked`. It runs before the unload, at the start, at each health check and before reconciliation keeps a running unit. A switch or activation fails with `incompatible_configuration`. Reconciliation does not keep a running unit with limits, so it stops the unit. The setup change that adds the escape route checks lifts this gate. The checks below run behind it.
+- The first check is the escape route check. It runs before the unload, at the start, at each health check and before reconciliation keeps a running unit. An open route refuses each unit with limits with `ErrEscapeRoute`. The error names each open route. A switch or activation then fails with `incompatible_configuration`. Reconciliation does not keep the unit, so it stops the unit. See [escape route checks](#escape-route-checks).
 - For a target with limits, the supervisor checks the launch binding. Then it checks the controllers, the host cap, the reserve, the I/O device and the loaded unit properties. It does this before it stops the current workload. If a check fails, the supervisor refuses the switch and changes nothing. See [runtime checks](#runtime-checks).
 - The start of the unit repeats these checks and also checks the slice memory. If a check fails, the unit does not start.
 - Design decision: a unit with limits needs `memoryMaxMiB`, `tasksMax` and `cpuQuotaPercent` to start. Systemd applies them as `MemoryMax`, `TasksMax` and `CPUQuota`. It also needs each I/O cap whose key the slice `io.max` caps. When the slice `io.max` caps a device other than the unit `ioDevice`, the unit cannot cap that device. The runtime then refuses the unit with `ErrLimitReserve`. The schema accepts limits without them, so setup can read and remove them.
@@ -28,6 +28,8 @@
   | `NeedDaemonReload` other than `no` on the slice or the user manager | Read failure. A package upgrade can set it until the next daemon-reload. It proves no wrong cap |
   | A failed read of a binding file, such as the unit file, a drop-in, the model, the chat template or the API key file | Read failure |
   | A missing chat template or API key file | Definite |
+  | An open escape route, or an escape route policy that setup cannot read or trust | Definite |
+  | A failed or timed-out command of the escape route checks, or another failed read of a route file | Read failure |
   | A missing model, or a model that is not a directory (`ErrModelUnavailable`) | Read failure. It is not a limit refusal |
   | Other command and read failures, such as a failed read of a slice or host file | Read failure |
 
@@ -37,7 +39,7 @@
 - A status check or reconciliation keeps the admission closed without a stop.
 - Setup cannot write limits. It rejects requests with limits before unit writes and accepts requests that remove them.
 
-Later changes add trainer binding limits, draft and setup support, the **Resource checks** page and the escape route checks. `requiredMiB` estimates launch VRAM demand. It enforces no ceiling. GPU VRAM enforcement and separate-account workload isolation are out of scope.
+Later changes add trainer binding limits, draft and setup support and the **Resource checks** page. `requiredMiB` estimates launch VRAM demand. It enforces no ceiling. GPU VRAM enforcement and separate-account workload isolation are out of scope.
 
 - [Host protection](#host-cap)
 - [Unit limits](#unit-limits)
@@ -101,6 +103,27 @@ Allow and deny files and parent directories need root ownership, no group or oth
 Unreadable `cron.allow` counts as absent. Only an exact username followed by newline counts: no trailing space or CR. Pass only with readable `cron.allow` omitting the user, or only `cron.deny` containing it.
 
 Apply the same rule to `at.allow` and `at.deny`. Inspect the socket modes and ACLs, not just group membership.
+
+### Escape route checks
+
+The runtime runs these checks one time for each launch check, health check and reconciliation check of a unit with limits. It runs all checks and names each open route.
+
+| Route | Implemented check |
+| --- | --- |
+| Account | `/etc/passwd` gives the name and primary group of the service UID. Without an entry, the route checks by name cannot run, so a route is open |
+| `cron` | The allow and deny rule of the trust model. The user spools `/var/spool/cron` and `/var/spool/cron/crontabs`: an entry with the account name or the account owner. The jobs of `/etc/crontab` and each file in `/etc/cron.d` with the account name or UID in the user field |
+| `at` | The allow and deny rule with `at.allow` and `at.deny`. The queues `/var/spool/at`, `/var/spool/atjobs` and `/var/spool/cron/atjobs`: a job with the account owner |
+| Groups | Membership through the primary group, the member list of `/etc/group` or a group of the supervisor process |
+| Sockets | The Docker, Podman, containerd, libvirt, LXD and Incus sockets. A socket is open when its mode lets the account write, or when it has an ACL |
+| `sudo` | `sudo -n -l -U <account>`. Each listed rule is open. Only the one-line denial of sudo closes the route. Other output is a policy that setup cannot read |
+| `polkit` | `pkcheck` for the supervisor process with `org.freedesktop.systemd1.manage-units` and `org.freedesktop.systemd1.manage-unit-files`. Exit status 0 opens the route. Exit status 1, 2 and 3 keep it closed. Without `pkcheck`, an installed polkit daemon is a policy that setup cannot read |
+| System units | `systemctl show` of the loaded system units. `User=` with the account name or UID is open. `user@UID.service` runs in the slice, so it does not count |
+
+A file or directory that the account cannot read keeps its route open. A symlink, a file where a directory must be and an untrusted rule file also keep it open. These results are definite. An allow file that the account cannot read counts as absent.
+
+A missing tool means no route through that tool. A command that fails, times out or gives an unknown exit status is a read failure. Another failed read of a route file is also a read failure. A read failure fails the launch, but it does not stop a running unit.
+
+On many hosts, the account cannot read the cron or `at` spools. Then the route stays open. An allow file that lists the account with extra spaces or a carriage return counts as an allow. The checks read only local files, not other account databases.
 
 ## Host cap
 
@@ -262,11 +285,11 @@ Only `parseOwnedLaunchUnit` and the exact trainer form accept this block. Remove
 
 ## Runtime checks
 
-The runtime applies these checks to units with limits. Units without limits do not change. Where this design differs from these checks, the checks describe the current release. In this release, the escape route gate in the first row refuses each unit with limits before the other checks run.
+The runtime applies these checks to units with limits. Units without limits do not change. Where this design differs from these checks, the checks describe the current release. The escape route checks in the first row run before the other checks.
 
 | Time | Check | Error |
 | --- | --- | --- |
-| Before unload, before start, each health check, before reconciliation keeps a unit | Escape route gate. This release refuses each unit with limits | `ErrEscapeRoutesUnchecked` |
+| Before unload, before start, each health check, before reconciliation keeps a unit | The [escape route checks](#escape-route-checks). An open route refuses the unit | `ErrEscapeRoute`, `ErrLimitReadback` |
 | Before unload, before start | `cgroup.controllers` of the user manager root lists each required controller. When the memory controller is in use, `memory.swap.max` is present there. With `IOWeight`, `io.weight` is present there | `ErrLimitController`, `ErrLimitInterface`, `ErrLimitReadback` |
 | Before unload, before start | Host cap. See the [host cap rules](#host-cap-rules) | `ErrHostCap`, `ErrLimitReserve`, `ErrLimitReadback` |
 | Before unload, before start | Each unit limit is at most its slice cap minus the [reserve](#reserve-and-pressure). The memory cap is the lower of slice `memory.high` and `memory.max` | `ErrLimitReserve` |
@@ -274,7 +297,7 @@ The runtime applies these checks to units with limits. Units without limits do n
 | Before unload, before start | Loaded properties match the catalog, with `OOMPolicy` and `OOMScoreAdjust`. The binding check requires no drop-ins and `NeedDaemonReload=no` | `ErrLimitProperties`, `ErrLaunchChanged`, `ErrLaunchUnsupported` |
 | Before start | The slice memory in use is `memory.current` minus the page cache (`active_file` plus `inactive_file` in `memory.stat`). That memory plus unit `MemoryMax` plus 2048 MiB is at most the lower of slice `memory.high` and `memory.max` | `ErrLimitMemory`, `ErrLimitReadback` |
 | After start | The controller, host cap, reserve, device and loaded property checks again. Then the readback, as in the next row | `ErrLimitController`, `ErrLimitInterface`, `ErrHostCap`, `ErrLimitReserve`, `ErrLimitDevice`, `ErrLimitProperties`, `ErrLimitReadback` and `ErrLimitDrift`. A definite failure also carries `ErrLimitCheckFailed` |
-| Each health check, before reconciliation keeps a unit | The escape route gate, the binding and the checks before unload again. Then the readback: the memory, pids and cpu files, unset controls included. With a CPU quota, `cpu.max.burst` is 0, or absent on a kernel without burst. `io.max` only with an I/O cap. `io.weight` only with `IOWeight`, and `io.bfq.weight` with BFQ | The errors of the rows above, and `ErrLimitDrift`. A definite failure also carries `ErrLimitCheckFailed` |
+| Each health check, before reconciliation keeps a unit | The escape route checks, the binding and the checks before unload again. Then the readback: the memory, pids and cpu files, unset controls included. With a CPU quota, `cpu.max.burst` is 0, or absent on a kernel without burst. `io.max` only with an I/O cap. `io.weight` only with `IOWeight`, and `io.bfq.weight` with BFQ | The errors of the rows above, and `ErrLimitDrift`. A definite failure also carries `ErrLimitCheckFailed` |
 
 The catalog schema accepts limits without `memoryMaxMiB`, `tasksMax`, `cpuQuotaPercent` or the I/O caps that the slice caps, so setup can read and remove them. The launch checks refuse such a unit with `ErrLimitReserve`. The error names the missing memory, task and CPU fields first. After you set them, it names each missing I/O cap.
 
@@ -303,7 +326,7 @@ The stop after a failed check has a fixed limit of 2 minutes. This limit covers 
 - A missing or untrusted host file is `ErrHostCap`. Other open and read failures are `ErrLimitReadback`. For `/lib`, a missing link, a `/lib` that is not a link, a link elsewhere or another owner is `ErrHostCap`.
 - Some files have other classes. A missing root `io.cost.qos` means no iocost, which is `ErrLimitDevice` for a unit with `IOWeight` and no BFQ. A missing slice `io.max` passes when the unit has no I/O cap. A slice or hierarchy that is missing, or that the runtime cannot check or open, is `ErrLimitReadback`. A symlink or a file where a directory must be is `ErrHostCap`. The slice `memory.current` and `memory.stat` are usage counters, so any failed or untrusted read of them is `ErrLimitReadback`.
 
-The runtime uses the proposed reserve values until the desktop options can change them. Package manager checks of vendor drop-ins and the escape route checks come with setup support.
+The runtime uses the proposed reserve values until the desktop options can change them. Package manager checks of vendor drop-ins come with setup support.
 
 ### Limits of the readback
 
