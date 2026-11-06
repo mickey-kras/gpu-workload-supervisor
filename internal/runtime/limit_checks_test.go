@@ -160,8 +160,8 @@ func newLimitFixture(t *testing.T, limits control.ResourceLimits, loaded string)
 	f.device = unix.Stat_t{Mode: unix.S_IFBLK | 0o660, Uid: uint32(os.Getuid()), Rdev: unix.Mkdev(259, 0)}
 	m.cgroups = cgroupFS{root: f.cgroups, verify: func(int) error { return nil }}
 	m.host = limitHost{root: f.host, owner: uint32(os.Getuid()), uid: 1000, ownerOf: f.ownerOf, lstat: f.lstat, hasXattr: hasXattr}
-	// The fixture stands in for the escape route checks of a later release,
-	// so the tests reach the other checks behind that gate.
+	// The fixture passes the escape route checks, so the tests reach the
+	// other checks. TestOpenEscapeRouteRefusesLimitedUnits runs them.
 	m.escapeRoutes = func(context.Context, control.WorkloadProfile) error { return nil }
 	f.writeCgroups(t)
 	f.writeHost(t)
@@ -1291,15 +1291,25 @@ func TestReadbackGroupGoneIsNotInterfaceMissing(t *testing.T) {
 	}
 }
 
-// This release has no escape route checks, so the default runtime refuses
-// every unit with limits before any other check: launch, health and
-// retention. Units without limits are not affected.
-func TestEscapeRouteGateRefusesLimitedUnits(t *testing.T) {
+// The default runtime runs the escape route checks before any other check
+// of a unit with limits: launch, health and retention. An open route
+// refuses the unit. Units without limits are not affected.
+func TestOpenEscapeRouteRefusesLimitedUnits(t *testing.T) {
 	f := newLimitFixture(t, fixtureLimits(), fixtureLoaded)
-	f.m.escapeRoutes = refuseUncheckedEscapeRoutes
+	m, err := newSystemdManager(testConfig(), &fakeRunner{}, http.DefaultClient)
+	if err != nil || m.escapeRoutes == nil || m.escape.pid != os.Getpid() || m.host.ownerOf(unix.Stat_t{Uid: 7}) != 7 {
+		t.Fatalf("default runtime = %v", err)
+	}
+	// The fixture manager gets the default checks on its fixture root. The
+	// account has no deny files, so cron and at are open.
+	f.m.escapeRoutes = f.m.checkEscapeRoutes
+	f.m.escape = escapeHost{pid: 1, verify: func(int) error { return nil }, processGroups: func() ([]uint32, error) { return nil, nil },
+		socketACL: func(string) (bool, error) { return false, nil }}
+	f.file(t, "/etc/passwd", "alice:x:1000:1000::/home/alice:/bin/sh\n")
+	f.file(t, "/etc/group", "alice:x:1000:\n")
 	ctx := context.Background()
-	// A failed binding probe and a missing host cap come later: the gate
-	// answers first with the definite refusal.
+	// A failed binding probe and a missing host cap come later: the
+	// escape route checks answer first with the definite refusal.
 	f.r.errs = map[string]error{f.bindingShow(): errors.New("bus")}
 	remove(t, f.host, "/etc/systemd/system/user-1000.slice.d/50-gws-host-cap.conf")
 	for name, check := range map[string]func() error{
@@ -1309,7 +1319,8 @@ func TestEscapeRouteGateRefusesLimitedUnits(t *testing.T) {
 		"health":        func() error { return f.m.Healthy(ctx, f.p.ID) },
 	} {
 		calls := len(f.r.calls)
-		if err := check(); !errors.Is(err, ErrEscapeRoutesUnchecked) || !DefiniteLimitFailure(err) || f.started() ||
+		if err := check(); !errors.Is(err, ErrEscapeRoute) || !DefiniteLimitFailure(err) || f.started() ||
+			!strings.Contains(err.Error(), "cron: neither /etc/cron.allow nor /etc/cron.deny denies alice") ||
 			slices.Contains(f.r.calls[calls:], f.bindingShow()) || slices.Contains(f.r.calls[calls:], f.sliceShow()) {
 			t.Fatalf("%s of a limited unit = %v: %v", name, err, f.r.calls[calls:])
 		}
@@ -1317,21 +1328,23 @@ func TestEscapeRouteGateRefusesLimitedUnits(t *testing.T) {
 	if err := f.m.VerifyLaunchLimits(ctx, control.WorkloadText); err != nil {
 		t.Fatalf("launch checks of an unlimited unit = %v", err)
 	}
-	// The gate covers only the launch and health of the limited unit.
+	// The checks cover only the launch and health of the limited unit.
 	// Preflight and release checks stay available, so setup can remove it.
 	f.r.errs = nil
 	f.cgroup(t, f.p.Cgroup, "cgroup.events", "populated 0\n")
-	if err := f.m.Preflight(ctx); errors.Is(err, ErrEscapeRoutesUnchecked) {
-		t.Fatalf("preflight with a gated unit = %v", err)
+	if err := f.m.Preflight(ctx); errors.Is(err, ErrEscapeRoute) {
+		t.Fatalf("preflight with an open route = %v", err)
 	}
 	for _, target := range []control.Workload{control.WorkloadIdle, control.WorkloadText, f.p.ID} {
 		if err := f.m.ReleasedFor(ctx, target); err != nil {
-			t.Fatalf("release for %s with a gated unit = %v", target, err)
+			t.Fatalf("release for %s with an open route = %v", target, err)
 		}
 	}
-	m, err := newSystemdManager(testConfig(), &fakeRunner{}, http.DefaultClient)
-	if err != nil || m.escapeRoutes == nil || !errors.Is(m.escapeRoutes(ctx, f.p), ErrEscapeRoutesUnchecked) || m.host.ownerOf(unix.Stat_t{Uid: 7}) != 7 {
-		t.Fatalf("default gate = %v", err)
+	// With the routes closed, the next check answers: the missing drop-in.
+	f.file(t, "/etc/cron.deny", "alice\n")
+	f.file(t, "/etc/at.deny", "alice\n")
+	if err := f.m.VerifyLaunchLimits(ctx, f.p.ID); !errors.Is(err, ErrHostCap) || errors.Is(err, ErrEscapeRoute) {
+		t.Fatalf("launch checks with closed routes = %v", err)
 	}
 }
 
@@ -1439,7 +1452,7 @@ func TestHostFileReadFailureOfRunningUnitIsNotDefinite(t *testing.T) {
 	}
 }
 
-// Each entry point runs the escape route gate once.
+// Each entry point runs the escape route checks once.
 func TestEscapeRouteGateRunsOncePerCall(t *testing.T) {
 	f := newLimitFixture(t, fixtureLimits(), fixtureLoaded)
 	ctx := context.Background()
@@ -1454,7 +1467,7 @@ func TestEscapeRouteGateRunsOncePerCall(t *testing.T) {
 		calls = 0
 		_ = check()
 		if calls != 1 {
-			t.Fatalf("%s ran the gate %d times", name, calls)
+			t.Fatalf("%s ran the escape route checks %d times", name, calls)
 		}
 	}
 }

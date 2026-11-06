@@ -243,11 +243,11 @@ func TestSwitchRefusesLimitedTargetBeforeAnyEffect(t *testing.T) {
 		strings.Contains(err.Error(), "through setup") {
 		t.Fatalf("switch without host cap = %v", err)
 	}
-	// The gate refusal gives the one fix: remove the limits. Text keeps
-	// running, and setup removes limits only from Idle.
-	r.launchErr = gpuruntime.ErrEscapeRoutesUnchecked
-	if _, err := c.Switch(ctx, "vision", "test"); !errors.Is(err, ErrLimitedTarget) || !strings.HasSuffix(err.Error(), "; next steps: run `gpu-mode -target idle switch`, then remove the limits through setup") {
-		t.Fatalf("switch to a gated unit = %v", err)
+	// An open route refusal names the route and its remedy. Text keeps
+	// running, and the healthy state needs no recovery.
+	r.launchErr = openRoute
+	if _, err := c.Switch(ctx, "vision", "test"); !errors.Is(err, ErrLimitedTarget) || !strings.HasSuffix(err.Error(), routeRemedy) || strings.Contains(err.Error(), "next steps") {
+		t.Fatalf("switch with an open route = %v", err)
 	}
 	r.launchErr = gpuruntime.ErrHostCap
 	if _, err := c.ActivateWorkload(ctx, "vision", control.OperatorPrecondition{Owner: control.OwnerSupervisor}); !errors.Is(err, ErrLimitedTarget) {
@@ -371,11 +371,11 @@ func TestRecoverStopsRejectedLimitedUnitWithoutLatch(t *testing.T) {
 	c, r, s := limitedController(t, catalog)
 	r.fakeRuntime.active = control.WorkloadIdle
 	r.visionActive = true
-	// The escape route gate refuses every running unit with limits.
-	gate := fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, gpuruntime.ErrEscapeRoutesUnchecked)
+	// An open escape route refuses every running unit with limits.
+	gate := fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, openRoute)
 	r.protectionErr = gate
 	// Reconcile latches the error state, so recover comes before setup.
-	if _, err := c.Reconcile(ctx); !errors.Is(err, ErrLimitedUnitRejected) || !strings.HasSuffix(err.Error(), "; next steps: run `gpu-mode recover`, then remove the limits through setup") {
+	if _, err := c.Reconcile(ctx); !errors.Is(err, ErrLimitedUnitRejected) || !strings.HasSuffix(err.Error(), routeRemedy+"; next steps: first, run `gpu-mode recover`") {
 		t.Fatalf("reconcile = %v", err)
 	}
 	// The unit runs again, for example after a manual start, while the
@@ -383,8 +383,8 @@ func TestRecoverStopsRejectedLimitedUnitWithoutLatch(t *testing.T) {
 	r.visionActive = true
 	r.calls = nil
 	state, err := c.Recover(ctx)
-	if !errors.Is(err, ErrLimitedUnitRejected) || !errors.Is(err, gpuruntime.ErrEscapeRoutesUnchecked) || r.visionActive ||
-		!slices.Contains(r.calls, "stop vision") || !strings.HasSuffix(err.Error(), "; next steps: remove the limits through setup") || strings.Contains(err.Error(), "gpu-mode recover") {
+	if !errors.Is(err, ErrLimitedUnitRejected) || !errors.Is(err, gpuruntime.ErrEscapeRoute) || r.visionActive ||
+		!slices.Contains(r.calls, "stop vision") || !strings.HasSuffix(err.Error(), routeRemedy) || strings.Contains(err.Error(), "gpu-mode recover") {
 		t.Fatalf("recover with a rejected unit = %+v, %v; calls %v", state, err, r.calls)
 	}
 	// This is the state that setup accepts for the removal of the limits.
@@ -404,12 +404,10 @@ func TestRecoverStopsRejectedLimitedUnitWithoutLatch(t *testing.T) {
 // limits fails a transient check. The transient failure latches without a
 // stop.
 func TestTransientRetainedFailureKeepsEarlierRejection(t *testing.T) {
-	gate := fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, gpuruntime.ErrEscapeRoutesUnchecked)
+	gate := fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, openRoute)
 	for cause, steps := range map[error]string{
 		gpuruntime.ErrLimitDrift: "; next steps: first, run `gpu-mode recover`\n",
-		// The workload that stays is unknown, so the steps also switch to
-		// Idle.
-		gate: "; next steps: run `gpu-mode recover`, if a workload other than Idle runs then, run `gpu-mode -target idle switch`, then remove the limits through setup\n",
+		gate: routeRemedy + "; next steps: first, run `gpu-mode recover`\n",
 	} {
 		transientAfterRejection(t, cause, steps)
 	}
@@ -594,20 +592,19 @@ func TestReconcileKeepsRetainedUnitAndStopsRejectedOne(t *testing.T) {
 		t.Fatalf("reconcile with a rejected unit = %+v, %v; calls %v", state, err, r.calls)
 	}
 	// Recover keeps text, so the state is stable and healthy with open
-	// admission. Setup removes limits only from Idle, so the error says to
-	// switch to Idle first.
+	// admission. The error ends with the remedy of the route.
 	r.visionActive = true
-	r.protectionErr = fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, gpuruntime.ErrEscapeRoutesUnchecked)
+	r.protectionErr = fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, openRoute)
 	state, err = c.Recover(ctx)
 	if !errors.Is(err, ErrLimitedUnitRejected) || r.visionActive || state.ActiveWorkload != control.WorkloadText ||
 		state.Phase != control.PhaseStable || state.Health != control.HealthHealthy || state.Admission != control.AdmissionOpen ||
-		!strings.HasSuffix(err.Error(), "; next steps: run `gpu-mode -target idle switch`, then remove the limits through setup") {
+		!strings.HasSuffix(err.Error(), routeRemedy) {
 		t.Fatalf("recover that keeps text = %+v, %v", state, err)
 	}
 }
 
-// Recover after a rejection that is not the gate needs no next step.
-func TestLimitRemedyOfRecoverWithoutGate(t *testing.T) {
+// Recover after a rejection needs no next step.
+func TestLimitRemedyOfRecoverWithoutLatch(t *testing.T) {
 	drift := fmt.Errorf("%w: %w", ErrLimitedUnitRejected, gpuruntime.ErrLimitDrift)
 	if err := limitRemedy(drift, remedyState{kept: control.WorkloadIdle}); err != drift || limitRemedy(nil, remedyState{latched: true}) != nil {
 		t.Fatalf("remedy = %v", err)
@@ -634,25 +631,25 @@ func TestInvariantFailureKeepsRejectedUnits(t *testing.T) {
 	}
 }
 
-// After a latched rejection, a gate refusal says to recover first: setup
-// refuses a latched state.
-func TestGateRefusalOfLatchedStateNamesRecover(t *testing.T) {
+// After a latched rejection, an open route refusal says to recover first:
+// setup refuses a latched state.
+func TestOpenRouteRefusalOfLatchedStateNamesRecover(t *testing.T) {
 	ctx := context.Background()
 	catalog := limitedCatalog()
 	catalog.Profiles[2].BootPolicy = "retain"
 	c, r, s := limitedController(t, catalog)
 	r.fakeRuntime.active = control.WorkloadIdle
 	r.visionActive = true
-	r.protectionErr = fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, gpuruntime.ErrEscapeRoutesUnchecked)
+	r.protectionErr = fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, openRoute)
 	if _, err := c.Reconcile(ctx); !errors.Is(err, ErrLimitedUnitRejected) {
 		t.Fatalf("reconcile = %v", err)
 	}
 	if state, err := s.State(ctx); err != nil || state.Health != control.HealthError || state.ActiveWorkload != control.WorkloadIdle {
 		t.Fatalf("state after the rejection = %+v, %v", state, err)
 	}
-	r.launchErr = gpuruntime.ErrEscapeRoutesUnchecked
+	r.launchErr = openRoute
 	_, err := c.Switch(ctx, "vision", "test")
-	if !errors.Is(err, ErrLimitedTarget) || !strings.HasSuffix(err.Error(), "; next steps: run `gpu-mode recover`, then remove the limits through setup") {
-		t.Fatalf("switch to a gated unit from a latched state = %v", err)
+	if !errors.Is(err, ErrLimitedTarget) || !strings.HasSuffix(err.Error(), routeRemedy+"; next steps: first, run `gpu-mode recover`") {
+		t.Fatalf("switch with an open route from a latched state = %v", err)
 	}
 }
