@@ -59,9 +59,11 @@ const (
 	ReasonTemplateApprovalFailed = "chat-template-approval-failed"
 )
 
+const tokenizerConfigFile = "tokenizer_config.json"
+
 // templateFiles hold the chat template, in the order that the loaders
 // prefer them. JSON files hold it in the top-level key chat_template.
-var templateFiles = []string{"chat_template.jinja", "chat_template.json", "tokenizer_config.json", "processor_config.json"}
+var templateFiles = []string{"chat_template.jinja", "chat_template.json", tokenizerConfigFile, "processor_config.json"}
 
 // templateResult is the result of the structural template check: the pin
 // of the template text and the literals that an operator must read.
@@ -94,7 +96,9 @@ func checkTemplate(ctx context.Context, root string, digests map[string]string) 
 
 // scanHook runs at the start of each template scan. Tests replace it to
 // check that a panic in the scan fails closed.
-var scanHook = func() {}
+var scanHook = func() {
+	// Production needs no hook; tests replace it to inject scan failures.
+}
 
 // PinTemplate gives the SHA-256 of the template text as UTF-8 bytes. A
 // file with the same text has the same SHA-256.
@@ -181,7 +185,7 @@ func templateText(name string, raw []byte) (string, bool, string) {
 }
 
 // specialTokenFiles define the special and added tokens of the tokenizer.
-var specialTokenFiles = []string{"tokenizer_config.json", "special_tokens_map.json", "tokenizer.json"}
+var specialTokenFiles = []string{tokenizerConfigFile, "special_tokens_map.json", "tokenizer.json"}
 
 // specialTokenKeys hold one special token, as a string or as an object
 // with the key content.
@@ -251,7 +255,7 @@ func (t tokenizerTokens) add(name string, fields map[string]json.RawMessage) {
 	switch name {
 	case "tokenizer.json":
 		t.addEntries(listOf(fields["added_tokens"]))
-	case "tokenizer_config.json":
+	case tokenizerConfigFile:
 		t.addNamed(fields)
 		var decoder map[string]json.RawMessage
 		_ = json.Unmarshal(fields["added_tokens_decoder"], &decoder)
