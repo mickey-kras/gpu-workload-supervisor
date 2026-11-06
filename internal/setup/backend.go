@@ -161,7 +161,7 @@ func (b Backend) Plan(home string, request Request) (Preview, error) {
 type Backend struct {
 	gpuInventory        func(context.Context) ([]string, string)
 	makeRuntime         func(Request) (gpuruntime.Manager, error)
-	runCommand          func(ctx context.Context, name string, args ...string) ([]byte, error)
+	runCommand          gpuruntime.CommandFunc
 	probeApplication    func(ctx context.Context, request ProbeRequest) (ApplicationCandidate, error)
 	discoverExecutables func(context.Context, string) []ApplicationCandidate
 	inspectAutomatic    func(string, string) (gpuruntime.AutomaticLaunch, error)

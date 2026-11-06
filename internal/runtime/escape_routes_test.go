@@ -33,7 +33,7 @@ type escapeFixture struct {
 	aclErr    error
 }
 
-const unitShow = "/usr/bin/systemctl show --property=Id --property=User -- *"
+const unitShow = "/usr/bin/systemctl show --all --property=Id --property=User -- *"
 
 func newEscapeFixture(t *testing.T) *escapeFixture {
 	t.Helper()
@@ -154,7 +154,6 @@ func TestCronAndAtRoutes(t *testing.T) {
 		"debian spool":               {map[string]string{"/var/spool/cron/crontabs/alice": "* * * * * x\n"}, "cron: /var/spool/cron/crontabs/alice"},
 		"system crontab by name":     {map[string]string{"/etc/crontab": "SHELL=/bin/sh\n17 * * * * alice cd / && run\n"}, "cron: /etc/crontab line 2 runs as alice"},
 		"cron.d job by number":       {map[string]string{"/etc/cron.d/job": "@reboot UID x\n"}, "cron: /etc/cron.d/job line 1 runs as UID"},
-		"cron.d entry not a file":    {map[string]string{"/etc/cron.d/sub/x": ""}, "cron: cannot check /etc/cron.d/sub (not a regular file)"},
 		"at deny omits the account":  {map[string]string{"/etc/at.deny": "bob\n"}, "at: /etc/at.deny does not deny alice"},
 		"at allow lists the account": {map[string]string{"/etc/at.allow": "alice\n"}, "at: /etc/at.allow allows alice"},
 	} {
@@ -236,8 +235,8 @@ func symlinkRule(t *testing.T, f *escapeFixture, name string) {
 	}
 }
 
-// A source that the account cannot read gives "cannot check". An
-// unreadable allow file counts as absent, so the deny file decides.
+// A source that the account cannot read gives "cannot check". For an
+// unreadable allow file, the scan does not read the deny file.
 func TestUnreadableSources(t *testing.T) {
 	for name, c := range map[string]struct {
 		files   map[string]string
@@ -291,6 +290,7 @@ func TestUnknownAccount(t *testing.T) {
 	f := newEscapeFixture(t)
 	f.write(t, "/etc/passwd", "root:x:0:0::/root:/bin/sh\nbad:x:"+strconv.Itoa(f.uid)+":x::/:/bin/sh\n")
 	f.write(t, "/etc/group", "docker:x:5001:alice\nwheel:x:5002:\n")
+	f.write(t, "/etc/at.deny", "bob\n")
 	f.gids = []uint32{5002}
 	f.r.outputs[unitShow] = []byte("Id=job.service\nUser=" + strconv.Itoa(f.uid) + "\n\nId=other.service\nUser=\n")
 	f.requireReport(t, "account: cannot check cron, at and the member lists of /etc/group: /etc/passwd has no entry for uid",
@@ -298,8 +298,43 @@ func TestUnknownAccount(t *testing.T) {
 	if strings.Contains(strings.Join(f.report(), "\n"), "docker") {
 		t.Fatalf("escape routes without a name matched a member list: %q", f.report())
 	}
-	if strings.Contains("\n"+strings.Join(f.report(), "\n"), "\ncron:") {
-		t.Fatalf("escape routes without a name checked cron: %q", f.report())
+	if report := "\n" + strings.Join(f.report(), "\n"); strings.Contains(report, "\ncron:") || strings.Contains(report, "\nat:") {
+		t.Fatalf("escape routes without a name checked cron or at: %q", f.report())
+	}
+}
+
+// When /etc/passwd cannot be read, the report also says which routes the
+// scan cannot check.
+func TestUnreadablePasswd(t *testing.T) {
+	f := newEscapeFixture(t)
+	f.blocked[f.inode(t, "/etc/passwd")] = unix.EACCES
+	f.requireReport(t, "account: cannot check /etc/passwd (permission denied)",
+		"account: cannot check cron, at and the member lists of /etc/group: /etc/passwd cannot be read")
+}
+
+// cron does not run directories, hidden files and backup files in
+// /etc/cron.d, so the scan skips them. A symlink there cannot be checked.
+func TestCronDirectoryEntries(t *testing.T) {
+	f := newEscapeFixture(t)
+	f.write(t, "/etc/cron.d/sub/x", "* * * * * alice x\n")
+	f.write(t, "/etc/cron.d/.hidden", "* * * * * alice x\n")
+	f.write(t, "/etc/cron.d/job~", "* * * * * alice x\n")
+	f.requireNone(t)
+	if err := os.Symlink("/etc/crontab", filepath.Join(f.root, "/etc/cron.d/link")); err != nil {
+		t.Fatal(err)
+	}
+	f.requireReport(t, "cron: cannot check /etc/cron.d/link (too many levels of symbolic links)")
+}
+
+// One unreadable parent of two cron spools gives one cron item. The at
+// queue below it gives its own at item.
+func TestEscapeRouteItemsAreUnique(t *testing.T) {
+	f := newEscapeFixture(t)
+	f.write(t, "/var/spool/cron/crontabs/bob", "")
+	f.blocked[f.inode(t, "/var/spool/cron")] = unix.EACCES
+	lines := f.report()
+	if len(lines) != 2 || lines[0] != "cron: cannot check /var/spool/cron (permission denied)" || lines[1] != "at: cannot check /var/spool/cron (permission denied)" {
+		t.Fatalf("escape routes with an unreadable spool parent = %q", lines)
 	}
 }
 
@@ -397,20 +432,46 @@ func TestPolkitRules(t *testing.T) {
 	f := newEscapeFixture(t)
 	f.write(t, "/etc/polkit-1/rules.d/10-units.rules", "if (action.id == \"org.freedesktop.systemd1.manage-unit-files\") { return polkit.Result.YES; }\n")
 	f.write(t, "/usr/share/polkit-1/rules.d/20-shell.rules", "org.freedesktop.machine1.host-shell org.freedesktop.policykit.exec\n")
+	f.write(t, "/run/polkit-1/rules.d/30-run.rules", "org.freedesktop.systemd1.manage-units\n")
+	f.write(t, "/usr/local/share/polkit-1/rules.d/40-local.rules", "org.freedesktop.policykit.exec\n")
 	f.requireReport(t, "polkit: /etc/polkit-1/rules.d/10-units.rules mentions org.freedesktop.systemd1.manage-unit",
+		"polkit: /run/polkit-1/rules.d/30-run.rules mentions org.freedesktop.systemd1.manage-unit",
+		"polkit: /usr/local/share/polkit-1/rules.d/40-local.rules mentions org.freedesktop.policykit.exec",
 		"polkit: /usr/share/polkit-1/rules.d/20-shell.rules mentions org.freedesktop.machine1",
 		"polkit: /usr/share/polkit-1/rules.d/20-shell.rules mentions org.freedesktop.policykit.exec")
 }
 
+// The scan asks systemctl for all loaded units, so inactive units count
+// too, such as a timer-activated service that does not run now.
 func TestSystemUnitRoute(t *testing.T) {
 	f := newEscapeFixture(t)
-	f.r.outputs[unitShow] = []byte("Id=job.service\nUser=alice\n\nId=other.service\nUser=" + strconv.Itoa(f.uid) + "\n")
-	f.requireReport(t, "system-units: job.service runs as alice", "system-units: other.service runs as "+strconv.Itoa(f.uid))
+	f.r.outputs[unitShow] = []byte("Id=job.service\nUser=alice\n\nId=nightly.service\nUser=" + strconv.Itoa(f.uid) + "\n")
+	f.requireReport(t, "system-units: job.service runs as alice", "system-units: nightly.service runs as "+strconv.Itoa(f.uid))
+	if f.r.calls[len(f.r.calls)-1] != unitShow {
+		t.Fatalf("system unit command = %v", f.r.calls)
+	}
 	f.r.outputs[unitShow] = nil
 	f.r.errs[unitShow] = errors.New("bus\nsecond line")
 	f.requireReport(t, "system-units: cannot check the loaded system units (systemctl show: bus)")
 	f.r.errs[unitShow] = errors.New(strings.Repeat("x", 200))
 	f.requireReport(t, "(systemctl show: "+strings.Repeat("x", 160)+"...)")
+	// The first line of the systemctl output tells why it failed.
+	f.r.outputs[unitShow] = []byte("\nSystem has not been booted with systemd.\nmore\n")
+	f.r.errs[unitShow] = exitStatus(1)
+	f.requireReport(t, "system-units: cannot check the loaded system units (systemctl show: exit status 1: System has not been booted with systemd.)")
+}
+
+// exitStatus is a command that ran and exited with a status.
+type exitStatus int
+
+func (e exitStatus) Error() string { return "exit status " + strconv.Itoa(int(e)) }
+
+// firstLine cuts a long line at a character boundary.
+func TestFirstLineKeepsCharacters(t *testing.T) {
+	line := strings.Repeat("x", 159) + "é" + "tail"
+	if got := firstLine(line); got != strings.Repeat("x", 159)+"..." {
+		t.Fatalf("firstLine = %q", got)
+	}
 }
 
 // The report has at most maxEscapeRoutes entries. "cannot check" items
@@ -444,8 +505,14 @@ func TestEscapeRouteScanLimits(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	routes := f.s.scan(ctx)
-	if len(routes) != 1 || routes[0] != (EscapeRoute{Route: "more", Item: "cannot check the other routes (context canceled)"}) || len(f.r.calls) != 1 {
+	if len(routes) != 1 || routes[0] != (EscapeRoute{Route: "incomplete", Item: "cannot check the rest of the routes (context canceled)"}) || len(f.r.calls) != 1 {
 		t.Fatalf("scan on a spent context = %+v, calls %v", routes, f.r.calls)
+	}
+	// A spent context also stops a directory walk.
+	var report routeReport
+	f.s.ctx = ctx
+	if entries := f.s.listPolicyDir(&report, "cron", "/etc"); entries != nil || len(report.missed) != 1 || report.missed[0].Route != "incomplete" {
+		t.Fatalf("directory walk on a spent context = %v, %+v", entries, report)
 	}
 }
 

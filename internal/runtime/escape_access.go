@@ -46,12 +46,12 @@ var daemonSockets = []string{
 }
 
 // lookupAccount reads the name and the groups of the account from
-// /etc/passwd, /etc/group and this process. named is false when the scan
-// cannot find the name: the cron and at checks and the member lists of
-// /etc/group need it. The process groups and /etc/group still give the
-// group names without it.
-func (s escapeScanner) lookupAccount(report *routeReport) (account escapeAccount, named bool) {
-	account = escapeAccount{uid: s.host.uid, gids: map[uint32]bool{}, groups: map[string]uint32{}}
+// /etc/passwd, /etc/group and this process. The name stays empty when the
+// scan cannot find it: the cron and at checks and the member lists of
+// /etc/group need it, so the report then says that it cannot check them.
+// The process groups and /etc/group still give the group names.
+func (s escapeScanner) lookupAccount(report *routeReport) escapeAccount {
+	account := escapeAccount{uid: s.host.uid, gids: map[uint32]bool{}, groups: map[string]uint32{}}
 	gids, err := s.probe.processGroups()
 	if err != nil {
 		report.unchecked(routeGroups, "the groups of this process ("+err.Error()+")")
@@ -59,14 +59,16 @@ func (s escapeScanner) lookupAccount(report *routeReport) (account escapeAccount
 	for _, gid := range gids {
 		account.gids[gid] = true
 	}
+	reason := "/etc/passwd cannot be read"
 	if passwd, ok := s.readRoutePolicy(report, routeAccount, "/etc/passwd", false); ok {
-		name, gid, found := passwdEntry(string(passwd), s.host.uid)
-		if found {
-			account.name, named = name, true
+		reason = fmt.Sprintf("/etc/passwd has no entry for uid %d", s.host.uid)
+		if name, gid, found := passwdEntry(string(passwd), s.host.uid); found {
+			account.name = name
 			account.gids[gid] = true
-		} else {
-			report.unchecked(routeAccount, fmt.Sprintf("cron, at and the member lists of /etc/group: /etc/passwd has no entry for uid %d", s.host.uid))
 		}
+	}
+	if account.name == "" {
+		report.unchecked(routeAccount, "cron, at and the member lists of /etc/group: "+reason)
 	}
 	group, _ := s.readRoutePolicy(report, routeGroups, "/etc/group", false)
 	for _, line := range strings.Split(string(group), "\n") {
@@ -79,11 +81,11 @@ func (s escapeScanner) lookupAccount(report *routeReport) (account escapeAccount
 			continue
 		}
 		account.groups[fields[0]] = gid
-		if named && slices.Contains(strings.Split(fields[3], ","), account.name) {
+		if account.name != "" && slices.Contains(strings.Split(fields[3], ","), account.name) {
 			account.gids[gid] = true
 		}
 	}
-	return account, named
+	return account
 }
 
 // parseID parses a user or group ID.

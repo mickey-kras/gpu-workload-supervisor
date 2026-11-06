@@ -1,13 +1,14 @@
 package runtime
 
 import (
-	"context"
 	"strings"
+	"unicode/utf8"
 )
 
 // polkitRuleDirs hold the polkit JavaScript rules. The scan reads them
-// as text. It does not run them, and it does not ask polkit.
-var polkitRuleDirs = []string{"/etc/polkit-1/rules.d", "/usr/share/polkit-1/rules.d"}
+// as text. It does not run them, and it does not ask polkit. A missing
+// directory has no rules.
+var polkitRuleDirs = []string{"/etc/polkit-1/rules.d", "/run/polkit-1/rules.d", "/usr/local/share/polkit-1/rules.d", "/usr/share/polkit-1/rules.d"}
 
 // polkitActionPrefixes name the actions that start units outside the
 // slice, open a host shell or run a program as root.
@@ -35,13 +36,19 @@ func (s escapeScanner) checkPolkit(report *routeReport) {
 }
 
 // checkSystemUnits reports each loaded system unit with User= set to the
-// account, by name or by number. The user manager of the account runs
-// inside the slice, so it does not count. systemctl prints the property
-// names and values without translation, so the locale does not matter.
-func (s escapeScanner) checkSystemUnits(ctx context.Context, report *routeReport, account escapeAccount) {
-	output, err := s.run(ctx, s.systemctl, "show", "--property=Id", "--property=User", "--", "*")
+// account, by name or by number. --all includes the inactive units, such
+// as timer and socket activated services and finished oneshot services.
+// The user manager of the account runs inside the slice, so it does not
+// count. systemctl prints the property names and values without
+// translation, so the locale does not matter.
+func (s escapeScanner) checkSystemUnits(report *routeReport, account escapeAccount) {
+	output, err := s.run(s.ctx, s.systemctl, "show", "--all", "--property=Id", "--property=User", "--", "*")
 	if err != nil {
-		report.unchecked(routeSystemUnits, "the loaded system units (systemctl show: "+firstLine(err.Error())+")")
+		reason := firstLine(err.Error())
+		if line := firstLine(strings.TrimSpace(string(output))); line != "" {
+			reason += ": " + line
+		}
+		report.unchecked(routeSystemUnits, "the loaded system units (systemctl show: "+reason+")")
 		return
 	}
 	for _, block := range strings.Split(string(output), "\n\n") {
@@ -59,11 +66,16 @@ func (s escapeScanner) checkSystemUnits(ctx context.Context, report *routeReport
 	}
 }
 
-// firstLine keeps the first line of a command error, at most 160 bytes.
+// firstLine keeps the first line of a command error or output, at most
+// 160 bytes, cut at a character boundary.
 func firstLine(text string) string {
 	text, _, _ = strings.Cut(text, "\n")
-	if len(text) > 160 {
-		text = text[:160] + "..."
+	if len(text) <= 160 {
+		return text
 	}
-	return text
+	cut := 160
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + "..."
 }

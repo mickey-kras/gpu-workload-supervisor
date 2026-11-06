@@ -49,15 +49,23 @@ func TestDiscoveryReportsEscapeRoutes(t *testing.T) {
 	}
 }
 
-// Without a profile systemctl path, the scan uses the fixed setup path.
-func TestEscapeRouteScanDefaultsSystemctl(t *testing.T) {
-	var systemctl string
-	backend := Backend{escapeRoutes: func(_ context.Context, _ gpuruntime.CommandFunc, path string) []gpuruntime.EscapeRoute {
-		systemctl = path
-		return nil
-	}}
+// The scan uses the systemctl path of the profile and the backend runner.
+// Without a profile path, it uses the fixed setup path.
+func TestEscapeRouteScanUsesProfileSystemctl(t *testing.T) {
+	var commands []string
+	backend := Backend{
+		runCommand: func(_ context.Context, name string, _ ...string) ([]byte, error) {
+			commands = append(commands, name)
+			return nil, nil
+		},
+		escapeRoutes: func(ctx context.Context, run gpuruntime.CommandFunc, path string) []gpuruntime.EscapeRoute {
+			_, _ = run(ctx, path)
+			return nil
+		},
+	}
+	backend.discoverEscapeRoutes(context.Background(), &Discovery{Request: Request{Profile: Profile{SystemctlPath: "/opt/bin/systemctl"}}})
 	backend.discoverEscapeRoutes(context.Background(), &Discovery{})
-	if systemctl != automaticSystemctlPath {
-		t.Fatalf("systemctl = %q", systemctl)
+	if len(commands) != 2 || commands[0] != "/opt/bin/systemctl" || commands[1] != automaticSystemctlPath {
+		t.Fatalf("systemctl commands = %q", commands)
 	}
 }

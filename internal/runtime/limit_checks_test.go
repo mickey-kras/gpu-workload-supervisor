@@ -1290,7 +1290,7 @@ func TestReadbackGroupGoneIsNotInterfaceMissing(t *testing.T) {
 
 // Escape routes are advisory, so no runtime path reads them: a unit with
 // limits passes its launch checks, starts, passes the limit checks of a
-// health check and is kept on a host where the scan would report routes.
+// health check and is kept on a host where the scan reports routes.
 // The host has no /etc/passwd and no cron or at deny files. The health
 // step calls checkStartedUnit, the limit part of Healthy, because the
 // fixture has no health endpoint.
@@ -1322,6 +1322,12 @@ func TestLimitedUnitRunsWithoutEscapeRouteCheck(t *testing.T) {
 		if strings.Contains(call, "--property=User") || strings.Contains(call, "sudo") || strings.Contains(call, "pkcheck") {
 			t.Fatalf("a limit check ran an escape route command: %s", call)
 		}
+	}
+	// The scan of the same host reports routes.
+	scanner := escapeScanner{host: f.m.host, run: f.r.Run, systemctl: "/usr/bin/true", probe: escapeProbe{verify: func(int) error { return nil },
+		processGroups: func() ([]uint32, error) { return nil, nil }, socketACL: func(string) (bool, error) { return false, nil }}}
+	if routes := scanner.scan(ctx); len(routes) == 0 {
+		t.Fatal("the scan of the fixture host reports no routes")
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 // cronSpools hold the crontabs of users. cronie names a crontab after its
@@ -24,8 +26,17 @@ func (s escapeScanner) checkCron(report *routeReport, account escapeAccount) {
 	}
 	s.checkSystemCrontab(report, "/etc/crontab", account)
 	for _, entry := range s.listPolicyDir(report, routeCron, "/etc/cron.d") {
+		if cronIgnores(entry) {
+			continue
+		}
 		s.checkSystemCrontab(report, "/etc/cron.d/"+entry.name, account)
 	}
+}
+
+// cronIgnores reports an /etc/cron.d entry that cron does not run: a
+// directory, a hidden file or a backup file that ends in a tilde.
+func cronIgnores(entry dirEntry) bool {
+	return entry.mode&unix.S_IFMT == unix.S_IFDIR || strings.HasPrefix(entry.name, ".") || strings.HasSuffix(entry.name, "~")
 }
 
 // checkAt reports the at route unless the allow and deny rule denies the
@@ -47,18 +58,19 @@ func (s escapeScanner) checkAt(report *routeReport, account escapeAccount) {
 // group or other write, no ACL and no file capability. A file that fails
 // these checks, or that the account cannot read, gives "cannot check".
 func (s escapeScanner) checkAccessRule(report *routeReport, route, allow, deny, name string, rootOnly bool) {
-	data, err := s.readPolicy(allow, true)
-	if err == nil {
+	// A missing file gives no data, and an existing file gives non-nil
+	// data, also when it is empty.
+	data, ok := s.readRoutePolicy(report, route, allow, true)
+	if !ok {
+		return
+	}
+	if data != nil {
 		if listsLoosely(string(data), name) {
 			report.add(route, allow+" allows "+name)
 		}
 		return
 	}
-	if !policyAbsent(err) {
-		report.policyFailure(route, allow, err)
-		return
-	}
-	data, ok := s.readRoutePolicy(report, route, deny, true)
+	data, ok = s.readRoutePolicy(report, route, deny, true)
 	switch {
 	case !ok, data == nil && rootOnly:
 	case data == nil:

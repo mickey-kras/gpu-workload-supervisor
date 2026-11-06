@@ -38,7 +38,11 @@ const (
 	routeSockets     = "sockets"
 	routePolkit      = "polkit"
 	routeSystemUnits = "system-units"
-	routeMore        = "more"
+	// routeMore gives the number and the routes of the findings that the
+	// bound leaves out.
+	routeMore = "more"
+	// routeIncomplete says that the context ended the scan early.
+	routeIncomplete = "incomplete"
 )
 
 // ScanEscapeRoutes reports the escape routes of the calling account. It is
@@ -57,6 +61,8 @@ type escapeScanner struct {
 	probe     escapeProbe
 	run       CommandFunc
 	systemctl string
+	// ctx is the context of the running scan. scan sets it.
+	ctx context.Context
 }
 
 // escapeProbe holds the process facts of the scan.
@@ -98,19 +104,19 @@ func pathHasACL(name string) (bool, error) {
 // scan runs each check and returns the bounded report. A spent context
 // stops the scan between checks, and the report says so.
 func (s escapeScanner) scan(ctx context.Context) []EscapeRoute {
+	s.ctx = ctx
 	var report routeReport
-	account, named := s.lookupAccount(&report)
-	checks := []func(){
+	account := s.lookupAccount(&report)
+	var checks []func()
+	if account.name != "" {
+		checks = append(checks, func() { s.checkCron(&report, account) }, func() { s.checkAt(&report, account) })
+	}
+	checks = append(checks,
 		func() { s.checkGroups(&report, account) },
 		func() { s.checkPolkit(&report) },
-		func() { s.checkSystemUnits(ctx, &report, account) },
-	}
-	if named {
-		checks = append([]func(){func() { s.checkCron(&report, account) }, func() { s.checkAt(&report, account) }}, checks...)
-	}
+		func() { s.checkSystemUnits(&report, account) })
 	for _, check := range checks {
-		if err := ctx.Err(); err != nil {
-			report.unchecked(routeMore, "the other routes ("+err.Error()+")")
+		if s.stopped(&report) {
 			break
 		}
 		check()
@@ -118,32 +124,44 @@ func (s escapeScanner) scan(ctx context.Context) []EscapeRoute {
 	return report.bounded()
 }
 
-// routeReport collects the findings of a scan.
+// stopped reports a spent scan context, and records it once.
+func (s escapeScanner) stopped(report *routeReport) bool {
+	err := s.ctx.Err()
+	if err != nil {
+		report.unchecked(routeIncomplete, "the rest of the routes ("+err.Error()+")")
+	}
+	return err != nil
+}
+
+// routeReport collects the findings of a scan. missed holds the sources
+// that the scan cannot check, found holds the other findings. Each list
+// holds an entry only once.
 type routeReport struct {
-	items []EscapeRoute
+	missed, found []EscapeRoute
 }
 
 func (r *routeReport) add(route, item string) {
-	r.items = append(r.items, EscapeRoute{Route: route, Item: item})
+	r.found = appendOnce(r.found, EscapeRoute{Route: route, Item: item})
 }
 
 // unchecked reports a source that the scan cannot check.
 func (r *routeReport) unchecked(route, source string) {
-	r.add(route, "cannot check "+source)
+	r.missed = appendOnce(r.missed, EscapeRoute{Route: route, Item: "cannot check " + source})
+}
+
+func appendOnce(list []EscapeRoute, item EscapeRoute) []EscapeRoute {
+	if slices.Contains(list, item) {
+		return list
+	}
+	return append(list, item)
 }
 
 // bounded returns at most maxEscapeRoutes findings, never nil. The
-// "cannot check" items come first, so the truncation keeps them. The last
-// entry names the routes of the findings that it leaves out.
+// "cannot check" items come first: a finding that the scan missed can hide
+// behind each of them, so the truncation keeps them. The last entry names
+// the routes of the findings that it leaves out.
 func (r *routeReport) bounded() []EscapeRoute {
-	items := make([]EscapeRoute, 0, len(r.items))
-	for _, unchecked := range []bool{true, false} {
-		for _, item := range r.items {
-			if strings.HasPrefix(item.Item, "cannot check ") == unchecked {
-				items = append(items, item)
-			}
-		}
-	}
+	items := append(append(make([]EscapeRoute, 0, len(r.missed)+len(r.found)), r.missed...), r.found...)
 	if len(items) <= maxEscapeRoutes {
 		return items
 	}
@@ -252,6 +270,7 @@ func (r *routeReport) policyFailure(route, name string, err error) {
 type dirEntry struct {
 	name  string
 	owner uint32
+	mode  uint32
 }
 
 // listPolicyDir lists a policy directory, walked without symlinks. A
@@ -277,6 +296,9 @@ func (s escapeScanner) listPolicyDir(report *routeReport, route, dir string) []d
 	}
 	entries := make([]dirEntry, 0, len(names))
 	for _, name := range names {
+		if s.stopped(report) {
+			return nil
+		}
 		var stat unix.Stat_t
 		err := unix.Fstatat(fd, name, &stat, unix.AT_SYMLINK_NOFOLLOW)
 		if policyAbsent(err) {
@@ -287,7 +309,7 @@ func (s escapeScanner) listPolicyDir(report *routeReport, route, dir string) []d
 			report.policyFailure(route, dir+"/"+name, err)
 			return nil
 		}
-		entries = append(entries, dirEntry{name: name, owner: s.host.ownerOf(stat)})
+		entries = append(entries, dirEntry{name: name, owner: s.host.ownerOf(stat), mode: stat.Mode})
 	}
 	return entries
 }
