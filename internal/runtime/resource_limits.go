@@ -13,6 +13,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const (
+	limitPathErrorFormat  = "%w: %s: %w"
+	swapAccountingFeature = "swap accounting"
+)
+
 // systemd starts a unit even when it cannot apply a limit, and it reports the
 // configured values while the cgroup holds others. A unit with limits starts
 // only after the escape route gate, binding, controller, host cap, reserve,
@@ -286,7 +291,7 @@ func (m *SystemdManager) checkHostProtection(ctx context.Context, p control.Work
 func (m *SystemdManager) requireManagerFiles(root string, l control.ResourceLimits) error {
 	var files []limitFile
 	if l.UsesMemory() {
-		files = append(files, limitFile{name: "memory.swap.max", feature: "swap accounting"})
+		files = append(files, limitFile{name: "memory.swap.max", feature: swapAccountingFeature})
 	}
 	if l.IOWeight != 0 {
 		files = append(files, limitFile{name: "io.weight", feature: "iocost"})
@@ -457,8 +462,8 @@ type limitFile struct {
 
 // featureSteps gives the next step for a kernel feature that is off.
 var featureSteps = map[string]string{
-	"swap accounting": "enable swap accounting: the kernel command line must not set `cgroup.memory=noswap` (older kernels need `swapaccount=1`), then reboot",
-	"iocost":          "the kernel needs CONFIG_BLK_CGROUP_IOCOST, or remove ioWeight through setup",
+	swapAccountingFeature: "enable swap accounting: the kernel command line must not set `cgroup.memory=noswap` (older kernels need `swapaccount=1`), then reboot",
+	"iocost":              "the kernel needs CONFIG_BLK_CGROUP_IOCOST, or remove ioWeight through setup",
 }
 
 // missingControlFile reports a control file that an existing group does
@@ -496,7 +501,7 @@ func expectedLimitFiles(l control.ResourceLimits, provider string) []limitFile {
 	files := []limitFile{
 		{name: "memory.high", want: formatMiB(l.MemoryHighMiB, "max"), feature: "memory"},
 		{name: "memory.max", want: formatMiB(l.MemoryMaxMiB, "max"), feature: "memory"},
-		{name: "memory.swap.max", want: formatSwap(l, "max"), feature: "swap accounting"},
+		{name: "memory.swap.max", want: formatSwap(l, "max"), feature: swapAccountingFeature},
 		{name: "pids.max", want: strconv.FormatUint(l.TasksMax, 10), feature: "pids"},
 	}
 	files = append(files, expectedCPUFiles(l)...)

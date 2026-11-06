@@ -87,9 +87,9 @@ func checkLeafDevice(device, name string) error {
 // and read failures are readback failures, which a later probe can pass.
 func deviceError(name string, err error) error {
 	if errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%w: %s: %w", ErrLimitDevice, name, err)
+		return fmt.Errorf(limitPathErrorFormat, ErrLimitDevice, name, err)
 	}
-	return fmt.Errorf("%w: %s: %w", ErrLimitReadback, name, err)
+	return fmt.Errorf(limitPathErrorFormat, ErrLimitReadback, name, err)
 }
 
 // ioWeightProvider returns "bfq" when the device uses BFQ, or "iocost" when
@@ -100,7 +100,7 @@ func (m *SystemdManager) ioWeightProvider(number string) (string, error) {
 	name := m.host.path("/sys/dev/block/" + number + "/queue/scheduler")
 	scheduler, err := os.ReadFile(name)
 	if err != nil {
-		return "", fmt.Errorf("%w: %s: %w", ErrLimitReadback, name, err)
+		return "", fmt.Errorf(limitPathErrorFormat, ErrLimitReadback, name, err)
 	}
 	if slices.Contains(strings.Fields(string(scheduler)), "[bfq]") {
 		return "bfq", nil
