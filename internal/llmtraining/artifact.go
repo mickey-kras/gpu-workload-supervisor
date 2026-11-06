@@ -19,6 +19,8 @@ import (
 )
 
 const (
+	trainingExportPrefix = "training export "
+
 	provenanceName      = "supervisor-provenance.json"
 	adapterConfigName   = "adapter_config.json"
 	adapterWeightsName  = "adapter_model.safetensors"
@@ -117,7 +119,7 @@ func bindArtifact(r Recipe, name string, remaining uint64, files map[string]stri
 	}
 	digest, content, err := hashArtifact(filepath.Join(r.OutputDirectory, name), remaining, exportJSONNames[name])
 	if errors.Is(err, errConfigurationTooLarge) {
-		return 0, errors.New("training export " + name + " is larger than " + strconv.Itoa(configurationBytes>>20) + " MiB")
+		return 0, errors.New(trainingExportPrefix + name + " is larger than " + strconv.Itoa(configurationBytes>>20) + " MiB")
 	}
 	if err != nil {
 		return 0, err
@@ -132,11 +134,15 @@ func bindArtifact(r Recipe, name string, remaining uint64, files map[string]stri
 
 // exportStatted runs after an export entry is opened and its size checked.
 // Tests use it to grow a file before the copy.
-var exportStatted = func(string) {}
+var exportStatted = func(string) {
+	// Production needs no callback; tests replace this hook to grow the file.
+}
 
 // exportHashed runs after each export entry is hashed. Tests use it to change
 // a file after its digest, which validation must not see.
-var exportHashed = func(string) {}
+var exportHashed = func(string) {
+	// Production needs no callback; tests replace this hook to change the file.
+}
 
 // exportJSONNames are the export configurations that the export validates.
 // It keeps their bytes while hashing, so it validates the bytes it binds.
@@ -261,7 +267,7 @@ func validateArtifactConfigs(r Recipe, files map[string]string, contents map[str
 // it gets the loader key lists and the architecture check. Unlike the
 // candidate, it can record the 4-bit loading that a QLoRA recipe requested.
 func checkExportModelConfig(r Recipe, files map[string]string, raw []byte) error {
-	owner := "training export " + modelConfigName
+	owner := trainingExportPrefix + modelConfigName
 	config, err := parseJSONObject(raw, owner)
 	if err != nil {
 		return err
@@ -300,7 +306,7 @@ func checkExportLoaderKeys(name string, raw []byte, files map[string]string) err
 	maps.DeleteFunc(set, func(_ string, value json.RawMessage) bool {
 		return bytes.Equal(bytes.TrimSpace(value), []byte("null"))
 	})
-	return inspectLoaderKeys("training export "+name, set, false, files)
+	return inspectLoaderKeys(trainingExportPrefix+name, set, false, files)
 }
 
 func newProvenance(r Recipe, job control.TrainingJob, invocation string, loss float64, files map[string]string) (Provenance, error) {

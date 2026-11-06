@@ -84,7 +84,7 @@ Discovery uses fixed GET routes, without redirects or ambient proxies, 1 MiB res
 
 External adoption checks effective units, ordered contributing-file hashes and pre-start commands. Allowed commands: system `true`/`false` with optional `--`, or `test` with one `-e`, `-f`, `-d`, `-r`, `-w`, `-x` or `-s` predicate and absolute clean path. Originals and vLLM `--max-model-len`/`--served-model-name` remain. Unsupported syntax, wrappers and escaped launches get guidance. Managed launches use a separate restricted format.
 
-Every vLLM launch also needs the [hardened settings](INTEGRATION.md#hardened-vllm-launch). The model folder must contain `chat_template.jinja`.
+Every vLLM launch also needs the [hardened settings](INTEGRATION.md#hardened-vllm-launch). For a managed launch, the model folder must contain the upstream `chat_template.jinja`. A file that you add by hand fails the [model checks](MODEL-CHECKS.md#upstream-identity).
 
 ### Upgrade and interrupted activation
 
@@ -95,6 +95,8 @@ New entrypoints reject the previous activated release before opening or migratin
 Activation holds controller and exclusive-proxy gates and verifies GPU release for existing and proposed mappings before snapshotting. Private `backups/activation-*` contains integrity-checked previous binaries and checksums, profile, accepted catalog, deployment marker, state and exact accepted owned-unit bytes. `owned-units.json` records SHA-256 hashes. `owned-units/` holds bytes. Keep this complete rollback tuple.
 
 The snapshot excludes vLLM API key files. After rollback, run setup again to create missing key files.
+
+Stored [model check](MODEL-CHECKS.md#results) results have format version 2. A result of another version reads as `not_scanned` until the checker checks the model again. An earlier release reads version 2 results as stale. If it checks a model again after a rollback, it replaces the stored result and drops its template approval. Then, after the next upgrade, the operator must approve the template again.
 
 Setup rejects stale previews before maintenance. Reopening resumes the exact pending request. Post-commit failures proceed forward, never undo a committed catalog. Never delete maintenance or migration metadata to bypass failure.
 

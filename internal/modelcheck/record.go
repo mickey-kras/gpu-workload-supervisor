@@ -16,8 +16,10 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
-// RecordVersion is the only result format.
-const RecordVersion = 1
+// RecordVersion is the only result format. Version 2 adds the chat template
+// pin, the template review list, its approval and the template limits. A
+// result of another version reads as stale.
+const RecordVersion = 2
 
 // MaxRecordBytes bounds one stored result. maxRecordFiles bounds its file
 // entries; it is above MaxModelFiles, so a later limit change stays readable.
@@ -26,8 +28,8 @@ const (
 	maxRecordFiles = 2 * MaxModelFiles
 )
 
-// ErrStaleRecord marks a well-formed result of another record version. Its
-// model is not scanned for this checker.
+// ErrStaleRecord marks a result with another positive record version. Only
+// the version is read. Its model is not scanned for this checker.
 var ErrStaleRecord = errors.New("model check record has another version")
 
 // Status is the overall result. Only StatusPassed is clean.
@@ -62,21 +64,35 @@ const (
 
 // Configuration is the effective configuration of the checks.
 type Configuration struct {
-	Hub              string `json:"hub"`
-	MaxJSONFileBytes int64  `json:"maxJSONFileBytes"`
-	MaxGitBlobBytes  int64  `json:"maxGitBlobBytes"`
-	MaxModelFiles    int    `json:"maxModelFiles"`
+	Hub              string         `json:"hub"`
+	MaxJSONFileBytes int64          `json:"maxJSONFileBytes"`
+	MaxGitBlobBytes  int64          `json:"maxGitBlobBytes"`
+	MaxModelFiles    int            `json:"maxModelFiles"`
+	Template         TemplateLimits `json:"template"`
+}
+
+// TemplateLimits are the limits of the chat template check.
+type TemplateLimits struct {
+	MaxBytes     int `json:"maxBytes"`
+	MaxDepth     int `json:"maxDepth"`
+	MaxTagTokens int `json:"maxTagTokens"`
+	// MaxReviewItems bounds the items of the review list, the literals
+	// that need review. MaxReviewBytes bounds the review list as JSON.
+	MaxReviewItems int `json:"maxReviewItems"`
+	MaxReviewBytes int `json:"maxReviewBytes"`
 }
 
 // currentConfiguration is the configuration that this checker applies.
 func currentConfiguration(hub string) Configuration {
-	return Configuration{Hub: hub, MaxJSONFileBytes: MaxJSONFileBytes, MaxGitBlobBytes: maxGitBlobBytes, MaxModelFiles: MaxModelFiles}
+	return Configuration{Hub: hub, MaxJSONFileBytes: MaxJSONFileBytes, MaxGitBlobBytes: maxGitBlobBytes, MaxModelFiles: MaxModelFiles,
+		Template: TemplateLimits{MaxBytes: MaxTemplateBytes, MaxDepth: maxTemplateDepth, MaxTagTokens: maxTagTokens, MaxReviewItems: maxReviewItems, MaxReviewBytes: maxReviewBytes}}
 }
 
 // valid checks the structure only. Current compares the values, so a
 // result from another configuration reads as not scanned, not as invalid.
 func (c Configuration) valid() bool {
-	return strings.HasPrefix(c.Hub, "https://") && len(c.Hub) <= 256 && c.MaxJSONFileBytes > 0 && c.MaxGitBlobBytes > 0 && c.MaxModelFiles > 0
+	return strings.HasPrefix(c.Hub, "https://") && len(c.Hub) <= 256 && c.MaxJSONFileBytes > 0 && c.MaxGitBlobBytes > 0 && c.MaxModelFiles > 0 &&
+		c.Template.MaxBytes > 0 && c.Template.MaxDepth > 0 && c.Template.MaxTagTokens > 0 && c.Template.MaxReviewItems > 0 && c.Template.MaxReviewBytes > 0
 }
 
 // Check names, in the order that they run. Each must pass.
@@ -99,19 +115,32 @@ type Check struct {
 
 // Record is one stored model check result. Files binds the result to the
 // SHA-256 of every model file. A record for other files, another root or
-// another source does not apply.
+// another source does not apply. ChatTemplateSHA256 is the SHA-256 of the
+// chat template text, as UTF-8 bytes, that passed the structural template
+// check. It equals the SHA-256 of a --chat-template file with the same
+// text. The vLLM binding records that SHA-256, see
+// runtime.ChatTemplateSHA256.
 type Record struct {
-	Version       int               `json:"version"`
-	Model         string            `json:"model"`
-	Root          string            `json:"root"`
-	Source        Source            `json:"source"`
-	Files         map[string]string `json:"files"`
-	Status        Status            `json:"status"`
-	Coverage      Coverage          `json:"coverage"`
-	Checks        []Check           `json:"checks"`
-	Checker       string            `json:"checker"`
-	Configuration Configuration     `json:"configuration"`
-	CheckedAt     time.Time         `json:"checkedAt"`
+	Version            int               `json:"version"`
+	Model              string            `json:"model"`
+	Root               string            `json:"root"`
+	Source             Source            `json:"source"`
+	Files              map[string]string `json:"files"`
+	Status             Status            `json:"status"`
+	Coverage           Coverage          `json:"coverage"`
+	Checks             []Check           `json:"checks"`
+	ChatTemplateSHA256 string            `json:"chatTemplateSHA256,omitempty"`
+	// TemplateFile names the first file of the model that holds the
+	// template, such as chat_template.jinja, when the record has a pin.
+	TemplateFile string `json:"templateFile,omitempty"`
+	// TemplateReview lists the literals of the template that an operator
+	// must read. It is the only field that holds template text. Keep it
+	// out of logs.
+	TemplateReview   []ReviewItem      `json:"templateReview,omitempty"`
+	TemplateApproval *TemplateApproval `json:"templateApproval,omitempty"`
+	Checker          string            `json:"checker"`
+	Configuration    Configuration     `json:"configuration"`
+	CheckedAt        time.Time         `json:"checkedAt"`
 }
 
 var (
@@ -134,6 +163,9 @@ func (r Record) Validate() error {
 	}
 	if !validFiles(r.Files, r.Checks[0].Outcome == OutcomePassed) {
 		return fmt.Errorf("model check record needs valid file entries, at most %d", maxRecordFiles)
+	}
+	if !r.validTemplate() {
+		return errors.New("model check record has template fields that do not follow from the template check")
 	}
 	if !r.Configuration.valid() {
 		return errors.New("model check record has an invalid configuration")
@@ -218,7 +250,7 @@ func ReadRecord(raw []byte) (Record, error) {
 	var version struct {
 		Version int `json:"version"`
 	}
-	if len(raw) <= MaxRecordBytes && json.Unmarshal(raw, &version) == nil && version.Version > RecordVersion {
+	if len(raw) <= MaxRecordBytes && json.Unmarshal(raw, &version) == nil && version.Version != RecordVersion && version.Version > 0 {
 		return Record{}, ErrStaleRecord
 	}
 	var record Record

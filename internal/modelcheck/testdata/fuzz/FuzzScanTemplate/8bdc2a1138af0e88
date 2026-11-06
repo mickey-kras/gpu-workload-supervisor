@@ -1,0 +1,2 @@
+go test fuzz v1
+string("{%for A in A%}{%if%}{{A.split()[]}}{%elif A%}{%for B in*A,*0%}00000000000000{%endfor%}000000000000000000000000000000000{%endif%}{%endfor%}")

@@ -10,6 +10,8 @@ import (
 )
 
 const (
+	processorConfigurationLabel = " processor configuration "
+
 	processorClass      = "Qwen3VLProcessor"
 	videoProcessorClass = "Qwen3VLVideoProcessor"
 
@@ -112,7 +114,7 @@ func checkExportProcessors(files map[string]string, contents map[string][]byte) 
 // locked transformers and loads no remote code. The error names the file, a
 // fixed field or category and the expected value, never file content.
 func checkProcessorFile(path, name, owner string, files map[string]string) error {
-	config, err := readJSONObject(path, owner+" processor configuration "+name)
+	config, err := readJSONObject(path, owner+processorConfigurationLabel+name)
 	if err != nil {
 		return err
 	}
@@ -121,7 +123,7 @@ func checkProcessorFile(path, name, owner string, files map[string]string) error
 
 // checkProcessorBytes applies checkProcessorFile to bytes already read.
 func checkProcessorBytes(raw []byte, name, owner string, files map[string]string) error {
-	config, err := parseJSONObject(raw, owner+" processor configuration "+name)
+	config, err := parseJSONObject(raw, owner+processorConfigurationLabel+name)
 	if err != nil {
 		return err
 	}
@@ -130,7 +132,7 @@ func checkProcessorBytes(raw []byte, name, owner string, files map[string]string
 
 func checkProcessorObject(config map[string]json.RawMessage, name, owner string, files map[string]string) error {
 	if problem := processorProblem(config, name, files); problem != "" {
-		return errors.New(owner + " processor configuration " + name + ": " + problem)
+		return errors.New(owner + processorConfigurationLabel + name + ": " + problem)
 	}
 	return nil
 }

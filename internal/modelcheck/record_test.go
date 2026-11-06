@@ -2,6 +2,7 @@ package modelcheck
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -33,7 +34,7 @@ func TestRecordRoundTripsStrictly(t *testing.T) {
 		"null field":           strings.Replace(text, `"checker":"test-1"`, `"checker":null`, 1),
 		"trailing value":       text + "{}",
 		"not UTF-8":            strings.Replace(text, `"test-1"`, "\"test-\xff\"", 1),
-		"other version":        strings.Replace(text, `"version":1`, `"version":2`, 1),
+		"other version":        strings.Replace(text, `"version":2`, `"version":0`, 1),
 		"status not derived":   strings.Replace(text, `"status":"not_scanned"`, `"status":"passed"`, 1),
 		"unknown outcome":      strings.Replace(text, `"outcome":"not_run"`, `"outcome":"skipped"`, 1),
 		"checks out of order":  strings.Replace(text, `"name":"file-allowlist"`, `"name":"upstream-identity"`, 1),
@@ -46,6 +47,12 @@ func TestRecordRoundTripsStrictly(t *testing.T) {
 		"other configuration":  strings.Replace(text, `"maxModelFiles":4096`, `"maxModelFiles":0`, 1),
 		"plain HTTP hub":       strings.Replace(text, `"hub":"https://`, `"hub":"http://`, 1),
 		"reason with content":  strings.Replace(text, `"outcome":"not_run"`, `"outcome":"not_run","reason":"/private/path"`, 1),
+		"no template limits":   regexp.MustCompile(`"template":\{[^}]*\}`).ReplaceAllString(text, `"template":{}`),
+		"zero maxBytes":        zeroLimit(text, "maxBytes"),
+		"zero maxDepth":        zeroLimit(text, "maxDepth"),
+		"zero maxTagTokens":    zeroLimit(text, "maxTagTokens"),
+		"zero maxReviewItems":  zeroLimit(text, "maxReviewItems"),
+		"zero maxReviewBytes":  zeroLimit(text, "maxReviewBytes"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := ReadRecord([]byte(content)); err == nil {
@@ -53,6 +60,11 @@ func TestRecordRoundTripsStrictly(t *testing.T) {
 			}
 		})
 	}
+}
+
+// zeroLimit sets one template limit of a record to 0.
+func zeroLimit(text, key string) string {
+	return regexp.MustCompile(`"`+key+`":[0-9]+`).ReplaceAllString(text, `"`+key+`":0`)
 }
 
 func TestStatusFollowsTheFirstCheckThatDidNotPass(t *testing.T) {
@@ -101,10 +113,18 @@ func TestMarshalRecordRefusesInvalidRecords(t *testing.T) {
 	}
 }
 
-func TestNewerRecordVersionIsStale(t *testing.T) {
+func TestOtherRecordVersionsAreStale(t *testing.T) {
 	_, raw := validRecord(t)
-	newer := strings.Replace(string(raw), `"version":1`, `"version":2`, 1)
-	if _, err := ReadRecord([]byte(newer)); !errors.Is(err, ErrStaleRecord) {
-		t.Fatal("a newer record version must read as stale", err)
+	for _, version := range []string{`"version":1`, `"version":3`} {
+		other := strings.Replace(string(raw), `"version":2`, version, 1)
+		if _, err := ReadRecord([]byte(other)); !errors.Is(err, ErrStaleRecord) {
+			t.Fatal("another record version must read as stale", version, err)
+		}
+	}
+	// A record of version 1 has no template limits. It reads as stale, not
+	// as invalid.
+	old := `{"version":1,"configuration":{"hub":"https://huggingface.co","maxJSONFileBytes":1,"maxGitBlobBytes":1,"maxModelFiles":1}}`
+	if _, err := ReadRecord([]byte(old)); !errors.Is(err, ErrStaleRecord) {
+		t.Fatal("a version 1 record must read as stale", err)
 	}
 }

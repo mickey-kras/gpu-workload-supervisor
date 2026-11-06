@@ -19,14 +19,14 @@
 | Proxy and adapters | Route gates, forwarding, bounded protocol checks, exact-body authorization, optional requester authentication, work registration and terminal evidence. No semantic content policy |
 | External broker | Workflow steps, retries, checkpoints, cancellation and results |
 | External gateway | Authentication, request and response policy and content validation |
-| [Model checks](MODEL-CHECKS.md) | File allowlist, upstream identity and results bound to file digests. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans the chat template check and the behavioral scan |
+| [Model checks](MODEL-CHECKS.md) | File allowlist, upstream identity, static chat template check and results bound to file digests. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans the behavioral scan |
 | Trainer adapter | Recipes and checkpoint contents. The controller owns finite-job lifecycle |
 
 Demand records prove admission. They do not schedule workflows or replay uncertain execution. Integrations must preserve admission, terminal evidence and runtime-bypass prevention. Setup installs no broker or gateway. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans a setup step that installs the pinned scanner after you confirm it. See [requester ingress](OPERATIONS.md#optional-requester-ingress) and [training](TRAINING.md#finite-training-jobs).
 
 ### Model checks
 
-[Model checks](MODEL-CHECKS.md) has the file allowlist, upstream identity check and result store. No command runs them yet. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans the other checks and a scan before first LLM use. [#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583) plans result display and rejection of failed models. These checks cannot prove model safety.
+[Model checks](MODEL-CHECKS.md) has the file allowlist, upstream identity check, static chat template check and result store. No command runs them yet. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans the behavioral scan and the scan job that runs the checks before first LLM use. [#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583) plans result display and rejection of failed models. These checks cannot prove model safety.
 
 ### State model
 
@@ -252,7 +252,7 @@ The key protects only vLLM `/v1` routes. Other routes need no key, for example `
 
 Bindings from an earlier release record none of these settings and do not qualify. Their workload proxy does not start until you configure them again. They do not block setup, which can remove or configure them again:
 
-- Managed binding: add `chat_template.jinja` to the model folder, open setup and configure the model again. Setup generates the hardened launch.
+- Managed binding: the model folder must hold the upstream `chat_template.jinja`. Open the setup and configure the model again. Setup generates the hardened launch. Do not add the file by hand: the [model checks](MODEL-CHECKS.md#upstream-identity) then fail. The managed launch does not support a model that has its template only in a JSON file. Use an existing launch for such a model, see [chat template result](MODEL-CHECKS.md#result).
 - Existing launch: add the settings to its unit, reload systemd and run setup again for the workload.
 
 ### ComfyUI execution completion

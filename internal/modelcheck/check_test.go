@@ -198,9 +198,9 @@ func TestRunBindsPassingFileChecksToDigests(t *testing.T) {
 	root := writeModel(t, files)
 	h := newHub(t, append(upstreamOf(files), UpstreamFile{Type: "file", Path: "extra.md", OID: blobID("extra"), Size: 5}))
 	record := run(t, h.checker(), root)
-	want := []Check{{CheckAllowlist, OutcomePassed, ""}, {CheckIdentity, OutcomePassed, ""}, {CheckTemplate, OutcomeNotRun, ""}, {CheckBehavior, OutcomeNotRun, ""}}
-	if !slices.Equal(record.Checks, want) || record.Status != StatusNotScanned || record.Coverage != CoveragePartial {
-		t.Fatalf("checks = %+v, status %s, coverage %s", record.Checks, record.Status, record.Coverage)
+	want := []Check{{CheckAllowlist, OutcomePassed, ""}, {CheckIdentity, OutcomePassed, ""}, {CheckTemplate, OutcomePassed, ""}, {CheckBehavior, OutcomeNotRun, ""}}
+	if !slices.Equal(record.Checks, want) || record.Status != StatusNotScanned || record.Coverage != CoveragePartial || record.ChatTemplateSHA256 != sha256Hex(files["chat_template.jinja"]) {
+		t.Fatalf("checks = %+v, status %s, coverage %s, pin %s", record.Checks, record.Status, record.Coverage, record.ChatTemplateSHA256)
 	}
 	if len(record.Files) != len(files) || record.Files["config.json"] != sha256Hex(files["config.json"]) {
 		t.Fatal("record must bind the SHA-256 of every model file")
@@ -228,6 +228,8 @@ func TestAllowlistRejectsFiles(t *testing.T) {
 		"auto_map":             {"config.json", `{"auto_map":{"AutoModel":"x.Model"}}`, ReasonRemoteCode},
 		"nested auto_map":      {"tokenizer_config.json", `{"a":[{"b":{"auto_map":1}}]}`, ReasonRemoteCode},
 		"auto_mapping":         {"generation_config.json", `{"auto_mapping":{}}`, ReasonRemoteCode},
+		"template elsewhere":   {"preprocessor_config.json", `{"chat_template":"{{ messages }}"}`, ReasonMisplacedTemplate},
+		"nested template":      {"tokenizer_config.json", `{"x":{"chat_template":"{{ messages }}"}}`, ReasonMisplacedTemplate},
 		"custom_pipelines":     {"config.json", `{"custom_pipelines":{"x":{}}}`, ReasonRemoteCode},
 		"duplicate JSON key":   {"generation_config.json", `{"a":1,"a":2}`, ReasonInvalidJSON},
 		"trailing value":       {"generation_config.json", `{}{}`, ReasonInvalidJSON},
