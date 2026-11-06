@@ -57,12 +57,16 @@ var limitCause = fmt.Errorf("%w: use 4096 MiB or less for memoryMaxMiB, or remov
 // causeRemedy ends the text of limitCause.
 const causeRemedy = ", or remove the limits through setup"
 
-// toIdle starts the step that switches to Idle before setup removes limits.
-const toIdle = "to remove the limits through setup, switch to Idle first: "
+// toIdle starts the switch to Idle before setup removes the limits, when
+// no recovery comes first.
+const toIdle = "to remove the limits through setup, first "
+
+// thenIdle starts the switch to Idle after the recovery steps.
+const thenIdle = "then, to remove the limits through setup, if a workload other than Idle runs, "
 
 // afterRecovery is the conditional switch of a supervisor-owned state
 // after recovery.
-const afterRecovery = toIdle + "if a workload other than Idle runs then, run `gpu-mode -target idle switch`"
+const afterRecovery = thenIdle + "run `gpu-mode -target idle switch`"
 
 // From a healthy Idle, a refusal needs no next steps: its text has the
 // fix.
@@ -130,7 +134,7 @@ func TestLimitCauseRefusalStepsFollowTheState(t *testing.T) {
 		"user owned": {control.State{Owner: control.OwnerUser, ActiveWorkload: control.WorkloadText, Phase: control.PhaseStable, Health: control.HealthHealthy},
 			causeRemedy + "; next steps: " + toIdle + "run `gpu-mode -target idle user-switch`"},
 		"user owned and latched": {control.State{Owner: control.OwnerUser, ActiveWorkload: control.WorkloadText, Phase: control.PhaseReconciling, Health: control.HealthError},
-			"; next steps: first, run `gpu-mode -target text recover-user`; " + toIdle + "if a workload other than Idle runs then, run `gpu-mode -target idle user-switch`"},
+			"; next steps: first, run `gpu-mode -target text recover-user`; " + thenIdle + "run `gpu-mode -target idle user-switch`"},
 		"user owned idle, latched": {control.State{Owner: control.OwnerUser, ActiveWorkload: control.WorkloadIdle, Phase: control.PhaseReconciling, Health: control.HealthError},
 			"; next steps: first, run `gpu-mode -target idle recover-user`"},
 		"user owned idle": {control.State{Owner: control.OwnerUser, ActiveWorkload: control.WorkloadIdle, Phase: control.PhaseStable, Health: control.HealthHealthy},
@@ -139,8 +143,11 @@ func TestLimitCauseRefusalStepsFollowTheState(t *testing.T) {
 			"; next steps: first, stop the running workload unit outside gpu-mode, then run `gpu-mode -target idle recover-user`"},
 		"supervisor owned limited unit, latched": {control.State{Owner: control.OwnerSupervisor, ActiveWorkload: "vision", Phase: control.PhaseReconciling, Health: control.HealthError},
 			causeRemedy + "; next steps: first, run `gpu-mode recover`; " + afterRecovery},
+		// recover-user with the limited unit as target runs its limit
+		// checks, which can refuse it too. So the unit stops outside
+		// gpu-mode, and the recovery ends in Idle.
 		"user owned limited unit, latched": {control.State{Owner: control.OwnerUser, ActiveWorkload: "vision", Phase: control.PhaseReconciling, Health: control.HealthError},
-			"; next steps: first, run `gpu-mode -target vision recover-user`; " + toIdle + "if a workload other than Idle runs then, run `gpu-mode -target idle user-switch`"},
+			causeRemedy + "; next steps: first, run `systemctl --user stop gws-owned-vision.service`, then run `gpu-mode -target idle recover-user`"},
 	} {
 		c2, r, _ := limitedController(t, limitedCatalog())
 		r.launchErr = limitCause

@@ -10,11 +10,14 @@ import (
 // remedyState is the state that the next steps of a limit rejection start
 // from. latched means the state needs recovery first: setup refuses it.
 // kept is the workload that keeps running. user means the user owns the
-// state, so the supervisor commands do not apply.
+// state, so the supervisor commands do not apply. keptUnit is the unit of
+// kept when kept has limits: recover-user runs its limit checks, which can
+// refuse it like the rejected unit.
 type remedyState struct {
-	latched bool
-	kept    control.Workload
-	user    bool
+	latched  bool
+	kept     control.Workload
+	user     bool
+	keptUnit string
 }
 
 // limitRemedy adds the next steps to a rejection of a unit with limits, as
@@ -31,15 +34,18 @@ func limitRemedy(rejected error, from remedyState) error {
 		return nil
 	}
 	var parts []string
-	if steps := from.recoverySteps(); len(steps) != 0 {
+	steps := from.recoverySteps()
+	if len(steps) != 0 {
 		text := steps[len(steps)-1]
 		if len(steps) > 1 {
 			text = strings.Join(steps[:len(steps)-1], ", ") + ", then " + text
 		}
 		parts = append(parts, "first, "+text)
 	}
-	if step := from.idleStep(); step != "" {
-		parts = append(parts, "to remove the limits through setup, switch to Idle first: "+step)
+	if step := from.idleStep(); step != "" && len(steps) != 0 {
+		parts = append(parts, "then, to remove the limits through setup, "+step)
+	} else if step != "" {
+		parts = append(parts, "to remove the limits through setup, first "+step)
 	}
 	if len(parts) == 0 {
 		return rejected
@@ -65,7 +71,7 @@ func (s remedyState) idleStep() string {
 		step = "run `gpu-mode -target idle user-switch`"
 	}
 	if kept == control.WorkloadUnknown || s.latched {
-		step = "if a workload other than Idle runs then, " + step
+		step = "if a workload other than Idle runs, " + step
 	}
 	return step
 }
@@ -77,12 +83,21 @@ func (s remedyState) unknownUserWorkload() bool {
 }
 
 // keptAfterRecovery is the workload that runs after the recovery steps.
-// The recovery of a user-owned state with an unknown workload ends in Idle.
+// The recovery of a latched user-owned state with an unknown workload or a
+// kept unit with limits ends in Idle.
 func (s remedyState) keptAfterRecovery() control.Workload {
-	if s.unknownUserWorkload() {
+	if s.unknownUserWorkload() || s.stopsKeptUnit() {
 		return control.WorkloadIdle
 	}
 	return s.kept
+}
+
+// stopsKeptUnit reports a latched user-owned state that runs a unit with
+// limits. recover-user with that unit as target runs its limit checks, and
+// they can refuse it as they refused the rejected unit. So the steps stop
+// the unit outside gpu-mode and recover to Idle.
+func (s remedyState) stopsKeptUnit() bool {
+	return s.latched && s.user && s.keptUnit != ""
 }
 
 // recoverySteps gives the recovery of a latched state for its owner.
@@ -93,6 +108,8 @@ func (s remedyState) recoverySteps() []string {
 		return nil
 	case !s.user:
 		return []string{"run `gpu-mode recover`"}
+	case s.stopsKeptUnit():
+		return []string{fmt.Sprintf("run `systemctl --user stop %s`", s.keptUnit), "run `gpu-mode -target idle recover-user`"}
 	case s.unknownUserWorkload():
 		return []string{"stop the running workload unit outside gpu-mode", "run `gpu-mode -target idle recover-user`"}
 	default:
