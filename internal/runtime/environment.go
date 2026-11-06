@@ -169,7 +169,7 @@ func qualifyEnvironmentPath(path string, file bool) error {
 		kind = kindFile
 	}
 	if _, err := trustPath(path, kind); err != nil {
-		return environmentError(pathName(path), reasonText(err))
+		return markBindingRead(environmentError(pathName(path), reasonText(err)), err)
 	}
 	return nil
 }
@@ -188,7 +188,7 @@ func pathName(path string) string {
 
 func qualifyEnvironmentSearchPath(path string) error {
 	if _, err := trustPath(path, kindDir); err != nil {
-		return environmentError(pathName(path), reasonText(err))
+		return markBindingRead(environmentError(pathName(path), reasonText(err)), err)
 	}
 	return nil
 }

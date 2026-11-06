@@ -2,16 +2,46 @@
 
 [Documentation](README.md). See [implemented integration](INTEGRATION.md).
 
-**Design for [#584](https://github.com/mickey-kras/gpu-workload-supervisor/issues/584). The current release has only the schema part.**
+**Design for [#584](https://github.com/mickey-kras/gpu-workload-supervisor/issues/584). This release has the schema and the runtime checks. Units with limits do not start yet.**
 
 - Catalog v5 accepts `limits` on owned inference launches. The renderer and strict parser carry them.
-- The supervisor refuses switches to units with limits before it stops the current workload. The runtime does not start them or report them healthy. Reconciliation stops running units with limits and goes idle. This gate does not change other workloads, preflight or release checks.
+- Design decision: units with limits do not start until the escape route checks exist. The first check refuses each unit with limits with `ErrEscapeRoutesUnchecked`. It runs before the unload, at the start, at each health check and before reconciliation keeps a running unit. A switch or activation fails with `incompatible_configuration`. Reconciliation does not keep a running unit with limits, so it stops the unit. The setup change that adds the escape route checks lifts this gate. The checks below run behind it.
+- For a target with limits, the supervisor checks the launch binding. Then it checks the controllers, the host cap, the reserve, the I/O device and the loaded unit properties. It does this before it stops the current workload. If a check fails, the supervisor refuses the switch and changes nothing. See [runtime checks](#runtime-checks).
+- The start of the unit repeats these checks and also checks the slice memory. If a check fails, the unit does not start.
+- Design decision: a unit with limits needs `memoryMaxMiB`, `tasksMax` and `cpuQuotaPercent` to start. Systemd applies them as `MemoryMax`, `TasksMax` and `CPUQuota`. It also needs each I/O cap whose key the slice `io.max` caps. When the slice `io.max` caps a device other than the unit `ioDevice`, the unit cannot cap that device. The runtime then refuses the unit with `ErrLimitReserve`. The schema accepts limits without them, so setup can read and remove them.
+- Health checks repeat these checks, except the slice memory check, and read back the values in the cgroup. These checks change nothing.
+- If a check after the start fails, the start stops the unit.
+- In a switch, a later definite failure ends the verification, and the supervisor stops the unit. From a supervisor-owned state, the rollback stops it. From a user-owned state, the failed transition stops it before it latches the error state.
+- A status check never stops a workload. It runs the health check only for a supervisor-owned, stable, healthy state with open admission. On a failed health check, it latches the error state and closes the admission.
+- Design decision: nothing reads the limits back on a schedule. This release does not stop a running unit with limits after a failed status check. The unit keeps running behind the closed admission until `recover`. The limit stop of the policy tick and its escalation come with the setup change for limits. See [limit checks](OPERATIONS.md#limit-checks).
+- Reconciliation keeps a running unit with limits and boot policy `retain` only after the checks pass. On a definite failure, it stops the unit and exits nonzero with the cause, so boot units that need a successful reconcile do not start. A definite failure in the readiness probe of a kept unit also stops it before the error state latches. The state keeps the workload that reconciliation kept, with error health and closed admission. The same write settles the state and latches the failure. Then run `recover` one time. If the unit runs, `recover` stops it and exits nonzero with the cause. It does not latch the error state again. If the unit does not run, `recover` settles the state and exits zero. Then remove the limits through setup. Setup removes them only from Idle.
+- Each failure class has one result:
+
+  | Failure | Class |
+  | --- | --- |
+  | A failed read of a limit file in the cgroup of a running unit | Definite. The runtime cannot prove the limit |
+  | A missing trusted host cap file, device node, sysfs device entry or interface file | Definite |
+  | A listed drop-in that is missing, while a second read still lists it with `NeedDaemonReload=no` | Definite |
+  | A listed drop-in that is missing, while a second read does not list it or needs daemon-reload | Read failure. A package upgrade can remove a vendor drop-in |
+  | A missing device scheduler file or `cgroup.controllers` at the user manager root | Read failure |
+  | A slice property that differs from its file, while a second read shows other values or needs daemon-reload | Read failure. An administrator can change the cap during the check |
+  | `NeedDaemonReload` other than `no` on the slice or the user manager | Read failure. A package upgrade can set it until the next daemon-reload. It proves no wrong cap |
+  | A failed read of a binding file, such as the unit file, a drop-in, the model, the chat template or the API key file | Read failure |
+  | A missing chat template or API key file | Definite |
+  | A missing model, or a model that is not a directory (`ErrModelUnavailable`) | Read failure. It is not a limit refusal |
+  | Other command and read failures, such as a failed read of a slice or host file | Read failure |
+
+- A read failure before the unload fails the switch with no change and its usual code.
+- In the start, a failure before the `systemctl start` call fails the switch with no stop. A failed start call or a failure after the call stops the unit and fails the switch.
+- In the health checks after the start, a switch retries a read failure until its deadline.
+- A status check or reconciliation keeps the admission closed without a stop.
 - Setup cannot write limits. It rejects requests with limits before unit writes and accepts requests that remove them.
 
-Later changes add trainer binding limits, draft and setup support, the **Resource checks** page, the host cap, and controller and cgroup readback checks. `requiredMiB` estimates launch VRAM demand. It enforces no ceiling. GPU VRAM enforcement and separate-account workload isolation are out of scope.
+Later changes add trainer binding limits, draft and setup support, the **Resource checks** page and the escape route checks. `requiredMiB` estimates launch VRAM demand. It enforces no ceiling. GPU VRAM enforcement and separate-account workload isolation are out of scope.
 
 - [Host protection](#host-cap)
 - [Unit limits](#unit-limits)
+- [Runtime checks](#runtime-checks)
 - [Drift and outcomes](#drift-checks)
 - [Schema](#schema)
 - [Qualification](#qualification-procedure)
@@ -102,7 +132,7 @@ Slice limits apply on reload. Changed delegation requires restarting `user@UID.s
 
 All three versions ship `user-.slice.d/10-defaults.conf` (`TasksMax=33%`, `StopWhenUnneeded=yes`). See source [5](#source-5). They also ship ordering-only `user@.service.d/10-login-barrier.conf`. See source [6](#source-6). Distributions can add files.
 
-Accept only the two exact host-cap drop-in names above and vendor files under `/usr/lib/systemd/system` or `/lib/systemd/system`. The package manager must identify unchanged systemd-package files. Root must own each file and ancestor without group or other write.
+Accept only the two exact host-cap drop-in names above and vendor files under `/usr/lib/systemd/system`. Accept vendor files under `/lib/systemd/system` only when `/lib` is a root-owned link to `usr/lib` or `/usr/lib`. The package manager must identify unchanged systemd-package files. Root must own each file and ancestor without group or other write.
 
 Unknown `DropInPaths` fail with named paths. Name ordering makes `50-` replace vendor `10-` values. Effective properties and cgroup readback remain decisive.
 
@@ -114,7 +144,7 @@ Before accepting or launching limited units, setup and preflight must check:
 
 1. Root-owned regular host-cap files and real parent directories through `/etc`, walked with `O_NOFOLLOW`. No symlinks, group or other write, UID-write ACLs or capabilities.
 2. Known `DropInPaths`, expected limit properties and `NeedDaemonReload=no` for slice and user manager.
-3. Slice path from system-manager `ControlGroup` only. Root-owned limit files without group or other write or UID ACLs. Manager and unit cgroups descend from the slice. `memory.max`, `pids.max` and `cpu.max` are finite. `memory.swap.max=0`. When swap is off and accounting is impossible, the host-cap check accepts a missing swap file.
+3. Slice path from system-manager `ControlGroup` only. Root-owned limit files without group or other write or UID ACLs. Manager and unit cgroups descend from the slice. `memory.max`, `pids.max` and `cpu.max` are finite. `memory.swap.max=0`. Each unit with limits needs `MemoryMax`, so the checks need swap accounting. A missing `memory.swap.max` at the root of the user manager is `ErrLimitInterface`. A missing slice `memory.swap.max` is `ErrHostCap`.
 4. User-manager root `cgroup.controllers` includes `io` for I/O controls.
 5. Every escape check passes.
 
@@ -122,7 +152,7 @@ Missing or different evidence fails closed with the drop-in path and differing p
 
 ### Reserve and pressure
 
-The shared cap includes supervisor, proxy and all UID workloads. Both unit memory limits must fit below slice `MemoryHigh` minus reserve. Other controls fit below their matching cap minus reserve.
+The shared cap includes supervisor, proxy and all UID workloads. Both unit memory limits must fit below the lower of slice `MemoryHigh` and `MemoryMax`, minus the reserve. Other controls fit below their matching cap minus reserve.
 
 | Control | Proposed reserve |
 | --- | --- |
@@ -138,7 +168,7 @@ Reject out-of-schema defaults without writing limits. Never store 0 where value 
 
 The example memory ceiling is 55296 MiB, not 59392 MiB from slice `MemoryMax`. Even unit `MemoryMax=55296` fails admission while the slice holds memory. Setup reads and displays actual `memory.current` beside the ceiling.
 
-Failed reads never mean 0. Before acceptance and admission, check `slice memory.current + unit MemoryMax + reserve <= slice MemoryHigh`. Failure names usage, ceiling and common `/dev/shm` and `tmpfs` causes.
+Failed reads never mean 0. Before acceptance and admission, check `slice memory in use + unit MemoryMax + reserve <= the lower of slice MemoryHigh and MemoryMax`. The memory in use is `memory.current` minus the reclaimable page cache: `active_file` plus `inactive_file` in the slice `memory.stat`. These lists leave out shmem and mlocked pages. A stopped model leaves its page cache in the slice, and the kernel can reclaim it. Failure names usage, page cache, ceiling and common `/dev/shm` and `tmpfs` causes.
 
 Memory remains charged to its instantiating cgroup until release, even after unit stop. Do not divide the ceiling between units: each next unit must fit beside current charges. Size mapped models as below.
 
@@ -159,10 +189,11 @@ Default delegation is `pids memory cpu` (source [8](#source-8)). I/O requires it
 
 Fail closed distinctly:
 
-- Controller absent from unit `cgroup.controllers`: delegation failure. Name controller and host-cap step.
+- A controller is not in `cgroup.controllers` at the root of the user manager: delegation failure. Name controller and the step for the delegation drop-in.
+- Controller present at the user manager root but absent from the unit `cgroup.controllers`: systemd did not enable it for the unit. Name controller, `systemctl --user daemon-reload` and a new start of the workload through gpu-mode.
 - Controller present but interface file absent: name file and kernel feature. Systemd tolerates missing `memory.swap.max`. See source [12](#source-12). This design does not for limited units.
 
-Before acceptance, check user-manager root `memory.swap.max`, because `MemoryMax` adds automatic `MemorySwapMax=0`. If absent, reject and instruct enabling swap accounting or removing `MemoryMax`.
+Before acceptance, check user-manager root `memory.swap.max`, because `MemoryMax` adds automatic `MemorySwapMax=0`. If absent, reject and instruct enabling swap accounting. A unit with limits needs `MemoryMax`.
 
 ## Unit limits
 
@@ -201,9 +232,9 @@ Readback requires the exact device line, including all four keys and `max` for u
 259:0 rbps=524288000 wbps=max riops=max wiops=max
 ```
 
-For `IOWeight`, check `[bfq]` in device `queue/scheduler` or `enable=1` in root `io.cost.qos`. Report the provider. Reject if neither.
+For `IOWeight`, the kernel needs iocost. Then check `[bfq]` in device `queue/scheduler` or `enable=1` in root `io.cost.qos`. Report the provider. Reject if neither.
 
-Iocost needs `io.weight` only. BFQ requires both weight files. Systemd writes BFQ range 1-1000. See source [16](#source-16).
+Iocost needs `io.weight` only. BFQ requires both weight files. Only iocost gives the `io.weight` file, so the check before unload requires `io.weight` at the user manager root. On a kernel without iocost, a unit with `IOWeight` does not start. Systemd writes BFQ range 1-1000. See source [16](#source-16).
 
 For input N<=100, B=N. Otherwise `B=100+(N-100)*900/9900` with integer arithmetic. See source [17](#source-17).
 
@@ -228,6 +259,55 @@ IOWriteIOPSMax=/dev/<kernel name> <count>
 ```
 
 Only `parseOwnedLaunchUnit` and the exact trainer form accept this block. Remove the exact rendered block before shared grammar parsing, as for owned dependencies. The owned-unit path rejects resource controls in any other position, including legacy and `Startup` forms. Adopted and imported grammar still accepts these directives, because the supervisor gives those units no limits. Use no owned-unit drop-ins.
+
+## Runtime checks
+
+The runtime applies these checks to units with limits. Units without limits do not change. Where this design differs from these checks, the checks describe the current release. In this release, the escape route gate in the first row refuses each unit with limits before the other checks run.
+
+| Time | Check | Error |
+| --- | --- | --- |
+| Before unload, before start, each health check, before reconciliation keeps a unit | Escape route gate. This release refuses each unit with limits | `ErrEscapeRoutesUnchecked` |
+| Before unload, before start | `cgroup.controllers` of the user manager root lists each required controller. When the memory controller is in use, `memory.swap.max` is present there. With `IOWeight`, `io.weight` is present there | `ErrLimitController`, `ErrLimitInterface`, `ErrLimitReadback` |
+| Before unload, before start | Host cap. See the [host cap rules](#host-cap-rules) | `ErrHostCap`, `ErrLimitReserve`, `ErrLimitReadback` |
+| Before unload, before start | Each unit limit is at most its slice cap minus the [reserve](#reserve-and-pressure). The memory cap is the lower of slice `memory.high` and `memory.max` | `ErrLimitReserve` |
+| Before unload, before start | The I/O device is a root-owned leaf block device with the catalog number. With `IOWeight`, the device uses the active BFQ scheduler, or the root `io.cost.qos` line of the device has `enable=1`. Without BFQ, the root `io.cost.qos` is root-owned without group or other write, ACL or file capability | `ErrLimitDevice`, `ErrHostCap`, `ErrLimitReadback` |
+| Before unload, before start | Loaded properties match the catalog, with `OOMPolicy` and `OOMScoreAdjust`. The binding check requires no drop-ins and `NeedDaemonReload=no` | `ErrLimitProperties`, `ErrLaunchChanged`, `ErrLaunchUnsupported` |
+| Before start | The slice memory in use is `memory.current` minus the page cache (`active_file` plus `inactive_file` in `memory.stat`). That memory plus unit `MemoryMax` plus 2048 MiB is at most the lower of slice `memory.high` and `memory.max` | `ErrLimitMemory`, `ErrLimitReadback` |
+| After start | The controller, host cap, reserve, device and loaded property checks again. Then the readback, as in the next row | `ErrLimitController`, `ErrLimitInterface`, `ErrHostCap`, `ErrLimitReserve`, `ErrLimitDevice`, `ErrLimitProperties`, `ErrLimitReadback` and `ErrLimitDrift`. A definite failure also carries `ErrLimitCheckFailed` |
+| Each health check, before reconciliation keeps a unit | The escape route gate, the binding and the checks before unload again. Then the readback: the memory, pids and cpu files, unset controls included. With a CPU quota, `cpu.max.burst` is 0, or absent on a kernel without burst. `io.max` only with an I/O cap. `io.weight` only with `IOWeight`, and `io.bfq.weight` with BFQ | The errors of the rows above, and `ErrLimitDrift`. A definite failure also carries `ErrLimitCheckFailed` |
+
+The catalog schema accepts limits without `memoryMaxMiB`, `tasksMax`, `cpuQuotaPercent` or the I/O caps that the slice caps, so setup can read and remove them. The launch checks refuse such a unit with `ErrLimitReserve`. The error names the missing memory, task and CPU fields first. After you set them, it names each missing I/O cap.
+
+A refusal before unload maps to `incompatible_configuration`. A definite failure after start carries `ErrLimitCheckFailed`. In a switch, the supervisor then ends the verification at once and stops the unit. From a supervisor-owned state, the rollback stops it. From a user-owned state, the failed transition stops it as a journaled limit stop before it latches the error state.
+
+A readback failure of a unit that stopped during the readback is not definite. In the health checks after the start, a switch retries it until its deadline. In Start, each failure after the start call stops the unit. A failed `systemctl start` call also stops the unit, because systemd can still run the start job.
+
+The stop after a failed check has a fixed limit of 2 minutes. This limit covers the SIGTERM phase of the systemd default stop timeout of 90 seconds and a prompt SIGKILL. Systemd gives each kill phase the same timeout. A process that stays in an uninterruptible wait after SIGKILL, such as a GPU driver wait, can make this stop fail first. Owned units do not set `TimeoutStopSec`, so a `DefaultTimeoutStopSec` of the user manager above about 110 seconds can also make it fail first. Then the start returns the stop error with the limit error, and systemd continues to stop the unit.
+
+### Host cap rules
+
+- `DropInPaths` of the slice lists the slice drop-in.
+- With an I/O control, `DropInPaths` of the user manager lists the `Delegate=io` drop-in.
+- `DropInPaths` lists only these drop-ins and vendor files under `/usr/lib/systemd/system`. The runtime accepts a vendor path under `/lib/systemd/system` only when `/lib` is a root-owned link to `usr/lib` or `/usr/lib`.
+- The runtime walks each listed file without symlinks. Each file and each parent directory needs a root owner, no group or other write, no ACL and no file capability.
+- Both units show `NeedDaemonReload=no`. Another value is `ErrLimitReadback`, not `ErrHostCap`. A launch fails, and the start stops the unit that it just started. An already running unit (status, reconcile) does not stop.
+- The slice `ControlGroup` contains the user manager cgroup.
+- The slice `cpu.max` gives a whole number of microseconds per second. The runtime does not support a non-default `CPUQuotaPeriodSec` on the slice, and the error says to remove it.
+- The slice files `memory.high`, `memory.max`, `pids.max` and `cpu.max` are finite and root-owned without group or other write, ACL or file capability. The same trust rules apply to the slice `memory.swap.max` and `io.max`.
+- With `IOWeight` and no BFQ, the root `io.cost.qos` is root-owned without group or other write, ACL or file capability. An untrusted file is `ErrHostCap`.
+- The slice `memory.swap.max` is 0. A missing file is `ErrHostCap`. See [host-cap checks](#host-cap-checks).
+- The slice properties match these files. On a mismatch, the runtime reads the properties again. Changed values or a reload need are `ErrLimitReadback`. The kernel keeps `memory.high` and `memory.max` in whole pages. The runtime rounds the systemd byte values down to a whole page before it compares them.
+- With an I/O cap, the slice `io.max` has a finite cap of the same key for the device.
+- The slice `io.max` caps no device other than the unit `ioDevice`. This rule applies to each unit with limits, also to a unit with no I/O fields. A unit has one `ioDevice`, so it cannot cap a second device. A cap on another device refuses the unit with `ErrLimitReserve`. To fix it, remove that cap from the slice drop-in. Or set `ioDevice` to that device and set its I/O caps.
+- Each error of a unit state or drop-in names the unit: the slice or `user@UID.service`.
+- A missing or untrusted host file is `ErrHostCap`. Other open and read failures are `ErrLimitReadback`. For `/lib`, a missing link, a `/lib` that is not a link, a link elsewhere or another owner is `ErrHostCap`.
+- Some files have other classes. A missing root `io.cost.qos` means no iocost, which is `ErrLimitDevice` for a unit with `IOWeight` and no BFQ. A missing slice `io.max` passes when the unit has no I/O cap. A slice or hierarchy that is missing, or that the runtime cannot check or open, is `ErrLimitReadback`. A symlink or a file where a directory must be is `ErrHostCap`. The slice `memory.current` and `memory.stat` are usage counters, so any failed or untrusted read of them is `ErrLimitReadback`.
+
+The runtime uses the proposed reserve values until the desktop options can change them. Package manager checks of vendor drop-ins and the escape route checks come with setup support.
+
+### Limits of the readback
+
+The readback runs only at transitions, at health checks and at reconciliation. Nothing reads the values back on a schedule while the state is healthy. The unit cgroup is part of the user manager tree, which systemd delegates to the service account. The workload and any other program of that account can change the unit limits between two readbacks. The root-owned slice cap is the boundary that this account cannot change.
 
 ## Drift checks
 
@@ -309,13 +389,13 @@ Display ceiling and current usage beside fields. Show memory in GiB, CPU in core
 | Controller not enabled | This computer does not let the account limit `<controller>`. An administrator must change the account settings |
 | Interface file missing | The system cannot apply `<control>`. `<kernel feature>` is off on this computer |
 | Host cap absent or different | The host protection of this account is missing or different. See the step on this page |
-| Reserve violation | This limit leaves too little room for the supervisor. Use `<value>` or less |
+| Reserve violation | This limit leaves too little room for the supervisor. Use `<allowed>` or less, or remove the limits through setup. When no valid value fits, raise the slice cap to at least `<needed cap>`, or remove the limits through setup |
 | Escape route | Programs from this account can run outside host protection through `<route>`. Setup did not save limits |
-| Memory pressure | Slice memory does not fit this limit. `<usage>` MiB is in use, and the ceiling is `<ceiling>` MiB |
+| Memory pressure | Slice memory does not fit this limit. `<usage>` MiB is in use. The `<cache>` MiB of page cache that the kernel can reclaim does not count. The start needs `<need>` MiB: `memoryMaxMiB` plus a 2048 MiB reserve. The ceiling is `<ceiling>` MiB. Check `/dev/shm` and `tmpfs` use |
 | Memory usage unknown | Setup cannot read the memory already in use. Setup did not save limits |
 | Drift | A limit changed after start. The supervisor stopped the workload. `<control>` was `<actual>`, not `<expected>` |
 | Readback failure | Setup cannot read `<path>` (`<errno>`). The supervisor stopped the workload |
-| `IOWeight` not applicable | The selected disk does not support I/O weight |
+| `IOWeight` not applicable | `<number>` (`<device>`) does not support I/O weight (no BFQ or iocost). Without a device name in sysfs, the text gives the number only |
 
 Present requires hard slice ceilings and passing escape checks. An open route cannot count as Present.
 
@@ -346,16 +426,16 @@ If the original catalog used its minimum version, exact bytes return. Otherwise 
 | Field | Range | Rule |
 | --- | --- | --- |
 | `memoryHighMiB` | 256 to 16777216 | Less than `memoryMaxMiB` when the unit has both |
-| `memoryMaxMiB` | 256 to 16777216 | None |
+| `memoryMaxMiB` | 256 to 16777216 | Required to start the unit |
 | `memorySwapMaxMiB` | 0 to 16777216 | Needs `memoryMaxMiB`. 0 when absent |
-| `tasksMax` | 64 to 4194304 | None |
+| `tasksMax` | 64 to 4194304 | Required to start the unit |
 | `cpuWeight` | 1 to 10000 | None |
-| `cpuQuotaPercent` | 1 to 102400 | None |
+| `cpuQuotaPercent` | 1 to 102400 | Required to start the unit |
 | `ioDevice` | `^/dev/[a-z][a-z0-9]{0,31}$` | Required with any I/O field. Setup writes the canonical kernel name |
 | `ioDeviceNumber` | `MAJ:MIN` | Required with `ioDevice`. Setup writes it |
-| `ioReadBandwidthMax`, `ioWriteBandwidthMax` | 1048576 to 1099511627776 | Bytes per second |
-| `ioReadIOPSMax`, `ioWriteIOPSMax` | 100 to 10000000 | Operations per second |
-| `ioWeight` | 1 to 10000 | Needs BFQ or iocost on `ioDevice` |
+| `ioReadBandwidthMax`, `ioWriteBandwidthMax` | 1048576 to 1099511627776 | Bytes per second. Required to start the unit when the slice `io.max` caps the key |
+| `ioReadIOPSMax`, `ioWriteIOPSMax` | 100 to 10000000 | Operations per second. Required to start the unit when the slice `io.max` caps the key |
+| `ioWeight` | 1 to 10000 | Needs iocost in the kernel, and BFQ or iocost on `ioDevice` |
 
 ## Qualification procedure
 

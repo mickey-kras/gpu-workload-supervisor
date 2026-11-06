@@ -88,11 +88,26 @@ func (l ResourceLimits) IsZero() bool {
 
 // UsesIO reports whether any I/O control is set.
 func (l ResourceLimits) UsesIO() bool {
-	return l.IOReadBandwidthMax != 0 || l.IOWriteBandwidthMax != 0 || l.IOReadIOPSMax != 0 || l.IOWriteIOPSMax != 0 || l.IOWeight != 0
+	return l.ThrottlesIO() || l.IOWeight != 0
+}
+
+// UsesMemory reports whether MemoryHigh or MemoryMax is set.
+func (l ResourceLimits) UsesMemory() bool {
+	return l.MemoryHighMiB != 0 || l.MemoryMaxMiB != 0
+}
+
+// UsesCPU reports whether CPUWeight or CPUQuota is set.
+func (l ResourceLimits) UsesCPU() bool {
+	return l.CPUWeight != 0 || l.CPUQuotaPercent != 0
+}
+
+// ThrottlesIO reports whether any io.max cap is set.
+func (l ResourceLimits) ThrottlesIO() bool {
+	return l.IOReadBandwidthMax != 0 || l.IOWriteBandwidthMax != 0 || l.IOReadIOPSMax != 0 || l.IOWriteIOPSMax != 0
 }
 
 func (l ResourceLimits) hasControl() bool {
-	return l.MemoryHighMiB != 0 || l.MemoryMaxMiB != 0 || l.TasksMax != 0 || l.CPUWeight != 0 || l.CPUQuotaPercent != 0 || l.UsesIO()
+	return l.UsesMemory() || l.TasksMax != 0 || l.UsesCPU() || l.UsesIO()
 }
 
 // Validate applies the bounded schema. systemd ignores an invalid value with

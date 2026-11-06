@@ -15,6 +15,24 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/httptransport"
 )
 
+// refuseUncheckedEscapeRoutes is the launch gate of this release.
+func refuseUncheckedEscapeRoutes(context.Context, control.WorkloadProfile) error {
+	return ErrEscapeRoutesUnchecked
+}
+
+// limitCleanupTimeout bounds the stop after a failed limit check in Start.
+// The budget is fixed on purpose. The stop must end the unit, so it does not
+// depend on a caller budget that a short entry point sets. It covers the
+// SIGTERM phase of the default systemd stop timeout of 90 seconds and a
+// prompt SIGKILL. systemd also gives each kill phase TimeoutStopSec, so a
+// process that stays in an uninterruptible wait after SIGKILL, such as a
+// GPU driver wait, can end this budget first even with the defaults. Owned
+// units set no TimeoutStopSec, so a user manager DefaultTimeoutStopSec
+// above about 110 seconds can also end it first. The stop job that systemd
+// queued still runs, and Start returns the stop error with the limit
+// error.
+const limitCleanupTimeout = 2 * time.Minute
+
 type CommandRunner interface {
 	Run(context.Context, string, ...string) ([]byte, error)
 }
@@ -46,10 +64,15 @@ type SystemdConfig struct {
 }
 
 type SystemdManager struct {
-	config                    SystemdConfig
-	runner                    CommandRunner
-	client                    *http.Client
-	cgroups                   cgroupFS
+	config  SystemdConfig
+	runner  CommandRunner
+	client  *http.Client
+	cgroups cgroupFS
+	host    limitHost
+	// escapeRoutes checks that no program of the service account can run
+	// outside the host cap. This release has no such check, so it refuses
+	// every unit with limits; tests replace it to reach the other checks.
+	escapeRoutes              func(context.Context, control.WorkloadProfile) error
 	nativeExecutableValidator func(string) error
 }
 
@@ -90,7 +113,7 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 	if runner == nil || client == nil {
 		return nil, errors.New("runner and HTTP client are required")
 	}
-	return &SystemdManager{config: config, runner: runner, client: client, cgroups: cgroupFS{root: "/sys/fs/cgroup", verify: verifyUnifiedHierarchy}}, nil
+	return &SystemdManager{config: config, runner: runner, client: client, cgroups: cgroupFS{root: "/sys/fs/cgroup", verify: verifyUnifiedHierarchy}, host: defaultLimitHost(), escapeRoutes: refuseUncheckedEscapeRoutes}, nil
 }
 
 func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) error {
@@ -101,13 +124,50 @@ func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) e
 	if p.Trainer != nil {
 		return errors.New("finite trainer requires an admitted job")
 	}
-	if err := RequireEnforceableLimits(p); err != nil {
-		return err
+	if p.HasLimits() {
+		return m.startLimitedUnit(ctx, p)
 	}
 	if err := m.verifyNativeBinding(ctx, p); err != nil {
 		return err
 	}
 	return m.startUnit(ctx, p.Unit, workload)
+}
+
+// startLimitedUnit runs the launch checks and the slice memory check, starts
+// the unit and checks its limits. Each limit error names the workload and
+// the unit.
+func (m *SystemdManager) startLimitedUnit(ctx context.Context, p control.WorkloadProfile) error {
+	limitCap, err := m.launchChecks(ctx, p)
+	if err == nil {
+		err = m.admitMemory(limitCap, p.NativeModel.Owned.Limits)
+	}
+	if err == nil {
+		err = m.prepareStart(ctx, p.ID)
+	}
+	if err != nil {
+		return UnitError(p, err)
+	}
+	// A failed start call can still leave a queued start job.
+	err = m.runSystemctl(ctx, "start", p.Unit)
+	if err == nil {
+		err = m.verifyStartedLimits(ctx, p)
+	}
+	if err != nil {
+		// Start owns the unit it just started: a rollback start must not
+		// leave a unit with failed limits running. The stop runs on its own
+		// bounded context, because the start context can be spent. The stop
+		// error is joined.
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), limitCleanupTimeout)
+		defer cancel()
+		return UnitError(p, errors.Join(err, m.stopUnit(stopCtx, p.Unit)))
+	}
+	return nil
+}
+
+// UnitError names the workload and the unit of err, as "id (unit): ". The
+// supervisor uses it too, so both name a unit the same way.
+func UnitError(p control.WorkloadProfile, err error) error {
+	return fmt.Errorf("%s (%s): %w", p.ID, p.Unit, err)
 }
 
 // StopForRecovery shuts down every configured unit regardless of adapter policy.
@@ -144,7 +204,7 @@ func (m *SystemdManager) releasedUnit(ctx context.Context, unit, group string, a
 	if !state.hasCgroup || (state.cgroup != "" && state.cgroup != group) {
 		return fmt.Errorf("%s ControlGroup does not match configured cgroup %s or metadata is missing", unit, group)
 	}
-	if err := m.verifyManagerCgroup(ctx); err != nil {
+	if _, err := m.managerCgroup(ctx); err != nil {
 		return err
 	}
 	if err := m.cgroups.empty(group); err != nil {
@@ -180,34 +240,36 @@ func (m *SystemdManager) unitState(ctx context.Context, unit string) (systemdUni
 	return state, nil
 }
 
-// The user's root slice identifies the same manager namespace that reports unit
-// paths. Unlike /proc/1/ns/cgroup, this evidence is available to an ordinary user.
-func (m *SystemdManager) verifyManagerCgroup(ctx context.Context) error {
+// managerCgroup verifies the user manager root slice and returns its
+// validated cgroup, so callers use the value that was checked. The user's
+// root slice identifies the same manager namespace that reports unit paths.
+// Unlike /proc/1/ns/cgroup, this evidence is available to an ordinary user.
+func (m *SystemdManager) managerCgroup(ctx context.Context) (string, error) {
 	state, err := m.readUnitState(ctx, "-.slice")
 	if err != nil {
-		return fmt.Errorf("inspect systemd manager cgroup anchor: %w", err)
+		return "", fmt.Errorf("inspect systemd manager cgroup anchor: %w", err)
 	}
 	if state.active != "active" || state.sub != "active" || !state.hasCgroup {
-		return errors.New("systemd manager root slice must be loaded/active with ControlGroup metadata")
+		return "", errors.New("systemd manager root slice must be loaded/active with ControlGroup metadata")
 	}
 	if err := validateCgroup(state.cgroup); err != nil {
-		return fmt.Errorf("systemd manager cgroup anchor: %w", err)
+		return "", fmt.Errorf("systemd manager cgroup anchor: %w", err)
 	}
 	for _, p := range m.config.Catalog.Profiles {
 		if !strings.HasPrefix(p.Cgroup, state.cgroup+"/") {
-			return errors.New("configured cgroup is not within systemd manager root")
+			return "", errors.New("configured cgroup is not within systemd manager root")
 		}
 		// Owned profiles admit no degrees of freedom: the cgroup must be the
 		// exact derivation from the discovered manager root, so a hand-edited
 		// profile cannot escape into a foreign or nested prefix.
 		if p.NativeModel != nil && p.NativeModel.Owned != nil && p.Cgroup != OwnedCgroup(state.cgroup, p) {
-			return errors.New("owned workload cgroup must derive from the systemd manager root")
+			return "", errors.New("owned workload cgroup must derive from the systemd manager root")
 		}
 	}
 	if err := m.cgroups.check(state.cgroup, false); err != nil {
-		return SafeError("systemd manager cgroup anchor is unavailable", err)
+		return "", SafeError("systemd manager cgroup anchor is unavailable", err)
 	}
-	return nil
+	return state.cgroup, nil
 }
 
 func (m *SystemdManager) readUnitState(ctx context.Context, unit string) (systemdUnitState, error) {
@@ -259,7 +321,7 @@ func (m *SystemdManager) resetStoppedFailure(ctx context.Context, unit string, s
 	if !state.hasCgroup {
 		return errors.New("workload ControlGroup metadata unavailable")
 	}
-	if err := m.verifyManagerCgroup(ctx); err != nil {
+	if _, err := m.managerCgroup(ctx); err != nil {
 		return err
 	}
 	if err := m.cgroups.empty(m.profileForUnit(unit).Cgroup); err != nil {
@@ -269,13 +331,19 @@ func (m *SystemdManager) resetStoppedFailure(ctx context.Context, unit string, s
 }
 
 func (m *SystemdManager) startUnit(ctx context.Context, unit string, workload control.Workload) error {
-	if err := m.ReleasedFor(ctx, workload); err != nil {
-		return err
-	}
-	if err := m.capacity(ctx, workload); err != nil {
+	if err := m.prepareStart(ctx, workload); err != nil {
 		return err
 	}
 	return m.runSystemctl(ctx, "start", unit)
+}
+
+// prepareStart requires the release of the other workloads and the GPU
+// capacity before a start. It starts nothing.
+func (m *SystemdManager) prepareStart(ctx context.Context, workload control.Workload) error {
+	if err := m.ReleasedFor(ctx, workload); err != nil {
+		return err
+	}
+	return m.capacity(ctx, workload)
 }
 
 func (m *SystemdManager) stopUnit(ctx context.Context, unit string) error {

@@ -265,3 +265,83 @@ func TestSetupRejectsUnsupportedVersionBeforeNormalizing(t *testing.T) {
 		t.Fatalf("decode without version = %v", err)
 	}
 }
+
+// After a limit rejection, reconcile leaves the state latched in error, and
+// setup refuses it. The test writes the state that recovery settles, and
+// setup then applies the request that removes the limits.
+func TestSetupRemovesLimitsAfterRecovery(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommandFor(home)
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	ctx := context.Background()
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	acceptLimitedCatalog(t, home, r)
+	r.ExpectedRevision = acceptedRevision(t, r).Revision
+	setState := func(health control.Health, phase control.Phase) {
+		t.Helper()
+		s := openStoreAt(t, r.Profile.StatePath)
+		defer s.Close()
+		state, err := s.State(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state.Health, state.Phase, state.Admission = health, phase, control.AdmissionClosed
+		state.ActiveWorkload, state.DesiredWorkload = control.WorkloadIdle, control.WorkloadIdle
+		if _, err := s.Recover(ctx, state.Version, state, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.Catalog = control.Catalog{Version: 5, Profiles: []control.WorkloadProfile{profile}}
+	setState(control.HealthError, control.PhaseReconciling)
+	latchedErr := backend.Apply(ctx, home, r)
+	if latchedErr == nil || !strings.Contains(latchedErr.Error(), "requires explicitly quiesced healthy Idle") || !acceptedRevision(t, r).Catalog.HasLimits() {
+		t.Fatalf("apply while latched = %v", latchedErr)
+	}
+	// The state that recovery settles: stable, healthy, closed Idle.
+	setState(control.HealthHealthy, control.PhaseStable)
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatalf("apply that removes limits after recovery = %v (latched: %v)", err, latchedErr)
+	}
+	if accepted := acceptedRevision(t, r).Catalog; accepted.HasLimits() {
+		t.Fatal("limits remain after the removal")
+	}
+}
+
+// Setup checks a healthy, stable Idle with closed admission, not the owner:
+// a user-owned Idle can remove limits, so the next steps need not return
+// control to the supervisor first.
+func TestSetupRemovesLimitsFromUserOwnedIdle(t *testing.T) {
+	backend, home, r := fixture(t)
+	backend.runCommand = fakeOwnedCommandFor(home)
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	ctx := context.Background()
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	acceptLimitedCatalog(t, home, r)
+	r.ExpectedRevision = acceptedRevision(t, r).Revision
+	s := openStoreAt(t, r.Profile.StatePath)
+	state, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Owner, state.Health, state.Phase, state.Admission = control.OwnerUser, control.HealthHealthy, control.PhaseStable, control.AdmissionClosed
+	state.ActiveWorkload, state.DesiredWorkload = control.WorkloadIdle, control.WorkloadIdle
+	if _, err := s.Recover(ctx, state.Version, state, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r.Catalog = control.Catalog{Version: 5, Profiles: []control.WorkloadProfile{profile}}
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatalf("apply that removes limits from a user-owned Idle = %v", err)
+	}
+	if acceptedRevision(t, r).Catalog.HasLimits() {
+		t.Fatal("limits remain after the removal")
+	}
+}

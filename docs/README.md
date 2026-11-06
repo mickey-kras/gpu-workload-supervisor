@@ -22,7 +22,7 @@ Start with desktop setup or host deployment. Complete host and adapter qualifica
 - [Local operator protocol](OPERATIONS.md#local-operator-protocol) and [requester ingress](OPERATIONS.md#optional-requester-ingress)
 - [Optional demand activation and inactivity policy](OPERATIONS.md#demand-activation-and-inactivity-idle-plan): defaults to Off and requires a qualified evidence provider
 - [Model checks](MODEL-CHECKS.md): file allowlist, upstream identity, static chat template check and results. No command runs them yet
-- [Resource-limit design](RESOURCE-LIMITS.md): catalog v5 accepts the schema. Units with limits do not start yet
+- [Resource-limit design](RESOURCE-LIMITS.md): catalog v5 accepts the schema. Units with limits do not start yet: this release has no escape route checks
 
 ## Maintenance
 

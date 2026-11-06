@@ -15,17 +15,6 @@ const ownedRenderErrorFormat = "%w: %v"
 
 var ErrOwnedRender = errors.New("owned launch cannot be rendered to the supported unit subset")
 
-// ErrLimitsNotEnforced keeps a unit with limits from starting until the
-// controller, host cap and cgroup readback checks of the limits design exist.
-// systemd starts a unit even when it cannot apply a limit, so launching
-// without those checks would claim protection that may be absent. The
-// supervisor refuses a switch or activation to that profile before any
-// unload, Start and Healthy refuse it as a backstop, and reconciliation does
-// not retain it. Other profiles, preflight and release are not affected.
-// Setup rejects limits separately (ErrLimitsNotInSetup) but accepts a request
-// that removes them.
-var ErrLimitsNotEnforced = errors.New("resource limits are configured, but this build cannot verify them; remove the workload through setup, or restore a backup")
-
 // ownedServiceHeader is the fixed [Service] opening. Limit lines follow it
 // directly, so the strict parser can remove them at one exact position.
 const ownedServiceHeader = "\n[Service]\nType=simple\nRestart=no\n"
@@ -219,15 +208,4 @@ func removeOwnedLimitLines(raw []byte, limits control.ResourceLimits) ([]byte, e
 	}
 	start := at + len(ownedServiceHeader)
 	return []byte(text[:start] + text[start+len(block):]), nil
-}
-
-// RequireEnforceableLimits is the one launch gate. The supervisor calls it for
-// a switch target before any unload, and Start and Healthy call it for their
-// own profile as the backstop. A limited unit cannot block other workloads or
-// the setup change that removes it.
-func RequireEnforceableLimits(p control.WorkloadProfile) error {
-	if p.HasLimits() {
-		return fmt.Errorf("%s (%s): %w", p.ID, p.Unit, ErrLimitsNotEnforced)
-	}
-	return nil
 }

@@ -1,13 +1,11 @@
 package runtime
 
 import (
-	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -15,6 +13,14 @@ import (
 )
 
 func limitedOwnedProfile(t *testing.T) (control.WorkloadProfile, []byte) {
+	t.Helper()
+	return ownedProfileWithLimits(t, control.ResourceLimits{Version: 1, MemoryHighMiB: 4096, MemoryMaxMiB: 8192, TasksMax: 4096, CPUQuotaPercent: 400,
+		IODevice: "/dev/nvme0n1", IODeviceNumber: "259:0", IOReadBandwidthMax: 1 << 30})
+}
+
+// ownedProfileWithLimits renders a verifiable owned unit with limits against
+// a fixture executable directory.
+func ownedProfileWithLimits(t *testing.T, limits control.ResourceLimits) (control.WorkloadProfile, []byte) {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "vllm"), []byte("#!/bin/false\n"), 0700); err != nil {
@@ -27,8 +33,6 @@ func limitedOwnedProfile(t *testing.T) (control.WorkloadProfile, []byte) {
 	if err := os.Mkdir(modelDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	limits := control.ResourceLimits{Version: 1, MemoryHighMiB: 4096, MemoryMaxMiB: 8192, TasksMax: 4096, CPUQuotaPercent: 400,
-		IODevice: "/dev/nvme0n1", IODeviceNumber: "259:0", IOReadBandwidthMax: 1 << 30}
 	p := ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: modelDir, Port: 9100, Alias: "selected", Conflicts: "gws-owned-alpha.service", Limits: limits})
 	*p.NativeModel = newHardenedFixture(t).bind(*p.NativeModel)
 	raw, err := RenderOwnedUnit(p)
@@ -149,89 +153,5 @@ func TestOnlyOwnedGrammarRejectsLimitDirectives(t *testing.T) {
 	}
 	if resourceLimitDirective("Description") || resourceLimitDirective("StartupDescription") {
 		t.Fatal("unrelated directive classified as a limit")
-	}
-}
-
-// limitedManager adds a verifiable owned unit with limits next to the
-// stopped text and media fixtures.
-func limitedManager(t *testing.T) (*SystemdManager, *fakeRunner, control.WorkloadProfile) {
-	t.Helper()
-	p, raw := limitedOwnedProfile(t)
-	dir := t.TempDir()
-	p.NativeModel.LaunchFile = filepath.Join(dir, p.Unit)
-	if err := os.WriteFile(p.NativeModel.LaunchFile, raw, 0600); err != nil {
-		t.Fatal(err)
-	}
-	p.Label, p.Adapter, p.Cgroup, p.HealthURL = "Vision", "systemd", "/workloads/app.slice/"+p.Unit, "http://127.0.0.1:9100/health"
-	r := stoppedRunner()
-	m := strictManager(t, r)
-	catalog := m.config.Catalog.Clone()
-	catalog.Version = control.CatalogVersionLimits
-	catalog.Profiles = append(catalog.Profiles, p)
-	m.config.Catalog = &catalog
-	m.config.OwnedUnitDir = dir
-	m.nativeExecutableValidator = fixtureExecutableValidator
-	launch, err := parseOwnedLaunchUnit(raw, *p.NativeModel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	show := "/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload --property=ExecStartPre --property=ExecStart --property=Environment --property=EnvironmentFiles -- " + p.Unit
-	r.outputs[show] = []byte("ExecStart={ path=" + strings.Fields(launch.execStart)[0] + " ; argv[]=" + launch.execStart + " ; }\nFragmentPath=" + p.NativeModel.LaunchFile + "\nDropInPaths=\nNeedDaemonReload=no\nEnvironment=HF_HUB_OFFLINE=1\nEnvironmentFiles=" + p.NativeModel.EnvironmentFile + " (ignore_errors=no)\n")
-	r.outputs["/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- "+p.Unit] = stoppedOutput()
-	for _, group := range []string{"text.service", "media.service", "app.slice/" + p.Unit} {
-		writeEvents(t, filepath.Join(m.cgroups.root, "workloads"), group, "populated 0\n")
-	}
-	return m, r, p
-}
-
-func TestUnitWithLimitsDoesNotLaunchUntilEnforced(t *testing.T) {
-	m, r, p := limitedManager(t)
-	ctx := context.Background()
-	// The gate covers only the limited profile's own start and health.
-	// Preflight, release for any target and other profiles stay available,
-	// so setup can still remove the limits.
-	if err := m.verifyNativeBinding(ctx, p); err != nil {
-		t.Fatalf("binding verification of a limited unit = %v", err)
-	}
-	if err := m.Preflight(ctx); err != nil {
-		t.Fatalf("preflight with a limited unit = %v", err)
-	}
-	for _, target := range []control.Workload{control.WorkloadIdle, control.WorkloadText, p.ID} {
-		if err := m.ReleasedFor(ctx, target); err != nil {
-			t.Fatalf("release for %s with a limited unit = %v", target, err)
-		}
-	}
-	calls := len(r.calls)
-	for name, call := range map[string]func() error{
-		"start":  func() error { return m.Start(ctx, p.ID) },
-		"health": func() error { return m.Healthy(ctx, p.ID) },
-	} {
-		err := call()
-		if !errors.Is(err, ErrLimitsNotEnforced) || !strings.Contains(err.Error(), string(p.ID)) || !strings.Contains(err.Error(), p.Unit) {
-			t.Fatalf("%s of a limited unit = %v", name, err)
-		}
-	}
-	for _, call := range r.calls[calls:] {
-		if strings.Contains(call, " start ") {
-			t.Fatalf("limited unit started: %v", r.calls[calls:])
-		}
-	}
-	// Another profile still starts and gets a health check without the gate.
-	calls = len(r.calls)
-	if err := m.Start(ctx, control.WorkloadText); errors.Is(err, ErrLimitsNotEnforced) {
-		t.Fatalf("start of an unlimited profile = %v", err)
-	}
-	if !slices.ContainsFunc(r.calls[calls:], func(call string) bool { return strings.HasSuffix(call, " start -- text.service") }) {
-		t.Fatalf("unlimited profile not started: %v", r.calls[calls:])
-	}
-	if err := m.Healthy(ctx, control.WorkloadText); errors.Is(err, ErrLimitsNotEnforced) {
-		t.Fatalf("health of an unlimited profile = %v", err)
-	}
-	plain := ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: "/models/v", Port: 9100})
-	if err := RequireEnforceableLimits(plain); err != nil {
-		t.Fatalf("unit without limits blocked: %v", err)
-	}
-	if err := RequireEnforceableLimits(control.WorkloadProfile{}); err != nil {
-		t.Fatalf("profile without a native model blocked: %v", err)
 	}
 }
