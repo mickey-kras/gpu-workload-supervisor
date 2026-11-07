@@ -17,9 +17,15 @@ import (
 // the service account can run outside the host cap, or a source that the
 // scan cannot check. Escape routes do not block limits. Limits protect
 // against runaway workloads, not against hostile code of the same UID.
+//
+// Unchecked marks a source that the scan cannot check: its item starts
+// with "cannot check". Count gives the number of left-out findings on the
+// "more" entry.
 type EscapeRoute struct {
-	Route string `json:"route"`
-	Item  string `json:"item"`
+	Route     string `json:"route"`
+	Item      string `json:"item"`
+	Unchecked bool   `json:"unchecked,omitempty"`
+	Count     int    `json:"count,omitempty"`
 }
 
 // maxEscapeRoutes bounds the report. A longer report ends with one
@@ -102,7 +108,8 @@ func pathHasACL(name string) (bool, error) {
 }
 
 // scan runs each check and returns the bounded report. A spent context
-// stops the scan between checks, and the report says so.
+// stops the scan between checks, between the entries of a directory and
+// between file reads. The report says so.
 func (s escapeScanner) scan(ctx context.Context) []EscapeRoute {
 	s.ctx = ctx
 	var report routeReport
@@ -121,23 +128,27 @@ func (s escapeScanner) scan(ctx context.Context) []EscapeRoute {
 		}
 		check()
 	}
+	// The context can end during the last check.
+	s.stopped(&report)
 	return report.bounded()
 }
 
 // stopped reports a spent scan context, and records it once.
 func (s escapeScanner) stopped(report *routeReport) bool {
 	err := s.ctx.Err()
-	if err != nil {
-		report.unchecked(routeIncomplete, "the rest of the routes ("+err.Error()+")")
+	if err != nil && report.incomplete == nil {
+		report.incomplete = &EscapeRoute{Route: routeIncomplete, Item: "cannot check the rest of the routes (" + err.Error() + ")", Unchecked: true}
 	}
 	return err != nil
 }
 
 // routeReport collects the findings of a scan. missed holds the sources
 // that the scan cannot check, found holds the other findings. Each list
-// holds an entry only once.
+// holds an entry only once. incomplete is set when the context ended the
+// scan early.
 type routeReport struct {
 	missed, found []EscapeRoute
+	incomplete    *EscapeRoute
 }
 
 func (r *routeReport) add(route, item string) {
@@ -146,7 +157,7 @@ func (r *routeReport) add(route, item string) {
 
 // unchecked reports a source that the scan cannot check.
 func (r *routeReport) unchecked(route, source string) {
-	r.missed = appendOnce(r.missed, EscapeRoute{Route: route, Item: "cannot check " + source})
+	r.missed = appendOnce(r.missed, EscapeRoute{Route: route, Item: "cannot check " + source, Unchecked: true})
 }
 
 func appendOnce(list []EscapeRoute, item EscapeRoute) []EscapeRoute {
@@ -157,11 +168,16 @@ func appendOnce(list []EscapeRoute, item EscapeRoute) []EscapeRoute {
 }
 
 // bounded returns at most maxEscapeRoutes findings, never nil. The
-// "cannot check" items come first: a finding that the scan missed can hide
-// behind each of them, so the truncation keeps them. The last entry names
-// the routes of the findings that it leaves out.
+// incomplete entry always stays first. The "cannot check" items come next:
+// a finding that the scan missed can hide behind each of them, so the
+// truncation keeps them. The last entry names the routes of the findings
+// that it leaves out.
 func (r *routeReport) bounded() []EscapeRoute {
-	items := append(append(make([]EscapeRoute, 0, len(r.missed)+len(r.found)), r.missed...), r.found...)
+	items := make([]EscapeRoute, 0, len(r.missed)+len(r.found)+1)
+	if r.incomplete != nil {
+		items = append(items, *r.incomplete)
+	}
+	items = append(append(items, r.missed...), r.found...)
 	if len(items) <= maxEscapeRoutes {
 		return items
 	}
@@ -173,7 +189,7 @@ func (r *routeReport) bounded() []EscapeRoute {
 		}
 	}
 	more := strconv.Itoa(len(left)) + " more findings (" + strings.Join(routes, ", ") + ")"
-	return append(kept, EscapeRoute{Route: routeMore, Item: more})
+	return append(kept, EscapeRoute{Route: routeMore, Item: more, Count: len(left)})
 }
 
 // errNotRegular marks a policy file that is not a regular file.
@@ -240,11 +256,18 @@ func policyAbsent(err error) bool {
 
 // policySource names the path of a failed read and its cause.
 func policySource(name string, err error) string {
+	name, err = walkFailure(name, err)
+	return name + " (" + err.Error() + ")"
+}
+
+// walkFailure gives the component of a failed walk and its cause: a walk
+// failure names the component that failed, not only the file.
+func walkFailure(name string, err error) (string, error) {
 	var walk *walkError
 	if errors.As(err, &walk) && walk.path != "" {
-		name, err = walk.path, walk.err
+		return walk.path, walk.err
 	}
-	return name + " (" + err.Error() + ")"
+	return name, err
 }
 
 // readRoutePolicy reads name for route. A missing file gives no data and

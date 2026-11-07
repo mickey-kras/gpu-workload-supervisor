@@ -33,7 +33,7 @@ type escapeFixture struct {
 	aclErr    error
 }
 
-const unitShow = "/usr/bin/systemctl show --all --property=Id --property=User -- *"
+const unitShow = "/usr/bin/systemctl show --property=Id --property=User -- *"
 
 func newEscapeFixture(t *testing.T) *escapeFixture {
 	t.Helper()
@@ -249,7 +249,7 @@ func TestUnreadableSources(t *testing.T) {
 		"at spool":       {map[string]string{"/var/spool/cron/atjobs/a1": ""}, "/var/spool/cron/atjobs", []string{"at: cannot check /var/spool/cron/atjobs (permission denied)"}},
 		"system crontab": {map[string]string{"/etc/crontab": ""}, "/etc/crontab", []string{"cron: cannot check /etc/crontab (permission denied)"}},
 		"cron.d":         {map[string]string{"/etc/cron.d/job": ""}, "/etc/cron.d", []string{"cron: cannot check /etc/cron.d (permission denied)"}},
-		"passwd":         {nil, "/etc/passwd", []string{"account: cannot check /etc/passwd (permission denied)"}},
+		"passwd":         {nil, "/etc/passwd", []string{"account: cannot check cron, at and the member lists of /etc/group: /etc/passwd (permission denied)"}},
 		"polkit rules":   {map[string]string{"/etc/polkit-1/rules.d/x.rules": ""}, "/etc/polkit-1/rules.d", []string{"polkit: cannot check /etc/polkit-1/rules.d (permission denied)"}},
 		// The routes by name still run without /etc/group.
 		"group": {map[string]string{"/etc/cron.deny": ""}, "/etc/group", []string{"groups: cannot check /etc/group (permission denied)", "cron: /etc/cron.deny does not deny alice"}},
@@ -305,11 +305,35 @@ func TestUnknownAccount(t *testing.T) {
 
 // When /etc/passwd cannot be read, the report also says which routes the
 // scan cannot check.
+//
+// /etc/group has risky groups with empty member lists. Without a name, an
+// empty member list must not match the account.
 func TestUnreadablePasswd(t *testing.T) {
+	for name, setup := range map[string]func(*testing.T, *escapeFixture){
+		"unreadable": func(t *testing.T, f *escapeFixture) { f.blocked[f.inode(t, "/etc/passwd")] = unix.EACCES },
+		"missing":    func(t *testing.T, f *escapeFixture) { remove(t, f.root, "/etc/passwd") },
+		"no entry":   func(t *testing.T, f *escapeFixture) { f.write(t, "/etc/passwd", "root:x:0:0::/root:/bin/sh\n") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newEscapeFixture(t)
+			setup(t, f)
+			reason := map[string]string{"unreadable": "/etc/passwd (permission denied)", "missing": "/etc/passwd (the file is missing)",
+				"no entry": "/etc/passwd has no entry for uid " + strconv.Itoa(f.uid)}[name]
+			lines := f.report()
+			if len(lines) != 1 || lines[0] != "account: cannot check cron, at and the member lists of /etc/group: "+reason {
+				t.Fatalf("escape routes = %q", lines)
+			}
+		})
+	}
+}
+
+// A missing /etc/group cannot be checked.
+func TestMissingGroupFile(t *testing.T) {
 	f := newEscapeFixture(t)
-	f.blocked[f.inode(t, "/etc/passwd")] = unix.EACCES
-	f.requireReport(t, "account: cannot check /etc/passwd (permission denied)",
-		"account: cannot check cron, at and the member lists of /etc/group: /etc/passwd cannot be read")
+	remove(t, f.root, "/etc/group")
+	if lines := f.report(); len(lines) != 1 || lines[0] != "groups: cannot check /etc/group (the file is missing)" {
+		t.Fatalf("escape routes = %q", lines)
+	}
 }
 
 // cron does not run directories, hidden files and backup files in
@@ -456,7 +480,7 @@ func TestSystemUnitRoute(t *testing.T) {
 	f.r.errs[unitShow] = errors.New(strings.Repeat("x", 200))
 	f.requireReport(t, "(systemctl show: "+strings.Repeat("x", 160)+"...)")
 	// The first line of the systemctl output tells why it failed.
-	f.r.outputs[unitShow] = []byte("\nSystem has not been booted with systemd.\nmore\n")
+	f.r.outputs[unitShow] = []byte("Id=a.service\nUser=bob\n\nSystem has not been booted with systemd.\nUser=x\n")
 	f.r.errs[unitShow] = exitStatus(1)
 	f.requireReport(t, "system-units: cannot check the loaded system units (systemctl show: exit status 1: System has not been booted with systemd.)")
 }
@@ -485,8 +509,8 @@ func TestEscapeRouteReportIsBounded(t *testing.T) {
 	f.write(t, "/etc/at.deny", "")
 	f.r.errs[unitShow] = errors.New("bus")
 	routes := f.s.scan(context.Background())
-	if len(routes) != maxEscapeRoutes || routes[0].Route != "system-units" ||
-		routes[len(routes)-1] != (EscapeRoute{Route: "more", Item: "11 more findings (cron, at)"}) {
+	if len(routes) != maxEscapeRoutes || routes[0].Route != "system-units" || !routes[0].Unchecked || routes[1].Unchecked ||
+		routes[len(routes)-1] != (EscapeRoute{Route: "more", Item: "11 more findings (cron, at)", Count: 11}) {
 		t.Fatalf("bounded report = %d entries: %+v", len(routes), routes)
 	}
 	if routes := (&routeReport{}).bounded(); routes == nil || len(routes) != 0 {
@@ -504,14 +528,15 @@ func TestEscapeRouteScanLimits(t *testing.T) {
 	f.requireReport(t, "cron: cannot check /var/spool/cron/crontabs (more than 1024 entries)")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+	f.r.calls = nil
 	routes := f.s.scan(ctx)
-	if len(routes) != 1 || routes[0] != (EscapeRoute{Route: "incomplete", Item: "cannot check the rest of the routes (context canceled)"}) || len(f.r.calls) != 1 {
+	if len(routes) != 1 || routes[0] != (EscapeRoute{Route: "incomplete", Item: "cannot check the rest of the routes (context canceled)", Unchecked: true}) || len(f.r.calls) != 0 {
 		t.Fatalf("scan on a spent context = %+v, calls %v", routes, f.r.calls)
 	}
 	// A spent context also stops a directory walk.
 	var report routeReport
 	f.s.ctx = ctx
-	if entries := f.s.listPolicyDir(&report, "cron", "/etc"); entries != nil || len(report.missed) != 1 || report.missed[0].Route != "incomplete" {
+	if entries := f.s.listPolicyDir(&report, "cron", "/etc"); entries != nil || report.incomplete == nil {
 		t.Fatalf("directory walk on a spent context = %v, %+v", entries, report)
 	}
 }

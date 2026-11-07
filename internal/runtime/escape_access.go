@@ -59,18 +59,23 @@ func (s escapeScanner) lookupAccount(report *routeReport) escapeAccount {
 	for _, gid := range gids {
 		account.gids[gid] = true
 	}
-	reason := "/etc/passwd cannot be read"
-	if passwd, ok := s.readRoutePolicy(report, routeAccount, "/etc/passwd", false); ok {
-		reason = fmt.Sprintf("/etc/passwd has no entry for uid %d", s.host.uid)
-		if name, gid, found := passwdEntry(string(passwd), s.host.uid); found {
-			account.name = name
-			account.gids[gid] = true
-		}
+	// One entry gives the reason and the routes that the scan then cannot
+	// check.
+	passwd, err := s.readPolicy("/etc/passwd", false)
+	reason := fmt.Sprintf("/etc/passwd has no entry for uid %d", s.host.uid)
+	if err != nil {
+		reason = policySource("/etc/passwd", missingFile(err))
+	} else if name, gid, found := passwdEntry(string(passwd), s.host.uid); found {
+		account.name = name
+		account.gids[gid] = true
 	}
 	if account.name == "" {
 		report.unchecked(routeAccount, "cron, at and the member lists of /etc/group: "+reason)
 	}
-	group, _ := s.readRoutePolicy(report, routeGroups, "/etc/group", false)
+	group, err := s.readPolicy("/etc/group", false)
+	if err != nil {
+		report.unchecked(routeGroups, policySource("/etc/group", missingFile(err)))
+	}
 	for _, line := range strings.Split(string(group), "\n") {
 		fields := strings.Split(line, ":")
 		if len(fields) != 4 {
@@ -86,6 +91,18 @@ func (s escapeScanner) lookupAccount(report *routeReport) escapeAccount {
 		}
 	}
 	return account
+}
+
+// errFileMissing marks an account file that does not exist. The scan
+// needs both account files, so a missing one cannot be checked.
+var errFileMissing = errors.New("the file is missing")
+
+// missingFile gives errFileMissing for a missing file, or err.
+func missingFile(err error) error {
+	if policyAbsent(err) {
+		return errFileMissing
+	}
+	return err
 }
 
 // parseID parses a user or group ID.

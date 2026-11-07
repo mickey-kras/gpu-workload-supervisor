@@ -26,6 +26,9 @@ func (s escapeScanner) checkCron(report *routeReport, account escapeAccount) {
 	}
 	s.checkSystemCrontab(report, "/etc/crontab", account)
 	for _, entry := range s.listPolicyDir(report, routeCron, "/etc/cron.d") {
+		if s.stopped(report) {
+			return
+		}
 		if cronIgnores(entry) {
 			continue
 		}
@@ -71,11 +74,14 @@ func (s escapeScanner) checkAccessRule(report *routeReport, route, allow, deny, 
 		return
 	}
 	data, ok = s.readRoutePolicy(report, route, deny, true)
-	switch {
-	case !ok, data == nil && rootOnly:
-	case data == nil:
+	if !ok || (data == nil && rootOnly) {
+		return
+	}
+	if data == nil {
 		report.add(route, "neither "+allow+" nor "+deny+" denies "+name)
-	case !listsExactly(string(data), name):
+		return
+	}
+	if !listsExactly(string(data), name) {
 		report.add(route, deny+" does not deny "+name)
 	}
 }

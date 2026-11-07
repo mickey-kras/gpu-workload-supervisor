@@ -348,10 +348,7 @@ var errUntrusted = errors.New("untrusted file")
 // A walk failure names the component that failed, such as a writable
 // parent directory, not only the file.
 func hostFileError(name string, err error) error {
-	var walk *walkError
-	if errors.As(err, &walk) && walk.path != "" {
-		name, err = walk.path, walk.err
-	}
+	name, err = walkFailure(name, err)
 	if errors.Is(err, errUntrusted) || definiteFileErrno(err) {
 		return fmt.Errorf("%w: %s: %w", ErrHostCap, name, err)
 	}
