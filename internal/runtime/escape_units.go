@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"unicode/utf8"
 )
@@ -36,7 +38,11 @@ func (s escapeScanner) checkSystemUnits(report *routeReport, account escapeAccou
 		// The context ended the command: the incomplete entry says so.
 		return
 	}
-	report.unchecked(routeSystemUnits, "the loaded system units (systemctl show: "+commandFailure(err, output)+")")
+	if errors.Is(err, ErrCommandNotRun) {
+		report.addUnchecked(routeSystemUnits, "the loaded system units ("+firstLine(err.Error())+")")
+		return
+	}
+	report.addUnchecked(routeSystemUnits, "the loaded system units (systemctl show: "+commandFailure(err, len(output), text)+")")
 }
 
 // unitUser gives the Id and User properties of one unit block, in any
@@ -54,14 +60,15 @@ func unitUser(block string) (id, user string) {
 }
 
 // commandFailure gives the reason of a failed command: the output limit,
-// or the first line of the error and the last output line that is not a
-// property.
-func commandFailure(err error, output []byte) string {
-	if len(output) >= CommandOutputLimit {
-		return "output exceeds 1 MiB"
+// or the first line of the error and the last line that is not a property.
+// size is the size of the whole output. text is the output without its
+// cut last line.
+func commandFailure(err error, size int, text string) string {
+	if size >= CommandOutputLimit {
+		return fmt.Sprintf("output exceeds %d MiB", CommandOutputLimit>>20)
 	}
 	reason := firstLine(err.Error())
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	lines := strings.Split(strings.TrimSpace(text), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
 		if line != "" && !strings.HasPrefix(line, "Id=") && !strings.HasPrefix(line, "User=") {

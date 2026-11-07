@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -24,7 +25,7 @@ func TestEscapeRouteReportBoundary(t *testing.T) {
 	if routes := report(maxEscapeRoutes); len(routes) != maxEscapeRoutes || routes[len(routes)-1].Route == "more" {
 		t.Fatalf("report of %d findings = %+v", maxEscapeRoutes, routes)
 	}
-	if routes := report(maxEscapeRoutes + 1); len(routes) != maxEscapeRoutes || routes[len(routes)-1] != (EscapeRoute{Route: "more", Item: "2 more entries (cron)", Count: 2}) {
+	if routes := report(maxEscapeRoutes + 1); len(routes) != maxEscapeRoutes || routes[len(routes)-1] != (EscapeRoute{Route: "more", Item: "2 more entries: cron", Count: 2}) {
 		t.Fatalf("report of %d findings = %+v", maxEscapeRoutes+1, routes)
 	}
 }
@@ -34,15 +35,72 @@ func TestEscapeRouteReportBoundary(t *testing.T) {
 func TestIncompleteEntryStaysInTheReport(t *testing.T) {
 	var r routeReport
 	for i := range 40 {
-		r.unchecked("cron", "/etc/cron.d/job"+strconv.Itoa(i))
+		r.addUnchecked("cron", "/etc/cron.d/job"+strconv.Itoa(i))
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	escapeScanner{ctx: ctx}.markStopped(&r)
 	routes := r.bounded()
-	want := EscapeRoute{Route: "more", Item: "10 more entries, 10 of them cannot check (cron)", Unchecked: true, Count: 10, UncheckedCount: 10}
+	want := EscapeRoute{Route: "more", Item: "10 more entries (10 about sources that the scan cannot check): cron", Unchecked: true, Count: 10, UncheckedCount: 10}
 	if len(routes) != maxEscapeRoutes || routes[0].Route != "incomplete" || routes[len(routes)-1] != want {
 		t.Fatalf("report = %+v", routes)
+	}
+}
+
+// When only some left-out entries are "cannot check" items, the "more"
+// entry counts both.
+func TestMoreEntryWithSomeUncheckedEntries(t *testing.T) {
+	var r routeReport
+	for i := range 33 {
+		r.addUnchecked("cron", "/etc/cron.d/job"+strconv.Itoa(i))
+	}
+	for i := range 5 {
+		r.add("at", "/var/spool/at/a"+strconv.Itoa(i))
+	}
+	routes := r.bounded()
+	want := EscapeRoute{Route: "more", Item: "7 more entries (2 about sources that the scan cannot check): cron, at", Unchecked: true, Count: 7, UncheckedCount: 2}
+	if len(routes) != maxEscapeRoutes || routes[len(routes)-1] != want {
+		t.Fatalf("more entry = %+v", routes[len(routes)-1])
+	}
+}
+
+// readRoutePolicy checks the context on its own: on a spent context, it
+// opens no file and records the incomplete entry.
+func TestReadRoutePolicyChecksTheContext(t *testing.T) {
+	f := newEscapeFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	f.s.ctx = ctx
+	opened := 0
+	f.s.probe.verify = func(int) error { opened++; return nil }
+	var report routeReport
+	if data, ok := f.s.readRoutePolicy(&report, "cron", "/etc/cron.deny", true); data != nil || ok || opened != 0 || report.incomplete == nil {
+		t.Fatalf("read on a spent context = %q, %v after %d opens: %+v", data, ok, opened, report)
+	}
+}
+
+// A runner that refuses to start systemctl gives its cause, not a failed
+// systemctl run.
+func TestSystemctlNotRun(t *testing.T) {
+	f := newEscapeFixture(t)
+	f.s.run = func(context.Context, string, ...string) ([]byte, error) {
+		return nil, fmt.Errorf("%w: /x/systemctl is not a trusted executable: world-writable", ErrCommandNotRun)
+	}
+	lines := f.report()
+	if len(lines) != 1 || lines[0] != "system-units: cannot check the loaded system units (the command did not run: /x/systemctl is not a trusted executable: world-writable)" {
+		t.Fatalf("escape routes = %q", lines)
+	}
+}
+
+// A failed run gives the last complete line that is not a property, not
+// the cut last line.
+func TestSystemctlFailureIgnoresTheCutLine(t *testing.T) {
+	f := newEscapeFixture(t)
+	f.r.outputs[unitShow] = []byte("Failed to connect to bus\nId=a.service\nUser=bo")
+	f.r.errs[unitShow] = errors.New("exit status 1")
+	lines := f.report()
+	if len(lines) != 1 || lines[0] != "system-units: cannot check the loaded system units (systemctl show: exit status 1: Failed to connect to bus)" {
+		t.Fatalf("escape routes = %q", lines)
 	}
 }
 
@@ -169,14 +227,14 @@ func TestSystemctlOutputLimit(t *testing.T) {
 // findings.
 func TestEscapeRouteJSON(t *testing.T) {
 	var r routeReport
-	r.unchecked("cron", "/etc/cron.deny (permission denied)")
+	r.addUnchecked("cron", "/etc/cron.deny (permission denied)")
 	r.add("at", "/etc/at.deny does not deny alice")
 	data, err := json.Marshal(r.bounded())
 	if err != nil || string(data) != `[{"route":"cron","item":"cannot check /etc/cron.deny (permission denied)","unchecked":true},{"route":"at","item":"/etc/at.deny does not deny alice"}]` {
 		t.Fatalf("JSON = %s, %v", data, err)
 	}
-	more, err := json.Marshal(EscapeRoute{Route: "more", Item: "2 more entries, 1 of them cannot check (cron)", Unchecked: true, Count: 2, UncheckedCount: 1})
-	if err != nil || string(more) != `{"route":"more","item":"2 more entries, 1 of them cannot check (cron)","unchecked":true,"count":2,"uncheckedCount":1}` {
+	more, err := json.Marshal(EscapeRoute{Route: "more", Item: "2 more entries (1 about sources that the scan cannot check): cron", Unchecked: true, Count: 2, UncheckedCount: 1})
+	if err != nil || string(more) != `{"route":"more","item":"2 more entries (1 about sources that the scan cannot check): cron","unchecked":true,"count":2,"uncheckedCount":1}` {
 		t.Fatalf("JSON = %s, %v", more, err)
 	}
 }

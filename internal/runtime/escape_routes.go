@@ -18,9 +18,11 @@ import (
 // scan cannot check. Escape routes do not block limits. Limits protect
 // against runaway workloads, not against hostile code of the same UID.
 //
-// Unchecked marks a source that the scan cannot check: its item starts
-// with "cannot check". Count gives the number of left-out findings on the
-// "more" entry.
+// Unchecked marks a source that the scan cannot check, and its item then
+// starts with "cannot check". On the "more" entry, Unchecked tells that
+// some of the entries that it leaves out are such sources, and its item
+// starts with the number of entries. Count gives the number of left-out
+// entries on the "more" entry.
 type EscapeRoute struct {
 	Route     string `json:"route"`
 	Item      string `json:"item"`
@@ -32,13 +34,18 @@ type EscapeRoute struct {
 }
 
 // maxEscapeRoutes bounds the report. A longer report ends with one
-// "more" entry that gives the number of findings left out.
+// "more" entry that gives the number of entries left out.
 const maxEscapeRoutes = 32
 
 // CommandFunc runs one command and returns its combined output. A runner
 // may bound the output to CommandOutputLimit bytes. It then cuts the
 // output there and returns an error.
 type CommandFunc func(ctx context.Context, name string, args ...string) ([]byte, error)
+
+// ErrCommandNotRun marks a command that the runner refused to start, such
+// as an untrusted executable. The report then does not say that the
+// command failed.
+var ErrCommandNotRun = errors.New("the command did not run")
 
 // CommandOutputLimit is the output bound of a CommandFunc. An output of
 // at least this size together with an error counts as cut, also at
@@ -54,7 +61,7 @@ const (
 	routeSockets     = "sockets"
 	routePolkit      = "polkit"
 	routeSystemUnits = "system-units"
-	// routeMore gives the number and the routes of the findings that the
+	// routeMore gives the number and the routes of the entries that the
 	// bound leaves out.
 	routeMore = "more"
 	// routeIncomplete says that the context ended the scan early.
@@ -155,22 +162,22 @@ func (s escapeScanner) markStopped(report *routeReport) bool {
 	return err != nil
 }
 
-// routeReport collects the findings of a scan. missed holds the sources
+// routeReport collects the findings of a scan. unchecked holds the sources
 // that the scan cannot check, found holds the other findings. Each list
 // holds an entry only once. incomplete is set when the context ended the
 // scan early.
 type routeReport struct {
-	missed, found []EscapeRoute
-	incomplete    *EscapeRoute
+	unchecked, found []EscapeRoute
+	incomplete       *EscapeRoute
 }
 
 func (r *routeReport) add(route, item string) {
 	r.found = appendOnce(r.found, EscapeRoute{Route: route, Item: item})
 }
 
-// unchecked reports a source that the scan cannot check.
-func (r *routeReport) unchecked(route, source string) {
-	r.missed = appendOnce(r.missed, EscapeRoute{Route: route, Item: "cannot check " + source, Unchecked: true})
+// addUnchecked reports a source that the scan cannot check.
+func (r *routeReport) addUnchecked(route, source string) {
+	r.unchecked = appendOnce(r.unchecked, EscapeRoute{Route: route, Item: "cannot check " + source, Unchecked: true})
 }
 
 func appendOnce(list []EscapeRoute, item EscapeRoute) []EscapeRoute {
@@ -187,11 +194,11 @@ func appendOnce(list []EscapeRoute, item EscapeRoute) []EscapeRoute {
 // entries that it leaves out, and how many of them are "cannot check"
 // items, and names their routes. It is unchecked when any of them is.
 func (r *routeReport) bounded() []EscapeRoute {
-	items := make([]EscapeRoute, 0, len(r.missed)+len(r.found)+1)
+	items := make([]EscapeRoute, 0, len(r.unchecked)+len(r.found)+1)
 	if r.incomplete != nil {
 		items = append(items, *r.incomplete)
 	}
-	items = append(append(items, r.missed...), r.found...)
+	items = append(append(items, r.unchecked...), r.found...)
 	if len(items) <= maxEscapeRoutes {
 		return items
 	}
@@ -208,9 +215,9 @@ func (r *routeReport) bounded() []EscapeRoute {
 	}
 	more := strconv.Itoa(len(left)) + " more entries"
 	if unchecked != 0 {
-		more += ", " + strconv.Itoa(unchecked) + " of them cannot check"
+		more += " (" + strconv.Itoa(unchecked) + " about sources that the scan cannot check)"
 	}
-	more += " (" + strings.Join(routes, ", ") + ")"
+	more += ": " + strings.Join(routes, ", ")
 	return append(kept, EscapeRoute{Route: routeMore, Item: more, Count: len(left), Unchecked: unchecked != 0, UncheckedCount: unchecked})
 }
 
@@ -309,7 +316,7 @@ func (s escapeScanner) readRoutePolicy(report *routeReport, route, name string, 
 // policyFailure records a failed read of name. A missing file adds nothing.
 func (r *routeReport) policyFailure(route, name string, err error) {
 	if !policyAbsent(err) {
-		r.unchecked(route, policySource(name, err))
+		r.addUnchecked(route, policySource(name, err))
 	}
 }
 

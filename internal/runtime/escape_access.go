@@ -55,7 +55,7 @@ func (s escapeScanner) lookupAccount(report *routeReport) escapeAccount {
 	account := escapeAccount{uid: s.host.uid, gids: map[uint32]bool{}, groups: map[string]uint32{}}
 	gids, err := s.probe.processGroups()
 	if err != nil {
-		report.unchecked(routeGroups, "the groups of this process ("+err.Error()+")")
+		report.addUnchecked(routeGroups, "the groups of this process ("+err.Error()+")")
 	}
 	for _, gid := range gids {
 		account.gids[gid] = true
@@ -71,11 +71,11 @@ func (s escapeScanner) lookupAccount(report *routeReport) escapeAccount {
 		account.gids[gid] = true
 	}
 	if account.name == "" {
-		report.unchecked(routeAccount, "cron, at and the member lists of /etc/group: "+reason)
+		report.addUnchecked(routeAccount, "cron, at and the member lists of /etc/group: "+reason)
 	}
 	group, err := s.readPolicy("/etc/group", false)
 	if err != nil {
-		report.unchecked(routeGroups, accountFileSource("/etc/group", err))
+		report.addUnchecked(routeGroups, accountFileSource("/etc/group", err))
 	}
 	account.addGroups(string(group))
 	return account
@@ -153,7 +153,7 @@ func (s escapeScanner) checkSocket(report *routeReport, account escapeAccount, s
 		return
 	}
 	if err != nil {
-		report.unchecked(routeSockets, socket+" ("+err.Error()+")")
+		report.addUnchecked(routeSockets, socket+" ("+err.Error()+")")
 		return
 	}
 	if stat.Mode&unix.S_IFMT != unix.S_IFSOCK {
@@ -166,7 +166,7 @@ func (s escapeScanner) checkSocket(report *routeReport, account escapeAccount, s
 	acl, err := s.probe.socketACL(name)
 	switch {
 	case err != nil:
-		report.unchecked(routeSockets, socket+" ("+err.Error()+")")
+		report.addUnchecked(routeSockets, socket+" ("+err.Error()+")")
 	case acl:
 		report.add(routeSockets, socket+" has an ACL")
 	}

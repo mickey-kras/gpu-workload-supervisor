@@ -21,6 +21,8 @@ func (s escapeScanner) checkPolkit(report *routeReport) {
 			if !strings.HasSuffix(entry.name, ".rules") {
 				continue
 			}
+			// readRoutePolicy also checks the context. This check only
+			// ends the loop early.
 			if s.markStopped(report) {
 				return
 			}
