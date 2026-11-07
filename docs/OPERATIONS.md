@@ -58,6 +58,8 @@ Supported external `ExecStart`, `Environment`, `WorkingDirectory` path tokens ca
 
 `gpu-setup discover` returns saved state and ComfyUI and vLLM `applications` candidates. It checks two default loopback ports and recognizable user-service metadata. Loaded metadata plus unchanged supported launch files define service endpoint and identity. Endpoint observations do not prove ownership. Existing profiles remain unchanged. Errors differ from empty inventories.
 
+Discovery also returns the advisory `escapeRoutes` list. `[]` means that the scan found nothing, and `null` means that no scan ran. See [escape route report](RESOURCE-LIMITS.md#escape-route-report).
+
 ```sh
 printf '%s' '{"app":"vllm","endpoint":"http://127.0.0.1:8000"}' | gpu-setup probe
 printf '%s' '{"app":"vllm","reference":"/models/model","referenceKind":"model-directory"}' | gpu-setup probe
