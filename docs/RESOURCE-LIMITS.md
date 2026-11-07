@@ -97,11 +97,13 @@ Limits protect against runaway workloads and accidents. They do not contain host
 
 `gpu-setup discover` returns the report as the `escapeRoutes` list. A later #584 change shows it on the desktop resource page. The supervisor and the runtime never run the scan.
 
-The scan runs after the other discovery steps and has its own limit of 5 seconds. The other steps cannot use up this limit. When the limit ends the scan, or the caller cancels discovery, the report says that the scan is incomplete. Run discovery again to complete it.
+The scan is the last step of discovery and has its own limit of 5 seconds. The other steps cannot use up this limit. When an earlier step fails, no scan runs. When the limit ends the scan, or the caller cancels discovery, the report says that the scan is incomplete. Run discovery again to complete it.
 
 Each entry has a `route` and an `item`. Some items are about a source that the scan cannot check. Such an item starts with `cannot check`, and its entry has `unchecked` set to `true`.
 
-The `more` entry has a numeric `count` of the entries that it leaves out. When some of them are about sources that the scan cannot check, `uncheckedCount` gives their number and `unchecked` is `true`. The route is one of `account`, `cron`, `at`, `groups`, `sockets`, `polkit`, `system-units`, `incomplete` and `more`. An empty list means that the scan found nothing. `null` means that no scan ran. The list has each entry only one time.
+The `more` entry has a numeric `count` of the entries that it leaves out. When some of them are about sources that the scan cannot check, `uncheckedCount` gives their number. Then `unchecked` is also `true`, but the item of the `more` entry starts with the number of entries, not with `cannot check`.
+
+The route is one of `account`, `cron`, `at`, `groups`, `sockets`, `polkit`, `system-units`, `incomplete` and `more`. An empty list means that the scan found nothing. `null` means that no scan ran. The list has each entry only one time.
 
 The list has at most 32 entries. When discovery stops the scan early, the first entry has the route `incomplete`. It says that the scan cannot check the rest of the routes, and the bound always keeps it. The items about sources that the scan cannot check come next. When there are more entries, the last entry has the route `more`. Its item gives their number, how many of them the scan cannot check, and their routes.
 
@@ -115,7 +117,7 @@ The scan runs as the desktop account, without root, and changes nothing. It runs
 | `groups` | Membership through the primary group, the member list of `/etc/group` or a group of the setup process. `/etc/group` gives the group names also without a `/etc/passwd` entry. When `/etc/group` is missing, the report says that it cannot check the file |
 | `sockets` | The Docker, Podman, containerd, libvirt, LXD and Incus sockets. The scan follows a symlink to the socket. A socket that the account can reach is open when its mode lets the account write, or when it has an ACL. The scan ignores a socket path that the account cannot reach, and a path that is not a socket |
 | `polkit` | Each `.rules` file in `/etc/polkit-1/rules.d`, `/run/polkit-1/rules.d`, `/usr/local/share/polkit-1/rules.d` and `/usr/share/polkit-1/rules.d` that mentions `org.freedesktop.systemd1.manage-unit`, `org.freedesktop.machine1` or `org.freedesktop.policykit.exec`. The rule can allow or deny the action, so the warning says only that the file mentions it |
-| `system-units` | `systemctl show` with the pattern `*`, which matches each loaded system unit, also an inactive one such as a timer-activated service. Setup runs `systemctl` only after the same trust check as the runtime. For an untrusted `systemctl`, the report says that the scan cannot check the units. `User=` with the account name or UID gives a warning. `user@UID.service` runs in the slice, so it gives none. The scan reads only property names and values, which `systemctl` does not translate. For a failed command, the report says that it cannot check the units. It adds the first line of the error and the last output line that is not a property. Output of 1 MiB or more gives the reason "output exceeds 1 MiB". For a failed command, a unit with all its lines before the end of the output still gives a warning. The scan ignores a cut last line and a unit without an `Id=` line |
+| `system-units` | `systemctl show` with the pattern `*`, which matches each loaded system unit, also an inactive one such as a timer-activated service. Setup runs `systemctl` only after the same trust check as the runtime. For an untrusted `systemctl`, the report says that the command did not run and gives the cause of the trust check. `User=` with the account name or UID gives a warning. `user@UID.service` runs in the slice, so it gives none. The scan reads only property names and values, which `systemctl` does not translate. For a failed command, the report says that it cannot check the units. It adds the first line of the error and the last output line that is not a property. Output of 1 MiB or more gives the reason "output exceeds 1 MiB". For a failed command, a unit with all its lines before the end of the output still gives a warning. The scan ignores a cut last line and a unit without an `Id=` line |
 
 The scan walks the cron, `at`, account and `polkit` files without symlinks. For a file or directory that the account cannot read, the scan reports "cannot check" and the path. It does the same for a symlink, a file where a directory must be and an allow or deny file that fails the trust checks.
 
@@ -416,12 +418,14 @@ Display ceiling and current usage beside fields. Show memory in GiB, CPU in core
 | Reserve violation | This limit leaves too little room for the supervisor. Use `<allowed>` or less, or remove the limits through setup. When no valid value fits, raise the slice cap to at least `<needed cap>`, or remove the limits through setup |
 | Escape route (warning) | Programs from this account can run outside host protection through `<route>`. Limits protect against runaway workloads, not against such programs |
 | Unchecked escape route (warning) | The scan `<item>`. A route can be open in a place that the scan cannot read |
-| Escape routes left out (warning) | `<item>` are not on this page |
+| Escape routes left out (warning) | Not shown: `<item>` |
 | Memory pressure | Slice memory does not fit this limit. `<usage>` MiB is in use. The `<cache>` MiB of page cache that the kernel can reclaim does not count. The start needs `<need>` MiB: `memoryMaxMiB` plus a 2048 MiB reserve. The ceiling is `<ceiling>` MiB. Check `/dev/shm` and `tmpfs` use |
 | Memory usage unknown | Setup cannot read the memory already in use. Setup did not save limits |
 | Drift | A limit changed after start. The supervisor stopped the workload. `<control>` was `<actual>`, not `<expected>` |
 | Readback failure | Setup cannot read `<path>` (`<errno>`). The supervisor stopped the workload |
 | `IOWeight` not applicable | `<number>` (`<device>`) does not support I/O weight (no BFQ or iocost). Without a device name in sysfs, the text gives the number only |
+
+The page picks the row of an escape route entry from its `route` first. The route `more` always uses the row for left-out routes, also when `unchecked` is `true`. The route `incomplete` uses the row for unchecked routes. Other entries use that row only when `unchecked` is `true`.
 
 Present requires hard slice ceilings. Escape routes do not change the status. The desktop page of a later #584 change shows them as warnings beside it.
 
