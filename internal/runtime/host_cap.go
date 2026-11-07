@@ -350,9 +350,9 @@ var errUntrusted = errors.New("untrusted file")
 func hostFileError(name string, err error) error {
 	name, err = walkFailure(name, err)
 	if errors.Is(err, errUntrusted) || definiteFileErrno(err) {
-		return fmt.Errorf("%w: %s: %w", ErrHostCap, name, err)
+		return fmt.Errorf(limitPathErrorFormat, ErrHostCap, name, err)
 	}
-	return fmt.Errorf("%w: %s: %w", ErrLimitReadback, name, err)
+	return fmt.Errorf(limitPathErrorFormat, ErrLimitReadback, name, err)
 }
 
 func (h limitHost) trustedDescriptor(fd int) error {
@@ -416,7 +416,7 @@ func (m *SystemdManager) readSliceCap(slice string, l control.ResourceLimits) (h
 func (m *SystemdManager) trustedCgroupFile(group, name string) ([]byte, error) {
 	data, err := m.cgroups.readChecked(group, name, m.host.trustedDescriptor)
 	if errors.Is(err, unix.ENOENT) && !errors.Is(err, errControlFileAbsent) {
-		return nil, fmt.Errorf("%w: %s: %w", ErrLimitReadback, path.Join(group, name), err)
+		return nil, fmt.Errorf(limitPathErrorFormat, ErrLimitReadback, path.Join(group, name), err)
 	}
 	if err != nil {
 		return nil, hostFileError(path.Join(group, name), err)
