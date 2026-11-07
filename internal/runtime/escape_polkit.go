@@ -21,7 +21,7 @@ func (s escapeScanner) checkPolkit(report *routeReport) {
 			if !strings.HasSuffix(entry.name, ".rules") {
 				continue
 			}
-			if s.stopped(report) {
+			if s.markStopped(report) {
 				return
 			}
 			s.checkPolkitFile(report, dir+"/"+entry.name)

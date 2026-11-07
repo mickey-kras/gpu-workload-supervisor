@@ -49,7 +49,8 @@ var daemonSockets = []string{
 // /etc/passwd, /etc/group and this process. The name stays empty when the
 // scan cannot find it: the cron and at checks and the member lists of
 // /etc/group need it, so the report then says that it cannot check them.
-// The process groups and /etc/group still give the group names.
+// /etc/group still gives the group names, and the process groups still
+// give group IDs.
 func (s escapeScanner) lookupAccount(report *routeReport) escapeAccount {
 	account := escapeAccount{uid: s.host.uid, gids: map[uint32]bool{}, groups: map[string]uint32{}}
 	gids, err := s.probe.processGroups()
@@ -64,7 +65,7 @@ func (s escapeScanner) lookupAccount(report *routeReport) escapeAccount {
 	passwd, err := s.readPolicy("/etc/passwd", false)
 	reason := fmt.Sprintf("/etc/passwd has no entry for uid %d", s.host.uid)
 	if err != nil {
-		reason = policySource("/etc/passwd", missingFile(err))
+		reason = accountFileSource("/etc/passwd", err)
 	} else if name, gid, found := passwdEntry(string(passwd), s.host.uid); found {
 		account.name = name
 		account.gids[gid] = true
@@ -74,9 +75,25 @@ func (s escapeScanner) lookupAccount(report *routeReport) escapeAccount {
 	}
 	group, err := s.readPolicy("/etc/group", false)
 	if err != nil {
-		report.unchecked(routeGroups, policySource("/etc/group", missingFile(err)))
+		report.unchecked(routeGroups, accountFileSource("/etc/group", err))
 	}
-	for _, line := range strings.Split(string(group), "\n") {
+	account.addGroups(string(group))
+	return account
+}
+
+// accountFileSource names a failed read of an account file. The scan
+// needs both account files, so a missing one cannot be checked either.
+func accountFileSource(name string, err error) string {
+	if policyAbsent(err) {
+		return name + " (the file is missing)"
+	}
+	return policySource(name, err)
+}
+
+// addGroups adds the group names of /etc/group, and the groups whose
+// member list names the account.
+func (account *escapeAccount) addGroups(group string) {
+	for _, line := range strings.Split(group, "\n") {
 		fields := strings.Split(line, ":")
 		if len(fields) != 4 {
 			continue
@@ -90,19 +107,6 @@ func (s escapeScanner) lookupAccount(report *routeReport) escapeAccount {
 			account.gids[gid] = true
 		}
 	}
-	return account
-}
-
-// errFileMissing marks an account file that does not exist. The scan
-// needs both account files, so a missing one cannot be checked.
-var errFileMissing = errors.New("the file is missing")
-
-// missingFile gives errFileMissing for a missing file, or err.
-func missingFile(err error) error {
-	if policyAbsent(err) {
-		return errFileMissing
-	}
-	return err
 }
 
 // parseID parses a user or group ID.

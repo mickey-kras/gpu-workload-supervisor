@@ -26,7 +26,7 @@ func (s escapeScanner) checkCron(report *routeReport, account escapeAccount) {
 	}
 	s.checkSystemCrontab(report, "/etc/crontab", account)
 	for _, entry := range s.listPolicyDir(report, routeCron, "/etc/cron.d") {
-		if s.stopped(report) {
+		if s.markStopped(report) {
 			return
 		}
 		if cronIgnores(entry) {

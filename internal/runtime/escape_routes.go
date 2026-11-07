@@ -26,14 +26,24 @@ type EscapeRoute struct {
 	Item      string `json:"item"`
 	Unchecked bool   `json:"unchecked,omitempty"`
 	Count     int    `json:"count,omitempty"`
+	// UncheckedCount gives how many of the left-out entries of "more" are
+	// about sources that the scan cannot check.
+	UncheckedCount int `json:"uncheckedCount,omitempty"`
 }
 
 // maxEscapeRoutes bounds the report. A longer report ends with one
 // "more" entry that gives the number of findings left out.
 const maxEscapeRoutes = 32
 
-// CommandFunc runs one command and returns its combined output.
+// CommandFunc runs one command and returns its combined output. A runner
+// may bound the output to CommandOutputLimit bytes. It then cuts the
+// output there and returns an error.
 type CommandFunc func(ctx context.Context, name string, args ...string) ([]byte, error)
+
+// CommandOutputLimit is the output bound of a CommandFunc. An output of
+// at least this size together with an error counts as cut, also at
+// exactly this size.
+const CommandOutputLimit = 1 << 20
 
 // The route values of an EscapeRoute.
 const (
@@ -108,11 +118,15 @@ func pathHasACL(name string) (bool, error) {
 }
 
 // scan runs each check and returns the bounded report. A spent context
-// stops the scan between checks, between the entries of a directory and
-// between file reads. The report says so.
+// stops the scan before it starts, between checks, before each route file
+// or directory read, between the entries of a directory and after an
+// interrupted systemctl run. The report says so.
 func (s escapeScanner) scan(ctx context.Context) []EscapeRoute {
 	s.ctx = ctx
 	var report routeReport
+	if s.markStopped(&report) {
+		return report.bounded()
+	}
 	account := s.lookupAccount(&report)
 	var checks []func()
 	if account.name != "" {
@@ -123,18 +137,17 @@ func (s escapeScanner) scan(ctx context.Context) []EscapeRoute {
 		func() { s.checkPolkit(&report) },
 		func() { s.checkSystemUnits(&report, account) })
 	for _, check := range checks {
-		if s.stopped(&report) {
+		if s.markStopped(&report) {
 			break
 		}
 		check()
 	}
-	// The context can end during the last check.
-	s.stopped(&report)
 	return report.bounded()
 }
 
-// stopped reports a spent scan context, and records it once.
-func (s escapeScanner) stopped(report *routeReport) bool {
+// markStopped reports a spent scan context, and records the incomplete
+// entry once.
+func (s escapeScanner) markStopped(report *routeReport) bool {
 	err := s.ctx.Err()
 	if err != nil && report.incomplete == nil {
 		report.incomplete = &EscapeRoute{Route: routeIncomplete, Item: "cannot check the rest of the routes (" + err.Error() + ")", Unchecked: true}
@@ -167,11 +180,12 @@ func appendOnce(list []EscapeRoute, item EscapeRoute) []EscapeRoute {
 	return append(list, item)
 }
 
-// bounded returns at most maxEscapeRoutes findings, never nil. The
+// bounded returns at most maxEscapeRoutes entries, never nil. The
 // incomplete entry always stays first. The "cannot check" items come next:
 // a finding that the scan missed can hide behind each of them, so the
-// truncation keeps them. The last entry names the routes of the findings
-// that it leaves out.
+// truncation keeps them before the findings. The last entry counts the
+// entries that it leaves out, and how many of them are "cannot check"
+// items, and names their routes. It is unchecked when any of them is.
 func (r *routeReport) bounded() []EscapeRoute {
 	items := make([]EscapeRoute, 0, len(r.missed)+len(r.found)+1)
 	if r.incomplete != nil {
@@ -183,20 +197,27 @@ func (r *routeReport) bounded() []EscapeRoute {
 	}
 	kept, left := items[:maxEscapeRoutes-1], items[maxEscapeRoutes-1:]
 	var routes []string
+	unchecked := 0
 	for _, item := range left {
 		if !slices.Contains(routes, item.Route) {
 			routes = append(routes, item.Route)
 		}
+		if item.Unchecked {
+			unchecked++
+		}
 	}
-	more := strconv.Itoa(len(left)) + " more findings (" + strings.Join(routes, ", ") + ")"
-	return append(kept, EscapeRoute{Route: routeMore, Item: more, Count: len(left)})
+	more := strconv.Itoa(len(left)) + " more entries"
+	if unchecked != 0 {
+		more += ", " + strconv.Itoa(unchecked) + " of them cannot check"
+	}
+	more += " (" + strings.Join(routes, ", ") + ")"
+	return append(kept, EscapeRoute{Route: routeMore, Item: more, Count: len(left), Unchecked: unchecked != 0, UncheckedCount: unchecked})
 }
 
 // errNotRegular marks a policy file that is not a regular file.
 var errNotRegular = errors.New("not a regular file")
 
-// policyLimit bounds the size of a policy file. errPolicyTooLarge names
-// the same limit.
+// policyLimit bounds the size of a policy file.
 const policyLimit = 1 << 20
 
 // errPolicyTooLarge marks a policy file above policyLimit.
@@ -274,6 +295,9 @@ func walkFailure(name string, err error) (string, error) {
 // true. Another failure reports that the scan cannot check the file and
 // gives false.
 func (s escapeScanner) readRoutePolicy(report *routeReport, route, name string, trusted bool) ([]byte, bool) {
+	if s.markStopped(report) {
+		return nil, false
+	}
 	data, err := s.readPolicy(name, trusted)
 	if err == nil {
 		return data, true
@@ -301,6 +325,9 @@ type dirEntry struct {
 // read, or that has more than maxDirEntries entries, gives none and a
 // "cannot check" item.
 func (s escapeScanner) listPolicyDir(report *routeReport, route, dir string) []dirEntry {
+	if s.markStopped(report) {
+		return nil
+	}
 	fd, err := s.openPolicy(dir, unix.O_DIRECTORY, false)
 	if err != nil {
 		report.policyFailure(route, dir, err)
@@ -319,7 +346,7 @@ func (s escapeScanner) listPolicyDir(report *routeReport, route, dir string) []d
 	}
 	entries := make([]dirEntry, 0, len(names))
 	for _, name := range names {
-		if s.stopped(report) {
+		if s.markStopped(report) {
 			return nil
 		}
 		var stat unix.Stat_t

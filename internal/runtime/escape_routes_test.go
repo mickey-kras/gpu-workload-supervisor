@@ -510,7 +510,7 @@ func TestEscapeRouteReportIsBounded(t *testing.T) {
 	f.r.errs[unitShow] = errors.New("bus")
 	routes := f.s.scan(context.Background())
 	if len(routes) != maxEscapeRoutes || routes[0].Route != "system-units" || !routes[0].Unchecked || routes[1].Unchecked ||
-		routes[len(routes)-1] != (EscapeRoute{Route: "more", Item: "11 more findings (cron, at)", Count: 11}) {
+		routes[len(routes)-1] != (EscapeRoute{Route: "more", Item: "11 more entries (cron, at)", Count: 11}) {
 		t.Fatalf("bounded report = %d entries: %+v", len(routes), routes)
 	}
 	if routes := (&routeReport{}).bounded(); routes == nil || len(routes) != 0 {
