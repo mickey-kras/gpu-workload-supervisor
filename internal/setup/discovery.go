@@ -84,12 +84,13 @@ func (b Backend) Discover(parent context.Context, home string) (Discovery, error
 	b.discoverApplications(ctx, &result, units, home)
 	b.discoverTrainers(ctx, &result)
 	b.discoverGPUInventory(ctx, &result)
-	b.discoverEscapeRoutes(parent, &result)
 	owned, err := discoverOwnedUnits(home, result.Request.Catalog)
 	if err != nil {
 		return result, err
 	}
 	result.OwnedUnits = owned
+	// The scan runs last, so a failed earlier step does not spend it.
+	b.discoverEscapeRoutes(parent, &result)
 	return result, nil
 }
 
@@ -118,11 +119,24 @@ func (b Backend) discoverEscapeRoutes(parent context.Context, result *Discovery)
 	if err == nil {
 		systemctl = resolved
 	} else {
+		// The scan runs only systemctl, so this runner refuses each command
+		// and gives the cause of the trust check.
+		cause := fmt.Errorf("%w: %s is not a trusted executable: %s", gpuruntime.ErrCommandNotRun, systemctl, trustFailure(systemctl, err))
 		run = func(context.Context, string, ...string) ([]byte, error) {
-			return nil, gpuruntime.SafeError(systemctl+" is not a trusted executable", err)
+			return nil, cause
 		}
 	}
 	result.EscapeRoutes = b.escapeRoutes(ctx, run, systemctl)
+}
+
+// trustFailure gives the reason of a failed trust check of path, without
+// the launch class and the repeated path.
+func trustFailure(path string, err error) string {
+	reason := strings.TrimPrefix(err.Error(), gpuruntime.ErrLaunchUnsupported.Error()+": ")
+	for strings.HasPrefix(reason, path+": ") {
+		reason = strings.TrimPrefix(reason, path+": ")
+	}
+	return reason
 }
 
 // ErrOwnedUnitDiscovery marks an owned-unit directory that exists but cannot

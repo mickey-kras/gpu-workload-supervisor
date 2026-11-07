@@ -22,17 +22,11 @@ func TestDiscoveryReportsEscapeRoutes(t *testing.T) {
 		commands = append(commands, name+" "+strings.Join(args, " "))
 		return nil, nil
 	}
-	var deadline time.Time
 	found := []gpuruntime.EscapeRoute{{Route: "cron", Item: "/etc/cron.deny does not deny alice"}}
-	backend.escapeRoutes = func(ctx context.Context, _ gpuruntime.CommandFunc, _ string) []gpuruntime.EscapeRoute {
-		deadline, _ = ctx.Deadline()
-		return found
-	}
-	start := time.Now()
+	backend.escapeRoutes = func(context.Context, gpuruntime.CommandFunc, string) []gpuruntime.EscapeRoute { return found }
 	got, err := backend.Discover(context.Background(), home)
-	// The scan has its own budget, not the rest of the 15 s of discovery.
-	if err != nil || len(got.EscapeRoutes) != 1 || deadline.Before(start) || deadline.After(time.Now().Add(escapeScanBudget)) {
-		t.Fatalf("discovery = %+v, %v with deadline %v: %v", got.EscapeRoutes, err, deadline, commands)
+	if err != nil || len(got.EscapeRoutes) != 1 {
+		t.Fatalf("discovery = %+v, %v: %v", got.EscapeRoutes, err, commands)
 	}
 	data, err := json.Marshal(got)
 	if err != nil || !strings.Contains(string(data), `"escapeRoutes":[{"route":"cron","item":"/etc/cron.deny does not deny alice"}]`) {
@@ -53,6 +47,23 @@ func TestDiscoveryReportsEscapeRoutes(t *testing.T) {
 	}
 }
 
+// The scan has its own budget of escapeScanBudget, also under a caller
+// with a far deadline.
+func TestEscapeRouteScanHasItsOwnBudget(t *testing.T) {
+	var deadline time.Time
+	backend := Backend{escapeRoutes: func(ctx context.Context, _ gpuruntime.CommandFunc, _ string) []gpuruntime.EscapeRoute {
+		deadline, _ = ctx.Deadline()
+		return nil
+	}}
+	parent, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	start := time.Now()
+	backend.discoverEscapeRoutes(parent, &Discovery{})
+	if deadline.Before(start.Add(escapeScanBudget-time.Second)) || deadline.After(time.Now().Add(escapeScanBudget)) {
+		t.Fatalf("scan deadline %v, start %v", deadline, start)
+	}
+}
+
 // The scan uses the systemctl path of the profile, after the trust check,
 // and the backend runner. Without a profile path, it uses the fixed setup
 // path. An untrusted systemctl does not run, and the scan gets a runner
@@ -61,6 +72,7 @@ func TestEscapeRouteScanUsesProfileSystemctl(t *testing.T) {
 	dir := t.TempDir()
 	trusted := filepath.Join(dir, "systemctl")
 	writable := filepath.Join(dir, "writable-systemctl")
+	link := filepath.Join(dir, "link")
 	for name, mode := range map[string]os.FileMode{trusted: 0o755, writable: 0o777} {
 		if err := os.WriteFile(name, []byte("#!/bin/sh\n"), mode); err != nil {
 			t.Fatal(err)
@@ -69,26 +81,32 @@ func TestEscapeRouteScanUsesProfileSystemctl(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var commands, failures []string
+	if err := os.Symlink(trusted, link); err != nil {
+		t.Fatal(err)
+	}
+	var commands, failures, paths []string
 	backend := Backend{
 		runCommand: func(_ context.Context, name string, _ ...string) ([]byte, error) {
 			commands = append(commands, name)
 			return nil, nil
 		},
 		escapeRoutes: func(ctx context.Context, run gpuruntime.CommandFunc, path string) []gpuruntime.EscapeRoute {
+			paths = append(paths, path)
 			if _, err := run(ctx, path); err != nil {
 				failures = append(failures, err.Error())
 			}
 			return nil
 		},
 	}
-	backend.discoverEscapeRoutes(context.Background(), &Discovery{Request: Request{Profile: Profile{SystemctlPath: trusted}}})
-	if len(commands) != 1 || commands[0] != trusted || len(failures) != 0 {
-		t.Fatalf("trusted systemctl: commands %q, failures %q", commands, failures)
+	// A symlink resolves to the trusted target before it runs.
+	backend.discoverEscapeRoutes(context.Background(), &Discovery{Request: Request{Profile: Profile{SystemctlPath: link}}})
+	if len(commands) != 1 || commands[0] != trusted || paths[0] != trusted || len(failures) != 0 {
+		t.Fatalf("trusted systemctl: commands %q, paths %q, failures %q", commands, paths, failures)
 	}
 	commands = nil
 	backend.discoverEscapeRoutes(context.Background(), &Discovery{Request: Request{Profile: Profile{SystemctlPath: writable}}})
-	if len(commands) != 0 || len(failures) != 1 || failures[0] != writable+" is not a trusted executable" {
+	if len(commands) != 0 || len(failures) != 1 ||
+		failures[0] != "the command did not run: "+writable+" is not a trusted executable: world-writable; remove other-write or choose another path" {
 		t.Fatalf("writable systemctl: commands %q, failures %q", commands, failures)
 	}
 	var path string
@@ -96,13 +114,14 @@ func TestEscapeRouteScanUsesProfileSystemctl(t *testing.T) {
 		path = p
 		return nil
 	}
-	backend.discoverEscapeRoutes(context.Background(), &Discovery{})
-	want, err := gpuruntime.ValidateSystemctlExecutable(automaticSystemctlPath)
-	if err != nil {
-		want = automaticSystemctlPath
+	// The default path is fixed. Skip this case on a host where it is
+	// not a plain file, because the scan then gets another path.
+	if info, err := os.Lstat(automaticSystemctlPath); err != nil || !info.Mode().IsRegular() {
+		t.Skip("no regular " + automaticSystemctlPath + " on this host")
 	}
-	if path != want {
-		t.Fatalf("default systemctl = %q, want %q", path, want)
+	backend.discoverEscapeRoutes(context.Background(), &Discovery{})
+	if path != automaticSystemctlPath {
+		t.Fatalf("default systemctl = %q", path)
 	}
 }
 
