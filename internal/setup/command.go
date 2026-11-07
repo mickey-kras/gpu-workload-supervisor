@@ -6,9 +6,12 @@ import (
 	"errors"
 	"os/exec"
 	"time"
+
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 )
 
-const commandOutputLimit = 1024 * 1024
+// commandOutputLimit is the output bound of the CommandFunc contract.
+const commandOutputLimit = gpuruntime.CommandOutputLimit
 
 type boundedOutput struct{ buffer bytes.Buffer }
 

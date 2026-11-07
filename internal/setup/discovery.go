@@ -46,8 +46,8 @@ func Discover(ctx context.Context, home string) (Discovery, error) {
 	return SystemBackend().Discover(ctx, home)
 }
 
-func (b Backend) Discover(ctx context.Context, home string) (Discovery, error) {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+func (b Backend) Discover(parent context.Context, home string) (Discovery, error) {
+	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 	result := Discovery{Request: Request{Version: 1, Profile: Profile{Version: 1, StatePath: deployment.DefaultStatePath(), SystemctlPath: "/usr/bin/systemctl", NvidiaSMIPath: gpuInventoryExecutable}, Catalog: control.Catalog{Version: 1}}}
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
@@ -84,7 +84,7 @@ func (b Backend) Discover(ctx context.Context, home string) (Discovery, error) {
 	b.discoverApplications(ctx, &result, units, home)
 	b.discoverTrainers(ctx, &result)
 	b.discoverGPUInventory(ctx, &result)
-	b.discoverEscapeRoutes(ctx, &result)
+	b.discoverEscapeRoutes(parent, &result)
 	owned, err := discoverOwnedUnits(home, result.Request.Catalog)
 	if err != nil {
 		return result, err
@@ -93,18 +93,36 @@ func (b Backend) Discover(ctx context.Context, home string) (Discovery, error) {
 	return result, nil
 }
 
+// escapeScanBudget bounds the escape route scan. The scan has its own
+// budget, so the earlier discovery steps cannot spend it.
+const escapeScanBudget = 5 * time.Second
+
 // discoverEscapeRoutes adds the advisory escape routes of the desktop
 // account. It uses the backend command runner and the systemctl of the
-// profile. A backend without the scan adds none.
-func (b Backend) discoverEscapeRoutes(ctx context.Context, result *Discovery) {
+// profile, after the same trust check as the runtime. An untrusted
+// systemctl does not run, and the report says that the scan cannot check
+// the system units. A backend without the scan adds none. parent is the
+// context of the caller, so its cancellation still stops the scan.
+func (b Backend) discoverEscapeRoutes(parent context.Context, result *Discovery) {
 	if b.escapeRoutes == nil {
 		return
 	}
+	ctx, cancel := context.WithTimeout(parent, escapeScanBudget)
+	defer cancel()
 	systemctl := result.Request.Profile.SystemctlPath
 	if systemctl == "" {
 		systemctl = automaticSystemctlPath
 	}
-	result.EscapeRoutes = b.escapeRoutes(ctx, b.runCommand, systemctl)
+	run := b.runCommand
+	resolved, err := gpuruntime.ValidateSystemctlExecutable(systemctl)
+	if err == nil {
+		systemctl = resolved
+	} else {
+		run = func(context.Context, string, ...string) ([]byte, error) {
+			return nil, gpuruntime.SafeError(systemctl+" is not a trusted executable", err)
+		}
+	}
+	result.EscapeRoutes = b.escapeRoutes(ctx, run, systemctl)
 }
 
 // ErrOwnedUnitDiscovery marks an owned-unit directory that exists but cannot
