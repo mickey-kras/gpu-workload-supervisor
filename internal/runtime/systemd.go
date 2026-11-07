@@ -15,11 +15,6 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/httptransport"
 )
 
-// refuseUncheckedEscapeRoutes is the launch gate of this release.
-func refuseUncheckedEscapeRoutes(context.Context, control.WorkloadProfile) error {
-	return ErrEscapeRoutesUnchecked
-}
-
 // limitCleanupTimeout bounds the stop after a failed limit check in Start.
 // The budget is fixed on purpose. The stop must end the unit, so it does not
 // depend on a caller budget that a short entry point sets. It covers the
@@ -64,15 +59,11 @@ type SystemdConfig struct {
 }
 
 type SystemdManager struct {
-	config  SystemdConfig
-	runner  CommandRunner
-	client  *http.Client
-	cgroups cgroupFS
-	host    limitHost
-	// escapeRoutes checks that no program of the service account can run
-	// outside the host cap. This release has no such check, so it refuses
-	// every unit with limits; tests replace it to reach the other checks.
-	escapeRoutes              func(context.Context, control.WorkloadProfile) error
+	config                    SystemdConfig
+	runner                    CommandRunner
+	client                    *http.Client
+	cgroups                   cgroupFS
+	host                      limitHost
 	nativeExecutableValidator func(string) error
 }
 
@@ -113,7 +104,7 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 	if runner == nil || client == nil {
 		return nil, errors.New("runner and HTTP client are required")
 	}
-	return &SystemdManager{config: config, runner: runner, client: client, cgroups: cgroupFS{root: "/sys/fs/cgroup", verify: verifyUnifiedHierarchy}, host: defaultLimitHost(), escapeRoutes: refuseUncheckedEscapeRoutes}, nil
+	return &SystemdManager{config: config, runner: runner, client: client, cgroups: cgroupFS{root: "/sys/fs/cgroup", verify: verifyUnifiedHierarchy}, host: defaultLimitHost()}, nil
 }
 
 func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) error {

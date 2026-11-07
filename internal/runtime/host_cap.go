@@ -54,6 +54,12 @@ func defaultLimitHost() limitHost {
 // system without extended attributes has none.
 func hasXattr(fd int, attribute string) (bool, error) {
 	_, err := unix.Fgetxattr(fd, attribute, nil)
+	return xattrPresent(err)
+}
+
+// xattrPresent classifies the error of an extended attribute lookup. No
+// attribute, and a file system without extended attributes, give false.
+func xattrPresent(err error) (bool, error) {
 	switch {
 	case err == nil:
 		return true, nil
@@ -342,10 +348,7 @@ var errUntrusted = errors.New("untrusted file")
 // A walk failure names the component that failed, such as a writable
 // parent directory, not only the file.
 func hostFileError(name string, err error) error {
-	var walk *walkError
-	if errors.As(err, &walk) && walk.path != "" {
-		name, err = walk.path, walk.err
-	}
+	name, err = walkFailure(name, err)
 	if errors.Is(err, errUntrusted) || definiteFileErrno(err) {
 		return fmt.Errorf(limitPathErrorFormat, ErrHostCap, name, err)
 	}

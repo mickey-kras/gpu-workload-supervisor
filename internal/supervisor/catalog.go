@@ -191,11 +191,10 @@ func (c *Controller) retainedCatalogTarget(ctx context.Context, snap gpuruntime.
 	return retained, nil
 }
 
-// checkRetainedLimits runs the escape route gate, the binding check, the
-// host protection checks and the cgroup readback before reconciliation keeps
-// a running unit with limits. runtime.ErrEscapeRoutesUnchecked says what
-// the gate does in this release. It leaves out the slice memory check: the running unit
-// already holds its memory. A runtime that cannot run the checks fails them.
+// checkRetainedLimits runs the binding check, the host protection checks
+// and the cgroup readback before reconciliation keeps a running unit with
+// limits. It leaves out the slice memory check: the running unit already
+// holds its memory. A runtime that cannot run the checks fails them.
 func (c *Controller) checkRetainedLimits(ctx context.Context, p control.WorkloadProfile) error {
 	if !p.HasLimits() {
 		return nil

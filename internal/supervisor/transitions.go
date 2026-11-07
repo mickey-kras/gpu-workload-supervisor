@@ -268,8 +268,10 @@ var ErrLimitedTarget = errors.New("target refused before any change")
 // from. The current workload keeps running. Setup removes limits only from
 // a healthy, stable Idle, so the next steps depend on the state and its
 // owner. A latched state needs recovery first. A state that cannot be read
-// counts as latched, and its running workload is unknown. The gate also
-// refuses recover-user for a kept workload with limits.
+// counts as latched, and its running workload is unknown. For a kept
+// workload with limits, it records the unit: recover-user runs the limit
+// checks of that unit, so the steps for a latched user-owned state stop
+// that unit first.
 func (c *Controller) remedyFromStore(ctx context.Context) remedyState {
 	state, err := c.store.State(ctx)
 	if err != nil {
