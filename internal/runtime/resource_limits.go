@@ -20,10 +20,11 @@ const (
 
 // systemd starts a unit even when it cannot apply a limit, and it reports the
 // configured values while the cgroup holds others. A unit with limits starts
-// only after the escape route gate, binding, controller, host cap, reserve,
-// device, loaded property and memory checks pass, and it stays healthy only
-// while its cgroup holds the exact values. ErrEscapeRoutesUnchecked says
-// what the gate does in this release. Each error class names what failed.
+// only after the binding, controller, host cap, reserve, device, loaded
+// property and memory checks pass, and it stays healthy only while its
+// cgroup holds the exact values. Each error class names what failed.
+// Escape routes are advisory: ScanEscapeRoutes reports them on request,
+// and no check here reads them.
 var (
 	ErrLimitController = errors.New("a required cgroup controller is not enabled for this account")
 	ErrLimitInterface  = errors.New("the system cannot apply a resource limit")
@@ -47,13 +48,6 @@ var (
 	ErrLimitCheckFailed = errors.New("a resource limit check of a started unit failed")
 	// ErrLimitUnchecked marks a runtime that cannot run the limit checks.
 	ErrLimitUnchecked = errors.New("the runtime cannot check resource limits")
-	// ErrEscapeRoutesUnchecked keeps units with limits from starting until
-	// the escape route checks exist: in this release, the gate refuses
-	// every unit with limits. This is the one place that states it. Programs of the service account could
-	// otherwise run outside the host cap. The setup change that adds those
-	// checks lifts this gate. The text gives only the cause: the supervisor
-	// adds the next step, which depends on the path.
-	ErrEscapeRoutesUnchecked = errors.New("this release has no escape route checks for units with resource limits")
 )
 
 // errBindingCommand marks a binding check whose command failed: the
@@ -125,7 +119,7 @@ func DefiniteLimitFailure(err error) bool {
 	if errors.Is(err, ErrLimitReadback) {
 		return false
 	}
-	for _, definite := range []error{ErrEscapeRoutesUnchecked, ErrHostCap, ErrLimitController, ErrLimitInterface, ErrLimitReserve, ErrLimitDevice, ErrLimitProperties, ErrLimitDrift, ErrLimitUnchecked} {
+	for _, definite := range []error{ErrHostCap, ErrLimitController, ErrLimitInterface, ErrLimitReserve, ErrLimitDevice, ErrLimitProperties, ErrLimitDrift, ErrLimitUnchecked} {
 		if errors.Is(err, definite) {
 			return true
 		}
@@ -166,15 +160,12 @@ func StartedCause(err error) (error, bool) {
 
 const mebibyte = 1 << 20
 
-// launchChecks runs the escape route gate, the binding check and the host
-// protection checks of a unit with limits, in that order. Start and
-// VerifyLaunchLimits both run it, so the two lists stay the same. It does
-// not change the unit, so a failure leaves the host as it was. The
-// returned cap holds the slice ceilings for the memory check of Start.
+// launchChecks runs the binding check and the host protection checks of a
+// unit with limits, in that order. Start and VerifyLaunchLimits both run
+// it, so the two lists stay the same. It does not change the unit, so a
+// failure leaves the host as it was. The returned cap holds the slice
+// ceilings for the memory check of Start.
 func (m *SystemdManager) launchChecks(ctx context.Context, p control.WorkloadProfile) (hostCap, error) {
-	if err := m.escapeRoutes(ctx, p); err != nil {
-		return hostCap{}, err
-	}
 	if err := m.verifyNativeBinding(ctx, p); err != nil {
 		return hostCap{}, err
 	}
@@ -194,8 +185,8 @@ func (m *SystemdManager) limitedProfile(workload control.Workload) (p control.Wo
 	return p, p.HasLimits(), nil
 }
 
-// VerifyLaunchLimits runs the launch checks of a unit with limits, the
-// escape route gate first. The supervisor calls it before it unloads the current workload, so a failure
+// VerifyLaunchLimits runs the launch checks of a unit with limits. The
+// supervisor calls it before it unloads the current workload, so a failure
 // refuses the switch with no change. It leaves out the slice memory check:
 // the current workload still holds its memory there. Start runs the same
 // checks and also the memory check.
@@ -209,10 +200,10 @@ func (m *SystemdManager) VerifyLaunchLimits(ctx context.Context, workload contro
 }
 
 // VerifyLimitProtection runs the same checks as a health check of a running
-// unit with limits: the escape route gate, the binding, the host protection
-// checks and the cgroup readback. The supervisor calls it before it
-// retains a running unit. It leaves out the slice memory check, because the running unit
-// already holds its memory in the slice. It changes nothing.
+// unit with limits: the binding, the host protection checks and the cgroup
+// readback. The supervisor calls it before it retains a running unit. It
+// leaves out the slice memory check, because the running unit already holds
+// its memory in the slice. It changes nothing.
 func (m *SystemdManager) VerifyLimitProtection(ctx context.Context, workload control.Workload) error {
 	p, limited, err := m.limitedProfile(workload)
 	if err != nil || !limited {
@@ -237,11 +228,6 @@ func (m *SystemdManager) checkStartedUnit(ctx context.Context, p control.Workloa
 // unit with limits. A changed binding, such as a set-property drop-in, is a
 // definite limit failure.
 func (m *SystemdManager) checkStartedLimitedUnit(ctx context.Context, p control.WorkloadProfile) error {
-	// The escape route gate runs first, so a gated unit always gets the
-	// definite refusal, whatever the binding probe returns.
-	if err := m.escapeRoutes(ctx, p); err != nil {
-		return tagStarted(err)
-	}
 	if err := m.verifyNativeBinding(ctx, p); err != nil {
 		if DefiniteBindingFailure(err) {
 			return checkFailed(err)
@@ -252,10 +238,9 @@ func (m *SystemdManager) checkStartedLimitedUnit(ctx context.Context, p control.
 }
 
 // checkHostProtection checks the controllers, the host cap, the reserve,
-// the I/O device and the loaded properties. Its callers run the escape
-// route gate first. It returns the slice ceilings and the I/O weight
-// provider of the device for the readback: "bfq", "iocost", or empty when
-// IOWeight is not set.
+// the I/O device and the loaded properties. It returns the slice ceilings
+// and the I/O weight provider of the device for the readback: "bfq",
+// "iocost", or empty when IOWeight is not set.
 func (m *SystemdManager) checkHostProtection(ctx context.Context, p control.WorkloadProfile) (limitCap hostCap, provider string, err error) {
 	l := p.NativeModel.Owned.Limits
 	if err := requireCappedControls(l); err != nil {

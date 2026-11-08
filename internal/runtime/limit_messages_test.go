@@ -22,10 +22,6 @@ func TestLimitErrorsNameTheUnit(t *testing.T) {
 	if err := f.start(t); !errors.Is(err, ErrHostCap) || !strings.HasPrefix(err.Error(), prefix) || f.started() {
 		t.Fatalf("start with a slice property mismatch = %v", err)
 	}
-	f.m.escapeRoutes = refuseUncheckedEscapeRoutes
-	if err := f.start(t); !errors.Is(err, ErrEscapeRoutesUnchecked) || !strings.HasPrefix(err.Error(), prefix) || f.started() {
-		t.Fatalf("start of a gated unit = %v", err)
-	}
 }
 
 // A workload that the runtime catalog does not have fails the checks

@@ -40,6 +40,8 @@ func fixture(t *testing.T) (Backend, string, Request) {
 	backend := SystemBackend()
 	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
 	backend.qualifyOwned = func(control.WorkloadProfile) error { return nil }
+	// The escape route scan reads host files, so the fixture has none.
+	backend.escapeRoutes = nil
 	backend.runCommand = func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("text.service disabled\nmedia.service disabled\n"), nil
 	}

@@ -160,9 +160,6 @@ func newLimitFixture(t *testing.T, limits control.ResourceLimits, loaded string)
 	f.device = unix.Stat_t{Mode: unix.S_IFBLK | 0o660, Uid: uint32(os.Getuid()), Rdev: unix.Mkdev(259, 0)}
 	m.cgroups = cgroupFS{root: f.cgroups, verify: func(int) error { return nil }}
 	m.host = limitHost{root: f.host, owner: uint32(os.Getuid()), uid: 1000, ownerOf: f.ownerOf, lstat: f.lstat, hasXattr: hasXattr}
-	// The fixture stands in for the escape route checks of a later release,
-	// so the tests reach the other checks behind that gate.
-	m.escapeRoutes = func(context.Context, control.WorkloadProfile) error { return nil }
 	f.writeCgroups(t)
 	f.writeHost(t)
 	f.writeShows(loaded)
@@ -1291,47 +1288,49 @@ func TestReadbackGroupGoneIsNotInterfaceMissing(t *testing.T) {
 	}
 }
 
-// This release has no escape route checks, so the default runtime refuses
-// every unit with limits before any other check: launch, health and
-// retention. Units without limits are not affected.
-func TestEscapeRouteGateRefusesLimitedUnits(t *testing.T) {
-	f := newLimitFixture(t, fixtureLimits(), fixtureLoaded)
-	f.m.escapeRoutes = refuseUncheckedEscapeRoutes
-	ctx := context.Background()
-	// A failed binding probe and a missing host cap come later: the gate
-	// answers first with the definite refusal.
-	f.r.errs = map[string]error{f.bindingShow(): errors.New("bus")}
-	remove(t, f.host, "/etc/systemd/system/user-1000.slice.d/50-gws-host-cap.conf")
-	for name, check := range map[string]func() error{
-		"before unload": func() error { return f.m.VerifyLaunchLimits(ctx, f.p.ID) },
-		"start":         func() error { return f.m.Start(ctx, f.p.ID) },
-		"retention":     func() error { return f.m.VerifyLimitProtection(ctx, f.p.ID) },
-		"health":        func() error { return f.m.Healthy(ctx, f.p.ID) },
-	} {
-		calls := len(f.r.calls)
-		if err := check(); !errors.Is(err, ErrEscapeRoutesUnchecked) || !DefiniteLimitFailure(err) || f.started() ||
-			slices.Contains(f.r.calls[calls:], f.bindingShow()) || slices.Contains(f.r.calls[calls:], f.sliceShow()) {
-			t.Fatalf("%s of a limited unit = %v: %v", name, err, f.r.calls[calls:])
-		}
-	}
-	if err := f.m.VerifyLaunchLimits(ctx, control.WorkloadText); err != nil {
-		t.Fatalf("launch checks of an unlimited unit = %v", err)
-	}
-	// The gate covers only the launch and health of the limited unit.
-	// Preflight and release checks stay available, so setup can remove it.
-	f.r.errs = nil
-	f.cgroup(t, f.p.Cgroup, "cgroup.events", "populated 0\n")
-	if err := f.m.Preflight(ctx); errors.Is(err, ErrEscapeRoutesUnchecked) {
-		t.Fatalf("preflight with a gated unit = %v", err)
-	}
-	for _, target := range []control.Workload{control.WorkloadIdle, control.WorkloadText, f.p.ID} {
-		if err := f.m.ReleasedFor(ctx, target); err != nil {
-			t.Fatalf("release for %s with a gated unit = %v", target, err)
-		}
-	}
+// Escape routes are advisory, so no runtime path reads them: a unit with
+// limits passes its launch checks, starts, passes the limit checks of a
+// health check and is kept on a host where the scan reports routes.
+// The cron deny file of the host does not deny the account. The health
+// step calls checkStartedUnit, the limit part of Healthy, because the
+// fixture has no health endpoint.
+func TestLimitedUnitRunsWithoutEscapeRouteCheck(t *testing.T) {
 	m, err := newSystemdManager(testConfig(), &fakeRunner{}, http.DefaultClient)
-	if err != nil || m.escapeRoutes == nil || !errors.Is(m.escapeRoutes(ctx, f.p), ErrEscapeRoutesUnchecked) || m.host.ownerOf(unix.Stat_t{Uid: 7}) != 7 {
-		t.Fatalf("default gate = %v", err)
+	if err != nil || m.host.ownerOf(unix.Stat_t{Uid: 7}) != 7 {
+		t.Fatalf("default runtime = %v", err)
+	}
+	f := newLimitFixture(t, fixtureLimits(), fixtureLoaded)
+	f.file(t, "/etc/passwd", "alice:x:1000:1000::/home/alice:/bin/sh\n")
+	f.file(t, "/etc/group", "alice:x:1000:\n")
+	f.file(t, "/etc/cron.deny", "")
+	ctx := context.Background()
+	// The checks run in this order: the unit runs after the start.
+	for _, step := range []struct {
+		name  string
+		check func() error
+	}{
+		{"before unload", func() error { return f.m.VerifyLaunchLimits(ctx, f.p.ID) }},
+		{"start", func() error { return f.m.Start(ctx, f.p.ID) }},
+		{"health", func() error { return f.m.checkStartedUnit(ctx, f.p) }},
+		{"retention", func() error { return f.m.VerifyLimitProtection(ctx, f.p.ID) }},
+	} {
+		if err := step.check(); err != nil {
+			t.Fatalf("%s of a limited unit with open routes = %v", step.name, err)
+		}
+	}
+	if !f.started() {
+		t.Fatal("the limited unit did not start")
+	}
+	for _, call := range f.r.calls {
+		if strings.Contains(call, "--property=User") || strings.Contains(call, "sudo") || strings.Contains(call, "pkcheck") {
+			t.Fatalf("a limit check ran an escape route command: %s", call)
+		}
+	}
+	// The scan of the same host reports routes.
+	scanner := escapeScanner{host: f.m.host, run: f.r.Run, systemctl: "/usr/bin/true", probe: escapeProbe{verify: func(int) error { return nil },
+		processGroups: func() ([]uint32, error) { return nil, nil }, socketACL: func(string) (bool, error) { return false, nil }}}
+	if routes := scanner.scan(ctx); !slices.Contains(routes, EscapeRoute{Route: "cron", Item: "/etc/cron.deny does not deny alice"}) {
+		t.Fatalf("the scan of the fixture host = %+v", routes)
 	}
 }
 
@@ -1436,26 +1435,6 @@ func TestHostFileReadFailureOfRunningUnitIsNotDefinite(t *testing.T) {
 	err := f.m.verifyStartedLimits(context.Background(), f.p)
 	if !errors.Is(err, ErrLimitReadback) || errors.Is(err, ErrLimitCheckFailed) || DefiniteLimitFailure(err) {
 		t.Fatalf("health with an unreadable scheduler = %v", err)
-	}
-}
-
-// Each entry point runs the escape route gate once.
-func TestEscapeRouteGateRunsOncePerCall(t *testing.T) {
-	f := newLimitFixture(t, fixtureLimits(), fixtureLoaded)
-	ctx := context.Background()
-	calls := 0
-	f.m.escapeRoutes = func(context.Context, control.WorkloadProfile) error { calls++; return nil }
-	for name, check := range map[string]func() error{
-		"before unload": func() error { return f.m.VerifyLaunchLimits(ctx, f.p.ID) },
-		"retention":     func() error { return f.m.VerifyLimitProtection(ctx, f.p.ID) },
-		"start":         func() error { return f.m.Start(ctx, f.p.ID) },
-		"health":        func() error { return f.m.Healthy(ctx, f.p.ID) },
-	} {
-		calls = 0
-		_ = check()
-		if calls != 1 {
-			t.Fatalf("%s ran the gate %d times", name, calls)
-		}
 	}
 }
 
