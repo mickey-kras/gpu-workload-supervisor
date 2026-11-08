@@ -28,6 +28,10 @@ type Discovery struct {
 	Applications       []ApplicationCandidate `json:"applications"`
 	OwnedUnits         []OwnedUnitStatus      `json:"ownedUnits"`
 	Trainers           []TrainerCandidate     `json:"trainers"`
+	// EscapeRoutes are advisory: ways through which programs of this
+	// account can run outside host protection. They do not block limits.
+	// A scan gives a list, also an empty one. null means no scan ran.
+	EscapeRoutes []gpuruntime.EscapeRoute `json:"escapeRoutes"`
 }
 
 // OwnedUnitStatus reports one supervisor-owned unit file so the UI can offer
@@ -42,8 +46,8 @@ func Discover(ctx context.Context, home string) (Discovery, error) {
 	return SystemBackend().Discover(ctx, home)
 }
 
-func (b Backend) Discover(ctx context.Context, home string) (Discovery, error) {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+func (b Backend) Discover(parent context.Context, home string) (Discovery, error) {
+	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 	result := Discovery{Request: Request{Version: 1, Profile: Profile{Version: 1, StatePath: deployment.DefaultStatePath(), SystemctlPath: "/usr/bin/systemctl", NvidiaSMIPath: gpuInventoryExecutable}, Catalog: control.Catalog{Version: 1}}}
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
@@ -85,7 +89,54 @@ func (b Backend) Discover(ctx context.Context, home string) (Discovery, error) {
 		return result, err
 	}
 	result.OwnedUnits = owned
+	// The scan runs last, so a failed earlier step does not spend it.
+	b.discoverEscapeRoutes(parent, &result)
 	return result, nil
+}
+
+// escapeScanBudget bounds the escape route scan. The scan has its own
+// budget, so the earlier discovery steps cannot spend it.
+const escapeScanBudget = 5 * time.Second
+
+// discoverEscapeRoutes adds the advisory escape routes of the desktop
+// account. It uses the backend command runner and the systemctl of the
+// profile, after the same trust check as the runtime. An untrusted
+// systemctl does not run, and the report says that the scan cannot check
+// the system units. A backend without the scan adds none. parent is the
+// context of the caller, so its cancellation still stops the scan.
+func (b Backend) discoverEscapeRoutes(parent context.Context, result *Discovery) {
+	if b.escapeRoutes == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(parent, escapeScanBudget)
+	defer cancel()
+	systemctl := result.Request.Profile.SystemctlPath
+	if systemctl == "" {
+		systemctl = automaticSystemctlPath
+	}
+	run := b.runCommand
+	resolved, err := gpuruntime.ValidateSystemctlExecutable(systemctl)
+	if err == nil {
+		systemctl = resolved
+	} else {
+		// The scan runs only systemctl, so this runner refuses each command
+		// and gives the cause of the trust check.
+		cause := fmt.Errorf("%w: %s is not a trusted executable: %s", gpuruntime.ErrCommandNotRun, systemctl, trustFailure(systemctl, err))
+		run = func(context.Context, string, ...string) ([]byte, error) {
+			return nil, cause
+		}
+	}
+	result.EscapeRoutes = b.escapeRoutes(ctx, run, systemctl)
+}
+
+// trustFailure gives the reason of a failed trust check of path, without
+// the launch class and the repeated path.
+func trustFailure(path string, err error) string {
+	reason := strings.TrimPrefix(err.Error(), gpuruntime.ErrLaunchUnsupported.Error()+": ")
+	for strings.HasPrefix(reason, path+": ") {
+		reason = strings.TrimPrefix(reason, path+": ")
+	}
+	return reason
 }
 
 // ErrOwnedUnitDiscovery marks an owned-unit directory that exists but cannot

@@ -161,7 +161,7 @@ func (b Backend) Plan(home string, request Request) (Preview, error) {
 type Backend struct {
 	gpuInventory        func(context.Context) ([]string, string)
 	makeRuntime         func(Request) (gpuruntime.Manager, error)
-	runCommand          func(ctx context.Context, name string, args ...string) ([]byte, error)
+	runCommand          gpuruntime.CommandFunc
 	probeApplication    func(ctx context.Context, request ProbeRequest) (ApplicationCandidate, error)
 	discoverExecutables func(context.Context, string) []ApplicationCandidate
 	inspectAutomatic    func(string, string) (gpuruntime.AutomaticLaunch, error)
@@ -170,10 +170,15 @@ type Backend struct {
 	qualifyOwned     func(control.WorkloadProfile) error
 	binaryDirectory  string
 	packageBinaryUID uint32
+	// escapeRoutes scans the advisory escape routes of this account for
+	// discovery with the command runner and the systemctl path; nil scans
+	// none.
+	escapeRoutes func(context.Context, gpuruntime.CommandFunc, string) []gpuruntime.EscapeRoute
 }
 
 func SystemBackend() Backend {
-	return Backend{makeRuntime: runtimeFor, runCommand: boundedCommand, probeApplication: Probe, discoverExecutables: installedExecutables, binaryDirectory: "/usr/bin"}
+	return Backend{makeRuntime: runtimeFor, runCommand: boundedCommand, probeApplication: Probe, discoverExecutables: installedExecutables, binaryDirectory: "/usr/bin",
+		escapeRoutes: gpuruntime.ScanEscapeRoutes}
 }
 
 func runtimeFor(request Request) (gpuruntime.Manager, error) {

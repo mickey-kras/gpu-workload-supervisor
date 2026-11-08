@@ -58,6 +58,8 @@ Supported external `ExecStart`, `Environment`, `WorkingDirectory` path tokens ca
 
 `gpu-setup discover` returns saved state and ComfyUI and vLLM `applications` candidates. It checks two default loopback ports and recognizable user-service metadata. Loaded metadata plus unchanged supported launch files define service endpoint and identity. Endpoint observations do not prove ownership. Existing profiles remain unchanged. Errors differ from empty inventories.
 
+Discovery also returns the advisory `escapeRoutes` list. `[]` means that the scan found nothing, and `null` means that no scan ran. See [escape route report](RESOURCE-LIMITS.md#escape-route-report).
+
 ```sh
 printf '%s' '{"app":"vllm","endpoint":"http://127.0.0.1:8000"}' | gpu-setup probe
 printf '%s' '{"app":"vllm","reference":"/models/model","referenceKind":"model-directory"}' | gpu-setup probe
@@ -180,8 +182,8 @@ Reconciliation never resumes jobs or takes User ownership. Inspect User state an
 | Command | Evidence and outcome |
 | --- | --- |
 | `status` | Persisted ownership and admission and observed active workload. Not full readiness or release proof. Can latch Supervisor observation failures. Check the exit code and JSON |
-| Idle `reconcile` | Success means stable, healthy and closed. Select text or media through the controller. A running unit with resource limits and boot policy `retain` must pass its checks. In this release, the escape route gate fails each such unit. On a definite failure, reconcile does not keep the unit. It stops the unit, as it stops each unit that it does not keep, and exits nonzero with the cause. The state keeps the workload that reconcile kept, with error health and closed admission. A failure that proves nothing latches the error state and does not stop the unit. Reconcile and setup refuse that state. Run `gpu-mode recover`. If it keeps a workload other than Idle, run `gpu-mode -target idle switch`. Then remove the limits through setup |
-| `recover` | Repair Supervisor failure first. Closes admission, rotates fence, waits up to `-drain-timeout` before stopping media. Old registrations keep completion authority. Failure or cancellation leaves closed admission, error health and unknown runtime. A running unit with resource limits and boot policy `retain` must pass its checks, as in reconcile. In this release, each such unit fails. `recover` stops the unit and does not latch the error state again. It exits nonzero with the cause. The state is stable and healthy for the workload that `recover` keeps. When that workload is Idle, admission stays closed. Otherwise, admission opens for that workload. Setup removes the limits only from Idle, so switch to Idle first when `recover` keeps another workload |
+| Idle `reconcile` | Success means stable, healthy and closed. Select text or media through the controller. A running unit with resource limits and boot policy `retain` must pass its checks. On a definite failure, reconcile does not keep the unit. It stops the unit, as it stops each unit that it does not keep, and exits nonzero with the cause. The state keeps the workload that reconcile kept, with error health and closed admission. A failure that proves nothing latches the error state and does not stop the unit. Reconcile and setup refuse that state. Run `gpu-mode recover`. Then fix the cause that the error names. If you cannot fix it, run `gpu-mode -target idle switch`. Then remove the limits through setup |
+| `recover` | Repair Supervisor failure first. Closes admission, rotates fence, waits up to `-drain-timeout` before stopping media. Old registrations keep completion authority. Failure or cancellation leaves closed admission, error health and unknown runtime. A running unit with resource limits and boot policy `retain` must pass its checks, as in reconcile. When the checks pass, `recover` keeps the unit. On a definite failure, `recover` stops the unit and does not latch the error state again. It exits nonzero with the cause. A failure that proves nothing latches the error state and does not stop the unit. The state is stable and healthy for the workload that `recover` keeps. When that workload is Idle, admission stays closed. Otherwise, admission opens for that workload. Fix the cause that the error names. If you cannot fix it, remove the limits through setup. Setup removes the limits only from Idle, so switch to Idle first when `recover` keeps another workload |
 
 Resolve orphaned work before destructive recovery. For suppressed probe and command-output details, inspect `systemctl --user status UNIT` and `journalctl --user -u UNIT`. The supervisor does not copy suppressed output to journals.
 
@@ -412,25 +414,27 @@ Status and mutations share the nonblocking controller gate: `busy` queues nothin
 
 ### Limit checks
 
-In this release, a switch or activation to a unit with resource limits fails with `incompatible_configuration` before any change. This release has no escape route checks.
+Escape routes do not block a unit with limits. `gpu-setup discover` reports them as warnings. See [escape route report](RESOURCE-LIMITS.md#escape-route-report).
 
-Over the operator protocol, the refusal is only the `incompatible_configuration` code. The `gpu-mode` CLI also writes the next steps to standard error as commands, for example after `gpu-mode -target vision switch`. Setup removes limits only from a healthy, stable Idle with closed admission. The state needs recovery when it has error health or a phase that is not stable, or when the supervisor cannot read it. Then the steps start with `gpu-mode recover`.
+Over the operator protocol, a refusal of a unit with limits is only the `incompatible_configuration` code. The `gpu-mode` CLI also writes the cause and the next steps to standard error, for example after `gpu-mode -target vision switch`. Most causes name their fix, often with "or remove the limits through setup".
 
-When the workload is not Idle, the steps then switch to Idle. A supervisor-owned state uses `gpu-mode -target idle switch`. A user-owned state uses `gpu-mode -target idle user-switch`. After recovery, this step applies only if a workload other than Idle runs then. When the user owns a state that needs recovery, the steps use `recover-user` instead of `recover`. `switch` and `recover` need supervisor ownership, and setup does not need it.
+Setup removes limits only from a healthy, stable Idle with closed admission. So when a workload other than Idle runs, the next steps switch to Idle. A supervisor-owned state uses `gpu-mode -target idle switch`. A user-owned state uses `gpu-mode -target idle user-switch`. After recovery, this step applies only if a workload other than Idle runs then.
 
-The gate also refuses `recover-user` for a unit with limits. A latched user-owned state can run a unit with limits or an unknown unit. Then the steps first stop that unit outside gpu-mode, for example with `systemctl --user stop UNIT`. Then they run `gpu-mode -target idle recover-user`.
+The state needs recovery when it has error health or a phase that is not stable, or when the supervisor cannot read it. Then the steps start with `gpu-mode recover`. When the user owns that state, the steps use `recover-user` instead of `recover`. `switch` and `recover` need supervisor ownership, and setup does not need it.
+
+A latched user-owned state can run a unit with limits. `recover-user` runs the limit checks of that unit, and they can refuse it. So the steps first stop that unit outside gpu-mode, for example with `systemctl --user stop UNIT`. The steps do the same for an unknown workload. Then they run `gpu-mode -target idle recover-user`.
 
 The steps use the default `gpu-mode` flags. If you ran the failed command with other flags, such as `-state`, give the same flags to each step.
 
-The next paragraph describes the checks before the unload and at the start. They apply when a later release removes that gate.
-
 A switch or activation fails with `incompatible_configuration` before any change when a check before the unload finds a definite mismatch. A command, read or timeout failure in these checks also changes nothing, but keeps its usual code. The slice memory check runs at start, after the unload. Failures after the unload keep their usual codes.
 
-Status never starts or stops a workload. For a supervisor-owned, stable, healthy state with open admission, a failed health check latches the error state and closes the admission. A limit failure is such a failure. Other states get no health check from status. In this release, a running unit with limits fails each health check.
+Status never starts or stops a workload. For a supervisor-owned, stable, healthy state with open admission, a failed health check latches the error state and closes the admission. A limit failure is such a failure. Other states get no health check from status.
 
-Status reports a failed limit check as a failed health check. Its error does not name the limit cause. Status does not stop the running unit. The unit keeps running behind the closed admission. The policy tick does not check units with limits. Reconcile refuses the latched state, and only `recover` stops the unit.
+Status reports a failed limit check as a failed health check. Its error does not name the limit cause. Status does not stop the running unit. The unit keeps running behind the closed admission. The policy tick does not check units with limits. Reconcile refuses the latched state.
 
-To stop the unit, run `recover` one time. For a unit with boot policy `retain`, `recover` stops the unit and exits nonzero with the cause. It does not latch the error state again. For a unit with another boot policy, `recover` stops the unit, as it stops each unit that it does not keep. It then exits zero and gives no cause.
+Run `recover` one time. For a unit with boot policy `retain`, `recover` runs the checks again. When they pass, `recover` keeps the unit. On a definite failure, `recover` stops the unit and exits nonzero with the cause. It does not latch the error state again.
+
+For a unit with another boot policy, `recover` stops the unit, as it stops each unit that it does not keep. It then exits zero and gives no cause.
 
 When `recover` keeps another workload, admission is open for that workload. Setup removes the limits only from Idle, so run `gpu-mode -target idle switch` first. Then remove the limits through setup. The limit stop of the policy tick and its escalation come with the setup change for limits. See [runtime checks](RESOURCE-LIMITS.md#runtime-checks).
 
