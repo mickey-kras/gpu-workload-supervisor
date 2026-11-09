@@ -7,6 +7,19 @@ import (
 	"time"
 )
 
+// PruneAuditBefore runs PruneAuditHistory in bounded batches until no eligible
+// record older than before remains. Each batch is its own transaction.
+func (s *Store) PruneAuditBefore(ctx context.Context, before time.Time) (int64, error) {
+	var total int64
+	for {
+		count, err := s.PruneAuditHistory(ctx, before, 256)
+		total += count
+		if err != nil || count == 0 {
+			return total, err
+		}
+	}
+}
+
 // PruneAuditHistory deletes at most limit audit parents and their dependent rows.
 // It never deletes unresolved work, live transitions, current-fence transitions,
 // or the latest recovery/restore record. Archive before invoking this operation.
