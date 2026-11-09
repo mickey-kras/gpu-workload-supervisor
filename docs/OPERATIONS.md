@@ -444,13 +444,19 @@ A switch or activation fails with `incompatible_configuration` before any change
 
 Status never starts or stops a workload. For a supervisor-owned, stable, healthy state with open admission, a failed health check latches the error state and closes the admission. A limit failure is such a failure. Other states get no health check from status.
 
-Status reports a failed limit check as a failed health check. Its error does not name the limit cause. Status does not stop the running unit. The unit keeps running behind the closed admission. The policy tick does not check units with limits. Reconcile refuses the latched state.
+Status reports a failed limit check as a failed health check. Its error does not name the limit cause. Status does not stop the running unit. The unit keeps running behind the closed admission.
+
+The policy tick then runs the [limit stop](RESOURCE-LIMITS.md#limit-stop). A definite failure stops the unit at once, or after the drain timeout when admitted work is pending. A failure that proves nothing stops the unit after the drain and readiness timeouts. Reconcile refuses the latched state.
 
 Run `recover` one time. For a unit with boot policy `retain`, `recover` runs the checks again. When they pass, `recover` keeps the unit. On a definite failure, `recover` stops the unit and exits nonzero with the cause. It does not latch the error state again.
 
 For a unit with another boot policy, `recover` stops the unit, as it stops each unit that it does not keep. It then exits zero and gives no cause.
 
-When `recover` keeps another workload, admission is open for that workload. Setup removes the limits only from Idle, so run `gpu-mode -target idle switch` first. Then remove the limits through setup. The limit stop of the policy tick and its escalation come in a later change. See [runtime checks](RESOURCE-LIMITS.md#runtime-checks).
+When `recover` keeps another workload, admission is open for that workload. Setup removes the limits only from Idle, so run `gpu-mode -target idle switch` first. Then remove the limits through setup. See [runtime checks](RESOURCE-LIMITS.md#runtime-checks).
+
+After a limit stop, the state is Idle or unknown, and the error state stays. A nonzero exit of the idle policy service shows the stop. Each tick exits nonzero until `recover` ends the latch.
+
+Read the service journal for the cause and the limit outcome. Run `resolve-work` for work that the stop cut off. Fix the cause. Then run `recover`.
 
 ### Operator settings
 
@@ -507,9 +513,13 @@ Active work waits with orchestration through busy or deferred responses. Orchest
 
 Every 60 seconds, user `gpu-workload-supervisor-idle.timer` runs oneshot `gpu-setup idle-policy-tick` through `gpu-workload-supervisor-idle.service`. The service requires `ConditionPathExists=%h/.config/gpu-workload-supervisor/operator.json`. Guided setup enables timer and reconciliation links. Remove-integration removes both.
 
-The tick reads the persisted profile's runtime and state path and committed settings and state. Unreadable profiles fail without fallback paths. Explicit diagnostics: `gpu-mode -state <path> idle-policy-tick`.
+The tick reads the persisted profile's runtime and state path and committed settings and state. Unreadable profiles fail without fallback paths. Then the tick runs the [limit stop](RESOURCE-LIMITS.md#limit-stop).
 
-Off, User ownership, unstable or latched state or idle or unknown workload disarms deadlines and does nothing. Enabled without qualified evidence fails closed and nonzero. Fresh evidence must exclude queued, reserved, running and unresolved work and unfinished admissions.
+`gpu-mode -state <path> idle-policy-tick` runs the same tick, the limit stop included. On a latched state, it can stop a unit. Give it the `-nvidia-smi` and `-systemctl` paths of the profile.
+
+Also give it the `-gpu-index` and `-capacity-headroom-mib` values of the profile. The release check reads them. To match `gpu-setup`, give it `-drain-timeout 2m -verify-timeout 1m -action-timeout 1m -cleanup-timeout 1m`. Without `-nvidia-smi`, the release check after a stop always fails.
+
+For the inactivity policy, Off, User ownership, unstable or latched state or idle or unknown workload disarms deadlines and does nothing. The limit stop still acts on a latched supervisor-owned state. Enabled without qualified evidence fails closed and nonzero. Fresh evidence must exclude queued, reserved, running and unresolved work and unfinished admissions.
 
 An attestation at most 120 seconds old arms `last activity + timeout`. On expiry without new activity, the tick drains to Idle. Inside the single-writer transaction, provider-generation fencing and pending-work rechecks are atomic with state-version and lease-fence checks. Registrations without terminal evidence count as unfinished.
 

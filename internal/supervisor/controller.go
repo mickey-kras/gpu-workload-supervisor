@@ -39,6 +39,11 @@ type storeGateway interface {
 	PendingTransitionWork(context.Context, string) (int, error)
 	PendingWork(context.Context) (int, error)
 	PendingWorkExcept(context.Context, control.Workload) (int, error)
+	PendingWorkFor(context.Context, control.Workload) (int, error)
+	LimitStop(context.Context) (store.LimitStop, bool, error)
+	MarkLimitFailure(context.Context, control.Workload, bool, time.Time) (store.LimitStop, error)
+	MarkLimitStopping(context.Context, control.Workload, time.Time) error
+	ClearLimitStop(context.Context) error
 	InProgressTransition(context.Context) (string, error)
 	Recover(context.Context, uint64, control.State, string) (control.State, error)
 	RotateFenceAndCloseAdmission(context.Context, uint64) (control.State, error)

@@ -470,8 +470,9 @@ func (b Backend) PolicyTick(ctx context.Context, home string) error {
 	}
 	defer cleanup()
 	// No qualified evidence provider ships with the supervisor, so an enabled
-	// policy fails closed and an Off policy is a clean no-op.
-	return controller.PolicyTick(ctx, nil)
+	// policy fails closed and an Off policy is a clean no-op. The tick
+	// first runs the limit stop, which can stop a unit whose limits fail.
+	return controller.TickWithLimits(ctx, nil, os.Stderr)
 }
 
 // activatedController loads the persisted operator.json profile, validates

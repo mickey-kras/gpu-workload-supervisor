@@ -94,8 +94,8 @@ func (c *Controller) reconcileCatalog(ctx context.Context, recovering bool) (con
 	if err != nil {
 		// This path latches and stops nothing, also the units already
 		// rejected: they keep running behind the closed admission until
-		// recover stops them. Stopping them here is the limit stop of the
-		// setup change. The latch error names them with their next steps.
+		// recover or the limit stop of the policy tick stops them. The
+		// latch error names them with their next steps.
 		// The latch needs recover, and the workload that stays is unknown.
 		return c.latchObservationFailure(ctx, state, errors.Join(limitRemedy(retained.rejected, unknownLatched), err))
 	}
