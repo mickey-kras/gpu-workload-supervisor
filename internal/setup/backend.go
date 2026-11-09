@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/user"
@@ -314,6 +315,14 @@ func (work activationWork) backup(ctx context.Context, plan unitPlan) error {
 	if err != nil {
 		return err
 	}
+	if err := work.fillBackup(ctx, root, directory, plan); err != nil {
+		// An incomplete tuple must not count toward backup retention.
+		return errors.Join(err, os.RemoveAll(directory))
+	}
+	return nil
+}
+
+func (work activationWork) fillBackup(ctx context.Context, root, directory string, plan unitPlan) error {
 	if err := syncDirectory(root); err != nil {
 		return err
 	}
@@ -411,12 +420,7 @@ func (b Backend) commitConfiguration(ctx context.Context, c commitOptions) error
 	if err := b.finalizeOwnedUnits(ctx, home, root, request, plan); err != nil {
 		return err
 	}
-	// Retire the activation record so only a genuinely interrupted activation
-	// guards the owned-units journal.
-	if err := os.Remove(filepath.Join(root, "activation.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
+	return retireActivation(root)
 }
 
 // newer permits only a stable target with a strictly higher release core.
@@ -445,14 +449,24 @@ func Reconcile(ctx context.Context, home string) error {
 	return SystemBackend().Reconcile(ctx, home)
 }
 
+// AuditRetention is the age past which reconcile prunes eligible audit
+// history. PruneAuditHistory always keeps live and latest evidence.
+const AuditRetention = 90 * 24 * time.Hour
+
 func (b Backend) Reconcile(ctx context.Context, home string) error {
-	controller, cleanup, err := b.activatedController(ctx, home)
+	controller, stateStore, cleanup, err := b.activatedController(ctx, home)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	_, err = controller.Reconcile(ctx)
-	return err
+	_, reconcileErr := controller.Reconcile(ctx)
+	// Prune even when reconcile fails so a persistently failing host does not
+	// also grow state.db without bound. Both errors surface.
+	var pruneErr error
+	if _, err := stateStore.PruneAuditBefore(ctx, time.Now().Add(-AuditRetention)); err != nil {
+		pruneErr = fmt.Errorf("prune audit history: %w", err)
+	}
+	return errors.Join(reconcileErr, pruneErr)
 }
 
 // PolicyTick evaluates the inactivity policy once against the persisted
@@ -464,7 +478,7 @@ func PolicyTick(ctx context.Context, home string) error {
 }
 
 func (b Backend) PolicyTick(ctx context.Context, home string) error {
-	controller, cleanup, err := b.activatedController(ctx, home)
+	controller, _, cleanup, err := b.activatedController(ctx, home)
 	if err != nil {
 		return err
 	}
@@ -478,41 +492,41 @@ func (b Backend) PolicyTick(ctx context.Context, home string) error {
 // activatedController loads the persisted operator.json profile, validates
 // activation, and builds a controller against the profile's state path and
 // runtime configuration. The returned cleanup releases the store and gate.
-func (b Backend) activatedController(ctx context.Context, home string) (*supervisor.Controller, func(), error) {
+func (b Backend) activatedController(ctx context.Context, home string) (*supervisor.Controller, *store.Store, func(), error) {
 	data, err := privateRead(filepath.Join(home, ".config/gpu-workload-supervisor/operator.json"))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	var profile Profile
 	if err := json.Unmarshal(data, &profile); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if profile.Version != 1 || profile.ActivatedRelease == "" {
-		return nil, nil, errors.New("an activated managed profile is required")
+		return nil, nil, nil, errors.New("an activated managed profile is required")
 	}
 	gate, err := lock.TryAcquire(profile.StatePath + ".lock")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	cleanup := func() { gate.Close() }
 	if err := deployment.Check(profile.StatePath, profile.ActivatedRelease); err != nil {
 		cleanup()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if err := sameProfile(home, data); err != nil {
 		cleanup()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	file, err := deployment.OpenPrivate(profile.StatePath)
 	if err != nil {
 		cleanup()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	file.Close()
 	stateStore, err := store.Open(ctx, profile.StatePath)
 	if err != nil {
 		cleanup()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	cleanup = func() {
 		stateStore.Close()
@@ -521,19 +535,19 @@ func (b Backend) activatedController(ctx context.Context, home string) (*supervi
 	snapshot, err := stateStore.Catalog(ctx)
 	if err != nil {
 		cleanup()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	manager, err := b.makeRuntime(Request{Profile: profile, Catalog: snapshot.Catalog})
 	if err != nil {
 		cleanup()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	controller, err := supervisor.New(stateStore, manager, supervisor.Config{Catalog: &snapshot, DrainTimeout: 2 * time.Minute, VerifyTimeout: time.Minute, ActionTimeout: time.Minute, CleanupTimeout: time.Minute, FinalizeTimeout: 10 * time.Second, PollInterval: 250 * time.Millisecond})
 	if err != nil {
 		cleanup()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return controller, cleanup, nil
+	return controller, stateStore, cleanup, nil
 }
 
 func (work *activationWork) readPreviousProfile() error {

@@ -96,6 +96,8 @@ New entrypoints reject the previous activated release before opening or migratin
 
 Activation holds controller and exclusive-proxy gates and verifies GPU release for existing and proposed mappings before snapshotting. Private `backups/activation-*` contains integrity-checked previous binaries and checksums, profile, accepted catalog, deployment marker, state and exact accepted owned-unit bytes. `owned-units.json` records SHA-256 hashes. `owned-units/` holds bytes. Keep this complete rollback tuple.
 
+After each committed activation, setup keeps the three newest `activation-*` tuples and deletes older ones. To keep an older tuple, copy it outside `backups/` first.
+
 The snapshot excludes vLLM API key files. After rollback, run setup again to create missing key files.
 
 Stored [model check](MODEL-CHECKS.md#results) results have format version 2. A result of another version reads as `not_scanned` until the checker checks the model again. An earlier release reads version 2 results as stale. If it checks a model again after a rollback, it replaces the stored result and drops its template approval. Then, after the next upgrade, the operator must approve the template again.
@@ -263,7 +265,9 @@ Before any proxy starts on restored state, follow [backup restoration](#restore-
 
 ### Keep or archive audit history
 
-Audit deletion is explicit. Work retention never removes it. Set the retention period and archive consistent [SQLite backups](#back-up-before-an-upgrade), then run batches:
+Guided setup prunes audit history automatically. Each login reconcile (`gpu-setup reconcile`) removes eligible records older than 90 days, in batches of 256, until none remain. It uses the same protection rules as `prune-audit`. A pruning failure makes the reconcile service fail. To keep older history, archive consistent [SQLite backups](#back-up-before-an-upgrade) within 90 days.
+
+To prune with a different cutoff, run batches manually:
 
 ```sh
 /PINNED/RELEASE/gpu-mode -state /PRIVATE/DURABLE/STATE/state.db \

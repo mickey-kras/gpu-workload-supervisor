@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -352,4 +353,25 @@ func TestCompletedSessionPruningRollsBackAllAuditRows(t *testing.T) {
 // legacySessionPayload is a session row as an earlier release stored it.
 func legacySessionPayload(id, status string) []byte {
 	return []byte(`{"id":"` + id + `","token":"t","status":"` + status + `"}`)
+}
+
+func TestPruneAuditBeforeDrainsAcrossBatches(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	state, _ := s.State(ctx)
+	const total = 300 // exceeds one 256-parent batch
+	for i := range total {
+		tr := Transition{ID: fmt.Sprintf("old-%03d", i), Fence: state.LeaseFence, Source: state, Target: state, Previous: state, Phase: control.PhaseDraining, Deadline: time.Now()}
+		if err := s.BeginTransition(ctx, tr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.db.Exec(`UPDATE transitions SET status='failed',updated_at='2000-01-01T00:00:00Z',lease_epoch=99`); err != nil {
+		t.Fatal(err)
+	}
+	count, err := s.PruneAuditBefore(ctx, s.now().Add(-time.Hour))
+	if err != nil || count != total {
+		t.Fatalf("pruned %d of %d: %v", count, total, err)
+	}
+	assertAuditTransitionIDs(t, s, "transitions", nil)
 }
