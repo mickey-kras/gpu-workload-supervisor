@@ -53,6 +53,13 @@ type SystemdConfig struct {
 	CapacityHeadroomMiB uint64
 	NvidiaSMIPath       string
 	SystemctlPath       string
+	// LimitReserve is the stored reserve under the host cap; nil uses
+	// DefaultLimitReserve.
+	LimitReserve *LimitReserve
+	// LimitReserveErr is set when the caller cannot read the stored
+	// reserve. Each limit check then fails with ErrLimitReadback: the
+	// default reserve could be too small.
+	LimitReserveErr error
 	// OwnedUnitDir locates supervisor-owned unit files for the preflight
 	// orphan scan; empty derives the effective user's systemd user directory.
 	OwnedUnitDir string
@@ -64,6 +71,7 @@ type SystemdManager struct {
 	client                    *http.Client
 	cgroups                   cgroupFS
 	host                      limitHost
+	reserve                   LimitReserve
 	nativeExecutableValidator func(string) error
 }
 
@@ -104,7 +112,13 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 	if runner == nil || client == nil {
 		return nil, errors.New("runner and HTTP client are required")
 	}
-	return &SystemdManager{config: config, runner: runner, client: client, cgroups: cgroupFS{root: "/sys/fs/cgroup", verify: verifyUnifiedHierarchy}, host: defaultLimitHost()}, nil
+	if config.LimitReserve != nil {
+		if err := config.LimitReserve.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return &SystemdManager{config: config, runner: runner, client: client, cgroups: cgroupFS{root: "/sys/fs/cgroup", verify: verifyUnifiedHierarchy},
+		host: defaultLimitHost(), reserve: EffectiveReserve(config.LimitReserve)}, nil
 }
 
 func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) error {

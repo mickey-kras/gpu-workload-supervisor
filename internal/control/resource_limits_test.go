@@ -216,7 +216,7 @@ func TestLowestCatalogVersionRoundTrip(t *testing.T) {
 		if got := LowestCatalogVersion(Catalog{Profiles: tc.profiles}); got != tc.want {
 			t.Fatalf("lowest version = %d, want %d", got, tc.want)
 		}
-		if _, limited := (Catalog{Profiles: tc.profiles}).LimitedProfile(); limited != (tc.want == CatalogVersionLimits) {
+		if limited := len((Catalog{Profiles: tc.profiles}).LimitedProfiles()) != 0; limited != (tc.want == CatalogVersionLimits) {
 			t.Fatalf("limited profile lookup for version %d = %v", tc.want, limited)
 		}
 	}

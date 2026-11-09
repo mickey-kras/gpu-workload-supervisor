@@ -32,6 +32,10 @@ type Discovery struct {
 	// account can run outside host protection. They do not block limits.
 	// A scan gives a list, also an empty one. null means no scan ran.
 	EscapeRoutes []gpuruntime.EscapeRoute `json:"escapeRoutes"`
+	// HostCap is the host cap step of the discovered request: the accepted
+	// catalog or a pending activation. It is empty when the check fails;
+	// see Errors.
+	HostCap *gpuruntime.HostCapStep `json:"hostCap,omitempty"`
 }
 
 // OwnedUnitStatus reports one supervisor-owned unit file so the UI can offer
@@ -84,6 +88,7 @@ func (b Backend) Discover(parent context.Context, home string) (Discovery, error
 	b.discoverApplications(ctx, &result, units, home)
 	b.discoverTrainers(ctx, &result)
 	b.discoverGPUInventory(ctx, &result)
+	b.discoverHostCap(ctx, &result)
 	owned, err := discoverOwnedUnits(home, result.Request.Catalog)
 	if err != nil {
 		return result, err

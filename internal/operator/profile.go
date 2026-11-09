@@ -102,7 +102,7 @@ func loadProfileFD(fd, uid int) (Profile, error) {
 	if e != nil || len(b) > MaxRequestBytes {
 		return p, errors.New("profile read limit")
 	}
-	if _, ok := fields(b, "version", "statePath", "activatedRelease", "systemctlPath", "nvidiaSMIPath", "gpuIndex", "capacityHeadroomMiB", "statusTimeoutSeconds", "operationTimeoutSeconds"); !ok {
+	if _, ok := fields(b, "version", "statePath", "activatedRelease", "systemctlPath", "nvidiaSMIPath", "gpuIndex", "capacityHeadroomMiB", "statusTimeoutSeconds", "operationTimeoutSeconds", "limitReserve"); !ok {
 		return p, errors.New("invalid profile fields")
 	}
 	if strictjson.DecodeLimited(bytes.NewReader(b), MaxRequestBytes, &p) != nil {

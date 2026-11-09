@@ -123,7 +123,13 @@ func (m *SystemdManager) ioWeightProvider(number string) (string, error) {
 	return "", noIOWeight(m.host, number)
 }
 
+// noIOWeightError marks a device that neither BFQ nor iocost weights. It
+// keeps the text and the class of its error.
+type noIOWeightError struct{ error }
+
+func (e *noIOWeightError) Unwrap() error { return e.error }
+
 // noIOWeight reports a device that neither BFQ nor iocost weights.
 func noIOWeight(h limitHost, number string) error {
-	return fmt.Errorf("%w: %s does not support I/O weight (no BFQ or iocost)", ErrLimitDevice, h.deviceName(number))
+	return &noIOWeightError{fmt.Errorf("%w: %s does not support I/O weight (no BFQ or iocost)", ErrLimitDevice, h.deviceName(number))}
 }

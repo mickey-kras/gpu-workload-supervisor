@@ -241,8 +241,23 @@ func (m *SystemdManager) checkStartedLimitedUnit(ctx context.Context, p control.
 // the I/O device and the loaded properties. It returns the slice ceilings
 // and the I/O weight provider of the device for the readback: "bfq",
 // "iocost", or empty when IOWeight is not set.
-func (m *SystemdManager) checkHostProtection(ctx context.Context, p control.WorkloadProfile) (limitCap hostCap, provider string, err error) {
-	l := p.NativeModel.Owned.Limits
+func (m *SystemdManager) checkHostProtection(ctx context.Context, p control.WorkloadProfile) (hostCap, string, error) {
+	limitCap, provider, err := m.checkLimitHost(ctx, p.NativeModel.Owned.Limits)
+	if err != nil {
+		return hostCap{}, "", err
+	}
+	return limitCap, provider, m.verifyLoadedLimits(ctx, p.Unit, p.NativeModel.Owned.Limits)
+}
+
+// checkLimitHost runs the host part of checkHostProtection. It first fails
+// with ErrLimitReadback when the stored reserve cannot be read. Then it
+// checks the capped controls, the controllers, the host cap, the reserve
+// and the I/O device. CheckLimitHost and HostCapStep run it for setup,
+// before setup writes the unit file with the new limits.
+func (m *SystemdManager) checkLimitHost(ctx context.Context, l control.ResourceLimits) (limitCap hostCap, provider string, err error) {
+	if m.config.LimitReserveErr != nil {
+		return hostCap{}, "", fmt.Errorf("%w: the stored limit reserve cannot be read: %w", ErrLimitReadback, m.config.LimitReserveErr)
+	}
 	if err := requireCappedControls(l); err != nil {
 		return hostCap{}, "", err
 	}
@@ -259,13 +274,13 @@ func (m *SystemdManager) checkHostProtection(ctx context.Context, p control.Work
 	if limitCap, err = m.verifyHostCap(ctx, managerRoot, l); err != nil {
 		return hostCap{}, "", err
 	}
-	if err := checkReserve(l, limitCap); err != nil {
+	if err := checkReserve(l, limitCap, m.reserve); err != nil {
 		return hostCap{}, "", err
 	}
 	if provider, err = m.verifyLimitDevice(l); err != nil {
 		return hostCap{}, "", err
 	}
-	return limitCap, provider, m.verifyLoadedLimits(ctx, p.Unit, l)
+	return limitCap, provider, nil
 }
 
 // requireManagerFiles checks the interface files at the user manager root

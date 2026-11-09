@@ -84,9 +84,9 @@ func TestLinkAndNotDirectoryStayDefinite(t *testing.T) {
 
 // At the schema minimum, the refusal still suggests the minimum value.
 func TestReserveSuggestionAtTheMinimum(t *testing.T) {
-	c := hostCap{memoryHigh: (control.MinLimitMemoryMiB + reserveMemoryMiB) * mebibyte, memoryMax: (control.MinLimitMemoryMiB + reserveMemoryMiB) * mebibyte,
-		tasks: 10000, cpu: 8000000, io: map[string]uint64{"riops": ioCeilingFor(control.MinLimitIOPS)}}
-	err := checkReserve(control.ResourceLimits{Version: 1, MemoryMaxMiB: 1024, TasksMax: 64, CPUQuotaPercent: 100}, c)
+	c := hostCap{memoryHigh: (control.MinLimitMemoryMiB + DefaultLimitReserve.MemoryMiB) * mebibyte, memoryMax: (control.MinLimitMemoryMiB + DefaultLimitReserve.MemoryMiB) * mebibyte,
+		tasks: 10000, cpu: 8000000, io: map[string]uint64{"riops": DefaultLimitReserve.ioCeilingFor(control.MinLimitIOPS)}}
+	err := checkReserve(control.ResourceLimits{Version: 1, MemoryMaxMiB: 1024, TasksMax: 64, CPUQuotaPercent: 100}, c, DefaultLimitReserve)
 	for _, part := range []string{"use 256 MiB or less for memoryMaxMiB", "set ioReadIOPSMax to 100 operations per second or less"} {
 		if !errors.Is(err, ErrLimitReserve) || !strings.Contains(err.Error(), part) {
 			t.Fatalf("reserve error = %v, missing %q", err, part)

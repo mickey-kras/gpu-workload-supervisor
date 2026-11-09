@@ -48,6 +48,10 @@ type Profile struct {
 	CapacityHeadroomMiB     uint64 `json:"capacityHeadroomMiB"`
 	StatusTimeoutSeconds    int    `json:"statusTimeoutSeconds,omitempty"`
 	OperationTimeoutSeconds int    `json:"operationTimeoutSeconds,omitempty"`
+	// LimitReserve is the room for the supervisor and proxy under the host
+	// cap of units with resource limits. Without it, the runtime uses
+	// runtime.DefaultLimitReserve. A profile without it keeps its bytes.
+	LimitReserve *gpuruntime.LimitReserve `json:"limitReserve,omitempty"`
 }
 
 func (p Profile) Validate() error {
@@ -73,6 +77,11 @@ func (p Profile) ValidateConfiguration() error {
 	if p.OperationTimeoutSeconds < 0 || p.OperationTimeoutSeconds > 1800 {
 		return errors.New("operation timeout must be between 0 and 1800 seconds")
 	}
+	if p.LimitReserve != nil {
+		if err := p.LimitReserve.Validate(); err != nil {
+			return err
+		}
+	}
 	for _, field := range []struct{ name, path string }{
 		{"statePath", p.StatePath}, {"systemctlPath", p.SystemctlPath}, {"nvidiaSMIPath", p.NvidiaSMIPath},
 	} {
@@ -96,7 +105,8 @@ func releaseToken(s string) bool {
 }
 
 func (p Profile) SystemdConfig(catalog *control.Catalog) gpuruntime.SystemdConfig {
-	return gpuruntime.SystemdConfig{Catalog: catalog, SystemctlPath: p.SystemctlPath, NvidiaSMIPath: p.NvidiaSMIPath, GPUIndex: p.GPUIndex, CapacityHeadroomMiB: p.CapacityHeadroomMiB, HealthTimeout: 10 * time.Second}
+	return gpuruntime.SystemdConfig{Catalog: catalog, SystemctlPath: p.SystemctlPath, NvidiaSMIPath: p.NvidiaSMIPath, GPUIndex: p.GPUIndex, CapacityHeadroomMiB: p.CapacityHeadroomMiB, HealthTimeout: 10 * time.Second,
+		LimitReserve: p.LimitReserve}
 }
 
 type Marker struct {

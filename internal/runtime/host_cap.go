@@ -15,16 +15,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Reserve for the supervisor and proxy under the host cap.
-const (
-	reserveMemoryMiB  = 2048
-	reserveTasks      = 512
-	reserveCPUPercent = 100
-	reserveIOPercent  = 10
-	// reserveMemoryBytes is the memory reserve in bytes.
-	reserveMemoryBytes = reserveMemoryMiB * mebibyte
-)
-
 // limitHost locates the host files of the limit checks. Tests replace the
 // root, the trusted owner, the UID, the file status, the owner lookup and
 // the extended attribute lookup.
@@ -471,14 +461,16 @@ type ioLimit struct {
 	key, field, unit, property string
 	minimum                    uint64
 	value                      func(control.ResourceLimits) uint64
+	// hostUpper is the largest host cap of the key.
+	hostUpper uint64
 }
 
 // ioLimits lists the io.max keys in the order of io.max.
 var ioLimits = []ioLimit{
-	{"rbps", "ioReadBandwidthMax", "bytes per second", "IOReadBandwidthMax", control.MinLimitIOBandwidth, func(l control.ResourceLimits) uint64 { return l.IOReadBandwidthMax }},
-	{"wbps", "ioWriteBandwidthMax", "bytes per second", "IOWriteBandwidthMax", control.MinLimitIOBandwidth, func(l control.ResourceLimits) uint64 { return l.IOWriteBandwidthMax }},
-	{"riops", "ioReadIOPSMax", "operations per second", "IOReadIOPSMax", control.MinLimitIOPS, func(l control.ResourceLimits) uint64 { return l.IOReadIOPSMax }},
-	{"wiops", "ioWriteIOPSMax", "operations per second", "IOWriteIOPSMax", control.MinLimitIOPS, func(l control.ResourceLimits) uint64 { return l.IOWriteIOPSMax }},
+	{"rbps", "ioReadBandwidthMax", "bytes per second", "IOReadBandwidthMax", control.MinLimitIOBandwidth, func(l control.ResourceLimits) uint64 { return l.IOReadBandwidthMax }, maxHostCapBandwidth},
+	{"wbps", "ioWriteBandwidthMax", "bytes per second", "IOWriteBandwidthMax", control.MinLimitIOBandwidth, func(l control.ResourceLimits) uint64 { return l.IOWriteBandwidthMax }, maxHostCapBandwidth},
+	{"riops", "ioReadIOPSMax", "operations per second", "IOReadIOPSMax", control.MinLimitIOPS, func(l control.ResourceLimits) uint64 { return l.IOReadIOPSMax }, maxHostCapIOPS},
+	{"wiops", "ioWriteIOPSMax", "operations per second", "IOWriteIOPSMax", control.MinLimitIOPS, func(l control.ResourceLimits) uint64 { return l.IOWriteIOPSMax }, maxHostCapIOPS},
 }
 
 // knownIOKey reports an io.max key that a unit can cap.

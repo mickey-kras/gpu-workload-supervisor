@@ -1,10 +1,15 @@
 package operator
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"golang.org/x/sys/unix"
 )
 
@@ -100,5 +105,54 @@ func TestProfileRejectsCaseAliases(t *testing.T) {
 		if _, e := loadProfileHome(t, root, os.Geteuid()); e == nil {
 			t.Fatal("accepted case alias")
 		}
+	}
+}
+
+// A profile that setup wrote with a stored limit reserve loads, and its
+// runtime configuration carries the reserve. An invalid reserve is
+// refused.
+func TestProfileWithLimitReserve(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".config", "gpu-workload-supervisor")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// The body has the bytes that setup writes: the JSON encoding of the
+	// shared profile type.
+	want := gpuruntime.LimitReserve{MemoryMiB: 4096, Tasks: 1024, CPUPercent: 200, IOPercent: 20}
+	data, err := json.Marshal(Profile{Version: 1, StatePath: "/var/tmp/state.db", ActivatedRelease: "v1", SystemctlPath: "/usr/bin/systemctl",
+		NvidiaSMIPath: "/usr/bin/nvidia-smi", LimitReserve: &want})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	if err := os.WriteFile(filepath.Join(dir, "operator.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := loadProfileHome(t, root, os.Geteuid())
+	if err != nil || p.SystemdConfig(&control.Catalog{}).LimitReserve == nil || *p.SystemdConfig(&control.Catalog{}).LimitReserve != want {
+		t.Fatalf("profile with a reserve = %+v, %v", p.LimitReserve, err)
+	}
+	body = strings.Replace(body, `"ioPercent":20`, `"ioPercent":90`, 1)
+	if err := os.WriteFile(filepath.Join(dir, "operator.json"), []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadProfileHome(t, root, os.Geteuid()); err == nil || !strings.Contains(err.Error(), "ioPercent") {
+		t.Fatalf("profile with an invalid reserve = %v", err)
+	}
+}
+
+// A missing profile, or a missing directory above it, gives an error that
+// is os.ErrNotExist. gpu-mode then uses the default limit reserve.
+func TestMissingProfileIsNotExist(t *testing.T) {
+	root := t.TempDir()
+	if _, err := loadProfileHome(t, root, os.Geteuid()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("home without .config = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".config", "gpu-workload-supervisor"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadProfileHome(t, root, os.Geteuid()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("directory without operator.json = %v", err)
 	}
 }
