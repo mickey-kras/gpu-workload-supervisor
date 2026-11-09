@@ -8,28 +8,79 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
+// LimitReserve is the room for the supervisor and proxy under the host cap.
+// Setup stores it in the operator profile. A runtime without a stored
+// reserve uses DefaultLimitReserve. The swap reserve is always 0.
+type LimitReserve struct {
+	MemoryMiB  uint64 `json:"memoryMiB"`
+	Tasks      uint64 `json:"tasks"`
+	CPUPercent uint64 `json:"cpuPercent"`
+	IOPercent  uint64 `json:"ioPercent"`
+}
+
+// DefaultLimitReserve is the reserve when the profile stores none.
+var DefaultLimitReserve = LimitReserve{MemoryMiB: 2048, Tasks: 512, CPUPercent: 100, IOPercent: 10}
+
+// The upper bounds of a stored reserve. maxReserveIOPercent keeps room in
+// a slice cap twice the largest unit cap.
+const (
+	maxReserveCPUPercent = 10000
+	maxReserveIOPercent  = 50
+)
+
+// EffectiveReserve gives the stored reserve, or DefaultLimitReserve when
+// none is stored.
+func EffectiveReserve(stored *LimitReserve) LimitReserve {
+	if stored != nil {
+		return *stored
+	}
+	return DefaultLimitReserve
+}
+
+// Validate checks the bounds of a stored reserve: memory and tasks in the
+// range of a unit limit, a CPU quota of 1 to 10000 percent and an I/O share
+// of 1 to 50 percent. Each value must be set.
+func (r LimitReserve) Validate() error {
+	switch {
+	case r.MemoryMiB < control.MinLimitMemoryMiB || r.MemoryMiB > control.MaxLimitMemoryMiB:
+		return fmt.Errorf("the limit reserve memoryMiB must be %d to %d", control.MinLimitMemoryMiB, control.MaxLimitMemoryMiB)
+	case r.Tasks < control.MinLimitTasks || r.Tasks > control.MaxLimitTasks:
+		return fmt.Errorf("the limit reserve tasks must be %d to %d", control.MinLimitTasks, control.MaxLimitTasks)
+	case r.CPUPercent < 1 || r.CPUPercent > maxReserveCPUPercent:
+		return fmt.Errorf("the limit reserve cpuPercent must be 1 to %d", maxReserveCPUPercent)
+	case r.IOPercent < 1 || r.IOPercent > maxReserveIOPercent:
+		return fmt.Errorf("the limit reserve ioPercent must be 1 to %d", maxReserveIOPercent)
+	}
+	return nil
+}
+
+// memoryBytes is the memory reserve in bytes.
+func (r LimitReserve) memoryBytes() uint64 {
+	return r.MemoryMiB * mebibyte
+}
+
 // checkReserve keeps each unit limit at or below its slice cap minus the
 // reserve, so the supervisor and proxy keep room under the shared cap. Its
 // caller runs requireCappedControls first, so memoryMaxMiB, tasksMax and
 // cpuQuotaPercent are set. Of the unset values, only an I/O cap that the
 // slice caps needs a check here.
-func checkReserve(l control.ResourceLimits, c hostCap) error {
+func checkReserve(l control.ResourceLimits, c hostCap, reserve LimitReserve) error {
 	memory := func(field string, value uint64) reserveLimit {
-		return reserveLimit{field: field, unit: "MiB", value: value * mebibyte, ceiling: c.memoryCeiling(), reserve: reserveMemoryBytes, scale: mebibyte,
+		return reserveLimit{field: field, unit: "MiB", value: value * mebibyte, ceiling: c.memoryCeiling(), reserve: reserve.memoryBytes(), scale: mebibyte,
 			minimum: control.MinLimitMemoryMiB}
 	}
 	checks := []error{
 		memory("memoryHighMiB", l.MemoryHighMiB).check(),
 		memory("memoryMaxMiB", l.MemoryMaxMiB).check(),
-		reserveLimit{field: "tasksMax", unit: "tasks", value: l.TasksMax, ceiling: c.tasks, reserve: reserveTasks, scale: 1,
+		reserveLimit{field: "tasksMax", unit: "tasks", value: l.TasksMax, ceiling: c.tasks, reserve: reserve.Tasks, scale: 1,
 			minimum: control.MinLimitTasks}.check(),
-		reserveLimit{field: "cpuQuotaPercent", unit: "percent", value: l.CPUQuotaPercent * 10000, ceiling: c.cpu, reserve: reserveCPUPercent * 10000, scale: 10000,
+		reserveLimit{field: "cpuQuotaPercent", unit: "percent", value: l.CPUQuotaPercent * 10000, ceiling: c.cpu, reserve: reserve.CPUPercent * 10000, scale: 10000,
 			minimum: 1}.check(),
 	}
 	for _, limit := range ioLimits {
 		ceiling := c.io[limit.key]
-		r := reserveLimit{field: limit.field, unit: limit.unit, value: limit.value(l), ceiling: ceiling, reserve: ioReserve(ceiling), scale: 1,
-			minimum: limit.minimum, need: ioCeilingFor(limit.minimum)}
+		r := reserveLimit{field: limit.field, unit: limit.unit, value: limit.value(l), ceiling: ceiling, reserve: reserve.ioReserve(ceiling), scale: 1,
+			minimum: limit.minimum, need: reserve.ioCeilingFor(limit.minimum)}
 		if r.value == 0 && ceiling != 0 {
 			// The slice caps this key, so an unset unit cap could use the
 			// reserve.
@@ -104,14 +155,14 @@ func (r reserveLimit) smallCap() error {
 
 // ioReserve is the I/O reserve under a slice cap. It divides first, so a
 // very large cap cannot overflow.
-func ioReserve(ceiling uint64) uint64 {
-	return ceiling/100*reserveIOPercent + ceiling%100*reserveIOPercent/100
+func (r LimitReserve) ioReserve(ceiling uint64) uint64 {
+	return ceiling/100*r.IOPercent + ceiling%100*r.IOPercent/100
 }
 
 // ioCeilingFor is the smallest slice I/O cap that leaves minimum after the
 // reserve: c - floor(c*p/100) >= minimum holds when c*(100-p) > 100*(minimum-1).
-func ioCeilingFor(minimum uint64) uint64 {
-	return 100*(minimum-1)/(100-reserveIOPercent) + 1
+func (r LimitReserve) ioCeilingFor(minimum uint64) uint64 {
+	return 100*(minimum-1)/(100-r.IOPercent) + 1
 }
 
 func subtractFloor(value, reserve uint64) uint64 {
@@ -147,11 +198,11 @@ func (m *SystemdManager) admitMemory(c hostCap, l control.ResourceLimits) error 
 	reclaimable := min(cache, current)
 	inUse := current - reclaimable
 	ceiling := c.memoryCeiling()
-	need := l.MemoryMaxMiB*mebibyte + reserveMemoryBytes
+	need := l.MemoryMaxMiB*mebibyte + m.reserve.memoryBytes()
 	if inUse > ceiling || need > ceiling-inUse {
 		return fmt.Errorf("%w: %d MiB is in use. The %d MiB of page cache that the kernel can reclaim does not count. "+
 			"The start needs %d MiB: memoryMaxMiB plus a %d MiB reserve. The ceiling is %d MiB. Check /dev/shm and tmpfs use", ErrLimitMemory,
-			inUse/mebibyte, reclaimable/mebibyte, need/mebibyte, reserveMemoryMiB, ceiling/mebibyte)
+			inUse/mebibyte, reclaimable/mebibyte, need/mebibyte, m.reserve.MemoryMiB, ceiling/mebibyte)
 	}
 	return nil
 }

@@ -146,11 +146,11 @@ func TestIOReserveDoesNotOverflow(t *testing.T) {
 	reserve := ceiling / 10
 	c := hostCap{memoryHigh: 64 * gib, memoryMax: 64 * gib, tasks: 10000, cpu: 8000000, io: map[string]uint64{"rbps": ceiling}}
 	l := control.ResourceLimits{Version: 1, MemoryMaxMiB: 1024, TasksMax: 64, CPUQuotaPercent: 100, IOReadBandwidthMax: ceiling - reserve}
-	if err := checkReserve(l, c); err != nil {
+	if err := checkReserve(l, c, DefaultLimitReserve); err != nil {
 		t.Fatalf("I/O cap at the boundary of a large slice cap = %v", err)
 	}
 	l.IOReadBandwidthMax++
-	if err := checkReserve(l, c); !errors.Is(err, ErrLimitReserve) || !strings.Contains(err.Error(), strconv.FormatUint(ceiling-reserve, 10)) {
+	if err := checkReserve(l, c, DefaultLimitReserve); !errors.Is(err, ErrLimitReserve) || !strings.Contains(err.Error(), strconv.FormatUint(ceiling-reserve, 10)) {
 		t.Fatalf("I/O cap above the boundary of a large slice cap = %v", err)
 	}
 }
@@ -178,7 +178,7 @@ func TestDeviceMismatchMessages(t *testing.T) {
 // The reserve errors give the unit of each I/O cap.
 func TestIOReserveMessagesGiveTheUnit(t *testing.T) {
 	c := hostCap{memoryHigh: 64 * gib, memoryMax: 64 * gib, tasks: 10000, cpu: 8000000, io: map[string]uint64{"rbps": 100 << 20, "wiops": 1000}}
-	err := checkReserve(control.ResourceLimits{Version: 1, MemoryMaxMiB: 1024, TasksMax: 64, CPUQuotaPercent: 100, IOWriteIOPSMax: 1000}, c)
+	err := checkReserve(control.ResourceLimits{Version: 1, MemoryMaxMiB: 1024, TasksMax: 64, CPUQuotaPercent: 100, IOWriteIOPSMax: 1000}, c, DefaultLimitReserve)
 	for _, part := range []string{"set ioReadBandwidthMax to 94371840 bytes per second or less", "use 900 operations per second or less for ioWriteIOPSMax"} {
 		if !errors.Is(err, ErrLimitReserve) || !strings.Contains(err.Error(), part) {
 			t.Fatalf("reserve error = %v, missing %q", err, part)
@@ -324,8 +324,8 @@ func TestDeviceUeventReadFailureIsNotDefinite(t *testing.T) {
 	}
 }
 
-// While setup cannot write limits, each remedy that changes the limits
-// also gives the remedy that works now.
+// Each remedy that changes the limits also gives the removal of the
+// limits through setup.
 func TestLimitRemediesIncludeRemoval(t *testing.T) {
 	if err := requireCappedControls(control.ResourceLimits{MemoryMaxMiB: 1, TasksMax: 1}); !strings.HasSuffix(err.Error(), "set it in the catalog limits, or remove the limits through setup") {
 		t.Fatalf("missing control = %v", err)
@@ -344,7 +344,7 @@ func TestReserveRefusalBelowSchemaMinimum(t *testing.T) {
 	c := hostCap{memoryHigh: 2200 * mebibyte, memoryMax: 2200 * mebibyte, tasks: 520, cpu: 1000000,
 		io: map[string]uint64{"rbps": 1 << 20, "riops": 100}}
 	l := control.ResourceLimits{Version: 1, MemoryMaxMiB: 1024, TasksMax: 64, CPUQuotaPercent: 50, IOReadBandwidthMax: 1 << 20}
-	err := checkReserve(l, c)
+	err := checkReserve(l, c, DefaultLimitReserve)
 	for _, part := range []string{
 		"raise the slice cap to at least 2304 MiB",
 		"raise the slice cap to at least 576 tasks",
@@ -361,7 +361,7 @@ func TestReserveRefusalBelowSchemaMinimum(t *testing.T) {
 	}
 	// The suggested I/O slice cap is the smallest one that fits the minimum.
 	for ceiling, minimum := range map[uint64]uint64{1165084: control.MinLimitIOBandwidth, 111: control.MinLimitIOPS} {
-		if ceiling-ioReserve(ceiling) < minimum || ceiling-1-ioReserve(ceiling-1) >= minimum {
+		if ceiling-DefaultLimitReserve.ioReserve(ceiling) < minimum || ceiling-1-DefaultLimitReserve.ioReserve(ceiling-1) >= minimum {
 			t.Fatalf("slice cap %d is not the smallest that leaves %d", ceiling, minimum)
 		}
 	}
@@ -504,11 +504,11 @@ func TestMalformedMemoryCurrentIsReadback(t *testing.T) {
 	}
 }
 
-// While setup cannot write limits, each reserve and device remedy that
-// changes the limits also gives the removal of the limits.
+// Each reserve and device remedy that changes the limits also gives the
+// removal of the limits through setup.
 func TestReserveRemediesIncludeRemoval(t *testing.T) {
 	c := hostCap{memoryHigh: 8 * gib, memoryMax: 8 * gib, tasks: 1000, cpu: 3000000, io: map[string]uint64{"rbps": 100 << 20}}
-	err := checkReserve(control.ResourceLimits{Version: 1, MemoryMaxMiB: 7000, TasksMax: 64, CPUQuotaPercent: 100}, c)
+	err := checkReserve(control.ResourceLimits{Version: 1, MemoryMaxMiB: 7000, TasksMax: 64, CPUQuotaPercent: 100}, c, DefaultLimitReserve)
 	for _, part := range []string{
 		"use 6144 MiB or less for memoryMaxMiB, or remove the limits through setup",
 		"set ioReadBandwidthMax to 94371840 bytes per second or less, or remove the limits through setup",

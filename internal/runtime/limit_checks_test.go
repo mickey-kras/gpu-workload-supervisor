@@ -797,14 +797,14 @@ func TestExpectedLimitPropertiesForUnsetControls(t *testing.T) {
 
 func TestCheckReserveNamesAllowedValue(t *testing.T) {
 	c := hostCap{memoryHigh: 1 * gib, memoryMax: 2 * gib, tasks: 100, cpu: 50000, io: map[string]uint64{}}
-	err := checkReserve(control.ResourceLimits{Version: 1, MemoryMaxMiB: 512, TasksMax: 64, CPUQuotaPercent: 1}, c)
+	err := checkReserve(control.ResourceLimits{Version: 1, MemoryMaxMiB: 512, TasksMax: 64, CPUQuotaPercent: 1}, c, DefaultLimitReserve)
 	for _, part := range []string{"raise the slice cap to at least 2304 MiB", "raise the slice cap to at least 576 tasks", "raise the slice cap to at least 101 percent"} {
 		if !errors.Is(err, ErrLimitReserve) || !strings.Contains(err.Error(), part) {
 			t.Fatalf("reserve error = %v, missing %q", err, part)
 		}
 	}
 	c = hostCap{memoryHigh: 4 * gib, memoryMax: 8 * gib, tasks: 1000, cpu: 3000000, io: map[string]uint64{"wiops": 1000}}
-	err = checkReserve(control.ResourceLimits{Version: 1, MemoryHighMiB: 3072, MemoryMaxMiB: 1024, TasksMax: 600, CPUQuotaPercent: 300, IOWriteIOPSMax: 1000}, c)
+	err = checkReserve(control.ResourceLimits{Version: 1, MemoryHighMiB: 3072, MemoryMaxMiB: 1024, TasksMax: 600, CPUQuotaPercent: 300, IOWriteIOPSMax: 1000}, c, DefaultLimitReserve)
 	for _, part := range []string{"use 2048 MiB or less", "use 488 tasks or less", "use 200 percent or less", "use 900 operations per second or less for ioWriteIOPSMax"} {
 		if !strings.Contains(err.Error(), part) {
 			t.Fatalf("reserve error = %v, missing %q", err, part)
@@ -881,7 +881,7 @@ func TestCheckReserveBoundaries(t *testing.T) {
 	c := hostCap{memoryHigh: 8 * gib, memoryMax: 10 * gib, tasks: 1000, cpu: 3000000, io: map[string]uint64{"rbps": 100 << 20}}
 	exact := control.ResourceLimits{Version: 1, MemoryHighMiB: 6144, MemoryMaxMiB: 6144, TasksMax: 488, CPUQuotaPercent: 200,
 		IOReadBandwidthMax: (100 << 20) - (100<<20)/10}
-	if err := checkReserve(exact, c); err != nil {
+	if err := checkReserve(exact, c, DefaultLimitReserve); err != nil {
 		t.Fatalf("limits at the boundary = %v", err)
 	}
 	for name, edit := range map[string]func(*control.ResourceLimits){
@@ -893,13 +893,13 @@ func TestCheckReserveBoundaries(t *testing.T) {
 	} {
 		over := exact
 		edit(&over)
-		if err := checkReserve(over, c); !errors.Is(err, ErrLimitReserve) {
+		if err := checkReserve(over, c, DefaultLimitReserve); !errors.Is(err, ErrLimitReserve) {
 			t.Fatalf("%s above the boundary = %v", name, err)
 		}
 	}
 	// The slice memory.max below memory.high is the memory ceiling.
 	c.memoryMax = 7 * gib
-	if err := checkReserve(control.ResourceLimits{Version: 1, MemoryMaxMiB: 6144, TasksMax: 64, CPUQuotaPercent: 1}, c); !errors.Is(err, ErrLimitReserve) ||
+	if err := checkReserve(control.ResourceLimits{Version: 1, MemoryMaxMiB: 6144, TasksMax: 64, CPUQuotaPercent: 1}, c, DefaultLimitReserve); !errors.Is(err, ErrLimitReserve) ||
 		!strings.Contains(err.Error(), "use 5120 MiB or less") {
 		t.Fatalf("reserve against a lower slice memory.max = %v", err)
 	}
@@ -1444,12 +1444,12 @@ func TestHostFileReadFailureOfRunningUnitIsNotDefinite(t *testing.T) {
 func TestReserveRequiresSliceCappedControls(t *testing.T) {
 	c := hostCap{memoryHigh: 8 * gib, memoryMax: 8 * gib, tasks: 1000, cpu: 3000000, io: map[string]uint64{"rbps": 100 << 20, "wbps": 100 << 20}}
 	l := control.ResourceLimits{Version: 1, MemoryMaxMiB: 1024, TasksMax: 64, CPUQuotaPercent: 100, IOReadBandwidthMax: 1 << 20}
-	err := checkReserve(l, c)
+	err := checkReserve(l, c, DefaultLimitReserve)
 	if part := "the slice caps io.max wbps; set ioWriteBandwidthMax to 94371840 bytes per second or less"; !errors.Is(err, ErrLimitReserve) || !strings.Contains(err.Error(), part) {
 		t.Fatalf("reserve = %v, missing %q", err, part)
 	}
 	l.IOWriteBandwidthMax = 1 << 20
-	if err := checkReserve(l, c); err != nil {
+	if err := checkReserve(l, c, DefaultLimitReserve); err != nil {
 		t.Fatalf("reserve with every capped control set = %v", err)
 	}
 }

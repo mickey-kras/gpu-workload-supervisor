@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/user"
@@ -32,6 +31,9 @@ type Request struct {
 	Catalog          control.Catalog `json:"catalog"`
 	ExpectedRevision string          `json:"expectedRevision"`
 	ConfirmQuiesced  bool            `json:"confirmQuiesced"`
+	// HostCap holds the slice values of the host cap step, when a unit has
+	// limits. Setup fills the unset caps; see runtime.LimitReserve.HostCapFor.
+	HostCap *gpuruntime.HostCapValues `json:"hostCap,omitempty"`
 }
 type activation struct {
 	Request Request `json:"request"`
@@ -43,6 +45,9 @@ type Preview struct {
 	Profile Profile         `json:"profile"`
 	Catalog control.Catalog `json:"catalog"`
 	Changes []string        `json:"changes"`
+	// HostCap is the host cap step. Without a unit with limits, its
+	// status is notNeeded.
+	HostCap *gpuruntime.HostCapStep `json:"hostCap,omitempty"`
 }
 
 // Reserve a bounded envelope allowance for deployment paths, revision and
@@ -74,20 +79,17 @@ func Decode(reader io.Reader) (Request, error) {
 	return request, Validate(candidate)
 }
 
-// Validate is the write gate of preview and apply. It adds the limits
-// rejection to the request shape check.
+// Validate is the write gate of preview and apply. It adds the host cap
+// values check to the request shape check.
 func Validate(request Request) error {
 	if err := validateShape(request); err != nil {
 		return err
 	}
-	if p, ok := request.Catalog.LimitedProfile(); ok {
-		return fmt.Errorf("workload %s: %w", p.ID, ErrLimitsNotInSetup)
-	}
-	return nil
+	return validateLimits(request)
 }
 
-// validateShape checks the request without the limits rejection. Read-only
-// paths use it, so a limited profile does not block an unrelated workload.
+// validateShape checks the request without the host cap values. Read-only
+// paths use it.
 func validateShape(request Request) error {
 	encoded, err := json.Marshal(request)
 	if err != nil {
@@ -104,11 +106,6 @@ func validateShape(request Request) error {
 	}
 	return request.Catalog.Validate()
 }
-
-// ErrLimitsNotInSetup rejects a request with resource limits before any unit
-// write. This release cannot verify limits, so setup accepts no request that
-// has them. A request can still remove limits that an accepted catalog has.
-var ErrLimitsNotInSetup = errors.New("setup in this release cannot apply resource limits; remove the limits or the workload from the request")
 
 func Home() (string, error) {
 	account, err := user.LookupId(strconv.Itoa(os.Geteuid()))
@@ -132,7 +129,12 @@ func (b Backend) Plan(home string, request Request) (Preview, error) {
 	if err := Validate(request); err != nil {
 		return Preview{}, err
 	}
-	if _, err := b.makeRuntime(request); err != nil {
+	manager, err := b.makeRuntime(request)
+	if err != nil {
+		return Preview{}, err
+	}
+	hostCap, err := previewHostCap(manager, request)
+	if err != nil {
 		return Preview{}, err
 	}
 	profile := request.Profile
@@ -153,7 +155,7 @@ func (b Backend) Plan(home string, request Request) (Preview, error) {
 		changes = append(changes, ownedChanges...)
 		changes = append(changes, "Retain verified binary/configuration/state backups")
 	}
-	return Preview{Release: deployment.Release, Profile: profile, Catalog: request.Catalog, Changes: changes}, nil
+	return Preview{Release: deployment.Release, Profile: profile, Catalog: request.Catalog, Changes: changes, HostCap: hostCap}, nil
 }
 
 // Backend holds the host interactions setup performs. Tests inject fakes
@@ -228,6 +230,9 @@ func (b Backend) Apply(ctx context.Context, home string, request Request) error 
 		return err
 	}
 	if err := work.inspect(ctx); err != nil {
+		return err
+	}
+	if err := b.acceptLimits(ctx, request, work.accepted.Catalog); err != nil {
 		return err
 	}
 	// Prove the accepted bindings and release while their unit files are still
@@ -490,6 +495,10 @@ func (b Backend) activatedController(ctx context.Context, home string) (*supervi
 	}
 	cleanup := func() { gate.Close() }
 	if err := deployment.Check(profile.StatePath, profile.ActivatedRelease); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	if err := sameProfile(home, data); err != nil {
 		cleanup()
 		return nil, nil, err
 	}

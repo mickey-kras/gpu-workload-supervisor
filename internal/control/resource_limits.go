@@ -224,12 +224,13 @@ func (c Catalog) HasLimits() bool {
 	return slices.ContainsFunc(c.Profiles, WorkloadProfile.HasLimits)
 }
 
-// LimitedProfile returns the first profile with limits, if any.
-func (c Catalog) LimitedProfile() (WorkloadProfile, bool) {
+// LimitedProfiles returns the profiles with limits.
+func (c Catalog) LimitedProfiles() []WorkloadProfile {
+	var limited []WorkloadProfile
 	for _, p := range c.Profiles {
 		if p.HasLimits() {
-			return p, true
+			limited = append(limited, p)
 		}
 	}
-	return WorkloadProfile{}, false
+	return limited
 }

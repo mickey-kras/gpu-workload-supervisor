@@ -416,6 +416,20 @@ Status and mutations share the nonblocking controller gate: `busy` queues nothin
 
 Escape routes do not block a unit with limits. `gpu-setup discover` reports them as warnings. See [escape route report](RESOURCE-LIMITS.md#escape-route-report).
 
+To add limits to a unit, do these steps:
+
+1. An adopted unit gets no limits. First convert it to a managed unit in its own preview and apply.
+2. Set `limits` on the owned unit.
+3. Set `hostCap` with `memoryHighMiB` and `memoryMaxMiB`.
+4. Optional: set `profile.limitReserve`. See [stored reserve](RESOURCE-LIMITS.md#stored-reserve).
+5. Run the preview, and read `hostCap` in the preview.
+6. When `commands` is empty and the status is `absent`, `different` or `unknown`, read `problems` and fix each cause.
+7. When the commands include `systemctl restart user@UID.service`, switch to Idle with `gpu-mode -target idle switch`. From a user-owned state, use `gpu-mode -target idle user-switch`.
+8. Give the `commands` to an administrator. The commands use `sudo`.
+9. Run the preview again, and confirm that the status is `present`. Then apply.
+
+The apply runs the setup checks before it writes the unit. A failed check refuses the apply and changes nothing. See [setup of unit limits](RESOURCE-LIMITS.md#setup-of-unit-limits).
+
 Over the operator protocol, a refusal of a unit with limits is only the `incompatible_configuration` code. The `gpu-mode` CLI also writes the cause and the next steps to standard error, for example after `gpu-mode -target vision switch`. Most causes name their fix, often with "or remove the limits through setup".
 
 Setup removes limits only from a healthy, stable Idle with closed admission. So when a workload other than Idle runs, the next steps switch to Idle. A supervisor-owned state uses `gpu-mode -target idle switch`. A user-owned state uses `gpu-mode -target idle user-switch`. After recovery, this step applies only if a workload other than Idle runs then.
@@ -436,7 +450,7 @@ Run `recover` one time. For a unit with boot policy `retain`, `recover` runs the
 
 For a unit with another boot policy, `recover` stops the unit, as it stops each unit that it does not keep. It then exits zero and gives no cause.
 
-When `recover` keeps another workload, admission is open for that workload. Setup removes the limits only from Idle, so run `gpu-mode -target idle switch` first. Then remove the limits through setup. The limit stop of the policy tick and its escalation come with the setup change for limits. See [runtime checks](RESOURCE-LIMITS.md#runtime-checks).
+When `recover` keeps another workload, admission is open for that workload. Setup removes the limits only from Idle, so run `gpu-mode -target idle switch` first. Then remove the limits through setup. The limit stop of the policy tick and its escalation come in a later change. See [runtime checks](RESOURCE-LIMITS.md#runtime-checks).
 
 ### Operator settings
 

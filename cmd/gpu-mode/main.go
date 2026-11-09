@@ -95,6 +95,8 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 		NvidiaSMIPath: *nvidiaSMIPath, SystemctlPath: *systemctlPath,
 	}
 	if command == "verify-host" {
+		// verify-host takes no state lock, so it reads the reserve here.
+		runtimeConfig.LimitReserve, runtimeConfig.LimitReserveErr = limitReserveFor(*statePath, loadOperatorProfile)
 		catalog, err := decodeCatalogFile(*catalogPath)
 		if err != nil {
 			return err
@@ -144,6 +146,9 @@ func executeWithState(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Mana
 	if err := deployment.Check(options.statePath, ""); err != nil {
 		return err
 	}
+	// The reserve is read under the state lock, so it belongs to the same
+	// committed setup as the pinned catalog.
+	runtimeConfig.LimitReserve, runtimeConfig.LimitReserveErr = limitReserveFor(options.statePath, loadOperatorProfile)
 	var stateStore *store.Store
 	if command == restoreStateCommand {
 		stateStore, err = store.OpenRestored(ctx, options.statePath)

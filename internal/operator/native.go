@@ -20,10 +20,29 @@ func NativeService(p Profile) Service {
 	}}
 }
 
+// reloadProfile reads the operator profile again under the state lock.
+// Tests replace it.
+var reloadProfile = LoadProfile
+
+// newNativeManager builds the runtime of a session. Tests replace it.
+var newNativeManager = gpuruntime.NewSystemdManager
+
+// openNativeSession runs under the state lock of Handle. The caller read p
+// before that lock, and the gateway reads it once at its start, so a setup
+// apply can commit a new catalog and a new limit reserve in between. The
+// session reads the profile again under the lock and uses its reserve, so
+// the reserve and the catalog come from the same committed setup. A
+// profile that it cannot read, or one for another state path, refuses the
+// session.
 func openNativeSession(ctx context.Context, p Profile) (Session, error) {
 	if p.Validate() != nil || deployment.Check(p.StatePath, p.ActivatedRelease) != nil {
 		return Session{}, ErrIncompatibleConfiguration
 	}
+	current, err := reloadProfile()
+	if err != nil || current.StatePath != p.StatePath {
+		return Session{}, ErrIncompatibleConfiguration
+	}
+	p.LimitReserve = current.LimitReserve
 	s, err := store.Open(ctx, p.StatePath)
 	if err != nil {
 		return Session{}, err
@@ -36,7 +55,7 @@ func openNativeSession(ctx context.Context, p Profile) (Session, error) {
 	if snap.Revision == "" || snap.Catalog.Validate() != nil {
 		return fail(ErrIncompatibleConfiguration)
 	}
-	manager, err := gpuruntime.NewSystemdManager(p.SystemdConfig(&snap.Catalog))
+	manager, err := newNativeManager(p.SystemdConfig(&snap.Catalog))
 	if err != nil {
 		return fail(ErrIncompatibleConfiguration)
 	}

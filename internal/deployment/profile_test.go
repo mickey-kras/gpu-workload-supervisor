@@ -1,11 +1,13 @@
 package deployment
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 )
 
 func validProfile() Profile {
@@ -84,5 +86,23 @@ func TestDefaultStatePathFallsBackWhenHomeUnknown(t *testing.T) {
 	t.Setenv("HOME", "")
 	if got := DefaultStatePath(); got != stateFile {
 		t.Fatalf("fallback path = %q, want %q", got, stateFile)
+	}
+}
+
+// The profile stores the limit reserve for the runtime. A profile without
+// it keeps its bytes, and an out-of-range reserve is refused.
+func TestProfileLimitReserve(t *testing.T) {
+	p := validProfile()
+	data, err := json.Marshal(p)
+	if err != nil || strings.Contains(string(data), "limitReserve") || p.SystemdConfig(&control.Catalog{}).LimitReserve != nil {
+		t.Fatalf("profile without a reserve = %s, %v", data, err)
+	}
+	p.LimitReserve = &gpuruntime.LimitReserve{MemoryMiB: 4096, Tasks: 1024, CPUPercent: 200, IOPercent: 20}
+	if err := p.Validate(); err != nil || p.SystemdConfig(&control.Catalog{}).LimitReserve != p.LimitReserve {
+		t.Fatalf("profile with a reserve = %v", err)
+	}
+	p.LimitReserve.IOPercent = 0
+	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "ioPercent") {
+		t.Fatalf("profile with an invalid reserve = %v", err)
 	}
 }

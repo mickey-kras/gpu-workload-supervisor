@@ -42,9 +42,9 @@ func TestPreparedCatalogUsesLowestVersion(t *testing.T) {
 	if limited.Catalog.Version != control.CatalogVersionLimits || limited.Catalog.Profiles[0].NativeModel.LaunchSHA256 == profile.NativeModel.LaunchSHA256 {
 		t.Fatalf("limits did not raise the version or the fingerprint: %+v", limited.Catalog.Profiles[0].NativeModel)
 	}
-	// This release cannot verify limits, so setup refuses them before any
-	// unit write and names the workload.
-	if err := Validate(limited); !errors.Is(err, ErrLimitsNotInSetup) || !strings.Contains(err.Error(), "vision") {
+	// The write gate accepts limits. Preview and apply run the host
+	// checks of the runtime.
+	if err := Validate(limited); err != nil {
 		t.Fatalf("v5 request with limits = %v", err)
 	}
 
@@ -71,12 +71,10 @@ func TestPreparedCatalogUsesLowestVersion(t *testing.T) {
 	}
 }
 
-func TestSetupRejectsLimitsBeforeUnitWrites(t *testing.T) {
+// The setup checks of the runtime run before any unit write. A runtime
+// without them refuses limits, and a failed check refuses the apply.
+func TestSetupChecksLimitsBeforeUnitWrites(t *testing.T) {
 	backend, home, _ := fixture(t)
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
-		t.Fatal("setup reached the runtime with limits")
-		return nil, nil
-	}
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
 	request := ownedFixtureRequest(t, home, profile)
 	request.Catalog.Version = control.CatalogVersionLimits
@@ -86,14 +84,18 @@ func TestSetupRejectsLimitsBeforeUnitWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Decode(bytes.NewReader(raw)); !errors.Is(err, ErrLimitsNotInSetup) {
+	if _, err := Decode(bytes.NewReader(raw)); err != nil {
 		t.Fatalf("decode with limits = %v", err)
 	}
-	if _, err := backend.Plan(home, request); !errors.Is(err, ErrLimitsNotInSetup) {
-		t.Fatalf("preview with limits = %v", err)
+	if _, err := backend.Plan(home, request); !errors.Is(err, gpuruntime.ErrLimitUnchecked) {
+		t.Fatalf("preview with limits and no checks = %v", err)
 	}
-	if err := backend.Apply(t.Context(), home, request); !errors.Is(err, ErrLimitsNotInSetup) {
-		t.Fatalf("apply with limits = %v", err)
+	request.ConfirmQuiesced = true
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+		return limitRuntime{checkErr: gpuruntime.ErrHostCap}, nil
+	}
+	if err := backend.Apply(t.Context(), home, request); !errors.Is(err, gpuruntime.ErrHostCap) || !strings.Contains(err.Error(), "vision (") {
+		t.Fatalf("apply with a failed host check = %v", err)
 	}
 	if _, err := os.Stat(request.Catalog.Profiles[0].NativeModel.LaunchFile); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("unit written for a rejected request: %v", err)
@@ -173,9 +175,10 @@ func TestSetupRemovesLimitsThatALaterReleaseWrote(t *testing.T) {
 			}
 			limited := acceptLimitedCatalog(t, home, r)
 			r.ExpectedRevision = acceptedRevision(t, r).Revision
-			// Editing the limited workload in place is refused before writes.
+			// Keeping the limits needs the host checks, which the fixture
+			// runtime cannot run, so the apply is refused before writes.
 			r.Catalog = control.Catalog{Version: 5, Profiles: []control.WorkloadProfile{limited}}
-			if err := backend.Apply(ctx, home, r); !errors.Is(err, ErrLimitsNotInSetup) {
+			if err := backend.Apply(ctx, home, r); !errors.Is(err, gpuruntime.ErrLimitUnchecked) {
 				t.Fatalf("apply that keeps limits = %v", err)
 			}
 			want := 1
@@ -219,8 +222,8 @@ func TestTrainerInspectionIgnoresAnUnrelatedLimitedProfile(t *testing.T) {
 	if _, err := b.InspectTrainer(context.Background(), request, "trainer"); err != nil || !inspected {
 		t.Fatalf("trainer inspection with a limited profile = %v, inspected %v", err, inspected)
 	}
-	if err := Validate(request); !errors.Is(err, ErrLimitsNotInSetup) {
-		t.Fatalf("write gate accepted limits: %v", err)
+	if err := Validate(request); err != nil {
+		t.Fatalf("write gate refused limits: %v", err)
 	}
 }
 

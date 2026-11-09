@@ -2,7 +2,7 @@
 
 [Documentation](README.md). See [implemented integration](INTEGRATION.md).
 
-**Design for [#584](https://github.com/mickey-kras/gpu-workload-supervisor/issues/584). This release has the schema, the runtime checks and the advisory escape route report. Setup cannot write limits yet.**
+**Design for [#584](https://github.com/mickey-kras/gpu-workload-supervisor/issues/584). This release has the schema, the runtime checks, the advisory escape route report and the setup of unit limits. The limit stop and the desktop page come later.**
 
 - Catalog v5 accepts `limits` on owned inference launches. The renderer and strict parser carry them.
 - Escape routes are advisory warnings. Setup discovery reports them. They do not block limits, and no runtime check reads them. See [escape route report](#escape-route-report).
@@ -13,7 +13,7 @@
 - If a check after the start fails, the start stops the unit.
 - In a switch, a later definite failure ends the verification, and the supervisor stops the unit. From a supervisor-owned state, the rollback stops it. From a user-owned state, the failed transition stops it before it latches the error state.
 - A status check never stops a workload. It runs the health check only for a supervisor-owned, stable, healthy state with open admission. On a failed health check, it latches the error state and closes the admission.
-- Design decision: nothing reads the limits back on a schedule. This release does not stop a running unit with limits after a failed status check. The unit keeps running behind the closed admission until `recover`. The limit stop of the policy tick and its escalation come with the setup change for limits. See [limit checks](OPERATIONS.md#limit-checks).
+- Design decision: nothing reads the limits back on a schedule. This release does not stop a running unit with limits after a failed status check. The unit keeps running behind the closed admission until `recover`. The limit stop of the policy tick and its escalation come in a later change. See [limit checks](OPERATIONS.md#limit-checks).
 - Reconciliation keeps a running unit with limits and boot policy `retain` only after the checks pass. On a definite failure, it stops the unit and exits nonzero with the cause, so boot units that need a successful reconcile do not start. A definite failure in the readiness probe of a kept unit also stops it before the error state latches. The state keeps the workload that reconciliation kept, with error health and closed admission. The same write settles the state and latches the failure. Then run `recover` one time. It runs the checks again and keeps the unit when they pass. On a definite failure, it stops the unit and exits nonzero, without a second latch. A failure that proves nothing latches without a stop. If the unit does not run, `recover` settles the state and exits zero. Then fix the cause, or switch to Idle and remove the limits through setup.
 - Each failure class has one result:
 
@@ -35,9 +35,9 @@
 - In the start, a failure before the `systemctl start` call fails the switch with no stop. A failed start call or a failure after the call stops the unit and fails the switch.
 - In the health checks after the start, a switch retries a read failure until its deadline.
 - A status check or reconciliation keeps the admission closed without a stop.
-- Setup cannot write limits. It rejects requests with limits before unit writes and accepts requests that remove them.
+- Setup writes limits on owned inference units and shows the root step of the host cap. See [setup of unit limits](#setup-of-unit-limits).
 
-Later changes add trainer binding limits, draft and setup support and the **Resource checks** page. `requiredMiB` estimates launch VRAM demand. It enforces no ceiling. GPU VRAM enforcement and separate-account workload isolation are out of scope.
+Later changes add trainer binding limits, the limit stop and the **Resource checks** page. `requiredMiB` estimates launch VRAM demand. It enforces no ceiling. GPU VRAM enforcement and separate-account workload isolation are out of scope.
 
 - [Host protection](#host-cap)
 - [Unit limits](#unit-limits)
@@ -196,13 +196,76 @@ Reject out-of-schema defaults without writing limits. Never store 0 where value 
 
 The example memory ceiling is 55296 MiB, not 59392 MiB from slice `MemoryMax`. Even unit `MemoryMax=55296` fails admission while the slice holds memory. Setup reads and displays actual `memory.current` beside the ceiling.
 
-Failed reads never mean 0. Before acceptance and admission, check `slice memory in use + unit MemoryMax + reserve <= the lower of slice MemoryHigh and MemoryMax`. The memory in use is `memory.current` minus the reclaimable page cache: `active_file` plus `inactive_file` in the slice `memory.stat`. These lists leave out shmem and mlocked pages. A stopped model leaves its page cache in the slice, and the kernel can reclaim it. Failure names usage, page cache, ceiling and common `/dev/shm` and `tmpfs` causes.
+Failed reads never mean 0. Before admission at each start, the runtime checks `slice memory in use + unit MemoryMax + reserve <= the lower of slice MemoryHigh and MemoryMax`. The memory in use is `memory.current` minus the reclaimable page cache: `active_file` plus `inactive_file` in the slice `memory.stat`. These lists leave out shmem and mlocked pages. A stopped model leaves its page cache in the slice, and the kernel can reclaim it. Failure names usage, page cache, ceiling and common `/dev/shm` and `tmpfs` causes.
 
 Memory remains charged to its instantiating cgroup until release, even after unit stop. Do not divide the ceiling between units: each next unit must fit beside current charges. Size mapped models as below.
 
 Render `OOMScoreAdjust=500` so slice OOM selects workloads before supervisor and proxy. `OOMPolicy=stop` keeps `memory.oom.group=0`. Only `kill` sets 1. See source [7](#source-7). Systemd stops remaining unit processes after the first kill.
 
 Render neither `RemoveIPC=` nor `PrivateIPC=`: the former needs `User=`, `Group=` or `DynamicUser=`. The latter excludes POSIX shared memory. User-manager units share one UID.
+
+### Setup of unit limits
+
+Setup preview and apply accept `limits` on owned inference units. Trainers get no limits yet. A request without limits writes the lowest catalog version that its content needs, so removing all limits writes that version again.
+
+Adopted units get no limits. Setup refuses limits on a unit that the accepted catalog adopts, by unit name or by workload ID. First convert the unit to a managed unit through setup preview and apply. Then add the limits in a second apply.
+
+Before apply writes a unit with limits, setup runs the checks of the runtime. These are the controller, host cap, reserve and I/O device checks. Setup leaves out the binding and loaded property checks, because apply writes the new unit file only after these checks. A failed check refuses the apply before any unit write.
+
+The setup request can carry `hostCap`, the values of the slice drop-in. The operator sets `memoryHighMiB` and `memoryMaxMiB`, and `memoryMaxMiB` must be above `memoryHighMiB`. Setup fills each unset value:
+
+| Value | Filled value |
+| --- | --- |
+| `tasksMax` | The largest unit `tasksMax` plus the task reserve |
+| `cpuQuotaPercent` | The largest unit `cpuQuotaPercent` plus the CPU reserve |
+| `ioReadBandwidthMax`, `ioWriteBandwidthMax`, `ioReadIOPSMax`, `ioWriteIOPSMax` | The smallest cap that holds the largest unit cap after the I/O reserve. A key that no unit sets stays unset |
+
+Setup refuses values that leave less than the reserve above a unit limit. The memory ceiling is `memoryHighMiB`. When a unit sets an I/O cap, the slice caps that key, so each unit with limits must set it. All units that cap I/O must use one `ioDevice`.
+
+### Host cap step
+
+Preview returns the host cap step as `hostCap` for its request. Discovery returns it for the accepted catalog, or for the request of a pending activation. Without a unit with limits, its status is `notNeeded`, and no root step is necessary.
+
+| Field | Content |
+| --- | --- |
+| `status` | `notNeeded`, `present`, `absent`, `different` or `unknown` |
+| `uid` | The service UID |
+| `values` | The filled `hostCap` values of the request |
+| `dropIns` | Each drop-in with its `path`, its exact `content` when the request has `hostCap`, and `install` when the root step must write it |
+| `commands` | The exact root commands for the drop-ins with `install`. Like `content`, they come only in a preview whose request has `hostCap` |
+| `problems` | Each missing, unreadable or different drop-in, and each failed setup check with its workload |
+| `ioWeight` | For each unit that limits I/O: its `workload`, `device` and `provider`. The provider is `bfq`, `iocost` or `none`. It is `invalid` when the device fails the device check, and `unknown` when setup cannot check the device |
+| `reserve` | The effective reserve |
+
+A missing drop-in makes the status `absent`. A drop-in that differs from the requested content, or a definite check failure, makes it `different`. A check that proves nothing, or a drop-in that setup cannot read, makes it `unknown`. Setup never runs the commands.
+
+Setup compares the slice drop-in byte for byte. The delegation drop-in matches when its `[Service]` section delegates `io`, so a different text asks for no needless restart. The setup checks compare the effective slice values with the slice properties. Without `hostCap` in the request, a drop-in to install gets a hint in `problems` to set the memory values.
+
+The commands use `sudo`. They create the drop-in directory and write each drop-in with `install` and an explicit mode. Then they run `systemctl daemon-reload`.
+
+When the drop-ins match but the checks fail, `problems` says to run `systemctl daemon-reload` after a new install. A missing or different delegation drop-in also needs `systemctl restart user@UID.service`. That restart stops the supervisor and its units, so switch to Idle first. See [host cap](#host-cap).
+
+### Stored reserve
+
+The setup request sets the reserve in `profile.limitReserve`, and setup stores it in `operator.json`. A request without it stores no reserve and removes a stored one. Then each reader uses the proposed values, and the profile has the same bytes as a profile of an earlier release. These programs read the stored reserve:
+
+- `gpu-operator`, through the operator profile
+- `gpu-workload-proxy`, which reads that profile at its start and uses the reserve for the activations of requester ingress
+- `gpu-setup`, also for the boot reconciliation and the idle policy tick. These two read the profile again under the state lock and refuse a profile that changed
+- `gpu-mode`, from the operator profile of the account when that profile has the same absolute state path. It reads the profile under the state lock, except for `verify-host`, which takes no lock
+
+Each request of `gpu-operator` and each activation of requester ingress reads the profile again under the state lock. They use its reserve, so the reserve and the catalog come from the same committed setup. A profile that they cannot read again refuses the request with `incompatible_configuration`.
+
+When `gpu-mode` cannot read the operator profile, each limit check fails with `ErrLimitReadback`, so a unit with limits does not launch. A missing profile, or a profile for another state path, gives the proposed values.
+
+| Field | Range | Default |
+| --- | --- | --- |
+| `memoryMiB` | 256 to 16777216 | 2048 |
+| `tasks` | 64 to 4194304 | 512 |
+| `cpuPercent` | 1 to 10000 | 100 |
+| `ioPercent` | 1 to 50 | 10 |
+
+The swap reserve is always 0. `gpu-operator` and `gpu-workload-proxy` of an older release reject a profile with `limitReserve`. An older `gpu-setup` ignores the field and uses the proposed values. To roll back, remove the reserve through setup, or restore the profile backup of the activation.
 
 ## Controller checks
 
@@ -299,7 +362,7 @@ The runtime applies these checks to units with limits. Units without limits do n
 | Before unload, before start | Each unit limit is at most its slice cap minus the [reserve](#reserve-and-pressure). The memory cap is the lower of slice `memory.high` and `memory.max` | `ErrLimitReserve` |
 | Before unload, before start | The I/O device is a root-owned leaf block device with the catalog number. With `IOWeight`, the device uses the active BFQ scheduler, or the root `io.cost.qos` line of the device has `enable=1`. Without BFQ, the root `io.cost.qos` is root-owned without group or other write, ACL or file capability | `ErrLimitDevice`, `ErrHostCap`, `ErrLimitReadback` |
 | Before unload, before start | Loaded properties match the catalog, with `OOMPolicy` and `OOMScoreAdjust`. The binding check requires no drop-ins and `NeedDaemonReload=no` | `ErrLimitProperties`, `ErrLaunchChanged`, `ErrLaunchUnsupported` |
-| Before start | The slice memory in use is `memory.current` minus the page cache (`active_file` plus `inactive_file` in `memory.stat`). That memory plus unit `MemoryMax` plus 2048 MiB is at most the lower of slice `memory.high` and `memory.max` | `ErrLimitMemory`, `ErrLimitReadback` |
+| Before start | The slice memory in use is `memory.current` minus the page cache (`active_file` plus `inactive_file` in `memory.stat`). That memory plus unit `MemoryMax` plus the [memory reserve](#stored-reserve) is at most the lower of slice `memory.high` and `memory.max` | `ErrLimitMemory`, `ErrLimitReadback` |
 | After start | The controller, host cap, reserve, device and loaded property checks again. Then the readback, as in the next row | `ErrLimitController`, `ErrLimitInterface`, `ErrHostCap`, `ErrLimitReserve`, `ErrLimitDevice`, `ErrLimitProperties`, `ErrLimitReadback` and `ErrLimitDrift`. A definite failure also carries `ErrLimitCheckFailed` |
 | Each health check, before reconciliation keeps a unit | The binding and the checks before unload again. Then the readback: the memory, pids and cpu files, unset controls included. With a CPU quota, `cpu.max.burst` is 0, or absent on a kernel without burst. `io.max` only with an I/O cap. `io.weight` only with `IOWeight`, and `io.bfq.weight` with BFQ | The errors of the rows above, and `ErrLimitDrift`. A definite failure also carries `ErrLimitCheckFailed` |
 
@@ -330,7 +393,7 @@ The stop after a failed check has a fixed limit of 2 minutes. This limit covers 
 - A missing or untrusted host file is `ErrHostCap`. Other open and read failures are `ErrLimitReadback`. For `/lib`, a missing link, a `/lib` that is not a link, a link elsewhere or another owner is `ErrHostCap`.
 - Some files have other classes. A missing root `io.cost.qos` means no iocost, which is `ErrLimitDevice` for a unit with `IOWeight` and no BFQ. A missing slice `io.max` passes when the unit has no I/O cap. A slice or hierarchy that is missing, or that the runtime cannot check or open, is `ErrLimitReadback`. A symlink or a file where a directory must be is `ErrHostCap`. The slice `memory.current` and `memory.stat` are usage counters, so any failed or untrusted read of them is `ErrLimitReadback`.
 
-The runtime uses the proposed reserve values until the desktop options can change them. Package manager checks of vendor drop-ins come with setup support.
+The runtime uses the reserve that setup stores in the profile, or the proposed values. See [stored reserve](#stored-reserve). The runtime checks only the path rule above for vendor drop-ins. The package manager check of vendor drop-ins comes in a later change.
 
 ### Limits of the readback
 
@@ -386,7 +449,9 @@ Keep existing health, transition and recovery rules: kill stops the unit and fai
 
 ### Memory sizing for mapped models
 
-llama.cpp maps GGUF. First readers charge model page cache to their cgroup. Set `MemoryHigh` above model size plus measured working set, and `MemoryMax` higher. Otherwise reclaim and refaults can exceed readiness deadlines without kill. Measure on the host.
+llama.cpp maps a GGUF file into memory. vLLM can map a safetensors file. The page cache of a mapped model counts against the cgroup of the unit that reads it first. Set `memoryHighMiB` above the model size plus the measured working set. Set `memoryMaxMiB` higher than `memoryHighMiB`.
+
+A low `MemoryHigh` does not kill the unit. The kernel reclaims the mapped pages and reads them again, so the model load becomes slow. The load can then pass the readiness deadline, and the switch fails with a timeout. Measure the load on the host with the limits that you plan to use.
 
 ### Checks before admission release
 
@@ -419,8 +484,8 @@ Display ceiling and current usage beside fields. Show memory in GiB, CPU in core
 | Escape route (warning) | Programs from this account can run outside host protection through `<route>`. Limits protect against runaway workloads, not against such programs |
 | Unchecked escape route (warning) | The scan `<item>`. A route can be open in a place that the scan cannot read |
 | Escape routes left out (warning) | Not shown: `<item>` |
-| Memory pressure | Slice memory does not fit this limit. `<usage>` MiB is in use. The `<cache>` MiB of page cache that the kernel can reclaim does not count. The start needs `<need>` MiB: `memoryMaxMiB` plus a 2048 MiB reserve. The ceiling is `<ceiling>` MiB. Check `/dev/shm` and `tmpfs` use |
-| Memory usage unknown | Setup cannot read the memory already in use. Setup did not save limits |
+| Memory pressure | Slice memory does not fit this limit. `<usage>` MiB is in use. The `<cache>` MiB of page cache that the kernel can reclaim does not count. The start needs `<need>` MiB: `memoryMaxMiB` plus a `<reserve>` MiB reserve. The ceiling is `<ceiling>` MiB. Check `/dev/shm` and `tmpfs` use |
+| Memory usage unknown | The supervisor cannot read the memory already in use. The workload did not start |
 | Drift | A limit changed after start. The supervisor stopped the workload. `<control>` was `<actual>`, not `<expected>` |
 | Readback failure | Setup cannot read `<path>` (`<errno>`). The supervisor stopped the workload |
 | `IOWeight` not applicable | `<number>` (`<device>`) does not support I/O weight (no BFQ or iocost). Without a device name in sysfs, the text gives the number only |
