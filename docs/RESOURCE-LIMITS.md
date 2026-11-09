@@ -2,7 +2,7 @@
 
 [Documentation](README.md). See [implemented integration](INTEGRATION.md).
 
-**Design for [#584](https://github.com/mickey-kras/gpu-workload-supervisor/issues/584). This release has the schema, the runtime checks, the advisory escape route report and the setup of unit limits. The limit stop and the desktop page come later.**
+**Design for [#584](https://github.com/mickey-kras/gpu-workload-supervisor/issues/584). This release has the schema, the runtime checks, the advisory escape route report, the setup of unit limits and the limit stop. The desktop page comes later.**
 
 - Catalog v5 accepts `limits` on owned inference launches. The renderer and strict parser carry them.
 - Escape routes are advisory warnings. Setup discovery reports them. They do not block limits, and no runtime check reads them. See [escape route report](#escape-route-report).
@@ -13,7 +13,7 @@
 - If a check after the start fails, the start stops the unit.
 - In a switch, a later definite failure ends the verification, and the supervisor stops the unit. From a supervisor-owned state, the rollback stops it. From a user-owned state, the failed transition stops it before it latches the error state.
 - A status check never stops a workload. It runs the health check only for a supervisor-owned, stable, healthy state with open admission. On a failed health check, it latches the error state and closes the admission.
-- Design decision: nothing reads the limits back on a schedule. This release does not stop a running unit with limits after a failed status check. The unit keeps running behind the closed admission until `recover`. The limit stop of the policy tick and its escalation come in a later change. See [limit checks](OPERATIONS.md#limit-checks).
+- Design decision: nothing reads the limits back on a schedule while the state is healthy. While a supervisor-owned state keeps the error latch with closed admission, the policy tick checks each running unit with limits. The cause of the latch does not matter. On a failure, the tick can stop the unit. See [limit stop](#limit-stop).
 - Reconciliation keeps a running unit with limits and boot policy `retain` only after the checks pass. On a definite failure, it stops the unit and exits nonzero with the cause, so boot units that need a successful reconcile do not start. A definite failure in the readiness probe of a kept unit also stops it before the error state latches. The state keeps the workload that reconciliation kept, with error health and closed admission. The same write settles the state and latches the failure. Then run `recover` one time. It runs the checks again and keeps the unit when they pass. On a definite failure, it stops the unit and exits nonzero, without a second latch. A failure that proves nothing latches without a stop. If the unit does not run, `recover` settles the state and exits zero. Then fix the cause, or switch to Idle and remove the limits through setup.
 - Each failure class has one result:
 
@@ -34,15 +34,16 @@
 - A read failure before the unload fails the switch with no change and its usual code.
 - In the start, a failure before the `systemctl start` call fails the switch with no stop. A failed start call or a failure after the call stops the unit and fails the switch.
 - In the health checks after the start, a switch retries a read failure until its deadline.
-- A status check or reconciliation keeps the admission closed without a stop.
+- A status check or reconciliation keeps the admission closed without a stop. The policy tick can stop the unit later. See [limit stop](#limit-stop).
 - Setup writes limits on owned inference units and shows the root step of the host cap. See [setup of unit limits](#setup-of-unit-limits).
 
-Later changes add trainer binding limits, the limit stop and the **Resource checks** page. `requiredMiB` estimates launch VRAM demand. It enforces no ceiling. GPU VRAM enforcement and separate-account workload isolation are out of scope.
+Later changes add trainer binding limits and the **Resource checks** page. `requiredMiB` estimates launch VRAM demand. It enforces no ceiling. GPU VRAM enforcement and separate-account workload isolation are out of scope.
 
 - [Host protection](#host-cap)
 - [Unit limits](#unit-limits)
 - [Runtime checks](#runtime-checks)
 - [Drift and outcomes](#drift-checks)
+- [Limit stop](#limit-stop)
 - [Schema](#schema)
 - [Qualification](#qualification-procedure)
 
@@ -435,6 +436,10 @@ Trainer `training-start` or `training-reconcile` stops without retry. Reconcile 
 
 See kernel `memory.high`, `memory.max`, `memory.events`, `pids.max`, `cpu.max`, `io.max`. With `OOMPolicy=stop`, OOM stops running or exited services as `oom-kill`. See source [19](#source-19). Counters are diagnostics, not completion and release evidence. They disappear with empty cgroups. Decisions use systemd state and existing evidence contracts.
 
+The limit stop reads the outcome before the stop. A kill comes first, then an allocation failure, a task-creation failure, a throttle and none. The `memory.events` `max` counter shows an allocation failure only after a failed exit. While the unit runs, it shows a throttle. The limit stop reads a running unit, so it shows a `max` event as a throttle. A throttle never gives completion.
+
+`io.stat` has no throttle counter, so the outcome cannot show an I/O throttle.
+
 ### Trainers
 
 Throttle leaves trainers active and incomplete. Fenced `oom-kill`, `exit-code`, `signal` and `core-dump` prove terminal failed. Allocation and task failures usually become these.
@@ -457,11 +462,55 @@ A low `MemoryHigh` does not kill the unit. The kernel reclaims the mapped pages 
 
 Limit kill never proves release. Trainer release needs an `inactive/dead` unit, then an empty or absent recursive cgroup. Next, check for no compute process on its GPU, then capacity for admission. Inference release needs `inactive/dead` first. Its recursive cgroup must then be absent or show `cgroup.events` `populated 0`.
 
-Capacity and compute-app queries are not inference release checks. Shared owned Ollama can idle `active/running` with no loaded models, but daemon kill must reach `inactive/dead`. Uninterruptible driver waits can keep processes after kill: keep admission closed and cleanup fail-closed.
+The limit stop has a stricter release check, because a limit kill proves no release. Each unit must show `inactive/dead`, and its recursive cgroup must have no process.
+
+The launch binding of each unit with a GPU UUID must match. Then the GPU of the stopped unit must have no compute process, and the stopped unit must have its capacity. When the runtime has no `nvidia-smi` path, this check fails. After a binding failure, the check runs one time. Restore the binding. Then run `recover`.
+
+Other than after a limit stop, capacity and compute-app queries are not inference release checks. Shared owned Ollama can idle `active/running` with no loaded models, but daemon kill must reach `inactive/dead`. Uninterruptible driver waits can keep processes after kill: keep admission closed and cleanup fail-closed.
 
 ### Lifecycle
 
 Keep `Restart=no`. Add no `StartLimit*`, automatic restart or phase. Idle stops non-shared units. Stop the shared Ollama to `inactive/dead` before rendering and reloading limits: daemon-reload can otherwise alter its live cgroup.
+
+## Limit stop
+
+The policy tick runs the limit stop before the inactivity policy. The limit stop acts only on a supervisor-owned state with error health and closed admission. No transition can be in progress. The limit stop then checks each running unit with limits. A user-owned state gets no limit stop.
+
+The `limit_stops` table keeps the time of the first failure and of the first definite failure in the latch. A failure of another unit keeps these times, so units that fail in turn cannot reset them. With no pending admitted work of the unit, a definite failure stops the unit at once. Work with no workload identity counts as work of the unit.
+
+Pending work defers the stop until the drain timeout after the first definite failure. The drain ends at the latest at the overdue time. The overdue time is the drain and readiness timeouts after the first failure. Then the stop cuts the work off, and the error names it. Run `resolve-work` for that work.
+
+After a definite failure, a later check that proves nothing does not change this plan. A check that passes holds the stop and keeps the times.
+
+Design decision: a check that proves nothing also defers the stop. When the drain and readiness timeouts pass after the first failure, the unit stops too. On this path, the stop cuts off pending admitted work at once, and the error names it. Run `resolve-work` for that work.
+
+The stop is a journaled transition with the initiator `resource-limit-stop`. The journal records the reason and the [limit outcome](#outcome-classes). Then it records the stop through the system manager and the release check. A passed release check commits Idle. Otherwise the transition fails, and the workload is unknown. The error state stays in both cases, so run `recover`.
+
+The record stays until a state write ends the latch, such as a successful `recover`.
+
+The store records the start of the stop before the stop. From then on, each tick exits nonzero until `recover` ends the latch. Each tick only takes that stop to its end. It checks no unit, and no failure of another unit replaces the record.
+
+When the stop fails and the unit still runs, the next tick stops the unit again, whatever its checks show. That stop cuts off pending admitted work. A record of a started stop stays also when its unit leaves the catalog.
+
+When the release check fails, the next tick runs the release check one time, with no new transition. When that check passes, the tick runs the stop again through the system manager as a new journaled transition. This new stop commits Idle when its release check passes. Otherwise it fails, and the workload stays unknown.
+
+A crash can interrupt the stop. Then each tick fails at once with a running transition. Run `recover`.
+
+| Result of the tick | Exit |
+| --- | --- |
+| A deferral before the drain and readiness timeouts pass after the first failure | Zero. The tick writes the cause to its log |
+| A failed transition check, catalog check or observation with no stored failure | Zero. The tick writes the cause to its log |
+| A failed unit beside the running units, such as after an OOM kill | Nonzero. The limit checks of the running units still run, and a failure can still stop a unit |
+| A failed read of the record | Nonzero while a supervisor-owned state keeps the error latch with closed admission. Otherwise zero |
+| A recorded failure before its stop, with no failed check now | Zero. No stop. The record keeps its times, and the latch stays until `recover` |
+| A failed read of the state | Nonzero. A recorded failure before its stop defers or escalates instead |
+| A failed write or delete of the record | Nonzero |
+| A deferral of a recorded failure after that time, before the stop starts | Nonzero. The unit keeps running |
+| A stop that ran, also with a failed release check | Nonzero, with the cause and the limit outcome |
+| A stop that did not run, or a failed write of its record | Nonzero. The next tick tries again |
+| Each tick after the stop started, until `recover` ends the latch | Nonzero. The error names the unit. No failed step, check or read defers it |
+
+`gpu-setup idle-policy-tick` uses a drain timeout of 2 minutes and a readiness timeout of 1 minute. `gpu-mode idle-policy-tick` uses its `-drain-timeout` and `-verify-timeout` flags. Their defaults are 5 minutes.
 
 ## Desktop
 

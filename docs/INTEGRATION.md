@@ -58,7 +58,7 @@ The journal records side-effect intent and observation.
 
 The `model_checks` table holds [model check](MODEL-CHECKS.md) results. No executable writes it yet.
 
-Database schema v19 adds the `limit_stops` table. Nothing writes it in this release. The later change for the limit stop writes it. Older binaries reject this schema. See [rollback](OPERATIONS.md#make-a-backup-restore-and-roll-back-state).
+Database schema v19 adds the `limit_stops` table. The [limit stop](RESOURCE-LIMITS.md#limit-stop) of the policy tick writes it. Older binaries reject this schema. See [rollback](OPERATIONS.md#make-a-backup-restore-and-roll-back-state).
 
 Any writer can migrate an opened database. Make a backup before changing binaries.
 
@@ -493,4 +493,4 @@ This release migrates the database to schema v19 for the `limit_stops` table. Fu
 
 Other fields cannot use that allowance. Full validation and readback allows 352 KiB. Setup requests allow 416 KiB, reserving 64 KiB for profile and envelope.
 
-Keep host evidence and hardware or build identifiers outside the repository. This release has the runtime checks of owned unit limits and the advisory escape route report. Setup writes unit limits and shows the root step of the host cap. See [resource limits](RESOURCE-LIMITS.md).
+Keep host evidence and hardware or build identifiers outside the repository. This release has the runtime checks of owned unit limits and the advisory escape route report. Setup writes unit limits and shows the root step of the host cap. While a supervisor-owned state keeps the error latch, the policy tick runs the limit stop. It can stop a running unit whose limits fail. See [resource limits](RESOURCE-LIMITS.md).

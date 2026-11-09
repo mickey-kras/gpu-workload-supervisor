@@ -364,6 +364,30 @@ func TestPolicyTickEvaluatesThePersistedProfile(t *testing.T) {
 	}
 }
 
+// The policy tick runs the limit stop. With no unit with limits in
+// the catalog, it removes a stale limit stop record.
+func TestPolicyTickClearsStaleLimitRecord(t *testing.T) {
+	backend, home, r := fixture(t)
+	ctx := context.Background()
+	if err := backend.Apply(ctx, home, r); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(ctx, r.Profile.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.MarkLimitFailure(ctx, "vision", true, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.PolicyTick(ctx, home); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.LimitStop(ctx); ok || err != nil {
+		t.Fatalf("stale record after the tick = %v, %v", ok, err)
+	}
+}
+
 func TestPolicyTickFailsLoudlyWithoutOperatorProfile(t *testing.T) {
 	backend, home, _ := fixture(t)
 	if err := backend.PolicyTick(context.Background(), home); err == nil {

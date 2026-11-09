@@ -387,9 +387,11 @@ func pinCatalog(snapshot control.CatalogSnapshot) (*control.CatalogSnapshot, err
 
 func executeRuntimeCommand(ctx context.Context, controller *supervisor.Controller, command string, options modeExecution) error {
 	// The oneshot policy tick carries no qualified evidence provider yet, so an
-	// enabled policy fails closed; an Off policy is a clean no-op.
+	// enabled policy fails closed; an Off policy is a clean no-op. While the
+	// state is latched, the tick first runs the limit stop, which can stop a
+	// running unit whose limits fail.
 	if command == idlePolicyTickCommand {
-		return controller.PolicyTick(ctx, nil)
+		return controller.TickWithLimits(ctx, nil, os.Stderr)
 	}
 	if strings.HasPrefix(command, "training-") {
 		return executeTraining(ctx, controller, command, options.trainingJob, control.Workload(options.target))
