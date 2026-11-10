@@ -323,45 +323,7 @@ func TestPolicyTickEvaluatesThePersistedProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := backend.PolicyTick(ctx, home); err != nil {
-		t.Fatalf("tick with off policy: %v", err)
-	}
-	// Enable the policy on a stable running workload: without a qualified
-	// evidence provider the tick must fail closed, never idle silently.
-	s, err := store.Open(ctx, r.Profile.StatePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, err := s.State(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state.DesiredWorkload = control.WorkloadText
-	state.ActiveWorkload = control.WorkloadText
-	state.Admission = control.AdmissionOpen
-	state, err = s.UpdateState(ctx, state.Version, state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snap, err := s.Catalog(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	settings, err := s.Settings(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := control.SettingsPrecondition{
-		Incarnation: state.LeaseFence.Incarnation, Version: state.Version, Owner: state.Owner,
-		ConfigurationRevision: snap.Revision, SettingsRevision: settings.SettingsRevision,
-	}
-	if _, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 5}, true); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := backend.PolicyTick(ctx, home); err == nil || !strings.Contains(err.Error(), "evidence") {
-		t.Fatalf("enabled tick without evidence: %v", err)
+		t.Fatalf("tick: %v", err)
 	}
 }
 

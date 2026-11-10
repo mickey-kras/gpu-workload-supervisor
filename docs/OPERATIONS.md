@@ -505,7 +505,7 @@ Read the service journal for the cause and the limit outcome. Run `resolve-work`
 
 `set-idle-policy` combines fresh status's complete `expected` with settings revision from fresh **get-settings**, never status. Its writer transaction revalidates both revisions plus incarnation, version and owner, rotates settings revision and clears armed deadlines. It never interrupts unstable state or transitions. Success returns only updated settings.
 
-Enablement without qualified evidence returns `unavailable`. Stale settings → `stale_state`, running transition → `busy`, invalid timeout → `invalid_request`. Both actions use status lifetimes. Older peers' strict `invalid_request` means idle policy unavailable.
+No inactivity evaluator ships, so enablement returns `unavailable`. Stale settings → `stale_state`, running transition → `busy`, invalid timeout → `invalid_request`. Both actions use status lifetimes. Older peers' strict `invalid_request` means idle policy unavailable.
 
 ### Demand activation
 
@@ -546,13 +546,7 @@ The tick reads the persisted profile's runtime and state path and committed sett
 
 Also give it the `-gpu-index` and `-capacity-headroom-mib` values of the profile. The release check reads them. To match `gpu-setup`, give it `-drain-timeout 2m -verify-timeout 1m -action-timeout 1m -cleanup-timeout 1m`. Without `-nvidia-smi`, the release check after a stop always fails.
 
-For the inactivity policy, Off, User ownership, unstable or latched state or idle or unknown workload disarms deadlines and does nothing. The limit stop still acts on a latched supervisor-owned state. Enabled without qualified evidence fails closed and nonzero. Fresh evidence must exclude queued, reserved, running and unresolved work and unfinished admissions.
-
-An attestation at most 120 seconds old arms `last activity + timeout`. On expiry without new activity, the tick drains to Idle. Inside the single-writer transaction, provider-generation fencing and pending-work rechecks are atomic with state-version and lease-fence checks. Registrations without terminal evidence count as unfinished.
-
-The provider validates generation and excludes queue or reservation changes through commit or rollback. Revocation aborts commit, disarms and fails closed. Committed draining closes admission before fence release.
-
-Any new activity, admission or state change aborts with exit 0 and no latch. The next tick fetches fresh evidence.
+The tick has no inactivity evaluator. It never drains a workload to Idle and never arms a deadline. The timer and the command keep their names, so installed units keep working after an upgrade.
 
 ### Lifetimes and limits
 
@@ -657,11 +651,11 @@ Completed-work retention also removes old canceled or terminal demand. Maximum q
 
 SQLite transactions cover queue, reservation and registration. Admission consumes claims atomically with native or ComfyUI registration. Queued or reserved demand invalidates idle deadlines and participates in atomic idle checks. Admitted work needs trusted terminal evidence or verified recovery. Native streaming and ComfyUI reconciliation contracts remain.
 
-Evidence excludes external bypass jobs. No deployment-qualified `EvidenceProvider` exists: enablement remains unavailable. Qualify runtime isolation plus terminal and model lifecycle separately. Fixtures cannot prove this.
+Evidence excludes external bypass jobs. No inactivity evaluator ships: enablement remains unavailable. Qualify runtime isolation plus terminal and model lifecycle separately. Fixtures cannot prove this.
 
 ## Demand activation and inactivity idle plan
 
-[#144](https://github.com/mickey-kras/gpu-workload-supervisor/issues/144) implements durable policy and settings, demand activation and a 60-second timer. Policy defaults Off. Packaged entrypoints lack qualified evidence: enablement returns `unavailable`, evaluation fails closed. Keep Off for initial desktop deployment.
+[#144](https://github.com/mickey-kras/gpu-workload-supervisor/issues/144) implements durable policy and settings, demand activation and a 60-second timer. Policy defaults Off. No inactivity evaluator ships: enablement returns `unavailable`. Keep Off for initial desktop deployment.
 
 ### Placement
 
@@ -669,7 +663,7 @@ One backend loop beside the transition controller uses durable evidence and exis
 
 ### Required before enablement
 
-Qualify an orchestration `EvidenceProvider`, queued, reserved, running and unresolved evidence, runtime-bypass prevention and native terminal and model lifecycle on the deployment host. Contracts are not adapters. Fixture coverage does not qualify the host. Production isolation for requester ingress remains unqualified. Integrate desktop settings and deadlines only with backend capability and fresh evidence.
+Build an inactivity evaluator in the policy tick. Qualify an orchestration evidence source, queued, reserved, running and unresolved evidence, runtime-bypass prevention and native terminal and model lifecycle on the deployment host. Contracts are not adapters. Fixture coverage does not qualify the host. Production isolation for requester ingress remains unqualified. Integrate desktop settings and deadlines only with backend capability and fresh evidence.
 
 <a id="activation-ingress"></a>
 
@@ -679,13 +673,13 @@ Use [typed activation](#demand-activation) for preconditions, readiness checks, 
 
 ### Idle transition
 
-The [policy tick](#inactivity-policy-tick) makes the fenced inactivity decision and aborts on intervening admission.
+No idle transition ships. A future evaluator in the [policy tick](#inactivity-policy-tick) must make a fenced inactivity decision. It must abort on intervening admission.
 
 ### Evidence input contract
 
 Use only orchestration attestation: job-identity sets for queued, reserved, running and unresolved work. Unresolved maps to `PendingWork` retaining completion authority. Use `ResolveUnfinishedWork` only for verified operator recovery, never policy cleanup.
 
-Pull `Attest` every evaluation. `AcquireFence` validates generation and excludes queue and reservation changes through the transaction. Invalidation is not fresh evidence. Timestamp age over 120 seconds (`MaxAttestationAge`, `internal/supervisor/policy.go`) is missing evidence. Unreachable, outage, uncertain, partial or missing attestations forbid Idle. Timer source: `packaging/gpu-workload-supervisor-idle.timer`.
+Read fresh evidence at each evaluation. A fence must validate the evidence generation and exclude queue and reservation changes through the transaction. Old, unreachable, uncertain, partial or missing evidence forbids Idle. Timer source: `packaging/gpu-workload-supervisor-idle.timer`.
 
 <a id="ownership-transfer-while-pending-idle-is-armed"></a>
 

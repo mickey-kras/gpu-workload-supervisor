@@ -138,8 +138,8 @@ export class HostProtection {
         for (const [index, field] of reserveFields.entries()) {
             const row = this.reserveRows[index];
             const text = row.text.trim();
-            if (!row.edited) reserve[field.key] = this.storedReserve[field.key];
-            else reserve[field.key] = text === '' ? reserveDefaults[field.key] : field.parse(text);
+            if (row.edited) reserve[field.key] = text === '' ? reserveDefaults[field.key] : field.parse(text);
+            else reserve[field.key] = this.storedReserve[field.key];
             if (reserve[field.key] === null) return this.fail(`${field.title}: enter a number.`);
         }
         const custom = reserveFields.some(field => reserve[field.key] !== reserveDefaults[field.key]);

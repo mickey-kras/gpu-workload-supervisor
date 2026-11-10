@@ -457,10 +457,10 @@ func (b Backend) Reconcile(ctx context.Context, home string) error {
 	return errors.Join(reconcileErr, pruneErr)
 }
 
-// PolicyTick evaluates the inactivity policy once against the persisted
-// operator profile. It is the profile-aware oneshot behind the idle user
-// timer: an unreadable operator.json fails loudly rather than silently
-// falling back to default paths.
+// PolicyTick runs the limit stop once against the persisted operator
+// profile. It is the profile-aware oneshot behind the idle user timer: an
+// unreadable operator.json fails loudly rather than silently falling back to
+// default paths.
 func PolicyTick(ctx context.Context, home string) error {
 	return SystemBackend().PolicyTick(ctx, home)
 }
@@ -471,10 +471,8 @@ func (b Backend) PolicyTick(ctx context.Context, home string) error {
 		return err
 	}
 	defer cleanup()
-	// No qualified evidence provider ships with the supervisor, so an enabled
-	// policy fails closed and an Off policy is a clean no-op. The tick
-	// first runs the limit stop, which can stop a unit whose limits fail.
-	return controller.TickWithLimits(ctx, nil, os.Stderr)
+	// The limit stop can stop a unit whose limits fail.
+	return controller.LimitTick(ctx, os.Stderr)
 }
 
 // activatedController loads the persisted operator.json profile, validates

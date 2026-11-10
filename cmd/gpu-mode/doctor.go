@@ -18,7 +18,10 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
-const doctorCommand = "doctor"
+const (
+	doctorCommand        = "doctor"
+	operatorProfileCheck = "operator profile"
+)
 
 // errDoctorFailed is the error of a doctor run with a failed check. The
 // report on stdout names the check and the next step.
@@ -63,7 +66,7 @@ func runDoctor(newRuntime func(gpuruntime.SystemdConfig) (supervisor.Runtime, er
 	}
 	defer processLock.Close()
 	if err := options.profile.check(options.statePath, loadOperatorProfile); err != nil {
-		return report.fail("operator profile", err, "run gpu-mode doctor again")
+		return report.fail(operatorProfileCheck, err, "run gpu-mode doctor again")
 	}
 	if err := deployment.Check(options.statePath, release); err != nil {
 		return report.fail("deployment marker", err,
@@ -89,21 +92,21 @@ func runDoctor(newRuntime func(gpuruntime.SystemdConfig) (supervisor.Runtime, er
 func doctorProfile(report doctorReport, statePath string, load func() (operator.Profile, error)) (string, error) {
 	profile, err := load()
 	if errors.Is(err, os.ErrNotExist) {
-		report.pass("operator profile", "none; the runtime flags come from the command line")
+		report.pass(operatorProfileCheck, "none; the runtime flags come from the command line")
 		return "", nil
 	}
 	if err != nil {
-		return "", report.fail("operator profile", err, profileHint)
+		return "", report.fail(operatorProfileCheck, err, profileHint)
 	}
 	same, err := sameStatePath(statePath, profile.StatePath)
 	if err != nil {
-		return "", report.fail("operator profile", err, "give -state as an absolute path")
+		return "", report.fail(operatorProfileCheck, err, "give -state as an absolute path")
 	}
 	if !same {
-		report.pass("operator profile", "it is for another state path; the checks use -state and the command-line flags")
+		report.pass(operatorProfileCheck, "it is for another state path; the checks use -state and the command-line flags")
 		return "", nil
 	}
-	report.pass("operator profile", "release "+profile.ActivatedRelease+" is activated for this state")
+	report.pass(operatorProfileCheck, "release "+profile.ActivatedRelease+" is activated for this state")
 	return profile.ActivatedRelease, nil
 }
 
