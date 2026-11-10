@@ -74,6 +74,9 @@ const candidate = {app: 'vllm', label: 'vLLM', unit: 'example-model.service',
 const comfy = {...candidate, app: 'comfyui', label: 'ComfyUI', unit: 'example-image.service', models: [],
     binding: {...candidate.binding, unit: 'example-image.service', model: ''}};
 const repairUUID = 'GPU-01234567-89ab-cdef-0123-456789abcdef';
+const hostCapStep = {status: 'absent', uid: 1000, dropIns: [{path: '/etc/systemd/system/user-1000.slice.d/50-gws-host-cap.conf', content: '[Slice]\nMemoryHigh=20G\nMemoryMax=24G\n', install: true}],
+    commands: ['sudo systemctl daemon-reload'], problems: ['50-gws-host-cap.conf is missing'], reserve: {memoryMiB: 2048, tasks: 512, cpuPercent: 100, ioPercent: 10},
+    usage: {memoryInUseMiB: 4096, pageCacheMiB: 1024, ceilingMiB: 20480}};
 let repairInventory = [];
 function stateCandidate(state) {
     const result = {...comfy, unit: longUnit, location: longLocation, endpoint: longEndpoint,
@@ -101,6 +104,7 @@ async function command(argv, input) {
     if (action === '--version') return 'GNOME Shell 50.1';
     if (action === 'discover') {
         const discovery = {gpuUUIDs: mode === 'installed-blocked' ? repairInventory : [repairUUID], gpuInventoryStatus: mode === 'installed-blocked' && !repairInventory.length ? 'unavailable' : 'available', request: {profile: {statePath: '/example/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: []}}, units: [], applications: mode === 'missing' ? [] : mode === 'mixed-unresolved' ? [comfy, {...candidate, recognized: false, binding: undefined, instanceStatus: 'invalid', configurationStatus: 'unsupported', models: []}] : ['ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed', 'installed-blocked'].includes(mode) ? [stateCandidate(mode)] : [comfy, candidate], errors: mode === 'error' ? ['Example discovery unavailable.'] : []};
+        if (mode === 'ready') Object.assign(discovery, {hostCap: hostCapStep, escapeRoutes: [{route: 'cron', item: 'a crontab of this account'}, {route: 'polkit', item: 'cannot check /etc/polkit-1/rules.d', unchecked: true}]});
         if (deferDiscovery) {
             deferDiscovery = false;
             return await new Promise(resolve => { installationReply = result => { installationReply = null; resolve(JSON.stringify({...discovery, applications: [result]})); }; });
@@ -612,6 +616,11 @@ app.connect('activate', () => {
                 const retain = byLabel(ui.window, 'Keep this workload running at login if already active');
                 await tabTo(ui, retain); run(['xdotool', 'key', 'space']); await delay(40);
                 assert(settingsEditor.settingsOverrides().requiredMiB === 512 && settingsEditor.settingsOverrides().bootPolicy === 'retain', 'native resource edits stage measured requirement and boot policy');
+                const limits = byLabel(ui.window, 'Limit the resources of this workload');
+                await tabTo(ui, limits); run(['xdotool', 'key', 'space']); await delay(60);
+                const tasks = widgets(ui.window).find(widget => widget instanceof Adw.EntryRow && widget.title === 'Tasks' && widget.get_mapped());
+                assert(limits.active && tasks?.is_sensitive() && tasks.text === '4096', 'native limits switch enables the fields with the task default');
+                await capture(ui, 'settings-resource-limits');
             }
             await capture(ui, screenshot);
             await tabTo(ui, ui.review); run(['xdotool', 'key', 'space']); await delay(100);
@@ -620,6 +629,15 @@ app.connect('activate', () => {
         await tabTo(ui, ui.later); run(['xdotool', 'key', 'space']); await delay(120);
         assert(ui.heading.label === 'Choose your applications' && JSON.stringify(ui.drafts) === beforeDraft && JSON.stringify(settingsEditor.settingsOverrides()) === beforeOverrides, 'Cancel discards native advanced draft and resource edits');
         await capture(ui, 'settings-draft-cancelled');
+        await tabTo(ui, ui.setupSettings); run(['xdotool', 'key', 'space']); await delay(80);
+        await tabTo(ui, named(ui, 'Host protection')); run(['xdotool', 'key', 'space']);
+        await waitFor(() => ui.hostPage && ui.hostProtection.page.get_mapped(), 'Host protection page opens');
+        assert(ownsFocus(ui, ui.settingsBack) && ui.settingsTitle.label === 'Host protection', 'Host protection focuses navigation');
+        await settingsTree(ui, 'host-protection', 'Back', [button('Copy root step'), button('Done')], ['Finish setup']);
+        wrapping(ui, 'This account has no host protection. An administrator must run one step as root.');
+        await capture(ui, 'host-protection');
+        await tabTo(ui, ui.review); run(['xdotool', 'key', 'space']); await delay(100);
+        assert(!ui.hostPage && ui.heading.label === 'Choose your applications', 'Done closes Host protection');
         await closeAndVerify(ui, 'draft-cancel');
 
         ui = await open('inspection-failed');

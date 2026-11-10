@@ -89,6 +89,19 @@ type HostCapStep struct {
 	Problems []string         `json:"problems,omitempty"`
 	IOWeight []IOWeightOption `json:"ioWeight,omitempty"`
 	Reserve  LimitReserve     `json:"reserve"`
+	// Usage is the current memory use of the slice, read only for display.
+	// It is absent when no unit passes its checks or a read fails.
+	Usage *HostCapUsage `json:"usage,omitempty"`
+}
+
+// HostCapUsage is the memory use of the slice in MiB, rounded down.
+// MemoryInUseMiB leaves out the page cache that the kernel can reclaim,
+// as the admission check does. CeilingMiB is the lower of the slice
+// MemoryHigh and MemoryMax.
+type HostCapUsage struct {
+	MemoryInUseMiB uint64 `json:"memoryInUseMiB"`
+	PageCacheMiB   uint64 `json:"pageCacheMiB"`
+	CeilingMiB     uint64 `json:"ceilingMiB"`
 }
 
 // CheckLimitHost runs the setup checks of a unit with limits: the capped
@@ -245,7 +258,11 @@ func (m *SystemdManager) checkLimitedHosts(ctx context.Context, step *HostCapSte
 	result := stepOK
 	for _, p := range limited {
 		l := p.NativeModel.Owned.Limits
-		if _, _, err := m.checkLimitHost(ctx, l); err != nil {
+		limitCap, _, err := m.checkLimitHost(ctx, l)
+		if err == nil && step.Usage == nil {
+			m.addUsage(step, limitCap)
+		}
+		if err != nil {
 			step.Problems = append(step.Problems, string(p.ID)+": "+err.Error())
 			severity := stepUnknown
 			if DefiniteLimitFailure(err) {
@@ -258,6 +275,17 @@ func (m *SystemdManager) checkLimitedHosts(ctx context.Context, step *HostCapSte
 		}
 	}
 	return result
+}
+
+// addUsage adds the memory use of the slice to step. A failed read gives
+// no usage and a problem; it does not change the status.
+func (m *SystemdManager) addUsage(step *HostCapStep, c hostCap) {
+	usage, err := m.sliceMemoryUsage(c)
+	if err != nil {
+		step.Problems = append(step.Problems, "the memory in use cannot be read: "+err.Error())
+		return
+	}
+	step.Usage = &HostCapUsage{MemoryInUseMiB: usage.inUse / mebibyte, PageCacheMiB: usage.reclaimable / mebibyte, CeilingMiB: c.memoryCeiling() / mebibyte}
 }
 
 // ioWeightOption gives the I/O weight provider of the device of l, "none"

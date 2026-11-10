@@ -12,6 +12,9 @@ import {ReviewedConfiguration, lowestCatalogVersion} from './review.mjs';
 import {createProfileEditor} from './profile-ui.mjs';
 import {addDraftEditor} from './discovery-ui.mjs';
 import {applications, candidateDiagnostics, recordFingerprint} from './onboarding.mjs';
+import {limitSummary, withLimits} from './limits-ui.mjs';
+import {hostRequest} from './host-protection.mjs';
+import {createHostProtection} from './host-page.mjs';
 
 // The caller supplies transport; fixture callers never invoke the production subprocess.
 export function createSetupWindow(options) { const ui = new SetupWindow(options); ui.start(); return ui; }
@@ -42,8 +45,9 @@ class SetupWindow {
         for (const name of ['field', 'invalidate', 'preparedStillCurrent', 'preparedProfile',
             'continueSetup', 'saveDraftSelections', 'postponeSetup', 'goBack', 'activateConfiguration', 'closeRequested'])
             this[name] = this[name].bind(this);
-        createShell(this); createSettings(this); createApplicationCards(this); createFooter(this);
+        createShell(this); createSettings(this); createApplicationCards(this); createFooter(this); createHostProtection(this);
         this.review.connect('clicked', () => {
+            if (this.hostPage) return this.closeHostProtection();
             const editor = this.applicationSettings?.editor;
             if (!editor || (['main', 'advanced'].includes(this.applicationSettings.page) && (editor.needsModelDecision() || this.drafts.some(draft => draft.id !== editor.id)))) return this.continueSetup();
             return editor.settingsAction();
@@ -177,13 +181,13 @@ class SetupWindow {
         if (this.drafts.some(draft => draft.id === initial.id)) { this.status.label = 'This workload already has an open selection. Finish or remove that selection first.'; return this.draftEditors.find(editor => editor.id === initial.id); }
         this.drafts.push(initial);
         let editor;
-        editor = addDraftEditor({Adw, Gtk, Gio, window: this.window, parent: this.draftRows, initial, detected: this.discovered, discovered: discovery => this.updateDiscovery(discovery), gpuUUIDs: this.gpuUUIDs, gpuInventoryStatus: this.gpuInventoryStatus, discoveryErrors: this.discoveryErrors, command: this.command, modelParent: this.modelPage, reportProblem: this.reportError, navigateSettings: state => this.navigateApplicationSettings(editor, state), saveSelections: () => this.saveDraftSelections(), openSettings: origin => this.openApplicationSettings(editor, origin),
+        editor = addDraftEditor({Adw, Gtk, Gio, window: this.window, parent: this.draftRows, initial, initialLimits: replacing?.nativeModel?.owned?.limits, detected: this.discovered, discovered: discovery => this.updateDiscovery(discovery), gpuUUIDs: this.gpuUUIDs, gpuInventoryStatus: this.gpuInventoryStatus, discoveryErrors: this.discoveryErrors, command: this.command, modelParent: this.modelPage, reportProblem: this.reportError, navigateSettings: state => this.navigateApplicationSettings(editor, state), saveSelections: () => this.saveDraftSelections(), openSettings: origin => this.openApplicationSettings(editor, origin),
             bind: async (profile, current, finish = false) => {
                 replacing ??= this.profiles.find(existing => existing.id === initial.id) ?? null;
                 if (replacing && !this.profiles.includes(replacing)) throw new Error('The original workload was removed. Reopen Manage workloads before editing it.');
-                const preserveSettings = () => replacing ? {...replacing, ...profile, id: replacing.id, requiredMiB: replacing.requiredMiB, bootPolicy: replacing.bootPolicy, ...editor.settingsOverrides()} : {...profile, ...editor.settingsOverrides()};
+                const preserveSettings = () => this.withEditorLimits(replacing ? {...replacing, ...profile, id: replacing.id, requiredMiB: replacing.requiredMiB, bootPolicy: replacing.bootPolicy, ...editor.settingsOverrides()} : {...profile, ...editor.settingsOverrides()}, editor, replacing);
                 if (this.profiles.some(existing => existing !== replacing && (existing.id === profile.id || (profile.unit && existing.unit === profile.unit && existing.nativeModel?.model === profile.nativeModel?.model)))) throw new Error('This installation and model is already configured.');
-                const candidate = JSON.stringify({...this.request, catalog: this.catalogFor([...this.profiles.filter(existing => existing !== replacing), preserveSettings()]), confirmQuiesced: false});
+                const candidate = JSON.stringify(this.requestFor([...this.profiles.filter(existing => existing !== replacing), preserveSettings()]));
                 await this.command(['/usr/bin/gpu-setup', 'verify-bindings'], candidate);
                 if (replacing && !this.profiles.includes(replacing)) throw new Error('The original workload changed during preview. Reopen Manage workloads.');
                 if (!current()) return;
@@ -214,6 +218,7 @@ class SetupWindow {
             removed: (finished = false) => { if (!finished) { this.invalidate(); } editor.group.visible = false; editor.modelGroup.visible = false; this.drafts = this.drafts.filter(item => item.id !== initial.id); this.draftEditors = this.draftEditors.filter(item => item !== editor); this.draftGeneration++; this.saveDrafts.sensitive = !this.pending; },
             taken: () => this.profiles.map(profile => profile.id)});
         editor.group.visible = reveal; editor.replacing = replacing; this.draftEditors.push(editor);
+        editor.setHostUsage(this.hostProtection.usage);
         return editor;
     }
 
@@ -248,6 +253,7 @@ class SetupWindow {
                 candidate.request = JSON.stringify(snapshot);
             }
             const preview = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'validate'], candidate.request));
+            this.hostProtection.setStep(preview.hostCap);
             if (!this.pending) await this.command(['/usr/bin/gpu-setup', 'verify-bindings'], candidate.request);
             if (!current() || !this.reviewed.accept(candidate)) {
                 this.status.label = 'Configuration changed during review. Review the updated configuration.';
@@ -260,7 +266,7 @@ class SetupWindow {
             this.status.label = `Finish setup allows Supervisor to start and stop these workloads. Finish active jobs before continuing.${removal}`;
             this.valid = true; return true;
         } catch (error) {
-            this.reportError('Review failed. Correct the fields above or reopen Manage workloads to refresh, then review again.', error);
+            this.reportError(limitSummary(error) ?? 'Review failed. Correct the fields above or reopen Manage workloads to refresh, then review again.', error);
             this.invalidate(); return false;
         }
         finally { this.review.sensitive = true; }
@@ -276,9 +282,15 @@ class SetupWindow {
         if (previous) {
             const updated = {...previous, ...profile, label: this.editedLabels.get(previous) ?? (profile.nativeModel?.model === editor.originalModel ? profile.label : previous.label), id: previous.id, requiredMiB: previous.requiredMiB, bootPolicy: previous.bootPolicy, ...editor.settingsOverrides()};
             if (this.editedLabels.has(previous)) this.editedLabels.set(updated, this.editedLabels.get(previous));
-            return updated;
+            return this.withEditorLimits(updated, editor, previous);
         }
-        return {...profile, ...editor.settingsOverrides()};
+        return this.withEditorLimits({...profile, ...editor.settingsOverrides()}, editor, null);
+    }
+
+    // withEditorLimits merges the limits of the Resource checks page. An
+    // adopted source unit needs a conversion apply before limits.
+    withEditorLimits(profile, editor, previous) {
+        return withLimits(profile, editor.limitsOverride(), Boolean(previous && !previous.nativeModel?.owned));
     }
 
     async continueSetup() {
@@ -318,7 +330,7 @@ class SetupWindow {
                 this.ready = true; this.renderSummary(items);
                 this.setStep(2); this.apply.sensitive = true;
             }
-        } catch (error) { this.reportError('Setup needs attention. Check the selected applications and models, then continue again.', error); this.invalidate(); }
+        } catch (error) { this.reportError(limitSummary(error) ?? 'Setup needs attention. Check the selected applications and models, then continue again.', error); this.invalidate(); }
         finally { this.review.sensitive = true; }
     }
 
@@ -328,6 +340,7 @@ class SetupWindow {
         this.gpuInventoryStatus = discovery.gpuInventoryStatus;
         this.discoveryErrors = discovery.errors ?? [];
         for (const editor of this.draftEditors) editor.updateDiscovery(discovery);
+        this.hostProtection.setDiscovery(discovery);
         for (const [appID, card] of this.applicationCards) {
             const candidates = this.discovered.filter(candidate => candidate.app === appID);
             card.detection.label = this.detectionMessage(candidates.filter(candidate => candidate.recognized), candidates);
@@ -385,7 +398,14 @@ class SetupWindow {
         if (!Number.isSafeInteger(this.request.profile.gpuIndex) || this.request.profile.gpuIndex < 0 ||
             items.some(profile => !Number.isSafeInteger(profile.requiredMiB ?? 0) || (profile.requiredMiB ?? 0) < 0))
             throw new Error('GPU index and VRAM requirements must be nonnegative whole numbers.');
-        return JSON.stringify({...this.request, catalog: this.catalogFor(items), confirmQuiesced: false});
+        return JSON.stringify(this.requestFor(items));
+    }
+
+    // requestFor gives the request for items with the values of the Host
+    // protection page.
+    requestFor(items) {
+        const request = hostRequest(this.request, this.hostProtection.values(), lowestCatalogVersion(items) === 5);
+        return {...request, catalog: this.catalogFor(items), confirmQuiesced: false};
     }
 
     async saveDraftSelections() {
@@ -412,6 +432,7 @@ class SetupWindow {
 
     goBack() {
         this.invalidate();
+        if (this.hostPage) return this.closeHostProtection();
         if (this.applicationSettings?.editor?.settingsBack()) return;
         this.cancelEditors();
         if (this.applicationSettings) this.closeApplicationSettings(); else this.setStep(this.step === 2 && this.draftEditors.some(editor => this.drafts.some(draft => draft.id === editor.id) && editor.needsModelDecision()) ? 1 : 0);
@@ -428,7 +449,7 @@ class SetupWindow {
             await this.command(['/usr/bin/gpu-setup', 'apply'], activationRequest);
             this.status.label = 'Configuration activated. Reconciliation is enabled for future logins. Log out and back in to discover the extension, then enable “GPU Workload Supervisor” in Extensions. GPU Control appears in the top-right Quick Settings menu. No workload was started.';
         } catch (error) {
-            this.reportError('Setup needs attention. Switch to Idle and finish active jobs before changing configured workloads. Reopen Manage workloads to refresh or resume an interrupted activation. State and backups are preserved.', error);
+            this.reportError(limitSummary(error) ?? 'Setup needs attention. Switch to Idle and finish active jobs before changing configured workloads. Reopen Manage workloads to refresh or resume an interrupted activation. State and backups are preserved.', error);
             this.review.sensitive = true; this.later.sensitive = true;
         }
         finally { this.invalidate(); }
@@ -445,6 +466,7 @@ class SetupWindow {
             if (!/\b50(?:\.|\s|$)/.test(version) || !GLib.getenv('XDG_CURRENT_DESKTOP')?.includes('GNOME'))
                 throw new Error('This package requires a GNOME Shell 50 desktop session.');
             const discovery = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'discover']));
+            this.hostProtection.setDiscovery(discovery, true);
             this.request = discovery.request; this.units = discovery.units; this.pending = Boolean(discovery.pending); this.discovered = discovery.applications ?? []; this.gpuUUIDs = discovery.gpuUUIDs ?? []; this.gpuInventoryStatus = discovery.gpuInventoryStatus; this.discoveryErrors = discovery.errors ?? [];
             let draftWarning = '';
             if (!this.pending) {

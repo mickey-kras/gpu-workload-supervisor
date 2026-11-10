@@ -3,6 +3,7 @@ package setup
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -297,5 +298,23 @@ func TestSameProfileUnderTheLock(t *testing.T) {
 	}
 	if err := sameProfile(home, []byte(`{"version":1,"limitReserve":{}}`)); !errors.Is(err, errProfileChanged) {
 		t.Fatalf("changed profile = %v", err)
+	}
+}
+
+// The preview JSON carries the slice memory usage of the host cap step, so
+// the desktop page can show it beside the ceiling.
+func TestPreviewCarriesHostCapUsage(t *testing.T) {
+	backend, home, _ := fixture(t)
+	usage := gpuruntime.HostCapUsage{MemoryInUseMiB: 4096, PageCacheMiB: 2048, CeilingMiB: 58368}
+	step := gpuruntime.HostCapStep{Status: gpuruntime.HostCapPresent, Usage: &usage}
+	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return limitRuntime{step: step}, nil }
+	request, _ := limitedRequest(t, home)
+	preview, err := backend.Plan(home, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(preview)
+	if err != nil || !strings.Contains(string(data), `"usage":{"memoryInUseMiB":4096,"pageCacheMiB":2048,"ceilingMiB":58368}`) {
+		t.Fatalf("preview JSON = %s, %v", data, err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -345,16 +346,38 @@ func TestHostCapStepUnknownCauses(t *testing.T) {
 func TestHostCapStepJSON(t *testing.T) {
 	step := HostCapStep{Status: HostCapAbsent, UID: 1000, Values: &HostCapValues{MemoryHighMiB: 2, MemoryMaxMiB: 3, TasksMax: 4},
 		DropIns: []DropIn{{Path: "/p", Content: "c", Install: true}}, Commands: []string{"x"}, Problems: []string{"y"},
-		IOWeight: []IOWeightOption{{Workload: "vision", Device: "/dev/d", Provider: "bfq"}}, Reserve: DefaultLimitReserve}
+		IOWeight: []IOWeightOption{{Workload: "vision", Device: "/dev/d", Provider: "bfq"}}, Reserve: DefaultLimitReserve,
+		Usage: &HostCapUsage{MemoryInUseMiB: 5, PageCacheMiB: 6, CeilingMiB: 7}}
 	data, err := json.Marshal(step)
 	want := `{"status":"absent","uid":1000,"values":{"memoryHighMiB":2,"memoryMaxMiB":3,"tasksMax":4},` +
 		`"dropIns":[{"path":"/p","content":"c","install":true}],"commands":["x"],"problems":["y"],` +
-		`"ioWeight":[{"workload":"vision","device":"/dev/d","provider":"bfq"}],"reserve":{"memoryMiB":2048,"tasks":512,"cpuPercent":100,"ioPercent":10}}`
+		`"ioWeight":[{"workload":"vision","device":"/dev/d","provider":"bfq"}],"reserve":{"memoryMiB":2048,"tasks":512,"cpuPercent":100,"ioPercent":10},` +
+		`"usage":{"memoryInUseMiB":5,"pageCacheMiB":6,"ceilingMiB":7}}`
 	if err != nil || string(data) != want {
 		t.Fatalf("JSON = %s, %v", data, err)
 	}
 	data, err = json.Marshal(HostCapStep{Status: HostCapNotNeeded, Reserve: DefaultLimitReserve})
 	if err != nil || string(data) != `{"status":"notNeeded","reserve":{"memoryMiB":2048,"tasks":512,"cpuPercent":100,"ioPercent":10}}` {
 		t.Fatalf("JSON = %s, %v", data, err)
+	}
+}
+
+// The step reports the slice memory in use without the reclaimable page
+// cache, beside the ceiling. A failed read gives a problem and no usage,
+// and the status stays.
+func TestHostCapStepUsage(t *testing.T) {
+	f := newLimitFixture(t, fixtureLimits(), fixtureLoaded)
+	f.cgroup(t, limitSlice, "memory.current", strconv.FormatUint(6<<30, 10)+"\n")
+	f.cgroup(t, limitSlice, "memory.stat", "anon 1\nactive_file "+strconv.FormatUint(1<<30, 10)+"\ninactive_file "+strconv.FormatUint(1<<30, 10)+"\n")
+	step, err := f.m.HostCapStep(context.Background(), nil)
+	if err != nil || step.Status != HostCapPresent || step.Usage == nil ||
+		*step.Usage != (HostCapUsage{MemoryInUseMiB: 4096, PageCacheMiB: 2048, CeilingMiB: 58368}) {
+		t.Fatalf("step = %+v, usage %+v, %v", step, step.Usage, err)
+	}
+	remove(t, f.cgroups, limitSlice+"/memory.stat")
+	step, err = f.m.HostCapStep(context.Background(), nil)
+	if err != nil || step.Status != HostCapPresent || step.Usage != nil || len(step.Problems) != 1 ||
+		!strings.Contains(step.Problems[0], "the memory in use cannot be read") {
+		t.Fatalf("step without memory.stat = %+v, %v", step, err)
 	}
 }

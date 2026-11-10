@@ -3,6 +3,7 @@ import {InstallationSettings, installationChoiceLabel} from './settings-pages.mj
 import {watchInstanceSelection, addRefreshButton, addFilePickers} from './discovery-inputs.mjs';
 import {addOwnedEditor, addBindingEditor} from './launch-ui.mjs';
 import {ApplicationDraft, applications, candidateChoice, candidateIdentity, profileIDFromModel} from './onboarding.mjs';
+import {UnitLimitsForm} from './limits-ui.mjs';
 
 // Backend error detail stays available but collapsed behind the actionable summary.
 export function addErrorReporter({Adw, Gtk, parent, status}) {
@@ -21,13 +22,10 @@ export function addErrorReporter({Adw, Gtk, parent, status}) {
 export function addDraftEditor(options) { return new DraftEditor(options).view(); }
 
 class DraftEditor {
-    constructor({Adw, Gtk, window, parent, initial, detected, discovered, gpuUUIDs, gpuInventoryStatus, discoveryErrors, command, changed, removed, bind, taken, modelParent, openSettings, reportProblem, navigateSettings, saveSelections}) {
-        this.Adw = Adw;
-        this.Gtk = Gtk;
-        this.window = window;
-        this.parent = parent;
-        this.initial = initial;
-        this.detected = detected;
+    constructor({Adw, Gtk, window, parent, initial, initialLimits, detected, discovered, gpuUUIDs, gpuInventoryStatus, discoveryErrors, command, changed, removed, bind, taken, modelParent, openSettings, reportProblem, navigateSettings, saveSelections}) {
+        this.initialLimits = initialLimits; this.Adw = Adw; this.Gtk = Gtk;
+        this.window = window; this.parent = parent;
+        this.initial = initial; this.detected = detected;
         this.discovered = discovered;
         this.discoveryErrors = discoveryErrors;
         this.command = command;
@@ -310,6 +308,7 @@ class DraftEditor {
             if (this.syncing) return;
             this.overrides.bootPolicy = this.retain.active ? 'retain' : 'stop-to-idle'; this.draft.edit({bootPolicy: this.overrides.bootPolicy}); this.changed(this.draft.snapshot());
         });
+        this.limits = new UnitLimitsForm({Adw: this.Adw, Gtk: this.Gtk, page: this.settings.pages.get('resources'), initial: this.initialLimits, changed: () => this.changed(this.draft.snapshot())});
     }
     addActions() {
         const save = new this.Gtk.Button({label: 'Save selections for later'}); this.details.add(save); save.connect('clicked', () => this.saveSelections());
@@ -376,6 +375,7 @@ class DraftEditor {
             settingsBack: () => this.settings.back(),
             cancelSettings: () => { this.draft.cancel(); this.restore(this.session); },
             settingsOverrides: () => this.overrides,
+            limitsOverride: () => this.limits.value(), setHostUsage: usage => this.limits.setUsage(usage),
             showProblem: this.reportError,
             cancel: () => this.draft.cancel(),
             checking: () => this.settings.busy,
@@ -394,7 +394,7 @@ class DraftEditor {
     capture() {
         const fields = [this.name, this.endpoint, this.health, ...Object.values(this.bindingFields), ...Object.values(this.ownedFields)].filter(field => typeof field !== 'function');
         const input = this.draft.snapshot();
-        return {input, candidate: this.lastCandidate, discoveryCandidate: this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === this.lastCandidate?.unit), evidence: this.installationEvidence, ready: this.settings.ready && !this.settings.busy, bindingEdits: [...this.bindingEdits], endpointEdited: this.endpointEdited, selection: this.instances[this.instance.selected - 1], fields: fields.map(field => [field, field.text]), capacity: this.capacity.text, retain: this.retain.active, overrides: {...this.overrides}};
+        return {input, candidate: this.lastCandidate, discoveryCandidate: this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === this.lastCandidate?.unit), evidence: this.installationEvidence, ready: this.settings.ready && !this.settings.busy, bindingEdits: [...this.bindingEdits], endpointEdited: this.endpointEdited, selection: this.instances[this.instance.selected - 1], fields: fields.map(field => [field, field.text]), capacity: this.capacity.text, retain: this.retain.active, overrides: {...this.overrides}, limits: this.limits.capture()};
     }
     restore(snapshot) {
         if (!snapshot) return;
@@ -402,6 +402,7 @@ class DraftEditor {
         for (const [field, text] of snapshot.fields) field.text = text;
         this.capacity.text = snapshot.capacity; this.retain.active = snapshot.retain;
         this.syncing = false;
+        this.limits.restore(snapshot.limits);
         this.syncing = true; this.instance.selected = this.instanceIndex(snapshot.selection); this.syncing = false; this.draft.input = snapshot.input; this.draft.cancel(); this.installationEvidence = snapshot.evidence; this.bindingEdits = new Set(snapshot.bindingEdits); this.endpointEdited = snapshot.endpointEdited; this.overrides = snapshot.overrides;
         this.changed(this.draft.snapshot());
         const current = snapshot.candidate?.unit ? this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === snapshot.candidate.unit) : snapshot.candidate;
