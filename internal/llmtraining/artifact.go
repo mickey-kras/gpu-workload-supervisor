@@ -80,7 +80,16 @@ var exportRejected = func() map[string]bool {
 	return rejected
 }()
 
-func artifactFiles(r Recipe) (map[string]string, error) {
+// exportHooks run during the export walk. Tests use them to change a file
+// between its steps; nil hooks do nothing.
+type exportHooks struct {
+	// statted runs after an export entry is opened and its size checked.
+	statted func(path string)
+	// hashed runs after each export entry is hashed.
+	hashed func(name string)
+}
+
+func artifactFiles(r Recipe, hooks exportHooks) (map[string]string, error) {
 	if err := privateExecutionDirectory(r.OutputDirectory); err != nil {
 		return nil, err
 	}
@@ -92,7 +101,7 @@ func artifactFiles(r Recipe) (map[string]string, error) {
 	contents := make(map[string][]byte)
 	var total uint64
 	for _, entry := range entries {
-		size, err := bindArtifact(r, entry.Name(), r.Budget.ExportBytes-total, files, contents)
+		size, err := bindArtifact(r, entry.Name(), r.Budget.ExportBytes-total, files, contents, hooks)
 		if err != nil {
 			return nil, err
 		}
@@ -110,14 +119,14 @@ func artifactFiles(r Recipe) (map[string]string, error) {
 // bindArtifact hashes one export entry into files, keeps the bytes of the
 // export configurations in contents, and returns the bytes it used of the
 // budget. It skips names outside the export and rejects unbound loader files.
-func bindArtifact(r Recipe, name string, remaining uint64, files map[string]string, contents map[string][]byte) (uint64, error) {
+func bindArtifact(r Recipe, name string, remaining uint64, files map[string]string, contents map[string][]byte, hooks exportHooks) (uint64, error) {
 	if !artifactNames[name] {
 		if exportRejected[name] {
 			return 0, errors.New("unsupported training export layout: " + name)
 		}
 		return 0, nil
 	}
-	digest, content, err := hashArtifact(filepath.Join(r.OutputDirectory, name), remaining, exportJSONNames[name])
+	digest, content, err := hashArtifact(filepath.Join(r.OutputDirectory, name), remaining, exportJSONNames[name], hooks.statted)
 	if errors.Is(err, errConfigurationTooLarge) {
 		return 0, errors.New(trainingExportPrefix + name + " is larger than " + strconv.Itoa(configurationBytes>>20) + " MiB")
 	}
@@ -128,20 +137,10 @@ func bindArtifact(r Recipe, name string, remaining uint64, files map[string]stri
 	if content.raw != nil {
 		contents[name] = content.raw
 	}
-	exportHashed(name)
+	if hooks.hashed != nil {
+		hooks.hashed(name)
+	}
 	return uint64(content.size), nil
-}
-
-// exportStatted runs after an export entry is opened and its size checked.
-// Tests use it to grow a file before the copy.
-var exportStatted = func(string) {
-	// Production needs no callback; tests replace this hook to grow the file.
-}
-
-// exportHashed runs after each export entry is hashed. Tests use it to change
-// a file after its digest, which validation must not see.
-var exportHashed = func(string) {
-	// Production needs no callback; tests replace this hook to change the file.
 }
 
 // exportJSONNames are the export configurations that the export validates.
@@ -176,7 +175,7 @@ type hashedArtifact struct {
 	raw  []byte
 }
 
-func hashArtifact(path string, remaining uint64, keep bool) (string, hashedArtifact, error) {
+func hashArtifact(path string, remaining uint64, keep bool, statted func(string)) (string, hashedArtifact, error) {
 	f, err := openRegular(path)
 	if err != nil {
 		return "", hashedArtifact{}, errors.New("training export contains an unreadable or linked asset")
@@ -186,7 +185,9 @@ func hashArtifact(path string, remaining uint64, keep bool) (string, hashedArtif
 	if err != nil || info.Size() <= 0 || uint64(info.Size()) > remaining {
 		return "", hashedArtifact{}, errors.New("training export exceeds its budget or contains an empty asset")
 	}
-	exportStatted(path)
+	if statted != nil {
+		statted(path)
+	}
 	if keep && info.Size() > configurationBytes {
 		return "", hashedArtifact{}, errConfigurationTooLarge
 	}
@@ -327,7 +328,7 @@ func newProvenance(r Recipe, job control.TrainingJob, invocation string, loss fl
 }
 
 func publishProvenance(r Recipe, job control.TrainingJob, invocation string, loss float64, expected map[string]string) error {
-	files, err := artifactFiles(r)
+	files, err := artifactFiles(r, exportHooks{})
 	if err != nil {
 		return err
 	}
@@ -406,7 +407,7 @@ func validateImport(r Recipe, recipe []byte) (Provenance, error) {
 }
 
 func matchImportProvenance(r Recipe, recipe, raw []byte, provenance Provenance) (Provenance, error) {
-	files, err := artifactFiles(r)
+	files, err := artifactFiles(r, exportHooks{})
 	if err != nil {
 		return Provenance{}, err
 	}

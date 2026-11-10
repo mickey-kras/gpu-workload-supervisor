@@ -15,30 +15,35 @@ var ErrIncompatibleConfiguration = errors.New("incompatible operator configurati
 // NativeService reads only the durable accepted catalog. No request or edited
 // setup file can select a runtime catalog or bypass activation.
 func NativeService(p Profile) Service {
+	return nativeHost{reloadProfile: LoadProfile, newManager: gpuruntime.NewSystemdManager}.service(p)
+}
+
+// nativeHost holds the host calls of a native session. Tests build their own.
+type nativeHost struct {
+	// reloadProfile reads the operator profile again under the state lock.
+	reloadProfile func() (Profile, error)
+	// newManager builds the runtime of a session.
+	newManager func(gpuruntime.SystemdConfig) (*gpuruntime.SystemdManager, error)
+}
+
+func (h nativeHost) service(p Profile) Service {
 	return Service{StatePath: p.StatePath, StatusTimeout: time.Duration(p.StatusTimeoutSeconds) * time.Second, OperationTimeout: time.Duration(p.OperationTimeoutSeconds) * time.Second, Open: func(ctx context.Context) (Session, error) {
-		return openNativeSession(ctx, p)
+		return h.openSession(ctx, p)
 	}}
 }
 
-// reloadProfile reads the operator profile again under the state lock.
-// Tests replace it.
-var reloadProfile = LoadProfile
-
-// newNativeManager builds the runtime of a session. Tests replace it.
-var newNativeManager = gpuruntime.NewSystemdManager
-
-// openNativeSession runs under the state lock of Handle. The caller read p
+// openSession runs under the state lock of Handle. The caller read p
 // before that lock, and the gateway reads it once at its start, so a setup
 // apply can commit a new catalog and a new limit reserve in between. The
 // session reads the profile again under the lock and uses its reserve, so
 // the reserve and the catalog come from the same committed setup. A
 // profile that it cannot read, or one for another state path, refuses the
 // session.
-func openNativeSession(ctx context.Context, p Profile) (Session, error) {
+func (h nativeHost) openSession(ctx context.Context, p Profile) (Session, error) {
 	if p.Validate() != nil || deployment.Check(p.StatePath, p.ActivatedRelease) != nil {
 		return Session{}, ErrIncompatibleConfiguration
 	}
-	current, err := reloadProfile()
+	current, err := h.reloadProfile()
 	if err != nil || current.StatePath != p.StatePath {
 		return Session{}, ErrIncompatibleConfiguration
 	}
@@ -55,7 +60,7 @@ func openNativeSession(ctx context.Context, p Profile) (Session, error) {
 	if snap.Revision == "" || snap.Catalog.Validate() != nil {
 		return fail(ErrIncompatibleConfiguration)
 	}
-	manager, err := newNativeManager(p.SystemdConfig(&snap.Catalog))
+	manager, err := h.newManager(p.SystemdConfig(&snap.Catalog))
 	if err != nil {
 		return fail(ErrIncompatibleConfiguration)
 	}

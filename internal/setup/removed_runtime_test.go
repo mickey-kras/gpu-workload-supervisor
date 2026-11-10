@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 	"os"
 	"testing"
 
@@ -49,7 +49,7 @@ func TestRemovedLlamaCPPCanBeDiscoveredAndRemoved(t *testing.T) {
 	if err := d.Request.Catalog.Validate(); err == nil {
 		t.Fatal("legacy execution admitted")
 	}
-	b.makeRuntime = func(request Request) (gpuruntime.Manager, error) {
+	b.makeRuntime = func(request Request) (supervisor.Runtime, error) {
 		if err := request.Catalog.Validate(); err != nil {
 			return nil, err
 		}

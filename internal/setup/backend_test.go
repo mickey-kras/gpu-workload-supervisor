@@ -15,6 +15,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 type idleRuntime struct{ err error }
@@ -38,7 +39,7 @@ func fixture(t *testing.T) (Backend, string, Request) {
 	home := t.TempDir()
 	r := Request{Version: 1, ConfirmQuiesced: true, Profile: Profile{Version: 1, StatePath: filepath.Join(home, "state/state.db"), SystemctlPath: "/usr/bin/systemctl", NvidiaSMIPath: "/usr/bin/nvidia-smi"}, Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health", BootPolicy: "stop-to-idle"}}}}
 	backend := SystemBackend()
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{}, nil }
 	backend.qualifyOwned = func(control.WorkloadProfile) error { return nil }
 	// The escape route scan reads host files, so the fixture has none.
 	backend.escapeRoutes = nil
@@ -125,11 +126,11 @@ func TestApplyFailuresAndMaintenanceResume(t *testing.T) {
 		t.Fatal("gate contention accepted")
 	}
 	gate.Close()
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{err: errors.New("GPU busy")}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{err: errors.New("GPU busy")}, nil }
 	if err := backend.Apply(ctx, home, r); err == nil {
 		t.Fatal("live runtime accepted")
 	}
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{}, nil }
 	backend.runCommand = func(context.Context, string, ...string) ([]byte, error) {
 		return nil, errors.New("unit manager unavailable")
 	}

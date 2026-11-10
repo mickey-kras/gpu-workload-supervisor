@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/setup"
 	"os"
 	"strings"
@@ -12,6 +13,21 @@ import (
 )
 
 const request = `{"version":1,"profile":{"version":1,"statePath":"/tmp/state.db","systemctlPath":"/usr/bin/systemctl","nvidiaSMIPath":"/usr/bin/true","gpuIndex":0,"capacityHeadroomMiB":0},"catalog":{"version":1,"profiles":[{"id":"text","label":"Text","adapter":"systemd","unit":"text.service","cgroup":"/user.slice/text","healthURL":"http://127.0.0.1:8000/health","bootPolicy":"stop-to-idle"}]}}`
+
+func TestVersionReportsReleaseWithoutAccount(t *testing.T) {
+	actions := systemActions()
+	actions.home = func() (string, error) { return "", errors.New("no account") }
+	actions.euid = func() int { return 0 }
+	for _, flag := range []string{"-version", "--version"} {
+		var output bytes.Buffer
+		if err := actions.run([]string{flag}, strings.NewReader(""), &output); err != nil || output.String() != deployment.Release+"\n" {
+			t.Fatalf("%s = %q, %v", flag, output.String(), err)
+		}
+	}
+	if err := actions.run([]string{"-version", "apply"}, strings.NewReader(""), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "usage") {
+		t.Fatalf("version combined with an action: %v", err)
+	}
+}
 
 func TestRun(t *testing.T) {
 	actions := systemActions()

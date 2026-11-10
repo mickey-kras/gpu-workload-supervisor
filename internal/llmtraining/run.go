@@ -32,6 +32,21 @@ type workerReceipt struct {
 // RunJob is an experimental adapter, not runtime or GPU qualification. The
 // catalog's trusted unit must contain it and all of its children for every phase.
 func RunJob(ctx context.Context, jobPath, invocationID, gpuUUID string) error {
+	return hostRunSteps().runJob(ctx, jobPath, invocationID, gpuUUID)
+}
+
+// runSteps are the replaceable steps of RunJob. Tests build their own.
+type runSteps struct {
+	prepare func(work string, r Recipe) error
+	check   func(jobPath string, e jobEnvelope, r Recipe) error
+	peaks   peakSettings
+}
+
+func hostRunSteps() runSteps {
+	return runSteps{prepare: prepareExecution, check: unchangedExecutionInputs, peaks: hostPeakSettings()}
+}
+
+func (s runSteps) runJob(ctx context.Context, jobPath, invocationID, gpuUUID string) error {
 	if !absolute(jobPath) || !control.ValidGPUUUID(gpuUUID) {
 		return errors.New("invalid training execution identity")
 	}
@@ -63,8 +78,8 @@ func RunJob(ctx context.Context, jobPath, invocationID, gpuUUID string) error {
 	// sampling between them. After the outcome, the runner only writes the
 	// small file. At shutdown, a storage walk in progress stops and gives no
 	// value.
-	peaks := newPeakRecorder(work, r.OutputDirectory, ctx.Done())
-	x := execution{jobPath: jobPath, invocationID: invocationID, gpuUUID: gpuUUID, work: work, envelope: e, recipe: r, peaks: peaks}
+	peaks := newPeakRecorder(work, r.OutputDirectory, ctx.Done(), s.peaks)
+	x := execution{jobPath: jobPath, invocationID: invocationID, gpuUUID: gpuUUID, work: work, envelope: e, recipe: r, peaks: peaks, steps: s}
 	err = x.run(ctx)
 	// A completed run took the final sample already; this call does nothing then.
 	peaks.finalSample()
@@ -86,17 +101,18 @@ type execution struct {
 	envelope                             jobEnvelope
 	recipe                               Recipe
 	peaks                                *peakRecorder
+	steps                                runSteps
 }
 
 func (x execution) run(ctx context.Context) error {
-	if err := prepareFiles(x.work, x.recipe); err != nil {
+	if err := x.steps.prepare(x.work, x.recipe); err != nil {
 		return err
 	}
 	train, err := executeWorker(ctx, x.recipe, x.work, x.gpuUUID, "train", x.peaks)
 	if err != nil {
 		return err
 	}
-	adapter, err := artifactFiles(x.recipe)
+	adapter, err := artifactFiles(x.recipe, exportHooks{})
 	if err != nil {
 		return err
 	}
@@ -105,7 +121,7 @@ func (x execution) run(ctx context.Context) error {
 	}
 	x.peaks.startPhase("export")
 	x.peaks.finalSample()
-	if err := checkInputs(x.jobPath, x.envelope, x.recipe); err != nil {
+	if err := x.steps.check(x.jobPath, x.envelope, x.recipe); err != nil {
 		return err
 	}
 	return publishProvenance(x.recipe, x.envelope.Job, x.invocationID, train.EvalLoss, adapter)
@@ -206,12 +222,6 @@ func trustedExecutionComponent(stat unix.Stat_t, stickyAncestor bool) bool {
 	kind := stat.Mode & unix.S_IFMT
 	return (stat.Uid == 0 || stat.Uid == uint32(os.Geteuid())) && !writable && (kind == unix.S_IFDIR || kind == unix.S_IFREG)
 }
-
-// Tests replace these steps.
-var (
-	prepareFiles = prepareExecution
-	checkInputs  = unchangedExecutionInputs
-)
 
 func prepareExecution(work string, r Recipe) error {
 	for _, name := range []string{"home", "cache"} {

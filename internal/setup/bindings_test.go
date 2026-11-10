@@ -10,6 +10,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 type bindingRuntime struct {
@@ -24,7 +25,7 @@ func TestVerifyBindingsFailsClosed(t *testing.T) {
 		t.Fatal("invalid request")
 	}
 	for _, fail := range []bool{false, true} {
-		backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+		backend.makeRuntime = func(Request) (supervisor.Runtime, error) {
 			var err error
 			if fail {
 				err = errors.New("binding changed")
@@ -35,7 +36,7 @@ func TestVerifyBindingsFailsClosed(t *testing.T) {
 			t.Fatalf("failure=%v: %v", fail, err)
 		}
 	}
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return nil, errors.New("runtime missing") }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return nil, errors.New("runtime missing") }
 	if err := backend.VerifyBindings(context.Background(), request); err == nil {
 		t.Fatal("missing runtime")
 	}
@@ -64,7 +65,7 @@ func TestAdoptedProfilesPreserveAcceptedCatalogOnDriftOrStaleRevision(t *testing
 			request.ExpectedRevision = accepted.Revision
 			checks := 0
 			precommitChecked := false
-			backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
+			backend.makeRuntime = func(got Request) (supervisor.Runtime, error) {
 				return launchPreflightRuntime{verify: func() error {
 					checks++
 					marker, err := deployment.Read(request.Profile.StatePath)

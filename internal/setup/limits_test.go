@@ -12,6 +12,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 // limitRuntime is an idle runtime with the setup checks of units with
@@ -68,7 +69,7 @@ func TestApplyWritesUnitLimits(t *testing.T) {
 	backend, home, _ := fixture(t)
 	backend.runCommand = fakeOwnedCommandFor(home)
 	var checked []control.Workload
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return limitRuntime{checked: &checked}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return limitRuntime{checked: &checked}, nil }
 	request, plain := limitedRequest(t, home)
 	ctx := context.Background()
 	if err := backend.Apply(ctx, home, request); err != nil {
@@ -98,14 +99,14 @@ func TestPreviewReportsTheHostCapStep(t *testing.T) {
 	backend, home, _ := fixture(t)
 	var wanted *gpuruntime.HostCapValues
 	step := gpuruntime.HostCapStep{Status: gpuruntime.HostCapAbsent, UID: 1000, Commands: []string{"sudo systemctl daemon-reload"}}
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return limitRuntime{step: step, wanted: &wanted}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return limitRuntime{step: step, wanted: &wanted}, nil }
 	request, plain := limitedRequest(t, home)
 	request.HostCap = &gpuruntime.HostCapValues{MemoryHighMiB: 16384, MemoryMaxMiB: 20480}
 	preview, err := backend.Plan(home, request)
 	if err != nil || preview.HostCap == nil || preview.HostCap.Status != gpuruntime.HostCapAbsent || wanted != request.HostCap {
 		t.Fatalf("preview = %+v, %v", preview.HostCap, err)
 	}
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) {
 		return limitRuntime{stepErr: gpuruntime.ErrLimitReserve}, nil
 	}
 	if _, err := backend.Plan(home, request); !errors.Is(err, gpuruntime.ErrLimitReserve) {
@@ -191,19 +192,19 @@ func TestDiscoveryReportsTheHostCapStep(t *testing.T) {
 	}
 	request, _ := limitedRequest(t, home)
 	step := gpuruntime.HostCapStep{Status: gpuruntime.HostCapPresent}
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return limitRuntime{step: step}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return limitRuntime{step: step}, nil }
 	result = Discovery{Request: request}
 	backend.discoverHostCap(context.Background(), &result)
 	if result.HostCap == nil || result.HostCap.Status != gpuruntime.HostCapPresent || len(result.Errors) != 0 {
 		t.Fatalf("host cap with limits = %+v, %v", result.HostCap, result.Errors)
 	}
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{}, nil }
 	result = Discovery{Request: request}
 	backend.discoverHostCap(context.Background(), &result)
 	if result.HostCap != nil || len(result.Errors) != 1 || !strings.Contains(result.Errors[0], "cannot be checked") {
 		t.Fatalf("host cap without checks = %+v, %v", result.HostCap, result.Errors)
 	}
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return nil, errors.New("no runtime") }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return nil, errors.New("no runtime") }
 	result = Discovery{Request: request}
 	backend.discoverHostCap(context.Background(), &result)
 	if len(result.Errors) != 1 || !strings.Contains(result.Errors[0], "no runtime") {
@@ -227,7 +228,7 @@ func TestApplyChecksEachLimitedUnit(t *testing.T) {
 	refingerprint(t, &second)
 	request.Catalog.Profiles = append(request.Catalog.Profiles, second)
 	var checked []control.Workload
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) {
 		return failSecond{limitRuntime: limitRuntime{checked: &checked}}, nil
 	}
 	err := backend.Apply(context.Background(), home, request)
@@ -269,7 +270,7 @@ func TestApplyRefusesLimitsOnAnAcceptedAdoptedUnit(t *testing.T) {
 	request.Profile = r.Profile
 	request.ExpectedRevision = acceptedRevision(t, r).Revision
 	var checked []control.Workload
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return limitRuntime{checked: &checked}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return limitRuntime{checked: &checked}, nil }
 	err := backend.Apply(ctx, home, request)
 	if !errors.Is(err, ErrLimitsNeedConversion) || !strings.Contains(err.Error(), "unit vision.service") || len(checked) != 0 {
 		t.Fatalf("apply that converts and limits = %v, checked %v", err, checked)
@@ -307,7 +308,7 @@ func TestPreviewCarriesHostCapUsage(t *testing.T) {
 	backend, home, _ := fixture(t)
 	usage := gpuruntime.HostCapUsage{MemoryInUseMiB: 4096, PageCacheMiB: 2048, CeilingMiB: 58368}
 	step := gpuruntime.HostCapStep{Status: gpuruntime.HostCapPresent, Usage: &usage}
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return limitRuntime{step: step}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return limitRuntime{step: step}, nil }
 	request, _ := limitedRequest(t, home)
 	preview, err := backend.Plan(home, request)
 	if err != nil {

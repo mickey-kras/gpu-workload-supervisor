@@ -11,7 +11,9 @@ import (
 
 const tcpHeader = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
 
-func procFixture(t *testing.T, tcp, tcp6 string) {
+// procFixture gives a system that reads the tables tcp and tcp6; "-" leaves
+// a table out.
+func procFixture(t *testing.T, tcp, tcp6 string) system {
 	t.Helper()
 	dir := t.TempDir()
 	if tcp != "-" {
@@ -24,9 +26,9 @@ func procFixture(t *testing.T, tcp, tcp6 string) {
 			t.Fatal(err)
 		}
 	}
-	saved := procNet
-	procNet = dir
-	t.Cleanup(func() { procNet = saved })
+	s := host()
+	s.procNet = dir
+	return s
 }
 
 func line(address, state string, uid int) string {
@@ -34,6 +36,7 @@ func line(address, state string, uid int) string {
 }
 
 func TestCheckListenerRequiresOnlyTheDesktopUser(t *testing.T) {
+	t.Parallel()
 	me := os.Geteuid()
 	other := me + 1
 	const endpoint = "http://127.0.0.1:8000" // port 8000 is 1F40
@@ -55,8 +58,8 @@ func TestCheckListenerRequiresOnlyTheDesktopUser(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			procFixture(t, tc.tcp, tc.tcp6)
-			err := CheckListener(endpoint)
+			t.Parallel()
+			err := procFixture(t, tc.tcp, tc.tcp6).checkListener(endpoint)
 			if (err == nil) != tc.ok || (err != nil && !errors.Is(err, ErrForeignListener)) {
 				t.Fatalf("error = %v", err)
 			}
@@ -65,12 +68,13 @@ func TestCheckListenerRequiresOnlyTheDesktopUser(t *testing.T) {
 }
 
 func TestCheckListenerRejectsBadInput(t *testing.T) {
-	procFixture(t, "-", "-")
-	if err := CheckListener("http://127.0.0.1:8000"); !errors.Is(err, ErrForeignListener) {
+	t.Parallel()
+	empty := procFixture(t, "-", "-")
+	if err := empty.checkListener("http://127.0.0.1:8000"); !errors.Is(err, ErrForeignListener) {
 		t.Fatalf("missing tcp table accepted: %v", err)
 	}
 	for _, endpoint := range []string{"http://localhost:8000", "http://127.0.0.1", "http://127.0.0.1:0", "://bad"} {
-		if err := CheckListener(endpoint); !errors.Is(err, ErrForeignListener) {
+		if err := empty.checkListener(endpoint); !errors.Is(err, ErrForeignListener) {
 			t.Fatalf("%s accepted: %v", endpoint, err)
 		}
 	}
@@ -78,15 +82,15 @@ func TestCheckListenerRejectsBadInput(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "tcp"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	saved := procNet
-	procNet = dir
-	t.Cleanup(func() { procNet = saved })
-	if err := CheckListener("http://127.0.0.1:8000"); !errors.Is(err, ErrForeignListener) {
+	unreadable := host()
+	unreadable.procNet = dir
+	if err := unreadable.checkListener("http://127.0.0.1:8000"); !errors.Is(err, ErrForeignListener) {
 		t.Fatalf("unreadable table accepted: %v", err)
 	}
 }
 
 func TestCheckListenerReadsTheRealTable(t *testing.T) {
+	t.Parallel()
 	if _, err := os.Stat("/proc/net/tcp"); err != nil {
 		t.Skip("no /proc/net/tcp")
 	}

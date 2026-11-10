@@ -375,7 +375,7 @@ func installTestCatalog(t *testing.T, stateStore *store.Store) control.CatalogSn
 	return snapshot
 }
 
-func testController(t *testing.T, stateStore storeGateway, runtime gpuruntime.Manager) *Controller {
+func testController(t *testing.T, stateStore storeGateway, runtime Runtime) *Controller {
 	t.Helper()
 	snapshot, err := stateStore.Catalog(context.Background())
 	if err != nil {

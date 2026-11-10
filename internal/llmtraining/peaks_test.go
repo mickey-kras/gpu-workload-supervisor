@@ -15,11 +15,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// testWalk walks with the current package hooks.
-func testWalk(root string, remaining int, limit walkLimit) (uint64, int, bool) {
-	return peakWalkHooks.allocatedBytes(root, remaining, limit)
-}
-
 // publishPeaks takes the final sample and writes the file, as RunJob does.
 func publishPeaks(p *peakRecorder, work, outcome string) error {
 	p.finalSample()
@@ -56,6 +51,7 @@ func progressScript(train, reload string) string {
 }
 
 func TestRunJobRecordsPeaksBeforeCompletion(t *testing.T) {
+	t.Parallel()
 	r, e, jobPath := executionFixture(t, executionScript)
 	// The export is larger than all other files of the execution together.
 	r.Budget.ExportBytes = 8 << 20
@@ -66,7 +62,7 @@ func TestRunJobRecordsPeaksBeforeCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	peaks := readPeaks(t, jobPath)
-	if peaks.Version != 1 || peaks.Outcome != "completed" || peaks.Phase != "export" || peaks.SampleIntervalMS != peakSampleInterval.Milliseconds() {
+	if peaks.Version != 1 || peaks.Outcome != "completed" || peaks.Phase != "export" || peaks.SampleIntervalMS != hostPeakSettings().interval.Milliseconds() {
 		t.Fatalf("peaks = %+v", peaks)
 	}
 	// VRAM keeps the largest phase sample; storage includes the 4 MiB export.
@@ -81,6 +77,7 @@ func TestRunJobRecordsPeaksBeforeCompletion(t *testing.T) {
 // TestWorkerProgressContract decodes the progress record that worker.py writes.
 // tests/training/test_worker.py asserts that the worker writes these exact bytes.
 func TestWorkerProgressContract(t *testing.T) {
+	t.Parallel()
 	golden, err := os.ReadFile(filepath.Join("testdata", "worker-progress.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +86,7 @@ func TestWorkerProgressContract(t *testing.T) {
 	if err := os.WriteFile(path, golden, 0600); err != nil {
 		t.Fatal(err)
 	}
-	p := newPeakRecorder(t.TempDir(), t.TempDir(), nil)
+	p := newPeakRecorder(t.TempDir(), t.TempDir(), nil, hostPeakSettings())
 	p.finishWorker(nil, path)
 	if p.peaks.VRAMPeakBytes == nil || *p.peaks.VRAMPeakBytes != 9 {
 		t.Fatalf("Go did not decode the worker progress record: %v", p.peaks.VRAMPeakBytes)
@@ -97,6 +94,7 @@ func TestWorkerProgressContract(t *testing.T) {
 }
 
 func TestRunJobMeasuresRAMInBytes(t *testing.T) {
+	t.Parallel()
 	r, e, jobPath := executionFixture(t, executionScript)
 	// dd holds a 32 MiB block buffer in its resident set.
 	script := executionScript + "if [ \"$5\" = train ]; then dd if=/dev/zero of=/dev/null bs=33554432 count=1 2>/dev/null; fi\n" +
@@ -112,24 +110,24 @@ func TestRunJobMeasuresRAMInBytes(t *testing.T) {
 }
 
 func TestRunJobSamplesNothingAfterTheFinalInputChecks(t *testing.T) {
+	t.Parallel()
 	r, e, jobPath := executionFixture(t, executionScript)
 	script := executionScript + "printf x > '" + filepath.Join(r.OutputDirectory, "adapter_model.safetensors") + "'\n"
 	updateExecutionScript(t, r, &e, jobPath, script)
-	previousStat, previousCheck := peakWalkHooks.stat, checkInputs
-	t.Cleanup(func() { peakWalkHooks.stat, checkInputs = previousStat, previousCheck })
+	steps := hostRunSteps()
 	var checked, late atomic.Bool
-	checkInputs = func(jobPath string, e jobEnvelope, r Recipe) error {
+	steps.check = func(jobPath string, e jobEnvelope, r Recipe) error {
 		checked.Store(true)
-		return previousCheck(jobPath, e, r)
+		return unchangedExecutionInputs(jobPath, e, r)
 	}
 	// No storage walk may run once the final input checks start.
-	peakWalkHooks.stat = func(dirfd int, name string, stat *unix.Stat_t) error {
+	steps.peaks.hooks.stat = func(dirfd int, name string, stat *unix.Stat_t) error {
 		if checked.Load() {
 			late.Store(true)
 		}
-		return previousStat(dirfd, name, stat)
+		return statEntry(dirfd, name, stat)
 	}
-	if err := RunJob(context.Background(), jobPath, executionInvocation, executionGPU); err != nil {
+	if err := steps.runJob(context.Background(), jobPath, executionInvocation, executionGPU); err != nil {
 		t.Fatal(err)
 	}
 	if late.Load() {
@@ -141,11 +139,11 @@ func TestRunJobSamplesNothingAfterTheFinalInputChecks(t *testing.T) {
 }
 
 func TestRunJobWritesPeaksWhenPreparationFails(t *testing.T) {
+	t.Parallel()
 	_, e, jobPath := executionFixture(t, executionScript)
-	previous := prepareFiles
-	t.Cleanup(func() { prepareFiles = previous })
-	prepareFiles = func(string, Recipe) error { return errors.New("preparation failed") }
-	if err := RunJob(context.Background(), jobPath, executionInvocation, executionGPU); err == nil {
+	steps := hostRunSteps()
+	steps.prepare = func(string, Recipe) error { return errors.New("preparation failed") }
+	if err := steps.runJob(context.Background(), jobPath, executionInvocation, executionGPU); err == nil {
 		t.Fatal("a failed preparation completed the job")
 	}
 	if _, err := os.Lstat(e.TerminalFile); !os.IsNotExist(err) {
@@ -157,18 +155,18 @@ func TestRunJobWritesPeaksWhenPreparationFails(t *testing.T) {
 }
 
 func TestRunJobStopsStorageWalksAtShutdown(t *testing.T) {
+	t.Parallel()
 	for _, sampled := range []bool{true, false} {
-		previous := peakSampleInterval
-		t.Cleanup(func() { peakSampleInterval = previous })
-		peakSampleInterval = time.Hour
+		steps := hostRunSteps()
+		steps.peaks.interval = time.Hour
 		if sampled {
-			peakSampleInterval = 10 * time.Millisecond
+			steps.peaks.interval = 10 * time.Millisecond
 		}
 		_, _, jobPath := executionFixture(t, "#!/bin/sh\nsleep 30\n")
 		ctx, cancel := context.WithCancel(context.Background())
 		time.AfterFunc(300*time.Millisecond, cancel)
 		started := time.Now()
-		if err := RunJob(ctx, jobPath, executionInvocation, executionGPU); err == nil {
+		if err := steps.runJob(ctx, jobPath, executionInvocation, executionGPU); err == nil {
 			t.Fatal("a cancelled job completed")
 		}
 		if time.Since(started) > 10*time.Second {
@@ -179,11 +177,11 @@ func TestRunJobStopsStorageWalksAtShutdown(t *testing.T) {
 		if peaks.Outcome != "failed" || (peaks.StoragePeakBytes != nil) != sampled {
 			t.Fatalf("sampled=%v peaks = %+v", sampled, peaks)
 		}
-		peakSampleInterval = previous
 	}
 }
 
 func TestRunJobRaisesVRAMFromAReloadSample(t *testing.T) {
+	t.Parallel()
 	r, e, jobPath := executionFixture(t, executionScript)
 	script := executionScript + progressScript("5000", "9000") +
 		"printf x > '" + filepath.Join(r.OutputDirectory, "adapter_model.safetensors") + "'\n"
@@ -197,6 +195,7 @@ func TestRunJobRaisesVRAMFromAReloadSample(t *testing.T) {
 }
 
 func TestRunJobRecordsPeaksOnFailure(t *testing.T) {
+	t.Parallel()
 	for name, script := range map[string]string{
 		"worker failure":   "#!/bin/sh\n" + progressScript("4096", "0") + "exit 1\n",
 		"invalid progress": "#!/bin/sh\nprintf '{\"version\":1,\"vramPeakBytes\":-1}' > \"$8\"\nchmod 600 \"$8\"\nexit 1\n",
@@ -226,6 +225,7 @@ func TestRunJobRecordsPeaksOnFailure(t *testing.T) {
 }
 
 func TestRunJobKeepsTrainPeaksWhenReloadFails(t *testing.T) {
+	t.Parallel()
 	r, e, jobPath := executionFixture(t, executionScript)
 	script := executionScript + progressScript("9000", "5000") +
 		"printf x > '" + filepath.Join(r.OutputDirectory, "adapter_model.safetensors") + "'\n" +
@@ -244,6 +244,7 @@ func TestRunJobKeepsTrainPeaksWhenReloadFails(t *testing.T) {
 }
 
 func TestRunJobWritesFailedPeaksWhenTheReceiptFails(t *testing.T) {
+	t.Parallel()
 	r, e, jobPath := executionFixture(t, executionScript)
 	// A directory at the terminal path makes the receipt write fail after the
 	// provenance exists.
@@ -260,6 +261,7 @@ func TestRunJobWritesFailedPeaksWhenTheReceiptFails(t *testing.T) {
 }
 
 func TestRunJobCompletesWhenPeaksCannotBePublished(t *testing.T) {
+	t.Parallel()
 	r, e, jobPath := executionFixture(t, executionScript)
 	work := filepath.Join(filepath.Dir(jobPath), ".llm-"+executionInvocation)
 	// The worker blocks the peaks destination with a directory. The peaks file
@@ -279,13 +281,15 @@ func TestRunJobCompletesWhenPeaksCannotBePublished(t *testing.T) {
 }
 
 func TestPeakRecorderStagingFailure(t *testing.T) {
+	t.Parallel()
 	missing := filepath.Join(t.TempDir(), "missing")
-	if err := publishPeaks(newPeakRecorder(missing, missing, nil), missing, "failed"); err == nil || !strings.Contains(err.Error(), "staging") {
+	if err := publishPeaks(newPeakRecorder(missing, missing, nil, hostPeakSettings()), missing, "failed"); err == nil || !strings.Contains(err.Error(), "staging") {
 		t.Fatal("published peaks into a missing directory", err)
 	}
 }
 
 func TestAllocatedBytesIsBoundedAndNeverFollowsLinks(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	outside := t.TempDir()
 	if err := os.WriteFile(filepath.Join(outside, "large"), make([]byte, 1<<20), 0600); err != nil {
@@ -299,6 +303,10 @@ func TestAllocatedBytesIsBoundedAndNeverFollowsLinks(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(root, "checkpoint", "weights"), make([]byte, 64<<10), 0600); err != nil {
 		t.Fatal(err)
+	}
+	hooks := hostPeakSettings().hooks
+	testWalk := func(root string, remaining int, limit walkLimit) (uint64, int, bool) {
+		return hooks.allocatedBytes(root, remaining, limit)
 	}
 	total, remaining, complete := testWalk(root, 100, farDeadline)
 	if total < 64<<10 || total >= 1<<20 || remaining != 96 || !complete {
@@ -328,9 +336,8 @@ func TestAllocatedBytesIsBoundedAndNeverFollowsLinks(t *testing.T) {
 	if _, _, complete := testWalk(root, 100, walkLimit{deadline: time.Now().Add(time.Hour), done: stopped}); complete {
 		t.Fatal("a walk after shutdown gave a complete result")
 	}
-	previousStat, previousList := peakWalkHooks.stat, peakWalkHooks.list
-	t.Cleanup(func() { peakWalkHooks.stat, peakWalkHooks.list = previousStat, previousList })
-	peakWalkHooks.stat = func(dirfd int, name string, stat *unix.Stat_t) error {
+	previousStat, previousList := hooks.stat, hooks.list
+	hooks.stat = func(dirfd int, name string, stat *unix.Stat_t) error {
 		if name == "weights" {
 			return unix.EACCES
 		}
@@ -340,7 +347,7 @@ func TestAllocatedBytesIsBoundedAndNeverFollowsLinks(t *testing.T) {
 		t.Fatal("an unreadable entry gave a complete walk")
 	}
 	// An entry that a save removed is left out, and the walk stays complete.
-	peakWalkHooks.stat = func(dirfd int, name string, stat *unix.Stat_t) error {
+	hooks.stat = func(dirfd int, name string, stat *unix.Stat_t) error {
 		if name == "weights" {
 			return unix.ENOENT
 		}
@@ -350,7 +357,7 @@ func TestAllocatedBytesIsBoundedAndNeverFollowsLinks(t *testing.T) {
 		t.Fatalf("removed entry: total=%d complete=%v", total, complete)
 	}
 	// Another device under the root is not part of the total.
-	peakWalkHooks.stat = func(dirfd int, name string, stat *unix.Stat_t) error {
+	hooks.stat = func(dirfd int, name string, stat *unix.Stat_t) error {
 		err := previousStat(dirfd, name, stat)
 		if name == "checkpoint" {
 			stat.Dev++
@@ -360,10 +367,10 @@ func TestAllocatedBytesIsBoundedAndNeverFollowsLinks(t *testing.T) {
 	if total, _, complete := testWalk(root, 100, farDeadline); !complete || total >= 64<<10 {
 		t.Fatalf("crossed a mount: total=%d complete=%v", total, complete)
 	}
-	peakWalkHooks.stat = previousStat
+	hooks.stat = previousStat
 	// Injected errors make the directory cases independent of the test uid.
 	lists := 0
-	peakWalkHooks.list = func(fd int, limit int) ([]string, error) {
+	hooks.list = func(fd int, limit int) ([]string, error) {
 		lists++
 		if lists > 1 {
 			return nil, errors.New("permission denied")
@@ -373,9 +380,9 @@ func TestAllocatedBytesIsBoundedAndNeverFollowsLinks(t *testing.T) {
 	if _, _, complete := testWalk(root, 100, farDeadline); complete {
 		t.Fatal("an unreadable directory gave a complete walk")
 	}
-	peakWalkHooks.list = previousList
+	hooks.list = previousList
 	// A directory that a save removes between the stat and the open is skipped.
-	peakWalkHooks.stat = func(dirfd int, name string, stat *unix.Stat_t) error {
+	hooks.stat = func(dirfd int, name string, stat *unix.Stat_t) error {
 		err := previousStat(dirfd, name, stat)
 		if name == "checkpoint" {
 			if removeErr := os.RemoveAll(filepath.Join(root, "checkpoint")); removeErr != nil {
@@ -387,7 +394,7 @@ func TestAllocatedBytesIsBoundedAndNeverFollowsLinks(t *testing.T) {
 	if _, _, complete := testWalk(root, 100, farDeadline); !complete {
 		t.Fatal("a removed directory made the walk incomplete")
 	}
-	peakWalkHooks.stat = previousStat
+	hooks.stat = previousStat
 	// A directory replaced by a link during the walk is not followed.
 	if err := os.Symlink(outside, filepath.Join(root, "checkpoint")); err != nil {
 		t.Fatal(err)
@@ -398,6 +405,7 @@ func TestAllocatedBytesIsBoundedAndNeverFollowsLinks(t *testing.T) {
 }
 
 func TestIncompleteStorageWalksGiveNoValue(t *testing.T) {
+	t.Parallel()
 	work, output := t.TempDir(), t.TempDir()
 	for index := 0; index < 3; index++ {
 		for _, dir := range []string{work, output} {
@@ -406,11 +414,11 @@ func TestIncompleteStorageWalksGiveNoValue(t *testing.T) {
 			}
 		}
 	}
-	previous := peakStorageEntries
-	t.Cleanup(func() { peakStorageEntries = previous })
+	settings := hostPeakSettings()
+	previous := settings.entries
 	// The output root takes 4 entries; the shared budget runs out in the work root.
-	peakStorageEntries = 6
-	p := newPeakRecorder(work, output, nil)
+	settings.entries = 6
+	p := newPeakRecorder(work, output, nil, settings)
 	p.sampleStorage(nil)
 	if p.peaks.StoragePeakBytes != nil {
 		t.Fatalf("a truncated walk gave a value: %d", *p.peaks.StoragePeakBytes)
@@ -439,26 +447,26 @@ func TestIncompleteStorageWalksGiveNoValue(t *testing.T) {
 }
 
 func TestStopEndsAStorageWalkInProgress(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	for index := 0; index < 200; index++ {
 		if err := os.WriteFile(filepath.Join(root, strings.Repeat("f", index%50+1)+string(rune('a'+index/50))), nil, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	previousInterval, previousStat := peakSampleInterval, peakWalkHooks.stat
-	t.Cleanup(func() { peakSampleInterval, peakWalkHooks.stat = previousInterval, previousStat })
-	peakSampleInterval = time.Millisecond
+	settings := hostPeakSettings()
+	settings.interval = time.Millisecond
 	walking := make(chan struct{}, 1)
 	// Each entry takes 20 ms, so one walk takes about 4 seconds.
-	peakWalkHooks.stat = func(dirfd int, name string, stat *unix.Stat_t) error {
+	settings.hooks.stat = func(dirfd int, name string, stat *unix.Stat_t) error {
 		select {
 		case walking <- struct{}{}:
 		default:
 		}
 		time.Sleep(20 * time.Millisecond)
-		return previousStat(dirfd, name, stat)
+		return statEntry(dirfd, name, stat)
 	}
-	p := newPeakRecorder(t.TempDir(), root, nil)
+	p := newPeakRecorder(t.TempDir(), root, nil, settings)
 	stop := p.watch()
 	<-walking
 	started := time.Now()
@@ -475,7 +483,8 @@ func TestStopEndsAStorageWalkInProgress(t *testing.T) {
 }
 
 func TestFinalSampleRunsOnce(t *testing.T) {
-	p := newPeakRecorder(t.TempDir(), t.TempDir(), nil)
+	t.Parallel()
+	p := newPeakRecorder(t.TempDir(), t.TempDir(), nil, hostPeakSettings())
 	list := p.hooks.list
 	lists := 0
 	p.hooks.list = func(fd int, limit int) ([]string, error) {
@@ -491,12 +500,13 @@ func TestFinalSampleRunsOnce(t *testing.T) {
 }
 
 func TestLateStorageWalkResultIsDropped(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "save"), make([]byte, 8192), 0600); err != nil {
 		t.Fatal(err)
 	}
 	// The work root is walked last, so its last entry ends the whole sample.
-	p := newPeakRecorder(root, t.TempDir(), nil)
+	p := newPeakRecorder(root, t.TempDir(), nil, hostPeakSettings())
 	stat := p.hooks.stat
 	entered, release, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	p.hooks.stat = func(dirfd int, name string, st *unix.Stat_t) error {
@@ -524,12 +534,13 @@ func TestLateStorageWalkResultIsDropped(t *testing.T) {
 }
 
 func TestFinalWalkAfterItsWaitCannotSetStorage(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "save"), make([]byte, 8192), 0600); err != nil {
 		t.Fatal(err)
 	}
 	// The work root is walked last, so its last entry ends the whole sample.
-	p := newPeakRecorder(root, t.TempDir(), nil)
+	p := newPeakRecorder(root, t.TempDir(), nil, hostPeakSettings())
 	stat := p.hooks.stat
 	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	p.hooks.stat = func(dirfd int, name string, st *unix.Stat_t) error {
@@ -556,23 +567,21 @@ func TestFinalWalkAfterItsWaitCannotSetStorage(t *testing.T) {
 }
 
 func TestBlockedStorageWalkNeverHoldsTheJob(t *testing.T) {
+	t.Parallel()
 	r, e, jobPath := executionFixture(t, executionScript)
 	script := executionScript + "printf x > '" + filepath.Join(r.OutputDirectory, "adapter_model.safetensors") + "'\n"
 	updateExecutionScript(t, r, &e, jobPath, script)
-	previousStat, previousInterval, previousWait, previousTimeout := peakWalkHooks.stat, peakSampleInterval, peakStopWait, peakWalkTimeout
 	release := make(chan struct{})
-	t.Cleanup(func() {
-		close(release)
-		peakWalkHooks.stat, peakSampleInterval, peakStopWait, peakWalkTimeout = previousStat, previousInterval, previousWait, previousTimeout
-	})
-	peakSampleInterval, peakStopWait, peakWalkTimeout = time.Millisecond, 50*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() { close(release) })
+	steps := hostRunSteps()
+	steps.peaks.interval, steps.peaks.stopWait, steps.peaks.walkTimeout = time.Millisecond, 50*time.Millisecond, 50*time.Millisecond
 	// Every filesystem call of the walk blocks, as on a hung mount.
-	peakWalkHooks.stat = func(int, string, *unix.Stat_t) error {
+	steps.peaks.hooks.stat = func(int, string, *unix.Stat_t) error {
 		<-release
 		return unix.ENOENT
 	}
 	started := time.Now()
-	if err := RunJob(context.Background(), jobPath, executionInvocation, executionGPU); err != nil {
+	if err := steps.runJob(context.Background(), jobPath, executionInvocation, executionGPU); err != nil {
 		t.Fatal(err)
 	}
 	if elapsed := time.Since(started); elapsed > 5*time.Second {
@@ -584,16 +593,16 @@ func TestBlockedStorageWalkNeverHoldsTheJob(t *testing.T) {
 }
 
 func TestStorageSamplerSeesATransientSaveInTheOutput(t *testing.T) {
-	previous := peakSampleInterval
-	peakSampleInterval = 10 * time.Millisecond
-	t.Cleanup(func() { peakSampleInterval = previous })
+	t.Parallel()
+	steps := hostRunSteps()
+	steps.peaks.interval = 10 * time.Millisecond
 	r, e, jobPath := executionFixture(t, executionScript)
 	// A save in progress exists only while the worker runs.
 	save := filepath.Join(r.OutputDirectory, "checkpoint-1.pending")
 	script := executionScript + "if [ \"$5\" = train ]; then head -c 8388608 /dev/urandom > '" + save + "'; sleep 0.3; rm '" + save + "'; fi\n" +
 		"printf x > '" + filepath.Join(r.OutputDirectory, "adapter_model.safetensors") + "'\n"
 	updateExecutionScript(t, r, &e, jobPath, script)
-	if err := RunJob(context.Background(), jobPath, executionInvocation, executionGPU); err != nil {
+	if err := steps.runJob(context.Background(), jobPath, executionInvocation, executionGPU); err != nil {
 		t.Fatal(err)
 	}
 	peaks := readPeaks(t, jobPath)
@@ -603,10 +612,11 @@ func TestStorageSamplerSeesATransientSaveInTheOutput(t *testing.T) {
 }
 
 func TestCgroupMemoryPeakReadsTheRunnerCgroup(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
-	previousFile, previousMount := selfCgroupFile, cgroupMount
-	t.Cleanup(func() { selfCgroupFile, cgroupMount = previousFile, previousMount })
-	selfCgroupFile, cgroupMount = filepath.Join(root, "cgroup"), filepath.Join(root, "mount")
+	settings := hostPeakSettings()
+	settings.selfCgroup, settings.cgroupMount = filepath.Join(root, "cgroup"), filepath.Join(root, "mount")
+	selfCgroupFile, cgroupMount := settings.selfCgroup, settings.cgroupMount
 	group := filepath.Join(cgroupMount, "user.slice", "trainer.service")
 	if err := os.MkdirAll(group, 0700); err != nil {
 		t.Fatal(err)
@@ -631,7 +641,7 @@ func TestCgroupMemoryPeakReadsTheRunnerCgroup(t *testing.T) {
 	}
 	work := t.TempDir()
 	writeFixture(t, filepath.Join(group, "memory.peak"), "1024\n")
-	if err := publishPeaks(newPeakRecorder(work, t.TempDir(), nil), work, "failed"); err != nil {
+	if err := publishPeaks(newPeakRecorder(work, t.TempDir(), nil, settings), work, "failed"); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(filepath.Join(work, "peaks.json"))

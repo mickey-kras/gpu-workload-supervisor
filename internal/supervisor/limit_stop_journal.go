@@ -122,16 +122,11 @@ func (c *Controller) limitStopRelease(ctx context.Context, id control.Workload) 
 	return nil
 }
 
-// probeLimitStopRelease runs the release check of a limit stop once. A
-// runtime without it fails the check.
+// probeLimitStopRelease runs the release check of a limit stop once.
 func (c *Controller) probeLimitStopRelease(ctx context.Context, id control.Workload) error {
-	r, ok := c.runtime.(limitStopRuntime)
-	if !ok {
-		return gpuruntime.ErrLimitUnchecked
-	}
 	probeCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
 	defer cancel()
-	return r.LimitStopReleased(probeCtx, id)
+	return c.runtime.LimitStopReleased(probeCtx, id)
 }
 
 // finishLimitStop ends the transition of a limit stop. It commits idle
