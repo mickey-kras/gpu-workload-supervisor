@@ -84,7 +84,7 @@ type TemplateLimits struct {
 
 // currentConfiguration is the configuration that this checker applies.
 func currentConfiguration(hub string) Configuration {
-	return Configuration{Hub: hub, MaxJSONFileBytes: MaxJSONFileBytes, MaxGitBlobBytes: maxGitBlobBytes, MaxModelFiles: MaxModelFiles,
+	return Configuration{Hub: hub, MaxJSONFileBytes: MaxJSONFileBytes, MaxGitBlobBytes: MaxGitBlobBytes, MaxModelFiles: MaxModelFiles,
 		Template: TemplateLimits{MaxBytes: MaxTemplateBytes, MaxDepth: maxTemplateDepth, MaxTagTokens: maxTagTokens, MaxReviewItems: maxReviewItems, MaxReviewBytes: maxReviewBytes}}
 }
 

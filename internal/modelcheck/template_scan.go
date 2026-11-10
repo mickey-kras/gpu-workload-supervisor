@@ -143,27 +143,34 @@ type templateScan struct {
 // input fails closed, with the reason of a checker failure. The scan stops
 // between tags when ctx ends. The caller then reads ctx.Err().
 func scanTemplate(ctx context.Context, text string, special map[string]bool, variables map[string][]string) ([]ReviewItem, string) {
-	return failClosed(func() ([]ReviewItem, string) {
-		scanHook()
-		if len(text) > MaxTemplateBytes {
-			return nil, ReasonTemplateTooLarge
-		}
-		if hiddenText(text) {
-			return nil, ReasonTemplateHiddenText
-		}
-		s := newScan(text, special, variables)
-		s.ctx = ctx
-		if reason := s.read(text); reason != "" {
-			return nil, reason
-		}
-		if s.count > maxReviewItems {
-			return nil, ReasonTemplateTooManyLiterals
-		}
-		if raw, err := json.Marshal(s.review); err != nil || len(raw) > maxReviewBytes {
-			return nil, ReasonTemplateReviewTooLarge
-		}
-		return s.review, ""
-	})
+	return guardedScan(ctx, text, special, variables, readTemplate)
+}
+
+// guardedScan runs read, a reader like readTemplate, through failClosed.
+func guardedScan(ctx context.Context, text string, special map[string]bool, variables map[string][]string, read func(context.Context, string, map[string]bool, map[string][]string) ([]ReviewItem, string)) ([]ReviewItem, string) {
+	return failClosed(func() ([]ReviewItem, string) { return read(ctx, text, special, variables) })
+}
+
+// readTemplate is the scan of scanTemplate, without the recover.
+func readTemplate(ctx context.Context, text string, special map[string]bool, variables map[string][]string) ([]ReviewItem, string) {
+	if len(text) > MaxTemplateBytes {
+		return nil, ReasonTemplateTooLarge
+	}
+	if hiddenText(text) {
+		return nil, ReasonTemplateHiddenText
+	}
+	s := newScan(text, special, variables)
+	s.ctx = ctx
+	if reason := s.read(text); reason != "" {
+		return nil, reason
+	}
+	if s.count > maxReviewItems {
+		return nil, ReasonTemplateTooManyLiterals
+	}
+	if raw, err := json.Marshal(s.review); err != nil || len(raw) > maxReviewBytes {
+		return nil, ReasonTemplateReviewTooLarge
+	}
+	return s.review, ""
 }
 
 // failClosed runs scan. A panic gives the reason of a checker failure, so
