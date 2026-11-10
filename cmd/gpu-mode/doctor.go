@@ -62,6 +62,9 @@ func runDoctor(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Manager, er
 		return err
 	}
 	defer processLock.Close()
+	if err := options.profile.check(options.statePath, loadOperatorProfile); err != nil {
+		return report.fail("operator profile", err, "run gpu-mode doctor again")
+	}
 	if err := deployment.Check(options.statePath, release); err != nil {
 		return report.fail("deployment marker", err,
 			"open GPU Workload Setup and finish or repeat the activation; see docs/OPERATIONS.md#upgrade-and-interrupted-activation")

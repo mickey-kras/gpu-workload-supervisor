@@ -154,3 +154,67 @@ func TestCommandUsesTheProfileConfiguration(t *testing.T) {
 		t.Fatalf("disagreeing flag = %v", err)
 	}
 }
+
+// A profile read before the state lock must still hold under it. Setup
+// activates under the same lock, so a change means a newer activation.
+func TestProfilePinDetectsChangeUnderLock(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	profile := activatedProfile(statePath)
+	changed := profile
+	changed.CapacityHeadroomMiB = 2048
+	broken := profileLoader(operator.Profile{}, errors.New("untrusted profile"))
+	missing := profileLoader(operator.Profile{}, fs.ErrNotExist)
+	other := activatedProfile(filepath.Join(t.TempDir(), "other.db"))
+	for _, tc := range []struct {
+		name          string
+		before, after func() (operator.Profile, error)
+		want          error
+		fails         bool
+	}{
+		{"unchanged", profileLoader(profile, nil), profileLoader(profile, nil), nil, false},
+		{"no profile", missing, missing, nil, false},
+		{"other state", profileLoader(other, nil), profileLoader(other, nil), nil, false},
+		{"broken both times", broken, broken, nil, false},
+		{"headroom changed", profileLoader(profile, nil), profileLoader(changed, nil), errProfileChanged, true},
+		{"activated meanwhile", missing, profileLoader(profile, nil), errProfileChanged, true},
+		{"repaired meanwhile", broken, profileLoader(profile, nil), errProfileChanged, true},
+		{"broken meanwhile", profileLoader(profile, nil), broken, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := pinProfile(statePath, tc.before).check(statePath, tc.after)
+			if (err != nil) != tc.fails || (tc.want != nil && !errors.Is(err, tc.want)) {
+				t.Fatalf("check = %v", err)
+			}
+		})
+	}
+}
+
+// End to end: a profile that changes while the command waits for the lock
+// stops the command before it builds the runtime.
+func TestCommandRefusesProfileChangedBeforeLock(t *testing.T) {
+	oldArgs, oldLoad := os.Args, loadOperatorProfile
+	t.Cleanup(func() { os.Args, loadOperatorProfile = oldArgs, oldLoad })
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	seedCatalog(t, statePath)
+	profile := activatedProfile(statePath)
+	profile.ActivatedRelease = ""
+	changed := profile
+	changed.CapacityHeadroomMiB = 2048
+	reads := 0
+	loadOperatorProfile = func() (operator.Profile, error) {
+		reads++
+		if reads > 2 { // flag defaults and the pin read the old profile
+			return changed, nil
+		}
+		return profile, nil
+	}
+	os.Args = []string{"gpu-mode", "reconcile"}
+	built := false
+	err := runWithRuntimeFactory(func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error) {
+		built = true
+		return &stoppedRecoveryRuntime{}, nil
+	})
+	if !errors.Is(err, errProfileChanged) || built {
+		t.Fatalf("err = %v, runtime built = %v", err, built)
+	}
+}

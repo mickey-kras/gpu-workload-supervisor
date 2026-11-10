@@ -48,6 +48,7 @@ type modeExecution struct {
 	statePath, resolveReason, target, trainingJob                                             string
 	auditBatch                                                                                int
 	allRestored                                                                               bool
+	profile                                                                                   profilePin
 	actionTimeout, drainTimeout, verifyTimeout, cleanupTimeout, finalizeTimeout, pollInterval time.Duration
 }
 
@@ -106,6 +107,7 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 		auditBatch: *auditBatch, allRestored: *allRestored, actionTimeout: *actionTimeout, drainTimeout: *drainTimeout,
 		verifyTimeout: *verifyTimeout, cleanupTimeout: *cleanupTimeout,
 		finalizeTimeout: *finalizeTimeout, pollInterval: *pollInterval,
+		profile: pinProfile(*statePath, loadOperatorProfile),
 	}
 	if command == doctorCommand {
 		return runDoctor(newRuntime, runtimeConfig, options)
@@ -154,6 +156,9 @@ func executeWithState(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Mana
 	}
 	defer proxyLock.Close()
 	if err := deployment.Check(options.statePath, ""); err != nil {
+		return err
+	}
+	if err := options.profile.check(options.statePath, loadOperatorProfile); err != nil {
 		return err
 	}
 	// The reserve is read under the state lock, so it belongs to the same

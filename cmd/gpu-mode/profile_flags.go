@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -97,4 +98,51 @@ func sameStatePath(flagPath, profilePath string) (bool, error) {
 		return false, fmt.Errorf("state path: %w", err)
 	}
 	return path == filepath.Clean(profilePath), nil
+}
+
+// errProfileChanged reports a profile change between reading the flags and
+// taking the state lock.
+var errProfileChanged = errors.New("the operator profile changed while this command waited for the state lock; run the command again")
+
+// profilePin records the profile values that applied to the state path when
+// the flags were read, or the error that made the profile unreadable.
+type profilePin struct {
+	values map[string]string
+	err    error
+}
+
+// pinProfile returns the profile values that apply to statePath, or nil when
+// there is no profile or it belongs to another state path.
+func pinProfile(statePath string, load func() (operator.Profile, error)) profilePin {
+	profile, err := load()
+	if errors.Is(err, os.ErrNotExist) {
+		return profilePin{}
+	}
+	if err != nil {
+		return profilePin{err: err}
+	}
+	same, err := sameStatePath(statePath, profile.StatePath)
+	if err != nil || !same {
+		return profilePin{err: err}
+	}
+	return profilePin{values: profileFlagValues(profile)}
+}
+
+// check runs under the state lock. Setup activates under the same lock, so a
+// profile that changed since the flags were read belongs to a newer
+// activation. The command must not combine its old flag values with the
+// newly accepted catalog.
+func (p profilePin) check(statePath string, load func() (operator.Profile, error)) error {
+	current := pinProfile(statePath, load)
+	if p.err != nil && current.err != nil {
+		// brokenProfile already required explicit flags for this command.
+		return nil
+	}
+	if current.err != nil {
+		return fmt.Errorf("%s: %w", profileHint, current.err)
+	}
+	if p.err != nil || !maps.Equal(p.values, current.values) {
+		return errProfileChanged
+	}
+	return nil
 }
