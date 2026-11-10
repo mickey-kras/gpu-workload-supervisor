@@ -8,6 +8,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/modelcheck"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
@@ -72,6 +73,7 @@ type storeGateway interface {
 	MarkLimitFailure(context.Context, control.Workload, bool, time.Time) (store.LimitStop, error)
 	MarkLimitStopping(context.Context, control.Workload, time.Time) error
 	ClearLimitStop(context.Context) error
+	ModelCheck(context.Context, string) (modelcheck.Record, error)
 	InProgressTransition(context.Context) (string, error)
 	Recover(context.Context, uint64, control.State, string) (control.State, error)
 	RotateFenceAndCloseAdmission(context.Context, uint64) (control.State, error)
