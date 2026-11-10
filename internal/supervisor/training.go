@@ -28,30 +28,13 @@ type trainingRuntime interface {
 	TrainingMemoryPeak(context.Context, control.WorkloadProfile, control.TrainingJob) (uint64, error)
 }
 
-func (c *Controller) trainingCapabilities() (trainingStore, trainingRuntime, error) {
-	s, ok := c.store.(trainingStore)
-	r, supported := c.runtime.(trainingRuntime)
-	if !ok || !supported {
-		return nil, nil, errors.New("finite training is unsupported by this controller")
-	}
-	return s, r, nil
-}
-
 func (c *Controller) TrainingStatus(ctx context.Context, id string) (control.TrainingJob, error) {
-	s, _, err := c.trainingCapabilities()
-	if err != nil {
-		return control.TrainingJob{}, err
-	}
-	return s.TrainingJob(ctx, id)
+	return c.store.TrainingJob(ctx, id)
 }
 
 // StartTraining runs under the controller process gate, like Switch. Only the
 // launch has a deadline; the durable admission covers the full finite execution.
 func (c *Controller) StartTraining(ctx context.Context, id string, target control.Workload) (control.TrainingJob, error) {
-	s, r, err := c.trainingCapabilities()
-	if err != nil {
-		return control.TrainingJob{}, err
-	}
 	if err := control.ValidateRequestID(id); err != nil {
 		return control.TrainingJob{}, err
 	}
@@ -59,7 +42,7 @@ func (c *Controller) StartTraining(ctx context.Context, id string, target contro
 	if !ok || p.Trainer == nil {
 		return control.TrainingJob{}, errors.New("target is not a trainer")
 	}
-	if err := s.PreflightTraining(ctx, id, target, c.config.Catalog.Revision); err != nil {
+	if err := c.store.PreflightTraining(ctx, id, target, c.config.Catalog.Revision); err != nil {
 		return control.TrainingJob{}, err
 	}
 	// Qualify runtime bindings and output destinations before claiming identity
@@ -67,26 +50,26 @@ func (c *Controller) StartTraining(ctx context.Context, id string, target contro
 	if err := c.runAction(ctx, c.runtime.Preflight); err != nil {
 		return control.TrainingJob{}, err
 	}
-	claim, err := s.ClaimTraining(ctx, id, target, c.config.Catalog.Revision)
+	claim, err := c.store.ClaimTraining(ctx, id, target, c.config.Catalog.Revision)
 	if err != nil {
 		return claim, err
 	}
 	if _, err := c.Switch(ctx, control.WorkloadIdle, "training-start"); err != nil {
-		return claim, c.abortTrainingPreparation(ctx, s, claim, err)
+		return claim, c.abortTrainingPreparation(ctx, claim, err)
 	}
-	job, err := s.ReserveTraining(ctx, claim)
+	job, err := c.store.ReserveTraining(ctx, claim)
 	if err != nil {
-		return job, c.abortTrainingPreparation(ctx, s, claim, err)
+		return job, c.abortTrainingPreparation(ctx, claim, err)
 	}
 	actionCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
-	invocation, startErr := r.StartTraining(actionCtx, p, job)
+	invocation, startErr := c.runtime.StartTraining(actionCtx, p, job)
 	cancel()
 	if invocation == "" && startErr == nil {
 		startErr = errors.New("trainer start returned no invocation evidence")
 	}
 	if invocation != "" {
 		finalCtx, finish := context.WithTimeout(context.Background(), c.config.FinalizeTimeout)
-		err = s.RecordTrainingLaunch(finalCtx, job, invocation)
+		err = c.store.RecordTrainingLaunch(finalCtx, job, invocation)
 		finish()
 		if err == nil {
 			job.InvocationID = invocation
@@ -96,44 +79,40 @@ func (c *Controller) StartTraining(ctx context.Context, id string, target contro
 	return job, errors.Join(startErr, err)
 }
 
-func (c *Controller) activeTraining(ctx context.Context, id string) (trainingStore, trainingRuntime, control.WorkloadProfile, control.TrainingJob, error) {
-	s, r, err := c.trainingCapabilities()
+func (c *Controller) activeTraining(ctx context.Context, id string) (control.WorkloadProfile, control.TrainingJob, error) {
+	job, err := c.store.TrainingJob(ctx, id)
 	if err != nil {
-		return s, r, control.WorkloadProfile{}, control.TrainingJob{}, err
-	}
-	job, err := s.TrainingJob(ctx, id)
-	if err != nil {
-		return s, r, control.WorkloadProfile{}, job, err
+		return control.WorkloadProfile{}, job, err
 	}
 	p, ok := c.config.Catalog.Catalog.Profile(job.Workload)
 	if !ok || p.Trainer == nil || job.CatalogRevision != c.config.Catalog.Revision {
-		return s, r, p, job, store.ErrVersionConflict
+		return p, job, store.ErrVersionConflict
 	}
 	state, err := c.store.State(ctx)
 	if err != nil {
-		return s, r, p, job, err
+		return p, job, err
 	}
 	if state.LeaseFence != job.Fence || control.TrainingTerminalOutcome(job.Status) {
-		return s, r, p, job, store.ErrStaleFence
+		return p, job, store.ErrStaleFence
 	}
-	return s, r, p, job, nil
+	return p, job, nil
 }
 
 // ReconcileTraining never starts a process. Missing/ambiguous evidence keeps
 // admission pending until explicit recovery stops and verifies the whole job.
 func (c *Controller) ReconcileTraining(ctx context.Context, id string) (control.State, error) {
-	s, r, p, job, err := c.activeTraining(ctx, id)
+	p, job, err := c.activeTraining(ctx, id)
 	if err != nil {
 		return control.State{}, err
 	}
-	outcome, err := c.trainingOutcome(ctx, s, r, p, job)
+	outcome, err := c.trainingOutcome(ctx, p, job)
 	if err != nil {
 		return control.State{}, err
 	}
-	return c.finishTraining(ctx, s, r, p, job, outcome)
+	return c.finishTraining(ctx, p, job, outcome)
 }
 
-func (c *Controller) trainingOutcome(ctx context.Context, s trainingStore, r trainingRuntime, p control.WorkloadProfile, job control.TrainingJob) (string, error) {
+func (c *Controller) trainingOutcome(ctx context.Context, p control.WorkloadProfile, job control.TrainingJob) (string, error) {
 	if job.TerminalOutcome != "" {
 		if !control.TrainingTerminalOutcome(job.TerminalOutcome) {
 			return "", store.ErrStaleFence
@@ -141,7 +120,7 @@ func (c *Controller) trainingOutcome(ctx context.Context, s trainingStore, r tra
 		return job.TerminalOutcome, nil
 	}
 	actionCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
-	evidence, err := r.TrainingTerminal(actionCtx, p, job)
+	evidence, err := c.runtime.TrainingTerminal(actionCtx, p, job)
 	cancel()
 	if err != nil {
 		return "", err
@@ -150,7 +129,7 @@ func (c *Controller) trainingOutcome(ctx context.Context, s trainingStore, r tra
 		return "", store.ErrStaleFence
 	}
 	// No cleanup effect is allowed until the receipt is durably committed.
-	if err := s.RecordTrainingTerminal(ctx, job, evidence); err != nil {
+	if err := c.store.RecordTrainingTerminal(ctx, job, evidence); err != nil {
 		return "", err
 	}
 	return evidence.Outcome, nil
@@ -162,7 +141,7 @@ func (c *Controller) RecoverTraining(ctx context.Context, id string) (control.St
 	if state, handled, err := c.recoverTrainingPreparation(ctx, id); handled || err != nil {
 		return state, err
 	}
-	s, r, p, job, err := c.activeTraining(ctx, id)
+	p, job, err := c.activeTraining(ctx, id)
 	if err != nil {
 		return control.State{}, err
 	}
@@ -173,20 +152,20 @@ func (c *Controller) RecoverTraining(ctx context.Context, id string) (control.St
 	if !control.TrainingTerminalOutcome(outcome) {
 		return control.State{}, store.ErrStaleFence
 	}
-	return c.finishTraining(ctx, s, r, p, job, outcome)
+	return c.finishTraining(ctx, p, job, outcome)
 }
 
-func (c *Controller) finishTraining(ctx context.Context, s trainingStore, r trainingRuntime, p control.WorkloadProfile, job control.TrainingJob, outcome string) (control.State, error) {
-	c.recordTrainingMemoryPeak(ctx, s, r, p, job)
+func (c *Controller) finishTraining(ctx context.Context, p control.WorkloadProfile, job control.TrainingJob, outcome string) (control.State, error) {
+	c.recordTrainingMemoryPeak(ctx, p, job)
 	if err := c.runAction(ctx, func(actionCtx context.Context) error { return c.runtime.Stop(actionCtx, p.ID) }); err != nil {
 		return control.State{}, err
 	}
-	if err := c.pollUntil(ctx, c.now().Add(c.config.VerifyTimeout), func(probeCtx context.Context) error { return r.ReleaseTraining(probeCtx, p) }); err != nil {
+	if err := c.pollUntil(ctx, c.now().Add(c.config.VerifyTimeout), func(probeCtx context.Context) error { return c.runtime.ReleaseTraining(probeCtx, p) }); err != nil {
 		return control.State{}, err
 	}
 	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.FinalizeTimeout)
 	defer cancel()
-	return s.FinishTraining(finalCtx, job, outcome)
+	return c.store.FinishTraining(finalCtx, job, outcome)
 }
 
 // trainingPeakTimeout bounds the peak read and, separately, the store write,
@@ -198,7 +177,7 @@ var trainingPeakTimeout = 5 * time.Second
 // controller has no log, so an absent memoryPeakBytes is the only trace;
 // qualification then uses external samples of the unit cgroup memory.peak.
 // The runner peaks file is only an unverified hint.
-func (c *Controller) recordTrainingMemoryPeak(ctx context.Context, s trainingStore, r trainingRuntime, p control.WorkloadProfile, job control.TrainingJob) {
+func (c *Controller) recordTrainingMemoryPeak(ctx context.Context, p control.WorkloadProfile, job control.TrainingJob) {
 	if job.InvocationID == "" || ctx.Err() != nil {
 		return
 	}
@@ -206,35 +185,31 @@ func (c *Controller) recordTrainingMemoryPeak(ctx context.Context, s trainingSto
 	// own deadline. The write gets its own budget after the read returns, so a
 	// slow read never loses a peak that it read.
 	read, cancelRead := context.WithTimeout(context.WithoutCancel(ctx), min(c.config.ActionTimeout, trainingPeakTimeout))
-	peak, err := r.TrainingMemoryPeak(read, p, job)
+	peak, err := c.runtime.TrainingMemoryPeak(read, p, job)
 	cancelRead()
 	if err != nil {
 		return
 	}
 	write, cancelWrite := context.WithTimeout(context.WithoutCancel(ctx), min(c.config.FinalizeTimeout, trainingPeakTimeout))
 	defer cancelWrite()
-	_ = s.RecordTrainingMemoryPeak(write, job, peak)
+	_ = c.store.RecordTrainingMemoryPeak(write, job, peak)
 }
 
-func (c *Controller) abortTrainingPreparation(ctx context.Context, s trainingStore, claim control.TrainingJob, cause error) error {
+func (c *Controller) abortTrainingPreparation(ctx context.Context, claim control.TrainingJob, cause error) error {
 	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.FinalizeTimeout)
 	defer cancel()
-	_, err := s.AbortTrainingPreparation(finalCtx, claim)
+	_, err := c.store.AbortTrainingPreparation(finalCtx, claim)
 	return errors.Join(cause, err)
 }
 
 func (c *Controller) recoverTrainingPreparation(ctx context.Context, id string) (control.State, bool, error) {
-	s, _, err := c.trainingCapabilities()
-	if err != nil {
-		return control.State{}, false, err
-	}
-	job, err := s.TrainingJob(ctx, id)
+	job, err := c.store.TrainingJob(ctx, id)
 	if err != nil {
 		return control.State{}, false, err
 	}
 	if job.Status != "preparing" {
 		return control.State{}, false, nil
 	}
-	state, err := s.AbortTrainingPreparation(ctx, job)
+	state, err := c.store.AbortTrainingPreparation(ctx, job)
 	return state, true, err
 }

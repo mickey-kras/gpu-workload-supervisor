@@ -118,12 +118,10 @@ func (c *Controller) settleCatalog(ctx context.Context, state control.State, ret
 // Recovery may inspect failed units to choose what to retain, but all later
 // readiness observations and release checks keep their normal strict rules.
 func (c *Controller) observeForReconciliation(ctx context.Context, recovering bool) (gpuruntime.Snapshot, error) {
-	if observer, ok := c.runtime.(interface {
-		ObserveForRecovery(context.Context) (gpuruntime.Snapshot, error)
-	}); recovering && ok {
+	if recovering {
 		probeCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
 		defer cancel()
-		return observer.ObserveForRecovery(probeCtx)
+		return c.runtime.ObserveForRecovery(probeCtx)
 	}
 	return c.observe(ctx)
 }
@@ -213,23 +211,17 @@ func limitedUnitError(class error, p control.WorkloadProfile, err error) error {
 }
 
 // limitChecker runs the checks of a unit with limits: the launch checks
-// before any unload, and the checks of a running unit. A runtime without
-// it refuses or fails such a unit.
+// before any unload, and the checks of a running unit.
 type limitChecker interface {
 	VerifyLaunchLimits(context.Context, control.Workload) error
 	VerifyLimitProtection(context.Context, control.Workload) error
 }
 
-// runLimitProbe runs one runtime limit check within ActionTimeout. A
-// runtime without the checks fails it with ErrLimitUnchecked.
+// runLimitProbe runs one runtime limit check within ActionTimeout.
 func (c *Controller) runLimitProbe(ctx context.Context, id control.Workload, probe func(limitChecker, context.Context, control.Workload) error) error {
-	checker, ok := c.runtime.(limitChecker)
-	if !ok {
-		return gpuruntime.ErrLimitUnchecked
-	}
 	probeCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
 	defer cancel()
-	return probe(checker, probeCtx, id)
+	return probe(c.runtime, probeCtx, id)
 }
 
 // unknownLatched is the remedy state of a latch: the state needs recovery,

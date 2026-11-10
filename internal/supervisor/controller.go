@@ -24,9 +24,37 @@ var (
 	ErrRuntimeObservation = errors.New("runtime observation failed")
 	ErrStateVerification  = errors.New("runtime state verification failed")
 	ErrHealthCheck        = errors.New("runtime health check failed")
+	// ErrInvalidTarget and ErrTrainerTarget refuse a request before any
+	// effect. Retrying the same request cannot succeed.
+	ErrInvalidTarget = errors.New("invalid target workload")
+	ErrTrainerTarget = errors.New("finite trainer requires training-start")
 )
 
+// Runtime is the runtime the controller drives. *gpuruntime.SystemdManager
+// implements it; tests use fakes.
+type Runtime interface {
+	Observe(context.Context) (gpuruntime.Snapshot, error)
+	// ObserveForRecovery reports a failed unit as not running, so recovery
+	// still finds the running units. It is never release evidence.
+	ObserveForRecovery(context.Context) (gpuruntime.Snapshot, error)
+	Start(context.Context, control.Workload) error
+	Stop(context.Context, control.Workload) error
+	// StopForRecovery shuts down every configured runtime unit, including the
+	// media UI. Normal Stop follows the profile's adapter policy.
+	StopForRecovery(context.Context) error
+	Healthy(context.Context, control.Workload) error
+	ReleasedFor(context.Context, control.Workload) error
+	Preflight(context.Context) error
+	limitChecker
+	limitStopRuntime
+	trainingRuntime
+}
+
+// storeGateway is the part of *store.Store that the controller uses. Tests
+// wrap a real store to inject write failures and cancellations at chosen
+// steps.
 type storeGateway interface {
+	trainingStore
 	AcquireUserExecution(context.Context, bool) (*lock.File, error)
 	State(context.Context) (control.State, error)
 	Catalog(context.Context) (control.CatalogSnapshot, error)
@@ -68,17 +96,17 @@ type Config struct {
 
 type Controller struct {
 	store   storeGateway
-	runtime gpuruntime.Manager
+	runtime Runtime
 	config  Config
 	now     func() time.Time
 	id      func() (string, error)
 }
 
-func New(stateStore *store.Store, runtime gpuruntime.Manager, config Config) (*Controller, error) {
+func New(stateStore *store.Store, runtime Runtime, config Config) (*Controller, error) {
 	return newController(stateStore, runtime, config, time.Now, control.NewUUID)
 }
 
-func newController(stateStore storeGateway, runtime gpuruntime.Manager, config Config, now func() time.Time, id func() (string, error)) (*Controller, error) {
+func newController(stateStore storeGateway, runtime Runtime, config Config, now func() time.Time, id func() (string, error)) (*Controller, error) {
 	if stateStore == nil || runtime == nil {
 		return nil, errors.New("store and runtime are required")
 	}

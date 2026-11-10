@@ -14,6 +14,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 // abortOwnedUnitWrites rolls back pre-commit unit writes and drops the pending
@@ -355,22 +356,22 @@ func (work activationWork) verifyAcceptedRuntime(ctx context.Context) error {
 // proof after candidate writes and at the transaction's quiescence gate. Removed
 // workloads remain in that proof even though the candidate cannot observe them.
 type activationReleaseManager struct {
-	gpuruntime.Manager
-	accepted gpuruntime.Manager
+	supervisor.Runtime
+	accepted supervisor.Runtime
 	replaced map[string]bool
 }
 
 func (m activationReleaseManager) PreflightWithOwnedRemovals(ctx context.Context, removals map[string]string) error {
-	if candidate, ok := m.Manager.(interface {
+	if candidate, ok := m.Runtime.(interface {
 		PreflightWithOwnedRemovals(context.Context, map[string]string) error
 	}); ok {
 		return candidate.PreflightWithOwnedRemovals(ctx, removals)
 	}
-	return m.Manager.Preflight(ctx)
+	return m.Runtime.Preflight(ctx)
 }
 
 func (m activationReleaseManager) ReleasedFor(ctx context.Context, target control.Workload) error {
-	if err := m.Manager.ReleasedFor(ctx, target); err != nil {
+	if err := m.Runtime.ReleasedFor(ctx, target); err != nil {
 		return err
 	}
 	if len(m.replaced) == 0 {
@@ -385,7 +386,7 @@ func (m activationReleaseManager) ReleasedFor(ctx context.Context, target contro
 	return previous.ReleasedForUnchangedLaunches(ctx, target, m.replaced)
 }
 
-func (work activationWork) verifyRuntimes(ctx context.Context, plan unitPlan) (gpuruntime.Manager, error) {
+func (work activationWork) verifyRuntimes(ctx context.Context, plan unitPlan) (supervisor.Runtime, error) {
 	manager, err := work.backend.makeRuntime(work.request)
 	if err != nil {
 		return nil, err
@@ -410,7 +411,7 @@ func (work activationWork) verifyRuntimes(ctx context.Context, plan unitPlan) (g
 		if err != nil {
 			return nil, err
 		}
-		manager = activationReleaseManager{Manager: manager, accepted: oldManager, replaced: replaced}
+		manager = activationReleaseManager{Runtime: manager, accepted: oldManager, replaced: replaced}
 	}
 	if err := manager.ReleasedFor(ctx, control.WorkloadIdle); err != nil {
 		return nil, fmt.Errorf("configured workloads have not released the GPU: %w", err)
@@ -517,7 +518,7 @@ func acceptedOwnedUnitProofs(catalog control.Catalog, home string) (map[string]s
 	return proven, nil
 }
 
-func verifyActivationBindings(ctx context.Context, manager gpuruntime.Manager, plan unitPlan) error {
+func verifyActivationBindings(ctx context.Context, manager supervisor.Runtime, plan unitPlan) error {
 	preflight := manager.Preflight
 	if preview, ok := manager.(interface {
 		PreflightWithOwnedRemovals(context.Context, map[string]string) error
