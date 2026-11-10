@@ -204,7 +204,7 @@ func TestCommandRefusesProfileChangedBeforeLock(t *testing.T) {
 	reads := 0
 	loadOperatorProfile = func() (operator.Profile, error) {
 		reads++
-		if reads > 2 { // flag defaults and the pin read the old profile
+		if reads > 1 { // only the read behind the flag defaults sees the old profile
 			return changed, nil
 		}
 		return profile, nil

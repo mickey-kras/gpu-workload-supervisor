@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"reflect"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -89,7 +90,9 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (supervisor
 		return err
 	}
 	// Defaults from the activated profile apply before any flag value is read.
-	if err := applyProfileDefaults(flags, command, loadOperatorProfile); err != nil {
+	// The pin reuses the same read, so a change after it fails under the lock.
+	snapshot := sync.OnceValues(loadOperatorProfile)
+	if err := applyProfileDefaults(flags, command, snapshot); err != nil {
 		return err
 	}
 	auditCutoff, err := validateAuditFlags(command, *auditBefore, *auditBatch)
@@ -107,7 +110,7 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (supervisor
 		auditBatch: *auditBatch, allRestored: *allRestored, actionTimeout: *actionTimeout, drainTimeout: *drainTimeout,
 		verifyTimeout: *verifyTimeout, cleanupTimeout: *cleanupTimeout,
 		finalizeTimeout: *finalizeTimeout, pollInterval: *pollInterval,
-		profile: pinProfile(*statePath, loadOperatorProfile),
+		profile: pinProfile(*statePath, snapshot),
 	}
 	if command == doctorCommand {
 		return runDoctor(newRuntime, runtimeConfig, options)
