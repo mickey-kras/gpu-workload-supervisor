@@ -36,8 +36,10 @@ func TestProxyFlagValidation(t *testing.T) {
 		{"invalid retention", "completed-work-retention must be positive", []string{"-completed-work-retention", "0s"}},
 		{"zero response header timeout", "upstream-response-header-timeout must be positive", []string{"-upstream-response-header-timeout", "0s"}},
 		{"negative response header timeout", "upstream-response-header-timeout must be positive", []string{"-upstream-response-header-timeout", "-1s"}},
-		{"invalid ordinary capacity", "max-inflight and max-completion-inflight must be positive", []string{"-max-inflight", "0"}},
-		{"invalid completion capacity", "max-inflight and max-completion-inflight must be positive", []string{"-max-completion-inflight", "0"}},
+		{"invalid ordinary capacity", "max-inflight, max-completion-inflight, body-read-timeout and body-idle-timeout must be positive", []string{"-max-inflight", "0"}},
+		{"invalid completion capacity", "max-inflight, max-completion-inflight, body-read-timeout and body-idle-timeout must be positive", []string{"-max-completion-inflight", "0"}},
+		{"invalid body read timeout", "body-read-timeout and body-idle-timeout must be positive", []string{"-body-read-timeout", "0s"}},
+		{"invalid body idle timeout", "body-read-timeout and body-idle-timeout must be positive", []string{"-body-idle-timeout", "-1s"}},
 		{"public listener", "listen address must be loopback", []string{"-listen", "0.0.0.0:8090"}},
 		{"malformed listener", "invalid listen address", []string{"-listen", "not-an-address"}},
 		{"missing upstream", "upstream is required", nil},
@@ -96,5 +98,43 @@ func TestDefaultStatePathAndLoopback(t *testing.T) {
 		if err := validateLoopbackAddress(address); err == nil {
 			t.Fatalf("accepted %s", address)
 		}
+	}
+}
+
+func TestProxyListenerChecksClientUserOnlyInTrustedMode(t *testing.T) {
+	if _, err := proxyListener("not-an-address", workloadproxy.IngressTrusted); err == nil {
+		t.Fatal("listened on a malformed address")
+	}
+	if _, err := proxyListener("0.0.0.0:0", workloadproxy.IngressAdapter); err == nil {
+		t.Fatal("listened on a non-loopback address")
+	}
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close()
+	if _, err := proxyListener(taken.Addr().String(), workloadproxy.IngressTrusted); err == nil {
+		t.Fatal("listened on an address in use")
+	}
+	for _, mode := range []string{workloadproxy.IngressTrusted, workloadproxy.IngressAdapter} {
+		listener, err := proxyListener("127.0.0.1:0", mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, plain := listener.(*net.TCPListener)
+		if plain != (mode == workloadproxy.IngressAdapter) {
+			t.Fatalf("%s mode: plain TCP listener = %v", mode, plain)
+		}
+		client, err := net.Dial("tcp", listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn, err := listener.Accept()
+		if err != nil {
+			t.Fatalf("%s mode: same-user client rejected: %v", mode, err)
+		}
+		_ = conn.Close()
+		_ = client.Close()
+		_ = listener.Close()
 	}
 }

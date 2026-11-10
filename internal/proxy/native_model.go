@@ -51,6 +51,9 @@ func checkNativeUpstream(n control.NativeModel, config Config) error {
 	if n.EnvironmentFile == "" {
 		return errors.New("native vLLM binding has no API key file; run setup again for this model")
 	}
+	if config.Transport != nil {
+		return errors.New("native model requires the built-in upstream transport, which verifies the vLLM peer")
+	}
 	if config.Upstream.String() != n.Endpoint || len(config.PassthroughRoutes) != 0 {
 		return errors.New("native model requires matching upstream and no passthrough routes")
 	}

@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"sync"
@@ -25,6 +27,11 @@ type Server struct {
 	drained         chan struct{}
 	hijacked        map[net.Conn]struct{}
 	closingHijacked bool
+	// BodyReadTimeout bounds the time from the first read of a request body to
+	// its end. BodyIdleTimeout bounds each wait for more body bytes. Zero
+	// disables a limit. Response streams have no deadline.
+	BodyReadTimeout time.Duration
+	BodyIdleTimeout time.Duration
 }
 
 func NewServer(handler http.Handler, maxOrdinary, maxCompletion int, completionPath string) *Server {
@@ -72,6 +79,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case admissionFull:
 		capacityUnavailable(w)
 		return
+	}
+	if (s.BodyReadTimeout > 0 || s.BodyIdleTimeout > 0) && r.Body != nil && r.Body != http.NoBody {
+		r.Body = &deadlineBody{ReadCloser: r.Body, controller: http.NewResponseController(w), total: s.BodyReadTimeout, idle: s.BodyIdleTimeout}
 	}
 	writer := &trackingWriter{ResponseWriter: w, owner: s}
 	defer func() {
@@ -178,4 +188,30 @@ func (s *Server) ShutdownAndDrain(server *http.Server, timeout time.Duration) er
 		err = errors.Join(err, errors.New("proxy handlers did not drain after forced close"))
 	}
 	return err
+}
+
+// deadlineBody sets a read deadline on the client connection for each body
+// read, so a slow or stalled body cannot hold a handler slot. net/http clears
+// the deadline when the body ends, on hijack and before the next request, so
+// response streams and upgraded connections keep no deadline.
+type deadlineBody struct {
+	io.ReadCloser
+	controller  *http.ResponseController
+	total, idle time.Duration
+	end         time.Time
+}
+
+func (b *deadlineBody) Read(buffer []byte) (int, error) {
+	now := time.Now()
+	if b.end.IsZero() && b.total > 0 {
+		b.end = now.Add(b.total)
+	}
+	deadline := b.end
+	if b.idle > 0 && (deadline.IsZero() || now.Add(b.idle).Before(deadline)) {
+		deadline = now.Add(b.idle)
+	}
+	if err := b.controller.SetReadDeadline(deadline); err != nil {
+		return 0, fmt.Errorf("set request body deadline: %w", err)
+	}
+	return b.ReadCloser.Read(buffer)
 }

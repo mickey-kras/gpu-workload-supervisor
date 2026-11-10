@@ -54,6 +54,7 @@ func main() {
 type proxyServerSettings struct {
 	statePath, listen                                                       string
 	readHeaderTimeout, idleTimeout, shutdownTimeout, completedWorkRetention time.Duration
+	bodyReadTimeout, bodyIdleTimeout                                        time.Duration
 	maxInflight, maxCompletionInflight                                      int
 }
 
@@ -68,7 +69,7 @@ func run() error {
 	fenceIDHeader := flags.String("fence-id-header", workloadproxy.DefaultFenceIDHeader, "lease incarnation header")
 	fenceEpochHeader := flags.String("fence-epoch-header", workloadproxy.DefaultFenceEpochHeader, "lease epoch header")
 	completionPath := flags.String("completion-path", workloadproxy.DefaultCompletionPath, "local terminal work endpoint path")
-	ingressMode := flags.String("ingress-mode", workloadproxy.IngressTrusted, "local ingress trust mode: trusted or adapter")
+	ingressMode := flags.String("ingress-mode", workloadproxy.IngressTrusted, "local ingress trust mode: trusted (same-user clients only) or adapter")
 	executionCredentialFile := flags.String("execution-credential-file", "", "private absolute credential file for adapter execution ingress")
 	completionCredentialFile := flags.String("completion-credential-file", "", "private absolute credential file for trusted terminal adapter callbacks")
 	requesterPolicyFile := flags.String("requester-policy-file", "", "private optional requester/workflow policy file; auto-idle remains unavailable")
@@ -76,6 +77,8 @@ func run() error {
 	readHeaderTimeout := flags.Duration("read-header-timeout", 10*time.Second, "HTTP header read timeout")
 	responseHeaderTimeout := flags.Duration("upstream-response-header-timeout", httptransport.DefaultResponseHeaderTimeout, "positive upstream response header wait after request upload; excludes response body")
 	idleTimeout := flags.Duration("idle-timeout", 2*time.Minute, "HTTP idle timeout")
+	bodyReadTimeout := flags.Duration("body-read-timeout", 2*time.Minute, "positive limit from the first request body read to its end")
+	bodyIdleTimeout := flags.Duration("body-idle-timeout", 30*time.Second, "positive limit for each wait for more request body bytes")
 	shutdownTimeout := flags.Duration("shutdown-timeout", 30*time.Second, "separate HTTP and native completion drain budgets; cancellation joins may exceed this duration")
 	completedWorkRetention := flags.Duration("completed-work-retention", 30*24*time.Hour, "time to keep completed work records")
 	maxInflight := flags.Int("max-inflight", 128, "maximum concurrent non-completion HTTP requests and separate native admission/persistence reservations")
@@ -98,8 +101,8 @@ func run() error {
 	if *responseHeaderTimeout <= 0 {
 		return errors.New("upstream-response-header-timeout must be positive")
 	}
-	if *maxInflight <= 0 || *maxCompletionInflight <= 0 {
-		return errors.New("max-inflight and max-completion-inflight must be positive")
+	if *maxInflight <= 0 || *maxCompletionInflight <= 0 || *bodyReadTimeout <= 0 || *bodyIdleTimeout <= 0 {
+		return errors.New("max-inflight, max-completion-inflight, body-read-timeout and body-idle-timeout must be positive")
 	}
 	if err := validateLoopbackAddress(*listen); err != nil {
 		return err
@@ -138,6 +141,7 @@ func run() error {
 	return serveProxy(proxyConfig, proxyServerSettings{
 		statePath: *statePath, listen: *listen,
 		readHeaderTimeout: *readHeaderTimeout, idleTimeout: *idleTimeout,
+		bodyReadTimeout: *bodyReadTimeout, bodyIdleTimeout: *bodyIdleTimeout,
 		shutdownTimeout: *shutdownTimeout, completedWorkRetention: *completedWorkRetention,
 		maxInflight: *maxInflight, maxCompletionInflight: *maxCompletionInflight,
 	})
@@ -195,8 +199,9 @@ func serveProxy(proxyConfig workloadproxy.Config, settings proxyServerSettings) 
 		return err
 	}
 	tracked := workloadproxy.NewServer(handler, settings.maxInflight, settings.maxCompletionInflight, proxyConfig.CompletionPath)
+	tracked.BodyReadTimeout, tracked.BodyIdleTimeout = settings.bodyReadTimeout, settings.bodyIdleTimeout
 	server := &http.Server{
-		Addr: settings.listen, Handler: tracked, ReadHeaderTimeout: settings.readHeaderTimeout,
+		Handler: tracked, ReadHeaderTimeout: settings.readHeaderTimeout,
 		IdleTimeout: settings.idleTimeout,
 		// Pin the 1 MiB header cap explicitly instead of inheriting it from the
 		// Go default. ReadTimeout/WriteTimeout stay unset: execution responses
@@ -230,7 +235,10 @@ func serveProxy(proxyConfig workloadproxy.Config, settings proxyServerSettings) 
 	}()
 	result := make(chan error, 1)
 	go func() {
-		err := server.ListenAndServe()
+		listener, err := proxyListener(settings.listen, proxyConfig.IngressMode)
+		if err == nil {
+			err = server.Serve(listener)
+		}
 		if errors.Is(err, http.ErrServerClosed) {
 			err = nil
 		}
@@ -250,6 +258,25 @@ func shutdownProxy(tracked *workloadproxy.Server, server *http.Server, handler *
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	return errors.Join(err, handler.DrainNativeCompletions(ctx))
+}
+
+// proxyListener listens on the loopback address. Trusted ingress has no
+// credentials, so it accepts only clients of the proxy user. Adapter ingress
+// authenticates each request and keeps cross-user gateways working.
+func proxyListener(address, ingressMode string) (net.Listener, error) {
+	if err := validateLoopbackAddress(address); err != nil {
+		return nil, err
+	}
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return nil, err
+	}
+	if ingressMode == workloadproxy.IngressAdapter {
+		return listener, nil
+	}
+	return workloadproxy.OwnerListener(listener, func(err error) {
+		log.Printf("trusted ingress rejected a connection: %v", err)
+	}), nil
 }
 
 func validateLoopbackAddress(address string) error {
