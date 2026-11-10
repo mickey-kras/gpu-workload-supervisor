@@ -100,7 +100,7 @@ export class UnitLimitsForm {
         this.enable = wrappedCheckButton(Gtk, 'Limit the resources of this workload', {active: Boolean(initial)});
         this.usage = new Gtk.Label({label: '', wrap: true, xalign: 0, visible: false});
         this.usage.add_css_class('dim-label');
-        this.error = new Gtk.Label({label: '', wrap: true, xalign: 0, visible: false, selectable: true});
+        this.error = new Gtk.Label({label: '', name: 'limits-error', wrap: true, xalign: 0, visible: false, selectable: true});
         this.error.add_css_class('setup-notice');
         this.advanced = new Adw.ExpanderRow({title: 'I/O and weight', expanded: false});
         this.rows = new Map();
@@ -111,6 +111,7 @@ export class UnitLimitsForm {
         for (const widget of [this.header, this.fields, this.error]) page.append(widget);
         this.enable.connect('toggled', () => { if (!this.syncing) this.toggled(); });
         this.toggled(false);
+        this.state = formState(this.value(true));
     }
     addRow(Adw, field) {
         const value = this.stored[field.key];
@@ -155,17 +156,20 @@ export class UnitLimitsForm {
         this.usage.visible = Boolean(usage);
         if (usage) this.usage.label = `Host memory ceiling: ${formatGiB(usage.ceilingMiB)} GiB. In use now: ${formatGiB(usage.memoryInUseMiB)} GiB. ${formatGiB(usage.pageCacheMiB)} GiB of page cache that the kernel can free does not count.`;
     }
-    value() {
-        this.error.visible = false;
+    // value gives the form value. With quiet, it does not show or hide the
+    // error text.
+    value(quiet = false) {
+        if (!quiet) this.error.visible = false;
         if (!this.enable.active) return this.initial ? null : undefined;
         const limits = {...this.stored, version: 1};
         for (const field of limitFields) {
             const result = readField(field, this.rows.get(field.key), this.stored);
-            if (result.error) return this.fail(result.error);
+            if (result.error) return quiet ? result : this.fail(result.error);
             if (result.value === undefined) delete limits[field.key]; else limits[field.key] = result.value;
         }
         const problem = checkLimits(limits);
-        return problem ? this.fail(problem) : limits;
+        if (!problem) return limits;
+        return quiet ? {error: problem} : this.fail(problem);
     }
     fail(text) {
         this.error.label = text; this.error.visible = true;
@@ -173,18 +177,60 @@ export class UnitLimitsForm {
     }
 }
 
-// withLimits puts the limits of a form value on an owned profile. An
-// adopted source unit or a profile without an owned launch refuses limits:
-// setup converts the unit first, and the limits come in a second apply.
-export function withLimits(profile, value, adopted) {
-    if (value === undefined) return profile;
-    if (value?.error) throw new PlainLimitError(value.error);
-    const owned = profile.nativeModel?.owned;
-    if (value !== null && (!owned || adopted)) throw new PlainLimitError(limitErrorText('resource limits need a supervisor-owned unit'));
-    if (!owned) return profile;
-    const next = {...owned};
-    if (value === null) delete next.limits; else next.limits = value;
-    return {...profile, nativeModel: {...profile.nativeModel, owned: next}};
+// withFormLimits puts a valid value of the limits form in an owned draft
+// value and in the draft input, so render-owned renders and fingerprints
+// the final unit, and saved drafts keep the limits. A form that is off
+// removes the limits. An invalid value does not change the draft input,
+// but it starts a new draft generation. checkFormLimits refuses it before
+// a render or a save.
+export function withFormLimits(form, draft, value) {
+    if (!form) return value;
+    const limits = form.value(true);
+    // A change of the form value, also to an invalid one, is a new draft
+    // generation, so a pending render of the earlier value is discarded.
+    const state = formState(limits);
+    if (state !== form.state) { form.state = state; draft.cancel(); }
+    if (!value.binding?.owned) return value;
+    if (limits?.error) return value;
+    const owned = {...value.binding.owned};
+    if (limits) owned.limits = limits; else delete owned.limits;
+    const next = {...value, binding: {...value.binding, owned}};
+    draft.input = {...draft.input, binding: next.binding};
+    return next;
+}
+
+// formState is the comparable value of the form: its limits, none, or an
+// invalid value.
+function formState(limits) {
+    return limits?.error ? 'invalid' : JSON.stringify(limits ?? null);
+}
+
+const adoptWithLimitsText = 'Limits need a launch that Supervisor manages. Clear Limit the resources of this workload to adopt this service, or use a managed launch.';
+
+// checkFormLimits refuses an invalid form, and limits on a draft without
+// an owned launch.
+export function checkFormLimits(form, input) {
+    const limits = form.value();
+    if (limits?.error) throw new PlainLimitError(limits.error);
+    if (limits && !input.binding?.owned) throw new PlainLimitError(adoptWithLimitsText);
+}
+
+// labelledLimitCheck runs check and puts label in front of its plain text,
+// so a refused save names its workload.
+export function labelledLimitCheck(label, check) {
+    try {
+        check();
+    } catch (error) {
+        throw error instanceof PlainLimitError ? new PlainLimitError(`${label}: ${error.message}`) : error;
+    }
+}
+
+// refuseAdoptedLimits refuses limits on a unit that the accepted catalog
+// adopts: setup converts the unit first, and the limits come in a second
+// apply. The backend refuses it too; this check answers before review.
+export function refuseAdoptedLimits(profile, adopted) {
+    if (adopted && profile.nativeModel?.owned?.limits) throw new PlainLimitError(limitErrorText('resource limits need a supervisor-owned unit'));
+    return profile;
 }
 
 // Plain text for the errors of the limit checks, in the order of the

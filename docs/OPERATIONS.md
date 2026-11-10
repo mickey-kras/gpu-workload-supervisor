@@ -396,7 +396,15 @@ Older binaries reject database schema v19. To roll back past this release, resto
 
 Older binaries also reject catalog v5. Before you stop components and install an older binary, remove all resource limits. Setup then writes the lowest version the catalog needs. Run `gpu-setup discover` and read `request.catalog.version`: 4 with trainers, 2 with owned launches, 1 otherwise. Version 5 means limits remain.
 
-This release's setup application has no limit controls. Remove each limited workload and apply, then add it again without limits if needed. Alternatively, restore a backup from before the limits.
+To remove the limits in the setup application, open the settings of each limited workload. Select **Advanced settings**, then **Resource checks**. Clear **Limit the resources of this workload**. Then apply. Alternatively, restore a backup from before the limits.
+
+Saved selections with limits make `drafts.json` version 2. An older setup reads only version 1. An older setup opens and shows that the saved setup drafts are unusable. It cannot continue.
+
+To use it again, move `drafts.json` aside or delete it. Setup then starts without the saved selections. A moved file keeps them for a later setup.
+
+Before you install the older binary, clear the limits of each saved selection. Then save the selections again.
+
+Make sure that the top-level version is `1`. With `jq`, run `jq .version ~/.config/gpu-workload-supervisor/drafts.json`. Without `jq`, run `grep -oE '"version": *[0-9]+' ~/.config/gpu-workload-supervisor/drafts.json | head -1`. The first match is the top-level version. A missing file is also safe.
 
 Stop and block components as above, and preserve the failed database for investigation. Select verified binaries, configuration and managed owned-unit bytes and hashes. Select a matching pre-upgrade backup or pre-migration snapshot for the database. Follow [desktop restoration](#restore-and-rollback), protecting foreign or modified units and refreshing the user manager. Complete every restore step, including `restore-state`, with a binary qualified for that backup and protocol. Never mix proxies that lack required handoff or lifetime locks with newer controllers.
 
