@@ -38,11 +38,18 @@ Use absolute, checksummed, version-pinned binaries for the CLI and proxies, neve
 Keep one explicit `-state` path in a durable service-owned directory with mode `0700`.
 Manual commands and automation must share state, trusted executables, capacity settings and timeouts.
 
+After setup activates a release, the operator profile keeps `-state`, `-systemctl`, `-nvidia-smi`, `-gpu-index` and `-capacity-headroom-mib`.
+`gpu-mode` uses these values for each flag that you do not give.
+A flag that you give must be equal to the profile value, else the command fails before it opens state.
+Only `verify-host` uses a different flag value, because it checks candidate values and opens no state.
+With `-state` set to a different database, `gpu-mode` does not use the profile.
+The runtime checks the paths and executables of the profile as it checks flags.
+
 Put flags before the single command.
 
 | Input | Meaning |
 | --- | --- |
-| `[runtime flags]` | Placeholder for `-state`, executable, capacity and timeout flags |
+| `[runtime flags]` | Placeholder for `-state`, executable, capacity and timeout flags. The activated profile supplies the state, executable and capacity flags |
 | `configure`, `verify-host` | Use `-catalog`, not accepted state |
 | `restore-state` | Needs only `-state`. No runtime policy |
 | `prune-audit` | Uses [audit flags](OPERATIONS.md#retain-or-archive-audit-history) |
