@@ -181,23 +181,11 @@ func subtractFloor(value, reserve uint64) uint64 {
 // checks of the other slice files. They are usage counters, not caps, so
 // any failure to read them is a readback failure.
 func (m *SystemdManager) admitMemory(c hostCap, l control.ResourceLimits) error {
-	data, err := m.trustedCgroupFile(c.slice, "memory.current")
-	if err != nil {
-		return fmt.Errorf("%w: the memory in use of %s cannot be read: %v", ErrLimitReadback, c.slice, err)
-	}
-	current, ok := parseCgroupUint(data)
-	if !ok {
-		return fmt.Errorf("%w: the memory in use of %s is malformed", ErrLimitReadback, c.slice)
-	}
-	cache, err := m.reclaimableCache(c.slice)
+	usage, err := m.sliceMemoryUsage(c)
 	if err != nil {
 		return err
 	}
-	// The two files are read at different times, so the cache can be
-	// above memory.current.
-	reclaimable := min(cache, current)
-	inUse := current - reclaimable
-	ceiling := c.memoryCeiling()
+	inUse, reclaimable, ceiling := usage.inUse, usage.reclaimable, c.memoryCeiling()
 	need := l.MemoryMaxMiB*mebibyte + m.reserve.memoryBytes()
 	if inUse > ceiling || need > ceiling-inUse {
 		return fmt.Errorf("%w: %d MiB is in use. The %d MiB of page cache that the kernel can reclaim does not count. "+
@@ -205,6 +193,33 @@ func (m *SystemdManager) admitMemory(c hostCap, l control.ResourceLimits) error 
 			inUse/mebibyte, reclaimable/mebibyte, need/mebibyte, m.reserve.MemoryMiB, ceiling/mebibyte)
 	}
 	return nil
+}
+
+// sliceMemory is the memory use of the slice in bytes: in use, without the
+// page cache that the kernel can reclaim, and that page cache.
+type sliceMemory struct {
+	inUse, reclaimable uint64
+}
+
+// sliceMemoryUsage reads memory.current and the reclaimable page cache of
+// the slice. A failed read is a readback failure, never 0.
+func (m *SystemdManager) sliceMemoryUsage(c hostCap) (sliceMemory, error) {
+	data, err := m.trustedCgroupFile(c.slice, "memory.current")
+	if err != nil {
+		return sliceMemory{}, fmt.Errorf("%w: the memory in use of %s cannot be read: %v", ErrLimitReadback, c.slice, err)
+	}
+	current, ok := parseCgroupUint(data)
+	if !ok {
+		return sliceMemory{}, fmt.Errorf("%w: the memory in use of %s is malformed", ErrLimitReadback, c.slice)
+	}
+	cache, err := m.reclaimableCache(c.slice)
+	if err != nil {
+		return sliceMemory{}, err
+	}
+	// The two files are read at different times, so the cache can be
+	// above memory.current.
+	reclaimable := min(cache, current)
+	return sliceMemory{inUse: current - reclaimable, reclaimable: reclaimable}, nil
 }
 
 // reclaimableCache reads the page cache on the file LRU lists from the

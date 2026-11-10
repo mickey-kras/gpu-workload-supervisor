@@ -2,7 +2,7 @@
 
 [Documentation](README.md). See [implemented integration](INTEGRATION.md).
 
-**Design for [#584](https://github.com/mickey-kras/gpu-workload-supervisor/issues/584). This release has the schema, the runtime checks, the advisory escape route report, the setup of unit limits and the limit stop. The desktop page comes later.**
+**Design for [#584](https://github.com/mickey-kras/gpu-workload-supervisor/issues/584). This release has the schema, the runtime checks, the advisory escape route report, the setup of unit limits, the limit stop and the desktop page.**
 
 - Catalog v5 accepts `limits` on owned inference launches. The renderer and strict parser carry them.
 - Escape routes are advisory warnings. Setup discovery reports them. They do not block limits, and no runtime check reads them. See [escape route report](#escape-route-report).
@@ -37,7 +37,7 @@
 - A status check or reconciliation keeps the admission closed without a stop. The policy tick can stop the unit later. See [limit stop](#limit-stop).
 - Setup writes limits on owned inference units and shows the root step of the host cap. See [setup of unit limits](#setup-of-unit-limits).
 
-Later changes add trainer binding limits and the **Resource checks** page. `requiredMiB` estimates launch VRAM demand. It enforces no ceiling. GPU VRAM enforcement and separate-account workload isolation are out of scope.
+Later changes add trainer binding limits. `requiredMiB` estimates launch VRAM demand. It enforces no ceiling. GPU VRAM enforcement and separate-account workload isolation are out of scope.
 
 - [Host protection](#host-cap)
 - [Unit limits](#unit-limits)
@@ -96,7 +96,7 @@ Limits protect against runaway workloads and accidents. They do not contain host
 
 ### Escape route report
 
-`gpu-setup discover` returns the report as the `escapeRoutes` list. A later #584 change shows it on the desktop resource page. The supervisor and the runtime never run the scan.
+`gpu-setup discover` returns the report as the `escapeRoutes` list. The **Host protection** page of the desktop setup shows it as warnings. The supervisor and the runtime never run the scan.
 
 The scan is the last step of discovery and has its own limit of 5 seconds. The other steps cannot use up this limit. When an earlier step fails, no scan runs. When the limit ends the scan, or the caller cancels discovery, the report says that the scan is incomplete. Run discovery again to complete it.
 
@@ -237,6 +237,7 @@ Preview returns the host cap step as `hostCap` for its request. Discovery return
 | `problems` | Each missing, unreadable or different drop-in, and each failed setup check with its workload |
 | `ioWeight` | For each unit that limits I/O: its `workload`, `device` and `provider`. The provider is `bfq`, `iocost` or `none`. It is `invalid` when the device fails the device check, and `unknown` when setup cannot check the device |
 | `reserve` | The effective reserve |
+| `usage` | The slice memory in MiB: `memoryInUseMiB` without the reclaimable page cache, `pageCacheMiB` and `ceilingMiB`. Absent when no unit passes its checks or a read fails. A failed read adds a problem and does not change the status |
 
 A missing drop-in makes the status `absent`. A drop-in that differs from the requested content, or a definite check failure, makes it `different`. A check that proves nothing, or a drop-in that setup cannot read, makes it `unknown`. Setup never runs the commands.
 
@@ -514,9 +515,13 @@ A crash can interrupt the stop. Then each tick fails at once with a running tran
 
 ## Desktop
 
-Use Advanced settings' Resource checks page. Limits default Off per unit. Enablement applies the [defaults for unset controls](#reserve-and-pressure).
+Each application has its limits on the **Resource checks** page of its Advanced settings. Limits default Off per unit. Only a launch that Supervisor manages can have limits. For an adopted unit, the page says to convert it first and add the limits in a second setup run.
 
-Display ceiling and current usage beside fields. Show memory in GiB, CPU in cores, tasks as count. Put I/O and weight in a closed section.
+When you turn the limits on, the page fills 4096 tasks and 4 CPU cores. Memory high and memory maximum start empty, and you must enter both. Enter memory in GiB with at most one decimal. Setup stores MiB, rounded down. The page shows CPU in cores and tasks as a count.
+
+I/O and weight are in a closed section. A value that you do not edit keeps its stored value exactly. The page shows the slice memory ceiling and the memory in use beside the fields.
+
+**Setup settings** has the **Host protection** page for the whole installation. It shows the host cap status, the memory in use, the problems and the escape route warnings. When the status is absent or different, it shows the exact root step with a **Copy root step** button. The page also has the host memory values of the request and the reserve for the supervisor. A request gets `hostCap` only when a workload has limits. A reserve equal to the defaults stores no `limitReserve`.
 
 | Status | Text | Action |
 | --- | --- | --- |
@@ -541,7 +546,7 @@ Display ceiling and current usage beside fields. Show memory in GiB, CPU in core
 
 The page picks the row of an escape route entry from its `route` first. The route `more` always uses the row for left-out routes, also when `unchecked` is `true`. The route `incomplete` uses the row for unchecked routes. Other entries use that row only when `unchecked` is `true`.
 
-Present requires hard slice ceilings. Escape routes do not change the status. The desktop page of a later #584 change shows them as warnings beside it.
+Present requires hard slice ceilings. Escape routes do not change the status. The **Host protection** page shows them as warnings beside it.
 
 ## Schema
 

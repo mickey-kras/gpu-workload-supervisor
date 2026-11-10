@@ -48,7 +48,9 @@ New or edited adopted services receive read-only launch and cgroup preflight and
 | Stale draft | Reopen Manage workloads before retrying |
 | Interrupted activation | Resumes its recorded configuration. Editing stays disabled until completion |
 
-For installed vLLM without a supported service, choose **Change installation…**, then **Choose installed executable…**. In **Advanced settings**, choose **Review changes** and an existing model directory. **Continue** validates both and previews a managed launch. Canceling a chooser retains its previous selection. Advanced settings separates common fields, **Resource checks** and **Launch details**. Launch details separates managed options from external adoption.
+For installed vLLM without a supported service, choose **Change installation…**, then **Choose installed executable…**. In **Advanced settings**, choose **Review changes** and an existing model directory. **Continue** validates both and previews a managed launch. Canceling a chooser retains its previous selection.
+
+Advanced settings separates common fields, **Resource checks** and **Launch details**. Resource checks also has the [resource limits](RESOURCE-LIMITS.md#desktop) of a managed launch. **Setup settings** has the **Host protection** page. Launch details separates managed options from external adoption.
 
 Recognized external services and drop-ins keep launch options. ComfyUI retains its service configuration. Optional gears keep managed-launch and explicit-binding workflows. An external vLLM service pins its model: each different model needs its own service.
 
