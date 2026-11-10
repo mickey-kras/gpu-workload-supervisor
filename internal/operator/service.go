@@ -264,7 +264,7 @@ func errorCode(err error) Code {
 		return WrongOwner
 	case errors.Is(err, store.ErrVersionConflict) || errors.Is(err, store.ErrStaleFence) || errors.Is(err, store.ErrConfigurationConflict) || errors.Is(err, store.ErrSettingsConflict):
 		return StaleState
-	case errors.Is(err, store.ErrInvalidIdleTimeout):
+	case errors.Is(err, store.ErrInvalidIdleTimeout) || errors.Is(err, supervisor.ErrInvalidTarget) || errors.Is(err, supervisor.ErrTrainerTarget):
 		return InvalidRequest
 	case errors.Is(err, store.ErrEvidenceUnavailable):
 		return Unavailable

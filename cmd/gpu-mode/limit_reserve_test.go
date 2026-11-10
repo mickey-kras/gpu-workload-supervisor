@@ -10,6 +10,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/operator"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 	"golang.org/x/sys/unix"
 )
 
@@ -58,7 +59,7 @@ func TestCommandsUseTheStoredReserve(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got gpuruntime.SystemdConfig
-	factory := func(cfg gpuruntime.SystemdConfig) (gpuruntime.Manager, error) {
+	factory := func(cfg gpuruntime.SystemdConfig) (supervisor.Runtime, error) {
 		got = cfg
 		return &cliCatalogRuntime{}, nil
 	}

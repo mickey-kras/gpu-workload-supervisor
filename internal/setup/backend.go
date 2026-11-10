@@ -163,7 +163,7 @@ func (b Backend) Plan(home string, request Request) (Preview, error) {
 // instead of touching the real runtime, unit manager, or package binaries.
 type Backend struct {
 	gpuInventory        func(context.Context) ([]string, string)
-	makeRuntime         func(Request) (gpuruntime.Manager, error)
+	makeRuntime         func(Request) (supervisor.Runtime, error)
 	runCommand          gpuruntime.CommandFunc
 	probeApplication    func(ctx context.Context, request ProbeRequest) (ApplicationCandidate, error)
 	discoverExecutables func(context.Context, string) []ApplicationCandidate
@@ -184,7 +184,7 @@ func SystemBackend() Backend {
 		escapeRoutes: gpuruntime.ScanEscapeRoutes}
 }
 
-func runtimeFor(request Request) (gpuruntime.Manager, error) {
+func runtimeFor(request Request) (supervisor.Runtime, error) {
 	return gpuruntime.NewSystemdManager(request.Profile.SystemdConfig(&request.Catalog))
 }
 
@@ -272,7 +272,7 @@ type commitOptions struct {
 	home    string
 	root    string
 	request Request
-	manager gpuruntime.Manager
+	manager supervisor.Runtime
 	fresh   bool
 	plan    unitPlan
 }

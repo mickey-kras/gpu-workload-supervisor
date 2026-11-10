@@ -38,7 +38,7 @@ func main() {
 }
 
 func run() error {
-	return runWithRuntimeFactory(func(config gpuruntime.SystemdConfig) (gpuruntime.Manager, error) {
+	return runWithRuntimeFactory(func(config gpuruntime.SystemdConfig) (supervisor.Runtime, error) {
 		return gpuruntime.NewSystemdManager(config)
 	})
 }
@@ -50,7 +50,7 @@ type modeExecution struct {
 	actionTimeout, drainTimeout, verifyTimeout, cleanupTimeout, finalizeTimeout, pollInterval time.Duration
 }
 
-func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error)) error {
+func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (supervisor.Runtime, error)) error {
 	flags := flag.NewFlagSet("gpu-mode", flag.ContinueOnError)
 	catalogPath := flags.String("catalog", "", "catalog JSON for configure and verify-host")
 	catalogRevision := flags.String("configuration-revision", "", "expected accepted catalog revision for configure")
@@ -130,7 +130,7 @@ func validateCatalogFlags(flags *flag.FlagSet, catalogPath string) error {
 	return nil
 }
 
-func executeWithState(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error), runtimeConfig gpuruntime.SystemdConfig, command string, auditCutoff time.Time, options modeExecution) error {
+func executeWithState(newRuntime func(gpuruntime.SystemdConfig) (supervisor.Runtime, error), runtimeConfig gpuruntime.SystemdConfig, command string, auditCutoff time.Time, options modeExecution) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	processLock, err := lock.AcquireContext(ctx, options.statePath+".lock", false)

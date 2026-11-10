@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,12 +13,14 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 // The runtime package covers kernel evidence and blank ControlGroup metadata.
 // This boundary fixture tests fresh CLI configuration, state and recovery wiring
 // without requiring a real user systemd manager or exposing a filesystem bypass.
 type stoppedRecoveryRuntime struct {
+	noLimitsOrTraining
 	releaseCalls int
 }
 
@@ -41,6 +44,40 @@ func (r *stoppedRecoveryRuntime) ReleasedFor(context.Context, control.Workload) 
 	return nil
 }
 func (r *stoppedRecoveryRuntime) Preflight(context.Context) error { return nil }
+func (r *stoppedRecoveryRuntime) ObserveForRecovery(ctx context.Context) (gpuruntime.Snapshot, error) {
+	return r.Observe(ctx)
+}
+
+// noLimitsOrTraining is the part of a fake runtime that cannot check
+// limits or run trainers.
+type noLimitsOrTraining struct{}
+
+var errFakeTraining = errors.New("the fake runs no trainer")
+
+func (noLimitsOrTraining) VerifyLaunchLimits(context.Context, control.Workload) error {
+	return gpuruntime.ErrLimitUnchecked
+}
+func (noLimitsOrTraining) VerifyLimitProtection(context.Context, control.Workload) error {
+	return gpuruntime.ErrLimitUnchecked
+}
+func (noLimitsOrTraining) LimitOutcome(context.Context, control.Workload) gpuruntime.LimitOutcome {
+	return gpuruntime.LimitOutcome{Class: gpuruntime.LimitOutcomeNone}
+}
+func (noLimitsOrTraining) LimitStopReleased(context.Context, control.Workload) error {
+	return gpuruntime.ErrLimitUnchecked
+}
+func (noLimitsOrTraining) StartTraining(context.Context, control.WorkloadProfile, control.TrainingJob) (string, error) {
+	return "", errFakeTraining
+}
+func (noLimitsOrTraining) TrainingTerminal(context.Context, control.WorkloadProfile, control.TrainingJob) (control.TrainingTerminal, error) {
+	return control.TrainingTerminal{}, errFakeTraining
+}
+func (noLimitsOrTraining) ReleaseTraining(context.Context, control.WorkloadProfile) error {
+	return errFakeTraining
+}
+func (noLimitsOrTraining) TrainingMemoryPeak(context.Context, control.WorkloadProfile, control.TrainingJob) (uint64, error) {
+	return 0, errFakeTraining
+}
 
 func TestFreshCLIUserIdleRecoveryWiresConfiguredCgroups(t *testing.T) {
 	ctx := context.Background()
@@ -82,7 +119,7 @@ func TestFreshCLIUserIdleRecoveryWiresConfiguredCgroups(t *testing.T) {
 		os.Stdout = output
 		os.Args = []string{"gpu-mode", "-state", statePath, "-systemctl", "/usr/bin/true", "-target", "idle", "recover-user"}
 		runtime := &stoppedRecoveryRuntime{}
-		factory := func(config gpuruntime.SystemdConfig) (gpuruntime.Manager, error) {
+		factory := func(config gpuruntime.SystemdConfig) (supervisor.Runtime, error) {
 			if config.Catalog == nil {
 				t.Fatalf("accepted catalog not pinned: %#v", config)
 			}

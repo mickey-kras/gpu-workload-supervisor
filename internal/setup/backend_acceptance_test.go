@@ -12,7 +12,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 func acceptanceWrite(t *testing.T, path string, data []byte) {
@@ -68,7 +68,7 @@ func TestAcceptanceActivationRejectsUnsafeInputsBeforeMaintenance(t *testing.T) 
 				old.ActivatedRelease = "0.1.0"
 				acceptanceJSON(t, filepath.Join(root, "operator.json"), old)
 			case "runtime-construction":
-				backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return nil, errors.New("invalid executable") }
+				backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return nil, errors.New("invalid executable") }
 			case "bad-activation-path":
 				if err := os.MkdirAll(filepath.Join(root, "activation.json"), 0700); err != nil {
 					t.Fatal(err)
@@ -117,7 +117,7 @@ func TestAcceptanceExistingActivationRejectsUnsafeUpgrade(t *testing.T) {
 			case "old-runtime-invalid", "old-runtime-busy":
 				r.Catalog = r.Catalog.Clone()
 				r.Catalog.Profiles[0].Label = "Edited candidate"
-				backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
+				backend.makeRuntime = func(got Request) (supervisor.Runtime, error) {
 					if got.Catalog.Profiles[0].Label == snapshot.Catalog.Profiles[0].Label {
 						if kind == "old-runtime-invalid" {
 							return nil, errors.New("previous executable invalid")
@@ -180,7 +180,7 @@ func TestAcceptanceDiscoveryAndReconciliationRejectDamagedProfiles(t *testing.T)
 					t.Fatal(err)
 				}
 			case "runtime-invalid":
-				backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return nil, errors.New("invalid runtime") }
+				backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return nil, errors.New("invalid runtime") }
 			}
 			if err := backend.Reconcile(ctx, home); err == nil {
 				t.Fatal("unsafe reconciliation accepted")

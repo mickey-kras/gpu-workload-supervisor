@@ -12,7 +12,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 func TestLegacyOwnedBackstopsResumeOriginalActivation(t *testing.T) {
@@ -95,7 +95,7 @@ func TestLegacyOwnedBackstopsResumeOriginalActivation(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(preview.Catalog, request.Catalog) {
 				t.Fatalf("preview rewrote pending activation: %#v %v", preview.Catalog, err)
 			}
-			backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
+			backend.makeRuntime = func(got Request) (supervisor.Runtime, error) {
 				if !reflect.DeepEqual(got.Catalog, request.Catalog) {
 					t.Fatal("recovery runtime saw rewritten catalog")
 				}
@@ -132,7 +132,7 @@ func TestLegacyOwnedBackstopsResumeOriginalActivation(t *testing.T) {
 			if err := backend.Reconcile(context.Background(), home); err != nil {
 				t.Fatal(err)
 			}
-			backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+			backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{}, nil }
 			request.ExpectedRevision = accepted.Revision
 			upgraded, err := backend.Plan(home, request)
 			if err != nil || upgraded.Catalog.Profiles[0].NativeModel.Owned.Conflicts != z.Unit {

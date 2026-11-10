@@ -16,7 +16,6 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 	"golang.org/x/sys/unix"
@@ -204,7 +203,7 @@ func TestAcceptanceProcessGatePreventsAnyOpen(t *testing.T) {
 }
 
 // Embedded nil methods deliberately fail the test if any runtime method is called.
-type acceptanceUntouchedRuntime struct{ gpuruntime.Manager }
+type acceptanceUntouchedRuntime struct{ supervisor.Runtime }
 
 func TestAcceptanceControllerStalePreconditionsHaveZeroEffects(t *testing.T) {
 	ctx := context.Background()
@@ -272,5 +271,16 @@ func TestAcceptanceControllerStalePreconditionsHaveZeroEffects(t *testing.T) {
 				t.Fatalf("transition created: %q %v", pending, err)
 			}
 		})
+	}
+	// Idle is a session workload but never an activation target: the
+	// refusal is permanent, so the code is not the transient unavailable.
+	idle := expected
+	idle.Owner = control.OwnerSupervisor
+	r := svc.Handle(Request{ProtocolVersion: 1, RequestID: "r", Action: actionActivateWorkload, Target: control.WorkloadIdle, Expected: &idle})
+	if r.Code != InvalidRequest || r.Status != nil {
+		t.Fatalf("response %+v", r)
+	}
+	if after, err := db.State(ctx); err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatalf("state changed: %+v %v", after, err)
 	}
 }

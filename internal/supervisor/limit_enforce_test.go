@@ -439,12 +439,12 @@ func TestLimitStopChecksChangedBindingOnce(t *testing.T) {
 	requireLatchedIdle(t, f)
 }
 
-// A runtime without the release check of a limit stop never records idle.
-func TestLimitStopWithoutReleaseCheckKeepsUnknownWorkload(t *testing.T) {
+// A limit stop whose release check cannot run never records idle.
+func TestLimitStopWithUncheckedReleaseKeepsUnknownWorkload(t *testing.T) {
 	f := latchedVision(t, false)
 	f.c.runtime = f.r.limitedRuntime
 	err := f.c.EnforceLimits(context.Background())
-	if !errors.Is(err, gpuruntime.ErrLimitUnchecked) || !strings.Contains(err.Error(), "the runtime cannot read it") || f.stopCount() != 1 {
+	if !errors.Is(err, gpuruntime.ErrLimitUnchecked) || !strings.Contains(err.Error(), "the fake cannot read it") || f.stopCount() != 1 {
 		t.Fatalf("stop without the release check = %v", err)
 	}
 	if state := f.state(t); state.ActiveWorkload != control.WorkloadUnknown {

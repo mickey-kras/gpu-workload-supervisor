@@ -12,7 +12,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 func TestLegacyOwnedPrunedJournalAfterActualAbort(t *testing.T) {
@@ -190,7 +190,7 @@ func TestDerivedOwnedOriginalRequestAfterActualPrecommitFailure(t *testing.T) {
 				t.Fatal("fixture did not derive dependencies")
 			}
 			injected := errors.New("injected precommit failure")
-			backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
+			backend.makeRuntime = func(got Request) (supervisor.Runtime, error) {
 				return launchPreflightRuntime{verify: func() error {
 					marker, err := deployment.Read(request.Profile.StatePath)
 					if err == nil && marker.Maintenance && reflect.DeepEqual(got.Catalog, candidate.Catalog) {
@@ -241,7 +241,7 @@ func TestDerivedOwnedOriginalRequestAfterActualPrecommitFailure(t *testing.T) {
 			}
 			candidateSeen, priorSeen := 0, 0
 			applying := false
-			backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
+			backend.makeRuntime = func(got Request) (supervisor.Runtime, error) {
 				if reflect.DeepEqual(got.Catalog, candidate.Catalog) {
 					candidateSeen++
 				} else if applying && scenario == "incremental-peer-add" && reflect.DeepEqual(got.Catalog, priorCatalog) {

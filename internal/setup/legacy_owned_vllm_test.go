@@ -11,12 +11,13 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/vllmkey"
 )
 
 // strictVLLMRuntime models the runtime qualification: a vLLM binding without
 // the hardened settings never passes preflight.
-func strictVLLMRuntime(request Request) (gpuruntime.Manager, error) {
+func strictVLLMRuntime(request Request) (supervisor.Runtime, error) {
 	for _, p := range request.Catalog.Profiles {
 		if p.NativeModel != nil && p.NativeModel.Runtime == "vllm" && !p.NativeModel.Hardened() {
 			return idleRuntime{err: errors.New("binding from an earlier release")}, nil
@@ -232,7 +233,7 @@ func TestAdoptionComparesTheLoadedEnvironmentFile(t *testing.T) {
 
 // keyCheckingRuntime models the runtime qualification of the key file: an
 // owned vLLM binding without its key file never passes preflight.
-func keyCheckingRuntime(request Request) (gpuruntime.Manager, error) {
+func keyCheckingRuntime(request Request) (supervisor.Runtime, error) {
 	for _, p := range request.Catalog.Profiles {
 		if p.NativeModel != nil && p.NativeModel.Owned != nil {
 			if _, err := vllmkey.Read(p.NativeModel.EnvironmentFile); err != nil {
@@ -326,7 +327,7 @@ func TestFailedApplyRemovesOnlyTheKeyFilesItCreated(t *testing.T) {
 		request.Catalog.Profiles[i].NativeModel.LaunchSHA256 = digest(raw)
 	}
 	createdDuringApply := false
-	b.makeRuntime = func(r Request) (gpuruntime.Manager, error) {
+	b.makeRuntime = func(r Request) (supervisor.Runtime, error) {
 		if _, candidate := r.Catalog.Profile(created.ID); candidate {
 			_, err := os.Stat(created.NativeModel.EnvironmentFile)
 			createdDuringApply = createdDuringApply || err == nil
@@ -350,7 +351,7 @@ func TestFailedApplyRemovesOnlyTheKeyFilesItCreated(t *testing.T) {
 
 // templateCheckingRuntime models the runtime pin check: a vLLM binding whose
 // chat template has another digest never passes preflight.
-func templateCheckingRuntime(request Request) (gpuruntime.Manager, error) {
+func templateCheckingRuntime(request Request) (supervisor.Runtime, error) {
 	for _, p := range request.Catalog.Profiles {
 		if p.NativeModel != nil && p.NativeModel.Hardened() {
 			digest, err := gpuruntime.ChatTemplateSHA256(p.NativeModel.ChatTemplate)
@@ -449,7 +450,7 @@ func TestNewOwnedVLLMWorkloadPassesPreviewThenApplyCreatesTheKey(t *testing.T) {
 	profile, _ := ownedFixtureProfile(t, home, "fresh", 9100)
 	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
 	present := true
-	b.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+	b.makeRuntime = func(Request) (supervisor.Runtime, error) {
 		return previewRuntime{key: profile.NativeModel.EnvironmentFile, present: &present}, nil
 	}
 	if err := b.verifyBindings(t.Context(), home, request); err != nil {

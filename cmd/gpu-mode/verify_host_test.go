@@ -9,6 +9,7 @@ import (
 	"time"
 
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 type hostProbeRuntime struct {
@@ -62,7 +63,7 @@ func TestVerifyHostDoesNotOpenState(t *testing.T) {
 				}
 				return nil
 			}}
-			err := runWithRuntimeFactory(func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error) {
+			err := runWithRuntimeFactory(func(gpuruntime.SystemdConfig) (supervisor.Runtime, error) {
 				if scenario == "factory failure" {
 					return nil, sentinel
 				}

@@ -12,6 +12,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 func ownedCLIProfile() control.WorkloadProfile {
@@ -90,7 +91,7 @@ func TestConfigureCarriesOwnedProfilesVerbatim(t *testing.T) {
 	statePath := filepath.Join(dir, "state.db")
 	file := filepath.Join(dir, "catalog.json")
 	r := &cliCatalogRuntime{}
-	factory := func(cfg gpuruntime.SystemdConfig) (gpuruntime.Manager, error) { return r, nil }
+	factory := func(cfg gpuruntime.SystemdConfig) (supervisor.Runtime, error) { return r, nil }
 	invoke := func(args ...string) error {
 		os.Args = append([]string{"gpu-mode", "-state", statePath}, args...)
 		return runWithRuntimeFactory(factory)

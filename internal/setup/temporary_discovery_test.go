@@ -12,8 +12,8 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 type cleanupRuntime struct {
@@ -89,7 +89,7 @@ func TestUpgradeTemporarySessionBlocksSetupUntilVerifiedCleanup(t *testing.T) {
 		t.Fatal(status, err)
 	}
 	runtime := &cleanupRuntime{fail: true}
-	b.makeRuntime = func(request Request) (gpuruntime.Manager, error) {
+	b.makeRuntime = func(request Request) (supervisor.Runtime, error) {
 		if err := request.Catalog.Validate(); err != nil {
 			return nil, err
 		}
