@@ -10,13 +10,11 @@ import (
 
 var errUpstreamKey = errors.New("native model API key is not sent")
 
-// Test hook.
-var checkUpstreamListener = vllmkey.CheckListener
-
 // upstreamKeyTransport sends the vLLM API key to the loopback upstream. It
 // reads the private key file for each request, so a new key applies without a
-// restart, and it replaces any Authorization header from the client. It sends
-// the key only when the desktop user holds the upstream port.
+// restart, and it replaces any Authorization header from the client. Its base
+// transport dials through ownedPeerDial, so the key goes only on a connection
+// that a socket of the desktop user accepted.
 type upstreamKeyTransport struct {
 	keyFile string
 	base    http.RoundTripper
@@ -24,9 +22,6 @@ type upstreamKeyTransport struct {
 
 func (t upstreamKeyTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	key, err := vllmkey.Read(t.keyFile)
-	if err == nil {
-		err = checkUpstreamListener("http://" + request.URL.Host)
-	}
 	if err != nil {
 		if request.Body != nil {
 			_ = request.Body.Close()

@@ -35,16 +35,7 @@ func (r *recordingTransport) RoundTrip(request *http.Request) (*http.Response, e
 	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{}")), Header: http.Header{}, Request: request}, nil
 }
 
-// allowUpstreamListener replaces the listener check for fake upstreams.
-func allowUpstreamListener(t *testing.T, err error) {
-	t.Helper()
-	saved := checkUpstreamListener
-	checkUpstreamListener = func(string) error { return err }
-	t.Cleanup(func() { checkUpstreamListener = saved })
-}
-
 func TestUpstreamKeyTransportReplacesClientAuthorization(t *testing.T) {
-	allowUpstreamListener(t, nil)
 	base := &recordingTransport{}
 	transport := upstreamKeyTransport{keyFile: proxyKeyFile(t), base: base}
 	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:9000/v1/models", nil)
@@ -69,19 +60,6 @@ func TestUpstreamKeyTransportFailsClosedWithoutKey(t *testing.T) {
 	}
 	if len(base.headers) != 0 {
 		t.Fatal("request without the key reached the upstream")
-	}
-}
-
-func TestUpstreamKeyTransportRefusesForeignListener(t *testing.T) {
-	allowUpstreamListener(t, vllmkey.ErrForeignListener)
-	base := &recordingTransport{}
-	transport := upstreamKeyTransport{keyFile: proxyKeyFile(t), base: base}
-	request := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:9000/v1/models", nil)
-	if _, err := transport.RoundTrip(request); !errors.Is(err, errUpstreamKey) || !errors.Is(err, vllmkey.ErrForeignListener) {
-		t.Fatalf("error = %v", err)
-	}
-	if len(base.headers) != 0 {
-		t.Fatal("the key reached a foreign listener")
 	}
 }
 
@@ -130,6 +108,19 @@ func TestNativeProxyRequiresKeyFileAtStart(t *testing.T) {
 	}
 }
 
+// nativeKeyHandler returns a handler for a native binding with the upstream
+// endpoint and key file.
+func nativeKeyHandler(t *testing.T, endpoint, keyFile string) *Handler {
+	t.Helper()
+	u, _ := url.Parse(endpoint)
+	s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: endpoint, EnvironmentFile: keyFile}}}}}}
+	h, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/v1/completions"}}, ReadOnlyRoutes: []Route{{Method: "GET", Path: "/v1/models"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
 func TestNativeReadRouteSendsUpstreamKey(t *testing.T) {
 	var seen string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -137,17 +128,22 @@ func TestNativeReadRouteSendsUpstreamKey(t *testing.T) {
 		_, _ = io.WriteString(w, `{"data":[{"id":"selected"}]}`)
 	}))
 	defer upstream.Close()
-	u, _ := url.Parse(upstream.URL)
-	s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: upstream.URL, EnvironmentFile: proxyKeyFile(t)}}}}}}
-	h, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/v1/completions"}}, ReadOnlyRoutes: []Route{{Method: "GET", Path: "/v1/models"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	h := nativeKeyHandler(t, upstream.URL, proxyKeyFile(t))
 	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	request.Header.Set("Authorization", "Bearer client-secret")
 	response := httptest.NewRecorder()
 	h.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || seen != "Bearer "+proxyTestKey {
 		t.Fatalf("status %d, upstream Authorization %q", response.Code, seen)
+	}
+}
+
+// A custom transport would skip the peer check, so a native binding refuses it.
+func TestNativeProxyRefusesCustomTransport(t *testing.T) {
+	u, _ := url.Parse("http://127.0.0.1:9000")
+	s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: u.String(), EnvironmentFile: proxyKeyFile(t)}}}}}}
+	_, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/v1/completions"}}, Transport: &recordingTransport{}})
+	if err == nil || !strings.Contains(err.Error(), "built-in upstream transport") {
+		t.Fatalf("custom transport accepted: %v", err)
 	}
 }
