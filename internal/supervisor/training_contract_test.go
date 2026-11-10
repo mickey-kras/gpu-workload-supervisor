@@ -808,9 +808,6 @@ func TestTrainingContractRoutineTransitionsWaitForRelease(t *testing.T) {
 			if _, err := c.TransferToUser(ctx, control.WorkloadIdle, "operator"); !errors.Is(err, store.ErrTrainingPending) {
 				t.Fatalf("ownership transfer error=%v", err)
 			}
-			if _, err := c.PolicyIdle(ctx, time.Now(), nil); err == nil {
-				t.Fatal("idle policy displaced training")
-			}
 			after, err := s.State(ctx)
 			if err != nil {
 				t.Fatal(err)

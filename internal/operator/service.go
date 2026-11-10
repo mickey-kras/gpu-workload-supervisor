@@ -32,9 +32,9 @@ type Session struct {
 	Close     func() error
 	// PolicyStore is nil only in tests; settings actions then fail closed.
 	PolicyStore PolicyStore
-	// IdlePolicyConfigurable is false until the hosting process carries a
-	// qualified evidence provider; it gates set-idle-policy enable writes and
-	// is never advertised on the version-1 status shape.
+	// IdlePolicyConfigurable is false: no inactivity evaluator ships. It
+	// gates set-idle-policy enable writes and is never advertised on the
+	// version-1 status shape.
 	IdlePolicyConfigurable bool
 }
 
@@ -181,7 +181,7 @@ func (s Session) getSettings(ctx context.Context) (*SettingsResponse, Code) {
 }
 
 // setIdlePolicy commits only through the typed store surface; enabling is
-// rejected fail-closed while the host has no qualified evidence provider.
+// rejected fail-closed because no inactivity evaluator ships.
 func (s Session) setIdlePolicy(ctx context.Context, req Request) (*SettingsResponse, Code) {
 	if s.PolicyStore == nil {
 		return nil, Unavailable

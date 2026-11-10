@@ -14,8 +14,8 @@ var (
 	ErrSettingsConflict = errors.New("operator settings revision conflict")
 	// ErrInvalidIdleTimeout rejects an out-of-bounds idle timeout.
 	ErrInvalidIdleTimeout = errors.New("idle timeout must be 0 (off) or between 5 and 1440 minutes")
-	// ErrEvidenceUnavailable rejects enabling the idle policy while the
-	// hosting process has no qualified evidence provider; never latched.
+	// ErrEvidenceUnavailable rejects enabling the idle policy: no inactivity
+	// evaluator ships. It never latches.
 	ErrEvidenceUnavailable = errors.New("qualified idle evidence provider is unavailable")
 )
 
@@ -28,14 +28,14 @@ func (s *Store) Settings(ctx context.Context) (control.PolicyState, error) {
 // precondition. The writer transaction re-validates the incarnation, state
 // version, owner, catalog revision, and settings revision; settings never
 // interrupt an unstable state or a running transition. Every write rotates
-// the opaque settings revision and clears the armed deadline, so a later
-// policy tick must re-verify before idling.
+// the opaque settings revision and clears an armed deadline that a database
+// of an older release can hold.
 func (s *Store) SetIdlePolicy(ctx context.Context, e control.SettingsPrecondition, p control.IdlePolicy, evidenceAvailable bool) (control.PolicyState, error) {
 	if err := p.Validate(); err != nil {
 		return control.PolicyState{}, errors.Join(ErrInvalidIdleTimeout, err)
 	}
-	// Enabling is gated on the hosting process carrying a qualified evidence
-	// provider; the store defends the invariant so no caller can bypass it.
+	// Enabling is gated on the caller; the store defends the invariant so no
+	// caller can bypass it.
 	if p.TimeoutMinutes != control.IdlePolicyOff && !evidenceAvailable {
 		return control.PolicyState{}, ErrEvidenceUnavailable
 	}
@@ -93,9 +93,9 @@ func (s *Store) setIdlePolicy(ctx context.Context, tx *sql.Tx, e control.Setting
 	return readPolicyState(ctx, tx)
 }
 
-// disarmIdleDeadline clears the verified armed deadline (and the attestation
-// it was armed from) inside the caller's writer transaction. The next policy
-// tick must re-attest before a deadline can be armed again.
+// disarmIdleDeadline clears an armed deadline and its attestation time
+// inside the caller's writer transaction. No production path arms a
+// deadline; a database of an older release can still hold one.
 func (s *Store) disarmIdleDeadline(ctx context.Context, tx *sql.Tx) error {
 	return updateSingleton(ctx, tx, `UPDATE idle_policy_state
 		SET armed_deadline = NULL, attestation_at = NULL, updated_at = ?

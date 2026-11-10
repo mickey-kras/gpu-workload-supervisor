@@ -475,7 +475,7 @@ Keep `Restart=no`. Add no `StartLimit*`, automatic restart or phase. Idle stops 
 
 ## Limit stop
 
-The policy tick runs the limit stop before the inactivity policy. The limit stop acts only on a supervisor-owned state with error health and closed admission. No transition can be in progress. The limit stop then checks each running unit with limits. A user-owned state gets no limit stop.
+The policy tick runs the limit stop. The limit stop acts only on a supervisor-owned state with error health and closed admission. No transition can be in progress. The limit stop then checks each running unit with limits. A user-owned state gets no limit stop.
 
 The `limit_stops` table keeps the time of the first failure and of the first definite failure in the latch. A failure of another unit keeps these times, so units that fail in turn cannot reset them. With no pending admitted work of the unit, a definite failure stops the unit at once. Work with no workload identity counts as work of the unit.
 
