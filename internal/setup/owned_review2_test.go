@@ -12,6 +12,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 // TestApplyRollsBackOwnedWritesOnFailedPrecheck reproduces the mutation leak:
@@ -30,11 +31,11 @@ func TestApplyRollsBackOwnedWritesOnFailedPrecheck(t *testing.T) {
 	updated, _ := ownedFixtureProfile(t, home, "vision", 9101)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{updated}}
 	r.ExpectedRevision = currentRevision(t, r)
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{err: errors.New("busy")}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{err: errors.New("busy")}, nil }
 	if err := backend.Apply(ctx, home, r); err == nil {
 		t.Fatal("non-quiescent workload applied")
 	}
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{}, nil }
 	data, err := os.ReadFile(filepath.Join(ownedUnitDirectory(home), profile.Unit))
 	if err != nil || string(data) != string(raw) {
 		t.Fatalf("committed unit not restored: %v", err)
@@ -1058,7 +1059,7 @@ func TestRollbackFailureRetainsPendingJournal(t *testing.T) {
 	updated, updatedRaw := ownedFixtureProfile(t, home, "vision", 9101)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{updated}}
 	r.ExpectedRevision = currentRevision(t, r)
-	backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
+	backend.makeRuntime = func(got Request) (supervisor.Runtime, error) {
 		if got.Catalog.Profiles[0].NativeModel.LaunchSHA256 == updated.NativeModel.LaunchSHA256 {
 			return idleRuntime{err: errors.New("candidate busy after write")}, nil
 		}
@@ -1067,7 +1068,7 @@ func TestRollbackFailureRetainsPendingJournal(t *testing.T) {
 	if err := backend.Apply(ctx, home, r); err == nil {
 		t.Fatal("apply succeeded despite rollback fault")
 	}
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{}, nil }
 	ownedAtomicWrite = restore
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
 	if _, present, _ := readOwnedUnitJournal(root); !present {
@@ -1476,7 +1477,7 @@ func TestResumeRestoresAcceptedRenderingBeforeReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Resumed attempt fails at the pre-commit runtime check.
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{err: errors.New("busy")}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{err: errors.New("busy")}, nil }
 	if err := backend.Apply(ctx, home, r2); err == nil {
 		t.Fatal("apply succeeded despite busy runtime")
 	}
@@ -1488,7 +1489,7 @@ func TestResumeRestoresAcceptedRenderingBeforeReplay(t *testing.T) {
 		t.Fatal("journal left behind")
 	}
 	// The same resume succeeds when the runtime frees up.
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{}, nil }
 	if err := backend.Apply(ctx, home, r2); err != nil {
 		t.Fatal(err)
 	}
@@ -1526,7 +1527,7 @@ func TestResumeFinishesCommittedDeleteBeforeReAdd(t *testing.T) {
 	// Re-add request whose attempt fails before commit: the finished delete
 	// plus rollback leave no unjournaled file behind.
 	r.ExpectedRevision = currentRevision(t, r)
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{err: errors.New("busy")}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{err: errors.New("busy")}, nil }
 	if err := backend.Apply(ctx, home, r); err == nil {
 		t.Fatal("apply succeeded despite busy runtime")
 	}
@@ -1537,7 +1538,7 @@ func TestResumeFinishesCommittedDeleteBeforeReAdd(t *testing.T) {
 		t.Fatal("journal left behind")
 	}
 	// Happy re-add path: the unit is recreated from the request.
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{}, nil }
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
@@ -1780,7 +1781,7 @@ func TestRollbackRemovalRejectsConcurrentDisplacement(t *testing.T) {
 	backend.runCommand = fakeOwnedCommandFor(home)
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
 	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{err: errors.New("busy")}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{err: errors.New("busy")}, nil }
 	path := filepath.Join(ownedUnitDirectory(home), profile.Unit)
 	restore := ownedStat
 	ownedStat = func(p string) (os.FileInfo, error) {

@@ -14,8 +14,8 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 func TestFinalApplicationUIRequestsApplyAndReopenWithRealBackend(t *testing.T) {
@@ -153,7 +153,7 @@ func TestFinalRemovalRetainsActivationGuards(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "old-runtime-busy":
-				backend.makeRuntime = func(r Request) (gpuruntime.Manager, error) {
+				backend.makeRuntime = func(r Request) (supervisor.Runtime, error) {
 					if !r.Catalog.Disabled {
 						return idleRuntime{err: errors.New("former application is busy")}, nil
 					}

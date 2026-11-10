@@ -49,7 +49,7 @@ func (r doctorReport) fail(check string, cause error, step string) error {
 // verify-host on the accepted catalog, then status. It stops at the first
 // failed check, because each later check needs the earlier ones. It changes
 // state only as status does: status can latch an observation failure.
-func runDoctor(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error), runtimeConfig gpuruntime.SystemdConfig, options modeExecution) error {
+func runDoctor(newRuntime func(gpuruntime.SystemdConfig) (supervisor.Runtime, error), runtimeConfig gpuruntime.SystemdConfig, options modeExecution) error {
 	report := doctorReport{out: os.Stdout}
 	release, err := doctorProfile(report, options.statePath, loadOperatorProfile)
 	if err != nil {
@@ -109,7 +109,7 @@ func doctorProfile(report doctorReport, statePath string, load func() (operator.
 
 // doctorController checks the accepted catalog and runs verify-host on it,
 // then builds the controller for status.
-func doctorController(ctx context.Context, report doctorReport, stateStore *store.Store, newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error), runtimeConfig gpuruntime.SystemdConfig, options modeExecution) (*supervisor.Controller, error) {
+func doctorController(ctx context.Context, report doctorReport, stateStore *store.Store, newRuntime func(gpuruntime.SystemdConfig) (supervisor.Runtime, error), runtimeConfig gpuruntime.SystemdConfig, options modeExecution) (*supervisor.Controller, error) {
 	snapshot, err := stateStore.Catalog(ctx)
 	if err == nil {
 		_, err = pinCatalog(snapshot)

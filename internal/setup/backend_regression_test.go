@@ -9,8 +9,8 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 func TestStalePreviewDoesNotEnterMaintenance(t *testing.T) {
@@ -67,7 +67,7 @@ func TestDiscoveryAndOldRuntimeUseCommittedDatabaseCatalog(t *testing.T) {
 		t.Fatalf("stale mirror won: %+v", found)
 	}
 	var checked []string
-	backend.makeRuntime = func(request Request) (gpuruntime.Manager, error) {
+	backend.makeRuntime = func(request Request) (supervisor.Runtime, error) {
 		checked = append(checked, request.Catalog.Profiles[0].Unit)
 		return idleRuntime{}, nil
 	}

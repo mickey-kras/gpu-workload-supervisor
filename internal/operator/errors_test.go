@@ -19,7 +19,8 @@ func TestTypedErrors(t *testing.T) {
 	for _, x := range []struct {
 		e error
 		c Code
-	}{{context.DeadlineExceeded, Timeout}, {store.ErrWrongOwner, WrongOwner}, {supervisor.ErrSupervisorOwned, WrongOwner}, {store.ErrVersionConflict, StaleState}, {store.ErrConfigurationConflict, StaleState}, {unix.EAGAIN, Busy}, {supervisor.ErrTransitionRunning, Busy}, {store.ErrUnstableState, RecoveryRequired}, {errors.New("secret path"), Unavailable}, {refused, IncompatibleConfiguration}, {limits, Unavailable}, {errors.Join(supervisor.ErrVerifyTimeout, limits), Timeout}, {errors.Join(supervisor.ErrRecoveryRequired, limits), RecoveryRequired}} {
+	}{{context.DeadlineExceeded, Timeout}, {store.ErrWrongOwner, WrongOwner}, {supervisor.ErrSupervisorOwned, WrongOwner}, {store.ErrVersionConflict, StaleState}, {store.ErrConfigurationConflict, StaleState}, {unix.EAGAIN, Busy}, {supervisor.ErrTransitionRunning, Busy}, {store.ErrUnstableState, RecoveryRequired}, {errors.New("secret path"), Unavailable}, {refused, IncompatibleConfiguration}, {limits, Unavailable}, {errors.Join(supervisor.ErrVerifyTimeout, limits), Timeout}, {errors.Join(supervisor.ErrRecoveryRequired, limits), RecoveryRequired},
+		{fmt.Errorf("%w %q", supervisor.ErrInvalidTarget, "idle"), InvalidRequest}, {supervisor.ErrTrainerTarget, InvalidRequest}} {
 		if c := errorCode(x.e); c != x.c {
 			t.Fatal(x, c)
 		}

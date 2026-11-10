@@ -12,6 +12,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 func TestManagedDeploymentRefusesBeforeDatabaseOpen(t *testing.T) {
@@ -21,7 +22,7 @@ func TestManagedDeploymentRefusesBeforeDatabaseOpen(t *testing.T) {
 			t.Fatal(err)
 		}
 		called := false
-		err := executeWithState(func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error) {
+		err := executeWithState(func(gpuruntime.SystemdConfig) (supervisor.Runtime, error) {
 			called = true
 			return nil, errors.New("unexpected runtime")
 		}, gpuruntime.SystemdConfig{}, "status", time.Time{}, modeExecution{statePath: path})
@@ -51,7 +52,7 @@ func TestLegacyRelativeStateWithoutMarkerStillOpens(t *testing.T) {
 	}
 	called := false
 	sentinel := errors.New("runtime reached")
-	err = executeWithState(func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error) { called = true; return nil, sentinel }, gpuruntime.SystemdConfig{}, "status", time.Time{}, modeExecution{statePath: "state.db"})
+	err = executeWithState(func(gpuruntime.SystemdConfig) (supervisor.Runtime, error) { called = true; return nil, sentinel }, gpuruntime.SystemdConfig{}, "status", time.Time{}, modeExecution{statePath: "state.db"})
 	if !called || !errors.Is(err, sentinel) {
 		t.Fatalf("legacy relative path failed: %v", err)
 	}

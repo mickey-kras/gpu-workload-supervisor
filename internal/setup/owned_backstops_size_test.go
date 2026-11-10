@@ -14,6 +14,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 func TestMaximumOwnedBackstopCatalogRoundTrips(t *testing.T) {
@@ -132,7 +133,7 @@ func TestDerivedOwnedSetupRequestSizeFailsBeforeEffects(t *testing.T) {
 		t.Fatalf("incoming request should fit: %v", err)
 	}
 	calls := 0
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { calls++; return idleRuntime{}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { calls++; return idleRuntime{}, nil }
 	backend.runCommand = func(context.Context, string, ...string) ([]byte, error) { calls++; return nil, nil }
 	if _, err := backend.Plan(home, request); err == nil || !strings.Contains(err.Error(), "setup request exceeds") {
 		t.Fatalf("oversized derived preview: %v", err)
@@ -303,7 +304,7 @@ func TestCatalogInputBudgetAndMalformedConflictsFailBeforeEffects(t *testing.T) 
 				t.Fatalf("invalid input decode: %v", err)
 			}
 			calls := 0
-			backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { calls++; return idleRuntime{}, nil }
+			backend.makeRuntime = func(Request) (supervisor.Runtime, error) { calls++; return idleRuntime{}, nil }
 			backend.runCommand = func(context.Context, string, ...string) ([]byte, error) { calls++; return nil, nil }
 			if _, err := backend.Plan(home, request); !errors.Is(err, wantErr) {
 				t.Fatalf("invalid preview: %v", err)
@@ -392,7 +393,7 @@ func TestSetupWholeRequestSizeLimit(t *testing.T) {
 		t.Fatal("oversized whole request decoded")
 	}
 	calls := 0
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { calls++; return idleRuntime{}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { calls++; return idleRuntime{}, nil }
 	backend.runCommand = func(context.Context, string, ...string) ([]byte, error) { calls++; return nil, nil }
 	if _, err := backend.Plan(home, request); err == nil {
 		t.Fatal("oversized whole request previewed")
