@@ -359,7 +359,7 @@ func TestPlanOwnedUnitsDeletesWhenAdoptedReferenceDrifts(t *testing.T) {
 // TestManagerCgroupWrapsSystemBackend exercises the production wrapper's error
 // propagation with a systemctl binary that cannot exist.
 func TestManagerCgroupWrapsSystemBackend(t *testing.T) {
-	if _, err := ManagerCgroup(context.Background(), "/nonexistent/systemctl"); err == nil {
+	if _, err := SystemBackend().ManagerCgroup(context.Background(), "/nonexistent/systemctl"); err == nil {
 		t.Fatal("missing systemctl accepted")
 	}
 }

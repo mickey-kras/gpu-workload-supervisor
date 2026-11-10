@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/setup"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
@@ -32,18 +33,19 @@ type setupActions struct {
 }
 
 func systemActions() setupActions {
+	backend := setup.SystemBackend()
 	return setupActions{
 		home:          setup.Home,
-		apply:         setup.Apply,
-		reconcile:     setup.Reconcile,
+		apply:         backend.Apply,
+		reconcile:     backend.Reconcile,
 		policyTick:    setup.PolicyTick,
-		discover:      setup.Discover,
+		discover:      backend.Discover,
 		probe:         setup.Probe,
-		prepare:       setup.Prepare,
+		prepare:       backend.Prepare,
 		euid:          os.Geteuid,
-		verify:        setup.VerifyBindings,
+		verify:        backend.VerifyBindings,
 		inspect:       runtime.BindHardenedNativeLaunch,
-		managerCgroup: setup.ManagerCgroup,
+		managerCgroup: backend.ManagerCgroup,
 	}
 }
 
@@ -54,8 +56,12 @@ func main() {
 	}
 }
 func (a setupActions) run(args []string, input io.Reader, output io.Writer) error {
+	if len(args) == 1 && (args[0] == "-version" || args[0] == "--version") {
+		_, err := fmt.Fprintln(output, deployment.Release)
+		return err
+	}
 	if len(args) != 1 {
-		return errors.New("usage: gpu-setup temporary-status|temporary-cleanup|discover|probe|prepare|correct-gpu|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|reconcile|idle-policy-tick|remove-integration")
+		return errors.New("usage: gpu-setup -version|temporary-status|temporary-cleanup|discover|probe|prepare|correct-gpu|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|reconcile|idle-policy-tick|remove-integration")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -85,11 +91,11 @@ func (a setupActions) runAction(ctx context.Context, home, action string, input 
 		if err := strictjson.DecodeLimited(input, 65536, &request); err != nil {
 			return err
 		}
-		return setup.TemporaryCleanup(ctx, home, request)
+		return setup.SystemBackend().TemporaryCleanup(ctx, home, request)
 	case "correct-gpu":
 		return runGPUCorrection(ctx, home, input, output)
 	case "remove-integration":
-		return setup.RemoveIntegration(ctx, home)
+		return setup.SystemBackend().RemoveIntegration(ctx, home)
 	case "discover":
 		return a.runDiscover(ctx, home, output)
 	case "drafts":
@@ -127,7 +133,7 @@ func runGPUCorrection(ctx context.Context, home string, input io.Reader, output 
 	if err := strictjson.DecodeLimited(input, 16384, &request); err != nil {
 		return err
 	}
-	result, err := setup.CorrectGPU(ctx, home, request)
+	result, err := setup.SystemBackend().CorrectGPU(ctx, home, request)
 	if err != nil {
 		return err
 	}
@@ -182,7 +188,7 @@ func (a setupActions) runPlanned(ctx context.Context, home, action string, input
 	if err != nil {
 		return err
 	}
-	preview, err := setup.Plan(home, request)
+	preview, err := setup.SystemBackend().Plan(home, request)
 	if err != nil {
 		return err
 	}

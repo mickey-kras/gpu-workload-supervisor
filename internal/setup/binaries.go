@@ -80,6 +80,9 @@ func copyActivation(ctx context.Context, home, root, destination string, profile
 	if err := collectActivationUnits(home, accepted.Catalog, plan, files); err != nil {
 		return err
 	}
+	if err := collectActivationKeys(home, accepted.Catalog, files); err != nil {
+		return err
+	}
 	ownershipData, err := privateRead(filepath.Join(root, manifestName))
 	if err != nil {
 		return err

@@ -14,9 +14,6 @@ import (
 // connection to the vLLM port. The key is not sent to it.
 var ErrForeignListener = errors.New("the vLLM port is not held only by the desktop user")
 
-// Test hook.
-var procNet = "/proc/net"
-
 // tcpListenState is the LISTEN state in /proc/net/tcp.
 const tcpListenState = "0A"
 
@@ -33,6 +30,10 @@ var loopbackListeners = map[string]map[string]bool{
 // exists. It reads /proc/net/tcp and, when no IPv4 socket listens on the
 // port, /proc/net/tcp6.
 func CheckListener(endpoint string) error {
+	return host().checkListener(endpoint)
+}
+
+func (s system) checkListener(endpoint string) error {
 	parsed, err := url.Parse(endpoint)
 	if err != nil || parsed.Hostname() != "127.0.0.1" {
 		return fmt.Errorf("%w: endpoint must be http://127.0.0.1:<port>", ErrForeignListener)
@@ -42,11 +43,11 @@ func CheckListener(endpoint string) error {
 		return fmt.Errorf("%w: endpoint has no valid port", ErrForeignListener)
 	}
 	wantPort := fmt.Sprintf("%04X", port)
-	uid := strconv.Itoa(effectiveUID())
+	uid := strconv.Itoa(s.uid)
 	// The kernel prefers an IPv4 listener for a connection to 127.0.0.1, so
 	// the IPv6 table counts only when no IPv4 listener exists.
 	for _, table := range []string{"tcp", "tcp6"} {
-		owners, err := listenerOwners(table, wantPort)
+		owners, err := s.listenerOwners(table, wantPort)
 		if err != nil {
 			return err
 		}
@@ -63,8 +64,8 @@ func CheckListener(endpoint string) error {
 	return fmt.Errorf("%w: nothing listens on port %d", ErrForeignListener, port)
 }
 
-func listenerOwners(table, port string) ([]string, error) {
-	file, err := os.Open(procNet + "/" + table)
+func (s system) listenerOwners(table, port string) ([]string, error) {
+	file, err := os.Open(s.procNet + "/" + table)
 	if errors.Is(err, os.ErrNotExist) && table == "tcp6" {
 		return nil, nil
 	}

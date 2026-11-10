@@ -118,10 +118,6 @@ func Home() (string, error) {
 	}
 	return account.HomeDir, nil
 }
-func Plan(home string, request Request) (Preview, error) {
-	return SystemBackend().Plan(home, request)
-}
-
 func (b Backend) Plan(home string, request Request) (Preview, error) {
 	request, err := prepareOwnedBackstopsForActivation(home, request)
 	if err != nil {
@@ -199,10 +195,6 @@ type activationWork struct {
 	marker         deployment.Marker
 	existing       bool
 	accepted       control.CatalogSnapshot
-}
-
-func Apply(ctx context.Context, home string, request Request) error {
-	return SystemBackend().Apply(ctx, home, request)
 }
 
 func (b Backend) Apply(ctx context.Context, home string, request Request) error {
@@ -443,10 +435,6 @@ func newer(next, previous string) bool {
 	}
 	previousCore := strings.TrimSuffix(semver.Canonical(previous), semver.Prerelease(previous))
 	return semver.Compare(next, previousCore) > 0
-}
-
-func Reconcile(ctx context.Context, home string) error {
-	return SystemBackend().Reconcile(ctx, home)
 }
 
 // AuditRetention is the age past which reconcile prunes eligible audit

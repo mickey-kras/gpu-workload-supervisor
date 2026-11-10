@@ -1,12 +1,10 @@
 import {wrappedCheckButton} from './presentation.mjs';
 
 // Peer dependencies belong to the derived catalog spec, never to editable
-// drafts. Limits are edited on the Resource checks page and merged after
-// the render, because the draft surface has no limits.
+// drafts. Limits stay: render-owned renders and fingerprints with them.
 export function editableOwnedLaunch(launch) {
     const owned = {...launch};
     delete owned.conflicts;
-    delete owned.limits;
     return owned;
 }
 

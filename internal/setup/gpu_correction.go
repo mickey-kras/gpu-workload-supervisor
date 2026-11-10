@@ -30,10 +30,6 @@ type GPUCorrection struct {
 	Applied     bool   `json:"applied"`
 }
 
-func CorrectGPU(ctx context.Context, home string, request GPUCorrectionRequest) (GPUCorrection, error) {
-	return SystemBackend().CorrectGPU(ctx, home, request)
-}
-
 func (b Backend) CorrectGPU(ctx context.Context, home string, request GPUCorrectionRequest) (GPUCorrection, error) {
 	if !selectedUnitName.MatchString(request.Unit) || !supportedCorrectionApp(request.App) {
 		return GPUCorrection{}, errors.New("choose a supported application service")

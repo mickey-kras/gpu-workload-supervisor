@@ -79,3 +79,29 @@ func removeOwnedKey(home, name string, catalogs ...control.Catalog) error {
 	}
 	return nil
 }
+
+// ownedKeyBackupDirectory holds the vLLM key files of an activation backup.
+const ownedKeyBackupDirectory = "owned-keys"
+
+// collectActivationKeys adds the setup-owned vLLM key file of each workload
+// of the accepted catalog to the backup tuple, so a rollback keeps the keys
+// that the restored units name. Apply never replaces an existing key file, so
+// the current bytes are the accepted ones. A key file that does not exist is
+// not in the tuple: after a restore, setup creates it. The tuple keeps the
+// private mode 0600, and no error contains key bytes.
+func collectActivationKeys(home string, catalog control.Catalog, files map[string][]byte) error {
+	for _, p := range catalog.Profiles {
+		if p.NativeModel == nil || p.NativeModel.EnvironmentFile == "" || p.NativeModel.EnvironmentFile != OwnedEnvironmentFile(home, p.ID) {
+			continue
+		}
+		data, err := privateRead(p.NativeModel.EnvironmentFile)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("back up the key file of %s: %w", p.ID, err)
+		}
+		files[filepath.Join(ownedKeyBackupDirectory, filepath.Base(p.NativeModel.EnvironmentFile))] = data
+	}
+	return nil
+}

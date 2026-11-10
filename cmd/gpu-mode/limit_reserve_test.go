@@ -75,12 +75,13 @@ func TestCommandsUseTheStoredReserve(t *testing.T) {
 	if err := invoke("reconcile"); err != nil || got.LimitReserve != stored || got.LimitReserveErr != nil {
 		t.Fatalf("reconcile runtime reserve = %+v, %v: %v", got.LimitReserve, got.LimitReserveErr, err)
 	}
+	// With an unreadable profile, the command line must name systemctl.
 	loadOperatorProfile = profileLoader(operator.Profile{}, errors.New("untrusted profile"))
-	if err := invoke("-catalog", file, "verify-host"); err != nil || got.LimitReserveErr == nil {
+	if err := invoke("-systemctl", "/usr/bin/systemctl", "-catalog", file, "verify-host"); err != nil || got.LimitReserveErr == nil {
 		t.Fatalf("verify-host with an unreadable profile = %v, %v", got.LimitReserveErr, err)
 	}
 	got = gpuruntime.SystemdConfig{}
-	if err := invoke("reconcile"); err != nil || got.LimitReserveErr == nil || got.LimitReserve != nil {
+	if err := invoke("-systemctl", "/usr/bin/systemctl", "reconcile"); err != nil || got.LimitReserveErr == nil || got.LimitReserve != nil {
 		t.Fatalf("reconcile with an unreadable profile = %v, %v", got.LimitReserveErr, err)
 	}
 	loadOperatorProfile = profileLoader(operator.Profile{}, fs.ErrNotExist)
