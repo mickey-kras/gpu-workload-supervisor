@@ -183,7 +183,8 @@ func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (
 }
 
 // upstreamTransport returns the configured or direct transport. For a native
-// model it adds the vLLM API key. The ingress transport, when used, wraps it
+// model it verifies the upstream peer of each connection and adds the vLLM
+// API key. The ingress transport, when used, wraps it
 // and strips client credentials first.
 func upstreamTransport(config Config, native *control.NativeModel) http.RoundTripper {
 	transport := config.Transport
@@ -191,6 +192,9 @@ func upstreamTransport(config Config, native *control.NativeModel) http.RoundTri
 		direct := httptransport.NewDirect()
 		if config.ResponseHeaderTimeout > 0 {
 			direct.ResponseHeaderTimeout = config.ResponseHeaderTimeout
+		}
+		if native != nil {
+			direct.DialContext = ownedPeerDial(direct.DialContext)
 		}
 		transport = direct
 	}

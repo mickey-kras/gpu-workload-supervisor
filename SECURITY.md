@@ -17,7 +17,8 @@ See [startup and recovery](docs/OPERATIONS.md#use-and-recover-workloads) and [re
 A transition must record its intent before it causes a runtime side effect.
 
 Do not log credentials, workload payloads, or untrusted runtime output.
-The execution proxy defaults to trusted local callers. Opt-in adapter ingress
+The execution proxy defaults to trusted local callers of its own user. It closes
+connections from other users. Opt-in adapter ingress
 separates gateway execution credentials from trusted terminal-adapter completion
 credentials and hides registration tokens from client response metadata. It does
 not replace:

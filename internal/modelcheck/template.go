@@ -94,12 +94,6 @@ func checkTemplate(ctx context.Context, root string, digests map[string]string) 
 	return templateResult{pin: PinTemplate(text), file: file, review: review}, "", nil
 }
 
-// scanHook runs at the start of each template scan. Tests replace it to
-// check that a panic in the scan fails closed.
-var scanHook = func() {
-	// Production needs no hook; tests replace it to inject scan failures.
-}
-
 // PinTemplate gives the SHA-256 of the template text as UTF-8 bytes. A
 // file with the same text has the same SHA-256.
 func PinTemplate(text string) string {

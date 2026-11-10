@@ -26,7 +26,7 @@ Demand records prove admission. They do not schedule workflows or replay uncerta
 
 ### Model checks
 
-[Model checks](MODEL-CHECKS.md) has the file allowlist, upstream identity check, static chat template check and result store. No command runs them yet. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans the behavioral scan and the scan job that runs the checks before first LLM use. [#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583) plans result display and rejection of failed models. These checks cannot prove model safety.
+[Model checks](MODEL-CHECKS.md) has the file allowlist, upstream identity check, static chat template check, result store and launch gate. No command runs the checks yet. The [launch gate](MODEL-CHECKS.md#launch-gate) refuses a vLLM launch when a stored result fails or its template differs from the pinned template. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans the behavioral scan and the scan job that runs the checks before first LLM use. [#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583) plans result display. These checks cannot prove model safety.
 
 ### State model
 
@@ -244,7 +244,9 @@ umask 077 && printf 'VLLM_API_KEY=%s\n' "$(head -c 32 /dev/urandom | base64 | tr
 
 Removing a managed workload removes its key file. Setup never removes the key file of an existing launch. A stop before commit can leave a new key file, which the next apply uses. If a managed key file is missing, the next apply creates one.
 
-The workload proxy reads the key file for each request and sends the key to vLLM. It replaces any client `Authorization` header. Readiness and the proxy send the key only when the desktop user owns each 127.0.0.1 listening socket on the vLLM port. Another user's program on the port thus gets no key. A small window remains between this check and the connection.
+The workload proxy reads the key file for each request and sends the key to vLLM. It replaces any client `Authorization` header. The proxy sends the key only on a connection that a socket of the desktop user accepted. It checks this socket after each connection to vLLM. Another user's program on the port thus gets no key.
+
+Readiness sends the key only when the desktop user owns each 127.0.0.1 listening socket on the vLLM port. A small window remains between the readiness check and its connection.
 
 A missing or unusable key file, or another user on the port, stops forwarding. The client gets `502 Bad Gateway` and the proxy log names the cause. Correct the key file or stop the other program. If vLLM rejects the key, readiness reports a key mismatch with the running vLLM. Restart the workload, or run setup again after a key file change.
 
@@ -332,7 +334,11 @@ Tokens prevent a stale completion. Completed legacy tokenless rows remain protec
 
 ### Route and listener boundary
 
-Use loopback only: user ownership bypasses lease registration, state-directory writers can drive user execution, and the service trusts its UID. [Requester ingress](OPERATIONS.md#optional-requester-ingress) adds local identity, workflow authorization and durable demand, not host isolation. External exposure, runtime-bypass prevention and content policy remain deployment responsibilities. See [security](../SECURITY.md).
+Use loopback only: user ownership bypasses lease registration, state-directory writers can drive user execution, and the service trusts its UID.
+
+In `trusted` mode, the proxy accepts only connections from programs of its own user. It reads the owner of the client socket from `/proc/net/tcp` and `/proc/net/tcp6`. It closes a connection from another user, root included, before HTTP starts and logs the user ID. Thus other users cannot start execution, read model data or use the vLLM key through the proxy. Adapter mode does not check the client user, because each request must have a credential.
+
+Migration: earlier releases accepted connections from all local users in `trusted` mode. If a client of another user, for example a gateway service account, uses the proxy, change to [adapter mode](#trusted-adapter-ingress). Clients of the proxy user need no change. [Requester ingress](OPERATIONS.md#optional-requester-ingress) adds local identity, workflow authorization and durable demand, not host isolation. External exposure, runtime-bypass prevention and content policy remain deployment responsibilities. See [security](../SECURITY.md).
 
 | Route class | Flag | Required evidence |
 | --- | --- | --- |
@@ -358,13 +364,13 @@ The authenticated gateway sends `X-Workload-Execution-Credential` for execution,
 
 Adapter mode strips ingress credentials, `Authorization` and `Proxy-Authorization` from upstream headers and trailers. URL credentials are forbidden. Admitted correlation reaches trusted upstreams.
 
-For a native vLLM binding, the proxy then sets the upstream `Authorization` header from the binding's key file in every ingress mode. It replaces any client `Authorization` header. It sends the key only when the desktop user owns each 127.0.0.1 listening socket on the vLLM port. See [Hardened vLLM launch](#hardened-vllm-launch).
+For a native vLLM binding, the proxy then sets the upstream `Authorization` header from the binding's key file in every ingress mode. It replaces any client `Authorization` header. It sends the key only on a connection that a socket of the desktop user accepted. See [Hardened vLLM launch](#hardened-vllm-launch).
 
 Client headers, informational responses and trailers suppress tokens and credentials, including unrelated metadata names and values containing them. Matching is case-insensitive substring matching, covering hex and UUID case changes, not other transformations. Backends and adapters must never echo secrets in bodies and logs.
 
 Payloads remain uninspected. Native terminal observation remains internal and unchanged.
 
-This mode is local, not a remote gateway. Without requester ingress, the gateway must authenticate requesters and enforce identity, CSRF, policy and appropriate limits. Keep execution credentials from clients, completion credentials only at the adapter, host service identities isolated and direct-runtime access blocked. Credentials alone do not qualify deployment. Idle stays Off pending separate evidence and host qualification.
+This mode is local, not a remote gateway. It accepts clients of all local users that send the correct credential. Without requester ingress, the gateway must authenticate requesters and enforce identity, CSRF, policy and appropriate limits. Keep execution credentials from clients, completion credentials only at the adapter, host service identities isolated and direct-runtime access blocked. Credentials alone do not qualify deployment. Idle stays Off pending separate evidence and host qualification.
 
 ### Connection limits
 
@@ -374,11 +380,15 @@ Private upstream and health transports connect directly, ignoring `HTTP_PROXY`, 
 | --- | --- |
 | `-read-header-timeout` | 10 seconds |
 | `-idle-timeout` | 2-minute idle keep-alive |
+| `-body-read-timeout` | 2 minutes from the first read of a request body to its end. Positive |
+| `-body-idle-timeout` | 30 seconds for each wait for more request body bytes. Positive |
 | `-max-inflight` | 128 ordinary requests. Positive |
 | `-max-completion-inflight` | 16 separate completion POST slots. Positive |
 | Dial and TLS handshake | 30 seconds / 10 seconds |
 | `-upstream-response-header-timeout` | Positive. 10 minutes after complete upload. Set the timeout above model-load and non-streaming time, for example `20m` |
-| Request bodies and response streams | No total read or write deadline |
+| Response streams | No total write deadline |
+
+A slow or stopped request body fails at a body limit and releases its slot. The upstream receives an incomplete body and the client gets an error. The limits start at the first body read, not when the request arrives. For `-body-read-timeout`, time that the upstream needs to read the body also counts.
 
 Saturation returns 503 `{"error":"proxy_capacity_exceeded"}` with `Retry-After: 1` before registration and forwarding. This suggests a delay, not capacity assurance. Non-POST completion-path requests use ordinary slots.
 

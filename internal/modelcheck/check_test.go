@@ -180,8 +180,10 @@ func (h *hub) page(w http.ResponseWriter, r *http.Request, total int, items func
 	_, _ = w.Write(raw)
 }
 
+// checker gives a checker for the hub. Its retries do not wait.
 func (h *hub) checker() Checker {
-	return Checker{Client: h.server.Client(), Hub: h.server.URL, Version: "test-1", Now: testNow}
+	return Checker{Client: h.server.Client(), Hub: h.server.URL, Version: "test-1", Now: testNow,
+		hub: hubOptions{retry: hubRetry{wait: func(context.Context, time.Duration) error { return nil }}}}
 }
 
 func run(t *testing.T, c Checker, root string) Record {
@@ -449,9 +451,6 @@ func TestIdentityMismatchIsAFinding(t *testing.T) {
 }
 
 func TestIdentityRefusesBlobsAboveTheLimitBeforeReading(t *testing.T) {
-	original := maxGitBlobBytes
-	maxGitBlobBytes = 4
-	t.Cleanup(func() { maxGitBlobBytes = original })
 	content := "a matching blob above the limit"
 	root := t.TempDir()
 	write(t, filepath.Join(root, "notes.json"), content)
@@ -459,7 +458,7 @@ func TestIdentityRefusesBlobsAboveTheLimitBeforeReading(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "notes.json")); err != nil {
 		t.Fatal(err)
 	}
-	reason, err := checkIdentity(context.Background(), root, map[string]string{"notes.json": sha256Hex(content)}, upstream)
+	reason, err := checkIdentity(context.Background(), root, map[string]string{"notes.json": sha256Hex(content)}, upstream, 4)
 	if reason != ReasonIdentityMismatch || err != nil {
 		t.Fatalf("a matching blob above the limit = %q, %v; want a mismatch without a read", reason, err)
 	}
@@ -667,14 +666,14 @@ func TestFilesChangedDuringTheCheckAreErrors(t *testing.T) {
 	}
 	upstream["config.json"] = UpstreamFile{Type: "file", Path: "config.json", OID: blobID(`{"architectures":["Other"]}`), Size: int64(len(`{"architectures":["Other"]}`))}
 	only := map[string]string{"config.json": digests["config.json"]}
-	reason, err = checkIdentity(context.Background(), root, only, upstream)
+	reason, err = checkIdentity(context.Background(), root, only, upstream, MaxGitBlobBytes)
 	if got := outcome(CheckIdentity, reason, err); got.Reason != "files-changed" {
 		t.Fatalf("identity after change = %+v", got)
 	}
 	if err := os.Remove(filepath.Join(root, "config.json")); err != nil {
 		t.Fatal(err)
 	}
-	reason, err = checkIdentity(context.Background(), root, only, upstream)
+	reason, err = checkIdentity(context.Background(), root, only, upstream, MaxGitBlobBytes)
 	if got := outcome(CheckIdentity, reason, err); got.Reason != "unreadable" {
 		t.Fatalf("identity after removal = %+v", got)
 	}
@@ -841,13 +840,11 @@ func TestUnusableTokenIsAnError(t *testing.T) {
 }
 
 func TestListingHasADefaultDeadline(t *testing.T) {
-	original := listingTimeout
-	listingTimeout = 200 * time.Millisecond
-	t.Cleanup(func() { listingTimeout = original })
 	files := modelFiles()
 	h := newHub(t, upstreamOf(files))
 	h.stalled = make(chan struct{})
 	checker := h.checker()
+	checker.hub.listingTimeout = 200 * time.Millisecond
 	checker.Client = &http.Client{Transport: h.server.Client().Transport}
 	start := time.Now()
 	record := run(t, checker, writeModel(t, files))
@@ -1006,7 +1003,7 @@ func TestSizeDifferenceIsAMismatchBeforeAnyRead(t *testing.T) {
 	entry.Size++
 	upstream["config.json"] = entry
 	// The digest is wrong on purpose: a size difference returns before any read.
-	reason, err := checkIdentity(context.Background(), root, map[string]string{"config.json": strings.Repeat("0", 64)}, upstream)
+	reason, err := checkIdentity(context.Background(), root, map[string]string{"config.json": strings.Repeat("0", 64)}, upstream, MaxGitBlobBytes)
 	if reason != ReasonIdentityMismatch || err != nil {
 		t.Fatalf("a size difference = %q, %v; want a mismatch", reason, err)
 	}
@@ -1124,7 +1121,7 @@ func TestChecksStopWhenCanceled(t *testing.T) {
 	if _, err := checkAllowlist(ctx, root, digests); !errors.Is(err, context.Canceled) {
 		t.Fatal("the allowlist must stop when canceled", err)
 	}
-	if _, err := checkIdentity(ctx, root, digests, upstream); !errors.Is(err, context.Canceled) {
+	if _, err := checkIdentity(ctx, root, digests, upstream, MaxGitBlobBytes); !errors.Is(err, context.Canceled) {
 		t.Fatal("the identity check must stop when canceled", err)
 	}
 	if _, err := checkShardIndexes(ctx, root, digests); !errors.Is(err, context.Canceled) {
