@@ -114,54 +114,6 @@ func TestDemandSurvivesRestartWithoutReservationReplay(t *testing.T) {
 	}
 }
 
-func TestDemandIdleTimeoutOrdering(t *testing.T) {
-	for _, arrivalFirst := range []bool{true, false} {
-		t.Run(map[bool]string{true: "arrival first", false: "timeout first"}[arrivalFirst], func(t *testing.T) {
-			s, now, deadline := armedFixture(t)
-			ctx := context.Background()
-			*now = deadline
-			tr := idleDrain(t, s, "idle")
-			d := testDemand()
-			if arrivalFirst {
-				if err := s.QueueDemand(ctx, d); err != nil {
-					t.Fatal(err)
-				}
-				if _, err := s.StartIdleTransition(ctx, deadline, tr, nil); !errors.Is(err, ErrPolicyPreempted) {
-					t.Fatalf("idle ignored arrival: %v", err)
-				}
-				settings, err := s.Settings(ctx)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := s.ArmIdleDeadline(ctx, settings.SettingsRevision, deadline.Add(5*time.Minute), deadline); !errors.Is(err, ErrPolicyPreempted) {
-					t.Fatalf("armed over demand: %v", err)
-				}
-			} else {
-				if _, err := s.StartIdleTransition(ctx, deadline, tr, nil); err != nil {
-					t.Fatal(err)
-				}
-				if err := s.QueueDemand(ctx, d); err != nil {
-					t.Fatal(err)
-				}
-				claim, err := s.ReserveDemand(ctx, d)
-				if err != nil {
-					t.Fatal(err)
-				}
-				state, err := s.State(ctx)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, err := s.AdmitWorkToken(WithDemandClaim(ctx, claim), d.RequestID, "", d.Workload, state.LeaseFence); !errors.Is(err, ErrAdmissionClosed) {
-					t.Fatalf("dispatch while idle drains: %v", err)
-				}
-			}
-			if pending, err := s.PendingWork(ctx); err != nil || pending != 0 {
-				t.Fatalf("queued demand mistaken for dispatched work: %d %v", pending, err)
-			}
-		})
-	}
-}
-
 func TestDemandRequeueCancelRetention(t *testing.T) {
 	ctx := context.Background()
 	s, now := policyFixture(t)
@@ -357,44 +309,6 @@ func TestDemandRetentionDeletesExactCompletedBatch(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("orphaned demand tombstones: %d", count)
-	}
-}
-
-func TestDemandConcurrentTimeoutArrival(t *testing.T) {
-	s, now, deadline := armedFixture(t)
-	*now = deadline
-	ctx := context.Background()
-	tr := idleDrain(t, s, "concurrent-idle")
-	start := make(chan struct{})
-	arrival := make(chan error, 1)
-	timeout := make(chan error, 1)
-	go func() { <-start; arrival <- s.QueueDemand(ctx, testDemand()) }()
-	go func() { <-start; _, err := s.StartIdleTransition(ctx, deadline, tr, nil); timeout <- err }()
-	close(start)
-	if err := <-arrival; err != nil {
-		t.Fatal(err)
-	}
-	idleErr := <-timeout
-	if idleErr != nil && !errors.Is(idleErr, ErrPolicyPreempted) {
-		t.Fatal(idleErr)
-	}
-	var count int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM broker_demands WHERE status='queued'`).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("lost arrival: %d %v", count, err)
-	}
-	state, err := s.State(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if idleErr == nil && state.Admission != control.AdmissionClosed {
-		t.Fatal("idle won without closing admission")
-	}
-	settings, err := s.Settings(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if settings.ArmedDeadline != nil {
-		t.Fatal("arrival left a stale armed deadline")
 	}
 }
 

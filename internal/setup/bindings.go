@@ -11,10 +11,6 @@ import (
 // VerifyBindings reads service, launch-file and cgroup evidence without starting
 // workloads. Existing adopted bindings are checked during owned-launch previews;
 // the complete catalog is preflighted again during Apply. Model readiness is checked separately before runtime admission.
-func VerifyBindings(ctx context.Context, request Request) error {
-	return SystemBackend().VerifyBindings(ctx, request)
-}
-
 func (b Backend) VerifyBindings(ctx context.Context, request Request) error {
 	home, err := Home()
 	if err != nil {

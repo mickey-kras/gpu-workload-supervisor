@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -154,4 +155,60 @@ func renderModelPath(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+// A draft with limits renders and fingerprints the final unit, and the
+// setup decoder accepts the request with its catalog v5 profile. Limits
+// merged into a profile after a render without them diverge from the
+// recorded fingerprint, so the decoder refuses such a request.
+func TestRenderOwnedWithLimitsPassesTheSetupDecoder(t *testing.T) {
+	actions := systemActions()
+	home := t.TempDir()
+	actions.home = func() (string, error) { return home, nil }
+	actions.euid = func() int { return 1000 }
+	actions.managerCgroup = func(context.Context, string) (string, error) {
+		return "/user.slice/user-1000.slice/user@1000.service", nil
+	}
+	limits := `{"version":1,"memoryHighMiB":8192,"memoryMaxMiB":10240,"tasksMax":4096,"cpuQuotaPercent":400}`
+	render := func(owned string) json.RawMessage {
+		t.Helper()
+		input := `{"draft":{"id":"vision","label":"Vision","app":"vllm","binding":{"instance":"owned","owned":{"modelPath":"` + renderModelPath(t) + `","port":9100` + owned + `}}}}`
+		var output bytes.Buffer
+		if err := actions.run([]string{"render-owned"}, strings.NewReader(input), &output); err != nil {
+			t.Fatal(err)
+		}
+		var result struct {
+			Profile json.RawMessage `json:"profile"`
+		}
+		if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result.Profile
+	}
+	request := func(version int, profile json.RawMessage) string {
+		return `{"version":1,"profile":{"version":1,"statePath":"` + home + `/state.db","systemctlPath":"/usr/bin/systemctl","nvidiaSMIPath":"/usr/bin/nvidia-smi"},"catalog":{"version":` + strconv.Itoa(version) +
+			`,"profiles":[` + string(profile) + `]},"expectedRevision":"","confirmQuiesced":false}`
+	}
+	limited := render(`,"limits":` + limits)
+	if !strings.Contains(string(limited), `"limits":`+limits) {
+		t.Fatalf("rendered profile without the limits: %s", limited)
+	}
+	if _, err := setup.Decode(strings.NewReader(request(5, limited))); err != nil {
+		t.Fatalf("decode of a request rendered with limits = %v", err)
+	}
+	plain := render("")
+	merged := json.RawMessage(strings.Replace(string(plain), `"port":9100`, `"port":9100,"limits":`+limits, 1))
+	if _, err := setup.Decode(strings.NewReader(request(5, merged))); err == nil || !strings.Contains(err.Error(), "diverges from the recorded fingerprint") {
+		t.Fatalf("decode of limits merged after the render = %v", err)
+	}
+	if _, err := setup.Decode(strings.NewReader(request(2, plain))); err != nil {
+		t.Fatalf("decode of a request without limits = %v", err)
+	}
+	// Invalid limits fail the render, with no profile.
+	invalid := strings.Replace(limits, `"memoryMaxMiB":10240`, `"memoryMaxMiB":8192`, 1)
+	input := `{"draft":{"id":"vision","label":"Vision","app":"vllm","binding":{"instance":"owned","owned":{"modelPath":"` + renderModelPath(t) + `","port":9100,"limits":` + invalid + `}}}}`
+	var output bytes.Buffer
+	if err := actions.run([]string{"render-owned"}, strings.NewReader(input), &output); err == nil || output.Len() != 0 {
+		t.Fatalf("render of invalid limits = %v, %q", err, output.String())
+	}
 }

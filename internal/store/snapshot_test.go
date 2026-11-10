@@ -68,7 +68,7 @@ func TestStateSnapshotAcrossTransitionStart(t *testing.T) {
 func TestStateSnapshotAcrossTransitionFinishAndArm(t *testing.T) {
 	ctx := context.Background()
 	s, _ := policyFixture(t)
-	revision := enablePolicy(t, s)
+	enablePolicy(t, s)
 	current := mustState(t, s)
 	tr := idleDrain(t, s, "snapshot-finish")
 	target := current
@@ -87,7 +87,7 @@ func TestStateSnapshotAcrossTransitionFinishAndArm(t *testing.T) {
 		if _, err := writer.FinishTransition(ctx, tr.ID, "committed", started.Version, target); err != nil {
 			return err
 		}
-		return writer.ArmIdleDeadline(ctx, revision, deadline, policyEpoch)
+		return armRow(ctx, writer, deadline, policyEpoch)
 	}}
 	got, err := readState(ctx, q)
 	if q.err != nil {
@@ -115,10 +115,8 @@ func TestSettingsSnapshotAcrossPolicyChanges(t *testing.T) {
 			ctx := context.Background()
 			s, _ := policyFixture(t)
 			if change.from != 0 {
-				revision := enablePolicy(t, s)
-				if err := s.ArmIdleDeadline(ctx, revision, policyEpoch.Add(5*time.Minute), policyEpoch); err != nil {
-					t.Fatal(err)
-				}
+				enablePolicy(t, s)
+				armForTest(t, s, policyEpoch.Add(5*time.Minute), policyEpoch)
 			}
 			before, err := s.Settings(ctx)
 			if err != nil {
@@ -127,11 +125,11 @@ func TestSettingsSnapshotAcrossPolicyChanges(t *testing.T) {
 			e := snapshotSettingsPrecondition(t, s, before.SettingsRevision)
 			writer := snapshotWriter(t, s)
 			q := &snapshotQuerier{db: s.db, commit: func(ctx context.Context) error {
-				changed, err := writer.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: change.to}, true)
+				_, err := writer.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: change.to}, true)
 				if err != nil || change.to != 5 {
 					return err
 				}
-				return writer.ArmIdleDeadline(ctx, changed.SettingsRevision, policyEpoch.Add(5*time.Minute), policyEpoch)
+				return armRow(ctx, writer, policyEpoch.Add(5*time.Minute), policyEpoch)
 			}}
 			got, err := readPolicyState(ctx, q)
 			if q.err != nil {

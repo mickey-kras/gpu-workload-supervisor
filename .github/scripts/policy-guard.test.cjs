@@ -853,7 +853,8 @@ function authorFixture({ association = 'OWNER', bot = false, changed = true } = 
     number: 1, base: { sha: 'a'.repeat(40) }, head: { sha: 'b'.repeat(40) },
   } } };
   const reads = [];
-  const github = { rest: {
+  const github = { paginate: async () => [], rest: {
+    issues: { listComments() {} },
     repos: { getContent: async params => {
       reads.push(params);
       return { data: { type: 'file', sha: (changed && params.ref === context.payload.pull_request.head.sha ? 'd' : 'c').repeat(40) } };
@@ -1019,7 +1020,8 @@ function liveGuardFixture() {
     head: { sha: 'b'.repeat(40) }, base: { sha: 'a'.repeat(40), ref: 'main' } };
   const context = { repo: { owner: 'mickey-kras', repo: 'gpu-workload-supervisor' }, payload: { pull_request: pull } };
   let reads = 0;
-  const github = { rest: {
+  const github = { paginate: async () => [], rest: {
+    issues: { listComments() {} },
     pulls: { get: async () => { reads++; return { data: pull }; } },
     git: {
       getCommit: async () => ({ data: { tree: { sha: 'c'.repeat(40) } } }),
@@ -1090,7 +1092,7 @@ test('independently approved bot policy changes still enforce lock semantics', a
     require_code_owner_review: true, dismiss_stale_reviews_on_push: true,
     require_last_push_approval: true, required_approving_review_count: 1,
   } };
-  fixture.github.paginate = async route => typeof route === 'string' ? [rule] : [{
+  fixture.github.paginate = async route => route === fixture.github.rest.issues.listComments ? [] : typeof route === 'string' ? [rule] : [{
     id: 1, user: { login: 'mickey-kras', id: 24433677, type: 'User' },
     state: 'APPROVED', commit_id: fixture.pull.head.sha,
   }];

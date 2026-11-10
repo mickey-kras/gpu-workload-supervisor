@@ -23,12 +23,21 @@ type DraftBinding struct {
 }
 
 // DraftOwnedLaunch mirrors control.OwnedLaunch for the draft surface.
+// Limits are optional. render-owned renders and fingerprints the unit with
+// them, so the request carries the fingerprint of the final unit. Absent
+// limits keep the exact bytes of a draft without them.
 type DraftOwnedLaunch struct {
-	Executable  string `json:"executable,omitempty"`
-	ModelPath   string `json:"modelPath,omitempty"`
-	Port        uint16 `json:"port"`
-	MaxModelLen uint32 `json:"maxModelLen,omitempty"`
-	Alias       string `json:"alias,omitempty"`
+	Executable  string                 `json:"executable,omitempty"`
+	ModelPath   string                 `json:"modelPath,omitempty"`
+	Port        uint16                 `json:"port"`
+	MaxModelLen uint32                 `json:"maxModelLen,omitempty"`
+	Alias       string                 `json:"alias,omitempty"`
+	Limits      control.ResourceLimits `json:"limits,omitzero"`
+}
+
+// hasLimits reports owned launch limits.
+func (o *DraftOwnedLaunch) hasLimits() bool {
+	return o != nil && !o.Limits.IsZero()
 }
 
 type Draft struct {
@@ -80,7 +89,13 @@ func ReadDrafts(home string) (DraftSnapshot, error) {
 	}
 	result.Revision = revision
 	if err != nil {
-		return result, fmt.Errorf("%w: %s: %w; remove the draft in setup and save, or delete the file", errUnusableDrafts, draftsDisplayPath, err)
+		// Setup still opens with unsupported applications, so the operator
+		// can remove them there. Other failures stop setup.
+		remedy := "setup cannot use this file. Move the file aside or delete it. Setup then starts without its saved selections; a moved file keeps them for a later setup"
+		if errors.Is(err, ErrUnsupportedDraftApplication) {
+			remedy = "remove the draft in setup and save, or delete the file"
+		}
+		return result, fmt.Errorf("%w: %s: %w; %s", errUnusableDrafts, draftsDisplayPath, err, remedy)
 	}
 	return result, nil
 }
@@ -109,15 +124,36 @@ func SaveDrafts(home string, request DraftRequest) (DraftSnapshot, error) {
 	if request.Drafts == nil {
 		request.Drafts = []Draft{}
 	}
-	result := DraftSnapshot{Version: 1, Drafts: request.Drafts}
+	result := DraftSnapshot{Version: draftsVersion(request.Drafts), Drafts: request.Drafts}
 	if err = writeJSON(filepath.Join(root, "drafts.json"), result); err != nil {
 		return result, err
 	}
 	return ReadDrafts(home)
 }
+
+// draftsVersionLimits is the drafts version of a file with owned limits.
+// A file without limits stays version 1, so older binaries still read it.
+// An older setup opens, shows that a version 2 file is unusable, and
+// cannot continue until the file is moved aside or deleted. Each request
+// and file must use the version that its drafts need.
+const draftsVersionLimits = 2
+
+// draftsVersion gives the lowest drafts version that drafts need.
+func draftsVersion(drafts []Draft) int {
+	for _, d := range drafts {
+		if d.Binding != nil && d.Binding.Owned.hasLimits() {
+			return draftsVersionLimits
+		}
+	}
+	return 1
+}
+
 func validateDrafts(version int, drafts []Draft) error {
-	if version != 1 || len(drafts) > 32 {
-		return errors.New("unsupported draft version or too many drafts")
+	if len(drafts) > 32 {
+		return errors.New("too many drafts")
+	}
+	if want := draftsVersion(drafts); version != want {
+		return fmt.Errorf("unsupported draft version %d: these drafts need version %d (%d with resource limits, 1 without)", version, want, draftsVersionLimits)
 	}
 	ids := map[string]bool{}
 	var unsupported error
@@ -181,6 +217,11 @@ func validateDraftModels(d Draft) error {
 func validateDraftBinding(binding *DraftBinding) error {
 	if binding == nil {
 		return nil
+	}
+	if binding.Owned.hasLimits() {
+		if err := binding.Owned.Limits.Validate(); err != nil {
+			return fmt.Errorf("draft resource limits: %w", err)
+		}
 	}
 	for _, value := range []string{binding.Unit, binding.Cgroup, binding.HealthURL, binding.Instance, binding.Model, binding.LaunchFile} {
 		if len(value) > 4096 {

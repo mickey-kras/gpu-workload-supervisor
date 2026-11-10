@@ -1,6 +1,7 @@
 import {applications, profileIDFromModel, recordFingerprint} from './onboarding.mjs';
+import {PlainLimitError} from './limits-ui.mjs';
 
-export function addOwnedEditor({Adw, Gtk, group, draftGroup, draft, initial, command, bind, changed, taken, status, reportError, parent, removed, isSyncing, edited}) {
+export function addOwnedEditor({Adw, Gtk, group, draftGroup, draft, initial, checkLimits, command, bind, changed, taken, status, reportError, parent, removed, isSyncing, edited}) {
     const launch = new Adw.PreferencesGroup({title: 'Supervisor-managed launch',
         description: 'Create a service for this model using the installed application. Applications and model files are preserved.'});
     group.add(launch);
@@ -39,6 +40,7 @@ export function addOwnedEditor({Adw, Gtk, group, draftGroup, draft, initial, com
         try {
             save(false);
             const input = draft.snapshot();
+            checkLimits(input);
             for (const [key, value] of Object.entries(input.binding.owned))
                 if (['port', 'maxModelLen'].includes(key) && (!Number.isSafeInteger(value) || value < 0))
                     throw new Error('Launch numbers must be nonnegative whole numbers.');
@@ -52,13 +54,13 @@ export function addOwnedEditor({Adw, Gtk, group, draftGroup, draft, initial, com
             await bind(result.profile, () => generation === draft.generation);
             if (generation !== draft.generation) { status.label = 'Draft changed during preview. Preview the updated launch.'; return; }
             draft.cancel(); parent.remove(draftGroup); removed();
-        } catch (error) { reportError('Launch preview failed. Check the model, instance and launch options, then retry.', error); }
+        } catch (error) { reportError(error instanceof PlainLimitError ? error.message : 'Launch preview failed. Check the model, instance and launch options, then retry.', error); }
         finally { preview.sensitive = true; }
     });
     return fields;
 }
 
-export function addBindingEditor({Adw, Gtk, group, draftGroup, draft, initial, status, parent, removed, bind, command, changed, taken, reportError, isSyncing, edited}) {
+export function addBindingEditor({Adw, Gtk, group, draftGroup, draft, initial, checkLimits, status, parent, removed, bind, command, changed, taken, reportError, isSyncing, edited}) {
     const binding = new Adw.PreferencesGroup({title: 'Existing service', description: 'Adopt an existing isolated service and its loaded configuration. This does not create a new launch. Saved fields remain unverified.'});
     group.add(binding);
     const fields = {};
@@ -93,6 +95,8 @@ export function addBindingEditor({Adw, Gtk, group, draftGroup, draft, initial, s
         const generation = draft.generation;
         promote.sensitive = false;
         try {
+            // The submitted profile has no owned launch, whatever the draft holds.
+            checkLimits({...input, binding: undefined});
             if (profile.nativeModel) {
                 const result = JSON.parse(await command(['/usr/bin/gpu-setup', 'fingerprint'], JSON.stringify({binding: profile.nativeModel})));
                 recordFingerprint(profile.nativeModel, result);
@@ -102,7 +106,7 @@ export function addBindingEditor({Adw, Gtk, group, draftGroup, draft, initial, s
             await bind(profile, () => generation === draft.generation);
             if (generation !== draft.generation) { status.label = 'Draft changed during verification. Verify the updated binding.'; return; }
             draft.cancel(); parent.remove(draftGroup); removed();
-        } catch (error) { reportError('Binding is not verified. Check Advanced launch binding, then retry.', error); }
+        } catch (error) { reportError(error instanceof PlainLimitError ? error.message : 'Binding is not verified. Check Advanced launch binding, then retry.', error); }
         finally { promote.sensitive = true; }
     });
     return fields;

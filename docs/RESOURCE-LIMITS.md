@@ -475,7 +475,7 @@ Keep `Restart=no`. Add no `StartLimit*`, automatic restart or phase. Idle stops 
 
 ## Limit stop
 
-The policy tick runs the limit stop before the inactivity policy. The limit stop acts only on a supervisor-owned state with error health and closed admission. No transition can be in progress. The limit stop then checks each running unit with limits. A user-owned state gets no limit stop.
+The policy tick runs the limit stop. The limit stop acts only on a supervisor-owned state with error health and closed admission. No transition can be in progress. The limit stop then checks each running unit with limits. A user-owned state gets no limit stop.
 
 The `limit_stops` table keeps the time of the first failure and of the first definite failure in the latch. A failure of another unit keeps these times, so units that fail in turn cannot reset them. With no pending admitted work of the unit, a definite failure stops the unit at once. Work with no workload identity counts as work of the unit.
 
@@ -564,11 +564,13 @@ One Go function selects minimum version: 5 with limits,4 with trainers,2 with ow
 
 Pending activation resumes exact recorded bytes and version. Lower the version only on later writes after maintenance clears.
 
-Drafts without limits remain v1 and readable by new binaries. Limited drafts use the next version. Reject v1 bodies containing limits before unmarshal.
+An owned draft can hold `limits`. `render-owned` renders and fingerprints the unit with them, so the request carries the fingerprint of the final unit. A drafts file without limits stays version 1, with the same bytes.
 
-Current `ReadDrafts` uses `json.Unmarshal`, which would discard the field. Apply the same rule to client `save-drafts`. Test v2 to v5 and back to equal v2 bytes through the shared function.
+A file with limits is version 2. An older setup opens and shows that the saved setup drafts are unusable. It cannot continue. To use it again, move the file aside or delete it. Setup then starts without the saved selections. A moved file keeps them for a later setup.
 
-Rollback: remove limits in setup, confirm lower catalog version, then install the older binary. Verified backup restore is the alternative. See [roll back a release](OPERATIONS.md#roll-back-a-release).
+Setup refuses a request or a file whose version does not fit its drafts. The desktop sends the version that its drafts need.
+
+Rollback: remove limits in setup. Clear them in saved selections and save, so that the top-level version of `drafts.json` is `1`. Confirm the lower catalog version, then install the older binary. Verified backup restore is the alternative. See [roll back a release](OPERATIONS.md#roll-back-a-release).
 
 If the original catalog used its minimum version, exact bytes return. Otherwise the next safe setup write lowers it without changing unit bytes and fingerprints. Never while activation resume remains open.
 

@@ -289,11 +289,11 @@ func TestTrainingContractHungPeakReadIsBoundedAndNeverBlocksStop(t *testing.T) {
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 	p2, _ := c2.config.Catalog.Catalog.Profile(job2.Workload)
-	c2.recordTrainingMemoryPeak(cancelled, s2, r2, p2, job2)
+	c2.recordTrainingMemoryPeak(cancelled, p2, job2)
 	if len(r2.trainingCalls) != 0 {
 		t.Fatalf("read a peak for a cancelled caller: %v", r2.trainingCalls)
 	}
-	c2.recordTrainingMemoryPeak(ctx, s2, r2, p2, job2)
+	c2.recordTrainingMemoryPeak(ctx, p2, job2)
 	if stored, err := s2.TrainingJob(ctx, job2.ID); err != nil || stored.MemoryPeakBytes == nil || *stored.MemoryPeakBytes != 1<<30 {
 		t.Fatalf("job = %+v, %v", stored, err)
 	}
@@ -620,25 +620,6 @@ func TestTrainingContractStartDrainsOpposingWork(t *testing.T) {
 	assertCalls(t, r.trainingCalls, "launch")
 }
 
-func TestTrainingContractUnsupportedRuntimeHasNoEffects(t *testing.T) {
-	_, s, _, job := trainingControllerContract(t)
-	r := &fakeRuntime{}
-	c := testController(t, s, r)
-	ctx := context.Background()
-	if _, err := c.TrainingStatus(ctx, job.ID); err == nil {
-		t.Fatal("unsupported status accepted")
-	}
-	if _, err := c.StartTraining(ctx, "new-job", "trainer"); err == nil {
-		t.Fatal("unsupported launch accepted")
-	}
-	if _, err := c.ReconcileTraining(ctx, job.ID); err == nil {
-		t.Fatal("unsupported reconciliation accepted")
-	}
-	if len(r.calls) != 0 {
-		t.Fatalf("unsupported capability caused effects: %v", r.calls)
-	}
-}
-
 func TestTrainingContractBadIdentityAndMissingJobHaveNoEffects(t *testing.T) {
 	c, s, r := trainingStartContract(t)
 	ctx := context.Background()
@@ -826,9 +807,6 @@ func TestTrainingContractRoutineTransitionsWaitForRelease(t *testing.T) {
 			}
 			if _, err := c.TransferToUser(ctx, control.WorkloadIdle, "operator"); !errors.Is(err, store.ErrTrainingPending) {
 				t.Fatalf("ownership transfer error=%v", err)
-			}
-			if _, err := c.PolicyIdle(ctx, time.Now(), nil); err == nil {
-				t.Fatal("idle policy displaced training")
 			}
 			after, err := s.State(ctx)
 			if err != nil {

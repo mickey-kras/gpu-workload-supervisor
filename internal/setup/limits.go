@@ -11,6 +11,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 // ErrLimitsNeedConversion refuses limits on a unit that the accepted
@@ -88,7 +89,7 @@ func acceptedCatalog(ctx context.Context, statePath string) (control.Catalog, er
 
 // limitChecker gives the setup checks of the runtime. A runtime without
 // them cannot accept limits.
-func limitChecker(manager gpuruntime.Manager) (limitHostChecker, error) {
+func limitChecker(manager supervisor.Runtime) (limitHostChecker, error) {
 	checker, ok := manager.(limitHostChecker)
 	if !ok {
 		return nil, gpuruntime.ErrLimitUnchecked
@@ -98,7 +99,7 @@ func limitChecker(manager gpuruntime.Manager) (limitHostChecker, error) {
 
 // previewHostCap gives the host cap step of a preview. It refuses limits
 // on an adopted unit. A request without limits needs no root step.
-func previewHostCap(manager gpuruntime.Manager, request Request) (*gpuruntime.HostCapStep, error) {
+func previewHostCap(manager supervisor.Runtime, request Request) (*gpuruntime.HostCapStep, error) {
 	if len(limitedProfiles(request.Catalog)) == 0 {
 		return notNeeded(request), nil
 	}

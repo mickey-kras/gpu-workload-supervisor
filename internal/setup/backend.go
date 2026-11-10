@@ -118,10 +118,6 @@ func Home() (string, error) {
 	}
 	return account.HomeDir, nil
 }
-func Plan(home string, request Request) (Preview, error) {
-	return SystemBackend().Plan(home, request)
-}
-
 func (b Backend) Plan(home string, request Request) (Preview, error) {
 	request, err := prepareOwnedBackstopsForActivation(home, request)
 	if err != nil {
@@ -163,7 +159,7 @@ func (b Backend) Plan(home string, request Request) (Preview, error) {
 // instead of touching the real runtime, unit manager, or package binaries.
 type Backend struct {
 	gpuInventory        func(context.Context) ([]string, string)
-	makeRuntime         func(Request) (gpuruntime.Manager, error)
+	makeRuntime         func(Request) (supervisor.Runtime, error)
 	runCommand          gpuruntime.CommandFunc
 	probeApplication    func(ctx context.Context, request ProbeRequest) (ApplicationCandidate, error)
 	discoverExecutables func(context.Context, string) []ApplicationCandidate
@@ -184,7 +180,7 @@ func SystemBackend() Backend {
 		escapeRoutes: gpuruntime.ScanEscapeRoutes}
 }
 
-func runtimeFor(request Request) (gpuruntime.Manager, error) {
+func runtimeFor(request Request) (supervisor.Runtime, error) {
 	return gpuruntime.NewSystemdManager(request.Profile.SystemdConfig(&request.Catalog))
 }
 
@@ -199,10 +195,6 @@ type activationWork struct {
 	marker         deployment.Marker
 	existing       bool
 	accepted       control.CatalogSnapshot
-}
-
-func Apply(ctx context.Context, home string, request Request) error {
-	return SystemBackend().Apply(ctx, home, request)
 }
 
 func (b Backend) Apply(ctx context.Context, home string, request Request) error {
@@ -272,7 +264,7 @@ type commitOptions struct {
 	home    string
 	root    string
 	request Request
-	manager gpuruntime.Manager
+	manager supervisor.Runtime
 	fresh   bool
 	plan    unitPlan
 }
@@ -445,10 +437,6 @@ func newer(next, previous string) bool {
 	return semver.Compare(next, previousCore) > 0
 }
 
-func Reconcile(ctx context.Context, home string) error {
-	return SystemBackend().Reconcile(ctx, home)
-}
-
 // AuditRetention is the age past which reconcile prunes eligible audit
 // history. PruneAuditHistory always keeps live and latest evidence.
 const AuditRetention = 90 * 24 * time.Hour
@@ -469,10 +457,10 @@ func (b Backend) Reconcile(ctx context.Context, home string) error {
 	return errors.Join(reconcileErr, pruneErr)
 }
 
-// PolicyTick evaluates the inactivity policy once against the persisted
-// operator profile. It is the profile-aware oneshot behind the idle user
-// timer: an unreadable operator.json fails loudly rather than silently
-// falling back to default paths.
+// PolicyTick runs the limit stop once against the persisted operator
+// profile. It is the profile-aware oneshot behind the idle user timer: an
+// unreadable operator.json fails loudly rather than silently falling back to
+// default paths.
 func PolicyTick(ctx context.Context, home string) error {
 	return SystemBackend().PolicyTick(ctx, home)
 }
@@ -483,10 +471,8 @@ func (b Backend) PolicyTick(ctx context.Context, home string) error {
 		return err
 	}
 	defer cleanup()
-	// No qualified evidence provider ships with the supervisor, so an enabled
-	// policy fails closed and an Off policy is a clean no-op. The tick
-	// first runs the limit stop, which can stop a unit whose limits fail.
-	return controller.TickWithLimits(ctx, nil, os.Stderr)
+	// The limit stop can stop a unit whose limits fail.
+	return controller.LimitTick(ctx, os.Stderr)
 }
 
 // activatedController loads the persisted operator.json profile, validates

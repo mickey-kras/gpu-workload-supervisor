@@ -66,10 +66,6 @@ func TemporaryStatus(ctx context.Context, home string) (*control.TemporaryDiscov
 	return store.InspectTemporaryDiscoveryStatus(ctx, db)
 }
 
-func TemporaryCleanup(ctx context.Context, home string, r TemporaryCleanupRequest) error {
-	return SystemBackend().TemporaryCleanup(ctx, home, r)
-}
-
 func (b Backend) TemporaryCleanup(ctx context.Context, home string, r TemporaryCleanupRequest) error {
 	if !r.ExternalControlPaused || r.ID == "" || r.Token == "" {
 		return errors.New("session identity and paused external application control are required for cleanup")

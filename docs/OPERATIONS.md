@@ -100,7 +100,7 @@ Activation holds controller and exclusive-proxy gates and verifies GPU release f
 
 After each committed activation, setup keeps the three newest `activation-*` tuples and deletes older ones. To keep an older tuple, copy it outside `backups/` first.
 
-The snapshot excludes vLLM API key files. After rollback, run setup again to create missing key files.
+The snapshot also keeps the API key file of each managed vLLM workload in `owned-keys/`, with mode `0600`. A key file that did not exist is not in the snapshot. After rollback, run setup again to create it.
 
 Stored [model check](MODEL-CHECKS.md#results) results have format version 2. A result of another version reads as `not_scanned` until the checker checks the model again. An earlier release reads version 2 results as stale. If it checks a model again after a rollback, it replaces the stored result and drops its template approval. Then, after the next upgrade, the operator must approve the template again.
 
@@ -115,6 +115,7 @@ Use the [full restore procedure](#make-a-backup-restore-and-roll-back-state), ke
 | `operator.json`, `catalog.json`, `ownership.json` | Same names |
 | `manifest.json` | `activated-binaries/manifest.json` |
 | `gpu-mode`, `gpu-workload-proxy`, `gpu-operator`, `gpu-setup` | Same names under `activated-binaries/` |
+| `owned-keys/` files | Same names under `vllm/`, service-owned, mode `0600` |
 
 Check the plain private `owned-units/` files against `owned-units.json` and saved catalog launch fingerprints. Restore saved filenames to `~/.config/systemd/user/`, service-owned, mode `0600`. You can recreate absent destinations.
 
@@ -155,6 +156,20 @@ Manual fallback: **Copy reviewed override** copies only the proposal. Ask the se
 ## Use and recover workloads
 
 Use pinned binaries and complete [deployment flags](DEPLOYMENT.md#deploy-the-supervisor). Replace the placeholders. Put flags before the single command. Never start runtimes independently.
+
+After setup, `gpu-mode` gets the [runtime flags](DEPLOYMENT.md#controller-configuration) from the activated profile. Then `[runtime flags]` in the examples is not necessary.
+
+### Check the deployment
+
+Run `doctor` first when a control fails or when you do not know the state:
+
+```sh
+/PINNED/RELEASE/gpu-mode [runtime flags] doctor
+```
+
+`doctor` runs the existing checks in sequence. It checks the operator profile, the deployment marker against the activated release and the accepted catalog. Then it runs `verify-host` on the accepted catalog, and `status`.
+
+Each check prints `ok` or `FAIL`. A `next` line gives the operator step. `doctor` stops at the first failed check and exits nonzero. It changes state only as `status` does.
 
 ### Switch workloads
 
@@ -294,17 +309,39 @@ Restore changes lease identity. Ordinary restart does not. Keep all affected com
 
 Record the pinned binary version and checksum and complete runtime and proxy configuration. Stop the controller automation, block new execution, finish or stop jobs, then stop every proxy and runtime sharing state. Prevent maintenance restarts.
 
-Use SQLite backup or a verified consistent snapshot, including all audit and migration metadata. Never copy only a live WAL database's `.db`. Protect backup and state directories with service-private permissions. Check the integrity. Keep previous binaries and configuration before new processes open or migrate state.
+Keep previous binaries and configuration before new processes open state. The state database needs no manual backup for an upgrade. The first new process that opens it takes a [pre-migration snapshot](#pre-migration-snapshots) before it changes the schema.
+
+Make a manual SQLite backup only to keep state longer than the snapshot retention, or to archive audit history. Use SQLite backup or a verified consistent snapshot, including all audit and migration metadata. Never copy only a live WAL database's `.db`. Protect backup and state directories with service-private permissions. Check the integrity.
 
 Before upgrading, [select an explicit media policy](DEPLOYMENT.md#select-an-explicit-media-policy). `restore-state` and `prune-audit` need no media stop policy.
 
 After upgrading Supervisor state, reconcile with new pinned binary and matching flags before proxies. For User state, inspect and `recover-user`. Reconcile rejects it. `return-control` requires explicit intent. Validate the deployment before work. Follow [ownership recovery](#ownership-and-unfinished-work).
 
+<a id="pre-migration-snapshots"></a>
+
+### Pre-migration snapshots
+
+A process that opens a state database with an older schema takes a snapshot before it applies a migration. A new database or a current database gets no snapshot. The snapshot is a consistent SQLite copy that includes the WAL contents. The process checks the snapshot integrity and schema version before it migrates. If the snapshot fails, the process does not migrate and stops with an error.
+
+The snapshot is in the private directory of the database, with mode `0600`. The name shows the old schema version and the UTC time, for example `state.db.pre-v18-20261110T073005Z.bak`. Each new snapshot deletes older snapshots of the same database, so only the three newest stay. Three snapshots let you roll back after a second quick upgrade, and they limit disk use. To keep an older snapshot, copy it to a different directory.
+
+A snapshot contains only the state database. It does not contain binaries, configuration, owned-unit bytes or the API key files of vLLM workloads.
+
+To roll back the database with a snapshot:
+
+1. Stop every proxy, controller automation and runtime sharing state, as in [Restore a backup](#restore-a-backup) step 1.
+2. Move `state.db` and its `state.db-wal` and `state.db-shm` files to a different private directory. Keep them for investigation.
+3. As the service identity, copy the snapshot to `state.db` with mode `0600`. Do not copy WAL or SHM files.
+4. Install the previous binaries and configuration. They must support the schema version in the snapshot name.
+5. Continue with [Restore a backup](#restore-a-backup) from step 3. Use the previous binary for `restore-state`.
+
+If a newer binary opens the restored state, it migrates the state again and takes a new snapshot.
+
 ### Restore a backup
 
 A backup's incarnation can predate live state. `restore-state` must rotate it before any proxy starts, after every backup installation, never ordinary restart.
 
-Backups exclude vLLM API key files. After a restore, run setup again. It creates a missing key file for each managed vLLM workload.
+A state database backup holds no API key files of vLLM workloads. Setup activation backups keep them, see [restore and rollback](#restore-and-rollback). If a key file is missing after a restore, run setup again. It creates a missing key file for each managed vLLM workload.
 
 1. Stop every proxy, controller automation and runtime sharing state. Finish or stop admitted jobs and prevent restart. Controller and proxy lifetime locks serialize commands, not earlier file replacement or external runtime stopping.
 2. Install a consistent backup at the configured private service-owned state path. Never copy live `.db` alone or leave another database's WAL or SHM files alongside it.
@@ -316,39 +353,13 @@ Backups exclude vLLM API key files. After a restore, run setup again. It creates
 
 The initialized supervisor database cannot be an empty placeholder. No runtime flags or backup copying occur. Success prints closed state and a new incarnation. Atomic changes: Supervisor ownership, unknown active workload, closed admission, abandoned restored active work, invalidated transitions and an audit record. Failed work and transition history remains. On failure keep everything stopped and repair before retrying.
 
-For unfinished training with unknown IDs, run this read-only Python 3 standard-library query as the service identity. Output contains only IDs and categories, never payloads or tokens:
+If `restore-state` reports unfinished training, recover all of it as the service identity:
 
    ```sh
-   python3 - /PRIVATE/DURABLE/STATE/state.db <<'PY'
-   import pathlib
-   import sqlite3
-   import sys
-
-   uri = pathlib.Path(sys.argv[1]).resolve().as_uri() + "?mode=ro"
-   with sqlite3.connect(uri, uri=True) as db:
-       for job_id, category in db.execute("""
-           SELECT id, 'reserved job' FROM training_jobs WHERE finished=0
-           UNION ALL
-           SELECT id, 'preparing claim' FROM training_claims WHERE status='preparing'
-           ORDER BY 1
-       """):
-           print(job_id, category, sep="\t")
-   PY
+   /PINNED/RELEASE/gpu-mode [runtime flags] -all-restored training-recover
    ```
 
-Recover each ID explicitly. In a text editor, create private regular mode-`0600` `/PRIVATE/DURABLE/STATE/training-job-id.txt` as the service identity. Store exactly one ID plus newline, preserving spaces, without category, tab, quotes or escapes. Do not paste into terminal prompts: IDs can exceed terminal line limits. Read as data with quoted expansion:
-
-   ```sh
-   if {
-       IFS= read -r training_job_id &&
-       [ -n "$training_job_id" ] &&
-       ! { IFS= read -r extra_line || [ -n "$extra_line" ]; }
-   } < /PRIVATE/DURABLE/STATE/training-job-id.txt; then
-       /PINNED/RELEASE/gpu-mode [runtime flags] -state /PRIVATE/DURABLE/STATE/state.db -training-job "$training_job_id" training-recover
-   else
-       printf '%s\n' 'Expected exactly one nonempty ID line; keep components stopped.' >&2
-   fi
-   ```
+The command requires stopped proxies. It reads the unfinished training IDs of the state and recovers each ID in sequence. For each ID, it prints one JSON line with the ID, the query category and the state. Last, it prints the count in `recoveredTraining`. Output never contains payloads or tokens.
 
 Use restored accepted-catalog runtime configuration and trainer bindings. Runtime commands reject `-catalog`.
 
@@ -359,7 +370,9 @@ Use restored accepted-catalog runtime configuration and trainer bindings. Runtim
 
 The query excludes finished jobs and interrupted claims.
 
-Failed query or no reserved job despite the error: keep stopped, investigate path and schema. Never guess IDs, edit state or bypass the guard. Recovery preserves persisted terminal outcomes, otherwise records `interrupted`. It never resumes or relaunches training. Backups prove no completion. Repair runtime and configuration failures, recover, retry `restore-state`.
+The command stops at the first failed recovery, and the error names the ID. Keep components stopped. Repair runtime and configuration failures, then run the command again.
+
+A failed query, or no reserved job despite the error: keep stopped, investigate path and schema. Never guess IDs, edit state or bypass the guard. Recovery preserves persisted terminal outcomes, otherwise records `interrupted`. It never resumes or relaunches training. Backups prove no completion. After recovery, retry `restore-state`.
 
 4. Keep proxies stopped. Run pinned `reconcile` with full matching flags and the same `-state`. Continue only after stable, healthy success. Failure: inspect the runtime before explicit `recover`. Start any needed workload through the controller.
 5. Start the proxies. Clients get the new fence. Proxies reject backup fences.
@@ -370,13 +383,21 @@ Failed query or no reserved job despite the error: keep stopped, investigate pat
 
 No automatic downgrade. Check the exact binary and database schema and behavioral compatibility before older binaries open state. The guard rejects newer schemas. Matching schema numbers prove no fencing, handoff or completion compatibility. Never edit migration metadata.
 
-Older binaries reject database schema v19. To roll back past this release, restore a verified database backup from before v19.
+Older binaries reject database schema v19. To roll back past this release, restore a verified database backup from before v19, such as a `state.db.pre-v18-*.bak` [pre-migration snapshot](#pre-migration-snapshots).
 
 Older binaries also reject catalog v5. Before you stop components and install an older binary, remove all resource limits. Setup then writes the lowest version the catalog needs. Run `gpu-setup discover` and read `request.catalog.version`: 4 with trainers, 2 with owned launches, 1 otherwise. Version 5 means limits remain.
 
-This release's setup application has no limit controls. Remove each limited workload and apply, then add it again without limits if needed. Alternatively, restore a backup from before the limits.
+To remove the limits in the setup application, open the settings of each limited workload. Select **Advanced settings**, then **Resource checks**. Clear **Limit the resources of this workload**. Then apply. Alternatively, restore a backup from before the limits.
 
-Stop and block components as above. Preserve the failed database for investigation. Select verified binaries and configuration and matching pre-upgrade backup, including managed owned-unit bytes and hashes. Follow [desktop restoration](#restore-and-rollback), protecting foreign or modified units and refreshing the user manager. Complete every restore step, including `restore-state`, with a binary qualified for that backup and protocol. Never mix proxies that lack required handoff or lifetime locks with newer controllers.
+Saved selections with limits make `drafts.json` version 2. An older setup reads only version 1. An older setup opens and shows that the saved setup drafts are unusable. It cannot continue.
+
+To use it again, move `drafts.json` aside or delete it. Setup then starts without the saved selections. A moved file keeps them for a later setup.
+
+Before you install the older binary, clear the limits of each saved selection. Then save the selections again.
+
+Make sure that the top-level version is `1`. With `jq`, run `jq .version ~/.config/gpu-workload-supervisor/drafts.json`. Without `jq`, run `grep -oE '"version": *[0-9]+' ~/.config/gpu-workload-supervisor/drafts.json | head -1`. The first match is the top-level version. A missing file is also safe.
+
+Stop and block components as above, and preserve the failed database for investigation. Select verified binaries, configuration and managed owned-unit bytes and hashes. Select a matching pre-upgrade backup or pre-migration snapshot for the database. Follow [desktop restoration](#restore-and-rollback), protecting foreign or modified units and refreshing the user manager. Complete every restore step, including `restore-state`, with a binary qualified for that backup and protocol. Never mix proxies that lack required handoff or lifetime locks with newer controllers.
 
 Reconcile, check closed-state recovery and refresh client fences before execution. Rollback loses post-backup work and audit updates. If the previous release cannot do this safely, keep admission closed and repair forward.
 
@@ -484,7 +505,7 @@ Read the service journal for the cause and the limit outcome. Run `resolve-work`
 
 `set-idle-policy` combines fresh status's complete `expected` with settings revision from fresh **get-settings**, never status. Its writer transaction revalidates both revisions plus incarnation, version and owner, rotates settings revision and clears armed deadlines. It never interrupts unstable state or transitions. Success returns only updated settings.
 
-Enablement without qualified evidence returns `unavailable`. Stale settings → `stale_state`, running transition → `busy`, invalid timeout → `invalid_request`. Both actions use status lifetimes. Older peers' strict `invalid_request` means idle policy unavailable.
+No inactivity evaluator ships, so enablement returns `unavailable`. Stale settings → `stale_state`, running transition → `busy`, invalid timeout → `invalid_request`. Both actions use status lifetimes. Older peers' strict `invalid_request` means idle policy unavailable.
 
 ### Demand activation
 
@@ -525,13 +546,7 @@ The tick reads the persisted profile's runtime and state path and committed sett
 
 Also give it the `-gpu-index` and `-capacity-headroom-mib` values of the profile. The release check reads them. To match `gpu-setup`, give it `-drain-timeout 2m -verify-timeout 1m -action-timeout 1m -cleanup-timeout 1m`. Without `-nvidia-smi`, the release check after a stop always fails.
 
-For the inactivity policy, Off, User ownership, unstable or latched state or idle or unknown workload disarms deadlines and does nothing. The limit stop still acts on a latched supervisor-owned state. Enabled without qualified evidence fails closed and nonzero. Fresh evidence must exclude queued, reserved, running and unresolved work and unfinished admissions.
-
-An attestation at most 120 seconds old arms `last activity + timeout`. On expiry without new activity, the tick drains to Idle. Inside the single-writer transaction, provider-generation fencing and pending-work rechecks are atomic with state-version and lease-fence checks. Registrations without terminal evidence count as unfinished.
-
-The provider validates generation and excludes queue or reservation changes through commit or rollback. Revocation aborts commit, disarms and fails closed. Committed draining closes admission before fence release.
-
-Any new activity, admission or state change aborts with exit 0 and no latch. The next tick fetches fresh evidence.
+The tick has no inactivity evaluator. It never drains a workload to Idle and never arms a deadline. The timer and the command keep their names, so installed units keep working after an upgrade.
 
 ### Lifetimes and limits
 
@@ -636,11 +651,11 @@ Completed-work retention also removes old canceled or terminal demand. Maximum q
 
 SQLite transactions cover queue, reservation and registration. Admission consumes claims atomically with native or ComfyUI registration. Queued or reserved demand invalidates idle deadlines and participates in atomic idle checks. Admitted work needs trusted terminal evidence or verified recovery. Native streaming and ComfyUI reconciliation contracts remain.
 
-Evidence excludes external bypass jobs. No deployment-qualified `EvidenceProvider` exists: enablement remains unavailable. Qualify runtime isolation plus terminal and model lifecycle separately. Fixtures cannot prove this.
+Evidence excludes external bypass jobs. No inactivity evaluator ships: enablement remains unavailable. Qualify runtime isolation plus terminal and model lifecycle separately. Fixtures cannot prove this.
 
 ## Demand activation and inactivity idle plan
 
-[#144](https://github.com/mickey-kras/gpu-workload-supervisor/issues/144) implements durable policy and settings, demand activation and a 60-second timer. Policy defaults Off. Packaged entrypoints lack qualified evidence: enablement returns `unavailable`, evaluation fails closed. Keep Off for initial desktop deployment.
+[#144](https://github.com/mickey-kras/gpu-workload-supervisor/issues/144) implements durable policy and settings, demand activation and a 60-second timer. Policy defaults Off. No inactivity evaluator ships: enablement returns `unavailable`. Keep Off for initial desktop deployment.
 
 ### Placement
 
@@ -648,7 +663,7 @@ One backend loop beside the transition controller uses durable evidence and exis
 
 ### Required before enablement
 
-Qualify an orchestration `EvidenceProvider`, queued, reserved, running and unresolved evidence, runtime-bypass prevention and native terminal and model lifecycle on the deployment host. Contracts are not adapters. Fixture coverage does not qualify the host. Production isolation for requester ingress remains unqualified. Integrate desktop settings and deadlines only with backend capability and fresh evidence.
+Build an inactivity evaluator in the policy tick. Qualify an orchestration evidence source, queued, reserved, running and unresolved evidence, runtime-bypass prevention and native terminal and model lifecycle on the deployment host. Contracts are not adapters. Fixture coverage does not qualify the host. Production isolation for requester ingress remains unqualified. Integrate desktop settings and deadlines only with backend capability and fresh evidence.
 
 <a id="activation-ingress"></a>
 
@@ -658,13 +673,13 @@ Use [typed activation](#demand-activation) for preconditions, readiness checks, 
 
 ### Idle transition
 
-The [policy tick](#inactivity-policy-tick) makes the fenced inactivity decision and aborts on intervening admission.
+No idle transition ships. A future evaluator in the [policy tick](#inactivity-policy-tick) must make a fenced inactivity decision. It must abort on intervening admission.
 
 ### Evidence input contract
 
 Use only orchestration attestation: job-identity sets for queued, reserved, running and unresolved work. Unresolved maps to `PendingWork` retaining completion authority. Use `ResolveUnfinishedWork` only for verified operator recovery, never policy cleanup.
 
-Pull `Attest` every evaluation. `AcquireFence` validates generation and excludes queue and reservation changes through the transaction. Invalidation is not fresh evidence. Timestamp age over 120 seconds (`MaxAttestationAge`, `internal/supervisor/policy.go`) is missing evidence. Unreachable, outage, uncertain, partial or missing attestations forbid Idle. Timer source: `packaging/gpu-workload-supervisor-idle.timer`.
+Read fresh evidence at each evaluation. A fence must validate the evidence generation and exclude queue and reservation changes through the transaction. Old, unreachable, uncertain, partial or missing evidence forbids Idle. Timer source: `packaging/gpu-workload-supervisor-idle.timer`.
 
 <a id="ownership-transfer-while-pending-idle-is-armed"></a>
 

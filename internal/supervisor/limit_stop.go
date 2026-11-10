@@ -43,21 +43,14 @@ var (
 const limitStopInitiator = "resource-limit-stop"
 
 // limitStopRuntime gives the outcome of the limits of a unit before its
-// stop, and the release check after it. A runtime without it fails the
-// release check, so the state keeps an unknown workload.
+// stop, and the release check after it.
 type limitStopRuntime interface {
 	LimitOutcome(context.Context, control.Workload) gpuruntime.LimitOutcome
 	LimitStopReleased(context.Context, control.Workload) error
 }
 
-// TickWithLimits runs the limit stop and then the inactivity policy. It is
-// the policy tick of gpu-mode and of gpu-setup.
-func (c *Controller) TickWithLimits(ctx context.Context, evidence EvidenceProvider, log io.Writer) error {
-	return errors.Join(c.LimitTick(ctx, log), c.PolicyTick(ctx, evidence))
-}
-
-// LimitTick runs EnforceLimits for the policy tick. A deferred stop goes to
-// log and is not an error, so the tick exits zero and retries. An overdue
+// LimitTick runs EnforceLimits for the policy tick of gpu-mode and of
+// gpu-setup. A deferred stop goes to log and is not an error, so the tick exits zero and retries. An overdue
 // deferral, a stop or a failed stop returns its cause: the tick exits
 // nonzero, and the service journal records why.
 func (c *Controller) LimitTick(ctx context.Context, log io.Writer) error {
@@ -150,11 +143,6 @@ func (c *Controller) observeLimitCandidates(ctx context.Context) (snapshot gpuru
 	snapshot, err = c.observe(ctx)
 	if err == nil {
 		return snapshot, nil, nil
-	}
-	if _, ok := c.runtime.(interface {
-		ObserveForRecovery(context.Context) (gpuruntime.Snapshot, error)
-	}); !ok {
-		return snapshot, nil, err
 	}
 	recovered, recoveryErr := c.observeForReconciliation(ctx, true)
 	if recoveryErr != nil {
@@ -382,13 +370,9 @@ func cutOffWork(id control.Workload, pending int, readErr error, how int) error 
 // limitOutcome reads the outcome of the limits of a unit as text. It is
 // diagnostics only: it decides nothing.
 func (c *Controller) limitOutcome(ctx context.Context, id control.Workload) gpuruntime.LimitOutcome {
-	r, ok := c.runtime.(limitStopRuntime)
-	if !ok {
-		return gpuruntime.LimitOutcome{Class: gpuruntime.LimitOutcomeNone, Detail: "the runtime cannot read it"}
-	}
 	probeCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
 	defer cancel()
-	return r.LimitOutcome(probeCtx, id)
+	return c.runtime.LimitOutcome(probeCtx, id)
 }
 
 // settleLimitRecord handles a record with no started stop when no running

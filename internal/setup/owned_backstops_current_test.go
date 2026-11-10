@@ -13,6 +13,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 func TestDerivedOwnedBackstopsResumeOriginalRequest(t *testing.T) {
@@ -108,7 +109,7 @@ func TestDerivedOwnedBackstopsResumeOriginalRequest(t *testing.T) {
 			if err != nil || !reflect.DeepEqual(preview.Catalog, candidate.Catalog) {
 				t.Fatalf("preview rewrote pending activation: %#v %v", preview.Catalog, err)
 			}
-			backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
+			backend.makeRuntime = func(got Request) (supervisor.Runtime, error) {
 				if !reflect.DeepEqual(got.Catalog, candidate.Catalog) {
 					t.Fatal("recovery runtime saw rewritten catalog")
 				}

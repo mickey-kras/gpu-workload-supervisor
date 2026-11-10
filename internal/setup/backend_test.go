@@ -15,6 +15,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 type idleRuntime struct{ err error }
@@ -38,7 +39,7 @@ func fixture(t *testing.T) (Backend, string, Request) {
 	home := t.TempDir()
 	r := Request{Version: 1, ConfirmQuiesced: true, Profile: Profile{Version: 1, StatePath: filepath.Join(home, "state/state.db"), SystemctlPath: "/usr/bin/systemctl", NvidiaSMIPath: "/usr/bin/nvidia-smi"}, Catalog: control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health", BootPolicy: "stop-to-idle"}}}}
 	backend := SystemBackend()
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{}, nil }
 	backend.qualifyOwned = func(control.WorkloadProfile) error { return nil }
 	// The escape route scan reads host files, so the fixture has none.
 	backend.escapeRoutes = nil
@@ -125,11 +126,11 @@ func TestApplyFailuresAndMaintenanceResume(t *testing.T) {
 		t.Fatal("gate contention accepted")
 	}
 	gate.Close()
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{err: errors.New("GPU busy")}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{err: errors.New("GPU busy")}, nil }
 	if err := backend.Apply(ctx, home, r); err == nil {
 		t.Fatal("live runtime accepted")
 	}
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil }
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{}, nil }
 	backend.runCommand = func(context.Context, string, ...string) ([]byte, error) {
 		return nil, errors.New("unit manager unavailable")
 	}
@@ -322,45 +323,7 @@ func TestPolicyTickEvaluatesThePersistedProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := backend.PolicyTick(ctx, home); err != nil {
-		t.Fatalf("tick with off policy: %v", err)
-	}
-	// Enable the policy on a stable running workload: without a qualified
-	// evidence provider the tick must fail closed, never idle silently.
-	s, err := store.Open(ctx, r.Profile.StatePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, err := s.State(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state.DesiredWorkload = control.WorkloadText
-	state.ActiveWorkload = control.WorkloadText
-	state.Admission = control.AdmissionOpen
-	state, err = s.UpdateState(ctx, state.Version, state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snap, err := s.Catalog(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	settings, err := s.Settings(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := control.SettingsPrecondition{
-		Incarnation: state.LeaseFence.Incarnation, Version: state.Version, Owner: state.Owner,
-		ConfigurationRevision: snap.Revision, SettingsRevision: settings.SettingsRevision,
-	}
-	if _, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 5}, true); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := backend.PolicyTick(ctx, home); err == nil || !strings.Contains(err.Error(), "evidence") {
-		t.Fatalf("enabled tick without evidence: %v", err)
+		t.Fatalf("tick: %v", err)
 	}
 }
 
