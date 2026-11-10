@@ -27,6 +27,9 @@ type Checker struct {
 	// Approver asks an operator to approve the literals of a chat template.
 	// Without it, a template with literals to review does not pass.
 	Approver Approver
+	// hub tunes the hub client: its listing timeout and retries. The zero
+	// value gives the defaults. Tests in this package set it.
+	hub hubOptions
 }
 
 // Run checks one model and gives a record bound to its file digests. A
@@ -113,11 +116,11 @@ func (c Checker) now() time.Time {
 }
 
 func (c Checker) identity(ctx context.Context, r Request, files map[string]string) Check {
-	upstream, err := HubListing(c.Client, c.Hub)(ctx, r.Source)
+	upstream, err := hubListing(c.Client, c.Hub, c.hub)(ctx, r.Source)
 	if err != nil {
 		return outcome(CheckIdentity, "", err)
 	}
-	reason, err := checkIdentity(ctx, r.Root, files, upstream)
+	reason, err := checkIdentity(ctx, r.Root, files, upstream, MaxGitBlobBytes)
 	return outcome(CheckIdentity, reason, err)
 }
 

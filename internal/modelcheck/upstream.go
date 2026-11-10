@@ -34,9 +34,6 @@ const (
 // The hub stores larger files in LFS, which publishes SHA-256.
 const MaxGitBlobBytes = 64 << 20
 
-// maxGitBlobBytes is the effective limit. Tests lower it.
-var maxGitBlobBytes int64 = MaxGitBlobBytes
-
 var (
 	repoPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}$`)
 	revisionPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -96,9 +93,6 @@ func (e upstreamError) Error() string { return "upstream listing failed: " + e.r
 
 func listingError(reason string) error { return upstreamError{reason: reason} }
 
-// listingTimeout bounds one listing when ctx has no deadline. Tests shorten it.
-var listingTimeout = 10 * time.Minute
-
 // maxHistoryPages bounds the commit history pages that the branch check reads.
 const maxHistoryPages = 64
 
@@ -110,14 +104,22 @@ var errNotOnBranch = errors.New("revision is not on a branch or tag")
 // HTTPS. The revision must be on a branch or a tag of the repository. It
 // refuses redirects, follows only next-page links to the same URL path and
 // bounds every page. A redirected repository needs its current name in the
-// source. It sends the token of an existing hub login only to the hub.
+// source. It sends the token of an existing hub login only to the hub. It
+// retries a request that failed with rate limiting, a server error or a
+// network failure a few times, with backoff and jitter. It honors the
+// Retry-After header of the hub.
 func HubListing(client *http.Client, hub string) Listing {
+	return hubListing(client, hub, hubOptions{})
+}
+
+func hubListing(client *http.Client, hub string, options hubOptions) Listing {
+	options = options.withDefaults()
 	strict := *client
 	strict.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return func(ctx context.Context, source Source) (map[string]UpstreamFile, error) {
 		if _, ok := ctx.Deadline(); !ok {
 			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, listingTimeout)
+			ctx, cancel = context.WithTimeout(ctx, options.listingTimeout)
 			defer cancel()
 		}
 		base, err := url.Parse(hub + "/api/models/" + source.Repo)
@@ -128,7 +130,7 @@ func HubListing(client *http.Client, hub string) Listing {
 		if err != nil {
 			return nil, listingError(ReasonTokenUnusable)
 		}
-		h := hubClient{client: &strict, base: base, token: token}
+		h := hubClient{client: &strict, base: base, token: token, retry: options.retry}
 		if err := h.onBranch(ctx, source.Revision); err != nil {
 			return nil, err
 		}
@@ -165,6 +167,7 @@ type hubClient struct {
 	client *http.Client
 	base   *url.URL
 	token  string
+	retry  hubRetry
 }
 
 type hubRef struct {
@@ -280,7 +283,9 @@ func (h hubClient) pages(ctx context.Context, suffix string, limit int, visit fu
 	return used, false, nil
 }
 
-// get reads one bounded JSON page. The token goes only to the hub host.
+// get reads one bounded JSON page. The token goes only to the hub host. A
+// network failure, rate limiting or a server error retries the request
+// within the bounds of h.retry. Errors never hold the token.
 func (h hubClient) get(ctx context.Context, page string) ([]byte, string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, page, nil)
 	if err != nil || request.URL.Host != h.base.Host || request.URL.Scheme != "https" {
@@ -290,22 +295,58 @@ func (h hubClient) get(ctx context.Context, page string) ([]byte, string, error)
 	if h.token != "" {
 		request.Header.Set("Authorization", "Bearer "+h.token)
 	}
+	for retry := 1; ; retry++ {
+		raw, link, wait, err := h.attempt(request)
+		if wait == nil || retry >= h.retry.attempts {
+			return raw, link, err
+		}
+		d, ok := h.retry.delay(retry, wait.after, wait.hinted)
+		if !ok || h.retry.wait(ctx, d) != nil {
+			return raw, link, err
+		}
+	}
+}
+
+// retryHint marks a failed request that a later request can pass. after
+// is the Retry-After wait of the hub, when hinted.
+type retryHint struct {
+	after  time.Duration
+	hinted bool
+}
+
+// attempt sends request once and reads one bounded JSON page. A non-nil
+// hint marks a failure that a retry can fix.
+func (h hubClient) attempt(request *http.Request) ([]byte, string, *retryHint, error) {
 	response, err := h.client.Do(request)
 	if err != nil {
-		return nil, "", listingError(ReasonUpstreamUnreachable)
+		return nil, "", transportHint(request), listingError(ReasonUpstreamUnreachable)
 	}
 	defer response.Body.Close()
 	if reason := statusReason(response); reason != "" {
-		return nil, "", listingError(reason)
+		var hint *retryHint
+		if retryableStatus(response) {
+			after, hinted := retryAfter(response, time.Now())
+			hint = &retryHint{after: after, hinted: hinted}
+		}
+		return nil, "", hint, listingError(reason)
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxListingPageBytes+1))
 	if err != nil {
-		return nil, "", listingError(ReasonUpstreamUnreachable)
+		return nil, "", transportHint(request), listingError(ReasonUpstreamUnreachable)
 	}
 	if len(raw) > maxListingPageBytes || !utf8.Valid(raw) {
-		return nil, "", listingError(ReasonUpstreamInvalid)
+		return nil, "", nil, listingError(ReasonUpstreamInvalid)
 	}
-	return raw, response.Header.Get("Link"), nil
+	return raw, response.Header.Get("Link"), nil, nil
+}
+
+// transportHint gives a retry hint for a network failure, unless the
+// request context ended.
+func transportHint(request *http.Request) *retryHint {
+	if request.Context().Err() != nil {
+		return nil
+	}
+	return &retryHint{}
 }
 
 // statusReason maps an HTTP status to a reason. The hub can answer 401 or
@@ -388,8 +429,9 @@ func sha1Accepted(name string) (accepted, text bool) {
 // git object at the pinned revision. An LFS file matches by its SHA-256,
 // which is the inventory digest. A file that sha1Accepted admits matches by
 // its git blob ID (SHA-1). gitBlobID hashes the same bytes after it confirms
-// that they still match the inventory SHA-256.
-func checkIdentity(ctx context.Context, root string, digests map[string]string, upstream map[string]UpstreamFile) (string, error) {
+// that they still match the inventory SHA-256. A file without LFS above
+// blobLimit is a mismatch; the checker passes MaxGitBlobBytes.
+func checkIdentity(ctx context.Context, root string, digests map[string]string, upstream map[string]UpstreamFile, blobLimit int64) (string, error) {
 	for _, name := range sortedNames(digests) {
 		if err := ctx.Err(); err != nil {
 			return "", err
@@ -398,7 +440,7 @@ func checkIdentity(ctx context.Context, root string, digests map[string]string, 
 		if !found {
 			return ReasonNotUpstream, nil
 		}
-		reason, err := fileIdentity(ctx, filepath.Join(root, name), digests[name], entry)
+		reason, err := fileIdentity(ctx, filepath.Join(root, name), digests[name], entry, blobLimit)
 		if err != nil || reason != "" {
 			return reason, err
 		}
@@ -407,7 +449,7 @@ func checkIdentity(ctx context.Context, root string, digests map[string]string, 
 }
 
 // fileIdentity compares one local file with its upstream entry.
-func fileIdentity(ctx context.Context, file, digest string, entry UpstreamFile) (string, error) {
+func fileIdentity(ctx context.Context, file, digest string, entry UpstreamFile, blobLimit int64) (string, error) {
 	if entry.LFS != nil {
 		if entry.LFS.OID != digest {
 			return ReasonIdentityMismatch, nil
@@ -418,7 +460,7 @@ func fileIdentity(ctx context.Context, file, digest string, entry UpstreamFile) 
 	if !accepted {
 		return ReasonNoSHA256, nil
 	}
-	if entry.Size > maxGitBlobBytes {
+	if entry.Size > blobLimit {
 		return ReasonIdentityMismatch, nil
 	}
 	blob, err := gitBlobID(ctx, file, entry.Size, digest, text)

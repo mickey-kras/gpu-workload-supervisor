@@ -9,9 +9,11 @@ layer. They do not prove that a model is safe. A clean result does not mean
 that a modified model behaves like its original.
 
 This page describes the checks that exist now. The behavioral scan, the scan
-job, model selection in the desktop UI and the gate of
+job, model selection in the desktop UI and result display of
 [#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583)
 are not available yet. No model can get `passed` yet. A model that passes the available checks stays `not_scanned`.
+The [launch gate](#launch-gate) refuses a model whose stored result does not
+allow the launch.
 
 ## Model and source
 
@@ -223,6 +225,16 @@ or path. The supervisor then sends no request.
 
 It sends the token only to the hub. It never stores, logs or shows the token.
 
+A request that fails with rate limiting (429), a request timeout (408), a
+server error (5xx) or a network failure gets a retry. Each request gets at
+most 4 attempts. Before a retry, the supervisor waits a random time up to 1
+second. This limit doubles for each retry, up to 30 seconds. When the hub
+sends a `Retry-After` header, the supervisor waits that time instead. If
+`Retry-After` asks for more than 60 seconds, the supervisor does not retry.
+
+With the retries, one short failure does not discard the file digests of a
+long run.
+
 A failed listing gives `error` with one of these reasons:
 
 | Reason | Cause |
@@ -230,7 +242,7 @@ A failed listing gives `error` with one of these reasons:
 | `upstream-not-found` | The repository or the commit does not exist. Without a token, the hub can also answer like this for a private repository |
 | `upstream-denied` | The hub refused access |
 | `upstream-moved` | The hub sent a redirect, for example for a renamed repository. Use its current name in the source |
-| `upstream-unreachable` | A network failure, a server error, a timeout or rate limiting. Try again later |
+| `upstream-unreachable` | A network failure, a server error, a timeout or rate limiting, also after the retries above. Try again later |
 | `upstream-invalid` | The listing breaks the rules above |
 | `hub-token-unusable` | The supervisor cannot use the hub login token that you configured. See above |
 
@@ -613,9 +625,8 @@ the result.
 
 The [hardened vLLM launch](INTEGRATION.md#hardened-vllm-launch) records the
 SHA-256 of the file that `--chat-template` names. For a file with the same
-text, the two digests are equal. No step compares them yet.
-[#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583)
-plans that gate.
+text, the two digests are equal. The [launch gate](#launch-gate) compares
+them.
 
 The managed launch reads `chat_template.jinja` from the model folder. A model
 that has its template only in a JSON file has no such file. Do not add one
@@ -673,3 +684,34 @@ A canceled check stores no result. The model stays `not_scanned`.
 No signatures or keys protect the results. The deployment trusts processes
 with the service UID (see [SECURITY.md](../SECURITY.md)). A process with that
 UID can forge a result. This is an accepted limit.
+
+## Launch gate
+
+The supervisor checks the stored result before it starts a vLLM workload.
+Switch, ownership changes and activation run this gate before they change
+the state. A refused launch changes nothing, and the error names the
+workload, its unit and the cause. The stored result of a workload uses the
+workload ID as its model ID.
+
+A stored result allows the launch only when all of these are true:
+
+- The result is valid.
+- The file allowlist, the upstream identity and the chat template checks
+  passed. A template that asks for review needs an operator approval. The
+  behavioral scan is not available yet, so it can stay `not_run`.
+- For a managed launch, the result is for the model directory of the
+  launch.
+- The binding pins a chat template, and its SHA-256 is the
+  [template SHA-256](#result) of the result. A template that changed after
+  the check or its approval refuses the launch.
+
+A result that the supervisor cannot read refuses the launch. The gate does
+not hash the model files again, because the weights can be large. The next
+check run finds other file changes.
+
+Design decision: a workload without a stored result still launches. No
+command writes results yet, so a gate that needs a result would refuse every
+vLLM launch. The gate applies only to new launches. A workload that runs
+during an upgrade keeps running. A recovery that only checks the state starts nothing, so
+it skips the gate. A rollback start of the previous workload after a failed
+catalog change also skips it.

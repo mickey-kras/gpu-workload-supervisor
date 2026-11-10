@@ -657,12 +657,13 @@ func TestScanPanicFailsClosed(t *testing.T) {
 	}
 }
 
-// TestScanTemplateRecoversFromAPanic checks that scanTemplate runs its scan
-// through failClosed.
+// TestScanTemplateRecoversFromAPanic checks that the scan of scanTemplate
+// runs through failClosed.
 func TestScanTemplateRecoversFromAPanic(t *testing.T) {
-	scanHook = func() { panic("checker bug") }
-	t.Cleanup(func() { scanHook = func() {} })
-	review, reason := scanTemplate(context.Background(), "{{ messages }}", nil, nil)
+	panics := func(context.Context, string, map[string]bool, map[string][]string) ([]ReviewItem, string) {
+		panic("checker bug")
+	}
+	review, reason := guardedScan(context.Background(), "{{ messages }}", nil, nil, panics)
 	if review != nil || reason != ReasonTemplateCheckFailed {
 		t.Fatalf("got %q %q", texts(review), reason)
 	}
