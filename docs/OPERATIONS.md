@@ -294,11 +294,33 @@ Restore changes lease identity. Ordinary restart does not. Keep all affected com
 
 Record the pinned binary version and checksum and complete runtime and proxy configuration. Stop the controller automation, block new execution, finish or stop jobs, then stop every proxy and runtime sharing state. Prevent maintenance restarts.
 
-Use SQLite backup or a verified consistent snapshot, including all audit and migration metadata. Never copy only a live WAL database's `.db`. Protect backup and state directories with service-private permissions. Check the integrity. Keep previous binaries and configuration before new processes open or migrate state.
+Keep previous binaries and configuration before new processes open state. The state database needs no manual backup for an upgrade. The first new process that opens it takes a [pre-migration snapshot](#pre-migration-snapshots) before it changes the schema.
+
+Make a manual SQLite backup only to keep state longer than the snapshot retention, or to archive audit history. Use SQLite backup or a verified consistent snapshot, including all audit and migration metadata. Never copy only a live WAL database's `.db`. Protect backup and state directories with service-private permissions. Check the integrity.
 
 Before upgrading, [select an explicit media policy](DEPLOYMENT.md#select-an-explicit-media-policy). `restore-state` and `prune-audit` need no media stop policy.
 
 After upgrading Supervisor state, reconcile with new pinned binary and matching flags before proxies. For User state, inspect and `recover-user`. Reconcile rejects it. `return-control` requires explicit intent. Validate the deployment before work. Follow [ownership recovery](#ownership-and-unfinished-work).
+
+<a id="pre-migration-snapshots"></a>
+
+### Pre-migration snapshots
+
+A process that opens a state database with an older schema takes a snapshot before it applies a migration. A new database or a current database gets no snapshot. The snapshot is a consistent SQLite copy that includes the WAL contents. The process checks the snapshot integrity and schema version before it migrates. If the snapshot fails, the process does not migrate and stops with an error.
+
+The snapshot is in the private directory of the database, with mode `0600`. The name shows the old schema version and the UTC time, for example `state.db.pre-v18-20261110T073005Z.bak`. Each new snapshot deletes older snapshots of the same database, so only the three newest stay. Three snapshots let you roll back after a second quick upgrade, and they limit disk use. To keep an older snapshot, copy it to a different directory.
+
+A snapshot contains only the state database. It does not contain binaries, configuration, owned-unit bytes or the API key files of vLLM workloads.
+
+To roll back the database with a snapshot:
+
+1. Stop every proxy, controller automation and runtime sharing state, as in [Restore a backup](#restore-a-backup) step 1.
+2. Move `state.db` and its `state.db-wal` and `state.db-shm` files to a different private directory. Keep them for investigation.
+3. As the service identity, copy the snapshot to `state.db` with mode `0600`. Do not copy WAL or SHM files.
+4. Install the previous binaries and configuration. They must support the schema version in the snapshot name.
+5. Continue with [Restore a backup](#restore-a-backup) from step 3. Use the previous binary for `restore-state`.
+
+If a newer binary opens the restored state, it migrates the state again and takes a new snapshot.
 
 ### Restore a backup
 
@@ -370,13 +392,13 @@ Failed query or no reserved job despite the error: keep stopped, investigate pat
 
 No automatic downgrade. Check the exact binary and database schema and behavioral compatibility before older binaries open state. The guard rejects newer schemas. Matching schema numbers prove no fencing, handoff or completion compatibility. Never edit migration metadata.
 
-Older binaries reject database schema v19. To roll back past this release, restore a verified database backup from before v19.
+Older binaries reject database schema v19. To roll back past this release, restore a verified database backup from before v19, such as a `state.db.pre-v18-*.bak` [pre-migration snapshot](#pre-migration-snapshots).
 
 Older binaries also reject catalog v5. Before you stop components and install an older binary, remove all resource limits. Setup then writes the lowest version the catalog needs. Run `gpu-setup discover` and read `request.catalog.version`: 4 with trainers, 2 with owned launches, 1 otherwise. Version 5 means limits remain.
 
 This release's setup application has no limit controls. Remove each limited workload and apply, then add it again without limits if needed. Alternatively, restore a backup from before the limits.
 
-Stop and block components as above. Preserve the failed database for investigation. Select verified binaries and configuration and matching pre-upgrade backup, including managed owned-unit bytes and hashes. Follow [desktop restoration](#restore-and-rollback), protecting foreign or modified units and refreshing the user manager. Complete every restore step, including `restore-state`, with a binary qualified for that backup and protocol. Never mix proxies that lack required handoff or lifetime locks with newer controllers.
+Stop and block components as above, and preserve the failed database for investigation. Select verified binaries, configuration and managed owned-unit bytes and hashes. Select a matching pre-upgrade backup or pre-migration snapshot for the database. Follow [desktop restoration](#restore-and-rollback), protecting foreign or modified units and refreshing the user manager. Complete every restore step, including `restore-state`, with a binary qualified for that backup and protocol. Never mix proxies that lack required handoff or lifetime locks with newer controllers.
 
 Reconcile, check closed-state recovery and refresh client fences before execution. Rollback loses post-backup work and audit updates. If the previous release cannot do this safely, keep admission closed and repair forward.
 
