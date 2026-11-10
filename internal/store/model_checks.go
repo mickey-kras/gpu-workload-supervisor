@@ -60,14 +60,9 @@ func (s *Store) ModelCheck(ctx context.Context, model string) (modelcheck.Record
 	return record, err
 }
 
-// rowQuerier is a database or a transaction.
-type rowQuerier interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
 // readModelCheck reads the stored result of one model and its stored
 // payload, with the rules of ModelCheck.
-func readModelCheck(ctx context.Context, db rowQuerier, model string) (modelcheck.Record, []byte, error) {
+func readModelCheck(ctx context.Context, db querier, model string) (modelcheck.Record, []byte, error) {
 	var raw []byte
 	err := db.QueryRowContext(ctx, `SELECT payload FROM model_checks WHERE model=?`, model).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {

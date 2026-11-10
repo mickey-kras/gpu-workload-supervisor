@@ -46,7 +46,7 @@ func TestProcessorFilePathKeysNameInventoriedFiles(t *testing.T) {
 	r, _ := completedArtifact(t)
 	r.Budget.ExportBytes = 1 << 20
 	writeFixture(t, filepath.Join(r.OutputDirectory, processorConfigName), strings.Replace(qwenSavedProcessor, `"image_processor": {`, `"image_processor": {"vocab_file":"missing.json",`, 1))
-	if _, err := artifactFiles(r); err == nil || !strings.Contains(err.Error(), "training export processor configuration processor_config.json: image_processor file names") {
+	if _, err := artifactFiles(r, exportHooks{}); err == nil || !strings.Contains(err.Error(), "training export processor configuration processor_config.json: image_processor file names") {
 		t.Fatalf("export error = %v", err)
 	}
 }
@@ -62,7 +62,7 @@ func TestProcessorFilesRejectAudioTokenizerKeys(t *testing.T) {
 	}
 	r, _ := completedArtifact(t)
 	writeFixture(t, filepath.Join(r.OutputDirectory, "audio_tokenizer_config.json"), `{}`)
-	if _, err := artifactFiles(r); err == nil || !strings.Contains(err.Error(), "unsupported training export layout: audio_tokenizer_config.json") {
+	if _, err := artifactFiles(r, exportHooks{}); err == nil || !strings.Contains(err.Error(), "unsupported training export layout: audio_tokenizer_config.json") {
 		t.Fatalf("export error = %v", err)
 	}
 }
@@ -123,7 +123,7 @@ func TestExportTokenizerAndAdapterConfigsUseTheLoaderKeyLists(t *testing.T) {
 				t.Fatal(err)
 			}
 			writeFixture(t, path, strings.Replace(strings.Replace(string(raw), "{", "{"+tc.insert, 1), ",}", "}", 1))
-			_, err = artifactFiles(r)
+			_, err = artifactFiles(r, exportHooks{})
 			if tc.want == "" {
 				if err != nil {
 					t.Fatal(err)

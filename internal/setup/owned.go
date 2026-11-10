@@ -22,8 +22,8 @@ var ErrManagerCgroupMismatch = errors.New("manager cgroup does not match the run
 // ManagerCgroup asks the running user manager for its root control group so
 // owned profiles derive cgroups from the host, not from request input. The
 // selected systemctl executable is resolved and trusted before it is invoked.
-func ManagerCgroup(ctx context.Context, systemctl string) (string, error) {
-	return managerCgroup(ctx, SystemBackend().runCommand, systemctl)
+func (b Backend) ManagerCgroup(ctx context.Context, systemctl string) (string, error) {
+	return managerCgroup(ctx, b.runCommand, systemctl)
 }
 
 func managerCgroup(ctx context.Context, runCommand func(context.Context, string, ...string) ([]byte, error), systemctl string) (string, error) {
