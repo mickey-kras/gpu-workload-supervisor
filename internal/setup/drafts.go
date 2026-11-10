@@ -23,12 +23,16 @@ type DraftBinding struct {
 }
 
 // DraftOwnedLaunch mirrors control.OwnedLaunch for the draft surface.
+// Limits are optional. render-owned renders and fingerprints the unit with
+// them, so the request carries the fingerprint of the final unit. Absent
+// limits keep the exact bytes of a draft without them.
 type DraftOwnedLaunch struct {
-	Executable  string `json:"executable,omitempty"`
-	ModelPath   string `json:"modelPath,omitempty"`
-	Port        uint16 `json:"port"`
-	MaxModelLen uint32 `json:"maxModelLen,omitempty"`
-	Alias       string `json:"alias,omitempty"`
+	Executable  string                 `json:"executable,omitempty"`
+	ModelPath   string                 `json:"modelPath,omitempty"`
+	Port        uint16                 `json:"port"`
+	MaxModelLen uint32                 `json:"maxModelLen,omitempty"`
+	Alias       string                 `json:"alias,omitempty"`
+	Limits      control.ResourceLimits `json:"limits,omitzero"`
 }
 
 type Draft struct {
@@ -109,15 +113,35 @@ func SaveDrafts(home string, request DraftRequest) (DraftSnapshot, error) {
 	if request.Drafts == nil {
 		request.Drafts = []Draft{}
 	}
-	result := DraftSnapshot{Version: 1, Drafts: request.Drafts}
+	result := DraftSnapshot{Version: draftsVersion(request.Drafts), Drafts: request.Drafts}
 	if err = writeJSON(filepath.Join(root, "drafts.json"), result); err != nil {
 		return result, err
 	}
 	return ReadDrafts(home)
 }
+
+// draftsVersionLimits is the drafts version of a file with owned limits.
+// A file without limits stays version 1, so older binaries still read it;
+// they refuse version 2 instead of dropping the limits. Each request and
+// file must use the version that its drafts need.
+const draftsVersionLimits = 2
+
+// draftsVersion gives the lowest drafts version that drafts need.
+func draftsVersion(drafts []Draft) int {
+	for _, d := range drafts {
+		if d.Binding != nil && d.Binding.Owned != nil && d.Binding.Owned.Limits != (control.ResourceLimits{}) {
+			return draftsVersionLimits
+		}
+	}
+	return 1
+}
+
 func validateDrafts(version int, drafts []Draft) error {
-	if version != 1 || len(drafts) > 32 {
+	if version < 1 || version > draftsVersionLimits || len(drafts) > 32 {
 		return errors.New("unsupported draft version or too many drafts")
+	}
+	if version != draftsVersion(drafts) {
+		return errors.New("drafts with resource limits need draft version 2, and other drafts version 1")
 	}
 	ids := map[string]bool{}
 	var unsupported error
@@ -181,6 +205,11 @@ func validateDraftModels(d Draft) error {
 func validateDraftBinding(binding *DraftBinding) error {
 	if binding == nil {
 		return nil
+	}
+	if binding.Owned != nil && binding.Owned.Limits != (control.ResourceLimits{}) {
+		if err := binding.Owned.Limits.Validate(); err != nil {
+			return fmt.Errorf("draft resource limits: %w", err)
+		}
 	}
 	for _, value := range []string{binding.Unit, binding.Cgroup, binding.HealthURL, binding.Instance, binding.Model, binding.LaunchFile} {
 		if len(value) > 4096 {

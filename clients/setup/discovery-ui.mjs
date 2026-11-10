@@ -3,7 +3,7 @@ import {InstallationSettings, installationChoiceLabel} from './settings-pages.mj
 import {watchInstanceSelection, addRefreshButton, addFilePickers} from './discovery-inputs.mjs';
 import {addOwnedEditor, addBindingEditor} from './launch-ui.mjs';
 import {ApplicationDraft, applications, candidateChoice, candidateIdentity, profileIDFromModel} from './onboarding.mjs';
-import {UnitLimitsForm} from './limits-ui.mjs';
+import {PlainLimitError, UnitLimitsForm, checkFormLimits, withFormLimits} from './limits-ui.mjs';
 
 // Backend error detail stays available but collapsed behind the actionable summary.
 export function addErrorReporter({Adw, Gtk, parent, status}) {
@@ -22,17 +22,15 @@ export function addErrorReporter({Adw, Gtk, parent, status}) {
 export function addDraftEditor(options) { return new DraftEditor(options).view(); }
 
 class DraftEditor {
-    constructor({Adw, Gtk, window, parent, initial, initialLimits, detected, discovered, gpuUUIDs, gpuInventoryStatus, discoveryErrors, command, changed, removed, bind, taken, modelParent, openSettings, reportProblem, navigateSettings, saveSelections}) {
-        this.initialLimits = initialLimits; this.Adw = Adw; this.Gtk = Gtk;
+    constructor({Adw, Gtk, window, parent, initial, detected, discovered, gpuUUIDs, gpuInventoryStatus, discoveryErrors, command, changed, removed, bind, taken, modelParent, openSettings, reportProblem, navigateSettings, saveSelections}) {
+        this.Adw = Adw; this.Gtk = Gtk;
         this.window = window; this.parent = parent;
         this.initial = initial; this.detected = detected;
-        this.discovered = discovered;
-        this.discoveryErrors = discoveryErrors;
+        this.discovered = discovered; this.discoveryErrors = discoveryErrors;
         this.command = command;
-        this.changed = changed;
+        this.changed = value => changed(withFormLimits(this.limits, this.draft, value));
         this.removed = removed;
-        this.bind = bind;
-        this.taken = taken;
+        this.bind = bind; this.taken = taken;
         this.modelParent = modelParent;
         this.openSettings = openSettings; this.reportProblem = reportProblem; this.navigateSettings = navigateSettings; this.saveSelections = saveSelections;
         this.discoveryErrors ??= [];
@@ -308,7 +306,7 @@ class DraftEditor {
             if (this.syncing) return;
             this.overrides.bootPolicy = this.retain.active ? 'retain' : 'stop-to-idle'; this.draft.edit({bootPolicy: this.overrides.bootPolicy}); this.changed(this.draft.snapshot());
         });
-        this.limits = new UnitLimitsForm({Adw: this.Adw, Gtk: this.Gtk, page: this.settings.pages.get('resources'), initial: this.initialLimits, changed: () => this.changed(this.draft.snapshot())});
+        this.limits = new UnitLimitsForm({Adw: this.Adw, Gtk: this.Gtk, page: this.settings.pages.get('resources'), initial: this.initial.binding?.owned?.limits, changed: () => this.changed(this.draft.snapshot())});
     }
     addActions() {
         const save = new this.Gtk.Button({label: 'Save selections for later'}); this.details.add(save); save.connect('clicked', () => this.saveSelections());
@@ -323,6 +321,7 @@ class DraftEditor {
             const generation = this.draft.generation;
             this.finish.sensitive = false; this.settings.checking(true);
             try {
+                checkFormLimits(this.limits, input);
                 const action = input.binding?.owned ? 'render-owned' : 'prepare';
                 const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', action], JSON.stringify({draft: input})));
                 if (generation !== this.draft.generation) return;
@@ -330,7 +329,7 @@ class DraftEditor {
                 if (generation !== this.draft.generation) return;
                 this.draft.cancel(); this.parent.remove(this.group); this.removed(true);
             } catch (error) {
-                if (generation === this.draft.generation) this.reportError('Setup could not finish. Check the installation or Advanced settings, then retry.', error);
+                if (generation === this.draft.generation) this.reportError(error instanceof PlainLimitError ? error.message : 'Setup could not finish. Check the installation or Advanced settings, then retry.', error);
             } finally { this.finish.sensitive = true; this.settings.checking(false); }
         });
         const remove = new this.Gtk.Button({label: 'Remove this application'}); this.details.add(remove);
@@ -375,7 +374,7 @@ class DraftEditor {
             settingsBack: () => this.settings.back(),
             cancelSettings: () => { this.draft.cancel(); this.restore(this.session); },
             settingsOverrides: () => this.overrides,
-            limitsOverride: () => this.limits.value(), setHostUsage: usage => this.limits.setUsage(usage),
+            setHostUsage: usage => this.limits.setUsage(usage),
             showProblem: this.reportError,
             cancel: () => this.draft.cancel(),
             checking: () => this.settings.busy,
@@ -430,6 +429,7 @@ class DraftEditor {
         const generation = this.draft.generation;
         const selectedModel = this.draft.needsModel ? input.model || input.binding?.owned?.modelPath || '' : '';
         if (this.draft.needsModel && !selectedModel) throw new Error('Choose an existing model.');
+        checkFormLimits(this.limits, input);
         const value = this.modelInput(input, selectedModel);
         const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', input.binding?.owned ? 'render-owned' : 'prepare'], JSON.stringify({draft: value})));
         if (generation !== this.draft.generation) throw new Error('Application changed while checking it. Continue again.');

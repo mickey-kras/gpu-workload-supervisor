@@ -70,7 +70,7 @@ test('stored limits stay exact when untouched, and turning them off removes them
     let request = await review(ui);
     assert.deepEqual(request.catalog.profiles[0].nativeModel.owned.limits, {...limits, ioWriteBandwidthMax: 7 * 1048576});
     const draft = JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input).draft;
-    assert.equal(draft.binding.owned.limits, undefined, 'the draft surface never carries limits');
+    assert.deepEqual(draft.binding.owned.limits, {...limits, ioWriteBandwidthMax: 7 * 1048576}, 'render-owned renders the final limits');
     ui = await start([limited]);
     await openResources(ui);
     ui.by('Limit the resources of this workload').active = false;
@@ -225,10 +225,10 @@ test('number formats, the limit check and the request helpers', () => {
     assert.equal(limitsUI.checkLimits({memoryHighMiB: 1, memoryMaxMiB: 2, tasksMax: 64, cpuQuotaPercent: 1, ioDevice: '/dev/sda'}),
         'I/O limits need the I/O device and its number, and the device needs an I/O limit.');
     assert.equal(limitsUI.checkLimits({memoryHighMiB: 1, memoryMaxMiB: 2, tasksMax: 64, cpuQuotaPercent: 1}), null);
-    assert.equal(limitsUI.withLimits(owned, undefined, false), owned);
-    assert.equal(limitsUI.withLimits(adopted, null, true), adopted);
-    assert.throws(() => limitsUI.withLimits(owned, {error: 'bad'}, false), /bad/);
-    assert.throws(() => limitsUI.withLimits(owned, {version: 1}, true), /Convert this service first/);
+    const limitedOwned = {...owned, nativeModel: {...owned.nativeModel, owned: {...owned.nativeModel.owned, limits: {version: 1}}}};
+    assert.equal(limitsUI.refuseAdoptedLimits(owned, true), owned);
+    assert.equal(limitsUI.refuseAdoptedLimits(limitedOwned, false), limitedOwned);
+    assert.throws(() => limitsUI.refuseAdoptedLimits(limitedOwned, true), /Convert this service first/);
     const request = {profile: {statePath: '/s', limitReserve: {memoryMiB: 1}}, hostCap: {memoryHighMiB: 1}};
     const plain = value => JSON.parse(JSON.stringify(value));
     assert.deepEqual(plain(host.hostRequest(request, {hostCap: {memoryHighMiB: 2}}, false)), {profile: {statePath: '/s'}});
@@ -237,4 +237,30 @@ test('number formats, the limit check and the request helpers', () => {
     assert.equal(host.rootStepText(null), '');
     assert.equal(host.rootStepText({dropIns: [], commands: ['c']}), 'c');
     assert.equal(host.escapeRouteText({route: 'more', item: '2 more', unchecked: true}), 'Not shown: 2 more.');
+});
+
+test('limits stay in the owned draft through launch edits, saved selections and render-owned', async () => {
+    const ui = await start();
+    await openResources(ui);
+    ui.by('Limit the resources of this workload').active = true;
+    ui.edit(ui.by('Memory high (GiB)'), 'text', '8'); ui.edit(ui.by('Memory maximum (GiB)'), 'text', '9');
+    await ui.click('Done'); await ui.click('Launch details');
+    ui.edit(ui.by('Launch port'), 'text', '8001');
+    await ui.click('Save selections for later');
+    const request = JSON.parse(ui.calls.findLast(call => call.argv[1] === 'save-drafts').input);
+    assert.equal(request.version, 2, 'drafts with limits use draft version 2');
+    const saved = request.drafts[0];
+    const want = {version: 1, memoryHighMiB: 8192, memoryMaxMiB: 9216, tasksMax: 4096, cpuQuotaPercent: 400};
+    assert.deepEqual(saved.binding.owned.limits, want);
+    assert.equal(saved.binding.owned.port, 8001);
+    await ui.click('Done'); await ui.click('Back'); await ui.click('Back'); await ui.click('Continue');
+    assert.deepEqual(JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input).draft.binding.owned.limits, want);
+});
+
+test('a saved draft with limits opens with them', async () => {
+    const draft = {id: 'draft-one', app: 'vllm', label: 'Qwen', binding: {instance: 'local', owned: {port: 8000, modelPath: '/models/qwen', limits: {version: 1, memoryHighMiB: 8192, memoryMaxMiB: 9216, tasksMax: 512, cpuQuotaPercent: 100}}}};
+    const ui = await start([], {}, {drafts: {drafts: [draft]}});
+    await openResources(ui);
+    assert.equal(ui.by('Limit the resources of this workload').active, true);
+    assert.equal(ui.by('Tasks').text, '512');
 });

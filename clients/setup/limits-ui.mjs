@@ -155,17 +155,20 @@ export class UnitLimitsForm {
         this.usage.visible = Boolean(usage);
         if (usage) this.usage.label = `Host memory ceiling: ${formatGiB(usage.ceilingMiB)} GiB. In use now: ${formatGiB(usage.memoryInUseMiB)} GiB. ${formatGiB(usage.pageCacheMiB)} GiB of page cache that the kernel can free does not count.`;
     }
-    value() {
-        this.error.visible = false;
+    // value gives the form value; quiet keeps the error text hidden while
+    // the operator types.
+    value(quiet = false) {
+        if (!quiet) this.error.visible = false;
         if (!this.enable.active) return this.initial ? null : undefined;
         const limits = {...this.stored, version: 1};
         for (const field of limitFields) {
             const result = readField(field, this.rows.get(field.key), this.stored);
-            if (result.error) return this.fail(result.error);
+            if (result.error) return quiet ? result : this.fail(result.error);
             if (result.value === undefined) delete limits[field.key]; else limits[field.key] = result.value;
         }
         const problem = checkLimits(limits);
-        return problem ? this.fail(problem) : limits;
+        if (!problem) return limits;
+        return quiet ? {error: problem} : this.fail(problem);
     }
     fail(text) {
         this.error.label = text; this.error.visible = true;
@@ -173,18 +176,34 @@ export class UnitLimitsForm {
     }
 }
 
-// withLimits puts the limits of a form value on an owned profile. An
-// adopted source unit or a profile without an owned launch refuses limits:
-// setup converts the unit first, and the limits come in a second apply.
-export function withLimits(profile, value, adopted) {
-    if (value === undefined) return profile;
-    if (value?.error) throw new PlainLimitError(value.error);
-    const owned = profile.nativeModel?.owned;
-    if (value !== null && (!owned || adopted)) throw new PlainLimitError(limitErrorText('resource limits need a supervisor-owned unit'));
-    if (!owned) return profile;
-    const next = {...owned};
-    if (value === null) delete next.limits; else next.limits = value;
-    return {...profile, nativeModel: {...profile.nativeModel, owned: next}};
+// withFormLimits puts a valid value of the limits form in an owned draft
+// value and in the draft input, so render-owned renders and fingerprints
+// the final unit, and saved drafts keep the limits. An invalid value
+// leaves the draft; checkFormLimits refuses it before any render.
+export function withFormLimits(form, draft, value) {
+    const limits = form?.value(true);
+    if (!value.binding?.owned || limits === undefined || limits?.error) return value;
+    const owned = {...value.binding.owned};
+    if (limits === null) delete owned.limits; else owned.limits = limits;
+    const next = {...value, binding: {...value.binding, owned}};
+    draft.input = {...draft.input, binding: next.binding};
+    return next;
+}
+
+// checkFormLimits refuses an invalid form, and limits on a draft without
+// an owned launch.
+export function checkFormLimits(form, input) {
+    const limits = form.value();
+    if (limits?.error) throw new PlainLimitError(limits.error);
+    if (limits && !input.binding?.owned) throw new PlainLimitError(limitErrorText('resource limits need a supervisor-owned unit'));
+}
+
+// refuseAdoptedLimits refuses limits on a unit that the accepted catalog
+// adopts: setup converts the unit first, and the limits come in a second
+// apply. The backend refuses it too; this check answers before review.
+export function refuseAdoptedLimits(profile, adopted) {
+    if (adopted && profile.nativeModel?.owned?.limits) throw new PlainLimitError(limitErrorText('resource limits need a supervisor-owned unit'));
+    return profile;
 }
 
 // Plain text for the errors of the limit checks, in the order of the

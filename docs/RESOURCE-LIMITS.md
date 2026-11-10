@@ -564,9 +564,7 @@ One Go function selects minimum version: 5 with limits,4 with trainers,2 with ow
 
 Pending activation resumes exact recorded bytes and version. Lower the version only on later writes after maintenance clears.
 
-Drafts without limits remain v1 and readable by new binaries. Limited drafts use the next version. Reject v1 bodies containing limits before unmarshal.
-
-Current `ReadDrafts` uses `json.Unmarshal`, which would discard the field. Apply the same rule to client `save-drafts`. Test v2 to v5 and back to equal v2 bytes through the shared function.
+An owned draft can hold `limits`. `render-owned` renders and fingerprints the unit with them, so the request carries the fingerprint of the final unit. A drafts file without limits stays version 1, with the same bytes. A file with limits is version 2, so an older binary refuses it and does not drop the limits. Setup refuses a request or a file whose version does not fit its drafts. The desktop sends the version that its drafts need.
 
 Rollback: remove limits in setup, confirm lower catalog version, then install the older binary. Verified backup restore is the alternative. See [roll back a release](OPERATIONS.md#roll-back-a-release).
 

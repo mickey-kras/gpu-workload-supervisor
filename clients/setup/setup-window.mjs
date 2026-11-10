@@ -12,7 +12,7 @@ import {ReviewedConfiguration, lowestCatalogVersion} from './review.mjs';
 import {createProfileEditor} from './profile-ui.mjs';
 import {addDraftEditor} from './discovery-ui.mjs';
 import {applications, candidateDiagnostics, recordFingerprint} from './onboarding.mjs';
-import {limitSummary, withLimits} from './limits-ui.mjs';
+import {limitSummary, refuseAdoptedLimits} from './limits-ui.mjs';
 import {hostRequest} from './host-protection.mjs';
 import {createHostProtection} from './host-page.mjs';
 
@@ -181,11 +181,11 @@ class SetupWindow {
         if (this.drafts.some(draft => draft.id === initial.id)) { this.status.label = 'This workload already has an open selection. Finish or remove that selection first.'; return this.draftEditors.find(editor => editor.id === initial.id); }
         this.drafts.push(initial);
         let editor;
-        editor = addDraftEditor({Adw, Gtk, Gio, window: this.window, parent: this.draftRows, initial, initialLimits: replacing?.nativeModel?.owned?.limits, detected: this.discovered, discovered: discovery => this.updateDiscovery(discovery), gpuUUIDs: this.gpuUUIDs, gpuInventoryStatus: this.gpuInventoryStatus, discoveryErrors: this.discoveryErrors, command: this.command, modelParent: this.modelPage, reportProblem: this.reportError, navigateSettings: state => this.navigateApplicationSettings(editor, state), saveSelections: () => this.saveDraftSelections(), openSettings: origin => this.openApplicationSettings(editor, origin),
+        editor = addDraftEditor({Adw, Gtk, Gio, window: this.window, parent: this.draftRows, initial, detected: this.discovered, discovered: discovery => this.updateDiscovery(discovery), gpuUUIDs: this.gpuUUIDs, gpuInventoryStatus: this.gpuInventoryStatus, discoveryErrors: this.discoveryErrors, command: this.command, modelParent: this.modelPage, reportProblem: this.reportError, navigateSettings: state => this.navigateApplicationSettings(editor, state), saveSelections: () => this.saveDraftSelections(), openSettings: origin => this.openApplicationSettings(editor, origin),
             bind: async (profile, current, finish = false) => {
                 replacing ??= this.profiles.find(existing => existing.id === initial.id) ?? null;
                 if (replacing && !this.profiles.includes(replacing)) throw new Error('The original workload was removed. Reopen Manage workloads before editing it.');
-                const preserveSettings = () => this.withEditorLimits(replacing ? {...replacing, ...profile, id: replacing.id, requiredMiB: replacing.requiredMiB, bootPolicy: replacing.bootPolicy, ...editor.settingsOverrides()} : {...profile, ...editor.settingsOverrides()}, editor, replacing);
+                const preserveSettings = () => this.withEditorLimits(replacing ? {...replacing, ...profile, id: replacing.id, requiredMiB: replacing.requiredMiB, bootPolicy: replacing.bootPolicy, ...editor.settingsOverrides()} : {...profile, ...editor.settingsOverrides()}, replacing);
                 if (this.profiles.some(existing => existing !== replacing && (existing.id === profile.id || (profile.unit && existing.unit === profile.unit && existing.nativeModel?.model === profile.nativeModel?.model)))) throw new Error('This installation and model is already configured.');
                 const candidate = JSON.stringify(this.requestFor([...this.profiles.filter(existing => existing !== replacing), preserveSettings()]));
                 await this.command(['/usr/bin/gpu-setup', 'verify-bindings'], candidate);
@@ -282,15 +282,15 @@ class SetupWindow {
         if (previous) {
             const updated = {...previous, ...profile, label: this.editedLabels.get(previous) ?? (profile.nativeModel?.model === editor.originalModel ? profile.label : previous.label), id: previous.id, requiredMiB: previous.requiredMiB, bootPolicy: previous.bootPolicy, ...editor.settingsOverrides()};
             if (this.editedLabels.has(previous)) this.editedLabels.set(updated, this.editedLabels.get(previous));
-            return this.withEditorLimits(updated, editor, previous);
+            return this.withEditorLimits(updated, previous);
         }
-        return this.withEditorLimits({...profile, ...editor.settingsOverrides()}, editor, null);
+        return this.withEditorLimits({...profile, ...editor.settingsOverrides()}, null);
     }
 
-    // withEditorLimits merges the limits of the Resource checks page. An
-    // adopted source unit needs a conversion apply before limits.
-    withEditorLimits(profile, editor, previous) {
-        return withLimits(profile, editor.limitsOverride(), Boolean(previous && !previous.nativeModel?.owned));
+    // withEditorLimits refuses limits on an adopted source unit. The render
+    // already carries the limits of the Resource checks page.
+    withEditorLimits(profile, previous) {
+        return refuseAdoptedLimits(profile, Boolean(previous && !previous.nativeModel?.owned));
     }
 
     async continueSetup() {
@@ -415,7 +415,7 @@ class SetupWindow {
         try {
             if (this.drafts.some(draft => !Number.isSafeInteger(draft.requiredMiB ?? 0) || (draft.requiredMiB ?? 0) < 0))
                 throw new Error('VRAM requirements must be nonnegative whole numbers within the supported numeric range.');
-            const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'save-drafts'], JSON.stringify({version: 1, expectedRevision: this.draftRevision, drafts: this.drafts})));
+            const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'save-drafts'], JSON.stringify({version: this.drafts.some(draft => draft.binding?.owned?.limits) ? 2 : 1, expectedRevision: this.draftRevision, drafts: this.drafts})));
             this.draftRevision = result.revision; saved = true;
             this.status.label = 'Selections saved. Saved applications still need a check before they can run. They are not selectable in GPU Control until safe start and stop control is set up and checked.';
         } catch (error) { this.reportError('Selections were not saved. Check the VRAM requirements or reopen Manage workloads to refresh before retrying.', error); }
