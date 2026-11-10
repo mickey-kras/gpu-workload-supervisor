@@ -47,6 +47,7 @@ type modeExecution struct {
 	catalogPath, catalogRevision                                                              string
 	statePath, resolveReason, target, trainingJob                                             string
 	auditBatch                                                                                int
+	allRestored                                                                               bool
 	actionTimeout, drainTimeout, verifyTimeout, cleanupTimeout, finalizeTimeout, pollInterval time.Duration
 }
 
@@ -72,6 +73,7 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 	auditBatch := flags.Int("audit-batch", 256, "maximum audit parents removed by prune-audit (1..1024)")
 	trainingJob := flags.String("training-job", "", "finite training job ID")
 	resolveReason := flags.String("resolve-reason", "", "required audit reason for resolve-work")
+	allRestored := flags.Bool("all-restored", false, "training-recover: recover every unfinished training job of restored state")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
@@ -82,7 +84,11 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 		return err
 	}
 	command := flags.Arg(0)
-	if err := validateTrainingFlags(command, *trainingJob); err != nil {
+	if err := validateTrainingFlags(command, *trainingJob, *allRestored); err != nil {
+		return err
+	}
+	// Defaults from the activated profile apply before any flag value is read.
+	if err := applyProfileDefaults(flags, command, loadOperatorProfile); err != nil {
 		return err
 	}
 	auditCutoff, err := validateAuditFlags(command, *auditBefore, *auditBatch)
@@ -94,7 +100,17 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 		GPUIndex:      *gpuIndex, CapacityHeadroomMiB: *headroom,
 		NvidiaSMIPath: *nvidiaSMIPath, SystemctlPath: *systemctlPath,
 	}
-	if command == "verify-host" {
+	options := modeExecution{
+		catalogPath: *catalogPath, catalogRevision: *catalogRevision,
+		statePath: *statePath, trainingJob: *trainingJob, resolveReason: *resolveReason, target: *target,
+		auditBatch: *auditBatch, allRestored: *allRestored, actionTimeout: *actionTimeout, drainTimeout: *drainTimeout,
+		verifyTimeout: *verifyTimeout, cleanupTimeout: *cleanupTimeout,
+		finalizeTimeout: *finalizeTimeout, pollInterval: *pollInterval,
+	}
+	if command == doctorCommand {
+		return runDoctor(newRuntime, runtimeConfig, options)
+	}
+	if command == verifyHostCommand {
 		// verify-host takes no state lock, so it reads the reserve here.
 		runtimeConfig.LimitReserve, runtimeConfig.LimitReserveErr = limitReserveFor(*statePath, loadOperatorProfile)
 		catalog, err := decodeCatalogFile(*catalogPath)
@@ -104,13 +120,7 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 		runtimeConfig.Catalog = &catalog
 		return verifyHost(runtimeConfig, *actionTimeout, newRuntime)
 	}
-	return executeWithState(newRuntime, runtimeConfig, command, auditCutoff, modeExecution{
-		catalogPath: *catalogPath, catalogRevision: *catalogRevision,
-		statePath: *statePath, trainingJob: *trainingJob, resolveReason: *resolveReason, target: *target,
-		auditBatch: *auditBatch, actionTimeout: *actionTimeout, drainTimeout: *drainTimeout,
-		verifyTimeout: *verifyTimeout, cleanupTimeout: *cleanupTimeout,
-		finalizeTimeout: *finalizeTimeout, pollInterval: *pollInterval,
-	})
+	return executeWithState(newRuntime, runtimeConfig, command, auditCutoff, options)
 }
 
 // The accepted catalog is the only workload configuration model: configure and
@@ -118,7 +128,7 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime
 // durably accepted catalog from state.
 func validateCatalogFlags(flags *flag.FlagSet, catalogPath string) error {
 	switch flags.Arg(0) {
-	case "configure", "verify-host":
+	case "configure", verifyHostCommand:
 		if catalogPath == "" {
 			return fmt.Errorf("%s requires -catalog", flags.Arg(0))
 		}
@@ -184,17 +194,21 @@ func executeWithState(newRuntime func(gpuruntime.SystemdConfig) (gpuruntime.Mana
 	if err != nil {
 		return err
 	}
-	controller, err := supervisor.New(stateStore, runtimeManager, supervisor.Config{
+	controller, err := supervisor.New(stateStore, runtimeManager, supervisorConfig(pinned, options))
+	if err != nil {
+		return err
+	}
+	return executeRuntimeCommand(ctx, controller, command, options)
+}
+
+func supervisorConfig(pinned *control.CatalogSnapshot, options modeExecution) supervisor.Config {
+	return supervisor.Config{
 		Catalog:      pinned,
 		DrainTimeout: options.drainTimeout, VerifyTimeout: options.verifyTimeout,
 		ActionTimeout:  options.actionTimeout,
 		CleanupTimeout: options.cleanupTimeout, FinalizeTimeout: options.finalizeTimeout,
 		PollInterval: options.pollInterval,
-	})
-	if err != nil {
-		return err
 	}
-	return executeRuntimeCommand(ctx, controller, command, options)
 }
 
 func validateCommandFlags(flags *flag.FlagSet, target string) error {
@@ -212,7 +226,7 @@ func validateCommandFlags(flags *flag.FlagSet, target string) error {
 		return errors.New("-release-max-used-mib has been removed: configure workload cgroups in the catalog; optional target capacity uses profile requiredMiB plus -capacity-headroom-mib")
 	}
 	if flags.NArg() != 1 {
-		return errors.New("usage: gpu-mode [flags] configure|switch|restore-state|prune-audit|verify-host|status|reconcile|recover|resolve-work|take-control|user-switch|return-control|recover-user|show-settings|idle-policy-tick")
+		return errors.New("usage: gpu-mode [flags] configure|switch|restore-state|prune-audit|verify-host|doctor|status|reconcile|recover|resolve-work|take-control|user-switch|return-control|recover-user|show-settings|idle-policy-tick")
 	}
 	if auditFlag && flags.Arg(0) != pruneAuditCommand {
 		return errors.New("-audit-before and -audit-batch require prune-audit")
@@ -394,6 +408,9 @@ func executeRuntimeCommand(ctx context.Context, controller *supervisor.Controlle
 		return controller.TickWithLimits(ctx, nil, os.Stderr)
 	}
 	if strings.HasPrefix(command, "training-") {
+		if options.allRestored {
+			return recoverAllRestored(ctx, controller, options.statePath)
+		}
 		return executeTraining(ctx, controller, command, options.trainingJob, control.Workload(options.target))
 	}
 	return executeCommand(ctx, controller, command, options.resolveReason, control.Workload(options.target))

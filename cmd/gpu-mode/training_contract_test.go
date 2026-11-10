@@ -39,8 +39,13 @@ func (r *cliTrainingRuntime) TrainingMemoryPeak(context.Context, control.Workloa
 
 func cliTrainingFixture(t *testing.T) (*supervisor.Controller, *store.Store, *cliTrainingRuntime) {
 	t.Helper()
+	return cliTrainingFixtureAt(t, filepath.Join(t.TempDir(), "state.db"))
+}
+
+func cliTrainingFixtureAt(t *testing.T, statePath string) (*supervisor.Controller, *store.Store, *cliTrainingRuntime) {
+	t.Helper()
 	ctx := context.Background()
-	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"))
+	s, err := store.Open(ctx, statePath)
 	if err != nil {
 		t.Fatal(err)
 	}

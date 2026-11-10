@@ -32,7 +32,7 @@ func executeTraining(ctx context.Context, c *supervisor.Controller, command, id 
 	switch command {
 	case "training-reconcile":
 		state, err = c.ReconcileTraining(ctx, id)
-	case "training-recover":
+	case trainingRecoverCommand:
 		state, err = c.RecoverTraining(ctx, id)
 	default:
 		return errors.New("unknown training command")
@@ -40,9 +40,15 @@ func executeTraining(ctx context.Context, c *supervisor.Controller, command, id 
 	return errors.Join(err, json.NewEncoder(os.Stdout).Encode(state))
 }
 
-func validateTrainingFlags(command, id string) error {
+func validateTrainingFlags(command, id string, allRestored bool) error {
+	if allRestored {
+		if command != trainingRecoverCommand || id != "" {
+			return errors.New("-all-restored requires training-recover without -training-job")
+		}
+		return nil
+	}
 	switch command {
-	case trainingStartCommand, "training-status", "training-reconcile", "training-recover":
+	case trainingStartCommand, "training-status", "training-reconcile", trainingRecoverCommand:
 		return control.ValidateRequestID(id)
 	default:
 		if strings.HasPrefix(command, "training-") {
