@@ -16,22 +16,29 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
-// Tests replace these values. A recorder copies them when it is created.
-var (
+// peakSettings are the tunable values and the filesystem calls of a
+// recorder. Tests change their own copy.
+type peakSettings struct {
 	// The storage walk stops at this many entries. A truncated walk gives no value.
-	peakStorageEntries = 65536
-	peakSampleInterval = time.Second
+	entries  int
+	interval time.Duration
 	// One storage walk stops at this deadline. A late walk gives no value.
-	peakWalkTimeout = 10 * time.Second
+	walkTimeout time.Duration
 	// The runner waits at most this long past a stop for a walk in progress.
 	// A walk that ends later is detached, and its result is dropped.
-	peakStopWait = time.Second
-	// peakWalkHooks are the filesystem calls of the storage walk. The recorder
-	// copies them; unit tests set the hooks of one recorder or walk instead.
-	peakWalkHooks  = walkHooks{stat: statEntry, list: listNames}
-	selfCgroupFile = "/proc/self/cgroup"
-	cgroupMount    = "/sys/fs/cgroup"
-)
+	stopWait time.Duration
+	// hooks are the filesystem calls of the storage walk.
+	hooks       walkHooks
+	selfCgroup  string
+	cgroupMount string
+}
+
+func hostPeakSettings() peakSettings {
+	return peakSettings{
+		entries: 65536, interval: time.Second, walkTimeout: 10 * time.Second, stopWait: time.Second,
+		hooks: walkHooks{stat: statEntry, list: listNames}, selfCgroup: "/proc/self/cgroup", cgroupMount: "/sys/fs/cgroup",
+	}
+}
 
 // resourcePeaks is the bounded peaks file in the private execution directory.
 // A null value is unmeasured. Sampled values are lower bounds, not exact peaks.
@@ -66,15 +73,9 @@ type peakRecorder struct {
 	roots []string
 	peaks resourcePeaks
 	// done stops storage walks at shutdown. A nil channel never stops them.
-	done        <-chan struct{}
-	entries     int
-	interval    time.Duration
-	walkTimeout time.Duration
-	stopWait    time.Duration
-	hooks       walkHooks
-	selfCgroup  string
-	cgroupMount string
-	final       sync.Once
+	done  <-chan struct{}
+	final sync.Once
+	peakSettings
 }
 
 // walkLimit stops one storage walk at its deadline, at shutdown or when the
@@ -101,13 +102,10 @@ func (l walkLimit) reached() bool {
 	return l.stopped() || time.Now().After(l.deadline)
 }
 
-func newPeakRecorder(work, output string, done <-chan struct{}) *peakRecorder {
-	// The recorder copies the tunable values once, so walks that run in other
-	// goroutines never read the package variables.
+func newPeakRecorder(work, output string, done <-chan struct{}, settings peakSettings) *peakRecorder {
 	return &peakRecorder{
-		roots: []string{output, work}, done: done, peaks: resourcePeaks{Version: 1, Phase: "prepare", SampleIntervalMS: peakSampleInterval.Milliseconds()},
-		entries: peakStorageEntries, interval: peakSampleInterval, walkTimeout: peakWalkTimeout, stopWait: peakStopWait,
-		hooks: peakWalkHooks, selfCgroup: selfCgroupFile, cgroupMount: cgroupMount,
+		roots: []string{output, work}, done: done, peaks: resourcePeaks{Version: 1, Phase: "prepare", SampleIntervalMS: settings.interval.Milliseconds()},
+		peakSettings: settings,
 	}
 }
 

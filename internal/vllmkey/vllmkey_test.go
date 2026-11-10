@@ -22,6 +22,7 @@ func writeKeyFile(t *testing.T, content string, mode os.FileMode) string {
 }
 
 func TestReadAcceptsOnePrivateAssignment(t *testing.T) {
+	t.Parallel()
 	key := strings.Repeat("a", 43)
 	for _, content := range []string{Name + "=" + key + "\n", Name + "=" + key} {
 		got, err := Read(writeKeyFile(t, content, 0o600))
@@ -32,6 +33,7 @@ func TestReadAcceptsOnePrivateAssignment(t *testing.T) {
 }
 
 func TestReadRejectsUnsafeOrMalformedFiles(t *testing.T) {
+	t.Parallel()
 	key := strings.Repeat("b", 43)
 	cases := map[string]func(t *testing.T) string{
 		"relative":     func(*testing.T) string { return "vllm.env" },
@@ -61,6 +63,7 @@ func TestReadRejectsUnsafeOrMalformedFiles(t *testing.T) {
 	}
 	for name, path := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			_, err := Read(path(t))
 			if !errors.Is(err, ErrInvalid) {
 				t.Fatalf("Read() error = %v", err)
@@ -73,16 +76,17 @@ func TestReadRejectsUnsafeOrMalformedFiles(t *testing.T) {
 }
 
 func TestReadRejectsAnotherOwner(t *testing.T) {
+	t.Parallel()
 	path := writeKeyFile(t, Name+"="+strings.Repeat("d", 43), 0o600)
-	original := effectiveUID
-	effectiveUID = func() int { return original() + 1 }
-	t.Cleanup(func() { effectiveUID = original })
-	if _, err := Read(path); !errors.Is(err, ErrInvalid) {
+	other := host()
+	other.uid++
+	if _, err := other.read(path); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Read() error = %v", err)
 	}
 }
 
 func TestEnsureCreatesPrivateKeyOnceAndKeepsIt(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "keys", "vllm.env")
 	if err := Ensure(path); err != nil {
 		t.Fatal(err)
@@ -109,6 +113,7 @@ func TestEnsureCreatesPrivateKeyOnceAndKeepsIt(t *testing.T) {
 }
 
 func TestEnsureNeverReplacesUnusableFile(t *testing.T) {
+	t.Parallel()
 	path := writeKeyFile(t, "OTHER=1\n", 0o600)
 	if err := Ensure(path); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Ensure() error = %v", err)
@@ -120,25 +125,26 @@ func TestEnsureNeverReplacesUnusableFile(t *testing.T) {
 }
 
 func TestEnsureReportsCreationFailures(t *testing.T) {
+	t.Parallel()
 	parent := writeKeyFile(t, "file", 0o600)
 	if err := Ensure(filepath.Join(parent, "vllm.env")); err == nil {
 		t.Fatal("Ensure accepted a file as the key directory")
 	}
-	original := randomRead
-	randomRead = func([]byte) (int, error) { return 0, errors.New("no entropy") }
-	t.Cleanup(func() { randomRead = original })
-	if err := Ensure(filepath.Join(t.TempDir(), "vllm.env")); err == nil {
+	failing := host()
+	failing.randomRead = func([]byte) (int, error) { return 0, errors.New("no entropy") }
+	if err := failing.ensure(filepath.Join(t.TempDir(), "vllm.env")); err == nil {
 		t.Fatal("Ensure accepted a random source failure")
 	}
 }
 
 func TestPublishReportsFailures(t *testing.T) {
-	if err := publish(filepath.Join(t.TempDir(), "missing"), "/unused", nil); err == nil {
+	t.Parallel()
+	if err := host().publish(filepath.Join(t.TempDir(), "missing"), "/unused", nil); err == nil {
 		t.Fatal("publish accepted a missing directory")
 	}
 	dir := t.TempDir()
 	existing := writeKeyFile(t, "x", 0o600)
-	if err := publish(dir, existing, []byte(Name+"="+strings.Repeat("e", 43))); err == nil {
+	if err := host().publish(dir, existing, []byte(Name+"="+strings.Repeat("e", 43))); err == nil {
 		t.Fatal("publish replaced an existing file")
 	}
 	closed, err := os.CreateTemp(dir, "closed")
@@ -152,6 +158,7 @@ func TestPublishReportsFailures(t *testing.T) {
 }
 
 func TestReadErrorsNameTheFileAndTheReason(t *testing.T) {
+	t.Parallel()
 	large := writeKeyFile(t, Name+"="+strings.Repeat("a", 43)+strings.Repeat("\n", 600), 0o600)
 	if _, err := Read(large); err == nil || !strings.Contains(err.Error(), "larger than 512 bytes") || !strings.Contains(err.Error(), large) {
 		t.Fatalf("size limit error = %v", err)
@@ -170,13 +177,13 @@ func TestReadErrorsNameTheFileAndTheReason(t *testing.T) {
 }
 
 func TestEnsureSyncsNewDirectoriesAndReportsSyncFailures(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	var synced []string
-	saved := syncDirectory
-	syncDirectory = func(dir string) error { synced = append(synced, dir); return saved(dir) }
-	t.Cleanup(func() { syncDirectory = saved })
+	recording := host()
+	recording.syncDirectory = func(dir string) error { synced = append(synced, dir); return syncDirectory(dir) }
 	path := filepath.Join(root, "a", "b", "vllm.env")
-	if err := Ensure(path); err != nil {
+	if err := recording.ensure(path); err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]bool{root: true, filepath.Join(root, "a"): true, filepath.Join(root, "a", "b"): true}
@@ -186,27 +193,24 @@ func TestEnsureSyncsNewDirectoriesAndReportsSyncFailures(t *testing.T) {
 	if len(want) != 0 {
 		t.Fatalf("directories not synced: %v (synced %v)", want, synced)
 	}
-	for _, failing := range []string{filepath.Join(root, "c"), filepath.Join(root, "d", "e")} {
-		syncDirectory = func(dir string) error {
+	failingAt := func(failing string) system {
+		s := host()
+		s.syncDirectory = func(dir string) error {
 			if dir == failing {
 				return errors.New("sync failed")
 			}
 			return nil
 		}
-		if err := Ensure(filepath.Join(failing, "vllm.env")); err == nil {
+		return s
+	}
+	for _, failing := range []string{filepath.Join(root, "c"), filepath.Join(root, "d", "e")} {
+		if err := failingAt(failing).ensure(filepath.Join(failing, "vllm.env")); err == nil {
 			t.Fatalf("sync failure of %s ignored", failing)
 		}
 	}
-	syncDirectory = func(dir string) error {
-		if dir == root {
-			return errors.New("sync failed")
-		}
-		return nil
-	}
-	if err := Ensure(filepath.Join(root, "f", "vllm.env")); err == nil {
+	if err := failingAt(root).ensure(filepath.Join(root, "f", "vllm.env")); err == nil {
 		t.Fatal("parent sync failure ignored")
 	}
-	syncDirectory = saved
 	if err := syncDirectory(filepath.Join(root, "missing")); err == nil {
 		t.Fatal("missing directory synced")
 	}
@@ -217,6 +221,7 @@ func TestEnsureSyncsNewDirectoriesAndReportsSyncFailures(t *testing.T) {
 const keyFileCommand = `umask 077 && printf 'VLLM_API_KEY=%s\n' "$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')" > "$KEY_FILE"`
 
 func TestDocumentedKeyFileCommandCreatesAUsableFile(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "vllm.env")
 	command := exec.Command("/bin/sh", "-c", keyFileCommand)
 	command.Env = append(os.Environ(), "KEY_FILE="+path)

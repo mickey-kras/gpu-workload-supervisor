@@ -91,10 +91,7 @@ func (b Backend) enableUserUnit(ctx context.Context, home, systemctl string, e u
 // any service and preserves profiles, state, audit, models and user workload units.
 // The caller's context bounds the timer-stop subprocess; the CLI passes its
 // verb deadline so an unresponsive user manager cannot hang removal forever.
-func RemoveIntegration(ctx context.Context, home string) error {
-	return SystemBackend().RemoveIntegration(ctx, home)
-}
-
+//
 // RemoveIntegration is all-or-nothing: both integrations (records and links)
 // are validated and the idle timer is stopped before either owned link is
 // deleted, so a failed removal leaves the installation fully intact.

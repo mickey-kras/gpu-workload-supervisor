@@ -46,10 +46,6 @@ type OwnedUnitStatus struct {
 	State  string `json:"state"`
 }
 
-func Discover(ctx context.Context, home string) (Discovery, error) {
-	return SystemBackend().Discover(ctx, home)
-}
-
 func (b Backend) Discover(parent context.Context, home string) (Discovery, error) {
 	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
