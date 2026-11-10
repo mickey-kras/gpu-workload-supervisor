@@ -10,6 +10,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 type launchPreflightRuntime struct {
@@ -52,7 +53,7 @@ func TestApplyPreflightsWrittenOwnedAndDriftedAdoptedBeforeCommit(t *testing.T) 
 				}
 			}
 			checks := 0
-			backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
+			backend.makeRuntime = func(got Request) (supervisor.Runtime, error) {
 				if len(got.Catalog.Profiles) == 1 {
 					// The accepted binding is checked before candidate writes.
 					return launchPreflightRuntime{verify: func() error {
@@ -107,7 +108,7 @@ func TestAllOwnedActivationPreflightsNewUnitBeforeCatalogCommit(t *testing.T) {
 	owned, raw := ownedFixtureProfile(t, home, "vision", 9100)
 	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{owned}}
 	checks := 0
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) {
 		return launchPreflightRuntime{verify: func() error {
 			checks++
 			data, err := os.ReadFile(filepath.Join(ownedUnitDirectory(home), owned.Unit))
@@ -157,7 +158,7 @@ func TestPreviewAndApplyCarryOnlyAcceptedOwnedRemovalProofs(t *testing.T) {
 			}
 			expected := map[string]string{original.Unit: digest(raw)}
 			checks := 0
-			backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
+			backend.makeRuntime = func(got Request) (supervisor.Runtime, error) {
 				if _, ok := got.Catalog.Profile(original.ID); ok && got.Catalog.Profiles[0].Unit == original.Unit {
 					// The accepted catalog owns this file and needs no removal exception.
 					return launchPreflightRuntime{verify: func() error {

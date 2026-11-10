@@ -6,80 +6,67 @@ before:
   hooks:
     - bash scripts/third-party-notices.sh
 
+# One build per entry in packaging/release-binaries.json, in the same order;
+# .github/scripts/release-binaries.test.cjs fails CI on any divergence. The
+# first build defines the shared settings as YAML anchors and the others alias
+# them, so every binary is built the same way.
 builds:
   - id: gpu-mode
     main: ./cmd/gpu-mode
     binary: gpu-mode
-    ldflags:
+    ldflags: &release-ldflags
       - -s -w -X github.com/mickey-kras/gpu-workload-supervisor/internal/deployment.Release={{ .Version }}
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - linux
-    goarch:
-      - amd64
-      - arm64
+    env: &static-env [CGO_ENABLED=0]
+    goos: &release-goos [linux]
+    goarch: &release-goarch [amd64, arm64]
   - id: gpu-workload-proxy
     main: ./cmd/gpu-workload-proxy
     binary: gpu-workload-proxy
-    ldflags:
-      - -s -w -X github.com/mickey-kras/gpu-workload-supervisor/internal/deployment.Release={{ .Version }}
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - linux
-    goarch:
-      - amd64
-      - arm64
-
+    ldflags: *release-ldflags
+    env: *static-env
+    goos: *release-goos
+    goarch: *release-goarch
   - id: gpu-operator
     main: ./cmd/gpu-operator
     binary: gpu-operator
-    ldflags:
-      - -s -w -X github.com/mickey-kras/gpu-workload-supervisor/internal/deployment.Release={{ .Version }}
-    env: [CGO_ENABLED=0]
-    goos: [linux]
-    goarch: [amd64, arm64]
+    ldflags: *release-ldflags
+    env: *static-env
+    goos: *release-goos
+    goarch: *release-goarch
   - id: gpu-setup
     main: ./cmd/gpu-setup
     binary: gpu-setup
-    ldflags:
-      - -s -w -X github.com/mickey-kras/gpu-workload-supervisor/internal/deployment.Release={{ .Version }}
-    env: [CGO_ENABLED=0]
-    goos: [linux]
-    goarch: [amd64, arm64]
-
+    ldflags: *release-ldflags
+    env: *static-env
+    goos: *release-goos
+    goarch: *release-goarch
   - id: gpu-training-runner
     main: ./cmd/gpu-training-runner
     binary: gpu-training-runner
-    ldflags:
-      - -s -w -X github.com/mickey-kras/gpu-workload-supervisor/internal/deployment.Release={{ .Version }}
-    env: [CGO_ENABLED=0]
-    goos: [linux]
-    goarch: [amd64, arm64]
+    ldflags: *release-ldflags
+    env: *static-env
+    goos: *release-goos
+    goarch: *release-goarch
   - id: gpu-training-candidate
     main: ./cmd/gpu-training-candidate
     binary: gpu-training-candidate
-    ldflags:
-      - -s -w -X github.com/mickey-kras/gpu-workload-supervisor/internal/deployment.Release={{ .Version }}
-    env: [CGO_ENABLED=0]
-    goos: [linux]
-    goarch: [amd64, arm64]
-
+    ldflags: *release-ldflags
+    env: *static-env
+    goos: *release-goos
+    goarch: *release-goarch
   - id: gpu-training-import
     main: ./cmd/gpu-training-import
     binary: gpu-training-import
-    ldflags:
-      - -s -w -X github.com/mickey-kras/gpu-workload-supervisor/internal/deployment.Release={{ .Version }}
-    env: [CGO_ENABLED=0]
-    goos: [linux]
-    goarch: [amd64, arm64]
+    ldflags: *release-ldflags
+    env: *static-env
+    goos: *release-goos
+    goarch: *release-goarch
 
 nfpms:
+  # No ids filter: the package carries every build above.
   - id: desktop
     package_name: gpu-workload-supervisor
     file_name_template: "{{ .ProjectName }}_{{ .Version }}_linux_{{ .Arch }}"
-    ids: [gpu-mode, gpu-workload-proxy, gpu-operator, gpu-setup, gpu-training-runner, gpu-training-candidate, gpu-training-import]
     formats: [deb]
     bindir: /usr/bin
     maintainer: gpu-workload-supervisor maintainers <noreply@github.com>

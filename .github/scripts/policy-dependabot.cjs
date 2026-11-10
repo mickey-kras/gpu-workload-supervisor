@@ -154,10 +154,10 @@ function supportedIgnores(ignore) {
 }
 
 function inspectUpdates(files, failures) {
-  // Intentional compatibility limits: five independent scopes and only the options validated below.
+  // Intentional compatibility limits: six independent scopes and only the options validated below.
   // New scopes/options require policy review; this is not the full Dependabot schema.
   const scopes = [['gomod', '/'], ['github-actions', '/'], ['npm', '/.github/aislop'],
-    ['npm', '/.github/scripts'], ['npm', '/clients/gnome']];
+    ['npm', '/.github/scripts'], ['npm', '/clients/gnome'], ['pip', '/training/axolotl']];
   const keys = ['package-ecosystem', 'directory', 'schedule', 'cooldown', 'rebase-strategy',
     'open-pull-requests-limit', 'groups', 'ignore', 'pull-request-branch-name', 'versioning-strategy'];
   try {

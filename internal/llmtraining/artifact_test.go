@@ -196,7 +196,7 @@ func TestExportRejectsMissingRedirectedOrUnsafeFiles(t *testing.T) {
 			case "null":
 				writeFixture(t, config, "null")
 			}
-			_, err := artifactFiles(r)
+			_, err := artifactFiles(r, exportHooks{})
 			if err == nil {
 				t.Fatal("accepted unsafe artifact")
 			}
@@ -248,7 +248,7 @@ func TestExportBindsAndChecksTheSavedProcessor(t *testing.T) {
 	// The export fixture holds the real processor_config.json of the locked
 	// transformers (see executionArtifactScript).
 	r, _ := completedArtifact(t)
-	files, err := artifactFiles(r)
+	files, err := artifactFiles(r, exportHooks{})
 	if err != nil || files[processorConfigName] == "" {
 		t.Fatalf("saved processor not bound: %v %v", files, err)
 	}
@@ -324,7 +324,7 @@ func TestExportBindsAndChecksTheSavedProcessor(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			r, _ := completedArtifact(t)
 			c.change(t, r)
-			if _, err := artifactFiles(r); err == nil || !strings.Contains(err.Error(), c.want) {
+			if _, err := artifactFiles(r, exportHooks{}); err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("unsupported saved processor accepted or unnamed: %v", err)
 			}
 		})
@@ -366,7 +366,7 @@ func TestExportModelConfigPassesTheModelChecks(t *testing.T) {
 			r.Adapter = tc.adapter
 			r.Budget.ExportBytes = 1 << 20
 			writeFixture(t, filepath.Join(r.OutputDirectory, "config.json"), tc.config)
-			_, err := artifactFiles(r)
+			_, err := artifactFiles(r, exportHooks{})
 			if tc.want == "" {
 				if err != nil {
 					t.Fatal(err)
@@ -382,29 +382,28 @@ func TestExportModelConfigPassesTheModelChecks(t *testing.T) {
 
 func TestExportRequiresTheSavedModelConfig(t *testing.T) {
 	r, _ := completedArtifact(t)
-	files, err := artifactFiles(r)
+	files, err := artifactFiles(r, exportHooks{})
 	if err != nil || files[modelConfigName] == "" {
 		t.Fatalf("saved config.json not bound: %v %v", files, err)
 	}
 	if err := os.Remove(filepath.Join(r.OutputDirectory, modelConfigName)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := artifactFiles(r); err == nil || !strings.Contains(err.Error(), "training export requires config.json") {
+	if _, err := artifactFiles(r, exportHooks{}); err == nil || !strings.Contains(err.Error(), "training export requires config.json") {
 		t.Fatalf("error = %v", err)
 	}
 }
 
 func TestExportRejectsAnOversizedConfigurationBeforeBufferingIt(t *testing.T) {
+	t.Parallel()
 	r, _ := completedArtifact(t)
 	r.Budget.ExportBytes = 64 << 20
 	// Valid JSON above the 1 MiB configuration limit.
 	writeFixture(t, filepath.Join(r.OutputDirectory, modelConfigName), strings.TrimSuffix(strings.TrimSpace(smokeSavedConfig), "}")+`,"pad":"`+strings.Repeat("x", 2<<20)+`"}`)
 	// The export rejects it from its size, before it reads and buffers it.
-	previous := exportHashed
-	t.Cleanup(func() { exportHashed = previous })
 	hashed := false
-	exportHashed = func(name string) { hashed = hashed || name == modelConfigName }
-	if _, err := artifactFiles(r); err == nil || err.Error() != "training export config.json is larger than 1 MiB" {
+	hooks := exportHooks{hashed: func(name string) { hashed = hashed || name == modelConfigName }}
+	if _, err := artifactFiles(r, hooks); err == nil || err.Error() != "training export config.json is larger than 1 MiB" {
 		t.Fatalf("error = %v", err)
 	}
 	if hashed {
@@ -413,8 +412,10 @@ func TestExportRejectsAnOversizedConfigurationBeforeBufferingIt(t *testing.T) {
 }
 
 func TestExportValidatesTheBytesItHashed(t *testing.T) {
+	t.Parallel()
 	for _, name := range slices.Sorted(maps.Keys(exportJSONNames)) {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			r, _ := completedArtifact(t)
 			if name == imageProcessorName || name == videoProcessorName {
 				r, _ = splitProcessorArtifact(t)
@@ -422,14 +423,12 @@ func TestExportValidatesTheBytesItHashed(t *testing.T) {
 			r.Budget.ExportBytes = 1 << 20
 			// After the file is hashed, replace it on disk with content that
 			// fails validation. The export must validate the bytes it hashed.
-			previous := exportHashed
-			t.Cleanup(func() { exportHashed = previous })
-			exportHashed = func(hashed string) {
+			hooks := exportHooks{hashed: func(hashed string) {
 				if hashed == name {
 					writeFixture(t, filepath.Join(r.OutputDirectory, name), `{`)
 				}
-			}
-			if _, err := artifactFiles(r); err != nil {
+			}}
+			if _, err := artifactFiles(r, hooks); err != nil {
 				t.Fatal("validation read the file again:", err)
 			}
 		})
@@ -437,6 +436,7 @@ func TestExportValidatesTheBytesItHashed(t *testing.T) {
 }
 
 func TestExportRejectsAConfigurationThatGrowsWhileHashed(t *testing.T) {
+	t.Parallel()
 	r, _ := completedArtifact(t)
 	r.Budget.ExportBytes = 64 << 20
 	path := filepath.Join(r.OutputDirectory, modelConfigName)
@@ -445,15 +445,13 @@ func TestExportRejectsAConfigurationThatGrowsWhileHashed(t *testing.T) {
 	base := strings.TrimSuffix(strings.TrimSpace(smokeSavedConfig), "}")
 	padding := configurationBytes - len(base) - len(`,"pad":""}`)
 	writeFixture(t, path, base+`,"pad":"`+strings.Repeat("x", padding)+`"}`)
-	if _, err := artifactFiles(r); err != nil {
+	if _, err := artifactFiles(r, exportHooks{}); err != nil {
 		t.Fatal("configuration of exactly the limit rejected:", err)
 	}
 	if info, err := os.Stat(path); err != nil || info.Size() != configurationBytes {
 		t.Fatalf("fixture size = %v %v", info, err)
 	}
-	previous := exportStatted
-	t.Cleanup(func() { exportStatted = previous })
-	exportStatted = func(statted string) {
+	hooks := exportHooks{statted: func(statted string) {
 		if statted == path {
 			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 			if err != nil {
@@ -464,8 +462,8 @@ func TestExportRejectsAConfigurationThatGrowsWhileHashed(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-	}
-	if _, err := artifactFiles(r); err == nil || !strings.Contains(err.Error(), "training export config.json") {
+	}}
+	if _, err := artifactFiles(r, hooks); err == nil || !strings.Contains(err.Error(), "training export config.json") {
 		t.Fatalf("grown configuration accepted or unnamed: %v", err)
 
 	}

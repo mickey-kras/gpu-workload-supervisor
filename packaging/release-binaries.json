@@ -1,0 +1,11 @@
+{
+  "binaries": [
+    { "name": "gpu-mode", "activated": true },
+    { "name": "gpu-workload-proxy", "activated": true },
+    { "name": "gpu-operator", "activated": true },
+    { "name": "gpu-setup", "activated": true },
+    { "name": "gpu-training-runner", "activated": false },
+    { "name": "gpu-training-candidate", "activated": false },
+    { "name": "gpu-training-import", "activated": false }
+  ]
+}

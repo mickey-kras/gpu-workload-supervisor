@@ -7,21 +7,33 @@ const RELEASE_HASHES = {
   ".github/scripts/release-publication.cjs": "124d6832b052c0f3309755c1874acf303bbef264cf24077e1831dacc51838462"
 };
 
+// Both release jobs verify the helpers against this one checked-in manifest. The
+// runtime gate reads it from the dispatched commit through the API, never from
+// the workspace, so a workspace write cannot replace a helper and its digest.
+const RELEASE_DIGEST_MANIFEST = '.github/release-helper-digests.json';
+
 const VALIDATION_SCRIPT = [
   "const { readFileSync } = require('node:fs');",
   "const { createHash } = require('node:crypto');",
   "const { resolve } = require('node:path');",
   "const { compileFunction } = require('node:vm');",
+  'const { data: manifest } = await github.rest.repos.getContent({',
+  `  ...context.repo, path: '${RELEASE_DIGEST_MANIFEST}', ref: context.sha,`, '});',
+  "if (manifest?.type !== 'file' || manifest.encoding !== 'base64' || typeof manifest.content !== 'string') {",
+  "  throw new Error('Release helper digest manifest is unreadable');", '}',
+  "const digests = JSON.parse(Buffer.from(manifest.content, 'base64').toString('utf8'));",
+  'const verified = (path, message) => {',
+  '  const bytes = readFileSync(resolve(path));',
+  "  const expected = Object.hasOwn(digests, path) ? digests[path] : '';",
+  "  if (!/^[a-f0-9]{64}$/.test(expected) || createHash('sha256').update(bytes).digest('hex') !== expected) {",
+  '    throw new Error(message);', '  }',
+  '  return bytes;', '};',
   "const filename = resolve('.github/scripts/release-validation.cjs');",
-  'const source = readFileSync(filename);',
-  "if (createHash('sha256').update(source).digest('hex') !==",
-  `    '${RELEASE_HASHES[".github/scripts/release-validation.cjs"]}') {`,
-  "  throw new Error('Release validation verifier bytes changed in the workspace');", '}',
+  "const source = verified('.github/scripts/release-validation.cjs',",
+  "  'Release validation verifier bytes changed in the workspace');",
   "const publicationFilename = resolve('.github/scripts/release-publication.cjs');",
-  'const publicationSource = readFileSync(publicationFilename);',
-  "if (createHash('sha256').update(publicationSource).digest('hex') !==",
-  `    '${RELEASE_HASHES[".github/scripts/release-publication.cjs"]}') {`,
-  "  throw new Error('Release publication helper bytes changed in the workspace');", '}',
+  "const publicationSource = verified('.github/scripts/release-publication.cjs',",
+  "  'Release publication helper bytes changed in the workspace');",
   'const publication = { exports: {} };',
   "const noImports = () => { throw new Error('Unexpected publication helper dependency'); };",
   "compileFunction(publicationSource.toString('utf8'), ['require', 'module', 'exports'],",
@@ -69,13 +81,29 @@ function inspectVerificationWorkspace(workflow, failures, script) {
   }
 }
 
+// The runtime manifest must list exactly the reviewed policy digests.
+function inspectDigestManifest(files, expected, failures) {
+  let manifest;
+  try {
+    manifest = JSON.parse(files[RELEASE_DIGEST_MANIFEST]);
+  } catch {
+    manifest = undefined;
+  }
+  const keys = Object.keys(expected).sort();
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) ||
+      JSON.stringify(Object.keys(manifest).sort()) !== JSON.stringify(keys) ||
+      keys.some(key => typeof expected[key] !== 'string' || manifest[key] !== expected[key])) {
+    failures.push(`${RELEASE_DIGEST_MANIFEST} does not match the reviewed release helper digests`);
+  }
+}
+
 function inspectValidationReuse(files, workflow, failures, checks, admitted) {
   const releaseJobs = workflow?.jobs;
   const path = '.github/workflows/release.yml';
   const validation = releaseJobs?.validation;
   const verification = releaseJobs?.publish?.steps?.find(step =>
     step.name === 'Verify main and successful validation at this commit');
-  let script = VALIDATION_SCRIPT;
+  const script = VALIDATION_SCRIPT;
   let candidateHashes = {};
   if (Object.keys(RELEASE_HASHES).some(file => admitted.has(file))) {
     try {
@@ -85,13 +113,15 @@ function inspectValidationReuse(files, workflow, failures, checks, admitted) {
       failures.push('Release helper digests are invalid');
     }
   }
+  const expectedDigests = {};
   for (const [file, hash] of Object.entries(RELEASE_HASHES)) {
     const actual = createHash('sha256').update(files[file] || '').digest('hex');
     const expected = admitted.has(file) ? candidateHashes?.[file] : hash;
     if (actual !== expected) failures.push(file.endsWith('release-validation.cjs')
       ? 'Release validation verifier was changed' : 'Release publication helper was changed');
-    if (admitted.has(file)) script = script.replaceAll(hash, actual);
+    expectedDigests[file] = expected;
   }
+  inspectDigestManifest(files, expectedDigests, failures);
   if (!validation) {
     failures.push(`${path} lost exact-commit main validation`);
     return;
@@ -229,4 +259,4 @@ function inspectReleasePublish(files, workflows, failures, checks, inspectGoRele
   });
 }
 
-module.exports = { inspectReleaseEntry, inspectReleasePublish, VALIDATION_SCRIPT };
+module.exports = { inspectReleaseEntry, inspectReleasePublish, VALIDATION_SCRIPT, RELEASE_DIGEST_MANIFEST };

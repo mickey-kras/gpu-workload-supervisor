@@ -6,6 +6,7 @@ const { mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, rmSync
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { createHash } = require('node:crypto');
 
 const SHA = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
@@ -13,6 +14,16 @@ const VERSION = '0.1.0';
 const FULL_NAME = 'mickey-kras/gpu-workload-supervisor';
 const NOW = Date.parse('2026-10-14T12:00:00Z');
 const time = delta => new Date(NOW + delta).toISOString();
+// The runtime gate reads the digest manifest from the dispatched commit via the API.
+const MANIFEST_PATH = '.github/release-helper-digests.json';
+const COMMITTED_MANIFEST = readFileSync(join(__dirname, '..', 'release-helper-digests.json'));
+function committedManifest(params, content = COMMITTED_MANIFEST) {
+  assert.equal(params.path, MANIFEST_PATH);
+  return { data: { type: 'file', encoding: 'base64', content: content.toString('base64') } };
+}
+const githubWithManifest = content => `{ rest: { repos: { getContent: async () => ({ data: {
+  type: 'file', encoding: 'base64', content: ${JSON.stringify(Buffer.from(content).toString('base64'))} } }) } } }`;
+const COMMITTED_GITHUB = githubWithManifest(COMMITTED_MANIFEST);
 
 function splitQuality(input) {
   const original = input.state.jobs[0];
@@ -55,6 +66,7 @@ function fixture() {
       get: async () => ({ data: state.repository }),
       getBranch: async () => ({ data: { commit: { sha: state.main } } }),
       getReleaseByTag: async () => ({ data: state.release }),
+      getContent: async params => committedManifest(params),
     },
     git: { getRef: async ({ ref }) => {
       if (ref.startsWith('tags/')) return { data: { object: { type: 'commit', sha: SHA } } };
@@ -360,7 +372,7 @@ test('overwritten workspace verifier cannot turn the protected runtime gate into
     writeFileSync(filename, 'module.exports = { verifyMain: async () => {} };\n');
     const source = `const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 new AsyncFunction('require', 'github', 'context', 'core', ${JSON.stringify(VALIDATION_SCRIPT)})(
-  require, {}, {}, {},
+  require, ${COMMITTED_GITHUB}, {}, {},
 ).catch(error => { console.error(error.message); process.exitCode = 1; });`;
     assert.throws(() => execFileSync(process.execPath, ['-e', source], { cwd: dir, stdio: 'pipe' }),
       error => error.stderr.toString().includes('verifier bytes changed in the workspace'));
@@ -384,7 +396,7 @@ const guardedRequire = name => name === 'node:vm' ? {
 } : require(name);
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 new AsyncFunction('require', 'github', 'context', 'core', ${JSON.stringify(VALIDATION_SCRIPT)})(
-  guardedRequire, {}, {}, {},
+  guardedRequire, ${COMMITTED_GITHUB}, {}, {},
 ).catch(error => { console.error(error.message); process.exitCode = 1; });`;
     assert.throws(() => execFileSync(process.execPath, ['-e', source], { cwd: dir, stdio: 'pipe' }),
       error => error.stderr.toString().includes('Release requires dispatch from main'));
@@ -405,7 +417,7 @@ test('the validation trust chain never executes follow-up mutation code or npm s
     writeFileSync(join(npm, 'index.js'), exit);
     const source = `const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 new AsyncFunction('require', 'github', 'context', 'core', ${JSON.stringify(VALIDATION_SCRIPT)})(
-  require, {}, {}, {},
+  require, ${COMMITTED_GITHUB}, {}, {},
 ).catch(error => { console.error(error.message); process.exitCode = 1; });`;
     assert.throws(() => execFileSync(process.execPath, ['-e', source], {
       cwd: dir, stdio: 'pipe', env: { ...process.env, GITHUB_ACTIONS: 'true', VERSION },
@@ -416,5 +428,41 @@ new AsyncFunction('require', 'github', 'context', 'core', ${JSON.stringify(VALID
     assert.throws(() => execFileSync(process.execPath, ['-e', source], { cwd: dir, stdio: 'pipe' }),
       error => error.stderr.toString().includes('publication helper bytes changed in the workspace'));
     assert.throws(() => readFileSync(join(dir, 'dependency-executed')), { code: 'ENOENT' });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('workspace digest manifest is never trusted; the committed manifest gates helper bytes', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'release-manifest-'));
+  const run = github => {
+    const source = `const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+new AsyncFunction('require', 'github', 'context', 'core', ${JSON.stringify(VALIDATION_SCRIPT)})(
+  require, ${github}, {}, {},
+).catch(error => { console.error(error.message); process.exitCode = 1; });`;
+    try {
+      execFileSync(process.execPath, ['-e', source], { cwd: dir, stdio: 'pipe' });
+      return '';
+    } catch (error) { return error.stderr.toString(); }
+  };
+  try {
+    const scripts = join(dir, '.github', 'scripts'); mkdirSync(scripts, { recursive: true });
+    for (const name of ['release-validation.cjs', 'release-publication.cjs']) {
+      writeFileSync(join(scripts, name), readFileSync(join(__dirname, name)));
+    }
+    assert.match(run(COMMITTED_GITHUB), /Release requires dispatch from main/);
+    // Replacing a helper together with a workspace manifest cannot satisfy the gate.
+    const forged = 'module.exports = { verifyMain: async () => {} };\n';
+    writeFileSync(join(scripts, 'release-validation.cjs'), forged);
+    const manifest = JSON.parse(COMMITTED_MANIFEST);
+    manifest['.github/scripts/release-validation.cjs'] = createHash('sha256').update(forged).digest('hex');
+    writeFileSync(join(dir, MANIFEST_PATH), JSON.stringify(manifest));
+    assert.match(run(COMMITTED_GITHUB), /verifier bytes changed in the workspace/);
+    writeFileSync(join(scripts, 'release-validation.cjs'), readFileSync(join(__dirname, 'release-validation.cjs')));
+    for (const [content, message] of [
+      ['{}', /verifier bytes changed in the workspace/],
+      [JSON.stringify({ ...JSON.parse(COMMITTED_MANIFEST), '.github/scripts/release-publication.cjs': 'A'.repeat(64) }),
+        /publication helper bytes changed in the workspace/],
+      ['not json', /JSON/],
+    ]) assert.match(run(githubWithManifest(content)), message);
+    assert.match(run('{ rest: { repos: { getContent: async () => ({ data: [] }) } } }'), /manifest is unreadable/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

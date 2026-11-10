@@ -12,6 +12,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 func TestPreparedCatalogUsesLowestVersion(t *testing.T) {
@@ -91,7 +92,7 @@ func TestSetupChecksLimitsBeforeUnitWrites(t *testing.T) {
 		t.Fatalf("preview with limits and no checks = %v", err)
 	}
 	request.ConfirmQuiesced = true
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) {
 		return limitRuntime{checkErr: gpuruntime.ErrHostCap}, nil
 	}
 	if err := backend.Apply(t.Context(), home, request); !errors.Is(err, gpuruntime.ErrHostCap) || !strings.Contains(err.Error(), "vision (") {
@@ -216,7 +217,7 @@ func TestTrainerInspectionIgnoresAnUnrelatedLimitedProfile(t *testing.T) {
 	request.Catalog.Version = control.CatalogVersionLimits
 	request.Catalog.Profiles = append(request.Catalog.Profiles, limited)
 	inspected := false
-	b.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+	b.makeRuntime = func(Request) (supervisor.Runtime, error) {
 		return trainerInspector{inspect: func(context.Context, control.Workload) error { inspected = true; return nil }}, nil
 	}
 	if _, err := b.InspectTrainer(context.Background(), request, "trainer"); err != nil || !inspected {
@@ -229,7 +230,7 @@ func TestTrainerInspectionIgnoresAnUnrelatedLimitedProfile(t *testing.T) {
 
 func TestSetupRejectsUnsupportedVersionBeforeNormalizing(t *testing.T) {
 	backend, home, _ := fixture(t)
-	backend.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+	backend.makeRuntime = func(Request) (supervisor.Runtime, error) {
 		t.Fatal("setup reached the runtime with an unsupported version")
 		return nil, nil
 	}

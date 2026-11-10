@@ -48,6 +48,7 @@ function files({ serial = true } = {}) {
     '.github/scripts/policy-lockfiles.cjs', '.github/scripts/policy-admission.cjs',
     '.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py',
     '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
+  '.github/release-helper-digests.json',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
     '.github/scripts/eslint.config.cjs', '.github/semgrep-tests/maintainability.go',
     '.github/scripts/check-go-directives.go', '.github/scripts/check-go-directives_test.go',
@@ -853,7 +854,8 @@ function authorFixture({ association = 'OWNER', bot = false, changed = true } = 
     number: 1, base: { sha: 'a'.repeat(40) }, head: { sha: 'b'.repeat(40) },
   } } };
   const reads = [];
-  const github = { rest: {
+  const github = { paginate: async () => [], rest: {
+    issues: { listComments() {} },
     repos: { getContent: async params => {
       reads.push(params);
       return { data: { type: 'file', sha: (changed && params.ref === context.payload.pull_request.head.sha ? 'd' : 'c').repeat(40) } };
@@ -1019,7 +1021,8 @@ function liveGuardFixture() {
     head: { sha: 'b'.repeat(40) }, base: { sha: 'a'.repeat(40), ref: 'main' } };
   const context = { repo: { owner: 'mickey-kras', repo: 'gpu-workload-supervisor' }, payload: { pull_request: pull } };
   let reads = 0;
-  const github = { rest: {
+  const github = { paginate: async () => [], rest: {
+    issues: { listComments() {} },
     pulls: { get: async () => { reads++; return { data: pull }; } },
     git: {
       getCommit: async () => ({ data: { tree: { sha: 'c'.repeat(40) } } }),
@@ -1090,7 +1093,7 @@ test('independently approved bot policy changes still enforce lock semantics', a
     require_code_owner_review: true, dismiss_stale_reviews_on_push: true,
     require_last_push_approval: true, required_approving_review_count: 1,
   } };
-  fixture.github.paginate = async route => typeof route === 'string' ? [rule] : [{
+  fixture.github.paginate = async route => route === fixture.github.rest.issues.listComments ? [] : typeof route === 'string' ? [rule] : [{
     id: 1, user: { login: 'mickey-kras', id: 24433677, type: 'User' },
     state: 'APPROVED', commit_id: fixture.pull.head.sha,
   }];
@@ -1298,7 +1301,7 @@ test('Dependabot recovery rejects unsupported, invalid or malformed daily cron s
 
 test('Dependabot scopes occur exactly once and cannot add unknown or overlapping directories', () => {
   const baseline = files({ serial: false });
-  assert.deepEqual(inspectActivated(baseline), [], 'real five-scope baseline');
+  assert.deepEqual(inspectActivated(baseline), [], 'real six-scope baseline');
   const path = '.github/dependabot.yml';
   for (const mutate of [
     config => { config.updates.push(structuredClone(config.updates[0])); },
@@ -1550,23 +1553,29 @@ test('classifier admission requires matching policy and workflow digests', () =>
 });
 
 
-test('release helper admission synchronizes policy and both runtime assertions', () => {
+test('release helper admission synchronizes policy and the shared runtime digest manifest', () => {
   const baseline = files({ serial: false });
   const policy = '.github/scripts/policy-release.cjs';
+  const manifest = '.github/release-helper-digests.json';
   const workflow = '.github/workflows/release.yml';
   const digest = content => require('node:crypto').createHash('sha256').update(content).digest('hex');
+  // Release workflow verification steps no longer carry digests themselves.
+  assert.ok(!baseline[workflow].includes(digest(baseline['.github/scripts/release-validation.cjs'])));
   for (const helper of ['.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs']) {
     const candidate = { ...baseline, [helper]: baseline[helper] + '\n// reviewed update\n' };
-    const admitted = new Set([helper, policy, workflow]);
+    const admitted = new Set([helper, policy, manifest, workflow]);
     assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
     const previous = digest(baseline[helper]);
     const current = digest(candidate[helper]);
     candidate[policy] = candidate[policy].replace(previous, current);
-    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
-    candidate[workflow] = candidate[workflow].replace(previous, current);
-    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
-    candidate[workflow] = candidate[workflow].replaceAll(previous, current);
+    assert.ok(inspectActivated(candidate, baseline, admitted).some(error => error.includes(manifest)));
+    candidate[manifest] = candidate[manifest].replace(previous, current);
     assert.deepEqual(inspectActivated(candidate, baseline, admitted), []);
+    // The manifest cannot authorize a helper without the reviewed policy digest.
+    const unreviewed = { ...candidate, [policy]: baseline[policy] };
+    assert.ok(inspectActivated(unreviewed, baseline, admitted).length > 0);
+    const extra = { ...candidate, [manifest]: JSON.stringify({ ...JSON.parse(candidate[manifest]), 'other.cjs': current }) };
+    assert.ok(inspectActivated(extra, baseline, admitted).some(error => error.includes(manifest)));
     assert.ok(inspectActivated(candidate, baseline).length > 0);
     const declaration = candidate[policy].match(/const RELEASE_HASHES = (\{[\s\S]*?\n\});/)[0];
     candidate[policy] = `/* ${declaration} */\n${baseline[policy]}`;

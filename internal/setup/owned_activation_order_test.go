@@ -11,6 +11,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 // bindingReleaseRuntime models the binding-sensitive release path: like the
@@ -106,7 +107,7 @@ func TestApplyVerifiesAcceptedUUIDBindingsBeforeOwnedReplacement(t *testing.T) {
 				request.Catalog.Profiles = append(request.Catalog.Profiles, z)
 			}
 			var releases []control.Catalog
-			backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
+			backend.makeRuntime = func(got Request) (supervisor.Runtime, error) {
 				return bindingReleaseRuntime{catalog: got.Catalog, releases: &releases}, nil
 			}
 			if err := backend.Apply(t.Context(), home, request); err != nil {
@@ -185,7 +186,7 @@ func TestApplyRejectsUnsafeAcceptedRuntimeBeforeOwnedMutation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
+			backend.makeRuntime = func(got Request) (supervisor.Runtime, error) {
 				return bindingReleaseRuntime{catalog: got.Catalog, busy: busy, bindingErr: bindingErr}, nil
 			}
 			writes := 0
@@ -245,7 +246,7 @@ func TestApplyRechecksRemovedWorkloadReleaseAfterOwnedWrites(t *testing.T) {
 				}
 				return delegate(ctx, name, args...)
 			}
-			backend.makeRuntime = func(got Request) (gpuruntime.Manager, error) {
+			backend.makeRuntime = func(got Request) (supervisor.Runtime, error) {
 				return bindingReleaseRuntime{catalog: got.Catalog, busyRead: func() control.Workload { return busy }, preflight: func() {
 					marker, err := deployment.Read(request.Profile.StatePath)
 					if stage == "transaction quiescence" && err == nil && marker.Maintenance {

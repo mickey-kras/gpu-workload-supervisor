@@ -54,3 +54,15 @@ updates:
       default-days: 7
     rebase-strategy: auto
     open-pull-requests-limit: 3
+
+  # Hash-locked training runtime: requirements.in compiled to requirements.txt
+  # with --generate-hashes; Dependabot's pip updater regenerates both.
+  - package-ecosystem: pip
+    directory: /training/axolotl
+    schedule:
+      interval: cron
+      cronjob: "3 11 * * *"
+    cooldown:
+      default-days: 7
+    rebase-strategy: auto
+    open-pull-requests-limit: 3

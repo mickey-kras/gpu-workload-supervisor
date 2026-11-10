@@ -8,11 +8,11 @@ import (
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 type trainerInspector struct {
-	gpuruntime.Manager
+	supervisor.Runtime
 	inspect func(context.Context, control.Workload) error
 }
 
@@ -50,7 +50,7 @@ func TestTrainerInspectionRequiresExplicitValidBinding(t *testing.T) {
 	} {
 		b, request := trainerInspectionRequest(t)
 		mutation(&request)
-		b.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+		b.makeRuntime = func(Request) (supervisor.Runtime, error) {
 			t.Fatal("invalid candidate reached runtime")
 			return nil, nil
 		}
@@ -72,7 +72,7 @@ func TestTrainerInspectionCannotVerifyCancelledObservation(t *testing.T) {
 	b, request := trainerInspectionRequest(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	b.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+	b.makeRuntime = func(Request) (supervisor.Runtime, error) {
 		t.Fatal("cancelled inspection reached runtime")
 		return nil, nil
 	}
@@ -81,7 +81,7 @@ func TestTrainerInspectionCannotVerifyCancelledObservation(t *testing.T) {
 	}
 	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
-	b.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+	b.makeRuntime = func(Request) (supervisor.Runtime, error) {
 		return trainerInspector{inspect: func(context.Context, control.Workload) error {
 			cancel()
 			return nil
@@ -97,7 +97,7 @@ func TestTrainerDiscoveryReportsBindingEvidenceWithoutApprovingRuntime(t *testin
 		b, request := trainerInspectionRequest(t)
 		original := request.Catalog.Clone()
 		calls := 0
-		b.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+		b.makeRuntime = func(Request) (supervisor.Runtime, error) {
 			return trainerInspector{inspect: func(ctx context.Context, id control.Workload) error {
 				calls++
 				if id != "trainer" {
@@ -123,9 +123,9 @@ func TestTrainerDiscoveryReportsBindingEvidenceWithoutApprovingRuntime(t *testin
 
 func TestTrainerInspectionReportsUnavailableRuntime(t *testing.T) {
 	b, request := trainerInspectionRequest(t)
-	for _, makeRuntime := range []func(Request) (gpuruntime.Manager, error){
-		func(Request) (gpuruntime.Manager, error) { return nil, errors.New("private-path-secret") },
-		func(Request) (gpuruntime.Manager, error) { return idleRuntime{}, nil },
+	for _, makeRuntime := range []func(Request) (supervisor.Runtime, error){
+		func(Request) (supervisor.Runtime, error) { return nil, errors.New("private-path-secret") },
+		func(Request) (supervisor.Runtime, error) { return idleRuntime{}, nil },
 	} {
 		b.makeRuntime = makeRuntime
 		found, err := b.InspectTrainer(context.Background(), request, "trainer")
@@ -146,7 +146,7 @@ func TestDiscoveryPreservesTrainerCatalogWhileAddingInspection(t *testing.T) {
 	if err := b.Apply(context.Background(), home, request); err != nil {
 		t.Fatal(err)
 	}
-	b.makeRuntime = func(Request) (gpuruntime.Manager, error) {
+	b.makeRuntime = func(Request) (supervisor.Runtime, error) {
 		return trainerInspector{inspect: func(context.Context, control.Workload) error { return nil }}, nil
 	}
 	b.probeApplication = func(_ context.Context, r ProbeRequest) (ApplicationCandidate, error) { return candidate(r), nil }

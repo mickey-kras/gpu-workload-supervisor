@@ -50,6 +50,7 @@ const REQUIRED_FILES = [
   '.github/scripts/policy-lockfiles.cjs', '.github/scripts/policy-admission.cjs',
   '.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py',
   '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
+  '.github/release-helper-digests.json',
   '.github/scripts/pr-branch-updater.cjs', 'sonar-project.properties',
   '.github/scripts/package.json', '.github/scripts/package-lock.json',
   '.github/scripts/eslint.config.cjs', '.github/semgrep-tests/maintainability.go',

@@ -27,9 +27,6 @@ var selectedUnitName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*\.service$
 // existing installations; owned profiles are synthesized by OwnedProfile.
 var ErrOwnedDraftPrepare = errors.New("owned launch drafts cannot be prepared from an existing installation")
 
-func Prepare(ctx context.Context, request PrepareRequest) (PreparedApplication, error) {
-	return SystemBackend().Prepare(ctx, request)
-}
 func (b Backend) Prepare(ctx context.Context, request PrepareRequest) (PreparedApplication, error) {
 	d := request.Draft
 	if err := validateDraft(d, map[string]bool{}); err != nil {

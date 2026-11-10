@@ -100,7 +100,7 @@ Activation holds controller and exclusive-proxy gates and verifies GPU release f
 
 After each committed activation, setup keeps the three newest `activation-*` tuples and deletes older ones. To keep an older tuple, copy it outside `backups/` first.
 
-The snapshot excludes vLLM API key files. After rollback, run setup again to create missing key files.
+The snapshot also keeps the API key file of each managed vLLM workload in `owned-keys/`, with mode `0600`. A key file that did not exist is not in the snapshot. After rollback, run setup again to create it.
 
 Stored [model check](MODEL-CHECKS.md#results) results have format version 2. A result of another version reads as `not_scanned` until the checker checks the model again. An earlier release reads version 2 results as stale. If it checks a model again after a rollback, it replaces the stored result and drops its template approval. Then, after the next upgrade, the operator must approve the template again.
 
@@ -115,6 +115,7 @@ Use the [full restore procedure](#make-a-backup-restore-and-roll-back-state), ke
 | `operator.json`, `catalog.json`, `ownership.json` | Same names |
 | `manifest.json` | `activated-binaries/manifest.json` |
 | `gpu-mode`, `gpu-workload-proxy`, `gpu-operator`, `gpu-setup` | Same names under `activated-binaries/` |
+| `owned-keys/` files | Same names under `vllm/`, service-owned, mode `0600` |
 
 Check the plain private `owned-units/` files against `owned-units.json` and saved catalog launch fingerprints. Restore saved filenames to `~/.config/systemd/user/`, service-owned, mode `0600`. You can recreate absent destinations.
 
@@ -155,6 +156,20 @@ Manual fallback: **Copy reviewed override** copies only the proposal. Ask the se
 ## Use and recover workloads
 
 Use pinned binaries and complete [deployment flags](DEPLOYMENT.md#deploy-the-supervisor). Replace the placeholders. Put flags before the single command. Never start runtimes independently.
+
+After setup, `gpu-mode` gets the [runtime flags](DEPLOYMENT.md#controller-configuration) from the activated profile. Then `[runtime flags]` in the examples is not necessary.
+
+### Check the deployment
+
+Run `doctor` first when a control fails or when you do not know the state:
+
+```sh
+/PINNED/RELEASE/gpu-mode [runtime flags] doctor
+```
+
+`doctor` runs the existing checks in sequence. It checks the operator profile, the deployment marker against the activated release and the accepted catalog. Then it runs `verify-host` on the accepted catalog, and `status`.
+
+Each check prints `ok` or `FAIL`. A `next` line gives the operator step. `doctor` stops at the first failed check and exits nonzero. It changes state only as `status` does.
 
 ### Switch workloads
 
@@ -326,7 +341,7 @@ If a newer binary opens the restored state, it migrates the state again and take
 
 A backup's incarnation can predate live state. `restore-state` must rotate it before any proxy starts, after every backup installation, never ordinary restart.
 
-Backups exclude vLLM API key files. After a restore, run setup again. It creates a missing key file for each managed vLLM workload.
+A state database backup holds no API key files of vLLM workloads. Setup activation backups keep them, see [restore and rollback](#restore-and-rollback). If a key file is missing after a restore, run setup again. It creates a missing key file for each managed vLLM workload.
 
 1. Stop every proxy, controller automation and runtime sharing state. Finish or stop admitted jobs and prevent restart. Controller and proxy lifetime locks serialize commands, not earlier file replacement or external runtime stopping.
 2. Install a consistent backup at the configured private service-owned state path. Never copy live `.db` alone or leave another database's WAL or SHM files alongside it.
@@ -338,39 +353,13 @@ Backups exclude vLLM API key files. After a restore, run setup again. It creates
 
 The initialized supervisor database cannot be an empty placeholder. No runtime flags or backup copying occur. Success prints closed state and a new incarnation. Atomic changes: Supervisor ownership, unknown active workload, closed admission, abandoned restored active work, invalidated transitions and an audit record. Failed work and transition history remains. On failure keep everything stopped and repair before retrying.
 
-For unfinished training with unknown IDs, run this read-only Python 3 standard-library query as the service identity. Output contains only IDs and categories, never payloads or tokens:
+If `restore-state` reports unfinished training, recover all of it as the service identity:
 
    ```sh
-   python3 - /PRIVATE/DURABLE/STATE/state.db <<'PY'
-   import pathlib
-   import sqlite3
-   import sys
-
-   uri = pathlib.Path(sys.argv[1]).resolve().as_uri() + "?mode=ro"
-   with sqlite3.connect(uri, uri=True) as db:
-       for job_id, category in db.execute("""
-           SELECT id, 'reserved job' FROM training_jobs WHERE finished=0
-           UNION ALL
-           SELECT id, 'preparing claim' FROM training_claims WHERE status='preparing'
-           ORDER BY 1
-       """):
-           print(job_id, category, sep="\t")
-   PY
+   /PINNED/RELEASE/gpu-mode [runtime flags] -all-restored training-recover
    ```
 
-Recover each ID explicitly. In a text editor, create private regular mode-`0600` `/PRIVATE/DURABLE/STATE/training-job-id.txt` as the service identity. Store exactly one ID plus newline, preserving spaces, without category, tab, quotes or escapes. Do not paste into terminal prompts: IDs can exceed terminal line limits. Read as data with quoted expansion:
-
-   ```sh
-   if {
-       IFS= read -r training_job_id &&
-       [ -n "$training_job_id" ] &&
-       ! { IFS= read -r extra_line || [ -n "$extra_line" ]; }
-   } < /PRIVATE/DURABLE/STATE/training-job-id.txt; then
-       /PINNED/RELEASE/gpu-mode [runtime flags] -state /PRIVATE/DURABLE/STATE/state.db -training-job "$training_job_id" training-recover
-   else
-       printf '%s\n' 'Expected exactly one nonempty ID line; keep components stopped.' >&2
-   fi
-   ```
+The command requires stopped proxies. It reads the unfinished training IDs of the state and recovers each ID in sequence. For each ID, it prints one JSON line with the ID, the query category and the state. Last, it prints the count in `recoveredTraining`. Output never contains payloads or tokens.
 
 Use restored accepted-catalog runtime configuration and trainer bindings. Runtime commands reject `-catalog`.
 
@@ -381,7 +370,9 @@ Use restored accepted-catalog runtime configuration and trainer bindings. Runtim
 
 The query excludes finished jobs and interrupted claims.
 
-Failed query or no reserved job despite the error: keep stopped, investigate path and schema. Never guess IDs, edit state or bypass the guard. Recovery preserves persisted terminal outcomes, otherwise records `interrupted`. It never resumes or relaunches training. Backups prove no completion. Repair runtime and configuration failures, recover, retry `restore-state`.
+The command stops at the first failed recovery, and the error names the ID. Keep components stopped. Repair runtime and configuration failures, then run the command again.
+
+A failed query, or no reserved job despite the error: keep stopped, investigate path and schema. Never guess IDs, edit state or bypass the guard. Recovery preserves persisted terminal outcomes, otherwise records `interrupted`. It never resumes or relaunches training. Backups prove no completion. After recovery, retry `restore-state`.
 
 4. Keep proxies stopped. Run pinned `reconcile` with full matching flags and the same `-state`. Continue only after stable, healthy success. Failure: inspect the runtime before explicit `recover`. Start any needed workload through the controller.
 5. Start the proxies. Clients get the new fence. Proxies reject backup fences.
