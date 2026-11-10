@@ -37,6 +37,9 @@ async function review(ui) {
     return call ? JSON.parse(call.input) : null;
 }
 
+// summary finds the status summary of a refusal, not the inline form error
+// of the Resource checks page.
+const summary = (ui, text) => ui.widgets.some(widget => widget.cssClasses?.includes('setup-notice') && widget.name !== 'limits-error' && widget.label === text);
 const visibleText = ui => ui.widgets.filter(widget => ui.visible(widget) && widget.label).map(widget => widget.label).join('\n');
 
 test('limits of an owned unit reach validate and apply with catalog v5 and the defaults', async () => {
@@ -70,7 +73,7 @@ test('stored limits stay exact when untouched, and turning them off removes them
     let request = await review(ui);
     assert.deepEqual(request.catalog.profiles[0].nativeModel.owned.limits, {...limits, ioWriteBandwidthMax: 7 * 1048576});
     const draft = JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input).draft;
-    assert.equal(draft.binding.owned.limits, undefined, 'the draft surface never carries limits');
+    assert.deepEqual(draft.binding.owned.limits, {...limits, ioWriteBandwidthMax: 7 * 1048576}, 'render-owned renders the final limits');
     ui = await start([limited]);
     await openResources(ui);
     ui.by('Limit the resources of this workload').active = false;
@@ -96,6 +99,7 @@ for (const [name, edit, text] of [
         ui.by('Limit the resources of this workload').active = true;
         edit(ui);
         assert.equal(await review(ui), null);
+        assert.ok(!ui.calls.some(call => ['render-owned', 'prepare'].includes(call.argv[1])), 'refused before any render');
         assert.ok(visibleText(ui).includes(text), visibleText(ui));
     });
 }
@@ -106,7 +110,8 @@ test('an adopted unit gets the convert-first refusal and no review', async () =>
     ui.by('Limit the resources of this workload').active = true;
     ui.edit(ui.by('Memory high (GiB)'), 'text', '8'); ui.edit(ui.by('Memory maximum (GiB)'), 'text', '9');
     assert.equal(await review(ui), null);
-    assert.ok(visibleText(ui).includes('Limits need a launch that Supervisor manages. Convert this service first and finish setup.'));
+    assert.ok(!ui.calls.some(call => ['render-owned', 'prepare'].includes(call.argv[1])), 'refused before any render');
+    assert.ok(visibleText(ui).includes('Limits need a launch that Supervisor manages. Clear Limit the resources of this workload to adopt this service, or use a managed launch.'));
 });
 
 test('Cancel restores the limits form of the session', async () => {
@@ -225,10 +230,10 @@ test('number formats, the limit check and the request helpers', () => {
     assert.equal(limitsUI.checkLimits({memoryHighMiB: 1, memoryMaxMiB: 2, tasksMax: 64, cpuQuotaPercent: 1, ioDevice: '/dev/sda'}),
         'I/O limits need the I/O device and its number, and the device needs an I/O limit.');
     assert.equal(limitsUI.checkLimits({memoryHighMiB: 1, memoryMaxMiB: 2, tasksMax: 64, cpuQuotaPercent: 1}), null);
-    assert.equal(limitsUI.withLimits(owned, undefined, false), owned);
-    assert.equal(limitsUI.withLimits(adopted, null, true), adopted);
-    assert.throws(() => limitsUI.withLimits(owned, {error: 'bad'}, false), /bad/);
-    assert.throws(() => limitsUI.withLimits(owned, {version: 1}, true), /Convert this service first/);
+    const limitedOwned = {...owned, nativeModel: {...owned.nativeModel, owned: {...owned.nativeModel.owned, limits: {version: 1}}}};
+    assert.equal(limitsUI.refuseAdoptedLimits(owned, true), owned);
+    assert.equal(limitsUI.refuseAdoptedLimits(limitedOwned, false), limitedOwned);
+    assert.throws(() => limitsUI.refuseAdoptedLimits(limitedOwned, true), /Convert this service first/);
     const request = {profile: {statePath: '/s', limitReserve: {memoryMiB: 1}}, hostCap: {memoryHighMiB: 1}};
     const plain = value => JSON.parse(JSON.stringify(value));
     assert.deepEqual(plain(host.hostRequest(request, {hostCap: {memoryHighMiB: 2}}, false)), {profile: {statePath: '/s'}});
@@ -237,4 +242,201 @@ test('number formats, the limit check and the request helpers', () => {
     assert.equal(host.rootStepText(null), '');
     assert.equal(host.rootStepText({dropIns: [], commands: ['c']}), 'c');
     assert.equal(host.escapeRouteText({route: 'more', item: '2 more', unchecked: true}), 'Not shown: 2 more.');
+});
+
+test('limits stay in the owned draft through launch edits, saved selections and render-owned', async () => {
+    const ui = await start();
+    await openResources(ui);
+    ui.by('Limit the resources of this workload').active = true;
+    ui.edit(ui.by('Memory high (GiB)'), 'text', '8'); ui.edit(ui.by('Memory maximum (GiB)'), 'text', '9');
+    await ui.click('Done'); await ui.click('Launch details');
+    ui.edit(ui.by('Launch port'), 'text', '8001');
+    await ui.click('Save selections for later');
+    const request = JSON.parse(ui.calls.findLast(call => call.argv[1] === 'save-drafts').input);
+    assert.equal(request.version, 2, 'drafts with limits use draft version 2');
+    const saved = request.drafts[0];
+    const want = {version: 1, memoryHighMiB: 8192, memoryMaxMiB: 9216, tasksMax: 4096, cpuQuotaPercent: 400};
+    assert.deepEqual(saved.binding.owned.limits, want);
+    assert.equal(saved.binding.owned.port, 8001);
+    await ui.click('Done'); await ui.click('Back'); await ui.click('Back'); await ui.click('Continue');
+    assert.deepEqual(JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input).draft.binding.owned.limits, want);
+});
+
+test('a saved draft with limits opens with them', async () => {
+    const draft = {id: 'draft-one', app: 'vllm', label: 'Qwen', binding: {instance: 'local', owned: {port: 8000, modelPath: '/models/qwen', limits: {version: 1, memoryHighMiB: 8192, memoryMaxMiB: 9216, tasksMax: 512, cpuQuotaPercent: 100}}}};
+    const ui = await start([], {}, {drafts: {drafts: [draft]}});
+    await openResources(ui);
+    assert.equal(ui.by('Limit the resources of this workload').active, true);
+    assert.equal(ui.by('Tasks').text, '512');
+});
+
+test('limits turned on and off again leave no limits in render, validate or saved drafts', async () => {
+    let ui = await start();
+    await openResources(ui);
+    const toggle = ui.by('Limit the resources of this workload');
+    toggle.active = true;
+    ui.edit(ui.by('Memory high (GiB)'), 'text', '8'); ui.edit(ui.by('Memory maximum (GiB)'), 'text', '9');
+    toggle.active = false;
+    const request = await review(ui);
+    assert.equal(JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input).draft.binding.owned.limits, undefined);
+    assert.equal(request.catalog.profiles[0].nativeModel.owned.limits, undefined);
+    assert.equal(request.catalog.version, 2);
+    const limits = {version: 1, memoryHighMiB: 8192, memoryMaxMiB: 9216, tasksMax: 512, cpuQuotaPercent: 100};
+    const draft = {id: 'draft-one', app: 'vllm', label: 'Qwen', binding: {instance: 'local', owned: {port: 8000, modelPath: '/models/qwen', limits}}};
+    ui = await start([], {}, {drafts: {drafts: [draft]}});
+    await openResources(ui);
+    ui.by('Limit the resources of this workload').active = false;
+    await ui.click('Done'); await ui.click('Launch details'); await ui.click('Save selections for later');
+    const saved = JSON.parse(ui.calls.findLast(call => call.argv[1] === 'save-drafts').input);
+    assert.equal(saved.version, 1);
+    assert.equal(Object.hasOwn(saved.drafts[0].binding.owned, 'limits'), false);
+});
+
+test('an invalid limits form refuses the managed launch preview and the save', async () => {
+    const draft = {id: 'draft-one', app: 'vllm', label: 'Qwen', binding: {instance: 'local', owned: {port: 8000, modelPath: '/models/qwen'}}};
+    let ui = await start([], {}, {drafts: {drafts: [draft]}});
+    await openResources(ui);
+    ui.by('Limit the resources of this workload').active = true;
+    ui.edit(ui.by('Memory high (GiB)'), 'text', '8'); ui.edit(ui.by('Memory maximum (GiB)'), 'text', '9');
+    ui.edit(ui.by('Memory maximum (GiB)'), 'text', '7');
+    await ui.click('Done'); await ui.click('Launch details'); await ui.click('Save selections for later');
+    assert.ok(!ui.calls.some(call => call.argv[1] === 'save-drafts'), 'an invalid form is not saved');
+    assert.ok(visibleText(ui).includes('Memory high must be less than the memory maximum.'));
+    ui = await start([], {}, {drafts: {drafts: [draft]}});
+    await openResources(ui);
+    ui.by('Limit the resources of this workload').active = true;
+    ui.edit(ui.by('Memory high (GiB)'), 'text', '8');
+    await ui.click('Done'); await ui.click('Launch details');
+    await ui.by('Preview managed launch and add for review').emit('clicked');
+    assert.ok(!ui.calls.some(call => ['render-owned', 'verify-bindings'].includes(call.argv[1])), 'the preview refuses an invalid form');
+    assert.ok(summary(ui, 'Enter a value for Memory maximum (GiB).'), 'the plain form text is reported');
+    ui.edit(ui.by('Memory maximum (GiB)'), 'text', '9');
+    await ui.by('Preview managed launch and add for review').emit('clicked');
+    assert.deepEqual(JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input).draft.binding.owned.limits,
+        {version: 1, memoryHighMiB: 8192, memoryMaxMiB: 9216, tasksMax: 4096, cpuQuotaPercent: 400});
+});
+
+test('limits on the converted launch of an adopted unit are refused after the render', async () => {
+    const limits = {version: 1, memoryHighMiB: 8192, memoryMaxMiB: 9216, tasksMax: 512, cpuQuotaPercent: 100};
+    const draft = {id: adopted.id, app: 'vllm', label: 'Adopted', binding: {instance: 'local', owned: {port: 8000, modelPath: '/models/qwen', limits}}};
+    const ui = await start([adopted], {}, {drafts: {drafts: [draft]}});
+    await ui.click('Continue');
+    assert.ok(ui.calls.some(call => call.argv[1] === 'render-owned'), 'the refusal comes after the render');
+    assert.ok(!ui.calls.some(call => call.argv[1] === 'validate'));
+    assert.ok(visibleText(ui).includes('Limits need a launch that Supervisor manages. Convert this service first and finish setup.'));
+});
+
+test('Use installation refuses limits on a service that Supervisor does not manage', async () => {
+    const candidate = {app: 'comfyui', label: 'ComfyUI', unit: 'comfyui.service', endpoint: 'http://127.0.0.1:8188', location: '/services/comfyui.service', recognized: true,
+        instanceStatus: 'not-running', configurationStatus: 'ready', binding: {unit: 'comfyui.service', cgroup: '/comfyui', healthURL: 'http://127.0.0.1:8188/system_stats'}};
+    const ui = await start([], {applications: [candidate]});
+    await ui.click('Settings for ComfyUI'); await ui.click('Advanced settings'); await ui.click('Resource checks');
+    ui.by('Limit the resources of this workload').active = true;
+    ui.edit(ui.by('Memory high (GiB)'), 'text', '8'); ui.edit(ui.by('Memory maximum (GiB)'), 'text', '9');
+    await ui.click('Done'); await ui.click('Back');
+    await ui.click('Use installation');
+    assert.ok(!ui.calls.some(call => ['prepare', 'render-owned', 'verify-bindings'].includes(call.argv[1])));
+    assert.ok(visibleText(ui).includes('Limits need a launch that Supervisor manages. Clear Limit the resources of this workload to adopt this service, or use a managed launch.'));
+});
+
+test('a limits edit while a managed launch preview is pending discards the stale render', async () => {
+    const draft = {id: 'draft-one', app: 'vllm', label: 'Qwen', binding: {instance: 'local', owned: {port: 8000, modelPath: '/models/qwen'}}};
+    const ui = await launch({deferAction: 'render-owned', responses: {
+        discover: {request: {profile: {statePath: '/state.db', gpuIndex: 0}, catalog: {version: 2, profiles: []}}, units: []},
+        drafts: {drafts: [draft]}, 'render-owned': rendered}});
+    await openResources(ui);
+    const toggle = ui.by('Limit the resources of this workload');
+    toggle.active = true;
+    ui.edit(ui.by('Memory high (GiB)'), 'text', '8'); ui.edit(ui.by('Memory maximum (GiB)'), 'text', '9');
+    const preview = ui.by('Preview managed launch and add for review').emit('clicked');
+    toggle.active = false;
+    ui.finish(); await preview;
+    assert.ok(!ui.calls.some(call => call.argv[1] === 'verify-bindings'), 'the stale render is discarded');
+    assert.ok(ui.widgets.some(widget => widget.label?.includes('Draft changed during preview')));
+});
+
+test('Verify binding refuses enabled limits on a service that Supervisor does not manage', async () => {
+    const ui = await launch({deferAction: 'unused'});
+    ui.selectApplication(0);
+    await ui.click('Advanced settings'); await ui.click('Resource checks');
+    ui.by('Limit the resources of this workload').active = true;
+    ui.edit(ui.by('Memory high (GiB)'), 'text', '8'); ui.edit(ui.by('Memory maximum (GiB)'), 'text', '9');
+    await ui.by('Verify binding and add for review').emit('clicked');
+    assert.ok(!ui.calls.some(call => ['fingerprint', 'verify-bindings'].includes(call.argv[1])), 'enabled limits stop the binding path');
+    assert.ok(summary(ui, 'Limits need a launch that Supervisor manages. Clear Limit the resources of this workload to adopt this service, or use a managed launch.'));
+    ui.by('Limit the resources of this workload').active = false;
+    await ui.by('Verify binding and add for review').emit('clicked');
+    assert.ok(ui.calls.some(call => call.argv[1] === 'verify-bindings'), 'without limits the binding path runs');
+});
+
+const ownedDraft = {id: 'draft-one', app: 'vllm', label: 'Qwen', binding: {instance: 'local', owned: {port: 8000, modelPath: '/models/qwen'}}};
+function deferred(action, deferOccurrence = null) {
+    return launch({deferAction: action, deferOccurrence, responses: {
+        discover: {request: {profile: {statePath: '/state.db', gpuIndex: 0}, catalog: {version: 2, profiles: []}}, units: []},
+        drafts: {drafts: [ownedDraft]}, 'render-owned': rendered}});
+}
+
+test('a pending render survives a limits event that changes nothing', async () => {
+    const ui = await deferred('render-owned');
+    await openResources(ui);
+    ui.by('Limit the resources of this workload').active = true;
+    ui.edit(ui.by('Memory high (GiB)'), 'text', '8'); ui.edit(ui.by('Memory maximum (GiB)'), 'text', '9');
+    const preview = ui.by('Preview managed launch and add for review').emit('clicked');
+    ui.edit(ui.by('Memory maximum (GiB)'), 'text', '9.0');
+    ui.finish(); await preview;
+    assert.ok(ui.calls.some(call => call.argv[1] === 'verify-bindings'), 'an unchanged value keeps the render');
+});
+
+test('Use installation discards a render that a limits edit made stale, refuses an invalid form and renders valid limits', async () => {
+    // Only the first render waits, so a wrong second render ends at once.
+    let ui = await deferred('render-owned', 1);
+    await openResources(ui);
+    const toggle = ui.by('Limit the resources of this workload');
+    toggle.active = true;
+    ui.edit(ui.by('Memory high (GiB)'), 'text', '8'); ui.edit(ui.by('Memory maximum (GiB)'), 'text', '9');
+    const finish = ui.by('Use installation').emit('clicked');
+    ui.edit(ui.by('Memory maximum (GiB)'), 'text', '7');
+    ui.finish(); await finish;
+    assert.ok(!ui.calls.some(call => call.argv[1] === 'verify-bindings'), 'the stale render is discarded');
+    await ui.by('Use installation').emit('clicked');
+    assert.equal(ui.calls.filter(call => call.argv[1] === 'render-owned').length, 1, 'an invalid form makes no render');
+    ui = await deferred('unused');
+    await openResources(ui);
+    ui.by('Limit the resources of this workload').active = true;
+    ui.edit(ui.by('Memory high (GiB)'), 'text', '8'); ui.edit(ui.by('Memory maximum (GiB)'), 'text', '9');
+    await ui.by('Use installation').emit('clicked');
+    assert.deepEqual(JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input).draft.binding.owned.limits,
+        {version: 1, memoryHighMiB: 8192, memoryMaxMiB: 9216, tasksMax: 4096, cpuQuotaPercent: 400});
+});
+
+test('Save selections checks the limits of every open draft', async () => {
+    const comfy = {id: 'draft-two', app: 'comfyui', label: 'ComfyUI'};
+    const ui = await start([], {}, {drafts: {drafts: [ownedDraft, comfy]}});
+    await ui.click('Settings for ComfyUI'); await ui.click('Advanced settings'); await ui.click('Resource checks');
+    ui.by('Limit the resources of this workload').active = true;
+    ui.edit(ui.by('Memory high (GiB)'), 'text', '8'); ui.edit(ui.by('Memory maximum (GiB)'), 'text', '9');
+    await ui.click('Done'); await ui.click('Back'); await ui.click('Back');
+    await ui.click('Settings for vLLM'); await ui.click('Advanced settings'); await ui.click('Launch details');
+    await ui.click('Save selections for later');
+    assert.ok(!ui.calls.some(call => call.argv[1] === 'save-drafts'), 'the second draft blocks the save');
+    const status = ui.widgets.find(widget => widget.label === 'Checking your desktop and available services…' || widget.cssClasses?.includes('setup-notice'));
+    assert.ok(status.label === 'ComfyUI: Limits need a launch that Supervisor manages. Clear Limit the resources of this workload to adopt this service, or use a managed launch.', status.label);
+});
+
+test('Verify binding refuses enabled limits on an owned draft and an invalid form', async () => {
+    let ui = await deferred('unused');
+    await openResources(ui);
+    ui.by('Limit the resources of this workload').active = true;
+    ui.edit(ui.by('Memory high (GiB)'), 'text', '8'); ui.edit(ui.by('Memory maximum (GiB)'), 'text', '9');
+    await ui.by('Verify binding and add for review').emit('clicked');
+    assert.ok(!ui.calls.some(call => ['fingerprint', 'verify-bindings'].includes(call.argv[1])), 'an owned draft does not let the binding drop the limits');
+    assert.ok(summary(ui, 'Limits need a launch that Supervisor manages. Clear Limit the resources of this workload to adopt this service, or use a managed launch.'));
+    ui = await launch({deferAction: 'unused'});
+    ui.selectApplication(0);
+    await ui.click('Advanced settings'); await ui.click('Resource checks');
+    ui.by('Limit the resources of this workload').active = true;
+    ui.edit(ui.by('Memory high (GiB)'), 'text', '8'); ui.edit(ui.by('Memory maximum (GiB)'), 'text', '7');
+    await ui.by('Verify binding and add for review').emit('clicked');
+    assert.ok(!ui.calls.some(call => ['fingerprint', 'verify-bindings'].includes(call.argv[1])), 'an invalid form stops the binding path');
+    assert.ok(summary(ui, 'Memory high must be less than the memory maximum.'));
 });

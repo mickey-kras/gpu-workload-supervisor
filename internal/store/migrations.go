@@ -243,12 +243,9 @@ func (s *Store) applyMigrations(ctx context.Context, tx *sql.Tx) error {
 	)`); err != nil {
 		return fmt.Errorf("create migration table: %w", err)
 	}
-	var current int
-	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&current); err != nil {
+	current, err := s.prepareMigration(ctx, tx)
+	if err != nil {
 		return err
-	}
-	if current > len(migrations) {
-		return fmt.Errorf("database schema version %d is newer than supported version %d", current, len(migrations))
 	}
 	for index := current; index < len(migrations); index++ {
 		version := index + 1
@@ -266,6 +263,25 @@ func (s *Store) applyMigrations(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+// prepareMigration returns the current schema version. A fresh database has
+// nothing to lose. An existing one gets a verified snapshot before any pending
+// migration runs, or it is not migrated.
+func (s *Store) prepareMigration(ctx context.Context, tx *sql.Tx) (int, error) {
+	var current int
+	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&current); err != nil {
+		return 0, err
+	}
+	if current > len(migrations) {
+		return 0, fmt.Errorf("database schema version %d is newer than supported version %d", current, len(migrations))
+	}
+	if current > 0 && current < len(migrations) {
+		if err := s.snapshotBeforeMigration(ctx, current); err != nil {
+			return 0, fmt.Errorf("snapshot before schema v%d migration: %w", current+1, err)
+		}
+	}
+	return current, nil
 }
 
 func validateV15IdleTimeout(ctx context.Context, tx *sql.Tx) error {

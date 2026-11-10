@@ -95,6 +95,7 @@ func OwnedProfile(d Draft, managerCgroup, home string) (control.WorkloadProfile,
 		Port:        d.Binding.Owned.Port,
 		MaxModelLen: d.Binding.Owned.MaxModelLen,
 		Alias:       d.Binding.Owned.Alias,
+		Limits:      d.Binding.Owned.Limits,
 	}
 	model := ownedProfileModel(owned)
 	id := control.Workload(d.ID)
