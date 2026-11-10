@@ -18,7 +18,7 @@ func TestOperatorProcessHelper(t *testing.T) {
 	if os.Getenv("GPU_OPERATOR_PROCESS_HELPER") != "1" {
 		return
 	}
-	os.Args = []string{"gpu-operator"}
+	os.Args = append([]string{"gpu-operator"}, strings.Fields(os.Getenv("GPU_OPERATOR_PROCESS_ARGS"))...)
 	main()
 	os.Exit(0)
 }
@@ -78,5 +78,21 @@ func TestOperatorUndeliveredResponseExitsNonzero(t *testing.T) {
 				t.Fatalf("write deadline did not produce exit 1: %v", err)
 			}
 		})
+	}
+}
+
+func TestOperatorUndeliveredVersionExitsNonzero(t *testing.T) {
+	// A read-only stdout makes the version write fail.
+	readOnly, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readOnly.Close()
+	cmd := operatorProcess(t)
+	cmd.Env = append(cmd.Env, "GPU_OPERATOR_PROCESS_ARGS=-version")
+	cmd.Stdout = readOnly
+	var exit *exec.ExitError
+	if err := cmd.Run(); !errors.As(err, &exit) || exit.ExitCode() != 1 {
+		t.Fatalf("undelivered version exit = %v", err)
 	}
 }

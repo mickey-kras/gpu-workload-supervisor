@@ -45,6 +45,16 @@ function validReview(reviews, sha) {
   return decisive[0]?.state === 'APPROVED' && decisive[0].commit_id === sha;
 }
 
+function commentDecision(comments, sha) {
+  const approve = `/approve-ci ${sha}`;
+  const revoke = `/revoke-ci ${sha}`;
+  const decisions = comments.filter(comment => Number.isSafeInteger(comment.id) &&
+    comment.user?.login === OWNER.login && comment.user?.id === OWNER.id && comment.user?.type === 'User' &&
+    [approve, revoke].includes(comment.body?.trim()));
+  decisions.sort((a, b) => b.id - a.id);
+  return decisions.length ? decisions[0].body.trim() === approve : undefined;
+}
+
 function protectedReview(rule) {
   const settings = rule?.parameters;
   return rule?.type === 'pull_request' && settings?.require_code_owner_review === true &&
@@ -80,7 +90,7 @@ async function reviewedHead(github, context, settingsReview = process.env.CI_POL
   const expected = context.payload.pull_request;
   const { data: pull } = await github.rest.pulls.get(params);
   if (pull.state !== 'open' || pull.head?.sha !== expected.head.sha || pull.base?.sha !== expected.base.sha ||
-      pull.user?.type !== 'Bot' || !Number.isSafeInteger(pull.user.id) || pull.user.id === OWNER.id) return false;
+      !Number.isSafeInteger(pull.user?.id)) return false;
   let owners;
   try {
     ({ data: owners } = await github.rest.repos.getContent({
@@ -94,6 +104,16 @@ async function reviewedHead(github, context, settingsReview = process.env.CI_POL
   const lines = Buffer.from(owners.content, 'base64').toString('utf8').split('\n')
     .map(line => line.trim()).filter(line => line && !line.startsWith('#'));
   if (lines.length !== 1 || lines[0] !== '/.github/ @mickey-kras') return false;
+  const comments = await github.paginate(github.rest.issues.listComments, {
+    ...context.repo, issue_number: params.pull_number, per_page: 100,
+  });
+  const decision = commentDecision(comments, pull.head.sha);
+  if (decision !== undefined) {
+    if (!decision) return false;
+    const { data: current } = await github.rest.pulls.get(params);
+    return current.state === 'open' && current.head?.sha === pull.head.sha && current.base?.sha === pull.base.sha;
+  }
+  if (pull.user.type !== 'Bot' || pull.user.id === OWNER.id) return false;
   const rules = await github.paginate('GET /repos/{owner}/{repo}/rules/branches/{branch}', {
     ...context.repo, branch: pull.base.ref, per_page: 100,
   });

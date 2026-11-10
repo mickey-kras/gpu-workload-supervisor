@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
@@ -25,6 +26,10 @@ func TestActivationBackupRestoresRemovedOwnedUnit(t *testing.T) {
 		t.Fatal(err)
 	}
 	profile = snapshot.Catalog.Profiles[0]
+	key, err := privateRead(profile.NativeModel.EnvironmentFile)
+	if err != nil {
+		t.Fatalf("apply created no key file: %v", err)
+	}
 	request.ExpectedRevision = snapshot.Revision
 	request.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health"}}}
 	if err := backend.Apply(ctx, home, request); err != nil {
@@ -63,6 +68,14 @@ func TestActivationBackupRestoresRemovedOwnedUnit(t *testing.T) {
 	raw, err := privateRead(filepath.Join(directory, "owned-units", profile.Unit))
 	if err != nil || digest(raw) != manifest.Hashes[profile.Unit] {
 		t.Fatalf("backup lost removed unit bytes: %v", err)
+	}
+	// The removal deleted the key file; the tuple keeps it private.
+	if _, err := os.Lstat(profile.NativeModel.EnvironmentFile); !os.IsNotExist(err) {
+		t.Fatalf("key file was not removed: %v", err)
+	}
+	savedKey, err := privateRead(filepath.Join(directory, ownedKeyBackupDirectory, "vision.env"))
+	if err != nil || string(savedKey) != string(key) {
+		t.Fatalf("backup lost the key file: %v", err)
 	}
 	// Reinstall the saved bytes in the now-absent path, as in the documented
 	// stopped-runtime restore procedure, and verify the restored binding.
@@ -136,5 +149,41 @@ func TestActivationUnitBackupRejectsUntrustedOrModifiedFiles(t *testing.T) {
 				t.Fatal("accepted unsafe unit backup")
 			}
 		})
+	}
+}
+
+func TestActivationKeyBackup(t *testing.T) {
+	home := t.TempDir()
+	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	adopted := control.WorkloadProfile{ID: "text", NativeModel: &control.NativeModel{EnvironmentFile: filepath.Join(home, "elsewhere.env")}}
+	catalog := control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile, adopted, {ID: "media"}}}
+	files := map[string][]byte{}
+	if err := collectActivationKeys(home, catalog, files); err != nil || len(files) != 0 {
+		t.Fatalf("missing key file = %v, %d files", err, len(files))
+	}
+	path := profile.NativeModel.EnvironmentFile
+	if err := mkdirTrusted(filepath.Dir(path)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("VLLM_API_KEY=secret-value\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := collectActivationKeys(home, catalog, files); err != nil || len(files) != 1 {
+		t.Fatalf("key file = %v, %d files", err, len(files))
+	}
+	destination := t.TempDir()
+	if err := writeActivationBackup(destination, files); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(destination, ownedKeyBackupDirectory, "vision.env"))
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("saved key mode = %v, %v", info, err)
+	}
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	err = collectActivationKeys(home, catalog, map[string][]byte{})
+	if err == nil || strings.Contains(err.Error(), "secret-value") {
+		t.Fatalf("readable key file = %v", err)
 	}
 }

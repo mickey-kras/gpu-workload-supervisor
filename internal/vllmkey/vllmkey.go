@@ -30,16 +30,26 @@ var (
 	token      = regexp.MustCompile(`^[A-Za-z0-9_-]{32,256}$`)
 )
 
-// Test hooks.
-var (
-	effectiveUID = os.Geteuid
-	randomRead   = rand.Read
-)
+// system is the host access of this package. Tests build their own.
+type system struct {
+	uid           int
+	randomRead    func([]byte) (int, error)
+	syncDirectory func(string) error
+	procNet       string
+}
+
+func host() system {
+	return system{uid: os.Geteuid(), randomRead: rand.Read, syncDirectory: syncDirectory, procNet: "/proc/net"}
+}
 
 // Read returns the key from a regular file that the current user owns, that
 // only the owner can read or write, and that holds exactly one VLLM_API_KEY
 // assignment.
 func Read(path string) (string, error) {
+	return host().read(path)
+}
+
+func (s system) read(path string) (string, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return "", fmt.Errorf("%w: %s: path must be absolute and clean", ErrInvalid, path)
 	}
@@ -55,7 +65,7 @@ func Read(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	if err := checkOwnership(info); err != nil {
+	if err := checkOwnership(info, s.uid); err != nil {
 		return "", fmt.Errorf(keyFileErrorFormat, ErrInvalid, path, err)
 	}
 	raw, err := io.ReadAll(io.LimitReader(file, maxFileBytes+1))
@@ -72,7 +82,7 @@ func Read(path string) (string, error) {
 	return key, nil
 }
 
-func checkOwnership(info os.FileInfo) error {
+func checkOwnership(info os.FileInfo, uid int) error {
 	if !info.Mode().IsRegular() {
 		return errors.New("not a regular file")
 	}
@@ -80,7 +90,7 @@ func checkOwnership(info os.FileInfo) error {
 		return errors.New("the file mode must be 0600")
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || int(stat.Uid) != effectiveUID() {
+	if !ok || int(stat.Uid) != uid {
 		return errors.New("the current user must own the file")
 	}
 	return nil
@@ -98,7 +108,11 @@ func parse(raw []byte) (string, error) {
 // Ensure keeps a usable key file and creates a new private key file when none
 // exists. It never replaces a file that exists but is not usable.
 func Ensure(path string) error {
-	_, readErr := Read(path)
+	return host().ensure(path)
+}
+
+func (s system) ensure(path string) error {
+	_, readErr := s.read(path)
 	if readErr == nil {
 		return nil
 	}
@@ -106,20 +120,20 @@ func Ensure(path string) error {
 		return fmt.Errorf("%w; correct or remove the file, then run setup again", readErr)
 	}
 	dir := filepath.Dir(path)
-	if err := makeDirectories(dir); err != nil {
+	if err := s.makeDirectories(dir); err != nil {
 		return fmt.Errorf("create the key directory for %s: %w", path, err)
 	}
 	secret := make([]byte, 32)
-	if _, err := randomRead(secret); err != nil {
+	if _, err := s.randomRead(secret); err != nil {
 		return fmt.Errorf("generate key: %w", err)
 	}
 	content := Name + "=" + base64.RawURLEncoding.EncodeToString(secret) + "\n"
-	return publish(dir, path, []byte(content))
+	return s.publish(dir, path, []byte(content))
 }
 
 // publish writes a temporary file and links it into place, so the key file
 // never exists in a partial state and an existing file is never replaced.
-func publish(dir, path string, content []byte) error {
+func (s system) publish(dir, path string, content []byte) error {
 	temporary, err := os.CreateTemp(dir, ".vllm-key-*")
 	if err != nil {
 		return fmt.Errorf("create key file: %w", err)
@@ -132,16 +146,16 @@ func publish(dir, path string, content []byte) error {
 	if err := os.Link(name, path); err != nil {
 		return fmt.Errorf("publish key file: %w", err)
 	}
-	if err := syncDirectory(dir); err != nil {
+	if err := s.syncDirectory(dir); err != nil {
 		return fmt.Errorf("publish key file: %w", err)
 	}
-	_, err = Read(path)
+	_, err = s.read(path)
 	return err
 }
 
 // makeDirectories creates the missing directories of dir with mode 0700 and
 // makes each new entry durable in its parent.
-func makeDirectories(dir string) error {
+func (s system) makeDirectories(dir string) error {
 	var missing []string
 	for current := dir; ; current = filepath.Dir(current) {
 		if _, err := os.Lstat(current); err == nil || current == filepath.Dir(current) {
@@ -153,15 +167,15 @@ func makeDirectories(dir string) error {
 		return err
 	}
 	for _, created := range missing {
-		if err := syncDirectory(filepath.Dir(created)); err != nil {
+		if err := s.syncDirectory(filepath.Dir(created)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// syncDirectory makes the entries of a directory durable. Test hook.
-var syncDirectory = func(dir string) error {
+// syncDirectory makes the entries of a directory durable.
+func syncDirectory(dir string) error {
 	directory, err := os.Open(dir)
 	if err != nil {
 		return err

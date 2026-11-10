@@ -15,13 +15,14 @@ const rule = { type: 'pull_request', ruleset_id: 123, ruleset_source_type: 'Repo
 function fixture() {
   const pull = { number: 1, state: 'open', user: { type: 'Bot', id: 456 },
     head: { sha: SHA }, base: { sha: BASE, ref: 'main' } };
-  const state = { pull, current: pull, reviews: [review], rules: [rule],
+  const state = { pull, current: pull, comments: [], reviews: [review], rules: [rule],
     ruleset: { id: 123, source_type: 'Repository', source: 'mickey-kras/gpu-workload-supervisor',
       updated_at: '2026-10-23T00:00:00Z', enforcement: 'active', target: 'branch', bypass_actors: [], rules: [rule] },
     owners: '/.github/ @mickey-kras\n' };
   let calls = 0;
   const github = {
     rest: {
+      issues: { listComments() {} },
       pulls: { get: async () => ({ data: calls++ ? state.current : state.pull }), listReviews() {} },
       repos: { getContent: async params => {
         assert.equal(params.ref, BASE);
@@ -29,7 +30,7 @@ function fixture() {
       } },
     },
     request: async () => ({ data: state.ruleset }),
-    paginate: async route => typeof route === 'string' ? state.rules : state.reviews,
+    paginate: async route => route === github.rest.issues.listComments ? state.comments : typeof route === 'string' ? state.rules : state.reviews,
   };
   return { state, github, context: { repo: { owner: 'mickey-kras', repo: 'gpu-workload-supervisor' }, payload: { pull_request: pull } } };
 }
@@ -47,6 +48,7 @@ test('redacted bypasses need the exact current administrator no-bypass readback'
   delete f.state.ruleset.bypass_actors;
   let rulePagination = false;
   f.github.paginate = async (route, params) => {
+    if (route === f.github.rest.issues.listComments) return f.state.comments;
     if (typeof route === 'string') {
       assert.equal(params.per_page, 100);
       rulePagination = true;
@@ -139,4 +141,38 @@ test('candidate digest maps reject ambiguous or executable values', () => {
     'function nested() { const HASHES = {}; }',
   ]) assert.equal(readPolicyConstant(source, 'HASHES'), undefined, source);
   assert.equal(readPolicyConstant('// const HASHES = {"helper": "new"};\nconst HASHES = {"helper": "old"};', 'HASHES').helper, 'old');
+});
+
+const comment = (body, id = 1) => ({ id, user: owner, body });
+
+test('owner comments admit owner-authored changes without another reviewer', async () => {
+  const f = fixture();
+  f.state.pull.user = owner;
+  f.state.rules = [];
+  f.state.comments = [comment(`/approve-ci ${SHA}`)];
+  assert.equal(await reviewedHead(f.github, f.context), true);
+  f.state.current = { ...f.state.pull, head: { sha: BASE } };
+  assert.equal(await reviewedHead(f.github, f.context), false);
+});
+
+test('comment approval binds owner identity, full head SHA, and exact command', async () => {
+  for (const value of [comment(`/approve-ci ${BASE}`), comment(`/approve-ci ${SHA.slice(0, 7)}`),
+    comment(`Please /approve-ci ${SHA}`), { ...comment(`/approve-ci ${SHA}`), user: { ...owner, id: 1 } },
+    { ...comment(`/approve-ci ${SHA}`), user: { ...owner, login: 'other' } },
+    { ...comment(`/approve-ci ${SHA}`), user: { ...owner, type: 'Bot' } }]) {
+    const f = fixture();
+    f.state.pull.user = owner;
+    f.state.comments = [value];
+    assert.equal(await reviewedHead(f.github, f.context), false);
+  }
+});
+
+test('latest owner decision wins and revocation blocks native review fallback', async () => {
+  const f = fixture();
+  f.state.comments = [comment(`/revoke-ci ${SHA}`, 2), comment(`/approve-ci ${SHA}`)];
+  assert.equal(await reviewedHead(f.github, f.context), false);
+  f.state.comments.push(comment(`/approve-ci ${SHA}`, 3));
+  assert.equal(await reviewedHead(f.github, f.context), true);
+  f.state.owners = '/.github/ @other';
+  assert.equal(await reviewedHead(f.github, f.context), false);
 });

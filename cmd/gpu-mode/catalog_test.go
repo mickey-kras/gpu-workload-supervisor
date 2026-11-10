@@ -5,6 +5,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,7 +20,10 @@ func TestGenericSwitchTarget(t *testing.T) {
 	}
 }
 
-type cliCatalogRuntime struct{ active control.Workload }
+type cliCatalogRuntime struct {
+	noLimitsOrTraining
+	active control.Workload
+}
 
 func (r *cliCatalogRuntime) Observe(context.Context) (gpuruntime.Snapshot, error) {
 	return gpuruntime.Snapshot{Workloads: map[control.Workload]gpuruntime.WorkloadObservation{"speech": {Active: r.active == "speech", Exclusive: true}}}, nil
@@ -43,6 +47,9 @@ func (r *cliCatalogRuntime) ReleasedFor(context.Context, control.Workload) error
 	return nil
 }
 func (r *cliCatalogRuntime) Preflight(context.Context) error { return nil }
+func (r *cliCatalogRuntime) ObserveForRecovery(ctx context.Context) (gpuruntime.Snapshot, error) {
+	return r.Observe(ctx)
+}
 func TestCLIThirdCatalogWorkloadAndFailedReload(t *testing.T) {
 	oldArgs, oldStdout := os.Args, os.Stdout
 	t.Cleanup(func() { os.Args, os.Stdout = oldArgs, oldStdout })
@@ -60,7 +67,7 @@ func TestCLIThirdCatalogWorkloadAndFailedReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := &cliCatalogRuntime{}
-	factory := func(cfg gpuruntime.SystemdConfig) (gpuruntime.Manager, error) {
+	factory := func(cfg gpuruntime.SystemdConfig) (supervisor.Runtime, error) {
 		if cfg.Catalog == nil {
 			t.Fatal("catalog not pinned")
 		}
