@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -119,5 +121,59 @@ func TestBodyDeadlineFailsWithoutConnectionControl(t *testing.T) {
 	tracked.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/execute", strings.NewReader("body")))
 	if readErr == nil || !strings.Contains(readErr.Error(), "set request body deadline") {
 		t.Fatalf("read without deadline support = %v", readErr)
+	}
+}
+
+func TestBodyDeadlinesLeaveForwardedResponsesOpen(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		name := "delayed"
+		if streaming {
+			name = "streaming"
+		}
+		t.Run(name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil || string(body) != "body" {
+					t.Errorf("forwarded body = %q: %v", body, err)
+					return
+				}
+				if streaming {
+					_, _ = io.WriteString(w, "start\n")
+					w.(http.Flusher).Flush()
+				}
+				select {
+				case <-time.After(400 * time.Millisecond):
+				case <-r.Context().Done():
+					t.Error("upstream request canceled after the body")
+					return
+				}
+				_, _ = io.WriteString(w, "done")
+			}))
+			defer upstream.Close()
+			target, err := url.Parse(upstream.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tracked := NewServer(httputil.NewSingleHostReverseProxy(target), 1, 1, DefaultCompletionPath)
+			tracked.BodyReadTimeout = 200 * time.Millisecond
+			tracked.BodyIdleTimeout = 100 * time.Millisecond
+			server := httptest.NewServer(tracked)
+			defer server.Close()
+			client := server.Client()
+			client.Timeout = 5 * time.Second
+			response, err := client.Post(server.URL+"/execute", "text/plain", strings.NewReader("body"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			body, err := io.ReadAll(response.Body)
+			want := "done"
+			if streaming {
+				want = "start\ndone"
+			}
+			if err != nil || response.StatusCode != http.StatusOK || string(body) != want {
+				t.Fatalf("response %d %q: %v", response.StatusCode, body, err)
+			}
+		})
 	}
 }

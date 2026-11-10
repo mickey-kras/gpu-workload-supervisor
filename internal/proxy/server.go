@@ -199,9 +199,13 @@ type deadlineBody struct {
 	controller  *http.ResponseController
 	total, idle time.Duration
 	end         time.Time
+	eof         bool
 }
 
 func (b *deadlineBody) Read(buffer []byte) (int, error) {
+	if b.eof {
+		return 0, io.EOF
+	}
 	now := time.Now()
 	if b.end.IsZero() && b.total > 0 {
 		b.end = now.Add(b.total)
@@ -213,5 +217,7 @@ func (b *deadlineBody) Read(buffer []byte) (int, error) {
 	if err := b.controller.SetReadDeadline(deadline); err != nil {
 		return 0, fmt.Errorf("set request body deadline: %w", err)
 	}
-	return b.ReadCloser.Read(buffer)
+	n, err := b.ReadCloser.Read(buffer)
+	b.eof = err == io.EOF
+	return n, err
 }
