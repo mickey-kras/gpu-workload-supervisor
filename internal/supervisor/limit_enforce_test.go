@@ -175,7 +175,7 @@ func requireLatchedIdle(t *testing.T, f *limitFixture) {
 func TestLimitTickStopsLatchedUnit(t *testing.T) {
 	f := latchedVision(t, false)
 	var log bytes.Buffer
-	err := f.c.TickWithLimits(context.Background(), nil, &log)
+	err := f.c.LimitTick(context.Background(), &log)
 	if !errors.Is(err, ErrLimitStopped) || !errors.Is(err, gpuruntime.ErrLimitDrift) || !strings.Contains(err.Error(), "limit outcome: kill") || log.Len() != 0 {
 		t.Fatalf("limit tick = %v; log %q", err, log.String())
 	}
@@ -190,7 +190,7 @@ func TestLimitTickStopsLatchedUnit(t *testing.T) {
 	if got := f.stops(t); !slices.EqualFunc(got, want, slices.Equal) {
 		t.Fatalf("journal = %q", got)
 	}
-	if err := f.c.TickWithLimits(context.Background(), nil, &log); !errors.Is(err, ErrLimitStopped) || f.stopCount() != 1 {
+	if err := f.c.LimitTick(context.Background(), &log); !errors.Is(err, ErrLimitStopped) || f.stopCount() != 1 {
 		t.Fatalf("next tick = %v; calls %v", err, f.r.calls)
 	}
 	if _, err := f.c.Switch(context.Background(), "text", "test"); !errors.Is(err, ErrRecoveryRequired) {
@@ -202,7 +202,7 @@ func TestLimitTickStopsLatchedUnit(t *testing.T) {
 	if _, ok := f.record(t); ok {
 		t.Fatal("the record outlives recover")
 	}
-	if err := f.c.TickWithLimits(context.Background(), nil, &log); err != nil {
+	if err := f.c.LimitTick(context.Background(), &log); err != nil {
 		t.Fatalf("tick after recover = %v", err)
 	}
 }
@@ -279,7 +279,7 @@ func TestLimitTickEscalatesOverdueDeferral(t *testing.T) {
 	f.offset = f.c.config.DrainTimeout + f.c.config.VerifyTimeout + 100*time.Millisecond
 	f.r.observeErr = errors.New("bus down")
 	var log bytes.Buffer
-	err := f.c.TickWithLimits(ctx, nil, &log)
+	err := f.c.LimitTick(ctx, &log)
 	if !errors.Is(err, ErrLimitStopOverdue) || errors.Is(err, ErrLimitStopDeferred) || f.stopCount() != 0 {
 		t.Fatalf("overdue deferral = %v; calls %v", err, f.r.calls)
 	}
@@ -510,7 +510,6 @@ type limitStore struct {
 	// eventAction is the action prefix that eventErr fails; empty means
 	// the reason observation.
 	eventAction string
-	settingsErr error
 	phaseErrs   map[control.Phase]error
 	running     string
 }
@@ -555,13 +554,6 @@ func (s *limitStore) MarkLimitStopping(ctx context.Context, w control.Workload, 
 		return s.stoppingErr
 	}
 	return s.storeGateway.MarkLimitStopping(ctx, w, at)
-}
-
-func (s *limitStore) Settings(ctx context.Context) (control.PolicyState, error) {
-	if s.settingsErr != nil {
-		return control.PolicyState{}, s.settingsErr
-	}
-	return s.storeGateway.Settings(ctx)
 }
 
 func (s *limitStore) SetTransitionPhase(ctx context.Context, id string, version uint64, phase control.Phase) (control.State, error) {
@@ -1112,19 +1104,6 @@ func TestLimitTickAfterRefusedStop(t *testing.T) {
 	g.r.releaseErr = nil
 	if err := g.c.EnforceLimits(ctx); !errors.Is(err, ErrLimitStopped) || !strings.Contains(err.Error(), "holds the error state") {
 		t.Fatalf("idle state with a passed probe = %v", err)
-	}
-}
-
-// TickWithLimits runs the limit stop first and returns its error joined
-// with the error of the inactivity policy.
-func TestTickWithLimitsJoinsBothErrors(t *testing.T) {
-	f := latchedVision(t, false)
-	policyErr := errors.New("settings unreadable")
-	f.c.store = &limitStore{storeGateway: f.s, settingsErr: policyErr}
-	var log bytes.Buffer
-	err := f.c.TickWithLimits(context.Background(), nil, &log)
-	if !errors.Is(err, ErrLimitStopped) || !errors.Is(err, policyErr) || f.stopCount() != 1 {
-		t.Fatalf("tick = %v; calls %v", err, f.r.calls)
 	}
 }
 

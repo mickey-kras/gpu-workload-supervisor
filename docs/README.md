@@ -20,7 +20,7 @@ Start with desktop setup or host deployment. Complete host and adapter qualifica
 - [Workload configuration](INTEGRATION.md#configured-workloads)
 - [Proxy setup](INTEGRATION.md#configure-the-execution-proxy) and [adapter contracts](INTEGRATION.md#contract-for-execution-proxy-adapters)
 - [Local operator protocol](OPERATIONS.md#local-operator-protocol) and [requester ingress](OPERATIONS.md#optional-requester-ingress)
-- [Optional demand activation and inactivity policy](OPERATIONS.md#demand-activation-and-inactivity-idle-plan): defaults to Off and requires a qualified evidence provider
+- [Optional demand activation and inactivity policy](OPERATIONS.md#demand-activation-and-inactivity-idle-plan): defaults to Off. No inactivity evaluator ships
 - [Model checks](MODEL-CHECKS.md): file allowlist, upstream identity, static chat template check and results. No command runs them yet
 - [Resource-limit design](RESOURCE-LIMITS.md): catalog v5 accepts the schema. The runtime checks the limits. `gpu-setup discover` reports the escape routes of the account as warnings. Setup writes unit limits and shows the root step of the host cap
 

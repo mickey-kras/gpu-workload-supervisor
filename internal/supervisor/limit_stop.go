@@ -50,14 +50,8 @@ type limitStopRuntime interface {
 	LimitStopReleased(context.Context, control.Workload) error
 }
 
-// TickWithLimits runs the limit stop and then the inactivity policy. It is
-// the policy tick of gpu-mode and of gpu-setup.
-func (c *Controller) TickWithLimits(ctx context.Context, evidence EvidenceProvider, log io.Writer) error {
-	return errors.Join(c.LimitTick(ctx, log), c.PolicyTick(ctx, evidence))
-}
-
-// LimitTick runs EnforceLimits for the policy tick. A deferred stop goes to
-// log and is not an error, so the tick exits zero and retries. An overdue
+// LimitTick runs EnforceLimits for the policy tick of gpu-mode and of
+// gpu-setup. A deferred stop goes to log and is not an error, so the tick exits zero and retries. An overdue
 // deferral, a stop or a failed stop returns its cause: the tick exits
 // nonzero, and the service journal records why.
 func (c *Controller) LimitTick(ctx context.Context, log io.Writer) error {

@@ -36,9 +36,8 @@ func (s *Store) startTransition(ctx context.Context, expected uint64, operator *
 	})
 }
 
-// beginTransitionTx persists the draining entry. Every transition disarms the
-// verified idle deadline in the same transaction: the next policy tick must
-// re-attest and re-arm before idling.
+// beginTransitionTx persists the draining entry. Every transition disarms an
+// armed idle deadline in the same transaction.
 func (s *Store) beginTransitionTx(ctx context.Context, tx *sql.Tx, current control.State, tr Transition) (control.State, error) {
 	if err := trainingPending(ctx, tx); err != nil {
 		return control.State{}, err
