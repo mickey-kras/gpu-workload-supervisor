@@ -14,6 +14,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/operator"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 type failingPreflightRuntime struct{ stoppedRecoveryRuntime }
@@ -41,7 +42,7 @@ func setDoctorState(t *testing.T, statePath string, owner control.Owner) {
 	}
 }
 
-func runDoctorCommand(t *testing.T, load func() (operator.Profile, error), manager gpuruntime.Manager, args ...string) (string, error) {
+func runDoctorCommand(t *testing.T, load func() (operator.Profile, error), manager supervisor.Runtime, args ...string) (string, error) {
 	t.Helper()
 	oldArgs, oldLoad, oldStdout := os.Args, loadOperatorProfile, os.Stdout
 	t.Cleanup(func() { os.Args, loadOperatorProfile, os.Stdout = oldArgs, oldLoad, oldStdout })
@@ -52,7 +53,7 @@ func runDoctorCommand(t *testing.T, load func() (operator.Profile, error), manag
 	defer output.Close()
 	os.Stdout, loadOperatorProfile = output, load
 	os.Args = append(append([]string{"gpu-mode"}, args...), doctorCommand)
-	runErr := runWithRuntimeFactory(func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error) { return manager, nil })
+	runErr := runWithRuntimeFactory(func(gpuruntime.SystemdConfig) (supervisor.Runtime, error) { return manager, nil })
 	raw, err := os.ReadFile(output.Name())
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +86,7 @@ func TestDoctorStopsAtTheFirstFailedCheck(t *testing.T) {
 		name      string
 		statePath string
 		load      func() (operator.Profile, error)
-		manager   gpuruntime.Manager
+		manager   supervisor.Runtime
 		want      []string
 	}{
 		{"unreadable profile", seeded, profileLoader(operator.Profile{}, errors.New("untrusted profile")), &stoppedRecoveryRuntime{}, []string{"FAIL  operator profile: untrusted profile", "next  the operator profile"}},

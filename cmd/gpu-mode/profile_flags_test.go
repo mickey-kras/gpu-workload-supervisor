@@ -12,6 +12,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/operator"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
 func activatedProfile(statePath string) operator.Profile {
@@ -142,7 +143,7 @@ func TestCommandUsesTheProfileConfiguration(t *testing.T) {
 	os.Stdout = output
 	var got gpuruntime.SystemdConfig
 	os.Args = []string{"gpu-mode", "reconcile"}
-	err = runWithRuntimeFactory(func(cfg gpuruntime.SystemdConfig) (gpuruntime.Manager, error) {
+	err = runWithRuntimeFactory(func(cfg gpuruntime.SystemdConfig) (supervisor.Runtime, error) {
 		got = cfg
 		return &stoppedRecoveryRuntime{}, nil
 	})
@@ -210,7 +211,7 @@ func TestCommandRefusesProfileChangedBeforeLock(t *testing.T) {
 	}
 	os.Args = []string{"gpu-mode", "reconcile"}
 	built := false
-	err := runWithRuntimeFactory(func(gpuruntime.SystemdConfig) (gpuruntime.Manager, error) {
+	err := runWithRuntimeFactory(func(gpuruntime.SystemdConfig) (supervisor.Runtime, error) {
 		built = true
 		return &stoppedRecoveryRuntime{}, nil
 	})
