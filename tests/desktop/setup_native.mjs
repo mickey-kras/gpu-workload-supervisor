@@ -374,7 +374,8 @@ app.connect('activate', () => {
         }
         const mappedLabel = (ui, label) => widgets(ui.window).some(widget => widget instanceof Gtk.Label && widget.get_mapped() && widget.label === label);
         async function typeInto(ui, row, text) {
-            await tabTo(ui, row); run(['xdotool', 'key', 'ctrl+a']); run(['xdotool', 'type', '--clearmodifiers', text]); await delay(80);
+            await tabTo(ui, row); run(['xdotool', 'key', 'ctrl+a']); run(['xdotool', 'type', '--clearmodifiers', text]);
+            await waitFor(() => row.text === text, 'the typed source reaches the field');
         }
         // modelRun captures the source fields, a run, its cancel, a run whose
         // hub listing failed, the template review and the summary note.
@@ -384,7 +385,7 @@ app.connect('activate', () => {
             const entry = title => widgets(ui.window).find(widget => widget instanceof Adw.EntryRow && widget.title === title && widget.get_mapped());
             const repo = entry('Repository (owner/name)'), revision = entry('Revision (40-character commit ID)');
             assert(repo?.text === 'example-org/example-small' && revision?.text === runRevision, 'the source of the cache folder fills the fields');
-            const warning = 'A result with an error, findings or a pending template review blocks the launch of this workload until a new check allows it.';
+            const warning = 'A result with an error, findings, an unsupported model or a pending template review blocks the launch of this workload until a new check allows it.';
             wrapping(ui, warning);
             await tabTo(ui, named(ui, 'Run checks'));
             await settingsTree(ui, 'settings-model-run', 'Run checks', [{name: 'Model scan', role: 'heading'}, {name: 'Findings detected'}, {name: warning}, button('Run checks'), button('Review chat template')], ['Cancel check', 'Safe model']);
@@ -412,8 +413,7 @@ app.connect('activate', () => {
             await waitFor(() => statusReply, 'a second run starts');
             statusReply({...runEntry, status: 'error', notStored: true, reviewPending: false, checks: [runChecks[0], {name: 'upstream-identity', outcome: 'error', reason: 'upstream-unreachable'}, {name: 'chat-template', outcome: 'not_run'}, runChecks[3]]});
             const failure = 'This run failed. Setup could not reach Hugging Face. The last stored result is kept.';
-            await waitFor(() => mappedLabel(ui, failure), 'the failed run shows its failure');
-            await delay(80);
+            await waitFor(() => mappedLabel(ui, failure) && named(ui, 'Run checks').is_sensitive(), 'the failed run shows its failure');
             await settingsTree(ui, 'settings-model-run-hub-failed', 'Run checks', [{name: 'Findings detected'}, {name: failure}], ['Scan failed']);
             await capture(ui, 'settings-model-run-hub-failed');
             await tabTo(ui, named(ui, 'Review chat template')); run(['xdotool', 'key', 'space']);
@@ -433,7 +433,7 @@ app.connect('activate', () => {
             await activate(ui, ui.applicationCards.get('vllm').gear, 'vLLM');
             await tabTo(ui, ui.review); run(['xdotool', 'key', 'space']);
             await waitFor(() => ui.step === 2 && ui.apply.get_mapped(), 'the review summary opens');
-            const note = 'This workload cannot start: its stored check result blocks the launch. Run the checks again on its Model scan card.';
+            const note = 'This workload cannot start: its stored check result blocks the launch. See the cause on its Model scan card.';
             wrapping(ui, note);
             const link = named(ui, 'Open Model scan of vLLM - example-small');
             await tabTo(ui, link);

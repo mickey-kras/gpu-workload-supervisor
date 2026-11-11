@@ -4,6 +4,7 @@ import Adw from 'gi://Adw?version=1';
 import Gtk from 'gi://Gtk?version=4.0';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GJS runtime supplies this native module, not npm.
 import Pango from 'gi://Pango';
+import {blockingReason, reasonText} from './model-reasons.mjs';
 
 // The source rules of gpu-setup model-check: a Hugging Face repository as
 // owner/name and a pinned commit of 40 lowercase hex characters.
@@ -25,22 +26,18 @@ export function cacheSource(path) {
     return validRepo(source.repo) ? source : null;
 }
 
-export const launchWarning = 'A result with an error, findings or a pending template review blocks the launch of this workload until a new check allows it.';
-const hubFailures = {
-    'upstream-unreachable': 'Setup could not reach Hugging Face.',
-    'upstream-not-found': 'Hugging Face did not find this repository or revision.',
-    'upstream-denied': 'Hugging Face refused access. Check your Hugging Face login.',
-};
+export const launchWarning = 'A result with an error, findings, an unsupported model or a pending template review blocks the launch of this workload until a new check allows it.';
 
 // runNote gives the note of a finished run. A run whose hub listing failed
 // is not stored: the last stored result stays.
 function runNote(entry) {
     if (entry.notStored) {
         const reason = entry.checks?.find(check => check.name === 'upstream-identity')?.reason;
-        return `This run failed. ${hubFailures[reason] ?? 'The Hugging Face listing failed.'} The last stored result is kept.`;
+        return `This run failed. ${reasonText(reason)} The last stored result is kept.`;
     }
-    const review = entry.reviewPending ? ' Review the chat template below.' : '';
-    return (entry.launchBlocked ? 'Checks finished. This result blocks the launch of this workload.' : 'Checks finished. The result is stored.') + review;
+    const parts = entry.launchBlocked ? ['Checks finished. This result blocks the launch of this workload.', blockingReason(entry)] : ['Checks finished. The result is stored.'];
+    if (entry.reviewPending) parts.push('Review the chat template below.');
+    return parts.filter(Boolean).join(' ');
 }
 
 function hint(text) {
@@ -94,11 +91,12 @@ export class CheckRunner {
         this.button.sensitive = validRepo(repo) && validRevision(revision) && !this.view.cancellable;
     }
 
-    // fill sets the fields to the stored source, or to the source in the
-    // name of a cache folder, until the operator edits them.
+    // fill sets the fields to the source of a stored result that applies,
+    // or to the source in the name of a cache folder, until the operator
+    // edits them.
     fill(entry, path) {
         if (this.edited) return;
-        const source = entry?.source ?? cacheSource(path) ?? {repo: '', revision: ''};
+        const source = (entry?.reason ? null : entry?.source) ?? cacheSource(path) ?? {repo: '', revision: ''};
         this.filling = true;
         this.repo.text = source.repo; this.revision.text = source.revision;
         this.filling = false;
@@ -125,19 +123,40 @@ export class CheckRunner {
             if (!entry.notStored) { ui.modelStatus.entries.set(workload, entry); this.edited = false; }
             return runNote(entry);
         });
+        // A new run can store another review list: read the open list again.
+        if (!ui.closed && this.view.review.body.visible) await this.view.review.load();
     }
 }
 
+// blockedTexts give the text of the summary note for the cause of a block.
+const blockedTexts = {
+    review: 'This workload cannot start until you approve its chat template. Review it on its Model scan card.',
+    result: 'This workload cannot start: its stored check result blocks the launch. See the cause on its Model scan card.',
+    stale: 'This workload cannot start with its stored check result. Run the checks again on its Model scan card.',
+    changed: 'This workload cannot start with its stored check result. After you finish setup, run the checks again on its Model scan card.',
+};
+
+function blockedKey(entry) {
+    if (entry.reviewPending) return 'review';
+    if (['model-changed', 'template-changed'].includes(entry.reason)) return 'changed';
+    return entry.reason ? 'stale' : 'result';
+}
+
 // blockedNote gives the note of a review summary line: it tells why a
-// workload cannot start and links to its Model scan card.
+// workload cannot start and links to its Model scan card. update(entry)
+// shows the text for a blocked entry, or hides the note for null.
 export function blockedNote(ui, workload, app, label) {
     const root = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 2, visible: false});
     const row = new Gtk.Box({orientation: Gtk.Orientation.HORIZONTAL, spacing: 8});
     row.append(new Gtk.Image({icon_name: 'dialog-warning-symbolic', valign: Gtk.Align.START, accessible_role: Gtk.AccessibleRole.PRESENTATION}));
-    row.append(new Gtk.Label({label: 'This workload cannot start: its stored check result blocks the launch. Run the checks again on its Model scan card.', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, hexpand: true}));
+    const text = new Gtk.Label({label: '', wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, hexpand: true});
+    row.append(text);
     root.append(row);
     const link = new Gtk.Button({label: `Open Model scan of ${label}`, halign: Gtk.Align.START}); link.add_css_class('flat'); link.add_css_class('setup-link');
-    link.connect('clicked', () => ui.openApplicationCard?.(app, link, workload));
+    link.connect('clicked', () => ui.openApplicationCard(app, link, workload));
     root.append(link);
-    return root;
+    return {root, update(entry) {
+        root.visible = entry !== null;
+        if (entry) text.label = blockedTexts[blockedKey(entry)];
+    }};
 }

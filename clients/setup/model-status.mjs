@@ -9,6 +9,7 @@ import Pango from 'gi://Pango';
 import {roundedCard} from './presentation.mjs';
 import {CheckRunner, blockedNote} from './model-check-run.mjs';
 import {TemplateReview} from './model-review.mjs';
+import {blockingReason, reasonText} from './model-reasons.mjs';
 
 // The status is read-only: it shows the stored check results of gpu-setup
 // model-status and never shows a model as safe. Each state has an icon and
@@ -57,6 +58,7 @@ export function modelStatusText(entry, app, state = 'loaded') {
     let detail = '';
     if (key !== 'image') detail = entry ? reasons[entry.reason] ?? '' : reasons['no-result'];
     if (key === 'not_scanned' && entry?.staticChecksPassed) detail = 'File checks passed. Behavioral scan not available yet.';
+    if (['findings', 'error', 'unsupported'].includes(key) && !entry?.reason) detail = blockingReason(entry);
     if (entry?.reviewPending) detail = [detail, 'A chat template review is pending.'].filter(Boolean).join(' ');
     return {icon, title, detail};
 }
@@ -71,12 +73,15 @@ function statusKey(entry, app) {
 // modelStatusDetails lists the checker revision, the coverage, the check
 // date and each check of an entry, then the defensive note. The checks of
 // a result that does not apply are labelled as the last stored result.
-export function modelStatusDetails(entry, error = '') {
+export function modelStatusDetails(entry, failedAction = '') {
     const lines = [`Checker revision: ${entry?.checker || 'not available'}`, 'Scanner revision: not available', `Coverage: ${entry?.coverage || 'none'}`,
         `Checked: ${checkDate(entry?.checkedAt)}`];
     if (entry?.reason && entry.checks?.length) lines.push('Last stored result. It does not apply now:');
-    for (const check of entry?.checks ?? []) lines.push(`${checkNames[check.name] ?? check.name}: ${outcomes[check.outcome] ?? check.outcome}`);
-    if (error) lines.push(`Error: the ${actionNames[error] ?? 'status'} action of gpu-setup failed.`);
+    for (const check of entry?.checks ?? []) {
+        const line = `${checkNames[check.name] ?? check.name}: ${outcomes[check.outcome] ?? check.outcome}`;
+        lines.push(check.reason ? `${line}. ${reasonText(check.reason)}` : line);
+    }
+    if (failedAction) lines.push(`Error: the ${actionNames[failedAction] ?? 'status'} action of gpu-setup failed.`);
     return [...lines, defensiveNote].join('\n');
 }
 
@@ -91,7 +96,7 @@ function modelIdentity(model, path) {
     return GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, path ? `path:${path}` : `model:${model ?? ''}`, -1);
 }
 // A launch without a pin has the empty pin, as in gpu-setup.
-const profileLaunch = profile => ({identity: modelIdentity(profile?.nativeModel?.model, profile?.nativeModel?.owned?.modelPath), pin: profile?.nativeModel?.chatTemplateSHA256 ?? ''});
+const profileLaunch = profile => ({identity: modelIdentity(profile?.nativeModel?.model, profile?.nativeModel?.owned?.modelPath), path: profile?.nativeModel?.owned?.modelPath, pin: profile?.nativeModel?.chatTemplateSHA256 ?? ''});
 // As in StoredStatus, the template rule needs the complete list of checks.
 // ReadRecord accepts only complete lists, so this guard only mirrors it.
 const templatePassed = entry => entry.checks?.length === 4 && entry.checks.find(check => check.name === 'chat-template')?.outcome === 'passed';
@@ -192,7 +197,7 @@ class StatusView {
         this.title = new Gtk.Label({wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0}); text.append(this.title);
         this.detail = new Gtk.Label({wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0}); this.detail.add_css_class('dim-label'); text.append(this.detail);
         row.append(text); this.root.append(row);
-        if (!card) { this.blocked = blockedNote(ui, workload, app, label); this.root.append(this.blocked); return; }
+        if (!card) { this.blocked = blockedNote(ui, workload, app, label); this.root.append(this.blocked.root); return; }
         this.toggle = new Gtk.Button({label: 'Scan details', halign: Gtk.Align.START}); this.toggle.add_css_class('flat'); this.toggle.add_css_class('setup-link');
         this.details = new Gtk.Label({wrap: true, wrap_mode: Pango.WrapMode.WORD_CHAR, xalign: 0, selectable: true, visible: false});
         this.toggle.update_state([Gtk.AccessibleState.EXPANDED], [Gtk.AccessibleTristate.FALSE]);
@@ -226,7 +231,9 @@ class StatusView {
         const proposed = this.proposed();
         if (proposed === null) return entry;
         const notScanned = (reason, launchBlocked = false) => ({workload: this.workload, kind: 'llm', status: 'not_scanned', reason, staticChecksPassed: false, launchBlocked});
-        if (!entry.identity || proposed.identity !== entry.identity) return notScanned('model-changed');
+        // The gate keeps a stored result by workload ID: it refuses that
+        // result for a launch of another model folder.
+        if (!entry.identity || proposed.identity !== entry.identity) return notScanned('model-changed', Boolean(entry.checkedAt && proposed.path));
         // The launch gate refuses a passed template check for another pin.
         if ('pin' in proposed && !entry.reason && templatePassed(entry) && proposed.pin !== (entry.templateSHA256 ?? '')) return notScanned('template-changed', true);
         return entry;
@@ -237,11 +244,11 @@ class StatusView {
         const entry = this.entry(status);
         const {icon, title, detail} = modelStatusText(entry, this.app, status.state);
         this.icon.icon_name = icon; this.title.label = title; this.detail.label = detail; this.detail.visible = Boolean(detail);
-        if (!this.details) { this.blocked.visible = status.state === 'loaded' && entry?.launchBlocked === true; return; }
+        if (!this.details) { this.blocked.update(status.state === 'loaded' && entry?.launchBlocked === true ? entry : null); return; }
         // A note describes the entry of the last check. It goes when the
         // card shows another entry, for example after a model change.
-        if (this.noted && !this.cancellable && entry !== this.noted.entry) { this.setNote(''); this.noted = null; this.error = null; }
-        this.details.label = modelStatusDetails(entry, this.error ?? status.error);
+        if (this.noted && !this.cancellable && entry !== this.noted.entry) { this.setNote(''); this.noted = null; this.failedAction = null; }
+        this.details.label = modelStatusDetails(entry, this.failedAction ?? status.error);
         this.recheck.visible = Boolean(entry?.kind === 'llm' && entry.checkedAt && recheckable.has(entry.reason ?? '')) && !this.cancellable;
         this.runner.update(entry, status.state, this.proposed()?.path); this.review.update(entry);
     }
@@ -261,19 +268,22 @@ class StatusView {
     }
 
     // operate runs one gpu-setup action of this card that the operator can
-    // cancel, and shows its note. A canceled or failed action keeps the last
-    // result. Focus moves from the Cancel button to focus(), when it is
-    // visible. It gives true when the action completed.
-    async operate({start, failed, action = 'model-status', focus}, work) {
-        this.cancellable = new Gio.Cancellable(); this.cancel.visible = true; this.error = null; this.noted = null; this.setNote(start); this.update();
+    // cancel, and shows its note. Focus moves from the Cancel button to
+    // focus(), when it is visible. It gives 'done', 'failed' or 'canceled'.
+    // A failed or canceled check of files keeps the last result. A failed
+    // or canceled action that writes reads the stored status again, see
+    // reload: the action can stop after its write.
+    async operate({start, failed, action = 'model-status', canceled = 'Check canceled. The last result is kept.', cancelLabel = 'Cancel check', focus}, work) {
+        const before = this.entry(this.ui.modelStatus ?? {entries: new Map()});
+        this.cancellable = new Gio.Cancellable(); this.cancel.label = cancelLabel; this.cancel.visible = true; this.failedAction = null; this.noted = null; this.setNote(start); this.update();
         this.cancel.grab_focus();
-        let done = false;
+        let outcome = 'done';
         try {
-            this.setNote(await work(this.cancellable)); done = true;
+            this.setNote(await work(this.cancellable));
         } catch (error) {
-            const cancelled = this.cancellable.is_cancelled();
-            if (!cancelled) { this.error = action; logFailure(error, action); }
-            this.setNote(cancelled ? 'Check canceled. The last result is kept.' : failed);
+            outcome = this.cancellable.is_cancelled() ? 'canceled' : 'failed';
+            if (outcome === 'failed') { this.failedAction = action; logFailure(error, action); }
+            this.setNote(outcome === 'canceled' ? canceled : failed);
         } finally {
             // Focus moves only from the Cancel button that this action hides.
             const focused = this.cancel.is_focus();
@@ -285,26 +295,34 @@ class StatusView {
                 if (focused) (target ?? this.toggle).grab_focus();
             }
         }
-        return done;
+        if (outcome !== 'done' && action !== 'model-status' && !this.ui.closed) await this.reload(before);
+        return outcome;
     }
 
-    // reload reads the status again after a failed approval, keeps its note,
-    // and reads the review list again when it is open. A failed read keeps
-    // the status that the card shows.
-    async reload() {
-        const note = this.note.label;
-        const error = this.error;
+    // reload reads the status again after a failed or canceled action that
+    // writes. When the stored result differs from the result before the
+    // action, the note says so; else it keeps the note of the action. It
+    // reads the review list again when it is open. A failed read keeps the
+    // status that the card shows.
+    async reload(before) {
+        let note = this.note.label;
+        const failedAction = this.failedAction;
         const reading = new Gio.Cancellable(); this.reading = reading;
         try {
             const models = readReport(await this.ui.command(['/usr/bin/gpu-setup', 'model-status'], JSON.stringify({version: 1}), reading));
             this.ui.modelStatus = {state: 'loaded', entries: new Map(models.map(entry => [entry.workload, entry]))};
+            if (changed(before, this.entry(this.ui.modelStatus))) note = 'The action stopped after setup stored a new result. The card shows the stored result.';
         } catch (failure) {
             if (!reading.is_cancelled()) logFailure(failure);
         }
         this.reading = null;
         if (this.ui.closed || reading.is_cancelled()) return;
-        this.noted = {entry: this.entry(this.ui.modelStatus)}; this.setNote(note); this.error = error;
+        this.noted = {entry: this.entry(this.ui.modelStatus)}; this.setNote(note); this.failedAction = failedAction;
         refreshModelStatus(this.ui);
         if (this.review.body.visible) await this.review.load();
     }
 }
+
+// changed tells whether two entries describe different stored results.
+const resultKey = entry => JSON.stringify([entry?.checkedAt, entry?.status, entry?.reason, entry?.reviewPending, entry?.checks]);
+const changed = (before, after) => resultKey(before) !== resultKey(after);

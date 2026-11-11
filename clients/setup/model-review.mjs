@@ -82,18 +82,17 @@ export class TemplateReview {
         }
     }
 
-    // store approves the list that the operator read. When the stored
-    // result changed, setup reads the status and the list again.
+    // store approves the list that the operator read. When the approval
+    // fails or is canceled, the card reads the status and the list again.
     async store() {
         const {ui, workload} = this.view;
         const {chatTemplateSHA256, reviewSHA256} = this.review;
-        const stored = await this.view.operate({start: 'Storing the approval…', failed: 'The approval was not stored. The stored result changed or could not be read. Read the review list again.',
-            action: 'model-approve', focus: () => (this.root.visible ? this.toggle : null)}, async cancellable => {
+        await this.view.operate({start: 'Storing the approval…', failed: 'The approval was not stored. The stored result changed or could not be read. Read the review list again.',
+            canceled: 'Approval canceled. The last result is kept.', cancelLabel: 'Cancel approval', action: 'model-approve', focus: () => (this.root.visible ? this.toggle : null)}, async cancellable => {
             const entry = JSON.parse(await ui.command(['/usr/bin/gpu-setup', 'model-approve'], JSON.stringify({version: 1, workload, chatTemplateSHA256, reviewSHA256}), cancellable));
             if (entry?.workload !== workload) throw new Error('The result is not for this workload.');
             ui.modelStatus.entries.set(workload, entry);
             return 'Template approved for this template SHA-256.';
         });
-        if (!stored && !ui.closed) await this.view.reload();
     }
 }
