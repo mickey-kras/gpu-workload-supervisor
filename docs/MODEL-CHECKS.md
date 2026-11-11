@@ -4,18 +4,19 @@
 
 The supervisor will check each LLM before use
 ([#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585)).
-No command runs the checks yet. Only a model with the status `passed` is clean. These checks are a defensive
+Only a model with the status `passed` is clean. These checks are a defensive
 layer. They do not prove that a model is safe. A clean result does not mean
 that a modified model behaves like its original.
 
-This page describes the checks that exist now. The behavioral scan, the scan
-job and model selection in the desktop UI of
-[#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583)
-are not available yet. No model can get `passed` yet. A model that passes the available checks stays `not_scanned`.
-The [launch gate](#launch-gate) refuses a model whose stored result does not
+This page describes the checks that exist now. The behavioral scan and the
+scan job of #585 are not available yet. No model can get `passed` yet. A
+model that passes the available checks stays `not_scanned`. The
+[launch gate](#launch-gate) refuses a model whose stored result does not
 allow the launch.
 
-Setup shows the stored status. See [Status display](#status-display).
+Setup shows the stored status. See [Status display](#status-display). The
+operator runs the checks of a workload from setup. See
+[Running checks](#running-checks) and [Template approval](#template-approval).
 
 ## Model and source
 
@@ -589,9 +590,10 @@ Without an approval, the template check gives `findings` with the reason
 operator can approve it. A refused approval gives the same result. An
 approval that fails for another cause gives `error` with the reason
 `chat-template-approval-failed`. An error when the supervisor reads a
-stored approval is such a cause. The model selection of
-[#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585)
-will show the list and ask for the approval.
+stored approval is such a cause.
+
+Setup shows the list and asks for the approval. See
+[Template approval](#template-approval).
 
 #### Rules
 
@@ -681,7 +683,10 @@ digest, the directory, the source, the checker version or the configuration
 (for example the hub) differs from the result, the status is `not_scanned`.
 Thus a new checker version checks each model again.
 
-A canceled check stores no result. The model stays `not_scanned`.
+A canceled check stores no result. The last stored result stays, with its
+template approval. A model without a stored result stays `not_scanned`. If
+a signal kills the process of a check, the check also stores nothing: the
+supervisor writes a result in one database transaction.
 
 No signatures or keys protect the results. The deployment trusts processes
 with the service UID (see [SECURITY.md](../SECURITY.md)). A process with that
@@ -757,6 +762,116 @@ check.
 
 Setup writes the error of a failed action to its log.
 
+The review summary also shows a note when the stored result of a workload
+blocks its launch. The note has a link to the Model scan card of the
+workload. A result blocks the launch when the [launch gate](#launch-gate)
+refuses it. A result that setup cannot read also blocks the launch. The
+gate also refuses a launch that pins another chat template than the checked
+template.
+
+## Running checks
+
+The Model scan card of each accepted LLM workload has the button
+`Run checks`. It runs `gpu-setup model-check` for that workload. The
+action runs the file allowlist, the upstream identity check and the chat
+template check on the model directory of the accepted launch. It stores the
+result with the workload ID as the model ID. Setup then shows the new
+status.
+
+Before you start a run, read the warning on the card. Some results block
+the launch of the workload until a new check allows it. These are an error,
+findings, an unsupported model and a pending template review.
+
+The run needs the source of the model files:
+
+- **Repository**: the Hugging Face repository as `owner/name`.
+- **Revision**: the commit ID of 40 lowercase hex characters. A branch or a
+  tag is not a pin.
+
+Setup fills in the two fields when it can. It uses the source of the stored
+result. Without a stored source, it reads the folder name when the model
+directory is a Hugging Face cache folder
+(`.../models--<owner>--<name>/snapshots/<revision>`). You can change the
+values before the run.
+
+Setup marks a value that is not valid and does not start the run. The source
+goes only into the check result. Setup does not change the workload
+configuration.
+
+The upstream identity check reads the file list of the source from
+`huggingface.co`. It sends the token of your Hugging Face login, see
+[Upstream identity](#upstream-identity). A cache folder of Hugging Face holds
+links to its files, and links are a finding of the
+[file allowlist](#file-allowlist). For a model in the cache, download a
+copy with `hf download --local-dir` and select that folder.
+
+These rules apply to the result of a run:
+
+- When the upstream listing fails, for example because the network is not
+  available, setup does not store the result. The last stored result stays.
+  The card shows the failure as the result of this run. This rule applies to
+  each reason that starts with `upstream-`, such as
+  `upstream-unreachable`.
+- Each other result replaces the stored result. This includes findings and
+  errors.
+- A canceled run stores nothing. The last stored result stays, with its
+  approval.
+- A run reuses the stored template approval for the same model directory,
+  source, template and review list.
+
+You can run the checks while the workload runs. The checks only read the
+model files.
+
+Setup refuses a run for these workloads:
+
+- An LLM workload that names only a model ID, such as an adopted service.
+  Setup cannot identify its model files. The card shows no `Run checks`
+  button for it.
+- An image workload or a workload that setup cannot identify.
+- A workload that is not in the accepted configuration.
+
+To run the checks yourself, run `gpu-setup model-check` as the desktop
+account. Give the request on standard input, for example
+`{"version":1,"workload":"chat","source":{"repo":"owner/name","revision":"<40 hex characters>"}}`.
+The action writes one status entry, as `gpu-setup model-status` does. The
+entry has `"notStored":true` when the upstream listing failed.
+
+The request is strict JSON of at most 4 KiB. A run stops after 60 minutes.
+An interrupt or a stop signal cancels it.
+
+## Template approval
+
+When the chat template has literals to review, the Model scan card shows
+`Review chat template`. Open it to read the review list. The
+`gpu-setup model-review` action reads the list from the stored result. The
+list shows the template file, the template SHA-256 and each literal with its
+line number. Each literal is in JSON quotes, so spaces, line ends and other
+hidden text are visible.
+
+Read each literal. If you accept all of them, select `Approve template`.
+The `gpu-setup model-approve` action gets the template SHA-256 and the
+review list SHA-256 that you read. Setup makes the approval again from the
+stored result and compares the two values. If a value is different, setup
+refuses the approval. The approval holds your UID and the time.
+
+After the approval, the template check passes. When the file and identity
+checks also passed, the card shows "File checks passed. Behavioral scan not
+available yet."
+
+If a new run changed the stored result after you read the list, the
+approval fails. Setup then reads the status and the review list again.
+Read the new list before you approve it. Setup also refuses an approval for
+a result that does not apply to the accepted workload, for example a result
+for another model directory.
+
+The two actions take strict JSON of at most 4 KiB:
+
+- `gpu-setup model-review`: `{"version":1,"workload":"chat"}`. The response
+  has `"pending":false` when no review is pending.
+- `gpu-setup model-approve`:
+  `{"version":1,"workload":"chat","chatTemplateSHA256":"...","reviewSHA256":"..."}`.
+  The response is the new status entry.
+
 ## Launch gate
 
 The supervisor checks the stored result before it starts a vLLM workload.
@@ -781,9 +896,13 @@ A result that the supervisor cannot read refuses the launch. The gate does
 not hash the model files again, because the weights can be large. The next
 check run finds other file changes.
 
-Design decision: a workload without a stored result still launches. No
-command writes results yet, so a gate that needs a result would refuse every
-vLLM launch. The gate applies only to new launches. A workload that runs
+Design decision: a workload without a stored result still launches. Setup
+writes a result only when the operator runs the checks. Thus a gate that
+needs a result would refuse each vLLM launch that has no result yet. Enforcement
+comes later
+([#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583)).
+
+The gate applies only to new launches. A workload that runs
 during an upgrade keeps running. A recovery that only checks the state starts nothing, so
 it skips the gate. A rollback start of the previous workload after a failed
 catalog change also skips it.
