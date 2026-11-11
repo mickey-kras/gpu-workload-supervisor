@@ -179,8 +179,8 @@ for these files:
 - `README`, `README.md`, `LICENSE`, `LICENSE.md` and `.gitattributes`. No
   loader reads them.
 - `.txt` and `.jinja` files with printable UTF-8 text only: no control
-  characters other than tab, line feed and carriage return. Else the result
-  is `upstream-identity-mismatch`.
+  characters other than tab, line feed and carriage return. Else the check
+  gives the reason `upstream-identity-mismatch`.
 
 Any other file, such as `tokenizer.model`, must be in LFS upstream with a
 SHA-256. Else the check gives `findings` with the reason
@@ -685,8 +685,8 @@ Thus a new checker version checks each model again.
 
 A canceled check stores no result. The last stored result stays, with its
 template approval. A model without a stored result stays `not_scanned`. If
-a signal kills the process of a check, the check also stores nothing: the
-supervisor writes a result in one database transaction.
+a signal kills the process of a check, the check also stores nothing: setup
+writes a result in one database transaction.
 
 No signatures or keys protect the results. The deployment trusts processes
 with the service UID (see [SECURITY.md](../SECURITY.md)). A process with that
@@ -767,7 +767,20 @@ blocks its launch. The note has a link to the Model scan card of the
 workload. A result blocks the launch when the [launch gate](#launch-gate)
 refuses it. A result that setup cannot read also blocks the launch. The
 gate also refuses a launch that pins another chat template than the checked
-template.
+template, and a launch of another model folder.
+
+The note tells the operator what to do:
+
+- For a pending template review, it asks you to approve the chat template.
+- For a result with findings, an error or an unsupported model, it asks you
+  to read the cause on the card.
+- For a selection that changes the model folder or the chat template, it
+  asks you to run the checks again after you finish setup.
+- Else, it asks you to run the checks again.
+
+The card and "Scan details" show the cause of a result in plain words, for
+each reason code. The text holds no path. For an unknown reason code, they
+show the code.
 
 ## Running checks
 
@@ -789,8 +802,8 @@ The run needs the source of the model files:
   tag is not a pin.
 
 Setup fills in the two fields when it can. It uses the source of the stored
-result. Without a stored source, it reads the folder name when the model
-directory is a Hugging Face cache folder
+result when that result applies to the accepted workload. Else, it reads the
+folder name when the model directory is a Hugging Face cache folder
 (`.../models--<owner>--<name>/snapshots/<revision>`). You can change the
 values before the run.
 
@@ -807,20 +820,35 @@ copy with `hf download --local-dir` and select that folder.
 
 These rules apply to the result of a run:
 
-- When the upstream listing fails, for example because the network is not
-  available, setup does not store the result. The last stored result stays.
-  The card shows the failure as the result of this run. This rule applies to
-  each reason that starts with `upstream-`, such as
-  `upstream-unreachable`.
+- When the upstream listing fails, setup can keep the last stored result.
+  This rule applies only to these reasons: `upstream-unreachable`,
+  `upstream-not-found`, `upstream-denied`, `upstream-invalid`,
+  `upstream-moved` and `upstream-history-too-long`. Setup keeps the stored
+  result only when it is for the same model directory and the same file
+  digests as this run. Then setup does not store the run. The card shows
+  this failure as the result of the run. Else setup stores the run, and the
+  gate refuses a launch of the changed files.
 - Each other result replaces the stored result. This includes findings and
-  errors.
+  errors. Setup stores an identity mismatch as a finding, with the reason
+  `upstream-identity-mismatch`. It stores an unusable Hugging Face token as
+  an error, with the reason `hub-token-unusable`. Both block the launch.
 - A canceled run stores nothing. The last stored result stays, with its
-  approval.
+  approval. A run that reaches its time limit also stores nothing. Its error
+  says that it stopped at the time limit.
+- If a run stops after setup stored its result, the card reads the stored
+  status again and says so.
 - A run reuses the stored template approval for the same model directory,
   source, template and review list.
 
 You can run the checks while the workload runs. The checks only read the
 model files.
+
+Setup writes the result as the other setup steps write the state. It needs
+an activated setup, and it refuses a write during maintenance or for
+another installed release. It holds the state lock only for the write.
+Before the write, it reads the accepted workload again. If the model
+directory or the chat template pin changed during the run, setup stores
+nothing and the action fails: run the checks again.
 
 Setup refuses a run for these workloads:
 
@@ -837,7 +865,8 @@ The action writes one status entry, as `gpu-setup model-status` does. The
 entry has `"notStored":true` when the upstream listing failed.
 
 The request is strict JSON of at most 4 KiB. A run stops after 60 minutes.
-An interrupt or a stop signal cancels it.
+The upstream listing in the run stops after 10 minutes. An interrupt or a
+stop signal cancels the run.
 
 ## Template approval
 
@@ -858,11 +887,12 @@ After the approval, the template check passes. When the file and identity
 checks also passed, the card shows "File checks passed. Behavioral scan not
 available yet."
 
-If a new run changed the stored result after you read the list, the
-approval fails. Setup then reads the status and the review list again.
-Read the new list before you approve it. Setup also refuses an approval for
-a result that does not apply to the accepted workload, for example a result
-for another model directory.
+If a new run changed the template or its review list after you read the
+list, the approval fails. Setup then reads the status and the review list
+again. Read the new list before you approve it. Setup also refuses an
+approval for a result that does not apply to the accepted workload. Examples
+are a result for another model directory and a template that the launch does
+not pin.
 
 The two actions take strict JSON of at most 4 KiB:
 
