@@ -51,14 +51,15 @@ const reasonTexts = {
 // failureCauses map a fixed part of a gpu-setup error to its cause. The
 // errors hold no path.
 const failureCauses = [
-    ['setup is busy with another change', 'Setup was busy with another change. Try again.'],
+    ['setup was busy with another change', 'Setup was busy with another change. Try again.'],
     ['deployment is in maintenance', 'Setup is in maintenance. Finish setup, then try again.'],
     ['installed release is not activated', 'The installed release is not activated. Finish setup, then try again.'],
     ['need an activated setup', 'Finish setup first.'],
     ['does not apply to the accepted workload', 'The workload changed during the action. Run the checks again.'],
-    ['stopped at its time limit', 'The check stopped at its time limit.'],
+    ['stopped at its time limit', 'The action stopped at its time limit.'],
     ['does not match the chat template review', 'The review list changed. Read it again.'],
     ['changed during the approval', 'The stored result changed. Read the review list again.'],
+    ['approval was canceled', 'The approval was canceled.'],
 ];
 
 // failureCause gives the cause of a failed gpu-setup action, or ''.

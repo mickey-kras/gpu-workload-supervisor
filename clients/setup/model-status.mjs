@@ -10,6 +10,7 @@ import {roundedCard} from './presentation.mjs';
 import {CheckRunner, blockedNote} from './model-check-run.mjs';
 import {TemplateReview} from './model-review.mjs';
 import {blockingReason, failureCause, reasonText} from './model-reasons.mjs';
+import {mergeReport, readReport} from './model-report.mjs';
 
 // The status is read-only: it shows the stored check results of gpu-setup
 // model-status and never shows a model as safe. Each state has an icon and
@@ -107,12 +108,6 @@ function logFailure(error, action = 'model-status') {
     console.warn(`gpu-setup ${action} failed: ${error.message}`);
 }
 
-// readReport gives the entries of a model status report of version 1.
-function readReport(output) {
-    const report = JSON.parse(output);
-    if (report?.version !== 1 || !Array.isArray(report.models)) throw new Error('unsupported model status report');
-    return report.models;
-}
 
 // loadModelStatus reads the status of the accepted workloads once. A
 // failure leaves each status unavailable; it never stops setup.
@@ -279,6 +274,7 @@ class StatusView {
         this.cancellable = new Gio.Cancellable(); this.cancel.label = cancelLabel; this.cancel.visible = true; this.failedAction = null; this.noted = null; this.setNote(start); this.update();
         this.cancel.grab_focus();
         let outcome = 'done';
+        let focused = null;
         try {
             this.setNote(await work(this.cancellable));
         } catch (error) {
@@ -286,11 +282,15 @@ class StatusView {
             if (outcome === 'failed') { this.failedAction = action; logFailure(error, action); }
             this.setNote(outcome === 'canceled' ? canceled : [failed, failureCause(error)].filter(Boolean).join(' '));
             // The action can stop after its write: read what is stored
-            // before focus returns to the card.
-            if (action !== 'model-status' && !this.ui.closed) await this.reload(before);
+            // before focus returns to the card. The Cancel button goes
+            // during the read, which the card stops only when it closes.
+            if (action !== 'model-status' && !this.ui.closed) {
+                focused = this.cancel.is_focus(); this.cancel.visible = false;
+                await this.reload(before);
+            }
         } finally {
             // Focus moves only from the Cancel button that this action hides.
-            const focused = this.cancel.is_focus();
+            focused ??= this.cancel.is_focus();
             this.cancellable = null; this.cancel.visible = false;
             this.noted = {entry: this.entry(this.ui.modelStatus)};
             if (!this.ui.closed) {
@@ -313,7 +313,7 @@ class StatusView {
         const reading = new Gio.Cancellable(); this.reading = reading; this.update();
         try {
             const models = readReport(await this.ui.command(['/usr/bin/gpu-setup', 'model-status'], JSON.stringify({version: 1}), reading));
-            this.ui.modelStatus = {state: 'loaded', entries: new Map(models.map(entry => [entry.workload, entry]))};
+            this.ui.modelStatus = mergeReport(this.ui.modelStatus, models, this.workload);
             if (changed(before, this.entry(this.ui.modelStatus))) note = 'The action stopped after setup stored a new result. The card shows the stored result.';
         } catch (failure) {
             if (!reading.is_cancelled()) logFailure(failure);

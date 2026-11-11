@@ -28,12 +28,16 @@ export function cacheSource(path) {
 
 export const launchWarning = 'A result with an error, findings, an unsupported model or a pending template review blocks the launch of this workload until a new check allows it.';
 
+// kept tells what stays when a run stores nothing: the last stored
+// result, or no result.
+const kept = (hadResult, last = 'The last result is kept.') => (hadResult ? last : 'Setup stored nothing.');
+
 // runNote gives the note of a finished run. A run whose hub listing failed
-// is not stored: the last stored result stays.
-function runNote(entry) {
+// is not stored: the state before the run stays.
+function runNote(entry, hadResult) {
     if (entry.notStored) {
         const reason = entry.checks?.find(check => check.name === 'upstream-identity')?.reason;
-        return `This run failed. ${reasonText(reason)} The last stored result is kept.`;
+        return `This run failed. ${reasonText(reason)} ${kept(hadResult, 'The last stored result is kept.')}`;
     }
     const parts = entry.launchBlocked ? ['Checks finished. This result blocks the launch of this workload.', blockingReason(entry)] : ['Checks finished. The result is stored.'];
     if (entry.reviewPending) parts.push('Review the chat template below.');
@@ -116,12 +120,13 @@ export class CheckRunner {
     async run() {
         const {ui, workload} = this.view;
         const source = this.source();
-        const outcome = await this.view.operate({start: 'Running checks… This can take a long time for large models.', failed: 'The checks did not store a result. The last result is kept.',
-            action: 'model-check', focus: () => (this.button.visible ? this.button : null)}, async cancellable => {
+        const hadResult = Boolean(ui.modelStatus.entries.get(workload)?.checkedAt);
+        const outcome = await this.view.operate({start: 'Running checks… This can take a long time for large models.', failed: `The checks did not store a result. ${kept(hadResult)}`,
+            canceled: `Check canceled. ${kept(hadResult)}`, action: 'model-check', focus: () => (this.button.visible ? this.button : null)}, async cancellable => {
             const entry = JSON.parse(await ui.command(['/usr/bin/gpu-setup', 'model-check'], JSON.stringify({version: 1, workload, source}), cancellable));
             if (entry?.workload !== workload) throw new Error('The result is not for this workload.');
             if (!entry.notStored) { ui.modelStatus.entries.set(workload, entry); this.edited = false; }
-            return runNote(entry);
+            return runNote(entry, hadResult);
         });
         // A new run can store another review list: read the open list again.
         if (outcome === 'done' && !ui.closed && this.view.review.body.visible) await this.view.review.load();

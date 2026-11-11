@@ -376,13 +376,13 @@ test('a canceled approval says so and reads what is stored', async () => {
 
 test('a failed action names its cause', async () => {
     for (const [action, message, text] of [
-        ['model-check', 'setup is busy with another change, so nothing was stored; try again', 'The checks did not store a result. The last result is kept. Setup was busy with another change. Try again.'],
+        ['model-check', 'setup was busy with another change until the time limit, so nothing was stored; try again', 'The checks did not store a result. The last result is kept. Setup was busy with another change. Try again.'],
         ['model-check', 'deployment is in maintenance; resume setup', 'The checks did not store a result. The last result is kept. Setup is in maintenance. Finish setup, then try again.'],
-        ['model-check', 'model check stopped at its time limit', 'The checks did not store a result. The last result is kept. The check stopped at its time limit.'],
+        ['model-check', 'model check stopped at its time limit', 'The checks did not store a result. The last result is kept. The action stopped at its time limit.'],
         ['model-check', 'the stored result does not apply to the accepted workload; run the checks again', 'The checks did not store a result. The last result is kept. The workload changed during the action. Run the checks again.'],
         ['model-check', 'model checks need an activated setup; finish setup first', 'The checks did not store a result. The last result is kept. Finish setup first.'],
         ['model-check', 'installed release is not activated; run setup', 'The checks did not store a result. The last result is kept. The installed release is not activated. Finish setup, then try again.'],
-        ['model-approve', 'setup is busy with another change, so nothing was stored; try again', 'The approval was not stored. Setup was busy with another change. Try again.'],
+        ['model-approve', 'setup was busy with another change until the time limit, so nothing was stored; try again', 'The approval was not stored. Setup was busy with another change. Try again.'],
         ['model-approve', 'the approval does not match the chat template review of this result', 'The approval was not stored. The review list changed. Read it again.'],
         ['model-approve', 'the stored model check result changed during the approval; read the result again before you approve', 'The approval was not stored. The stored result changed. Read the review list again.'],
     ]) {
@@ -415,4 +415,46 @@ test('the reason texts cover each reason code of the checks', async () => {
     const {reasonText} = await import('./model-reasons.mjs');
     assert.ok(codes.length > 30);
     for (const code of codes.filter(code => !display.has(code))) assert.ok(!reasonText(code).startsWith('Reason code:'), code);
+});
+
+test('a run without a stored result says that nothing was stored', async () => {
+    const empty = {...stored, checkedAt: undefined, checks: [], staticChecksPassed: false, reason: 'no-result'};
+    const hub = {...stored, status: 'error', staticChecksPassed: false, notStored: true,
+        checks: [checks[0], {name: 'upstream-identity', outcome: 'error', reason: 'upstream-unreachable'}, {name: 'chat-template', outcome: 'not_run'}, checks[3]]};
+    const ui = await openSettings(empty, {responses: {'model-check': hub}});
+    await ui.click('Run checks');
+    assert.ok(shown(ui, 'This run failed. Setup could not reach Hugging Face. Setup stored nothing.'));
+    assert.equal(ui.widgets.some(widget => widget.label?.includes('last stored result is kept') && ui.visible(widget)), false);
+    const failed = await openSettings(empty, {fail: 'model-check'});
+    await failed.click('Run checks'); await settle();
+    assert.ok(shown(failed, 'The checks did not store a result. Setup stored nothing.'));
+    const canceled = await openSettings(empty, {deferAction: 'model-check'});
+    const running = canceled.click('Run checks');
+    await canceled.click('Cancel check'); await running; await settle();
+    assert.ok(shown(canceled, 'Check canceled. Setup stored nothing.'));
+});
+
+test('a status read after a failed run changes only its own card', async () => {
+    const {mergeReport} = await import('./model-report.mjs');
+    const rechecked = {...stored, workload: 'other', rechecked: true, reason: 'files-changed'};
+    const status = {state: 'loaded', entries: new Map([[workload, stored], ['other', rechecked]])};
+    const merged = mergeReport(status, [{...findings}, {...stored, workload: 'other'}], workload);
+    assert.equal(merged.entries.get('other'), rechecked, 'the recheck result of card A stays');
+    assert.equal(merged.entries.get(workload).status, 'findings', 'card B takes its new entry');
+    assert.equal(mergeReport(merged, [], workload).entries.has(workload), false, 'an entry that goes away goes');
+    const loaded = mergeReport({state: 'unavailable', entries: new Map()}, [stored, rechecked], workload);
+    assert.equal(loaded.entries.size, 2, 'a status that was not loaded takes the whole report');
+    let reads = 0;
+    const ui = await openSettings({}, {fail: 'model-check', responses: {'model-status': () => ({version: 1, models: [++reads > 1 ? findings : stored]})}});
+    await ui.click('Run checks'); await settle();
+    assert.equal(reads, 2, 'the card reads the status again');
+    assert.ok(shown(ui, 'Findings detected'));
+});
+
+test('the Cancel button goes while the card reads the stored status', async () => {
+    const ui = await openSettings({}, {fail: 'model-check', deferAction: 'model-status', deferOccurrence: 2});
+    const running = ui.click('Run checks'); await settle();
+    assert.equal(ui.visible(ui.by('Cancel check')), false, 'Cancel does nothing during the read, so it is hidden');
+    ui.finish(); await running; await settle();
+    assert.equal(ui.by('Run checks').focused, true);
 });

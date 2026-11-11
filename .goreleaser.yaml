@@ -112,6 +112,8 @@ nfpms:
         dst: /usr/share/gpu-workload-supervisor/model-review.mjs
       - src: clients/setup/model-reasons.mjs
         dst: /usr/share/gpu-workload-supervisor/model-reasons.mjs
+      - src: clients/setup/model-report.mjs
+        dst: /usr/share/gpu-workload-supervisor/model-report.mjs
       - src: clients/setup/limits-ui.mjs
         dst: /usr/share/gpu-workload-supervisor/limits-ui.mjs
       - src: clients/setup/host-protection.mjs
