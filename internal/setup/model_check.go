@@ -15,6 +15,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/modelcheck"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
+	"golang.org/x/sys/unix"
 )
 
 // MaxModelCheckRequestBytes bounds the JSON of a model check, review or
@@ -49,9 +50,8 @@ type ModelApproveRequest struct {
 // ModelReview is the chat template review list of the stored result of
 // one workload. Pending is false when no stored result exists, when the
 // result does not apply to the accepted launch, or when it asks for no
-// review. Items
-// hold the literals of the template: the desktop shows them to the
-// operator. The setup log does not.
+// review. Items hold the literals of the template: the desktop shows them
+// to the operator. The setup log does not.
 type ModelReview struct {
 	Version            int                     `json:"version"`
 	Workload           string                  `json:"workload"`
@@ -71,8 +71,11 @@ var (
 	ErrModelNoDirectory   = errors.New("the workload names no model folder, so setup cannot check its files")
 	ErrResultNotCurrent   = errors.New("the stored result does not apply to the accepted workload; run the checks again")
 	// ErrStateBusy tells that another setup change held the state lock
-	// until the wait for it ended. Nothing was stored.
-	ErrStateBusy = errors.New("setup is busy with another change, so nothing was stored; try again")
+	// until the time limit of the action. Nothing was stored.
+	ErrStateBusy = errors.New("setup was busy with another change until the time limit, so nothing was stored; try again")
+	// ErrApprovalCanceled tells that the operator canceled an approval
+	// before setup stored it.
+	ErrApprovalCanceled = errors.New("the approval was canceled; nothing was stored")
 )
 
 // digestPattern matches a SHA-256 as 64 lowercase hex characters.
@@ -179,29 +182,60 @@ func loadWriteTarget(ctx context.Context, home, workload string) (checkTarget, e
 	return target, deployment.Check(target.statePath, target.release)
 }
 
-// gateWait bounds the wait for the state gate before a write. The context
-// of the action usually ends first: a run of the checks has 60 minutes in
-// all, so a finished run waits for the gate until that limit. Tests make
-// it shorter.
-var gateWait = 60 * time.Minute
+// gatePoll bounds the wait between two tries for the state gate. The wait
+// starts at 10 ms and doubles up to this bound.
+const gatePoll = time.Second
 
-// acquireGate waits for the state gate until ctx ends or gateWait runs
-// out. A cancel or time limit of ctx gives modelcheck.ErrCheckCanceled or
-// modelcheck.ErrCheckTimedOut. The end of gateWait gives ErrStateBusy.
-// Other errors pass through.
-func acquireGate(ctx context.Context, statePath string) (*lock.File, error) {
-	waitCtx, cancel := context.WithTimeout(ctx, gateWait)
-	defer cancel()
-	gate, err := lock.AcquireContext(waitCtx, statePath+".lock", false)
-	switch {
-	case err == nil:
-		return gate, nil
-	case modelcheck.Stopped(ctx) != nil:
-		return nil, modelcheck.Stopped(ctx)
-	case errors.Is(waitCtx.Err(), context.DeadlineExceeded):
-		return nil, ErrStateBusy
+// stops are the errors of an action that stops before its write: a
+// cancel, and the time limit of the action before the wait for the gate.
+type stops struct{ canceled, timedOut error }
+
+// checkStops are the stops of a run of the checks. approvalStops are the
+// stops of an approval, which has no time limit of its own.
+var (
+	checkStops    = stops{canceled: modelcheck.ErrCheckCanceled, timedOut: modelcheck.ErrCheckTimedOut}
+	approvalStops = stops{canceled: ErrApprovalCanceled, timedOut: ErrStateBusy}
+)
+
+// acquireGate waits for the state gate until the action context ends, so a
+// finished run waits as long as its time limit allows. The time limit of
+// the action during the wait means that another change held the gate:
+// it gives ErrStateBusy. A cancel gives the cancel error of the action. A
+// context that ended before the wait gives the stop of the action. Other
+// errors pass through.
+func acquireGate(ctx context.Context, statePath string, stop stops) (*lock.File, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, stop.of(err)
 	}
-	return nil, err
+	delay := 10 * time.Millisecond
+	for {
+		gate, err := lock.TryAcquire(statePath + ".lock")
+		if err == nil {
+			return gate, nil
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+			return nil, err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return nil, ErrStateBusy
+			}
+			return nil, stop.canceled
+		case <-timer.C:
+		}
+		delay = min(2*delay, gatePoll)
+	}
+}
+
+// of gives the stop error for the end of a context.
+func (s stops) of(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return s.timedOut
+	}
+	return s.canceled
 }
 
 // writeTarget runs write with the writable store, as the other setup
@@ -210,8 +244,8 @@ func acquireGate(ctx context.Context, statePath string) (*lock.File, error) {
 // reads the target again: a workload whose state path, release, model
 // directory or chat template pin changed after target was read gives
 // ErrResultNotCurrent, and nothing is written.
-func writeTarget(ctx context.Context, home string, target checkTarget, write func(*store.Store, checkTarget) (ModelStatusEntry, error)) (ModelStatusEntry, error) {
-	gate, err := acquireGate(ctx, target.statePath)
+func writeTarget(ctx context.Context, home string, target checkTarget, stop stops, write func(*store.Store, checkTarget) (ModelStatusEntry, error)) (ModelStatusEntry, error) {
+	gate, err := acquireGate(ctx, target.statePath, stop)
 	if err != nil {
 		return ModelStatusEntry{}, err
 	}
@@ -256,7 +290,7 @@ func ModelCheck(ctx context.Context, home string, request ModelCheckRequest, cli
 	if err != nil {
 		return ModelStatusEntry{}, err
 	}
-	return writeTarget(ctx, home, target, func(st *store.Store, fresh checkTarget) (ModelStatusEntry, error) {
+	return writeTarget(ctx, home, target, checkStops, func(st *store.Store, fresh checkTarget) (ModelStatusEntry, error) {
 		if record.HubFailed() {
 			stored, err := st.ModelCheck(ctx, request.Workload)
 			kept := errors.Is(err, store.ErrNoModelCheck) || (err == nil && stored.Root == record.Root && maps.Equal(stored.Files, record.Files))
@@ -342,19 +376,17 @@ func ModelReviewList(ctx context.Context, home string, request ModelReviewReques
 }
 
 // currentReview gives the pending review of a result that applies to the
-// target, for the chat template that the launch pins. A result that does
-// not apply, or a review of another template, gives ErrResultNotCurrent.
-// A result without a pending review gives modelcheck.ErrNoPendingReview.
+// target. A result that does not apply gives ErrResultNotCurrent; this
+// includes a review of another template than the launch pins, see
+// modelcheck.StoredStatus. A result without a pending review gives
+// modelcheck.ErrNoPendingReview.
 func currentReview(record modelcheck.Record, target checkTarget) (modelcheck.ReviewRequest, error) {
 	if _, reason := modelcheck.StoredStatus(record, string(target.profile.ID), target.root, target.pin); reason != "" {
 		return modelcheck.ReviewRequest{}, ErrResultNotCurrent
 	}
 	pending, ok := record.PendingReview()
-	switch {
-	case !ok:
+	if !ok {
 		return pending, modelcheck.ErrNoPendingReview
-	case pending.ChatTemplateSHA256 != target.pin:
-		return pending, ErrResultNotCurrent
 	}
 	return pending, nil
 }
@@ -369,7 +401,7 @@ func ModelApprove(ctx context.Context, home string, request ModelApproveRequest,
 	if err != nil {
 		return ModelStatusEntry{}, err
 	}
-	return writeTarget(ctx, home, target, func(st *store.Store, fresh checkTarget) (ModelStatusEntry, error) {
+	return writeTarget(ctx, home, target, approvalStops, func(st *store.Store, fresh checkTarget) (ModelStatusEntry, error) {
 		record, err := st.ModelCheck(ctx, request.Workload)
 		if err != nil {
 			return ModelStatusEntry{}, err

@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -674,9 +676,11 @@ func TestModelReviewNeedsThePinnedTemplate(t *testing.T) {
 	}
 }
 
-// The write waits for the state gate. A busy gate, a cancel and a time
-// limit during the wait store nothing, with their own errors. A gate that
-// frees during the wait lets the write go on.
+// The write waits for the state gate until the time limit of the action,
+// as the gpu-setup actions set it. A gate that stays busy until then gives
+// ErrStateBusy, for a check and for an approval. A cancel during the wait
+// gives the cancel error of the action. Nothing is stored in these cases. A
+// gate that frees during the wait lets the write go on.
 func TestModelCheckWaitsForTheStateGate(t *testing.T) {
 	home, _, hub := runFixture(t, "run-gate", reviewTemplate)
 	runCheck(t, home, "run-gate", hub)
@@ -686,38 +690,71 @@ func TestModelCheckWaitsForTheStateGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wait := gateWait
-	t.Cleanup(func() { gateWait = wait })
-	gateWait = 50 * time.Millisecond
 	hub.mismatch = "config.json"
 	check := ModelCheckRequest{Version: 1, Workload: "run-gate", Source: runSource}
-	if _, err := ModelCheck(context.Background(), home, check, hub.client()); !errors.Is(err, ErrStateBusy) {
-		t.Fatalf("busy gate: %v", err)
+	limited, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
+	if _, err := ModelCheck(limited, home, check, hub.client()); !errors.Is(err, ErrStateBusy) {
+		t.Fatalf("busy gate until the time limit of a check: %v", err)
 	}
 	review, _ := ModelReviewList(context.Background(), home, ModelReviewRequest{Version: 1, Workload: "run-gate"})
 	approve := ModelApproveRequest{Version: 1, Workload: "run-gate", ChatTemplateSHA256: review.ChatTemplateSHA256, ReviewSHA256: review.ReviewSHA256}
-	if _, err := ModelApprove(context.Background(), home, approve, 1000, time.Now()); !errors.Is(err, ErrStateBusy) {
-		t.Fatalf("busy gate for an approval: %v", err)
+	approveLimit, stopApprove := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer stopApprove()
+	if _, err := ModelApprove(approveLimit, home, approve, 1000, time.Now()); !errors.Is(err, ErrStateBusy) {
+		t.Fatalf("busy gate until the time limit of an approval: %v", err)
 	}
-	// The run ends at once; the wait for the gate then ends by a cancel or
-	// by the time limit of the action.
-	gateWait = time.Hour
 	canceled, cancel := context.WithCancel(context.Background())
-	hub.onRequest = func() { go func() { time.Sleep(200 * time.Millisecond); cancel() }() }
+	hub.onRequest = func() { go func() { time.Sleep(300 * time.Millisecond); cancel() }() }
 	if _, err := ModelCheck(canceled, home, check, hub.client()); !errors.Is(err, modelcheck.ErrCheckCanceled) {
 		t.Fatalf("canceled during the wait: %v", err)
 	}
-	limited, stop := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer stop()
-	if _, err := ModelCheck(limited, home, check, hub.client()); !errors.Is(err, modelcheck.ErrCheckTimedOut) {
-		t.Fatalf("time limit during the wait: %v", err)
+	canceledApproval, cancelApproval := context.WithCancel(context.Background())
+	go func() { time.Sleep(200 * time.Millisecond); cancelApproval() }()
+	if _, err := ModelApprove(canceledApproval, home, approve, 1000, time.Now()); !errors.Is(err, ErrApprovalCanceled) {
+		t.Fatalf("approval canceled during the wait: %v", err)
 	}
-	if after, _ := storedResult(t, home, "run-gate"); after.CheckedAt != before.CheckedAt || after.Status != before.Status {
+	if after, _ := storedResult(t, home, "run-gate"); after.CheckedAt != before.CheckedAt || after.Status != before.Status || after.TemplateApproval != nil {
 		t.Fatalf("a refused write changed the result: %+v", after)
 	}
 	hub.onRequest = func() { go func() { time.Sleep(100 * time.Millisecond); held.Close() }() }
 	if entry, err := ModelCheck(context.Background(), home, check, hub.client()); err != nil || entry.Status != modelcheck.StatusFindings {
 		t.Fatalf("a gate that frees during the wait: %+v %v", entry, err)
+	}
+}
+
+// acquireGate maps the end of the wait by its cause, and passes other lock
+// errors through.
+func TestAcquireGateMapsTheEndOfTheWait(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.db")
+	held, err := lock.TryAcquire(state + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	deadline, stop := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer stop()
+	if _, err := acquireGate(deadline, state, checkStops); !errors.Is(err, ErrStateBusy) {
+		t.Fatalf("deadline during the wait: %v", err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
+	if _, err := acquireGate(canceled, state, approvalStops); !errors.Is(err, ErrApprovalCanceled) {
+		t.Fatalf("cancel during the wait: %v", err)
+	}
+	if _, err := acquireGate(deadline, state, checkStops); !errors.Is(err, modelcheck.ErrCheckTimedOut) {
+		t.Fatalf("deadline before the wait: %v", err)
+	}
+	if _, err := acquireGate(canceled, state, checkStops); !errors.Is(err, modelcheck.ErrCheckCanceled) {
+		t.Fatalf("cancel before the wait: %v", err)
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = acquireGate(context.Background(), filepath.Join(file, "state.db"), checkStops)
+	if err == nil || errors.Is(err, ErrStateBusy) || errors.Is(err, modelcheck.ErrCheckCanceled) || errors.Is(err, modelcheck.ErrCheckTimedOut) {
+		t.Fatalf("a lock error must pass through: %v", err)
 	}
 }
 
@@ -745,10 +782,36 @@ func TestModelCheckHubFailureForAnotherRootIsStored(t *testing.T) {
 	}
 }
 
-// A finished run waits for the gate as long as the run may take in all, so
-// a long supervisor change does not throw the run away.
-func TestGateWaitCoversTheRunLimit(t *testing.T) {
-	if gateWait < 60*time.Minute {
-		t.Fatalf("gate wait %v is shorter than the 60 minute run limit", gateWait)
+// Each error fragment that the desktop maps to a cause is in the text of
+// an error that the model check actions give.
+func TestDesktopFailureCausesMatchTheErrors(t *testing.T) {
+	raw, err := os.ReadFile("../../clients/setup/model-reasons.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := strings.Index(string(raw), "const failureCauses = [")
+	end := strings.Index(string(raw)[start:], "];")
+	fragments := regexp.MustCompile(`\['([^']+)', '`).FindAllStringSubmatch(string(raw)[start:start+end], -1)
+	state := filepath.Join(t.TempDir(), "state.db")
+	if err := os.WriteFile(state, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	texts := []string{ErrStateBusy.Error(), ErrModelNotActivated.Error(), ErrResultNotCurrent.Error(), ErrApprovalCanceled.Error(),
+		modelcheck.ErrCheckTimedOut.Error(), modelcheck.ErrApprovalMismatch.Error(), store.ErrModelCheckConflict.Error()}
+	for _, marker := range []deployment.Marker{{Version: 1, Release: deployment.Release, Maintenance: true}, {Version: 1, Release: "v0.0.1"}} {
+		if err := deployment.Write(state, marker); err != nil {
+			t.Fatal(err)
+		}
+		if err := deployment.Check(state, marker.Release); err != nil {
+			texts = append(texts, err.Error())
+		}
+	}
+	if len(fragments) < 8 {
+		t.Fatalf("fragments %v", fragments)
+	}
+	for _, fragment := range fragments {
+		if !slices.ContainsFunc(texts, func(text string) bool { return strings.Contains(text, fragment[1]) }) {
+			t.Errorf("no error has the text %q", fragment[1])
+		}
 	}
 }
