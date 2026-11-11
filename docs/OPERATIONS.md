@@ -112,7 +112,7 @@ A request with a recheck stops after 30 minutes. Other requests stop after 5 min
 
 To run the model checks of a workload, use `Run checks` on its Model scan card, or run `gpu-setup model-check` as the desktop account. See [Running checks](MODEL-CHECKS.md#running-checks). The action changes only the stored check result of that workload. It reads the file list of the model source from `huggingface.co` with your Hugging Face login. The action needs an activated setup outside maintenance. A run stops after 60 minutes.
 
-When the hub is not available or refuses the source, the action keeps the last stored result for the same files. The action stores an unusable Hugging Face token (`hub-token-unusable`) and an identity mismatch, and these results block the launch. See [Running checks](MODEL-CHECKS.md#running-checks) for the exact reasons.
+When the hub is not available or refuses the source, the action keeps the last stored result for the same files. Without a stored result, the action stores nothing. The action stores an unusable Hugging Face token (`hub-token-unusable`) and an identity mismatch, and these results block the launch. See [Running checks](MODEL-CHECKS.md#running-checks) for the exact reasons.
 
 To approve the review list of a chat template, use `gpu-setup model-review` and `gpu-setup model-approve`. See [Template approval](MODEL-CHECKS.md#template-approval). To find failed runs and approvals, run `journalctl --user -g 'gpu-setup model-(check|review|approve) failed'`.
 

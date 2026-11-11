@@ -205,8 +205,8 @@ the reason `upstream-invalid`. Else the check gives one of these results:
 
 The supervisor reads at most 64 pages of the tree, of at most 16 MiB each,
 over HTTPS. It does not follow redirects. It follows only next-page links to
-the same path on the same host. A listing that has no other deadline stops
-after 10 minutes.
+the same path on the same host. A listing stops after 10 minutes. An
+earlier deadline of the run stops it first.
 
 For a gated or private repository, the supervisor uses the token of an
 existing Hugging Face login. The first location that you configure decides.
@@ -735,11 +735,17 @@ applies again, with these rules:
 
 A result whose chat template check passed applies only to a launch that
 pins the same template SHA-256. If the SHA-256 is different, setup shows
-`not_scanned`, as the [launch gate](#launch-gate) does. A result with
-findings or an error keeps its status. The review summary compares the pin
-of the launch. The settings card adds only a comparison of the model,
-because a selection has no pin before its preview. The pin of the accepted
-launch still applies there.
+`not_scanned`, as the [launch gate](#launch-gate) does.
+
+A result whose chat template asks for review applies only to a launch that
+pins that template too, because you can approve only that review. Else setup
+shows `not_scanned` with "The chat template of the launch is not the checked
+template." A launch without a pin pins no template. Other results with
+findings or an error keep their status.
+
+The review summary compares the pin of the launch. The settings card adds
+only a comparison of the model, because a selection has no pin before its
+preview. The pin of the accepted launch still applies there.
 
 For a result that does not apply, the details show its checks as the last
 stored result.
@@ -807,8 +813,8 @@ folder name when the model directory is a Hugging Face cache folder
 (`.../models--<owner>--<name>/snapshots/<revision>`). You can change the
 values before the run.
 
-Setup marks a value that is not valid and does not start the run. The source
-goes only into the check result. Setup does not change the workload
+Setup marks a value that is not valid. Then you cannot start the run. The
+source goes only into the check result. Setup does not change the workload
 configuration.
 
 The upstream identity check reads the file list of the source from
@@ -825,9 +831,11 @@ These rules apply to the result of a run:
   `upstream-not-found`, `upstream-denied`, `upstream-invalid`,
   `upstream-moved` and `upstream-history-too-long`. Setup keeps the stored
   result only when it is for the same model directory and the same file
-  digests as this run. Then setup does not store the run. The card shows
-  this failure as the result of the run. Else setup stores the run, and the
-  gate refuses a launch of the changed files.
+  digests as this run. When setup has no stored result, it also stores nothing:
+  the workload stays without a result, and a workload without a result
+  still launches. In both cases, the card shows this failure as the result
+  of the run. Else setup stores the run, and the gate refuses a launch of
+  the changed files.
 - Each other result replaces the stored result. This includes findings and
   errors. Setup stores an identity mismatch as a finding, with the reason
   `upstream-identity-mismatch`. It stores an unusable Hugging Face token as
@@ -850,6 +858,11 @@ Before the write, it reads the accepted workload again. If the model
 directory or the chat template pin changed during the run, setup stores
 nothing and the action fails: run the checks again.
 
+If another setup change or a workload switch holds the state lock, a
+finished run waits for it until the time limit of the run. A cancel during
+this wait stops the run, and setup stores nothing. When an action fails,
+the card names the cause, for example a busy setup or maintenance.
+
 Setup refuses a run for these workloads:
 
 - An LLM workload that names only a model ID, such as an adopted service.
@@ -861,8 +874,9 @@ Setup refuses a run for these workloads:
 To run the checks yourself, run `gpu-setup model-check` as the desktop
 account. Give the request on standard input, for example
 `{"version":1,"workload":"chat","source":{"repo":"owner/name","revision":"<40 hex characters>"}}`.
-The action writes one status entry, as `gpu-setup model-status` does. The
-entry has `"notStored":true` when the upstream listing failed.
+The action writes one status entry object, in the form of an entry of the
+`gpu-setup model-status` report. The entry has `"notStored":true` when the
+upstream listing failed and setup kept the state before the run.
 
 The request is strict JSON of at most 4 KiB. A run stops after 60 minutes.
 The upstream listing in the run stops after 10 minutes. An interrupt or a
