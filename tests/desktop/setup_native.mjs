@@ -391,11 +391,12 @@ app.connect('activate', () => {
             await capture(ui, 'settings-model-run');
             await typeInto(ui, revision, 'main');
             const hint = 'Enter the full commit ID: 40 lowercase hex characters. A branch or tag name is not a pin.';
-            assert(mappedLabel(ui, hint) && revision.has_css_class('error'), 'a branch name is marked as not valid');
+            // GTK handles the typed keys after xdotool returns.
+            await waitFor(() => mappedLabel(ui, hint) && revision.has_css_class('error'), 'a branch name is marked as not valid');
             await settingsTree(ui, 'settings-model-run-invalid', 'Revision (40-character commit ID)', [button('Run checks', false), {name: hint}]);
             await capture(ui, 'settings-model-run-invalid');
             await typeInto(ui, revision, runRevision);
-            assert(!mappedLabel(ui, hint) && named(ui, 'Run checks').is_sensitive(), 'a pinned revision allows the run');
+            await waitFor(() => revision.text === runRevision && !mappedLabel(ui, hint) && named(ui, 'Run checks').is_sensitive(), 'a pinned revision allows the run');
             await tabTo(ui, named(ui, 'Run checks')); run(['xdotool', 'key', 'space']);
             await waitFor(() => statusReply, 'Run checks starts one run');
             assert(JSON.stringify(commandRecords.at(-1)) === JSON.stringify({action: 'model-check', input: {version: 1, workload: 'chat', source: {repo: 'example-org/example-small', revision: runRevision}}}), 'the run names the workload and the source');
