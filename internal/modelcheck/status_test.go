@@ -125,7 +125,10 @@ func TestHubFailedNeedsAnUpstreamError(t *testing.T) {
 			t.Errorf("%s is not a hub failure", name)
 		}
 	}
-	if !testSource.Valid() || (Source{Repo: "model", Revision: testSource.Revision}).Valid() {
+}
+
+func TestSourceValid(t *testing.T) {
+	if !testSource.Valid() || (Source{Repo: "model", Revision: testSource.Revision}).Valid() || (Source{Repo: testSource.Repo, Revision: "main"}).Valid() {
 		t.Error("source validation")
 	}
 }

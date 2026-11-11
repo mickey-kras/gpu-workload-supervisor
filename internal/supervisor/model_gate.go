@@ -21,7 +21,8 @@ import (
 // see modelcheck.Record.AllowLaunch. A result that cannot be read refuses
 // the launch. A workload without a stored result still launches: setup
 // writes a result only when the operator runs the checks (gpu-setup
-// model-check), so a gate that needs a result waits for #583.
+// model-check), so a gate that needs a result waits for a later #583
+// change.
 func (c *Controller) refuseModelCheck(ctx context.Context, target control.Workload, verifyOnly bool) error {
 	p, ok := c.config.Catalog.Catalog.Profile(target)
 	if verifyOnly || !ok || p.NativeModel == nil {

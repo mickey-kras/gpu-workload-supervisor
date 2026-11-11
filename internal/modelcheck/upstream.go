@@ -51,9 +51,7 @@ type Source struct {
 
 // Valid tells whether the source names a hub repository as org/name and a
 // pinned commit of 40 lowercase hex characters.
-func (s Source) Valid() bool { return s.valid() }
-
-func (s Source) valid() bool {
+func (s Source) Valid() bool {
 	return repoPattern.MatchString(s.Repo) && !strings.Contains(s.Repo, "..") && revisionPattern.MatchString(s.Revision)
 }
 
@@ -121,13 +119,12 @@ func hubListing(client *http.Client, hub string, options hubOptions) Listing {
 	strict := *client
 	strict.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return func(ctx context.Context, source Source) (map[string]UpstreamFile, error) {
-		if _, ok := ctx.Deadline(); !ok {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, options.listingTimeout)
-			defer cancel()
-		}
+		// The listing has its own bound, also inside a longer run. The
+		// earlier deadline wins.
+		ctx, cancel := context.WithTimeout(ctx, options.listingTimeout)
+		defer cancel()
 		base, err := url.Parse(hub + "/api/models/" + source.Repo)
-		if !source.valid() || err != nil || base.Scheme != "https" {
+		if !source.Valid() || err != nil || base.Scheme != "https" {
 			return nil, listingError(ReasonUpstreamInvalid)
 		}
 		token, err := hubToken()

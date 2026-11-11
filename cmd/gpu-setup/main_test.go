@@ -318,15 +318,18 @@ func TestModelCheckActionsRefuseInvalidRequests(t *testing.T) {
 	actions.home = func() (string, error) { return home, nil }
 	actions.euid = func() int { return 1000 }
 	revision := strings.Repeat("a", 40)
-	for action, raw := range map[string]string{
-		"model-check":   `{"version":1,"workload":"chat","source":{"repo":"org/model","revision":"` + revision + `"},"extra":1}`,
-		"model-review":  `{"version":1,"workload":"chat"}` + strings.Repeat(" ", 4096),
-		"model-approve": `{"version":1,"workload":"chat","chatTemplateSHA256":"x","reviewSHA256":"y"}`,
+	for action, tc := range map[string]struct{ raw, want string }{
+		"model-check":   {`{"version":1,"workload":"chat","source":{"repo":"org/model","revision":"` + revision + `"},"extra":1}`, "unknown field"},
+		"model-review":  {`{"version":1,"workload":"chat"}` + strings.Repeat(" ", 4096), "json exceeds"},
+		"model-approve": {`{"version":1,"workload":"chat","chatTemplateSHA256":"x","reviewSHA256":"y"}`, setup.ErrModelCheckRequest.Error()},
 	} {
 		var output bytes.Buffer
-		if err := actions.run([]string{action}, strings.NewReader(raw), &output); err == nil || output.Len() != 0 {
+		if err := actions.run([]string{action}, strings.NewReader(tc.raw), &output); err == nil || !strings.Contains(err.Error(), tc.want) || output.Len() != 0 {
 			t.Fatalf("%s: %v %q", action, err, output.String())
 		}
+	}
+	if err := runModelAction(context.Background(), home, "model-other", strings.NewReader("{}"), &bytes.Buffer{}); err == nil {
+		t.Fatal("an unknown model action ran")
 	}
 	// A valid request for setup without a profile names no workload.
 	valid := map[string]string{

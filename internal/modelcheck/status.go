@@ -1,9 +1,6 @@
 package modelcheck
 
-import (
-	"context"
-	"strings"
-)
+import "context"
 
 // CheckerVersion is the checker version that StoredStatus accepts. A record
 // of another version reads as not scanned, so a new checker checks each
@@ -92,16 +89,23 @@ func (r Record) StaticChecksPassed() bool {
 	return true
 }
 
+// listingFailures are the reasons of a hub listing that failed. An
+// identity mismatch and an unusable hub token are not among them.
+var listingFailures = map[string]bool{
+	ReasonUpstreamNotFound: true, ReasonUpstreamDenied: true, ReasonUpstreamInvalid: true,
+	ReasonUpstreamUnreachable: true, ReasonUpstreamMoved: true, ReasonHistoryTooLong: true,
+}
+
 // HubFailed reports a record whose upstream identity check did not
 // complete because the hub listing failed, for example because the hub is
-// not reachable. Its reason starts with "upstream-". The files can be
-// correct, so the setup action that runs the checks keeps the earlier
-// stored result and does not store this record. An identity mismatch is a
-// finding, not a hub failure.
+// not reachable. The files can be correct, so the setup action that runs
+// the checks can keep the earlier stored result. An identity mismatch is a
+// finding, and an unusable hub token is an error of this computer: neither
+// is a hub failure.
 func (r Record) HubFailed() bool {
 	for _, check := range r.Checks {
 		if check.Name == CheckIdentity {
-			return check.Outcome == OutcomeError && strings.HasPrefix(check.Reason, "upstream-")
+			return check.Outcome == OutcomeError && listingFailures[check.Reason]
 		}
 	}
 	return false

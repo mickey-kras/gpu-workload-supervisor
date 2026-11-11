@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/modelcheck"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
@@ -53,10 +54,17 @@ type fakeHub struct {
 	// started, when set, gets one value at the first request, and the
 	// request then waits for its context to end.
 	started chan struct{}
+	// onRequest, when set, runs once at the first request, for example to
+	// change setup while a run is in progress.
+	onRequest func()
 }
 
 func (h *fakeHub) RoundTrip(r *http.Request) (*http.Response, error) {
 	h.requests.Add(1)
+	if h.onRequest != nil {
+		h.onRequest()
+		h.onRequest = nil
+	}
 	if h.started != nil {
 		close(h.started)
 		h.started = nil
@@ -131,7 +139,10 @@ func runFixture(t *testing.T, id, template string) (string, string, *fakeHub) {
 		t.Fatal(err)
 	}
 	s.Close()
-	writeStatusProfile(t, home, Profile{Version: 1, StatePath: state})
+	writeStatusProfile(t, home, Profile{Version: 1, StatePath: state, ActivatedRelease: deployment.Release})
+	if err := deployment.Write(state, deployment.Marker{Version: 1, Release: deployment.Release}); err != nil {
+		t.Fatal(err)
+	}
 	return home, root, &fakeHub{files: files}
 }
 
@@ -233,18 +244,19 @@ func TestModelCheckCancelStoresNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	hub.mismatch = "config.json"
+	requests := hub.requests.Load()
 	started := make(chan struct{})
 	hub.started = started
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { <-started; cancel() }()
-	if _, err := ModelCheck(ctx, home, ModelCheckRequest{Version: 1, Workload: "run-cancel", Source: runSource}, hub.client()); err == nil {
-		t.Fatal("a canceled run gave a result")
+	if _, err := ModelCheck(ctx, home, ModelCheckRequest{Version: 1, Workload: "run-cancel", Source: runSource}, hub.client()); !errors.Is(err, modelcheck.ErrCheckCanceled) || hub.requests.Load() != requests+1 {
+		t.Fatalf("a run canceled during the listing: %v, %d hub requests", err, hub.requests.Load())
 	}
 	after, err := storedResult(t, home, "run-cancel")
 	if err != nil || after.CheckedAt != before.CheckedAt || after.Status != before.Status {
 		t.Fatalf("the canceled run changed the result: %+v %v", after, err)
 	}
-	// A run canceled before it starts stores nothing either.
+	// A run canceled before it starts is refused early and stores nothing.
 	done, stop := context.WithCancel(context.Background())
 	stop()
 	if _, err := ModelCheck(done, home, ModelCheckRequest{Version: 1, Workload: "run-cancel", Source: runSource}, hub.client()); err == nil {
@@ -349,7 +361,9 @@ func TestModelApproveRefusesMismatchAndConflict(t *testing.T) {
 		}
 	}
 	runCheck(t, home, "run-approve", hub)
-	if _, err := ModelApprove(context.Background(), home, request, 1000, now); !errors.Is(err, modelcheck.ErrApprovalMismatch) {
+	// The new template is not the template that the launch pins, so the new
+	// review is not current either.
+	if _, err := ModelApprove(context.Background(), home, request, 1000, now); !errors.Is(err, ErrResultNotCurrent) {
 		t.Fatalf("approval of a replaced review: %v", err)
 	}
 	hub.files = runModelFiles(reviewTemplate)
@@ -476,5 +490,181 @@ func TestModelCheckRequestsAreStrict(t *testing.T) {
 		if _, err := DecodeModelApproveRequest(strings.NewReader(raw)); err == nil {
 			t.Errorf("approve %s accepted", raw)
 		}
+	}
+}
+
+func writeRunModel(t *testing.T, id string, files map[string]string) {
+	t.Helper()
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(testModelRoot, id, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A hub failure keeps the earlier result only for the same files. Files
+// that changed after the stored check give a stored error that blocks the
+// launch. A run without an earlier result stores the error too.
+func TestModelCheckStoresAHubFailureForChangedFiles(t *testing.T) {
+	home, _, hub := runFixture(t, "run-changed", "{{ messages }}")
+	runCheck(t, home, "run-changed", hub)
+	files := runModelFiles("{{ messages }}")
+	files["generation_config.json"] = `{"temperature":0.5}`
+	writeRunModel(t, "run-changed", files)
+	hub.status = http.StatusServiceUnavailable
+	entry := runCheck(t, home, "run-changed", hub)
+	if entry.NotStored || entry.Status != modelcheck.StatusError || !entry.LaunchBlocked {
+		t.Fatalf("entry %+v", entry)
+	}
+	record, err := storedResult(t, home, "run-changed")
+	if err != nil || record.Status != modelcheck.StatusError || record.Checks[1].Reason != modelcheck.ReasonUpstreamUnreachable {
+		t.Fatalf("stored %+v %v", record, err)
+	}
+	fresh, _, hub := runFixture(t, "run-first", "{{ messages }}")
+	hub.status = http.StatusServiceUnavailable
+	if entry := runCheck(t, fresh, "run-first", hub); entry.NotStored || !entry.LaunchBlocked {
+		t.Fatalf("a first run with a hub failure: %+v", entry)
+	}
+	if _, err := storedResult(t, fresh, "run-first"); err != nil {
+		t.Fatalf("a first run with a hub failure is stored: %v", err)
+	}
+}
+
+// A kept hub failure reports the launch block of the stored result.
+func TestModelCheckKeptHubFailureReportsTheStoredBlock(t *testing.T) {
+	home, _, hub := runFixture(t, "run-kept", "{{ messages }}")
+	runCheck(t, home, "run-kept", hub)
+	hub.status = http.StatusNotFound
+	entry := runCheck(t, home, "run-kept", hub)
+	if !entry.NotStored || entry.LaunchBlocked {
+		t.Fatalf("a kept passing result does not block the launch: %+v", entry)
+	}
+}
+
+// An unusable hub token and an identity mismatch are stored, never kept.
+func TestModelCheckStoresTokenAndMismatchErrors(t *testing.T) {
+	home, _, hub := runFixture(t, "run-token", reviewTemplate)
+	runCheck(t, home, "run-token", hub)
+	approveReview(t, home, "run-token")
+	t.Setenv("HF_TOKEN", "bad token")
+	entry := runCheck(t, home, "run-token", hub)
+	record, err := storedResult(t, home, "run-token")
+	if entry.NotStored || !entry.LaunchBlocked || err != nil || record.Checks[1].Reason != modelcheck.ReasonTokenUnusable || record.TemplateApproval != nil {
+		t.Fatalf("token error: %+v %+v %v", entry, record.Checks, err)
+	}
+	t.Setenv("HF_TOKEN", "")
+	hub.mismatch = "config.json"
+	entry = runCheck(t, home, "run-token", hub)
+	if entry.NotStored || entry.Status != modelcheck.StatusFindings || entry.Checks[1].Reason != modelcheck.ReasonIdentityMismatch {
+		t.Fatalf("mismatch: %+v", entry)
+	}
+}
+
+// The actions that write need an activated setup outside maintenance, with
+// the installed release. They check this before the run and again before
+// the write.
+func TestModelCheckNeedsAnActivatedDeployment(t *testing.T) {
+	home, _, hub := runFixture(t, "run-deploy", reviewTemplate)
+	runCheck(t, home, "run-deploy", hub)
+	review, _ := ModelReviewList(context.Background(), home, ModelReviewRequest{Version: 1, Workload: "run-deploy"})
+	state := filepath.Join(home, "state/state.db")
+	before, _ := storedResult(t, home, "run-deploy")
+	approve := ModelApproveRequest{Version: 1, Workload: "run-deploy", ChatTemplateSHA256: review.ChatTemplateSHA256, ReviewSHA256: review.ReviewSHA256}
+	check := ModelCheckRequest{Version: 1, Workload: "run-deploy", Source: runSource}
+	for name, marker := range map[string]deployment.Marker{
+		"maintenance":   {Version: 1, Release: deployment.Release, Maintenance: true},
+		"other release": {Version: 1, Release: "v0.0.1"},
+	} {
+		if err := deployment.Write(state, marker); err != nil {
+			t.Fatal(err)
+		}
+		requests := hub.requests.Load()
+		if _, err := ModelCheck(context.Background(), home, check, hub.client()); err == nil || hub.requests.Load() != requests {
+			t.Fatalf("%s: check %v", name, err)
+		}
+		if _, err := ModelApprove(context.Background(), home, approve, 1000, time.Now()); err == nil {
+			t.Fatalf("%s: approval accepted", name)
+		}
+	}
+	if err := deployment.Write(state, deployment.Marker{Version: 1, Release: deployment.Release}); err != nil {
+		t.Fatal(err)
+	}
+	// Maintenance that starts during the run refuses the write.
+	hub.mismatch = "config.json"
+	hub.onRequest = func() {
+		if err := deployment.Write(state, deployment.Marker{Version: 1, Release: deployment.Release, Maintenance: true}); err != nil {
+			t.Error(err)
+		}
+	}
+	if _, err := ModelCheck(context.Background(), home, check, hub.client()); err == nil {
+		t.Fatal("a run stored its result during maintenance")
+	}
+	if after, _ := storedResult(t, home, "run-deploy"); after.CheckedAt != before.CheckedAt || after.Status != before.Status {
+		t.Fatalf("maintenance did not stop the write: %+v", after)
+	}
+	// A profile without an activated release is refused.
+	writeStatusProfile(t, home, Profile{Version: 1, StatePath: state})
+	if _, err := ModelCheck(context.Background(), home, check, hub.client()); !errors.Is(err, ErrModelNotActivated) {
+		t.Fatalf("not activated: %v", err)
+	}
+}
+
+// A run stores its result only for the catalog that it read at the start.
+func TestModelCheckRefusesAResultForAChangedCatalog(t *testing.T) {
+	home, _, hub := runFixture(t, "run-catalog", "{{ messages }}")
+	runCheck(t, home, "run-catalog", hub)
+	before, _ := storedResult(t, home, "run-catalog")
+	state := filepath.Join(home, "state/state.db")
+	draft := ownedDraft("run-catalog", 9181)
+	draft.Binding.Owned.ModelPath = testModelPath("run-catalog-moved")
+	moved, _, err := OwnedProfile(draft, "/user.slice/user-1000.slice/user@1000.service", home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub.mismatch = "config.json"
+	hub.onRequest = func() {
+		s, err := store.Open(context.Background(), state)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer s.Close()
+		snapshot, err := s.Catalog(context.Background())
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		catalog := snapshot.Catalog.Clone()
+		catalog.Profiles[0] = moved
+		if _, err := s.ReplaceCatalog(context.Background(), snapshot.Revision, catalog); err != nil {
+			t.Error(err)
+		}
+	}
+	if _, err := ModelCheck(context.Background(), home, ModelCheckRequest{Version: 1, Workload: "run-catalog", Source: runSource}, hub.client()); !errors.Is(err, ErrResultNotCurrent) {
+		t.Fatalf("a result for the old catalog: %v", err)
+	}
+	if after, _ := storedResult(t, home, "run-catalog"); after.CheckedAt != before.CheckedAt || after.Status != before.Status {
+		t.Fatalf("a result for the old catalog was stored: %+v", after)
+	}
+}
+
+// A review of another template than the launch pins is not current.
+func TestModelReviewNeedsThePinnedTemplate(t *testing.T) {
+	home, _, hub := runFixture(t, "run-pin", reviewTemplate)
+	files := runModelFiles("{{ messages }}Answer in French.")
+	writeRunModel(t, "run-pin", files)
+	hub.files = files
+	if entry := runCheck(t, home, "run-pin", hub); !entry.ReviewPending {
+		t.Fatalf("entry %+v", entry)
+	}
+	review, err := ModelReviewList(context.Background(), home, ModelReviewRequest{Version: 1, Workload: "run-pin"})
+	if err != nil || review.Pending {
+		t.Fatalf("a review of another template: %+v %v", review, err)
+	}
+	record, _ := storedResult(t, home, "run-pin")
+	pending, _ := record.PendingReview()
+	request := ModelApproveRequest{Version: 1, Workload: "run-pin", ChatTemplateSHA256: pending.ChatTemplateSHA256, ReviewSHA256: pending.ReviewSHA256}
+	if _, err := ModelApprove(context.Background(), home, request, 1000, time.Now()); !errors.Is(err, ErrResultNotCurrent) {
+		t.Fatalf("approval of another template: %v", err)
 	}
 }

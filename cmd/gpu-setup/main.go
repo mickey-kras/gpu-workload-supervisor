@@ -114,7 +114,7 @@ func (a setupActions) runAction(ctx context.Context, home, action string, input 
 		}
 		return json.NewEncoder(output).Encode(report)
 	case "model-check", "model-review", "model-approve":
-		return runModelCheck(ctx, home, action, input, output)
+		return runModelAction(ctx, home, action, input, output)
 	case "drafts":
 		return runDrafts(home, output)
 	case "save-drafts":
@@ -250,9 +250,9 @@ func actionContext(action string) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), actionTimeout)
 }
 
-// runModelCheck runs the model check, review and approval actions. Each
+// runModelAction runs the model check, review and approval actions. Each
 // writes one JSON object.
-func runModelCheck(ctx context.Context, home, action string, input io.Reader, output io.Writer) error {
+func runModelAction(ctx context.Context, home, action string, input io.Reader, output io.Writer) error {
 	var result any
 	switch action {
 	case "model-check":
@@ -271,7 +271,7 @@ func runModelCheck(ctx context.Context, home, action string, input io.Reader, ou
 		if result, err = setup.ModelReviewList(ctx, home, request); err != nil {
 			return err
 		}
-	default:
+	case "model-approve":
 		request, err := setup.DecodeModelApproveRequest(input)
 		if err != nil {
 			return err
@@ -279,6 +279,8 @@ func runModelCheck(ctx context.Context, home, action string, input io.Reader, ou
 		if result, err = setup.ModelApprove(ctx, home, request, os.Getuid(), time.Now()); err != nil {
 			return err
 		}
+	default:
+		return errors.New("unknown model action")
 	}
 	return json.NewEncoder(output).Encode(result)
 }

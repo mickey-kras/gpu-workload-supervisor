@@ -3,13 +3,16 @@ package setup
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"regexp"
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/modelcheck"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
@@ -63,6 +66,7 @@ type ModelReview struct {
 var (
 	ErrModelCheckRequest  = errors.New("the model check request is not valid")
 	ErrModelNotConfigured = errors.New("the workload is not in the accepted configuration")
+	ErrModelNotActivated  = errors.New("model checks need an activated setup; finish setup first")
 	ErrModelNotLLM        = errors.New("model checks apply only to LLM workloads")
 	ErrModelNoDirectory   = errors.New("the workload names no model folder, so setup cannot check its files")
 	ErrResultNotCurrent   = errors.New("the stored result does not apply to the accepted workload; run the checks again")
@@ -71,49 +75,64 @@ var (
 // digestPattern matches a SHA-256 as 64 lowercase hex characters.
 var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// DecodeModelCheckRequest reads one strict request of at most
+// modelRequest is a request of a model check action.
+type modelRequest interface {
+	ModelCheckRequest | ModelReviewRequest | ModelApproveRequest
+	valid() bool
+}
+
+func (r ModelCheckRequest) valid() bool {
+	return r.Version == 1 && control.ValidWorkloadID(control.Workload(r.Workload)) && r.Source.Valid()
+}
+
+func (r ModelReviewRequest) valid() bool {
+	return r.Version == 1 && control.ValidWorkloadID(control.Workload(r.Workload))
+}
+
+func (r ModelApproveRequest) valid() bool {
+	return r.Version == 1 && control.ValidWorkloadID(control.Workload(r.Workload)) &&
+		digestPattern.MatchString(r.ChatTemplateSHA256) && digestPattern.MatchString(r.ReviewSHA256)
+}
+
+// decodeModelRequest reads one strict request of at most
 // MaxModelCheckRequestBytes and validates it.
-func DecodeModelCheckRequest(r io.Reader) (ModelCheckRequest, error) {
-	var request ModelCheckRequest
+func decodeModelRequest[T modelRequest](r io.Reader) (T, error) {
+	var request T
 	if err := strictjson.DecodeLimited(r, MaxModelCheckRequestBytes, &request); err != nil {
 		return request, err
 	}
-	if request.Version != 1 || !control.ValidWorkloadID(control.Workload(request.Workload)) || !request.Source.Valid() {
+	if !request.valid() {
 		return request, ErrModelCheckRequest
 	}
 	return request, nil
+}
+
+// DecodeModelCheckRequest reads one strict model check request.
+func DecodeModelCheckRequest(r io.Reader) (ModelCheckRequest, error) {
+	return decodeModelRequest[ModelCheckRequest](r)
 }
 
 // DecodeModelReviewRequest reads one strict review request.
 func DecodeModelReviewRequest(r io.Reader) (ModelReviewRequest, error) {
-	var request ModelReviewRequest
-	if err := strictjson.DecodeLimited(r, MaxModelCheckRequestBytes, &request); err != nil {
-		return request, err
-	}
-	if request.Version != 1 || !control.ValidWorkloadID(control.Workload(request.Workload)) {
-		return request, ErrModelCheckRequest
-	}
-	return request, nil
+	return decodeModelRequest[ModelReviewRequest](r)
 }
 
 // DecodeModelApproveRequest reads one strict approval request.
 func DecodeModelApproveRequest(r io.Reader) (ModelApproveRequest, error) {
-	var request ModelApproveRequest
-	if err := strictjson.DecodeLimited(r, MaxModelCheckRequestBytes, &request); err != nil {
-		return request, err
-	}
-	if request.Version != 1 || !control.ValidWorkloadID(control.Workload(request.Workload)) ||
-		!digestPattern.MatchString(request.ChatTemplateSHA256) || !digestPattern.MatchString(request.ReviewSHA256) {
-		return request, ErrModelCheckRequest
-	}
-	return request, nil
+	return decodeModelRequest[ModelApproveRequest](r)
 }
 
 // checkTarget is an accepted LLM workload with a model directory.
 type checkTarget struct {
-	statePath string
-	profile   control.WorkloadProfile
-	root, pin string
+	statePath, release string
+	profile            control.WorkloadProfile
+	root, pin          string
+}
+
+// sameLaunch tells whether two targets name the same state, release, model
+// directory and chat template pin.
+func (t checkTarget) sameLaunch(other checkTarget) bool {
+	return t.statePath == other.statePath && t.release == other.release && t.root == other.root && t.pin == other.pin
 }
 
 // loadCheckTarget finds an accepted LLM workload that has a model
@@ -140,51 +159,119 @@ func loadCheckTarget(ctx context.Context, home, workload string) (checkTarget, e
 	case p.NativeModel.Owned == nil || p.NativeModel.Owned.ModelPath == "":
 		return checkTarget{}, ErrModelNoDirectory
 	}
-	return checkTarget{statePath: profile.StatePath, profile: p, root: p.NativeModel.Owned.ModelPath, pin: p.NativeModel.ChatTemplateSHA256}, nil
+	return checkTarget{statePath: profile.StatePath, release: profile.ActivatedRelease, profile: p, root: p.NativeModel.Owned.ModelPath, pin: p.NativeModel.ChatTemplateSHA256}, nil
 }
 
-// openCheckStore opens the existing state database for a write.
-func openCheckStore(ctx context.Context, path string) (*store.Store, error) {
-	file, err := deployment.OpenPrivate(path)
+// loadWriteTarget is loadCheckTarget for an action that writes: setup must
+// be activated, and the deployment must not be in maintenance or carry
+// another release.
+func loadWriteTarget(ctx context.Context, home, workload string) (checkTarget, error) {
+	target, err := loadCheckTarget(ctx, home, workload)
 	if err != nil {
-		return nil, err
+		return target, err
 	}
-	file.Close()
-	return store.Open(ctx, path)
+	if target.release == "" {
+		return target, ErrModelNotActivated
+	}
+	return target, deployment.Check(target.statePath, target.release)
+}
+
+// gateWait bounds the wait for the state gate before a write.
+const gateWait = time.Minute
+
+// writeTarget runs write with the writable store, as the other setup
+// write paths do. It holds the state gate, so no apply or activation runs
+// during the write. Under the gate it checks the deployment again, and
+// reads the target again: a workload whose model directory or chat
+// template pin changed after target was read gives ErrResultNotCurrent,
+// and nothing is written.
+func writeTarget(ctx context.Context, home string, target checkTarget, write func(*store.Store, checkTarget) (ModelStatusEntry, error)) (ModelStatusEntry, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, gateWait)
+	gate, err := lock.AcquireContext(waitCtx, target.statePath+".lock", false)
+	cancel()
+	if err != nil {
+		return ModelStatusEntry{}, fmt.Errorf("setup is busy with another change; try again: %w", err)
+	}
+	defer gate.Close()
+	fresh, err := loadWriteTarget(ctx, home, string(target.profile.ID))
+	if err != nil {
+		return ModelStatusEntry{}, err
+	}
+	if !target.sameLaunch(fresh) {
+		return ModelStatusEntry{}, ErrResultNotCurrent
+	}
+	st, err := store.Open(ctx, fresh.statePath)
+	if err != nil {
+		return ModelStatusEntry{}, err
+	}
+	defer st.Close()
+	return write(st, fresh)
 }
 
 // ModelCheck runs the checks of one accepted LLM workload and stores the
 // result, keyed by the workload ID. client reads the hub. The run reuses a
 // stored template approval for the same files; it never approves by
-// itself. A canceled or failed run stores nothing. A run whose hub
-// listing failed keeps the earlier stored result: it stores nothing and
-// gives the entry of the run with NotStored. Each other run replaces the
-// stored result, also with findings or an error. The entry describes the
-// stored result.
+// itself. A run that is canceled or stops at its time limit, or whose
+// checker gives an error, stores nothing.
+//
+// A run whose hub listing failed keeps the earlier stored result when that
+// result is for the same model directory and the same file digests. It
+// then stores nothing and gives the entry of the run with NotStored. Else
+// it stores the run, so a launch of changed files stays blocked. Each
+// other run replaces the stored result, also with findings or an error.
+// Else the entry describes the stored result.
 func ModelCheck(ctx context.Context, home string, request ModelCheckRequest, client *http.Client) (ModelStatusEntry, error) {
-	target, err := loadCheckTarget(ctx, home, request.Workload)
+	target, err := loadWriteTarget(ctx, home, request.Workload)
 	if err != nil {
 		return ModelStatusEntry{}, err
 	}
-	st, err := openCheckStore(ctx, target.statePath)
+	prior, err := readStoredResult(ctx, target)
 	if err != nil {
 		return ModelStatusEntry{}, err
 	}
-	defer st.Close()
-	checker := modelcheck.Checker{Client: client, Hub: modelcheck.DefaultHub, Version: modelcheck.CheckerVersion, Approver: st.TemplateApprover(nil, nil)}
+	checker := modelcheck.Checker{Client: client, Hub: modelcheck.DefaultHub, Version: modelcheck.CheckerVersion, Approver: storedApprover(prior)}
 	record, err := checker.Run(ctx, modelcheck.Request{Model: request.Workload, Root: target.root, Source: request.Source})
 	if err != nil {
 		return ModelStatusEntry{}, err
 	}
-	if record.HubFailed() {
-		entry := recordEntry(target, record)
-		entry.NotStored = true
-		return entry, nil
+	return writeTarget(ctx, home, target, func(st *store.Store, fresh checkTarget) (ModelStatusEntry, error) {
+		if record.HubFailed() {
+			if stored, err := st.ModelCheck(ctx, request.Workload); err == nil && stored.Root == record.Root && maps.Equal(stored.Files, record.Files) {
+				entry := recordEntry(fresh, record)
+				entry.NotStored, entry.LaunchBlocked = true, recordEntry(fresh, stored).LaunchBlocked
+				return entry, nil
+			}
+		}
+		if err := st.PutModelCheck(ctx, record); err != nil {
+			return ModelStatusEntry{}, err
+		}
+		return storedEntry(ctx, st, fresh)
+	})
+}
+
+// readStoredResult reads the stored result of the target from the state
+// database, read-only. It gives nil without a result that reads as valid.
+func readStoredResult(ctx context.Context, target checkTarget) (*modelcheck.Record, error) {
+	db, err := readOnlyDB(target.statePath)
+	if err != nil {
+		return nil, err
 	}
-	if err := st.PutModelCheck(ctx, record); err != nil {
-		return ModelStatusEntry{}, err
+	defer db.Close()
+	record, _, err := storedModelCheck(ctx, db, string(target.profile.ID))
+	return record, err
+}
+
+// storedApprover reuses the approval of prior for the same model directory,
+// source, template and review list, as store.TemplateApprover does. Else
+// it asks for review: setup never approves by itself. An approval that the
+// operator stores during the run stays, see store.PutModelCheck.
+func storedApprover(prior *modelcheck.Record) modelcheck.Approver {
+	return func(_ context.Context, request modelcheck.ReviewRequest) (modelcheck.TemplateApproval, error) {
+		if prior != nil && prior.TemplateApproval != nil && prior.Root == request.Root && prior.Source == request.Source && prior.TemplateApproval.Matches(request) {
+			return *prior.TemplateApproval, nil
+		}
+		return modelcheck.TemplateApproval{}, modelcheck.ErrApprovalNeeded
 	}
-	return storedEntry(ctx, st, target)
 }
 
 // storedEntry reads the stored result of the target again, for example
@@ -214,17 +301,12 @@ func ModelReviewList(ctx context.Context, home string, request ModelReviewReques
 	if err != nil {
 		return review, err
 	}
-	db, err := readOnlyDB(target.statePath)
+	record, err := readStoredResult(ctx, target)
+	if err != nil || record == nil {
+		return review, err
+	}
+	pending, err := currentReview(*record, target)
 	if err != nil {
-		return review, err
-	}
-	defer db.Close()
-	record, found, err := storedModelCheck(ctx, db, request.Workload)
-	if err != nil || !found || record == nil {
-		return review, err
-	}
-	pending, ok := currentReview(*record, target)
-	if !ok {
 		return review, nil
 	}
 	review.Pending, review.TemplateFile, review.Items = true, pending.TemplateFile, pending.Review
@@ -233,12 +315,21 @@ func ModelReviewList(ctx context.Context, home string, request ModelReviewReques
 }
 
 // currentReview gives the pending review of a result that applies to the
-// target.
-func currentReview(record modelcheck.Record, target checkTarget) (modelcheck.ReviewRequest, bool) {
+// target, for the chat template that the launch pins. A result that does
+// not apply, or a review of another template, gives ErrResultNotCurrent.
+// A result without a pending review gives modelcheck.ErrNoPendingReview.
+func currentReview(record modelcheck.Record, target checkTarget) (modelcheck.ReviewRequest, error) {
 	if _, reason := modelcheck.StoredStatus(record, string(target.profile.ID), target.root, target.pin); reason != "" {
-		return modelcheck.ReviewRequest{}, false
+		return modelcheck.ReviewRequest{}, ErrResultNotCurrent
 	}
-	return record.PendingReview()
+	pending, ok := record.PendingReview()
+	switch {
+	case !ok:
+		return pending, modelcheck.ErrNoPendingReview
+	case pending.ChatTemplateSHA256 != target.pin:
+		return pending, ErrResultNotCurrent
+	}
+	return pending, nil
 }
 
 // ModelApprove stores the approval of the operator with uid for the
@@ -247,31 +338,25 @@ func currentReview(record modelcheck.Record, target checkTarget) (modelcheck.Rev
 // modelcheck.ErrApprovalMismatch. A result that changed after the read
 // gives store.ErrModelCheckConflict: the desktop reads the list again.
 func ModelApprove(ctx context.Context, home string, request ModelApproveRequest, uid int, now time.Time) (ModelStatusEntry, error) {
-	target, err := loadCheckTarget(ctx, home, request.Workload)
+	target, err := loadWriteTarget(ctx, home, request.Workload)
 	if err != nil {
 		return ModelStatusEntry{}, err
 	}
-	st, err := openCheckStore(ctx, target.statePath)
-	if err != nil {
-		return ModelStatusEntry{}, err
-	}
-	defer st.Close()
-	record, err := st.ModelCheck(ctx, request.Workload)
-	if err != nil {
-		return ModelStatusEntry{}, err
-	}
-	if _, reason := modelcheck.StoredStatus(record, request.Workload, target.root, target.pin); reason != "" {
-		return ModelStatusEntry{}, ErrResultNotCurrent
-	}
-	pending, ok := record.PendingReview()
-	switch {
-	case !ok:
-		return ModelStatusEntry{}, modelcheck.ErrNoPendingReview
-	case pending.ChatTemplateSHA256 != request.ChatTemplateSHA256 || pending.ReviewSHA256 != request.ReviewSHA256:
-		return ModelStatusEntry{}, modelcheck.ErrApprovalMismatch
-	}
-	if err := st.ApproveTemplate(ctx, request.Workload, modelcheck.NewApproval(pending, uid, now)); err != nil {
-		return ModelStatusEntry{}, err
-	}
-	return storedEntry(ctx, st, target)
+	return writeTarget(ctx, home, target, func(st *store.Store, fresh checkTarget) (ModelStatusEntry, error) {
+		record, err := st.ModelCheck(ctx, request.Workload)
+		if err != nil {
+			return ModelStatusEntry{}, err
+		}
+		pending, err := currentReview(record, fresh)
+		if err != nil {
+			return ModelStatusEntry{}, err
+		}
+		if pending.ChatTemplateSHA256 != request.ChatTemplateSHA256 || pending.ReviewSHA256 != request.ReviewSHA256 {
+			return ModelStatusEntry{}, modelcheck.ErrApprovalMismatch
+		}
+		if err := st.ApproveTemplate(ctx, request.Workload, modelcheck.NewApproval(pending, uid, now)); err != nil {
+			return ModelStatusEntry{}, err
+		}
+		return storedEntry(ctx, st, fresh)
+	})
 }
