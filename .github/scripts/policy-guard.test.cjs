@@ -1617,3 +1617,45 @@ test('STE control files are mandatory and their replacement cannot authorize its
   assert.ok(inspectActivated(candidate, baseline).some(failure => failure.includes('independent exact-head owner admission')));
   assert.ok(inspectActivated(candidate, baseline).some(failure => failure.includes('documentation gate controls changed')));
 });
+
+test('release transition accepts both exact formats and rejects malformed manifests', () => {
+  const { MANIFEST_VALIDATION_SCRIPT } = require('./policy-release.cjs');
+  const baseline = files({ serial: false });
+  assert.deepEqual(inspectActivated(baseline), []);
+  const candidate = { ...baseline };
+  const path = '.github/workflows/release.yml';
+  const workflow = YAML.parse(candidate[path]);
+  for (const id of ['validation', 'publish']) {
+    const step = workflow.jobs[id].steps.find(step => step.with?.script === VALIDATION_SCRIPT);
+    assert.ok(step);
+    step.with.script = MANIFEST_VALIDATION_SCRIPT;
+  }
+  candidate[path] = YAML.stringify(workflow);
+  const manifest = '.github/release-helper-digests.json';
+  const hashes = Object.fromEntries(['release-validation', 'release-publication'].map(name => {
+    const path = `.github/scripts/${name}.cjs`;
+    return [path, require('node:crypto').createHash('sha256').update(candidate[path]).digest('hex')];
+  }));
+  candidate[manifest] = JSON.stringify(hashes);
+  assert.deepEqual(inspectActivated(candidate), []);
+  for (const value of [undefined, '{}', 'null', '[]', JSON.stringify({ ...hashes, extra: 'x' }),
+    JSON.stringify({ ...hashes, '.github/scripts/release-validation.cjs': 'a'.repeat(64) })]) {
+    assert.ok(inspectActivated({ ...candidate, [manifest]: value }).some(error => error.includes(manifest)));
+  }
+  workflow.jobs.validation.steps.find(step => step.with?.script === MANIFEST_VALIDATION_SCRIPT).if = 'always()';
+  assert.ok(inspectActivated({ ...candidate, [path]: YAML.stringify(workflow) }).length > 0);
+});
+
+test('training Dependabot scope is optional, exact and unique', () => {
+  const baseline = files({ serial: false });
+  const path = '.github/dependabot.yml';
+  const config = YAML.parse(baseline[path]);
+  const training = { 'package-ecosystem': 'pip', directory: '/training/axolotl', schedule: { interval: 'weekly' } };
+  config.updates.push(training);
+  assert.deepEqual(inspectActivated({ ...baseline, [path]: YAML.stringify(config) }), []);
+  for (const entry of [{ ...training }, { ...training, directory: '/training' }]) {
+    const invalid = structuredClone(config);
+    invalid.updates.push(entry);
+    assert.ok(inspectActivated({ ...baseline, [path]: YAML.stringify(invalid) }).some(error => error.includes('coverage')));
+  }
+});

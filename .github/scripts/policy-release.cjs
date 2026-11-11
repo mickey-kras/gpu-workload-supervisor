@@ -36,6 +36,44 @@ const VALIDATION_SCRIPT = [
   '  github, context, core, version: process.env.VERSION,', '});', '',
 ].join('\n');
 
+const RELEASE_DIGEST_MANIFEST = '.github/release-helper-digests.json';
+
+const MANIFEST_VALIDATION_SCRIPT = [
+  "const { readFileSync } = require('node:fs');",
+  "const { createHash } = require('node:crypto');",
+  "const { resolve } = require('node:path');",
+  "const { compileFunction } = require('node:vm');",
+  'const { data: manifest } = await github.rest.repos.getContent({',
+  `  ...context.repo, path: '${RELEASE_DIGEST_MANIFEST}', ref: context.sha,`, '});',
+  "if (manifest?.type !== 'file' || manifest.encoding !== 'base64' || typeof manifest.content !== 'string') {",
+  "  throw new Error('Release helper digest manifest is unreadable');", '}',
+  "const digests = JSON.parse(Buffer.from(manifest.content, 'base64').toString('utf8'));",
+  'const verified = (path, message) => {',
+  '  const bytes = readFileSync(resolve(path));',
+  "  const expected = Object.hasOwn(digests, path) ? digests[path] : '';",
+  "  if (!/^[a-f0-9]{64}$/.test(expected) || createHash('sha256').update(bytes).digest('hex') !== expected) {",
+  '    throw new Error(message);', '  }',
+  '  return bytes;', '};',
+  "const filename = resolve('.github/scripts/release-validation.cjs');",
+  "const source = verified('.github/scripts/release-validation.cjs',",
+  "  'Release validation verifier bytes changed in the workspace');",
+  "const publicationFilename = resolve('.github/scripts/release-publication.cjs');",
+  "const publicationSource = verified('.github/scripts/release-publication.cjs',",
+  "  'Release publication helper bytes changed in the workspace');",
+  'const publication = { exports: {} };',
+  "const noImports = () => { throw new Error('Unexpected publication helper dependency'); };",
+  "compileFunction(publicationSource.toString('utf8'), ['require', 'module', 'exports'],",
+  '  { filename: publicationFilename })(noImports, publication, publication.exports);',
+  'const closedRequire = name => {',
+  "  if (name !== './release-publication.cjs') throw new Error('Unexpected validation dependency');",
+  '  return publication.exports;', '};',
+  'const validated = { exports: {} };',
+  "compileFunction(source.toString('utf8'), ['require', 'module', 'exports'], { filename })(",
+  '  closedRequire, validated, validated.exports,', ');',
+  'await validated.exports.verifyMain({',
+  '  github, context, core, version: process.env.VERSION,', '});', '',
+].join('\n');
+
 const HARDEN = { uses: 'step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed',
   with: { 'egress-policy': 'audit' } };
 const CHECKOUT = { uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
@@ -69,6 +107,21 @@ function inspectVerificationWorkspace(workflow, failures, script) {
   }
 }
 
+function inspectDigestManifest(files, expected, failures) {
+  let manifest;
+  try {
+    manifest = JSON.parse(files[RELEASE_DIGEST_MANIFEST]);
+  } catch {
+    manifest = undefined;
+  }
+  const keys = Object.keys(expected).sort();
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) ||
+      JSON.stringify(Object.keys(manifest).sort()) !== JSON.stringify(keys) ||
+      keys.some(key => typeof expected[key] !== 'string' || manifest[key] !== expected[key])) {
+    failures.push(`${RELEASE_DIGEST_MANIFEST} does not match the reviewed release helper digests`);
+  }
+}
+
 function inspectValidationReuse(files, workflow, failures, checks, admitted) {
   const releaseJobs = workflow?.jobs;
   const path = '.github/workflows/release.yml';
@@ -85,9 +138,11 @@ function inspectValidationReuse(files, workflow, failures, checks, admitted) {
       failures.push('Release helper digests are invalid');
     }
   }
+  const expectedDigests = {};
   for (const [file, hash] of Object.entries(RELEASE_HASHES)) {
     const actual = createHash('sha256').update(files[file] || '').digest('hex');
     const expected = admitted.has(file) ? candidateHashes?.[file] : hash;
+    expectedDigests[file] = expected;
     if (actual !== expected) failures.push(file.endsWith('release-validation.cjs')
       ? 'Release validation verifier was changed' : 'Release publication helper was changed');
     if (admitted.has(file)) script = script.replaceAll(hash, actual);
@@ -95,6 +150,10 @@ function inspectValidationReuse(files, workflow, failures, checks, admitted) {
   if (!validation) {
     failures.push(`${path} lost exact-commit main validation`);
     return;
+  }
+  if (verification?.with?.script === MANIFEST_VALIDATION_SCRIPT) {
+    script = MANIFEST_VALIDATION_SCRIPT;
+    inspectDigestManifest(files, expectedDigests, failures);
   }
   inspectVerificationWorkspace(workflow, failures, script);
   if (['quality', 'aislop', 'codeql'].some(id => Object.hasOwn(releaseJobs, id)) ||
@@ -229,4 +288,4 @@ function inspectReleasePublish(files, workflows, failures, checks, inspectGoRele
   });
 }
 
-module.exports = { inspectReleaseEntry, inspectReleasePublish, VALIDATION_SCRIPT };
+module.exports = { inspectReleaseEntry, inspectReleasePublish, VALIDATION_SCRIPT, MANIFEST_VALIDATION_SCRIPT };
