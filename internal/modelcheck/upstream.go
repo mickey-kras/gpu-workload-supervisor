@@ -49,6 +49,10 @@ type Source struct {
 	Revision string `json:"revision"`
 }
 
+// Valid tells whether the source names a hub repository as org/name and a
+// pinned commit of 40 lowercase hex characters.
+func (s Source) Valid() bool { return s.valid() }
+
 func (s Source) valid() bool {
 	return repoPattern.MatchString(s.Repo) && !strings.Contains(s.Repo, "..") && revisionPattern.MatchString(s.Revision)
 }

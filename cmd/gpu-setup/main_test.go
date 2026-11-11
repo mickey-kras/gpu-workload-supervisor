@@ -9,6 +9,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/setup"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -221,7 +222,7 @@ func TestRootRejectedForAllSetupActions(t *testing.T) {
 
 func TestAllDesktopCommandsRejectRootBeforeReadingInputOrWritingOutput(t *testing.T) {
 	for _, command := range []string{
-		"correct-gpu", "discover", "probe", "prepare", "fingerprint", "render-owned", "drafts", "save-drafts", "verify-bindings", "validate", "apply", "reconcile", "idle-policy-tick", "remove-integration", "model-status",
+		"correct-gpu", "discover", "probe", "prepare", "fingerprint", "render-owned", "drafts", "save-drafts", "verify-bindings", "validate", "apply", "reconcile", "idle-policy-tick", "remove-integration", "model-status", "model-check", "model-review", "model-approve",
 	} {
 		t.Run(command, func(t *testing.T) {
 			a := systemActions()
@@ -306,5 +307,66 @@ func TestDraftCommandsRecoverUnsupportedSelections(t *testing.T) {
 				t.Fatalf("supported selection lost: %+v %v", current, err)
 			}
 		})
+	}
+}
+
+// The model check actions read strict JSON of at most 4 KiB and write
+// nothing for a request that they refuse.
+func TestModelCheckActionsRefuseInvalidRequests(t *testing.T) {
+	actions := systemActions()
+	home := t.TempDir()
+	actions.home = func() (string, error) { return home, nil }
+	actions.euid = func() int { return 1000 }
+	revision := strings.Repeat("a", 40)
+	for action, raw := range map[string]string{
+		"model-check":   `{"version":1,"workload":"chat","source":{"repo":"org/model","revision":"` + revision + `"},"extra":1}`,
+		"model-review":  `{"version":1,"workload":"chat"}` + strings.Repeat(" ", 4096),
+		"model-approve": `{"version":1,"workload":"chat","chatTemplateSHA256":"x","reviewSHA256":"y"}`,
+	} {
+		var output bytes.Buffer
+		if err := actions.run([]string{action}, strings.NewReader(raw), &output); err == nil || output.Len() != 0 {
+			t.Fatalf("%s: %v %q", action, err, output.String())
+		}
+	}
+	// A valid request for setup without a profile names no workload.
+	valid := map[string]string{
+		"model-check":   `{"version":1,"workload":"chat","source":{"repo":"org/model","revision":"` + revision + `"}}`,
+		"model-review":  `{"version":1,"workload":"chat"}`,
+		"model-approve": `{"version":1,"workload":"chat","chatTemplateSHA256":"` + strings.Repeat("a", 64) + `","reviewSHA256":"` + strings.Repeat("b", 64) + `"}`,
+	}
+	for action, raw := range valid {
+		var output bytes.Buffer
+		if err := actions.run([]string{action}, strings.NewReader(raw), &output); !errors.Is(err, setup.ErrModelNotConfigured) || output.Len() != 0 {
+			t.Fatalf("%s: %v %q", action, err, output.String())
+		}
+	}
+	files, err := os.ReadDir(home)
+	if err != nil || len(files) != 0 {
+		t.Fatalf("a refused request changed home: %v %v", files, err)
+	}
+}
+
+// A model check gets the longest timeout, and a stop signal cancels it.
+func TestModelCheckContext(t *testing.T) {
+	for action, want := range map[string]time.Duration{"model-check": modelCheckTimeout, "model-status": recheckTimeout, "model-review": actionTimeout} {
+		ctx, cancel := actionContext(action)
+		deadline, ok := ctx.Deadline()
+		if left := time.Until(deadline); !ok || left > want || left < want-time.Minute {
+			t.Fatalf("%s deadline %v", action, left)
+		}
+		cancel()
+		if ctx.Err() == nil {
+			t.Fatalf("%s: cancel did not end the context", action)
+		}
+	}
+	ctx, cancel := actionContext("model-check")
+	defer cancel()
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stop signal did not cancel the model check")
 	}
 }

@@ -1,11 +1,14 @@
 package modelcheck
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // CheckerVersion is the checker version that StoredStatus accepts. A record
 // of another version reads as not scanned, so a new checker checks each
-// model again. No command writes records yet: the command that runs the
-// checks must set Checker.Version to CheckerVersion.
+// model again. The setup action that runs the checks, gpu-setup
+// model-check, sets Checker.Version to CheckerVersion.
 const CheckerVersion = "1"
 
 // Reasons of a display status that differs from the stored status. They
@@ -87,4 +90,19 @@ func (r Record) StaticChecksPassed() bool {
 		}
 	}
 	return true
+}
+
+// HubFailed reports a record whose upstream identity check did not
+// complete because the hub listing failed, for example because the hub is
+// not reachable. Its reason starts with "upstream-". The files can be
+// correct, so the setup action that runs the checks keeps the earlier
+// stored result and does not store this record. An identity mismatch is a
+// finding, not a hub failure.
+func (r Record) HubFailed() bool {
+	for _, check := range r.Checks {
+		if check.Name == CheckIdentity {
+			return check.Outcome == OutcomeError && strings.HasPrefix(check.Reason, "upstream-")
+		}
+	}
+	return false
 }
