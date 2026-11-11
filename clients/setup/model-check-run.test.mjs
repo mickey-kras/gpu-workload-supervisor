@@ -399,9 +399,10 @@ test('a failed action names its cause', async () => {
 test('Run checks waits while the card reads the stored status', async () => {
     const ui = await openSettings({}, {fail: 'model-check', deferAction: 'model-status', deferOccurrence: 2});
     const running = ui.click('Run checks'); await settle();
-    assert.equal(ui.by('Run checks').sensitive, false, 'no second run during the read');
+    assert.equal(ui.visible(ui.by('Run checks')), false, 'no second run during the read');
     ui.finish(); await running; await settle();
     assert.equal(ui.by('Run checks').sensitive, true);
+    assert.equal(ui.by('Run checks').focused, true, 'focus returns after the read');
 });
 
 test('the reason texts cover each reason code of the checks', async () => {

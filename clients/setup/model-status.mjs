@@ -285,6 +285,9 @@ class StatusView {
             outcome = this.cancellable.is_cancelled() ? 'canceled' : 'failed';
             if (outcome === 'failed') { this.failedAction = action; logFailure(error, action); }
             this.setNote(outcome === 'canceled' ? canceled : [failed, failureCause(error)].filter(Boolean).join(' '));
+            // The action can stop after its write: read what is stored
+            // before focus returns to the card.
+            if (action !== 'model-status' && !this.ui.closed) await this.reload(before);
         } finally {
             // Focus moves only from the Cancel button that this action hides.
             const focused = this.cancel.is_focus();
@@ -296,7 +299,6 @@ class StatusView {
                 if (focused) (target ?? this.toggle).grab_focus();
             }
         }
-        if (outcome !== 'done' && action !== 'model-status' && !this.ui.closed) await this.reload(before);
         return outcome;
     }
 
