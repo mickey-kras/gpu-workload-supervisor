@@ -46,7 +46,7 @@ for (const [index, app] of ['comfyui', 'vllm'].entries()) {
         const applied = JSON.parse(ui.calls.find(call => call.argv[1] === 'apply').input);
         assert.equal(applied.confirmQuiesced, true);
         assert.equal(applied.catalog.profiles.length, 1);
-        assert.ok(ui.calls.every(call => ['--version', 'discover', 'drafts', 'prepare', 'fingerprint', 'validate', 'verify-bindings', 'apply'].includes(call.argv[1])));
+        assert.ok(ui.calls.every(call => ['--version', 'discover', 'drafts', 'model-status', 'prepare', 'fingerprint', 'validate', 'verify-bindings', 'apply'].includes(call.argv[1])));
     });
 }
 

@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 const request = `{"version":1,"profile":{"version":1,"statePath":"/tmp/state.db","systemctlPath":"/usr/bin/systemctl","nvidiaSMIPath":"/usr/bin/true","gpuIndex":0,"capacityHeadroomMiB":0},"catalog":{"version":1,"profiles":[{"id":"text","label":"Text","adapter":"systemd","unit":"text.service","cgroup":"/user.slice/text","healthURL":"http://127.0.0.1:8000/health","bootPolicy":"stop-to-idle"}]}}`
@@ -156,6 +157,41 @@ func TestDraftCommands(t *testing.T) {
 	}
 }
 
+func TestModelStatusCommand(t *testing.T) {
+	actions := systemActions()
+	actions.home = func() (string, error) { return t.TempDir(), nil }
+	actions.euid = func() int { return 1000 }
+	var output bytes.Buffer
+	limit := `{"version":1}` + strings.Repeat(" ", setup.MaxModelStatusRequestBytes-len(`{"version":1}`))
+	if err := actions.run([]string{"model-status"}, strings.NewReader(limit), &output); err != nil || output.String() != `{"version":1,"models":[]}`+"\n" {
+		t.Fatalf("model-status: %q %v", output.String(), err)
+	}
+	for _, data := range []string{`{`, `{"version":2}`, `{"version":1,"unknown":true}`, `{"version":1,"recheck":["../x"]}`, `{"version":1}` + strings.Repeat(" ", setup.MaxModelStatusRequestBytes)} {
+		if err := actions.run([]string{"model-status"}, strings.NewReader(data), &bytes.Buffer{}); err == nil {
+			t.Fatalf("accepted %.40s", data)
+		}
+	}
+}
+
+func TestModelStatusTimeout(t *testing.T) {
+	parent, cancel := context.WithTimeout(context.Background(), recheckTimeout)
+	defer cancel()
+	for _, tc := range []struct {
+		request setup.ModelStatusRequest
+		limit   time.Duration
+	}{
+		{setup.ModelStatusRequest{Version: 1}, actionTimeout},
+		{setup.ModelStatusRequest{Version: 1, Recheck: []string{"text"}}, recheckTimeout},
+	} {
+		ctx, stop := modelStatusContext(parent, tc.request)
+		deadline, ok := ctx.Deadline()
+		stop()
+		if left := time.Until(deadline); !ok || left > tc.limit || left < tc.limit-time.Minute {
+			t.Fatalf("recheck %v: %v left", tc.request.Recheck, left)
+		}
+	}
+}
+
 func TestVerifyBindingsCommand(t *testing.T) {
 	actions := systemActions()
 	actions.euid = func() int { return 1000 }
@@ -185,7 +221,7 @@ func TestRootRejectedForAllSetupActions(t *testing.T) {
 
 func TestAllDesktopCommandsRejectRootBeforeReadingInputOrWritingOutput(t *testing.T) {
 	for _, command := range []string{
-		"correct-gpu", "discover", "probe", "prepare", "fingerprint", "render-owned", "drafts", "save-drafts", "verify-bindings", "validate", "apply", "reconcile", "idle-policy-tick", "remove-integration",
+		"correct-gpu", "discover", "probe", "prepare", "fingerprint", "render-owned", "drafts", "save-drafts", "verify-bindings", "validate", "apply", "reconcile", "idle-policy-tick", "remove-integration", "model-status",
 	} {
 		t.Run(command, func(t *testing.T) {
 			a := systemActions()

@@ -9,11 +9,13 @@ layer. They do not prove that a model is safe. A clean result does not mean
 that a modified model behaves like its original.
 
 This page describes the checks that exist now. The behavioral scan, the scan
-job, model selection in the desktop UI and result display of
+job and model selection in the desktop UI of
 [#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583)
 are not available yet. No model can get `passed` yet. A model that passes the available checks stays `not_scanned`.
 The [launch gate](#launch-gate) refuses a model whose stored result does not
 allow the launch.
+
+Setup shows the stored status. See [Status display](#status-display).
 
 ## Model and source
 
@@ -684,6 +686,76 @@ A canceled check stores no result. The model stays `not_scanned`.
 No signatures or keys protect the results. The deployment trusts processes
 with the service UID (see [SECURITY.md](../SECURITY.md)). A process with that
 UID can forge a result. This is an accepted limit.
+
+## Status display
+
+The desktop setup shows the status of each workload. The status is on the
+main page of the application settings and in the review summary. The
+`gpu-setup model-status` action reads it from the stored results. This
+action changes nothing and runs no check.
+
+| Display | Cause |
+| --- | --- |
+| Scanned, no findings | The status is `passed` |
+| Not scanned | The status is `not_scanned`, there is no result, or setup cannot read the stored result |
+| Findings detected | The status is `findings` |
+| Scan failed | The status is `error` |
+| Scan not available for this model | The status is `unsupported` |
+| No backdoor scan available for image models | The workload is a ComfyUI workload |
+| Model files not identified | Setup cannot identify the model files of the workload |
+| Scan status not available | Setup cannot run `gpu-setup model-status`, the action fails, or the report has a version that setup cannot read |
+| Reading scan status… | Setup did not get the status yet |
+
+Each state has an icon and a text, so the state does not depend on color.
+The display never calls a model safe. When the file, identity and template
+checks passed, a second line shows "File checks passed. Behavioral scan not
+available yet." A second line also shows the cause of a `not_scanned`
+status, for example files that changed or another checker version. When a
+chat template review is pending, the second line also says so.
+
+The status applies to the model of the accepted workload. Each entry holds
+a SHA-256 of the model directory path or of the model ID, and the chat
+template pin of the accepted launch. This SHA-256 is not a digest of the
+files. If a selection or an interrupted setup has another model, setup
+shows "Not scanned".
+
+After setup applies the new model, the stored result of the workload
+applies again, with these rules:
+
+- A managed launch with another model directory reads as `not_scanned`
+  (`other-directory`) until a check stores a new result.
+- A launch that names only a model ID has no model directory. The stored
+  result of its workload ID stays in use until the next check. The status
+  does not compare the source of the result.
+
+A result whose chat template check passed applies only to a launch that
+pins the same template SHA-256. If the SHA-256 is different, setup shows
+`not_scanned`, as the [launch gate](#launch-gate) does. A result with
+findings or an error keeps its status. The review summary compares the pin
+of the launch. The settings card adds only a comparison of the model,
+because a selection has no pin before its preview. The pin of the accepted
+launch still applies there.
+
+For a result that does not apply, the details show its checks as the last
+stored result.
+
+"Scan details" shows the checker revision, the scanner revision, the
+coverage, the check date and the outcome of each check. The scanner
+revision is "not available" until the behavioral scan is available. The
+details also show this note: "These checks are a defensive layer, not
+complete backdoor detection."
+
+The status uses the stored digests. It does not hash the model files each
+time that setup opens, because the weights can be large.
+
+The button `Check files again` calculates the digests of one workload again
+and compares them with the result. Files that changed give `not_scanned`.
+Files that setup cannot read, for example a missing folder, also give
+`not_scanned`. The operator can cancel this check. A canceled or failed
+check keeps the last status. Setup does not store the result of this
+check.
+
+Setup writes the error of a failed action to its log.
 
 ## Launch gate
 

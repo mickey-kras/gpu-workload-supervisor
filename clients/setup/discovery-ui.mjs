@@ -356,7 +356,7 @@ class DraftEditor {
         return {
             latestCandidate: () => this.lastCandidate,
             updateDiscovery: discovery => this.updateDiscovery(discovery),
-            app: this.initial.app, id: this.initial.id, originalModel: this.initial.model ?? this.initial.binding?.owned?.modelPath, group: this.group, modelGroup: this.modelGroup, finish: this.finish,
+            app: this.initial.app, id: this.initial.id, originalModel: this.initial.model ?? this.initial.binding?.owned?.modelPath, group: this.group, modelGroup: this.modelGroup, mainPage: this.settings.pages.get('main'), finish: this.finish,
             showSettings: profile => {
                 this.syncing = true;
                 const required = Object.hasOwn(this.overrides, 'requiredMiB') ? this.overrides.requiredMiB : profile?.requiredMiB;

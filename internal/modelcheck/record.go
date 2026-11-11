@@ -279,14 +279,23 @@ func Current(ctx context.Context, r *Record, model, root string, source Source, 
 		r.Configuration != currentConfiguration(checker.Hub) {
 		return StatusNotScanned
 	}
-	files, reason, err := Inventory(ctx, root)
-	if err != nil || !reflect.DeepEqual(r.Files, files) {
-		return StatusNotScanned
-	}
-	// An inventory with a problem stops early, so its digests can equal a
-	// complete record. Only a record of the same problem still applies.
-	if reason != "" && (len(r.Checks) == 0 || r.Checks[0].Reason != reason) {
+	if match, err := filesMatch(ctx, *r, root); err != nil || !match {
 		return StatusNotScanned
 	}
 	return r.Status
+}
+
+// filesMatch takes a fresh inventory of root and reports that it equals
+// the files of r. An inventory error gives the error and no match.
+func filesMatch(ctx context.Context, r Record, root string) (bool, error) {
+	files, reason, err := Inventory(ctx, root)
+	if err != nil {
+		return false, err
+	}
+	if !reflect.DeepEqual(r.Files, files) {
+		return false, nil
+	}
+	// An inventory with a problem stops early, so its digests can equal a
+	// complete record. Only a record of the same problem still applies.
+	return reason == "" || (len(r.Checks) != 0 && r.Checks[0].Reason == reason), nil
 }

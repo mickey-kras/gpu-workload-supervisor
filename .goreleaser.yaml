@@ -104,6 +104,8 @@ nfpms:
         dst: /usr/share/gpu-workload-supervisor/setup-window.mjs
       - src: clients/setup/presentation.mjs
         dst: /usr/share/gpu-workload-supervisor/presentation.mjs
+      - src: clients/setup/model-status.mjs
+        dst: /usr/share/gpu-workload-supervisor/model-status.mjs
       - src: clients/setup/icons/
         dst: /usr/share/gpu-workload-supervisor/icons/
         type: tree
