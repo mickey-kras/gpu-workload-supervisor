@@ -782,6 +782,9 @@ The note tells the operator what to do:
   to read the cause on the card.
 - For a selection that changes the model folder or the chat template, it
   asks you to run the checks again after you finish setup.
+- For an accepted launch that pins another chat template than the checked
+  template, it asks you to run setup again for the workload. You must also
+  run the checks again.
 - Else, it asks you to run the checks again.
 
 The card and "Scan details" show the cause of a result in plain words, for
@@ -858,10 +861,15 @@ Before the write, it reads the accepted workload again. If the model
 directory or the chat template pin changed during the run, setup stores
 nothing and the action fails: run the checks again.
 
-If another setup change or a workload switch holds the state lock, a
-finished run waits for it until the time limit of the run. A cancel during
-this wait stops the run, and setup stores nothing. When an action fails,
-the card names the cause, for example a busy setup or maintenance.
+Another setup change or a workload switch can hold the state lock. Then a
+finished action waits for the lock until its time limit: 60 minutes for a
+run, 5 minutes for an approval. If the lock stays busy until then, the
+action fails and stores nothing. The card shows the cause "Setup was busy
+with another change". A cancel during this wait also stores nothing.
+
+When an action fails, the card names the cause, for example a busy setup or
+maintenance. When setup had no stored result before the run, the card says
+"Setup stored nothing."
 
 Setup refuses a run for these workloads:
 
@@ -942,11 +950,11 @@ check run finds other file changes.
 
 Design decision: a workload without a stored result still launches. Setup
 writes a result only when the operator runs the checks. Thus a gate that
-needs a result would refuse each vLLM launch that has no result yet. Enforcement
-comes later
+needs a result would refuse each vLLM launch that has no result yet.
+Enforcement comes later
 ([#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583)).
 
-The gate applies only to new launches. A workload that runs
-during an upgrade keeps running. A recovery that only checks the state starts nothing, so
-it skips the gate. A rollback start of the previous workload after a failed
+The gate applies only to new launches. A workload that runs during an
+upgrade keeps running. A recovery that only checks the state starts
+nothing, so it skips the gate. A rollback start of the previous workload after a failed
 catalog change also skips it.
