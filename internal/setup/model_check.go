@@ -3,7 +3,6 @@ package setup
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"maps"
 	"net/http"
@@ -48,8 +47,9 @@ type ModelApproveRequest struct {
 }
 
 // ModelReview is the chat template review list of the stored result of
-// one workload. Pending is false when the result applies to the accepted
-// launch and asks for no review, or when no such result exists. Items
+// one workload. Pending is false when no stored result exists, when the
+// result does not apply to the accepted launch, or when it asks for no
+// review. Items
 // hold the literals of the template: the desktop shows them to the
 // operator. The setup log does not.
 type ModelReview struct {
@@ -70,6 +70,9 @@ var (
 	ErrModelNotLLM        = errors.New("model checks apply only to LLM workloads")
 	ErrModelNoDirectory   = errors.New("the workload names no model folder, so setup cannot check its files")
 	ErrResultNotCurrent   = errors.New("the stored result does not apply to the accepted workload; run the checks again")
+	// ErrStateBusy tells that another setup change held the state lock
+	// until the wait for it ended. Nothing was stored.
+	ErrStateBusy = errors.New("setup is busy with another change, so nothing was stored; try again")
 )
 
 // digestPattern matches a SHA-256 as 64 lowercase hex characters.
@@ -176,21 +179,41 @@ func loadWriteTarget(ctx context.Context, home, workload string) (checkTarget, e
 	return target, deployment.Check(target.statePath, target.release)
 }
 
-// gateWait bounds the wait for the state gate before a write.
-const gateWait = time.Minute
+// gateWait bounds the wait for the state gate before a write. The context
+// of the action usually ends first: a run of the checks has 60 minutes in
+// all, so a finished run waits for the gate until that limit. Tests make
+// it shorter.
+var gateWait = 60 * time.Minute
+
+// acquireGate waits for the state gate until ctx ends or gateWait runs
+// out. A cancel or time limit of ctx gives modelcheck.ErrCheckCanceled or
+// modelcheck.ErrCheckTimedOut. The end of gateWait gives ErrStateBusy.
+// Other errors pass through.
+func acquireGate(ctx context.Context, statePath string) (*lock.File, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, gateWait)
+	defer cancel()
+	gate, err := lock.AcquireContext(waitCtx, statePath+".lock", false)
+	switch {
+	case err == nil:
+		return gate, nil
+	case modelcheck.Stopped(ctx) != nil:
+		return nil, modelcheck.Stopped(ctx)
+	case errors.Is(waitCtx.Err(), context.DeadlineExceeded):
+		return nil, ErrStateBusy
+	}
+	return nil, err
+}
 
 // writeTarget runs write with the writable store, as the other setup
 // write paths do. It holds the state gate, so no apply or activation runs
 // during the write. Under the gate it checks the deployment again, and
-// reads the target again: a workload whose model directory or chat
-// template pin changed after target was read gives ErrResultNotCurrent,
-// and nothing is written.
+// reads the target again: a workload whose state path, release, model
+// directory or chat template pin changed after target was read gives
+// ErrResultNotCurrent, and nothing is written.
 func writeTarget(ctx context.Context, home string, target checkTarget, write func(*store.Store, checkTarget) (ModelStatusEntry, error)) (ModelStatusEntry, error) {
-	waitCtx, cancel := context.WithTimeout(ctx, gateWait)
-	gate, err := lock.AcquireContext(waitCtx, target.statePath+".lock", false)
-	cancel()
+	gate, err := acquireGate(ctx, target.statePath)
 	if err != nil {
-		return ModelStatusEntry{}, fmt.Errorf("setup is busy with another change; try again: %w", err)
+		return ModelStatusEntry{}, err
 	}
 	defer gate.Close()
 	fresh, err := loadWriteTarget(ctx, home, string(target.profile.ID))
@@ -211,15 +234,14 @@ func writeTarget(ctx context.Context, home string, target checkTarget, write fun
 // ModelCheck runs the checks of one accepted LLM workload and stores the
 // result, keyed by the workload ID. client reads the hub. The run reuses a
 // stored template approval for the same files; it never approves by
-// itself. A run that is canceled or stops at its time limit, or whose
-// checker gives an error, stores nothing.
+// itself. A run that is canceled, stops at its time limit, or whose
+// checker cannot make a record, stores nothing. Else there are two cases:
 //
-// A run whose hub listing failed keeps the earlier stored result when that
-// result is for the same model directory and the same file digests. It
-// then stores nothing and gives the entry of the run with NotStored. Else
-// it stores the run, so a launch of changed files stays blocked. Each
-// other run replaces the stored result, also with findings or an error.
-// Else the entry describes the stored result.
+//  1. The hub listing failed, and no result is stored, or the stored
+//     result is for the same model directory and file digests. Setup
+//     keeps that state and gives the entry of the run with NotStored.
+//  2. Any other run replaces the stored result, also with findings or an
+//     error. The entry describes the stored result.
 func ModelCheck(ctx context.Context, home string, request ModelCheckRequest, client *http.Client) (ModelStatusEntry, error) {
 	target, err := loadWriteTarget(ctx, home, request.Workload)
 	if err != nil {
@@ -236,9 +258,12 @@ func ModelCheck(ctx context.Context, home string, request ModelCheckRequest, cli
 	}
 	return writeTarget(ctx, home, target, func(st *store.Store, fresh checkTarget) (ModelStatusEntry, error) {
 		if record.HubFailed() {
-			if stored, err := st.ModelCheck(ctx, request.Workload); err == nil && stored.Root == record.Root && maps.Equal(stored.Files, record.Files) {
+			stored, err := st.ModelCheck(ctx, request.Workload)
+			kept := errors.Is(err, store.ErrNoModelCheck) || (err == nil && stored.Root == record.Root && maps.Equal(stored.Files, record.Files))
+			if kept {
 				entry := recordEntry(fresh, record)
-				entry.NotStored, entry.LaunchBlocked = true, recordEntry(fresh, stored).LaunchBlocked
+				// The launch block is the block of the state that stays.
+				entry.NotStored, entry.LaunchBlocked = true, err == nil && stored.AllowLaunch(fresh.root, fresh.pin) != nil
 				return entry, nil
 			}
 		}
@@ -286,9 +311,9 @@ func storedEntry(ctx context.Context, st *store.Store, target checkTarget) (Mode
 
 // recordEntry gives the status entry of a result for the target.
 func recordEntry(target checkTarget, record modelcheck.Record) ModelStatusEntry {
-	entry, root, pin := baseEntry(target.profile)
-	entry.Status, entry.Reason = modelcheck.StoredStatus(record, string(target.profile.ID), root, pin)
-	describeRecord(&entry, record, root, pin)
+	entry, _, _ := baseEntry(target.profile)
+	entry.Status, entry.Reason = modelcheck.StoredStatus(record, string(target.profile.ID), target.root, target.pin)
+	describeRecord(&entry, record, target.root, target.pin)
 	return entry
 }
 
@@ -307,6 +332,8 @@ func ModelReviewList(ctx context.Context, home string, request ModelReviewReques
 	}
 	pending, err := currentReview(*record, target)
 	if err != nil {
+		// A result that is not current, or that asks for no review, has
+		// no pending review.
 		return review, nil
 	}
 	review.Pending, review.TemplateFile, review.Items = true, pending.TemplateFile, pending.Review

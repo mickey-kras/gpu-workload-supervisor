@@ -32,8 +32,11 @@ func CurrentConfiguration() Configuration {
 // root of the record, for a launch that names no model directory. It does
 // not compare the source. pin is the chat template SHA-256 of the launch.
 // As in the launch gate, a record whose template check passed applies only
-// to a launch that pins the same SHA-256. Other records, for example
-// findings, keep their status.
+// to a launch that pins the same SHA-256. A record whose template check
+// asks for review applies only to a launch that pins the template of that
+// review too, because only that review can be approved. A launch without
+// a pin pins no template. Other records, for example findings, keep their
+// status.
 func StoredStatus(r Record, model, root, pin string) (Status, string) {
 	switch {
 	case r.Model != model:
@@ -42,7 +45,7 @@ func StoredStatus(r Record, model, root, pin string) (Status, string) {
 		return StatusNotScanned, ReasonOtherDirectory
 	case r.Checker != CheckerVersion || r.Configuration != CurrentConfiguration():
 		return StatusNotScanned, ReasonCheckerChanged
-	case len(r.Checks) == len(checkOrder) && r.templateCheck().Outcome == OutcomePassed && r.ChatTemplateSHA256 != pin:
+	case len(r.Checks) == len(checkOrder) && (r.templateCheck().Outcome == OutcomePassed || asksReview(r.templateCheck())) && r.ChatTemplateSHA256 != pin:
 		return StatusNotScanned, ReasonTemplateChanged
 	}
 	return r.Status, ""

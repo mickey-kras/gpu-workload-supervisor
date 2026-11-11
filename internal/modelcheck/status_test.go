@@ -44,7 +44,9 @@ func TestStoredStatusUsesTheStoredDigests(t *testing.T) {
 		"no template pin":   {nil, "example", root, "", StatusNotScanned, ReasonTemplateChanged},
 		"stored findings":   {func(r *Record) { r.Status = StatusFindings }, "example", root, pin, StatusFindings, ""},
 		"findings, no pin":  {func(r *Record) { r.Status, r.ChatTemplateSHA256 = StatusFindings, "" }, "example", root, "", StatusFindings, ""},
-		"review, other pin": {func(r *Record) { *r = needsReview(t, *r) }, "example", root, strings.Repeat("d", 64), StatusFindings, ""},
+		"review, other pin": {func(r *Record) { *r = needsReview(t, *r) }, "example", root, strings.Repeat("d", 64), StatusNotScanned, ReasonTemplateChanged},
+		"review, no pin":    {func(r *Record) { *r = needsReview(t, *r) }, "example", root, "", StatusNotScanned, ReasonTemplateChanged},
+		"review, same pin":  {func(r *Record) { *r = needsReview(t, *r) }, "example", root, pin, StatusFindings, ""},
 	} {
 		r := record
 		if tc.edit != nil {

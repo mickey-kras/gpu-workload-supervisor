@@ -20,6 +20,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/modelcheck"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
@@ -504,7 +505,8 @@ func writeRunModel(t *testing.T, id string, files map[string]string) {
 
 // A hub failure keeps the earlier result only for the same files. Files
 // that changed after the stored check give a stored error that blocks the
-// launch. A run without an earlier result stores the error too.
+// launch. A run without an earlier result stores nothing: the workload
+// stays without a result.
 func TestModelCheckStoresAHubFailureForChangedFiles(t *testing.T) {
 	home, _, hub := runFixture(t, "run-changed", "{{ messages }}")
 	runCheck(t, home, "run-changed", hub)
@@ -522,11 +524,11 @@ func TestModelCheckStoresAHubFailureForChangedFiles(t *testing.T) {
 	}
 	fresh, _, hub := runFixture(t, "run-first", "{{ messages }}")
 	hub.status = http.StatusServiceUnavailable
-	if entry := runCheck(t, fresh, "run-first", hub); entry.NotStored || !entry.LaunchBlocked {
+	if entry := runCheck(t, fresh, "run-first", hub); !entry.NotStored || entry.LaunchBlocked {
 		t.Fatalf("a first run with a hub failure: %+v", entry)
 	}
-	if _, err := storedResult(t, fresh, "run-first"); err != nil {
-		t.Fatalf("a first run with a hub failure is stored: %v", err)
+	if _, err := storedResult(t, fresh, "run-first"); !errors.Is(err, store.ErrNoModelCheck) {
+		t.Fatalf("a first run with a hub failure stored a result: %v", err)
 	}
 }
 
@@ -579,11 +581,12 @@ func TestModelCheckNeedsAnActivatedDeployment(t *testing.T) {
 			t.Fatal(err)
 		}
 		requests := hub.requests.Load()
-		if _, err := ModelCheck(context.Background(), home, check, hub.client()); err == nil || hub.requests.Load() != requests {
+		want := map[string]string{"maintenance": "maintenance", "other release": "not activated"}[name]
+		if _, err := ModelCheck(context.Background(), home, check, hub.client()); err == nil || !strings.Contains(err.Error(), want) || hub.requests.Load() != requests {
 			t.Fatalf("%s: check %v", name, err)
 		}
-		if _, err := ModelApprove(context.Background(), home, approve, 1000, time.Now()); err == nil {
-			t.Fatalf("%s: approval accepted", name)
+		if _, err := ModelApprove(context.Background(), home, approve, 1000, time.Now()); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: approval %v", name, err)
 		}
 	}
 	if err := deployment.Write(state, deployment.Marker{Version: 1, Release: deployment.Release}); err != nil {
@@ -654,7 +657,9 @@ func TestModelReviewNeedsThePinnedTemplate(t *testing.T) {
 	files := runModelFiles("{{ messages }}Answer in French.")
 	writeRunModel(t, "run-pin", files)
 	hub.files = files
-	if entry := runCheck(t, home, "run-pin", hub); !entry.ReviewPending {
+	// The review is for another template than the launch pins: the status
+	// says so, and no review is pending.
+	if entry := runCheck(t, home, "run-pin", hub); entry.ReviewPending || entry.Reason != modelcheck.ReasonTemplateChanged || !entry.LaunchBlocked {
 		t.Fatalf("entry %+v", entry)
 	}
 	review, err := ModelReviewList(context.Background(), home, ModelReviewRequest{Version: 1, Workload: "run-pin"})
@@ -666,5 +671,84 @@ func TestModelReviewNeedsThePinnedTemplate(t *testing.T) {
 	request := ModelApproveRequest{Version: 1, Workload: "run-pin", ChatTemplateSHA256: pending.ChatTemplateSHA256, ReviewSHA256: pending.ReviewSHA256}
 	if _, err := ModelApprove(context.Background(), home, request, 1000, time.Now()); !errors.Is(err, ErrResultNotCurrent) {
 		t.Fatalf("approval of another template: %v", err)
+	}
+}
+
+// The write waits for the state gate. A busy gate, a cancel and a time
+// limit during the wait store nothing, with their own errors. A gate that
+// frees during the wait lets the write go on.
+func TestModelCheckWaitsForTheStateGate(t *testing.T) {
+	home, _, hub := runFixture(t, "run-gate", reviewTemplate)
+	runCheck(t, home, "run-gate", hub)
+	before, _ := storedResult(t, home, "run-gate")
+	state := filepath.Join(home, "state/state.db")
+	held, err := lock.TryAcquire(state + ".lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait := gateWait
+	t.Cleanup(func() { gateWait = wait })
+	gateWait = 50 * time.Millisecond
+	hub.mismatch = "config.json"
+	check := ModelCheckRequest{Version: 1, Workload: "run-gate", Source: runSource}
+	if _, err := ModelCheck(context.Background(), home, check, hub.client()); !errors.Is(err, ErrStateBusy) {
+		t.Fatalf("busy gate: %v", err)
+	}
+	review, _ := ModelReviewList(context.Background(), home, ModelReviewRequest{Version: 1, Workload: "run-gate"})
+	approve := ModelApproveRequest{Version: 1, Workload: "run-gate", ChatTemplateSHA256: review.ChatTemplateSHA256, ReviewSHA256: review.ReviewSHA256}
+	if _, err := ModelApprove(context.Background(), home, approve, 1000, time.Now()); !errors.Is(err, ErrStateBusy) {
+		t.Fatalf("busy gate for an approval: %v", err)
+	}
+	// The run ends at once; the wait for the gate then ends by a cancel or
+	// by the time limit of the action.
+	gateWait = time.Hour
+	canceled, cancel := context.WithCancel(context.Background())
+	hub.onRequest = func() { go func() { time.Sleep(200 * time.Millisecond); cancel() }() }
+	if _, err := ModelCheck(canceled, home, check, hub.client()); !errors.Is(err, modelcheck.ErrCheckCanceled) {
+		t.Fatalf("canceled during the wait: %v", err)
+	}
+	limited, stop := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer stop()
+	if _, err := ModelCheck(limited, home, check, hub.client()); !errors.Is(err, modelcheck.ErrCheckTimedOut) {
+		t.Fatalf("time limit during the wait: %v", err)
+	}
+	if after, _ := storedResult(t, home, "run-gate"); after.CheckedAt != before.CheckedAt || after.Status != before.Status {
+		t.Fatalf("a refused write changed the result: %+v", after)
+	}
+	hub.onRequest = func() { go func() { time.Sleep(100 * time.Millisecond); held.Close() }() }
+	if entry, err := ModelCheck(context.Background(), home, check, hub.client()); err != nil || entry.Status != modelcheck.StatusFindings {
+		t.Fatalf("a gate that frees during the wait: %+v %v", entry, err)
+	}
+}
+
+// A hub failure for another model directory than the stored result is
+// stored. A kept hub failure reports the block of the result that stays.
+func TestModelCheckHubFailureForAnotherRootIsStored(t *testing.T) {
+	home, _, hub := runFixture(t, "run-root", reviewTemplate)
+	runCheck(t, home, "run-root", hub)
+	hub.status = http.StatusNotFound
+	if entry := runCheck(t, home, "run-root", hub); !entry.NotStored || !entry.LaunchBlocked {
+		t.Fatalf("a kept result with a pending review blocks the launch: %+v", entry)
+	}
+	state := filepath.Join(home, "state/state.db")
+	s := openStoreAt(t, state)
+	record, _ := s.ModelCheck(context.Background(), "run-root")
+	record.Root = testModelPath("run-root-old")
+	if err := s.PutModelCheck(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	entry := runCheck(t, home, "run-root", hub)
+	stored, err := storedResult(t, home, "run-root")
+	if entry.NotStored || !entry.LaunchBlocked || err != nil || stored.Root != testModelPath("run-root") || stored.Checks[1].Reason != modelcheck.ReasonUpstreamNotFound {
+		t.Fatalf("hub failure for another root: %+v %+v %v", entry, stored.Checks, err)
+	}
+}
+
+// A finished run waits for the gate as long as the run may take in all, so
+// a long supervisor change does not throw the run away.
+func TestGateWaitCoversTheRunLimit(t *testing.T) {
+	if gateWait < 60*time.Minute {
+		t.Fatalf("gate wait %v is shorter than the 60 minute run limit", gateWait)
 	}
 }

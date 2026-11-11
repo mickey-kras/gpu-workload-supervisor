@@ -44,7 +44,7 @@ func (c Checker) Run(ctx context.Context, r Request) (Record, error) {
 		return Record{}, errors.New("model check needs a model ID, a clean absolute root and a pinned source")
 	}
 	files, reason, err := Inventory(ctx, r.Root)
-	if err := stopped(ctx); err != nil {
+	if err := Stopped(ctx); err != nil {
 		return Record{}, err
 	}
 	if err != nil && !errors.Is(err, errChanged) && !errors.Is(err, errUnreadable) {
@@ -72,7 +72,7 @@ func (c Checker) Run(ctx context.Context, r Request) (Record, error) {
 	for _, name := range checkOrder[len(results):] {
 		results = append(results, Check{Name: name, Outcome: OutcomeNotRun})
 	}
-	if err := stopped(ctx); err != nil {
+	if err := Stopped(ctx); err != nil {
 		return Record{}, err
 	}
 	record.Checks, record.Status, record.Coverage = results, statusOf(results), coverageOf(results)
@@ -85,9 +85,9 @@ var (
 	ErrCheckTimedOut = errors.New("model check stopped at its time limit")
 )
 
-// stopped gives the error of a run whose context ended: a time limit is
-// not a cancel.
-func stopped(ctx context.Context) error {
+// Stopped gives the error of a run whose context ended: a time limit is
+// not a cancel. It gives nil while ctx is live.
+func Stopped(ctx context.Context) error {
 	switch {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		return ErrCheckTimedOut
