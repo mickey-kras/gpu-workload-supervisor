@@ -46,7 +46,11 @@ export function createWidgetClass(widgets) {
             if (this.emit('close-request') === true) return;
             this.closed = true; this.emit('unrealize');
         }
-        grab_focus() { this.focused = true; }
+        grab_focus() {
+            for (const widget of widgets) widget.focused = false;
+            this.focused = true;
+        }
+        is_focus() { return this.focused === true; }
         run() { this.emit('activate'); }
     }
     return Widget;

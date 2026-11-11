@@ -61,16 +61,23 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return err
 	}
 	if len(args) != 1 {
-		return errors.New("usage: gpu-setup -version|temporary-status|temporary-cleanup|discover|probe|prepare|correct-gpu|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|reconcile|idle-policy-tick|remove-integration")
+		return errors.New("usage: gpu-setup -version|temporary-status|temporary-cleanup|discover|probe|prepare|correct-gpu|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|reconcile|idle-policy-tick|remove-integration|model-status")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// A recheck reads every model file again, which takes longer. A
+	// status read without a recheck gets actionTimeout, see
+	// modelStatusContext.
+	timeout := actionTimeout
+	if args[0] == "model-status" {
+		timeout = recheckTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	home, err := a.home()
 	if err != nil {
 		return err
 	}
 	switch args[0] {
-	case "temporary-status", "temporary-cleanup", "correct-gpu", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned":
+	case "temporary-status", "temporary-cleanup", "correct-gpu", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned", "model-status":
 		if a.euid() == 0 {
 			return errors.New("run guided setup as the desktop account, not root")
 		}
@@ -98,6 +105,18 @@ func (a setupActions) runAction(ctx context.Context, home, action string, input 
 		return setup.SystemBackend().RemoveIntegration(ctx, home)
 	case "discover":
 		return a.runDiscover(ctx, home, output)
+	case "model-status":
+		var request setup.ModelStatusRequest
+		if err := strictjson.DecodeLimited(input, setup.MaxModelStatusRequestBytes, &request); err != nil {
+			return err
+		}
+		ctx, cancel := modelStatusContext(ctx, request)
+		defer cancel()
+		report, err := setup.ModelStatus(ctx, home, request)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(report)
 	case "drafts":
 		return runDrafts(home, output)
 	case "save-drafts":
@@ -203,4 +222,20 @@ func (a setupActions) runPlanned(ctx context.Context, home, action string, input
 		}
 	}
 	return json.NewEncoder(output).Encode(preview)
+}
+
+// The timeouts of the actions. Only a model status request that names
+// workloads to recheck reads model files, so only it gets recheckTimeout.
+const (
+	actionTimeout  = 5 * time.Minute
+	recheckTimeout = 30 * time.Minute
+)
+
+// modelStatusContext limits a model status request without a recheck to
+// actionTimeout.
+func modelStatusContext(ctx context.Context, request setup.ModelStatusRequest) (context.Context, context.CancelFunc) {
+	if len(request.Recheck) == 0 {
+		return context.WithTimeout(ctx, actionTimeout)
+	}
+	return context.WithCancel(ctx)
 }

@@ -5,7 +5,7 @@ import {launch} from './harness.mjs';
 test('large discovery stays compact and adopts no service until explicit selection', async () => {
     const ui = await launch({units: Array.from({length: 10000}, (_, i) => `worker-${i}.service`)});
     assert.ok(ui.widgets.every(widget => (widget.label ?? '').length < 1000));
-    assert.deepEqual(ui.calls.map(call => call.argv[1]), ['--version', 'discover', 'drafts']);
+    assert.deepEqual(ui.calls.map(call => call.argv[1]), ['--version', 'discover', 'drafts', 'model-status']);
     ui.by('Add existing service (Advanced)').emit('clicked');
     const service = ui.by('Existing user service');
     assert.ok(service, 'service selection is available in each workload card');

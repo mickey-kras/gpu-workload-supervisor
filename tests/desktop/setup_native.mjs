@@ -97,13 +97,29 @@ function stateCandidate(state) {
     if (state === 'installed-blocked') Object.assign(result, {installed: true, recognized: false, endpoint: undefined, cgroup: undefined, binding: undefined, configurationStatus: 'gpu-unresolved', diagnostics: ['CUDA_VISIBLE_DEVICES requires a full GPU UUID.', 'Restart policy is unsupported.', 'Executable /private-runtime-secret is not root-owned.']});
     return result;
 }
-async function command(argv, input) {
+let statusReply = null;
+const scanEntry = {workload: 'chat', label: 'vLLM', kind: 'llm', identity: GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, 'model:example-small', -1), status: 'not_scanned', staticChecksPassed: true, reviewPending: false, rechecked: false, coverage: 'partial', checker: '1', checkedAt: '2026-11-01T09:30:00Z',
+    checks: [{name: 'file-allowlist', outcome: 'passed'}, {name: 'upstream-identity', outcome: 'passed'}, {name: 'chat-template', outcome: 'passed'}, {name: 'behavioral-scan', outcome: 'not_run'}]};
+// scanProfile is the accepted workload of the scan state; its saved draft
+// keeps the accepted model.
+const scanProfile = {id: 'chat', label: 'vLLM', adapter: 'systemd', unit: candidate.unit, cgroup: candidate.cgroup, healthURL: candidate.binding.healthURL, bootPolicy: 'stop-to-idle',
+    nativeModel: {runtime: 'vllm', instance: 'local', model: 'example-small', endpoint: candidate.endpoint, launchFile: candidate.binding.launchFile, launchSHA256: 'fixture-sha'}};
+// A recheck waits for statusReply or for its cancellation, which rejects as
+// a stopped subprocess does.
+function modelStatus(input, cancellable) {
+    if (!JSON.parse(input).recheck) return JSON.stringify({version: 1, models: mode === 'scan' ? [scanEntry] : []});
+    return new Promise((resolve, reject) => {
+        statusReply = entry => { statusReply = null; resolve(JSON.stringify({version: 1, models: [entry]})); };
+        cancellable.connect(() => { statusReply = null; reject(new Error('Operation was cancelled')); });
+    });
+}
+async function command(argv, input, cancellable = null) {
     const action = argv[1]; calls.push(action);
     commandRecords.push({action, input: input ? JSON.parse(input) : null});
     assert(!['apply', 'render-owned'].includes(action), `unexpected mutation: ${action}`);
     if (action === '--version') return 'GNOME Shell 50.1';
     if (action === 'discover') {
-        const discovery = {gpuUUIDs: mode === 'installed-blocked' ? repairInventory : [repairUUID], gpuInventoryStatus: mode === 'installed-blocked' && !repairInventory.length ? 'unavailable' : 'available', request: {profile: {statePath: '/example/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: []}}, units: [], applications: mode === 'missing' ? [] : mode === 'mixed-unresolved' ? [comfy, {...candidate, recognized: false, binding: undefined, instanceStatus: 'invalid', configurationStatus: 'unsupported', models: []}] : ['ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed', 'installed-blocked'].includes(mode) ? [stateCandidate(mode)] : [comfy, candidate], errors: mode === 'error' ? ['Example discovery unavailable.'] : []};
+        const discovery = {gpuUUIDs: mode === 'installed-blocked' ? repairInventory : [repairUUID], gpuInventoryStatus: mode === 'installed-blocked' && !repairInventory.length ? 'unavailable' : 'available', request: {profile: {statePath: '/example/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: mode === 'scan' ? [scanProfile] : []}}, units: [], applications: mode === 'missing' ? [] : mode === 'mixed-unresolved' ? [comfy, {...candidate, recognized: false, binding: undefined, instanceStatus: 'invalid', configurationStatus: 'unsupported', models: []}] : ['ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed', 'installed-blocked'].includes(mode) ? [stateCandidate(mode)] : [comfy, candidate], errors: mode === 'error' ? ['Example discovery unavailable.'] : []};
         if (mode === 'ready') Object.assign(discovery, {hostCap: hostCapStep, escapeRoutes: [{route: 'cron', item: 'a crontab of this account'}, {route: 'polkit', item: 'cannot check /etc/polkit-1/rules.d', unchecked: true}]});
         if (deferDiscovery) {
             deferDiscovery = false;
@@ -113,7 +129,8 @@ async function command(argv, input) {
     }
     if (action === 'correct-gpu') return JSON.stringify({fingerprint: 'native-preview', content: `[Service]\nEnvironment="CUDA_VISIBLE_DEVICES=${repairUUID}"\n`, applied: false});
     if (action === 'probe') return await new Promise(resolve => { deferDiscovery = false; installationReply = result => { installationReply = null; resolve(JSON.stringify(result)); }; });
-    if (action === 'drafts') return JSON.stringify({revision: 'fixture', drafts: []});
+    if (action === 'drafts') return JSON.stringify({revision: 'fixture', drafts: mode === 'scan' ? [{id: 'chat', label: 'vLLM', app: 'vllm', model: 'example-small', binding: {...candidate.binding, instance: 'local', model: 'example-small'}}] : []});
+    if (action === 'model-status') return await modelStatus(input, cancellable);
     if (action === 'prepare') {
         const {draft} = JSON.parse(input);
         const installation = draft.app === 'comfyui' ? comfy : candidate;
@@ -163,7 +180,8 @@ app.connect('activate', () => {
             assert(!startup.headingSelection[0], `initial heading must not select its text: ${JSON.stringify(startup.headingSelection)}`);
             assert(Number(x11.WIDTH) === Number(width) * scale, `native window width mismatch: geometry=${JSON.stringify(startup)}`);
             assert(Number(x11.HEIGHT) === Number(height) * scale, `native window height mismatch: geometry=${JSON.stringify(startup)}`);
-            const appImages = widgets(ui.window).filter(widget => widget.has_css_class('setup-icon-tile')).flatMap(tile => widgets(tile).filter(widget => widget instanceof Gtk.Image || widget instanceof Gtk.Picture));
+            // A saved draft keeps its hidden settings card; only the shown tiles count.
+            const appImages = widgets(ui.window).filter(widget => widget.has_css_class('setup-icon-tile') && widget.get_mapped()).flatMap(tile => widgets(tile).filter(widget => widget instanceof Gtk.Image || widget instanceof Gtk.Picture));
             assert(appImages.length >= 2, 'both application icons are rendered');
             // A slow compositor can map the window before it allocates every icon.
             for (let attempt = 0; attempt < 40 && appImages.some(image => image.get_width() === 0); attempt++) await delay(50);
@@ -639,6 +657,37 @@ app.connect('activate', () => {
         await tabTo(ui, ui.review); run(['xdotool', 'key', 'space']); await delay(100);
         assert(!ui.hostPage && ui.heading.label === 'Choose your applications', 'Done closes Host protection');
         await closeAndVerify(ui, 'draft-cancel');
+
+        ui = await open('scan');
+        await activate(ui, ui.applicationCards.get('vllm').gear, 'vLLM');
+        await settingsTree(ui, 'settings-model-scan', 'Back', [{name: 'Model scan', role: 'heading'}, {name: 'Not scanned'}, {name: 'File checks passed. Behavioral scan not available yet.'}, button('Check files again')],
+            ['Scanned, no findings', 'Safe model', 'Cancel check']);
+        await capture(ui, 'settings-model-scan');
+        const checkerLine = () => widgets(ui.window).find(widget => widget instanceof Gtk.Label && widget.label.startsWith('Checker revision'));
+        assert(!checkerLine().get_mapped(), 'scan details are closed until requested');
+        await tabTo(ui, named(ui, 'Scan details')); run(['xdotool', 'key', 'space']); await delay(80);
+        assert(checkerLine().get_mapped(), 'keyboard opens the scan details');
+        await settingsTree(ui, 'settings-model-scan-details', 'Scan details', [], [], ['Checker revision: 1', 'Scanner revision: not available', 'Checked: 2026-11-01 09:30 UTC', 'These checks are a defensive layer, not complete backdoor detection.']);
+        await capture(ui, 'settings-model-scan-details');
+        await tabTo(ui, named(ui, 'Check files again')); run(['xdotool', 'key', 'space']);
+        await waitFor(() => statusReply, 'Check files again starts one recheck');
+        assert(JSON.stringify(commandRecords.at(-1).input) === JSON.stringify({version: 1, recheck: ['chat']}), 'the recheck names only this workload');
+        await tabTo(ui, named(ui, 'Cancel check'));
+        await settingsTree(ui, 'settings-model-scan-checking', 'Cancel check', [button('Cancel check')], ['Check files again'], ['Checking model files…']);
+        await capture(ui, 'settings-model-scan-checking');
+        run(['xdotool', 'key', 'space']);
+        await waitFor(() => !statusReply && widgets(ui.window).some(widget => widget instanceof Gtk.Label && widget.get_mapped() && widget.label === 'Check canceled. The last result is kept.'), 'Cancel check stops the recheck');
+        await delay(80);
+        await settingsTree(ui, 'settings-model-scan-canceled', 'Check files again', [button('Check files again'), {name: 'File checks passed. Behavioral scan not available yet.'}], ['Cancel check'], ['Check canceled. The last result is kept.']);
+        await capture(ui, 'settings-model-scan-canceled');
+        await tabTo(ui, named(ui, 'Check files again')); run(['xdotool', 'key', 'space']);
+        await waitFor(() => statusReply, 'a second recheck starts');
+        statusReply({...scanEntry, rechecked: true, staticChecksPassed: false, reason: 'files-changed'});
+        await waitFor(() => widgets(ui.window).some(widget => widget instanceof Gtk.Label && widget.get_mapped() && widget.label === 'The model files changed after the last check.'), 'the recheck shows changed files');
+        await delay(80);
+        await settingsTree(ui, 'settings-model-scan-changed', 'Check files again', [{name: 'Not scanned'}, {name: 'The model files changed after the last check. The stored result no longer applies.'}], ['File checks passed. Behavioral scan not available yet.']);
+        await capture(ui, 'settings-model-scan-changed');
+        await closeAndVerify(ui, 'model-scan');
 
         ui = await open('inspection-failed');
         await activate(ui, ui.applicationCards.get('comfyui').gear, 'ComfyUI');

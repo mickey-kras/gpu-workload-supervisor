@@ -57,6 +57,7 @@ def run_case(root, output, dimensions):
                 'configuration-checking', 'settings-stale-check', 'settings-stale-endpoint-check'}
     required.update(('diagnostic-export', 'settings-installed-blocked', 'correction-unavailable', 'correction-selected-preview', 'correction-inventory-disappeared'))
     required.update(('included-unresolved-settings', 'included-unresolved-blocked', 'included-valid-rest-review'))
+    required.update(f'settings-model-scan{state}' for state in ('', '-details', '-checking', '-canceled', '-changed'))
     required.update(f'settings-{state}' for state in
                     ('ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed'))
     required.update(f'configuration-{state}' for state in

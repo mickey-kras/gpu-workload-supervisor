@@ -21,7 +21,7 @@ Setup rejects unsupported Shell versions or sessions. A new system-wide extensio
 
 The OS home of the effective account fixes `~/.config/gpu-workload-supervisor/operator.json`. Ambient HOME and XDG overrides cannot choose runtime configuration. SQLite holds the accepted catalog and opaque revision. Setup owns `catalog.json` for setup and backup only. Ordinary controls ignore mirror edits.
 
-Setup exposes `discover`, `probe`, `correct-gpu`, `prepare`, `fingerprint`, `render-owned`, `drafts`, `save-drafts`, `verify-bindings`, `validate`, `apply`, `reconcile`, `idle-policy-tick`, `remove-integration`. Request and response commands use strict versioned stdin and stdout JSON. The desktop supplies requests and shows concrete previews.
+Setup exposes `discover`, `probe`, `correct-gpu`, `prepare`, `fingerprint`, `render-owned`, `drafts`, `save-drafts`, `verify-bindings`, `validate`, `apply`, `reconcile`, `idle-policy-tick`, `remove-integration`, `model-status`. Request and response commands use strict versioned stdin and stdout JSON. The desktop supplies requests and shows concrete previews.
 
 ### Manage workloads in setup
 
@@ -103,6 +103,12 @@ After each committed activation, setup keeps the three newest `activation-*` tup
 The snapshot also keeps the API key file of each managed vLLM workload in `owned-keys/`, with mode `0600`. A key file that did not exist is not in the snapshot. After rollback, run setup again to create it.
 
 Stored [model check](MODEL-CHECKS.md#results) results have format version 2. A result of another version reads as `not_scanned` until the checker checks the model again. An earlier release reads version 2 results as stale. If it checks a model again after a rollback, it replaces the stored result and drops its template approval. Then, after the next upgrade, the operator must approve the template again.
+
+Setup shows the stored model check status of each workload. See [Status display](MODEL-CHECKS.md#status-display). To read the status, run `gpu-setup model-status` as the desktop account with the request `{"version":1}` on standard input. The action changes nothing. It writes one JSON object to standard output: `{"version":1,"models":[...]}`. The `models` list has one entry for each accepted workload.
+
+To calculate the file digests of workloads again, give their IDs in the `"recheck"` array, for example `{"version":1,"recheck":["chat"]}`. Setup reads the files again only when the stored result applies to the workload. The entry then has `"rechecked":true`. The request is at most 8 KiB and names at most 32 workloads.
+
+A request with a recheck stops after 30 minutes. Other requests stop after 5 minutes. The desktop writes each failed action to the user journal. To find these errors, run `journalctl --user -g 'gpu-setup model-status failed'`.
 
 Setup rejects stale previews before maintenance. Reopening resumes the exact pending request. Post-commit failures proceed forward, never undo a committed catalog. Never delete maintenance or migration metadata to bypass failure.
 

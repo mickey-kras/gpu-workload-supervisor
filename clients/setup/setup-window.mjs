@@ -15,6 +15,7 @@ import {applications, candidateDiagnostics, recordFingerprint} from './onboardin
 import {labelledLimitCheck, limitSummary, refuseAdoptedLimits} from './limits-ui.mjs';
 import {hostRequest} from './host-protection.mjs';
 import {createHostProtection} from './host-page.mjs';
+import {cancelModelChecks, clearSummaryStatus, dropModelStatus, loadModelStatus, modelStatusLine, refreshModelStatus, showModelStatus} from './model-status.mjs';
 
 // The caller supplies transport; fixture callers never invoke the production subprocess.
 export function createSetupWindow(options) { const ui = new SetupWindow(options); ui.start(); return ui; }
@@ -63,13 +64,13 @@ class SetupWindow {
 
     renderSummary(items) {
         for (const card of this.summaryCards) this.summary.remove(card);
-        this.summaryCards.length = 0;
+        this.summaryCards.length = 0; clearSummaryStatus(this);
         for (const profile of items) {
             const appID = this.runtimeOf(profile);
             const card = roundedCard(Gtk); card.add_css_class('setup-summary-card');
             if (appID) card.append(applicationHeader(Gtk, appID, profile.label || profile.id));
             else card.append(new Gtk.Label({label: profile.label || profile.id, wrap: true, xalign: 0}));
-            this.summary.append(card); this.summaryCards.push(card);
+            card.append(modelStatusLine(this, profile, appID)); this.summary.append(card); this.summaryCards.push(card);
         }
         if (!items.length) { const label = new Gtk.Label({label: 'No workloads selected. Supervisor configuration will be updated.', wrap: true, xalign: 0}); this.summary.append(label); this.summaryCards.push(label); }
     }
@@ -125,8 +126,7 @@ class SetupWindow {
         this.setupSettings.visible = false; this.back.visible = false;
         this.saveDrafts.visible = false; this.later.visible = true; this.later.label = 'Cancel';
         for (const draftEditor of this.draftEditors) draftEditor.group.visible = draftEditor === editor;
-        editor.showSettings(editor.replacing);
-        this.settingsBack.grab_focus();
+        editor.showSettings(editor.replacing); showModelStatus(this, editor); this.settingsBack.grab_focus();
     }
 
     closeApplicationSettings(restoreFocus = true) {
@@ -151,7 +151,7 @@ class SetupWindow {
         this.applicationSettings.scrolls ??= new Map();
         if (previous !== page) this.applicationSettings.scrolls.set(previous, this.scroll.get_vadjustment().value);
         this.applicationSettings.page = page;
-        this.heading.label = title; this.settingsTitle.label = title;
+        this.heading.label = title; this.settingsTitle.label = title; refreshModelStatus(this);
         this.review.label = {main: 'Use installation', configuration: 'Check again', advanced: 'Review changes'}[page] ?? 'Done';
         this.review.sensitive = !busy && (page === 'main' ? ready : true);
         this.status.visible = false;
@@ -215,7 +215,7 @@ class SetupWindow {
                 if (this.drafts.find(item => item.id === initial.id)?.label !== value.label) this.editedLabels.delete(editor?.replacing ?? replacing);
                 this.invalidate(); this.drafts = this.drafts.map(item => item.id === initial.id ? value : item); this.draftGeneration++; this.saveDrafts.sensitive = !this.pending;
             },
-            removed: (finished = false) => { if (!finished) { this.invalidate(); } editor.group.visible = false; editor.modelGroup.visible = false; this.drafts = this.drafts.filter(item => item.id !== initial.id); this.draftEditors = this.draftEditors.filter(item => item !== editor); this.draftGeneration++; this.saveDrafts.sensitive = !this.pending; },
+            removed: (finished = false) => { if (!finished) { this.invalidate(); } editor.group.visible = false; editor.modelGroup.visible = false; this.drafts = this.drafts.filter(item => item.id !== initial.id); this.draftEditors = this.draftEditors.filter(item => item !== editor); dropModelStatus(this, editor); this.draftGeneration++; this.saveDrafts.sensitive = !this.pending; },
             taken: () => this.profiles.map(profile => profile.id)});
         editor.group.visible = reveal; editor.replacing = replacing; this.draftEditors.push(editor);
         editor.setHostUsage(this.hostProtection.usage);
@@ -428,7 +428,7 @@ class SetupWindow {
             this.applicationSettings.editor.cancelSettings(); this.closeApplicationSettings();
             return;
         }
-        this.cancelEditors(); this.closed = true; this.releasePresentation(); this.window.close();
+        this.cancelEditors(); cancelModelChecks(this); this.closed = true; this.releasePresentation(); this.window.close();
     }
 
     goBack() {
@@ -458,7 +458,7 @@ class SetupWindow {
 
     closeRequested() {
         this.invalidate();
-        this.closed = true; this.cancelEditors(); this.releasePresentation(); return false;
+        this.closed = true; this.cancelEditors(); cancelModelChecks(this); this.releasePresentation(); return false;
     }
 
     async initialize() {
@@ -488,7 +488,7 @@ class SetupWindow {
             for (const profile of this.request.catalog.profiles ?? []) this.addProfile(profile);
             for (const editor of this.draftEditors) editor.replacing ??= this.profiles.find(profile => profile.id === editor.id) ?? null;
             this.add.sensitive = !this.pending; this.rows.sensitive = !this.pending; this.draftRows.sensitive = !this.pending; this.settings.sensitive = !this.pending;
-            this.updateApplicationCards();
+            this.updateApplicationCards(); loadModelStatus(this);
             this.review.sensitive = true;
             if (draftWarning) this.reportError('Remove unsupported saved selections, then save. Other selections are kept.', new Error(draftWarning));
             if (this.discoveryErrors.length) this.reportError('Some installations could not be checked. Choose an application location or reopen setup to retry discovery.', new Error(this.discoveryErrors.join('\n')));

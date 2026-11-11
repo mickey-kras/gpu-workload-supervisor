@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {createWidgetClass} from './harness-widgets.mjs';
 import {loadGjsModule} from '../gnome/tests/gjs-modules.js';
 
@@ -51,25 +52,15 @@ export async function launch({units = [], profiles = [], pending = false, fail =
         'gi://Pango': {default: {WrapMode: {WORD_CHAR: 2}}},
         'gi://Gdk?version=4.0': {default: {ContentProvider: {new_for_value: value => ({value})}}},
         'gi://GObject': {default: {TYPE_STRING: 'string', Value: class { init(type) { this.type = type; } set_string(text) { this.text = text; } }}},
-        'gi://GLib': {default: {PRIORITY_DEFAULT_IDLE: 200, SOURCE_REMOVE: false, idle_add(priority, callback) { callback(); return 1; }, getenv: () => 'GNOME', uuid_string_random: () => uuidSequence++ ? `unique-id-${uuidSequence}` : 'unique-id',
+        'gi://GLib': {default: {ChecksumType: {SHA256: 2}, compute_checksum_for_string: (type, text) => createHash('sha256').update(text).digest('hex'), PRIORITY_DEFAULT_IDLE: 200, SOURCE_REMOVE: false, idle_add(priority, callback) { callback(); return 1; }, getenv: () => 'GNOME', uuid_string_random: () => uuidSequence++ ? `unique-id-${uuidSequence}` : 'unique-id',
             markup_escape_text: text => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
         }},
         'gi://Gio': {default: {FileIcon, File: {new_for_uri: fileAtURI}, SubprocessFlags: {STDIN_PIPE: 1, STDOUT_PIPE: 2, STDERR_PIPE: 4},
-            Subprocess: {new(argv) { let requestInput; return {
-                communicate_utf8_async(input, cancel, callback) {
-                    requestInput = input; calls.push({argv, input});
-                    if (argv[1] === deferAction && (deferOccurrence === null || calls.filter(call => call.argv[1] === deferAction).length === deferOccurrence)) deferred.push(() => callback(this, {}));
-                    else callback(this, {});
-                },
-                communicate_utf8_finish() {
-                    if (argv[1] === '--version') return [true, version, 'Backend unavailable'];
-                    const fallback = argv[1] === 'discover' ? {request, units, pending} : {changes: ['Reviewed change']};
-                    return [true, JSON.stringify(typeof responses[argv[1]] === 'function' ? responses[argv[1]](JSON.parse(requestInput ?? 'null'), calls) : responses[argv[1]] ?? fallback), 'Backend unavailable'];
-                },
-                get_successful: () => argv[1] !== fail,
-            }; }} }},
+            Cancellable, Subprocess: subprocesses({calls, deferred, deferAction, deferOccurrence, version, responses, fallback: {request, units, pending}, fail})}},
     };
-    await loadGjsModule('../../setup/setup.js', native);
+    // The application log of the module, as console.warn writes it in GJS.
+    const logs = [];
+    await loadGjsModule('../../setup/setup.js', native, {console: {warn: message => logs.push(message)}});
     await new Promise(resolve => setImmediate(resolve));
     const by = label => {
         const matches = widgets.filter(widget => widget.label === label || widget.title === label || widget.accessibleProperties?.label === label);
@@ -87,10 +78,40 @@ export async function launch({units = [], profiles = [], pending = false, fail =
         if (!visible(widget) || !widget.sensitive) throw new Error(`Control is not actionable: ${label}`);
         await widget.emit('clicked');
     };
-    return {widgets, calls, request, appearance, styleProviders, by, visible, click, selectApplication(index) {
+    return {widgets, calls, logs, request, appearance, styleProviders, by, visible, click, selectApplication(index) {
         const label = ['ComfyUI', 'vLLM'][index];
         by(`Use ${label}`).active = true;
         by(`Settings for ${label}`).emit('clicked');
     }, finish: () => deferred.shift()(),
         edit(widget, property, value) { widget[property] = value; }};
+}
+
+// Like Gio.Cancellable, connect takes the callback alone: GJS shadows the
+// signal connect of GObject with g_cancellable_connect.
+class Cancellable {
+    handlers = []; cancelled = false;
+    connect(fn) { this.handlers.push(fn); }
+    is_cancelled() { return this.cancelled; }
+    cancel() { this.cancelled = true; for (const fn of this.handlers) fn(); }
+}
+
+// Deferred calls complete with finish(); a call stopped before then never does.
+function subprocesses({calls, deferred, deferAction, deferOccurrence, version, responses, fallback, fail}) {
+    return {new(argv) { let requestInput; let call; let waiting = null; let killed = false; return {
+        communicate_utf8_async(input, cancel, callback) {
+            requestInput = input; call = {argv, input, cancellable: cancel}; calls.push(call);
+            if (argv[1] === deferAction && (deferOccurrence === null || calls.filter(item => item.argv[1] === deferAction).length === deferOccurrence)) {
+                waiting = () => callback(this, {});
+                deferred.push(() => waiting?.());
+            } else callback(this, {});
+        },
+        force_exit() { killed = true; call.killed = true; const finish = waiting; waiting = null; finish?.(); },
+        communicate_utf8_finish() {
+            if (killed) throw new Error('Operation was cancelled');
+            if (argv[1] === '--version') return [true, version, 'Backend unavailable'];
+            const response = argv[1] === 'discover' ? fallback : {changes: ['Reviewed change']};
+            return [true, JSON.stringify(typeof responses[argv[1]] === 'function' ? responses[argv[1]](JSON.parse(requestInput ?? 'null'), calls) : responses[argv[1]] ?? response), 'Backend unavailable'];
+        },
+        get_successful: () => argv[1] !== fail,
+    }; }};
 }

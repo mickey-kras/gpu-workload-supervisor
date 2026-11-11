@@ -5,11 +5,13 @@ import Gio from 'gi://Gio';
 import {createSetupWindow} from './setup-window.mjs';
 
 // The setup application is short-lived. Runtime controls use gpu-operator.
-function command(argv, input = null) {
+// A canceled command stops its process and rejects.
+function command(argv, input = null, cancellable = null) {
     return new Promise((resolve, reject) => {
         const proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDIN_PIPE |
             Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
-        proc.communicate_utf8_async(input, null, (child, result) => {
+        cancellable?.connect(() => proc.force_exit());
+        proc.communicate_utf8_async(input, cancellable, (child, result) => {
             try {
                 const [, stdout, stderr] = child.communicate_utf8_finish(result);
                 if (!child.get_successful()) throw new Error(stderr.trim() || 'Command failed');
