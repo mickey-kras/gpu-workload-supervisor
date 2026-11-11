@@ -1,0 +1,8 @@
+# Hash-locked bootstrap for the training-runtime job. Wheels only; the hashes
+# are the PyPI-published manylinux wheels for uv 0.13.4 (x86_64, aarch64).
+# 0.13.4 is the first release that fixes GHSA-hq85-5cpj-mr62.
+# Keep the version in step with docs/TRAINING.md when regenerating the lock.
+uv==0.13.4 \
+    --hash=sha256:05e4332791b4d55b6dde8695b7fa6079b26991519f44760887c5dfbd5ca4fe53 \
+    --hash=sha256:e90ab42825587821096cb0d071e387468da38cfa22818c91f9c0b3c0453048e8 \
+    --hash=sha256:7b3cdf868e5415631fe797b648c0d6945d38d388f23367bdd0b6332e80a1fcb0

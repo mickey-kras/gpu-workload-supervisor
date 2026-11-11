@@ -11,13 +11,18 @@ trap 'rm -rf "$root"' EXIT
 dpkg-deb --extract "$package" "$root"
 dpkg-deb --control "$package" "$root/DEBIAN"
 version="$(dpkg-deb --field "$package" Version)"
+version_check="$(dirname "${BASH_SOURCE[0]}")/desktop-version.cjs"
+# Every binary in packaging/release-binaries.json must ship with the package release.
+binaries=()
+while IFS= read -r binary; do binaries+=("$binary"); done < <(node "$version_check" --list)
+test "${#binaries[@]}" -gt 0
 releases=()
-for binary in gpu-mode gpu-workload-proxy gpu-operator gpu-setup gpu-training-runner gpu-training-candidate; do
+for binary in "${binaries[@]}"; do
   test -x "$root/usr/bin/$binary"
   embedded_release="$(go version -m "$root/usr/bin/$binary" | sed -n 's/.*deployment.Release=\([^ " ]*\).*/\1/p')"
   releases+=("$embedded_release")
 done
-node "$(dirname "${BASH_SOURCE[0]}")/desktop-version.cjs" "$version" "${releases[@]}"
+node "$version_check" "$version" "${releases[@]}"
 for file in extension.js metadata.json model.js contract.js transport.js framing.js dialogs.js; do
   test -s "$root/usr/share/gnome-shell/extensions/gpu-workload-supervisor@local/$file"
 done

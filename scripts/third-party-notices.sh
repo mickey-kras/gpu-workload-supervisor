@@ -7,9 +7,13 @@ trap 'rm -rf "$notice_tools"' EXIT
 # Ignore local private-module/checksum bypass settings for this public tool.
 GOSUMDB=sum.golang.org GOPRIVATE= GONOSUMDB= GONOPROXY= GOPROXY=https://proxy.golang.org GOBIN="$notice_tools" go install github.com/google/go-licenses/v2@v2.0.1
 rm -rf THIRD_PARTY_NOTICES
+# Collect notices for every shipped binary in packaging/release-binaries.json.
+commands=()
+while IFS= read -r binary; do commands+=("./cmd/$binary"); done < <(node scripts/desktop-version.cjs --list)
+test "${#commands[@]}" -gt 0
 for arch in amd64 arm64; do
   GOOS=linux GOARCH="$arch" CGO_ENABLED=0 "$notice_tools/go-licenses" save \
-    ./cmd/gpu-mode ./cmd/gpu-workload-proxy ./cmd/gpu-operator ./cmd/gpu-setup ./cmd/gpu-training-runner ./cmd/gpu-training-candidate \
+    "${commands[@]}" \
     --ignore github.com/mickey-kras/gpu-workload-supervisor \
     --save_path="THIRD_PARTY_NOTICES/linux_$arch"
 done

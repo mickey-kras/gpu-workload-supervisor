@@ -14,6 +14,7 @@ jobs:
   entry:
     name: read release version from main
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -70,18 +71,27 @@ jobs:
             const { createHash } = require('node:crypto');
             const { resolve } = require('node:path');
             const { compileFunction } = require('node:vm');
+            const { data: manifest } = await github.rest.repos.getContent({
+              ...context.repo, path: '.github/release-helper-digests.json', ref: context.sha,
+            });
+            if (manifest?.type !== 'file' || manifest.encoding !== 'base64' || typeof manifest.content !== 'string') {
+              throw new Error('Release helper digest manifest is unreadable');
+            }
+            const digests = JSON.parse(Buffer.from(manifest.content, 'base64').toString('utf8'));
+            const verified = (path, message) => {
+              const bytes = readFileSync(resolve(path));
+              const expected = Object.hasOwn(digests, path) ? digests[path] : '';
+              if (!/^[a-f0-9]{64}$/.test(expected) || createHash('sha256').update(bytes).digest('hex') !== expected) {
+                throw new Error(message);
+              }
+              return bytes;
+            };
             const filename = resolve('.github/scripts/release-validation.cjs');
-            const source = readFileSync(filename);
-            if (createHash('sha256').update(source).digest('hex') !==
-                'a0b980507a2b5e4b0a7d27a11b36afd27db5f39dd2d74bca72ab82eecf9ec337') {
-              throw new Error('Release validation verifier bytes changed in the workspace');
-            }
+            const source = verified('.github/scripts/release-validation.cjs',
+              'Release validation verifier bytes changed in the workspace');
             const publicationFilename = resolve('.github/scripts/release-publication.cjs');
-            const publicationSource = readFileSync(publicationFilename);
-            if (createHash('sha256').update(publicationSource).digest('hex') !==
-                '124d6832b052c0f3309755c1874acf303bbef264cf24077e1831dacc51838462') {
-              throw new Error('Release publication helper bytes changed in the workspace');
-            }
+            const publicationSource = verified('.github/scripts/release-publication.cjs',
+              'Release publication helper bytes changed in the workspace');
             const publication = { exports: {} };
             const noImports = () => { throw new Error('Unexpected publication helper dependency'); };
             compileFunction(publicationSource.toString('utf8'), ['require', 'module', 'exports'],
@@ -101,6 +111,7 @@ jobs:
     name: publish source and binaries v${{ needs.entry.outputs.version }}
     needs: [entry, validation]
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     environment: release-automation
     permissions:
       contents: read
@@ -132,18 +143,27 @@ jobs:
             const { createHash } = require('node:crypto');
             const { resolve } = require('node:path');
             const { compileFunction } = require('node:vm');
+            const { data: manifest } = await github.rest.repos.getContent({
+              ...context.repo, path: '.github/release-helper-digests.json', ref: context.sha,
+            });
+            if (manifest?.type !== 'file' || manifest.encoding !== 'base64' || typeof manifest.content !== 'string') {
+              throw new Error('Release helper digest manifest is unreadable');
+            }
+            const digests = JSON.parse(Buffer.from(manifest.content, 'base64').toString('utf8'));
+            const verified = (path, message) => {
+              const bytes = readFileSync(resolve(path));
+              const expected = Object.hasOwn(digests, path) ? digests[path] : '';
+              if (!/^[a-f0-9]{64}$/.test(expected) || createHash('sha256').update(bytes).digest('hex') !== expected) {
+                throw new Error(message);
+              }
+              return bytes;
+            };
             const filename = resolve('.github/scripts/release-validation.cjs');
-            const source = readFileSync(filename);
-            if (createHash('sha256').update(source).digest('hex') !==
-                'a0b980507a2b5e4b0a7d27a11b36afd27db5f39dd2d74bca72ab82eecf9ec337') {
-              throw new Error('Release validation verifier bytes changed in the workspace');
-            }
+            const source = verified('.github/scripts/release-validation.cjs',
+              'Release validation verifier bytes changed in the workspace');
             const publicationFilename = resolve('.github/scripts/release-publication.cjs');
-            const publicationSource = readFileSync(publicationFilename);
-            if (createHash('sha256').update(publicationSource).digest('hex') !==
-                '124d6832b052c0f3309755c1874acf303bbef264cf24077e1831dacc51838462') {
-              throw new Error('Release publication helper bytes changed in the workspace');
-            }
+            const publicationSource = verified('.github/scripts/release-publication.cjs',
+              'Release publication helper bytes changed in the workspace');
             const publication = { exports: {} };
             const noImports = () => { throw new Error('Unexpected publication helper dependency'); };
             compileFunction(publicationSource.toString('utf8'), ['require', 'module', 'exports'],
@@ -338,6 +358,7 @@ jobs:
     name: reserve next patch after v${{ needs.entry.outputs.version }}
     needs: [entry, publish]
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     environment: release-automation
     permissions:
       contents: read

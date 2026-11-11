@@ -206,7 +206,7 @@ The smoke runs on the CPU and blocks flash-linear-attention, so transformers use
 
 `pip check` reports nine intentional deviations. Use the exact checker. Never ignore other failures or edit installed metadata.
 
-Regenerate only for explicit dependency updates with uv 0.12.23:
+Regenerate only for explicit dependency updates with uv 0.13.4:
 
 ```sh
 uv pip compile training/axolotl/requirements.in \

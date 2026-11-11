@@ -33,7 +33,6 @@ function expectedExecutableDigest(files, path, admitted) {
 
 const STE_FILES = ['.github/workflows/docs-ste.yml', '.ste.yml', '.vale.ini', '.vale/styles/config/vocabularies/Project/accept.txt'];
 
-const OPTIONAL_FILES = ['.github/release-helper-digests.json'];
 const REQUIRED_FILES = [
   ...STE_FILES,
   '.github/CODEOWNERS',
@@ -51,6 +50,7 @@ const REQUIRED_FILES = [
   '.github/scripts/policy-lockfiles.cjs', '.github/scripts/policy-admission.cjs',
   '.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py',
   '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
+  '.github/release-helper-digests.json',
   '.github/scripts/pr-branch-updater.cjs', 'sonar-project.properties',
   '.github/scripts/package.json', '.github/scripts/package-lock.json',
   '.github/scripts/eslint.config.cjs', '.github/semgrep-tests/maintainability.go',
@@ -484,13 +484,13 @@ async function run({ github, context }) {
   if (tree.truncated) throw new Error('Cannot verify a truncated PR tree');
   for (const entry of tree.tree) {
     if (FORBIDDEN_INPUTS.includes(entry.path)) throw new Error(`${entry.path}: CI npm input redirection is forbidden`);
-    if ([...REQUIRED_FILES, ...OPTIONAL_FILES].includes(entry.path) &&
+    if (REQUIRED_FILES.includes(entry.path) &&
         (entry.type !== 'blob' || !['100644', '100755'].includes(entry.mode))) {
       throw new Error(`${entry.path}: policy inputs must be regular files`);
     }
   }
   const paths = tree.tree.filter(entry => entry.type === 'blob' &&
-    ([...REQUIRED_FILES, ...OPTIONAL_FILES].includes(entry.path) ||
+    (REQUIRED_FILES.includes(entry.path) ||
       (entry.path.startsWith('.github/workflows/') && /\.ya?ml$/.test(entry.path))))
     .map(entry => entry.path);
   const files = {};

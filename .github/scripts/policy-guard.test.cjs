@@ -48,6 +48,7 @@ function files({ serial = true } = {}) {
     '.github/scripts/policy-lockfiles.cjs', '.github/scripts/policy-admission.cjs',
     '.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py',
     '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
+  '.github/release-helper-digests.json',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
     '.github/scripts/eslint.config.cjs', '.github/semgrep-tests/maintainability.go',
     '.github/scripts/check-go-directives.go', '.github/scripts/check-go-directives_test.go',
@@ -1300,7 +1301,7 @@ test('Dependabot recovery rejects unsupported, invalid or malformed daily cron s
 
 test('Dependabot scopes occur exactly once and cannot add unknown or overlapping directories', () => {
   const baseline = files({ serial: false });
-  assert.deepEqual(inspectActivated(baseline), [], 'real five-scope baseline');
+  assert.deepEqual(inspectActivated(baseline), [], 'real six-scope baseline');
   const path = '.github/dependabot.yml';
   for (const mutate of [
     config => { config.updates.push(structuredClone(config.updates[0])); },
@@ -1552,23 +1553,29 @@ test('classifier admission requires matching policy and workflow digests', () =>
 });
 
 
-test('release helper admission synchronizes policy and both runtime assertions', () => {
+test('release helper admission synchronizes policy and the shared runtime digest manifest', () => {
   const baseline = files({ serial: false });
   const policy = '.github/scripts/policy-release.cjs';
+  const manifest = '.github/release-helper-digests.json';
   const workflow = '.github/workflows/release.yml';
   const digest = content => require('node:crypto').createHash('sha256').update(content).digest('hex');
+  // Release workflow verification steps no longer carry digests themselves.
+  assert.ok(!baseline[workflow].includes(digest(baseline['.github/scripts/release-validation.cjs'])));
   for (const helper of ['.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs']) {
     const candidate = { ...baseline, [helper]: baseline[helper] + '\n// reviewed update\n' };
-    const admitted = new Set([helper, policy, workflow]);
+    const admitted = new Set([helper, policy, manifest, workflow]);
     assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
     const previous = digest(baseline[helper]);
     const current = digest(candidate[helper]);
     candidate[policy] = candidate[policy].replace(previous, current);
-    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
-    candidate[workflow] = candidate[workflow].replace(previous, current);
-    assert.ok(inspectActivated(candidate, baseline, admitted).length > 0);
-    candidate[workflow] = candidate[workflow].replaceAll(previous, current);
+    assert.ok(inspectActivated(candidate, baseline, admitted).some(error => error.includes(manifest)));
+    candidate[manifest] = candidate[manifest].replace(previous, current);
     assert.deepEqual(inspectActivated(candidate, baseline, admitted), []);
+    // The manifest cannot authorize a helper without the reviewed policy digest.
+    const unreviewed = { ...candidate, [policy]: baseline[policy] };
+    assert.ok(inspectActivated(unreviewed, baseline, admitted).length > 0);
+    const extra = { ...candidate, [manifest]: JSON.stringify({ ...JSON.parse(candidate[manifest]), 'other.cjs': current }) };
+    assert.ok(inspectActivated(extra, baseline, admitted).some(error => error.includes(manifest)));
     assert.ok(inspectActivated(candidate, baseline).length > 0);
     const declaration = candidate[policy].match(/const RELEASE_HASHES = (\{[\s\S]*?\n\});/)[0];
     candidate[policy] = `/* ${declaration} */\n${baseline[policy]}`;
@@ -1618,19 +1625,12 @@ test('STE control files are mandatory and their replacement cannot authorize its
   assert.ok(inspectActivated(candidate, baseline).some(failure => failure.includes('documentation gate controls changed')));
 });
 
-test('release transition accepts both exact formats and rejects malformed manifests', () => {
-  const { MANIFEST_VALIDATION_SCRIPT } = require('./policy-release.cjs');
+test('release verification rejects malformed manifests and conditional validation', () => {
   const baseline = files({ serial: false });
   assert.deepEqual(inspectActivated(baseline), []);
   const candidate = { ...baseline };
   const path = '.github/workflows/release.yml';
   const workflow = YAML.parse(candidate[path]);
-  for (const id of ['validation', 'publish']) {
-    const step = workflow.jobs[id].steps.find(step => step.with?.script === VALIDATION_SCRIPT);
-    assert.ok(step);
-    step.with.script = MANIFEST_VALIDATION_SCRIPT;
-  }
-  candidate[path] = YAML.stringify(workflow);
   const manifest = '.github/release-helper-digests.json';
   const hashes = Object.fromEntries(['release-validation', 'release-publication'].map(name => {
     const path = `.github/scripts/${name}.cjs`;
@@ -1642,17 +1642,19 @@ test('release transition accepts both exact formats and rejects malformed manife
     JSON.stringify({ ...hashes, '.github/scripts/release-validation.cjs': 'a'.repeat(64) })]) {
     assert.ok(inspectActivated({ ...candidate, [manifest]: value }).some(error => error.includes(manifest)));
   }
-  workflow.jobs.validation.steps.find(step => step.with?.script === MANIFEST_VALIDATION_SCRIPT).if = 'always()';
+  workflow.jobs.validation.steps.find(step => step.with?.script === VALIDATION_SCRIPT).if = 'always()';
   assert.ok(inspectActivated({ ...candidate, [path]: YAML.stringify(workflow) }).length > 0);
 });
 
-test('training Dependabot scope is optional, exact and unique', () => {
+test('training Dependabot scope is required, exact and unique', () => {
   const baseline = files({ serial: false });
   const path = '.github/dependabot.yml';
   const config = YAML.parse(baseline[path]);
   const training = { 'package-ecosystem': 'pip', directory: '/training/axolotl', schedule: { interval: 'weekly' } };
-  config.updates.push(training);
   assert.deepEqual(inspectActivated({ ...baseline, [path]: YAML.stringify(config) }), []);
+  const missing = structuredClone(config);
+  missing.updates = missing.updates.filter(entry => entry['package-ecosystem'] !== 'pip');
+  assert.ok(inspectActivated({ ...baseline, [path]: YAML.stringify(missing) }).some(error => error.includes('coverage')));
   for (const entry of [{ ...training }, { ...training, directory: '/training' }]) {
     const invalid = structuredClone(config);
     invalid.updates.push(entry);
