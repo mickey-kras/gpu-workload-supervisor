@@ -9,7 +9,7 @@ import Pango from 'gi://Pango';
 import {roundedCard} from './presentation.mjs';
 import {CheckRunner, blockedNote} from './model-check-run.mjs';
 import {TemplateReview} from './model-review.mjs';
-import {blockingReason, reasonText} from './model-reasons.mjs';
+import {blockingReason, failureCause, reasonText} from './model-reasons.mjs';
 
 // The status is read-only: it shows the stored check results of gpu-setup
 // model-status and never shows a model as safe. Each state has an icon and
@@ -230,12 +230,13 @@ class StatusView {
         if (entry?.kind !== 'llm') return entry;
         const proposed = this.proposed();
         if (proposed === null) return entry;
-        const notScanned = (reason, launchBlocked = false) => ({workload: this.workload, kind: 'llm', status: 'not_scanned', reason, staticChecksPassed: false, launchBlocked});
+        // selection marks a cause in the selection, not in the stored result.
+        const notScanned = (reason, launchBlocked = false) => ({workload: this.workload, kind: 'llm', status: 'not_scanned', reason, staticChecksPassed: false, launchBlocked, selection: true});
         // The gate keeps a stored result by workload ID: it refuses that
         // result for a launch of another model folder.
         if (!entry.identity || proposed.identity !== entry.identity) return notScanned('model-changed', Boolean(entry.checkedAt && proposed.path));
         // The launch gate refuses a passed template check for another pin.
-        if ('pin' in proposed && !entry.reason && templatePassed(entry) && proposed.pin !== (entry.templateSHA256 ?? '')) return notScanned('template-changed', true);
+        if ('pin' in proposed && !entry.reason && (templatePassed(entry) || entry.reviewPending) && proposed.pin !== (entry.templateSHA256 ?? '')) return notScanned('template-changed', true);
         return entry;
     }
 
@@ -283,7 +284,7 @@ class StatusView {
         } catch (error) {
             outcome = this.cancellable.is_cancelled() ? 'canceled' : 'failed';
             if (outcome === 'failed') { this.failedAction = action; logFailure(error, action); }
-            this.setNote(outcome === 'canceled' ? canceled : failed);
+            this.setNote(outcome === 'canceled' ? canceled : [failed, failureCause(error)].filter(Boolean).join(' '));
         } finally {
             // Focus moves only from the Cancel button that this action hides.
             const focused = this.cancel.is_focus();
@@ -307,7 +308,7 @@ class StatusView {
     async reload(before) {
         let note = this.note.label;
         const failedAction = this.failedAction;
-        const reading = new Gio.Cancellable(); this.reading = reading;
+        const reading = new Gio.Cancellable(); this.reading = reading; this.update();
         try {
             const models = readReport(await this.ui.command(['/usr/bin/gpu-setup', 'model-status'], JSON.stringify({version: 1}), reading));
             this.ui.modelStatus = {state: 'loaded', entries: new Map(models.map(entry => [entry.workload, entry]))};

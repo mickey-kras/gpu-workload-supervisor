@@ -87,7 +87,7 @@ export class TemplateReview {
     async store() {
         const {ui, workload} = this.view;
         const {chatTemplateSHA256, reviewSHA256} = this.review;
-        await this.view.operate({start: 'Storing the approval…', failed: 'The approval was not stored. The stored result changed or could not be read. Read the review list again.',
+        await this.view.operate({start: 'Storing the approval…', failed: 'The approval was not stored.',
             canceled: 'Approval canceled. The last result is kept.', cancelLabel: 'Cancel approval', action: 'model-approve', focus: () => (this.root.visible ? this.toggle : null)}, async cancellable => {
             const entry = JSON.parse(await ui.command(['/usr/bin/gpu-setup', 'model-approve'], JSON.stringify({version: 1, workload, chatTemplateSHA256, reviewSHA256}), cancellable));
             if (entry?.workload !== workload) throw new Error('The result is not for this workload.');

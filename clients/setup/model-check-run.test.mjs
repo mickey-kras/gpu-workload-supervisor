@@ -107,7 +107,7 @@ test('a canceled run keeps the last result', async () => {
 test('a run whose hub listing failed shows the failure and keeps the stored result', async () => {
     for (const [reason, text] of [['upstream-unreachable', 'Setup could not reach Hugging Face.'], ['upstream-not-found', 'Hugging Face did not find this repository or revision.'],
         ['upstream-denied', 'Hugging Face refused access. Check your Hugging Face login.'], ['upstream-moved', 'Hugging Face moved this repository. Enter its current name.'],
-        ['upstream-history-too-long', 'The branch history is too long to find this revision. Enter the commit of a branch or a tag.'], ['upstream-invalid', 'Hugging Face gave a file list that setup cannot read.'], ['upstream-new', 'Reason code: upstream-new']]) {
+        ['upstream-history-too-long', 'The branch history is too long to find this revision. Enter a commit that a branch or a tag points at.'], ['upstream-invalid', 'Hugging Face gave a file list that setup cannot read.'], ['upstream-new', 'Reason code: upstream-new']]) {
         const failure = {...stored, status: 'error', staticChecksPassed: false, notStored: true, launchBlocked: true,
             checks: [checks[0], {name: 'upstream-identity', outcome: 'error', reason}, {name: 'chat-template', outcome: 'not_run'}, checks[3]]};
         const ui = await openSettings({}, {responses: {'model-check': failure}});
@@ -122,7 +122,7 @@ test('a run whose hub listing failed shows the failure and keeps the stored resu
 test('a failed run writes the error to the log and keeps the last result', async () => {
     const ui = await openSettings({}, {fail: 'model-check'});
     await ui.click('Run checks');
-    assert.ok(shown(ui, 'The checks could not run. The last result is kept.'));
+    assert.ok(shown(ui, 'The checks did not store a result. The last result is kept.'));
     assert.deepEqual(ui.logs, ['gpu-setup model-check failed: Backend unavailable']);
     assert.match(ui.widgets.find(widget => widget.label?.startsWith('Checker revision')).label, /\nError: the check action of gpu-setup failed\.\n/);
     assert.ok(!ui.widgets.some(widget => widget.label?.includes('Backend unavailable')));
@@ -175,7 +175,7 @@ test('a failed approval reads the status and the review list again', async () =>
     assert.ok(shown(ui, 'Line 1: "Read 1"'));
     const statusReads = ui.calls.filter(call => call.argv[1] === 'model-status').length;
     await ui.click('Approve template'); await settle();
-    assert.ok(shown(ui, 'The approval was not stored. The stored result changed or could not be read. Read the review list again.'));
+    assert.ok(shown(ui, 'The approval was not stored.'));
     assert.equal(ui.calls.filter(call => call.argv[1] === 'model-status').length, statusReads + 1, 'the status is read again');
     assert.ok(shown(ui, 'Line 1: "Read 2"'), 'the review list is read again');
     const listed = label => ui.widgets.some(widget => widget.label === label && ui.widgets.some(parent => parent.children.includes(widget)));
@@ -278,7 +278,7 @@ test('an approval for another workload or a failed status read keeps the card', 
     assert.equal(ui.logs.length, 2);
     assert.match(ui.logs[1], /^gpu-setup model-status failed: /);
     assert.ok(shown(ui, 'Findings detected'), 'the card keeps the status it shows');
-    assert.ok(shown(ui, 'The approval was not stored. The stored result changed or could not be read. Read the review list again.'));
+    assert.ok(shown(ui, 'The approval was not stored.'));
 });
 
 test('closing setup stops the status read after a failed approval', async () => {
@@ -345,6 +345,10 @@ test('the summary note names the action that ends the block', async () => {
     for (const [entry, profile, text] of [
         [{...findings, reviewPending: true, templateSHA256: 'pin'}, pinned, 'This workload cannot start until you approve its chat template. Review it on its Model scan card.'],
         [{...findings, reason: 'other-directory', templateSHA256: 'pin'}, pinned, 'This workload cannot start with its stored check result. Run the checks again on its Model scan card.'],
+        [{...findings, reviewPending: true, templateSHA256: 'pin'}, {...pinned, nativeModel: {...pinned.nativeModel, chatTemplateSHA256: 'new-pin'}},
+            'This workload cannot start with its stored check result. After you finish setup, run the checks again on its Model scan card.'],
+        [{...findings, status: 'not_scanned', reason: 'template-changed', templateSHA256: 'pin'}, pinned,
+            'This workload cannot start: its launch pins another chat template than the checked template. Run setup again for this workload, then run the checks.'],
         [{...stored, templateSHA256: 'pin'}, {...pinned, nativeModel: {...pinned.nativeModel, owned: {port: 8000, modelPath: '/models/new'}}},
             'This workload cannot start with its stored check result. After you finish setup, run the checks again on its Model scan card.'],
     ]) {
@@ -368,4 +372,46 @@ test('a canceled approval says so and reads what is stored', async () => {
     assert.ok(shown(ui, 'Approval canceled. The last result is kept.'));
     assert.equal(ui.calls.at(-1).argv[1], 'model-review', 'the open list is read again');
     assert.ok(ui.calls.some(call => call.argv[1] === 'model-status' && call !== ui.calls[0]), 'the status is read again');
+});
+
+test('a failed action names its cause', async () => {
+    for (const [action, message, text] of [
+        ['model-check', 'setup is busy with another change, so nothing was stored; try again', 'The checks did not store a result. The last result is kept. Setup was busy with another change. Try again.'],
+        ['model-check', 'deployment is in maintenance; resume setup', 'The checks did not store a result. The last result is kept. Setup is in maintenance. Finish setup, then try again.'],
+        ['model-check', 'model check stopped at its time limit', 'The checks did not store a result. The last result is kept. The check stopped at its time limit.'],
+        ['model-check', 'the stored result does not apply to the accepted workload; run the checks again', 'The checks did not store a result. The last result is kept. The workload changed during the action. Run the checks again.'],
+        ['model-check', 'model checks need an activated setup; finish setup first', 'The checks did not store a result. The last result is kept. Finish setup first.'],
+        ['model-check', 'installed release is not activated; run setup', 'The checks did not store a result. The last result is kept. The installed release is not activated. Finish setup, then try again.'],
+        ['model-approve', 'setup is busy with another change, so nothing was stored; try again', 'The approval was not stored. Setup was busy with another change. Try again.'],
+        ['model-approve', 'the approval does not match the chat template review of this result', 'The approval was not stored. The review list changed. Read it again.'],
+        ['model-approve', 'the stored model check result changed during the approval; read the result again before you approve', 'The approval was not stored. The stored result changed. Read the review list again.'],
+    ]) {
+        const ui = await openSettings({...findings, reviewPending: true}, {fail: action, stderr: {[action]: message}, responses: {'model-review': review}});
+        if (action === 'model-approve') {
+            await ui.click('Review chat template'); await settle();
+            await ui.click('Approve template');
+        } else await ui.click('Run checks');
+        await settle();
+        assert.ok(shown(ui, text), text);
+    }
+});
+
+test('Run checks waits while the card reads the stored status', async () => {
+    const ui = await openSettings({}, {fail: 'model-check', deferAction: 'model-status', deferOccurrence: 2});
+    const running = ui.click('Run checks'); await settle();
+    assert.equal(ui.by('Run checks').sensitive, false, 'no second run during the read');
+    ui.finish(); await running; await settle();
+    assert.equal(ui.by('Run checks').sensitive, true);
+});
+
+test('the reason texts cover each reason code of the checks', async () => {
+    const {readFileSync, readdirSync} = await import('node:fs');
+    const dir = new URL('../../internal/modelcheck/', import.meta.url);
+    const go = readdirSync(dir).filter(name => name.endsWith('.go') && !name.endsWith('_test.go'))
+        .map(name => readFileSync(new URL(name, dir), 'utf8')).join('\n');
+    const codes = [...go.matchAll(/\bReason\w+\s*=\s*"([a-z0-9-]+)"/g)].map(match => match[1]);
+    const display = new Set(['no-result', 'other-directory', 'checker-changed', 'result-unusable', 'template-changed', 'files-unavailable']);
+    const {reasonText} = await import('./model-reasons.mjs');
+    assert.ok(codes.length > 30);
+    for (const code of codes.filter(code => !display.has(code))) assert.ok(!reasonText(code).startsWith('Reason code:'), code);
 });

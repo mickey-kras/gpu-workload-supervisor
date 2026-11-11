@@ -7,7 +7,7 @@ function FileIcon(properties) { return {...properties}; }
 function fileAtURI() { return {get_parent: () => ({get_child: () => ({query_exists: () => true})})}; }
 
 // Substitute only GI widgets and subprocesses; run the setup's real event handlers.
-export async function launch({units = [], profiles = [], pending = false, fail = null, version = 'GNOME Shell 50.1', responses = {}, filePath = '/models/selected', fileError = null, deferAction = 'validate', deferOccurrence = null} = {}) {
+export async function launch({units = [], profiles = [], pending = false, fail = null, version = 'GNOME Shell 50.1', responses = {}, filePath = '/models/selected', fileError = null, deferAction = 'validate', deferOccurrence = null, stderr = {}} = {}) {
     const widgets = []; const calls = []; const deferred = []; let uuidSequence = 0;
     const Widget = createWidgetClass(widgets);
     const request = {profile: {statePath: '/state.db', gpuIndex: 2, extra: 'profile'},
@@ -56,7 +56,7 @@ export async function launch({units = [], profiles = [], pending = false, fail =
             markup_escape_text: text => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
         }},
         'gi://Gio': {default: {FileIcon, File: {new_for_uri: fileAtURI}, SubprocessFlags: {STDIN_PIPE: 1, STDOUT_PIPE: 2, STDERR_PIPE: 4},
-            Cancellable, Subprocess: subprocesses({calls, deferred, deferAction, deferOccurrence, version, responses, fallback: {request, units, pending}, fail})}},
+            Cancellable, Subprocess: subprocesses({calls, deferred, deferAction, deferOccurrence, version, responses, fallback: {request, units, pending}, fail, stderr})}},
     };
     // The application log of the module, as console.warn writes it in GJS.
     const logs = [];
@@ -96,7 +96,7 @@ class Cancellable {
 }
 
 // Deferred calls complete with finish(); a call stopped before then never does.
-function subprocesses({calls, deferred, deferAction, deferOccurrence, version, responses, fallback, fail}) {
+function subprocesses({calls, deferred, deferAction, deferOccurrence, version, responses, fallback, fail, stderr}) {
     return {new(argv) { let requestInput; let call; let waiting = null; let killed = false; return {
         communicate_utf8_async(input, cancel, callback) {
             requestInput = input; call = {argv, input, cancellable: cancel}; calls.push(call);
@@ -110,7 +110,7 @@ function subprocesses({calls, deferred, deferAction, deferOccurrence, version, r
             if (killed) throw new Error('Operation was cancelled');
             if (argv[1] === '--version') return [true, version, 'Backend unavailable'];
             const response = argv[1] === 'discover' ? fallback : {changes: ['Reviewed change']};
-            return [true, JSON.stringify(typeof responses[argv[1]] === 'function' ? responses[argv[1]](JSON.parse(requestInput ?? 'null'), calls) : responses[argv[1]] ?? response), 'Backend unavailable'];
+            return [true, JSON.stringify(typeof responses[argv[1]] === 'function' ? responses[argv[1]](JSON.parse(requestInput ?? 'null'), calls) : responses[argv[1]] ?? response), stderr[argv[1]] ?? 'Backend unavailable'];
         },
         get_successful: () => argv[1] !== fail,
     }; }};

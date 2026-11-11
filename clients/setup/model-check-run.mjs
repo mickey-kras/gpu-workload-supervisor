@@ -88,7 +88,7 @@ export class CheckRunner {
             label.visible = wrong;
             if (wrong) row.add_css_class('error'); else row.remove_css_class('error');
         }
-        this.button.sensitive = validRepo(repo) && validRevision(revision) && !this.view.cancellable;
+        this.button.sensitive = validRepo(repo) && validRevision(revision) && !this.view.cancellable && !this.view.reading;
     }
 
     // fill sets the fields to the source of a stored result that applies,
@@ -116,7 +116,7 @@ export class CheckRunner {
     async run() {
         const {ui, workload} = this.view;
         const source = this.source();
-        await this.view.operate({start: 'Running checks… This can take a long time for large models.', failed: 'The checks could not run. The last result is kept.',
+        const outcome = await this.view.operate({start: 'Running checks… This can take a long time for large models.', failed: 'The checks did not store a result. The last result is kept.',
             action: 'model-check', focus: () => (this.button.visible ? this.button : null)}, async cancellable => {
             const entry = JSON.parse(await ui.command(['/usr/bin/gpu-setup', 'model-check'], JSON.stringify({version: 1, workload, source}), cancellable));
             if (entry?.workload !== workload) throw new Error('The result is not for this workload.');
@@ -124,7 +124,7 @@ export class CheckRunner {
             return runNote(entry);
         });
         // A new run can store another review list: read the open list again.
-        if (!ui.closed && this.view.review.body.visible) await this.view.review.load();
+        if (outcome === 'done' && !ui.closed && this.view.review.body.visible) await this.view.review.load();
     }
 }
 
@@ -133,12 +133,14 @@ const blockedTexts = {
     review: 'This workload cannot start until you approve its chat template. Review it on its Model scan card.',
     result: 'This workload cannot start: its stored check result blocks the launch. See the cause on its Model scan card.',
     stale: 'This workload cannot start with its stored check result. Run the checks again on its Model scan card.',
+    template: 'This workload cannot start: its launch pins another chat template than the checked template. Run setup again for this workload, then run the checks.',
     changed: 'This workload cannot start with its stored check result. After you finish setup, run the checks again on its Model scan card.',
 };
 
 function blockedKey(entry) {
     if (entry.reviewPending) return 'review';
-    if (['model-changed', 'template-changed'].includes(entry.reason)) return 'changed';
+    if (entry.selection) return 'changed';
+    if (entry.reason === 'template-changed') return 'template';
     return entry.reason ? 'stale' : 'result';
 }
 
