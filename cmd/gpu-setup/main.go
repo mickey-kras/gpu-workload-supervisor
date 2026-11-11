@@ -19,7 +19,10 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
-const cmdVerifyBindings = "verify-bindings"
+const (
+	cmdVerifyBindings = "verify-bindings"
+	cmdModelStatus    = "model-status"
+)
 
 type setupActions struct {
 	home          func() (string, error)
@@ -73,7 +76,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return err
 	}
 	switch args[0] {
-	case "temporary-status", "temporary-cleanup", "correct-gpu", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned", "model-status", "model-check", "model-review", "model-approve":
+	case "temporary-status", "temporary-cleanup", "correct-gpu", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned", cmdModelStatus, "model-check", "model-review", "model-approve":
 		if a.euid() == 0 {
 			return errors.New("run guided setup as the desktop account, not root")
 		}
@@ -101,7 +104,7 @@ func (a setupActions) runAction(ctx context.Context, home, action string, input 
 		return setup.SystemBackend().RemoveIntegration(ctx, home)
 	case "discover":
 		return a.runDiscover(ctx, home, output)
-	case "model-status":
+	case cmdModelStatus:
 		var request setup.ModelStatusRequest
 		if err := strictjson.DecodeLimited(input, setup.MaxModelStatusRequestBytes, &request); err != nil {
 			return err
@@ -240,7 +243,7 @@ const (
 // one transaction.
 func actionContext(action string) (context.Context, context.CancelFunc) {
 	switch action {
-	case "model-status":
+	case cmdModelStatus:
 		return context.WithTimeout(context.Background(), recheckTimeout)
 	case "model-check":
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
