@@ -853,6 +853,33 @@ func TestListingHasADefaultDeadline(t *testing.T) {
 	}
 }
 
+// The listing keeps its own bound inside a run with a later deadline, and
+// a run that reaches its deadline reports a time limit, not a cancel.
+func TestListingBoundInsideALongerRun(t *testing.T) {
+	files := modelFiles()
+	h := newHub(t, upstreamOf(files))
+	h.stalled = make(chan struct{})
+	checker := h.checker()
+	checker.hub.listingTimeout = 200 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	start := time.Now()
+	record, err := checker.Run(ctx, Request{Model: "example", Root: writeModel(t, files), Source: testSource})
+	if err != nil || record.Checks[1] != (Check{CheckIdentity, OutcomeError, ReasonUpstreamUnreachable}) || time.Since(start) > 10*time.Second {
+		t.Fatalf("a stalled hub inside a longer run must time out as unreachable: %+v %v", record.Checks, err)
+	}
+	expired, stop := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer stop()
+	if _, err := h.checker().Run(expired, Request{Model: "example", Root: writeModel(t, files), Source: testSource}); !errors.Is(err, ErrCheckTimedOut) {
+		t.Fatalf("a run at its deadline: %v", err)
+	}
+	canceled, stopNow := context.WithCancel(context.Background())
+	stopNow()
+	if _, err := h.checker().Run(canceled, Request{Model: "example", Root: writeModel(t, files), Source: testSource}); !errors.Is(err, ErrCheckCanceled) {
+		t.Fatalf("a canceled run: %v", err)
+	}
+}
+
 func TestCancelDuringListingStoresNoResult(t *testing.T) {
 	files := modelFiles()
 	h := newHub(t, upstreamOf(files))

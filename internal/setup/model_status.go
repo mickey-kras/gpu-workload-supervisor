@@ -66,6 +66,18 @@ type ModelStatusEntry struct {
 	Checks             []modelcheck.Check  `json:"checks,omitempty"`
 	Identity           string              `json:"identity,omitempty"`
 	TemplateSHA256     string              `json:"templateSHA256,omitempty"`
+	// Source is the hub repository and revision of the stored result. The
+	// desktop offers it for the next run.
+	Source *modelcheck.Source `json:"source,omitempty"`
+	// CheckAvailable marks an LLM workload with a model directory, which
+	// gpu-setup model-check can check.
+	CheckAvailable bool `json:"checkAvailable"`
+	// LaunchBlocked marks a stored result that the launch gate refuses,
+	// or a stored result that cannot be read.
+	LaunchBlocked bool `json:"launchBlocked"`
+	// NotStored marks the entry of a run whose hub listing failed. It
+	// describes that run. The earlier stored result stays.
+	NotStored bool `json:"notStored,omitempty"`
 }
 
 // ModelIdentity gives the SHA-256 of the text "path:" and the model
@@ -113,15 +125,8 @@ func ModelStatus(ctx context.Context, home string, request ModelStatusRequest) (
 	if err := request.validate(); err != nil {
 		return report, err
 	}
-	data, err := privateRead(filepath.Join(home, ".config/gpu-workload-supervisor/operator.json"))
-	if errors.Is(err, os.ErrNotExist) {
-		return report, nil
-	}
-	if err != nil {
-		return report, err
-	}
-	var profile Profile
-	if err := json.Unmarshal(data, &profile); err != nil {
+	profile, found, err := readOperatorProfile(home)
+	if err != nil || !found {
 		return report, err
 	}
 	snapshot, err := ReadCatalog(ctx, profile.StatePath)
@@ -152,28 +157,15 @@ func ModelStatus(ctx context.Context, home string, request ModelStatusRequest) (
 // that cannot be read leaves the workload not scanned; the launch gate
 // refuses it. Without a results table, no workload has a result.
 func modelStatusEntry(ctx context.Context, db *sql.DB, results bool, p control.WorkloadProfile, recheck bool) (ModelStatusEntry, error) {
-	entry := ModelStatusEntry{Workload: string(p.ID), Label: p.Label, Kind: modelKind(p), Status: modelcheck.StatusNotScanned}
-	if entry.Kind != ModelKindLLM {
-		if entry.Kind == ModelKindUnidentified {
-			entry.Reason = ReasonFilesUnidentified
-		}
-		return entry, nil
-	}
-	root := ""
-	if p.NativeModel.Owned != nil {
-		root = p.NativeModel.Owned.ModelPath
-	}
-	pin := p.NativeModel.ChatTemplateSHA256
-	entry.Identity, entry.TemplateSHA256 = ModelIdentity(p.NativeModel.Model, root), pin
-	entry.Reason = modelcheck.ReasonNoResult
-	if !results {
+	entry, root, pin := baseEntry(p)
+	if entry.Kind != ModelKindLLM || !results {
 		return entry, nil
 	}
 	record, found, err := storedModelCheck(ctx, db, string(p.ID))
 	if err != nil || !found {
 		return entry, err
 	}
-	entry.Reason = modelcheck.ReasonResultUnusable
+	entry.Reason, entry.LaunchBlocked = modelcheck.ReasonResultUnusable, true
 	if record == nil {
 		return entry, nil
 	}
@@ -183,13 +175,40 @@ func modelStatusEntry(ctx context.Context, db *sql.DB, results bool, p control.W
 			return entry, fmt.Errorf("recheck %s: %w", p.ID, err)
 		}
 	}
-	checkedAt := record.CheckedAt
+	describeRecord(&entry, *record, root, pin)
+	return entry, nil
+}
+
+// baseEntry gives the entry of a workload without a stored result, and the
+// model directory and chat template pin of its launch.
+func baseEntry(p control.WorkloadProfile) (entry ModelStatusEntry, root, pin string) {
+	entry = ModelStatusEntry{Workload: string(p.ID), Label: p.Label, Kind: modelKind(p), Status: modelcheck.StatusNotScanned}
+	if entry.Kind != ModelKindLLM {
+		if entry.Kind == ModelKindUnidentified {
+			entry.Reason = ReasonFilesUnidentified
+		}
+		return entry, "", ""
+	}
+	if p.NativeModel.Owned != nil {
+		root = p.NativeModel.Owned.ModelPath
+	}
+	pin = p.NativeModel.ChatTemplateSHA256
+	entry.Identity, entry.TemplateSHA256 = ModelIdentity(p.NativeModel.Model, root), pin
+	entry.Reason, entry.CheckAvailable = modelcheck.ReasonNoResult, root != ""
+	return entry, root, pin
+}
+
+// describeRecord adds the fields of a result to entry, after its status
+// and reason are set. A pending review and the static checks count only
+// for a result that applies.
+func describeRecord(entry *ModelStatusEntry, record modelcheck.Record, root, pin string) {
 	if entry.Reason == "" {
 		_, entry.ReviewPending = record.PendingReview()
 		entry.StaticChecksPassed = record.StaticChecksPassed()
 	}
-	entry.Coverage, entry.Checker, entry.CheckedAt, entry.Checks = record.Coverage, record.Checker, &checkedAt, record.Checks
-	return entry, nil
+	checkedAt, source := record.CheckedAt, record.Source
+	entry.Coverage, entry.Checker, entry.CheckedAt, entry.Checks, entry.Source = record.Coverage, record.Checker, &checkedAt, record.Checks, &source
+	entry.LaunchBlocked = record.AllowLaunch(root, pin) != nil
 }
 
 // recheckEntry reads the model files of a stored result that applies, and
@@ -234,4 +253,20 @@ func storedModelCheck(ctx context.Context, db *sql.DB, model string) (record *mo
 		return nil, true, nil
 	}
 	return &stored, true, nil
+}
+
+// readOperatorProfile reads the operator profile of setup. found is false
+// when setup has no profile yet.
+func readOperatorProfile(home string) (profile Profile, found bool, err error) {
+	data, err := privateRead(filepath.Join(home, ".config/gpu-workload-supervisor/operator.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return profile, false, nil
+	}
+	if err != nil {
+		return profile, false, err
+	}
+	if err := json.Unmarshal(data, &profile); err != nil {
+		return profile, false, err
+	}
+	return profile, true, nil
 }

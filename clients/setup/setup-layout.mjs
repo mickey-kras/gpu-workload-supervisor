@@ -107,6 +107,24 @@ export function createSettings(ui) {
 }
 
 export function createApplicationCards(ui) {
+    // openApplicationCard opens the settings of an application, from origin.
+    // A workload ID opens the settings of that workload, for example from
+    // the Model scan link of the review summary.
+    ui.openApplicationCard = (app, origin, workload = null) => {
+        const {select} = ui.applicationCards.get(app);
+        if (!select.active) select.active = true;
+        const named = item => workload === null || item.id === workload;
+        const editor = ui.draftEditors.find(editor => editor.app === app && named(editor) && ui.drafts.some(draft => draft.id === editor.id));
+        if (editor) { ui.openApplicationSettings(editor, origin); return; }
+        const current = ui.profiles.find(profile => ui.runtimeOf(profile) === app && named(profile));
+        if (!current) return;
+        const binding = current.nativeModel?.owned ? {instance: current.nativeModel.instance, owned: editableOwnedLaunch(current.nativeModel.owned)} : {
+            unit: current.unit, cgroup: current.cgroup, healthURL: current.healthURL, instance: current.nativeModel?.instance,
+            model: current.nativeModel?.model, launchFile: current.nativeModel?.launchFile ?? current.launchBinding?.launchFile};
+        const created = ui.appendDraft({id: current.id, app, label: current.label, model: current.nativeModel?.model,
+            endpoint: current.nativeModel?.endpoint ?? current.launchBinding?.endpoint, binding}, current);
+        if (created) ui.openApplicationSettings(created, origin);
+    };
     for (const choice of ['comfyui', 'vllm'].map(id => applications.find(choice => choice.id === id))) {
         const card = roundedCard(Gtk, Gtk.Orientation.HORIZONTAL, 16);
         const detection = new Gtk.Label({label: 'Checking installation…', wrap: true, xalign: 0}); detection.add_css_class('dim-label'); detection.add_css_class('setup-detection');
@@ -115,21 +133,7 @@ export function createApplicationCards(ui) {
         const gear = new Gtk.Button({icon_name: 'emblem-system-symbolic', tooltip_text: `Settings for ${choice.label}`, sensitive: false});
         const header = applicationHeader(Gtk, choice.id, choice.label, gear, detection); header.hexpand = true; card.append(header);
         gear.update_property([Gtk.AccessibleProperty.LABEL], [`Settings for ${choice.label}`]);
-        gear.connect('clicked', () => {
-            if (!select.active) select.active = true;
-            const editor = ui.draftEditors.find(editor => editor.app === choice.id && ui.drafts.some(draft => draft.id === editor.id));
-            if (editor) ui.openApplicationSettings(editor, gear);
-            else {
-                const current = ui.profiles.find(profile => ui.runtimeOf(profile) === choice.id);
-                if (!current) return;
-                const binding = current.nativeModel?.owned ? {instance: current.nativeModel.instance, owned: editableOwnedLaunch(current.nativeModel.owned)} : {
-                    unit: current.unit, cgroup: current.cgroup, healthURL: current.healthURL, instance: current.nativeModel?.instance,
-                    model: current.nativeModel?.model, launchFile: current.nativeModel?.launchFile ?? current.launchBinding?.launchFile};
-                const editor = ui.appendDraft({id: current.id, app: choice.id, label: current.label, model: current.nativeModel?.model,
-                    endpoint: current.nativeModel?.endpoint ?? current.launchBinding?.endpoint, binding}, current);
-                if (editor) ui.openApplicationSettings(editor, gear);
-            }
-        });
+        gear.connect('clicked', () => ui.openApplicationCard(choice.id, gear));
         select.connect('toggled', () => {
             if (select.active) ui.selectApplication(choice);
             else {

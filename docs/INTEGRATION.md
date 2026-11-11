@@ -26,7 +26,7 @@ Demand records prove admission. They do not schedule workflows or replay uncerta
 
 ### Model checks
 
-[Model checks](MODEL-CHECKS.md) has the file allowlist, upstream identity check, static chat template check, result store and launch gate. No command runs the checks yet. The [launch gate](MODEL-CHECKS.md#launch-gate) refuses a vLLM launch when a stored result fails or its template differs from the pinned template. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans the behavioral scan and the scan job that runs the checks before first LLM use.
+[Model checks](MODEL-CHECKS.md) has the file allowlist, upstream identity check, static chat template check, result store and launch gate. Setup runs the checks of a workload when the operator asks (`gpu-setup model-check`). The [launch gate](MODEL-CHECKS.md#launch-gate) refuses a vLLM launch when a stored result fails or its template differs from the pinned template. [#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585) plans the behavioral scan and the scan job.
 
 Setup shows the stored status. See [Status display](MODEL-CHECKS.md#status-display). [#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583) plans the rest of the result display. These checks cannot prove model safety.
 

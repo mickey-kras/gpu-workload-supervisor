@@ -152,7 +152,7 @@ var (
 
 // Validate needs a complete record whose status follows from its checks.
 func (r Record) Validate() error {
-	if r.Version != RecordVersion || !modelPattern.MatchString(r.Model) || !cleanAbsolute(r.Root) || !r.Source.valid() || !checkerPattern.MatchString(r.Checker) {
+	if r.Version != RecordVersion || !modelPattern.MatchString(r.Model) || !cleanAbsolute(r.Root) || !r.Source.Valid() || !checkerPattern.MatchString(r.Checker) {
 		return errors.New("model check record has an invalid identity")
 	}
 	if r.CheckedAt.IsZero() || r.CheckedAt.Location() != time.UTC {

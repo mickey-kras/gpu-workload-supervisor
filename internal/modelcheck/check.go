@@ -40,12 +40,12 @@ func (c Checker) Run(ctx context.Context, r Request) (Record, error) {
 	if c.Client == nil || !checkerPattern.MatchString(c.Version) || !currentConfiguration(c.Hub).valid() {
 		return Record{}, errors.New("model checker needs a client, an HTTPS hub and a version")
 	}
-	if !modelPattern.MatchString(r.Model) || !cleanAbsolute(r.Root) || !r.Source.valid() {
+	if !modelPattern.MatchString(r.Model) || !cleanAbsolute(r.Root) || !r.Source.Valid() {
 		return Record{}, errors.New("model check needs a model ID, a clean absolute root and a pinned source")
 	}
 	files, reason, err := Inventory(ctx, r.Root)
-	if ctx.Err() != nil {
-		return Record{}, errors.New("model check was canceled")
+	if err := Stopped(ctx); err != nil {
+		return Record{}, err
 	}
 	if err != nil && !errors.Is(err, errChanged) && !errors.Is(err, errUnreadable) {
 		return Record{}, fmt.Errorf("model files cannot be inventoried: %w", err)
@@ -72,11 +72,29 @@ func (c Checker) Run(ctx context.Context, r Request) (Record, error) {
 	for _, name := range checkOrder[len(results):] {
 		results = append(results, Check{Name: name, Outcome: OutcomeNotRun})
 	}
-	if ctx.Err() != nil {
-		return Record{}, errors.New("model check was canceled")
+	if err := Stopped(ctx); err != nil {
+		return Record{}, err
 	}
 	record.Checks, record.Status, record.Coverage = results, statusOf(results), coverageOf(results)
 	return record, record.Validate()
+}
+
+// Errors of a run that stopped before its end. Neither gives a record.
+var (
+	ErrCheckCanceled = errors.New("model check was canceled")
+	ErrCheckTimedOut = errors.New("model check stopped at its time limit")
+)
+
+// Stopped gives the error of a run whose context ended: a time limit is
+// not a cancel. It gives nil while ctx is live.
+func Stopped(ctx context.Context) error {
+	switch {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return ErrCheckTimedOut
+	case ctx.Err() != nil:
+		return ErrCheckCanceled
+	}
+	return nil
 }
 
 // templateFields are the record fields that the template check gives.

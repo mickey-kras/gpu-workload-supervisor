@@ -24,7 +24,8 @@ const (
 
 // hubOptions tunes the hub client. The zero value gives the defaults.
 type hubOptions struct {
-	// listingTimeout bounds one listing when ctx has no deadline.
+	// listingTimeout bounds one listing. An earlier deadline of ctx stops
+	// it first.
 	listingTimeout time.Duration
 	retry          hubRetry
 }

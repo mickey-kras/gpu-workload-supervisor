@@ -44,7 +44,9 @@ func TestStoredStatusUsesTheStoredDigests(t *testing.T) {
 		"no template pin":   {nil, "example", root, "", StatusNotScanned, ReasonTemplateChanged},
 		"stored findings":   {func(r *Record) { r.Status = StatusFindings }, "example", root, pin, StatusFindings, ""},
 		"findings, no pin":  {func(r *Record) { r.Status, r.ChatTemplateSHA256 = StatusFindings, "" }, "example", root, "", StatusFindings, ""},
-		"review, other pin": {func(r *Record) { *r = needsReview(t, *r) }, "example", root, strings.Repeat("d", 64), StatusFindings, ""},
+		"review, other pin": {func(r *Record) { *r = needsReview(t, *r) }, "example", root, strings.Repeat("d", 64), StatusNotScanned, ReasonTemplateChanged},
+		"review, no pin":    {func(r *Record) { *r = needsReview(t, *r) }, "example", root, "", StatusNotScanned, ReasonTemplateChanged},
+		"review, same pin":  {func(r *Record) { *r = needsReview(t, *r) }, "example", root, pin, StatusFindings, ""},
 	} {
 		r := record
 		if tc.edit != nil {
@@ -96,5 +98,39 @@ func TestRecheckStatusFindsChangedFiles(t *testing.T) {
 	}
 	if status, reason, err := RecheckStatus(ctx, record, "example", root, pin); err != nil || status != StatusNotScanned || reason != ReasonFilesUnavailable {
 		t.Fatalf("recheck of a missing directory = %s, %q, %v", status, reason, err)
+	}
+}
+
+// Only an identity check error with an upstream reason is a hub failure.
+// A mismatch is a finding, and an unusable token is not a hub failure.
+func TestHubFailedNeedsAnUpstreamError(t *testing.T) {
+	record := func(outcome Outcome, reason string) Record {
+		return Record{Checks: []Check{
+			{Name: CheckAllowlist, Outcome: OutcomePassed},
+			{Name: CheckIdentity, Outcome: outcome, Reason: reason},
+		}}
+	}
+	for _, reason := range []string{ReasonUpstreamUnreachable, ReasonUpstreamNotFound, ReasonUpstreamDenied, ReasonUpstreamInvalid, ReasonUpstreamMoved, ReasonHistoryTooLong} {
+		if !record(OutcomeError, reason).HubFailed() {
+			t.Errorf("%s is a hub failure", reason)
+		}
+	}
+	for name, r := range map[string]Record{
+		"mismatch":     record(OutcomeFailed, ReasonIdentityMismatch),
+		"not upstream": record(OutcomeFailed, ReasonNotUpstream),
+		"token":        record(OutcomeError, ReasonTokenUnusable),
+		"unreadable":   record(OutcomeError, ReasonUnreadable),
+		"passed":       record(OutcomePassed, ""),
+		"no check":     {Checks: []Check{{Name: CheckAllowlist, Outcome: OutcomeError, Reason: ReasonUpstreamUnreachable}}},
+	} {
+		if r.HubFailed() {
+			t.Errorf("%s is not a hub failure", name)
+		}
+	}
+}
+
+func TestSourceValid(t *testing.T) {
+	if !testSource.Valid() || (Source{Repo: "model", Revision: testSource.Revision}).Valid() || (Source{Repo: testSource.Repo, Revision: "main"}).Valid() {
+		t.Error("source validation")
 	}
 }

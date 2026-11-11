@@ -4,8 +4,8 @@ import "context"
 
 // CheckerVersion is the checker version that StoredStatus accepts. A record
 // of another version reads as not scanned, so a new checker checks each
-// model again. No command writes records yet: the command that runs the
-// checks must set Checker.Version to CheckerVersion.
+// model again. The setup action that runs the checks, gpu-setup
+// model-check, sets Checker.Version to CheckerVersion.
 const CheckerVersion = "1"
 
 // Reasons of a display status that differs from the stored status. They
@@ -32,8 +32,11 @@ func CurrentConfiguration() Configuration {
 // root of the record, for a launch that names no model directory. It does
 // not compare the source. pin is the chat template SHA-256 of the launch.
 // As in the launch gate, a record whose template check passed applies only
-// to a launch that pins the same SHA-256. Other records, for example
-// findings, keep their status.
+// to a launch that pins the same SHA-256. A record whose template check
+// asks for review applies only to a launch that pins the template of that
+// review too, because only that review can be approved. A launch without
+// a pin pins no template. Other records, for example findings, keep their
+// status.
 func StoredStatus(r Record, model, root, pin string) (Status, string) {
 	switch {
 	case r.Model != model:
@@ -42,7 +45,7 @@ func StoredStatus(r Record, model, root, pin string) (Status, string) {
 		return StatusNotScanned, ReasonOtherDirectory
 	case r.Checker != CheckerVersion || r.Configuration != CurrentConfiguration():
 		return StatusNotScanned, ReasonCheckerChanged
-	case len(r.Checks) == len(checkOrder) && r.templateCheck().Outcome == OutcomePassed && r.ChatTemplateSHA256 != pin:
+	case len(r.Checks) == len(checkOrder) && (r.templateCheck().Outcome == OutcomePassed || asksReview(r.templateCheck())) && r.ChatTemplateSHA256 != pin:
 		return StatusNotScanned, ReasonTemplateChanged
 	}
 	return r.Status, ""
@@ -87,4 +90,26 @@ func (r Record) StaticChecksPassed() bool {
 		}
 	}
 	return true
+}
+
+// listingFailures are the reasons of a hub listing that failed. An
+// identity mismatch and an unusable hub token are not among them.
+var listingFailures = map[string]bool{
+	ReasonUpstreamNotFound: true, ReasonUpstreamDenied: true, ReasonUpstreamInvalid: true,
+	ReasonUpstreamUnreachable: true, ReasonUpstreamMoved: true, ReasonHistoryTooLong: true,
+}
+
+// HubFailed reports a record whose upstream identity check did not
+// complete because the hub listing failed, for example because the hub is
+// not reachable. The files can be correct, so the setup action that runs
+// the checks can keep the earlier stored result. An identity mismatch is a
+// finding, and an unusable hub token is an error of this computer: neither
+// is a hub failure.
+func (r Record) HubFailed() bool {
+	for _, check := range r.Checks {
+		if check.Name == CheckIdentity {
+			return check.Outcome == OutcomeError && listingFailures[check.Reason]
+		}
+	}
+	return false
 }
