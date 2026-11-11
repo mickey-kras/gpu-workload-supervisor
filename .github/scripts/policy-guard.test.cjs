@@ -1624,3 +1624,40 @@ test('STE control files are mandatory and their replacement cannot authorize its
   assert.ok(inspectActivated(candidate, baseline).some(failure => failure.includes('independent exact-head owner admission')));
   assert.ok(inspectActivated(candidate, baseline).some(failure => failure.includes('documentation gate controls changed')));
 });
+
+test('release verification rejects malformed manifests and conditional validation', () => {
+  const baseline = files({ serial: false });
+  assert.deepEqual(inspectActivated(baseline), []);
+  const candidate = { ...baseline };
+  const path = '.github/workflows/release.yml';
+  const workflow = YAML.parse(candidate[path]);
+  const manifest = '.github/release-helper-digests.json';
+  const hashes = Object.fromEntries(['release-validation', 'release-publication'].map(name => {
+    const path = `.github/scripts/${name}.cjs`;
+    return [path, require('node:crypto').createHash('sha256').update(candidate[path]).digest('hex')];
+  }));
+  candidate[manifest] = JSON.stringify(hashes);
+  assert.deepEqual(inspectActivated(candidate), []);
+  for (const value of [undefined, '{}', 'null', '[]', JSON.stringify({ ...hashes, extra: 'x' }),
+    JSON.stringify({ ...hashes, '.github/scripts/release-validation.cjs': 'a'.repeat(64) })]) {
+    assert.ok(inspectActivated({ ...candidate, [manifest]: value }).some(error => error.includes(manifest)));
+  }
+  workflow.jobs.validation.steps.find(step => step.with?.script === VALIDATION_SCRIPT).if = 'always()';
+  assert.ok(inspectActivated({ ...candidate, [path]: YAML.stringify(workflow) }).length > 0);
+});
+
+test('training Dependabot scope is required, exact and unique', () => {
+  const baseline = files({ serial: false });
+  const path = '.github/dependabot.yml';
+  const config = YAML.parse(baseline[path]);
+  const training = { 'package-ecosystem': 'pip', directory: '/training/axolotl', schedule: { interval: 'weekly' } };
+  assert.deepEqual(inspectActivated({ ...baseline, [path]: YAML.stringify(config) }), []);
+  const missing = structuredClone(config);
+  missing.updates = missing.updates.filter(entry => entry['package-ecosystem'] !== 'pip');
+  assert.ok(inspectActivated({ ...baseline, [path]: YAML.stringify(missing) }).some(error => error.includes('coverage')));
+  for (const entry of [{ ...training }, { ...training, directory: '/training' }]) {
+    const invalid = structuredClone(config);
+    invalid.updates.push(entry);
+    assert.ok(inspectActivated({ ...baseline, [path]: YAML.stringify(invalid) }).some(error => error.includes('coverage')));
+  }
+});
