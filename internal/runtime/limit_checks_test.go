@@ -159,10 +159,12 @@ func newLimitFixture(t *testing.T, limits control.ResourceLimits, loaded string)
 	f := &limitFixture{m: m, r: r, p: p, cgroups: t.TempDir(), host: t.TempDir()}
 	f.device = unix.Stat_t{Mode: unix.S_IFBLK | 0o660, Uid: uint32(os.Getuid()), Rdev: unix.Mkdev(259, 0)}
 	m.cgroups = cgroupFS{root: f.cgroups, verify: func(int) error { return nil }}
-	m.host = limitHost{root: f.host, owner: uint32(os.Getuid()), uid: 1000, ownerOf: f.ownerOf, lstat: f.lstat, hasXattr: hasXattr}
+	m.host = limitHost{root: f.host, owner: uint32(os.Getuid()), uid: 1000, ownerOf: f.ownerOf, lstat: f.lstat, hasXattr: hasXattr,
+		packageTools: func() ([]packageTool, error) { return []packageTool{fixtureDpkg}, nil }}
 	f.writeCgroups(t)
 	f.writeHost(t)
 	f.writeShows(loaded)
+	f.writePackages()
 	return f
 }
 

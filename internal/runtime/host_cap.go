@@ -30,10 +30,13 @@ type limitHost struct {
 	// hasXattr reports whether an open file has an extended attribute.
 	// Tests replace it to give one file a file capability without root.
 	hasXattr func(fd int, attribute string) (bool, error)
+	// packageTools returns the package managers that check vendor
+	// drop-ins. Tests replace it to give a host with fake package managers.
+	packageTools func() ([]packageTool, error)
 }
 
 func defaultLimitHost() limitHost {
-	return limitHost{root: "/", owner: 0, uid: os.Getuid(), ownerOf: statOwner, hasXattr: hasXattr, lstat: func(name string) (unix.Stat_t, error) {
+	return limitHost{root: "/", owner: 0, uid: os.Getuid(), ownerOf: statOwner, hasXattr: hasXattr, packageTools: findPackageTools, lstat: func(name string) (unix.Stat_t, error) {
 		var stat unix.Stat_t
 		err := unix.Lstat(name, &stat)
 		return stat, err
@@ -112,7 +115,7 @@ func (m *SystemdManager) verifyHostCap(ctx context.Context, managerRoot string, 
 	if err != nil {
 		return hostCap{}, err
 	}
-	if err := h.checkUnitDropIns(h.sliceUnit(), values, h.capDropIn(), true, m.dropInReader(ctx, h.sliceUnit())); err != nil {
+	if err := h.checkUnitDropIns(h.sliceUnit(), values, h.capDropIn(), true, m.dropInReader(ctx, h.sliceUnit()), m.vendorCheck(ctx, h.sliceUnit(), h.capDropIn())); err != nil {
 		return hostCap{}, err
 	}
 	slice, ok := single(values, "ControlGroup")
@@ -130,7 +133,8 @@ func (m *SystemdManager) verifyHostCap(ctx context.Context, managerRoot string, 
 	if err != nil {
 		return hostCap{}, err
 	}
-	return limitCap, h.checkUnitDropIns(h.managerUnit(), manager, h.delegateDropIn(), l.UsesIO(), m.dropInReader(ctx, h.managerUnit()))
+	return limitCap, h.checkUnitDropIns(h.managerUnit(), manager, h.delegateDropIn(), l.UsesIO(), m.dropInReader(ctx, h.managerUnit()),
+		m.vendorCheck(ctx, h.managerUnit(), h.delegateDropIn()))
 }
 
 // sliceCapChanged classifies a slice property that differs from its cgroup
@@ -167,28 +171,36 @@ func (m *SystemdManager) dropInReader(ctx context.Context, unit string) func() (
 
 // checkUnitDropIns accepts only the host cap drop-in and vendor files. Each
 // listed file, including the host cap drop-in named by own, must pass
-// trustedFile. Each error names unit. reread reads the list again when a
-// listed file is missing.
-func (h limitHost) checkUnitDropIns(unit string, values map[string][]string, own string, require bool, reread func() (map[string][]string, error)) error {
+// trustedFile. Each vendor file must also pass vendor, the package manager
+// check. Each error names unit. reread reads the list again when a listed
+// file is missing.
+func (h limitHost) checkUnitDropIns(unit string, values map[string][]string, own string, require bool, reread func() (map[string][]string, error),
+	vendor vendorCheck) error {
 	if state, _ := single(values, "LoadState"); state != "loaded" {
 		return fmt.Errorf("%w: %s is not loaded", ErrHostCap, unit)
 	}
 	if err := reloadNeed(unit, values); err != nil {
 		return err
 	}
-	var paths []string
-	for _, value := range values["DropInPaths"] {
-		paths = append(paths, strings.Fields(value)...)
-	}
+	paths := dropInPaths(values)
 	if require && !slices.Contains(paths, own) {
 		return fmt.Errorf("%w: %s does not load %s", ErrHostCap, unit, own)
 	}
 	for _, name := range paths {
-		if err := h.trustedDropIn(name, own); err != nil {
+		if err := h.trustedDropIn(name, own, vendor); err != nil {
 			return fmt.Errorf("drop-in of %s: %w", unit, dropInGone(unit, name, err, reread))
 		}
 	}
 	return nil
+}
+
+// dropInPaths gives the listed drop-ins of systemctl show output.
+func dropInPaths(values map[string][]string) []string {
+	var paths []string
+	for _, value := range values["DropInPaths"] {
+		paths = append(paths, strings.Fields(value)...)
+	}
+	return paths
 }
 
 // dropInGone classifies a listed drop-in that is missing. A package upgrade
@@ -231,16 +243,28 @@ func reloadNeed(unit string, values map[string][]string) error {
 	return nil
 }
 
-// trustedDropIn checks one listed drop-in: own, or a vendor file.
-func (h limitHost) trustedDropIn(name, own string) error {
-	if name != own {
-		vendor, err := h.vendorFile(name, own)
-		if err != nil {
-			return err
-		}
-		name = vendor
+// vendorCheck checks a vendor drop-in that passed trustedFile with the
+// package manager. listed is the name that systemd lists, file is its name
+// under /usr/lib and stat is the status of the open file. Its error must not
+// wrap ENOENT: checkUnitDropIns takes ENOENT for a missing drop-in.
+type vendorCheck func(listed, file string, stat unix.Stat_t) error
+
+// trustedDropIn checks one listed drop-in: own, or a vendor file that also
+// passes vendor.
+func (h limitHost) trustedDropIn(name, own string, vendor vendorCheck) error {
+	if name == own {
+		_, err := h.trustedFile(name)
+		return err
 	}
-	return h.trustedFile(name)
+	file, err := h.vendorFile(name, own)
+	if err != nil {
+		return err
+	}
+	stat, err := h.trustedFile(file)
+	if err != nil {
+		return err
+	}
+	return vendor(name, file, stat)
 }
 
 // vendorFile accepts a drop-in under /usr/lib/systemd/system. On a merged
@@ -312,21 +336,21 @@ func libError(err error) error {
 
 // trustedFile walks name from the root without symlinks. Each directory and
 // the regular file must have the trusted owner, no group or other write, no
-// ACL and no file capability.
-func (h limitHost) trustedFile(name string) error {
+// ACL and no file capability. It returns the status of the open file.
+func (h limitHost) trustedFile(name string) (unix.Stat_t, error) {
+	var stat unix.Stat_t
 	fd, err := openNoFollow(h.root, strings.Split(strings.TrimPrefix(name, "/"), "/"), unix.O_NONBLOCK|unix.O_NOCTTY, h.trustedDescriptor)
 	if err != nil {
-		return hostFileError(name, err)
+		return stat, hostFileError(name, err)
 	}
 	defer func() { _ = unix.Close(fd) }()
-	var stat unix.Stat_t
 	if err := unix.Fstat(fd, &stat); err != nil {
-		return hostFileError(name, err)
+		return stat, hostFileError(name, err)
 	}
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
-		return fmt.Errorf("%w: %s is not a regular file", ErrHostCap, name)
+		return stat, fmt.Errorf("%w: %s is not a regular file", ErrHostCap, name)
 	}
-	return nil
+	return stat, nil
 }
 
 // errUntrusted marks a proven trust failure of an open file.

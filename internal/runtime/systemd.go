@@ -73,6 +73,8 @@ type SystemdManager struct {
 	host                      limitHost
 	reserve                   LimitReserve
 	nativeExecutableValidator func(string) error
+	// vendorCache keeps the verified vendor drop-ins of the host cap.
+	vendorCache *vendorCache
 }
 
 func NewSystemdManager(config SystemdConfig) (*SystemdManager, error) {
@@ -118,7 +120,7 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 		}
 	}
 	return &SystemdManager{config: config, runner: runner, client: client, cgroups: cgroupFS{root: "/sys/fs/cgroup", verify: verifyUnifiedHierarchy},
-		host: defaultLimitHost(), reserve: EffectiveReserve(config.LimitReserve)}, nil
+		host: defaultLimitHost(), reserve: EffectiveReserve(config.LimitReserve), vendorCache: &vendorCache{}}, nil
 }
 
 func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) error {

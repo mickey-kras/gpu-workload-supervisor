@@ -23,6 +23,8 @@
   | A missing trusted host cap file, device node, sysfs device entry or interface file | Definite |
   | A listed drop-in that is missing, while a second read still lists it with `NeedDaemonReload=no` | Definite |
   | A listed drop-in that is missing, while a second read does not list it or needs daemon-reload | Read failure. A package upgrade can remove a vendor drop-in |
+  | A vendor drop-in that differs from its package, or that no installed package owns | Definite |
+  | A vendor drop-in with an unknown result from the package manager, or a host without `dpkg` or `rpm` | Read failure. It never passes |
   | A missing device scheduler file or `cgroup.controllers` at the user manager root | Read failure |
   | A slice property that differs from its file, while a second read shows other values or needs daemon-reload | Read failure. An administrator can change the cap during the check |
   | `NeedDaemonReload` other than `no` on the slice or the user manager | Read failure. A package upgrade can set it until the next daemon-reload. It proves no wrong cap |
@@ -162,7 +164,7 @@ Slice limits apply on reload. Changed delegation requires restarting `user@UID.s
 
 All three versions ship `user-.slice.d/10-defaults.conf` (`TasksMax=33%`, `StopWhenUnneeded=yes`). See source [5](#source-5). They also ship ordering-only `user@.service.d/10-login-barrier.conf`. See source [6](#source-6). Distributions can add files.
 
-Accept only the two exact host-cap drop-in names above and vendor files under `/usr/lib/systemd/system`. Accept vendor files under `/lib/systemd/system` only when `/lib` is a root-owned link to `usr/lib` or `/usr/lib`. The package manager must identify unchanged systemd-package files. Root must own each file and ancestor without group or other write.
+Accept only the two exact host-cap drop-in names above and vendor files under `/usr/lib/systemd/system`. Accept vendor files under `/lib/systemd/system` only when `/lib` is a root-owned link to `usr/lib` or `/usr/lib`. The package manager must identify unchanged package files. See [vendor drop-in check](#vendor-drop-in-check). Root must own each file and ancestor without group or other write.
 
 Unknown `DropInPaths` fail with named paths. Name ordering makes `50-` replace vendor `10-` values. Effective properties and cgroup readback remain decisive.
 
@@ -238,8 +240,9 @@ Preview returns the host cap step as `hostCap` for its request. Discovery return
 | `ioWeight` | For each unit that limits I/O: its `workload`, `device` and `provider`. The provider is `bfq`, `iocost` or `none`. It is `invalid` when the device fails the device check, and `unknown` when setup cannot check the device |
 | `reserve` | The effective reserve |
 | `usage` | The slice memory in MiB: `memoryInUseMiB` without the reclaimable page cache, `pageCacheMiB` and `ceilingMiB`. Absent when no unit passes its checks or a read fails. A failed read adds a problem and does not change the status |
+| `vendorDropIns` | Each vendor drop-in of the slice and of `user@UID.service` with its `unit`, `path`, `manager`, `packages`, `result` and `detail`. The result is `verified`, `modified`, `unowned` or `cannotCheck`. See [vendor drop-in check](#vendor-drop-in-check) |
 
-A missing drop-in makes the status `absent`. A drop-in that differs from the requested content, or a definite check failure, makes it `different`. A check that proves nothing, or a drop-in that setup cannot read, makes it `unknown`. Setup never runs the commands.
+A missing drop-in makes the status `absent`. A drop-in that differs from the requested content, a `modified` or `unowned` vendor drop-in, or a definite check failure, makes it `different`. A check that proves nothing, a `cannotCheck` vendor drop-in, or a drop-in that setup cannot read, makes it `unknown`. Setup never runs the commands.
 
 Setup compares the slice drop-in byte for byte. The delegation drop-in matches when its `[Service]` section delegates `io`, so a different text asks for no needless restart. The setup checks compare the effective slice values with the slice properties. Without `hostCap` in the request, a drop-in to install gets a hint in `problems` to set the memory values.
 
@@ -394,8 +397,33 @@ The stop after a failed check has a fixed limit of 2 minutes. This limit covers 
 - Each error of a unit state or drop-in names the unit: the slice or `user@UID.service`.
 - A missing or untrusted host file is `ErrHostCap`. Other open and read failures are `ErrLimitReadback`. For `/lib`, a missing link, a `/lib` that is not a link, a link elsewhere or another owner is `ErrHostCap`.
 - Some files have other classes. A missing root `io.cost.qos` means no iocost, which is `ErrLimitDevice` for a unit with `IOWeight` and no BFQ. A missing slice `io.max` passes when the unit has no I/O cap. A slice or hierarchy that is missing, or that the runtime cannot check or open, is `ErrLimitReadback`. A symlink or a file where a directory must be is `ErrHostCap`. The slice `memory.current` and `memory.stat` are usage counters, so any failed or untrusted read of them is `ErrLimitReadback`.
+- Each vendor drop-in passes the package manager check. See [vendor drop-in check](#vendor-drop-in-check).
 
-The runtime uses the reserve that setup stores in the profile, or the proposed values. See [stored reserve](#stored-reserve). The runtime checks only the path rule above for vendor drop-ins. The package manager check of vendor drop-ins comes in a later change.
+The runtime uses the reserve that setup stores in the profile, or the proposed values. See [stored reserve](#stored-reserve).
+
+### Vendor drop-in check
+
+The runtime checks each vendor drop-in of the slice and of `user@UID.service` with the package manager. It does this after the trust walk of the file. The check uses `dpkg` and then `rpm`, when their executables exist in `/usr/bin` and pass the executable trust check. The first package manager that owns the file gives the result.
+
+| Package manager | Commands |
+| --- | --- |
+| `dpkg` | `dpkg-query -S FILE` finds the packages that own the file. `dpkg-query --control-show PACKAGE md5sums` must list the file. `dpkg --verify-format=rpm --verify PACKAGE` must show no checksum failure for the file |
+| `rpm` | `rpm -qf FILE` finds the packages that own the file. `rpm -V --verbose --nodeps --noscripts PACKAGE` must list the file with no size, digest or link failure |
+
+`dpkg --verify` shows nothing for a file without a recorded checksum. For this reason, the `md5sums` file of the package must list the file. A Debian package from before the merged `/usr` change records its files under `/lib`. When `/lib` is a trusted link, the check also looks up the `/lib` name. Each package that owns the file must pass. A diverted file, a ghost file or a line of unknown output never passes.
+
+The results are as follows:
+
+| Result | Meaning | Class |
+| --- | --- | --- |
+| `verified` | An installed package owns the file and records its checksum, and the file matches it | Passes |
+| `modified` | The file differs from its package, or the package manager shows it as missing. Reinstall the package, then run `systemctl daemon-reload` | `ErrHostCap` |
+| `unowned` | No installed package owns the file. Remove it, or move its settings into the host-cap drop-in | `ErrHostCap` |
+| `cannotCheck` | No supported package manager is present, an executable fails the trust check, or a command fails, times out or shows unknown output | `ErrLimitReadback` |
+
+A `cannotCheck` result never passes. On a host without `dpkg` or `rpm`, a unit with limits cannot start while systemd lists a vendor drop-in. Its health checks also fail, as for other read failures.
+
+Each command has a limit of 20 seconds. The runtime keeps a `verified` result while the file keeps its device, inode, size, modification time and change time. This prevents a package manager run at each health check. The owner and mode results of the package manager do not count, because the trust walk checks them.
 
 ### Limits of the readback
 
