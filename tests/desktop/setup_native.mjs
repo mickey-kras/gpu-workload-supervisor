@@ -104,14 +104,30 @@ const scanEntry = {workload: 'chat', label: 'vLLM', kind: 'llm', identity: GLib.
 // keeps the accepted model.
 const scanProfile = {id: 'chat', label: 'vLLM', adapter: 'systemd', unit: candidate.unit, cgroup: candidate.cgroup, healthURL: candidate.binding.healthURL, bootPolicy: 'stop-to-idle',
     nativeModel: {runtime: 'vllm', instance: 'local', model: 'example-small', endpoint: candidate.endpoint, launchFile: candidate.binding.launchFile, launchSHA256: 'fixture-sha'}};
-// A recheck waits for statusReply or for its cancellation, which rejects as
-// a stopped subprocess does.
-function modelStatus(input, cancellable) {
-    if (!JSON.parse(input).recheck) return JSON.stringify({version: 1, models: mode === 'scan' ? [scanEntry] : []});
+// The run state has a managed workload in a Hugging Face cache folder whose
+// template review is pending. The blocked state is the scan state with a
+// stored result that blocks the launch.
+const runRevision = '0123456789abcdef0123456789abcdef01234567';
+const runPath = `/example/hf/models--example-org--example-small/snapshots/${runRevision}`;
+const runProfile = {...scanProfile, nativeModel: {...scanProfile.nativeModel, instance: 'owned', model: runPath, owned: {port: 8000, modelPath: runPath}}};
+const runChecks = [scanEntry.checks[0], scanEntry.checks[1], {name: 'chat-template', outcome: 'failed', reason: 'chat-template-needs-review'}, scanEntry.checks[3]];
+const runEntry = {...scanEntry, identity: GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, `path:${runPath}`, -1), status: 'findings', staticChecksPassed: false,
+    reviewPending: true, checkAvailable: true, launchBlocked: true, checks: runChecks};
+const runReview = {version: 1, workload: 'chat', pending: true, templateFile: 'chat_template.jinja', chatTemplateSHA256: 'a'.repeat(64), reviewSHA256: 'b'.repeat(64),
+    items: [{line: 1, text: 'Answer in English.'}, {line: 4, text: 'You are a helpful assistant.'}]};
+const scanModes = ['scan', 'blocked'];
+const statusModels = () => ({scan: [scanEntry], blocked: [{...scanEntry, status: 'findings', staticChecksPassed: false, launchBlocked: true, checks: runChecks}], run: [runEntry]})[mode] ?? [];
+// A recheck or a run waits for statusReply or for its cancellation, which
+// rejects as a stopped subprocess does.
+function deferredReply(wrap, cancellable) {
     return new Promise((resolve, reject) => {
-        statusReply = entry => { statusReply = null; resolve(JSON.stringify({version: 1, models: [entry]})); };
+        statusReply = entry => { statusReply = null; resolve(JSON.stringify(wrap(entry))); };
         cancellable.connect(() => { statusReply = null; reject(new Error('Operation was cancelled')); });
     });
+}
+function modelStatus(input, cancellable) {
+    if (!JSON.parse(input).recheck) return JSON.stringify({version: 1, models: statusModels()});
+    return deferredReply(entry => ({version: 1, models: [entry]}), cancellable);
 }
 async function command(argv, input, cancellable = null) {
     const action = argv[1]; calls.push(action);
@@ -119,7 +135,10 @@ async function command(argv, input, cancellable = null) {
     assert(!['apply', 'render-owned'].includes(action), `unexpected mutation: ${action}`);
     if (action === '--version') return 'GNOME Shell 50.1';
     if (action === 'discover') {
-        const discovery = {gpuUUIDs: mode === 'installed-blocked' ? repairInventory : [repairUUID], gpuInventoryStatus: mode === 'installed-blocked' && !repairInventory.length ? 'unavailable' : 'available', request: {profile: {statePath: '/example/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: mode === 'scan' ? [scanProfile] : []}}, units: [], applications: mode === 'missing' ? [] : mode === 'mixed-unresolved' ? [comfy, {...candidate, recognized: false, binding: undefined, instanceStatus: 'invalid', configurationStatus: 'unsupported', models: []}] : ['ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed', 'installed-blocked'].includes(mode) ? [stateCandidate(mode)] : [comfy, candidate], errors: mode === 'error' ? ['Example discovery unavailable.'] : []};
+        const discovery = {gpuUUIDs: mode === 'installed-blocked' ? repairInventory : [repairUUID], gpuInventoryStatus: mode === 'installed-blocked' && !repairInventory.length ? 'unavailable' : 'available', request: {profile: {statePath: '/example/state.db', gpuIndex: 0}, catalog: {version: 1, profiles: scanModes.includes(mode) ? [scanProfile] : mode === 'run' ? [runProfile] : []}}, units: [], applications: mode === 'missing' ? [] : mode === 'mixed-unresolved' ? [comfy, {...candidate, recognized: false, binding: undefined, instanceStatus: 'invalid', configurationStatus: 'unsupported', models: []}] : ['ready', 'running', 'missing-location', 'unreachable', 'recognized-unreachable', 'invalid-contradictory', 'gpu-unresolved', 'unsupported-trust', 'unsupported-home', 'inspection-failed', 'installed-blocked'].includes(mode) ? [stateCandidate(mode)] : [comfy, candidate], errors: mode === 'error' ? ['Example discovery unavailable.'] : []};
+        // The saved draft of the blocked state matches its installation, so
+        // setup can reach the review summary.
+        if (mode === 'blocked') discovery.applications = [comfy, {...candidate, binding: {...candidate.binding, instance: 'local', model: 'example-small'}}];
         if (mode === 'ready') Object.assign(discovery, {hostCap: hostCapStep, escapeRoutes: [{route: 'cron', item: 'a crontab of this account'}, {route: 'polkit', item: 'cannot check /etc/polkit-1/rules.d', unchecked: true}]});
         if (deferDiscovery) {
             deferDiscovery = false;
@@ -129,8 +148,11 @@ async function command(argv, input, cancellable = null) {
     }
     if (action === 'correct-gpu') return JSON.stringify({fingerprint: 'native-preview', content: `[Service]\nEnvironment="CUDA_VISIBLE_DEVICES=${repairUUID}"\n`, applied: false});
     if (action === 'probe') return await new Promise(resolve => { deferDiscovery = false; installationReply = result => { installationReply = null; resolve(JSON.stringify(result)); }; });
-    if (action === 'drafts') return JSON.stringify({revision: 'fixture', drafts: mode === 'scan' ? [{id: 'chat', label: 'vLLM', app: 'vllm', model: 'example-small', binding: {...candidate.binding, instance: 'local', model: 'example-small'}}] : []});
+    if (action === 'drafts') return JSON.stringify({revision: 'fixture', drafts: scanModes.includes(mode) ? [{id: 'chat', label: 'vLLM', app: 'vllm', model: 'example-small', binding: {...candidate.binding, instance: 'local', model: 'example-small'}}] : []});
     if (action === 'model-status') return await modelStatus(input, cancellable);
+    if (action === 'model-check') return await deferredReply(entry => entry, cancellable);
+    if (action === 'model-review') return JSON.stringify(runReview);
+    if (action === 'model-approve') return JSON.stringify({...runEntry, status: 'not_scanned', staticChecksPassed: true, reviewPending: false, launchBlocked: false, checks: scanEntry.checks});
     if (action === 'prepare') {
         const {draft} = JSON.parse(input);
         const installation = draft.app === 'comfyui' ? comfy : candidate;
@@ -349,6 +371,78 @@ app.connect('activate', () => {
             const [located, bounds] = native.compute_bounds(ui.window);
             assert(located && bounds.get_x() >= 0 && bounds.get_x() + bounds.get_width() <= ui.window.get_width(), 'wrapped text stays inside the native window horizontally');
             geometry.push({screen: ui.heading.label, text: label, x: bounds.get_x(), y: bounds.get_y(), width: bounds.get_width(), height: bounds.get_height(), wrapped: true});
+        }
+        const mappedLabel = (ui, label) => widgets(ui.window).some(widget => widget instanceof Gtk.Label && widget.get_mapped() && widget.label === label);
+        async function typeInto(ui, row, text) {
+            await tabTo(ui, row); run(['xdotool', 'key', 'ctrl+a']); run(['xdotool', 'type', '--clearmodifiers', text]);
+            await waitFor(() => row.text === text, 'the typed source reaches the field');
+        }
+        // modelRun captures the source fields, a run, its cancel, a run whose
+        // hub listing failed, the template review and the summary note.
+        async function modelRun() {
+            let ui = await open('run');
+            await activate(ui, ui.applicationCards.get('vllm').gear, 'vLLM');
+            const entry = title => widgets(ui.window).find(widget => widget instanceof Adw.EntryRow && widget.title === title && widget.get_mapped());
+            const repo = entry('Repository (owner/name)'), revision = entry('Revision (40-character commit ID)');
+            assert(repo?.text === 'example-org/example-small' && revision?.text === runRevision, 'the source of the cache folder fills the fields');
+            const warning = 'A result with an error, findings, an unsupported model or a pending template review blocks the launch of this workload until a new check allows it.';
+            wrapping(ui, warning);
+            await tabTo(ui, named(ui, 'Run checks'));
+            await settingsTree(ui, 'settings-model-run', 'Run checks', [{name: 'Model scan', role: 'heading'}, {name: 'Findings detected'}, {name: warning}, button('Run checks'), button('Review chat template')], ['Cancel check', 'Safe model']);
+            await capture(ui, 'settings-model-run');
+            await typeInto(ui, revision, 'main');
+            const hint = 'Enter the full commit ID: 40 lowercase hex characters. A branch or tag name is not a pin.';
+            // GTK handles the typed keys after xdotool returns.
+            await waitFor(() => mappedLabel(ui, hint) && revision.has_css_class('error'), 'a branch name is marked as not valid');
+            await settingsTree(ui, 'settings-model-run-invalid', 'Revision (40-character commit ID)', [button('Run checks', false), {name: hint}]);
+            await capture(ui, 'settings-model-run-invalid');
+            await typeInto(ui, revision, runRevision);
+            await waitFor(() => revision.text === runRevision && !mappedLabel(ui, hint) && named(ui, 'Run checks').is_sensitive(), 'a pinned revision allows the run');
+            await tabTo(ui, named(ui, 'Run checks')); run(['xdotool', 'key', 'space']);
+            await waitFor(() => statusReply, 'Run checks starts one run');
+            assert(JSON.stringify(commandRecords.at(-1)) === JSON.stringify({action: 'model-check', input: {version: 1, workload: 'chat', source: {repo: 'example-org/example-small', revision: runRevision}}}), 'the run names the workload and the source');
+            await waitFor(() => ownsFocus(ui, named(ui, 'Cancel check')), 'focus moves to Cancel check');
+            await settingsTree(ui, 'settings-model-run-running', 'Cancel check', [button('Cancel check')], ['Run checks', 'Check files again'], ['Running checks']);
+            await capture(ui, 'settings-model-run-running');
+            run(['xdotool', 'key', 'space']);
+            await waitFor(() => !statusReply && mappedLabel(ui, 'Check canceled. The last result is kept.'), 'Cancel check stops the run');
+            await waitFor(() => ownsFocus(ui, named(ui, 'Run checks')), 'focus returns to Run checks');
+            await settingsTree(ui, 'settings-model-run-canceled', 'Run checks', [button('Run checks'), {name: 'Findings detected'}], ['Cancel check'], ['Check canceled. The last result is kept.']);
+            await capture(ui, 'settings-model-run-canceled');
+            run(['xdotool', 'key', 'space']);
+            await waitFor(() => statusReply, 'a second run starts');
+            statusReply({...runEntry, status: 'error', notStored: true, reviewPending: false, checks: [runChecks[0], {name: 'upstream-identity', outcome: 'error', reason: 'upstream-unreachable'}, {name: 'chat-template', outcome: 'not_run'}, runChecks[3]]});
+            const failure = 'This run failed. Setup could not reach Hugging Face. The last stored result is kept.';
+            await waitFor(() => mappedLabel(ui, failure) && named(ui, 'Run checks').is_sensitive(), 'the failed run shows its failure');
+            await settingsTree(ui, 'settings-model-run-hub-failed', 'Run checks', [{name: 'Findings detected'}, {name: failure}], ['Scan failed']);
+            await capture(ui, 'settings-model-run-hub-failed');
+            await tabTo(ui, named(ui, 'Review chat template')); run(['xdotool', 'key', 'space']);
+            await waitFor(() => mappedLabel(ui, 'Line 1: "Answer in English."'), 'the review list shows each literal');
+            wrapping(ui, 'Line 4: "You are a helpful assistant."');
+            await settingsTree(ui, 'settings-model-review', 'Review chat template', [button('Approve template'), {name: 'Line 1: "Answer in English."'}], [], ['Template SHA-256']);
+            await capture(ui, 'settings-model-review');
+            await tabTo(ui, named(ui, 'Approve template')); run(['xdotool', 'key', 'space']);
+            await waitFor(() => mappedLabel(ui, 'Template approved for this template SHA-256.'), 'the approval is stored');
+            assert(JSON.stringify(commandRecords.at(-1).input) === JSON.stringify({version: 1, workload: 'chat', chatTemplateSHA256: runReview.chatTemplateSHA256, reviewSHA256: runReview.reviewSHA256}), 'the approval names the SHA-256 values that the operator read');
+            await waitFor(() => ownsFocus(ui, named(ui, 'Scan details')), 'focus moves to Scan details');
+            await settingsTree(ui, 'settings-model-review-approved', 'Scan details', [{name: 'Not scanned'}, {name: 'File checks passed. Behavioral scan not available yet.'}], ['Approve template', 'Review chat template']);
+            await capture(ui, 'settings-model-review-approved');
+            await closeAndVerify(ui, 'model-run');
+
+            ui = await open('blocked');
+            await activate(ui, ui.applicationCards.get('vllm').gear, 'vLLM');
+            await tabTo(ui, ui.review); run(['xdotool', 'key', 'space']);
+            await waitFor(() => ui.step === 2 && ui.apply.get_mapped(), 'the review summary opens');
+            const note = 'This workload cannot start: its stored check result blocks the launch. See the cause on its Model scan card.';
+            wrapping(ui, note);
+            const link = named(ui, 'Open Model scan of vLLM - example-small');
+            await tabTo(ui, link);
+            await settingsTree(ui, 'review-model-blocked', 'Open Model scan of vLLM - example-small', [{name: note}, {name: 'Findings detected'}, button('Open Model scan of vLLM - example-small')]);
+            await capture(ui, 'review-model-blocked');
+            await activate(ui, link, 'vLLM');
+            assert(mappedLabel(ui, 'Findings detected'), 'the link opens the Model scan card');
+            await capture(ui, 'review-model-scan-link');
+            await closeAndVerify(ui, 'model-blocked');
         }
         let ui = await open('stopped');
         const reportButton = named(ui, 'Copy diagnostic report');
@@ -688,6 +782,7 @@ app.connect('activate', () => {
         await settingsTree(ui, 'settings-model-scan-changed', 'Check files again', [{name: 'Not scanned'}, {name: 'The model files changed after the last check. The stored result no longer applies.'}], ['File checks passed. Behavioral scan not available yet.']);
         await capture(ui, 'settings-model-scan-changed');
         await closeAndVerify(ui, 'model-scan');
+        await modelRun(ui);
 
         ui = await open('inspection-failed');
         await activate(ui, ui.applicationCards.get('comfyui').gear, 'ComfyUI');

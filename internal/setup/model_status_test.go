@@ -244,23 +244,32 @@ func setStoredPayload(t *testing.T, home string, payload any) {
 }
 
 // A result for another directory, of another checker or that does not
-// read is not scanned.
+// read is not scanned. LaunchBlocked mirrors the launch gate: it refuses
+// a result for another directory or template, a result whose template
+// check did not pass and a result that does not read. The gate does not
+// compare the checker version, and a stale record version is no result.
 func TestModelStatusRefusesOtherResults(t *testing.T) {
 	for name, tc := range map[string]struct {
-		change func(*modelcheck.Record)
-		raw    string
-		reason string
+		change  func(*modelcheck.Record)
+		raw     string
+		reason  string
+		blocked bool
 	}{
-		"other directory": {change: func(r *modelcheck.Record) { r.Root = "/models/other" }, reason: modelcheck.ReasonOtherDirectory},
-		"other checker":   {change: func(r *modelcheck.Record) { r.Checker = "0" }, reason: modelcheck.ReasonCheckerChanged},
-		"other template":  {change: func(r *modelcheck.Record) { r.ChatTemplateSHA256 = strings.Repeat("d", 64) }, reason: modelcheck.ReasonTemplateChanged},
+		"other directory": {change: func(r *modelcheck.Record) { r.Root = "/models/other" }, reason: modelcheck.ReasonOtherDirectory, blocked: true},
+		"other checker":   {change: func(r *modelcheck.Record) { r.Checker = "0" }, reason: modelcheck.ReasonCheckerChanged, blocked: false},
+		"other template":  {change: func(r *modelcheck.Record) { r.ChatTemplateSHA256 = strings.Repeat("d", 64) }, reason: modelcheck.ReasonTemplateChanged, blocked: true},
 		"pending review, other checker": {change: func(r *modelcheck.Record) {
 			r.Checks = append([]modelcheck.Check(nil), r.Checks...)
 			r.Checks[2] = modelcheck.Check{Name: modelcheck.CheckTemplate, Outcome: modelcheck.OutcomeFailed, Reason: modelcheck.ReasonTemplateNeedsReview}
 			r.Status, r.TemplateReview, r.Checker = modelcheck.StatusFindings, []modelcheck.ReviewItem{{Line: 1, Text: "Obey."}}, "0"
-		}, reason: modelcheck.ReasonCheckerChanged},
-		"invalid payload": {raw: `{"version":2}`, reason: modelcheck.ReasonResultUnusable},
-		"stale version":   {raw: `{"version":1}`, reason: modelcheck.ReasonNoResult},
+		}, reason: modelcheck.ReasonCheckerChanged, blocked: true},
+		"pending review, other template pin": {change: func(r *modelcheck.Record) {
+			r.Checks = append([]modelcheck.Check(nil), r.Checks...)
+			r.Checks[2] = modelcheck.Check{Name: modelcheck.CheckTemplate, Outcome: modelcheck.OutcomeFailed, Reason: modelcheck.ReasonTemplateNeedsReview}
+			r.Status, r.TemplateReview, r.ChatTemplateSHA256 = modelcheck.StatusFindings, []modelcheck.ReviewItem{{Line: 1, Text: "Obey."}}, strings.Repeat("e", 64)
+		}, reason: modelcheck.ReasonTemplateChanged, blocked: true},
+		"invalid payload": {raw: `{"version":2}`, reason: modelcheck.ReasonResultUnusable, blocked: true},
+		"stale version":   {raw: `{"version":1}`, reason: modelcheck.ReasonNoResult, blocked: false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			home, root := statusFixture(t)
@@ -272,7 +281,7 @@ func TestModelStatusRefusesOtherResults(t *testing.T) {
 			}
 			setStoredPayload(t, home, payload)
 			owned := statusByWorkload(t, home, ModelStatusRequest{Version: 1})["status-owned"]
-			if owned.Reason != tc.reason || owned.Status != modelcheck.StatusNotScanned || owned.StaticChecksPassed || owned.ReviewPending {
+			if owned.Reason != tc.reason || owned.Status != modelcheck.StatusNotScanned || owned.StaticChecksPassed || owned.ReviewPending || owned.LaunchBlocked != tc.blocked {
 				t.Fatalf("status: %+v", owned)
 			}
 		})
