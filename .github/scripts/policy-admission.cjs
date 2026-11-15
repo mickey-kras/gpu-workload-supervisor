@@ -1,4 +1,5 @@
-const OWNER = { login: 'mickey-kras', id: 24433677 };
+const fs = require('node:fs');
+const path = require('node:path');
 const POLICY_SOURCES = [
   '.github/CODEOWNERS', '.github/workflows/policy-guard.yml',
   '.github/scripts/policy-guard.cjs', '.github/scripts/policy-admission.cjs',
@@ -7,6 +8,34 @@ const POLICY_SOURCES = [
   '.github/scripts/policy-pr-scope.cjs', '.github/scripts/policy-action-pins.cjs',
   '.github/scripts/policy-dependabot.cjs',
 ];
+
+// Trusted policy reviewers live in a reviewed list instead of a hardcoded
+// owner identity. Path resolution stays lazy: this module is also imported
+// inside a sandboxed digest verifier that defines no __dirname.
+function reviewersFilePath(explicitPath) {
+  return explicitPath || path.resolve(__dirname, '..', 'trusted-reviewers.json');
+}
+
+function loadTrustedReviewers(explicitPath) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(reviewersFilePath(explicitPath), 'utf8'));
+    if (!parsed || !Array.isArray(parsed.reviewers)) throw new Error('missing reviewers array');
+    const reviewers = parsed.reviewers.filter(reviewer => reviewer &&
+      Number.isSafeInteger(reviewer.id) && typeof reviewer.login === 'string');
+    if (!reviewers.length) throw new Error('no reviewer with an integer id and a string login');
+    return reviewers;
+  } catch (error) {
+    console.error(`trusted-reviewers.json unreadable or malformed; denying admission: ${error.message}`);
+    return null;
+  }
+}
+
+// Match primarily by numeric account id; login is the fallback and display form.
+function isTrustedReviewer(user, reviewers) {
+  if (!reviewers || !user || user.type !== 'User') return false;
+  if (Number.isSafeInteger(user.id) && reviewers.some(reviewer => reviewer.id === user.id)) return true;
+  return typeof user.login === 'string' && reviewers.some(reviewer => reviewer.login === user.login);
+}
 
 // Parse candidate text without executing it or honoring inline lint configuration.
 function readPolicyConstant(source, name) {
@@ -37,19 +66,23 @@ function readPolicyConstant(source, name) {
   return result;
 }
 
-function validReview(reviews, sha) {
-  const decisive = reviews.filter(review => Number.isSafeInteger(review.id) && review.user?.login === OWNER.login &&
-    review.user?.id === OWNER.id && review.user?.type === 'User' &&
+function validReview(reviews, sha, trustedPath) {
+  const reviewers = loadTrustedReviewers(trustedPath);
+  if (!reviewers) return false;
+  const decisive = reviews.filter(review => Number.isSafeInteger(review.id) &&
+    isTrustedReviewer(review.user, reviewers) &&
     ['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state));
   decisive.sort((a, b) => b.id - a.id);
   return decisive[0]?.state === 'APPROVED' && decisive[0].commit_id === sha;
 }
 
-function commentDecision(comments, sha) {
+function commentDecision(comments, sha, trustedPath) {
+  const reviewers = loadTrustedReviewers(trustedPath);
+  if (!reviewers) return false;
   const approve = `/approve-ci ${sha}`;
   const revoke = `/revoke-ci ${sha}`;
   const decisions = comments.filter(comment => Number.isSafeInteger(comment.id) &&
-    comment.user?.login === OWNER.login && comment.user?.id === OWNER.id && comment.user?.type === 'User' &&
+    isTrustedReviewer(comment.user, reviewers) &&
     [approve, revoke].includes(comment.body?.trim()));
   decisions.sort((a, b) => b.id - a.id);
   return decisions.length ? decisions[0].body.trim() === approve : undefined;
@@ -85,7 +118,9 @@ async function reviewSourceActive(github, context, rule, settingsReview) {
     Number.isFinite(Date.parse(revision)) && new Date(revision).toISOString() === revision.replace('Z', '.000Z') &&
     reviewed.updated_at === revision && Array.isArray(reviewed.bypass_actors) && reviewed.bypass_actors.length === 0;
 }
-async function reviewedHead(github, context, settingsReview = process.env.CI_POLICY_SETTINGS_REVIEW || '') {
+async function reviewedHead(github, context, settingsReview = process.env.CI_POLICY_SETTINGS_REVIEW || '', trustedPath) {
+  const reviewers = loadTrustedReviewers(trustedPath);
+  if (!reviewers) return false;
   const params = { ...context.repo, pull_number: context.payload.pull_request.number };
   const expected = context.payload.pull_request;
   const { data: pull } = await github.rest.pulls.get(params);
@@ -103,17 +138,19 @@ async function reviewedHead(github, context, settingsReview = process.env.CI_POL
   if (owners.type !== 'file' || owners.encoding !== 'base64' || typeof owners.content !== 'string') return false;
   const lines = Buffer.from(owners.content, 'base64').toString('utf8').split('\n')
     .map(line => line.trim()).filter(line => line && !line.startsWith('#'));
-  if (lines.length !== 1 || lines[0] !== '/.github/ @mickey-kras') return false;
+  const policyOwners = lines.filter(line => line.split(/\s+/)[0] === '/.github/')
+    .flatMap(line => line.split(/\s+/).slice(1).map(login => login.replace(/^@/, '')));
+  if (!policyOwners.some(login => reviewers.some(reviewer => reviewer.login === login))) return false;
   const comments = await github.paginate(github.rest.issues.listComments, {
     ...context.repo, issue_number: params.pull_number, per_page: 100,
   });
-  const decision = commentDecision(comments, pull.head.sha);
+  const decision = commentDecision(comments, pull.head.sha, trustedPath);
   if (decision !== undefined) {
     if (!decision) return false;
     const { data: current } = await github.rest.pulls.get(params);
     return current.state === 'open' && current.head?.sha === pull.head.sha && current.base?.sha === pull.base.sha;
   }
-  if (pull.user.type !== 'Bot' || pull.user.id === OWNER.id) return false;
+  if (pull.user.type !== 'Bot' || reviewers.some(reviewer => reviewer.id === pull.user.id)) return false;
   const rules = await github.paginate('GET /repos/{owner}/{repo}/rules/branches/{branch}', {
     ...context.repo, branch: pull.base.ref, per_page: 100,
   });
@@ -124,9 +161,10 @@ async function reviewedHead(github, context, settingsReview = process.env.CI_POL
   }
   if (!enforced) return false;
   const reviews = await github.paginate(github.rest.pulls.listReviews, { ...params, per_page: 100 });
-  if (!validReview(reviews, pull.head.sha)) return false;
+  if (!validReview(reviews, pull.head.sha, trustedPath)) return false;
   const { data: current } = await github.rest.pulls.get(params);
   return current.state === 'open' && current.head?.sha === pull.head.sha && current.base?.sha === pull.base.sha;
 }
 
-module.exports = { readPolicyConstant, POLICY_SOURCES, reviewedHead, validReview, protectedReview };
+module.exports = { readPolicyConstant, POLICY_SOURCES, reviewedHead, validReview, protectedReview,
+  loadTrustedReviewers, isTrustedReviewer };

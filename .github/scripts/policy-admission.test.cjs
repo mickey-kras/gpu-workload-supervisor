@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { mkdtempSync, writeFileSync } = require('node:fs');
+const { tmpdir } = require('node:os');
+const { join } = require('node:path');
 const { reviewedHead, validReview, readPolicyConstant } = require('./policy-admission.cjs');
 
 const SHA = 'a'.repeat(40);
@@ -92,11 +95,11 @@ test('rejects self-authored changes, stale reviews, dismissed reviews, bypasses 
     s => { s.reviews = [{ ...review, commit_id: BASE }]; },
     s => { s.reviews.push({ ...review, id: 2, state: 'DISMISSED' }); },
     s => { s.reviews.push({ ...review, id: 2, state: 'CHANGES_REQUESTED' }); },
-    s => { s.reviews = [{ ...review, user: { ...owner, id: 99 } }]; },
+    s => { s.reviews = [{ ...review, user: { ...owner, id: 99, login: 'other' } }]; },
     s => { s.rules = []; },
     s => { s.ruleset = { ...s.ruleset, bypass_actors: [{ actor_id: 1 }] }; },
     s => { s.ruleset = { ...s.ruleset, enforcement: 'evaluate' }; },
-    s => { s.owners += '/.github/scripts/ @someone-else\n'; },
+    s => { s.owners = '/.github/ @someone-else\n'; },
     s => { s.current = { ...s.pull, head: { sha: BASE } }; },
     s => { s.current = { ...s.pull, base: { ...s.pull.base, sha: SHA } }; },
   ]) {
@@ -155,10 +158,9 @@ test('owner comments admit owner-authored changes without another reviewer', asy
   assert.equal(await reviewedHead(f.github, f.context), false);
 });
 
-test('comment approval binds owner identity, full head SHA, and exact command', async () => {
+test('comment approval binds a fully listed identity, full head SHA, and exact command', async () => {
   for (const value of [comment(`/approve-ci ${BASE}`), comment(`/approve-ci ${SHA.slice(0, 7)}`),
-    comment(`Please /approve-ci ${SHA}`), { ...comment(`/approve-ci ${SHA}`), user: { ...owner, id: 1 } },
-    { ...comment(`/approve-ci ${SHA}`), user: { ...owner, login: 'other' } },
+    comment(`Please /approve-ci ${SHA}`), { ...comment(`/approve-ci ${SHA}`), user: { ...owner, id: 1, login: 'other' } },
     { ...comment(`/approve-ci ${SHA}`), user: { ...owner, type: 'Bot' } }]) {
     const f = fixture();
     f.state.pull.user = owner;
@@ -175,4 +177,53 @@ test('latest owner decision wins and revocation blocks native review fallback', 
   assert.equal(await reviewedHead(f.github, f.context), true);
   f.state.owners = '/.github/ @other';
   assert.equal(await reviewedHead(f.github, f.context), false);
+  f.state.owners = '/.github/ @other @mickey-kras\n';
+  assert.equal(await reviewedHead(f.github, f.context), true);
+});
+
+const reviewerList = reviewers => {
+  const file = join(mkdtempSync(join(tmpdir(), 'trusted-reviewers-')), 'trusted-reviewers.json');
+  writeFileSync(file, typeof reviewers === 'string' ? reviewers : JSON.stringify({ reviewers }));
+  return file;
+};
+
+test('identity matching is id-primary with login fallback against the trusted list', () => {
+  const list = reviewerList([{ login: 'reviewer-one', id: 111 }, { login: 'reviewer-two', id: 222 }]);
+  const approval = user => validReview([{ id: 1, user, commit_id: SHA, state: 'APPROVED' }], SHA, list);
+  // listed reviewer admitted by id
+  assert.equal(approval({ login: 'reviewer-one', id: 111, type: 'User' }), true);
+  // listed reviewer admitted by login fallback when the id is unknown
+  assert.equal(approval({ login: 'reviewer-two', id: 999, type: 'User' }), true);
+  // unlisted reviewer denied even with a valid approval shape
+  assert.equal(approval({ login: 'intruder', id: 999, type: 'User' }), false);
+  // bots and non-decisive identities never match
+  assert.equal(approval({ login: 'reviewer-one', id: 111, type: 'Bot' }), false);
+});
+
+test('malformed or empty trusted-reviewers.json denies admission', () => {
+  const approval = list => validReview([{ id: 1, user: owner, commit_id: SHA, state: 'APPROVED' }], SHA, list);
+  assert.equal(approval(reviewerList('{not json')), false);
+  assert.equal(approval(reviewerList('{"reviewers":"nope"}')), false);
+  assert.equal(approval(reviewerList([])), false);
+  assert.equal(approval(reviewerList([{ login: 'no-id' }, { id: 1 }])), false);
+});
+
+test('reviewedHead follows the trusted list instead of any implicit owner', async () => {
+  const list = reviewerList([{ login: 'trusted-dev', id: 555 }]);
+  const f = fixture();
+  f.state.owners = '/.github/ @trusted-dev\n';
+  f.state.reviews = [{ id: 1, user: { login: 'trusted-dev', id: 555, type: 'User' }, commit_id: SHA, state: 'APPROVED' }];
+  assert.equal(await reviewedHead(f.github, f.context, undefined, list), true);
+  // the previous hardcoded owner is no longer implicitly trusted
+  f.state.reviews = [review];
+  assert.equal(await reviewedHead(f.github, f.context, undefined, list), false);
+  // a policy line without any trusted reviewer denies
+  f.state.owners = '/.github/ @mickey-kras\n';
+  assert.equal(await reviewedHead(f.github, f.context, undefined, list), false);
+});
+
+test('extra CODEOWNERS lines no longer deny when the policy line keeps a trusted reviewer', async () => {
+  const f = fixture();
+  f.state.owners = '/.github/ @mickey-kras @someone-else\n/docs/ @someone-else\n';
+  assert.equal(await reviewedHead(f.github, f.context), true);
 });
