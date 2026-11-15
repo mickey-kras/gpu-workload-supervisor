@@ -1,0 +1,160 @@
+name: graphify
+
+# main owns graphify-out/graph.json. Work PRs never change it, so the graph cannot conflict.
+# After each push to main, the refresh job rebuilds the graph and opens a one-file PR.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: graphify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRAPH: graphify-out/graph.json
+  REFRESH_BRANCH: ci/graphify-refresh
+  GRAPHIFY_BACKEND: none
+  PYTHONHASHSEED: '0'
+
+jobs:
+  ownership:
+    name: graph ownership
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        with:
+          egress-policy: audit
+      # The default ref is the PR merge commit. Its first parent is the base, so the diff is the PR alone.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install pinned graph tools
+        run: python -m pip install --require-hashes -r .github/graphify/requirements.txt
+      - name: Test graph extraction
+        run: python -m unittest discover -s .github/graphify -p 'test_*.py'
+      - name: Keep the graph owned by main
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          changed="$(git diff --name-only HEAD^1 HEAD)"
+          if [[ "$HEAD_REF" == "$REFRESH_BRANCH" && "$HEAD_REPO" == "$REPOSITORY" ]]; then
+            if [[ "$changed" != "$GRAPH" ]]; then
+              echo "A refresh PR must change only $GRAPH." >&2
+              exit 1
+            fi
+            python .github/graphify/snapshot.py --check
+          elif grep -Fxq "$GRAPH" <<<"$changed"; then
+            echo "Do not change $GRAPH in a work PR. The graphify workflow rebuilds it after merge." >&2
+            exit 1
+          fi
+
+  refresh:
+    name: refresh graph
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: release-automation
+    timeout-minutes: 15
+    steps:
+      - uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - name: Install pinned graph tools
+        run: python -m pip install --require-hashes -r .github/graphify/requirements.txt
+      - name: Rebuild the graph
+        id: build
+        run: |
+          set -euo pipefail
+          python .github/graphify/snapshot.py
+          if git ls-files --error-unmatch -- "$GRAPH" >/dev/null 2>&1 && git diff --quiet -- "$GRAPH"; then
+            echo 'Graph on main matches its sources.'
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Release App token
+        id: app
+        if: steps.build.outputs.changed == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+      # The App token makes the PR run the required checks. Merge still needs the required review.
+      - name: Open or update the refresh PR
+        if: steps.build.outputs.changed == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+          script: |
+            const { readFileSync } = require('node:fs');
+            const { owner, repo } = context.repo;
+            const path = process.env.GRAPH;
+            const branch = process.env.REFRESH_BRANCH;
+            const base = context.sha;
+            const { data: main } = await github.rest.git.getRef({ owner, repo, ref: 'heads/main' });
+            if (main.object.sha !== base) {
+              core.notice(`main moved to ${main.object.sha}; its own run refreshes the graph.`);
+              return;
+            }
+            const { data: parent } = await github.rest.git.getCommit({ owner, repo, commit_sha: base });
+            const { data: blob } = await github.rest.git.createBlob({
+              owner, repo, encoding: 'base64', content: readFileSync(path).toString('base64'),
+            });
+            const { data: tree } = await github.rest.git.createTree({
+              owner, repo, base_tree: parent.tree.sha,
+              tree: [{ path, mode: '100644', type: 'blob', sha: blob.sha }],
+            });
+            const { data: commit } = await github.rest.git.createCommit({
+              owner, repo, tree: tree.sha, parents: [base],
+              message: `chore(graph): rebuild code graph for ${base.slice(0, 7)}`,
+            });
+            try {
+              await github.rest.git.updateRef({ owner, repo, ref: `heads/${branch}`, sha: commit.sha, force: true });
+            } catch (error) {
+              if (error.status !== 422) throw error;
+              await github.rest.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha: commit.sha });
+            }
+            const open = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'open', base: 'main', head: `${owner}:${branch}`, per_page: 100,
+            });
+            if (open.length > 1) throw new Error(`Several open PRs use ${branch}`);
+            const number = open[0]?.number ?? (await github.rest.pulls.create({
+              owner, repo, base: 'main', head: branch, maintainer_can_modify: false,
+              title: 'chore(graph): refresh code graph',
+              body: `Rebuilds \`${path}\` from main. The graphify workflow updates this PR after each push to main.\n\nSquash-merges automatically after required checks and review.\n`,
+            })).data.number;
+            const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number: number });
+            if (!pull.auto_merge) {
+              await github.graphql(`mutation($id: ID!, $head: GitObjectID!) {
+                enablePullRequestAutoMerge(input: { pullRequestId: $id, mergeMethod: SQUASH, expectedHeadOid: $head }) {
+                  clientMutationId
+                }
+              }`, { id: pull.node_id, head: commit.sha });
+            }
+            await core.summary.addRaw(`Graph refresh #${number} at ${commit.sha}.\n`).write();

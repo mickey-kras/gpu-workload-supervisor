@@ -27,6 +27,7 @@ Start with desktop setup or host deployment. Complete host and adapter qualifica
 ## Maintenance
 
 - [Development and tests](MAINTENANCE.md#development)
+- [Code graph](CODE-GRAPH.md)
 - [Releases and publication recovery](MAINTENANCE.md#source-and-binary-releases)
 - [CI policy](MAINTENANCE.md#ci-policy-changes) and [build-tool updates](MAINTENANCE.md#build-tool-updates)
 - [Security policy](../SECURITY.md)
