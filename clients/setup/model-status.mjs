@@ -315,8 +315,8 @@ class StatusView {
             const models = readReport(await this.ui.command(['/usr/bin/gpu-setup', 'model-status'], JSON.stringify({version: 1}), reading));
             this.ui.modelStatus = mergeReport(this.ui.modelStatus, models, this.workload);
             if (changed(before, this.entry(this.ui.modelStatus))) note = 'The action stopped after setup stored a new result. The card shows the stored result.';
-        } catch (failure) {
-            if (!reading.is_cancelled()) logFailure(failure);
+        } catch (error_) {
+            if (!reading.is_cancelled()) logFailure(error_);
         }
         this.reading = null;
         if (this.ui.closed || reading.is_cancelled()) return;
