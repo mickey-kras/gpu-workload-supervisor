@@ -164,9 +164,138 @@ func runGPUCorrection(ctx context.Context, home string, input io.Reader, output 
 }
 
 func (a setupActions) runDiscover(ctx context.Context, home string, output io.Writer) error {
-	result, err := a.discover(ctx)
+	result, err := a.discover(ctx, home)
 	if err != nil {
 		return err
 	}
 	return json.NewEncoder(output).Encode(result)
+}
+func runDrafts(home string, output io.Writer) error {
+	result, err := setup.ReadDrafts(home)
+	if err != nil && !errors.Is(err, setup.ErrUnsupportedDraftApplication) {
+		return err
+	}
+	warning := ""
+	if err != nil {
+		warning = err.Error()
+	}
+	return json.NewEncoder(output).Encode(struct {
+		setup.DraftSnapshot
+		Warning string `json:"warning,omitempty"`
+	}{result, warning})
+}
+func runSaveDrafts(home string, input io.Reader, output io.Writer) error {
+	var request setup.DraftRequest
+	if err := strictjson.DecodeLimited(input, 65536, &request); err != nil {
+		return err
+	}
+	result, err := setup.SaveDrafts(home, request)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(output).Encode(result)
+}
+func (a setupActions) runProbe(ctx context.Context, input io.Reader, output io.Writer) error {
+	request, err := setup.DecodeProbe(input)
+	if err != nil {
+		return err
+	}
+	result, err := a.probe(ctx, request)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(output).Encode(result)
+}
+func (a setupActions) runPlanned(ctx context.Context, home, action string, input io.Reader, output io.Writer) error {
+	request, err := setup.Decode(input)
+	if err != nil {
+		return err
+	}
+	preview, err := setup.SystemBackend().Plan(home, request)
+	if err != nil {
+		return err
+	}
+	if action == cmdVerifyBindings {
+		if err := a.verify(ctx, request); err != nil {
+			return err
+		}
+	}
+	if action == "apply" {
+		if err := a.apply(ctx, home, request); err != nil {
+			return err
+		}
+	}
+	return json.NewEncoder(output).Encode(preview)
+}
+
+// The timeouts of the actions. Only a model status request that names
+// workloads to recheck reads model files, so only it gets recheckTimeout.
+// A model check reads all model files and the hub listing, so it gets
+// modelCheckTimeout.
+const (
+	actionTimeout     = 5 * time.Minute
+	recheckTimeout    = 30 * time.Minute
+	modelCheckTimeout = 60 * time.Minute
+)
+
+// actionContext gives the context of an action, with its timeout. A
+// recheck reads every model file again, which takes longer. A status read
+// without a recheck gets actionTimeout, see modelStatusContext. An
+// interrupt or a stop signal cancels a model check, which then stores
+// nothing. A killed run stores nothing too: the store writes the result in
+// one transaction.
+func actionContext(action string) (context.Context, context.CancelFunc) {
+	switch action {
+	case cmdModelStatus:
+		return context.WithTimeout(context.Background(), recheckTimeout)
+	case cmdModelCheck:
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		ctx, cancel := context.WithTimeout(ctx, modelCheckTimeout)
+		return ctx, func() { cancel(); stop() }
+	}
+	return context.WithTimeout(context.Background(), actionTimeout)
+}
+
+// runModelAction runs the model check, review and approval actions. Each
+// writes one JSON object.
+func runModelAction(ctx context.Context, home, action string, input io.Reader, output io.Writer) error {
+	var result any
+	switch action {
+	case cmdModelCheck:
+		request, err := setup.DecodeModelCheckRequest(input)
+		if err != nil {
+			return err
+		}
+		if result, err = setup.ModelCheck(ctx, home, request, &http.Client{}); err != nil {
+			return err
+		}
+	case cmdModelReview:
+		request, err := setup.DecodeModelReviewRequest(input)
+		if err != nil {
+			return err
+		}
+		if result, err = setup.ModelReviewList(ctx, home, request); err != nil {
+			return err
+		}
+	case cmdModelApprove:
+		request, err := setup.DecodeModelApproveRequest(input)
+		if err != nil {
+			return err
+		}
+		if result, err = setup.ModelApprove(ctx, home, request, os.Getuid(), time.Now()); err != nil {
+			return err
+		}
+	default:
+		return errors.New("unknown model action")
+	}
+	return json.NewEncoder(output).Encode(result)
+}
+
+// modelStatusContext limits a model status request without a recheck to
+// actionTimeout.
+func modelStatusContext(ctx context.Context, request setup.ModelStatusRequest) (context.Context, context.CancelFunc) {
+	if len(request.Recheck) == 0 {
+		return context.WithTimeout(ctx, actionTimeout)
+	}
+	return context.WithCancel(ctx)
 }
