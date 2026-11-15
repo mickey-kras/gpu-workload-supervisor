@@ -86,9 +86,37 @@ Stopped ordinary services without ControlGroup support restricted placement on s
 
 Discovery uses fixed GET routes, without redirects or ambient proxies, 1 MiB responses, 3-second probes and a 15-second total. It never starts applications, loads or unloads models, downloads files, scans drives or writes configuration.
 
-External adoption checks effective units, ordered contributing-file hashes and pre-start commands. Allowed commands: system `true`/`false` with optional `--`, or `test` with one `-e`, `-f`, `-d`, `-r`, `-w`, `-x` or `-s` predicate and absolute clean path. Originals and vLLM `--max-model-len`/`--served-model-name` remain. Unsupported syntax, wrappers and escaped launches get guidance. Managed launches use a separate restricted format.
+External adoption checks effective units, ordered contributing-file hashes and pre-start commands. Allowed commands: system `true`/`false` with optional `--`, or `test` with one `-e`, `-f`, `-d`, `-r`, `-w`, `-x` or `-s` predicate and absolute clean path. Originals and vLLM `--max-model-len`/`--served-model-name` remain. The bounded [KV cache and batching options](#vllm-kv-cache-and-batching-options) also remain. Unsupported syntax, wrappers and escaped launches get guidance. Managed launches use a separate restricted format.
 
 Every vLLM launch also needs the [hardened settings](INTEGRATION.md#hardened-vllm-launch). For a managed launch, the model folder must contain the upstream `chat_template.jinja`. A file that you add by hand fails the [model checks](MODEL-CHECKS.md#upstream-identity).
+
+### vLLM KV cache and batching options
+
+vLLM manages the KV cache. The supervisor accepts only a small set of KV cache and batching options. It refuses all other options. We verified the options against vLLM 0.14.1, the minimum serving version.
+
+A managed launch can have a `serving` object in its owned launch. Without the object, the unit keeps its earlier bytes and fingerprint. With the object, the unit gets all of the defaults below explicitly. Thus a vLLM update cannot change them silently. A catalog with a `serving` object is catalog version 6. A drafts file with one is drafts version 3.
+
+| Option | Rendered value | Setting in `serving` |
+| --- | --- | --- |
+| `--gpu-memory-utilization` | `0.90` | `gpuMemoryPercent`: 50 to 95 |
+| `--kv-cache-dtype` | `auto` | `kvCacheDType`: `auto` only |
+| `--enable-chunked-prefill` | Always | None |
+| `--enable-prefix-caching` | Always, except for diagnosis | `disablePrefixCaching: true` renders `--no-enable-prefix-caching` |
+| `--prefix-caching-hash-algo` | `sha256`, with prefix caching | None. SHA-256 prevents hash collisions between prefixes |
+| `--max-num-seqs` | Not set | `maxNumSeqs`: 1 to 64 |
+| `--max-num-batched-tokens` | Not set | `maxNumBatchedTokens`: 256 to 65536. This is the chunked prefill budget |
+
+`--max-model-len` (`maxModelLen`) stays the main control of the KV cache size. The `fp8` KV cache needs a qualification run for the model and the GPU ([#453](https://github.com/mickey-kras/gpu-workload-supervisor/issues/453)). Until that run exists, the supervisor refuses `fp8`. The supervisor does not support CPU offload of the KV cache, disaggregated prefill or `--calculate-kv-scales`.
+
+Before preview and apply, setup runs `vllm serve --help=all` with the executable of the managed launch. A plain `--help` shows only the option groups. Setup reads at most 1 MiB of output and stops the command after 2 minutes. Setup refuses the launch if the help does not show an option or a rendered value. It never passes an unknown option to vLLM.
+
+An adopted launch can use the same options, with the same values and bounds. The qualification refuses a value out of bounds, an unknown option, a repeated option, and `--enable-prefix-caching` together with `--no-enable-prefix-caching`. The qualification accepts only the forms `--option value` and `0.NN`, such as `--gpu-memory-utilization 0.85`.
+
+#### Capacity admission
+
+At start, vLLM reserves `gpu-memory-utilization × total VRAM`, independent of the model size. Thus admission uses that reservation for a launch that sets `--gpu-memory-utilization`: every launch with a `serving` object, and each adopted launch with the option. The supervisor reads `memory.free` and `memory.total` from `nvidia-smi`. The requirement is the larger of `requiredMiB` and the reservation, rounded up to whole MiB. The supervisor adds the capacity headroom to it.
+
+For an adopted launch, the supervisor reads the option from the fingerprinted launch file. A changed file fails admission.
 
 ### Upgrade and interrupted activation
 
@@ -397,11 +425,11 @@ No automatic downgrade. Check the exact binary and database schema and behaviora
 
 Older binaries reject database schema v19. To roll back past this release, restore a verified database backup from before v19, such as a `state.db.pre-v18-*.bak` [pre-migration snapshot](#pre-migration-snapshots).
 
-Older binaries also reject catalog v5. Before you stop components and install an older binary, remove all resource limits. Setup then writes the lowest version the catalog needs. Run `gpu-setup discover` and read `request.catalog.version`: 4 with trainers, 2 with owned launches, 1 otherwise. Version 5 means limits remain.
+Older binaries also reject catalog v5 and v6. Before you stop components and install an older binary, remove all resource limits and [vLLM serving options](#vllm-kv-cache-and-batching-options). Setup then writes the lowest version the catalog needs. Run `gpu-setup discover` and read `request.catalog.version`: 4 with trainers, 2 with owned launches, 1 otherwise. Version 5 means limits remain. Version 6 means serving options remain.
 
 To remove the limits in the setup application, open the settings of each limited workload. Select **Advanced settings**, then **Resource checks**. Clear **Limit the resources of this workload**. Then apply. Alternatively, restore a backup from before the limits.
 
-Saved selections with limits make `drafts.json` version 2. An older setup reads only version 1. An older setup opens and shows that the saved setup drafts are unusable. It cannot continue.
+Saved selections with limits make `drafts.json` version 2. Saved selections with serving options make it version 3. An older setup reads only version 1. An older setup opens and shows that the saved setup drafts are unusable. It cannot continue.
 
 To use it again, move `drafts.json` aside or delete it. Setup then starts without the saved selections. A moved file keeps them for a later setup.
 

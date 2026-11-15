@@ -9,7 +9,7 @@ Training presets stay disabled until [GPU qualification](#llm-training-qualifica
 
 ## Finite training jobs
 
-Training needs a separate trainer binding in catalog version 4 or 5. Versions 1/2 remain supported. Version 3 stays reserved. Do not use inference `nativeModel` bindings for training.
+Training needs a separate trainer binding in catalog version 4 or later. Versions 1/2 remain supported. Version 3 stays reserved. Do not use inference `nativeModel` bindings for training.
 
 The adapter owns recipes, datasets, metrics, checkpoints, evaluation and export. Keep GPU work in its unit's recursive cgroup. The supervisor stores lifecycle identity, terminal evidence and unit memory peak, without job queues or automatic resume.
 

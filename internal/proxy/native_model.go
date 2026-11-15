@@ -64,7 +64,7 @@ func checkNativeUpstream(n control.NativeModel, config Config) error {
 // reads the catalog without Validate, so it refuses versions it does not
 // understand rather than misinterpreting them.
 func supportedCatalogVersion(v int) bool {
-	return v == control.CatalogVersionLegacy || v == control.CatalogVersionOwned || v == control.CatalogVersionTrainer || v == control.CatalogVersionLimits
+	return v == control.CatalogVersionLegacy || v == control.CatalogVersionOwned || v == control.CatalogVersionTrainer || v == control.CatalogVersionLimits || v == control.CatalogVersionServing
 }
 
 func nativeExecutionRoute(r Route) bool {

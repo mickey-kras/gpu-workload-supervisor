@@ -35,10 +35,27 @@ function hasLimits(profile) {
     return limits !== null && typeof limits === 'object' && Object.values(limits).some(Boolean);
 }
 
+// Mirror of control.WorkloadProfile.HasServingOptions: an empty or null
+// serving object is absent, and the backend decoder rejects it.
+function hasServingOptions(profile) {
+    const serving = profile.nativeModel?.owned?.serving;
+    return serving !== null && typeof serving === 'object' && Object.values(serving).some(Boolean);
+}
+
+// Mirror of draftsVersion in internal/setup/drafts.go: 3 with serving
+// options, 2 with resource limits, 1 otherwise.
+export function draftsVersion(drafts) {
+    if (drafts.some(draft => draft.binding?.owned?.serving))
+        return 3;
+    return drafts.some(draft => draft.binding?.owned?.limits) ? 2 : 1;
+}
+
 // Mirror of control.LowestCatalogVersion in internal/control/catalog.go: the
 // lowest catalog version that the profiles need. The backend recomputes it
 // before preview and apply.
 export function lowestCatalogVersion(profiles) {
+    if (profiles.some(hasServingOptions))
+        return 6;
     if (profiles.some(hasLimits))
         return 5;
     if (profiles.some(profile => profile.trainer))

@@ -8,7 +8,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import {applicationHeader, roundedCard} from './presentation.mjs';
 import {createShell, createSettings, createApplicationCards, createFooter} from './setup-layout.mjs';
-import {ReviewedConfiguration, lowestCatalogVersion} from './review.mjs';
+import {ReviewedConfiguration, draftsVersion, lowestCatalogVersion} from './review.mjs';
 import {createProfileEditor} from './profile-ui.mjs';
 import {addDraftEditor} from './discovery-ui.mjs';
 import {applications, candidateDiagnostics, recordFingerprint} from './onboarding.mjs';
@@ -416,7 +416,7 @@ class SetupWindow {
             if (this.drafts.some(draft => !Number.isSafeInteger(draft.requiredMiB ?? 0) || (draft.requiredMiB ?? 0) < 0))
                 throw new Error('VRAM requirements must be nonnegative whole numbers within the supported numeric range.');
             for (const draft of this.drafts) labelledLimitCheck(draft.label || draft.id, () => this.draftEditors.find(editor => editor.id === draft.id)?.checkLimits());
-            const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'save-drafts'], JSON.stringify({version: this.drafts.some(draft => draft.binding?.owned?.limits) ? 2 : 1, expectedRevision: this.draftRevision, drafts: this.drafts})));
+            const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', 'save-drafts'], JSON.stringify({version: draftsVersion(this.drafts), expectedRevision: this.draftRevision, drafts: this.drafts})));
             this.draftRevision = result.revision; saved = true;
             this.status.label = 'Selections saved. Saved applications still need a check before they can run. They are not selectable in GPU Control until safe start and stop control is set up and checked.';
         } catch (error) { this.reportError(limitSummary(error) ?? 'Selections were not saved. Check the VRAM requirements and resource limits, or reopen Manage workloads to refresh before retrying.', error); }

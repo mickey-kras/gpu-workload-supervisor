@@ -231,7 +231,7 @@ func (b Backend) Apply(ctx context.Context, home string, request Request) error 
 	// Prove the accepted bindings and release while their unit files are still
 	// intact. Same-name edits (including derived Conflicts changes) replace
 	// their fingerprints; the candidate is verified separately after reload.
-	plan, err := b.planOwnedUnits(request, work.accepted, home)
+	plan, err := b.planCheckedOwnedUnits(ctx, request, work.accepted, home)
 	if err != nil {
 		return err
 	}

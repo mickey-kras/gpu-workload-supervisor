@@ -309,6 +309,9 @@ type serverFlags struct {
 	port         string
 	loadFormat   string
 	chatTemplate string
+	// gpuMemoryPercent is an explicit --gpu-memory-utilization in percent;
+	// 0 when the launch does not set it.
+	gpuMemoryPercent uint32
 }
 
 func parseServerCommand(args []string, runtimeName string) (serverFlags, error) {
@@ -320,6 +323,15 @@ func parseServerCommand(args []string, runtimeName string) (serverFlags, error) 
 	return flags.parse(args[3:])
 }
 
+// switchServerFlag reports the qualified vLLM options that take no value.
+func switchServerFlag(key string) bool {
+	switch key {
+	case control.FlagEnablePrefixCaching, control.FlagNoPrefixCaching, control.FlagEnableChunkedPrefill:
+		return true
+	}
+	return false
+}
+
 func (f *serverFlags) parse(args []string) (serverFlags, error) {
 	seen := map[string]bool{}
 	for len(args) > 0 {
@@ -329,6 +341,9 @@ func (f *serverFlags) parse(args []string) (serverFlags, error) {
 			return *f, fmt.Errorf("%w: duplicate option %s", ErrLaunchUnsupported, diagnosticServerFlag(key))
 		}
 		seen[key] = true
+		if switchServerFlag(key) {
+			continue
+		}
 		if len(args) == 0 {
 			return *f, fmt.Errorf("%w: option %s requires a value", ErrLaunchUnsupported, diagnosticServerFlag(key))
 		}
@@ -338,12 +353,17 @@ func (f *serverFlags) parse(args []string) (serverFlags, error) {
 			return *f, fmt.Errorf("%w: unsupported option or value %s", err, diagnosticServerFlag(key))
 		}
 	}
+	if seen[control.FlagEnablePrefixCaching] && seen[control.FlagNoPrefixCaching] {
+		return *f, fmt.Errorf("%w: conflicting options %s and %s", ErrLaunchUnsupported, control.FlagEnablePrefixCaching, control.FlagNoPrefixCaching)
+	}
 	return *f, nil
 }
 
 func diagnosticServerFlag(key string) string {
 	switch key {
-	case "--host", "--port", flagServedModelName, flagMaxModelLen, flagLoadFormat, flagChatTemplate:
+	case "--host", "--port", flagServedModelName, flagMaxModelLen, flagLoadFormat, flagChatTemplate,
+		control.FlagGPUMemoryUtilization, control.FlagKVCacheDType, control.FlagEnablePrefixCaching, control.FlagNoPrefixCaching,
+		control.FlagPrefixCachingHash, control.FlagEnableChunkedPrefill, control.FlagMaxNumSeqs, control.FlagMaxNumBatchedTokens:
 		return key
 	}
 	return "(unqualified option)"
@@ -372,6 +392,59 @@ func (f *serverFlags) apply(key, value string) error {
 		}
 		f.chatTemplate = value
 	default:
+		return f.applyServing(key, value)
+	}
+	return nil
+}
+
+// applyServing applies the bounded KV cache and batching options. Owned and
+// adopted launches share these bounds.
+func (f *serverFlags) applyServing(key, value string) error {
+	switch key {
+	case control.FlagGPUMemoryUtilization:
+		percent, ok := parseGPUMemoryUtilization(value)
+		if !ok {
+			return ErrLaunchUnsupported
+		}
+		f.gpuMemoryPercent = percent
+	case control.FlagKVCacheDType:
+		if value != control.KVCacheDTypeAuto {
+			return ErrLaunchUnsupported
+		}
+	case control.FlagPrefixCachingHash:
+		if value != control.PrefixCachingHashSHA256 {
+			return ErrLaunchUnsupported
+		}
+	case control.FlagMaxNumSeqs:
+		return boundedDecimal(value, 1, control.MaxServingNumSeqs)
+	case control.FlagMaxNumBatchedTokens:
+		return boundedDecimal(value, control.MinBatchedTokens, control.MaxBatchedTokens)
+	default:
+		return ErrLaunchUnsupported
+	}
+	return nil
+}
+
+// gpuMemoryUtilization accepts only a plain fraction with one or two
+// decimals, such as 0.9 or 0.90, so the value has one exact percentage.
+var gpuMemoryUtilization = regexp.MustCompile(`^0\.([0-9])([0-9]?)$`)
+
+func parseGPUMemoryUtilization(value string) (uint32, bool) {
+	match := gpuMemoryUtilization.FindStringSubmatch(value)
+	if match == nil {
+		return 0, false
+	}
+	percent := uint32(match[1][0]-'0') * 10
+	if match[2] != "" {
+		percent += uint32(match[2][0] - '0')
+	}
+	return percent, control.ValidGPUMemoryPercent(percent)
+}
+
+// boundedDecimal accepts a canonical decimal in [minimum, maximum].
+func boundedDecimal(value string, minimum, maximum uint64) error {
+	v, err := strconv.ParseUint(value, 10, 32)
+	if err != nil || v < minimum || v > maximum || strconv.FormatUint(v, 10) != value {
 		return ErrLaunchUnsupported
 	}
 	return nil
