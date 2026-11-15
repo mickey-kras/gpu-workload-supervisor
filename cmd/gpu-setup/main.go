@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
@@ -64,23 +67,16 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return err
 	}
 	if len(args) != 1 {
-		return errors.New("usage: gpu-setup -version|temporary-status|temporary-cleanup|discover|probe|prepare|correct-gpu|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|reconcile|idle-policy-tick|remove-integration|model-status")
+		return errors.New("usage: gpu-setup -version|temporary-status|temporary-cleanup|discover|probe|prepare|correct-gpu|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|reconcile|idle-policy-tick|remove-integration|model-status|model-check|model-review|model-approve")
 	}
-	// A recheck reads every model file again, which takes longer. A
-	// status read without a recheck gets actionTimeout, see
-	// modelStatusContext.
-	timeout := actionTimeout
-	if args[0] == cmdModelStatus {
-		timeout = recheckTimeout
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := actionContext(args[0])
 	defer cancel()
 	home, err := a.home()
 	if err != nil {
 		return err
 	}
 	switch args[0] {
-	case "temporary-status", "temporary-cleanup", "correct-gpu", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned", cmdModelStatus:
+	case "temporary-status", "temporary-cleanup", "correct-gpu", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned", cmdModelStatus, "model-check", "model-review", "model-approve":
 		if a.euid() == 0 {
 			return errors.New("run guided setup as the desktop account, not root")
 		}
@@ -120,6 +116,8 @@ func (a setupActions) runAction(ctx context.Context, home, action string, input 
 			return err
 		}
 		return json.NewEncoder(output).Encode(report)
+	case "model-check", "model-review", "model-approve":
+		return runModelAction(ctx, home, action, input, output)
 	case "drafts":
 		return runDrafts(home, output)
 	case "save-drafts":
@@ -229,10 +227,66 @@ func (a setupActions) runPlanned(ctx context.Context, home, action string, input
 
 // The timeouts of the actions. Only a model status request that names
 // workloads to recheck reads model files, so only it gets recheckTimeout.
+// A model check reads all model files and the hub listing, so it gets
+// modelCheckTimeout.
 const (
-	actionTimeout  = 5 * time.Minute
-	recheckTimeout = 30 * time.Minute
+	actionTimeout     = 5 * time.Minute
+	recheckTimeout    = 30 * time.Minute
+	modelCheckTimeout = 60 * time.Minute
 )
+
+// actionContext gives the context of an action, with its timeout. A
+// recheck reads every model file again, which takes longer. A status read
+// without a recheck gets actionTimeout, see modelStatusContext. An
+// interrupt or a stop signal cancels a model check, which then stores
+// nothing. A killed run stores nothing too: the store writes the result in
+// one transaction.
+func actionContext(action string) (context.Context, context.CancelFunc) {
+	switch action {
+	case cmdModelStatus:
+		return context.WithTimeout(context.Background(), recheckTimeout)
+	case "model-check":
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		ctx, cancel := context.WithTimeout(ctx, modelCheckTimeout)
+		return ctx, func() { cancel(); stop() }
+	}
+	return context.WithTimeout(context.Background(), actionTimeout)
+}
+
+// runModelAction runs the model check, review and approval actions. Each
+// writes one JSON object.
+func runModelAction(ctx context.Context, home, action string, input io.Reader, output io.Writer) error {
+	var result any
+	switch action {
+	case "model-check":
+		request, err := setup.DecodeModelCheckRequest(input)
+		if err != nil {
+			return err
+		}
+		if result, err = setup.ModelCheck(ctx, home, request, &http.Client{}); err != nil {
+			return err
+		}
+	case "model-review":
+		request, err := setup.DecodeModelReviewRequest(input)
+		if err != nil {
+			return err
+		}
+		if result, err = setup.ModelReviewList(ctx, home, request); err != nil {
+			return err
+		}
+	case "model-approve":
+		request, err := setup.DecodeModelApproveRequest(input)
+		if err != nil {
+			return err
+		}
+		if result, err = setup.ModelApprove(ctx, home, request, os.Getuid(), time.Now()); err != nil {
+			return err
+		}
+	default:
+		return errors.New("unknown model action")
+	}
+	return json.NewEncoder(output).Encode(result)
+}
 
 // modelStatusContext limits a model status request without a recheck to
 // actionTimeout.
