@@ -49,6 +49,7 @@ type Runtime interface {
 	limitChecker
 	limitStopRuntime
 	trainingRuntime
+	gpuProcessRuntime
 }
 
 // storeGateway is the part of *store.Store that the controller uses. Tests
@@ -445,6 +446,10 @@ func failureCode(err error) string {
 		return "timeout"
 	case errors.Is(err, gpuruntime.ErrCapacity):
 		return "capacity"
+	case errors.Is(err, gpuruntime.ErrGPUInUse):
+		return "gpu-in-use"
+	case errors.Is(err, gpuruntime.ErrGPUCheckFailed):
+		return "gpu-check"
 	case errors.Is(err, ErrRuntimeObservation):
 		return "runtime-observation"
 	case errors.Is(err, ErrStateVerification), errors.Is(err, ErrInvariant):

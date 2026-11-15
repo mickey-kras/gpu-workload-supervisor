@@ -10,7 +10,16 @@ export const ERROR_CODES = [
     'timeout',
     'unavailable',
     'deferred',
+    'gpu_in_use',
+    'gpu_check_failed',
+    'not_permitted',
 ];
+// A refused start that names what blocks it: the processes on the GPU, or
+// the failure of the GPU check. A failed check never reads as a free GPU.
+export const GPU_CODES = ['gpu_in_use', 'gpu_check_failed'];
+export const CLOSE_ACTION = 'close-gpu-process';
+const MAX_PID = 4194304;
+const UNSAFE_TEXT = /[\p{Cc}\u202a-\u202e\u2066-\u2069]/u;
 const fail = () => {
     throw new Error('Invalid operator response');
 };
@@ -143,6 +152,47 @@ function validateStatus(s) {
 // additionally carries the freshly rotated lease fence.
 export const SETTINGS_ACTIONS = ['get-settings', 'set-idle-policy'];
 const ACTIVATE_ACTION = 'activate-workload';
+const GPU_ACTIONS = ['user-switch', ACTIVATE_ACTION, CLOSE_ACTION];
+
+function text(v, max, allowEmpty) {
+    if (
+        typeof v !== 'string' ||
+        (!allowEmpty && !v) ||
+        [...v].length > max ||
+        UNSAFE_TEXT.test(v)
+    )
+        fail();
+}
+
+function validateGPUProcess(p) {
+    keys(p, ['pid', 'name', 'user', 'usedMiB', 'closable']);
+    if (!Number.isInteger(p.pid) || p.pid < 1 || p.pid > MAX_PID) fail();
+    text(p.name, 256, true);
+    text(p.user, 256, true);
+    if (
+        p.usedMiB !== null &&
+        (!Number.isSafeInteger(p.usedMiB) || p.usedMiB < 0)
+    )
+        fail();
+    if (typeof p.closable !== 'boolean') fail();
+}
+
+function validateGPUCheck(r) {
+    if (r.code === 'gpu_check_failed') {
+        keys(r.gpuCheck, ['failure']);
+        text(r.gpuCheck.failure, 512, false);
+        return;
+    }
+    keys(r.gpuCheck, ['processes']);
+    const processes = r.gpuCheck.processes;
+    if (
+        !Array.isArray(processes) ||
+        processes.length < 1 ||
+        processes.length > 32
+    )
+        fail();
+    processes.forEach(validateGPUProcess);
+}
 
 // The committed fence handed to the activating caller: an opaque incarnation
 // token plus a canonical nonzero uint64 epoch string (never a number), the
@@ -165,6 +215,7 @@ export function parseResponse(text, requestId, action) {
     if (r.protocolVersion !== 1 || r.requestId !== requestId) fail();
     if (r.code !== 'ok') {
         if (r.code === 'deferred') validateDeferredStatus(r);
+        if (GPU_CODES.includes(r.code)) validateGPUCheck(r);
         return r;
     }
     if (SETTINGS_ACTIONS.includes(action)) {
@@ -201,6 +252,13 @@ function validateResponseKeys(r, action) {
         // the current lease fence so a caller that lost a committed
         // activation response can recover the committed generation.
         keys(r, 'leaseFence' in r ? [...base, 'status', 'leaseFence'] : [...base, 'status']);
+    } else if (GPU_CODES.includes(r.code)) {
+        // Only an action that starts a workload, or Close, reports the GPU.
+        if (!GPU_ACTIONS.includes(action)) fail();
+        keys(r, [...base, 'gpuCheck']);
+    } else if (r.code === 'not_permitted') {
+        if (action !== CLOSE_ACTION) fail();
+        keys(r, base);
     } else {
         keys(r, base);
         one(r.code, ERROR_CODES);

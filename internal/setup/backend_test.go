@@ -23,7 +23,13 @@ type idleRuntime struct{ err error }
 func (r idleRuntime) Observe(context.Context) (gpuruntime.Snapshot, error) {
 	return gpuruntime.Snapshot{Workloads: map[control.Workload]gpuruntime.WorkloadObservation{}}, r.err
 }
-func (r idleRuntime) Start(context.Context, control.Workload) error   { return r.err }
+func (r idleRuntime) Start(context.Context, control.Workload) error { return r.err }
+func (r idleRuntime) CheckGPUFree(context.Context, control.Workload) error {
+	return r.err
+}
+func (r idleRuntime) CloseGPUProcess(context.Context, control.Workload, int) error {
+	return r.err
+}
 func (r idleRuntime) Stop(context.Context, control.Workload) error    { return r.err }
 func (r idleRuntime) StopForRecovery(context.Context) error           { return r.err }
 func (r idleRuntime) Healthy(context.Context, control.Workload) error { return r.err }

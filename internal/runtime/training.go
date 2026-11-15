@@ -156,6 +156,9 @@ func (m *SystemdManager) StartTraining(ctx context.Context, p control.WorkloadPr
 	if err := m.ReleasedFor(ctx, control.WorkloadIdle); err != nil {
 		return "", err
 	}
+	if err := m.checkProfileGPUFree(ctx, p); err != nil {
+		return "", err
+	}
 	if err := m.capacity(ctx, p.ID); err != nil {
 		return "", err
 	}
@@ -242,11 +245,11 @@ func (m *SystemdManager) ReleaseTraining(ctx context.Context, p control.Workload
 	if err := m.verifyProfileGPU(ctx, p); err != nil {
 		return err
 	}
-	out, err := m.runner.Run(ctx, m.config.NvidiaSMIPath, "--query-compute-apps=pid", "--format=csv,noheader,nounits", "-i", p.Trainer.GPUUUID)
-	if err != nil {
+	err := m.gpuIdle(ctx, p)
+	if errors.Is(err, ErrGPUCheckFailed) {
 		return SafeError("trainer GPU release observation failed", err)
 	}
-	if strings.TrimSpace(string(out)) != "" {
+	if err != nil {
 		return errors.New("GPU compute processes remain after trainer exit")
 	}
 	return m.capacity(ctx, p.ID)

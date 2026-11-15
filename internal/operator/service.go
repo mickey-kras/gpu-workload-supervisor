@@ -17,6 +17,9 @@ type Backend interface {
 	Status(context.Context) (control.State, error)
 	OperatorTransition(context.Context, string, control.Workload, control.OperatorPrecondition) (control.State, error)
 	ActivateWorkload(context.Context, control.Workload, control.OperatorPrecondition) (control.State, error)
+	// CloseGPUProcess sends SIGTERM to one process of the desktop user that
+	// blocks target, then checks the GPU again: nil means free.
+	CloseGPUProcess(context.Context, control.Workload, int) error
 }
 
 // PolicyStore serves the typed settings surface straight from durable state:
@@ -86,9 +89,14 @@ func (session Session) respond(ctx context.Context, req Request, result Response
 	if req.Action == actionGetSettings || req.Action == actionSetIdlePolicy {
 		return session.respondSettings(ctx, req, result)
 	}
-	state, code := session.execute(ctx, req)
+	if req.Action == actionCloseGPUProcess {
+		return session.respondClose(ctx, req, result)
+	}
+	state, err := session.execute(ctx, req)
+	code := errorCode(err)
 	if code != OK {
 		result.Code = code
+		result.GPUCheck = gpuCheck(code, err)
 		// A deferred activation still reports the observed current status so
 		// the desktop can render why the workload did not start, and the
 		// current fence so an orchestration caller that lost a committed
@@ -132,17 +140,18 @@ func (s Service) requestBudget(action string) (time.Duration, bool) {
 	return budget, budget >= 0 && budget <= maximum
 }
 
-func (s Session) execute(ctx context.Context, req Request) (control.State, Code) {
+// codeError carries a protocol code that has no runtime cause.
+type codeError Code
+
+func (e codeError) Error() string { return string(e) }
+
+func (s Session) execute(ctx context.Context, req Request) (control.State, error) {
 	if req.Action == actionStatus {
-		state, err := s.Backend.Status(ctx)
-		if err != nil {
-			return state, errorCode(err)
-		}
-		return state, OK
+		return s.Backend.Status(ctx)
 	}
 	var state control.State
 	if code := s.validateTransition(req); code != OK {
-		return state, code
+		return state, codeError(code)
 	}
 	e := req.Expected
 	version, _ := strconv.ParseUint(e.Version, 10, 64)
@@ -153,10 +162,7 @@ func (s Session) execute(ctx context.Context, req Request) (control.State, Code)
 	} else {
 		state, err = s.Backend.OperatorTransition(ctx, req.Action, req.Target, precondition)
 	}
-	if err != nil {
-		return state, errorCode(err)
-	}
-	return state, OK
+	return state, err
 }
 
 // executeSettings serves the typed settings surface straight from durable
@@ -224,14 +230,19 @@ func (s Session) validateTransition(req Request) Code {
 		return StaleState
 	}
 	if req.Action == actionUserSwitch || req.Action == actionActivateWorkload {
-		for _, w := range s.Workloads {
-			if w.ID == req.Target {
-				return OK
-			}
-		}
-		return InvalidRequest
+		return s.listedTarget(req.Target)
 	}
 	return OK
+}
+
+// listedTarget requires a target from the catalog of the session.
+func (s Session) listedTarget(target control.Workload) Code {
+	for _, w := range s.Workloads {
+		if w.ID == target {
+			return OK
+		}
+	}
+	return InvalidRequest
 }
 
 func (session Session) status(state control.State) *Status {
@@ -253,6 +264,18 @@ func validCatalog(s Session) bool {
 	return seen[control.WorkloadIdle]
 }
 func errorCode(err error) Code {
+	var code codeError
+	if err == nil {
+		return OK
+	}
+	if errors.As(err, &code) {
+		return Code(code)
+	}
+	if errors.Is(err, supervisor.ErrGPURefused) {
+		// Only the refusal before any change is a GPU code. A check that
+		// fails inside a started transition keeps the usual code.
+		return gpuErrorCode(err)
+	}
 	switch {
 	case errors.Is(err, ErrIncompatibleConfiguration) || errors.Is(err, supervisor.ErrLimitedTarget):
 		// Only the refusal before any effect is a definite outcome. Limit

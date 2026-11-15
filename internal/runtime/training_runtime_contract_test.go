@@ -208,7 +208,7 @@ func TestTrainerContractReleaseRequiresCgroupAndGPUProof(t *testing.T) {
 	root := fixtureCgroups(t, m)
 	command := "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- training.service"
 	r.outputs[command] = stoppedOutput()
-	gpuCommand := "/usr/bin/true --query-compute-apps=pid --format=csv,noheader,nounits -i " + trainerContractGPU
+	gpuCommand := "/usr/bin/true --query-compute-apps=pid,process_name,used_memory --format=csv,noheader,nounits -i " + trainerContractGPU
 	writeEvents(t, root, "training.service", "populated 0\n")
 	if err := m.ReleaseTraining(context.Background(), p); err != nil {
 		t.Fatal(err)
@@ -218,7 +218,7 @@ func TestTrainerContractReleaseRequiresCgroupAndGPUProof(t *testing.T) {
 		t.Fatal("recursive populated cgroup accepted")
 	}
 	writeEvents(t, root, "training.service", "populated 0\n")
-	r.outputs[gpuCommand] = []byte("1234\n")
+	r.outputs[gpuCommand] = []byte("1234, trainer, 2048\n")
 	if err := m.ReleaseTraining(context.Background(), p); err == nil {
 		t.Fatal("surviving GPU process accepted")
 	}
@@ -231,7 +231,7 @@ func TestTrainerContractReleaseRequiresCgroupAndGPUProof(t *testing.T) {
 func TestTrainerContractReleaseFailsClosedOnMissingGPUOrCapacity(t *testing.T) {
 	m, r, p, _, _ := trainerContractFixture(t)
 	r.outputs["/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- training.service"] = stoppedOutput()
-	gpuCommand := "/usr/bin/true --query-compute-apps=pid --format=csv,noheader,nounits -i " + trainerContractGPU
+	gpuCommand := "/usr/bin/true --query-compute-apps=pid,process_name,used_memory --format=csv,noheader,nounits -i " + trainerContractGPU
 	r.errs = map[string]error{gpuCommand: fmt.Errorf("GPU observation unavailable")}
 	if err := m.ReleaseTraining(context.Background(), p); err == nil {
 		t.Fatal("GPU observation failure ignored")

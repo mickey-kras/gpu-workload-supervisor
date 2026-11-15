@@ -37,14 +37,18 @@ function loadDialog(opens) {
         'utf8',
     )
         .replaceAll(/^import .*;\n/gm, '')
-        .replace('export function ownershipDialog', 'function ownershipDialog');
+        .replaceAll('export function ', 'function ');
     const context = vm.createContext({
         Clutter: { KEY_Escape: 65307 },
         St: { Label },
         ModalDialog: { ModalDialog: Dialog },
     });
     vm.runInContext(source, context);
-    return { create: context.ownershipDialog, instance: () => instances.at(-1) };
+    return {
+        create: context.ownershipDialog,
+        close: vm.runInContext('closeProcessDialog', context),
+        instance: () => instances.at(-1),
+    };
 }
 
 test('failed modal open destroys dialog and does not retain ownership prompt', () => {
@@ -79,4 +83,21 @@ test('ownership confirmation uses Shell isDefault and closes before committing i
     button.action();
     assert.deepEqual(events, ['close', 'confirm']);
     assert.equal(result.destroyed, true);
+});
+
+test('close confirmation names the process and its PID before SIGTERM', () => {
+    const dialog = loadDialog(true);
+    const events = [];
+    const result = dialog.close(
+        'python3',
+        4242,
+        () => events.push('confirm'),
+        () => events.push('close'),
+    );
+    assert.equal(result.buttons[1].label, 'Close It');
+    assert.equal(result.buttons[0].key, 65307);
+    result.buttons[0].action();
+    assert.deepEqual(events, ['close']);
+    result.buttons[1].action();
+    assert.deepEqual(events, ['close', 'close', 'confirm']);
 });

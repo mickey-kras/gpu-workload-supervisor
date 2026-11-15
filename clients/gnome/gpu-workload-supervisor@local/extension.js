@@ -14,7 +14,8 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as QuickSettings from 'resource:///org/gnome/shell/ui/quickSettings.js';
 import { Model } from './model.js';
 import { Transport } from './transport.js';
-import { ownershipDialog } from './dialogs.js';
+import { closeProcessDialog, ownershipDialog } from './dialogs.js';
+import { CLOSE_ACTION } from './contract.js';
 const now = () => GLib.get_monotonic_time() / 1000;
 const messages = {
     unavailable: 'Unavailable — outcome may be uncertain',
@@ -26,7 +27,15 @@ const messages = {
     unsupported_version: 'Incompatible operator version',
     invalid_request: 'Operator contract mismatch',
     timeout: 'Timed out — outcome uncertain',
+    gpu_in_use: 'GPU in use — see menu',
+    gpu_check_failed: 'GPU check failed — see menu',
+    not_permitted: 'Not your process — not closed',
 };
+const processName = (p) => p.name || 'unknown program';
+function processRow(p) {
+    const memory = p.usedMiB === null ? 'unknown memory' : `${p.usedMiB} MiB`;
+    return `${processName(p)} · PID ${p.pid} · ${p.user || 'unknown user'} · ${memory}`;
+}
 const Toggle = GObject.registerClass(
     class Toggle extends QuickSettings.QuickMenuToggle {
         constructor(controller) {
@@ -56,6 +65,10 @@ export default class GPUControl extends Extension {
         this._indicator.quickSettingsItems.push(this._toggle);
         this._workloads = new PopupMenu.PopupMenuSection();
         this._toggle.menu.addMenuItem(this._workloads);
+        this._gpu = new PopupMenu.PopupMenuSection();
+        this._gpuKey = null;
+        this._gpuActions = [];
+        this._toggle.menu.addMenuItem(this._gpu);
         this._toggle.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._details = new PopupMenu.PopupSubMenuMenuItem('Details');
         this._toggle.menu.addMenuItem(this._details);
@@ -113,6 +126,27 @@ export default class GPUControl extends Extension {
             },
         );
     }
+    closeProcess(pid) {
+        const m = this._model;
+        const d = m.closeIntent(pid);
+        if (!d || this._dialog) return;
+        const process = m.blocked.processes.find((p) => p.pid === pid);
+        this._toggle.menu.close();
+        this._dialog = closeProcessDialog(
+            processName(process),
+            pid,
+            () => {
+                if (this._alive && m.closable(pid)) this._call(CLOSE_ACTION, d);
+            },
+            () => {
+                this._dialog = null;
+            },
+        );
+    }
+    retry() {
+        const d = this._model.retryIntent(now());
+        if (d) this._call(d.action, d);
+    }
     async _call(action, decision = null) {
         if (!this._alive) return;
         const m = this._model,
@@ -149,7 +183,44 @@ export default class GPUControl extends Extension {
         this._toggle.subtitle = this._subtitle(v);
         this._refresh.setSensitive(!v.pending);
         this._renderWorkloads(m, s);
+        this._renderGPU(m, v.blocked);
         this._renderDetails(v, s);
+    }
+    _gpuHeader(blocked) {
+        const label = this._label(blocked.target);
+        if (blocked.failure)
+            return `GPU check failed: ${blocked.failure} — ${label} not started`;
+        if (blocked.processes.length)
+            return `GPU in use — ${label} not started`;
+        return `GPU is free — retry ${label}`;
+    }
+    _renderGPU(m, blocked) {
+        const key = JSON.stringify(blocked);
+        if (key !== this._gpuKey) {
+            this._gpuKey = key;
+            this._gpu.removeAll();
+            this._gpuActions = [];
+            if (blocked) this._buildGPU(blocked);
+        }
+        for (const { pid, item } of this._gpuActions)
+            item.setSensitive(
+                pid === null ? !!m.retryIntent(now()) : !!m.closeIntent(pid),
+            );
+    }
+    _buildGPU(blocked) {
+        const rows = [this._gpuHeader(blocked), ...blocked.processes.map(processRow)];
+        for (const text of rows)
+            this._gpu.addMenuItem(
+                new PopupMenu.PopupMenuItem(text, { reactive: false }),
+            );
+        for (const p of blocked.processes.filter((q) => q.closable)) {
+            const item = this._gpu.addAction(`Close ${processName(p)}…`, () =>
+                this.closeProcess(p.pid),
+            );
+            this._gpuActions.push({ pid: p.pid, item });
+        }
+        const retry = this._gpu.addAction('Retry', () => this.retry());
+        this._gpuActions.push({ pid: null, item: retry });
     }
     _subtitle(v) {
         if (v.pending) return 'Request pending…';
