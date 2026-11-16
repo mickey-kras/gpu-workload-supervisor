@@ -152,7 +152,7 @@ function validateStatus(s) {
 // additionally carries the freshly rotated lease fence.
 export const SETTINGS_ACTIONS = ['get-settings', 'set-idle-policy'];
 const ACTIVATE_ACTION = 'activate-workload';
-const GPU_ACTIONS = ['user-switch', ACTIVATE_ACTION, CLOSE_ACTION];
+const GPU_ACTIONS = new Set(['user-switch', ACTIVATE_ACTION, CLOSE_ACTION]);
 
 function text(v, max, allowEmpty) {
     if (
@@ -254,7 +254,7 @@ function validateResponseKeys(r, action) {
         keys(r, 'leaseFence' in r ? [...base, 'status', 'leaseFence'] : [...base, 'status']);
     } else if (GPU_CODES.includes(r.code)) {
         // Only an action that starts a workload, or Close, reports the GPU.
-        if (!GPU_ACTIONS.includes(action)) fail();
+        if (!GPU_ACTIONS.has(action)) fail();
         keys(r, [...base, 'gpuCheck']);
     } else if (r.code === 'not_permitted') {
         if (action !== CLOSE_ACTION) fail();

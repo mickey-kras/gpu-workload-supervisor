@@ -1,6 +1,6 @@
 import { compareVersions, CLOSE_ACTION, GPU_CODES } from './contract.js';
 const FRESH_MS = 30000;
-const REFUSALS = [...GPU_CODES, 'not_permitted'];
+const REFUSALS = new Set([...GPU_CODES, 'not_permitted']);
 export class Model {
     generation = 1;
     sequence = 0;
@@ -135,7 +135,7 @@ export class Model {
             this.fail(c, r.code);
             // A refused start changed nothing: refresh the status soon, so
             // Retry is offered again without the error backoff.
-            if (REFUSALS.includes(r.code)) this.delay = 1000;
+            if (REFUSALS.has(r.code)) this.delay = 1000;
             return false;
         }
         const s = r.status;
