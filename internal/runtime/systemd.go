@@ -75,6 +75,7 @@ type SystemdManager struct {
 	nativeExecutableValidator func(string) error
 	// vendorCache keeps the verified vendor drop-ins of the host cap.
 	vendorCache *vendorCache
+	gpuHost     gpuProcessHost
 }
 
 func NewSystemdManager(config SystemdConfig) (*SystemdManager, error) {
@@ -120,7 +121,7 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 		}
 	}
 	return &SystemdManager{config: config, runner: runner, client: client, cgroups: cgroupFS{root: "/sys/fs/cgroup", verify: verifyUnifiedHierarchy},
-		host: defaultLimitHost(), reserve: EffectiveReserve(config.LimitReserve), vendorCache: &vendorCache{}}, nil
+		host: defaultLimitHost(), reserve: EffectiveReserve(config.LimitReserve), vendorCache: &vendorCache{}, gpuHost: defaultGPUProcessHost()}, nil
 }
 
 func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) error {
@@ -344,10 +345,14 @@ func (m *SystemdManager) startUnit(ctx context.Context, unit string, workload co
 	return m.runSystemctl(ctx, "start", unit)
 }
 
-// prepareStart requires the release of the other workloads and the GPU
-// capacity before a start. It starts nothing.
+// prepareStart requires the release of the other workloads, a GPU without
+// unsupervised processes and the GPU capacity before a start. It starts
+// nothing.
 func (m *SystemdManager) prepareStart(ctx context.Context, workload control.Workload) error {
 	if err := m.ReleasedFor(ctx, workload); err != nil {
+		return err
+	}
+	if err := m.CheckGPUFree(ctx, workload); err != nil {
 		return err
 	}
 	return m.capacity(ctx, workload)

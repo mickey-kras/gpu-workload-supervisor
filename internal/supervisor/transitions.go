@@ -70,6 +70,11 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 	if err != nil {
 		return current, err
 	}
+	if startsTarget(current, target, options) {
+		if err := c.refuseGPUInUse(ctx, target); err != nil {
+			return current, err
+		}
+	}
 	if err := c.refuseModelCheck(ctx, target, options.verifyOnly); err != nil {
 		return current, err
 	}
@@ -92,6 +97,12 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 		return current, err
 	}
 	return c.executeTransition(ctx, transition, state, current, target, options)
+}
+
+// startsTarget reports whether the transition starts target: a verify-only
+// recovery and a takeover start nothing, and a running target is kept.
+func startsTarget(current control.State, target control.Workload, options transitionOptions) bool {
+	return !options.verifyOnly && !options.preserve && target != control.WorkloadIdle && current.ActiveWorkload != target
 }
 
 func (c *Controller) transitionSource(ctx context.Context, options transitionOptions) (control.State, error) {

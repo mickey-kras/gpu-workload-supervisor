@@ -54,6 +54,12 @@ type noLimitsOrTraining struct{}
 
 var errFakeTraining = errors.New("the fake runs no trainer")
 
+func (noLimitsOrTraining) CheckGPUFree(context.Context, control.Workload) error { return nil }
+
+func (noLimitsOrTraining) CloseGPUProcess(context.Context, control.Workload, int) error {
+	return errFakeTraining
+}
+
 func (noLimitsOrTraining) VerifyLaunchLimits(context.Context, control.Workload) error {
 	return gpuruntime.ErrLimitUnchecked
 }

@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
@@ -101,4 +102,16 @@ func (r *fakeRuntime) ReleaseTraining(context.Context, control.WorkloadProfile) 
 
 func (r *fakeRuntime) TrainingMemoryPeak(context.Context, control.WorkloadProfile, control.TrainingJob) (uint64, error) {
 	return 0, errFakeTraining
+}
+
+// The GPU process check of the fake records each check apart from the
+// lifecycle calls and returns gpuErr.
+func (r *fakeRuntime) CheckGPUFree(_ context.Context, w control.Workload) error {
+	r.gpuChecks = append(r.gpuChecks, string(w))
+	return r.gpuErr
+}
+
+func (r *fakeRuntime) CloseGPUProcess(_ context.Context, w control.Workload, pid int) error {
+	r.gpuChecks = append(r.gpuChecks, fmt.Sprintf("close %s %d", w, pid))
+	return r.closeErr
 }

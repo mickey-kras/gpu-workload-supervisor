@@ -143,6 +143,8 @@ func newSystemdFixtureWithBackstops(t *testing.T, backstops bool) *systemdFixtur
 	}
 	f.manager, err = gpuruntime.NewSystemdManager(gpuruntime.SystemdConfig{
 		Catalog: &catalog, SystemctlPath: executable, HealthTimeout: time.Second, OwnedUnitDir: ownedScan,
+		// /usr/bin/true prints no compute process rows: the GPU check passes.
+		NvidiaSMIPath: "/usr/bin/true",
 	})
 	if err != nil {
 		t.Fatal(err)

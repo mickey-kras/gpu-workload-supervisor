@@ -5,18 +5,37 @@ import St from 'gi://St';
 // aislop-ignore-next-line ai-slop/hallucinated-import -- GNOME 50 GJS runtime supplies this native module, not npm.
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 export function ownershipDialog(action, label, confirm, onClose) {
-    const dialog = new ModalDialog.ModalDialog();
     const taking = action === 'take-control';
-    dialog.contentLayout.add_child(
-        new St.Label({
-            text: taking ? 'Take GPU control?' : 'Return GPU control?',
-            style_class: 'dialog-title',
-        }),
-    );
-    const description = new St.Label({
-        text: taking
+    return confirmDialog(
+        taking ? 'Take GPU control?' : 'Return GPU control?',
+        taking
             ? `Keep ${label} running and take manual control of the GPU.`
             : 'Stop current GPU work and return control to the supervisor in Idle.',
+        taking ? 'Take Control' : 'Stop and Return',
+        confirm,
+        onClose,
+    );
+}
+
+// Close asks one program of the desktop user to exit with SIGTERM. It never
+// forces it; the GPU is checked again afterwards.
+export function closeProcessDialog(name, pid, confirm, onClose) {
+    return confirmDialog(
+        `Close ${name}?`,
+        `Ask ${name} (PID ${pid}) to exit. Unsaved work in it can be lost. The GPU is checked again afterwards.`,
+        'Close It',
+        confirm,
+        onClose,
+    );
+}
+
+function confirmDialog(title, text, confirmLabel, confirm, onClose) {
+    const dialog = new ModalDialog.ModalDialog();
+    dialog.contentLayout.add_child(
+        new St.Label({ text: title, style_class: 'dialog-title' }),
+    );
+    const description = new St.Label({
+        text,
         style_class: 'dialog-description',
     });
     description.clutter_text.line_wrap = true;
@@ -28,7 +47,7 @@ export function ownershipDialog(action, label, confirm, onClose) {
             action: () => dialog.close(),
         },
         {
-            label: taking ? 'Take Control' : 'Stop and Return',
+            label: confirmLabel,
             isDefault: true,
             action: () => {
                 dialog.close();

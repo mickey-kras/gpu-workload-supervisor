@@ -218,3 +218,107 @@ test('pending requests cannot replay and late completion after disable cannot sc
     await e._call('status');
     assert.equal(calls, 1);
 });
+
+test('a refused start shows GPU in use with Close for own processes and Retry', async () => {
+    const { extension: e, advance } = await shell();
+    const requests = [];
+    const replies = [];
+    e._transport.call = async request => {
+        requests.push(request);
+        const active = request.action === 'user-switch' ? request.target : 'render';
+        return replies.shift() ?? { code: 'ok', status: status('user', active) };
+    };
+    await e._call('status');
+    assert.deepEqual(e._gpu.items, []);
+    replies.push({
+        code: 'gpu_in_use',
+        gpuCheck: {
+            processes: [
+                { pid: 4242, name: 'python3', user: 'alice', usedMiB: 2048, closable: true },
+                { pid: 77, name: '', user: '', usedMiB: null, closable: false },
+            ],
+        },
+    });
+    e._workloadItems[0].item.action();
+    await settle();
+    assert.equal(e._toggle.subtitle, 'GPU in use — see menu');
+    assert.deepEqual(e._gpu.items.map(i => i.label.text), [
+        'GPU in use — Idle not started',
+        'python3 · PID 4242 · alice · 2048 MiB',
+        'unknown program · PID 77 · unknown user · unknown memory',
+        'Close python3…',
+        'Retry',
+    ]);
+    const [close, retry] = e._gpu.items.slice(3);
+    assert.equal(close.sensitive, true);
+    assert.equal(retry.sensitive, false, 'Retry waits for a fresh status');
+    const shown = e._gpu.items;
+    e._render();
+    assert.equal(e._gpu.items, shown, 'an unchanged refusal is not rebuilt');
+
+    // Close asks first; Cancel sends nothing.
+    close.action();
+    const cancelled = e._dialog;
+    assert.equal(cancelled.buttons[1].label, 'Close It');
+    e.closeProcess(4242);
+    assert.equal(e._dialog, cancelled, 'one prompt at a time');
+    cancelled.buttons[0].action();
+    assert.equal(e._dialog, null);
+    assert.equal(requests.length, 2);
+    e.closeProcess(77);
+    assert.equal(e._dialog, null, 'no Close for a process of another user');
+
+    // Confirm: SIGTERM is requested for the listed PID, then the GPU is free.
+    close.action();
+    e._dialog.buttons[1].action();
+    await settle();
+    assert.equal(JSON.stringify(requests.at(-1)), JSON.stringify({
+        protocolVersion: 1,
+        requestId: requests.at(-1).requestId,
+        action: 'close-gpu-process',
+        target: 'idle',
+        pid: 4242,
+    }));
+    assert.deepEqual(e._gpu.items.map(i => i.label.text), ['GPU is free — retry Idle', 'Retry']);
+    assert.equal(e._gpu.items[1].sensitive, true);
+    e._gpu.items[1].action();
+    await settle();
+    assert.equal(requests.at(-1).action, 'user-switch');
+    assert.equal(requests.at(-1).target, 'idle');
+    assert.deepEqual(e._gpu.items, []);
+    e.retry();
+    assert.equal(requests.at(-1).action, 'user-switch', 'no Retry without a refusal');
+
+    // A failed check shows the failure, never a free GPU.
+    replies.push({ code: 'gpu_check_failed', gpuCheck: { failure: 'the nvidia-smi process query timed out' } });
+    advance(1);
+    e._workloadItems[1].item.action();
+    await settle();
+    assert.equal(e._toggle.subtitle, 'GPU check failed — see menu');
+    assert.deepEqual(e._gpu.items.map(i => i.label.text), [
+        'GPU check failed: the nvidia-smi process query timed out — Rendering not started',
+        'Retry',
+    ]);
+    e.disable();
+});
+
+test('a close prompt confirmed after the refusal is gone sends nothing', async () => {
+    const { extension: e } = await shell();
+    const requests = [];
+    e._transport.call = async request => {
+        requests.push(request);
+        if (request.action === 'user-switch')
+            return { code: 'gpu_in_use', gpuCheck: { processes: [{ pid: 9, name: 'x', user: 'alice', usedMiB: 1, closable: true }] } };
+        return { code: 'ok', status: status('user') };
+    };
+    await e._call('status');
+    e._workloadItems[0].item.action();
+    await settle();
+    e.closeProcess(9);
+    const prompt = e._dialog;
+    e._model.blocked = null;
+    prompt.buttons[1].action();
+    await settle();
+    assert.equal(requests.at(-1).action, 'user-switch');
+    e.disable();
+});

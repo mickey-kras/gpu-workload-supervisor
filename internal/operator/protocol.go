@@ -19,7 +19,11 @@ const (
 	actionGetSettings      = "get-settings"
 	actionSetIdlePolicy    = "set-idle-policy"
 	actionActivateWorkload = "activate-workload"
+	actionCloseGPUProcess  = "close-gpu-process"
 )
+
+// maxPID is the largest PID Linux can assign (PID_MAX_LIMIT).
+const maxPID int = 1 << 22
 
 const MaxRequestBytes = 16 * 1024
 const MaxResponseBytes = 64 * 1024
@@ -41,6 +45,15 @@ const (
 	// readable, but the workload cannot start now (not idle, or unfinished
 	// admitted work). It never latches anything and may be retried.
 	Deferred Code = "deferred"
+	// GPUInUse refuses a start before any change: another program uses the
+	// target GPU. The response lists the processes in gpuCheck.
+	GPUInUse Code = "gpu_in_use"
+	// GPUCheckFailed refuses a start before any change: the GPU process check
+	// failed or timed out. gpuCheck.failure says why. It never means free.
+	GPUCheckFailed Code = "gpu_check_failed"
+	// NotPermitted refuses to close a process that does not run as the
+	// desktop user.
+	NotPermitted Code = "not_permitted"
 )
 
 type Expected struct {
@@ -56,6 +69,8 @@ type Request struct {
 	Expected        *Expected        `json:"expected,omitempty"`
 	Target          control.Workload `json:"target,omitempty"`
 	Settings        *SettingsRequest `json:"settings,omitempty"`
+	// PID is the process for close-gpu-process, and only for it.
+	PID int `json:"pid,omitempty"`
 }
 type Workload struct {
 	ID    control.Workload `json:"id"`
@@ -104,6 +119,25 @@ type Response struct {
 	// LeaseFence is present only on a successful activate-workload response:
 	// the freshly rotated fence authorizes exactly one execution generation.
 	LeaseFence *FenceResponse `json:"leaseFence,omitempty"`
+	// GPUCheck is present only with gpu_in_use and gpu_check_failed.
+	GPUCheck *GPUCheck `json:"gpuCheck,omitempty"`
+}
+
+// GPUProcess is one program that blocks a start. User is empty when the
+// process cannot be read. UsedMiB is null when the driver does not report it.
+type GPUProcess struct {
+	PID      int     `json:"pid"`
+	Name     string  `json:"name"`
+	User     string  `json:"user"`
+	UsedMiB  *uint64 `json:"usedMiB"`
+	Closable bool    `json:"closable"`
+}
+
+// GPUCheck explains a gpu_in_use or gpu_check_failed code: the processes,
+// or the failure of the check.
+type GPUCheck struct {
+	Processes []GPUProcess `json:"processes,omitempty"`
+	Failure   string       `json:"failure,omitempty"`
 }
 
 // FenceResponse hands the committed fence to the activating caller.
@@ -138,7 +172,7 @@ func Decode(body []byte) (Request, Code) {
 	if d.Decode(new(any)) != io.EOF {
 		return Request{}, InvalidRequest
 	}
-	m, ok := fields(body, "protocolVersion", "requestId", "action", "expected", "target", "settings")
+	m, ok := fields(body, "protocolVersion", "requestId", "action", "expected", "target", "settings", "pid")
 	if !ok || !token(r.RequestID, 64) {
 		return Request{}, InvalidRequest
 	}
@@ -181,13 +215,20 @@ func validateAction(r Request) Code {
 		return validateExpected(r.Expected)
 	case actionTakeControl, actionUserSwitch, actionReturnControl:
 		return validateTransitionRequest(r)
+	case actionCloseGPUProcess:
+		// Close needs no precondition: it changes no supervisor state, and
+		// the runtime lists the process again before the signal.
+		if r.Settings != nil || r.Expected != nil || !workloadID(string(r.Target)) || r.Target == control.WorkloadIdle || r.PID <= 0 || r.PID > maxPID {
+			return InvalidRequest
+		}
+		return OK
 	default:
 		return InvalidRequest
 	}
 }
 
 func validateTransitionRequest(r Request) Code {
-	if r.Settings != nil || (r.Action == actionUserSwitch && !workloadID(string(r.Target))) || (r.Action != actionUserSwitch && r.Target != "") {
+	if r.PID != 0 || r.Settings != nil || (r.Action == actionUserSwitch && !workloadID(string(r.Target))) || (r.Action != actionUserSwitch && r.Target != "") {
 		return InvalidRequest
 	}
 	return validateExpected(r.Expected)
@@ -236,6 +277,9 @@ func requestFields(m map[string]json.RawMessage, action string) bool {
 			return false
 		}
 	}
+	if ok, decided := closeFields(m, action); decided {
+		return ok
+	}
 	if action == actionStatus || action == actionGetSettings {
 		_, e := m["expected"]
 		_, t := m["target"]
@@ -251,6 +295,25 @@ func requestFields(m map[string]json.RawMessage, action string) bool {
 		}
 	}
 	return mutationFields(m, action)
+}
+
+// closeFields decides the fields of close-gpu-process: a target and a PID,
+// and no precondition or settings. A PID on any other action is refused.
+// decided is false when the other rules apply.
+func closeFields(m map[string]json.RawMessage, action string) (ok, decided bool) {
+	_, pid := m["pid"]
+	if action != actionCloseGPUProcess {
+		return false, pid
+	}
+	_, e := m["expected"]
+	_, s := m["settings"]
+	return pid && !e && !s && present(m, "target"), true
+}
+
+// present reports a field that is set and not null.
+func present(m map[string]json.RawMessage, key string) bool {
+	raw, ok := m[key]
+	return ok && !bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
 }
 
 func mutationFields(m map[string]json.RawMessage, action string) bool {

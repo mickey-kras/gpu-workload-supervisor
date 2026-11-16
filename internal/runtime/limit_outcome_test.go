@@ -12,7 +12,7 @@ import (
 )
 
 const textOutcomeCommand = "/usr/bin/true --user show --property=ActiveState,Result,ExecMainCode,ExecMainStatus -- text.service"
-const computeAppsCommand = "/usr/bin/true --query-compute-apps=pid --format=csv,noheader,nounits -i 0"
+const computeAppsCommand = "/usr/bin/true --query-compute-apps=pid,process_name,used_memory --format=csv,noheader,nounits -i 0"
 
 func writeCounters(t *testing.T, root string, files map[string]string) {
 	t.Helper()
@@ -111,7 +111,7 @@ func TestLimitStopReleasedChecksGPUAndCapacity(t *testing.T) {
 	if err := m.LimitStopReleased(ctx, control.WorkloadText); err == nil || errors.Is(err, ErrLimitStopUnreleased) {
 		t.Fatalf("populated cgroup = %v", err)
 	}
-	for name, m := range map[string]*SystemdManager{"process": first(setup("123\n", nil)), "probe": first(setup("", errors.New("no driver")))} {
+	for name, m := range map[string]*SystemdManager{"process": first(setup("123, /usr/bin/python3, 512\n", nil)), "probe": first(setup("", errors.New("no driver")))} {
 		if err := m.LimitStopReleased(ctx, control.WorkloadText); !errors.Is(err, ErrLimitStopUnreleased) {
 			t.Errorf("%s: released = %v", name, err)
 		}
@@ -132,7 +132,7 @@ func first(m *SystemdManager, _ string) *SystemdManager { return m }
 func TestLimitStopGPUCheckUsesProfileGPU(t *testing.T) {
 	uuid := "GPU-11111111-2222-3333-4444-555555555555"
 	r := &fakeRunner{outputs: map[string][]byte{
-		"/usr/bin/true --query-compute-apps=pid --format=csv,noheader,nounits -i " + uuid: []byte("42\n"),
+		"/usr/bin/true --query-compute-apps=pid,process_name,used_memory --format=csv,noheader,nounits -i " + uuid: []byte("42, /usr/bin/python3, 512\n"),
 		computeAppsCommand: []byte(""),
 	}}
 	m := strictManager(t, r)

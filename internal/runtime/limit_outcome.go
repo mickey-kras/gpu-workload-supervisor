@@ -166,15 +166,11 @@ func (m *SystemdManager) gpuReleased(ctx context.Context, p control.WorkloadProf
 	if m.config.NvidiaSMIPath == "" {
 		return fmt.Errorf("%w: no GPU probe is configured, so GPU release cannot be checked", ErrLimitStopUnreleased)
 	}
-	device := profileGPUUUID(p)
-	if device == "" {
-		device = strconv.Itoa(m.config.GPUIndex)
-	}
-	out, err := m.runner.Run(ctx, m.config.NvidiaSMIPath, "--query-compute-apps=pid", "--format=csv,noheader,nounits", "-i", device)
-	if err != nil {
+	err := m.gpuIdle(ctx, p)
+	if errors.Is(err, ErrGPUCheckFailed) {
 		return SafeError("GPU release observation failed", ErrLimitStopUnreleased, err)
 	}
-	if strings.TrimSpace(string(out)) != "" {
+	if err != nil {
 		return fmt.Errorf("%w: GPU compute processes remain after the stop", ErrLimitStopUnreleased)
 	}
 	return nil

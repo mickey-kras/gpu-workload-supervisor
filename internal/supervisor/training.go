@@ -50,6 +50,10 @@ func (c *Controller) StartTraining(ctx context.Context, id string, target contro
 	if err := c.runAction(ctx, c.runtime.Preflight); err != nil {
 		return control.TrainingJob{}, err
 	}
+	// Other programs on the GPU block the trainer before any claim or stop.
+	if err := c.refuseGPUInUse(ctx, target); err != nil {
+		return control.TrainingJob{}, err
+	}
 	claim, err := c.store.ClaimTraining(ctx, id, target, c.config.Catalog.Revision)
 	if err != nil {
 		return claim, err
