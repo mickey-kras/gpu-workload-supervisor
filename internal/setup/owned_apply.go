@@ -367,7 +367,7 @@ func (m activationReleaseManager) PreflightWithOwnedRemovals(ctx context.Context
 	}); ok {
 		return candidate.PreflightWithOwnedRemovals(ctx, removals)
 	}
-	return m.Runtime.Preflight(ctx)
+	return m.Preflight(ctx)
 }
 
 func (m activationReleaseManager) ReleasedFor(ctx context.Context, target control.Workload) error {

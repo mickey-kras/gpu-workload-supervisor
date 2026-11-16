@@ -144,5 +144,8 @@ func (m *SystemdManager) Stop(ctx context.Context, id control.Workload) error {
 }
 
 func validObservedUnit(st systemdUnitState, trainer, recovering bool) bool {
-	return !(!(st.active == "active" && st.sub == "running") && !(st.active == "inactive" && st.sub == "dead") && !(trainer && st.active == "active" && st.sub == "exited") && !((recovering || trainer) && st.active == "failed" && st.sub == "failed"))
+	return st.active == "active" && st.sub == "running" ||
+		st.active == "inactive" && st.sub == "dead" ||
+		trainer && st.active == "active" && st.sub == "exited" ||
+		(recovering || trainer) && st.active == "failed" && st.sub == "failed"
 }

@@ -65,3 +65,18 @@ test('candidate helpers cannot weaken source identity, digest or scanner validat
 test('coverage and scanner helper behavior rejects missing, mismatched and unreadable evidence', () => {
   execFileSync('python3', ['-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_ci_reuse.py'], { stdio: 'pipe' });
 });
+
+
+test('Go analysis cannot be skipped, made advisory, or detached from its report artifact', () => {
+  mutate(workflows => { step(workflows, CI, 'go', 'Go static analysis').if = false; });
+  mutate(workflows => { step(workflows, CI, 'go', 'Go static analysis')['continue-on-error'] = true; });
+  mutate(workflows => { step(workflows, CI, 'go', 'Go static analysis').run += ' || true'; });
+  mutate(workflows => {
+    const producer = step(workflows, CI, 'go', 'Stage go quality coverage');
+    producer.run = producer.run.replace('cp golangci-lint-report.xml go-quality-coverage/', 'true');
+  });
+  mutate(workflows => {
+    const consumer = step(workflows, MAIN, 'sonar', 'Validate and restore quality coverage');
+    consumer.run = consumer.run.replace('(cd go-quality-coverage && sha256sum --check --strict analysis.sha256)', 'true');
+  });
+});

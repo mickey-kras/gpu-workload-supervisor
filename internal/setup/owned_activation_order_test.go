@@ -168,9 +168,10 @@ func TestApplyRejectsUnsafeAcceptedRuntimeBeforeOwnedMutation(t *testing.T) {
 			request.ExpectedRevision = currentRevision(t, request)
 			request.Catalog.Profiles = []control.WorkloadProfile{uuidOwnedFixture(t, home, "a", 9101)}
 			busy := control.Workload("")
-			if failure == "busy retained workload" {
+			switch failure {
+			case "busy retained workload":
 				busy = a.ID
-			} else if failure == "busy removed workload" {
+			case "busy removed workload":
 				busy = z.ID
 			}
 			var bindingErr error

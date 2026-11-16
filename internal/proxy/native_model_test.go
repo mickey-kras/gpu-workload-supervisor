@@ -163,7 +163,7 @@ func (s *nativeStore) AdmitWorkTokenAtCatalog(ctx context.Context, requestID, jo
 	if revision != s.catalog.Revision {
 		return "", store.ErrVersionConflict
 	}
-	return s.fakeStore.AdmitWorkToken(ctx, requestID, jobID, workload, fence)
+	return s.AdmitWorkToken(ctx, requestID, jobID, workload, fence)
 }
 
 func TestNativeAdmissionRejectsChangedCatalog(t *testing.T) {

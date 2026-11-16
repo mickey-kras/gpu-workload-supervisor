@@ -71,7 +71,7 @@ func (s *templateScan) reprSource(tokens []templateToken, i int, conditions []bo
 	case next.is(tokOperator, "(") && t.text == "range":
 		return !membership(tokens, i-1) && !consumed(tokens, i)
 	case s.namespaces[t.text]:
-		return !next.is(tokOperator, ".") && !next.is(tokName, "is") && !(tokens[0].is(tokName, "set") && i == 1)
+		return !next.is(tokOperator, ".") && !next.is(tokName, "is") && (!tokens[0].is(tokName, "set") || i != 1)
 	case constants[t.text]:
 		return !testName(tokens, i) && !quietConstant(tokens, i, conditions)
 	}

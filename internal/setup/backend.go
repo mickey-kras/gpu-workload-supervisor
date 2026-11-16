@@ -280,7 +280,7 @@ func (work *activationWork) inspect(ctx context.Context) error {
 		return err
 	}
 	marker := work.marker
-	if work.old.StatePath != "" && marker.Release != work.old.ActivatedRelease && !(marker.Maintenance && work.old.ActivatedRelease == deployment.Release) {
+	if work.old.StatePath != "" && marker.Release != work.old.ActivatedRelease && (!marker.Maintenance || work.old.ActivatedRelease != deployment.Release) {
 		return errors.New("activated profile and marker disagree")
 	}
 	if marker.Release != "" && marker.Release != deployment.Release && !newer(deployment.Release, marker.Release) {

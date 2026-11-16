@@ -21,8 +21,8 @@ func TestDerivedOwnedBackstopsResumeOriginalRequest(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			backend, home, request := fixture(t)
 			backend.runCommand = fakeOwnedCommandFor(home)
-			a, rawA := ownedFixtureProfile(t, home, "a", 9100)
-			z, rawZ := ownedFixtureProfile(t, home, "z", 9200)
+			a, _ := ownedFixtureProfile(t, home, "a", 9100)
+			z, _ := ownedFixtureProfile(t, home, "z", 9200)
 			z.NativeModel.Instance = "z"
 			request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a, z}}
 			if err := Validate(request); err != nil {
@@ -32,11 +32,11 @@ func TestDerivedOwnedBackstopsResumeOriginalRequest(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rawA, err = gpuruntime.RenderOwnedUnit(candidate.Catalog.Profiles[0])
+			rawA, err := gpuruntime.RenderOwnedUnit(candidate.Catalog.Profiles[0])
 			if err != nil {
 				t.Fatal(err)
 			}
-			rawZ, err = gpuruntime.RenderOwnedUnit(candidate.Catalog.Profiles[1])
+			rawZ, err := gpuruntime.RenderOwnedUnit(candidate.Catalog.Profiles[1])
 			if err != nil {
 				t.Fatal(err)
 			}

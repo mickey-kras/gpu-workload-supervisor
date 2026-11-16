@@ -86,14 +86,14 @@ func startProxyService(t *testing.T, statePath, address, upstream string) *proxy
 	return p
 }
 
-func (p *proxyServiceProcess) wait(t *testing.T, timeout time.Duration) (error, string) {
+func (p *proxyServiceProcess) wait(t *testing.T, timeout time.Duration) (string, error) {
 	t.Helper()
 	select {
 	case <-p.done:
-		return p.err, p.output.String()
+		return p.output.String(), p.err
 	case <-time.After(timeout):
 		t.Fatal("proxy process did not exit")
-		return nil, ""
+		return "", nil
 	}
 }
 
@@ -140,7 +140,7 @@ func TestProxyServiceStartupWaitsAndStopsForMaintenance(t *testing.T) {
 			if reason == "timeout" {
 				wait = proxyStartupLockTimeout + 5*time.Second
 			}
-			if err, output := p.wait(t, wait); err == nil || !strings.Contains(output, want) || !strings.Contains(output, "exclusive maintenance") {
+			if output, err := p.wait(t, wait); err == nil || !strings.Contains(output, want) || !strings.Contains(output, "exclusive maintenance") {
 				t.Fatalf("production startup exit = %v, output = %q", err, output)
 			}
 			if _, err := os.Stat(statePath); !os.IsNotExist(err) {
@@ -244,7 +244,7 @@ func TestProxyServiceRetainsLockThroughSignalAndHandlerDrain(t *testing.T) {
 	if body, err := io.ReadAll(response.Body); err != nil || string(body) != "started\nfinished\n" {
 		t.Fatalf("admitted response lost during drain: %q, %v", body, err)
 	}
-	if err, output := p.wait(t, 5*time.Second); err != nil {
+	if output, err := p.wait(t, 5*time.Second); err != nil {
 		t.Fatalf("drained proxy exit = %v, output = %q", err, output)
 	}
 	maintenance, err := lock.TryAcquire(statePath + ".proxy.lock")

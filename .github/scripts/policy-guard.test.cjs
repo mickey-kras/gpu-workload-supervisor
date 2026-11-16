@@ -54,7 +54,7 @@ function files({ serial = true } = {}) {
     '.github/scripts/check-go-directives.go', '.github/scripts/check-go-directives_test.go',
     '.github/aislop/package.json', '.github/aislop/package-lock.json',
     '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
-    'sonar-project.properties', '.goreleaser.yaml', '.testcoverage.yml',
+    'sonar-project.properties', '.goreleaser.yaml', '.testcoverage.yml', '.golangci.yml',
     '.github/actions/setup-goreleaser/action.yml', '.github/scripts/install-goreleaser.sh',
   ]) result[path] = readFileSync(path, 'utf8');
   // Legacy mutation tests still exercise the original command controls in a
@@ -1660,4 +1660,18 @@ test('training Dependabot scope is required, exact and unique', () => {
     invalid.updates.push(entry);
     assert.ok(inspectActivated({ ...baseline, [path]: YAML.stringify(invalid) }).some(error => error.includes('coverage')));
   }
+});
+
+
+test('Go analyzer configuration and Sonar report import cannot be removed or weakened', () => {
+  for (const content of [undefined, '', 'version: "2"\nlinters:\n  default: none\n']) {
+    const candidate = files();
+    if (content === undefined) delete candidate['.golangci.yml'];
+    else candidate['.golangci.yml'] = content;
+    assert.ok(inspect(candidate).some(error => error.includes('Go static analysis') || error.includes('.golangci.yml')));
+  }
+  const candidate = files();
+  candidate['sonar-project.properties'] = candidate['sonar-project.properties']
+    .replace('sonar.go.golangci-lint.reportPaths=golangci-lint-report.xml', '');
+  assert.ok(inspect(candidate).some(error => error.includes('Go static analysis path')));
 });

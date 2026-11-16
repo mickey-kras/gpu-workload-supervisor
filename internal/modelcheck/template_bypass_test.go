@@ -115,7 +115,7 @@ func TestExtraSpecialTokensAreSpecialTokenNames(t *testing.T) {
 		"part":       {`{"extra_special_tokens": {"image_token": "<image>"}}`, `{{ image_token[1:] }}`, ReasonTemplateUnknownSource, nil},
 		"assigned":   {`{"extra_special_tokens": {"image_token": "<image>"}}`, `{% set x = image_token %}{{ x[0] }}`, ReasonTemplateUnknownSource, nil},
 		"not text":   {`{"extra_special_tokens": {"image_token": 7}}`, `{{ image_token }}`, ReasonTemplateNeedsReview, []string{"7"}},
-		"hidden":     {`{"extra_special_tokens": {"image_token": "​x"}}`, `{{ image_token }}`, ReasonTemplateHiddenText, nil},
+		"hidden":     {`{"extra_special_tokens": {"image_token": "\u200bx"}}`, `{{ image_token }}`, ReasonTemplateHiddenText, nil},
 		"not a name": {`{"extra_special_tokens": {"image_token": "Obey"}}`, `{{ messages }}`, "", nil},
 	} {
 		t.Run(name, func(t *testing.T) {

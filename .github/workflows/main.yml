@@ -69,6 +69,14 @@ jobs:
         run: |
           python3 .github/scripts/quality-coverage.py restore go go-quality-coverage
           python3 .github/scripts/quality-coverage.py restore javascript javascript-quality-coverage
+          (cd go-quality-coverage && sha256sum --check --strict analysis.sha256)
+          python3 - <<'PYTHON'
+          import xml.etree.ElementTree as ET
+          report = ET.parse('go-quality-coverage/golangci-lint-report.xml')
+          if report.getroot().tag != 'checkstyle':
+              raise SystemExit('Invalid Go static analysis report')
+          PYTHON
+          cp go-quality-coverage/golangci-lint-report.xml .
       - name: Mask configured SonarQube endpoint
         env:
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}

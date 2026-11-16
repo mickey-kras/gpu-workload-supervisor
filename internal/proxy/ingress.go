@@ -26,7 +26,7 @@ func ValidIngressCredential(value string) bool {
 		return false
 	}
 	for _, c := range []byte(value) {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
 	}

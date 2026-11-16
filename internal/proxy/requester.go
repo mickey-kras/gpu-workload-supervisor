@@ -45,7 +45,7 @@ func policyID(value string) bool {
 		return false
 	}
 	for _, c := range value {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.') {
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '-' && c != '_' && c != '.' {
 			return false
 		}
 	}
@@ -281,7 +281,7 @@ func validateDemandDependencies(stateStore StateStore, config Config) error {
 }
 
 func (h *Handler) requesterExecution(r *http.Request) bool {
-	return h.requesterPolicy != nil && !(r.Method == http.MethodPost && r.URL.Path == h.completionPath)
+	return h.requesterPolicy != nil && (r.Method != http.MethodPost || r.URL.Path != h.completionPath)
 }
 
 func requesterSecrets(policy *RequesterPolicy) []string {

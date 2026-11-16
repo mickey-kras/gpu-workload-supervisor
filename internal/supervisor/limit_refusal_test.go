@@ -20,7 +20,7 @@ func TestLimitProbesUseActionTimeout(t *testing.T) {
 	catalog.Profiles[2].BootPolicy = "retain"
 	c, r, _ := limitedController(t, catalog)
 	c.config.ActionTimeout = 50 * time.Millisecond
-	r.fakeRuntime.active = control.WorkloadIdle
+	r.active = control.WorkloadIdle
 	r.visionActive = true
 	r.protectionErr = gpuruntime.ErrLimitDrift
 	start := time.Now()
@@ -50,11 +50,11 @@ func TestLimitProbesUseActionTimeout(t *testing.T) {
 	}
 }
 
-// limitCause is a definite launch check failure. Its text names its fix,
+// errLimitCause is a definite launch check failure. Its text names its fix,
 // so the supervisor adds only the recovery and the switch to Idle.
-var limitCause = fmt.Errorf("%w: use 4096 MiB or less for memoryMaxMiB, or remove the limits through setup", gpuruntime.ErrLimitReserve)
+var errLimitCause = fmt.Errorf("%w: use 4096 MiB or less for memoryMaxMiB, or remove the limits through setup", gpuruntime.ErrLimitReserve)
 
-// causeRemedy ends the text of limitCause.
+// causeRemedy ends the text of errLimitCause.
 const causeRemedy = ", or remove the limits through setup"
 
 // toIdle starts the switch to Idle before setup removes the limits, when
@@ -73,11 +73,11 @@ const afterRecovery = thenIdle + "run `gpu-mode -target idle switch`"
 func TestLimitCauseRefusalFromIdle(t *testing.T) {
 	ctx := context.Background()
 	c, r, _ := limitedController(t, limitedCatalog())
-	r.fakeRuntime.active = control.WorkloadIdle
+	r.active = control.WorkloadIdle
 	if state, err := c.Reconcile(ctx); err != nil || state.ActiveWorkload != control.WorkloadIdle {
 		t.Fatalf("reconcile to Idle = %+v, %v", state, err)
 	}
-	r.launchErr = limitCause
+	r.launchErr = errLimitCause
 	_, err := c.Switch(ctx, "vision", "test")
 	if !errors.Is(err, ErrLimitedTarget) || !strings.HasSuffix(err.Error(), causeRemedy) || strings.Contains(err.Error(), "next steps") {
 		t.Fatalf("switch with a limit cause from Idle = %v", err)
@@ -90,7 +90,7 @@ func TestLimitCauseRefusalFromIdle(t *testing.T) {
 func TestLimitCauseRefusalWithUnreadableState(t *testing.T) {
 	ctx := context.Background()
 	c, r, _ := limitedController(t, limitedCatalog())
-	r.launchErr = limitCause
+	r.launchErr = errLimitCause
 	c.store = failingStore{storeGateway: c.store, stateErr: errors.New("database locked")}
 	err := c.refuseLimitedTarget(ctx, "vision")
 	if !errors.Is(err, ErrLimitedTarget) || !strings.HasSuffix(err.Error(), causeRemedy+"; next steps: first, run `gpu-mode recover`; "+afterRecovery) {
@@ -101,8 +101,8 @@ func TestLimitCauseRefusalWithUnreadableState(t *testing.T) {
 // With several rejected units, the next steps go on their own line, so they
 // apply to each unit and not only to the last one.
 func TestLimitRemedyOfSeveralUnits(t *testing.T) {
-	one := fmt.Errorf("%w: vision: %w", ErrLimitedUnitRejected, limitCause)
-	two := fmt.Errorf("%w: audio: %w", ErrLimitedUnitRejected, limitCause)
+	one := fmt.Errorf("%w: vision: %w", ErrLimitedUnitRejected, errLimitCause)
+	two := fmt.Errorf("%w: audio: %w", ErrLimitedUnitRejected, errLimitCause)
 	err := limitRemedy(errors.Join(errors.Join(nil, one), two), remedyState{latched: true, kept: control.WorkloadIdle})
 	if want := two.Error() + "\nnext steps: first, run `gpu-mode recover`"; !strings.HasSuffix(err.Error(), want) {
 		t.Fatalf("remedy of two units = %q", err)
@@ -150,7 +150,7 @@ func TestLimitCauseRefusalStepsFollowTheState(t *testing.T) {
 			causeRemedy + "; next steps: first, run `systemctl --user stop gws-owned-vision.service`, then run `gpu-mode -target idle recover-user`"},
 	} {
 		c2, r, _ := limitedController(t, limitedCatalog())
-		r.launchErr = limitCause
+		r.launchErr = errLimitCause
 		c2.store = seenState{storeGateway: c2.store, state: c.state}
 		if err := c2.refuseLimitedTarget(context.Background(), "vision"); !errors.Is(err, ErrLimitedTarget) || !strings.HasSuffix(err.Error(), c.want) {
 			t.Errorf("%s: limit cause refusal = %v", name, err)
@@ -169,7 +169,7 @@ func TestUserSwitchLimitCauseRefusal(t *testing.T) {
 	if _, err := c.TransferToUser(ctx, control.WorkloadText, "test"); err != nil {
 		t.Fatal(err)
 	}
-	r.launchErr = limitCause
+	r.launchErr = errLimitCause
 	_, err := c.SwitchUser(ctx, "vision", "test")
 	if !errors.Is(err, ErrLimitedTarget) || !strings.HasSuffix(err.Error(), causeRemedy+"; next steps: "+toIdle+"run `gpu-mode -target idle user-switch`") {
 		t.Fatalf("user switch with a limit cause = %v", err)
@@ -183,9 +183,9 @@ func TestFailedRecoverAfterRejectionNamesRecover(t *testing.T) {
 	catalog := limitedCatalog()
 	catalog.Profiles[2].BootPolicy = "retain"
 	c, r, s := limitedController(t, catalog)
-	r.fakeRuntime.active = control.WorkloadIdle
+	r.active = control.WorkloadIdle
 	r.visionActive = true
-	r.protectionErr = fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, limitCause)
+	r.protectionErr = fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, errLimitCause)
 	stopErr := errors.New("stop refused")
 	r.visionStopErr = stopErr
 	_, err := c.Recover(ctx)
@@ -218,9 +218,9 @@ func TestRejectionNamesOneClass(t *testing.T) {
 	catalog := limitedCatalog()
 	catalog.Profiles[2].BootPolicy = "retain"
 	c, r, _ := limitedController(t, catalog)
-	r.fakeRuntime.active = control.WorkloadIdle
+	r.active = control.WorkloadIdle
 	r.visionActive = true
-	r.protectionErr = fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, limitCause)
+	r.protectionErr = fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, errLimitCause)
 	_, err := c.Reconcile(ctx)
 	if !errors.Is(err, ErrLimitedUnitRejected) || !errors.Is(err, gpuruntime.ErrLimitCheckFailed) || strings.Contains(err.Error(), gpuruntime.ErrLimitCheckFailed.Error()) ||
 		!strings.Contains(err.Error(), "failed a check: vision (gws-owned-vision.service): a resource limit is unset or leaves too little room for the supervisor: use 4096 MiB") {
