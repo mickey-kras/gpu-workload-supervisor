@@ -29,7 +29,7 @@ func gpuService(t *testing.T) (Service, *backendFixture) {
 func refused(err error) error { return fmt.Errorf("%w: %w", supervisor.ErrGPURefused, err) }
 
 var userProcess = gpuruntime.GPUProcess{PID: 4242, Name: "python3", UsedMiB: 2048, MemoryKnown: true, UID: 1000, User: "alice", Closable: true}
-var otherProcess = gpuruntime.GPUProcess{PID: 77, Name: "render‮\x07farm", UID: 1001, User: "bob"}
+var otherProcess = gpuruntime.GPUProcess{PID: 77, Name: "render" + string(rune(0x202E)) + "\x07farm", UID: 1001, User: "bob"}
 
 func switchRequest() Request {
 	return Request{ProtocolVersion: 1, RequestID: "r", Action: "user-switch", Target: "third", Expected: &Expected{"inc", "1", control.OwnerUser, "rev"}}
@@ -180,7 +180,7 @@ func TestGPUCheckDetailFallbacks(t *testing.T) {
 	if got := gpuErrorCode(errors.New("x")); got != Unavailable {
 		t.Fatalf("unrelated = %s", got)
 	}
-	if got := displayText(" a\x00b⁦c" + string([]byte{0xff}) + " "); got != "abc" {
+	if got := displayText(" a\x00b" + string(rune(0x2066)) + "c" + string([]byte{0xff}) + " "); got != "abc" {
 		t.Fatalf("display = %q", got)
 	}
 }
