@@ -276,7 +276,12 @@ class DraftEditor {
                     else if (key !== 'model') value = binding.owned[key] ?? '';
                     field.text = String(value);
                 }
-                this.syncing = false; this.ownedFields.selectLaunch();
+                this.syncing = false;
+                // The candidate carries the serving defaults the probe seeded
+                // for a new managed launch; adopt them before the field
+                // rebuild of selectLaunch, which would drop them.
+                this.serving.sync(binding.owned?.serving);
+                this.ownedFields.selectLaunch();
             },
             setProbeGuidance: guidance => this.probeGuidance = guidance, clearOwnedReference: () => this.clearOwnedReference(), selectOwnedReference: (path, kind) => this.selectOwnedReference(path, kind)});
         this.refresh = addRefreshButton({Gtk: this.Gtk, group: {add: child => this.settings.pages.get('configuration').append(child)}, draft: this.draft, status: this.status, command: this.command, show: (candidate) => this.show(candidate), reportError: this.reportError, guidance: () => this.probeGuidance, checking: busy => this.settings.checking(busy), inspectService: async input => {

@@ -31,6 +31,52 @@ async function review(ui) {
 
 const visibleText = ui => ui.widgets.filter(widget => ui.visible(widget) && widget.label).map(widget => widget.label).join('\n');
 
+const unitServing = await loadGjsModule('../../setup/serving-ui.mjs', Object.fromEntries([
+    ['gi://Gtk?version=4.0', {default: {}}], ['gi://Gio', {default: {}}], ['gi://Pango', {default: {WrapMode: {WORD_CHAR: 2}}}],
+]));
+
+function formFixture(initial) {
+    class Widget {
+        constructor(properties = {}) { Object.assign(this, properties); this.cssClasses = []; }
+        connect() { return 1; }
+        add_css_class(name) { this.cssClasses.push(name); }
+        add(child) { (this.children ??= []).push(child); }
+        append(child) { this.add(child); }
+        set_child(child) { this.child = child; }
+        update_property() {}
+    }
+    const Adw = {PreferencesGroup: Widget, EntryRow: Widget, ExpanderRow: Widget};
+    const Gtk = {Label: Widget, CheckButton: Widget, AccessibleProperty: {LABEL: 'label'}};
+    const form = new unitServing.ServingOptionsForm({Adw, Gtk, page: {append() {}}, initial, changed: () => {}});
+    const byTitle = title => (form.header.children ?? []).concat(form.fields.children ?? []).find(widget => widget.title === title);
+    return {form, byTitle};
+}
+
+test('sync adopts the seeded defaults of a selected managed candidate', () => {
+    const {form, byTitle} = formFixture(undefined);
+    assert.equal(form.value(true), undefined);
+    form.sync({version: 1});
+    assert.equal(form.enable.active, true);
+    assert.equal(byTitle('GPU memory utilization').text, '0.90');
+    assert.equal(JSON.stringify(form.value(true)), JSON.stringify({version: 1}));
+    // Clearing the pin removes the seeded options from the candidate value.
+    form.enable.active = false;
+    assert.equal(form.value(true), null);
+    // A candidate without serving resets the form to its stored-draft state.
+    form.sync(undefined);
+    assert.equal(form.enable.active, false);
+    assert.equal(form.value(true), undefined);
+});
+
+test('sync adopts stored option values and the diagnosis flag', () => {
+    const {form, byTitle} = formFixture(undefined);
+    form.sync({version: 1, gpuMemoryPercent: 85, maxNumSeqs: 16, disablePrefixCaching: true});
+    assert.equal(byTitle('GPU memory utilization').text, '0.85');
+    assert.equal(byTitle('Maximum concurrent sequences').text, '16');
+    assert.equal(form.prefixCaching.active, true);
+    assert.equal(JSON.stringify(form.value(true)), JSON.stringify({version: 1, gpuMemoryPercent: 85, maxNumSeqs: 16, disablePrefixCaching: true}));
+});
+
 test('utilization parses and formats the exact two-digit fraction', () => {
     assert.equal(servingUI.parseUtilization('0.90'), 90);
     assert.equal(servingUI.parseUtilization(' 0.50 '), 50);

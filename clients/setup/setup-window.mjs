@@ -8,7 +8,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import {applicationHeader, roundedCard} from './presentation.mjs';
 import {createShell, createSettings, createApplicationCards, createFooter} from './setup-layout.mjs';
-import {ReviewedConfiguration, draftsVersion, lowestCatalogVersion} from './review.mjs';
+import {ReviewedConfiguration, draftsVersion, hasLimits, lowestCatalogVersion} from './review.mjs';
 import {createProfileEditor} from './profile-ui.mjs';
 import {addDraftEditor} from './discovery-ui.mjs';
 import {applications, candidateDiagnostics, recordFingerprint} from './onboarding.mjs';
@@ -406,9 +406,10 @@ class SetupWindow {
     }
 
     // requestFor gives the request for items with the values of the Host
-    // protection page.
+    // protection page. A host cap needs at least one workload with resource
+    // limits; serving options alone do not qualify it.
     requestFor(items) {
-        const request = hostRequest(this.request, this.hostProtection.values(), lowestCatalogVersion(items) >= 5);
+        const request = hostRequest(this.request, this.hostProtection.values(), items.some(hasLimits));
         return {...request, catalog: this.catalogFor(items), confirmQuiesced: false};
     }
 

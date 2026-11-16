@@ -130,6 +130,29 @@ export class ServingOptionsForm {
         this.syncing = false;
         this.toggled(false);
     }
+    // sync adopts the serving options of a selected candidate. The probe
+    // seeds the pinned defaults on a new managed launch, so the form shows
+    // them instead of the state of the stored draft.
+    sync(value) {
+        this.stored = value ? {...value} : {};
+        this.initial = value ?? null;
+        this.syncing = true;
+        this.enable.active = Boolean(value);
+        this.dtype.text = this.stored.kvCacheDType || 'auto';
+        for (const field of servingFields) {
+            const row = this.rows.get(field.key);
+            const stored = this.stored[field.key];
+            let text = '';
+            if (stored !== undefined) text = field.format(stored);
+            else if (field.key === 'gpuMemoryPercent') text = field.format(servingDefaults.gpuMemoryPercent);
+            row.text = text;
+            row.edited = false;
+        }
+        this.prefixCaching.active = Boolean(value?.disablePrefixCaching);
+        this.syncing = false;
+        this.toggled(false);
+        this.state = formState(this.value(true));
+    }
     // value gives the form value. With quiet, it does not show or hide the
     // error text.
     value(quiet = false) {
