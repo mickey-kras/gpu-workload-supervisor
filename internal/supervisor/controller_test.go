@@ -28,6 +28,10 @@ type fakeRuntime struct {
 	cancelOnStop           func()
 	blockStop              bool
 	calls                  []string
+	// gpuErr is the result of the GPU process check; closeErr of Close.
+	gpuErr    error
+	closeErr  error
+	gpuChecks []string
 }
 
 func (r *fakeRuntime) Observe(context.Context) (gpuruntime.Snapshot, error) {

@@ -45,6 +45,9 @@ func (c *Controller) ActivateWorkload(ctx context.Context, target control.Worklo
 	if err := c.refuseModelCheck(ctx, target, false); err != nil {
 		return current, err
 	}
+	if err := c.refuseGPUInUse(ctx, target); err != nil {
+		return current, err
+	}
 	if err := c.preflight(ctx); err != nil {
 		return current, err
 	}

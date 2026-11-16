@@ -32,7 +32,7 @@ func (b Backend) verifyBindings(ctx context.Context, home string, request Reques
 			return err
 		}
 	}
-	plan, err := b.planOwnedUnits(request, accepted, home)
+	plan, err := b.planCheckedOwnedUnits(ctx, request, accepted, home)
 	if err != nil {
 		return err
 	}

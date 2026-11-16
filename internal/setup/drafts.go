@@ -33,6 +33,14 @@ type DraftOwnedLaunch struct {
 	MaxModelLen uint32                 `json:"maxModelLen,omitempty"`
 	Alias       string                 `json:"alias,omitempty"`
 	Limits      control.ResourceLimits `json:"limits,omitzero"`
+	// Serving are the optional vLLM KV cache and batching options. Absent
+	// keeps the exact bytes of a draft without them.
+	Serving control.ServingOptions `json:"serving,omitzero"`
+}
+
+// hasServing reports owned launch serving options.
+func (o *DraftOwnedLaunch) hasServing() bool {
+	return o != nil && !o.Serving.IsZero()
 }
 
 // hasLimits reports owned launch limits.
@@ -138,14 +146,22 @@ func SaveDrafts(home string, request DraftRequest) (DraftSnapshot, error) {
 // and file must use the version that its drafts need.
 const draftsVersionLimits = 2
 
+// draftsVersionServing is the drafts version of a file with vLLM serving
+// options, with or without limits. Older binaries refuse it like version 2.
+const draftsVersionServing = 3
+
 // draftsVersion gives the lowest drafts version that drafts need.
 func draftsVersion(drafts []Draft) int {
+	version := 1
 	for _, d := range drafts {
-		if d.Binding != nil && d.Binding.Owned.hasLimits() {
-			return draftsVersionLimits
+		switch {
+		case d.Binding != nil && d.Binding.Owned.hasServing():
+			return draftsVersionServing
+		case d.Binding != nil && d.Binding.Owned.hasLimits():
+			version = draftsVersionLimits
 		}
 	}
-	return 1
+	return version
 }
 
 func validateDrafts(version int, drafts []Draft) error {
@@ -153,7 +169,7 @@ func validateDrafts(version int, drafts []Draft) error {
 		return errors.New("too many drafts")
 	}
 	if want := draftsVersion(drafts); version != want {
-		return fmt.Errorf("unsupported draft version %d: these drafts need version %d (%d with resource limits, 1 without)", version, want, draftsVersionLimits)
+		return fmt.Errorf("unsupported draft version %d: these drafts need version %d (%d with serving options, %d with resource limits, 1 without)", version, want, draftsVersionServing, draftsVersionLimits)
 	}
 	ids := map[string]bool{}
 	var unsupported error
@@ -221,6 +237,11 @@ func validateDraftBinding(binding *DraftBinding) error {
 	if binding.Owned.hasLimits() {
 		if err := binding.Owned.Limits.Validate(); err != nil {
 			return fmt.Errorf("draft resource limits: %w", err)
+		}
+	}
+	if binding.Owned.hasServing() {
+		if err := binding.Owned.Serving.Validate(); err != nil {
+			return fmt.Errorf("draft serving options: %w", err)
 		}
 	}
 	for _, value := range []string{binding.Unit, binding.Cgroup, binding.HealthURL, binding.Instance, binding.Model, binding.LaunchFile} {

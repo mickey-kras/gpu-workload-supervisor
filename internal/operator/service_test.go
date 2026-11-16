@@ -14,9 +14,17 @@ import (
 )
 
 type backendFixture struct {
-	state  control.State
-	called bool
-	err    error
+	state    control.State
+	called   bool
+	err      error
+	closeErr error
+	closed   []int
+}
+
+func (b *backendFixture) CloseGPUProcess(_ context.Context, _ control.Workload, pid int) error {
+	b.called = true
+	b.closed = append(b.closed, pid)
+	return b.closeErr
 }
 
 func (b *backendFixture) Status(context.Context) (control.State, error) {

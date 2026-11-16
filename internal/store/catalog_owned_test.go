@@ -185,3 +185,39 @@ func TestCatalogLimitsVersionTransitions(t *testing.T) {
 		t.Fatalf("5→2 after removing limits rejected: %v", err)
 	}
 }
+
+func TestCatalogServingVersionTransitions(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	owned := ownedTestCatalog()
+	first, err := s.ReplaceCatalog(ctx, "", owned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := owned.Clone()
+	served.Version = 6
+	served.Profiles[0].NativeModel.Owned.Serving = control.ServingOptions{Version: 1, MaxNumSeqs: 4}
+	second, err := s.ReplaceCatalog(ctx, first.Revision, served)
+	if err != nil {
+		t.Fatalf("2→6 with serving options rejected: %v", err)
+	}
+	read, err := s.Catalog(ctx)
+	if err != nil || read.Catalog.Profiles[0].NativeModel.Owned.Serving != served.Profiles[0].NativeModel.Owned.Serving {
+		t.Fatalf("v6 serving options did not round-trip: %v", err)
+	}
+	smuggled := served.Clone()
+	smuggled.Version = 5
+	if err := validateCatalogVersionTransition(served, smuggled); !errors.Is(err, control.ErrServingRequiresV6) {
+		t.Fatalf("6→5 with serving guard = %v", err)
+	}
+	if _, err := s.ReplaceCatalog(ctx, second.Revision, smuggled); !errors.Is(err, control.ErrServingRequiresV6) {
+		t.Fatalf("6→5 with serving stored: %v", err)
+	}
+	if _, err := s.ReplaceCatalog(ctx, second.Revision, owned); err != nil {
+		t.Fatalf("6→2 after removing serving options rejected: %v", err)
+	}
+}

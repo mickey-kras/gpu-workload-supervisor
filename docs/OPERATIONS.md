@@ -86,9 +86,37 @@ Stopped ordinary services without ControlGroup support restricted placement on s
 
 Discovery uses fixed GET routes, without redirects or ambient proxies, 1 MiB responses, 3-second probes and a 15-second total. It never starts applications, loads or unloads models, downloads files, scans drives or writes configuration.
 
-External adoption checks effective units, ordered contributing-file hashes and pre-start commands. Allowed commands: system `true`/`false` with optional `--`, or `test` with one `-e`, `-f`, `-d`, `-r`, `-w`, `-x` or `-s` predicate and absolute clean path. Originals and vLLM `--max-model-len`/`--served-model-name` remain. Unsupported syntax, wrappers and escaped launches get guidance. Managed launches use a separate restricted format.
+External adoption checks effective units, ordered contributing-file hashes and pre-start commands. Allowed commands: system `true`/`false` with optional `--`, or `test` with one `-e`, `-f`, `-d`, `-r`, `-w`, `-x` or `-s` predicate and absolute clean path. Originals and vLLM `--max-model-len`/`--served-model-name` remain. The bounded [KV cache and batching options](#vllm-kv-cache-and-batching-options) also remain. Unsupported syntax, wrappers and escaped launches get guidance. Managed launches use a separate restricted format.
 
 Every vLLM launch also needs the [hardened settings](INTEGRATION.md#hardened-vllm-launch). For a managed launch, the model folder must contain the upstream `chat_template.jinja`. A file that you add by hand fails the [model checks](MODEL-CHECKS.md#upstream-identity).
+
+### vLLM KV cache and batching options
+
+vLLM manages the KV cache. The supervisor accepts only a small set of KV cache and batching options. It refuses all other options. We verified the options against vLLM 0.14.1, the minimum serving version.
+
+A managed launch can have a `serving` object in its owned launch. Without the object, the unit keeps its earlier bytes and fingerprint. With the object, the unit gets all of the defaults below explicitly. Thus a vLLM update cannot change them silently. A catalog with a `serving` object is catalog version 6. A drafts file with one is drafts version 3.
+
+| Option | Rendered value | Setting in `serving` |
+| --- | --- | --- |
+| `--gpu-memory-utilization` | `0.90` | `gpuMemoryPercent`: 50 to 95 |
+| `--kv-cache-dtype` | `auto` | `kvCacheDType`: `auto` only |
+| `--enable-chunked-prefill` | Always | None |
+| `--enable-prefix-caching` | Always, except for diagnosis | `disablePrefixCaching: true` renders `--no-enable-prefix-caching` |
+| `--prefix-caching-hash-algo` | `sha256`, with prefix caching | None. SHA-256 prevents hash collisions between prefixes |
+| `--max-num-seqs` | Not set | `maxNumSeqs`: 1 to 64 |
+| `--max-num-batched-tokens` | Not set | `maxNumBatchedTokens`: 256 to 65536. This is the chunked prefill budget |
+
+`--max-model-len` (`maxModelLen`) stays the main control of the KV cache size. The `fp8` KV cache needs a qualification run for the model and the GPU ([#453](https://github.com/mickey-kras/gpu-workload-supervisor/issues/453)). Until that run exists, the supervisor refuses `fp8`. The supervisor does not support CPU offload of the KV cache, disaggregated prefill or `--calculate-kv-scales`.
+
+Before preview and apply, setup runs `vllm serve --help=all` with the executable of the managed launch. A plain `--help` shows only the option groups. Setup reads at most 1 MiB of output and stops the command after 2 minutes. Setup refuses the launch if the help does not show an option or a rendered value. It never passes an unknown option to vLLM.
+
+An adopted launch can use the same options, with the same values and bounds. The qualification refuses a value out of bounds, an unknown option, a repeated option, and `--enable-prefix-caching` together with `--no-enable-prefix-caching`. The qualification accepts only the forms `--option value` and `0.NN`, such as `--gpu-memory-utilization 0.85`.
+
+#### Capacity admission
+
+At start, vLLM reserves `gpu-memory-utilization × total VRAM`, independent of the model size. Thus admission uses that reservation for a launch that sets `--gpu-memory-utilization`: every launch with a `serving` object, and each adopted launch with the option. The supervisor reads `memory.free` and `memory.total` from `nvidia-smi`. The requirement is the larger of `requiredMiB` and the reservation, rounded up to whole MiB. The supervisor adds the capacity headroom to it.
+
+For an adopted launch, the supervisor reads the option from the fingerprinted launch file. A changed file fails admission.
 
 ### Upgrade and interrupted activation
 
@@ -397,11 +425,11 @@ No automatic downgrade. Check the exact binary and database schema and behaviora
 
 Older binaries reject database schema v19. To roll back past this release, restore a verified database backup from before v19, such as a `state.db.pre-v18-*.bak` [pre-migration snapshot](#pre-migration-snapshots).
 
-Older binaries also reject catalog v5. Before you stop components and install an older binary, remove all resource limits. Setup then writes the lowest version the catalog needs. Run `gpu-setup discover` and read `request.catalog.version`: 4 with trainers, 2 with owned launches, 1 otherwise. Version 5 means limits remain.
+Older binaries also reject catalog v5 and v6. Before you stop components and install an older binary, remove all resource limits and [vLLM serving options](#vllm-kv-cache-and-batching-options). Setup then writes the lowest version the catalog needs. Run `gpu-setup discover` and read `request.catalog.version`: 4 with trainers, 2 with owned launches, 1 otherwise. Version 5 means limits remain. Version 6 means serving options remain.
 
 To remove the limits in the setup application, open the settings of each limited workload. Select **Advanced settings**, then **Resource checks**. Clear **Limit the resources of this workload**. Then apply. Alternatively, restore a backup from before the limits.
 
-Saved selections with limits make `drafts.json` version 2. An older setup reads only version 1. An older setup opens and shows that the saved setup drafts are unusable. It cannot continue.
+Saved selections with limits make `drafts.json` version 2. Saved selections with serving options make it version 3. An older setup reads only version 1. An older setup opens and shows that the saved setup drafts are unusable. It cannot continue.
 
 To use it again, move `drafts.json` aside or delete it. Setup then starts without the saved selections. A moved file keeps them for a later setup.
 
@@ -449,7 +477,38 @@ Versions are canonical nonzero unsigned 64-bit decimal strings, never JavaScript
 
 Backend and client reject unknown request and response fields. Evolve peers together. Incompatible shapes need protocol-version changes. New actions can have separate shapes. Older backends return `invalid_request`.
 
-Status and mutations share the nonblocking controller gate: `busy` queues nothing. Error codes: `invalid_request`, `unsupported_version`, `incompatible_configuration`, `stale_state`, `wrong_owner`, `busy`, `recovery_required`, `timeout`, `unavailable`, `deferred`. Errors omit status except deferred activation. Invalid envelopes can have empty correlation IDs. Errors expose neither profile paths nor runtime output.
+Status and mutations share the nonblocking controller gate: `busy` queues nothing. Error codes: `invalid_request`, `unsupported_version`, `incompatible_configuration`, `stale_state`, `wrong_owner`, `busy`, `recovery_required`, `timeout`, `unavailable`, `deferred`, `gpu_in_use`, `gpu_check_failed`, `not_permitted`. Errors omit status except deferred activation.
+
+`gpu_in_use` and `gpu_check_failed` add `gpuCheck`. See [other programs on the GPU](#other-programs-on-the-gpu). Invalid envelopes can have empty correlation IDs. Errors expose neither profile paths nor runtime output.
+
+### Other programs on the GPU
+
+Before each start, the supervisor lists the compute processes on the target GPU with `nvidia-smi --query-compute-apps=pid,process_name,used_memory`. The target GPU is the GPU UUID of the workload, or the profile `gpuIndex`. A trainer start runs the same check. The release checks after a stop and after a trainer exit use the same query.
+
+The check reads `/proc/PID/cgroup` of each process. It ignores a process in the cgroup of a catalog unit or below it. Any other process blocks the start. So a running supervised workload never blocks a switch, and the check never stops it.
+
+The supervisor reports external programs and asks. It never stops them as part of a start. A process that the check cannot read, for example in another PID namespace, also blocks the start. Its user is then unknown.
+
+A failed query, a query that runs longer than 15 seconds, output that the check cannot parse or a missing `nvidia-smi` path blocks the start too. A failed check never reads as a free GPU.
+
+The controller runs the check before any change. `user-switch`, `activate-workload`, `gpu-mode switch` and a trainer start then fail, and the current workload keeps running. The runtime runs the check again just before the start, after the unload. A failure there keeps the usual transition failure and latches the state, as a capacity failure does.
+
+Over the operator protocol, a refusal before any change has one of these codes:
+
+| Code | `gpuCheck` |
+| --- | --- |
+| `gpu_in_use` | `processes`: 1 to 32 `{pid,name,user,usedMiB,closable}` entries. `user` is empty when unknown. `usedMiB` is `null` when the driver does not report it |
+| `gpu_check_failed` | `failure`: why the check did not complete, for example `the nvidia-smi process query timed out` |
+
+`closable` is true only when the real, effective and saved user IDs of the process are the desktop account, and that account is not root. To ask such a process to exit, send:
+
+```json
+{"protocolVersion":1,"requestId":"r3","action":"close-gpu-process","target":"speech","pid":4242}
+```
+
+`close-gpu-process` has no `expected`: it changes no supervisor state. The operator lists the processes again and refuses a PID that is not `closable` with `not_permitted`. It pins the process with a pidfd and lists it again, so a reused PID never gets the signal. It sends SIGTERM, never SIGKILL, waits up to 5 seconds for the exit and checks the GPU again.
+
+A free GPU answers `ok` with status. Then send the start again. A process that still runs, or another process, answers `gpu_in_use`. A process that ended before Close is not an error: the answer is the check again. The `gpu-mode` CLI writes the processes or the failure to standard error and has no Close.
 
 ### Limit checks
 
@@ -588,6 +647,8 @@ Lost response means uncertain outcome: fetch fresh status before deciding. SIGKI
 | Take Control | Confirms preservation of verified current workload |
 | Stop and Return | Confirms stopping work and Supervisor Idle |
 | User selection | Immediate. Active workload is a no-op. Menus use configured labels |
+| GPU in use | A refused start shows the target, then each process with name, PID, user and GPU memory, and **Retry**. A failed check shows its failure, never a free GPU |
+| Close it | Only for a `closable` process. Confirms, then requests SIGTERM and shows the check again |
 | Details | Owner, requested and active workloads, phase, health, admission, freshness |
 | Pending, stale, error or recovery | Disable mutations. No extension recovery control |
 | Calls | One outstanding. Status backs off 5–60 seconds, never overlaps mutation |
@@ -603,6 +664,7 @@ Run `npm test --prefix clients/gnome` for contract, model and mock lifecycle tes
 - Keyboard and visual access to the toggle, menu and Details.
 - Cancel and confirm both ownership dialogs.
 - Third-workload selection, active no-op and repeated pending clicks.
+- A start refused by another program on the GPU: **Close it** for a process of the desktop account, no Close for other accounts, and **Retry**.
 - Stale and faulted observations.
 - Disable/re-enable and Shell restart during admitted work.
 

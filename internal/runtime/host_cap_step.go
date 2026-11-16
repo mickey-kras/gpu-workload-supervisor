@@ -92,6 +92,9 @@ type HostCapStep struct {
 	// Usage is the current memory use of the slice, read only for display.
 	// It is absent when no unit passes its checks or a read fails.
 	Usage *HostCapUsage `json:"usage,omitempty"`
+	// VendorDropIns is the package manager check of each vendor drop-in
+	// of the slice and of the user manager.
+	VendorDropIns []VendorDropIn `json:"vendorDropIns,omitempty"`
 }
 
 // HostCapUsage is the memory use of the slice in MiB, rounded down.
@@ -150,7 +153,7 @@ func (m *SystemdManager) HostCapStep(ctx context.Context, want *HostCapValues) (
 		}
 	}
 	files := m.compareDropIns(&step, paths, content)
-	checks := m.checkLimitedHosts(ctx, &step, limited)
+	checks := max(m.checkLimitedHosts(ctx, &step, limited), m.checkVendorDropIns(ctx, &step))
 	if want != nil && files == stepOK && checks != stepOK {
 		// The drop-ins match, but systemd can still load the old ones.
 		step.Problems = append(step.Problems, "the drop-ins match the requested values; after a new install, run `sudo systemctl daemon-reload`")
@@ -275,6 +278,60 @@ func (m *SystemdManager) checkLimitedHosts(ctx context.Context, step *HostCapSte
 		}
 	}
 	return result
+}
+
+// checkVendorDropIns adds the package manager check of each vendor drop-in
+// of the slice and of the user manager to step. A modified or unowned file
+// is a definite failure. A file that the package manager cannot check
+// proves nothing. A listed name that is not a vendor file is left to the
+// setup checks, which refuse it.
+func (m *SystemdManager) checkVendorDropIns(ctx context.Context, step *HostCapStep) int {
+	result := stepOK
+	for _, unit := range []struct{ name, own string }{{m.host.sliceUnit(), m.host.capDropIn()}, {m.host.managerUnit(), m.host.delegateDropIn()}} {
+		values, err := m.dropInReader(ctx, unit.name)()
+		if err != nil {
+			step.Problems = append(step.Problems, "the vendor drop-ins of "+unit.name+" cannot be listed: "+err.Error())
+			result = max(result, stepUnknown)
+			continue
+		}
+		for _, listed := range dropInPaths(values) {
+			if drop, ok := m.stepVendorDropIn(ctx, unit.name, listed, unit.own); ok {
+				step.VendorDropIns = append(step.VendorDropIns, drop)
+				result = max(result, vendorSeverity(drop.Result))
+			}
+		}
+	}
+	return result
+}
+
+// stepVendorDropIn checks one listed drop-in for the step. ok is false for
+// the host cap drop-in and for a name that is not a vendor file. A vendor
+// file that fails the trust walk cannot be checked.
+func (m *SystemdManager) stepVendorDropIn(ctx context.Context, unit, listed, own string) (VendorDropIn, bool) {
+	if listed == own {
+		return VendorDropIn{}, false
+	}
+	file, err := m.host.vendorFile(listed, own)
+	if err != nil {
+		return VendorDropIn{}, false
+	}
+	stat, err := m.host.trustedFile(file)
+	if err != nil {
+		return VendorDropIn{Unit: unit, Path: listed, Result: VendorDropInCannotCheck, Detail: err.Error()}, true
+	}
+	return m.checkVendorDropIn(ctx, unit, listed, file, stat), true
+}
+
+// vendorSeverity gives the step result of a vendor drop-in result.
+func vendorSeverity(result string) int {
+	switch result {
+	case VendorDropInVerified:
+		return stepOK
+	case VendorDropInModified, VendorDropInUnowned:
+		return stepDifferent
+	default:
+		return stepUnknown
+	}
 }
 
 // addUsage adds the memory use of the slice to step. A failed read gives

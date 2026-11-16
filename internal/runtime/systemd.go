@@ -73,6 +73,9 @@ type SystemdManager struct {
 	host                      limitHost
 	reserve                   LimitReserve
 	nativeExecutableValidator func(string) error
+	// vendorCache keeps the verified vendor drop-ins of the host cap.
+	vendorCache *vendorCache
+	gpuHost     gpuProcessHost
 }
 
 func NewSystemdManager(config SystemdConfig) (*SystemdManager, error) {
@@ -118,7 +121,7 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 		}
 	}
 	return &SystemdManager{config: config, runner: runner, client: client, cgroups: cgroupFS{root: "/sys/fs/cgroup", verify: verifyUnifiedHierarchy},
-		host: defaultLimitHost(), reserve: EffectiveReserve(config.LimitReserve)}, nil
+		host: defaultLimitHost(), reserve: EffectiveReserve(config.LimitReserve), vendorCache: &vendorCache{}, gpuHost: defaultGPUProcessHost()}, nil
 }
 
 func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) error {
@@ -342,10 +345,14 @@ func (m *SystemdManager) startUnit(ctx context.Context, unit string, workload co
 	return m.runSystemctl(ctx, "start", unit)
 }
 
-// prepareStart requires the release of the other workloads and the GPU
-// capacity before a start. It starts nothing.
+// prepareStart requires the release of the other workloads, a GPU without
+// unsupervised processes and the GPU capacity before a start. It starts
+// nothing.
 func (m *SystemdManager) prepareStart(ctx context.Context, workload control.Workload) error {
 	if err := m.ReleasedFor(ctx, workload); err != nil {
+		return err
+	}
+	if err := m.CheckGPUFree(ctx, workload); err != nil {
 		return err
 	}
 	return m.capacity(ctx, workload)
@@ -429,8 +436,8 @@ func (config *SystemdConfig) prepareWorkloads() error {
 			return errors.New("capacity requirement plus headroom overflows")
 		}
 	}
-	// Headroom is only ever added to a measured requirement; without one it
-	// would be accepted but silently never applied. An explicitly disabled
+	// Headroom is only ever added to a measured requirement or an owned vLLM
+	// reservation; without one it would be accepted but silently never applied. An explicitly disabled
 	// catalog retains this preference for future measured workloads.
 	if config.CapacityHeadroomMiB != 0 && !config.Catalog.Disabled && !config.measuresCapacity() {
 		return errors.New("capacity headroom requires a measured target requirement")
@@ -440,7 +447,7 @@ func (config *SystemdConfig) prepareWorkloads() error {
 
 func (config SystemdConfig) measuresCapacity() bool {
 	for _, p := range config.Catalog.Profiles {
-		if p.RequiredMiB != 0 {
+		if p.RequiredMiB != 0 || p.HasServingOptions() {
 			return true
 		}
 	}
