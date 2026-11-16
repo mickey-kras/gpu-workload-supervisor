@@ -111,6 +111,13 @@ A managed launch can have a `serving` object in its owned launch. Without the ob
 Before preview and apply, setup runs `vllm serve --help=all` with the executable of the managed launch. A plain `--help` shows only the option groups. Setup reads at most 1 MiB of output and stops the command after 2 minutes. Setup refuses the launch if the help does not show an option or a rendered value. It never passes an unknown option to vLLM.
 
 An adopted launch can use the same options, with the same values and bounds. The qualification refuses a value out of bounds, an unknown option, a repeated option, and `--enable-prefix-caching` together with `--no-enable-prefix-caching`. The qualification accepts only the forms `--option value` and `0.NN`, such as `--gpu-memory-utilization 0.85`.
+Adopted launches are grammar-bounded but not help-checked: by design, no pinned executable exists for an adopted launch, so setup cannot run `serve --help=all` for it.
+
+#### Setup controls
+
+In setup, the Launch details page of a managed vLLM launch has a "KV cache and batching" group. A new managed draft carries the pinned defaults, so the unit renders them explicitly from the first apply. An earlier draft without the object keeps its earlier bytes until the operator enables the group. Disabling the group restores the earlier bytes again.
+
+GPU memory use is 0.50 to 0.95, shown as the exact rendered value (default 0.90). Maximum concurrent sequences is 1 to 64. The chunked prefill budget is 256 to 65536 tokens. An empty field keeps the vLLM default, and the KV cache dtype stays `auto`. `fp8` needs a qualification run first ([#453](https://github.com/mickey-kras/gpu-workload-supervisor/issues/453)). The diagnosis-only switch disables prefix caching (`--no-enable-prefix-caching`) and never combines with the prefix caching flags.
 
 #### Capacity admission
 

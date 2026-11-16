@@ -13,6 +13,7 @@ import {createProfileEditor} from './profile-ui.mjs';
 import {addDraftEditor} from './discovery-ui.mjs';
 import {applications, candidateDiagnostics, recordFingerprint} from './onboarding.mjs';
 import {labelledLimitCheck, limitSummary, refuseAdoptedLimits} from './limits-ui.mjs';
+import {servingSummary, servingSummaries} from './serving-ui.mjs';
 import {hostRequest} from './host-protection.mjs';
 import {createHostProtection} from './host-page.mjs';
 import {cancelModelChecks, clearSummaryStatus, dropModelStatus, loadModelStatus, modelStatusLine, refreshModelStatus, showModelStatus} from './model-status.mjs';
@@ -70,7 +71,10 @@ class SetupWindow {
             const card = roundedCard(Gtk); card.add_css_class('setup-summary-card');
             if (appID) card.append(applicationHeader(Gtk, appID, profile.label || profile.id));
             else card.append(new Gtk.Label({label: profile.label || profile.id, wrap: true, xalign: 0}));
-            card.append(modelStatusLine(this, profile, appID)); this.summary.append(card); this.summaryCards.push(card);
+            card.append(modelStatusLine(this, profile, appID));
+            const servingLine = servingSummary(profile);
+            if (servingLine) { const label = new Gtk.Label({label: servingLine, wrap: true, xalign: 0}); label.add_css_class('dim-label'); card.append(label); }
+            this.summary.append(card); this.summaryCards.push(card);
         }
         if (!items.length) { const label = new Gtk.Label({label: 'No workloads selected. Supervisor configuration will be updated.', wrap: true, xalign: 0}); this.summary.append(label); this.summaryCards.push(label); }
     }
@@ -260,7 +264,7 @@ class SetupWindow {
                 return;
             }
             commit();
-            this.changes.label = preview.changes.join('\n');
+            this.changes.label = [preview.changes.join('\n'), ...servingSummaries(JSON.parse(candidate.request).catalog?.profiles ?? [])].filter(Boolean).join('\n');
             const removedProfiles = (this.request.catalog.profiles ?? []).filter(original => !items.some(profile => profile.id === original.id));
             const removal = removedProfiles.length ? ` Remove ${removedProfiles.map(profile => profile.label || profile.id).join(', ')} from Supervisor? Their applications and files are preserved.` : '';
             this.status.label = `Finish setup allows Supervisor to start and stop these workloads. Finish active jobs before continuing.${removal}`;
@@ -404,7 +408,7 @@ class SetupWindow {
     // requestFor gives the request for items with the values of the Host
     // protection page.
     requestFor(items) {
-        const request = hostRequest(this.request, this.hostProtection.values(), lowestCatalogVersion(items) === 5);
+        const request = hostRequest(this.request, this.hostProtection.values(), lowestCatalogVersion(items) >= 5);
         return {...request, catalog: this.catalogFor(items), confirmQuiesced: false};
     }
 
