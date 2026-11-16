@@ -4,6 +4,7 @@ import {watchInstanceSelection, addRefreshButton, addFilePickers} from './discov
 import {addOwnedEditor, addBindingEditor} from './launch-ui.mjs';
 import {ApplicationDraft, applications, candidateChoice, candidateIdentity, profileIDFromModel} from './onboarding.mjs';
 import {PlainLimitError, UnitLimitsForm, checkFormLimits, withFormLimits} from './limits-ui.mjs';
+import {ServingOptionsForm, checkFormServing, withFormServing} from './serving-ui.mjs';
 
 // Backend error detail stays available but collapsed behind the actionable summary.
 export function addErrorReporter({Adw, Gtk, parent, status}) {
@@ -28,7 +29,7 @@ class DraftEditor {
         this.initial = initial; this.detected = detected;
         this.discovered = discovered; this.discoveryErrors = discoveryErrors;
         this.command = command;
-        this.changed = value => changed(withFormLimits(this.limits, this.draft, value));
+        this.changed = value => changed(withFormServing(this.serving, this.draft, withFormLimits(this.limits, this.draft, value)));
         this.removed = removed;
         this.bind = bind; this.taken = taken;
         this.modelParent = modelParent;
@@ -275,7 +276,12 @@ class DraftEditor {
                     else if (key !== 'model') value = binding.owned[key] ?? '';
                     field.text = String(value);
                 }
-                this.syncing = false; this.ownedFields.selectLaunch();
+                this.syncing = false;
+                // The candidate carries the serving defaults the probe seeded
+                // for a new managed launch; adopt them before the field
+                // rebuild of selectLaunch, which would drop them.
+                this.serving.sync(binding.owned?.serving);
+                this.ownedFields.selectLaunch();
             },
             setProbeGuidance: guidance => this.probeGuidance = guidance, clearOwnedReference: () => this.clearOwnedReference(), selectOwnedReference: (path, kind) => this.selectOwnedReference(path, kind)});
         this.refresh = addRefreshButton({Gtk: this.Gtk, group: {add: child => this.settings.pages.get('configuration').append(child)}, draft: this.draft, status: this.status, command: this.command, show: (candidate) => this.show(candidate), reportError: this.reportError, guidance: () => this.probeGuidance, checking: busy => this.settings.checking(busy), inspectService: async input => {
@@ -285,8 +291,8 @@ class DraftEditor {
             return discovery.applications?.find(candidate => candidate.app === input.app && candidate.unit === input.binding.unit) ?? null;
         }});
         addFilePickers({Gtk: this.Gtk, window: this.window, group: this.settings.selection, advancedGroup: this.settings.selection, draft: this.draft, reference: this.reference, endpoint: this.endpoint, status: this.status, changed: this.changed, clearBinding: () => this.clearBinding(), clearModels: () => this.clearModels(), clearOwnedReference: () => this.clearOwnedReference(), setSync: value => this.syncing = value, selectedReference: (path, kind) => this.selectOwnedReference(path, kind), selectedExecutable: path => this.selectExecutable(path), modelGroup: this.modelParent ? this.modelGroup : null, selectionChanged: () => this.resetSelection()});
-        if (this.draft.needsModel) this.ownedFields = addOwnedEditor({Adw: this.Adw, Gtk: this.Gtk, group: this.details, draftGroup: this.group, draft: this.draft, initial: this.initial, checkLimits: input => checkFormLimits(this.limits, input), command: this.command, bind: this.bind, changed: this.changed, taken: this.taken, status: this.status, isSyncing: () => this.syncing, edited: () => { this.installationEvidence = null; this.settings.invalidate(); }, reportError: this.reportError, parent: this.parent, removed: this.removed});
-        this.bindingFields = addBindingEditor({Adw: this.Adw, Gtk: this.Gtk, group: this.details, draftGroup: this.group, draft: this.draft, initial: this.initial, checkLimits: input => checkFormLimits(this.limits, input), status: this.status, parent: this.parent, removed: this.removed, bind: this.bind, command: this.command, changed: this.changed, taken: this.taken, reportError: this.reportError, isSyncing: () => this.syncing, edited: key => {
+        if (this.draft.needsModel) this.ownedFields = addOwnedEditor({Adw: this.Adw, Gtk: this.Gtk, group: this.details, draftGroup: this.group, draft: this.draft, initial: this.initial, checkLimits: input => { checkFormLimits(this.limits, input); checkFormServing(this.serving, input); }, command: this.command, bind: this.bind, changed: this.changed, taken: this.taken, status: this.status, isSyncing: () => this.syncing, edited: () => { this.installationEvidence = null; this.settings.invalidate(); }, reportError: this.reportError, parent: this.parent, removed: this.removed});
+        this.bindingFields = addBindingEditor({Adw: this.Adw, Gtk: this.Gtk, group: this.details, draftGroup: this.group, draft: this.draft, initial: this.initial, checkLimits: input => { checkFormLimits(this.limits, input); checkFormServing(this.serving, input); }, status: this.status, parent: this.parent, removed: this.removed, bind: this.bind, command: this.command, changed: this.changed, taken: this.taken, reportError: this.reportError, isSyncing: () => this.syncing, edited: key => {
                 this.bindingEdits.add(key); this.installationEvidence = null; this.settings.invalidate();
                 this.syncing = true; this.health.text = this.draft.snapshot().binding?.healthURL ?? ''; this.syncing = false;
                 this.settings.identity.label = candidateIdentity({...this.draft.snapshot(), ...this.draft.snapshot().binding});
@@ -307,6 +313,7 @@ class DraftEditor {
             this.overrides.bootPolicy = this.retain.active ? 'retain' : 'stop-to-idle'; this.draft.edit({bootPolicy: this.overrides.bootPolicy}); this.changed(this.draft.snapshot());
         });
         this.limits = new UnitLimitsForm({Adw: this.Adw, Gtk: this.Gtk, page: this.settings.pages.get('resources'), initial: this.initial.binding?.owned?.limits, changed: () => this.changed(this.draft.snapshot())});
+        this.serving = new ServingOptionsForm({Adw: this.Adw, Gtk: this.Gtk, page: this.settings.pages.get('launch'), initial: this.initial.binding?.owned?.serving, changed: () => this.changed(this.draft.snapshot())});
     }
     addActions() {
         const save = new this.Gtk.Button({label: 'Save selections for later'}); this.details.add(save); save.connect('clicked', () => this.saveSelections());
@@ -322,6 +329,7 @@ class DraftEditor {
             this.finish.sensitive = false; this.settings.checking(true);
             try {
                 checkFormLimits(this.limits, input);
+                checkFormServing(this.serving, input);
                 const action = input.binding?.owned ? 'render-owned' : 'prepare';
                 const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', action], JSON.stringify({draft: input})));
                 if (generation !== this.draft.generation) return;
@@ -374,7 +382,7 @@ class DraftEditor {
             settingsBack: () => this.settings.back(),
             cancelSettings: () => { this.draft.cancel(); this.restore(this.session); },
             settingsOverrides: () => this.overrides,
-            setHostUsage: usage => this.limits.setUsage(usage), checkLimits: () => checkFormLimits(this.limits, this.draft.snapshot()),
+            setHostUsage: usage => this.limits.setUsage(usage), checkLimits: () => { checkFormLimits(this.limits, this.draft.snapshot()); checkFormServing(this.serving, this.draft.snapshot()); },
             showProblem: this.reportError,
             cancel: () => this.draft.cancel(),
             checking: () => this.settings.busy,
@@ -393,7 +401,7 @@ class DraftEditor {
     capture() {
         const fields = [this.name, this.endpoint, this.health, ...Object.values(this.bindingFields), ...Object.values(this.ownedFields)].filter(field => typeof field !== 'function');
         const input = this.draft.snapshot();
-        return {input, candidate: this.lastCandidate, discoveryCandidate: this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === this.lastCandidate?.unit), evidence: this.installationEvidence, ready: this.settings.ready && !this.settings.busy, bindingEdits: [...this.bindingEdits], endpointEdited: this.endpointEdited, selection: this.instances[this.instance.selected - 1], fields: fields.map(field => [field, field.text]), capacity: this.capacity.text, retain: this.retain.active, overrides: {...this.overrides}, limits: this.limits.capture()};
+        return {input, candidate: this.lastCandidate, discoveryCandidate: this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === this.lastCandidate?.unit), evidence: this.installationEvidence, ready: this.settings.ready && !this.settings.busy, bindingEdits: [...this.bindingEdits], endpointEdited: this.endpointEdited, selection: this.instances[this.instance.selected - 1], fields: fields.map(field => [field, field.text]), capacity: this.capacity.text, retain: this.retain.active, overrides: {...this.overrides}, limits: this.limits.capture(), serving: this.serving.capture()};
     }
     restore(snapshot) {
         if (!snapshot) return;
@@ -402,6 +410,7 @@ class DraftEditor {
         this.capacity.text = snapshot.capacity; this.retain.active = snapshot.retain;
         this.syncing = false;
         this.limits.restore(snapshot.limits);
+        this.serving.restore(snapshot.serving);
         this.syncing = true; this.instance.selected = this.instanceIndex(snapshot.selection); this.syncing = false; this.draft.input = snapshot.input; this.draft.cancel(); this.installationEvidence = snapshot.evidence; this.bindingEdits = new Set(snapshot.bindingEdits); this.endpointEdited = snapshot.endpointEdited; this.overrides = snapshot.overrides;
         this.changed(this.draft.snapshot());
         const current = snapshot.candidate?.unit ? this.detected.find(candidate => candidate.app === this.initial.app && candidate.unit === snapshot.candidate.unit) : snapshot.candidate;
@@ -430,6 +439,7 @@ class DraftEditor {
         const selectedModel = this.draft.needsModel ? input.model || input.binding?.owned?.modelPath || '' : '';
         if (this.draft.needsModel && !selectedModel) throw new Error('Choose an existing model.');
         checkFormLimits(this.limits, input);
+        checkFormServing(this.serving, input);
         const value = this.modelInput(input, selectedModel);
         const result = JSON.parse(await this.command(['/usr/bin/gpu-setup', input.binding?.owned ? 'render-owned' : 'prepare'], JSON.stringify({draft: value})));
         if (generation !== this.draft.generation) throw new Error('Application changed while checking it. Continue again.');

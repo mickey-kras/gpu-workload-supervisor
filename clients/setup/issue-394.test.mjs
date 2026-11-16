@@ -17,6 +17,22 @@ function ownedProfile({draft}) {
             launchSHA256: 'fixture', owned: draft.binding.owned}}};
 }
 
+test('the probe-seeded serving defaults survive the managed candidate prefill', async () => {
+    const binding = {instance: 'installed-vllm-identity', owned: {executable: '/venv/bin/vllm', port: 9003, serving: {version: 1}}};
+    const candidate = {app: 'vllm', label: 'vLLM', sourceKind: 'owned', recognized: true, configurationStatus: 'model-required', instanceStatus: 'installed',
+        reference: binding.owned.executable, referenceKind: 'application', binding, models: []};
+    const ui = await launch({deferAction: 'unused', filePath: '/models/existing-vllm', responses: {discover: discover([candidate]), 'render-owned': ownedProfile}});
+    await ui.click('Settings for vLLM');
+    await ui.click('Advanced settings');
+    await ui.click('Launch details');
+    assert.equal(ui.by('Pin the KV cache and batching defaults').active, true);
+    assert.equal(ui.by('GPU memory utilization').text, '0.90');
+    await ui.click('Back'); await ui.click('Back');
+    await ui.click('Use installation'); await ui.click('Choose another model…'); await ui.click('Choose model folder...'); await ui.click('Continue');
+    const rendered = JSON.parse(ui.calls.find(call => call.argv[1] === 'render-owned').input).draft;
+    assert.deepEqual(rendered.binding.owned.serving, {version: 1});
+});
+
 test('beginning gear opens compact settings; Back restores originating scroll, focus and selections', async () => {
     const ui = await launch({responses: {discover: discover([service('one.service')])}});
     const gear = ui.by('Settings for vLLM');
