@@ -14,15 +14,36 @@ export const validRepo = repo => repoPattern.test(repo) && !repo.includes('..');
 export const validRevision = revision => revisionPattern.test(revision);
 
 // A Hugging Face cache folder of a pinned snapshot:
-// .../models--<owner>--<name>/snapshots/<revision>.
-const cachePattern = /(?:^|\/)models--([^/]+?)--([^/]+)\/snapshots\/([0-9a-f]{40})\/?$/;
+// .../models--<owner>--<name>/snapshots/<revision>. Parsed with string
+// scans rather than one backtracking regex, so a hostile folder name
+// cannot cause super-linear work (SonarQube javascript:S5852).
+const snapshotMarker = '/snapshots/';
+const revisionChars = '0123456789abcdef';
 
 // cacheSource gives the source of a model folder in the Hugging Face cache,
 // or null for another folder.
 export function cacheSource(path) {
-    const match = cachePattern.exec(path ?? '');
-    if (!match) return null;
-    const source = {repo: `${match[1]}/${match[2]}`, revision: match[3]};
+    const text = String(path ?? '');
+    // The snapshot tail is anchored at the end: at most one trailing slash,
+    // then the marker and exactly 40 lowercase hex characters.
+    const trimmed = text.endsWith('/') ? text.slice(0, -1) : text;
+    const marker = trimmed.lastIndexOf(snapshotMarker);
+    if (marker === -1) return null;
+    const revision = trimmed.slice(marker + snapshotMarker.length);
+    if (revision.length !== 40) return null;
+    for (const char of revision) if (!revisionChars.includes(char)) return null;
+    // The cache folder is the last path segment before the marker and must
+    // read models--<owner>--<name>, with both parts non-empty.
+    const folder = trimmed.slice(0, marker);
+    const segment = folder.slice(folder.lastIndexOf('/') + 1);
+    if (!segment.startsWith('models--')) return null;
+    const body = segment.slice('models--'.length);
+    const split = body.indexOf('--', 1);
+    if (split === -1) return null;
+    const owner = body.slice(0, split);
+    const name = body.slice(split + 2);
+    if (name === '') return null;
+    const source = {repo: `${owner}/${name}`, revision};
     return validRepo(source.repo) ? source : null;
 }
 
