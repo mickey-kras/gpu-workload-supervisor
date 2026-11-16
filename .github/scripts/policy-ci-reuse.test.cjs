@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { execFileSync } = require('node:child_process');
 const { normalizeCiReuse } = require('./policy-ci-reuse.cjs');
-const { reuseFixture } = require('./ci-reuse-fixture.cjs');
+const { reuseFixture, analyzerReuseFixture, legacyReuseFixture } = require('./ci-reuse-fixture.cjs');
 
 const CI = '.github/workflows/ci.yml';
 const AISLOP = '.github/workflows/aislop.yml';
@@ -67,16 +67,46 @@ test('coverage and scanner helper behavior rejects missing, mismatched and unrea
 });
 
 
-test('Go analysis cannot be skipped, made advisory, or detached from its report artifact', () => {
-  mutate(workflows => { step(workflows, CI, 'go', 'Go static analysis').if = false; });
-  mutate(workflows => { step(workflows, CI, 'go', 'Go static analysis')['continue-on-error'] = true; });
-  mutate(workflows => { step(workflows, CI, 'go', 'Go static analysis').run += ' || true'; });
-  mutate(workflows => {
-    const producer = step(workflows, CI, 'go', 'Stage go quality coverage');
-    producer.run = producer.run.replace('cp golangci-lint-report.xml go-quality-coverage/', 'true');
-  });
-  mutate(workflows => {
-    const consumer = step(workflows, MAIN, 'sonar', 'Validate and restore quality coverage');
-    consumer.run = consumer.run.replace('(cd go-quality-coverage && sha256sum --check --strict analysis.sha256)', 'true');
-  });
+test('both frozen workflow profiles pass and preserve the same existing gate contract', () => {
+  const previous = legacyReuseFixture();
+  const analyzer = analyzerReuseFixture();
+  assert.deepEqual(errors(previous), []);
+  assert.deepEqual(errors(analyzer), []);
+  const normalize = workflows => normalizeCiReuse(sources(), workflows, []);
+  assert.deepEqual(normalize(analyzer), normalize(previous));
+});
+
+test('mixing the old and analyzer workflow profiles is rejected', () => {
+  for (const path of [CI, MAIN]) {
+    const workflows = legacyReuseFixture();
+    workflows[path] = analyzerReuseFixture()[path];
+    assert.notDeepEqual(errors(workflows), []);
+  }
+});
+
+test('the analyzer profile retains verification, failure status, and report provenance', () => {
+  const mutations = [
+    workflows => { step(workflows, CI, 'go', 'Go static analysis').if = false; },
+    workflows => { step(workflows, CI, 'go', 'Go static analysis')['continue-on-error'] = true; },
+    workflows => { step(workflows, CI, 'go', 'Go static analysis').run += ' || true'; },
+    workflows => { step(workflows, CI, 'go', 'Go static analysis').run = 'golangci-lint run'; },
+    workflows => { step(workflows, CI, 'go', 'Stage go quality coverage').run = 'true'; },
+    workflows => { step(workflows, MAIN, 'sonar', 'Validate and restore quality coverage').run = 'true'; },
+    workflows => { step(workflows, MAIN, 'sonar', 'Download Go quality coverage').with.name = 'latest'; },
+  ];
+  for (const change of mutations) {
+    const workflows = analyzerReuseFixture();
+    change(workflows);
+    assert.notDeepEqual(errors(workflows), []);
+  }
+});
+
+test('even admitted candidate fingerprints cannot authorize arbitrary workflow changes', () => {
+  const workflows = analyzerReuseFixture();
+  workflows[CI].jobs.go.steps.push({ run: 'echo arbitrary' });
+  const files = { ...sources(), '.github/scripts/policy-ci-reuse.cjs':
+    'const REUSE_HASHES = {".github/workflows/ci.yml":"candidate"};' };
+  const failures = [];
+  normalizeCiReuse(files, workflows, failures, new Set(['.github/scripts/policy-ci-reuse.cjs']));
+  assert.notDeepEqual(failures, []);
 });
