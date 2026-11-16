@@ -12,3 +12,8 @@ exclude:
 rules:
   security/hardcoded-secret: error
   security/vulnerable-dependency: off
+
+imports:
+  # PyPI distribution graphifyy (.github/graphify/requirements.txt) installs module graphify.
+  provided:
+    - graphify
