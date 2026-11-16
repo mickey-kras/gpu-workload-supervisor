@@ -30,7 +30,7 @@ export class ReviewedConfiguration {
 
 // Mirror of control.WorkloadProfile.HasLimits: an empty, null or all-zero
 // limits object is absent, and the backend decoder rejects it.
-function hasLimits(profile) {
+export function hasLimits(profile) {
     const limits = profile.nativeModel?.owned?.limits;
     return limits !== null && typeof limits === 'object' && Object.values(limits).some(Boolean);
 }

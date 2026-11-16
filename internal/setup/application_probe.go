@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/httptransport"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
@@ -242,7 +243,10 @@ func probeSelectedExecutable(r ProbeRequest, result ApplicationCandidate, valida
 	result.Recognized = true
 	result.InstanceStatus = "installed"
 	result.ConfigurationStatus = "model-required"
-	result.Binding = &DraftBinding{Instance: "instance-" + result.ID, Owned: &DraftOwnedLaunch{Executable: r.Reference, Port: 8000}}
+	// A new owned draft pins the serving defaults explicitly, so a vLLM
+	// update cannot change them silently. Clearing the object keeps the
+	// legacy byte-preserving form.
+	result.Binding = &DraftBinding{Instance: "instance-" + result.ID, Owned: &DraftOwnedLaunch{Executable: r.Reference, Port: 8000, Serving: control.ServingOptions{Version: control.ServingOptionsVersion}}}
 	result.NextStep = "Supported executable installed. Select an existing local model, then review creation of a supervisor-owned launch. Nothing has been started."
 	return result
 }
