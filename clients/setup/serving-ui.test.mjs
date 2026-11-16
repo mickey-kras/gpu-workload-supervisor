@@ -68,6 +68,19 @@ test('sync adopts the seeded defaults of a selected managed candidate', () => {
     assert.equal(form.value(true), undefined);
 });
 
+test('capture and restore keep the stored options across a mid-session sync', () => {
+    const {form, byTitle} = formFixture({version: 1, gpuMemoryPercent: 85, maxNumSeqs: 16});
+    const snapshot = form.capture();
+    // Selecting another managed installation adopts its seeded defaults.
+    form.sync({version: 1});
+    assert.equal(JSON.stringify(form.value(true)), JSON.stringify({version: 1}));
+    // Cancel restores the stored draft state, not only the visible rows.
+    form.restore(snapshot);
+    assert.equal(byTitle('GPU memory utilization').text, '0.85');
+    assert.equal(byTitle('Maximum concurrent sequences').text, '16');
+    assert.equal(JSON.stringify(form.value(true)), JSON.stringify({version: 1, gpuMemoryPercent: 85, maxNumSeqs: 16}));
+});
+
 test('sync adopts stored option values and the diagnosis flag', () => {
     const {form, byTitle} = formFixture(undefined);
     form.sync({version: 1, gpuMemoryPercent: 85, maxNumSeqs: 16, disablePrefixCaching: true});

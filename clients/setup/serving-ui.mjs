@@ -119,13 +119,20 @@ export class ServingOptionsForm {
         if (notify) this.changed?.();
     }
     // capture and restore keep the form of a cancelled settings session.
+    // The snapshot covers the backing serving state too, so a restore after
+    // a mid-session sync cannot resurrect the values of the other
+    // installation.
     capture() {
-        return {active: this.enable.active, rows: [...this.rows.values()].map(row => [row, row.text, row.edited]), prefixCaching: this.prefixCaching.active};
+        return {active: this.enable.active, rows: [...this.rows.values()].map(row => [row, row.text, row.edited]), prefixCaching: this.prefixCaching.active,
+            stored: {...this.stored}, initial: this.initial ? {...this.initial} : null};
     }
     restore(snapshot) {
         this.syncing = true;
+        this.stored = {...snapshot.stored};
+        this.initial = snapshot.initial ? {...snapshot.initial} : null;
         this.enable.active = snapshot.active;
         for (const [row, text, edited] of snapshot.rows) { row.text = text; row.edited = edited; }
+        this.dtype.text = this.stored.kvCacheDType || 'auto';
         this.prefixCaching.active = snapshot.prefixCaching;
         this.syncing = false;
         this.toggled(false);
