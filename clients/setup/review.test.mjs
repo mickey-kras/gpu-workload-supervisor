@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {ReviewedConfiguration, lowestCatalogVersion} from './review.mjs';
+import {ReviewedConfiguration, draftsVersion, lowestCatalogVersion} from './review.mjs';
 
 test('editing while validation runs retires its reply', () => {
     const review = new ReviewedConfiguration();
@@ -34,4 +34,21 @@ test('catalog version is the lowest that the profiles need', () => {
     assert.equal(lowestCatalogVersion([trainer, limited]), 5);
     for (const limits of [{}, null, {version: 0}, {version: 0, memoryMaxMiB: 0}])
         assert.equal(lowestCatalogVersion([{nativeModel: {owned: {port: 8000, limits}}}]), 2, JSON.stringify(limits));
+});
+
+test('serving options need catalog version 6', () => {
+    const serving = {nativeModel: {owned: {port: 8000, serving: {version: 1}}}};
+    const limited = {nativeModel: {owned: {port: 8000, limits: {version: 1, memoryMaxMiB: 4096}}}};
+    assert.equal(lowestCatalogVersion([serving]), 6);
+    assert.equal(lowestCatalogVersion([limited, serving]), 6);
+    for (const options of [{}, null, {version: 0}])
+        assert.equal(lowestCatalogVersion([{nativeModel: {owned: {port: 8000, serving: options}}}]), 2, JSON.stringify(options));
+});
+
+test('drafts version follows serving options and limits', () => {
+    const owned = owned => ({binding: {owned}});
+    assert.equal(draftsVersion([]), 1);
+    assert.equal(draftsVersion([owned({port: 8000})]), 1);
+    assert.equal(draftsVersion([owned({limits: {version: 1}})]), 2);
+    assert.equal(draftsVersion([owned({limits: {version: 1}}), owned({serving: {version: 1}})]), 3);
 });

@@ -110,6 +110,10 @@ type OwnedLaunch struct {
 	// Limits are opt-in unit resource controls. Absent keeps the exact legacy
 	// unit bytes and fingerprints; present needs catalog version 5.
 	Limits ResourceLimits `json:"limits,omitzero"`
+	// Serving are opt-in vLLM KV cache and batching options. Absent keeps the
+	// exact legacy unit bytes and fingerprints; present needs catalog
+	// version 6.
+	Serving ServingOptions `json:"serving,omitzero"`
 }
 
 // ValidNativeModelIdentity applies the catalog's model-identity rule
@@ -210,6 +214,11 @@ func (n NativeModel) validateOwned() error {
 	}
 	if !o.Limits.IsZero() {
 		if err := o.Limits.Validate(); err != nil {
+			return err
+		}
+	}
+	if !o.Serving.IsZero() {
+		if err := o.Serving.Validate(); err != nil {
 			return err
 		}
 	}

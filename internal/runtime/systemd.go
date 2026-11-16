@@ -436,8 +436,8 @@ func (config *SystemdConfig) prepareWorkloads() error {
 			return errors.New("capacity requirement plus headroom overflows")
 		}
 	}
-	// Headroom is only ever added to a measured requirement; without one it
-	// would be accepted but silently never applied. An explicitly disabled
+	// Headroom is only ever added to a measured requirement or an owned vLLM
+	// reservation; without one it would be accepted but silently never applied. An explicitly disabled
 	// catalog retains this preference for future measured workloads.
 	if config.CapacityHeadroomMiB != 0 && !config.Catalog.Disabled && !config.measuresCapacity() {
 		return errors.New("capacity headroom requires a measured target requirement")
@@ -447,7 +447,7 @@ func (config *SystemdConfig) prepareWorkloads() error {
 
 func (config SystemdConfig) measuresCapacity() bool {
 	for _, p := range config.Catalog.Profiles {
-		if p.RequiredMiB != 0 {
+		if p.RequiredMiB != 0 || p.HasServingOptions() {
 			return true
 		}
 	}

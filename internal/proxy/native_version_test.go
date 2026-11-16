@@ -18,19 +18,19 @@ func TestNativePolicyCatalogVersionGuard(t *testing.T) {
 	profile := func(version int) control.CatalogSnapshot {
 		return control.CatalogSnapshot{Revision: "one", Catalog: control.Catalog{Version: version, Profiles: []control.WorkloadProfile{{ID: "media", NativeModel: &control.NativeModel{Runtime: "vllm", Model: "selected", Endpoint: upstream.URL, EnvironmentFile: proxyKeyFile(t)}}}}}
 	}
-	for _, version := range []int{1, 2, 4, 5} {
+	for _, version := range []int{1, 2, 4, 5, 6} {
 		s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: profile(version)}
 		if _, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/v1/completions"}}}); err != nil {
 			t.Fatalf("catalog version %d refused: %v", version, err)
 		}
 	}
-	for _, version := range []int{0, 3, 6, 99} {
+	for _, version := range []int{0, 3, 7, 99} {
 		s := &nativeStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}, catalog: profile(version)}
 		if _, err := NewWithContext(context.Background(), s, Config{Upstream: u, Workload: "media", ExecutionRoutes: []Route{{Method: "POST", Path: "/v1/completions"}}}); err == nil {
 			t.Fatalf("catalog version %d accepted", version)
 		}
 	}
-	if !supportedCatalogVersion(1) || !supportedCatalogVersion(2) || supportedCatalogVersion(0) || supportedCatalogVersion(3) || !supportedCatalogVersion(5) || supportedCatalogVersion(6) {
+	if !supportedCatalogVersion(1) || !supportedCatalogVersion(2) || supportedCatalogVersion(0) || supportedCatalogVersion(3) || !supportedCatalogVersion(5) || !supportedCatalogVersion(6) || supportedCatalogVersion(7) {
 		t.Fatal("supportedCatalogVersion boundary wrong")
 	}
 }

@@ -114,11 +114,15 @@ func (s *Store) replaceCatalog(ctx context.Context, tx *sql.Tx, expected string,
 // validateCatalogVersionTransition permits every transition between supported
 // versions except two. It rejects 2→1 when the new catalog carries owned
 // profiles, and any version below 5 that still carries resource limits, which
-// an older binary rejects as an unknown key. Validate already rejects both, so
+// an older binary rejects as an unknown key, and any version below 6
+// that still carries serving options, for the same reason. Validate already rejects both, so
 // this guard is the defense-in-depth layer behind it.
 func validateCatalogVersionTransition(old, next control.Catalog) error {
 	if next.Version < control.CatalogVersionLimits && next.HasLimits() {
 		return control.ErrLimitsRequireV5
+	}
+	if next.Version < control.CatalogVersionServing && next.HasServingOptions() {
+		return control.ErrServingRequiresV6
 	}
 	if old.Version != control.CatalogVersionOwned || next.Version != control.CatalogVersionLegacy {
 		return nil

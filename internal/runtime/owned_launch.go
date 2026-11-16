@@ -48,31 +48,54 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 		b.WriteString("Environment=" + offlineHubName + "=1\n")
 		b.WriteString("EnvironmentFile=" + n.EnvironmentFile + "\n")
 	}
-	var execStart string
-	executable := n.Owned.Executable
-	if executable == "" {
-		executable = ownedBinaryDirectory + "/" + n.Runtime
-	}
+	executable := OwnedExecutable(*n)
 	if !control.ValidOwnedExecutable(n.Runtime, executable) {
 		return nil, fmt.Errorf("%w: unsupported executable", ErrOwnedRender)
 	}
-	switch n.Runtime {
-	case "vllm":
-		execStart = executable + " serve " + n.Owned.ModelPath + " --host " + hardenedBindHost + " --port " + strconv.Itoa(int(n.Owned.Port))
-		if hardened {
-			execStart += " --load-format safetensors --chat-template " + n.ChatTemplate
-		}
-		if n.Owned.MaxModelLen != 0 {
-			execStart += " --max-model-len " + strconv.FormatUint(uint64(n.Owned.MaxModelLen), 10)
-		}
-		if n.Owned.Alias != "" {
-			execStart += " --served-model-name " + n.Owned.Alias
-		}
-	default:
+	if n.Runtime != "vllm" {
 		return nil, fmt.Errorf("%w: runtime %s", ErrOwnedRender, n.Runtime)
+	}
+	execStart, err := renderVLLMExecStart(*n, executable, hardened)
+	if err != nil {
+		return nil, err
 	}
 	b.WriteString("ExecStart=" + execStart + "\n")
 	return []byte(b.String()), nil
+}
+
+// renderVLLMExecStart renders the vLLM command line of an owned launch.
+// Serving options follow every earlier option, so a launch without them
+// keeps its exact earlier bytes and fingerprint.
+func renderVLLMExecStart(n control.NativeModel, executable string, hardened bool) (string, error) {
+	o := n.Owned
+	if !o.Serving.IsZero() {
+		if err := o.Serving.Validate(); err != nil {
+			return "", fmt.Errorf(ownedRenderErrorFormat, ErrOwnedRender, err)
+		}
+	}
+	execStart := executable + " serve " + o.ModelPath + " --host " + hardenedBindHost + " --port " + strconv.Itoa(int(o.Port))
+	if hardened {
+		execStart += " --load-format safetensors --chat-template " + n.ChatTemplate
+	}
+	if o.MaxModelLen != 0 {
+		execStart += " --max-model-len " + strconv.FormatUint(uint64(o.MaxModelLen), 10)
+	}
+	if o.Alias != "" {
+		execStart += " --served-model-name " + o.Alias
+	}
+	if serving := o.Serving.Args(); len(serving) > 0 {
+		execStart += " " + strings.Join(serving, " ")
+	}
+	return execStart, nil
+}
+
+// OwnedExecutable is the executable that the owned unit of n runs: the
+// recorded executable, or the packaged one of the runtime.
+func OwnedExecutable(n control.NativeModel) string {
+	if n.Owned != nil && n.Owned.Executable != "" {
+		return n.Owned.Executable
+	}
+	return ownedBinaryDirectory + "/" + n.Runtime
 }
 
 // OwnedCgroup derives the workload cgroup from the systemd manager root.

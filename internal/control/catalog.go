@@ -114,19 +114,27 @@ const CatalogVersionTrainer = 4
 // CatalogVersionLimits is the first catalog version that accepts limits.
 const CatalogVersionLimits = 5
 
+// CatalogVersionServing is the first catalog version that accepts vLLM
+// serving options.
+const CatalogVersionServing = 6
+
 // ErrUnsupportedCatalogVersion rejects a catalog version that no reader knows.
 var ErrUnsupportedCatalogVersion = errors.New("unsupported catalog version")
 
 // SupportedCatalogVersion reports whether v is a known catalog version.
 func SupportedCatalogVersion(v int) bool {
-	return v == CatalogVersionLegacy || v == CatalogVersionOwned || v == CatalogVersionTrainer || v == CatalogVersionLimits
+	return v == CatalogVersionLegacy || v == CatalogVersionOwned || v == CatalogVersionTrainer || v == CatalogVersionLimits || v == CatalogVersionServing
 }
 
 // LowestCatalogVersion is the one version rule for every catalog writer:
-// 5 with limits, 4 with a trainer binding, 2 with an owned launch, else 1.
+// 6 with serving options, 5 with limits, 4 with a trainer binding, 2 with an
+// owned launch, else 1.
 // The setup client mirrors it in clients/setup/review.mjs; the backend
 // recomputes the version before preview and apply.
 func LowestCatalogVersion(c Catalog) int {
+	if c.HasServingOptions() {
+		return CatalogVersionServing
+	}
 	version := CatalogVersionLegacy
 	for _, p := range c.Profiles {
 		switch {
@@ -245,16 +253,26 @@ func (c Catalog) validateSize() error {
 	return nil
 }
 
+// validateProfileVersion rejects profile content that the catalog version
+// predates.
+func validateProfileVersion(version int, p WorkloadProfile) error {
+	switch {
+	case p.Trainer != nil && version < CatalogVersionTrainer:
+		return errors.New("trainer bindings require catalog version 4 or later")
+	case version < CatalogVersionLimits && p.HasLimits():
+		return ErrLimitsRequireV5
+	case version < CatalogVersionServing && p.HasServingOptions():
+		return ErrServingRequiresV6
+	case version == CatalogVersionLegacy && p.NativeModel != nil && p.NativeModel.Owned != nil:
+		return ErrOwnedRequiresV2
+	}
+	return nil
+}
+
 func (c Catalog) validateProfiles() error {
 	for i, p := range c.Profiles {
-		if p.Trainer != nil && c.Version < CatalogVersionTrainer {
-			return errors.New("trainer bindings require catalog version 4 or 5")
-		}
-		if c.Version < CatalogVersionLimits && p.HasLimits() {
-			return ErrLimitsRequireV5
-		}
-		if c.Version == CatalogVersionLegacy && p.NativeModel != nil && p.NativeModel.Owned != nil {
-			return ErrOwnedRequiresV2
+		if err := validateProfileVersion(c.Version, p); err != nil {
+			return err
 		}
 		if err := p.validate(); err != nil {
 			return err
