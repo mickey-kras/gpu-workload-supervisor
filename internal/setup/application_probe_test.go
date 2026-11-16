@@ -7,9 +7,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 func probeServer(t *testing.T, responses map[string]string) *httptest.Server {
@@ -274,5 +277,65 @@ func TestProbeKeyProtectedVLLMKeepsModelsUnknown(t *testing.T) {
 	got, err := Probe(context.Background(), ProbeRequest{App: "vllm", Endpoint: s.URL})
 	if err != nil || got.InstanceStatus != "available" || got.InventoryStatus != "unknown" || got.Version != "0.14.1" || len(got.Models) != 0 || !strings.Contains(got.NextStep, "API key") {
 		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func TestProbeSelectedExecutableCarriesServingDefaults(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "vllm")
+	if err := os.WriteFile(target, []byte("not executed"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	r := ProbeRequest{App: "vllm", Reference: target, ReferenceKind: "application"}
+	got, err := probeReferenceWithExecutableValidator(context.Background(), r, candidate(r), func(string, string) error { return nil })
+	if err != nil || !got.Recognized || got.Binding == nil || got.Binding.Owned == nil {
+		t.Fatalf("selected executable probe: %+v %v", got, err)
+	}
+	expected := control.ServingOptions{Version: control.ServingOptionsVersion}
+	if got.Binding.Owned.Serving != expected {
+		t.Fatalf("new owned draft serving = %+v, want %+v", got.Binding.Owned.Serving, expected)
+	}
+	// The defaults must survive the drafts store unchanged at version 3.
+	home := t.TempDir()
+	request := DraftRequest{Version: draftsVersionServing, Drafts: []Draft{{ID: "draft-model", Label: "Model", App: "vllm", Reference: target, ReferenceKind: "application", Binding: got.Binding}}}
+	saved, err := SaveDrafts(home, request)
+	if err != nil {
+		t.Fatalf("save draft with serving defaults: %v", err)
+	}
+	if saved.Version != draftsVersionServing {
+		t.Fatalf("serving draft saved at drafts version %d, want %d", saved.Version, draftsVersionServing)
+	}
+	reopened, err := ReadDrafts(home)
+	if err != nil || len(reopened.Drafts) != 1 {
+		t.Fatalf("reopen serving draft: %+v %v", reopened, err)
+	}
+	if reopened.Drafts[0].Binding.Owned.Serving != expected {
+		t.Fatalf("serving defaults did not round trip: %+v", reopened.Drafts[0].Binding.Owned.Serving)
+	}
+}
+
+func TestServingLessDraftLoadsUnchanged(t *testing.T) {
+	// Older drafts without a serving object predate drafts version 3; they
+	// must keep loading with zero-valued serving options and no version bump.
+	home := t.TempDir()
+	legacy := Draft{ID: "draft-old", Label: "Old", App: "vllm", Reference: "/models/old", ReferenceKind: "model-directory",
+		Binding: &DraftBinding{Instance: "custom", Owned: &DraftOwnedLaunch{ModelPath: "/models/old", Port: 12345}}}
+	saved, err := SaveDrafts(home, DraftRequest{Version: 1, Drafts: []Draft{legacy}})
+	if err != nil {
+		t.Fatalf("save serving-less draft: %v", err)
+	}
+	if saved.Version != 1 {
+		t.Fatalf("serving-less draft bumped to drafts version %d, want 1", saved.Version)
+	}
+	reopened, err := ReadDrafts(home)
+	if err != nil || len(reopened.Drafts) != 1 {
+		t.Fatalf("reopen serving-less draft: %+v %v", reopened, err)
+	}
+	expected := &DraftBinding{Instance: "custom", Owned: &DraftOwnedLaunch{ModelPath: "/models/old", Port: 12345}}
+	if !reflect.DeepEqual(reopened.Drafts[0].Binding, expected) {
+		t.Fatalf("serving-less draft changed on load: %+v", reopened.Drafts[0].Binding)
+	}
+	if reopened.Drafts[0].Binding.Owned.Serving != (control.ServingOptions{}) {
+		t.Fatalf("serving-less draft gained options: %+v", reopened.Drafts[0].Binding.Owned.Serving)
 	}
 }
