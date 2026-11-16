@@ -99,7 +99,7 @@ test('malformed gpu details fail closed', () => {
         mutate(r);
         assert.throws(() => parse(r, 'user-switch'));
     }
-    for (const failure of ['', 'bad‮text', 7]) {
+    for (const failure of ['', 'bad' + String.fromCodePoint(0x202e) + 'text', 7]) {
         const r = checkFailed();
         r.gpuCheck.failure = failure;
         assert.throws(() => parse(r, 'user-switch'));
