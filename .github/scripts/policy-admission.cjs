@@ -30,10 +30,12 @@ function loadTrustedReviewers(explicitPath) {
   }
 }
 
-// Match primarily by numeric account id; login is the fallback and display form.
+// Match primarily by numeric account id: a user carrying an unlisted id is
+// denied outright so a recycled login cannot impersonate a listed reviewer.
+// Login is the fallback only when a provider omits the numeric id.
 function isTrustedReviewer(user, reviewers) {
   if (!reviewers || !user || user.type !== 'User') return false;
-  if (Number.isSafeInteger(user.id) && reviewers.some(reviewer => reviewer.id === user.id)) return true;
+  if (Number.isSafeInteger(user.id)) return reviewers.some(reviewer => reviewer.id === user.id);
   return typeof user.login === 'string' && reviewers.some(reviewer => reviewer.login === user.login);
 }
 

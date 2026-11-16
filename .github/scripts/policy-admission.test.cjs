@@ -192,8 +192,10 @@ test('identity matching is id-primary with login fallback against the trusted li
   const approval = user => validReview([{ id: 1, user, commit_id: SHA, state: 'APPROVED' }], SHA, list);
   // listed reviewer admitted by id
   assert.equal(approval({ login: 'reviewer-one', id: 111, type: 'User' }), true);
-  // listed reviewer admitted by login fallback when the id is unknown
-  assert.equal(approval({ login: 'reviewer-two', id: 999, type: 'User' }), true);
+  // listed reviewer admitted by login fallback when a provider omits the numeric id
+  assert.equal(approval({ login: 'reviewer-two', type: 'User' }), true);
+  // a recycled login carrying an unlisted numeric id is denied
+  assert.equal(approval({ login: 'reviewer-two', id: 999, type: 'User' }), false);
   // unlisted reviewer denied even with a valid approval shape
   assert.equal(approval({ login: 'intruder', id: 999, type: 'User' }), false);
   // bots and non-decisive identities never match
