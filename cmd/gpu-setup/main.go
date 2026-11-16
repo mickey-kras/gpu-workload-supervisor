@@ -22,6 +22,9 @@ import (
 const (
 	cmdVerifyBindings = "verify-bindings"
 	cmdModelStatus    = "model-status"
+	cmdModelCheck     = "model-check"
+	cmdModelReview    = "model-review"
+	cmdModelApprove   = "model-approve"
 )
 
 type setupActions struct {
@@ -76,7 +79,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return err
 	}
 	switch args[0] {
-	case "temporary-status", "temporary-cleanup", "correct-gpu", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned", cmdModelStatus, "model-check", "model-review", "model-approve":
+	case "temporary-status", "temporary-cleanup", "correct-gpu", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned", cmdModelStatus, cmdModelCheck, cmdModelReview, cmdModelApprove:
 		if a.euid() == 0 {
 			return errors.New("run guided setup as the desktop account, not root")
 		}
@@ -116,7 +119,7 @@ func (a setupActions) runAction(ctx context.Context, home, action string, input 
 			return err
 		}
 		return json.NewEncoder(output).Encode(report)
-	case "model-check", "model-review", "model-approve":
+	case cmdModelCheck, cmdModelReview, cmdModelApprove:
 		return runModelAction(ctx, home, action, input, output)
 	case "drafts":
 		return runDrafts(home, output)
@@ -245,7 +248,7 @@ func actionContext(action string) (context.Context, context.CancelFunc) {
 	switch action {
 	case cmdModelStatus:
 		return context.WithTimeout(context.Background(), recheckTimeout)
-	case "model-check":
+	case cmdModelCheck:
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		ctx, cancel := context.WithTimeout(ctx, modelCheckTimeout)
 		return ctx, func() { cancel(); stop() }
@@ -258,7 +261,7 @@ func actionContext(action string) (context.Context, context.CancelFunc) {
 func runModelAction(ctx context.Context, home, action string, input io.Reader, output io.Writer) error {
 	var result any
 	switch action {
-	case "model-check":
+	case cmdModelCheck:
 		request, err := setup.DecodeModelCheckRequest(input)
 		if err != nil {
 			return err
@@ -266,7 +269,7 @@ func runModelAction(ctx context.Context, home, action string, input io.Reader, o
 		if result, err = setup.ModelCheck(ctx, home, request, &http.Client{}); err != nil {
 			return err
 		}
-	case "model-review":
+	case cmdModelReview:
 		request, err := setup.DecodeModelReviewRequest(input)
 		if err != nil {
 			return err
@@ -274,7 +277,7 @@ func runModelAction(ctx context.Context, home, action string, input io.Reader, o
 		if result, err = setup.ModelReviewList(ctx, home, request); err != nil {
 			return err
 		}
-	case "model-approve":
+	case cmdModelApprove:
 		request, err := setup.DecodeModelApproveRequest(input)
 		if err != nil {
 			return err
