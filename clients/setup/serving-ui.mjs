@@ -166,15 +166,22 @@ export class ServingOptionsForm {
         if (!quiet) this.error.visible = false;
         if (!this.enable.active) return this.initial ? null : undefined;
         const serving = {...this.stored, version: 1};
-        for (const field of servingFields) {
-            const result = readField(field, this.rows.get(field.key), this.stored);
-            if (result.error) return quiet ? result : this.fail(result.error);
-            if (result.value === undefined) delete serving[field.key]; else serving[field.key] = result.value;
-        }
+        const invalid = this.readFields(serving);
+        if (invalid) return quiet ? invalid : this.fail(invalid.error);
         if (this.prefixCaching.active) serving.disablePrefixCaching = true; else delete serving.disablePrefixCaching;
         const problem = checkServing(serving);
         if (!problem) return serving;
         return quiet ? {error: problem} : this.fail(problem);
+    }
+    // readFields puts the edited field values in the serving object. It
+    // returns the first field error, or null.
+    readFields(serving) {
+        for (const field of servingFields) {
+            const result = readField(field, this.rows.get(field.key), this.stored);
+            if (result.error) return result;
+            if (result.value === undefined) delete serving[field.key]; else serving[field.key] = result.value;
+        }
+        return null;
     }
     fail(text) {
         this.error.label = text; this.error.visible = true;
