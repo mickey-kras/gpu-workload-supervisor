@@ -66,6 +66,9 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 	if err := c.refuseLimitedTarget(ctx, target); err != nil {
 		return control.State{}, err
 	}
+	if err := c.refuseArtifactTarget(ctx, target); err != nil {
+		return control.State{}, err
+	}
 	current, err := c.transitionSource(ctx, options)
 	if err != nil {
 		return current, err

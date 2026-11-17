@@ -46,7 +46,10 @@ func qualifyParsedLaunch(unit parsedLaunchUnit, n control.NativeModel, validate 
 	if err := unit.validatePreCommands(validate); err != nil {
 		return err
 	}
-	return qualifyParsedMainCommand(unit, n, validate)
+	if err := qualifyParsedMainCommand(unit, n, validate); err != nil {
+		return err
+	}
+	return qualifyParsedArtifacts(unit, n)
 }
 
 // Main-command checks are independent of startup preparation validation.
@@ -81,6 +84,10 @@ type parsedLaunchUnit struct {
 	// limitDirectives records resource controls. Only the owned grammar
 	// rejects them; the adopted grammar accepts them as before.
 	limitDirectives []string
+	// artifactBinds records the configured BindReadOnlyPaths value of a
+	// protected launch: setup-derived for owned launches, source-verified
+	// against the recorded artifacts for adopted ones.
+	artifactBinds   string
 	environmentFile string
 	// keyFilePending marks an owned launch whose key file apply creates.
 	keyFilePending bool

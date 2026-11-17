@@ -78,6 +78,10 @@ func (r *fakeRuntime) VerifyLimitProtection(context.Context, control.Workload) e
 	return gpuruntime.ErrLimitUnchecked
 }
 
+func (r *fakeRuntime) VerifyArtifactProtection(context.Context, control.Workload) error {
+	return gpuruntime.ErrArtifactUnchecked
+}
+
 func (r *fakeRuntime) LimitOutcome(context.Context, control.Workload) gpuruntime.LimitOutcome {
 	return gpuruntime.LimitOutcome{Class: gpuruntime.LimitOutcomeNone, Detail: "the fake cannot read it"}
 }

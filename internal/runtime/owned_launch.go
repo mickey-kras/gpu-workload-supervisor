@@ -45,6 +45,13 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 	// or replace the unit; qualification rejects it for execution.
 	hardened := n.Hardened()
 	if hardened {
+		if !n.Owned.Artifacts.IsZero() {
+			line, err := ownedArtifactBindLine(*n)
+			if err != nil {
+				return nil, err
+			}
+			b.WriteString(line)
+		}
 		b.WriteString("Environment=" + offlineHubName + "=1\n")
 		b.WriteString("EnvironmentFile=" + n.EnvironmentFile + "\n")
 	}
@@ -61,6 +68,26 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 	}
 	b.WriteString("ExecStart=" + execStart + "\n")
 	return []byte(b.String()), nil
+}
+
+// ownedArtifactBindLine renders the deterministic BindReadOnlyPaths line of
+// a protected owned launch. Artifact protection needs the hardened launch:
+// without the pinned chat template and environment file the binds could not
+// cover the approved metadata.
+func ownedArtifactBindLine(n control.NativeModel) (string, error) {
+	o := n.Owned
+	if o == nil || o.Artifacts.IsZero() {
+		return "", nil
+	}
+	if !n.Hardened() {
+		return "", fmt.Errorf("%w: artifact protection requires the hardened launch with a pinned chat template and environment file", ErrOwnedRender)
+	}
+	for _, path := range []string{o.ModelPath, n.ChatTemplate, n.EnvironmentFile} {
+		if !control.LaunchGrammarExpressible(path) {
+			return "", fmt.Errorf("%w: artifact path %q is not expressible in the unit grammar", ErrOwnedRender, path)
+		}
+	}
+	return "BindReadOnlyPaths=" + artifactBindValue(o.ModelPath, n) + "\n", nil
 }
 
 // renderVLLMExecStart renders the vLLM command line of an owned launch.
@@ -206,6 +233,10 @@ func parseOwnedLaunchUnit(raw []byte, n control.NativeModel) (parsedLaunchUnit, 
 	if err != nil {
 		return parsedLaunchUnit{}, err
 	}
+	raw, err = removeOwnedArtifactLine(raw, n)
+	if err != nil {
+		return parsedLaunchUnit{}, err
+	}
 	parsed, err := parseLaunchUnit(raw)
 	if err != nil {
 		return parsed, err
@@ -213,7 +244,35 @@ func parseOwnedLaunchUnit(raw []byte, n control.NativeModel) (parsedLaunchUnit, 
 	if len(parsed.limitDirectives) != 0 {
 		return parsedLaunchUnit{}, fmt.Errorf("%w: resource control %s outside the rendered limits", ErrLaunchUnsupported, parsed.limitDirectives[0])
 	}
+	if !n.Owned.Artifacts.IsZero() {
+		parsed.artifactBinds = artifactBindValue(n.Owned.ModelPath, n)
+	}
 	return parsed, nil
+}
+
+// removeOwnedArtifactLine accepts the artifact bind line only as the exact
+// rendered line directly after the fixed header and limits block.
+// parseOwnedLaunchUnit rejects any leftover BindReadOnlyPaths directive, so
+// a moved, changed or extra line fails.
+func removeOwnedArtifactLine(raw []byte, n control.NativeModel) ([]byte, error) {
+	o := n.Owned
+	if o == nil || o.Artifacts.IsZero() {
+		return raw, nil
+	}
+	line, err := ownedArtifactBindLine(n)
+	if err != nil {
+		return nil, err
+	}
+	text := string(raw)
+	at := strings.Index(text, ownedServiceHeader)
+	if at < 0 || strings.Count(text, ownedServiceHeader) != 1 {
+		return nil, ErrLaunchUnsupported
+	}
+	start := at + len(ownedServiceHeader)
+	if !strings.HasPrefix(text[start:], line) {
+		return nil, ErrLaunchUnsupported
+	}
+	return []byte(text[:start] + text[start+len(line):]), nil
 }
 
 // removeOwnedLimitLines accepts limit directives only as the exact rendered

@@ -260,6 +260,16 @@ func (unit *parsedLaunchUnit) applyExternalScalar(directive, value string) error
 	if err != nil {
 		return err
 	}
+	if directive == "[Service]BindReadOnlyPaths" {
+		// Adopted vLLM units may pin the model artifacts read-only. The
+		// value is verified against the recorded artifacts during
+		// qualification; until then it claims nothing.
+		if err := validateArtifactBindValue(value); err != nil {
+			return err
+		}
+		unit.artifactBinds = value
+		return nil
+	}
 	if accepted, err := externalDirective(section, key, value); accepted || err != nil {
 		if err == nil {
 			unit.recordLoadedProperty(key, value)

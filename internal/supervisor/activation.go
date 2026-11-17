@@ -35,6 +35,9 @@ func (c *Controller) ActivateWorkload(ctx context.Context, target control.Worklo
 	if err := c.refuseLimitedTarget(ctx, target); err != nil {
 		return control.State{}, err
 	}
+	if err := c.refuseArtifactTarget(ctx, target); err != nil {
+		return control.State{}, err
+	}
 	current, err := c.store.State(ctx)
 	if err != nil {
 		return control.State{}, err

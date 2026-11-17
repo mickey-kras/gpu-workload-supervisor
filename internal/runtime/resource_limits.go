@@ -101,6 +101,9 @@ func DefiniteBindingFailure(err error) bool {
 	if errors.Is(err, errBindingCommand) || errors.Is(err, errBindingRead) {
 		return false
 	}
+	if errors.Is(err, ErrArtifactEscape) || errors.Is(err, ErrArtifactAlias) || errors.Is(err, ErrArtifactRoot) || errors.Is(err, ErrArtifactBounds) {
+		return true
+	}
 	return errors.Is(err, ErrLaunchChanged) || errors.Is(err, ErrLaunchUnsupported)
 }
 

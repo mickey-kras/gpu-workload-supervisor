@@ -159,6 +159,9 @@ func inspectParsedAutomaticLaunch(u parsedLaunchUnit, raw []byte, app string, va
 		if u.environmentFile != "" {
 			problems.add(fmt.Errorf("%w: EnvironmentFile is supported only for the vLLM API key", ErrLaunchUnsupported))
 		}
+		if u.artifactBinds != "" {
+			problems.add(fmt.Errorf("%w: BindReadOnlyPaths is supported only for vLLM model artifacts", ErrLaunchUnsupported))
+		}
 		endpoint, err := comfyLaunchEndpoint(args)
 		result.Endpoint = endpoint
 		problems.add(err)

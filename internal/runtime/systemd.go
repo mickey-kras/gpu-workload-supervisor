@@ -138,7 +138,10 @@ func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) e
 	if err := m.verifyNativeBinding(ctx, p); err != nil {
 		return err
 	}
-	return m.startUnit(ctx, p.Unit, workload)
+	if err := m.startUnit(ctx, p.Unit, workload); err != nil {
+		return err
+	}
+	return m.verifyStartedArtifacts(ctx, p)
 }
 
 // startLimitedUnit runs the launch checks and the slice memory check, starts
@@ -159,6 +162,9 @@ func (m *SystemdManager) startLimitedUnit(ctx context.Context, p control.Workloa
 	err = m.runSystemctl(ctx, "start", p.Unit)
 	if err == nil {
 		err = m.verifyStartedLimits(ctx, p)
+	}
+	if err == nil {
+		err = m.verifyStartedArtifacts(ctx, p)
 	}
 	if err != nil {
 		// Start owns the unit it just started: a rollback start must not

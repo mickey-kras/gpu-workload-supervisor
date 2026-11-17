@@ -114,6 +114,10 @@ type OwnedLaunch struct {
 	// exact legacy unit bytes and fingerprints; present needs catalog
 	// version 6.
 	Serving ServingOptions `json:"serving,omitzero"`
+	// Artifacts are opt-in read-only pinning of the model artifacts. Absent
+	// keeps the exact legacy unit bytes and fingerprints; present needs the
+	// hardened launch and catalog version 7.
+	Artifacts ArtifactProtection `json:"artifacts,omitzero"`
 }
 
 // ValidNativeModelIdentity applies the catalog's model-identity rule
@@ -219,6 +223,14 @@ func (n NativeModel) validateOwned() error {
 	}
 	if !o.Serving.IsZero() {
 		if err := o.Serving.Validate(); err != nil {
+			return err
+		}
+	}
+	if !o.Artifacts.IsZero() {
+		if !n.Hardened() {
+			return errors.New("owned artifact protection requires the hardened launch with a pinned chat template and environment file")
+		}
+		if err := o.Artifacts.Validate(); err != nil {
 			return err
 		}
 	}

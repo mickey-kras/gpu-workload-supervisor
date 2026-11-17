@@ -181,6 +181,13 @@ func (c *Controller) retainedCatalogTarget(ctx context.Context, snap gpuruntime.
 			retained.rejected = errors.Join(retained.rejected, limitedUnitError(ErrLimitedUnitRejected, p, checkErr))
 			continue
 		}
+		if checkErr := c.checkRetainedArtifacts(ctx, p); checkErr != nil {
+			if !gpuruntime.DefiniteBindingFailure(checkErr) {
+				return retainedTarget{rejected: retained.rejected}, gpuruntime.UnitError(p, checkErr)
+			}
+			retained.rejected = errors.Join(retained.rejected, limitedUnitError(ErrArtifactUnitRejected, p, checkErr))
+			continue
+		}
 		if retained.workload != control.WorkloadIdle {
 			return retainedTarget{rejected: retained.rejected}, ErrInvariant
 		}
@@ -210,11 +217,13 @@ func limitedUnitError(class error, p control.WorkloadProfile, err error) error {
 	return fmt.Errorf("%w: %w", class, gpuruntime.UnitError(p, err))
 }
 
-// limitChecker runs the checks of a unit with limits: the launch checks
-// before any unload, and the checks of a running unit.
+// limitChecker runs the checks of a unit with limits or artifact
+// protection: the launch checks before any unload, and the checks of a
+// running unit.
 type limitChecker interface {
 	VerifyLaunchLimits(context.Context, control.Workload) error
 	VerifyLimitProtection(context.Context, control.Workload) error
+	VerifyArtifactProtection(context.Context, control.Workload) error
 }
 
 // runLimitProbe runs one runtime limit check within ActionTimeout.

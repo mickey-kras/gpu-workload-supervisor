@@ -136,6 +136,9 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 	if err := CheckLoadedLaunchProperties(values, launch.loadedProperties); err != nil {
 		return err
 	}
+	if launch.artifactBinds != "" && !samePathSet(values["BindReadOnlyPaths"], launch.artifactBinds) {
+		return fmt.Errorf("%w: loaded BindReadOnlyPaths differs from inspected source; reload and refresh the binding", ErrLaunchChanged)
+	}
 	if err := CheckLoadedEnvironment(values["Environment"], launch.environmentValues); err != nil {
 		return err
 	}
@@ -166,6 +169,9 @@ func nativeBindingShowArguments(unit string, launch parsedLaunchUnit) []string {
 	}
 	if launch.environmentFile != "" {
 		args = append(args, "--property=EnvironmentFiles")
+	}
+	if launch.artifactBinds != "" {
+		args = append(args, "--property=BindReadOnlyPaths")
 	}
 	args = append(args, "--", unit)
 	return args

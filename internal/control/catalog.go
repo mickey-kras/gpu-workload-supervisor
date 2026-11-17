@@ -118,20 +118,27 @@ const CatalogVersionLimits = 5
 // serving options.
 const CatalogVersionServing = 6
 
+// CatalogVersionArtifactProtection is the first catalog version that
+// accepts read-only model artifact protection.
+const CatalogVersionArtifactProtection = 7
+
 // ErrUnsupportedCatalogVersion rejects a catalog version that no reader knows.
 var ErrUnsupportedCatalogVersion = errors.New("unsupported catalog version")
 
 // SupportedCatalogVersion reports whether v is a known catalog version.
 func SupportedCatalogVersion(v int) bool {
-	return v == CatalogVersionLegacy || v == CatalogVersionOwned || v == CatalogVersionTrainer || v == CatalogVersionLimits || v == CatalogVersionServing
+	return v == CatalogVersionLegacy || v == CatalogVersionOwned || v == CatalogVersionTrainer || v == CatalogVersionLimits || v == CatalogVersionServing || v == CatalogVersionArtifactProtection
 }
 
 // LowestCatalogVersion is the one version rule for every catalog writer:
-// 6 with serving options, 5 with limits, 4 with a trainer binding, 2 with an
-// owned launch, else 1.
+// 7 with artifact protection, 6 with serving options, 5 with limits, 4 with
+// a trainer binding, 2 with an owned launch, else 1.
 // The setup client mirrors it in clients/setup/review.mjs; the backend
 // recomputes the version before preview and apply.
 func LowestCatalogVersion(c Catalog) int {
+	if c.HasArtifactProtection() {
+		return CatalogVersionArtifactProtection
+	}
 	if c.HasServingOptions() {
 		return CatalogVersionServing
 	}
@@ -263,6 +270,8 @@ func validateProfileVersion(version int, p WorkloadProfile) error {
 		return ErrLimitsRequireV5
 	case version < CatalogVersionServing && p.HasServingOptions():
 		return ErrServingRequiresV6
+	case version < CatalogVersionArtifactProtection && p.HasArtifactProtection():
+		return ErrArtifactsRequireV7
 	case version == CatalogVersionLegacy && p.NativeModel != nil && p.NativeModel.Owned != nil:
 		return ErrOwnedRequiresV2
 	}
