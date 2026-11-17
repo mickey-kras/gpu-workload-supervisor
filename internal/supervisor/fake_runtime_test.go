@@ -60,32 +60,6 @@ func (r *releaseOrderedRuntime) ObserveForRecovery(ctx context.Context) (gpurunt
 	return r.Observe(ctx)
 }
 
-func (r *limitedRuntime) ObserveForRecovery(ctx context.Context) (gpuruntime.Snapshot, error) {
-	return r.Observe(ctx)
-}
-
-func (r *uncheckedRuntime) ObserveForRecovery(ctx context.Context) (gpuruntime.Snapshot, error) {
-	return r.Observe(ctx)
-}
-
-// fakeRuntime cannot check limits or run trainers. Fakes that can
-// override these methods.
-func (r *fakeRuntime) VerifyLaunchLimits(context.Context, control.Workload) error {
-	return gpuruntime.ErrLimitUnchecked
-}
-
-func (r *fakeRuntime) VerifyLimitProtection(context.Context, control.Workload) error {
-	return gpuruntime.ErrLimitUnchecked
-}
-
-func (r *fakeRuntime) LimitOutcome(context.Context, control.Workload) gpuruntime.LimitOutcome {
-	return gpuruntime.LimitOutcome{Class: gpuruntime.LimitOutcomeNone, Detail: "the fake cannot read it"}
-}
-
-func (r *fakeRuntime) LimitStopReleased(context.Context, control.Workload) error {
-	return gpuruntime.ErrLimitUnchecked
-}
-
 var errFakeTraining = errors.New("the fake runs no trainer")
 
 func (r *fakeRuntime) StartTraining(context.Context, control.WorkloadProfile, control.TrainingJob) (string, error) {

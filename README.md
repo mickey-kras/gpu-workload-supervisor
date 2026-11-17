@@ -10,9 +10,6 @@ blocks requests when a transition fails.
 | `gpu-workload-proxy` | Admission proxy |
 | `gpu-operator` | Local operator backend |
 | `gpu-setup` | Detection and setup |
-| `gpu-training-runner` | Experimental training runner |
-| `gpu-training-candidate` | Preparation of unqualified inputs. Does not execute training. |
-| `gpu-training-import` | Preparation of unqualified PEFT imports. Does not activate serving. |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/generated/overview-dark.svg">

@@ -17,7 +17,11 @@ import (
 func trainingContractStore(t *testing.T) (*Store, string, string) {
 	t.Helper()
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "state.db")
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "state.db")
 	s, err := Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
@@ -367,7 +371,11 @@ func TestTrainingContractRejectsCanonicalStateOutputThroughAncestorAlias(t *test
 	if err := original.Close(); err != nil {
 		t.Fatal(err)
 	}
-	alias := filepath.Join(t.TempDir(), "alias")
+	aliasRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(aliasRoot, "alias")
 	parent := filepath.Dir(path)
 	if err := os.Symlink(filepath.Dir(parent), alias); err != nil {
 		t.Fatal(err)

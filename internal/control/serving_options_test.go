@@ -40,6 +40,10 @@ func TestServingOptionsRenderDefaultsExplicitly(t *testing.T) {
 	if got := full.Args(); !slices.Equal(got, want) {
 		t.Fatalf("full = %q, want %q", got, want)
 	}
+	sleeping := ServingOptions{Version: 1, SleepMode: true}.Args()
+	if !slices.Contains(sleeping, FlagEnableSleepMode) {
+		t.Fatalf("sleepMode did not render %s: %q", FlagEnableSleepMode, sleeping)
+	}
 }
 
 func TestServingOptionsBounds(t *testing.T) {

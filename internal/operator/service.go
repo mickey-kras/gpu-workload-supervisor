@@ -277,7 +277,7 @@ func errorCode(err error) Code {
 		return gpuErrorCode(err)
 	}
 	switch {
-	case errors.Is(err, ErrIncompatibleConfiguration) || errors.Is(err, supervisor.ErrLimitedTarget):
+	case errors.Is(err, ErrIncompatibleConfiguration):
 		// Only the refusal before any effect is a definite outcome. Limit
 		// failures after an effect keep their usual codes.
 		return IncompatibleConfiguration

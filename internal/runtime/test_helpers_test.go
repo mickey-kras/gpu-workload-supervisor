@@ -2,9 +2,23 @@ package runtime
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
+
+const computeAppsCommand = "/usr/bin/true --query-compute-apps=pid,process_name,used_memory --format=csv,noheader,nounits -i 0"
+
+func first(m *SystemdManager, _ string) *SystemdManager { return m }
+
+func remove(t *testing.T, root, name string) {
+	t.Helper()
+	if err := os.RemoveAll(filepath.Join(root, name)); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // These wrappers give tests direct access to production checks that the
 // runtime reaches through larger call paths.

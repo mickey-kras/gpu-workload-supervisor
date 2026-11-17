@@ -30,7 +30,11 @@ func (m *SystemdManager) observe(ctx context.Context, recovering bool) (Snapshot
 		if !validObservedUnit(st, p.Trainer != nil, recovering) {
 			return Snapshot{}, fmt.Errorf("%s is neither running nor stopped", p.Unit)
 		}
-		s.Workloads[p.ID] = WorkloadObservation{Active: st.active == "active", Exclusive: p.Adapter != control.AdapterMediaUnload}
+		active := st.active == "active"
+		if active && m.isHibernated(ctx, p) {
+			active = false
+		}
+		s.Workloads[p.ID] = WorkloadObservation{Active: active, Exclusive: p.Adapter != control.AdapterMediaUnload}
 	}
 	return s, nil
 }
@@ -53,22 +57,26 @@ func (m *SystemdManager) releasedFor(ctx context.Context, target control.Workloa
 		}
 	}
 	for _, p := range m.config.Catalog.Profiles {
-		if launchSourceReplaced(p, replaced) {
-			continue
-		}
-		if profileGPUUUID(p) != "" {
-			if err := m.verifyNativeBinding(ctx, p); err != nil {
-				return err
-			}
-		}
-		if p.ID == target {
-			continue
-		}
-		if err := m.releasedUnit(ctx, p.Unit, p.Cgroup, p.Adapter == control.AdapterMediaUnload); err != nil {
+		if err := m.checkReleasedProfile(ctx, p, target, replaced); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (m *SystemdManager) checkReleasedProfile(ctx context.Context, p control.WorkloadProfile, target control.Workload, replaced map[string]bool) error {
+	if launchSourceReplaced(p, replaced) {
+		return nil
+	}
+	if profileGPUUUID(p) != "" {
+		if err := m.verifyNativeBinding(ctx, p); err != nil {
+			return err
+		}
+	}
+	if p.ID == target || m.releasedViaSleep(ctx, p) {
+		return nil
+	}
+	return m.releasedUnit(ctx, p.Unit, p.Cgroup, p.Adapter == control.AdapterMediaUnload)
 }
 
 func launchSourceReplaced(p control.WorkloadProfile, replaced map[string]bool) bool {
@@ -100,7 +108,7 @@ func (m *SystemdManager) Healthy(ctx context.Context, id control.Workload) error
 		return nil
 	}
 	p, _ := m.config.Catalog.Profile(id)
-	if err := m.checkStartedUnit(ctx, p); err != nil {
+	if err := m.verifyNativeBinding(ctx, p); err != nil {
 		return err
 	}
 	if p.Trainer != nil {

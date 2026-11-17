@@ -5,11 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"golang.org/x/sys/unix"
 )
 
@@ -108,37 +106,24 @@ func TestProfileRejectsCaseAliases(t *testing.T) {
 	}
 }
 
-// A profile that setup wrote with a stored limit reserve loads, and its
-// runtime configuration carries the reserve. An invalid reserve is
-// refused.
-func TestProfileWithLimitReserve(t *testing.T) {
+func TestProfileWithGPUUUID(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, ".config", "gpu-workload-supervisor")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	// The body has the bytes that setup writes: the JSON encoding of the
-	// shared profile type.
-	want := gpuruntime.LimitReserve{MemoryMiB: 4096, Tasks: 1024, CPUPercent: 200, IOPercent: 20}
+	want := "GPU-11111111-2222-3333-4444-555555555555"
 	data, err := json.Marshal(Profile{Version: 1, StatePath: "/var/tmp/state.db", ActivatedRelease: "v1", SystemctlPath: "/usr/bin/systemctl",
-		NvidiaSMIPath: "/usr/bin/nvidia-smi", LimitReserve: &want})
+		NvidiaSMIPath: "/usr/bin/nvidia-smi", GPUUUID: want})
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := string(data)
 	if err := os.WriteFile(filepath.Join(dir, "operator.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
 	p, err := loadProfileHome(t, root, os.Geteuid())
-	if err != nil || p.SystemdConfig(&control.Catalog{}).LimitReserve == nil || *p.SystemdConfig(&control.Catalog{}).LimitReserve != want {
-		t.Fatalf("profile with a reserve = %+v, %v", p.LimitReserve, err)
-	}
-	body = strings.Replace(body, `"ioPercent":20`, `"ioPercent":90`, 1)
-	if err := os.WriteFile(filepath.Join(dir, "operator.json"), []byte(body), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := loadProfileHome(t, root, os.Geteuid()); err == nil || !strings.Contains(err.Error(), "ioPercent") {
-		t.Fatalf("profile with an invalid reserve = %v", err)
+	if err != nil || p.SystemdConfig(&control.Catalog{}).GPUUUID != want {
+		t.Fatalf("profile with gpuUUID = %+v, %v", p.GPUUUID, err)
 	}
 }
 

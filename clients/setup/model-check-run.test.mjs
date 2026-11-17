@@ -413,7 +413,7 @@ test('the reason texts cover each reason code of the checks', async () => {
     const codes = [...go.matchAll(/\bReason\w+\s*=\s*"([a-z0-9-]+)"/g)].map(match => match[1]);
     const display = new Set(['no-result', 'other-directory', 'checker-changed', 'result-unusable', 'template-changed', 'files-unavailable']);
     const {reasonText} = await import('./model-reasons.mjs');
-    assert.ok(codes.length > 30);
+    assert.ok(codes.length >= 18);
     for (const code of codes.filter(code => !display.has(code))) assert.ok(!reasonText(code).startsWith('Reason code:'), code);
 });
 

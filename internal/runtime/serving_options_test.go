@@ -58,6 +58,7 @@ func TestRenderOwnedUnitServingRoundTripQualifies(t *testing.T) {
 		{Version: 1},
 		{Version: 1, GPUMemoryPercent: 50, MaxNumSeqs: 1, MaxNumBatchedTokens: 256},
 		{Version: 1, GPUMemoryPercent: 95, KVCacheDType: "auto", MaxNumSeqs: 64, MaxNumBatchedTokens: 65536, DisablePrefixCaching: true},
+		{Version: 1, GPUMemoryPercent: 90, SleepMode: true},
 	} {
 		p := ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: modelDir, Port: 9100, Alias: "selected", Serving: serving})
 		bound := newHardenedFixture(t).bind(*p.NativeModel)

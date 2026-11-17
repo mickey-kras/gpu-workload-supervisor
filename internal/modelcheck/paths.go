@@ -9,8 +9,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/llmtraining"
 )
 
 // textKeys hold token text or labels, never file paths or model IDs.
@@ -160,7 +158,7 @@ func (s *jsonScan) object(at scope, depth int) error {
 		}
 		seen[key] = true
 		child := scope{key: key, template: at.template || key == templateKey, data: at.data || (depth > 1 && tokenDataKeys[key])}
-		child.pathKey = depth == 1 && slices.Contains(llmtraining.FilePathKeys, key)
+		child.pathKey = depth == 1 && slices.Contains(FilePathKeys, key)
 		if reason := s.keyReason(key, depth, child); reason != "" {
 			return s.stop(reason)
 		}

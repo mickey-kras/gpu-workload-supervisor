@@ -26,7 +26,11 @@ import (
 // above about 110 seconds can also end it first. The stop job that systemd
 // queued still runs, and Start returns the stop error with the limit
 // error.
-const limitCleanupTimeout = 2 * time.Minute
+// CommandFunc runs one command and returns its combined output.
+type CommandFunc func(ctx context.Context, name string, args ...string) ([]byte, error)
+
+// CommandOutputLimit bounds command output read by setup helpers (1 MiB).
+const CommandOutputLimit = 1 << 20
 
 type CommandRunner interface {
 	Run(context.Context, string, ...string) ([]byte, error)
@@ -50,16 +54,10 @@ type SystemdConfig struct {
 	Catalog             *control.Catalog
 	HealthTimeout       time.Duration
 	GPUIndex            int
+	GPUUUID             string
 	CapacityHeadroomMiB uint64
 	NvidiaSMIPath       string
 	SystemctlPath       string
-	// LimitReserve is the stored reserve under the host cap; nil uses
-	// DefaultLimitReserve.
-	LimitReserve *LimitReserve
-	// LimitReserveErr is set when the caller cannot read the stored
-	// reserve. Each limit check then fails with ErrLimitReadback: the
-	// default reserve could be too small.
-	LimitReserveErr error
 	// OwnedUnitDir locates supervisor-owned unit files for the preflight
 	// orphan scan; empty derives the effective user's systemd user directory.
 	OwnedUnitDir string
@@ -70,12 +68,8 @@ type SystemdManager struct {
 	runner                    CommandRunner
 	client                    *http.Client
 	cgroups                   cgroupFS
-	host                      limitHost
-	reserve                   LimitReserve
 	nativeExecutableValidator func(string) error
-	// vendorCache keeps the verified vendor drop-ins of the host cap.
-	vendorCache *vendorCache
-	gpuHost     gpuProcessHost
+	gpuHost                   gpuProcessHost
 }
 
 func NewSystemdManager(config SystemdConfig) (*SystemdManager, error) {
@@ -112,16 +106,19 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 	if config.HealthTimeout <= 0 || config.GPUIndex < 0 {
 		return nil, errors.New("invalid runtime timeout or GPU index")
 	}
+	if config.GPUUUID != "" && !control.ValidGPUUUID(config.GPUUUID) {
+		return nil, errors.New("invalid runtime GPU UUID")
+	}
 	if runner == nil || client == nil {
 		return nil, errors.New("runner and HTTP client are required")
 	}
-	if config.LimitReserve != nil {
-		if err := config.LimitReserve.Validate(); err != nil {
-			return nil, err
-		}
-	}
-	return &SystemdManager{config: config, runner: runner, client: client, cgroups: cgroupFS{root: "/sys/fs/cgroup", verify: verifyUnifiedHierarchy},
-		host: defaultLimitHost(), reserve: EffectiveReserve(config.LimitReserve), vendorCache: &vendorCache{}, gpuHost: defaultGPUProcessHost()}, nil
+	return &SystemdManager{
+		config:  config,
+		runner:  runner,
+		client:  client,
+		cgroups: cgroupFS{root: "/sys/fs/cgroup", verify: verifyUnifiedHierarchy},
+		gpuHost: defaultGPUProcessHost(),
+	}, nil
 }
 
 func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) error {
@@ -132,44 +129,10 @@ func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) e
 	if p.Trainer != nil {
 		return errors.New("finite trainer requires an admitted job")
 	}
-	if p.HasLimits() {
-		return m.startLimitedUnit(ctx, p)
-	}
 	if err := m.verifyNativeBinding(ctx, p); err != nil {
 		return err
 	}
 	return m.startUnit(ctx, p.Unit, workload)
-}
-
-// startLimitedUnit runs the launch checks and the slice memory check, starts
-// the unit and checks its limits. Each limit error names the workload and
-// the unit.
-func (m *SystemdManager) startLimitedUnit(ctx context.Context, p control.WorkloadProfile) error {
-	limitCap, err := m.launchChecks(ctx, p)
-	if err == nil {
-		err = m.admitMemory(limitCap, p.NativeModel.Owned.Limits)
-	}
-	if err == nil {
-		err = m.prepareStart(ctx, p.ID)
-	}
-	if err != nil {
-		return UnitError(p, err)
-	}
-	// A failed start call can still leave a queued start job.
-	err = m.runSystemctl(ctx, "start", p.Unit)
-	if err == nil {
-		err = m.verifyStartedLimits(ctx, p)
-	}
-	if err != nil {
-		// Start owns the unit it just started: a rollback start must not
-		// leave a unit with failed limits running. The stop runs on its own
-		// bounded context, because the start context can be spent. The stop
-		// error is joined.
-		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), limitCleanupTimeout)
-		defer cancel()
-		return UnitError(p, errors.Join(err, m.stopUnit(stopCtx, p.Unit)))
-	}
-	return nil
 }
 
 // UnitError names the workload and the unit of err, as "id (unit): ". The

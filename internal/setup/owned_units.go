@@ -91,9 +91,6 @@ const (
 	ownedUnitJournalName  = "owned-units-journal.json"
 	ownedJournalPending   = "writes-pending"
 	ownedJournalCommitted = "committed"
-	ownedUnitFileMode     = 0o644
-	ownedUnitNamePrefix   = "gws-owned-"
-	ownedUnitNameSuffix   = ".service"
 )
 
 func ownedUnitDirectory(home string) string {

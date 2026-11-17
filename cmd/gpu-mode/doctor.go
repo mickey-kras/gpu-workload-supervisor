@@ -73,7 +73,6 @@ func runDoctor(newRuntime func(gpuruntime.SystemdConfig) (supervisor.Runtime, er
 			"open GPU Workload Setup and finish or repeat the activation; see docs/OPERATIONS.md#upgrade-and-interrupted-activation")
 	}
 	report.pass("deployment marker", "the installed release can use this state")
-	runtimeConfig.LimitReserve, runtimeConfig.LimitReserveErr = limitReserveFor(options.statePath, loadOperatorProfile)
 	stateStore, err := store.Open(ctx, options.statePath)
 	if err != nil {
 		return report.fail("state", fmt.Errorf("open state store: %w", err), "check the -state path and its owner and mode")

@@ -77,17 +77,17 @@ func TestNativeSessionRereadsTheReserve(t *testing.T) {
 		t.Fatal(e)
 	}
 	db.Close()
-	var got *gpuruntime.LimitReserve
+	var got string
 	updated := p
-	updated.LimitReserve = &gpuruntime.LimitReserve{MemoryMiB: 4096, Tasks: 1024, CPUPercent: 200, IOPercent: 20}
+	updated.GPUUUID = "GPU-11111111-2222-3333-4444-555555555555"
 	host := rereading(updated, nil)
 	host.newManager = func(c gpuruntime.SystemdConfig) (*gpuruntime.SystemdManager, error) {
-		got = c.LimitReserve
+		got = c.GPUUUID
 		return gpuruntime.NewSystemdManager(c)
 	}
 	session, e := host.service(p).Open(context.Background())
-	if e != nil || got != updated.LimitReserve {
-		t.Fatalf("session reserve = %+v, %v", got, e)
+	if e != nil || got != updated.GPUUUID {
+		t.Fatalf("session gpuUUID = %q, %v", got, e)
 	}
 	session.Close()
 	other := updated

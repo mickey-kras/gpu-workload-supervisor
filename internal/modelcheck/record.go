@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -16,23 +15,18 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
-// RecordVersion is the only result format. Version 2 adds the chat template
-// pin, the template review list, its approval and the template limits. A
-// result of another version reads as stale.
+// RecordVersion identifies the safetensors + template-pin model check format.
 const RecordVersion = 2
 
-// MaxRecordBytes bounds one stored result. maxRecordFiles bounds its file
-// entries; it is above MaxModelFiles, so a later limit change stays readable.
 const (
 	MaxRecordBytes = 4 << 20
 	maxRecordFiles = 2 * MaxModelFiles
 )
 
-// ErrStaleRecord marks a result with another positive record version. Only
-// the version is read. Its model is not scanned for this checker.
+// ErrStaleRecord marks a result with another positive record version.
 var ErrStaleRecord = errors.New("model check record has another version")
 
-// Status is the overall result. Only StatusPassed is clean.
+// Status is the overall check result. Only StatusPassed is clean.
 type Status string
 
 const (
@@ -43,7 +37,7 @@ const (
 	StatusNotScanned  Status = "not_scanned"
 )
 
-// Outcome is the result of one check.
+// Outcome is the result of one check stage.
 type Outcome string
 
 const (
@@ -54,7 +48,7 @@ const (
 	OutcomeNotRun      Outcome = "not_run"
 )
 
-// Coverage tells whether every check ran.
+// Coverage reports whether all check stages executed.
 type Coverage string
 
 const (
@@ -62,64 +56,43 @@ const (
 	CoveragePartial  Coverage = "partial"
 )
 
-// Configuration is the effective configuration of the checks.
+// Configuration records the bounds under which a check ran.
 type Configuration struct {
-	Hub              string         `json:"hub"`
-	MaxJSONFileBytes int64          `json:"maxJSONFileBytes"`
-	MaxGitBlobBytes  int64          `json:"maxGitBlobBytes"`
-	MaxModelFiles    int            `json:"maxModelFiles"`
-	Template         TemplateLimits `json:"template"`
+	Hub              string `json:"hub"`
+	MaxJSONFileBytes int64  `json:"maxJSONFileBytes"`
+	MaxModelFiles    int    `json:"maxModelFiles"`
+	MaxTemplateBytes int    `json:"maxTemplateBytes"`
 }
 
-// TemplateLimits are the limits of the chat template check.
-type TemplateLimits struct {
-	MaxBytes     int `json:"maxBytes"`
-	MaxDepth     int `json:"maxDepth"`
-	MaxTagTokens int `json:"maxTagTokens"`
-	// MaxReviewItems bounds the items of the review list, the literals
-	// that need review. MaxReviewBytes bounds the review list as JSON.
-	MaxReviewItems int `json:"maxReviewItems"`
-	MaxReviewBytes int `json:"maxReviewBytes"`
-}
-
-// currentConfiguration is the configuration that this checker applies.
 func currentConfiguration(hub string) Configuration {
-	return Configuration{Hub: hub, MaxJSONFileBytes: MaxJSONFileBytes, MaxGitBlobBytes: MaxGitBlobBytes, MaxModelFiles: MaxModelFiles,
-		Template: TemplateLimits{MaxBytes: MaxTemplateBytes, MaxDepth: maxTemplateDepth, MaxTagTokens: maxTagTokens, MaxReviewItems: maxReviewItems, MaxReviewBytes: maxReviewBytes}}
+	return Configuration{
+		Hub:              hub,
+		MaxJSONFileBytes: MaxJSONFileBytes,
+		MaxModelFiles:    MaxModelFiles,
+		MaxTemplateBytes: MaxTemplateBytes,
+	}
 }
 
-// valid checks the structure only. Current compares the values, so a
-// result from another configuration reads as not scanned, not as invalid.
 func (c Configuration) valid() bool {
-	return strings.HasPrefix(c.Hub, "https://") && len(c.Hub) <= 256 && c.MaxJSONFileBytes > 0 && c.MaxGitBlobBytes > 0 && c.MaxModelFiles > 0 &&
-		c.Template.MaxBytes > 0 && c.Template.MaxDepth > 0 && c.Template.MaxTagTokens > 0 && c.Template.MaxReviewItems > 0 && c.Template.MaxReviewBytes > 0
+	return strings.HasPrefix(c.Hub, "https://") && len(c.Hub) <= 256 &&
+		c.MaxJSONFileBytes > 0 && c.MaxModelFiles > 0 && c.MaxTemplateBytes > 0
 }
 
-// Check names, in the order that they run. Each must pass.
 const (
 	CheckAllowlist = "file-allowlist"
-	CheckIdentity  = "upstream-identity"
 	CheckTemplate  = "chat-template"
-	CheckBehavior  = "behavioral-scan"
 )
 
-var checkOrder = []string{CheckAllowlist, CheckIdentity, CheckTemplate, CheckBehavior}
+var checkOrder = []string{CheckAllowlist, CheckTemplate}
 
-// Check is one check result. Reason is a fixed code; it never holds a path
-// or file content.
+// Check holds the outcome of one named check stage.
 type Check struct {
 	Name    string  `json:"name"`
 	Outcome Outcome `json:"outcome"`
 	Reason  string  `json:"reason,omitempty"`
 }
 
-// Record is one stored model check result. Files binds the result to the
-// SHA-256 of every model file. A record for other files, another root or
-// another source does not apply. ChatTemplateSHA256 is the SHA-256 of the
-// chat template text, as UTF-8 bytes, that passed the structural template
-// check. It equals the SHA-256 of a --chat-template file with the same
-// text. The vLLM binding records that SHA-256, see
-// runtime.ChatTemplateSHA256.
+// Record binds the check outcome of a local model directory to SHA-256 digests of every file.
 type Record struct {
 	Version            int               `json:"version"`
 	Model              string            `json:"model"`
@@ -130,29 +103,25 @@ type Record struct {
 	Coverage           Coverage          `json:"coverage"`
 	Checks             []Check           `json:"checks"`
 	ChatTemplateSHA256 string            `json:"chatTemplateSHA256,omitempty"`
-	// TemplateFile names the first file of the model that holds the
-	// template, such as chat_template.jinja, when the record has a pin.
-	TemplateFile string `json:"templateFile,omitempty"`
-	// TemplateReview lists the literals of the template that an operator
-	// must read. It is the only field that holds template text. Keep it
-	// out of logs.
-	TemplateReview   []ReviewItem      `json:"templateReview,omitempty"`
-	TemplateApproval *TemplateApproval `json:"templateApproval,omitempty"`
-	Checker          string            `json:"checker"`
-	Configuration    Configuration     `json:"configuration"`
-	CheckedAt        time.Time         `json:"checkedAt"`
+	TemplateFile       string            `json:"templateFile,omitempty"`
+	Checker            string            `json:"checker"`
+	Configuration      Configuration     `json:"configuration"`
+	CheckedAt          time.Time         `json:"checkedAt"`
 }
 
 var (
 	modelPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 	checkerPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]{0,127}$`)
 	reasonPattern  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
-	validOutcomes  = map[Outcome]bool{OutcomePassed: true, OutcomeFailed: true, OutcomeError: true, OutcomeUnsupported: true, OutcomeNotRun: true}
+	validOutcomes  = map[Outcome]bool{
+		OutcomePassed: true, OutcomeFailed: true, OutcomeError: true,
+		OutcomeUnsupported: true, OutcomeNotRun: true,
+	}
 )
 
-// Validate needs a complete record whose status follows from its checks.
+// Validate verifies structural invariants of a stored model check record.
 func (r Record) Validate() error {
-	if r.Version != RecordVersion || !modelPattern.MatchString(r.Model) || !cleanAbsolute(r.Root) || !r.Source.Valid() || !checkerPattern.MatchString(r.Checker) {
+	if !r.validIdentity() {
 		return errors.New("model check record has an invalid identity")
 	}
 	if r.CheckedAt.IsZero() || r.CheckedAt.Location() != time.UTC {
@@ -164,23 +133,33 @@ func (r Record) Validate() error {
 	if !validFiles(r.Files, r.Checks[0].Outcome == OutcomePassed) {
 		return fmt.Errorf("model check record needs valid file entries, at most %d", maxRecordFiles)
 	}
-	if !r.validTemplate() {
-		return errors.New("model check record has template fields that do not follow from the template check")
+	if !r.validTemplatePin() {
+		return errors.New("model check record has invalid chat template pin fields")
 	}
 	if !r.Configuration.valid() {
 		return errors.New("model check record has an invalid configuration")
 	}
-	if coverageOf(r.Checks) != r.Coverage {
-		return errors.New("model check record coverage does not follow from its checks")
-	}
-	if statusOf(r.Checks) != r.Status {
-		return errors.New("model check record status does not follow from its checks")
+	if coverageOf(r.Checks) != r.Coverage || statusOf(r.Checks) != r.Status {
+		return errors.New("model check record status or coverage does not follow from its checks")
 	}
 	return nil
 }
 
-// validFiles needs at least one file once the allowlist passed. A failed
-// inventory can stop before the first file.
+func (r Record) validIdentity() bool {
+	return r.Version == RecordVersion && modelPattern.MatchString(r.Model) &&
+		cleanAbsolute(r.Root) && r.Source.Valid() && checkerPattern.MatchString(r.Checker)
+}
+
+func (r Record) validTemplatePin() bool {
+	if r.ChatTemplateSHA256 == "" && r.TemplateFile == "" {
+		return true
+	}
+	if r.Checks[1].Outcome != OutcomePassed {
+		return false
+	}
+	return sha256Pattern.MatchString(r.ChatTemplateSHA256) && filepath.IsLocal(r.TemplateFile) && r.Files[r.TemplateFile] != ""
+}
+
 func validFiles(files map[string]string, complete bool) bool {
 	if files == nil || (complete && len(files) == 0) || len(files) > maxRecordFiles {
 		return false
@@ -205,8 +184,6 @@ func validChecks(checks []Check) bool {
 	return true
 }
 
-// statusOf gives the status of the first check that did not pass. A check
-// that did not run after passing checks leaves the model not scanned.
 func statusOf(checks []Check) Status {
 	for _, check := range checks {
 		switch check.Outcome {
@@ -244,8 +221,7 @@ func MarshalRecord(r Record) ([]byte, error) {
 	return raw, nil
 }
 
-// ReadRecord decodes one bounded strict record. Unknown, duplicate, null and
-// differently spelled fields are rejected.
+// ReadRecord decodes one bounded strict JSON record.
 func ReadRecord(raw []byte) (Record, error) {
 	var version struct {
 		Version int `json:"version"`
@@ -258,44 +234,36 @@ func ReadRecord(raw []byte) (Record, error) {
 		return Record{}, errors.New("model check record is not bounded strict JSON")
 	}
 	canonical, err := MarshalRecord(record)
-	if err != nil {
-		return Record{}, err
-	}
-	var got, want any
-	if json.Unmarshal(raw, &got) != nil || json.Unmarshal(canonical, &want) != nil || !reflect.DeepEqual(got, want) {
-		return Record{}, errors.New("model check record fields differ from the canonical form")
+	if err != nil || !bytes.Equal(compactJSON(raw), canonical) {
+		return Record{}, errors.New("model check record is not canonical")
 	}
 	return record, nil
 }
 
-// Current gives the status that applies to the model files on disk now. It
-// takes a fresh inventory of root. An inventory error, an inventory problem
-// that the record does not hold, or a record for other digests, another root, another source, another
-// checker version or another configuration, such as another hub, leaves the
-// model not scanned: results never carry over to changed or other models,
-// and a new checker checks again.
-func Current(ctx context.Context, r *Record, model, root string, source Source, checker Checker) Status {
-	if r == nil || r.Model != model || r.Root != root || r.Source != source || r.Checker != checker.Version ||
-		r.Configuration != currentConfiguration(checker.Hub) {
-		return StatusNotScanned
+func compactJSON(raw []byte) []byte {
+	var out bytes.Buffer
+	if json.Compact(&out, raw) != nil {
+		return nil
 	}
-	if match, err := filesMatch(ctx, *r, root); err != nil || !match {
-		return StatusNotScanned
-	}
-	return r.Status
+	return out.Bytes()
 }
 
-// filesMatch takes a fresh inventory of root and reports that it equals
-// the files of r. An inventory error gives the error and no match.
+func cleanAbsolute(path string) bool {
+	return filepath.IsAbs(path) && filepath.Clean(path) == path && path != "/"
+}
+
 func filesMatch(ctx context.Context, r Record, root string) (bool, error) {
-	files, reason, err := Inventory(ctx, root)
+	actual, reason, err := Inventory(ctx, root)
 	if err != nil {
 		return false, err
 	}
-	if !reflect.DeepEqual(r.Files, files) {
+	if reason != "" || len(actual) != len(r.Files) {
 		return false, nil
 	}
-	// An inventory with a problem stops early, so its digests can equal a
-	// complete record. Only a record of the same problem still applies.
-	return reason == "" || (len(r.Checks) != 0 && r.Checks[0].Reason == reason), nil
+	for name, digest := range r.Files {
+		if actual[name] != digest {
+			return false, nil
+		}
+	}
+	return true, nil
 }

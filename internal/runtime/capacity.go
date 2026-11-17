@@ -34,7 +34,7 @@ func (m *SystemdManager) capacity(ctx context.Context, workload control.Workload
 	if required == 0 {
 		return nil
 	}
-	output, err := m.runner.Run(ctx, m.config.NvidiaSMIPath, "--query-gpu=memory.free", "--format=csv,noheader,nounits", "-i", strconv.Itoa(m.config.GPUIndex))
+	output, err := m.runner.Run(ctx, m.config.NvidiaSMIPath, "--query-gpu=memory.free", "--format=csv,noheader,nounits", "-i", m.gpuDeviceTarget())
 	if err != nil {
 		return SafeError("query memory.free failed", ErrCapacity, err)
 	}
@@ -53,7 +53,7 @@ func (m *SystemdManager) capacity(ctx context.Context, workload control.Workload
 // The requirement is the larger of the measured requirement and the
 // reservation; headroom is added as for a measured requirement.
 func (m *SystemdManager) reservedCapacity(ctx context.Context, p control.WorkloadProfile, percent uint32) error {
-	output, err := m.runner.Run(ctx, m.config.NvidiaSMIPath, "--query-gpu=memory.free,memory.total", "--format=csv,noheader,nounits", "-i", strconv.Itoa(m.config.GPUIndex))
+	output, err := m.runner.Run(ctx, m.config.NvidiaSMIPath, "--query-gpu=memory.free,memory.total", "--format=csv,noheader,nounits", "-i", m.gpuDeviceTarget())
 	if err != nil {
 		return SafeError("query memory.free,memory.total failed", ErrCapacity, err)
 	}
@@ -72,6 +72,13 @@ func (m *SystemdManager) reservedCapacity(ctx context.Context, p control.Workloa
 			ErrCapacity, p.ID, needed, control.FormatGPUMemoryUtilization(percent), total, reservation, p.RequiredMiB, m.config.CapacityHeadroomMiB, free)
 	}
 	return nil
+}
+
+func (m *SystemdManager) gpuDeviceTarget() string {
+	if m.config.GPUUUID != "" {
+		return m.config.GPUUUID
+	}
+	return strconv.Itoa(m.config.GPUIndex)
 }
 
 func parseFreeAndTotal(output []byte) (uint64, uint64, error) {

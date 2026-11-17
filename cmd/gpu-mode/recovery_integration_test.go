@@ -60,18 +60,6 @@ func (noLimitsOrTraining) CloseGPUProcess(context.Context, control.Workload, int
 	return errFakeTraining
 }
 
-func (noLimitsOrTraining) VerifyLaunchLimits(context.Context, control.Workload) error {
-	return gpuruntime.ErrLimitUnchecked
-}
-func (noLimitsOrTraining) VerifyLimitProtection(context.Context, control.Workload) error {
-	return gpuruntime.ErrLimitUnchecked
-}
-func (noLimitsOrTraining) LimitOutcome(context.Context, control.Workload) gpuruntime.LimitOutcome {
-	return gpuruntime.LimitOutcome{Class: gpuruntime.LimitOutcomeNone}
-}
-func (noLimitsOrTraining) LimitStopReleased(context.Context, control.Workload) error {
-	return gpuruntime.ErrLimitUnchecked
-}
 func (noLimitsOrTraining) StartTraining(context.Context, control.WorkloadProfile, control.TrainingJob) (string, error) {
 	return "", errFakeTraining
 }

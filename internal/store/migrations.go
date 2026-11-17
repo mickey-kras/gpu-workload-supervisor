@@ -209,6 +209,13 @@ CREATE TABLE broker_demands (
 CREATE INDEX idx_broker_demands_status ON broker_demands(status);
 `
 
+const schemaV19 = `CREATE TABLE limit_stops (
+ singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+ workload TEXT NOT NULL CHECK (length(workload) BETWEEN 1 AND 64 AND workload NOT IN ('idle', 'unknown')),
+ first_seen_at INTEGER NOT NULL CHECK (typeof(first_seen_at) = 'integer' AND first_seen_at > 0),
+ definite_at INTEGER CHECK (definite_at IS NULL OR (typeof(definite_at) = 'integer' AND definite_at >= first_seen_at)),
+ stopping_at INTEGER CHECK (stopping_at IS NULL OR (definite_at IS NOT NULL AND typeof(stopping_at) = 'integer' AND stopping_at >= definite_at)));`
+
 var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8, schemaV9, schemaV10, schemaV11, schemaV12, schemaV13, schemaV14, schemaV15, schemaV16, schemaV17, schemaV18, schemaV19}
 
 func (s *Store) initialize(ctx context.Context) error {

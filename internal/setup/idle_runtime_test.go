@@ -12,23 +12,6 @@ func (r idleRuntime) ObserveForRecovery(ctx context.Context) (gpuruntime.Snapsho
 	return r.Observe(ctx)
 }
 
-// idleRuntime cannot check limits or run trainers.
-func (r idleRuntime) VerifyLaunchLimits(context.Context, control.Workload) error {
-	return gpuruntime.ErrLimitUnchecked
-}
-
-func (r idleRuntime) VerifyLimitProtection(context.Context, control.Workload) error {
-	return gpuruntime.ErrLimitUnchecked
-}
-
-func (r idleRuntime) LimitOutcome(context.Context, control.Workload) gpuruntime.LimitOutcome {
-	return gpuruntime.LimitOutcome{Class: gpuruntime.LimitOutcomeNone}
-}
-
-func (r idleRuntime) LimitStopReleased(context.Context, control.Workload) error {
-	return gpuruntime.ErrLimitUnchecked
-}
-
 var errFakeTraining = errors.New("the fake runs no trainer")
 
 func (r idleRuntime) StartTraining(context.Context, control.WorkloadProfile, control.TrainingJob) (string, error) {

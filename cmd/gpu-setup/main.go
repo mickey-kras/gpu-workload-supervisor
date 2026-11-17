@@ -23,8 +23,6 @@ const (
 	cmdVerifyBindings = "verify-bindings"
 	cmdModelStatus    = "model-status"
 	cmdModelCheck     = "model-check"
-	cmdModelReview    = "model-review"
-	cmdModelApprove   = "model-approve"
 )
 
 type setupActions struct {
@@ -70,7 +68,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return err
 	}
 	if len(args) != 1 {
-		return errors.New("usage: gpu-setup -version|temporary-status|temporary-cleanup|discover|probe|prepare|correct-gpu|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|reconcile|idle-policy-tick|remove-integration|model-status|model-check|model-review|model-approve")
+		return errors.New("usage: gpu-setup -version|discover|probe|prepare|correct-gpu|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|reconcile|idle-policy-tick|remove-integration|model-status|model-check")
 	}
 	ctx, cancel := actionContext(args[0])
 	defer cancel()
@@ -79,7 +77,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return err
 	}
 	switch args[0] {
-	case "temporary-status", "temporary-cleanup", "correct-gpu", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned", cmdModelStatus, cmdModelCheck, cmdModelReview, cmdModelApprove:
+	case "correct-gpu", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned", cmdModelStatus, cmdModelCheck:
 		if a.euid() == 0 {
 			return errors.New("run guided setup as the desktop account, not root")
 		}
@@ -89,18 +87,6 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 
 func (a setupActions) runAction(ctx context.Context, home, action string, input io.Reader, output io.Writer) error {
 	switch action {
-	case "temporary-status":
-		result, err := setup.TemporaryStatus(ctx, home)
-		if err != nil {
-			return err
-		}
-		return json.NewEncoder(output).Encode(result)
-	case "temporary-cleanup":
-		var request setup.TemporaryCleanupRequest
-		if err := strictjson.DecodeLimited(input, 65536, &request); err != nil {
-			return err
-		}
-		return setup.SystemBackend().TemporaryCleanup(ctx, home, request)
 	case "correct-gpu":
 		return runGPUCorrection(ctx, home, input, output)
 	case "remove-integration":
@@ -119,7 +105,7 @@ func (a setupActions) runAction(ctx context.Context, home, action string, input 
 			return err
 		}
 		return json.NewEncoder(output).Encode(report)
-	case cmdModelCheck, cmdModelReview, cmdModelApprove:
+	case cmdModelCheck:
 		return runModelAction(ctx, home, action, input, output)
 	case "drafts":
 		return runDrafts(home, output)
@@ -267,22 +253,6 @@ func runModelAction(ctx context.Context, home, action string, input io.Reader, o
 			return err
 		}
 		if result, err = setup.ModelCheck(ctx, home, request, &http.Client{}); err != nil {
-			return err
-		}
-	case cmdModelReview:
-		request, err := setup.DecodeModelReviewRequest(input)
-		if err != nil {
-			return err
-		}
-		if result, err = setup.ModelReviewList(ctx, home, request); err != nil {
-			return err
-		}
-	case cmdModelApprove:
-		request, err := setup.DecodeModelApproveRequest(input)
-		if err != nil {
-			return err
-		}
-		if result, err = setup.ModelApprove(ctx, home, request, os.Getuid(), time.Now()); err != nil {
 			return err
 		}
 	default:

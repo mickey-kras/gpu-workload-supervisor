@@ -2,6 +2,7 @@ package modelcheck
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -11,6 +12,9 @@ func TestMain(m *testing.M) {
 	cache, err := os.MkdirTemp("", "modelcheck-cache-")
 	if err != nil {
 		panic(err)
+	}
+	if resolved, evalErr := filepath.EvalSymlinks(cache); evalErr == nil {
+		cache = resolved
 	}
 	for _, key := range []string{"HF_TOKEN", "HF_TOKEN_PATH", "HF_HOME"} {
 		_ = os.Unsetenv(key)

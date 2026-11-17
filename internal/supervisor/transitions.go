@@ -2,12 +2,10 @@ package supervisor
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
@@ -61,9 +59,6 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 		return control.State{}, fmt.Errorf("%w %q", ErrInvalidTarget, target)
 	}
 	if err := c.checkCatalog(ctx); err != nil {
-		return control.State{}, err
-	}
-	if err := c.refuseLimitedTarget(ctx, target); err != nil {
 		return control.State{}, err
 	}
 	current, err := c.transitionSource(ctx, options)
@@ -214,7 +209,7 @@ func (c *Controller) loadTransition(ctx context.Context, transitionID string, st
 	state = loading
 	if target != control.WorkloadIdle && active != target {
 		err = c.effect(ctx, transitionID, state.Phase, "start "+string(target), func(actionCtx context.Context) error {
-			return c.runtime.Start(actionCtx, target)
+			return c.wakeOrStart(actionCtx, target)
 		})
 	}
 	return state, err
@@ -249,73 +244,10 @@ func (c *Controller) executeTransition(ctx context.Context, transition store.Tra
 	}
 	state = verifying
 	if err := c.waitReady(ctx, target, c.now().Add(c.config.VerifyTimeout)); err != nil {
-		if !skipEffects && current.Owner == control.OwnerUser && errors.Is(err, gpuruntime.ErrLimitCheckFailed) {
-			err = errors.Join(err, c.stopFailedTarget(ctx, transition.ID, state.Phase, target))
-		}
 		return fail(transition.ID, state, current, err)
 	}
 	final := stableTarget(state, options.targetOwner, target)
 	finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.FinalizeTimeout)
 	defer cancel()
 	return c.store.FinishTransition(finalizeCtx, transition.ID, "committed", state.Version, final)
-}
-
-// stopFailedTarget stops a started target that failed a definite limit
-// check. fail rolls back only a supervisor-owned source, so a user-owned
-// source would leave the unit running. The transition already authorized
-// stopping user work, and the stop is a journaled effect. It runs on a
-// detached, bounded context, because the transition context can be spent.
-func (c *Controller) stopFailedTarget(ctx context.Context, transitionID string, phase control.Phase, target control.Workload) error {
-	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.config.CleanupTimeout)
-	defer cancel()
-	return c.effect(stopCtx, transitionID, phase, "limit stop "+string(target), func(ctx context.Context) error {
-		return c.runtime.Stop(ctx, target)
-	})
-}
-
-// ErrLimitedTarget marks the refusal of a unit with limits before any unload
-// or other effect: a launch check failed, and the current workload keeps
-// running. Checks after an effect keep their usual error codes.
-var ErrLimitedTarget = errors.New("target refused before any change")
-
-// remedyFromStore gives the state that the next steps of a refusal start
-// from. The current workload keeps running. Setup removes limits only from
-// a healthy, stable Idle, so the next steps depend on the state and its
-// owner. A latched state needs recovery first. A state that cannot be read
-// counts as latched, and its running workload is unknown. For a kept
-// workload with limits, it records the unit: recover-user runs the limit
-// checks of that unit, so the steps for a latched user-owned state stop
-// that unit first.
-func (c *Controller) remedyFromStore(ctx context.Context) remedyState {
-	state, err := c.store.State(ctx)
-	if err != nil {
-		return unknownLatched
-	}
-	from := remedyState{latched: state.Health == control.HealthError || state.Phase != control.PhaseStable,
-		kept: state.ActiveWorkload, user: state.Owner == control.OwnerUser}
-	if kept, ok := c.config.Catalog.Catalog.Profile(state.ActiveWorkload); ok && kept.HasLimits() {
-		from.keptUnit = kept.Unit
-	}
-	return from
-}
-
-// refuseLimitedTarget runs the launch checks of a unit with limits before any
-// unload. A runtime that cannot run them refuses the unit. Start repeats
-// these checks as the backstop, and it also checks the slice memory.
-func (c *Controller) refuseLimitedTarget(ctx context.Context, target control.Workload) error {
-	p, _ := c.config.Catalog.Catalog.Profile(target)
-	if !p.HasLimits() {
-		return nil
-	}
-	err := c.runLimitProbe(ctx, target, limitChecker.VerifyLaunchLimits)
-	if err == nil {
-		return nil
-	}
-	if gpuruntime.DefiniteLimitFailure(err) || gpuruntime.DefiniteBindingFailure(err) {
-		from := c.remedyFromStore(ctx)
-		return limitRemedy(limitedUnitError(ErrLimitedTarget, p, err), from)
-	}
-	// A command, read or context failure decides nothing. Nothing changed,
-	// and the error keeps its usual code. It still names the target.
-	return gpuruntime.UnitError(p, err)
 }

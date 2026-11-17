@@ -28,7 +28,7 @@ func trainingPending(ctx context.Context, tx *sql.Tx) error {
 	if pending {
 		return ErrTrainingPending
 	}
-	return temporaryDiscoveryPending(ctx, tx)
+	return nil
 }
 
 func (s *Store) TrainingJob(ctx context.Context, id string) (control.TrainingJob, error) {

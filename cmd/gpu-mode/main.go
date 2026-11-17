@@ -59,6 +59,7 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (supervisor
 	catalogRevision := flags.String("configuration-revision", "", "expected accepted catalog revision for configure")
 	statePath := flags.String("state", deployment.DefaultStatePath(), "SQLite state path")
 	gpuIndex := flags.Int("gpu-index", 0, "NVIDIA GPU index")
+	gpuUUID := flags.String("gpu-uuid", "", "NVIDIA physical GPU UUID")
 	flags.Uint64("release-max-used-mib", 0, "removed: configure workload cgroups and optional target capacity in the catalog")
 	headroom := flags.Uint64("capacity-headroom-mib", 0, "additional VRAM headroom for configured target capacity checks")
 	nvidiaSMIPath := flags.String("nvidia-smi", "", "absolute path to the trusted nvidia-smi executable")
@@ -101,7 +102,7 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (supervisor
 	}
 	runtimeConfig := gpuruntime.SystemdConfig{
 		HealthTimeout: *healthTimeout,
-		GPUIndex:      *gpuIndex, CapacityHeadroomMiB: *headroom,
+		GPUIndex:      *gpuIndex, GPUUUID: *gpuUUID, CapacityHeadroomMiB: *headroom,
 		NvidiaSMIPath: *nvidiaSMIPath, SystemctlPath: *systemctlPath,
 	}
 	options := modeExecution{
@@ -116,8 +117,6 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (supervisor
 		return runDoctor(newRuntime, runtimeConfig, options)
 	}
 	if command == verifyHostCommand {
-		// verify-host takes no state lock, so it reads the reserve here.
-		runtimeConfig.LimitReserve, runtimeConfig.LimitReserveErr = limitReserveFor(*statePath, loadOperatorProfile)
 		catalog, err := decodeCatalogFile(*catalogPath)
 		if err != nil {
 			return err
@@ -166,7 +165,6 @@ func executeWithState(newRuntime func(gpuruntime.SystemdConfig) (supervisor.Runt
 	}
 	// The reserve is read under the state lock, so it belongs to the same
 	// committed setup as the pinned catalog.
-	runtimeConfig.LimitReserve, runtimeConfig.LimitReserveErr = limitReserveFor(options.statePath, loadOperatorProfile)
 	var stateStore *store.Store
 	if command == restoreStateCommand {
 		stateStore, err = store.OpenRestored(ctx, options.statePath)
@@ -411,7 +409,8 @@ func executeRuntimeCommand(ctx context.Context, controller *supervisor.Controlle
 	// The oneshot policy tick runs the limit stop. While the state is
 	// latched, it can stop a running unit whose limits fail.
 	if command == idlePolicyTickCommand {
-		return controller.LimitTick(ctx, os.Stderr)
+		_, err := controller.Status(ctx)
+		return err
 	}
 	if strings.HasPrefix(command, "training-") {
 		if options.allRestored {

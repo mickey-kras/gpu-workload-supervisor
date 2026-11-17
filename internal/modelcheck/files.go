@@ -19,7 +19,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/llmtraining"
 	"golang.org/x/sys/unix"
 )
 
@@ -52,9 +51,9 @@ var rejectedExtensions = map[string]bool{".py": true, ".bin": true, ".pt": true,
 var redirectKeys = func() map[string]string {
 	keys := map[string]string{}
 	for reason, list := range map[string][]string{
-		ReasonRemoteCode:       llmtraining.RemoteCodeKeys,
-		ReasonModelRedirect:    llmtraining.ModelRedirectKeys,
-		ReasonFilePathRedirect: llmtraining.FileRedirectKeys,
+		ReasonRemoteCode:       RemoteCodeKeys,
+		ReasonModelRedirect:    ModelRedirectKeys,
+		ReasonFilePathRedirect: FileRedirectKeys,
 	} {
 		for _, key := range list {
 			keys[key] = reason
@@ -167,7 +166,7 @@ func readBound(ctx context.Context, file, digest string, limit int64, tooLarge s
 		return nil, "", err
 	}
 	defer f.Close()
-	raw, err := io.ReadAll(llmtraining.ContextReader(ctx, io.LimitReader(f, limit+1)))
+	raw, err := io.ReadAll(ContextReader(ctx, io.LimitReader(f, limit+1)))
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, "", ctxErr
 	}
