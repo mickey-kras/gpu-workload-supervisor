@@ -25,7 +25,7 @@ The configuration enables `govet`, `staticcheck`, unused code and ineffective as
 Analyzer findings fail CI.
 
 Main imports the Checkstyle report from the successful Go coverage artifact.
-The artifact must match the repository, commit, run and `GITHUB_RUN_ATTEMPT`.
+The artifact must match the repository, commit, run and GitHub Actions try.
 
 Missing or invalid reports stop Sonar.
 
