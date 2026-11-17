@@ -75,7 +75,7 @@ type ServingOptions struct {
 	// diagnosis only.
 	DisablePrefixCaching bool `json:"disablePrefixCaching,omitempty"`
 	// SleepMode renders --enable-sleep-mode so the supervisor can hibernate
-	// vLLM weights and KV cache to host RAM instead of cold-stopping the unit.
+	// vLLM weights to host RAM and discard KV cache instead of stopping the unit.
 	SleepMode bool `json:"sleepMode,omitempty"`
 }
 

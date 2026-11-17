@@ -203,6 +203,7 @@ func baseEntry(p control.WorkloadProfile) (entry ModelStatusEntry, root, pin str
 // for a result that applies.
 func describeRecord(entry *ModelStatusEntry, record modelcheck.Record, root, pin string) {
 	if entry.Reason == "" {
+		_, entry.ReviewPending = record.PendingReview()
 		entry.StaticChecksPassed = record.StaticChecksPassed()
 	}
 	checkedAt, source := record.CheckedAt, record.Source

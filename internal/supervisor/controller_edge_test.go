@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -698,6 +699,8 @@ func TestFailureAuditClassifiesSafetyErrors(t *testing.T) {
 		{ErrRuntimeObservation, "runtime-observation"},
 		{ErrInvariant, "state-mismatch"},
 		{ErrHealthCheck, "health-check"},
+		{gpuruntime.SafeError(ErrHealthCheck.Error(), ErrHealthCheck, fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, gpuruntime.ErrLimitDrift)), "limit-check"},
+		{errors.Join(context.Canceled, gpuruntime.ErrLimitCheckFailed), "limit-check"},
 		{errors.New("unexpected"), "failed"},
 	} {
 		if code := failureCode(test.err); code != test.code {

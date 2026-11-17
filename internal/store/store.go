@@ -409,7 +409,7 @@ func writeState(ctx context.Context, tx *sql.Tx, state control.State) error {
 	if changed != 1 {
 		return sql.ErrNoRows
 	}
-	return nil
+	return clearUnlatchedLimitStop(ctx, tx, state)
 }
 
 func preparePath(path string) error {

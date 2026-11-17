@@ -1,7 +1,6 @@
 package setup
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -33,6 +32,9 @@ type Request struct {
 	Catalog          control.Catalog `json:"catalog"`
 	ExpectedRevision string          `json:"expectedRevision"`
 	ConfirmQuiesced  bool            `json:"confirmQuiesced"`
+	// HostCap holds the slice values of the host cap step, when a unit has
+	// limits. Setup fills the unset caps; see runtime.LimitReserve.HostCapFor.
+	HostCap *gpuruntime.HostCapValues `json:"hostCap,omitempty"`
 }
 type activation struct {
 	Request Request `json:"request"`
@@ -44,6 +46,9 @@ type Preview struct {
 	Profile Profile         `json:"profile"`
 	Catalog control.Catalog `json:"catalog"`
 	Changes []string        `json:"changes"`
+	// HostCap is the host cap step. Without a unit with limits, its
+	// status is notNeeded.
+	HostCap *gpuruntime.HostCapStep `json:"hostCap,omitempty"`
 }
 
 // Reserve a bounded envelope allowance for deployment paths, revision and
@@ -78,7 +83,10 @@ func Decode(reader io.Reader) (Request, error) {
 // Validate is the write gate of preview and apply. It adds the host cap
 // values check to the request shape check.
 func Validate(request Request) error {
-	return validateShape(request)
+	if err := validateShape(request); err != nil {
+		return err
+	}
+	return validateLimits(request)
 }
 
 // validateShape checks the request without the host cap values. Read-only
@@ -118,7 +126,12 @@ func (b Backend) Plan(home string, request Request) (Preview, error) {
 	if err := Validate(request); err != nil {
 		return Preview{}, err
 	}
-	if _, err := b.makeRuntime(request); err != nil {
+	manager, err := b.makeRuntime(request)
+	if err != nil {
+		return Preview{}, err
+	}
+	hostCap, err := previewHostCap(manager, request)
+	if err != nil {
 		return Preview{}, err
 	}
 	profile := request.Profile
@@ -139,7 +152,7 @@ func (b Backend) Plan(home string, request Request) (Preview, error) {
 		changes = append(changes, ownedChanges...)
 		changes = append(changes, "Retain verified binary/configuration/state backups")
 	}
-	return Preview{Release: deployment.Release, Profile: profile, Catalog: request.Catalog, Changes: changes}, nil
+	return Preview{Release: deployment.Release, Profile: profile, Catalog: request.Catalog, Changes: changes, HostCap: hostCap}, nil
 }
 
 // Backend holds the host interactions setup performs. Tests inject fakes
@@ -156,10 +169,15 @@ type Backend struct {
 	qualifyOwned     func(control.WorkloadProfile) error
 	binaryDirectory  string
 	packageBinaryUID uint32
+	// escapeRoutes scans the advisory escape routes of this account for
+	// discovery with the command runner and the systemctl path; nil scans
+	// none.
+	escapeRoutes func(context.Context, gpuruntime.CommandFunc, string) []gpuruntime.EscapeRoute
 }
 
 func SystemBackend() Backend {
-	return Backend{makeRuntime: runtimeFor, runCommand: boundedCommand, probeApplication: Probe, discoverExecutables: installedExecutables, binaryDirectory: "/usr/bin"}
+	return Backend{makeRuntime: runtimeFor, runCommand: boundedCommand, probeApplication: Probe, discoverExecutables: installedExecutables, binaryDirectory: "/usr/bin",
+		escapeRoutes: gpuruntime.ScanEscapeRoutes}
 }
 
 func runtimeFor(request Request) (supervisor.Runtime, error) {
@@ -205,6 +223,9 @@ func (b Backend) Apply(ctx context.Context, home string, request Request) error 
 		return err
 	}
 	if err := work.inspect(ctx); err != nil {
+		return err
+	}
+	if err := b.acceptLimits(ctx, request, work.accepted.Catalog); err != nil {
 		return err
 	}
 	// Prove the accepted bindings and release while their unit files are still
@@ -450,24 +471,13 @@ func (b Backend) PolicyTick(ctx context.Context, home string) error {
 		return err
 	}
 	defer cleanup()
-	_, err = controller.Status(ctx)
-	return err
+	// The limit stop can stop a unit whose limits fail.
+	return controller.LimitTick(ctx, os.Stderr)
 }
 
 // activatedController loads the persisted operator.json profile, validates
 // activation, and builds a controller against the profile's state path and
 // runtime configuration. The returned cleanup releases the store and gate.
-func verifySameOperatorProfile(home string, before []byte) error {
-	fresh, err := privateRead(filepath.Join(home, ".config/gpu-workload-supervisor/operator.json"))
-	if err != nil {
-		return err
-	}
-	if !bytes.Equal(fresh, before) {
-		return errors.New("the operator profile changed during the check; retry")
-	}
-	return nil
-}
-
 func (b Backend) activatedController(ctx context.Context, home string) (*supervisor.Controller, *store.Store, func(), error) {
 	data, err := privateRead(filepath.Join(home, ".config/gpu-workload-supervisor/operator.json"))
 	if err != nil {
@@ -489,7 +499,7 @@ func (b Backend) activatedController(ctx context.Context, home string) (*supervi
 		cleanup()
 		return nil, nil, nil, err
 	}
-	if err := verifySameOperatorProfile(home, data); err != nil {
+	if err := sameProfile(home, data); err != nil {
 		cleanup()
 		return nil, nil, nil, err
 	}
@@ -550,6 +560,9 @@ func (work *activationWork) inspectExistingCatalog(ctx context.Context) error {
 		return err
 	}
 	if work.existing {
+		if err := checkNoTemporaryDiscovery(ctx, work.request.Profile.StatePath); err != nil {
+			return err
+		}
 		if !work.marker.Maintenance {
 			if err := Inspect(ctx, work.request.Profile.StatePath); err != nil {
 				return err

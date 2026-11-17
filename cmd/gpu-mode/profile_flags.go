@@ -14,11 +14,6 @@ import (
 
 const verifyHostCommand = "verify-host"
 
-var loadOperatorProfile = operator.LoadProfile
-
-const profileHint = "the operator profile ~/.config/gpu-workload-supervisor/operator.json, or a directory above it, " +
-	"cannot be read or is not valid; fix the owner, mode or content of that path, or run setup again"
-
 // profileFlagNames are the runtime flags that setup stores in the operator
 // profile, in a fixed order for stable error messages.
 var profileFlagNames = []string{"state", "systemctl", "nvidia-smi", "gpu-index", "capacity-headroom-mib"}

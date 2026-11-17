@@ -147,3 +147,17 @@ func TestGPUReservation(t *testing.T) {
 		t.Fatal("utilization format")
 	}
 }
+
+func TestSleepingOwnedUnitsDoNotStopTheirPeersThroughConflicts(t *testing.T) {
+	p := servingProfile(ServingOptions{Version: 1, SleepMode: true})
+	q := ownedVLLMProfile()
+	q.ID, q.Unit = "other", "gws-owned-other.service"
+	c := Catalog{Profiles: []WorkloadProfile{p, q}}
+	if c.OwnedConflictUnits(p) != "" || c.OwnedConflictUnits(q) != "" {
+		t.Fatal("systemd would stop the sleeping process and lose its RAM cache")
+	}
+	p.NativeModel.Owned.Serving.SleepMode = false
+	if c.OwnedConflictUnits(p) != q.Unit || c.OwnedConflictUnits(q) != p.Unit {
+		t.Fatal("ordinary owned units lost their conflict backstop")
+	}
+}

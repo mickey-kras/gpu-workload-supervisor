@@ -178,7 +178,7 @@ func (m *SystemdManager) gpuDevice(p control.WorkloadProfile) string {
 	if device := profileGPUUUID(p); device != "" {
 		return device
 	}
-	return strconv.Itoa(m.config.GPUIndex)
+	return m.gpuDeviceTarget()
 }
 
 // computeApps runs the one compute process query on device. A query that

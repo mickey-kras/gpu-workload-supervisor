@@ -22,10 +22,6 @@ func activatedProfile(statePath string) operator.Profile {
 	}
 }
 
-func profileLoader(p operator.Profile, err error) func() (operator.Profile, error) {
-	return func() (operator.Profile, error) { return p, err }
-}
-
 func profileFlagSet(t *testing.T, args ...string) *flag.FlagSet {
 	t.Helper()
 	flags := flag.NewFlagSet("gpu-mode", flag.ContinueOnError)

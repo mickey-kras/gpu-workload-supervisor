@@ -11,6 +11,8 @@ blocks requests when a transition fails.
 | `gpu-operator` | Local operator backend |
 | `gpu-setup` | Detection and setup |
 
+See [Runtime refactor scope](docs/REFACTOR-SCOPE.md) for implemented behavior and remaining work.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/generated/overview-dark.svg">
   <img src="docs/architecture/generated/overview-light.svg" alt="Clients send requests through the execution proxy to workload services sharing one GPU. A separate controller switches workloads. Both use durable state for admission and fencing.">

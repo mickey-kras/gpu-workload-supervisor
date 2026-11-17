@@ -3,15 +3,12 @@ package runtime
 import (
 	"context"
 	"errors"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"path"
 	"regexp"
 	"strconv"
 	"strings"
-
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
-
-const appSlice = "app.slice"
 
 var automaticUnitName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*\.service$`)
 

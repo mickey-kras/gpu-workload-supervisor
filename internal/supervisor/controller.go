@@ -46,61 +46,47 @@ type Runtime interface {
 	Healthy(context.Context, control.Workload) error
 	ReleasedFor(context.Context, control.Workload) error
 	Preflight(context.Context) error
+	limitChecker
+	limitStopRuntime
 	trainingRuntime
 	gpuProcessRuntime
 }
 
-// HibernatableRuntime is an optional capability interface (ISP / Strategy)
-// implemented by runtimes such as SystemdManager that can hibernate vLLM
-// weights to host RAM (/sleep?level=1) and resume (/wake_up) without a cold stop.
+// HibernatableRuntime parks a runtime without ending its service.
 type HibernatableRuntime interface {
 	Sleep(context.Context, control.Workload) error
 	Wake(context.Context, control.Workload) error
 }
 
-var (
-	_ Runtime             = (*gpuruntime.SystemdManager)(nil)
-	_ HibernatableRuntime = (*gpuruntime.SystemdManager)(nil)
-	_ storeGateway        = (*store.Store)(nil)
-)
-
-// stateRepository reads and mutates durable GPU ownership, catalog, and recovery state.
-type stateRepository interface {
+// storeGateway is the part of *store.Store that the controller uses. Tests
+// wrap a real store to inject write failures and cancellations at chosen
+// steps.
+type storeGateway interface {
+	trainingStore
 	AcquireUserExecution(context.Context, bool) (*lock.File, error)
 	State(context.Context) (control.State, error)
 	Catalog(context.Context) (control.CatalogSnapshot, error)
-	ModelCheck(context.Context, string) (modelcheck.Record, error)
-	InProgressTransition(context.Context) (string, error)
-	Recover(context.Context, uint64, control.State, string) (control.State, error)
-	RotateFenceAndCloseAdmission(context.Context, uint64) (control.State, error)
-}
-
-// transitionJournal persists fenced workload transitions and phase audit events.
-type transitionJournal interface {
 	StartTransition(context.Context, uint64, store.Transition) (control.State, error)
 	StartOperatorTransition(context.Context, control.OperatorPrecondition, store.Transition) (control.State, error)
 	CheckOperatorPrecondition(context.Context, control.OperatorPrecondition) error
 	SetTransitionPhase(context.Context, string, uint64, control.Phase) (control.State, error)
 	FinishTransition(context.Context, string, string, uint64, control.State) (control.State, error)
 	AppendTransitionEvent(context.Context, store.TransitionEvent) error
-	CheckActivationPrecondition(context.Context, control.OperatorPrecondition) error
-	StartActivationTransition(context.Context, control.OperatorPrecondition, store.Transition) (control.State, error)
-}
-
-// workDrainReader tracks admitted proxy requests during transition draining.
-type workDrainReader interface {
 	PendingTransitionWork(context.Context, string) (int, error)
 	PendingWork(context.Context) (int, error)
 	PendingWorkExcept(context.Context, control.Workload) (int, error)
+	PendingWorkFor(context.Context, control.Workload) (int, error)
+	LimitStop(context.Context) (store.LimitStop, bool, error)
+	MarkLimitFailure(context.Context, control.Workload, bool, time.Time) (store.LimitStop, error)
+	MarkLimitStopping(context.Context, control.Workload, time.Time) error
+	ClearLimitStop(context.Context) error
+	ModelCheck(context.Context, string) (modelcheck.Record, error)
+	InProgressTransition(context.Context) (string, error)
+	Recover(context.Context, uint64, control.State, string) (control.State, error)
+	RotateFenceAndCloseAdmission(context.Context, uint64) (control.State, error)
 	ResolveUnfinishedWork(context.Context, uint64, string) (int64, error)
-}
-
-// storeGateway composes the narrow repository interfaces used by Controller.
-type storeGateway interface {
-	stateRepository
-	transitionJournal
-	workDrainReader
-	trainingStore
+	CheckActivationPrecondition(context.Context, control.OperatorPrecondition) error
+	StartActivationTransition(context.Context, control.OperatorPrecondition, store.Transition) (control.State, error)
 }
 
 type Config struct {
@@ -304,6 +290,15 @@ func (c *Controller) pollUntil(ctx context.Context, deadline time.Time, probe fu
 	var lastErr error
 	for {
 		lastErr = probe(verifyCtx)
+		// A failed limit check of a started unit cannot pass on a retry,
+		// and a cancelled caller must not hide it: the failed transition
+		// or reconciliation then stops the unit. A transition does so
+		// through its rollback from a supervisor-owned source, or through
+		// stopFailedTarget from a user-owned one; reconciliation through
+		// stopFailedLimits.
+		if errors.Is(lastErr, gpuruntime.ErrLimitCheckFailed) {
+			return errors.Join(ctx.Err(), lastErr)
+		}
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -447,6 +442,10 @@ func closedReconciling(s control.State) control.State {
 
 func failureCode(err error) string {
 	switch {
+	case errors.Is(err, gpuruntime.ErrLimitCheckFailed):
+		// A definite limit failure of a started unit, also when the caller
+		// cancelled at the same time.
+		return "limit-check"
 	case errors.Is(err, context.Canceled):
 		return "canceled"
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, ErrDrainTimeout), errors.Is(err, ErrVerifyTimeout):

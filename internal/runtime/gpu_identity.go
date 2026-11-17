@@ -3,9 +3,9 @@ package runtime
 import (
 	"context"
 	"fmt"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"strconv"
 	"strings"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 // ErrGPUIdentityUnresolved distinguishes a discovered numeric CUDA selection
@@ -45,7 +45,7 @@ func (m *SystemdManager) verifyProfileGPU(ctx context.Context, p control.Workloa
 	if !control.ValidGPUUUID(uuid) || m.config.NvidiaSMIPath == "" {
 		return failure("physical GPU identity cannot be inspected")
 	}
-	out, err := m.runner.Run(ctx, m.config.NvidiaSMIPath, "--query-gpu=uuid", "--format=csv,noheader", "-i", strconv.Itoa(m.config.GPUIndex))
+	out, err := m.runner.Run(ctx, m.config.NvidiaSMIPath, "--query-gpu=uuid", "--format=csv,noheader", "-i", m.gpuDeviceTarget())
 	if err != nil {
 		// The identity is unknown, not proven wrong: keep the command
 		// failure so callers can retry it. The error keeps the

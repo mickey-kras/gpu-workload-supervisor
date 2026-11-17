@@ -17,10 +17,10 @@ import (
 )
 
 type vllmSleepStatus struct {
-	IsSleeping bool `json:"is_sleeping"`
+	IsSleeping *bool `json:"is_sleeping"`
 }
 
-// Sleep offloads vLLM model weights and KV cache to host RAM (/sleep?level=1)
+// Sleep offloads vLLM weights to RAM and discards KV cache (/sleep?level=1)
 // when the profile enables sleep mode, falling back to Stop if unsupported or failed.
 func (m *SystemdManager) Sleep(ctx context.Context, id control.Workload) error {
 	p, ok := m.config.Catalog.Profile(id)
@@ -38,7 +38,10 @@ func (m *SystemdManager) Sleep(ctx context.Context, id control.Workload) error {
 		return nil
 	}
 	if st.active == "active" && st.sub == "running" {
-		if m.requestVLLMSleep(ctx, *p.NativeModel) == nil && m.verifyVLLMSleeping(ctx, *p.NativeModel) {
+		if err := m.verifyNativeBinding(ctx, p); err != nil {
+			return err
+		}
+		if m.requestVLLMSleep(ctx, *p.NativeModel) == nil && m.releasedViaSleep(ctx, p) {
 			return nil
 		}
 	}
@@ -56,14 +59,29 @@ func (m *SystemdManager) Wake(ctx context.Context, id control.Workload) error {
 		return m.Start(ctx, id)
 	}
 	st, err := m.unitState(ctx, p.Unit)
-	if err == nil && st.active == "active" && st.sub == "running" {
+	if err != nil {
+		return err
+	}
+	if st.active == "active" && st.sub == "running" {
 		if err := m.verifyNativeBinding(ctx, p); err != nil {
 			return err
 		}
-		if err := m.capacity(ctx, id); err != nil {
+		if err := m.prepareStart(ctx, id); err != nil {
 			return err
 		}
-		if m.requestVLLMWake(ctx, *p.NativeModel) == nil {
+		if p.HasLimits() {
+			if err := m.VerifyLimitProtection(ctx, id); err != nil {
+				return err
+			}
+		}
+		wakeErr := m.requestVLLMWake(ctx, *p.NativeModel)
+		sleeping, stateErr := m.vllmSleeping(ctx, *p.NativeModel)
+		if wakeErr == nil && stateErr == nil && !sleeping {
+			if err := m.checkStartedUnit(ctx, p); err != nil {
+				stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), limitCleanupTimeout)
+				defer cancel()
+				return errors.Join(err, m.stopUnit(stopCtx, p.Unit))
+			}
 			return nil
 		}
 		if stopErr := m.stopUnit(ctx, p.Unit); stopErr != nil {
@@ -97,7 +115,7 @@ func (m *SystemdManager) isHibernated(ctx context.Context, p control.WorkloadPro
 	if !m.supportsSleepMode(p) {
 		return false
 	}
-	return m.verifyVLLMSleeping(ctx, *p.NativeModel)
+	return m.releasedViaSleep(ctx, p)
 }
 
 func (m *SystemdManager) releasedViaSleep(ctx context.Context, p control.WorkloadProfile) bool {
@@ -108,7 +126,39 @@ func (m *SystemdManager) releasedViaSleep(ctx context.Context, p control.Workloa
 	if err != nil || st.active != "active" || st.sub != "running" {
 		return false
 	}
-	return m.verifyVLLMSleeping(ctx, *p.NativeModel)
+	if err := m.verifyNativeBinding(ctx, p); err != nil {
+		return false
+	}
+	if !st.hasCgroup || st.cgroup != p.Cgroup {
+		return false
+	}
+	if _, err := m.managerCgroup(ctx); err != nil {
+		return false
+	}
+	if err := m.cgroups.check(p.Cgroup, false); err != nil {
+		return false
+	}
+	return m.verifyVLLMSleeping(ctx, *p.NativeModel) && m.sleepGPUReleased(ctx, p) == nil
+}
+
+// A runtime status flag is not GPU release evidence. Every compute process
+// still in the sleeping unit must report zero allocated VRAM. Unknown process
+// attribution or memory keeps the GPU unavailable and causes a cold stop.
+func (m *SystemdManager) sleepGPUReleased(ctx context.Context, p control.WorkloadProfile) error {
+	apps, err := m.computeApps(ctx, m.gpuDevice(p))
+	if err != nil {
+		return err
+	}
+	for _, app := range apps {
+		group, err := m.gpuHost.processCgroup(app.pid)
+		if err != nil {
+			return gpuCheckFailure("sleeping GPU process ownership could not be read", err)
+		}
+		if (group == p.Cgroup || strings.HasPrefix(group, p.Cgroup+"/")) && (!app.memoryKnown || app.usedMiB != 0) {
+			return errors.New("sleeping workload has not released GPU memory")
+		}
+	}
+	return nil
 }
 
 func (m *SystemdManager) requestVLLMSleep(ctx context.Context, n control.NativeModel) error {
@@ -122,15 +172,23 @@ func (m *SystemdManager) requestVLLMWake(ctx context.Context, n control.NativeMo
 }
 
 func (m *SystemdManager) verifyVLLMSleeping(ctx context.Context, n control.NativeModel) bool {
+	sleeping, err := m.vllmSleeping(ctx, n)
+	return err == nil && sleeping
+}
+
+func (m *SystemdManager) vllmSleeping(ctx context.Context, n control.NativeModel) (bool, error) {
 	body, err := m.doVLLMControlRequest(ctx, n, http.MethodGet, "/is_sleeping")
 	if err != nil {
-		return false
+		return false, err
 	}
 	var status vllmSleepStatus
-	if strictjson.DecodeLimited(bytes.NewReader(body), 1024, &status) != nil {
-		return false
+	if err := strictjson.DecodeLimited(bytes.NewReader(body), 1024, &status); err != nil {
+		return false, err
 	}
-	return status.IsSleeping
+	if status.IsSleeping == nil {
+		return false, errors.New("vLLM sleep status is missing")
+	}
+	return *status.IsSleeping, nil
 }
 
 func (m *SystemdManager) doVLLMControlRequest(ctx context.Context, n control.NativeModel, method, path string) ([]byte, error) {

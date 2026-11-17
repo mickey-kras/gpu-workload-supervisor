@@ -7,46 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 	"io"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"unicode/utf8"
-
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
-
-// DefaultHub identifies the default model hub recorded in configuration metadata.
-const DefaultHub = "https://huggingface.co"
-
-// MaxTemplateBytes bounds a chat template file read when computing its SHA-256 pin.
-const MaxTemplateBytes = 256 << 10
-
-var (
-	repoPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}$`)
-	revisionPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	sha256Pattern   = regexp.MustCompile(`^[0-9a-f]{64}$`)
-)
-
-// Source names the upstream repository and the pinned commit recorded for provenance.
-type Source struct {
-	Repo     string `json:"repo"`
-	Revision string `json:"revision"`
-}
-
-// Valid reports whether s names a hub repository as org/name and a 40-hex commit SHA.
-func (s Source) Valid() bool {
-	return repoPattern.MatchString(s.Repo) && !strings.Contains(s.Repo, "..") && revisionPattern.MatchString(s.Revision)
-}
-
-// PinTemplate returns the lowercase hex SHA-256 of template text.
-func PinTemplate(text string) string {
-	sum := sha256.Sum256([]byte(text))
-	return hex.EncodeToString(sum[:])
-}
-
-// templateFiles lists the top-level files from which a chat template pin may be derived.
-var templateFiles = []string{"chat_template.jinja", "chat_template.json", "tokenizer_config.json"}
 
 // JSON keys rejected by the safetensors model check allowlist.
 var (
@@ -93,14 +59,29 @@ func FileDigest(ctx context.Context, path string) (string, error) {
 	if !cleanAbsolute(path) {
 		return "", errors.New("file digest requires a clean absolute path")
 	}
+	if err := noParentLinks(path); err != nil {
+		return "", err
+	}
 	f, err := openRegular(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, ContextReader(ctx, io.LimitReader(f, 1<<40))); err != nil {
+	const maxFileBytes int64 = 1 << 40
+	info, err := f.Stat()
+	if err != nil {
 		return "", err
+	}
+	if info.Size() > maxFileBytes {
+		return "", errors.New("model file exceeds its size limit")
+	}
+	h := sha256.New()
+	n, err := io.Copy(h, ContextReader(ctx, io.LimitReader(f, maxFileBytes+1)))
+	if err != nil {
+		return "", err
+	}
+	if n > maxFileBytes || n != info.Size() {
+		return "", errors.New("model file changed or exceeds its size limit")
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
@@ -142,51 +123,4 @@ func validateShardWeightMap(raw []byte, files map[string]string, limit int64) er
 		}
 	}
 	return nil
-}
-
-// resolveTemplatePin hashes chat_template.jinja or an embedded string chat_template if present.
-func resolveTemplatePin(ctx context.Context, root string, files map[string]string) (pin, file, reason string, err error) {
-	if files["chat_template.jinja"] != "" {
-		raw, r, readErr := readBound(ctx, filepath.Join(root, "chat_template.jinja"), files["chat_template.jinja"], MaxTemplateBytes, "chat-template-too-large")
-		if readErr != nil || r != "" {
-			return "", "", r, readErr
-		}
-		if !utf8.Valid(raw) {
-			return "", "", "chat-template-invalid", nil
-		}
-		return PinTemplate(string(raw)), "chat_template.jinja", "", nil
-	}
-	for _, name := range []string{"chat_template.json", "tokenizer_config.json"} {
-		if files[name] == "" {
-			continue
-		}
-		p, r, readErr := extractJSONTemplatePin(ctx, root, name, files[name])
-		if readErr != nil || r != "" || p != "" {
-			return p, name, r, readErr
-		}
-	}
-	return "", "", "", nil
-}
-
-func extractJSONTemplatePin(ctx context.Context, root, name, digest string) (string, string, error) {
-	raw, reason, err := readBound(ctx, filepath.Join(root, name), digest, MaxJSONFileBytes, ReasonJSONTooLarge)
-	if err != nil || reason != "" {
-		return "", reason, err
-	}
-	var doc map[string]json.RawMessage
-	if json.Unmarshal(raw, &doc) != nil {
-		return "", ReasonInvalidJSON, nil
-	}
-	rawTpl, ok := doc["chat_template"]
-	if !ok || string(rawTpl) == "null" {
-		return "", "", nil
-	}
-	var text string
-	if json.Unmarshal(rawTpl, &text) != nil {
-		return "", "named-chat-templates", nil
-	}
-	if len(text) > MaxTemplateBytes {
-		return "", "chat-template-too-large", nil
-	}
-	return PinTemplate(text), "", nil
 }
