@@ -15,12 +15,12 @@ type hibernatingFakeRuntime struct {
 
 func (h *hibernatingFakeRuntime) Sleep(ctx context.Context, id control.Workload) error {
 	h.actions = append(h.actions, "sleep:"+string(id))
-	return h.acceptanceRuntime.Stop(ctx, id)
+	return h.Stop(ctx, id)
 }
 
 func (h *hibernatingFakeRuntime) Wake(ctx context.Context, id control.Workload) error {
 	h.actions = append(h.actions, "wake:"+string(id))
-	return h.acceptanceRuntime.Start(ctx, id)
+	return h.Start(ctx, id)
 }
 
 func TestControllerDispatchesHibernatableRuntimeOnSwitch(t *testing.T) {

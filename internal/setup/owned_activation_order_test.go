@@ -92,6 +92,11 @@ func uuidOwnedFixture(t *testing.T, home, id string, port uint16) control.Worklo
 	p, _ := ownedFixtureProfile(t, home, id, port)
 	p.NativeModel.Instance = id
 	p.NativeModel.GPUUUID = "GPU-01234567-89ab-cdef-0123-456789abcdef"
+	raw, err := gpuruntime.RenderOwnedUnit(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.NativeModel.LaunchSHA256 = digest(raw)
 	return p
 }
 

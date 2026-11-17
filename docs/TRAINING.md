@@ -1,6 +1,6 @@
 # Training
 
-The experimental training executables were removed in the runtime refactor.
+The runtime refactor removes the experimental training executables.
 The commands for those executables below describe the retired implementation.
 See [issue 451](https://github.com/mickey-kras/gpu-workload-supervisor/issues/451) for the generic finite-job replacement.
 

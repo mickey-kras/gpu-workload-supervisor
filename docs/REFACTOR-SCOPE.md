@@ -9,7 +9,7 @@ This branch is a preparation step. It does not complete the daemon migration.
 | Workload drivers | Optional sleep and wake methods on the existing runtime | Separate service and transient-job drivers |
 | Admission proxy | Existing request accounting and fences | Move state writes and lifecycle requests to the daemon |
 
-The experimental training executables and their framework dependencies are removed.
+This branch removes the experimental training executables and their framework dependencies.
 The generic finite-job replacement remains in [issue 451](https://github.com/mickey-kras/gpu-workload-supervisor/issues/451).
 The existing finite-job records and lifecycle stay readable for recovery.
 The older training-runner documents describe the removed experimental implementation.
@@ -35,7 +35,7 @@ Sleep-enabled owned units omit mutual systemd conflicts.
 Otherwise, starting the next unit would stop the sleeping process and discard its RAM cache.
 The supervisor still checks GPU release before it starts the next workload.
 
-Current vLLM HTTP sleep endpoints require `VLLM_SERVER_DEV_MODE=1`.
+The HTTP endpoints for sleep in vLLM need `VLLM_SERVER_DEV_MODE=1`.
 The [vLLM security guidance](https://docs.vllm.ai/en/latest/usage/security/) describes the unauthenticated development endpoints.
 This branch does not enable that mode or relax its rejection.
 A stock qualified server therefore uses the cold-stop fallback when sleep endpoints are unavailable.

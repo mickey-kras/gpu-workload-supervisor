@@ -62,31 +62,27 @@ func (m *SystemdManager) Wake(ctx context.Context, id control.Workload) error {
 	if err != nil {
 		return err
 	}
-	if st.active == "active" && st.sub == "running" {
-		if err := m.verifyNativeBinding(ctx, p); err != nil {
-			return err
+	if st.active != "active" || st.sub != "running" {
+		return m.Start(ctx, id)
+	}
+	if err := m.checkStartedUnit(ctx, p); err != nil {
+		return err
+	}
+	if err := m.prepareStart(ctx, id); err != nil {
+		return err
+	}
+	wakeErr := m.requestVLLMWake(ctx, *p.NativeModel)
+	sleeping, stateErr := m.vllmSleeping(ctx, *p.NativeModel)
+	if wakeErr == nil && stateErr == nil && !sleeping {
+		if err := m.checkStartedUnit(ctx, p); err != nil {
+			stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), limitCleanupTimeout)
+			defer cancel()
+			return errors.Join(err, m.stopUnit(stopCtx, p.Unit))
 		}
-		if err := m.prepareStart(ctx, id); err != nil {
-			return err
-		}
-		if p.HasLimits() {
-			if err := m.VerifyLimitProtection(ctx, id); err != nil {
-				return err
-			}
-		}
-		wakeErr := m.requestVLLMWake(ctx, *p.NativeModel)
-		sleeping, stateErr := m.vllmSleeping(ctx, *p.NativeModel)
-		if wakeErr == nil && stateErr == nil && !sleeping {
-			if err := m.checkStartedUnit(ctx, p); err != nil {
-				stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), limitCleanupTimeout)
-				defer cancel()
-				return errors.Join(err, m.stopUnit(stopCtx, p.Unit))
-			}
-			return nil
-		}
-		if stopErr := m.stopUnit(ctx, p.Unit); stopErr != nil {
-			return stopErr
-		}
+		return nil
+	}
+	if err := m.stopUnit(ctx, p.Unit); err != nil {
+		return err
 	}
 	return m.Start(ctx, id)
 }
