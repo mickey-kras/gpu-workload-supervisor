@@ -235,7 +235,7 @@ func TestSetupRejectsUnsupportedVersionBeforeNormalizing(t *testing.T) {
 		return nil, nil
 	}
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-	for _, version := range []int{0, 3, 7, -1} {
+	for _, version := range []int{0, 3, 8, -1} {
 		request := ownedFixtureRequest(t, home, profile)
 		request.Catalog.Version = version
 		raw, err := json.Marshal(request)

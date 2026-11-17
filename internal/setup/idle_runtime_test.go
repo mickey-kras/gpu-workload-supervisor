@@ -21,6 +21,10 @@ func (r idleRuntime) VerifyLimitProtection(context.Context, control.Workload) er
 	return gpuruntime.ErrLimitUnchecked
 }
 
+func (r idleRuntime) VerifyArtifactProtection(context.Context, control.Workload) error {
+	return gpuruntime.ErrArtifactUnchecked
+}
+
 func (r idleRuntime) LimitOutcome(context.Context, control.Workload) gpuruntime.LimitOutcome {
 	return gpuruntime.LimitOutcome{Class: gpuruntime.LimitOutcomeNone}
 }

@@ -36,11 +36,19 @@ type DraftOwnedLaunch struct {
 	// Serving are the optional vLLM KV cache and batching options. Absent
 	// keeps the exact bytes of a draft without them.
 	Serving control.ServingOptions `json:"serving,omitzero"`
+	// Artifacts are the optional read-only model artifact protection.
+	// Absent keeps the exact bytes of a draft without it.
+	Artifacts control.ArtifactProtection `json:"artifacts,omitzero"`
 }
 
 // hasServing reports owned launch serving options.
 func (o *DraftOwnedLaunch) hasServing() bool {
 	return o != nil && !o.Serving.IsZero()
+}
+
+// hasArtifacts reports owned launch artifact protection.
+func (o *DraftOwnedLaunch) hasArtifacts() bool {
+	return o != nil && !o.Artifacts.IsZero()
 }
 
 // hasLimits reports owned launch limits.
@@ -150,15 +158,22 @@ const draftsVersionLimits = 2
 // options, with or without limits. Older binaries refuse it like version 2.
 const draftsVersionServing = 3
 
+// draftsVersionArtifacts is the drafts version of a file with read-only
+// model artifact protection, with or without serving options and limits.
+// Older binaries refuse it like version 2.
+const draftsVersionArtifacts = 4
+
 // draftsVersion gives the lowest drafts version that drafts need.
 func draftsVersion(drafts []Draft) int {
 	version := 1
 	for _, d := range drafts {
 		switch {
+		case d.Binding != nil && d.Binding.Owned.hasArtifacts():
+			return draftsVersionArtifacts
 		case d.Binding != nil && d.Binding.Owned.hasServing():
-			return draftsVersionServing
+			version = max(version, draftsVersionServing)
 		case d.Binding != nil && d.Binding.Owned.hasLimits():
-			version = draftsVersionLimits
+			version = max(version, draftsVersionLimits)
 		}
 	}
 	return version
@@ -169,7 +184,7 @@ func validateDrafts(version int, drafts []Draft) error {
 		return errors.New("too many drafts")
 	}
 	if want := draftsVersion(drafts); version != want {
-		return fmt.Errorf("unsupported draft version %d: these drafts need version %d (%d with serving options, %d with resource limits, 1 without)", version, want, draftsVersionServing, draftsVersionLimits)
+		return fmt.Errorf("unsupported draft version %d: these drafts need version %d (%d with artifact protection, %d with serving options, %d with resource limits, 1 without)", version, want, draftsVersionArtifacts, draftsVersionServing, draftsVersionLimits)
 	}
 	ids := map[string]bool{}
 	var unsupported error
@@ -242,6 +257,11 @@ func validateDraftBinding(binding *DraftBinding) error {
 	if binding.Owned.hasServing() {
 		if err := binding.Owned.Serving.Validate(); err != nil {
 			return fmt.Errorf("draft serving options: %w", err)
+		}
+	}
+	if binding.Owned.hasArtifacts() {
+		if err := binding.Owned.Artifacts.Validate(); err != nil {
+			return fmt.Errorf("draft artifact protection: %w", err)
 		}
 	}
 	for _, value := range []string{binding.Unit, binding.Cgroup, binding.HealthURL, binding.Instance, binding.Model, binding.LaunchFile} {

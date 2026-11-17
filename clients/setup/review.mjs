@@ -42,9 +42,18 @@ function hasServingOptions(profile) {
     return serving !== null && typeof serving === 'object' && Object.values(serving).some(Boolean);
 }
 
-// Mirror of draftsVersion in internal/setup/drafts.go: 3 with serving
-// options, 2 with resource limits, 1 otherwise.
+// Mirror of control.WorkloadProfile.HasArtifactProtection: an empty or null
+// artifacts object is absent, and the backend decoder rejects it.
+function hasArtifactProtection(profile) {
+    const artifacts = profile.nativeModel?.owned?.artifacts;
+    return artifacts !== null && typeof artifacts === 'object' && Object.values(artifacts).some(Boolean);
+}
+
+// Mirror of draftsVersion in internal/setup/drafts.go: 4 with artifact
+// protection, 3 with serving options, 2 with resource limits, 1 otherwise.
 export function draftsVersion(drafts) {
+    if (drafts.some(draft => draft.binding?.owned?.artifacts))
+        return 4;
     if (drafts.some(draft => draft.binding?.owned?.serving))
         return 3;
     return drafts.some(draft => draft.binding?.owned?.limits) ? 2 : 1;
@@ -54,6 +63,8 @@ export function draftsVersion(drafts) {
 // lowest catalog version that the profiles need. The backend recomputes it
 // before preview and apply.
 export function lowestCatalogVersion(profiles) {
+    if (profiles.some(hasArtifactProtection))
+        return 7;
     if (profiles.some(hasServingOptions))
         return 6;
     if (profiles.some(hasLimits))

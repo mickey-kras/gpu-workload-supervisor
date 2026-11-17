@@ -45,10 +45,21 @@ test('serving options need catalog version 6', () => {
         assert.equal(lowestCatalogVersion([{nativeModel: {owned: {port: 8000, serving: options}}}]), 2, JSON.stringify(options));
 });
 
-test('drafts version follows serving options and limits', () => {
+test('artifact protection needs catalog version 7', () => {
+    const artifacts = {nativeModel: {owned: {port: 8000, artifacts: {version: 1}}}};
+    const serving = {nativeModel: {owned: {port: 8000, serving: {version: 1}}}};
+    assert.equal(lowestCatalogVersion([artifacts]), 7);
+    assert.equal(lowestCatalogVersion([serving, artifacts]), 7);
+    for (const options of [{}, null, {version: 0}])
+        assert.equal(lowestCatalogVersion([{nativeModel: {owned: {port: 8000, artifacts: options}}}]), 2, JSON.stringify(options));
+});
+
+test('drafts version follows artifact protection, serving options and limits', () => {
     const owned = owned => ({binding: {owned}});
     assert.equal(draftsVersion([]), 1);
     assert.equal(draftsVersion([owned({port: 8000})]), 1);
     assert.equal(draftsVersion([owned({limits: {version: 1}})]), 2);
     assert.equal(draftsVersion([owned({limits: {version: 1}}), owned({serving: {version: 1}})]), 3);
+    assert.equal(draftsVersion([owned({serving: {version: 1}}), owned({artifacts: {version: 1}})]), 4);
+    assert.equal(draftsVersion([owned({artifacts: {version: 1}})]), 4);
 });
