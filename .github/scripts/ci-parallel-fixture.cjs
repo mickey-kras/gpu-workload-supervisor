@@ -17,7 +17,7 @@ function parallelFixture() {
     workflow.on.workflow_call = null;
     for (const id of ['go', 'frontend']) {
       delete workflow.jobs[id].outputs;
-      workflow.jobs[id].steps = workflow.jobs[id].steps.filter(step => !step.name?.includes('quality coverage') && step.name !== 'CI reuse regressions');
+      workflow.jobs[id].steps = workflow.jobs[id].steps.filter(step => !step.name?.includes('quality coverage') && step.name !== 'CI reuse regressions' && step.name !== 'Go static analysis');
     }
     const scans = workflow.jobs.scans.steps;
     const report = scans.find(step => step.name === 'Trivy filesystem report');

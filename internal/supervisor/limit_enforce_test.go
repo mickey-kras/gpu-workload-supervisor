@@ -50,7 +50,7 @@ type limitFixture struct {
 	offset time.Duration
 }
 
-var limitDrift = fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, gpuruntime.ErrLimitDrift)
+var errLimitDrift = fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, gpuruntime.ErrLimitDrift)
 
 // latchedVision switches to vision, admits work when work is set, and
 // latches the state through a failed status check.
@@ -74,12 +74,12 @@ func latchedVision(t *testing.T, work bool) *limitFixture {
 			t.Fatal(err)
 		}
 	}
-	lr.healthErr = limitDrift
+	lr.healthErr = errLimitDrift
 	if _, err := c.Status(ctx); !errors.Is(err, gpuruntime.ErrLimitDrift) {
 		t.Fatalf("status latch = %v", err)
 	}
 	lr.healthErr = nil
-	lr.protectionErr = limitDrift
+	lr.protectionErr = errLimitDrift
 	lr.calls = nil
 	return f
 }
@@ -296,7 +296,7 @@ func TestLimitTickLateDefiniteFailureStopsByOverdueTime(t *testing.T) {
 	if err := f.c.EnforceLimits(ctx); !errors.Is(err, ErrLimitStopDeferred) {
 		t.Fatalf("unproven failure = %v", err)
 	}
-	f.r.protectionErr = limitDrift
+	f.r.protectionErr = errLimitDrift
 	f.offset = v + d/2
 	if err := f.c.EnforceLimits(ctx); !errors.Is(err, ErrLimitStopDeferred) {
 		t.Fatalf("definite failure with work = %v", err)
@@ -700,7 +700,7 @@ func TestLimitTickNewLatchGetsNewDrain(t *testing.T) {
 		t.Fatal("the record outlives the latch")
 	}
 	f.offset = f.c.config.DrainTimeout + time.Millisecond
-	f.r.healthErr = limitDrift
+	f.r.healthErr = errLimitDrift
 	if _, err := f.c.Status(ctx); !errors.Is(err, gpuruntime.ErrLimitDrift) {
 		t.Fatalf("second latch = %v", err)
 	}
@@ -754,7 +754,7 @@ func twoLimitedUnits(t *testing.T) *limitFixture {
 	if _, err := c.Switch(ctx, "vision", "test"); err != nil {
 		t.Fatal(err)
 	}
-	lr.healthErr = limitDrift
+	lr.healthErr = errLimitDrift
 	if _, err := c.Status(ctx); err == nil {
 		t.Fatal("no latch")
 	}
@@ -769,7 +769,7 @@ func TestLimitTickPrefersDefiniteFailure(t *testing.T) {
 	f := twoLimitedUnits(t)
 	c, lr, ctx := f.c, f.r.limitedRuntime, context.Background()
 	lr.alsoActive = []control.Workload{"audio"}
-	lr.protectionErrs = map[control.Workload]error{"vision": gpuruntime.ErrLimitReadback, "audio": limitDrift}
+	lr.protectionErrs = map[control.Workload]error{"vision": gpuruntime.ErrLimitReadback, "audio": errLimitDrift}
 	lr.calls = nil
 	err := c.EnforceLimits(ctx)
 	if !errors.Is(err, ErrLimitStopped) || !slices.Contains(lr.calls, "stop audio") || slices.Contains(lr.calls, "stop vision") {
@@ -807,11 +807,11 @@ type bumpingStore struct {
 }
 
 func (s bumpingStore) StartTransition(ctx context.Context, version uint64, tr store.Transition) (control.State, error) {
-	state, err := s.Store.State(ctx)
+	state, err := s.State(ctx)
 	if err != nil {
 		return control.State{}, err
 	}
-	if _, err := s.Store.UpdateState(ctx, state.Version, state); err != nil {
+	if _, err := s.UpdateState(ctx, state.Version, state); err != nil {
 		return control.State{}, err
 	}
 	return s.Store.StartTransition(ctx, version, tr)
@@ -901,7 +901,7 @@ func TestLimitTickStartedStopKeepsRecordAgainstOtherUnit(t *testing.T) {
 	f := twoLimitedUnits(t)
 	ctx := context.Background()
 	f.c.config.VerifyTimeout = 100 * time.Millisecond
-	f.r.protectionErr = limitDrift
+	f.r.protectionErr = errLimitDrift
 	f.r.releaseErr = errors.New("compute process remains")
 	if err := f.c.EnforceLimits(ctx); !errors.Is(err, ErrLimitStopped) || !errors.Is(err, f.r.releaseErr) {
 		t.Fatalf("stop = %v", err)
@@ -1116,7 +1116,7 @@ func TestLimitTickPendingReadEscalates(t *testing.T) {
 	if err := f.c.EnforceLimits(ctx); !errors.Is(err, ErrLimitStopDeferred) {
 		t.Fatalf("unproven failure = %v", err)
 	}
-	f.r.protectionErr = limitDrift
+	f.r.protectionErr = errLimitDrift
 	f.offset = f.c.config.DrainTimeout + f.c.config.VerifyTimeout + time.Millisecond
 	f.c.store = &limitStore{storeGateway: f.s, pendingErr: errors.New("store failed")}
 	err := f.c.EnforceLimits(ctx)

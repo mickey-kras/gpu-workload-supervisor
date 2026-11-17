@@ -348,11 +348,12 @@ func TestManagerCgroupAnchorMustExistAndMatchBothWorkloads(t *testing.T) {
 		if err := os.Remove(filepath.Join(anchor, "cgroup.events")); err != nil {
 			t.Fatal(err)
 		}
-		if evidence == "missing" {
+		switch evidence {
+		case "missing":
 			if err := os.Remove(anchor); err != nil {
 				t.Fatal(err)
 			}
-		} else if evidence == "malformed" {
+		case "malformed":
 			writeEvents(t, m.cgroups.root, "workloads", "populated unknown\n")
 		}
 		if err := m.ReleasedFor(context.Background(), control.WorkloadIdle); err == nil {

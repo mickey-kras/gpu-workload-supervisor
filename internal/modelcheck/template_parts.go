@@ -230,7 +230,7 @@ func partSelection(tokens []templateToken, i int) bool {
 	case i == 0, t.kind != tokOperator:
 		return false
 	case t.text == "[":
-		return valueEnd(tokens[i-1]) && !(next.kind == tokString && tokenAt(tokens, i+2).is(tokOperator, "]"))
+		return valueEnd(tokens[i-1]) && (next.kind != tokString || !tokenAt(tokens, i+2).is(tokOperator, "]"))
 	case t.text == "." && tokenAt(tokens, i+2).is(tokOperator, "("):
 		return next.text == "replace" || removalMethods[next.text] && len(arguments(tokens, i+2)) > 0
 	case t.text == ".":

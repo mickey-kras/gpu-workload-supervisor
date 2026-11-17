@@ -39,3 +39,6 @@ __pycache__/
 # Vale styles are installed from the pinned release.
 .vale/styles/*
 !.vale/styles/config/
+
+# External analyzer report
+golangci-lint-report.xml

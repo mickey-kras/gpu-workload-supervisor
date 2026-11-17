@@ -210,7 +210,7 @@ func (m *SystemdManager) TrainingTerminal(ctx context.Context, p control.Workloa
 	if job.InvocationID == "" || v["InvocationID"] != job.InvocationID {
 		return evidence, ErrLaunchChanged
 	}
-	if v["ActiveState"] != "failed" && !(v["ActiveState"] == "active" && v["SubState"] == "exited") {
+	if v["ActiveState"] != "failed" && (v["ActiveState"] != "active" || v["SubState"] != "exited") {
 		return evidence, errors.New("trainer has not exited")
 	}
 	// A fenced systemd failure is terminal evidence, but still needs recursive
@@ -347,7 +347,7 @@ func validInvocationID(id string) bool {
 		return false
 	}
 	for _, r := range id {
-		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
 			return false
 		}
 	}
