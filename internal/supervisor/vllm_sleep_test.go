@@ -116,7 +116,7 @@ func TestTrainingAndUserHandoffColdStopSleepingServices(t *testing.T) {
 	cat.Catalog.Version = 4
 	cat.Catalog.Profiles = append(cat.Catalog.Profiles, control.WorkloadProfile{
 		ID: "trainer", Label: "Trainer", Adapter: "systemd", Unit: "trainer.service",
-		Cgroup: "/training/trainer.service", BootPolicy: "stop-to-idle",
+		Cgroup: "/training/trainer.service", RequiredMiB: 1024, BootPolicy: "stop-to-idle",
 		Trainer: &control.TrainerBinding{
 			Version: 1, GPUUUID: "GPU-11111111-1111-1111-1111-111111111111",
 			LaunchFile: "/opt/trainer/unit.service", LaunchSHA256: strings.Repeat("a", 64),

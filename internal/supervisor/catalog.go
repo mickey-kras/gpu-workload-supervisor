@@ -28,6 +28,7 @@ func (c *Controller) checkCatalog(ctx context.Context) error {
 	}
 	return nil
 }
+
 type coldReleaseRuntime interface {
 	ReleasedForSetup(context.Context, control.Workload) error
 }
