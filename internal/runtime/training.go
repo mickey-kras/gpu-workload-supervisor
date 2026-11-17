@@ -153,7 +153,7 @@ func (m *SystemdManager) StartTraining(ctx context.Context, p control.WorkloadPr
 	if err := m.verifyTrainerBinding(ctx, p); err != nil {
 		return "", err
 	}
-	if err := m.ReleasedFor(ctx, control.WorkloadIdle); err != nil {
+	if err := m.ReleasedForSetup(ctx, control.WorkloadIdle); err != nil {
 		return "", err
 	}
 	if err := m.checkProfileGPUFree(ctx, p); err != nil {

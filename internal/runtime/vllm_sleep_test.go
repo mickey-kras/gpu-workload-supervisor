@@ -121,7 +121,11 @@ func TestVLLMSleepWakeAndReleasedViaSleep(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	m, _ := newSleepTestManager(t, srv.URL)
+	m, r := newSleepTestManager(t, srv.URL)
+	query := "/usr/bin/true --query-compute-apps=pid,process_name,used_memory --format=csv,noheader,nounits -i " + sleepGPU
+	r.outputs[query] = []byte("123, vllm, 512\n")
+	m.gpuHost.proc = t.TempDir()
+	(gpuProcFixture{t: t, root: m.gpuHost.proc}).add(123, m.config.Catalog.Profiles[0].Cgroup, 1000)
 	if outcome, err := m.Sleep(context.Background(), "text"); err != nil || outcome != "sleeping" {
 		t.Fatalf("sleep outcome = %q, error = %v", outcome, err)
 	}
@@ -165,7 +169,7 @@ func TestVLLMSleepFallsBackWhenControlOrGPUProofFails(t *testing.T) {
 			m, r := newSleepTestManager(t, srv.URL)
 			query := "/usr/bin/true --query-compute-apps=pid,process_name,used_memory --format=csv,noheader,nounits -i " + sleepGPU
 			if scenario == "memory retained" || scenario == "unknown memory" || scenario == "unknown process" {
-				memory := "1024"
+				memory := "4096"
 				if scenario == "unknown memory" {
 					memory = "N/A"
 				}
@@ -241,5 +245,36 @@ func TestVLLMWakeFallsBackUntilAwakeIsProven(t *testing.T) {
 				t.Fatalf("an unverified wake skipped cold restart: %v", r.calls)
 			}
 		})
+	}
+}
+
+func TestVLLMSleepAndWakeHonorCallerContextBeyondHealthTimeout(t *testing.T) {
+	var sleeping atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer secret-test-token-12345678901234567890" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/sleep":
+			time.Sleep(40 * time.Millisecond)
+			sleeping.Store(true)
+		case "/wake_up":
+			time.Sleep(40 * time.Millisecond)
+			sleeping.Store(false)
+		case "/is_sleeping":
+			fmt.Fprintf(w, `{"is_sleeping":%t}`, sleeping.Load())
+		}
+	}))
+	defer srv.Close()
+	m, _ := newSleepTestManager(t, srv.URL)
+	m.client.Timeout = 10 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if outcome, err := m.Sleep(ctx, "text"); err != nil || outcome != "sleeping" {
+		t.Fatalf("sleep with short HealthTimeout = %q, %v", outcome, err)
+	}
+	if err := m.Wake(ctx, "text"); err != nil || sleeping.Load() {
+		t.Fatalf("wake with short HealthTimeout = %v, sleeping = %t", err, sleeping.Load())
 	}
 }

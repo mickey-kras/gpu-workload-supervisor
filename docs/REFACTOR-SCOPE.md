@@ -25,7 +25,8 @@ A level 1 sleep offloads weights to RAM and discards the KV cache.
 It does not let an active model exceed the GPU's VRAM capacity.
 
 The supervisor verifies the launch binding, service state, cgroup, and GPU process memory.
-A sleeping workload must report zero allocated VRAM for its compute processes.
+A sleeping workload must not exceed 2048 MiB of allocated VRAM across its compute processes.
+Training preparation and user handoffs stop sleeping services before GPU release.
 Unknown memory or process ownership is not release evidence.
 A failed sleep or release check falls back to a service stop.
 A wake uses the normal release, external-process, capacity, and limit checks.

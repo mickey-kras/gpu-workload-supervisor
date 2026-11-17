@@ -141,22 +141,35 @@ func (m *SystemdManager) releasedViaSleep(ctx context.Context, p control.Workloa
 	return m.verifyVLLMSleeping(ctx, *p.NativeModel) && m.sleepGPUReleased(ctx, p) == nil
 }
 
-// A runtime status flag is not GPU release evidence. Every compute process
-// still in the sleeping unit must report zero allocated VRAM. Unknown process
-// attribution or memory keeps the GPU unavailable and causes a cold stop.
+// maxSleepingContextMiB bounds the primary CUDA context and allocator state
+// that live worker processes retain on the GPU during level 1 sleep.
+const maxSleepingContextMiB uint64 = 2048
+
+func inWorkloadCgroup(group, root string) bool {
+	return root != "" && (group == root || strings.HasPrefix(group, root+"/"))
+}
+
+// A runtime status flag is not GPU release evidence. Compute processes still
+// in the sleeping unit must have known attribution and stay within the bounded
+// CUDA context allowance; incoming starts still require measured free VRAM.
 func (m *SystemdManager) sleepGPUReleased(ctx context.Context, p control.WorkloadProfile) error {
 	apps, err := m.computeApps(ctx, m.gpuDevice(p))
 	if err != nil {
 		return err
 	}
+	var usedMiB uint64
 	for _, app := range apps {
 		group, err := m.gpuHost.processCgroup(app.pid)
 		if err != nil {
 			return gpuCheckFailure("sleeping GPU process ownership could not be read", err)
 		}
-		if (group == p.Cgroup || strings.HasPrefix(group, p.Cgroup+"/")) && (!app.memoryKnown || app.usedMiB != 0) {
+		if !inWorkloadCgroup(group, p.Cgroup) {
+			continue
+		}
+		if !app.memoryKnown || app.usedMiB > maxSleepingContextMiB-usedMiB {
 			return errors.New("sleeping workload has not released GPU memory")
 		}
+		usedMiB += app.usedMiB
 	}
 	return nil
 }
@@ -206,7 +219,7 @@ func (m *SystemdManager) doVLLMControlRequest(ctx context.Context, n control.Nat
 		}
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
-	resp, err := m.client.Do(req)
+	resp, err := m.controlClient(method).Do(req)
 	if err != nil {
 		return nil, &safeHTTPRequestError{cause: err}
 	}
@@ -222,4 +235,11 @@ func (m *SystemdManager) doVLLMControlRequest(ctx context.Context, n control.Nat
 		return nil, errors.New("invalid JSON from vLLM control endpoint")
 	}
 	return raw, nil
+}
+
+func (m *SystemdManager) controlClient(method string) *http.Client {
+	if method == http.MethodPost && m.client != nil {
+		return &http.Client{Transport: m.client.Transport, CheckRedirect: m.client.CheckRedirect}
+	}
+	return m.client
 }

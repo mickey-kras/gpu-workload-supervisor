@@ -39,9 +39,16 @@ func (c *Controller) RecoverUser(ctx context.Context, target control.Workload, i
 	return c.transition(ctx, target, control.OwnerUser, control.OwnerUser, initiator, true)
 }
 
+func (c *Controller) switchColdStop(ctx context.Context, target control.Workload, initiator string) (control.State, error) {
+	return c.transitionConditional(ctx, target, initiator, transitionOptions{
+		sourceOwner: control.OwnerSupervisor, targetOwner: control.OwnerSupervisor, coldStop: true,
+	})
+}
+
 func (c *Controller) transition(ctx context.Context, target control.Workload, sourceOwner, targetOwner control.Owner, initiator string, verifyOnly bool) (control.State, error) {
 	return c.transitionConditional(ctx, target, initiator, transitionOptions{
 		sourceOwner: sourceOwner, targetOwner: targetOwner, verifyOnly: verifyOnly,
+		coldStop: targetOwner == control.OwnerUser,
 	})
 }
 
@@ -50,6 +57,7 @@ type transitionOptions struct {
 	targetOwner control.Owner
 	verifyOnly  bool
 	preserve    bool
+	coldStop    bool
 	operator    *control.OperatorPrecondition
 }
 
@@ -157,7 +165,7 @@ func stableTarget(state control.State, owner control.Owner, target control.Workl
 	return state
 }
 
-func (c *Controller) unloadTransition(ctx context.Context, transitionID string, state, previous control.State, target control.Workload, verifyOnly bool) (control.State, control.Workload, error) {
+func (c *Controller) unloadTransition(ctx context.Context, transitionID string, state, previous control.State, target control.Workload, verifyOnly, coldStop bool) (control.State, control.Workload, error) {
 	active := previous.ActiveWorkload
 	if verifyOnly {
 		return state, active, nil
@@ -176,7 +184,7 @@ func (c *Controller) unloadTransition(ctx context.Context, transitionID string, 
 		}
 		return state, control.WorkloadIdle, err
 	}
-	active, err = c.unloadCatalog(ctx, transitionID, state.Phase, previous, target)
+	active, err = c.unloadCatalogMode(ctx, transitionID, state.Phase, previous, target, coldStop)
 	return state, active, err
 }
 
@@ -229,7 +237,7 @@ func (c *Controller) executeTransition(ctx context.Context, transition store.Tra
 	if err := c.waitForDrain(ctx, transition.ID, transition.Deadline); err != nil {
 		return fail(transition.ID, state, current, err)
 	}
-	state, active, err := c.unloadTransition(ctx, transition.ID, state, current, target, skipEffects)
+	state, active, err := c.unloadTransition(ctx, transition.ID, state, current, target, skipEffects, options.coldStop)
 	if err != nil {
 		return fail(transition.ID, state, current, err)
 	}

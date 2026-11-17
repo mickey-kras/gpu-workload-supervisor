@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
@@ -27,7 +28,15 @@ func (c *Controller) checkCatalog(ctx context.Context) error {
 	}
 	return nil
 }
+type coldReleaseRuntime interface {
+	ReleasedForSetup(context.Context, control.Workload) error
+}
+
 func (c *Controller) unloadCatalog(ctx context.Context, id string, phase control.Phase, current control.State, target control.Workload) (control.Workload, error) {
+	return c.unloadCatalogMode(ctx, id, phase, current, target, false)
+}
+
+func (c *Controller) unloadCatalogMode(ctx context.Context, id string, phase control.Phase, current control.State, target control.Workload, coldStop bool) (control.Workload, error) {
 	snap, err := c.observe(ctx)
 	if err != nil {
 		return control.WorkloadUnknown, err
@@ -40,11 +49,33 @@ func (c *Controller) unloadCatalog(ctx context.Context, id string, phase control
 		if p.ID == target {
 			continue
 		}
-		if err = c.effectWithOutcome(ctx, id, phase, "stop "+string(p.ID), func(ctx context.Context) (string, error) { return c.stopOrSleep(ctx, p.ID) }); err != nil {
+		if err = c.unloadProfile(ctx, id, phase, p.ID, coldStop); err != nil {
 			return active, err
 		}
 	}
-	return active, c.waitReleasedFor(ctx, target, c.now().Add(c.config.VerifyTimeout))
+	deadline := c.now().Add(c.config.VerifyTimeout)
+	if coldStop {
+		return active, c.waitColdReleasedFor(ctx, target, deadline)
+	}
+	return active, c.waitReleasedFor(ctx, target, deadline)
+}
+
+func (c *Controller) unloadProfile(ctx context.Context, id string, phase control.Phase, workload control.Workload, coldStop bool) error {
+	if coldStop {
+		return c.effect(ctx, id, phase, "stop "+string(workload), func(ctx context.Context) error { return c.runtime.Stop(ctx, workload) })
+	}
+	return c.effectWithOutcome(ctx, id, phase, "stop "+string(workload), func(ctx context.Context) (string, error) { return c.stopOrSleep(ctx, workload) })
+}
+
+func (c *Controller) waitColdReleasedFor(ctx context.Context, target control.Workload, deadline time.Time) error {
+	return c.pollUntil(ctx, deadline, func(probeCtx context.Context) error {
+		actionCtx, cancel := context.WithTimeout(probeCtx, c.config.ActionTimeout)
+		defer cancel()
+		if cr, ok := c.runtime.(coldReleaseRuntime); ok {
+			return cr.ReleasedForSetup(actionCtx, target)
+		}
+		return c.runtime.ReleasedFor(actionCtx, target)
+	})
 }
 
 func (c *Controller) stopOrSleep(ctx context.Context, id control.Workload) (string, error) {

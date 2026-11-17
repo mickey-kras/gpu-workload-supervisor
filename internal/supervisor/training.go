@@ -58,7 +58,7 @@ func (c *Controller) StartTraining(ctx context.Context, id string, target contro
 	if err != nil {
 		return claim, err
 	}
-	if _, err := c.Switch(ctx, control.WorkloadIdle, "training-start"); err != nil {
+	if _, err := c.switchColdStop(ctx, control.WorkloadIdle, "training-start"); err != nil {
 		return claim, c.abortTrainingPreparation(ctx, claim, err)
 	}
 	job, err := c.store.ReserveTraining(ctx, claim)
