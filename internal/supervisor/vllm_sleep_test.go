@@ -36,7 +36,7 @@ func (h *hibernatingFakeRuntime) ReleasedForSetup(ctx context.Context, target co
 			return errors.New("sleeping service still holds CUDA context")
 		}
 	}
-	return h.acceptanceRuntime.ReleasedFor(ctx, target)
+	return h.ReleasedFor(ctx, target)
 }
 
 func (h *hibernatingFakeRuntime) StartTraining(_ context.Context, _ control.WorkloadProfile, job control.TrainingJob) (string, error) {
@@ -44,7 +44,7 @@ func (h *hibernatingFakeRuntime) StartTraining(_ context.Context, _ control.Work
 	return strings.Repeat("a", 32), nil
 }
 
-func (h *hibernatingFakeRuntime) ReleaseTraining(ctx context.Context, p control.WorkloadProfile) error {
+func (h *hibernatingFakeRuntime) ReleaseTraining(ctx context.Context, _ control.WorkloadProfile) error {
 	if len(h.sleeping) != 0 {
 		return errors.New("GPU compute processes remain after trainer exit")
 	}
@@ -139,7 +139,6 @@ func TestTrainingAndUserHandoffColdStopSleepingServices(t *testing.T) {
 	if _, err := c.Switch(ctx, "speech", "test"); err != nil {
 		t.Fatal(err)
 	}
-	// Park speech in level 1 sleep at Idle, then run finite training.
 	if _, err := c.Switch(ctx, control.WorkloadIdle, "idle-policy"); err != nil || !runtime.sleeping["speech"] {
 		t.Fatalf("expected sleeping speech at idle: sleeping=%v err=%v", runtime.sleeping, err)
 	}
@@ -152,7 +151,6 @@ func TestTrainingAndUserHandoffColdStopSleepingServices(t *testing.T) {
 	if _, err := c.RecoverTraining(ctx, "job-sleep-handoff"); err != nil {
 		t.Fatalf("RecoverTraining failed: %v", err)
 	}
-	// User ownership handoff also cold-stops sleeping supervisor services.
 	if _, err := c.Switch(ctx, "speech", "test"); err != nil {
 		t.Fatal(err)
 	}

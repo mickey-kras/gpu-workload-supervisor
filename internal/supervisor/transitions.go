@@ -39,12 +39,6 @@ func (c *Controller) RecoverUser(ctx context.Context, target control.Workload, i
 	return c.transition(ctx, target, control.OwnerUser, control.OwnerUser, initiator, true)
 }
 
-func (c *Controller) switchColdStop(ctx context.Context, target control.Workload, initiator string) (control.State, error) {
-	return c.transitionConditional(ctx, target, initiator, transitionOptions{
-		sourceOwner: control.OwnerSupervisor, targetOwner: control.OwnerSupervisor, coldStop: true,
-	})
-}
-
 func (c *Controller) transition(ctx context.Context, target control.Workload, sourceOwner, targetOwner control.Owner, initiator string, verifyOnly bool) (control.State, error) {
 	return c.transitionConditional(ctx, target, initiator, transitionOptions{
 		sourceOwner: sourceOwner, targetOwner: targetOwner, verifyOnly: verifyOnly,
@@ -165,12 +159,13 @@ func stableTarget(state control.State, owner control.Owner, target control.Workl
 	return state
 }
 
-func (c *Controller) unloadTransition(ctx context.Context, transitionID string, state, previous control.State, target control.Workload, verifyOnly, coldStop bool) (control.State, control.Workload, error) {
+func (c *Controller) unloadTransition(ctx context.Context, transition store.Transition, state control.State, target control.Workload, options transitionOptions) (control.State, control.Workload, error) {
+	previous := transition.Previous
 	active := previous.ActiveWorkload
-	if verifyOnly {
+	if options.verifyOnly || options.preserve {
 		return state, active, nil
 	}
-	unloading, err := c.store.SetTransitionPhase(ctx, transitionID, state.Version, control.PhaseUnloading)
+	unloading, err := c.store.SetTransitionPhase(ctx, transition.ID, state.Version, control.PhaseUnloading)
 	if err != nil {
 		return state, active, err
 	}
@@ -178,13 +173,17 @@ func (c *Controller) unloadTransition(ctx context.Context, transitionID string, 
 	if previous.Owner == control.OwnerUser {
 		// User submissions are not registered work. Terminate both runtimes,
 		// including queued media jobs, before waiting for HTTP handoffs.
-		err = c.effect(ctx, transitionID, state.Phase, "stop user runtimes", c.runtime.StopForRecovery)
+		err = c.effect(ctx, transition.ID, state.Phase, "stop user runtimes", c.runtime.StopForRecovery)
 		if err == nil {
 			err = c.waitReleased(ctx, c.now().Add(c.config.VerifyTimeout))
 		}
 		return state, control.WorkloadIdle, err
 	}
-	active, err = c.unloadCatalogMode(ctx, transitionID, state.Phase, previous, target, coldStop)
+	if options.coldStop {
+		active, err = c.unloadCatalogCold(ctx, transition.ID, state.Phase, previous, target)
+		return state, active, err
+	}
+	active, err = c.unloadCatalog(ctx, transition.ID, state.Phase, previous, target)
 	return state, active, err
 }
 
@@ -237,7 +236,7 @@ func (c *Controller) executeTransition(ctx context.Context, transition store.Tra
 	if err := c.waitForDrain(ctx, transition.ID, transition.Deadline); err != nil {
 		return fail(transition.ID, state, current, err)
 	}
-	state, active, err := c.unloadTransition(ctx, transition.ID, state, current, target, skipEffects, options.coldStop)
+	state, active, err := c.unloadTransition(ctx, transition, state, target, options)
 	if err != nil {
 		return fail(transition.ID, state, current, err)
 	}

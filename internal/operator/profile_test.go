@@ -156,3 +156,27 @@ func TestMissingProfileIsNotExist(t *testing.T) {
 		t.Fatalf("directory without operator.json = %v", err)
 	}
 }
+
+func TestProfileWithGPUUUID(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".config", "gpu-workload-supervisor")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	want := "GPU-11111111-2222-3333-4444-555555555555"
+	raw := `{"version":1,"statePath":"/var/tmp/state.db","activatedRelease":"v1","systemctlPath":"/usr/bin/systemctl","nvidiaSMIPath":"/usr/bin/nvidia-smi","gpuIndex":0,"gpuUUID":"` + want + `"}`
+	if err := os.WriteFile(filepath.Join(dir, "operator.json"), []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := loadProfileHome(t, root, os.Geteuid())
+	if err != nil || p.GPUUUID != want {
+		t.Fatalf("profile gpuUUID = %q, %v", p.GPUUUID, err)
+	}
+	bad := strings.Replace(raw, want, "0", 1)
+	if err := os.WriteFile(filepath.Join(dir, "operator.json"), []byte(bad), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadProfileHome(t, root, os.Geteuid()); err == nil {
+		t.Fatal("invalid gpuUUID accepted")
+	}
+}

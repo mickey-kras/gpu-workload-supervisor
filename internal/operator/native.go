@@ -48,6 +48,7 @@ func (h nativeHost) openSession(ctx context.Context, p Profile) (Session, error)
 		return Session{}, ErrIncompatibleConfiguration
 	}
 	p.LimitReserve = current.LimitReserve
+	p.GPUUUID = current.GPUUUID
 	s, err := store.Open(ctx, p.StatePath)
 	if err != nil {
 		return Session{}, err

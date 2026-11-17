@@ -143,7 +143,7 @@ func (m *SystemdManager) releasedViaSleep(ctx context.Context, p control.Workloa
 
 // maxSleepingContextMiB bounds the primary CUDA context and allocator state
 // that live worker processes retain on the GPU during level 1 sleep.
-const maxSleepingContextMiB uint64 = 2048
+const maxSleepingContextMiB = 2048
 
 func inWorkloadCgroup(group, root string) bool {
 	return root != "" && (group == root || strings.HasPrefix(group, root+"/"))

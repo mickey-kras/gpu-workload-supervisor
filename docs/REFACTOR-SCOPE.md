@@ -26,9 +26,11 @@ It does not let an active model exceed the GPU's VRAM capacity.
 
 The supervisor verifies the launch binding, service state, cgroup, and GPU process memory.
 A sleeping workload must not exceed 2048 MiB of allocated VRAM across its compute processes.
-Training preparation and user handoffs stop sleeping services before GPU release.
 Unknown memory or process ownership is not release evidence.
 A failed sleep or release check falls back to a service stop.
+
+Training preparation stops sleeping services before the trainer starts.
+User handoffs also stop sleeping services before GPU release.
 A wake uses the normal release, external-process, capacity, and limit checks.
 A wake response must also confirm that the engine is awake.
 

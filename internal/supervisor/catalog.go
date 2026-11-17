@@ -33,16 +33,16 @@ type coldReleaseRuntime interface {
 	ReleasedForSetup(context.Context, control.Workload) error
 }
 
-func (c *Controller) unloadCatalog(ctx context.Context, id string, phase control.Phase, current control.State, target control.Workload) (control.Workload, error) {
-	return c.unloadCatalogMode(ctx, id, phase, current, target, false)
-}
-
-func (c *Controller) unloadCatalogMode(ctx context.Context, id string, phase control.Phase, current control.State, target control.Workload, coldStop bool) (control.Workload, error) {
+func (c *Controller) observedActiveWorkload(ctx context.Context, current control.State) (control.Workload, error) {
 	snap, err := c.observe(ctx)
 	if err != nil {
 		return control.WorkloadUnknown, err
 	}
-	active, err := observedWorkload(current, snap)
+	return observedWorkload(current, snap)
+}
+
+func (c *Controller) unloadCatalog(ctx context.Context, id string, phase control.Phase, current control.State, target control.Workload) (control.Workload, error) {
+	active, err := c.observedActiveWorkload(ctx, current)
 	if err != nil {
 		return active, err
 	}
@@ -50,22 +50,27 @@ func (c *Controller) unloadCatalogMode(ctx context.Context, id string, phase con
 		if p.ID == target {
 			continue
 		}
-		if err = c.unloadProfile(ctx, id, phase, p.ID, coldStop); err != nil {
+		if err = c.effectWithOutcome(ctx, id, phase, "stop "+string(p.ID), func(ctx context.Context) (string, error) { return c.stopOrSleep(ctx, p.ID) }); err != nil {
 			return active, err
 		}
 	}
-	deadline := c.now().Add(c.config.VerifyTimeout)
-	if coldStop {
-		return active, c.waitColdReleasedFor(ctx, target, deadline)
-	}
-	return active, c.waitReleasedFor(ctx, target, deadline)
+	return active, c.waitReleasedFor(ctx, target, c.now().Add(c.config.VerifyTimeout))
 }
 
-func (c *Controller) unloadProfile(ctx context.Context, id string, phase control.Phase, workload control.Workload, coldStop bool) error {
-	if coldStop {
-		return c.effect(ctx, id, phase, "stop "+string(workload), func(ctx context.Context) error { return c.runtime.Stop(ctx, workload) })
+func (c *Controller) unloadCatalogCold(ctx context.Context, id string, phase control.Phase, current control.State, target control.Workload) (control.Workload, error) {
+	active, err := c.observedActiveWorkload(ctx, current)
+	if err != nil {
+		return active, err
 	}
-	return c.effectWithOutcome(ctx, id, phase, "stop "+string(workload), func(ctx context.Context) (string, error) { return c.stopOrSleep(ctx, workload) })
+	for _, p := range c.config.Catalog.Catalog.Profiles {
+		if p.ID == target {
+			continue
+		}
+		if err = c.effect(ctx, id, phase, "stop "+string(p.ID), func(ctx context.Context) error { return c.runtime.Stop(ctx, p.ID) }); err != nil {
+			return active, err
+		}
+	}
+	return active, c.waitColdReleasedFor(ctx, target, c.now().Add(c.config.VerifyTimeout))
 }
 
 func (c *Controller) waitColdReleasedFor(ctx context.Context, target control.Workload, deadline time.Time) error {
