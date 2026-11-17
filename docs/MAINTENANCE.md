@@ -16,7 +16,18 @@ Run from the repository root:
 ```sh
 go test ./...
 go vet ./...
+golangci-lint run --config .golangci.yml ./...
 ```
+
+Use `golangci-lint` 2.15.0. CI verifies the Linux archive digest before execution.
+
+The configuration enables `govet`, `staticcheck`, unused code and ineffective assignment checks.
+Analyzer findings fail CI.
+
+Main imports the Checkstyle report from the successful Go coverage artifact.
+The artifact must match the repository, commit, run and GitHub Actions try.
+
+Missing or invalid reports stop Sonar.
 
 Total statement coverage must reach 90%. [.testcoverage.yml](../.testcoverage.yml) sets package floors.
 New packages need 90%. Raise the explicit lower floors as coverage improves. Never lower them to pass.

@@ -266,8 +266,10 @@ func TestAdapterCompletionSeparatesAuthorityAndPreservesRaces(t *testing.T) {
 	if token == oldToken || finish(completionCredential, oldToken, store.WorkCompleted) != http.StatusConflict {
 		t.Fatal("old tuple finished reused ID")
 	}
-	if finish(completionCredential, token, store.WorkCompleted) != http.StatusNoContent || finish(completionCredential, token, store.WorkCompleted) != http.StatusNoContent {
-		t.Fatal("trusted completion retry failed")
+	for range 2 {
+		if finish(completionCredential, token, store.WorkCompleted) != http.StatusNoContent {
+			t.Fatal("trusted completion retry failed")
+		}
 	}
 }
 

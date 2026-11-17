@@ -97,7 +97,8 @@ func releaseToken(s string) bool {
 		return false
 	}
 	for _, c := range []byte(s) {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.') {
+		allowed := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.'
+		if !allowed {
 			return false
 		}
 	}
@@ -241,5 +242,7 @@ func trustedPrivateStat(stat unix.Stat_t, private bool) bool {
 	if !private && stat.Uid == 0 && stat.Mode&unix.S_ISVTX != 0 {
 		writable = false
 	}
-	return !((stat.Uid != uint32(os.Geteuid()) && (private || stat.Uid != 0)) || writable || (private && (stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Mode&0077 != 0)))
+	ownerTrusted := stat.Uid == uint32(os.Geteuid()) || !private && stat.Uid == 0
+	privateMode := !private || stat.Mode&unix.S_IFMT == unix.S_IFREG && stat.Mode&0077 == 0
+	return ownerTrusted && !writable && privateMode
 }

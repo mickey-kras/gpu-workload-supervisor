@@ -4,7 +4,7 @@ go 1.27.4
 
 require (
 	github.com/google/uuid v1.6.0
-	golang.org/x/mod v0.42.0
+	golang.org/x/mod v0.43.0
 	golang.org/x/sys v0.50.0
 	modernc.org/sqlite v1.62.0
 )

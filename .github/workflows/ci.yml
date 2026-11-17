@@ -113,6 +113,13 @@ jobs:
       - name: Go vet
         if: ${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}
         run: go vet ./...
+      - name: Go static analysis
+        run: |
+          archive="$RUNNER_TEMP/golangci-lint.tar.gz"
+          curl --fail --location --silent --show-error --retry 3 https://github.com/golangci/golangci-lint/releases/download/v2.15.0/golangci-lint-2.15.0-linux-amd64.tar.gz --output "$archive"
+          printf '9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea  %s\n' "$archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/golangci-lint-2.15.0-linux-amd64/golangci-lint" run --config .golangci.yml --output.checkstyle.path=golangci-lint-report.xml ./...
       - name: Go cognitive complexity
         if: ${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}
         run: |
@@ -131,7 +138,11 @@ jobs:
 
       - name: Stage go quality coverage
         if: ${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}
-        run: python3 .github/scripts/quality-coverage.py stage go go-quality-coverage
+        run: |
+          python3 .github/scripts/quality-coverage.py stage go go-quality-coverage
+          test -s golangci-lint-report.xml
+          cp golangci-lint-report.xml go-quality-coverage/
+          sha256sum golangci-lint-report.xml > go-quality-coverage/analysis.sha256
       - name: Upload go quality coverage
         if: ${{ github.event_name != 'pull_request' || inputs.validation-mode != 'docs-only' }}
         id: coverage

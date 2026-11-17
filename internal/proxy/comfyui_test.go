@@ -234,7 +234,7 @@ func TestComfyUIBoundsAndTransportUncertainty(t *testing.T) {
 				if mode == "transport" {
 					return nil, errors.New("fixture")
 				}
-				var body io.ReadCloser = io.NopCloser(strings.NewReader(strings.Repeat("x", comfyUIBodyLimit+1)))
+				var body = io.NopCloser(strings.NewReader(strings.Repeat("x", comfyUIBodyLimit+1)))
 				if mode == "read" {
 					body = io.NopCloser(comfyUIBrokenReader{})
 				}

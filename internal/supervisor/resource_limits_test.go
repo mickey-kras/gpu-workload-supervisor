@@ -199,7 +199,7 @@ func TestLimitFailureAfterStartRollsBack(t *testing.T) {
 			}
 			state, stateErr := s.State(ctx)
 			if stateErr != nil || state.ActiveWorkload != control.WorkloadText || state.Health != control.HealthError ||
-				state.Phase != control.PhaseReconciling || state.Admission != control.AdmissionClosed || r.visionActive || r.fakeRuntime.active != control.WorkloadText {
+				state.Phase != control.PhaseReconciling || state.Admission != control.AdmissionClosed || r.visionActive || r.active != control.WorkloadText {
 				t.Fatalf("state after a limit failure = %+v, %v; calls %v", state, stateErr, r.calls)
 			}
 			if !slices.Contains(r.calls, "stop vision") {
@@ -247,7 +247,7 @@ func TestSwitchRefusesLimitedTargetBeforeAnyEffect(t *testing.T) {
 	}
 	// A cause that names its fix keeps it. The healthy state needs no
 	// recovery.
-	r.launchErr = limitCause
+	r.launchErr = errLimitCause
 	if _, err := c.Switch(ctx, "vision", "test"); !errors.Is(err, ErrLimitedTarget) || !strings.HasSuffix(err.Error(), causeRemedy+"; next steps: "+toIdle+"run `gpu-mode -target idle switch`") ||
 		strings.Contains(err.Error(), "recover") {
 		t.Fatalf("switch with a limit cause = %v", err)
@@ -257,7 +257,7 @@ func TestSwitchRefusesLimitedTargetBeforeAnyEffect(t *testing.T) {
 		t.Fatalf("activation without host cap = %v", err)
 	}
 	after, err := s.State(ctx)
-	if err != nil || !reflect.DeepEqual(after, before) || r.fakeRuntime.active != control.WorkloadText || len(r.calls) != 0 {
+	if err != nil || !reflect.DeepEqual(after, before) || r.active != control.WorkloadText || len(r.calls) != 0 {
 		t.Fatalf("refused switch changed something: %+v, %v; calls %v", after, err, r.calls)
 	}
 	// A limited profile does not block other targets.
@@ -277,7 +277,7 @@ func TestReconcileRetainsHealthyLimitedUnit(t *testing.T) {
 	catalog := limitedCatalog()
 	catalog.Profiles[2].BootPolicy = "retain"
 	c, r, _ := limitedController(t, catalog)
-	r.fakeRuntime.active = control.WorkloadIdle
+	r.active = control.WorkloadIdle
 	r.visionActive = true
 	state, err := c.Reconcile(ctx)
 	if err != nil || state.ActiveWorkload != "vision" || !r.visionActive || r.healthCalls == 0 || r.protections != 1 {
@@ -317,7 +317,7 @@ func TestReconcileStopsRetainedLimitedUnitThatFailsChecks(t *testing.T) {
 		catalog := limitedCatalog()
 		catalog.Profiles[2].BootPolicy = "retain"
 		c, r, s := limitedController(t, catalog)
-		r.fakeRuntime.active = control.WorkloadIdle
+		r.active = control.WorkloadIdle
 		r.visionActive = true
 		before, err := s.State(ctx)
 		if err != nil {
@@ -347,7 +347,7 @@ func TestReconcileStopsRetainedLimitedUnitThatFailsChecks(t *testing.T) {
 	catalog := limitedCatalog()
 	catalog.Profiles[2].BootPolicy = "retain"
 	c, r, s := limitedController(t, catalog)
-	r.fakeRuntime.active = control.WorkloadIdle
+	r.active = control.WorkloadIdle
 	r.visionActive = true
 	transient := errors.New("bus timeout")
 	r.protectionErr = transient
@@ -372,10 +372,10 @@ func TestRecoverStopsRejectedLimitedUnitWithoutLatch(t *testing.T) {
 	catalog := limitedCatalog()
 	catalog.Profiles[2].BootPolicy = "retain"
 	c, r, s := limitedController(t, catalog)
-	r.fakeRuntime.active = control.WorkloadIdle
+	r.active = control.WorkloadIdle
 	r.visionActive = true
 	// A definite check failure refuses the running unit with limits.
-	rejected := fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, limitCause)
+	rejected := fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, errLimitCause)
 	r.protectionErr = rejected
 	// Reconcile latches the error state, so recover comes before setup.
 	if _, err := c.Reconcile(ctx); !errors.Is(err, ErrLimitedUnitRejected) || !strings.HasSuffix(err.Error(), causeRemedy+"; next steps: first, run `gpu-mode recover`") {
@@ -407,7 +407,7 @@ func TestRecoverStopsRejectedLimitedUnitWithoutLatch(t *testing.T) {
 // limits fails a transient check. The transient failure latches without a
 // stop.
 func TestTransientRetainedFailureKeepsEarlierRejection(t *testing.T) {
-	reserve := fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, limitCause)
+	reserve := fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, errLimitCause)
 	for cause, steps := range map[error]string{
 		// The workload that stays is unknown, so the steps also switch to
 		// Idle.
@@ -435,7 +435,7 @@ func transientAfterRejection(t *testing.T, cause error, steps string) {
 	second.NativeModel.LaunchFile = "/home/u/.config/systemd/user/gws-owned-vision2.service"
 	catalog.Profiles = append(catalog.Profiles, second)
 	c, r, s := limitedController(t, catalog)
-	r.fakeRuntime.active = control.WorkloadIdle
+	r.active = control.WorkloadIdle
 	r.visionActive = true
 	r.alsoActive = []control.Workload{"vision2"}
 	transient := errors.New("bus timeout")
@@ -592,14 +592,14 @@ func TestReconcileKeepsRetainedUnitAndStopsRejectedOne(t *testing.T) {
 	r.calls = nil
 	state, err := c.Reconcile(ctx)
 	if !errors.Is(err, ErrLimitedUnitRejected) || r.visionActive || !slices.Contains(r.calls, "stop vision") ||
-		r.fakeRuntime.active != control.WorkloadText || state.ActiveWorkload != control.WorkloadText ||
+		r.active != control.WorkloadText || state.ActiveWorkload != control.WorkloadText ||
 		state.Health != control.HealthError || state.Admission != control.AdmissionClosed {
 		t.Fatalf("reconcile with a rejected unit = %+v, %v; calls %v", state, err, r.calls)
 	}
 	// Recover keeps text, so the state is stable and healthy with open
 	// admission. The steps switch to Idle before setup removes the limits.
 	r.visionActive = true
-	r.protectionErr = fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, limitCause)
+	r.protectionErr = fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, errLimitCause)
 	state, err = c.Recover(ctx)
 	if !errors.Is(err, ErrLimitedUnitRejected) || r.visionActive || state.ActiveWorkload != control.WorkloadText ||
 		state.Phase != control.PhaseStable || state.Health != control.HealthHealthy || state.Admission != control.AdmissionOpen ||
@@ -626,7 +626,7 @@ func TestInvariantFailureKeepsRejectedUnits(t *testing.T) {
 	catalog.Profiles = []control.WorkloadProfile{vision, catalog.Profiles[0], catalog.Profiles[1]}
 	catalog.Profiles[1].BootPolicy, catalog.Profiles[2].BootPolicy = "retain", "retain"
 	c, r, _ := limitedController(t, catalog)
-	r.fakeRuntime.active = control.WorkloadText
+	r.active = control.WorkloadText
 	r.visionActive = true
 	r.alsoActive = []control.Workload{control.WorkloadMedia}
 	r.protectionErr = gpuruntime.ErrLimitDrift
@@ -643,16 +643,16 @@ func TestLimitCauseRefusalOfLatchedStateNamesRecover(t *testing.T) {
 	catalog := limitedCatalog()
 	catalog.Profiles[2].BootPolicy = "retain"
 	c, r, s := limitedController(t, catalog)
-	r.fakeRuntime.active = control.WorkloadIdle
+	r.active = control.WorkloadIdle
 	r.visionActive = true
-	r.protectionErr = fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, limitCause)
+	r.protectionErr = fmt.Errorf("%w: %w", gpuruntime.ErrLimitCheckFailed, errLimitCause)
 	if _, err := c.Reconcile(ctx); !errors.Is(err, ErrLimitedUnitRejected) {
 		t.Fatalf("reconcile = %v", err)
 	}
 	if state, err := s.State(ctx); err != nil || state.Health != control.HealthError || state.ActiveWorkload != control.WorkloadIdle {
 		t.Fatalf("state after the rejection = %+v, %v", state, err)
 	}
-	r.launchErr = limitCause
+	r.launchErr = errLimitCause
 	_, err := c.Switch(ctx, "vision", "test")
 	if !errors.Is(err, ErrLimitedTarget) || !strings.HasSuffix(err.Error(), causeRemedy+"; next steps: first, run `gpu-mode recover`") {
 		t.Fatalf("switch with a limit cause from a latched state = %v", err)

@@ -1182,7 +1182,7 @@ func TestSpecialTokenVariablesFollowTheTokenRule(t *testing.T) {
 			t.Errorf("%s: got %q %q, want %q", text, reason, texts(review), want)
 		}
 	}
-	for value, want := range map[string]string{"​x": ReasonTemplateHiddenText, strings.Repeat("x", maxSpecialValue+1): ReasonTemplateTooComplex} {
+	for value, want := range map[string]string{"\u200bx": ReasonTemplateHiddenText, strings.Repeat("x", maxSpecialValue+1): ReasonTemplateTooComplex} {
 		if _, reason := scanTemplate(context.Background(), `{{ pad_token }}`, testSpecial, map[string][]string{"pad_token": {value}}); reason != want {
 			t.Errorf("%q: got %q, want %q", value, reason, want)
 		}

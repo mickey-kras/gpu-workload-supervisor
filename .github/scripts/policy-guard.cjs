@@ -12,6 +12,7 @@ const { inspectDependabot, verifyDependabotAuthor } = require('./policy-dependab
 const GORELEASER_ACTION_DIGEST = 'c88133b8d7e69681883fe0aa77a141453ace73146561612522b9cd5f485722ac';
 
 const EXECUTABLE_HASHES = {
+  ".golangci.yml": "d2e7a6b3cb70d2863f6031d6ed32aa084c4eb70460ba5d157fb3961584e9fc4b",
   ".github/workflows/docs-ste.yml": "674f1c64f24b65cc50fcc5b1223c73ecfe0e607ed0e3d8a50b517fbb218fe4b4",
   ".ste.yml": "f75eda8fb8d6ae25db6875adf984b0bb167d52aff977ff5524bcc0f48d02c941",
   ".vale.ini": "1d2daa33c324e5140367a5143df339068822cb45f7f2ae023dbd7d744e0793ff",
@@ -57,7 +58,7 @@ const REQUIRED_FILES = [
   '.github/scripts/check-go-directives.go', '.github/scripts/check-go-directives_test.go',
   '.github/aislop/package.json', '.github/aislop/package-lock.json',
   '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
-  '.goreleaser.yaml', '.testcoverage.yml',
+  '.goreleaser.yaml', '.testcoverage.yml', '.golangci.yml',
   '.github/actions/setup-goreleaser/action.yml', '.github/scripts/install-goreleaser.sh',
 ];
 
@@ -319,6 +320,9 @@ function inspectAdditionalWorkflows(files, workflows, failures, checks, admitted
   if (!files['sonar-project.properties']?.includes('sonar.go.coverage.reportPaths=coverage.out')) {
     failures.push('SonarQube lost Go coverage path');
   }
+  if (!files['sonar-project.properties']?.includes('sonar.go.golangci-lint.reportPaths=golangci-lint-report.xml')) {
+    failures.push('SonarQube lost Go static analysis path');
+  }
   try {
     const releaseConfig = YAML.parse(files['.goreleaser.yaml']);
     const targets = releaseConfig.builds || [];
@@ -346,6 +350,10 @@ function inspectScannerConfigs(files, workflows, failures, admitted) {
   if (createHash('sha256').update(files['.github/scripts/check-go-directives.go'] || '').digest('hex') !==
       expectedExecutableDigest(files, '.github/scripts/check-go-directives.go', admitted)) {
     failures.push('Go suppression guard was changed');
+  }
+  if (createHash('sha256').update(files['.golangci.yml'] || '').digest('hex') !==
+      expectedExecutableDigest(files, '.golangci.yml', admitted)) {
+    failures.push('Go static analysis policy was changed');
   }
   // Validate PR config bytes as data; the trusted guard must never execute it.
   const eslintConfig = files['.github/scripts/eslint.config.cjs'] || '';

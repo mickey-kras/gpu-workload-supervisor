@@ -134,7 +134,7 @@ func TestReconcileStopsRetainedUnitThatFailsReadiness(t *testing.T) {
 		catalog.Profiles[2].BootPolicy = "retain"
 		c, r, s := limitedController(t, catalog)
 		ctx := context.Background()
-		r.fakeRuntime.active = control.WorkloadIdle
+		r.active = control.WorkloadIdle
 		r.visionActive = true
 		c.config.VerifyTimeout = 2 * time.Second
 		if fast {

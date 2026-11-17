@@ -46,12 +46,6 @@ func (h hardenedFixture) lines() string {
 	return "Environment=HF_HUB_OFFLINE=1\nEnvironmentFile=" + h.keyFile + "\n"
 }
 
-// loaded returns the systemctl show lines of the hardened settings. The
-// Environment line has to be merged with other loaded variables.
-func (h hardenedFixture) loaded() string {
-	return "EnvironmentFiles=" + h.keyFile + " (ignore_errors=no)\n"
-}
-
 func (h hardenedFixture) bind(n control.NativeModel) control.NativeModel {
 	n.ChatTemplate, n.ChatTemplateSHA256, n.EnvironmentFile = h.template, h.templateSHA256, h.keyFile
 	return n

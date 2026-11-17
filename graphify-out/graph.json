@@ -4629,7 +4629,7 @@
       "relation": "calls",
       "source": "clients_setup_serving_ui_checkformserving",
       "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L219",
+      "source_location": "L226",
       "target": "clients_setup_limits_ui_plainlimiterror",
       "weight": 1.0
     },
@@ -4699,6 +4699,18 @@
       "confidence_score": 1.0,
       "context": "call",
       "relation": "calls",
+      "source": "clients_setup_serving_ui_servingoptionsform_readfields",
+      "source_file": "clients/setup/serving-ui.mjs",
+      "source_location": "L180",
+      "target": "clients_setup_serving_ui_readfield",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "call",
+      "relation": "calls",
       "source": "clients_setup_serving_ui_servingoptionsform_restore",
       "source_file": "clients/setup/serving-ui.mjs",
       "source_location": "L138",
@@ -4749,8 +4761,8 @@
       "relation": "calls",
       "source": "clients_setup_serving_ui_servingoptionsform_value",
       "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L170",
-      "target": "clients_setup_serving_ui_readfield",
+      "source_location": "L169",
+      "target": "clients_setup_serving_ui_servingoptionsform_readfields",
       "weight": 1.0
     },
     {
@@ -4761,7 +4773,7 @@
       "relation": "calls",
       "source": "clients_setup_serving_ui_servingoptionsform_value",
       "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L171",
+      "source_location": "L170",
       "target": "clients_setup_serving_ui_servingoptionsform_fail",
       "weight": 1.0
     },
@@ -4773,7 +4785,7 @@
       "relation": "calls",
       "source": "clients_setup_serving_ui_servingoptionsform_value",
       "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L175",
+      "source_location": "L172",
       "target": "clients_setup_serving_ui_checkserving",
       "weight": 1.0
     },
@@ -4785,7 +4797,7 @@
       "relation": "calls",
       "source": "clients_setup_serving_ui_servingsummaries",
       "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L242",
+      "source_location": "L249",
       "target": "clients_setup_serving_ui_servingsummary",
       "weight": 1.0
     },
@@ -4797,7 +4809,7 @@
       "relation": "calls",
       "source": "clients_setup_serving_ui_servingsummary",
       "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L229",
+      "source_location": "L236",
       "target": "clients_setup_serving_ui_formatutilization",
       "weight": 1.0
     },
@@ -4881,7 +4893,7 @@
       "relation": "calls",
       "source": "clients_setup_serving_ui_withformserving",
       "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L196",
+      "source_location": "L203",
       "target": "clients_setup_serving_ui_formstate",
       "weight": 1.0
     },
@@ -8877,7 +8889,7 @@
       "relation": "calls",
       "source": "internal_deployment_deployment_check",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L121",
+      "source_location": "L122",
       "target": "internal_deployment_deployment_read",
       "weight": 1.0
     },
@@ -8889,7 +8901,7 @@
       "relation": "calls",
       "source": "internal_deployment_deployment_check",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L140",
+      "source_location": "L141",
       "target": "internal_deployment_deployment_openprivate",
       "weight": 1.0
     },
@@ -8901,7 +8913,7 @@
       "relation": "calls",
       "source": "internal_deployment_deployment_openprivate",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L231",
+      "source_location": "L232",
       "target": "internal_deployment_deployment_trustedprivatestat",
       "weight": 1.0
     },
@@ -8913,7 +8925,7 @@
       "relation": "calls",
       "source": "internal_deployment_deployment_read",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L153",
+      "source_location": "L154",
       "target": "internal_deployment_deployment_openprivate",
       "weight": 1.0
     },
@@ -8925,7 +8937,7 @@
       "relation": "calls",
       "source": "internal_deployment_deployment_write",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L176",
+      "source_location": "L177",
       "target": "internal_deployment_deployment_atomicwrite",
       "weight": 1.0
     },
@@ -17001,7 +17013,7 @@
       "relation": "calls",
       "source": "internal_proxy_ingress_test_testadapterfiltersinformationalresponsesandrequesttrailers",
       "source_file": "internal/proxy/ingress_test.go",
-      "source_location": "L297",
+      "source_location": "L299",
       "target": "internal_proxy_ingress_test_adapterhandler",
       "weight": 1.0
     },
@@ -17013,7 +17025,7 @@
       "relation": "calls",
       "source": "internal_proxy_ingress_test_testadapternativecompletionanduserforwarding",
       "source_file": "internal/proxy/ingress_test.go",
-      "source_location": "L342",
+      "source_location": "L344",
       "target": "internal_proxy_ingress_test_adapterconfig",
       "weight": 1.0
     },
@@ -22725,7 +22737,7 @@
       "relation": "calls",
       "source": "internal_runtime_release_test_testmanagercgroupanchormustexistandmatchbothworkloads",
       "source_file": "internal/runtime/release_test.go",
-      "source_location": "L356",
+      "source_location": "L357",
       "target": "internal_runtime_release_test_writeevents",
       "weight": 1.0
     },
@@ -26817,7 +26829,7 @@
       "relation": "calls",
       "source": "internal_setup_owned_activation_order_test_testapplyrechecksremovedworkloadreleaseafterownedwrites",
       "source_file": "internal/setup/owned_activation_order_test.go",
-      "source_location": "L231",
+      "source_location": "L232",
       "target": "internal_setup_owned_activation_order_test_uuidownedfixture",
       "weight": 1.0
     },
@@ -102780,7 +102792,7 @@
       "relation": "references",
       "source": "deployment_profile_systemdconfig",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L107",
+      "source_location": "L108",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_catalog",
       "weight": 1.0
     },
@@ -104964,7 +104976,7 @@
       "relation": "references",
       "source": "internal_deployment_deployment_trustedprivatestat",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L239",
+      "source_location": "L240",
       "target": "go_type_golang_org_x_sys_unix_stat_t",
       "weight": 1.0
     },
@@ -104976,7 +104988,7 @@
       "relation": "references",
       "source": "internal_deployment_deployment_write",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L168",
+      "source_location": "L169",
       "target": "internal_deployment_deployment_go_deployment_marker",
       "weight": 1.0
     },
@@ -112692,7 +112704,7 @@
       "relation": "references",
       "source": "internal_proxy_ingress_test_testadapterfiltersinformationalresponsesandrequesttrailers",
       "source_file": "internal/proxy/ingress_test.go",
-      "source_location": "L274",
+      "source_location": "L276",
       "target": "go_type_testing_t",
       "weight": 1.0
     },
@@ -112704,7 +112716,7 @@
       "relation": "references",
       "source": "internal_proxy_ingress_test_testadapternativecompletionanduserforwarding",
       "source_file": "internal/proxy/ingress_test.go",
-      "source_location": "L332",
+      "source_location": "L334",
       "target": "go_type_testing_t",
       "weight": 1.0
     },
@@ -116556,7 +116568,7 @@
       "relation": "references",
       "source": "internal_runtime_hardened_fixture_test_ptrnativemodel",
       "source_file": "internal/runtime/hardened_fixture_test.go",
-      "source_location": "L60",
+      "source_location": "L54",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_nativemodel",
       "weight": 1.0
     },
@@ -116568,7 +116580,7 @@
       "relation": "references",
       "source": "internal_runtime_hardened_fixture_test_servingapi",
       "source_file": "internal/runtime/hardened_fixture_test.go",
-      "source_location": "L79",
+      "source_location": "L73",
       "target": "go_type_net_http_handlerfunc",
       "weight": 1.0
     },
@@ -116580,7 +116592,7 @@
       "relation": "references",
       "source": "internal_runtime_hardened_fixture_test_servingbinding",
       "source_file": "internal/runtime/hardened_fixture_test.go",
-      "source_location": "L66",
+      "source_location": "L60",
       "target": "go_type_testing_t",
       "weight": 1.0
     },
@@ -120492,7 +120504,7 @@
       "relation": "references",
       "source": "internal_runtime_release_test_testhierarchyverificationcombinesfilesystemandmountevidence",
       "source_file": "internal/runtime/release_test.go",
-      "source_location": "L366",
+      "source_location": "L367",
       "target": "go_type_testing_t",
       "weight": 1.0
     },
@@ -120552,7 +120564,7 @@
       "relation": "references",
       "source": "internal_runtime_release_test_testunifiedhierarchyprobeneedsnoprivilegedprocaccess",
       "source_file": "internal/runtime/release_test.go",
-      "source_location": "L396",
+      "source_location": "L397",
       "target": "go_type_testing_t",
       "weight": 1.0
     },
@@ -126492,7 +126504,7 @@
       "relation": "references",
       "source": "internal_setup_owned_activation_order_test_testapplyrechecksremovedworkloadreleaseafterownedwrites",
       "source_file": "internal/setup/owned_activation_order_test.go",
-      "source_location": "L224",
+      "source_location": "L225",
       "target": "go_type_testing_t",
       "weight": 1.0
     },
@@ -141564,7 +141576,7 @@
       "relation": "references",
       "source": "runtime_hardenedfixture_bind",
       "source_file": "internal/runtime/hardened_fixture_test.go",
-      "source_location": "L55",
+      "source_location": "L49",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_nativemodel",
       "weight": 1.0
     },
@@ -155520,7 +155532,7 @@
       "relation": "references",
       "source": "deployment_profile_systemdconfig",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L107",
+      "source_location": "L108",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_runtime_systemdconfig",
       "weight": 1.0
     },
@@ -155784,7 +155796,7 @@
       "relation": "references",
       "source": "internal_deployment_deployment_openprivate",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L206",
+      "source_location": "L207",
       "target": "go_type_os_file",
       "weight": 1.0
     },
@@ -155796,7 +155808,7 @@
       "relation": "references",
       "source": "internal_deployment_deployment_read",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L147",
+      "source_location": "L148",
       "target": "internal_deployment_deployment_go_deployment_marker",
       "weight": 1.0
     },
@@ -157656,7 +157668,7 @@
       "relation": "references",
       "source": "internal_runtime_hardened_fixture_test_servingbinding",
       "source_file": "internal/runtime/hardened_fixture_test.go",
-      "source_location": "L66",
+      "source_location": "L60",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_nativemodel",
       "weight": 1.0
     },
@@ -167662,7 +167674,7 @@
       "relation": "contains",
       "source": "clients_setup_serving_ui",
       "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L191",
+      "source_location": "L198",
       "target": "clients_setup_serving_ui_withformserving",
       "weight": 1.0
     },
@@ -167673,7 +167685,7 @@
       "relation": "contains",
       "source": "clients_setup_serving_ui",
       "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L209",
+      "source_location": "L216",
       "target": "clients_setup_serving_ui_formstate",
       "weight": 1.0
     },
@@ -167684,19 +167696,8 @@
       "relation": "contains",
       "source": "clients_setup_serving_ui",
       "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L217",
+      "source_location": "L224",
       "target": "clients_setup_serving_ui_checkformserving",
-      "weight": 1.0
-    },
-    {
-      "_origin": "ast",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "relation": "contains",
-      "source": "clients_setup_serving_ui",
-      "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L226",
-      "target": "clients_setup_serving_ui_servingsummary",
       "weight": 1.0
     },
     {
@@ -167717,7 +167718,18 @@
       "relation": "contains",
       "source": "clients_setup_serving_ui",
       "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L239",
+      "source_location": "L233",
+      "target": "clients_setup_serving_ui_servingsummary",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "clients_setup_serving_ui",
+      "source_file": "clients/setup/serving-ui.mjs",
+      "source_location": "L246",
       "target": "clients_setup_serving_ui_servingsummaries",
       "weight": 1.0
     },
@@ -171237,7 +171249,7 @@
       "relation": "contains",
       "source": "docs_maintenance_ci_policy_changes",
       "source_file": "docs/MAINTENANCE.md",
-      "source_location": "L188",
+      "source_location": "L199",
       "target": "docs_maintenance_administrator_rollout",
       "weight": 1.0
     },
@@ -171248,7 +171260,7 @@
       "relation": "contains",
       "source": "docs_maintenance_development",
       "source_file": "docs/MAINTENANCE.md",
-      "source_location": "L31",
+      "source_location": "L42",
       "target": "docs_maintenance_pr_validation_scope",
       "weight": 1.0
     },
@@ -171259,7 +171271,7 @@
       "relation": "contains",
       "source": "docs_maintenance_development",
       "source_file": "docs/MAINTENANCE.md",
-      "source_location": "L59",
+      "source_location": "L70",
       "target": "docs_maintenance_desktop_package_ci",
       "weight": 1.0
     },
@@ -171270,7 +171282,7 @@
       "relation": "contains",
       "source": "docs_maintenance_development",
       "source_file": "docs/MAINTENANCE.md",
-      "source_location": "L70",
+      "source_location": "L81",
       "target": "docs_maintenance_documentation_language",
       "weight": 1.0
     },
@@ -171281,7 +171293,7 @@
       "relation": "contains",
       "source": "docs_maintenance_maintenance",
       "source_file": "docs/MAINTENANCE.md",
-      "source_location": "L158",
+      "source_location": "L169",
       "target": "docs_maintenance_ci_policy_changes",
       "weight": 1.0
     },
@@ -171292,19 +171304,8 @@
       "relation": "contains",
       "source": "docs_maintenance_maintenance",
       "source_file": "docs/MAINTENANCE.md",
-      "source_location": "L225",
+      "source_location": "L236",
       "target": "docs_maintenance_build_tool_updates",
-      "weight": 1.0
-    },
-    {
-      "_origin": "ast",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "relation": "contains",
-      "source": "docs_maintenance_maintenance",
-      "source_file": "docs/MAINTENANCE.md",
-      "source_location": "L87",
-      "target": "docs_maintenance_source_and_binary_releases",
       "weight": 1.0
     },
     {
@@ -171323,9 +171324,20 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "relation": "contains",
+      "source": "docs_maintenance_maintenance",
+      "source_file": "docs/MAINTENANCE.md",
+      "source_location": "L98",
+      "target": "docs_maintenance_source_and_binary_releases",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
       "source": "docs_maintenance_source_and_binary_releases",
       "source_file": "docs/MAINTENANCE.md",
-      "source_location": "L137",
+      "source_location": "L148",
       "target": "docs_maintenance_recover_a_mutable_or_incomplete_publication",
       "weight": 1.0
     },
@@ -174317,7 +174329,7 @@
       "relation": "contains",
       "source": "internal_deployment_deployment",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L112",
+      "source_location": "L113",
       "target": "internal_deployment_deployment_go_deployment_marker",
       "weight": 1.0
     },
@@ -174328,7 +174340,7 @@
       "relation": "contains",
       "source": "internal_deployment_deployment",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L120",
+      "source_location": "L121",
       "target": "internal_deployment_deployment_check",
       "weight": 1.0
     },
@@ -174339,7 +174351,7 @@
       "relation": "contains",
       "source": "internal_deployment_deployment",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L147",
+      "source_location": "L148",
       "target": "internal_deployment_deployment_read",
       "weight": 1.0
     },
@@ -174350,7 +174362,7 @@
       "relation": "contains",
       "source": "internal_deployment_deployment",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L168",
+      "source_location": "L169",
       "target": "internal_deployment_deployment_write",
       "weight": 1.0
     },
@@ -174361,7 +174373,7 @@
       "relation": "contains",
       "source": "internal_deployment_deployment",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L180",
+      "source_location": "L181",
       "target": "internal_deployment_deployment_atomicwrite",
       "weight": 1.0
     },
@@ -174372,7 +174384,7 @@
       "relation": "contains",
       "source": "internal_deployment_deployment",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L206",
+      "source_location": "L207",
       "target": "internal_deployment_deployment_openprivate",
       "weight": 1.0
     },
@@ -174383,7 +174395,7 @@
       "relation": "contains",
       "source": "internal_deployment_deployment",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L239",
+      "source_location": "L240",
       "target": "internal_deployment_deployment_trustedprivatestat",
       "weight": 1.0
     },
@@ -183799,7 +183811,7 @@
       "relation": "contains",
       "source": "internal_proxy_ingress_test",
       "source_file": "internal/proxy/ingress_test.go",
-      "source_location": "L274",
+      "source_location": "L276",
       "target": "internal_proxy_ingress_test_testadapterfiltersinformationalresponsesandrequesttrailers",
       "weight": 1.0
     },
@@ -183810,7 +183822,7 @@
       "relation": "contains",
       "source": "internal_proxy_ingress_test",
       "source_file": "internal/proxy/ingress_test.go",
-      "source_location": "L332",
+      "source_location": "L334",
       "target": "internal_proxy_ingress_test_testadapternativecompletionanduserforwarding",
       "weight": 1.0
     },
@@ -188903,7 +188915,7 @@
       "relation": "contains",
       "source": "internal_runtime_hardened_fixture_test",
       "source_file": "internal/runtime/hardened_fixture_test.go",
-      "source_location": "L60",
+      "source_location": "L54",
       "target": "internal_runtime_hardened_fixture_test_ptrnativemodel",
       "weight": 1.0
     },
@@ -188914,7 +188926,7 @@
       "relation": "contains",
       "source": "internal_runtime_hardened_fixture_test",
       "source_file": "internal/runtime/hardened_fixture_test.go",
-      "source_location": "L66",
+      "source_location": "L60",
       "target": "internal_runtime_hardened_fixture_test_servingbinding",
       "weight": 1.0
     },
@@ -188925,7 +188937,7 @@
       "relation": "contains",
       "source": "internal_runtime_hardened_fixture_test",
       "source_file": "internal/runtime/hardened_fixture_test.go",
-      "source_location": "L79",
+      "source_location": "L73",
       "target": "internal_runtime_hardened_fixture_test_servingapi",
       "weight": 1.0
     },
@@ -193457,7 +193469,7 @@
       "relation": "contains",
       "source": "internal_runtime_release_test",
       "source_file": "internal/runtime/release_test.go",
-      "source_location": "L366",
+      "source_location": "L367",
       "target": "internal_runtime_release_test_testhierarchyverificationcombinesfilesystemandmountevidence",
       "weight": 1.0
     },
@@ -193479,7 +193491,7 @@
       "relation": "contains",
       "source": "internal_runtime_release_test",
       "source_file": "internal/runtime/release_test.go",
-      "source_location": "L396",
+      "source_location": "L397",
       "target": "internal_runtime_release_test_testunifiedhierarchyprobeneedsnoprivilegedprocaccess",
       "weight": 1.0
     },
@@ -199947,7 +199959,7 @@
       "relation": "contains",
       "source": "internal_setup_owned_activation_order_test",
       "source_file": "internal/setup/owned_activation_order_test.go",
-      "source_location": "L224",
+      "source_location": "L225",
       "target": "internal_setup_owned_activation_order_test_testapplyrechecksremovedworkloadreleaseafterownedwrites",
       "weight": 1.0
     },
@@ -215512,7 +215524,18 @@
       "relation": "method",
       "source": "clients_setup_serving_ui_servingoptionsform",
       "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L179",
+      "source_location": "L178",
+      "target": "clients_setup_serving_ui_servingoptionsform_readfields",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "method",
+      "source": "clients_setup_serving_ui_servingoptionsform",
+      "source_file": "clients/setup/serving-ui.mjs",
+      "source_location": "L186",
       "target": "clients_setup_serving_ui_servingoptionsform_fail",
       "weight": 1.0
     },
@@ -216051,7 +216074,7 @@
       "relation": "method",
       "source": "deployment_profile",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L107",
+      "source_location": "L108",
       "target": "deployment_profile_systemdconfig",
       "weight": 1.0
     },
@@ -224576,18 +224599,7 @@
       "relation": "method",
       "source": "runtime_hardenedfixture",
       "source_file": "internal/runtime/hardened_fixture_test.go",
-      "source_location": "L51",
-      "target": "runtime_hardenedfixture_loaded",
-      "weight": 1.0
-    },
-    {
-      "_origin": "ast",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "relation": "method",
-      "source": "runtime_hardenedfixture",
-      "source_file": "internal/runtime/hardened_fixture_test.go",
-      "source_location": "L55",
+      "source_location": "L49",
       "target": "runtime_hardenedfixture_bind",
       "weight": 1.0
     },
@@ -230747,7 +230759,7 @@
       "relation": "references",
       "source": "docs_maintenance",
       "source_file": "docs/MAINTENANCE.md",
-      "source_location": "L29",
+      "source_location": "L40",
       "target": "docs_deployment",
       "weight": 1.0
     },
@@ -246961,7 +246973,7 @@
       "relation": "calls",
       "source": "internal_proxy_ingress_test_testadapterfiltersinformationalresponsesandrequesttrailers",
       "source_file": "internal/proxy/ingress_test.go",
-      "source_location": "L297",
+      "source_location": "L299",
       "target": "internal_proxy_proxy_test_admittedstate",
       "weight": 1.0
     },
@@ -246973,7 +246985,7 @@
       "relation": "calls",
       "source": "internal_proxy_ingress_test_testadapternativecompletionanduserforwarding",
       "source_file": "internal/proxy/ingress_test.go",
-      "source_location": "L339",
+      "source_location": "L341",
       "target": "internal_proxy_native_completion_test_newterminalfixture",
       "weight": 1.0
     },
@@ -246985,7 +246997,7 @@
       "relation": "calls",
       "source": "internal_proxy_ingress_test_testadapternativecompletionanduserforwarding",
       "source_file": "internal/proxy/ingress_test.go",
-      "source_location": "L345",
+      "source_location": "L347",
       "target": "internal_proxy_proxy_newwithcontext",
       "weight": 1.0
     },
@@ -246997,7 +247009,7 @@
       "relation": "calls",
       "source": "internal_proxy_ingress_test_testadapternativecompletionanduserforwarding",
       "source_file": "internal/proxy/ingress_test.go",
-      "source_location": "L350",
+      "source_location": "L352",
       "target": "internal_proxy_proxy_test_addleaseheaders",
       "weight": 1.0
     },
@@ -247009,7 +247021,7 @@
       "relation": "calls",
       "source": "internal_proxy_ingress_test_testadapternativecompletionanduserforwarding",
       "source_file": "internal/proxy/ingress_test.go",
-      "source_location": "L354",
+      "source_location": "L356",
       "target": "internal_proxy_native_finish_test_drainnative",
       "weight": 1.0
     },
@@ -251497,7 +251509,7 @@
       "relation": "calls",
       "source": "internal_runtime_hardened_fixture_test_servingbinding",
       "source_file": "internal/runtime/hardened_fixture_test.go",
-      "source_location": "L69",
+      "source_location": "L63",
       "target": "internal_runtime_native_model_test_nativelaunchfixture",
       "weight": 1.0
     },
@@ -258205,7 +258217,7 @@
       "relation": "calls",
       "source": "internal_runtime_release_test_testhierarchyverificationcombinesfilesystemandmountevidence",
       "source_file": "internal/runtime/release_test.go",
-      "source_location": "L370",
+      "source_location": "L371",
       "target": "internal_runtime_cgroup_verifyhierarchy",
       "weight": 1.0
     },
@@ -258217,7 +258229,7 @@
       "relation": "calls",
       "source": "internal_runtime_release_test_testhierarchyverificationcombinesfilesystemandmountevidence",
       "source_file": "internal/runtime/release_test.go",
-      "source_location": "L383",
+      "source_location": "L384",
       "target": "internal_runtime_cgroup_requirecgroup2",
       "weight": 1.0
     },
@@ -258229,7 +258241,7 @@
       "relation": "calls",
       "source": "internal_runtime_release_test_testhierarchyverificationcombinesfilesystemandmountevidence",
       "source_file": "internal/runtime/release_test.go",
-      "source_location": "L389",
+      "source_location": "L390",
       "target": "internal_runtime_cgroup_selfmountinfo",
       "weight": 1.0
     },
@@ -258289,7 +258301,7 @@
       "relation": "calls",
       "source": "internal_runtime_release_test_testunifiedhierarchyprobeneedsnoprivilegedprocaccess",
       "source_file": "internal/runtime/release_test.go",
-      "source_location": "L401",
+      "source_location": "L402",
       "target": "internal_runtime_cgroup_verifycgroupmount",
       "weight": 1.0
     },
@@ -258301,7 +258313,7 @@
       "relation": "calls",
       "source": "internal_runtime_release_test_testunifiedhierarchyprobeneedsnoprivilegedprocaccess",
       "source_file": "internal/runtime/release_test.go",
-      "source_location": "L409",
+      "source_location": "L410",
       "target": "internal_runtime_cgroup_verifyunifiedhierarchy",
       "weight": 1.0
     },
@@ -265585,7 +265597,7 @@
       "relation": "calls",
       "source": "internal_setup_owned_activation_order_test_testapplyrechecksremovedworkloadreleaseafterownedwrites",
       "source_file": "internal/setup/owned_activation_order_test.go",
-      "source_location": "L227",
+      "source_location": "L228",
       "target": "internal_setup_backend_test_fixture",
       "weight": 1.0
     },
@@ -265597,7 +265609,7 @@
       "relation": "calls",
       "source": "internal_setup_owned_activation_order_test_testapplyrechecksremovedworkloadreleaseafterownedwrites",
       "source_file": "internal/setup/owned_activation_order_test.go",
-      "source_location": "L228",
+      "source_location": "L229",
       "target": "internal_setup_owned_test_fakeownedcommandfor",
       "weight": 1.0
     },
@@ -265609,7 +265621,7 @@
       "relation": "calls",
       "source": "internal_setup_owned_activation_order_test_testapplyrechecksremovedworkloadreleaseafterownedwrites",
       "source_file": "internal/setup/owned_activation_order_test.go",
-      "source_location": "L236",
+      "source_location": "L237",
       "target": "internal_setup_owned_review2_test_currentrevision",
       "weight": 1.0
     },
@@ -265657,7 +265669,7 @@
       "relation": "calls",
       "source": "internal_setup_owned_activation_order_test_testapplyrejectsunsafeacceptedruntimebeforeownedmutation",
       "source_file": "internal/setup/owned_activation_order_test.go",
-      "source_location": "L217",
+      "source_location": "L218",
       "target": "internal_setup_owned_units_readownedunitjournal",
       "weight": 1.0
     },
@@ -289759,10 +289771,10 @@
     }
   ],
   "graph": {
-    "content_sha256": "de561bb7721c4da9889412e8ff9ff5685b721296c0328967ebfdb17ff03e21b1",
+    "content_sha256": "78e2435ef019a46dc4c8020f80977fc4bc8246c3a9c78ae4860bd70a2c9358ad",
     "graphify_version": "0.9.105",
     "scope": "Application code, tests and authored Markdown documentation",
-    "source_sha256": "dac944a3f5b193628d0e480e57ddf813fc6f4a6a1e55c8b773cbf5aa7f4c86ba",
+    "source_sha256": "67a3be96645803357306b009bdf9a50fbed21c48af999e62af9e59caf5dd7a60",
     "tool_sha256": "165bc875ce63148e53e539714174b83612e5c2efccd74ef793f03cc39175b4f0"
   },
   "hyperedges": [],
@@ -290721,7 +290733,7 @@
       "label": "Marker",
       "norm_label": "marker",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L112"
+      "source_location": "L113"
     },
     {
       "_callable": true,
@@ -300268,7 +300280,7 @@
       "label": "checkFormServing()",
       "norm_label": "checkformserving()",
       "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L217"
+      "source_location": "L224"
     },
     {
       "_callable": true,
@@ -300301,7 +300313,7 @@
       "label": "formState()",
       "norm_label": "formstate()",
       "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L209"
+      "source_location": "L216"
     },
     {
       "_callable": true,
@@ -300367,7 +300379,18 @@
       "label": ".fail()",
       "norm_label": ".fail()",
       "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L179"
+      "source_location": "L186"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "clients_setup_serving_ui_servingoptionsform_readfields",
+      "label": ".readFields()",
+      "norm_label": ".readfields()",
+      "source_file": "clients/setup/serving-ui.mjs",
+      "source_location": "L178"
     },
     {
       "_callable": true,
@@ -300422,7 +300445,7 @@
       "label": "servingSummaries()",
       "norm_label": "servingsummaries()",
       "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L239"
+      "source_location": "L246"
     },
     {
       "_callable": true,
@@ -300433,7 +300456,7 @@
       "label": "servingSummary()",
       "norm_label": "servingsummary()",
       "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L226"
+      "source_location": "L233"
     },
     {
       "_callable": true,
@@ -300521,7 +300544,7 @@
       "label": "withFormServing()",
       "norm_label": "withformserving()",
       "source_file": "clients/setup/serving-ui.mjs",
-      "source_location": "L191"
+      "source_location": "L198"
     },
     {
       "_callable": true,
@@ -304173,7 +304196,7 @@
       "label": ".SystemdConfig()",
       "norm_label": ".systemdconfig()",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L107"
+      "source_location": "L108"
     },
     {
       "_callable": true,
@@ -306098,7 +306121,7 @@
       "label": "AtomicWrite()",
       "norm_label": "atomicwrite()",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L180"
+      "source_location": "L181"
     },
     {
       "_callable": true,
@@ -306109,7 +306132,7 @@
       "label": "Check()",
       "norm_label": "check()",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L120"
+      "source_location": "L121"
     },
     {
       "_callable": true,
@@ -306131,7 +306154,7 @@
       "label": "OpenPrivate()",
       "norm_label": "openprivate()",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L206"
+      "source_location": "L207"
     },
     {
       "_callable": true,
@@ -306142,7 +306165,7 @@
       "label": "Read()",
       "norm_label": "read()",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L147"
+      "source_location": "L148"
     },
     {
       "_callable": true,
@@ -306230,7 +306253,7 @@
       "label": "trustedPrivateStat()",
       "norm_label": "trustedprivatestat()",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L239"
+      "source_location": "L240"
     },
     {
       "_callable": true,
@@ -306241,7 +306264,7 @@
       "label": "Write()",
       "norm_label": "write()",
       "source_file": "internal/deployment/deployment.go",
-      "source_location": "L168"
+      "source_location": "L169"
     },
     {
       "_callable": true,
@@ -314326,7 +314349,7 @@
       "label": "TestAdapterFiltersInformationalResponsesAndRequestTrailers()",
       "norm_label": "testadapterfiltersinformationalresponsesandrequesttrailers()",
       "source_file": "internal/proxy/ingress_test.go",
-      "source_location": "L274"
+      "source_location": "L276"
     },
     {
       "_callable": true,
@@ -314337,7 +314360,7 @@
       "label": "TestAdapterNativeCompletionAndUserForwarding()",
       "norm_label": "testadapternativecompletionanduserforwarding()",
       "source_file": "internal/proxy/ingress_test.go",
-      "source_location": "L332"
+      "source_location": "L334"
     },
     {
       "_callable": true,
@@ -318583,7 +318606,7 @@
       "label": "ptrNativeModel()",
       "norm_label": "ptrnativemodel()",
       "source_file": "internal/runtime/hardened_fixture_test.go",
-      "source_location": "L60"
+      "source_location": "L54"
     },
     {
       "_callable": true,
@@ -318594,7 +318617,7 @@
       "label": "servingAPI()",
       "norm_label": "servingapi()",
       "source_file": "internal/runtime/hardened_fixture_test.go",
-      "source_location": "L79"
+      "source_location": "L73"
     },
     {
       "_callable": true,
@@ -318605,7 +318628,7 @@
       "label": "servingBinding()",
       "norm_label": "servingbinding()",
       "source_file": "internal/runtime/hardened_fixture_test.go",
-      "source_location": "L66"
+      "source_location": "L60"
     },
     {
       "_callable": true,
@@ -322818,7 +322841,7 @@
       "label": "TestHierarchyVerificationCombinesFilesystemAndMountEvidence()",
       "norm_label": "testhierarchyverificationcombinesfilesystemandmountevidence()",
       "source_file": "internal/runtime/release_test.go",
-      "source_location": "L366"
+      "source_location": "L367"
     },
     {
       "_callable": true,
@@ -322873,7 +322896,7 @@
       "label": "TestUnifiedHierarchyProbeNeedsNoPrivilegedProcAccess()",
       "norm_label": "testunifiedhierarchyprobeneedsnoprivilegedprocaccess()",
       "source_file": "internal/runtime/release_test.go",
-      "source_location": "L396"
+      "source_location": "L397"
     },
     {
       "_callable": true,
@@ -328395,7 +328418,7 @@
       "label": "TestApplyRechecksRemovedWorkloadReleaseAfterOwnedWrites()",
       "norm_label": "testapplyrechecksremovedworkloadreleaseafterownedwrites()",
       "source_file": "internal/setup/owned_activation_order_test.go",
-      "source_location": "L224"
+      "source_location": "L225"
     },
     {
       "_callable": true,
@@ -341177,7 +341200,7 @@
       "label": ".bind()",
       "norm_label": ".bind()",
       "source_file": "internal/runtime/hardened_fixture_test.go",
-      "source_location": "L55"
+      "source_location": "L49"
     },
     {
       "_callable": true,
@@ -341189,17 +341212,6 @@
       "norm_label": ".lines()",
       "source_file": "internal/runtime/hardened_fixture_test.go",
       "source_location": "L45"
-    },
-    {
-      "_callable": true,
-      "_origin": "ast",
-      "community": null,
-      "file_type": "code",
-      "id": "runtime_hardenedfixture_loaded",
-      "label": ".loaded()",
-      "norm_label": ".loaded()",
-      "source_file": "internal/runtime/hardened_fixture_test.go",
-      "source_location": "L51"
     },
     {
       "_callable": true,
@@ -364202,7 +364214,7 @@
       "node_kind": "heading",
       "norm_label": "administrator rollout",
       "source_file": "docs/MAINTENANCE.md",
-      "source_location": "L188"
+      "source_location": "L199"
     },
     {
       "_origin": "ast",
@@ -364213,7 +364225,7 @@
       "node_kind": "heading",
       "norm_label": "build tool updates",
       "source_file": "docs/MAINTENANCE.md",
-      "source_location": "L225"
+      "source_location": "L236"
     },
     {
       "_origin": "ast",
@@ -364224,7 +364236,7 @@
       "node_kind": "heading",
       "norm_label": "ci policy changes",
       "source_file": "docs/MAINTENANCE.md",
-      "source_location": "L158"
+      "source_location": "L169"
     },
     {
       "_origin": "ast",
@@ -364235,7 +364247,7 @@
       "node_kind": "heading",
       "norm_label": "desktop package ci",
       "source_file": "docs/MAINTENANCE.md",
-      "source_location": "L59"
+      "source_location": "L70"
     },
     {
       "_origin": "ast",
@@ -364257,7 +364269,7 @@
       "node_kind": "heading",
       "norm_label": "documentation language",
       "source_file": "docs/MAINTENANCE.md",
-      "source_location": "L70"
+      "source_location": "L81"
     },
     {
       "_origin": "ast",
@@ -364279,7 +364291,7 @@
       "node_kind": "heading",
       "norm_label": "pr validation scope",
       "source_file": "docs/MAINTENANCE.md",
-      "source_location": "L31"
+      "source_location": "L42"
     },
     {
       "_origin": "ast",
@@ -364290,7 +364302,7 @@
       "node_kind": "heading",
       "norm_label": "recover a mutable or incomplete publication",
       "source_file": "docs/MAINTENANCE.md",
-      "source_location": "L137"
+      "source_location": "L148"
     },
     {
       "_origin": "ast",
@@ -364301,7 +364313,7 @@
       "node_kind": "heading",
       "norm_label": "source and binary releases",
       "source_file": "docs/MAINTENANCE.md",
-      "source_location": "L87"
+      "source_location": "L98"
     },
     {
       "_origin": "ast",

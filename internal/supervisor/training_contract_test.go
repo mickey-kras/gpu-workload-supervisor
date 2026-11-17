@@ -180,11 +180,11 @@ func TestTrainingContractReconcileRequiresTerminalAndRelease(t *testing.T) {
 }
 
 func TestTrainingContractRecoveryNeverReplaysOrClaimsSuccess(t *testing.T) {
-	c, s, r, job := trainingControllerContract(t)
+	_, s, r, job := trainingControllerContract(t)
 	ctx := context.Background()
 	r.terminalErr = errors.New("lost terminal")
 	// A fresh controller models restart with only durable store identity.
-	c = testController(t, s, r)
+	c := testController(t, s, r)
 	if _, err := c.RecoverTraining(ctx, job.ID); err != nil {
 		t.Fatal(err)
 	}
