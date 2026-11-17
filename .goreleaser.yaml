@@ -40,6 +40,27 @@ builds:
     env: *static-env
     goos: *release-goos
     goarch: *release-goarch
+  - id: gpu-training-runner
+    main: ./cmd/gpu-training-runner
+    binary: gpu-training-runner
+    ldflags: *release-ldflags
+    env: *static-env
+    goos: *release-goos
+    goarch: *release-goarch
+  - id: gpu-training-candidate
+    main: ./cmd/gpu-training-candidate
+    binary: gpu-training-candidate
+    ldflags: *release-ldflags
+    env: *static-env
+    goos: *release-goos
+    goarch: *release-goarch
+  - id: gpu-training-import
+    main: ./cmd/gpu-training-import
+    binary: gpu-training-import
+    ldflags: *release-ldflags
+    env: *static-env
+    goos: *release-goos
+    goarch: *release-goarch
 
 nfpms:
   # No ids filter: the package carries every build above.

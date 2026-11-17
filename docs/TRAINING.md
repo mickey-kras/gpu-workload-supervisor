@@ -1,9 +1,8 @@
 # Training
 
-The runtime refactor removes the experimental training executables.
-The commands for those executables below describe the retired implementation.
-See [issue 451](https://github.com/mickey-kras/gpu-workload-supervisor/issues/451) for the generic finite-job replacement.
-
+Before a package upgrade, reconcile or recover any pending job with the accepted trainer executable.
+The trainer binding pins the executable path and SHA-256 digest.
+If the upgrade changes the digest, qualify the installed executable again and update the binding before use.
 
 Training presets stay disabled until [GPU qualification](#llm-training-qualification) passes. Preparation, discovery, dependency checks and repository tests do not approve runtimes. #453 stays open. Checkpoint and resume: #454. Training UI: #456.
 

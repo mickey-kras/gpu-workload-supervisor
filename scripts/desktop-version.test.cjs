@@ -27,8 +27,8 @@ test('mismatched binaries, package versions and development builds are rejected'
   assert.throws(() => verifyRelease('1.2.3', ['1.2.3']));
 });
 
-test('the release inventory lists every packaged binary, including gpu-setup', () => {
-  assert.ok(releaseBinaries().includes('gpu-setup'));
+test('the release inventory lists every packaged binary, including gpu-training-import', () => {
+  assert.ok(releaseBinaries().includes('gpu-training-import'));
   const dir = mkdtempSync(join(tmpdir(), 'release-binaries-'));
   try {
     for (const binaries of [[], [{name: 'gpu-mode'}, {name: 'gpu-mode'}], [{name: '../evil'}]]) {

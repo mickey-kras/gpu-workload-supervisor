@@ -9,10 +9,10 @@ This branch is a preparation step. It does not complete the daemon migration.
 | Workload drivers | Optional sleep and wake methods on the existing runtime | Separate service and transient-job drivers |
 | Admission proxy | Existing request accounting and fences | Move state writes and lifecycle requests to the daemon |
 
-This branch removes the experimental training executables and their framework dependencies.
-The generic finite-job replacement remains in [issue 451](https://github.com/mickey-kras/gpu-workload-supervisor/issues/451).
-The existing finite-job records and lifecycle stay readable for recovery.
-The older training-runner documents describe the removed experimental implementation.
+The packages keep the experimental training executables for existing installations.
+An accepted trainer binding pins the executable path and SHA-256 digest for recovery and launch checks.
+Retire the executables after the generic finite-job replacement provides a migration for these bindings.
+See [issue 451](https://github.com/mickey-kras/gpu-workload-supervisor/issues/451).
 
 Existing template validation, template approval, resource limits, and setup cleanup stay supported.
 Their replacements must preserve the accepted configuration and desktop actions.

@@ -22,30 +22,34 @@ type vllmSleepStatus struct {
 
 // Sleep offloads vLLM weights to RAM and discards KV cache (/sleep?level=1)
 // when the profile enables sleep mode, falling back to Stop if unsupported or failed.
-func (m *SystemdManager) Sleep(ctx context.Context, id control.Workload) error {
+func (m *SystemdManager) Sleep(ctx context.Context, id control.Workload) (string, error) {
 	p, ok := m.config.Catalog.Profile(id)
 	if !ok {
-		return errors.New("unconfigured workload")
+		return "", errors.New("unconfigured workload")
 	}
 	if !m.supportsSleepMode(p) {
-		return m.Stop(ctx, id)
+		return "ok", m.Stop(ctx, id)
 	}
 	st, err := m.unitState(ctx, p.Unit)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if st.active == "inactive" && st.sub == "dead" {
-		return nil
+		return "already-stopped", nil
 	}
-	if st.active == "active" && st.sub == "running" {
-		if err := m.verifyNativeBinding(ctx, p); err != nil {
-			return err
-		}
-		if m.requestVLLMSleep(ctx, *p.NativeModel) == nil && m.releasedViaSleep(ctx, p) {
-			return nil
-		}
+	if st.active != "active" || st.sub != "running" {
+		return "stopped-service-not-running", m.Stop(ctx, id)
 	}
-	return m.Stop(ctx, id)
+	if err := m.verifyNativeBinding(ctx, p); err != nil {
+		return "", err
+	}
+	if err := m.requestVLLMSleep(ctx, *p.NativeModel); err != nil {
+		return "stopped-sleep-request-failed", m.Stop(ctx, id)
+	}
+	if !m.releasedViaSleep(ctx, p) {
+		return "stopped-sleep-release-unverified", m.Stop(ctx, id)
+	}
+	return "sleeping", nil
 }
 
 // Wake resumes a hibernated vLLM unit from host RAM (/wake_up) when active,

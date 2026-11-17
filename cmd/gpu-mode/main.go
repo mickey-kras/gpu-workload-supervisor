@@ -59,6 +59,7 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (supervisor
 	catalogRevision := flags.String("configuration-revision", "", "expected accepted catalog revision for configure")
 	statePath := flags.String("state", deployment.DefaultStatePath(), "SQLite state path")
 	gpuIndex := flags.Int("gpu-index", 0, "NVIDIA GPU index")
+	gpuUUID := flags.String("gpu-uuid", "", "NVIDIA GPU UUID (takes precedence over the index)")
 	flags.Uint64("release-max-used-mib", 0, "removed: configure workload cgroups and optional target capacity in the catalog")
 	headroom := flags.Uint64("capacity-headroom-mib", 0, "additional VRAM headroom for configured target capacity checks")
 	nvidiaSMIPath := flags.String("nvidia-smi", "", "absolute path to the trusted nvidia-smi executable")
@@ -101,7 +102,7 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (supervisor
 	}
 	runtimeConfig := gpuruntime.SystemdConfig{
 		HealthTimeout: *healthTimeout,
-		GPUIndex:      *gpuIndex, CapacityHeadroomMiB: *headroom,
+		GPUIndex:      *gpuIndex, GPUUUID: *gpuUUID, CapacityHeadroomMiB: *headroom,
 		NvidiaSMIPath: *nvidiaSMIPath, SystemctlPath: *systemctlPath,
 	}
 	options := modeExecution{

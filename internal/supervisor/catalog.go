@@ -40,18 +40,18 @@ func (c *Controller) unloadCatalog(ctx context.Context, id string, phase control
 		if p.ID == target {
 			continue
 		}
-		if err = c.effect(ctx, id, phase, "stop "+string(p.ID), func(ctx context.Context) error { return c.stopOrSleep(ctx, p.ID) }); err != nil {
+		if err = c.effectWithOutcome(ctx, id, phase, "stop "+string(p.ID), func(ctx context.Context) (string, error) { return c.stopOrSleep(ctx, p.ID) }); err != nil {
 			return active, err
 		}
 	}
 	return active, c.waitReleasedFor(ctx, target, c.now().Add(c.config.VerifyTimeout))
 }
 
-func (c *Controller) stopOrSleep(ctx context.Context, id control.Workload) error {
+func (c *Controller) stopOrSleep(ctx context.Context, id control.Workload) (string, error) {
 	if h, ok := c.runtime.(HibernatableRuntime); ok {
 		return h.Sleep(ctx, id)
 	}
-	return c.runtime.Stop(ctx, id)
+	return "ok", c.runtime.Stop(ctx, id)
 }
 
 func (c *Controller) wakeOrStart(ctx context.Context, id control.Workload) error {
@@ -67,7 +67,7 @@ func (c *Controller) rollbackCatalog(ctx context.Context, id string, previous co
 		return err
 	}
 	if previous.ActiveWorkload != control.WorkloadIdle && previous.ActiveWorkload != control.WorkloadUnknown {
-		if err = c.effect(ctx, id, control.PhaseReconciling, "rollback start "+string(previous.ActiveWorkload), func(ctx context.Context) error { return c.runtime.Start(ctx, previous.ActiveWorkload) }); err != nil {
+		if err = c.effect(ctx, id, control.PhaseReconciling, "rollback start "+string(previous.ActiveWorkload), func(ctx context.Context) error { return c.wakeOrStart(ctx, previous.ActiveWorkload) }); err != nil {
 			return err
 		}
 	}
@@ -305,7 +305,7 @@ func (c *Controller) stopFailedLimits(ctx context.Context, target control.Worklo
 func (c *Controller) stopOpposingCatalog(ctx context.Context, target control.Workload) error {
 	for _, p := range c.config.Catalog.Catalog.Profiles {
 		if p.ID != target {
-			if err := c.runAction(ctx, func(ctx context.Context) error { return c.stopOrSleep(ctx, p.ID) }); err != nil {
+			if err := c.runAction(ctx, func(ctx context.Context) error { return c.runtime.Stop(ctx, p.ID) }); err != nil {
 				return err
 			}
 		}

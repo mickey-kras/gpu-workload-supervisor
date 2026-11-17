@@ -349,7 +349,16 @@ func (work activationWork) verifyAcceptedRuntime(ctx context.Context) error {
 	if err := verifyActivationBindings(ctx, manager, work.unrunnableBindingPlan()); err != nil {
 		return err
 	}
-	return manager.ReleasedFor(ctx, control.WorkloadIdle)
+	return releasedForSetup(ctx, manager, control.WorkloadIdle)
+}
+
+func releasedForSetup(ctx context.Context, manager supervisor.Runtime, target control.Workload) error {
+	if stopped, ok := manager.(interface {
+		ReleasedForSetup(context.Context, control.Workload) error
+	}); ok {
+		return stopped.ReleasedForSetup(ctx, target)
+	}
+	return manager.ReleasedFor(ctx, target)
 }
 
 // activationReleaseManager repeats the unchanged accepted workloads' release
@@ -371,11 +380,11 @@ func (m activationReleaseManager) PreflightWithOwnedRemovals(ctx context.Context
 }
 
 func (m activationReleaseManager) ReleasedFor(ctx context.Context, target control.Workload) error {
-	if err := m.Runtime.ReleasedFor(ctx, target); err != nil {
+	if err := releasedForSetup(ctx, m.Runtime, target); err != nil {
 		return err
 	}
 	if len(m.replaced) == 0 {
-		return m.accepted.ReleasedFor(ctx, target)
+		return releasedForSetup(ctx, m.accepted, target)
 	}
 	previous, ok := m.accepted.(interface {
 		ReleasedForUnchangedLaunches(context.Context, control.Workload, map[string]bool) error
@@ -413,7 +422,7 @@ func (work activationWork) verifyRuntimes(ctx context.Context, plan unitPlan) (s
 		}
 		manager = activationReleaseManager{Runtime: manager, accepted: oldManager, replaced: replaced}
 	}
-	if err := manager.ReleasedFor(ctx, control.WorkloadIdle); err != nil {
+	if err := releasedForSetup(ctx, manager, control.WorkloadIdle); err != nil {
 		return nil, fmt.Errorf("configured workloads have not released the GPU: %w", err)
 	}
 	return manager, nil

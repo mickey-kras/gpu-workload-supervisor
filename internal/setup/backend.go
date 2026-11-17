@@ -376,7 +376,7 @@ func (b Backend) commitConfiguration(ctx context.Context, c commitOptions) error
 		if err := verifyActivationBindings(ctx, manager, plan); err != nil {
 			return err
 		}
-		return manager.ReleasedFor(ctx, control.WorkloadIdle)
+		return releasedForSetup(ctx, manager, control.WorkloadIdle)
 	}, Committed: committed, Commit: func() error {
 		return commitRequestedCatalog(ctx, stateStore, request, committed)
 	}})

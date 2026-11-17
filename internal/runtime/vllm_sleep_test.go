@@ -122,8 +122,8 @@ func TestVLLMSleepWakeAndReleasedViaSleep(t *testing.T) {
 	}))
 	defer srv.Close()
 	m, _ := newSleepTestManager(t, srv.URL)
-	if err := m.Sleep(context.Background(), "text"); err != nil {
-		t.Fatal(err)
+	if outcome, err := m.Sleep(context.Background(), "text"); err != nil || outcome != "sleeping" {
+		t.Fatalf("sleep outcome = %q, error = %v", outcome, err)
 	}
 	if !sleeping.Load() {
 		t.Fatal("sleep was not requested")
@@ -132,8 +132,14 @@ func TestVLLMSleepWakeAndReleasedViaSleep(t *testing.T) {
 		t.Fatal(err)
 	}
 	snap, err := m.Observe(context.Background())
-	if err != nil || snap.Workloads["text"].Active {
+	if err != nil || snap.Workloads["text"].Active || !snap.Workloads["text"].Sleeping {
 		t.Fatalf("sleep observation: %+v %v", snap, err)
+	}
+	if err := m.ReleasedForSetup(context.Background(), control.WorkloadIdle); err == nil {
+		t.Fatal("setup accepted a live sleeping unit")
+	}
+	if err := m.ReleasedForUnchangedLaunches(context.Background(), control.WorkloadIdle, nil); err == nil {
+		t.Fatal("setup accepted a live sleeping unit in the previous catalog")
 	}
 	if err := m.Wake(context.Background(), "text"); err != nil {
 		t.Fatal(err)
@@ -172,8 +178,8 @@ func TestVLLMSleepFallsBackWhenControlOrGPUProofFails(t *testing.T) {
 			if scenario == "GPU query failed" {
 				r.errs[query] = errors.New("unavailable")
 			}
-			if err := m.Sleep(context.Background(), "text"); err != nil {
-				t.Fatal(err)
+			if outcome, err := m.Sleep(context.Background(), "text"); err != nil || !strings.HasPrefix(outcome, "stopped-sleep-") {
+				t.Fatalf("fallback outcome = %q, error = %v", outcome, err)
 			}
 			if !slices.Contains(r.calls, "/usr/bin/true --user stop -- gws-owned-text.service") {
 				t.Fatalf("no stop after %s: %v", scenario, r.calls)

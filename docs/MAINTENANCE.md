@@ -98,7 +98,7 @@ Neither tool checks the complete official dictionary. Passing gates does not cer
 ## Source and binary releases
 
 The workflow publishes tested source, amd64 and arm64 Linux archives, Debian packages for both architectures, archive checksums and a CycloneDX source SBOM.
-Archives contain six executables:
+Archives contain seven executables:
 
 | Executable | Purpose |
 | --- | --- |
@@ -108,6 +108,7 @@ Archives contain six executables:
 | `gpu-setup` | Setup, discovery, catalog commit |
 | `gpu-training-runner` | Experimental finite-job LLM runner. No enabled preset |
 | `gpu-training-candidate` | Unqualified input preparation. No training |
+| `gpu-training-import` | Unqualified PEFT import preparation |
 
 Debian packages add the GNOME extension and setup application. Check the downloaded build provenance with `gh attestation verify`.
 

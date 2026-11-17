@@ -221,7 +221,7 @@ func (f limitFailure) definite() bool {
 func (c *Controller) firstLimitFailure(ctx context.Context, snapshot gpuruntime.Snapshot) limitFailure {
 	var deferred limitFailure
 	for _, p := range c.config.Catalog.Catalog.Profiles {
-		if !p.HasLimits() || !snapshot.Workloads[p.ID].Active {
+		if !p.HasLimits() || !snapshot.Workloads[p.ID].Running() {
 			continue
 		}
 		f := limitFailure{profile: p, err: c.checkRetainedLimits(ctx, p)}
@@ -380,7 +380,7 @@ func (c *Controller) limitOutcome(ctx context.Context, id control.Workload) gpur
 // passing check does not reset them. A unit that stopped by itself, or
 // that left the catalog, needs no record.
 func (c *Controller) settleLimitRecord(ctx context.Context, snapshot gpuruntime.Snapshot, stop store.LimitStop, stored bool) error {
-	if !stored || snapshot.Workloads[stop.Workload].Active {
+	if !stored || snapshot.Workloads[stop.Workload].Running() {
 		return nil
 	}
 	if err := c.store.ClearLimitStop(ctx); err != nil {
@@ -398,7 +398,7 @@ func (c *Controller) settleStartedStop(ctx context.Context, state control.State,
 	if !ok {
 		return fmt.Errorf("%w: the unit of the started limit stop of %s left the catalog; run recover", ErrLimitStopFailed, stop.Workload)
 	}
-	if snapshot.Workloads[p.ID].Active {
+	if snapshot.Workloads[p.ID].Running() {
 		return c.retryStartedStop(ctx, state, p)
 	}
 	return c.finishEarlierStop(ctx, state, p)
