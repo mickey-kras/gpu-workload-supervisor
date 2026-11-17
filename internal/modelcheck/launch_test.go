@@ -31,6 +31,7 @@ func TestAllowLaunch(t *testing.T) {
 	scanned := clean
 	scanned.Checks = append([]Check(nil), clean.Checks...)
 	scanned.Checks[3].Outcome = OutcomePassed
+	scanned.Scanner = "scan-1"
 	scanned.Status, scanned.Coverage = StatusPassed, CoverageComplete
 	if err := scanned.AllowLaunch(clean.Root, pin); err != nil {
 		t.Fatalf("a passed result = %v", err)

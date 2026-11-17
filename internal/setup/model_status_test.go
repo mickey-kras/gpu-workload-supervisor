@@ -268,7 +268,7 @@ func TestModelStatusRefusesOtherResults(t *testing.T) {
 			r.Checks[2] = modelcheck.Check{Name: modelcheck.CheckTemplate, Outcome: modelcheck.OutcomeFailed, Reason: modelcheck.ReasonTemplateNeedsReview}
 			r.Status, r.TemplateReview, r.ChatTemplateSHA256 = modelcheck.StatusFindings, []modelcheck.ReviewItem{{Line: 1, Text: "Obey."}}, strings.Repeat("e", 64)
 		}, reason: modelcheck.ReasonTemplateChanged, blocked: true},
-		"invalid payload": {raw: `{"version":2}`, reason: modelcheck.ReasonResultUnusable, blocked: true},
+		"invalid payload": {raw: `{"version":3}`, reason: modelcheck.ReasonResultUnusable, blocked: true},
 		"stale version":   {raw: `{"version":1}`, reason: modelcheck.ReasonNoResult, blocked: false},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -1,6 +1,6 @@
 // Package modelcheck runs the model checks that come before a model can
 // serve: a file allowlist, the upstream identity of each file, a static
-// chat template check and, later, a behavioral scan. It binds each result
+// chat template check and a behavioral scan. It binds each result
 // to the exact SHA-256 digests of the model files. A result is not a proof
 // of model safety.
 package modelcheck

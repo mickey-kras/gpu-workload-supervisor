@@ -63,8 +63,8 @@ func TestModelCheckStoreRejectsTamperedRows(t *testing.T) {
 	ctx := context.Background()
 	s := testStore(t)
 	for model, payload := range map[string]string{
-		"duplicate": `{"version":2,"version":2}`,
-		"unknown":   `{"version":2,"extra":true}`,
+		"duplicate": `{"version":3,"version":3}`,
+		"unknown":   `{"version":3,"extra":true}`,
 		"truncated": `{"version":`,
 		"old":       `{"version":0}`,
 	} {
@@ -94,7 +94,7 @@ func TestModelCheckStoreRejectsTamperedRows(t *testing.T) {
 	if err := s.db.QueryRowContext(ctx, `SELECT payload FROM model_checks WHERE model=?`, "moved").Scan(&stored); err != nil || string(stored) != string(raw) {
 		t.Fatal("a refused approval changed the row", err)
 	}
-	for model, payload := range map[string]string{"newer": `{"version":3,"future":true}`, "older": `{"version":1,"configuration":{}}`} {
+	for model, payload := range map[string]string{"newer": `{"version":4,"future":true}`, "older": `{"version":1,"configuration":{}}`} {
 		if _, err := s.db.ExecContext(ctx, `INSERT INTO model_checks(model,payload) VALUES(?,?)`, model, payload); err != nil {
 			t.Fatal(err)
 		}

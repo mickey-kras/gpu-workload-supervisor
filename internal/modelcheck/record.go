@@ -16,10 +16,12 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
-// RecordVersion is the only result format. Version 2 adds the chat template
-// pin, the template review list, its approval and the template limits. A
-// result of another version reads as stale.
-const RecordVersion = 2
+// RecordVersion is the only result format. Version 2 adds the chat
+// template pin, the template review list, its approval and the template
+// limits. Version 3 adds the behavioral scan: the scanner revision and
+// the scan outcome as fourth check. A result of another version reads as
+// stale.
+const RecordVersion = 3
 
 // MaxRecordBytes bounds one stored result. maxRecordFiles bounds its file
 // entries; it is above MaxModelFiles, so a later limit change stays readable.
@@ -138,9 +140,12 @@ type Record struct {
 	// out of logs.
 	TemplateReview   []ReviewItem      `json:"templateReview,omitempty"`
 	TemplateApproval *TemplateApproval `json:"templateApproval,omitempty"`
-	Checker          string            `json:"checker"`
-	Configuration    Configuration     `json:"configuration"`
-	CheckedAt        time.Time         `json:"checkedAt"`
+	// Scanner is the revision of the pinned scanner that ran the
+	// behavioral scan. It is empty while no scanner ran.
+	Scanner       string        `json:"scanner,omitempty"`
+	Checker       string        `json:"checker"`
+	Configuration Configuration `json:"configuration"`
+	CheckedAt     time.Time     `json:"checkedAt"`
 }
 
 var (
@@ -166,6 +171,12 @@ func (r Record) Validate() error {
 	}
 	if !r.validTemplate() {
 		return errors.New("model check record has template fields that do not follow from the template check")
+	}
+	if (r.Checks[len(checkOrder)-1].Outcome == OutcomeNotRun) != (r.Scanner == "") {
+		return errors.New("model check record scanner does not follow from the behavioral check")
+	}
+	if r.Scanner != "" && !checkerPattern.MatchString(r.Scanner) {
+		return errors.New("model check record has an invalid scanner revision")
 	}
 	if !r.Configuration.valid() {
 		return errors.New("model check record has an invalid configuration")
@@ -270,13 +281,21 @@ func ReadRecord(raw []byte) (Record, error) {
 
 // Current gives the status that applies to the model files on disk now. It
 // takes a fresh inventory of root. An inventory error, an inventory problem
-// that the record does not hold, or a record for other digests, another root, another source, another
-// checker version or another configuration, such as another hub, leaves the
-// model not scanned: results never carry over to changed or other models,
-// and a new checker checks again.
+// that the record does not hold, or a record for other digests, another
+// root, another source, another checker or scanner revision, or another
+// configuration, such as another hub, leaves the model not scanned:
+// results never carry over to changed or other models, and a new checker
+// or scanner environment checks again.
 func Current(ctx context.Context, r *Record, model, root string, source Source, checker Checker) Status {
 	if r == nil || r.Model != model || r.Root != root || r.Source != source || r.Checker != checker.Version ||
 		r.Configuration != currentConfiguration(checker.Hub) {
+		return StatusNotScanned
+	}
+	scanner := ""
+	if checker.Scanner != nil {
+		scanner = checker.Scanner.Revision()
+	}
+	if r.Scanner != scanner {
 		return StatusNotScanned
 	}
 	if match, err := filesMatch(ctx, *r, root); err != nil || !match {

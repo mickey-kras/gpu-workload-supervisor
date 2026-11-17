@@ -34,7 +34,7 @@ func TestRecordRoundTripsStrictly(t *testing.T) {
 		"null field":           strings.Replace(text, `"checker":"test-1"`, `"checker":null`, 1),
 		"trailing value":       text + "{}",
 		"not UTF-8":            strings.Replace(text, `"test-1"`, "\"test-\xff\"", 1),
-		"other version":        strings.Replace(text, `"version":2`, `"version":0`, 1),
+		"other version":        strings.Replace(text, `"version":3`, `"version":0`, 1),
 		"status not derived":   strings.Replace(text, `"status":"not_scanned"`, `"status":"passed"`, 1),
 		"unknown outcome":      strings.Replace(text, `"outcome":"not_run"`, `"outcome":"skipped"`, 1),
 		"checks out of order":  strings.Replace(text, `"name":"file-allowlist"`, `"name":"upstream-identity"`, 1),
@@ -97,6 +97,18 @@ func TestMarshalRecordRefusesInvalidRecords(t *testing.T) {
 		"bad checker":   func(r *Record) { r.Checker = "" },
 		"missing check": func(r *Record) { r.Checks = r.Checks[:3] },
 		"zero time":     func(r *Record) { r.CheckedAt = time.Time{} },
+		"scanner without scan": func(r *Record) {
+			r.Scanner = "scan-1"
+		},
+		"scan without scanner": func(r *Record) {
+			r.Checks[3].Outcome = OutcomePassed
+			r.Status, r.Coverage = StatusPassed, CoverageComplete
+		},
+		"bad scanner revision": func(r *Record) {
+			r.Checks[3].Outcome = OutcomePassed
+			r.Status, r.Coverage = StatusPassed, CoverageComplete
+			r.Scanner = "-bad"
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			copied := record
@@ -115,8 +127,8 @@ func TestMarshalRecordRefusesInvalidRecords(t *testing.T) {
 
 func TestOtherRecordVersionsAreStale(t *testing.T) {
 	_, raw := validRecord(t)
-	for _, version := range []string{`"version":1`, `"version":3`} {
-		other := strings.Replace(string(raw), `"version":2`, version, 1)
+	for _, version := range []string{`"version":1`, `"version":2`} {
+		other := strings.Replace(string(raw), `"version":3`, version, 1)
 		if _, err := ReadRecord([]byte(other)); !errors.Is(err, ErrStaleRecord) {
 			t.Fatal("another record version must read as stale", version, err)
 		}

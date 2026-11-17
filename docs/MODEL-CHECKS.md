@@ -8,9 +8,12 @@ Only a model with the status `passed` is clean. These checks are a defensive
 layer. They do not prove that a model is safe. A clean result does not mean
 that a modified model behaves like its original.
 
-This page describes the checks that exist now. The behavioral scan and the
-scan job of #585 are not available yet. No model can get `passed` yet. A
-model that passes the available checks stays `not_scanned`. The
+This page describes the checks that exist now: the file allowlist, the
+upstream identity, the chat template check and the machinery of the
+behavioral scan. The scanner environment and the scan job of #585 do not
+ship yet, so the behavioral scan stays `not_run`. No model can get
+`passed` yet. A model that passes the available checks stays
+`not_scanned`. The
 [launch gate](#launch-gate) refuses a model whose stored result does not
 allow the launch.
 
@@ -645,6 +648,86 @@ Then the two digests are equal.
 The review cannot find an instruction that an operator does not see in the
 literals. The behavioral scan covers the model, not the template.
 
+### Behavioral scan
+
+The behavioral scan loads the exact build on one assigned GPU and watches
+its behavior before the first use. It is the fourth check
+(`behavioral-scan`). It runs only after the file allowlist, the upstream
+identity and the chat template checks passed. The machinery of the scan is
+in the supervisor. The scanner environment does not ship yet, so the check
+stays `not_run`.
+
+The scan runs as a finite job in an isolated unit, as a training job does.
+The unit gets a job description with the model ID, the directory, the
+SHA-256 of each file, the pinned scanner revision and the assigned GPU. It
+runs the scanner as one command with the job description and a verdict
+file.
+
+The unit has a private directory and a clean environment. It gets
+no proxy variables, no token variables and offline flags for the download
+libraries. It gets the assigned GPU as `CUDA_VISIBLE_DEVICES`. The model
+directory stays read-only for the unit.
+
+After the unit ends, the supervisor reads the model directory again. It
+compares the SHA-256 of each file with the job description. A changed file
+gives `error` with the reason `files-changed` and beats the verdict.
+
+The scanner writes one verdict file of at most 4 KiB:
+
+```json
+{"version": 1, "scanner": "<revision>", "status": "passed", "reason": "<code>"}
+```
+
+The status is `passed`, `findings`, `error` or `unsupported`. A status
+`error` or `unsupported` has a fixed reason code. The supervisor reads only
+this file. A verdict of another scanner revision, of another version, or
+with a missing, malformed or oversized field gives `error` with the reason
+`verdict-invalid`. A nonzero exit of the unit gives `error` with the reason
+`scanner-failed`. A stop at the time limit gives `error` with the reason
+`scan-timeout`.
+
+The scanner runs only for a build it supports. The support decision reads
+`config.json` and the safetensors headers. It does not load the weights:
+
+- The build must declare a supported architecture in `config.json`. Today
+  the only one is `Qwen3_5ForConditionalGeneration`. Else the result is
+  `unsupported` with the reason `unsupported-architecture`, and the
+  scanner does not run.
+- The weight format must be one the scanner supports. A
+  `quantization_config.quant_method` of `nvfp4`, `int4`, `fp8` or
+  `fbgemm_fp8` gives that format. Else the safetensors weights must have
+  one dtype: `BF16` for bf16, or one `F8*` dtype for fp8. Mixed dtypes or
+  another dtype give `unsupported` with the reason `unsupported-format`,
+  and the scanner does not run.
+- The build must have an assigned GPU of the host. Else the result is
+  `unsupported` with the reason `unsupported-hardware`, and the scanner
+  does not run.
+
+The reason codes of the scan:
+
+| Reason | Rule |
+| --- | --- |
+| `findings` | The scanner found backdoor behavior |
+| `scanner-failed` | The scan unit gave a nonzero exit (`error`) |
+| `scan-timeout` | The scan unit stopped at the time limit (`error`) |
+| `verdict-invalid` | The verdict file is missing, malformed, oversized, of another scanner revision or inconsistent (`error`) |
+| `unsupported-architecture` | The build declares an architecture that the scanner does not support |
+| `unsupported-format` | The build has a weight format that the scanner does not support |
+| `unsupported-hardware` | The build has no assigned GPU |
+
+The scan needs a scanner environment on the host: the pinned
+[Microsoft LLM Backdoor Scanner](https://github.com/microsoft/llm-backdoor-scanner)
+with its dependencies. These steps stay open:
+
+- The setup installer step for the pinned environment.
+- The supervisor scan-job lifecycle: queue, GPU wait and release.
+- The validation of the declared support list and the working paths on a
+  real GPU.
+- The launch that waits for a scan result
+  ([#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583)).
+
+Until then the [launch gate](#launch-gate) stays as it is.
+
 ## Results
 
 | Status | Cause |
@@ -668,12 +751,14 @@ as bounded strict JSON of at most 4 MiB. A result holds these items:
 - The review list of the chat template and the approval of an operator,
   see [Review](#review). The review list is the only template text in the
   result. The supervisor does not write it to logs.
+- The scanner revision, when the behavioral scan ran.
 - The checker version and the configuration: the hub URL, the file limits
   and the template limits.
 - The check time.
 
 Reason codes never hold paths or file content. The result format has
-version 2. A result with another positive version is `not_scanned`. A
+version 3. Version 3 adds the scanner revision and the scan outcome as
+fourth check. A result with another positive version is `not_scanned`. A
 result without a positive version is not valid.
 
 The supervisor calculates the status again from a new inventory of the files
@@ -751,10 +836,9 @@ For a result that does not apply, the details show its checks as the last
 stored result.
 
 "Scan details" shows the checker revision, the scanner revision, the
-coverage, the check date and the outcome of each check. The scanner
-revision is "not available" until the behavioral scan is available. The
-details also show this note: "These checks are a defensive layer, not
-complete backdoor detection."
+coverage, the check date and the outcome of each check. Without a scan,
+the scanner revision is "not available". The details also show this note:
+"These checks are a defensive layer, not complete backdoor detection."
 
 The status uses the stored digests. It does not hash the model files each
 time that setup opens, because the weights can be large.
@@ -937,7 +1021,7 @@ A stored result allows the launch only when all of these are true:
 - The result is valid.
 - The file allowlist, the upstream identity and the chat template checks
   passed. A template that asks for review needs an operator approval. The
-  behavioral scan is not available yet, so it can stay `not_run`.
+  behavioral scan can stay `not_run`: no scanner ships yet.
 - For a managed launch, the result is for the model directory of the
   launch.
 - The binding pins a chat template, and its SHA-256 is the

@@ -27,15 +27,20 @@ type Checker struct {
 	// Approver asks an operator to approve the literals of a chat template.
 	// Without it, a template with literals to review does not pass.
 	Approver Approver
+	// Scanner runs the behavioral scan of the exact build after the other
+	// checks passed. Without it, the behavior check stays not run, so the
+	// model stays not scanned.
+	Scanner Scanner
 	// hub tunes the hub client: its listing timeout and retries. The zero
 	// value gives the defaults. Tests in this package set it.
 	hub hubOptions
 }
 
 // Run checks one model and gives a record bound to its file digests. A
-// check that does not pass stops the checks after it. The behavioral scan
-// is not available yet, so a model that passes the other checks stays not
-// scanned. A canceled run gives no record, so the model stays not scanned.
+// check that does not pass stops the checks after it. Without a scanner,
+// the behavioral scan stays not run, so a model that passes the other
+// checks stays not scanned. A canceled run gives no record, so the model
+// stays not scanned.
 func (c Checker) Run(ctx context.Context, r Request) (Record, error) {
 	if c.Client == nil || !checkerPattern.MatchString(c.Version) || !currentConfiguration(c.Hub).valid() {
 		return Record{}, errors.New("model checker needs a client, an HTTPS hub and a version")
@@ -67,6 +72,15 @@ func (c Checker) Run(ctx context.Context, r Request) (Record, error) {
 		check, fields := c.template(ctx, record, files)
 		record.ChatTemplateSHA256, record.TemplateFile = fields.pin, fields.file
 		record.TemplateReview, record.TemplateApproval = fields.review, fields.approval
+		results = append(results, check)
+	}
+	if results[len(results)-1].Outcome == OutcomePassed && c.Scanner != nil {
+		check, err := c.Scanner.Scan(ctx, r.Model, r.Root, files)
+		if err != nil {
+			return Record{}, err
+		}
+		check.Name = CheckBehavior
+		record.Scanner = c.Scanner.Revision()
 		results = append(results, check)
 	}
 	for _, name := range checkOrder[len(results):] {
