@@ -84,4 +84,42 @@ PYTHON
   return files;
 }
 
-module.exports = { reuseFixture };
+// Exact reviewed analyzer profile, independent of the policy fingerprint constants.
+const ANALYSIS_STEP = {
+  "name": "Go static analysis",
+  "run": "archive=\"$RUNNER_TEMP/golangci-lint.tar.gz\"\ncurl --fail --location --silent --show-error --retry 3 https://github.com/golangci/golangci-lint/releases/download/v2.15.0/golangci-lint-2.15.0-linux-amd64.tar.gz --output \"$archive\"\nprintf '9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea  %s\\n' \"$archive\" | sha256sum --check --strict\ntar -xzf \"$archive\" -C \"$RUNNER_TEMP\"\n\"$RUNNER_TEMP/golangci-lint-2.15.0-linux-amd64/golangci-lint\" run --config .golangci.yml --output.checkstyle.path=golangci-lint-report.xml ./...\n"
+};
+const ANALYSIS_PRODUCER = {
+  "name": "Stage go quality coverage",
+  "run": "python3 .github/scripts/quality-coverage.py stage go go-quality-coverage\ntest -s golangci-lint-report.xml\ncp golangci-lint-report.xml go-quality-coverage/\nsha256sum golangci-lint-report.xml > go-quality-coverage/analysis.sha256\n"
+};
+const ANALYSIS_CONSUMER = {
+  "name": "Validate and restore quality coverage",
+  "run": "python3 .github/scripts/quality-coverage.py restore go go-quality-coverage\npython3 .github/scripts/quality-coverage.py restore javascript javascript-quality-coverage\n(cd go-quality-coverage && sha256sum --check --strict analysis.sha256)\npython3 - <<'PYTHON'\nimport xml.etree.ElementTree as ET\nreport = ET.parse('go-quality-coverage/golangci-lint-report.xml')\nif report.getroot().tag != 'checkstyle':\n    raise SystemExit('Invalid Go static analysis report')\nPYTHON\ncp go-quality-coverage/golangci-lint-report.xml .\n"
+};
+
+function analyzerReuseFixture() {
+  const workflows = reuseFixture();
+  const steps = workflows['.github/workflows/ci.yml'].jobs.go.steps;
+  if (!steps.some(step => step.name === 'Go static analysis')) {
+    steps.splice(steps.findIndex(step => step.name === 'Go cognitive complexity'), 0, structuredClone(ANALYSIS_STEP));
+  }
+  Object.assign(steps.find(step => step.name === 'Stage go quality coverage'), structuredClone(ANALYSIS_PRODUCER));
+  Object.assign(workflows['.github/workflows/main.yml'].jobs.sonar.steps
+    .find(step => step.name === 'Validate and restore quality coverage'), structuredClone(ANALYSIS_CONSUMER));
+  return workflows;
+}
+
+function legacyReuseFixture() {
+  const workflows = reuseFixture();
+  const go = workflows['.github/workflows/ci.yml'].jobs.go;
+  go.steps = go.steps.filter(step => step.name !== 'Go static analysis');
+  go.steps.find(step => step.name === 'Stage go quality coverage').run =
+    'python3 .github/scripts/quality-coverage.py stage go go-quality-coverage';
+  workflows['.github/workflows/main.yml'].jobs.sonar.steps
+    .find(step => step.name === 'Validate and restore quality coverage').run =
+    'python3 .github/scripts/quality-coverage.py restore go go-quality-coverage\npython3 .github/scripts/quality-coverage.py restore javascript javascript-quality-coverage\n';
+  return workflows;
+}
+
+module.exports = { reuseFixture, analyzerReuseFixture, legacyReuseFixture };
