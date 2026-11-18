@@ -30,12 +30,19 @@ func (m *SystemdManager) observe(ctx context.Context, recovering bool) (Snapshot
 		if !validObservedUnit(st, p.Trainer != nil, recovering) {
 			return Snapshot{}, fmt.Errorf("%s is neither running nor stopped", p.Unit)
 		}
-		s.Workloads[p.ID] = WorkloadObservation{Active: st.active == "active", Exclusive: p.Adapter != control.AdapterMediaUnload}
+		active := st.active == "active"
+		sleeping := active && m.isHibernated(ctx, p)
+		s.Workloads[p.ID] = WorkloadObservation{Active: active && !sleeping, Sleeping: sleeping, Exclusive: p.Adapter != control.AdapterMediaUnload}
 	}
 	return s, nil
 }
 func (m *SystemdManager) ReleasedFor(ctx context.Context, target control.Workload) error {
-	return m.releasedFor(ctx, target, nil)
+	return m.releasedFor(ctx, target, nil, true)
+}
+
+// ReleasedForSetup requires stopped units before setup changes their definitions.
+func (m *SystemdManager) ReleasedForSetup(ctx context.Context, target control.Workload) error {
+	return m.releasedFor(ctx, target, nil, false)
 }
 
 // ReleasedForUnchangedLaunches rechecks accepted workloads during setup. Only
@@ -43,32 +50,36 @@ func (m *SystemdManager) ReleasedFor(ctx context.Context, target control.Workloa
 // separately verify and prove release of the replacement catalog before
 // calling this method.
 func (m *SystemdManager) ReleasedForUnchangedLaunches(ctx context.Context, target control.Workload, replaced map[string]bool) error {
-	return m.releasedFor(ctx, target, replaced)
+	return m.releasedFor(ctx, target, replaced, false)
 }
 
-func (m *SystemdManager) releasedFor(ctx context.Context, target control.Workload, replaced map[string]bool) error {
+func (m *SystemdManager) releasedFor(ctx context.Context, target control.Workload, replaced map[string]bool, allowSleep bool) error {
 	if target != control.WorkloadIdle {
 		if _, ok := m.config.Catalog.Profile(target); !ok {
 			return errors.New("unconfigured release target")
 		}
 	}
 	for _, p := range m.config.Catalog.Profiles {
-		if launchSourceReplaced(p, replaced) {
-			continue
-		}
-		if profileGPUUUID(p) != "" {
-			if err := m.verifyNativeBinding(ctx, p); err != nil {
-				return err
-			}
-		}
-		if p.ID == target {
-			continue
-		}
-		if err := m.releasedUnit(ctx, p.Unit, p.Cgroup, p.Adapter == control.AdapterMediaUnload); err != nil {
+		if err := m.checkReleasedProfile(ctx, p, target, replaced, allowSleep); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (m *SystemdManager) checkReleasedProfile(ctx context.Context, p control.WorkloadProfile, target control.Workload, replaced map[string]bool, allowSleep bool) error {
+	if launchSourceReplaced(p, replaced) {
+		return nil
+	}
+	if profileGPUUUID(p) != "" {
+		if err := m.verifyNativeBinding(ctx, p); err != nil {
+			return err
+		}
+	}
+	if p.ID == target || (allowSleep && m.releasedViaSleep(ctx, p)) {
+		return nil
+	}
+	return m.releasedUnit(ctx, p.Unit, p.Cgroup, p.Adapter == control.AdapterMediaUnload)
 }
 
 func launchSourceReplaced(p control.WorkloadProfile, replaced map[string]bool) bool {

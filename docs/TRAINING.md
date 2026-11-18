@@ -1,5 +1,9 @@
 # Training
 
+Before a package upgrade, reconcile or recover any pending job with the accepted trainer executable.
+The trainer binding pins the executable path and SHA-256 digest.
+If the upgrade changes the digest, qualify the installed executable again and update the binding before use.
+
 Training presets stay disabled until [GPU qualification](#llm-training-qualification) passes. Preparation, discovery, dependency checks and repository tests do not approve runtimes. #453 stays open. Checkpoint and resume: #454. Training UI: #456.
 
 - [Bind a trainer](#finite-training-jobs) and [start or recover a job](#commands).

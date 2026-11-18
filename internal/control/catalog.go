@@ -525,7 +525,7 @@ func profilesOverlap(p, q WorkloadProfile) bool {
 func (c Catalog) OwnedConflictUnits(p WorkloadProfile) string {
 	units := map[string]bool{}
 	for _, q := range c.Profiles {
-		if q.NativeModel != nil && q.NativeModel.Owned != nil && q.Unit != p.Unit {
+		if q.NativeModel != nil && q.NativeModel.Owned != nil && q.Unit != p.Unit && !sleepPair(p, q) {
 			units[q.Unit] = true
 		}
 	}
@@ -535,6 +535,11 @@ func (c Catalog) OwnedConflictUnits(p WorkloadProfile) string {
 	}
 	slices.Sort(names)
 	return strings.Join(names, " ")
+}
+
+func sleepPair(p, q WorkloadProfile) bool {
+	return p.NativeModel != nil && p.NativeModel.Owned != nil && p.NativeModel.Owned.Serving.SleepMode ||
+		q.NativeModel != nil && q.NativeModel.Owned != nil && q.NativeModel.Owned.Serving.SleepMode
 }
 
 func (c Catalog) validateOwnedConflicts() error {

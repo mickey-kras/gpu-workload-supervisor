@@ -140,7 +140,7 @@ func (b Backend) finishTemporaryCleanup(ctx context.Context, p Profile, state *s
 	if err := cleanup.StopTemporaryDiscovery(ctx, session.Candidate, invocation); err != nil {
 		return err
 	}
-	if err := manager.ReleasedFor(ctx, control.WorkloadIdle); err != nil {
+	if err := releasedForSetup(ctx, manager, control.WorkloadIdle); err != nil {
 		return err
 	}
 	_, err = state.FinishTemporaryDiscovery(ctx, r.ID, r.Token)

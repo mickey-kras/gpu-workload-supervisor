@@ -9,6 +9,7 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -100,4 +101,43 @@ func TestNativeSessionRereadsTheReserve(t *testing.T) {
 			t.Errorf("%s: %v", name, e)
 		}
 	}
+}
+
+func TestNativeSessionRereadsGPUUUID(t *testing.T) {
+	t.Parallel()
+	want := "GPU-11111111-2222-3333-4444-555555555555"
+	command, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := Profile{Version: 1, StatePath: filepath.Join(t.TempDir(), "state.db"), ActivatedRelease: deployment.Release, SystemctlPath: command, NvidiaSMIPath: command}
+	if err := deployment.Write(p.StatePath, deployment.Marker{Version: 1, Release: deployment.Release}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(context.Background(), p.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{
+		ID: "third", Label: "Third", Adapter: "systemd", Unit: "third.service",
+		Cgroup: "/user/third", HealthURL: "http://127.0.0.1:9999/system_stats",
+		LaunchBinding: &control.LaunchBinding{GPUUUID: want, Runtime: "comfyui", Endpoint: "http://127.0.0.1:9999", LaunchFile: "/units/third.service", LaunchSHA256: strings.Repeat("a", 64)},
+	}}}
+	if _, err = db.ReplaceCatalog(context.Background(), "", cat); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	updated := p
+	updated.GPUUUID = want
+	var got string
+	host := rereading(updated, nil)
+	host.newManager = func(c gpuruntime.SystemdConfig) (*gpuruntime.SystemdManager, error) {
+		got = c.GPUUUID
+		return gpuruntime.NewSystemdManager(c)
+	}
+	session, err := host.service(p).Open(context.Background())
+	if err != nil || got != want {
+		t.Fatalf("session gpuUUID = %q, %v", got, err)
+	}
+	session.Close()
 }

@@ -16,8 +16,6 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/llmtraining"
 )
 
 // DefaultHub is the model hub that publishes upstream git object IDs.
@@ -505,7 +503,7 @@ func gitBlobID(ctx context.Context, file string, size int64, digest string, text
 	if info.Size() != size {
 		return "", nil
 	}
-	content, err := io.ReadAll(llmtraining.ContextReader(ctx, io.LimitReader(f, size+1)))
+	content, err := io.ReadAll(ContextReader(ctx, io.LimitReader(f, size+1)))
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return "", ctxErr
 	}

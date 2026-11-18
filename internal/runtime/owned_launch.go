@@ -43,6 +43,12 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 	// A binding from an earlier release has no hardened settings. It keeps
 	// its exact earlier bytes and fingerprint, so setup can prove and remove
 	// or replace the unit; qualification rejects it for execution.
+	if n.GPUUUID != "" {
+		if !control.ValidGPUUUID(n.GPUUUID) {
+			return nil, fmt.Errorf("%w: invalid GPU UUID", ErrOwnedRender)
+		}
+		b.WriteString("Environment=CUDA_VISIBLE_DEVICES=" + n.GPUUUID + "\n")
+	}
 	hardened := n.Hardened()
 	if hardened {
 		b.WriteString("Environment=" + offlineHubName + "=1\n")

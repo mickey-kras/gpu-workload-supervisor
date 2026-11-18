@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
@@ -27,12 +28,37 @@ func (c *Controller) checkCatalog(ctx context.Context) error {
 	}
 	return nil
 }
-func (c *Controller) unloadCatalog(ctx context.Context, id string, phase control.Phase, current control.State, target control.Workload) (control.Workload, error) {
+
+type coldReleaseRuntime interface {
+	ReleasedForSetup(context.Context, control.Workload) error
+}
+
+func (c *Controller) observedActiveWorkload(ctx context.Context, current control.State) (control.Workload, error) {
 	snap, err := c.observe(ctx)
 	if err != nil {
 		return control.WorkloadUnknown, err
 	}
-	active, err := observedWorkload(current, snap)
+	return observedWorkload(current, snap)
+}
+
+func (c *Controller) unloadCatalog(ctx context.Context, id string, phase control.Phase, current control.State, target control.Workload) (control.Workload, error) {
+	active, err := c.observedActiveWorkload(ctx, current)
+	if err != nil {
+		return active, err
+	}
+	for _, p := range c.config.Catalog.Catalog.Profiles {
+		if p.ID == target {
+			continue
+		}
+		if err = c.effectWithOutcome(ctx, id, phase, "stop "+string(p.ID), func(ctx context.Context) (string, error) { return c.stopOrSleep(ctx, p.ID) }); err != nil {
+			return active, err
+		}
+	}
+	return active, c.waitReleasedFor(ctx, target, c.now().Add(c.config.VerifyTimeout))
+}
+
+func (c *Controller) unloadCatalogCold(ctx context.Context, id string, phase control.Phase, current control.State, target control.Workload) (control.Workload, error) {
+	active, err := c.observedActiveWorkload(ctx, current)
 	if err != nil {
 		return active, err
 	}
@@ -44,15 +70,41 @@ func (c *Controller) unloadCatalog(ctx context.Context, id string, phase control
 			return active, err
 		}
 	}
-	return active, c.waitReleasedFor(ctx, target, c.now().Add(c.config.VerifyTimeout))
+	return active, c.waitColdReleasedFor(ctx, target, c.now().Add(c.config.VerifyTimeout))
 }
+
+func (c *Controller) waitColdReleasedFor(ctx context.Context, target control.Workload, deadline time.Time) error {
+	return c.pollUntil(ctx, deadline, func(probeCtx context.Context) error {
+		actionCtx, cancel := context.WithTimeout(probeCtx, c.config.ActionTimeout)
+		defer cancel()
+		if cr, ok := c.runtime.(coldReleaseRuntime); ok {
+			return cr.ReleasedForSetup(actionCtx, target)
+		}
+		return c.runtime.ReleasedFor(actionCtx, target)
+	})
+}
+
+func (c *Controller) stopOrSleep(ctx context.Context, id control.Workload) (string, error) {
+	if h, ok := c.runtime.(HibernatableRuntime); ok {
+		return h.Sleep(ctx, id)
+	}
+	return "ok", c.runtime.Stop(ctx, id)
+}
+
+func (c *Controller) wakeOrStart(ctx context.Context, id control.Workload) error {
+	if h, ok := c.runtime.(HibernatableRuntime); ok {
+		return h.Wake(ctx, id)
+	}
+	return c.runtime.Start(ctx, id)
+}
+
 func (c *Controller) rollbackCatalog(ctx context.Context, id string, previous control.State) error {
 	_, err := c.unloadCatalog(ctx, id, control.PhaseReconciling, previous, control.WorkloadIdle)
 	if err != nil {
 		return err
 	}
 	if previous.ActiveWorkload != control.WorkloadIdle && previous.ActiveWorkload != control.WorkloadUnknown {
-		if err = c.effect(ctx, id, control.PhaseReconciling, "rollback start "+string(previous.ActiveWorkload), func(ctx context.Context) error { return c.runtime.Start(ctx, previous.ActiveWorkload) }); err != nil {
+		if err = c.effect(ctx, id, control.PhaseReconciling, "rollback start "+string(previous.ActiveWorkload), func(ctx context.Context) error { return c.wakeOrStart(ctx, previous.ActiveWorkload) }); err != nil {
 			return err
 		}
 	}

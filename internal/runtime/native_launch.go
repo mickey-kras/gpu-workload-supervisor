@@ -312,6 +312,7 @@ type serverFlags struct {
 	// gpuMemoryPercent is an explicit --gpu-memory-utilization in percent;
 	// 0 when the launch does not set it.
 	gpuMemoryPercent uint32
+	sleepMode        bool
 }
 
 func parseServerCommand(args []string, runtimeName string) (serverFlags, error) {
@@ -323,9 +324,11 @@ func parseServerCommand(args []string, runtimeName string) (serverFlags, error) 
 	return flags.parse(args[3:])
 }
 
-// switchServerFlag reports the qualified vLLM options that take no value.
-func switchServerFlag(key string) bool {
+func (f *serverFlags) applySwitchFlag(key string) bool {
 	switch key {
+	case control.FlagEnableSleepMode:
+		f.sleepMode = true
+		return true
 	case control.FlagEnablePrefixCaching, control.FlagNoPrefixCaching, control.FlagEnableChunkedPrefill:
 		return true
 	}
@@ -341,7 +344,7 @@ func (f *serverFlags) parse(args []string) (serverFlags, error) {
 			return *f, fmt.Errorf("%w: duplicate option %s", ErrLaunchUnsupported, diagnosticServerFlag(key))
 		}
 		seen[key] = true
-		if switchServerFlag(key) {
+		if f.applySwitchFlag(key) {
 			continue
 		}
 		if len(args) == 0 {
@@ -363,7 +366,7 @@ func diagnosticServerFlag(key string) string {
 	switch key {
 	case "--host", "--port", flagServedModelName, flagMaxModelLen, flagLoadFormat, flagChatTemplate,
 		control.FlagGPUMemoryUtilization, control.FlagKVCacheDType, control.FlagEnablePrefixCaching, control.FlagNoPrefixCaching,
-		control.FlagPrefixCachingHash, control.FlagEnableChunkedPrefill, control.FlagMaxNumSeqs, control.FlagMaxNumBatchedTokens:
+		control.FlagPrefixCachingHash, control.FlagEnableChunkedPrefill, control.FlagMaxNumSeqs, control.FlagMaxNumBatchedTokens, control.FlagEnableSleepMode:
 		return key
 	}
 	return "(unqualified option)"

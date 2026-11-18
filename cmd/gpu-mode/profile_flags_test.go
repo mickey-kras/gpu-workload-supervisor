@@ -15,6 +15,8 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
+const profileTestGPU = "GPU-11111111-2222-3333-4444-555555555555"
+
 func activatedProfile(statePath string) operator.Profile {
 	return operator.Profile{
 		Version: 1, StatePath: statePath, ActivatedRelease: "1.0.0",
@@ -30,6 +32,7 @@ func profileFlagSet(t *testing.T, args ...string) *flag.FlagSet {
 	flags.String("systemctl", "", "")
 	flags.String("nvidia-smi", "", "")
 	flags.Int("gpu-index", 0, "")
+	flags.String("gpu-uuid", "", "")
 	flags.Uint64("capacity-headroom-mib", 0, "")
 	if err := flags.Parse(args); err != nil {
 		t.Fatal(err)
@@ -47,6 +50,7 @@ func TestProfileDefaultsFillOmittedFlags(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	profile := activatedProfile(filepath.Join(dir, "state.db"))
+	profile.GPUUUID = profileTestGPU
 	for _, args := range [][]string{
 		nil,
 		{"-state", "state.db", "-systemctl", "/usr/bin/systemctl", "-gpu-index", "1"},
@@ -56,7 +60,7 @@ func TestProfileDefaultsFillOmittedFlags(t *testing.T) {
 			t.Fatalf("%v: %v", args, err)
 		}
 		if flagValue(flags, "systemctl") != "/usr/bin/systemctl" || flagValue(flags, "nvidia-smi") != "/usr/bin/nvidia-smi" ||
-			flagValue(flags, "gpu-index") != "1" || flagValue(flags, "capacity-headroom-mib") != "512" {
+			flagValue(flags, "gpu-index") != "1" || flagValue(flags, "gpu-uuid") != profileTestGPU || flagValue(flags, "capacity-headroom-mib") != "512" {
 			t.Fatalf("%v: profile defaults not applied", args)
 		}
 		if args == nil && flagValue(flags, "state") != profile.StatePath {
@@ -69,10 +73,12 @@ func TestProfileDefaultsFillOmittedFlags(t *testing.T) {
 // the profile. verify-host keeps its explicit flags.
 func TestProfileDefaultsRejectDisagreement(t *testing.T) {
 	profile := activatedProfile("/state/state.db")
+	profile.GPUUUID = profileTestGPU
 	for _, args := range [][]string{
 		{"-systemctl", "/opt/bin/systemctl"},
 		{"-nvidia-smi", "/opt/bin/nvidia-smi"},
 		{"-gpu-index", "0"},
+		{"-gpu-uuid", ""},
 		{"-capacity-headroom-mib", "0"},
 	} {
 		flags := profileFlagSet(t, append(args, "switch")...)
@@ -87,6 +93,9 @@ func TestProfileDefaultsRejectDisagreement(t *testing.T) {
 		if flagValue(flags, strings.TrimPrefix(args[0], "-")) != args[1] {
 			t.Fatalf("verify-host lost the explicit %v", args)
 		}
+		if args[0] == "-gpu-index" && flagValue(flags, "gpu-uuid") != "" {
+			t.Fatal("profile UUID overrode the candidate GPU index")
+		}
 	}
 }
 
@@ -94,8 +103,9 @@ func TestProfileDefaultsRejectDisagreement(t *testing.T) {
 // the command-line flags.
 func TestProfileDefaultsKeepCommandLineFlags(t *testing.T) {
 	profile := activatedProfile("/state/state.db")
+	profile.GPUUUID = profileTestGPU
 	flags := profileFlagSet(t, "-state", "/other/state.db", "-systemctl", "/opt/bin/systemctl", "switch")
-	if err := applyProfileDefaults(flags, "switch", profileLoader(profile, nil)); err != nil || flagValue(flags, "nvidia-smi") != "" {
+	if err := applyProfileDefaults(flags, "switch", profileLoader(profile, nil)); err != nil || flagValue(flags, "nvidia-smi") != "" || flagValue(flags, "gpu-uuid") != "" {
 		t.Fatalf("other state path: %v", err)
 	}
 	flags = profileFlagSet(t, "switch")
@@ -134,6 +144,7 @@ func TestCommandUsesTheProfileConfiguration(t *testing.T) {
 	seedCatalog(t, statePath)
 	profile := activatedProfile(statePath)
 	profile.ActivatedRelease = ""
+	profile.GPUUUID = profileTestGPU
 	loadOperatorProfile = profileLoader(profile, nil)
 	output, err := os.CreateTemp(t.TempDir(), "output")
 	if err != nil {
@@ -147,7 +158,7 @@ func TestCommandUsesTheProfileConfiguration(t *testing.T) {
 		got = cfg
 		return &stoppedRecoveryRuntime{}, nil
 	})
-	if got.SystemctlPath != profile.SystemctlPath || got.NvidiaSMIPath != profile.NvidiaSMIPath || got.GPUIndex != 1 || got.CapacityHeadroomMiB != 512 {
+	if got.SystemctlPath != profile.SystemctlPath || got.NvidiaSMIPath != profile.NvidiaSMIPath || got.GPUIndex != 1 || got.GPUUUID != profileTestGPU || got.CapacityHeadroomMiB != 512 {
 		t.Fatalf("runtime configuration = %+v (%v)", got, err)
 	}
 	os.Args = []string{"gpu-mode", "-systemctl", "/opt/bin/systemctl", "reconcile"}
@@ -200,7 +211,7 @@ func TestCommandRefusesProfileChangedBeforeLock(t *testing.T) {
 	profile := activatedProfile(statePath)
 	profile.ActivatedRelease = ""
 	changed := profile
-	changed.CapacityHeadroomMiB = 2048
+	changed.GPUUUID = profileTestGPU
 	reads := 0
 	loadOperatorProfile = func() (operator.Profile, error) {
 		reads++

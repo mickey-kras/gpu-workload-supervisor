@@ -34,8 +34,8 @@ The first character is a letter or a digit.
 ## Inventory
 
 The supervisor reads the top level of the model directory and calculates the
-SHA-256 of each file. It uses the shared file digest and shard index rules of
-`internal/llmtraining`:
+SHA-256 of each file. It applies the digest and shard index rules in
+`internal/modelcheck/safetensors.go`:
 
 - A model has at most 4096 files. A model with more files is `unsupported`.
 - No part of the path to the model directory can be a link. If the path has a
@@ -124,8 +124,7 @@ backslash. Else the reason is `file-path-redirect`. These keys include `tokenize
 `merges_file`, `source_spm` and the other file names of the tokenizer classes
 in transformers.
 
-The key lists are in `internal/llmtraining/loader_keys.go`. The training
-candidate inspection uses them too. The lists are not complete, so the check
+See `internal/modelcheck/safetensors.go` for the key lists. The check
 also applies one rule to all other string values at any depth. A value fails
 when it has one of these forms:
 

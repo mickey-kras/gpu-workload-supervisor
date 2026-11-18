@@ -50,6 +50,7 @@ type SystemdConfig struct {
 	Catalog             *control.Catalog
 	HealthTimeout       time.Duration
 	GPUIndex            int
+	GPUUUID             string
 	CapacityHeadroomMiB uint64
 	NvidiaSMIPath       string
 	SystemctlPath       string
@@ -423,6 +424,9 @@ func (e *safeHTTPRequestError) Error() string {
 func (e *safeHTTPRequestError) Unwrap() error { return e.cause }
 
 func (config *SystemdConfig) prepareWorkloads() error {
+	if config.GPUUUID != "" && !control.ValidGPUUUID(config.GPUUUID) {
+		return errors.New("invalid runtime GPU UUID")
+	}
 	if config.Catalog == nil {
 		return errors.New("workload catalog is required")
 	}
@@ -432,6 +436,9 @@ func (config *SystemdConfig) prepareWorkloads() error {
 		return err
 	}
 	for _, p := range cloned.Profiles {
+		if config.GPUUUID != "" && profileGPUUUID(p) != config.GPUUUID {
+			return errors.New("each workload must bind the configured GPU UUID")
+		}
 		if p.RequiredMiB > ^uint64(0)-config.CapacityHeadroomMiB {
 			return errors.New("capacity requirement plus headroom overflows")
 		}

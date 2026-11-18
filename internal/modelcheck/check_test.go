@@ -19,8 +19,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/llmtraining"
 	"time"
 )
 
@@ -992,9 +990,9 @@ func TestPathValuesAreRejectedAtAnyDepth(t *testing.T) {
 
 func TestEverySharedLoaderKeyIsRejected(t *testing.T) {
 	for reason, keys := range map[string][]string{
-		ReasonRemoteCode:       llmtraining.RemoteCodeKeys,
-		ReasonModelRedirect:    llmtraining.ModelRedirectKeys,
-		ReasonFilePathRedirect: llmtraining.FileRedirectKeys,
+		ReasonRemoteCode:       RemoteCodeKeys,
+		ReasonModelRedirect:    ModelRedirectKeys,
+		ReasonFilePathRedirect: FileRedirectKeys,
 	} {
 		for _, key := range keys {
 			t.Run(key, func(t *testing.T) {
@@ -1007,7 +1005,7 @@ func TestEverySharedLoaderKeyIsRejected(t *testing.T) {
 			})
 		}
 	}
-	for _, key := range llmtraining.FilePathKeys {
+	for _, key := range FilePathKeys {
 		t.Run(key, func(t *testing.T) {
 			files := modelFiles()
 			files["tokenizer_config.json"] = `{"` + key + `":"absent-name"}`

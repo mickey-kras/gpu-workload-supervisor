@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/llmtraining"
 	"golang.org/x/sys/unix"
 )
 
@@ -79,7 +78,7 @@ func addEntry(ctx context.Context, root string, entry os.DirEntry, files map[str
 	case !entry.Type().IsRegular():
 		return ReasonLinkOrNonRegular, nil
 	}
-	digest, err := llmtraining.FileDigest(ctx, filepath.Join(root, name))
+	digest, err := FileDigest(ctx, filepath.Join(root, name))
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return "", ctxErr
 	}
@@ -138,20 +137,19 @@ func metadataLevel(directory string, accepts func(os.DirEntry) bool) (string, st
 }
 
 func checkShardIndexes(ctx context.Context, root string, files map[string]string) (string, error) {
-	inventory := llmtraining.Inventory{Root: root, Files: files}
 	for _, name := range sortedNames(files) {
 		if !strings.HasSuffix(name, ".safetensors.index.json") {
 			continue
 		}
-		err := llmtraining.CheckShardIndex(ctx, inventory, name, MaxJSONFileBytes)
+		err := verifyShardIndex(ctx, root, files, name, MaxJSONFileBytes)
 		switch {
 		case ctx.Err() != nil:
 			return "", ctx.Err()
-		case errors.Is(err, llmtraining.ErrShardIndexTooLarge):
+		case errors.Is(err, errShardIndexTooLarge):
 			return ReasonShardTooLarge, nil
-		case errors.Is(err, llmtraining.ErrShardIndexChanged):
+		case errors.Is(err, errShardIndexChanged):
 			return "", errChanged
-		case errors.Is(err, llmtraining.ErrShardIndexUnreadable):
+		case errors.Is(err, errShardIndexUnreadable):
 			return "", errUnreadable
 		case err != nil:
 			return ReasonInvalidShard, nil

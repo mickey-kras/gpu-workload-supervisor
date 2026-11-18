@@ -16,12 +16,12 @@ const verifyHostCommand = "verify-host"
 
 // profileFlagNames are the runtime flags that setup stores in the operator
 // profile, in a fixed order for stable error messages.
-var profileFlagNames = []string{"state", "systemctl", "nvidia-smi", "gpu-index", "capacity-headroom-mib"}
+var profileFlagNames = []string{"state", "systemctl", "nvidia-smi", "gpu-index", "gpu-uuid", "capacity-headroom-mib"}
 
 func profileFlagValues(p operator.Profile) map[string]string {
 	return map[string]string{
 		"state": p.StatePath, "systemctl": p.SystemctlPath, "nvidia-smi": p.NvidiaSMIPath,
-		"gpu-index": strconv.Itoa(p.GPUIndex), "capacity-headroom-mib": strconv.FormatUint(p.CapacityHeadroomMiB, 10),
+		"gpu-index": strconv.Itoa(p.GPUIndex), "gpu-uuid": p.GPUUUID, "capacity-headroom-mib": strconv.FormatUint(p.CapacityHeadroomMiB, 10),
 	}
 }
 
@@ -66,6 +66,11 @@ func applyProfileDefaults(flags *flag.FlagSet, command string, load func() (oper
 func mergeProfileFlags(flags *flag.FlagSet, command string, explicit map[string]bool, values map[string]string) error {
 	for _, name := range profileFlagNames {
 		if !explicit[name] {
+			// An explicit candidate index selects a GPU even when the
+			// current profile selects it by UUID.
+			if command == verifyHostCommand && name == "gpu-uuid" && explicit["gpu-index"] {
+				continue
+			}
 			if err := flags.Set(name, values[name]); err != nil {
 				return fmt.Errorf("operator profile value of -%s: %w", name, err)
 			}

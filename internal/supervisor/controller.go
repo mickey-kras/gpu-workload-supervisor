@@ -52,6 +52,12 @@ type Runtime interface {
 	gpuProcessRuntime
 }
 
+// HibernatableRuntime parks a runtime without ending its service.
+type HibernatableRuntime interface {
+	Sleep(context.Context, control.Workload) (string, error)
+	Wake(context.Context, control.Workload) error
+}
+
 // storeGateway is the part of *store.Store that the controller uses. Tests
 // wrap a real store to inject write failures and cancellations at chosen
 // steps.
@@ -367,15 +373,20 @@ func (c *Controller) runAction(ctx context.Context, fn func(context.Context) err
 }
 
 func (c *Controller) effect(ctx context.Context, transitionID string, phase control.Phase, action string, fn func(context.Context) error) error {
+	return c.effectWithOutcome(ctx, transitionID, phase, action, func(ctx context.Context) (string, error) {
+		return "ok", fn(ctx)
+	})
+}
+
+func (c *Controller) effectWithOutcome(ctx context.Context, transitionID string, phase control.Phase, action string, fn func(context.Context) (string, error)) error {
 	if err := c.store.AppendTransitionEvent(ctx, store.TransitionEvent{
 		TransitionID: transitionID, Phase: phase, Kind: "intent", Action: action,
 	}); err != nil {
 		return err
 	}
 	actionCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
-	err := fn(actionCtx)
+	outcome, err := fn(actionCtx)
 	cancel()
-	outcome := "ok"
 	if err != nil {
 		outcome = failureCode(err)
 	}

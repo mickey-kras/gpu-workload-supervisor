@@ -45,6 +45,7 @@ type Profile struct {
 	SystemctlPath           string `json:"systemctlPath"`
 	NvidiaSMIPath           string `json:"nvidiaSMIPath"`
 	GPUIndex                int    `json:"gpuIndex"`
+	GPUUUID                 string `json:"gpuUUID,omitempty"`
 	CapacityHeadroomMiB     uint64 `json:"capacityHeadroomMiB"`
 	StatusTimeoutSeconds    int    `json:"statusTimeoutSeconds,omitempty"`
 	OperationTimeoutSeconds int    `json:"operationTimeoutSeconds,omitempty"`
@@ -77,6 +78,9 @@ func (p Profile) ValidateConfiguration() error {
 	if p.OperationTimeoutSeconds < 0 || p.OperationTimeoutSeconds > 1800 {
 		return errors.New("operation timeout must be between 0 and 1800 seconds")
 	}
+	if p.GPUUUID != "" && !control.ValidGPUUUID(p.GPUUUID) {
+		return errors.New("invalid GPU UUID")
+	}
 	if p.LimitReserve != nil {
 		if err := p.LimitReserve.Validate(); err != nil {
 			return err
@@ -106,7 +110,7 @@ func releaseToken(s string) bool {
 }
 
 func (p Profile) SystemdConfig(catalog *control.Catalog) gpuruntime.SystemdConfig {
-	return gpuruntime.SystemdConfig{Catalog: catalog, SystemctlPath: p.SystemctlPath, NvidiaSMIPath: p.NvidiaSMIPath, GPUIndex: p.GPUIndex, CapacityHeadroomMiB: p.CapacityHeadroomMiB, HealthTimeout: 10 * time.Second,
+	return gpuruntime.SystemdConfig{Catalog: catalog, SystemctlPath: p.SystemctlPath, NvidiaSMIPath: p.NvidiaSMIPath, GPUIndex: p.GPUIndex, GPUUUID: p.GPUUUID, CapacityHeadroomMiB: p.CapacityHeadroomMiB, HealthTimeout: 10 * time.Second,
 		LimitReserve: p.LimitReserve}
 }
 
