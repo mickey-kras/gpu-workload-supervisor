@@ -19,7 +19,8 @@ const EXECUTABLE_HASHES = {
   ".vale/styles/config/vocabularies/Project/accept.txt": "5000d8689ae7037cf1336122d156368bbcb9ec3da339d86e1a806f8ecb65668d",
   ".github/scripts/install-goreleaser.sh": "de2e876e51298aec0ec86a42fdb850aaa2f95e3d86cd1fa67a6d5c1febbcc8b0",
   ".github/scripts/check-go-directives.go": "f356bcb0bd9546d4ee133001335740bfb41623e4671554606895e6ab1a305489",
-  ".github/scripts/eslint.config.cjs": "72d5ad0cda934ad013c3b1ddb62bf6aa1b5a65caa457f18c5f6725ea93e48f31"
+  ".github/scripts/eslint.config.cjs": "72d5ad0cda934ad013c3b1ddb62bf6aa1b5a65caa457f18c5f6725ea93e48f31",
+  ".github/scripts/audit-aislop.cjs": "ed18d532d29c0e1fd2605b7f38ab3ffdb18d229954d2abd8e666d6faff266059"
 };
 
 function expectedExecutableDigest(files, path, admitted) {
@@ -54,7 +55,7 @@ const REQUIRED_FILES = [
   '.github/release-helper-digests.json',
   '.github/scripts/pr-branch-updater.cjs', 'sonar-project.properties',
   '.github/scripts/package.json', '.github/scripts/package-lock.json',
-  '.github/scripts/eslint.config.cjs', '.github/semgrep-tests/maintainability.go',
+  '.github/scripts/eslint.config.cjs', '.github/scripts/audit-aislop.cjs', '.github/semgrep-tests/maintainability.go',
   '.github/scripts/check-go-directives.go', '.github/scripts/check-go-directives_test.go',
   '.github/aislop/package.json', '.github/aislop/package-lock.json',
   '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
@@ -260,7 +261,7 @@ function inspectCi(files, workflows, failures, checks, admitted) {
   exactRun(ci, 'checks', 'Go vet', ['go vet ./...']);
   exactRun(ci, 'checks', 'Audit Aislop toolchain', [
     'npm ci --prefix .github/aislop --ignore-scripts --no-audit --no-fund',
-    'npm audit --prefix .github/aislop --audit-level=moderate',
+    'node .github/scripts/audit-aislop.cjs',
   ]);
   exactRun(ci, 'checks', 'Test policy automation', [
     'npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund',
@@ -360,6 +361,10 @@ function inspectScannerConfigs(files, workflows, failures, admitted) {
   if (createHash('sha256').update(eslintConfig).digest('hex') !==
       expectedExecutableDigest(files, '.github/scripts/eslint.config.cjs', admitted)) {
     failures.push('JavaScript maintainability policy was changed');
+  }
+  if (createHash('sha256').update(files['.github/scripts/audit-aislop.cjs'] || '').digest('hex') !==
+      expectedExecutableDigest(files, '.github/scripts/audit-aislop.cjs', admitted)) {
+    failures.push('Aislop audit helper was changed');
   }
   try {
     const raw = files['.github/dependency-review-config.yml'];
