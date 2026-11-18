@@ -16,8 +16,8 @@ import (
 func TestSetupOwnedBackstopsUpgradeRollbackAndPeerRemoval(t *testing.T) {
 	backend, home, request := fixture(t)
 	backend.runCommand = func(context.Context, string, ...string) ([]byte, error) { return []byte("NeedDaemonReload=no"), nil }
-	a, oldA := ownedFixtureProfile(t, home, "a", 9100)
-	z, oldZ := ownedFixtureProfile(t, home, "z", 9200)
+	a, oldA := preSandboxOwnedFixtureProfile(t, home, "a", 9100)
+	z, oldZ := preSandboxOwnedFixtureProfile(t, home, "z", 9200)
 	z.NativeModel.Instance = "z"
 	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a, z}}
 	// Install an already accepted pre-backstop catalog without rewriting its proof.
@@ -50,7 +50,7 @@ func TestSetupOwnedBackstopsUpgradeRollbackAndPeerRemoval(t *testing.T) {
 	if a.NativeModel.Owned.Conflicts != "" || a.NativeModel.LaunchSHA256 != digest(oldA) {
 		t.Fatal("preview mutated accepted profile")
 	}
-	if len(preview.Changes) == 0 || !reflect.DeepEqual(preview.Catalog.Profiles[0].NativeModel.Owned.Conflicts, z.Unit) {
+	if len(preview.Changes) == 0 || !reflect.DeepEqual(preview.Catalog.Profiles[0].NativeModel.Owned.Conflicts, z.Unit) || !preview.Catalog.Profiles[0].HasArtifactSandbox() {
 		t.Fatal("upgrade not reviewed", preview)
 	}
 	for _, change := range preview.Changes {
@@ -80,7 +80,8 @@ func TestSetupOwnedBackstopsUpgradeRollbackAndPeerRemoval(t *testing.T) {
 	// A carried profile can remove or adopt its peer: dependencies are recomputed.
 	candidate.Catalog.Profiles = candidate.Catalog.Profiles[:1]
 	normalized, err := prepareOwnedBackstops(candidate)
-	if err != nil || normalized.Catalog.Validate() != nil || normalized.Catalog.Profiles[0].NativeModel.Owned.Conflicts != "" || normalized.Catalog.Profiles[0].NativeModel.LaunchSHA256 != digest(oldA) {
+	_, sandboxedA := ownedFixtureProfile(t, home, "a", 9100)
+	if err != nil || normalized.Catalog.Validate() != nil || normalized.Catalog.Profiles[0].NativeModel.Owned.Conflicts != "" || normalized.Catalog.Profiles[0].NativeModel.LaunchSHA256 != digest(sandboxedA) {
 		t.Fatal("removed peer retained", err)
 	}
 	candidate.Catalog = control.Catalog{Version: 2, Disabled: true}
@@ -103,7 +104,7 @@ func TestSetupOwnedBackstopsPeerAndExternalUnits(t *testing.T) {
 	media, _ := ownedFixtureProfile(t, home, "media", 9100)
 	media.NativeModel.Instance = "media"
 	external := request.Catalog.Profiles[0]
-	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{chat, external, media, code}}
+	request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{chat, external, media, code}}
 	before, _ := json.Marshal(external)
 	raw, _ := json.Marshal(request)
 	decoded, err := Decode(strings.NewReader(string(raw)))

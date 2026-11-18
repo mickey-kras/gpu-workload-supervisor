@@ -161,7 +161,7 @@ func TestPlanOwnedUnitsDedupesRepeatedUnitDeletes(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, first.Unit), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	accepted := control.CatalogSnapshot{Revision: "r1", Catalog: control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{first, converted}}}
+	accepted := control.CatalogSnapshot{Revision: "r1", Catalog: control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{first, converted}}}
 	req := ownedFixtureRequest(t, home)
 	req.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health"}}}
 	plan, err := backend.planOwnedUnits(req, accepted, home)

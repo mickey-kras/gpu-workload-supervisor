@@ -104,6 +104,9 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 	if p.Trainer != nil {
 		return m.verifyTrainerBinding(ctx, p)
 	}
+	if p.NativeModel != nil && p.NativeModel.Owned != nil && !p.HasArtifactSandbox() {
+		return fmt.Errorf("%w: this supervisor-managed vLLM binding predates model artifact protection; run setup again for this model", ErrLaunchUnsupported)
+	}
 	if err := m.verifyProfileGPU(ctx, p); err != nil {
 		return err
 	}
@@ -156,7 +159,7 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 
 func nativeBindingShowArguments(unit string, launch parsedLaunchUnit) []string {
 	args := []string{"--user", "show", "--property=FragmentPath", "--property=DropInPaths", "--property=NeedDaemonReload", "--property=ExecStartPre", "--property=ExecStart"}
-	for _, key := range []string{"WorkingDirectory", "Wants", "KillSignal", "NoNewPrivileges", "PrivateTmp", "ProtectHome", "ProtectSystem"} {
+	for _, key := range loadedLaunchPropertyNames {
 		if _, configured := launch.loadedProperties[key]; configured {
 			args = append(args, "--property="+key)
 		}

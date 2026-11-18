@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -40,6 +41,13 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 	b.WriteString("[Unit]\nDescription=Supervisor-owned " + n.Runtime + " launch for " + string(p.ID) + "\n")
 	b.WriteString(ownedDependencies(p.Unit, n.Owned.Conflicts))
 	b.WriteString(ownedServiceHeader + n.Owned.Limits.RenderLines())
+	if n.Owned.ArtifactSandbox {
+		block, err := ownedArtifactSandbox(*n)
+		if err != nil {
+			return nil, fmt.Errorf(ownedRenderErrorFormat, ErrOwnedRender, err)
+		}
+		b.WriteString(block)
+	}
 	// A binding from an earlier release has no hardened settings. It keeps
 	// its exact earlier bytes and fingerprint, so setup can prove and remove
 	// or replace the unit; qualification rejects it for execution.
@@ -196,6 +204,13 @@ func parseOwnedLaunchUnit(raw []byte, n control.NativeModel) (parsedLaunchUnit, 
 		return parseLaunchUnit(raw)
 	}
 	unit := filepath.Base(n.LaunchFile)
+	if n.Owned.ArtifactSandbox {
+		_, id := sandboxUnitIdentity(n)
+		expected, err := RenderOwnedUnit(control.WorkloadProfile{ID: id, Unit: unit, NativeModel: &n})
+		if err != nil || !bytes.Equal(raw, expected) {
+			return parsedLaunchUnit{}, ErrLaunchUnsupported
+		}
+	}
 	if !control.ValidOwnedConflicts(unit, n.Owned.Conflicts) {
 		return parsedLaunchUnit{}, ErrLaunchUnsupported
 	}
@@ -212,6 +227,16 @@ func parseOwnedLaunchUnit(raw []byte, n control.NativeModel) (parsedLaunchUnit, 
 	if err != nil {
 		return parsedLaunchUnit{}, err
 	}
+	if n.Owned.ArtifactSandbox {
+		block, err := ownedArtifactSandbox(n)
+		if err != nil {
+			return parsedLaunchUnit{}, err
+		}
+		raw, err = removeOwnedServiceBlock(raw, block)
+		if err != nil {
+			return parsedLaunchUnit{}, err
+		}
+	}
 	parsed, err := parseLaunchUnit(raw)
 	if err != nil {
 		return parsed, err
@@ -219,14 +244,20 @@ func parseOwnedLaunchUnit(raw []byte, n control.NativeModel) (parsedLaunchUnit, 
 	if len(parsed.limitDirectives) != 0 {
 		return parsedLaunchUnit{}, fmt.Errorf("%w: resource control %s outside the rendered limits", ErrLaunchUnsupported, parsed.limitDirectives[0])
 	}
-	return parsed, nil
+	if n.Owned.ArtifactSandbox {
+		err = parsed.recordOwnedArtifactSandbox(n)
+	}
+	return parsed, err
 }
 
 // removeOwnedLimitLines accepts limit directives only as the exact rendered
 // block after the fixed [Service] header. parseOwnedLaunchUnit rejects any
 // limit directive left elsewhere, so a moved, changed or extra line fails.
 func removeOwnedLimitLines(raw []byte, limits control.ResourceLimits) ([]byte, error) {
-	block := limits.RenderLines()
+	return removeOwnedServiceBlock(raw, limits.RenderLines())
+}
+
+func removeOwnedServiceBlock(raw []byte, block string) ([]byte, error) {
 	if block == "" {
 		return raw, nil
 	}

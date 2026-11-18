@@ -29,12 +29,10 @@ func ownedProfileWithLimits(t *testing.T, limits control.ResourceLimits) (contro
 	saved := ownedBinaryDirectory
 	ownedBinaryDirectory = dir
 	t.Cleanup(func() { ownedBinaryDirectory = saved })
-	modelDir := filepath.Join(dir, "v")
-	if err := os.Mkdir(modelDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	p := ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ModelPath: modelDir, Port: 9100, Alias: "selected", Conflicts: "gws-owned-alpha.service", Limits: limits})
-	*p.NativeModel = newHardenedFixture(t).bind(*p.NativeModel)
+	hardened := newHardenedFixture(t)
+	modelDir := filepath.Dir(hardened.template)
+	p := ownedRenderProfile("vllm", "vision", &control.OwnedLaunch{ArtifactSandbox: true, ModelPath: modelDir, Port: 9100, Alias: "selected", Conflicts: "gws-owned-alpha.service", Limits: limits})
+	*p.NativeModel = hardened.bind(*p.NativeModel)
 	raw, err := RenderOwnedUnit(p)
 	if err != nil {
 		t.Fatal(err)
@@ -45,10 +43,14 @@ func ownedProfileWithLimits(t *testing.T, limits control.ResourceLimits) (contro
 
 func TestRenderOwnedUnitWithLimitsGolden(t *testing.T) {
 	p, raw := limitedOwnedProfile(t)
+	sandbox, err := ownedArtifactSandbox(*p.NativeModel)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := "[Unit]\nDescription=Supervisor-owned vllm launch for vision\nConflicts=gws-owned-alpha.service\nAfter=gws-owned-alpha.service\n" +
 		"\n[Service]\nType=simple\nRestart=no\n" +
 		"OOMPolicy=stop\nOOMScoreAdjust=500\nMemoryHigh=4096M\nMemoryMax=8192M\nMemorySwapMax=0M\nTasksMax=4096\nCPUQuota=400%\n" +
-		"IOReadBandwidthMax=/dev/nvme0n1 1073741824\n" +
+		"IOReadBandwidthMax=/dev/nvme0n1 1073741824\n" + sandbox +
 		"Environment=HF_HUB_OFFLINE=1\nEnvironmentFile=" + p.NativeModel.EnvironmentFile + "\n" +
 		"ExecStart=" + ownedBinaryDirectory + "/vllm serve " + p.NativeModel.Owned.ModelPath + " --host 127.0.0.1 --port 9100 --load-format safetensors --chat-template " + p.NativeModel.ChatTemplate + " --served-model-name selected\n"
 	if string(raw) != want {

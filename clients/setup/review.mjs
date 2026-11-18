@@ -54,6 +54,8 @@ export function draftsVersion(drafts) {
 // lowest catalog version that the profiles need. The backend recomputes it
 // before preview and apply.
 export function lowestCatalogVersion(profiles) {
+    if (profiles.some(profile => profile.nativeModel?.owned?.artifactSandbox === true))
+        return 7;
     if (profiles.some(hasServingOptions))
         return 6;
     if (profiles.some(hasLimits))

@@ -118,28 +118,32 @@ const CatalogVersionLimits = 5
 // serving options.
 const CatalogVersionServing = 6
 
+// CatalogVersionArtifactSandbox is the first version with the owned artifact sandbox.
+const CatalogVersionArtifactSandbox = 7
+
 // ErrUnsupportedCatalogVersion rejects a catalog version that no reader knows.
 var ErrUnsupportedCatalogVersion = errors.New("unsupported catalog version")
 
 // SupportedCatalogVersion reports whether v is a known catalog version.
 func SupportedCatalogVersion(v int) bool {
-	return v == CatalogVersionLegacy || v == CatalogVersionOwned || v == CatalogVersionTrainer || v == CatalogVersionLimits || v == CatalogVersionServing
+	return v == CatalogVersionLegacy || v == CatalogVersionOwned || v == CatalogVersionTrainer || v == CatalogVersionLimits || v == CatalogVersionServing || v == CatalogVersionArtifactSandbox
 }
 
 // LowestCatalogVersion is the one version rule for every catalog writer:
-// 6 with serving options, 5 with limits, 4 with a trainer binding, 2 with an
-// owned launch, else 1.
+// 7 with an artifact sandbox, 6 with serving options, 5 with limits, 4 with a
+// trainer binding, 2 with an owned launch, else 1.
 // The setup client mirrors it in clients/setup/review.mjs; the backend
 // recomputes the version before preview and apply.
 func LowestCatalogVersion(c Catalog) int {
-	if c.HasServingOptions() {
-		return CatalogVersionServing
-	}
 	version := CatalogVersionLegacy
 	for _, p := range c.Profiles {
 		switch {
+		case p.HasArtifactSandbox():
+			return CatalogVersionArtifactSandbox
+		case p.HasServingOptions():
+			version = max(version, CatalogVersionServing)
 		case p.HasLimits():
-			return CatalogVersionLimits
+			version = max(version, CatalogVersionLimits)
 		case p.Trainer != nil:
 			version = max(version, CatalogVersionTrainer)
 		case p.NativeModel != nil && p.NativeModel.Owned != nil:
@@ -147,6 +151,11 @@ func LowestCatalogVersion(c Catalog) int {
 		}
 	}
 	return version
+}
+
+// HasArtifactSandbox reports whether the owned inference unit has a filesystem sandbox.
+func (p WorkloadProfile) HasArtifactSandbox() bool {
+	return p.NativeModel != nil && p.NativeModel.Owned != nil && p.NativeModel.Owned.ArtifactSandbox
 }
 
 // DecodeCatalogBytes is the single strict decode path for catalog bytes from
@@ -257,6 +266,8 @@ func (c Catalog) validateSize() error {
 // predates.
 func validateProfileVersion(version int, p WorkloadProfile) error {
 	switch {
+	case version < CatalogVersionArtifactSandbox && p.HasArtifactSandbox():
+		return errors.New("owned artifact sandbox requires catalog version 7 or later")
 	case p.Trainer != nil && version < CatalogVersionTrainer:
 		return errors.New("trainer bindings require catalog version 4 or later")
 	case version < CatalogVersionLimits && p.HasLimits():

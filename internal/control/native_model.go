@@ -114,6 +114,9 @@ type OwnedLaunch struct {
 	// exact legacy unit bytes and fingerprints; present needs catalog
 	// version 6.
 	Serving ServingOptions `json:"serving,omitzero"`
+	// ArtifactSandbox is setup-derived. Its absence preserves the previous
+	// unit fingerprint so setup can prove and replace the installed file.
+	ArtifactSandbox bool `json:"artifactSandbox,omitempty"`
 }
 
 // ValidNativeModelIdentity applies the catalog's model-identity rule

@@ -49,7 +49,7 @@ func statusFixture(t *testing.T) (string, string) {
 		Cgroup: "/user.slice/other", HealthURL: "http://127.0.0.1:9173/health", BootPolicy: "stop-to-idle"}
 	state := filepath.Join(home, "state/state.db")
 	s := openStoreAt(t, state)
-	if _, err := s.ReplaceCatalog(context.Background(), "", control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{owned, adopted, image, other}}); err != nil {
+	if _, err := s.ReplaceCatalog(context.Background(), "", control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{owned, adopted, image, other}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.PutModelCheck(context.Background(), statusRecord(t, "status-owned", root)); err != nil {

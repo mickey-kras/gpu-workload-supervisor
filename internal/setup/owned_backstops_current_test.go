@@ -24,7 +24,7 @@ func TestDerivedOwnedBackstopsResumeOriginalRequest(t *testing.T) {
 			a, _ := ownedFixtureProfile(t, home, "a", 9100)
 			z, _ := ownedFixtureProfile(t, home, "z", 9200)
 			z.NativeModel.Instance = "z"
-			request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a, z}}
+			request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{a, z}}
 			if err := Validate(request); err != nil {
 				t.Fatal(err)
 			}

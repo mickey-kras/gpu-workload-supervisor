@@ -90,13 +90,14 @@ func OwnedProfile(d Draft, managerCgroup, home string) (control.WorkloadProfile,
 		return control.WorkloadProfile{}, nil, errors.New("owned drafts require an instance")
 	}
 	owned := control.OwnedLaunch{
-		Executable:  d.Binding.Owned.Executable,
-		ModelPath:   d.Binding.Owned.ModelPath,
-		Port:        d.Binding.Owned.Port,
-		MaxModelLen: d.Binding.Owned.MaxModelLen,
-		Alias:       d.Binding.Owned.Alias,
-		Limits:      d.Binding.Owned.Limits,
-		Serving:     d.Binding.Owned.Serving,
+		Executable:      d.Binding.Owned.Executable,
+		ModelPath:       d.Binding.Owned.ModelPath,
+		Port:            d.Binding.Owned.Port,
+		MaxModelLen:     d.Binding.Owned.MaxModelLen,
+		Alias:           d.Binding.Owned.Alias,
+		Limits:          d.Binding.Owned.Limits,
+		Serving:         d.Binding.Owned.Serving,
+		ArtifactSandbox: true,
 	}
 	model := ownedProfileModel(owned)
 	id := control.Workload(d.ID)
@@ -167,10 +168,6 @@ func prepareOwnedBackstops(request Request) (Request, error) {
 		return request, control.ErrUnsupportedCatalogVersion
 	}
 	request.Catalog = request.Catalog.Clone()
-	// Every writer uses the lowest version the content needs, so removing the
-	// last limits returns the exact earlier bytes. A resumed activation keeps
-	// its recorded request, which selectRecordedActivation chooses.
-	request.Catalog.Version = control.LowestCatalogVersion(request.Catalog)
 	for _, p := range request.Catalog.Profiles {
 		if p.NativeModel != nil && p.NativeModel.Owned != nil {
 			if _, err := ownedRenderChecked(p); err != nil {
@@ -184,12 +181,18 @@ func prepareOwnedBackstops(request Request) (Request, error) {
 			continue
 		}
 		p.NativeModel.Owned.Conflicts = request.Catalog.OwnedConflictUnits(*p)
+		if p.NativeModel.Hardened() {
+			p.NativeModel.Owned.ArtifactSandbox = true
+		}
 		raw, err := gpuruntime.RenderOwnedUnit(*p)
 		if err != nil {
 			return request, err
 		}
 		p.NativeModel.LaunchSHA256 = digest(raw)
 	}
+	// A resumed activation can keep its recorded request, which
+	// selectRecordedActivation chooses after the candidate is rendered.
+	request.Catalog.Version = control.LowestCatalogVersion(request.Catalog)
 	return request, nil
 }
 

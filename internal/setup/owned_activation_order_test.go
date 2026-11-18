@@ -107,7 +107,7 @@ func TestApplyVerifiesAcceptedUUIDBindingsBeforeOwnedReplacement(t *testing.T) {
 			backend.runCommand = fakeOwnedCommandFor(home)
 			a := uuidOwnedFixture(t, home, "a", 9100)
 			z := uuidOwnedFixture(t, home, "z", 9200)
-			request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a}}
+			request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{a}}
 			if change == "peer removal" {
 				request.Catalog.Profiles = append(request.Catalog.Profiles, z)
 			}
@@ -166,7 +166,7 @@ func TestApplyRejectsUnsafeAcceptedRuntimeBeforeOwnedMutation(t *testing.T) {
 			backend.runCommand = fakeOwnedCommandFor(home)
 			a := uuidOwnedFixture(t, home, "a", 9100)
 			z := uuidOwnedFixture(t, home, "z", 9200)
-			request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a, z}}
+			request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{a, z}}
 			if err := backend.Apply(t.Context(), home, request); err != nil {
 				t.Fatal(err)
 			}
@@ -235,7 +235,7 @@ func TestApplyRechecksRemovedWorkloadReleaseAfterOwnedWrites(t *testing.T) {
 			backend.runCommand = delegate
 			removed := request.Catalog.Profiles[0]
 			original := uuidOwnedFixture(t, home, "a", 9100)
-			request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{original, removed}}
+			request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{original, removed}}
 			if err := backend.Apply(t.Context(), home, request); err != nil {
 				t.Fatal(err)
 			}

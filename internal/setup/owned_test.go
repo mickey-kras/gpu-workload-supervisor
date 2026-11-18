@@ -11,6 +11,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/vllmkey"
 )
@@ -36,11 +37,24 @@ func ownedFixtureProfile(t *testing.T, home, id string, port uint16) (control.Wo
 	return profile, raw
 }
 
+// preSandboxOwnedFixtureProfile reproduces the bytes an earlier setup installed.
+func preSandboxOwnedFixtureProfile(t *testing.T, home, id string, port uint16) (control.WorkloadProfile, []byte) {
+	t.Helper()
+	profile, _ := ownedFixtureProfile(t, home, id, port)
+	profile.NativeModel.Owned.ArtifactSandbox = false
+	raw, err := gpuruntime.RenderOwnedUnit(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile.NativeModel.LaunchSHA256 = digest(raw)
+	return profile, raw
+}
+
 func ownedFixtureRequest(t *testing.T, home string, profiles ...control.WorkloadProfile) Request {
 	t.Helper()
 	_, _, r := fixture(t)
 	r.Profile.StatePath = filepath.Join(home, "state/state.db")
-	r.Catalog = control.Catalog{Version: 2, Profiles: profiles}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: profiles}
 	return r
 }
 
@@ -90,7 +104,7 @@ func TestPlanOwnedUnitsDiffs(t *testing.T) {
 	home := t.TempDir()
 	backend, _, _ := fixture(t)
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
-	accepted := control.CatalogSnapshot{Revision: "r1", Catalog: control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}}
+	accepted := control.CatalogSnapshot{Revision: "r1", Catalog: control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}}
 
 	t.Run("add", func(t *testing.T) {
 		req := ownedFixtureRequest(t, home, profile)
@@ -142,7 +156,7 @@ func TestPlanOwnedUnitsDiffs(t *testing.T) {
 		req := ownedFixtureRequest(t, home)
 		req.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health"}}}
 		other, _ := ownedFixtureProfile(t, home, "code", 9200)
-		snapshot := control.CatalogSnapshot{Revision: "r2", Catalog: control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{other}}}
+		snapshot := control.CatalogSnapshot{Revision: "r2", Catalog: control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{other}}}
 		plan, err := backend.planOwnedUnits(req, snapshot, home)
 		if err != nil {
 			t.Fatal(err)
@@ -187,7 +201,7 @@ func TestOwnedUnitWriteCollisionAndOverwrite(t *testing.T) {
 		t.Fatalf("foreign content overwritten: %v", err)
 	}
 	// Content proven from the accepted catalog may be replaced.
-	accepted := control.CatalogSnapshot{Revision: "r1", Catalog: control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}}
+	accepted := control.CatalogSnapshot{Revision: "r1", Catalog: control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}}
 	changed, changedRaw := ownedFixtureProfile(t, home, "vision", 9200)
 	req2 := ownedFixtureRequest(t, home, changed)
 	if err := os.WriteFile(path, raw, 0600); err != nil {
@@ -276,7 +290,7 @@ func TestApplyOwnedLifecycle(t *testing.T) {
 	backend, home, r := fixture(t)
 	backend.runCommand = fakeOwnedCommandFor(home)
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	ctx := context.Background()
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
@@ -481,7 +495,7 @@ func TestApplyCarriedAdoptedProfilesVerbatim(t *testing.T) {
 	// Verbatim carried profiles ride along with a new owned profile.
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
 	r.ExpectedRevision = snap.Revision
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{adopted[0], adopted[1], profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{adopted[0], adopted[1], profile}}
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatalf("verbatim carried profiles rejected: %v", err)
 	}
@@ -494,7 +508,7 @@ func TestApplyCarriedAdoptedProfilesVerbatim(t *testing.T) {
 	s.Close()
 	changed := adopted[1]
 	changed.Label = "Renamed"
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{adopted[0], changed, profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{adopted[0], changed, profile}}
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatalf("changed adopted profile rejected: %v", err)
 	}
@@ -530,7 +544,7 @@ func TestDiscoverOwnedUnitsStates(t *testing.T) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	catalog := control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	catalog := control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	got, err := discoverOwnedUnits(home, catalog)
 	if err != nil {
 		t.Fatal(err)

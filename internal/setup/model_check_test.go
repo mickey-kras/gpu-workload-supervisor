@@ -138,7 +138,7 @@ func runFixture(t *testing.T, id, template string) (string, string, *fakeHub) {
 	others := statusProfiles(t, statusHome)
 	state := filepath.Join(home, "state/state.db")
 	s := openStoreAt(t, state)
-	if _, err := s.ReplaceCatalog(context.Background(), "", control.Catalog{Version: 2, Profiles: append([]control.WorkloadProfile{owned}, others...)}); err != nil {
+	if _, err := s.ReplaceCatalog(context.Background(), "", control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: append([]control.WorkloadProfile{owned}, others...)}); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()

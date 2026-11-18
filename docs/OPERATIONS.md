@@ -90,11 +90,19 @@ External adoption checks effective units, ordered contributing-file hashes and p
 
 Every vLLM launch also needs the [hardened settings](INTEGRATION.md#hardened-vllm-launch). For a managed launch, the model folder must contain the upstream `chat_template.jinja`. A file that you add by hand fails the [model checks](MODEL-CHECKS.md#upstream-identity).
 
+### Model files in a managed vLLM launch
+
+The generated user service mounts the model directory read-only. This includes the weights, tokenizer, configuration and chat template. Systemd gives the service a private writable directory for cache and temporary files.
+
+Apply setup again to upgrade an older managed unit. Use a separate process to update model files, then repeat the model checks before serving. Adopted services keep their existing filesystem policy.
+
+The host must support user namespaces for the systemd user service. The supervisor checks the loaded service properties. The host kernel enforces write access.
+
 ### vLLM KV cache and batching options
 
 vLLM manages the KV cache. The supervisor accepts only a small set of KV cache and batching options. It refuses all other options. We verified the options against vLLM 0.14.1, the minimum serving version.
 
-A managed launch can have a `serving` object in its owned launch. Without the object, the unit keeps its earlier bytes and fingerprint. With the object, the unit gets all of the defaults below explicitly. Thus a vLLM update cannot change them silently. A catalog with a `serving` object is catalog version 6. A drafts file with one is drafts version 3.
+A managed launch can have a `serving` object in its owned launch. Without the object, the unit keeps its earlier bytes and fingerprint. With the object, the unit gets all of the defaults below explicitly. Thus a vLLM update cannot change them silently. A catalog with a `serving` object requires catalog version 6 or later. A drafts file with one is drafts version 3.
 
 | Option | Rendered value | Setting in `serving` |
 | --- | --- | --- |
@@ -431,6 +439,8 @@ A failed query, or no reserved job despite the error: keep stopped, investigate 
 No automatic downgrade. Check the exact binary and database schema and behavioral compatibility before older binaries open state. The guard rejects newer schemas. Matching schema numbers prove no fencing, handoff or completion compatibility. Never edit migration metadata.
 
 Older binaries reject database schema v19. To roll back past this release, restore a verified database backup from before v19, such as a `state.db.pre-v18-*.bak` [pre-migration snapshot](#pre-migration-snapshots).
+
+A managed launch with read-only model files requires catalog v7. Remove the managed launch before a downgrade to a binary that lacks v7 support.
 
 Older binaries also reject catalog v5 and v6. Before you stop components and install an older binary, remove all resource limits and [vLLM serving options](#vllm-kv-cache-and-batching-options). Setup then writes the lowest version the catalog needs. Run `gpu-setup discover` and read `request.catalog.version`: 4 with trainers, 2 with owned launches, 1 otherwise. Version 5 means limits remain. Version 6 means serving options remain.
 

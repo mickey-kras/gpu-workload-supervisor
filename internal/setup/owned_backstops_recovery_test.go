@@ -20,8 +20,8 @@ func TestLegacyOwnedBackstopsResumeOriginalActivation(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			backend, home, request := fixture(t)
 			backend.runCommand = fakeOwnedCommandFor(home)
-			a, rawA := ownedFixtureProfile(t, home, "a", 9100)
-			z, rawZ := ownedFixtureProfile(t, home, "z", 9200)
+			a, rawA := preSandboxOwnedFixtureProfile(t, home, "a", 9100)
+			z, rawZ := preSandboxOwnedFixtureProfile(t, home, "z", 9200)
 			z.NativeModel.Instance = "z"
 			request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a, z}}
 			if err := Validate(request); err != nil {
@@ -144,8 +144,8 @@ func TestLegacyOwnedBackstopsResumeOriginalActivation(t *testing.T) {
 
 func TestLegacyOwnedPrefenceIncrementalEditReplaysProvenUnits(t *testing.T) {
 	backend, home, request := fixture(t)
-	a, rawA := ownedFixtureProfile(t, home, "a", 9100)
-	oldZ, oldRawZ := ownedFixtureProfile(t, home, "z", 9200)
+	a, rawA := preSandboxOwnedFixtureProfile(t, home, "a", 9100)
+	oldZ, oldRawZ := preSandboxOwnedFixtureProfile(t, home, "z", 9200)
 	oldZ.NativeModel.Instance = "z"
 	s := openStoreAt(t, request.Profile.StatePath)
 	prior, err := s.ReplaceCatalog(context.Background(), "", control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a, oldZ}})
@@ -156,7 +156,7 @@ func TestLegacyOwnedPrefenceIncrementalEditReplaysProvenUnits(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Close()
-	newZ, newRawZ := ownedFixtureProfile(t, home, "z", 9300)
+	newZ, newRawZ := preSandboxOwnedFixtureProfile(t, home, "z", 9300)
 	newZ.NativeModel.Instance = "z"
 	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a, newZ}}
 	request.ExpectedRevision = prior.Revision
@@ -219,8 +219,8 @@ func TestLegacyOwnedPrefenceJournalProofGuards(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			backend, home, request := fixture(t)
 			backend.runCommand = fakeOwnedCommandFor(home)
-			a, rawA := ownedFixtureProfile(t, home, "a", 9100)
-			z, rawZ := ownedFixtureProfile(t, home, "z", 9200)
+			a, rawA := preSandboxOwnedFixtureProfile(t, home, "a", 9100)
+			z, rawZ := preSandboxOwnedFixtureProfile(t, home, "z", 9200)
 			z.NativeModel.Instance = "z"
 			request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a, z}}
 			root := filepath.Join(home, ".config/gpu-workload-supervisor")
