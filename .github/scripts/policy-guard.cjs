@@ -20,7 +20,7 @@ const EXECUTABLE_HASHES = {
   ".github/scripts/install-goreleaser.sh": "de2e876e51298aec0ec86a42fdb850aaa2f95e3d86cd1fa67a6d5c1febbcc8b0",
   ".github/scripts/check-go-directives.go": "f356bcb0bd9546d4ee133001335740bfb41623e4671554606895e6ab1a305489",
   ".github/scripts/eslint.config.cjs": "72d5ad0cda934ad013c3b1ddb62bf6aa1b5a65caa457f18c5f6725ea93e48f31",
-  ".github/scripts/audit-aislop.cjs": "a337b82da202e2396c0c001c4439a6db2857cea32be241c9e7a3128b3337d86a"
+  ".github/scripts/audit-aislop.cjs": "ed18d532d29c0e1fd2605b7f38ab3ffdb18d229954d2abd8e666d6faff266059"
 };
 
 function expectedExecutableDigest(files, path, admitted) {

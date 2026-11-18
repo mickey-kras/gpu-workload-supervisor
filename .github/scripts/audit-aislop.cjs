@@ -4,10 +4,10 @@ const { resolve } = require('node:path');
 
 const AISLOP_PREFIX = '.github/aislop';
 const BLOCKED_SEVERITIES = new Set(['moderate', 'high', 'critical']);
-// GHSA-fc5q-39xc-vjpf affects picomatch * with no upstream release yet.
-// Requiring range "*" fails closed automatically once a patched release exists.
+// Remove this CI-only exception when a patched dependency is available.
+const EXCEPTION_EXPIRES_AT = Date.parse('2026-12-02T08:00:00Z');
 const UNFIXED_ALLOWLIST = new Map([
-  ['GHSA-fc5q-39xc-vjpf', { name: 'picomatch', range: '*' }],
+  ['GHSA-fc5q-39xc-vjpf', { name: 'picomatch', range: '<=4.0.7' }],
 ]);
 
 function plainObject(value) {
@@ -15,8 +15,8 @@ function plainObject(value) {
 }
 
 function allowedAdvisory(pkg, item) {
-  if (!plainObject(item) || typeof item.url !== 'string') return false;
-  const match = /\/(GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4})$/.exec(item.url);
+  if (!plainObject(item) || typeof item.url !== 'string' || item.severity !== 'high') return false;
+  const match = /^https:\/\/github\.com\/advisories\/(GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4})$/.exec(item.url);
   if (!match) return false;
   const rule = UNFIXED_ALLOWLIST.get(match[1]);
   if (!rule) return false;
@@ -60,17 +60,22 @@ function blockedVulnerability(pkg, entry) {
   return entry.via.some(item => plainObject(item) && BLOCKED_SEVERITIES.has(item.severity));
 }
 
-function inspectAuditReport(raw) {
+function inspectAuditReport(raw, now = Date.now()) {
   const vulnerabilities = parseReport(raw);
   const unexcused = [];
+  let exceptionApplied = false;
   for (const [pkg, entry] of Object.entries(vulnerabilities)) {
-    if (blockedVulnerability(pkg, entry) && !excusedPackage(pkg, vulnerabilities)) {
+    if (!blockedVulnerability(pkg, entry)) continue;
+    if (now < EXCEPTION_EXPIRES_AT && entry.severity !== 'critical' && excusedPackage(pkg, vulnerabilities)) {
+      exceptionApplied = true;
+    } else {
       unexcused.push(`${pkg} (${entry.severity})`);
     }
   }
   if (unexcused.length > 0) {
     throw new Error(`Unexcused npm audit vulnerabilities: ${unexcused.sort().join(', ')}`);
   }
+  return exceptionApplied;
 }
 
 function captureAuditJson(prefix, exec) {
@@ -78,7 +83,7 @@ function captureAuditJson(prefix, exec) {
   try {
     return exec('npm', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
   } catch (error) {
-    const hasExitOutput = typeof error?.status === 'number' && !error.signal && typeof error.stdout === 'string';
+    const hasExitOutput = error?.status === 1 && !error.signal && typeof error.stdout === 'string';
     if (!hasExitOutput) {
       const detail = error instanceof Error ? error.message : 'unknown error';
       throw new Error(`npm audit execution failed: ${detail}`, { cause: error });
@@ -87,17 +92,19 @@ function captureAuditJson(prefix, exec) {
   }
 }
 
-function runAudit(prefix = AISLOP_PREFIX, exec = execFileSync) {
+function runAudit(prefix = AISLOP_PREFIX, exec = execFileSync, now = Date.now()) {
   if (prefix !== AISLOP_PREFIX) throw new Error(`Unsupported audit prefix: ${prefix}`);
   if (!statSync(resolve(prefix, 'package-lock.json')).isFile()) {
     throw new Error(`Missing lockfile in ${prefix}`);
   }
-  inspectAuditReport(captureAuditJson(prefix, exec));
+  return inspectAuditReport(captureAuditJson(prefix, exec), now);
 }
 
 if (require.main === module) {
   try {
-    runAudit();
+    if (runAudit()) {
+      process.stderr.write(`Aislop CI audit exception applied for GHSA-fc5q-39xc-vjpf. Expires ${new Date(EXCEPTION_EXPIRES_AT).toISOString()}.\n`);
+    }
   } catch (error) {
     process.stderr.write(`${error.message}\n`);
     process.exitCode = 1;

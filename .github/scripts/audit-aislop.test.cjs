@@ -2,7 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { inspectAuditReport, runAudit } = require('./audit-aislop.cjs');
 
-function advisory(id, { name = 'picomatch', range = '*', severity = 'high' } = {}) {
+const BEFORE_EXPIRY = Date.parse('2026-11-18T00:00:00Z');
+
+function advisory(id, { name = 'picomatch', range = '<=4.0.7', severity = 'high' } = {}) {
   return { name, severity, range, url: `https://github.com/advisories/${id}` };
 }
 
@@ -28,8 +30,8 @@ test('clean v2 reports and low-only findings pass', () => {
   }));
 });
 
-test('unfixed picomatch GHSA-fc5q-39xc-vjpf and its transitive chain pass while range is *', () => {
-  inspectAuditReport(JSON.stringify(picomatchGraph()));
+test('unfixed picomatch GHSA-fc5q-39xc-vjpf and its transitive chain pass for the exact advisory range', () => {
+  assert.equal(inspectAuditReport(JSON.stringify(picomatchGraph()), BEFORE_EXPIRY), true);
   const exitOne = () => {
     const error = new Error('vulnerabilities found');
     error.status = 1;
@@ -37,7 +39,12 @@ test('unfixed picomatch GHSA-fc5q-39xc-vjpf and its transitive chain pass while 
     error.stdout = JSON.stringify(picomatchGraph());
     throw error;
   };
-  runAudit('.github/aislop', exitOne);
+  assert.equal(runAudit('.github/aislop', exitOne, BEFORE_EXPIRY), true);
+});
+
+test('the exception expires at the configured deadline', () => {
+  const report = JSON.stringify(picomatchGraph());
+  assert.throws(() => inspectAuditReport(report, Date.parse('2026-12-02T08:00:00Z')), /Unexcused/);
 });
 
 test('malformed reports and cyclic vulnerability graphs fail closed', () => {
@@ -58,11 +65,13 @@ test('malformed reports and cyclic vulnerability graphs fail closed', () => {
   }
 });
 
-test('patched picomatch range and any other moderate or higher advisories fail closed', () => {
+test('changed picomatch ranges and any other moderate or higher advisories fail closed', () => {
   const tarAdvisory = advisory('GHSA-1111-2222-3333', { name: 'tar', severity: 'moderate' });
   const unexcusedReports = [
-    picomatchGraph(advisory('GHSA-fc5q-39xc-vjpf', { range: '<=4.0.7' })),
+    picomatchGraph(advisory('GHSA-fc5q-39xc-vjpf', { range: '<4.0.7' })),
+    picomatchGraph(advisory('GHSA-fc5q-39xc-vjpf', { range: '*' })),
     picomatchGraph(advisory('GHSA-aaaa-bbbb-cccc')),
+    picomatchGraph(advisory('GHSA-fc5q-39xc-vjpf', { severity: 'critical' })),
     {
       auditReportVersion: 2,
       vulnerabilities: {
@@ -72,7 +81,7 @@ test('patched picomatch range and any other moderate or higher advisories fail c
     },
   ];
   for (const report of unexcusedReports) {
-    assert.throws(() => inspectAuditReport(JSON.stringify(report)));
+    assert.throws(() => inspectAuditReport(JSON.stringify(report), BEFORE_EXPIRY));
   }
 });
 
