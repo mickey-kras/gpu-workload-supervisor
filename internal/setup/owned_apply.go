@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -396,11 +397,15 @@ func (m activationReleaseManager) ReleasedFor(ctx context.Context, target contro
 }
 
 func (work activationWork) verifyRuntimes(ctx context.Context, plan unitPlan) (supervisor.Runtime, error) {
-	manager, err := work.backend.makeRuntime(work.request)
+	observed, preflightPlan, err := work.observeLegacyRetry(plan)
 	if err != nil {
 		return nil, err
 	}
-	if err := verifyActivationBindings(ctx, manager, plan); err != nil {
+	manager, err := work.backend.makeRuntime(observed)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyActivationBindings(ctx, manager, preflightPlan); err != nil {
 		return nil, err
 	}
 	if work.existing && work.old.StatePath != "" {
@@ -410,7 +415,7 @@ func (work activationWork) verifyRuntimes(ctx context.Context, plan unitPlan) (s
 		replaced := map[string]bool{}
 		// Before the first commit, only the recorded setup plan has a mapping.
 		if work.accepted.Revision == "" {
-			previous.Catalog = work.request.Catalog
+			previous.Catalog = observed.Catalog
 		} else {
 			for name := range plan.Writes {
 				replaced[filepath.Join(ownedUnitDirectory(work.home), name)] = true
@@ -425,7 +430,49 @@ func (work activationWork) verifyRuntimes(ctx context.Context, plan unitPlan) (s
 	if err := releasedForSetup(ctx, manager, control.WorkloadIdle); err != nil {
 		return nil, fmt.Errorf("configured workloads have not released the GPU: %w", err)
 	}
+	if legacyArtifactCatalog(work.request.Catalog) {
+		manager = activationObservationManager{Runtime: manager, proof: preflightPlan}
+	}
 	return manager, nil
+}
+
+// observeLegacyRetry keeps a proved historical request for commit and removes
+// the old bindings only from the setup preflight and release observation.
+func (work activationWork) observeLegacyRetry(plan unitPlan) (Request, unitPlan, error) {
+	observed := work.request
+	// Preparation enables the sandbox for hardened units in a new apply.
+	// An unmarked hardened candidate can only be an exact legacy retry.
+	if !legacyArtifactCatalog(observed.Catalog) {
+		return observed, plan, nil
+	}
+	if err := verifyOwnedUnitRenderings(work.home, observed.Catalog); err != nil {
+		return observed, plan, err
+	}
+	observed.Catalog = observed.Catalog.Clone()
+	proof := unitPlan{Deletes: append([]string(nil), plan.Deletes...), proven: maps.Clone(plan.proven)}
+	for i, p := range observed.Catalog.Profiles {
+		if legacyArtifactBinding(p) {
+			observed.Catalog.Profiles[i].NativeModel = nil
+			proof.Deletes = append(proof.Deletes, p.Unit)
+			proof.proven[p.Unit] = p.NativeModel.LaunchSHA256
+		}
+	}
+	return observed, proof, nil
+}
+
+// activationObservationManager supplies the same legacy unit proofs when the
+// transaction repeats preflight immediately before committing.
+type activationObservationManager struct {
+	supervisor.Runtime
+	proof unitPlan
+}
+
+func (m activationObservationManager) Preflight(ctx context.Context) error {
+	return verifyActivationBindings(ctx, m.Runtime, m.proof)
+}
+
+func (m activationObservationManager) ReleasedForSetup(ctx context.Context, target control.Workload) error {
+	return releasedForSetup(ctx, m.Runtime, target)
 }
 
 func previewOwnedUnitWrite(dir string, p control.WorkloadProfile, proven map[string]string) (bool, error) {
@@ -546,6 +593,14 @@ func verifyActivationBindings(ctx context.Context, manager supervisor.Runtime, p
 
 func removalObservationCatalog(c control.Catalog) control.Catalog {
 	if !hasUnrunnableBinding(c) {
+		if legacyArtifactCatalog(c) {
+			c = c.Clone()
+			for i, p := range c.Profiles {
+				if legacyArtifactBinding(p) {
+					c.Profiles[i].NativeModel = nil
+				}
+			}
+		}
 		return c
 	}
 	c = c.Clone()
@@ -565,11 +620,9 @@ func removalObservationCatalog(c control.Catalog) control.Catalog {
 
 func (work activationWork) unrunnableBindingPlan() unitPlan {
 	plan := unitPlan{proven: map[string]string{}}
-	if !hasUnrunnableBinding(work.accepted.Catalog) {
-		return plan
-	}
+	stripAll := hasUnrunnableBinding(work.accepted.Catalog)
 	for _, p := range work.accepted.Catalog.Profiles {
-		if p.NativeModel != nil && (p.NativeModel.Owned != nil || p.AdoptedOwnedFile()) {
+		if legacyArtifactBinding(p) || (stripAll && p.NativeModel != nil && (p.NativeModel.Owned != nil || p.AdoptedOwnedFile())) {
 			plan.Deletes = append(plan.Deletes, p.Unit)
 			plan.proven[p.Unit] = p.NativeModel.LaunchSHA256
 		}
@@ -591,6 +644,20 @@ func hasUnrunnableBinding(c control.Catalog) bool {
 		}
 	}
 	return false
+}
+
+func legacyArtifactCatalog(c control.Catalog) bool {
+	for _, p := range c.Profiles {
+		if legacyArtifactBinding(p) {
+			return true
+		}
+	}
+	return false
+}
+
+func legacyArtifactBinding(p control.WorkloadProfile) bool {
+	n := p.NativeModel
+	return n != nil && n.Runtime == "vllm" && n.Owned != nil && n.Hardened() && !p.HasArtifactSandbox()
 }
 
 // chatTemplateChanged reports a vLLM binding whose pinned chat template is

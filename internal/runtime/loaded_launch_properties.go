@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-var loadedLaunchPropertyNames = [...]string{"WorkingDirectory", "Wants", "KillSignal", "NoNewPrivileges", "PrivateTmp", "ProtectHome", "ProtectSystem", "PrivateUsers", "ReadOnlyPaths", "ReadWritePaths", "RuntimeDirectory", "RuntimeDirectoryMode"}
+var loadedLaunchPropertyNames = [...]string{"WorkingDirectory", "Wants", "KillSignal", "NoNewPrivileges", "PrivateTmp", "ProtectHome", "Type", "ProtectSystem", "PrivateUsers", "ReadOnlyPaths", "ReadWritePaths", "BindReadOnlyPaths", "RuntimeDirectory", "RuntimeDirectoryMode"}
 
 // qualifiedLoadedProperty describes the canonical systemctl show evidence for
 // explicitly configured directives that affect paths, dependencies or isolation.

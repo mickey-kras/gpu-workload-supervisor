@@ -495,7 +495,9 @@ Optional `owned.conflicts` joins render, spec and fingerprint validation. Absent
 
 Preview shows replacement writes. Explicit apply upgrades through rollback and recovery journaling. Removing a peer or replacing it with a qualified adopted binding recomputes dependencies.
 
-Guarded files cannot directly qualify for adoption: dependency directives remain outside external grammar and setup never strips them.
+Keep the managed binding for a v7 owned vLLM service. Setup rejects direct adoption of its generated sandbox. To switch to an adopted launch, select a separate service that passes the launch checks.
+
+Setup can adopt an earlier owned unit if its launch and drop-ins pass the checks. Generated dependency guards prevent direct adoption.
 
 Pending activation replays original hashes exactly. Only a later preview after recovery offers the `owned.conflicts` upgrade. Startup never rewrites accepted files.
 

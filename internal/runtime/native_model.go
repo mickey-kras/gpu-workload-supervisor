@@ -136,6 +136,13 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 	if err != nil {
 		return err
 	}
+	if err := checkLoadedLaunch(values, launch); err != nil {
+		return err
+	}
+	return CheckNativeBindingSources(values, p.Unit, launchFile, dropIns)
+}
+
+func checkLoadedLaunch(values map[string]string, launch parsedLaunchUnit) error {
 	if err := CheckLoadedLaunchProperties(values, launch.loadedProperties); err != nil {
 		return err
 	}
@@ -151,10 +158,7 @@ func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.Work
 	if err := CheckLoadedLaunchCommand(values["ExecStart"], launch.execStart); err != nil {
 		return err
 	}
-	if err := CheckLoadedPreCommands(values["ExecStartPre"], launch.preCommands); err != nil {
-		return err
-	}
-	return CheckNativeBindingSources(values, p.Unit, launchFile, dropIns)
+	return CheckLoadedPreCommands(values["ExecStartPre"], launch.preCommands)
 }
 
 func nativeBindingShowArguments(unit string, launch parsedLaunchUnit) []string {

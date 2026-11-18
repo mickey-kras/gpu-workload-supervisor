@@ -169,10 +169,11 @@ func prepareOwnedBackstops(request Request) (Request, error) {
 	}
 	request.Catalog = request.Catalog.Clone()
 	for _, p := range request.Catalog.Profiles {
-		if p.NativeModel != nil && p.NativeModel.Owned != nil {
-			if _, err := ownedRenderChecked(p); err != nil {
-				return request, err
-			}
+		if p.NativeModel == nil || p.NativeModel.Owned == nil {
+			continue
+		}
+		if _, err := ownedRenderChecked(p); err != nil {
+			return request, err
 		}
 	}
 	for i := range request.Catalog.Profiles {
@@ -181,9 +182,7 @@ func prepareOwnedBackstops(request Request) (Request, error) {
 			continue
 		}
 		p.NativeModel.Owned.Conflicts = request.Catalog.OwnedConflictUnits(*p)
-		if p.NativeModel.Hardened() {
-			p.NativeModel.Owned.ArtifactSandbox = true
-		}
+		p.NativeModel.Owned.ArtifactSandbox = p.NativeModel.Owned.ArtifactSandbox || p.NativeModel.Hardened()
 		raw, err := gpuruntime.RenderOwnedUnit(*p)
 		if err != nil {
 			return request, err

@@ -115,7 +115,13 @@ func parseExternalLaunchSourcesWithAccountHome(sources [][]byte, readHome func()
 	for _, directive := range keys {
 		problems.add(unit.applyExternalScalar(directive, directives.scalars[directive]))
 	}
-	return unit, problems.err()
+	err := problems.err()
+	if err != nil && len(sources) > 0 &&
+		bytes.HasPrefix(sources[0], []byte("[Unit]\nDescription=Supervisor-owned vllm launch for ")) &&
+		bytes.Contains(sources[0], []byte("\nPrivateUsers=yes\nProtectSystem=strict\nReadOnlyPaths=")) {
+		return unit, fmt.Errorf("%w: the generated vLLM artifact sandbox requires its supervisor-managed binding; keep that binding or select a separately qualified service to adopt", ErrLaunchUnsupported)
+	}
+	return unit, err
 }
 
 func (d *externalLaunchDirectives) readSource(raw []byte) error {

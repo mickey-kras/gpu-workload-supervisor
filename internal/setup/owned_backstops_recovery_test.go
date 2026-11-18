@@ -97,12 +97,31 @@ func TestLegacyOwnedBackstopsResumeOriginalActivation(t *testing.T) {
 			}
 			backend.makeRuntime = func(got Request) (supervisor.Runtime, error) {
 				if !reflect.DeepEqual(got.Catalog, request.Catalog) {
-					t.Fatal("recovery runtime saw rewritten catalog")
+					t.Fatal("binding preview saw rewritten catalog")
 				}
 				return launchPreflightRuntime{verify: func() error { return nil }, preview: func(map[string]string) error { return nil }}, nil
 			}
 			if err := backend.verifyBindings(context.Background(), home, decoded); err != nil {
 				t.Fatal(err)
+			}
+			backend.makeRuntime = func(got Request) (supervisor.Runtime, error) {
+				for _, p := range got.Catalog.Profiles {
+					if p.NativeModel != nil {
+						t.Fatalf("recovery exposed a legacy binding to runtime: %s", p.ID)
+					}
+				}
+				return launchPreflightRuntime{
+					verify: func() error { return errors.New("legacy unit proof missing") },
+					preview: func(proofs map[string]string) error {
+						for unit, expected := range map[string][]byte{a.Unit: rawA, z.Unit: rawZ} {
+							raw, err := os.ReadFile(filepath.Join(ownedUnitDirectory(home), unit))
+							if err != nil || digest(raw) != proofs[unit] || digest(raw) != digest(expected) {
+								return errors.New("legacy unit proof mismatch")
+							}
+						}
+						return nil
+					},
+				}, nil
 			}
 			if err := backend.Apply(context.Background(), home, decoded); err != nil {
 				t.Fatalf("exact original retry cannot resume: %v", err)
@@ -129,6 +148,7 @@ func TestLegacyOwnedBackstopsResumeOriginalActivation(t *testing.T) {
 			}
 			// Reconciliation reads the persisted legacy catalog unchanged. The upgrade
 			// is a separately reviewed setup operation after recovery has completed.
+			backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{}, nil }
 			if err := backend.Reconcile(context.Background(), home); err != nil {
 				t.Fatal(err)
 			}

@@ -94,7 +94,7 @@ Every vLLM launch also needs the [hardened settings](INTEGRATION.md#hardened-vll
 
 The generated user service mounts the model directory read-only. This includes the weights, tokenizer, configuration and chat template. Systemd gives the service a private writable directory for cache and temporary files.
 
-Apply setup again to upgrade an older managed unit. Use a separate process to update model files, then repeat the model checks before serving. Adopted services keep their existing filesystem policy.
+Run the setup again to upgrade an older managed unit. Use a separate process to update model files, then repeat the model checks before serving. Adopted services keep their existing filesystem policy.
 
 The host must support user namespaces for the systemd user service. The supervisor checks the loaded service properties. The host kernel enforces write access.
 
@@ -102,7 +102,7 @@ The host must support user namespaces for the systemd user service. The supervis
 
 vLLM manages the KV cache. The supervisor accepts only a small set of KV cache and batching options. It refuses all other options. We verified the options against vLLM 0.14.1, the minimum serving version.
 
-A managed launch can have a `serving` object in its owned launch. Without the object, the unit keeps its earlier bytes and fingerprint. With the object, the unit gets all of the defaults below explicitly. Thus a vLLM update cannot change them silently. A catalog with a `serving` object requires catalog version 6 or later. A drafts file with one is drafts version 3.
+A managed launch can have a `serving` object in its owned launch. Without the object, setup adds no serving options to the command. With the object, the unit gets all of the defaults below explicitly. Thus a vLLM update cannot change them silently. A catalog with a `serving` object requires catalog version 6 or later. A drafts file with one is drafts version 3.
 
 | Option | Rendered value | Setting in `serving` |
 | --- | --- | --- |

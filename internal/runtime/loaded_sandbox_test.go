@@ -36,11 +36,12 @@ func TestOwnedSandboxReadback(t *testing.T) {
 	good := string(r.outputs[command])
 	// systemctl show keeps PrivateUsers boolean even on releases that also
 	// expose PrivateUsersEx, prints mode in octal and expands %t at load.
-	const writable = "/run/user/1000/gws-owned-text-inference"
+	const writable = "/run/user/1000/gws-d253cbad16732b9d520413ee"
 	for _, line := range []string{
-		"PrivateUsers=yes", "ProtectSystem=strict", "RuntimeDirectoryMode=0700",
+		"Type=exec", "PrivateUsers=yes", "ProtectSystem=strict", "RuntimeDirectoryMode=0700",
 		"ReadOnlyPaths=" + p.NativeModel.Owned.ModelPath, "ReadWritePaths=" + writable,
-		"RuntimeDirectory=gws-owned-text-inference",
+		"BindReadOnlyPaths=" + p.NativeModel.Owned.ModelPath + ":" + writable + "/model:rbind",
+		"RuntimeDirectory=gws-d253cbad16732b9d520413ee",
 	} {
 		if !slices.Contains(strings.Split(good, "\n"), line) {
 			t.Fatalf("readback expectation differs from systemctl show for %s", line)
@@ -50,12 +51,12 @@ func TestOwnedSandboxReadback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "TMPDIR", "HF_HOME", "VLLM_CACHE_ROOT", "CUDA_CACHE_PATH", "TRITON_CACHE_DIR"} {
+	for _, name := range []string{"XDG_CACHE_HOME", "XDG_CONFIG_HOME", "TMPDIR", "FLASHINFER_WORKSPACE_BASE", "HF_HOME", "VLLM_CACHE_ROOT", "CUDA_CACHE_PATH", "TRITON_CACHE_DIR"} {
 		if !slices.Contains(strings.Fields(properties["Environment"]), name+"="+writable) {
 			t.Fatalf("missing expanded %s in loaded environment", name)
 		}
 	}
-	for _, key := range []string{"ProtectSystem", "PrivateUsers", "ReadOnlyPaths", "ReadWritePaths", "RuntimeDirectory", "RuntimeDirectoryMode"} {
+	for _, key := range []string{"Type", "ProtectSystem", "PrivateUsers", "ReadOnlyPaths", "ReadWritePaths", "BindReadOnlyPaths", "RuntimeDirectory", "RuntimeDirectoryMode"} {
 		t.Run(key, func(t *testing.T) {
 			if !slices.Contains(strings.Fields(command), "--property="+key) {
 				t.Fatalf("missing %s in systemctl show", key)

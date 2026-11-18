@@ -133,25 +133,14 @@ func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) e
 	if p.Trainer != nil {
 		return errors.New("finite trainer requires an admitted job")
 	}
+	if err := m.prepareProfileStart(ctx, p); err != nil {
+		if p.HasLimits() {
+			return UnitError(p, err)
+		}
+		return err
+	}
 	limited := p.HasLimits()
 	sandboxed := p.HasArtifactSandbox()
-	if limited {
-		limitCap, err := m.launchChecks(ctx, p)
-		if err != nil {
-			return UnitError(p, err)
-		}
-		if err := m.admitMemory(limitCap, p.NativeModel.Owned.Limits); err != nil {
-			return UnitError(p, err)
-		}
-	} else if err := m.verifyNativeBinding(ctx, p); err != nil {
-		return err
-	}
-	if err := m.prepareStart(ctx, workload); err != nil {
-		if limited {
-			return UnitError(p, err)
-		}
-		return err
-	}
 	err := m.runSystemctl(ctx, "start", p.Unit)
 	if !limited && !sandboxed {
 		return err
@@ -170,6 +159,23 @@ func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) e
 		return UnitError(p, errors.Join(err, m.stopUnit(stopCtx, p.Unit)))
 	}
 	return nil
+}
+
+// prepareProfileStart qualifies the binding and admits the workload before
+// issuing a start job. An admission failure needs no cleanup.
+func (m *SystemdManager) prepareProfileStart(ctx context.Context, p control.WorkloadProfile) error {
+	if p.HasLimits() {
+		limitCap, err := m.launchChecks(ctx, p)
+		if err != nil {
+			return err
+		}
+		if err := m.admitMemory(limitCap, p.NativeModel.Owned.Limits); err != nil {
+			return err
+		}
+	} else if err := m.verifyNativeBinding(ctx, p); err != nil {
+		return err
+	}
+	return m.prepareStart(ctx, p.ID)
 }
 
 // UnitError names the workload and the unit of err, as "id (unit): ". The

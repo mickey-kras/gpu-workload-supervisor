@@ -206,6 +206,9 @@ func (n NativeModel) validateOwned() error {
 	if o == nil {
 		return nil
 	}
+	if o.ArtifactSandbox && (!n.Hardened() || filepath.Dir(n.ChatTemplate) != o.ModelPath) {
+		return errors.New("owned artifact sandbox requires a hardened binding with its chat template in the model directory")
+	}
 	if o.Executable != "" && !ValidOwnedExecutable(n.Runtime, o.Executable) {
 		return errors.New("owned executable must be a supported absolute direct path")
 	}

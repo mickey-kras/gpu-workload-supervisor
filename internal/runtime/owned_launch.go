@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -19,6 +18,14 @@ var ErrOwnedRender = errors.New("owned launch cannot be rendered to the supporte
 // ownedServiceHeader is the fixed [Service] opening. Limit lines follow it
 // directly, so the strict parser can remove them at one exact position.
 const ownedServiceHeader = "\n[Service]\nType=simple\nRestart=no\n"
+
+func ownedLaunchServiceHeader(n control.NativeModel) string {
+	if n.Owned.ArtifactSandbox {
+		// Start succeeds only after the sandbox is installed and exec succeeds.
+		return "\n[Service]\nType=exec\nRestart=no\n"
+	}
+	return ownedServiceHeader
+}
 
 // Owned binaries are packaged executables; the deterministic render names the
 // packaged path and the round-trip qualification proves it is trusted. It is a
@@ -40,7 +47,7 @@ func RenderOwnedUnit(p control.WorkloadProfile) ([]byte, error) {
 	}
 	b.WriteString("[Unit]\nDescription=Supervisor-owned " + n.Runtime + " launch for " + string(p.ID) + "\n")
 	b.WriteString(ownedDependencies(p.Unit, n.Owned.Conflicts))
-	b.WriteString(ownedServiceHeader + n.Owned.Limits.RenderLines())
+	b.WriteString(ownedLaunchServiceHeader(*n) + n.Owned.Limits.RenderLines())
 	if n.Owned.ArtifactSandbox {
 		block, err := ownedArtifactSandbox(*n)
 		if err != nil {
@@ -204,26 +211,13 @@ func parseOwnedLaunchUnit(raw []byte, n control.NativeModel) (parsedLaunchUnit, 
 		return parseLaunchUnit(raw)
 	}
 	unit := filepath.Base(n.LaunchFile)
-	if n.Owned.ArtifactSandbox {
-		_, id := sandboxUnitIdentity(n)
-		expected, err := RenderOwnedUnit(control.WorkloadProfile{ID: id, Unit: unit, NativeModel: &n})
-		if err != nil || !bytes.Equal(raw, expected) {
-			return parsedLaunchUnit{}, ErrLaunchUnsupported
-		}
+	original := raw
+	raw, err := removeOwnedDependencies(raw, unit, n.Owned.Conflicts)
+	if err != nil {
+		return parsedLaunchUnit{}, err
 	}
-	if !control.ValidOwnedConflicts(unit, n.Owned.Conflicts) {
-		return parsedLaunchUnit{}, ErrLaunchUnsupported
-	}
-	dependencies := ownedDependencies(unit, n.Owned.Conflicts)
-	if dependencies != "" {
-		// Match the renderer's placement directly after Description in [Unit].
-		lines := strings.SplitN(string(raw), "\n", 3)
-		if len(lines) != 3 || lines[0] != "[Unit]" || !strings.HasPrefix(lines[1], "Description=") || !strings.HasPrefix(lines[2], dependencies) {
-			return parsedLaunchUnit{}, ErrLaunchUnsupported
-		}
-		raw = []byte(lines[0] + "\n" + lines[1] + "\n" + strings.TrimPrefix(lines[2], dependencies))
-	}
-	raw, err := removeOwnedLimitLines(raw, n.Owned.Limits)
+	header := ownedLaunchServiceHeader(n)
+	raw, err = removeOwnedServiceBlock(raw, header, n.Owned.Limits.RenderLines())
 	if err != nil {
 		return parsedLaunchUnit{}, err
 	}
@@ -232,7 +226,7 @@ func parseOwnedLaunchUnit(raw []byte, n control.NativeModel) (parsedLaunchUnit, 
 		if err != nil {
 			return parsedLaunchUnit{}, err
 		}
-		raw, err = removeOwnedServiceBlock(raw, block)
+		raw, err = removeOwnedServiceBlock(raw, header, block)
 		if err != nil {
 			return parsedLaunchUnit{}, err
 		}
@@ -245,27 +239,40 @@ func parseOwnedLaunchUnit(raw []byte, n control.NativeModel) (parsedLaunchUnit, 
 		return parsedLaunchUnit{}, fmt.Errorf("%w: resource control %s outside the rendered limits", ErrLaunchUnsupported, parsed.limitDirectives[0])
 	}
 	if n.Owned.ArtifactSandbox {
-		err = parsed.recordOwnedArtifactSandbox(n)
+		if err := parsed.verifyOwnedArtifactSandbox(original, n); err != nil {
+			return parsedLaunchUnit{}, err
+		}
 	}
-	return parsed, err
+	return parsed, nil
 }
 
-// removeOwnedLimitLines accepts limit directives only as the exact rendered
-// block after the fixed [Service] header. parseOwnedLaunchUnit rejects any
-// limit directive left elsewhere, so a moved, changed or extra line fails.
-func removeOwnedLimitLines(raw []byte, limits control.ResourceLimits) ([]byte, error) {
-	return removeOwnedServiceBlock(raw, limits.RenderLines())
+func removeOwnedDependencies(raw []byte, unit, peers string) ([]byte, error) {
+	if !control.ValidOwnedConflicts(unit, peers) {
+		return nil, ErrLaunchUnsupported
+	}
+	dependencies := ownedDependencies(unit, peers)
+	if dependencies == "" {
+		return raw, nil
+	}
+	// Match the renderer's placement directly after Description in [Unit].
+	lines := strings.SplitN(string(raw), "\n", 3)
+	if len(lines) != 3 || lines[0] != "[Unit]" || !strings.HasPrefix(lines[1], "Description=") || !strings.HasPrefix(lines[2], dependencies) {
+		return nil, ErrLaunchUnsupported
+	}
+	return []byte(lines[0] + "\n" + lines[1] + "\n" + strings.TrimPrefix(lines[2], dependencies)), nil
 }
 
-func removeOwnedServiceBlock(raw []byte, block string) ([]byte, error) {
+// removeOwnedServiceBlock accepts generated lines only directly after the
+// fixed [Service] header.
+func removeOwnedServiceBlock(raw []byte, header, block string) ([]byte, error) {
 	if block == "" {
 		return raw, nil
 	}
 	text := string(raw)
-	at := strings.Index(text, ownedServiceHeader)
-	if at < 0 || strings.Count(text, ownedServiceHeader) != 1 || !strings.HasPrefix(text[at+len(ownedServiceHeader):], block) {
+	at := strings.Index(text, header)
+	if at < 0 || strings.Count(text, header) != 1 || !strings.HasPrefix(text[at+len(header):], block) {
 		return nil, ErrLaunchUnsupported
 	}
-	start := at + len(ownedServiceHeader)
+	start := at + len(header)
 	return []byte(text[:start] + text[start+len(block):]), nil
 }

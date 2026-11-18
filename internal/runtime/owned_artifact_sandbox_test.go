@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"golang.org/x/sys/unix"
 )
 
 func TestOwnedArtifactSandboxRenderAndParse(t *testing.T) {
@@ -35,10 +36,11 @@ func TestOwnedArtifactSandboxRenderAndParse(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, line := range []string{
-		"PrivateUsers=yes", "ProtectSystem=strict", "ReadOnlyPaths=" + model,
-		"ReadWritePaths=%t/gws-owned-vision-inference", "RuntimeDirectory=gws-owned-vision-inference",
-		"RuntimeDirectoryMode=0700", "Environment=TMPDIR=%t/gws-owned-vision-inference",
-		"Environment=VLLM_CACHE_ROOT=%t/gws-owned-vision-inference",
+		"Type=exec", "PrivateUsers=yes", "ProtectSystem=strict", "ReadOnlyPaths=" + model,
+		"ReadWritePaths=%t/gws-02dc23cc3bcc180b37d2c134", "RuntimeDirectory=gws-02dc23cc3bcc180b37d2c134",
+		"RuntimeDirectoryMode=0700", "Environment=TMPDIR=%t/gws-02dc23cc3bcc180b37d2c134",
+		"Environment=VLLM_CACHE_ROOT=%t/gws-02dc23cc3bcc180b37d2c134",
+		"BindReadOnlyPaths=" + model + ":%t/gws-02dc23cc3bcc180b37d2c134/model:rbind",
 	} {
 		if !strings.Contains(string(raw), "\n"+line+"\n") || strings.Contains(string(legacy), "\n"+line+"\n") {
 			t.Errorf("sandbox line %q has incorrect placement", line)
@@ -48,8 +50,9 @@ func TestOwnedArtifactSandboxRenderAndParse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writable := filepath.Join(runtimeRoot, "gws-owned-vision-inference")
+	writable := filepath.Join(runtimeRoot, "gws-02dc23cc3bcc180b37d2c134")
 	if parsed.loadedProperties["ReadOnlyPaths"] != model || parsed.loadedProperties["ReadWritePaths"] != writable ||
+		parsed.loadedProperties["BindReadOnlyPaths"] != model+":"+writable+"/model:rbind" ||
 		parsed.environmentValues["TMPDIR"] != writable || parsed.environmentValues["VLLM_CACHE_ROOT"] != writable {
 		t.Fatalf("sandbox binding differs: properties=%v environment=%v", parsed.loadedProperties, parsed.environmentValues)
 	}
@@ -73,7 +76,7 @@ func TestOwnedArtifactSandboxRenderAndParse(t *testing.T) {
 
 func TestOwnedArtifactSandboxRejectsModelOverlappingWritablePath(t *testing.T) {
 	root := t.TempDir()
-	model := filepath.Join(root, "gws-owned-vision-inference")
+	model := filepath.Join(root, "gws-02dc23cc3bcc180b37d2c134")
 	if err := os.Mkdir(model, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -88,5 +91,15 @@ func TestOwnedArtifactSandboxRejectsModelOverlappingWritablePath(t *testing.T) {
 	}
 	if _, err := parseOwnedLaunchUnit(raw, *p.NativeModel); !errors.Is(err, ErrLaunchUnsupported) {
 		t.Fatalf("model overlapping writable path accepted: %v", err)
+	}
+}
+
+func TestOwnedArtifactSandboxLeavesRoomForVLLMSocket(t *testing.T) {
+	unit := control.OwnedUnitName(control.Workload(strings.Repeat("a", 64)))
+	dir := sandboxDirectory(unit)
+	other := control.OwnedUnitName(control.Workload(strings.Repeat("a", 63) + "b"))
+	socket := filepath.Join("/run/user/4294967294", dir, "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
+	if len(socket) >= len(unix.RawSockaddrUnix{}.Path) || dir == sandboxDirectory(other) {
+		t.Fatalf("unsuitable socket directory %q", dir)
 	}
 }

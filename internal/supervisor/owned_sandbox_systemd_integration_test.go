@@ -4,9 +4,11 @@ package supervisor
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -48,12 +50,17 @@ if rm -f "$weights"; then exit 23; fi
 if ( : > "$template" ); then exit 24; fi
 if ( : > "$key" ); then exit 25; fi
 if ( : > "$0" ); then exit 26; fi
-[ -n "${XDG_CACHE_HOME:-}" ] && [ -n "${TMPDIR:-}" ] || exit 30
+[ "$(cat "$RUNTIME_DIRECTORY/model/model.safetensors")" = weights ] || exit 27
+if touch "$RUNTIME_DIRECTORY/model/new.safetensors"; then exit 28; fi
+[ -n "${RUNTIME_DIRECTORY:-}" ] && [ "${XDG_CACHE_HOME:-}" = "$RUNTIME_DIRECTORY" ] &&
+  [ "${TMPDIR:-}" = "$RUNTIME_DIRECTORY" ] || exit 30
 ( mkdir -p "$XDG_CACHE_HOME" "$TMPDIR" &&
   printf cache > "$XDG_CACHE_HOME/qualification-cache" &&
   printf temp > "$TMPDIR/qualification-temp" &&
   [ "$(cat "$XDG_CACHE_HOME/qualification-cache")" = cache ] &&
   [ "$(cat "$TMPDIR/qualification-temp")" = temp ] ) || exit 31
+: > "$RUNTIME_DIRECTORY/qualification-ready"
+exec /usr/bin/sleep infinity
 `
 	artifacts := map[string]string{
 		weights:                             "weights",
@@ -93,23 +100,45 @@ if ( : > "$0" ); then exit 26; fi
 	systemdCommand(t, "daemon-reload")
 	systemdCommand(t, "start", unit)
 
+	runtimeRoot := os.Getenv("XDG_RUNTIME_DIR")
+	if runtimeRoot == "" {
+		runtimeRoot = fmt.Sprintf("/run/user/%d", os.Geteuid())
+	}
+	runtimeDirectory := systemdCommand(t, "show", "--property=RuntimeDirectory", "--value", unit)
+	if !strings.HasPrefix(runtimeDirectory, "gws-") || strings.ContainsAny(runtimeDirectory, "/\r\n ") {
+		t.Fatalf("invalid sandbox runtime directory %q", runtimeDirectory)
+	}
+	writable := filepath.Join(runtimeRoot, runtimeDirectory)
+	ready := filepath.Join(writable, "qualification-ready")
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		state := systemdCommand(t, "show", "--property=ActiveState", "--value", unit)
-		if state == "failed" || state == "inactive" {
+		if state != "active" {
+			result := systemdCommand(t, "show", "--property=Result", "--property=ExecMainStatus", unit)
+			t.Fatalf("vLLM sandbox probe entered state %s (see fixture exit statuses):\n%s", state, result)
+		}
+		_, err := os.Stat(ready)
+		if err == nil {
 			break
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("vLLM sandbox probe did not exit: %s", state)
+		if !errors.Is(err, os.ErrNotExist) || time.Now().After(deadline) {
+			t.Fatalf("vLLM sandbox probe did not report readiness: %v", err)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond)
 	}
-	result := systemdCommand(t, "show", "--property=Result", "--property=ExecMainCode", "--property=ExecMainStatus", unit)
-	for _, property := range []string{"Result=success", "ExecMainCode=1", "ExecMainStatus=0"} {
-		if !strings.Contains("\n"+result+"\n", "\n"+property+"\n") {
-			t.Fatalf("vLLM sandbox probe failed (see fixture exit statuses):\n%s", result)
+	properties := systemdCommand(t, "show", "--property=PrivateUsers", "--property=ProtectSystem",
+		"--property=ReadOnlyPaths", "--property=ReadWritePaths", "--property=Type", "--property=BindReadOnlyPaths",
+		"--property=RuntimeDirectoryMode", unit)
+	for _, property := range []string{
+		"Type=exec", "BindReadOnlyPaths=" + model + ":" + writable + "/model:rbind",
+		"PrivateUsers=yes", "ProtectSystem=strict", "ReadOnlyPaths=" + model,
+		"ReadWritePaths=" + writable, "RuntimeDirectoryMode=0700",
+	} {
+		if !slices.Contains(strings.Split(properties, "\n"), property) {
+			t.Errorf("loaded unit missing %q in:\n%s", property, properties)
 		}
 	}
+	artifacts[launch] = string(rendered)
 	for path, want := range artifacts {
 		got, err := os.ReadFile(path)
 		if err != nil || string(got) != want {

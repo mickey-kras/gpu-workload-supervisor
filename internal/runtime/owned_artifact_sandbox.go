@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,7 +16,7 @@ import (
 const sandboxDirectoryMode = "0700"
 
 var sandboxEnvironment = [...]string{
-	"HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "TMPDIR",
+	"XDG_CACHE_HOME", "XDG_CONFIG_HOME", "TMPDIR", "FLASHINFER_WORKSPACE_BASE",
 	"HF_HOME", "VLLM_CACHE_ROOT", "CUDA_CACHE_PATH", "TRITON_CACHE_DIR",
 }
 
@@ -31,10 +33,17 @@ func ownedArtifactSandbox(n control.NativeModel) (string, error) {
 	var b strings.Builder
 	b.WriteString("PrivateUsers=yes\nProtectSystem=strict\nReadOnlyPaths=" + model + "\n")
 	b.WriteString("ReadWritePaths=%t/" + dir + "\nRuntimeDirectory=" + dir + "\nRuntimeDirectoryMode=" + sandboxDirectoryMode + "\n")
+	// A bind to a different destination makes systemd fail unit execution
+	// when mount namespacing is unavailable instead of ignoring the sandbox.
+	b.WriteString("BindReadOnlyPaths=" + sandboxModelBind(model, "%t/"+dir) + "\n")
 	for _, name := range sandboxEnvironment {
 		b.WriteString("Environment=" + name + "=%t/" + dir + "\n")
 	}
 	return b.String(), nil
+}
+
+func sandboxModelBind(model, runtimeDir string) string {
+	return model + ":" + runtimeDir + "/model:rbind"
 }
 
 func sandboxUnitIdentity(n control.NativeModel) (string, control.Workload) {
@@ -43,13 +52,25 @@ func sandboxUnitIdentity(n control.NativeModel) (string, control.Workload) {
 }
 
 func sandboxDirectory(unit string) string {
-	return strings.TrimSuffix(unit, ".service") + "-inference"
+	// vLLM creates Unix sockets under TMPDIR. Leave room for its UUID even
+	// when a workload uses the longest allowed unit name.
+	hash := sha256.Sum256([]byte(unit))
+	return fmt.Sprintf("gws-%x", hash[:12])
 }
 
 func validSandboxPath(path string) bool {
 	return filepath.IsAbs(path) && filepath.Clean(path) == path && path != "/" &&
-		!strings.ContainsAny(path, launchExpansionCharacters+";*?[]") &&
+		!strings.ContainsAny(path, launchExpansionCharacters+":;*?[]") &&
 		strings.IndexFunc(path, unicode.IsSpace) < 0 && strings.IndexFunc(path, unicode.IsControl) < 0
+}
+
+func (u *parsedLaunchUnit) verifyOwnedArtifactSandbox(raw []byte, n control.NativeModel) error {
+	unit, id := sandboxUnitIdentity(n)
+	expected, err := RenderOwnedUnit(control.WorkloadProfile{ID: id, Unit: unit, NativeModel: &n})
+	if err != nil || !bytes.Equal(raw, expected) {
+		return ErrLaunchUnsupported
+	}
+	return u.recordOwnedArtifactSandbox(n)
 }
 
 func (u *parsedLaunchUnit) recordOwnedArtifactSandbox(n control.NativeModel) error {
@@ -84,8 +105,9 @@ func (u *parsedLaunchUnit) recordOwnedArtifactSandbox(n control.NativeModel) err
 		u.loadedProperties = map[string]string{}
 	}
 	for key, value := range map[string]string{
-		"PrivateUsers": "yes", "ProtectSystem": "strict", "ReadOnlyPaths": model,
+		"Type": "exec", "PrivateUsers": "yes", "ProtectSystem": "strict", "ReadOnlyPaths": model,
 		"ReadWritePaths": writable, "RuntimeDirectory": dir, "RuntimeDirectoryMode": sandboxDirectoryMode,
+		"BindReadOnlyPaths": sandboxModelBind(model, writable),
 	} {
 		u.loadedProperties[key] = value
 	}
