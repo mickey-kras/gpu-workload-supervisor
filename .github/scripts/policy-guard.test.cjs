@@ -50,7 +50,7 @@ function files({ serial = true } = {}) {
     '.github/scripts/release-validation.cjs', '.github/scripts/release-publication.cjs',
   '.github/release-helper-digests.json',
     '.github/scripts/package.json', '.github/scripts/package-lock.json',
-    '.github/scripts/eslint.config.cjs', '.github/semgrep-tests/maintainability.go',
+    '.github/scripts/eslint.config.cjs', '.github/scripts/audit-aislop.cjs', '.github/semgrep-tests/maintainability.go',
     '.github/scripts/check-go-directives.go', '.github/scripts/check-go-directives_test.go',
     '.github/aislop/package.json', '.github/aislop/package-lock.json',
     '.github/dependency-review-config.yml', '.semgrep.yml', '.aislop/config.yml',
@@ -555,7 +555,7 @@ test('package coverage config rejects deletion and duplicate keys', () => {
 function temporaryAuditFiles() {
   const candidate = files();
   candidate['.github/workflows/ci.yml'] = candidate['.github/workflows/ci.yml'].replace(
-    '          npm ci --prefix .github/aislop --ignore-scripts --no-audit --no-fund\n          npm audit --prefix .github/aislop --audit-level=moderate',
+    '          npm ci --prefix .github/aislop --ignore-scripts --no-audit --no-fund\n          node .github/scripts/audit-aislop.cjs',
     [
       'npm ci --prefix .github/audit-tool --ignore-scripts --no-audit --no-fund',
       'npm audit --prefix .github/audit-tool --audit-level=moderate',
@@ -1491,7 +1491,7 @@ test('exact-head admission covers executable helpers without relaxing workflow c
   for (const path of ['.github/actions/setup-goreleaser/action.yml',
     '.github/scripts/quality-coverage.py', '.github/scripts/check-scan-reports.py',
     '.github/scripts/install-goreleaser.sh', '.github/scripts/check-go-directives.go',
-    '.github/scripts/eslint.config.cjs']) {
+    '.github/scripts/eslint.config.cjs', '.github/scripts/audit-aislop.cjs']) {
     const candidate = { ...baseline };
     if (path.endsWith('action.yml')) {
       const action = YAML.parse(candidate[path]);

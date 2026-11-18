@@ -7,14 +7,14 @@ const AISLOP = '.github/workflows/aislop.yml';
 const MAIN = '.github/workflows/main.yml';
 
 const REUSE_HASHES = {
-  ".github/workflows/ci.yml": "25788c92b7bed0875527b6f9293f9590c55ca520054f1ba74d915aad12758a1b",
+  ".github/workflows/ci.yml": "d2371b78ba34207134de6116f6a86e24f5a5fe007ccf461b9ded479882708895",
   ".github/workflows/aislop.yml": "c33bceeeb1a4f685a75e622364e2c136d9352a3f8266d6a0383eed65178523e7",
   ".github/workflows/main.yml": "92302363b733e5176abc7a43bdb4ad5fe6dc74d75108c5dc7f755a0befe1d7ca"
 };
 // This second frozen profile adds only the reviewed analyzer and report transfer.
 // Both workflows must match: mixed profiles and candidate-provided hashes fail.
 const ANALYZER_HASHES = {
-  ".github/workflows/ci.yml": "7fd726b592c45e13dbb305e8de5962c4664180803ee5cc17771d7b1c533054e1",
+  ".github/workflows/ci.yml": "8b9b4585b5eb5573a566be1f0be1c4fbab3f667ddd58c68838609c26f7e5d491",
   ".github/workflows/main.yml": "4e99236f93f749d6ba9bda02e96f53042664ab47587e80c75683eea34b0bb2c9"
 };
 const HELPER_HASHES = {
