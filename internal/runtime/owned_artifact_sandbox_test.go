@@ -36,7 +36,7 @@ func TestOwnedArtifactSandboxRenderAndParse(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, line := range []string{
-		"Type=exec", "PrivateUsers=yes", "ProtectSystem=strict", "ReadOnlyPaths=" + model,
+		"Type=exec", "PrivateUsers=yes", "ProtectSystem=strict", "MountFlags=private", "ReadOnlyPaths=" + model,
 		"ReadWritePaths=%t/gws-02dc23cc3bcc180b37d2c134", "RuntimeDirectory=gws-02dc23cc3bcc180b37d2c134",
 		"RuntimeDirectoryMode=0700", "Environment=TMPDIR=%t/gws-02dc23cc3bcc180b37d2c134",
 		"Environment=VLLM_CACHE_ROOT=%t/gws-02dc23cc3bcc180b37d2c134",
@@ -52,6 +52,7 @@ func TestOwnedArtifactSandboxRenderAndParse(t *testing.T) {
 	}
 	writable := filepath.Join(runtimeRoot, "gws-02dc23cc3bcc180b37d2c134")
 	if parsed.loadedProperties["ReadOnlyPaths"] != model || parsed.loadedProperties["ReadWritePaths"] != writable ||
+		parsed.loadedProperties["MountFlags"] != "private" ||
 		parsed.loadedProperties["BindReadOnlyPaths"] != model+":"+writable+"/model:rbind" ||
 		parsed.environmentValues["TMPDIR"] != writable || parsed.environmentValues["VLLM_CACHE_ROOT"] != writable {
 		t.Fatalf("sandbox binding differs: properties=%v environment=%v", parsed.loadedProperties, parsed.environmentValues)

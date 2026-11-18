@@ -97,7 +97,7 @@ func (m *SystemdManager) supportsSleepMode(p control.WorkloadProfile) bool {
 		return false
 	}
 	if n.Owned != nil {
-		return n.Owned.Serving.SleepMode
+		return p.HasArtifactSandbox() && n.Owned.Serving.SleepMode
 	}
 	sources, err := readLaunchSources(n.LaunchFile, n.DropIns)
 	if err != nil || fmt.Sprintf("%x", sha256.Sum256(sources[0])) != n.LaunchSHA256 {

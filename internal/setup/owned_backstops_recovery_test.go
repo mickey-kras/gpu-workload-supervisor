@@ -12,6 +12,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
@@ -322,6 +323,72 @@ func TestLegacyOwnedPrefenceJournalProofGuards(t *testing.T) {
 				if err := backend.Apply(context.Background(), home, request); !errors.Is(err, ErrOwnedJournalStateMismatch) {
 					t.Fatalf("foreign journal consumed: %v", err)
 				}
+			}
+		})
+	}
+}
+
+func TestLegacyOwnedRetryWithModelPathUnsupportedBySandbox(t *testing.T) {
+	for _, fenced := range []bool{false, true} {
+		name := "unit journal"
+		if fenced {
+			name = "maintenance fence"
+		}
+		t.Run(name, func(t *testing.T) {
+			backend, home, request := fixture(t)
+			backend.runCommand = fakeOwnedCommandFor(home)
+			legacy, _ := preSandboxOwnedFixtureProfile(t, home, "vision", 9100)
+			model := filepath.Join(home, "models", "org:model")
+			legacy.NativeModel.Owned.ModelPath = model
+			legacy.NativeModel.Model = model
+			legacy.NativeModel.ChatTemplate = filepath.Join(model, ownedChatTemplateName)
+			refingerprint(t, &legacy)
+			request.Catalog = control.Catalog{Version: control.CatalogVersionOwned, Profiles: []control.WorkloadProfile{legacy}}
+
+			if _, err := backend.Plan(home, request); !errors.Is(err, gpuruntime.ErrOwnedRender) {
+				t.Fatalf("fresh setup allowed a model path that cannot be sandboxed: %v", err)
+			}
+			root := filepath.Join(home, ".config/gpu-workload-supervisor")
+			if err := os.MkdirAll(root, 0700); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := ownedRenderChecked(legacy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(ownedUnitDirectory(home), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(legacy.NativeModel.LaunchFile, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if fenced {
+				if err := os.MkdirAll(filepath.Dir(request.Profile.StatePath), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := deployment.Write(request.Profile.StatePath, deployment.Marker{Version: 1, Release: deployment.Release, Maintenance: true}); err != nil {
+					t.Fatal(err)
+				}
+				if err := writeJSON(filepath.Join(root, "activation.json"), activation{Request: request, Fresh: true}); err != nil {
+					t.Fatal(err)
+				}
+				stale := request
+				stale.Catalog = stale.Catalog.Clone()
+				stale.Catalog.Profiles[0].Label = "Different plan"
+				if _, err := backend.Plan(home, stale); err == nil || !strings.Contains(err.Error(), "must resume its original request") {
+					t.Fatalf("maintenance accepted a different plan: %v", err)
+				}
+			} else {
+				journal := unitJournal{Version: 1, StatePath: request.Profile.StatePath, Writes: map[string]string{legacy.Unit: legacy.NativeModel.LaunchSHA256}, Deletes: map[string]string{}, Phase: ownedJournalPending}
+				if err := writeOwnedUnitJournal(root, journal); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := backend.Apply(t.Context(), home, request); err != nil {
+				t.Fatalf("exact legacy recovery did not finish: %v", err)
+			}
+			if got := acceptedRevision(t, request).Catalog; !reflect.DeepEqual(got, request.Catalog) {
+				t.Fatal("recovery changed the historical catalog")
 			}
 		})
 	}

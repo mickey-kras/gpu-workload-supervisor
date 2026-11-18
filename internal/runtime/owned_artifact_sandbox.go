@@ -31,7 +31,8 @@ func ownedArtifactSandbox(n control.NativeModel) (string, error) {
 	}
 	dir := sandboxDirectory(unit)
 	var b strings.Builder
-	b.WriteString("PrivateUsers=yes\nProtectSystem=strict\nReadOnlyPaths=" + model + "\n")
+	// Keep later host mounts from replacing parts of the read-only model tree.
+	b.WriteString("PrivateUsers=yes\nProtectSystem=strict\nMountFlags=private\nReadOnlyPaths=" + model + "\n")
 	b.WriteString("ReadWritePaths=%t/" + dir + "\nRuntimeDirectory=" + dir + "\nRuntimeDirectoryMode=" + sandboxDirectoryMode + "\n")
 	// A bind to a different destination makes systemd fail unit execution
 	// when mount namespacing is unavailable instead of ignoring the sandbox.
@@ -108,6 +109,7 @@ func (u *parsedLaunchUnit) recordOwnedArtifactSandbox(n control.NativeModel) err
 		"Type": "exec", "PrivateUsers": "yes", "ProtectSystem": "strict", "ReadOnlyPaths": model,
 		"ReadWritePaths": writable, "RuntimeDirectory": dir, "RuntimeDirectoryMode": sandboxDirectoryMode,
 		"BindReadOnlyPaths": sandboxModelBind(model, writable),
+		"MountFlags":        "private",
 	} {
 		u.loadedProperties[key] = value
 	}

@@ -80,7 +80,11 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 	if err := c.refuseModelCheck(ctx, target, options.verifyOnly); err != nil {
 		return current, err
 	}
-	if err := c.preflight(ctx); err != nil {
+	preflight := c.preflight
+	if target == control.WorkloadIdle {
+		preflight = c.preflightForStop
+	}
+	if err := preflight(ctx); err != nil {
 		return current, err
 	}
 	transitionID, err := c.id()

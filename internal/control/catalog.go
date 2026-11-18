@@ -75,7 +75,7 @@ type CatalogSnapshot struct {
 }
 
 // MaxCatalogInputBytes bounds canonical catalog data excluding derived owned
-// conflicts. The separate allowance fits 32 profiles with 31 peers each,
+// conflicts and artifact sandbox markers. The allowance fits 32 profiles with 31 peers each,
 // including the longest owned unit names, spaces and JSON field overhead.
 const MaxCatalogInputBytes = 256 * 1024
 const MaxOwnedConflictBytes = 96 * 1024
@@ -250,6 +250,7 @@ func (c Catalog) validateSize() error {
 		n := base.Profiles[i].NativeModel
 		if n != nil && n.Owned != nil {
 			n.Owned.Conflicts = ""
+			n.Owned.ArtifactSandbox = false
 		}
 	}
 	encoded, err = json.Marshal(base)

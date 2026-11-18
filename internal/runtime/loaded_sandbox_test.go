@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
 type sandboxDriftRunner struct {
@@ -38,7 +40,7 @@ func TestOwnedSandboxReadback(t *testing.T) {
 	// expose PrivateUsersEx, prints mode in octal and expands %t at load.
 	const writable = "/run/user/1000/gws-d253cbad16732b9d520413ee"
 	for _, line := range []string{
-		"Type=exec", "PrivateUsers=yes", "ProtectSystem=strict", "RuntimeDirectoryMode=0700",
+		"Type=exec", "PrivateUsers=yes", "ProtectSystem=strict", "MountFlags=private", "RuntimeDirectoryMode=0700",
 		"ReadOnlyPaths=" + p.NativeModel.Owned.ModelPath, "ReadWritePaths=" + writable,
 		"BindReadOnlyPaths=" + p.NativeModel.Owned.ModelPath + ":" + writable + "/model:rbind",
 		"RuntimeDirectory=gws-d253cbad16732b9d520413ee",
@@ -56,7 +58,7 @@ func TestOwnedSandboxReadback(t *testing.T) {
 			t.Fatalf("missing expanded %s in loaded environment", name)
 		}
 	}
-	for _, key := range []string{"Type", "ProtectSystem", "PrivateUsers", "ReadOnlyPaths", "ReadWritePaths", "BindReadOnlyPaths", "RuntimeDirectory", "RuntimeDirectoryMode"} {
+	for _, key := range []string{"Type", "ProtectSystem", "PrivateUsers", "MountFlags", "ReadOnlyPaths", "ReadWritePaths", "BindReadOnlyPaths", "RuntimeDirectory", "RuntimeDirectoryMode"} {
 		t.Run(key, func(t *testing.T) {
 			if !slices.Contains(strings.Fields(command), "--property="+key) {
 				t.Fatalf("missing %s in systemctl show", key)
@@ -82,9 +84,18 @@ func TestOwnedSandboxReadback(t *testing.T) {
 }
 
 func TestOwnedSandboxLegacyBindingCanStop(t *testing.T) {
-	m, r := newSleepTestManager(t, "http://127.0.0.1:9111")
+	m, r := newOwnedSleepFixture(t, "http://127.0.0.1:9111", false)
 	p := m.config.Catalog.Profiles[0]
-	p.NativeModel.Owned.ArtifactSandbox = false
+	ctx := context.Background()
+	if err := m.Preflight(ctx); !errors.Is(err, ErrLaunchUnsupported) {
+		t.Fatalf("serving preflight accepted unsandboxed launch: %v", err)
+	}
+	if err := m.PreflightForStop(ctx); err != nil {
+		t.Fatalf("verified shutdown preflight = %v", err)
+	}
+	if err := m.ReleasedFor(ctx, control.WorkloadIdle); err == nil {
+		t.Fatal("running legacy unit passed Idle release")
+	}
 	if err := m.Start(context.Background(), p.ID); !errors.Is(err, ErrLaunchUnsupported) || !strings.Contains(err.Error(), "run setup") {
 		t.Fatalf("legacy binding start = %v", err)
 	}
@@ -92,7 +103,14 @@ func TestOwnedSandboxLegacyBindingCanStop(t *testing.T) {
 		t.Fatal("legacy unit started")
 	}
 	writeEvents(t, m.cgroups.root, strings.TrimPrefix(p.Cgroup, "/"), "populated 0\n")
-	if err := m.Stop(context.Background(), p.ID); err != nil {
+	if _, err := m.Sleep(ctx, p.ID); err != nil {
 		t.Fatalf("legacy binding stop = %v", err)
+	}
+	if err := m.Healthy(ctx, control.WorkloadIdle); err != nil {
+		t.Fatalf("release after verified cold stop = %v", err)
+	}
+	p.NativeModel.LaunchSHA256 = strings.Repeat("f", 64)
+	if err := m.PreflightForStop(ctx); !errors.Is(err, ErrOwnedRender) {
+		t.Fatalf("shutdown preflight accepted changed fingerprint: %v", err)
 	}
 }

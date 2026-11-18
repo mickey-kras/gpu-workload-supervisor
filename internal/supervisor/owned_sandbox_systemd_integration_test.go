@@ -52,6 +52,14 @@ if ( : > "$key" ); then exit 25; fi
 if ( : > "$0" ); then exit 26; fi
 [ "$(cat "$RUNTIME_DIRECTORY/model/model.safetensors")" = weights ] || exit 27
 if touch "$RUNTIME_DIRECTORY/model/new.safetensors"; then exit 28; fi
+awk '
+  $5 == "/" {
+    seen = 1
+    for (i = 7; i <= NF && $i != "-"; i++)
+      if ($i ~ /^(shared|master|propagate_from):/) exit 1
+  }
+  END { if (!seen) exit 1 }
+' /proc/self/mountinfo || exit 29
 [ -n "${RUNTIME_DIRECTORY:-}" ] && [ "${XDG_CACHE_HOME:-}" = "$RUNTIME_DIRECTORY" ] &&
   [ "${TMPDIR:-}" = "$RUNTIME_DIRECTORY" ] || exit 30
 ( mkdir -p "$XDG_CACHE_HOME" "$TMPDIR" &&
@@ -128,10 +136,10 @@ exec /usr/bin/sleep infinity
 	}
 	properties := systemdCommand(t, "show", "--property=PrivateUsers", "--property=ProtectSystem",
 		"--property=ReadOnlyPaths", "--property=ReadWritePaths", "--property=Type", "--property=BindReadOnlyPaths",
-		"--property=RuntimeDirectoryMode", unit)
+		"--property=RuntimeDirectoryMode", "--property=MountFlags", unit)
 	for _, property := range []string{
 		"Type=exec", "BindReadOnlyPaths=" + model + ":" + writable + "/model:rbind",
-		"PrivateUsers=yes", "ProtectSystem=strict", "ReadOnlyPaths=" + model,
+		"PrivateUsers=yes", "ProtectSystem=strict", "MountFlags=private", "ReadOnlyPaths=" + model,
 		"ReadWritePaths=" + writable, "RuntimeDirectoryMode=0700",
 	} {
 		if !slices.Contains(strings.Split(properties, "\n"), property) {

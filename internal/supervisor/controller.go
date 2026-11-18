@@ -165,7 +165,7 @@ func (c *Controller) beginRecovery(ctx context.Context, state control.State) (co
 	if err := ctx.Err(); err != nil {
 		return state, err
 	}
-	if err := c.preflight(ctx); err != nil {
+	if err := c.preflightForStop(ctx); err != nil {
 		return state, err
 	}
 	return state, nil
@@ -198,7 +198,7 @@ func (c *Controller) ResolveUnfinishedWork(ctx context.Context, reason string) (
 	if err != nil {
 		return state, 0, err
 	}
-	if err := c.preflight(ctx); err != nil {
+	if err := c.preflightForStop(ctx); err != nil {
 		return state, 0, err
 	}
 	if err := c.runAction(ctx, c.runtime.StopForRecovery); err != nil {

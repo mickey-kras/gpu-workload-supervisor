@@ -72,7 +72,7 @@ func TestSetupReplacesOrRemovesPreSandboxOwnedUnit(t *testing.T) {
 					},
 				}
 				if action == "busy" {
-					manager.idleRuntime.err = busy
+					manager.err = busy
 				}
 				return manager, nil
 			}

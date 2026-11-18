@@ -72,7 +72,11 @@ func (m *SystemdManager) checkReleasedProfile(ctx context.Context, p control.Wor
 		return nil
 	}
 	if profileGPUUUID(p) != "" {
-		if err := m.verifyNativeBinding(ctx, p); err != nil {
+		verifyBinding := m.verifyNativeBinding
+		if target == control.WorkloadIdle {
+			verifyBinding = m.verifyUnitBinding
+		}
+		if err := verifyBinding(ctx, p); err != nil {
 			return err
 		}
 	}

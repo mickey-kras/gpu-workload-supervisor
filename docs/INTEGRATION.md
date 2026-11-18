@@ -107,11 +107,13 @@ An enabled catalog contains 1-32 profiles:
 | 3 | Reserved. Rejected |
 | 4 | Finite trainer bindings and fenced jobs. Supports owned launches |
 | 5 | Version 4 plus `limits` on owned launches |
+| 6 | Version 5 plus vLLM `serving` options |
+| 7 | Version 6 plus `artifactSandbox` on owned vLLM launches |
 | Later | Rejected until a separate feature adds support |
 
-Unchanged v1/v2 profiles need no migration. Owned launches need v2/v4/v5. Trainers need v4/v5. [Resource `limits`](RESOURCE-LIMITS.md) need v5. Catalog, database and upstream API versions are independent. The validator rejects unsupported versions and fields outside their version.
+Setup writes the lowest version that supports all profiles in the catalog. The validator rejects unknown versions and fields that need a later version. Setup upgrades hardened managed vLLM launches to version 7 when you apply the configuration.
 
-Setup writes the lowest version the content needs: 5 with limits, 4 with trainers, 2 with owned launches, 1 otherwise. Setup writes limits only on owned inference units, after the setup checks of the runtime pass. See [setup of unit limits](RESOURCE-LIMITS.md#setup-of-unit-limits).
+Setup writes limits only on owned inference units, after the setup checks of the runtime pass. See [setup of unit limits](RESOURCE-LIMITS.md#setup-of-unit-limits).
 
 This release has the runtime checks. Escape routes are advisory: setup discovery reports them, and they do not block limits. Before the unload, the runtime checks the launch binding, controllers, host cap, reserve, device and loaded properties. The start also checks the slice memory, and health checks read the cgroup values back. See [runtime checks](RESOURCE-LIMITS.md#runtime-checks).
 

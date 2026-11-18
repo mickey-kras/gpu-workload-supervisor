@@ -94,9 +94,15 @@ Every vLLM launch also needs the [hardened settings](INTEGRATION.md#hardened-vll
 
 The generated user service mounts the model directory read-only. This includes the weights, tokenizer, configuration and chat template. Systemd gives the service a private writable directory for cache and temporary files.
 
-Run the setup again to upgrade an older managed unit. Use a separate process to update model files, then repeat the model checks before serving. Adopted services keep their existing filesystem policy.
+The unit uses private mount propagation so later host mounts cannot replace parts of the read-only model tree. Stop the unit before unmounting host storage that it uses. The running unit retains its mounts until it stops.
 
-The host must support user namespaces for the systemd user service. The supervisor checks the loaded service properties. The host kernel enforces write access.
+Before upgrading an active installation, use the currently activated release and its matching runtime flags to switch to Idle. Use `gpu-mode -target idle switch` for Supervisor ownership or `gpu-mode -target idle user-switch` for User ownership. Cold-stop any service left sleeping with `systemctl --user stop UNIT` before setup. A newer binary cannot operate state marked for a previous release.
+
+If the installed release is already activated with an earlier managed unit, the same Idle switch verifies its binding and stops it. For a latched Supervisor state, run `gpu-mode recover` to drain work and cold-stop the earlier unit, even when its boot policy is `retain`. If recovery retains another workload, switch to Idle before running setup. For latched User ownership, stop the affected services and verify Idle with `gpu-mode -target idle recover-user`.
+
+An older managed unit cannot start until you run the setup again. Use a separate process to update model files, then repeat the model checks before serving. Adopted services keep their existing filesystem policy.
+
+The host must support user namespaces for the systemd user service. The supervisor checks the loaded service properties. The host kernel enforces write access. Keep the weights, tokenizer and metadata inside the model directory. A link to a file on a writable filesystem can leave that file outside the read-only mount. Run the model checks before serving.
 
 ### vLLM KV cache and batching options
 

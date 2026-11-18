@@ -101,11 +101,17 @@ func verifyOwnedSpecMode(p control.WorkloadProfile, validate func(string) error,
 }
 
 func (m *SystemdManager) verifyNativeBinding(ctx context.Context, p control.WorkloadProfile) error {
-	if p.Trainer != nil {
-		return m.verifyTrainerBinding(ctx, p)
-	}
 	if p.NativeModel != nil && p.NativeModel.Owned != nil && !p.HasArtifactSandbox() {
 		return fmt.Errorf("%w: this supervisor-managed vLLM binding predates model artifact protection; run setup again for this model", ErrLaunchUnsupported)
+	}
+	return m.verifyUnitBinding(ctx, p)
+}
+
+// verifyUnitBinding checks source and loaded identity even when the catalog
+// binding is only eligible for shutdown.
+func (m *SystemdManager) verifyUnitBinding(ctx context.Context, p control.WorkloadProfile) error {
+	if p.Trainer != nil {
+		return m.verifyTrainerBinding(ctx, p)
 	}
 	if err := m.verifyProfileGPU(ctx, p); err != nil {
 		return err

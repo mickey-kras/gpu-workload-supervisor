@@ -18,7 +18,7 @@ import (
 
 func limitedCatalog() control.Catalog {
 	catalog := testCatalog()
-	catalog.Version = control.CatalogVersionLimits
+	catalog.Version = control.CatalogVersionArtifactSandbox
 	catalog.Profiles = append(catalog.Profiles, control.WorkloadProfile{
 		ID: "vision", Label: "Vision", Adapter: "systemd", Unit: "gws-owned-vision.service",
 		Cgroup:    "/user.slice/user-1000.slice/user@1000.service/app.slice/gws-owned-vision.service",
@@ -27,7 +27,8 @@ func limitedCatalog() control.Catalog {
 			Runtime: "vllm", Instance: "local", Model: "vision-q8", Endpoint: "http://127.0.0.1:9102",
 			LaunchFile:   "/home/u/.config/systemd/user/gws-owned-vision.service",
 			LaunchSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			Owned: &control.OwnedLaunch{ModelPath: "/models/vision-q8", Port: 9102, Alias: "vision-q8",
+			ChatTemplate: "/models/vision-q8/chat_template.jinja", ChatTemplateSHA256: strings.Repeat("a", 64), EnvironmentFile: "/home/u/.config/gpu-workload-supervisor/vllm/vision.env",
+			Owned: &control.OwnedLaunch{ArtifactSandbox: true, ModelPath: "/models/vision-q8", Port: 9102, Alias: "vision-q8",
 				Limits: control.ResourceLimits{Version: 1, MemoryMaxMiB: 8192, TasksMax: 4096}},
 		},
 	})
@@ -426,7 +427,9 @@ func transientAfterRejection(t *testing.T, cause error, steps string) {
 	second := catalog.Profiles[2]
 	model := *second.NativeModel
 	second.NativeModel = &model
-	second.NativeModel.Owned = &control.OwnedLaunch{ModelPath: "/models/vision-q4", Port: 9103, Alias: "vision-q4",
+	second.NativeModel.ChatTemplate = "/models/vision-q4/chat_template.jinja"
+	second.NativeModel.EnvironmentFile = "/home/u/.config/gpu-workload-supervisor/vllm/vision2.env"
+	second.NativeModel.Owned = &control.OwnedLaunch{ArtifactSandbox: true, ModelPath: "/models/vision-q4", Port: 9103, Alias: "vision-q4",
 		Limits: control.ResourceLimits{Version: 1, MemoryMaxMiB: 4096, TasksMax: 2048}}
 	second.ID, second.Label, second.Unit = "vision2", "Vision 2", "gws-owned-vision2.service"
 	second.Cgroup = "/user.slice/user-1000.slice/user@1000.service/app.slice/gws-owned-vision2.service"
@@ -656,5 +659,20 @@ func TestLimitCauseRefusalOfLatchedStateNamesRecover(t *testing.T) {
 	_, err := c.Switch(ctx, "vision", "test")
 	if !errors.Is(err, ErrLimitedTarget) || !strings.HasSuffix(err.Error(), causeRemedy+"; next steps: first, run `gpu-mode recover`") {
 		t.Fatalf("switch with a limit cause from a latched state = %v", err)
+	}
+}
+
+func TestRecoverColdStopsLegacyOwnedRetainUnit(t *testing.T) {
+	catalog := limitedCatalog()
+	catalog.Profiles[2].BootPolicy = "retain"
+	catalog.Profiles[2].NativeModel.Owned.ArtifactSandbox = false
+	catalog.Version = control.LowestCatalogVersion(catalog)
+	c, r, _ := limitedController(t, catalog)
+	r.active = control.WorkloadIdle
+	r.visionActive = true
+	state, err := c.Recover(context.Background())
+	if err != nil || r.visionActive || !slices.Contains(r.calls, "stop vision") ||
+		state.ActiveWorkload != control.WorkloadIdle || state.Admission != control.AdmissionClosed || state.Health != control.HealthHealthy {
+		t.Fatalf("recover = %+v, %v; calls %v", state, err, r.calls)
 	}
 }

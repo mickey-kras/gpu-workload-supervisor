@@ -17,17 +17,23 @@ import (
 var ErrOrphanedOwnedUnit = errors.New("supervisor-owned unit not in catalog")
 
 func (m *SystemdManager) Preflight(ctx context.Context) error {
-	return m.preflight(ctx, nil)
+	return m.preflight(ctx, nil, m.verifyNativeBinding)
+}
+
+// PreflightForStop verifies every binding and cgroup before an operator shutdown,
+// including the recorded identity of an earlier owned inference service.
+func (m *SystemdManager) PreflightForStop(ctx context.Context) error {
+	return m.preflight(ctx, nil, m.verifyUnitBinding)
 }
 
 // PreflightWithOwnedRemovals permits only exact accepted unit contents that
 // setup will remove after committing the replacement catalog.
 func (m *SystemdManager) PreflightWithOwnedRemovals(ctx context.Context, removals map[string]string) error {
-	return m.preflight(ctx, removals)
+	return m.preflight(ctx, removals, m.verifyNativeBinding)
 }
 
-func (m *SystemdManager) preflight(ctx context.Context, removals map[string]string) error {
-	if err := m.preflightBindings(ctx); err != nil {
+func (m *SystemdManager) preflight(ctx context.Context, removals map[string]string, verifyBinding func(context.Context, control.WorkloadProfile) error) error {
+	if err := m.preflightBindings(ctx, verifyBinding); err != nil {
 		return err
 	}
 	if _, err := m.managerCgroup(ctx); err != nil {
@@ -156,13 +162,13 @@ func (m *SystemdManager) preflightWorkloadCgroup(ctx context.Context, unit, grou
 	return nil
 }
 
-func (m *SystemdManager) preflightBindings(ctx context.Context) error {
+func (m *SystemdManager) preflightBindings(ctx context.Context, verifyBinding func(context.Context, control.WorkloadProfile) error) error {
 	if m.config.Catalog != nil {
 		for _, p := range m.config.Catalog.Profiles {
 			if err := m.verifyOwnedSpec(p); err != nil {
 				return err
 			}
-			if err := m.verifyNativeBinding(ctx, p); err != nil {
+			if err := verifyBinding(ctx, p); err != nil {
 				return err
 			}
 		}
