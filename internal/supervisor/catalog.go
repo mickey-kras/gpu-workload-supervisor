@@ -142,7 +142,7 @@ func (c *Controller) reconcileCatalog(ctx context.Context, recovering bool) (con
 	if err != nil {
 		return c.latchObservationFailure(ctx, state, err)
 	}
-	retained, err := c.retainedCatalogTarget(ctx, snap)
+	retained, err := c.retainedCatalogTarget(ctx, snap, recovering)
 	if err != nil {
 		// This path latches and stops nothing, also the units already
 		// rejected: they keep running behind the closed admission until
@@ -216,9 +216,14 @@ type retainedTarget struct {
 	rejected error
 }
 
-func (c *Controller) retainedCatalogTarget(ctx context.Context, snap gpuruntime.Snapshot) (retainedTarget, error) {
+func (c *Controller) retainedCatalogTarget(ctx context.Context, snap gpuruntime.Snapshot, recovering bool) (retainedTarget, error) {
 	retained := retainedTarget{workload: control.WorkloadIdle}
 	for _, p := range c.config.Catalog.Catalog.Profiles {
+		// Shutdown preflight can qualify an earlier hardened launch for a cold
+		// stop. Such a launch must never be a retained execution target.
+		if recovering && p.NativeModel != nil && p.NativeModel.Owned != nil && !p.HasArtifactSandbox() {
+			continue
+		}
 		if p.BootPolicy != "retain" || !snap.Workloads[p.ID].Active {
 			continue
 		}

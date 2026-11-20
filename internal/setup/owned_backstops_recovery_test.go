@@ -12,6 +12,7 @@ import (
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
 )
 
@@ -20,8 +21,8 @@ func TestLegacyOwnedBackstopsResumeOriginalActivation(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			backend, home, request := fixture(t)
 			backend.runCommand = fakeOwnedCommandFor(home)
-			a, rawA := ownedFixtureProfile(t, home, "a", 9100)
-			z, rawZ := ownedFixtureProfile(t, home, "z", 9200)
+			a, rawA := preSandboxOwnedFixtureProfile(t, home, "a", 9100)
+			z, rawZ := preSandboxOwnedFixtureProfile(t, home, "z", 9200)
 			z.NativeModel.Instance = "z"
 			request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a, z}}
 			if err := Validate(request); err != nil {
@@ -97,12 +98,31 @@ func TestLegacyOwnedBackstopsResumeOriginalActivation(t *testing.T) {
 			}
 			backend.makeRuntime = func(got Request) (supervisor.Runtime, error) {
 				if !reflect.DeepEqual(got.Catalog, request.Catalog) {
-					t.Fatal("recovery runtime saw rewritten catalog")
+					t.Fatal("binding preview saw rewritten catalog")
 				}
 				return launchPreflightRuntime{verify: func() error { return nil }, preview: func(map[string]string) error { return nil }}, nil
 			}
 			if err := backend.verifyBindings(context.Background(), home, decoded); err != nil {
 				t.Fatal(err)
+			}
+			backend.makeRuntime = func(got Request) (supervisor.Runtime, error) {
+				for _, p := range got.Catalog.Profiles {
+					if p.NativeModel != nil {
+						t.Fatalf("recovery exposed a legacy binding to runtime: %s", p.ID)
+					}
+				}
+				return launchPreflightRuntime{
+					verify: func() error { return errors.New("legacy unit proof missing") },
+					preview: func(proofs map[string]string) error {
+						for unit, expected := range map[string][]byte{a.Unit: rawA, z.Unit: rawZ} {
+							raw, err := os.ReadFile(filepath.Join(ownedUnitDirectory(home), unit))
+							if err != nil || digest(raw) != proofs[unit] || digest(raw) != digest(expected) {
+								return errors.New("legacy unit proof mismatch")
+							}
+						}
+						return nil
+					},
+				}, nil
 			}
 			if err := backend.Apply(context.Background(), home, decoded); err != nil {
 				t.Fatalf("exact original retry cannot resume: %v", err)
@@ -129,6 +149,7 @@ func TestLegacyOwnedBackstopsResumeOriginalActivation(t *testing.T) {
 			}
 			// Reconciliation reads the persisted legacy catalog unchanged. The upgrade
 			// is a separately reviewed setup operation after recovery has completed.
+			backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{}, nil }
 			if err := backend.Reconcile(context.Background(), home); err != nil {
 				t.Fatal(err)
 			}
@@ -144,8 +165,8 @@ func TestLegacyOwnedBackstopsResumeOriginalActivation(t *testing.T) {
 
 func TestLegacyOwnedPrefenceIncrementalEditReplaysProvenUnits(t *testing.T) {
 	backend, home, request := fixture(t)
-	a, rawA := ownedFixtureProfile(t, home, "a", 9100)
-	oldZ, oldRawZ := ownedFixtureProfile(t, home, "z", 9200)
+	a, rawA := preSandboxOwnedFixtureProfile(t, home, "a", 9100)
+	oldZ, oldRawZ := preSandboxOwnedFixtureProfile(t, home, "z", 9200)
 	oldZ.NativeModel.Instance = "z"
 	s := openStoreAt(t, request.Profile.StatePath)
 	prior, err := s.ReplaceCatalog(context.Background(), "", control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a, oldZ}})
@@ -156,7 +177,7 @@ func TestLegacyOwnedPrefenceIncrementalEditReplaysProvenUnits(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Close()
-	newZ, newRawZ := ownedFixtureProfile(t, home, "z", 9300)
+	newZ, newRawZ := preSandboxOwnedFixtureProfile(t, home, "z", 9300)
 	newZ.NativeModel.Instance = "z"
 	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a, newZ}}
 	request.ExpectedRevision = prior.Revision
@@ -219,8 +240,8 @@ func TestLegacyOwnedPrefenceJournalProofGuards(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			backend, home, request := fixture(t)
 			backend.runCommand = fakeOwnedCommandFor(home)
-			a, rawA := ownedFixtureProfile(t, home, "a", 9100)
-			z, rawZ := ownedFixtureProfile(t, home, "z", 9200)
+			a, rawA := preSandboxOwnedFixtureProfile(t, home, "a", 9100)
+			z, rawZ := preSandboxOwnedFixtureProfile(t, home, "z", 9200)
 			z.NativeModel.Instance = "z"
 			request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a, z}}
 			root := filepath.Join(home, ".config/gpu-workload-supervisor")
@@ -302,6 +323,72 @@ func TestLegacyOwnedPrefenceJournalProofGuards(t *testing.T) {
 				if err := backend.Apply(context.Background(), home, request); !errors.Is(err, ErrOwnedJournalStateMismatch) {
 					t.Fatalf("foreign journal consumed: %v", err)
 				}
+			}
+		})
+	}
+}
+
+func TestLegacyOwnedRetryWithModelPathUnsupportedBySandbox(t *testing.T) {
+	for _, fenced := range []bool{false, true} {
+		name := "unit journal"
+		if fenced {
+			name = "maintenance fence"
+		}
+		t.Run(name, func(t *testing.T) {
+			backend, home, request := fixture(t)
+			backend.runCommand = fakeOwnedCommandFor(home)
+			legacy, _ := preSandboxOwnedFixtureProfile(t, home, "vision", 9100)
+			model := filepath.Join(home, "models", "org:model")
+			legacy.NativeModel.Owned.ModelPath = model
+			legacy.NativeModel.Model = model
+			legacy.NativeModel.ChatTemplate = filepath.Join(model, ownedChatTemplateName)
+			refingerprint(t, &legacy)
+			request.Catalog = control.Catalog{Version: control.CatalogVersionOwned, Profiles: []control.WorkloadProfile{legacy}}
+
+			if _, err := backend.Plan(home, request); !errors.Is(err, gpuruntime.ErrOwnedRender) {
+				t.Fatalf("fresh setup allowed a model path that cannot be sandboxed: %v", err)
+			}
+			root := filepath.Join(home, ".config/gpu-workload-supervisor")
+			if err := os.MkdirAll(root, 0700); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := ownedRenderChecked(legacy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(ownedUnitDirectory(home), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(legacy.NativeModel.LaunchFile, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if fenced {
+				if err := os.MkdirAll(filepath.Dir(request.Profile.StatePath), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := deployment.Write(request.Profile.StatePath, deployment.Marker{Version: 1, Release: deployment.Release, Maintenance: true}); err != nil {
+					t.Fatal(err)
+				}
+				if err := writeJSON(filepath.Join(root, "activation.json"), activation{Request: request, Fresh: true}); err != nil {
+					t.Fatal(err)
+				}
+				stale := request
+				stale.Catalog = stale.Catalog.Clone()
+				stale.Catalog.Profiles[0].Label = "Different plan"
+				if _, err := backend.Plan(home, stale); err == nil || !strings.Contains(err.Error(), "must resume its original request") {
+					t.Fatalf("maintenance accepted a different plan: %v", err)
+				}
+			} else {
+				journal := unitJournal{Version: 1, StatePath: request.Profile.StatePath, Writes: map[string]string{legacy.Unit: legacy.NativeModel.LaunchSHA256}, Deletes: map[string]string{}, Phase: ownedJournalPending}
+				if err := writeOwnedUnitJournal(root, journal); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := backend.Apply(t.Context(), home, request); err != nil {
+				t.Fatalf("exact legacy recovery did not finish: %v", err)
+			}
+			if got := acceptedRevision(t, request).Catalog; !reflect.DeepEqual(got, request.Catalog) {
+				t.Fatal("recovery changed the historical catalog")
 			}
 		})
 	}

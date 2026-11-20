@@ -114,6 +114,9 @@ type OwnedLaunch struct {
 	// exact legacy unit bytes and fingerprints; present needs catalog
 	// version 6.
 	Serving ServingOptions `json:"serving,omitzero"`
+	// ArtifactSandbox is setup-derived. Its absence preserves the previous
+	// unit fingerprint so setup can prove and replace the installed file.
+	ArtifactSandbox bool `json:"artifactSandbox,omitempty"`
 }
 
 // ValidNativeModelIdentity applies the catalog's model-identity rule
@@ -202,6 +205,9 @@ func (n NativeModel) validateOwned() error {
 	o := n.Owned
 	if o == nil {
 		return nil
+	}
+	if o.ArtifactSandbox && (!n.Hardened() || filepath.Dir(n.ChatTemplate) != o.ModelPath) {
+		return errors.New("owned artifact sandbox requires a hardened binding with its chat template in the model directory")
 	}
 	if o.Executable != "" && !ValidOwnedExecutable(n.Runtime, o.Executable) {
 		return errors.New("owned executable must be a supported absolute direct path")

@@ -133,44 +133,49 @@ func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) e
 	if p.Trainer != nil {
 		return errors.New("finite trainer requires an admitted job")
 	}
-	if p.HasLimits() {
-		return m.startLimitedUnit(ctx, p)
-	}
-	if err := m.verifyNativeBinding(ctx, p); err != nil {
+	if err := m.prepareProfileStart(ctx, p); err != nil {
+		if p.HasLimits() {
+			return UnitError(p, err)
+		}
 		return err
 	}
-	return m.startUnit(ctx, p.Unit, workload)
-}
-
-// startLimitedUnit runs the launch checks and the slice memory check, starts
-// the unit and checks its limits. Each limit error names the workload and
-// the unit.
-func (m *SystemdManager) startLimitedUnit(ctx context.Context, p control.WorkloadProfile) error {
-	limitCap, err := m.launchChecks(ctx, p)
-	if err == nil {
-		err = m.admitMemory(limitCap, p.NativeModel.Owned.Limits)
+	limited := p.HasLimits()
+	sandboxed := p.HasArtifactSandbox()
+	err := m.runSystemctl(ctx, "start", p.Unit)
+	if !limited && !sandboxed {
+		return err
 	}
-	if err == nil {
-		err = m.prepareStart(ctx, p.ID)
+	if err == nil && sandboxed {
+		err = m.verifyNativeBinding(ctx, p)
 	}
-	if err != nil {
-		return UnitError(p, err)
-	}
-	// A failed start call can still leave a queued start job.
-	err = m.runSystemctl(ctx, "start", p.Unit)
-	if err == nil {
+	if err == nil && limited {
 		err = m.verifyStartedLimits(ctx, p)
 	}
 	if err != nil {
-		// Start owns the unit it just started: a rollback start must not
-		// leave a unit with failed limits running. The stop runs on its own
-		// bounded context, because the start context can be spent. The stop
-		// error is joined.
+		// A failed start can leave a queued job. Stop on an independent
+		// deadline even if the caller's context expired during readback.
 		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), limitCleanupTimeout)
 		defer cancel()
 		return UnitError(p, errors.Join(err, m.stopUnit(stopCtx, p.Unit)))
 	}
 	return nil
+}
+
+// prepareProfileStart qualifies the binding and admits the workload before
+// issuing a start job. An admission failure needs no cleanup.
+func (m *SystemdManager) prepareProfileStart(ctx context.Context, p control.WorkloadProfile) error {
+	if p.HasLimits() {
+		limitCap, err := m.launchChecks(ctx, p)
+		if err != nil {
+			return err
+		}
+		if err := m.admitMemory(limitCap, p.NativeModel.Owned.Limits); err != nil {
+			return err
+		}
+	} else if err := m.verifyNativeBinding(ctx, p); err != nil {
+		return err
+	}
+	return m.prepareStart(ctx, p.ID)
 }
 
 // UnitError names the workload and the unit of err, as "id (unit): ". The
@@ -337,13 +342,6 @@ func (m *SystemdManager) resetStoppedFailure(ctx context.Context, unit string, s
 		return err
 	}
 	return m.runSystemctl(ctx, "reset-failed", unit)
-}
-
-func (m *SystemdManager) startUnit(ctx context.Context, unit string, workload control.Workload) error {
-	if err := m.prepareStart(ctx, workload); err != nil {
-		return err
-	}
-	return m.runSystemctl(ctx, "start", unit)
 }
 
 // prepareStart requires the release of the other workloads, a GPU without

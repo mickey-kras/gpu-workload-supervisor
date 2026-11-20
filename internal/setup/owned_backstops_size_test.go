@@ -124,7 +124,7 @@ func TestDerivedOwnedSetupRequestSizeFailsBeforeEffects(t *testing.T) {
 	a, _ := ownedFixtureProfile(t, home, "a", 9100)
 	z, _ := ownedFixtureProfile(t, home, "z", 9200)
 	z.NativeModel.Instance = "z"
-	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a, z}}
+	request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{a, z}}
 	// A valid-size incoming request can cross the same setup wire boundary after
 	// deriving its peer graph. This path only inspects serialized sizes.
 	raw, _ := json.Marshal(request)
@@ -158,7 +158,7 @@ func TestNearLimitLegacyOwnedCatalogUpgradesOnlyOnApply(t *testing.T) {
 	legacyUnits := map[string][]byte{}
 	for i := 0; i < 31; i++ {
 		id := fmt.Sprintf("p%02d", i) + strings.Repeat("x", 61)
-		p, raw := ownedFixtureProfile(t, home, id, uint16(9000+i))
+		p, raw := preSandboxOwnedFixtureProfile(t, home, id, uint16(9000+i))
 		p.NativeModel.Instance = fmt.Sprintf("p%d", i)
 		request.Catalog.Profiles = append(request.Catalog.Profiles, p)
 		legacyUnits[p.Unit] = raw
@@ -294,7 +294,7 @@ func TestCatalogInputBudgetAndMalformedConflictsFailBeforeEffects(t *testing.T) 
 				wantErr = gpuruntime.ErrOwnedRender
 				p, _ := ownedFixtureProfile(t, home, "a", 9100)
 				p.NativeModel.Owned.Conflicts = "not a unit"
-				request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{p}}
+				request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{p}}
 			}
 			encoded, err := json.Marshal(request)
 			if err != nil {

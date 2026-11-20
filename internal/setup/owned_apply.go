@@ -396,11 +396,15 @@ func (m activationReleaseManager) ReleasedFor(ctx context.Context, target contro
 }
 
 func (work activationWork) verifyRuntimes(ctx context.Context, plan unitPlan) (supervisor.Runtime, error) {
-	manager, err := work.backend.makeRuntime(work.request)
+	observed, preflightPlan, err := work.observeLegacyRetry(plan)
 	if err != nil {
 		return nil, err
 	}
-	if err := verifyActivationBindings(ctx, manager, plan); err != nil {
+	manager, err := work.backend.makeRuntime(observed)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyActivationBindings(ctx, manager, preflightPlan); err != nil {
 		return nil, err
 	}
 	if work.existing && work.old.StatePath != "" {
@@ -410,7 +414,7 @@ func (work activationWork) verifyRuntimes(ctx context.Context, plan unitPlan) (s
 		replaced := map[string]bool{}
 		// Before the first commit, only the recorded setup plan has a mapping.
 		if work.accepted.Revision == "" {
-			previous.Catalog = work.request.Catalog
+			previous.Catalog = observed.Catalog
 		} else {
 			for name := range plan.Writes {
 				replaced[filepath.Join(ownedUnitDirectory(work.home), name)] = true
@@ -424,6 +428,9 @@ func (work activationWork) verifyRuntimes(ctx context.Context, plan unitPlan) (s
 	}
 	if err := releasedForSetup(ctx, manager, control.WorkloadIdle); err != nil {
 		return nil, fmt.Errorf("configured workloads have not released the GPU: %w", err)
+	}
+	if legacyArtifactCatalog(work.request.Catalog) {
+		manager = activationObservationManager{Runtime: manager, proof: preflightPlan}
 	}
 	return manager, nil
 }
@@ -546,6 +553,14 @@ func verifyActivationBindings(ctx context.Context, manager supervisor.Runtime, p
 
 func removalObservationCatalog(c control.Catalog) control.Catalog {
 	if !hasUnrunnableBinding(c) {
+		if legacyArtifactCatalog(c) {
+			c = c.Clone()
+			for i, p := range c.Profiles {
+				if legacyArtifactBinding(p) {
+					c.Profiles[i].NativeModel = nil
+				}
+			}
+		}
 		return c
 	}
 	c = c.Clone()
@@ -565,11 +580,9 @@ func removalObservationCatalog(c control.Catalog) control.Catalog {
 
 func (work activationWork) unrunnableBindingPlan() unitPlan {
 	plan := unitPlan{proven: map[string]string{}}
-	if !hasUnrunnableBinding(work.accepted.Catalog) {
-		return plan
-	}
+	stripAll := hasUnrunnableBinding(work.accepted.Catalog)
 	for _, p := range work.accepted.Catalog.Profiles {
-		if p.NativeModel != nil && (p.NativeModel.Owned != nil || p.AdoptedOwnedFile()) {
+		if legacyArtifactBinding(p) || (stripAll && p.NativeModel != nil && (p.NativeModel.Owned != nil || p.AdoptedOwnedFile())) {
 			plan.Deletes = append(plan.Deletes, p.Unit)
 			plan.proven[p.Unit] = p.NativeModel.LaunchSHA256
 		}

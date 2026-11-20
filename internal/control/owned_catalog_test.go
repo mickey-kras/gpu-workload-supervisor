@@ -48,6 +48,36 @@ func TestOwnedCatalogRequiresVersion2(t *testing.T) {
 	}
 }
 
+func TestOwnedArtifactSandboxRequiresVersion7(t *testing.T) {
+	p := ownedVLLMProfile()
+	p.NativeModel.Owned.ArtifactSandbox = true
+	p.NativeModel.ChatTemplate = p.NativeModel.Owned.ModelPath + "/chat_template.jinja"
+	p.NativeModel.ChatTemplateSHA256 = p.NativeModel.LaunchSHA256
+	p.NativeModel.EnvironmentFile = "/home/u/.config/gpu-workload-supervisor/vllm/vision.env"
+	c := Catalog{Version: CatalogVersionServing, Profiles: []WorkloadProfile{p}}
+	if err := c.Validate(); err == nil {
+		t.Fatal("catalog v6 accepted an artifact sandbox")
+	}
+	if version := LowestCatalogVersion(c); version != CatalogVersionArtifactSandbox {
+		t.Fatalf("lowest catalog version = %d", version)
+	}
+	c.Version = CatalogVersionArtifactSandbox
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeCatalogBytes(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.Profiles[0].HasArtifactSandbox() {
+		t.Fatal("catalog serialization dropped the artifact sandbox")
+	}
+}
+
 func TestOwnedCatalogStrictDecode(t *testing.T) {
 	c := Catalog{Version: 2, Profiles: []WorkloadProfile{ownedVLLMProfile()}}
 	raw, err := json.Marshal(c)

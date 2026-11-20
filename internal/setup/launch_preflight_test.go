@@ -45,7 +45,7 @@ func TestApplyPreflightsWrittenOwnedAndDriftedAdoptedBeforeCommit(t *testing.T) 
 			}
 			request.ExpectedRevision = currentRevision(t, request)
 			owned, raw := ownedFixtureProfile(t, home, "vision", 9100)
-			request.Catalog.Version = 2
+			request.Catalog.Version = control.CatalogVersionArtifactSandbox
 			request.Catalog.Profiles = append(request.Catalog.Profiles, owned)
 			if drift {
 				if err := os.WriteFile(external, []byte("drifted adopted launch"), 0600); err != nil {
@@ -106,7 +106,7 @@ func TestAllOwnedActivationPreflightsNewUnitBeforeCatalogCommit(t *testing.T) {
 	backend, home, request := fixture(t)
 	backend.runCommand = fakeOwnedCommandFor(home)
 	owned, raw := ownedFixtureProfile(t, home, "vision", 9100)
-	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{owned}}
+	request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{owned}}
 	checks := 0
 	backend.makeRuntime = func(Request) (supervisor.Runtime, error) {
 		return launchPreflightRuntime{verify: func() error {
@@ -142,7 +142,7 @@ func TestPreviewAndApplyCarryOnlyAcceptedOwnedRemovalProofs(t *testing.T) {
 				t.Fatal(err)
 			}
 			adopted := request.Catalog.Profiles[0]
-			request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{original, adopted}}
+			request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{original, adopted}}
 			if err := backend.Apply(t.Context(), home, request); err != nil {
 				t.Fatal(err)
 			}

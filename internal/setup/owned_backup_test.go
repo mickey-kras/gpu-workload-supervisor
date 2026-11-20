@@ -15,7 +15,7 @@ func TestActivationBackupRestoresRemovedOwnedUnit(t *testing.T) {
 	backend, home, request := fixture(t)
 	backend.runCommand = fakeOwnedCommandFor(home)
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	ctx := context.Background()
 	if err := backend.Apply(ctx, home, request); err != nil {
 		t.Fatal(err)
@@ -90,7 +90,7 @@ func TestActivationBackupRestoresRemovedOwnedUnit(t *testing.T) {
 func TestActivationUnitBackupUsesVerifiedPrewriteBytes(t *testing.T) {
 	home := t.TempDir()
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
-	catalog := control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	catalog := control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	path := profile.NativeModel.LaunchFile
 	if err := mkdirTrusted(filepath.Dir(path)); err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestActivationUnitBackupRejectsUntrustedOrModifiedFiles(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			catalog := control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+			catalog := control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 			if err := collectActivationUnits(home, catalog, unitPlan{}, map[string][]byte{}); err == nil {
 				t.Fatal("accepted unsafe unit backup")
 			}
@@ -156,7 +156,7 @@ func TestActivationKeyBackup(t *testing.T) {
 	home := t.TempDir()
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
 	adopted := control.WorkloadProfile{ID: "text", NativeModel: &control.NativeModel{EnvironmentFile: filepath.Join(home, "elsewhere.env")}}
-	catalog := control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile, adopted, {ID: "media"}}}
+	catalog := control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile, adopted, {ID: "media"}}}
 	files := map[string][]byte{}
 	if err := collectActivationKeys(home, catalog, files); err != nil || len(files) != 0 {
 		t.Fatalf("missing key file = %v, %d files", err, len(files))

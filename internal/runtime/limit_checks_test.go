@@ -79,6 +79,7 @@ func (r *limitRunner) called(call string) bool {
 // iocost, and a stopped owned unit with limits whose cgroup holds the
 // rendered values.
 type limitFixture struct {
+	binding   string
 	m         *SystemdManager
 	r         *limitRunner
 	p         control.WorkloadProfile
@@ -139,7 +140,7 @@ func newLimitFixture(t *testing.T, limits control.ResourceLimits, loaded string)
 	r := &limitRunner{fakeRunner: fakeRunner{outputs: map[string][]byte{textShowCommand: stoppedOutput(), mediaShowCommand: stoppedOutput()}}, unit: p.Unit, cgroup: p.Cgroup}
 	m := strictManager(t, r)
 	catalog := m.config.Catalog.Clone()
-	catalog.Version = control.CatalogVersionLimits
+	catalog.Version = control.CatalogVersionArtifactSandbox
 	for i := range catalog.Profiles {
 		catalog.Profiles[i].Cgroup = limitManagerRoot + "/" + catalog.Profiles[i].Unit
 	}
@@ -151,12 +152,20 @@ func newLimitFixture(t *testing.T, limits control.ResourceLimits, loaded string)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.outputs["/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload --property=ExecStartPre --property=ExecStart --property=Environment --property=EnvironmentFiles -- "+p.Unit] =
-		[]byte("ExecStart={ path=" + strings.Fields(launch.execStart)[0] + " ; argv[]=" + launch.execStart + " ; }\nFragmentPath=" + p.NativeModel.LaunchFile +
-			"\nDropInPaths=\nNeedDaemonReload=no\nEnvironment=HF_HUB_OFFLINE=1\nEnvironmentFiles=" + p.NativeModel.EnvironmentFile + " (ignore_errors=no)\n")
+	binding := strings.Join(append([]string{"/usr/bin/true"}, nativeBindingShowArguments(p.Unit, launch)...), " ")
+	var environment []string
+	for name, value := range launch.environmentValues {
+		environment = append(environment, name+"="+value)
+	}
+	show := "ExecStart={ path=" + strings.Fields(launch.execStart)[0] + " ; argv[]=" + launch.execStart + " ; }\nFragmentPath=" + p.NativeModel.LaunchFile +
+		"\nDropInPaths=\nNeedDaemonReload=no\nEnvironment=" + strings.Join(environment, " ") + "\nEnvironmentFiles=" + p.NativeModel.EnvironmentFile + " (ignore_errors=no)\n"
+	for key, value := range launch.loadedProperties {
+		show += key + "=" + value + "\n"
+	}
+	r.outputs[binding] = []byte(show)
 	r.outputs["/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- "+p.Unit] = stoppedOutput()
 	r.outputs[rootShowCommand] = []byte("LoadState=loaded\nActiveState=active\nSubState=active\nControlGroup=" + limitManagerRoot + "\n")
-	f := &limitFixture{m: m, r: r, p: p, cgroups: t.TempDir(), host: t.TempDir()}
+	f := &limitFixture{binding: binding, m: m, r: r, p: p, cgroups: t.TempDir(), host: t.TempDir()}
 	f.device = unix.Stat_t{Mode: unix.S_IFBLK | 0o660, Uid: uint32(os.Getuid()), Rdev: unix.Mkdev(259, 0)}
 	m.cgroups = cgroupFS{root: f.cgroups, verify: func(int) error { return nil }}
 	m.host = limitHost{root: f.host, owner: uint32(os.Getuid()), uid: 1000, ownerOf: f.ownerOf, lstat: f.lstat, hasXattr: hasXattr,
@@ -267,10 +276,6 @@ func (f *limitFixture) writeShows(loaded string) {
 // from the systemd formats rather than from the code under test.
 const fixtureLoaded = "OOMPolicy=stop\nOOMScoreAdjust=500\nMemoryHigh=4294967296\nMemoryMax=8589934592\nMemorySwapMax=0\nTasksMax=4096\n" +
 	"CPUWeight=200\nCPUQuotaPerSecUSec=4s\nIOWeight=500\nIOReadBandwidthMax=/dev/nvme0n1 536870912\n"
-
-func (f *limitFixture) bindingShow() string {
-	return "/usr/bin/true --user show --property=FragmentPath --property=DropInPaths --property=NeedDaemonReload --property=ExecStartPre --property=ExecStart --property=Environment --property=EnvironmentFiles -- " + f.p.Unit
-}
 
 func (f *limitFixture) unitShow() string {
 	return "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- " + f.p.Unit
@@ -1166,7 +1171,7 @@ func TestHostFileErrorClasses(t *testing.T) {
 // that is a definite limit failure.
 func TestChangedBindingOfLimitedUnitIsDefinite(t *testing.T) {
 	f := newLimitFixture(t, fixtureLimits(), fixtureLoaded)
-	f.edit(f.bindingShow(), "DropInPaths=", "DropInPaths=/run/user/1000/systemd/system.control/"+f.p.Unit+".d/50-MemoryMax.conf")
+	f.edit(f.binding, "DropInPaths=", "DropInPaths=/run/user/1000/systemd/system.control/"+f.p.Unit+".d/50-MemoryMax.conf")
 	for name, check := range map[string]func() error{
 		"health":    func() error { return f.m.Healthy(context.Background(), f.p.ID) },
 		"retention": func() error { return f.m.VerifyLimitProtection(context.Background(), f.p.ID) },
@@ -1339,7 +1344,7 @@ func TestLimitedUnitRunsWithoutEscapeRouteCheck(t *testing.T) {
 // A failed systemctl call proves no binding change: it is not definite.
 func TestBindingCommandFailureIsNotDefinite(t *testing.T) {
 	f := newLimitFixture(t, fixtureLimits(), fixtureLoaded)
-	f.r.errs = map[string]error{f.bindingShow(): errors.New("bus")}
+	f.r.errs = map[string]error{f.binding: errors.New("bus")}
 	err := f.m.VerifyLimitProtection(context.Background(), f.p.ID)
 	if !errors.Is(err, ErrLaunchChanged) || DefiniteBindingFailure(err) || DefiniteLimitFailure(err) || errors.Is(err, ErrLimitCheckFailed) ||
 		err.Error() != "cannot inspect the launch binding: command failed" {
