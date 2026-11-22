@@ -134,7 +134,7 @@ func sandboxContains(parent, path string) bool {
 // ErrSandboxNamespace tells that systemd could not create the namespaces of
 // the artifact sandbox, usually because the host restricts unprivileged user
 // namespaces.
-var ErrSandboxNamespace = errors.New("the host does not let the systemd user manager create the artifact sandbox namespaces; install packaging/apparmor/gpu-workload-supervisor-systemd-user, load it with `sudo apparmor_parser --replace`, then restart the user manager")
+var ErrSandboxNamespace = errors.New("the host does not let the systemd user manager create the artifact sandbox namespaces; install /usr/share/gpu-workload-supervisor/apparmor/gpu-workload-supervisor-systemd-user in /etc/apparmor.d, load it with `sudo apparmor_parser --replace`, then restart the user manager")
 
 // exitNamespace is the systemd exit status of a failed namespace setup.
 const exitNamespace = "226"
