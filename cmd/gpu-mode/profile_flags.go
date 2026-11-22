@@ -12,16 +12,20 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/operator"
 )
 
-const verifyHostCommand = "verify-host"
+const (
+	verifyHostCommand = "verify-host"
+	gpuIndexFlag      = "gpu-index"
+	gpuUUIDFlag       = "gpu-uuid"
+)
 
 // profileFlagNames are the runtime flags that setup stores in the operator
 // profile, in a fixed order for stable error messages.
-var profileFlagNames = []string{"state", "systemctl", "nvidia-smi", "gpu-index", "gpu-uuid", "capacity-headroom-mib"}
+var profileFlagNames = []string{"state", "systemctl", "nvidia-smi", gpuIndexFlag, gpuUUIDFlag, "capacity-headroom-mib"}
 
 func profileFlagValues(p operator.Profile) map[string]string {
 	return map[string]string{
 		"state": p.StatePath, "systemctl": p.SystemctlPath, "nvidia-smi": p.NvidiaSMIPath,
-		"gpu-index": strconv.Itoa(p.GPUIndex), "gpu-uuid": p.GPUUUID, "capacity-headroom-mib": strconv.FormatUint(p.CapacityHeadroomMiB, 10),
+		gpuIndexFlag: strconv.Itoa(p.GPUIndex), gpuUUIDFlag: p.GPUUUID, "capacity-headroom-mib": strconv.FormatUint(p.CapacityHeadroomMiB, 10),
 	}
 }
 
@@ -68,7 +72,7 @@ func mergeProfileFlags(flags *flag.FlagSet, command string, explicit map[string]
 		if !explicit[name] {
 			// An explicit candidate index selects a GPU even when the
 			// current profile selects it by UUID.
-			if command == verifyHostCommand && name == "gpu-uuid" && explicit["gpu-index"] {
+			if command == verifyHostCommand && name == gpuUUIDFlag && explicit[gpuIndexFlag] {
 				continue
 			}
 			if err := flags.Set(name, values[name]); err != nil {
