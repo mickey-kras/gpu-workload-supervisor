@@ -96,9 +96,9 @@ The generated user service mounts the model directory read-only. This includes t
 
 The unit uses private mount propagation so later host mounts cannot replace parts of the read-only model tree. Stop the unit before unmounting host storage that it uses. The running unit retains its mounts until it stops.
 
-Before upgrading an active installation, use the currently activated release and its matching runtime flags to switch to Idle. Use `gpu-mode -target idle switch` for Supervisor ownership or `gpu-mode -target idle user-switch` for User ownership. Cold-stop any service left sleeping with `systemctl --user stop UNIT` before setup. A newer binary cannot operate state marked for a previous release.
+Before upgrading an active installation, use the currently activated release and its matching runtime flags to switch to Idle. Use `gpu-mode -target idle switch` for Supervisor ownership or `gpu-mode -target idle user-switch` for User ownership. Cold-stop any service left sleeping with `systemctl --user stop UNIT` before setup. A newer binary cannot use state marked for a previous release.
 
-If the installed release is already activated with an earlier managed unit, the same Idle switch verifies its binding and stops it. For a latched Supervisor state, run `gpu-mode recover` to drain work and cold-stop the earlier unit, even when its boot policy is `retain`. If recovery retains another workload, switch to Idle before running setup. For latched User ownership, stop the affected services and verify Idle with `gpu-mode -target idle recover-user`.
+If the active release has an earlier managed unit, the same Idle switch checks its binding and stops it. For a latched Supervisor state, run `gpu-mode recover` to drain work and cold-stop the earlier unit, even when its boot policy is `retain`. If recovery retains another workload, switch to Idle before running setup. For latched User ownership, stop the affected services and check Idle with `gpu-mode -target idle recover-user`.
 
 An older managed unit cannot start until you run the setup again. Use a separate process to update model files, then repeat the model checks before serving. Adopted services keep their existing filesystem policy.
 

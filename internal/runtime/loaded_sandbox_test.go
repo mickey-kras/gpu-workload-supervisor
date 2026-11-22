@@ -109,6 +109,13 @@ func TestOwnedSandboxLegacyBindingCanStop(t *testing.T) {
 	if err := m.Healthy(ctx, control.WorkloadIdle); err != nil {
 		t.Fatalf("release after verified cold stop = %v", err)
 	}
+	// Recovery that retains another workload proves this stopped profile released.
+	if err := m.checkReleasedProfile(ctx, p, control.Workload("other"), nil, false); err != nil {
+		t.Fatalf("release for another target after verified cold stop = %v", err)
+	}
+	if err := m.checkReleasedProfile(ctx, p, p.ID, nil, false); !errors.Is(err, ErrLaunchUnsupported) {
+		t.Fatalf("legacy binding passed as release target: %v", err)
+	}
 	p.NativeModel.LaunchSHA256 = strings.Repeat("f", 64)
 	if err := m.PreflightForStop(ctx); !errors.Is(err, ErrOwnedRender) {
 		t.Fatalf("shutdown preflight accepted changed fingerprint: %v", err)
