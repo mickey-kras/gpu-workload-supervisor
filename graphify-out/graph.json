@@ -7029,7 +7029,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_profile_flags_applyprofiledefaults",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L55",
+      "source_location": "L59",
       "target": "cmd_gpu_mode_profile_flags_brokenprofile",
       "weight": 1.0
     },
@@ -7041,7 +7041,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_profile_flags_applyprofiledefaults",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L58",
+      "source_location": "L62",
       "target": "cmd_gpu_mode_profile_flags_samestatepath",
       "weight": 1.0
     },
@@ -7053,7 +7053,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_profile_flags_applyprofiledefaults",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L63",
+      "source_location": "L67",
       "target": "cmd_gpu_mode_profile_flags_mergeprofileflags",
       "weight": 1.0
     },
@@ -7065,7 +7065,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_profile_flags_applyprofiledefaults",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L63",
+      "source_location": "L67",
       "target": "cmd_gpu_mode_profile_flags_profileflagvalues",
       "weight": 1.0
     },
@@ -7077,7 +7077,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_profile_flags_brokenprofile",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L93",
+      "source_location": "L97",
       "target": "cmd_gpu_mode_profile_flags_usesruntime",
       "weight": 1.0
     },
@@ -7089,7 +7089,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_profile_flags_pinprofile",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L129",
+      "source_location": "L133",
       "target": "cmd_gpu_mode_profile_flags_samestatepath",
       "weight": 1.0
     },
@@ -7101,7 +7101,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_profile_flags_pinprofile",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L133",
+      "source_location": "L137",
       "target": "cmd_gpu_mode_profile_flags_profileflagvalues",
       "weight": 1.0
     },
@@ -8157,7 +8157,7 @@
       "relation": "calls",
       "source": "gpu_mode_profilepin_check",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L141",
+      "source_location": "L145",
       "target": "cmd_gpu_mode_profile_flags_pinprofile",
       "weight": 1.0
     },
@@ -101640,7 +101640,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_profile_flags_applyprofiledefaults",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L47",
+      "source_location": "L51",
       "target": "go_type_flag_flagset",
       "weight": 1.0
     },
@@ -101652,7 +101652,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_profile_flags_applyprofiledefaults",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L47",
+      "source_location": "L51",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_operator_profile",
       "weight": 1.0
     },
@@ -101664,7 +101664,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_profile_flags_mergeprofileflags",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L66",
+      "source_location": "L70",
       "target": "go_type_flag_flagset",
       "weight": 1.0
     },
@@ -101676,7 +101676,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_profile_flags_pinprofile",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L121",
+      "source_location": "L125",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_operator_profile",
       "weight": 1.0
     },
@@ -101688,7 +101688,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_profile_flags_profileflagvalues",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L21",
+      "source_location": "L25",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_operator_profile",
       "weight": 1.0
     },
@@ -104160,7 +104160,7 @@
       "relation": "references",
       "source": "gpu_mode_profilepin_check",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L140",
+      "source_location": "L144",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_operator_profile",
       "weight": 1.0
     },
@@ -157080,7 +157080,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_profile_flags_pinprofile",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L121",
+      "source_location": "L125",
       "target": "gpu_mode_profilepin",
       "weight": 1.0
     },
@@ -170823,7 +170823,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_profile_flags",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L100",
+      "source_location": "L104",
       "target": "cmd_gpu_mode_profile_flags_samestatepath",
       "weight": 1.0
     },
@@ -170834,7 +170834,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_profile_flags",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L114",
+      "source_location": "L118",
       "target": "gpu_mode_profilepin",
       "weight": 1.0
     },
@@ -170845,7 +170845,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_profile_flags",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L121",
+      "source_location": "L125",
       "target": "cmd_gpu_mode_profile_flags_pinprofile",
       "weight": 1.0
     },
@@ -170856,7 +170856,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_profile_flags",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L21",
+      "source_location": "L25",
       "target": "cmd_gpu_mode_profile_flags_profileflagvalues",
       "weight": 1.0
     },
@@ -170867,7 +170867,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_profile_flags",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L30",
+      "source_location": "L34",
       "target": "cmd_gpu_mode_profile_flags_usesruntime",
       "weight": 1.0
     },
@@ -170878,7 +170878,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_profile_flags",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L47",
+      "source_location": "L51",
       "target": "cmd_gpu_mode_profile_flags_applyprofiledefaults",
       "weight": 1.0
     },
@@ -170889,7 +170889,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_profile_flags",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L66",
+      "source_location": "L70",
       "target": "cmd_gpu_mode_profile_flags_mergeprofileflags",
       "weight": 1.0
     },
@@ -170900,7 +170900,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_profile_flags",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L92",
+      "source_location": "L96",
       "target": "cmd_gpu_mode_profile_flags_brokenprofile",
       "weight": 1.0
     },
@@ -218629,7 +218629,7 @@
       "relation": "method",
       "source": "gpu_mode_profilepin",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L140",
+      "source_location": "L144",
       "target": "gpu_mode_profilepin_check",
       "weight": 1.0
     },
@@ -292854,10 +292854,10 @@
     }
   ],
   "graph": {
-    "content_sha256": "0ea776706ccca1bcd7d867dd1d26ec0cc00f2adf3b90e3340883cb44b5a0d243",
+    "content_sha256": "056057920d9dc6ed08ed16d633cb43209db291a04e2e9c277d080bede82d12ec",
     "graphify_version": "0.9.105",
     "scope": "Application code, tests and authored Markdown documentation",
-    "source_sha256": "f5e36bb319e638dbfd567b300049e5c7813c2bacf23bbbea238a8c07ed98a7f1",
+    "source_sha256": "c2851176738ea0aaed2e6eb5ea5211878829b503f42bd4b64ff5a11e88e2db2d",
     "tool_sha256": "165bc875ce63148e53e539714174b83612e5c2efccd74ef793f03cc39175b4f0"
   },
   "hyperedges": [],
@@ -293332,7 +293332,7 @@
       "label": "profilePin",
       "norm_label": "profilepin",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L114"
+      "source_location": "L118"
     },
     {
       "_callable": true,
@@ -305116,7 +305116,7 @@
       "label": "applyProfileDefaults()",
       "norm_label": "applyprofiledefaults()",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L47"
+      "source_location": "L51"
     },
     {
       "_callable": true,
@@ -305127,7 +305127,7 @@
       "label": "brokenProfile()",
       "norm_label": "brokenprofile()",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L92"
+      "source_location": "L96"
     },
     {
       "_callable": true,
@@ -305138,7 +305138,7 @@
       "label": "mergeProfileFlags()",
       "norm_label": "mergeprofileflags()",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L66"
+      "source_location": "L70"
     },
     {
       "_callable": true,
@@ -305149,7 +305149,7 @@
       "label": "pinProfile()",
       "norm_label": "pinprofile()",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L121"
+      "source_location": "L125"
     },
     {
       "_callable": true,
@@ -305160,7 +305160,7 @@
       "label": "profileFlagValues()",
       "norm_label": "profileflagvalues()",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L21"
+      "source_location": "L25"
     },
     {
       "_callable": true,
@@ -305171,7 +305171,7 @@
       "label": "sameStatePath()",
       "norm_label": "samestatepath()",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L100"
+      "source_location": "L104"
     },
     {
       "_callable": true,
@@ -305292,7 +305292,7 @@
       "label": "usesRuntime()",
       "norm_label": "usesruntime()",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L30"
+      "source_location": "L34"
     },
     {
       "_callable": true,
@@ -307701,7 +307701,7 @@
       "label": ".check()",
       "norm_label": ".check()",
       "source_file": "cmd/gpu-mode/profile_flags.go",
-      "source_location": "L140"
+      "source_location": "L144"
     },
     {
       "_callable": true,
