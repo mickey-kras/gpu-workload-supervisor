@@ -155,6 +155,9 @@ func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) e
 	if !limited && !sandboxed {
 		return err
 	}
+	if err != nil && sandboxed {
+		err = m.sandboxStartError(ctx, p.Unit, err)
+	}
 	if err == nil && sandboxed {
 		err = m.verifyNativeBinding(ctx, p)
 	}

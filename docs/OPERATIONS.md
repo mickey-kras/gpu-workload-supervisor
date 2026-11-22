@@ -102,7 +102,16 @@ If the active release has an earlier managed unit, the same Idle switch checks i
 
 An older managed unit cannot start until you run the setup again. Use a separate process to update model files, then repeat the model checks before serving. Adopted services keep their existing filesystem policy.
 
-The host must support user namespaces for the systemd user service. The supervisor checks the loaded service properties. The host kernel enforces write access. Keep the weights, tokenizer and metadata inside the model directory. A link to a file on a writable filesystem can leave that file outside the read-only mount. Run the model checks before serving.
+The systemd user service needs a user namespace for the sandbox. Ubuntu 23.10 and later restrict unprivileged user namespaces, and the managed unit then fails with status `226/NAMESPACE`. To let only the systemd user manager create the namespace, install the packaged AppArmor profile once as root:
+
+```sh
+sudo install -m 0644 packaging/apparmor/gpu-workload-supervisor-systemd-user /etc/apparmor.d/
+sudo apparmor_parser --replace /etc/apparmor.d/gpu-workload-supervisor-systemd-user
+```
+
+Then log out and log in again, or restart `user@UID.service`. The user manager gets the profile only when it starts. Hosts without the restriction need no profile.
+
+The supervisor checks the loaded service properties. The host kernel enforces write access. Keep the weights, tokenizer and metadata inside the model directory. A link to a file on a writable filesystem can leave that file outside the read-only mount. Run the model checks before serving.
 
 ### vLLM KV cache and batching options
 

@@ -2,7 +2,9 @@ package runtime
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -127,4 +129,26 @@ func (u *parsedLaunchUnit) recordOwnedArtifactSandbox(n control.NativeModel) err
 
 func sandboxContains(parent, path string) bool {
 	return parent == path || strings.HasPrefix(path, strings.TrimSuffix(parent, "/")+"/")
+}
+
+// ErrSandboxNamespace tells that systemd could not create the namespaces of
+// the artifact sandbox, usually because the host restricts unprivileged user
+// namespaces.
+var ErrSandboxNamespace = errors.New("the host does not let the systemd user manager create the artifact sandbox namespaces; install packaging/apparmor/gpu-workload-supervisor-systemd-user, load it with `sudo apparmor_parser --replace`, then restart the user manager")
+
+// exitNamespace is the systemd exit status of a failed namespace setup.
+const exitNamespace = "226"
+
+// sandboxStartError names the host fix when the unit failed to set up its
+// namespaces. Other start failures keep their original error.
+func (m *SystemdManager) sandboxStartError(ctx context.Context, unit string, err error) error {
+	out, showErr := m.runner.Run(ctx, m.config.SystemctlPath, systemctlUserFlag, "show", "--property=ExecMainStatus", "--", unit)
+	if showErr != nil {
+		return err
+	}
+	values, parseErr := ParseUnitProperties(out)
+	if parseErr != nil || values["ExecMainStatus"] != exitNamespace {
+		return err
+	}
+	return errors.Join(ErrSandboxNamespace, err)
 }
