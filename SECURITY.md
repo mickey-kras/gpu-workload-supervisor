@@ -38,6 +38,26 @@ Processes with that UID can replace state between validation and the SQLite open
 File checks do not isolate mutually untrusted processes that share a UID.
 Use separate service identities.
 
+## Agents and tool executors
+
+Do not trust an agent, its tools or the documents that it reads. The supervisor alone controls workload lifecycle, configuration and model files. Text from a model, a tool or a document cannot start, stop or change a workload.
+
+| Part | Identity | Access |
+| --- | --- | --- |
+| Supervisor, proxy and runtimes | Service UID | State, control and model files |
+| Agent and tool executor | A different, unprivileged UID | Inference through the proxy only |
+| Model updater | Operator, outside the runtime units | Model files, then setup and model checks |
+
+The boundary uses Unix identities, not a network sandbox:
+
+- The supervisor has no control socket. Lifecycle commands open the SQLite state. Only the service UID can open the state: it must be a private `0600` file in directories that other users cannot write.
+- In `trusted` ingress, the proxy closes connections from other UIDs. An agent of a different UID needs [adapter ingress](docs/INTEGRATION.md#trusted-adapter-ingress) and the execution credential. Do not give it the completion credential.
+- The proxy forwards only the configured routes. A native vLLM binding accepts only `POST` to `/v1/chat/completions`, `/v1/completions` and `/v1/embeddings`, and `GET /v1/models`.
+- The vLLM key file is private to the service UID. Setup refuses `VLLM_SERVER_DEV_MODE`, plugins and adapters that load at run time. Thus vLLM does not open its development routes, and a caller cannot load an adapter.
+- Supervisor-managed vLLM units mount the model files read-only.
+
+Run each agent and tool executor as a different UID. Do not add that UID to the service UID group. Do not mount the state directory, the key files, the user systemd directory or the model directory into its container. Do not run tools as the service UID: file checks do not isolate processes that share a UID.
+
 CI uses pinned GitHub Actions, Go vulnerability analysis, dependency review,
 Gitleaks, Semgrep, Trivy, CodeQL, Aislop, and main-only SonarQube. Dependabot
 ecosystems and update rules are in [dependabot.yml](.github/dependabot.yml).
