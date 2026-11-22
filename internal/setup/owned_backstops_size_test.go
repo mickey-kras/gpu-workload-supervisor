@@ -33,12 +33,12 @@ func TestMaximumOwnedBackstopCatalogRoundTrips(t *testing.T) {
 	// Maximum workload IDs give the longest owned unit names. Fill the input
 	// budget through a clean placement prefix, retaining the owned suffix.
 	p := &request.Catalog.Profiles[0]
-	base, err := json.Marshal(request.Catalog)
+	base, err := json.Marshal(inputCatalog(request.Catalog))
 	if err != nil {
 		t.Fatal(err)
 	}
 	p.Cgroup = "/" + strings.Repeat("x", control.MaxCatalogInputBytes-len(base)) + strings.TrimPrefix(p.Cgroup, "/")
-	base, err = json.Marshal(request.Catalog)
+	base, err = json.Marshal(inputCatalog(request.Catalog))
 	if err != nil || len(base) != control.MaxCatalogInputBytes {
 		t.Fatalf("maximum input fixture size=%d: %v", len(base), err)
 	}
@@ -407,4 +407,17 @@ func TestSetupWholeRequestSizeLimit(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".config/gpu-workload-supervisor")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("whole-request size rejection wrote activation files", err)
 	}
+}
+
+// inputCatalog drops the setup-derived owned fields that the input size limit
+// does not count.
+func inputCatalog(c control.Catalog) control.Catalog {
+	c = c.Clone()
+	for i := range c.Profiles {
+		if o := c.Profiles[i].NativeModel; o != nil && o.Owned != nil {
+			o.Owned.Conflicts = ""
+			o.Owned.ArtifactSandbox = false
+		}
+	}
+	return c
 }
