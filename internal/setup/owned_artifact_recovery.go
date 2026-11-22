@@ -20,7 +20,7 @@ func (work activationWork) observeLegacyRetry(plan unitPlan) (Request, unitPlan,
 	if err := verifyOwnedUnitRenderings(work.home, observed.Catalog); err != nil {
 		return observed, plan, err
 	}
-	observed.Catalog = observed.Catalog.Clone()
+	observed.Catalog, observed.observation = observed.Catalog.Clone(), true
 	proof := unitPlan{Deletes: append([]string(nil), plan.Deletes...), proven: maps.Clone(plan.proven)}
 	for i, p := range observed.Catalog.Profiles {
 		if legacyArtifactBinding(p) {

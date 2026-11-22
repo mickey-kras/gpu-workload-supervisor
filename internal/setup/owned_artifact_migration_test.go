@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,5 +101,32 @@ func TestSetupReplacesOrRemovesPreSandboxOwnedUnit(t *testing.T) {
 				t.Fatal("setup did not prove the accepted legacy bytes")
 			}
 		})
+	}
+}
+
+// A stripped legacy binding has no GPU identity. Setup must still observe it
+// on a deployment pinned to a GPU UUID, without allowing execution.
+func TestLegacyObservationKeepsGPUPinnedRuntime(t *testing.T) {
+	_, home, request := fixture(t)
+	const uuid = "GPU-01234567-89ab-cdef-0123-456789abcdef"
+	legacy, _ := preSandboxOwnedFixtureProfile(t, home, "vision", 9100)
+	legacy.NativeModel.GPUUUID = uuid
+	request.Profile.GPUUUID = uuid
+	executable := filepath.Join(home, "never-run")
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	request.Profile.SystemctlPath, request.Profile.NvidiaSMIPath = executable, executable
+	request.Catalog = removalObservationCatalog(control.Catalog{Version: control.CatalogVersionOwned, Profiles: []control.WorkloadProfile{legacy}})
+	if _, err := runtimeFor(request); err == nil || !strings.Contains(err.Error(), "GPU UUID") {
+		t.Fatalf("an execution runtime accepted a workload without GPU identity: %v", err)
+	}
+	request.observation = true
+	manager, err := runtimeFor(request)
+	if err != nil {
+		t.Fatalf("observation runtime = %v", err)
+	}
+	if err := manager.Start(t.Context(), legacy.ID); err == nil {
+		t.Fatal("observation runtime started a workload")
 	}
 }

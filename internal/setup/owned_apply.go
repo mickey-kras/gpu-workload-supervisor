@@ -341,7 +341,7 @@ func (work activationWork) verifyAcceptedRuntime(ctx context.Context) error {
 	}
 	previous := work.request
 	previous.Profile = work.old
-	previous.Catalog = removalObservationCatalog(work.accepted.Catalog)
+	previous.Catalog, previous.observation = removalObservationCatalog(work.accepted.Catalog), true
 	manager, err := work.backend.makeRuntime(previous)
 	if err != nil {
 		return err
@@ -410,7 +410,7 @@ func (work activationWork) verifyRuntimes(ctx context.Context, plan unitPlan) (s
 	if work.existing && work.old.StatePath != "" {
 		previous := work.request
 		previous.Profile = work.old
-		previous.Catalog = removalObservationCatalog(work.accepted.Catalog)
+		previous.Catalog, previous.observation = removalObservationCatalog(work.accepted.Catalog), true
 		replaced := map[string]bool{}
 		// Before the first commit, only the recorded setup plan has a mapping.
 		if work.accepted.Revision == "" {

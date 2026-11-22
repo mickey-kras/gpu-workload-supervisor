@@ -64,7 +64,14 @@ type SystemdConfig struct {
 	// OwnedUnitDir locates supervisor-owned unit files for the preflight
 	// orphan scan; empty derives the effective user's systemd user directory.
 	OwnedUnitDir string
+	// ObservationOnly builds a manager that only proves bindings and
+	// release. Setup strips bindings that cannot run from its observation
+	// catalogs, so such a profile may lack GPU identity; the manager then
+	// refuses to start or wake any workload.
+	ObservationOnly bool
 }
+
+var errObservationOnly = errors.New("an observation-only runtime cannot start workloads")
 
 type SystemdManager struct {
 	config                    SystemdConfig
@@ -126,6 +133,9 @@ func newSystemdManager(config SystemdConfig, runner CommandRunner, client *http.
 }
 
 func (m *SystemdManager) Start(ctx context.Context, workload control.Workload) error {
+	if m.config.ObservationOnly {
+		return errObservationOnly
+	}
 	p, ok := m.config.Catalog.Profile(workload)
 	if !ok {
 		return errors.New("unconfigured workload")
@@ -434,7 +444,8 @@ func (config *SystemdConfig) prepareWorkloads() error {
 		return err
 	}
 	for _, p := range cloned.Profiles {
-		if config.GPUUUID != "" && profileGPUUUID(p) != config.GPUUUID {
+		uuid := profileGPUUUID(p)
+		if config.GPUUUID != "" && uuid != config.GPUUUID && (uuid != "" || !config.ObservationOnly) {
 			return errors.New("each workload must bind the configured GPU UUID")
 		}
 		if p.RequiredMiB > ^uint64(0)-config.CapacityHeadroomMiB {
