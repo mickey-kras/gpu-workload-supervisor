@@ -3,10 +3,12 @@
 package supervisor
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -106,7 +108,7 @@ exec /usr/bin/sleep infinity
 		systemdCommand(t, "daemon-reload")
 	})
 	systemdCommand(t, "daemon-reload")
-	systemdCommand(t, "start", unit)
+	startSandboxUnit(t, unit)
 
 	runtimeRoot := os.Getenv("XDG_RUNTIME_DIR")
 	if runtimeRoot == "" {
@@ -156,4 +158,20 @@ exec /usr/bin/sleep infinity
 	if _, err := os.Stat(filepath.Join(model, "new.safetensors")); !os.IsNotExist(err) {
 		t.Fatalf("unexpected artifact creation: %v", err)
 	}
+}
+
+// startSandboxUnit reports why systemd could not set up the sandbox, which
+// systemctl start alone does not show.
+func startSandboxUnit(t *testing.T, unit string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "systemctl", "--user", "start", unit).CombinedOutput()
+	if err == nil {
+		return
+	}
+	status, _ := exec.CommandContext(ctx, "systemctl", "--user", "show", "--property=Result", "--property=ExecMainCode", "--property=ExecMainStatus", unit).CombinedOutput()
+	journal, _ := exec.CommandContext(ctx, "journalctl", "--user", "--unit", unit, "--no-pager", "--lines", "20").CombinedOutput()
+	userns, _ := os.ReadFile("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
+	t.Fatalf("start %s: %v: %s\n%s\njournal:\n%s\napparmor_restrict_unprivileged_userns=%q", unit, err, output, status, journal, strings.TrimSpace(string(userns)))
 }
