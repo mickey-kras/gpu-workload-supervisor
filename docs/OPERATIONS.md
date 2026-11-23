@@ -754,9 +754,9 @@ A request is a wake signal for the proxy workload. The proxy queues the demand f
 
 The supervisor defers a switch until the admitted work of the current workload finishes. The proxy then waits and tries again, thus a switch never interrupts work. A switch never stops a trainer. A request during a running transition, for example an idle stop, waits for its end. Concurrent requests start one activation. The other requests see the running transition and wait.
 
-`-demand-wait-timeout` limits the wait. The default is 5 minutes, which covers a cold load of a large model. A timeout or a closed client connection returns HTTP 409 `demand_queued` and keeps the queued demand. Callers keep payloads and explicitly retry. No replay worker.
+`-demand-wait-timeout` limits the wait. The default is 5 minutes, which covers a cold load of a large model. A timeout or a closed client connection returns HTTP 409 `demand_timeout` and cancels the demand, so it does not block the idle policy. Callers keep payloads and retry with a new request ID. No replay worker.
 
-A refused activation returns HTTP 409 `demand_rejected` immediately. Examples are `gpu_in_use`, `wrong_owner`, `recovery_required` and `incompatible_configuration`. User ownership or a health change during the wait also returns `demand_rejected`. The demand stays queued.
+A refused activation returns HTTP 409 `demand_rejected` immediately. Examples are `gpu_in_use`, `wrong_owner`, `recovery_required` and `incompatible_configuration`. User ownership or a health change during the wait also returns `demand_rejected`. The proxy cancels the demand.
 
 Only requester ingress wakes a workload. Standard execution with caller fence headers never activates a workload. Each waiting request holds one `-max-inflight` slot.
 

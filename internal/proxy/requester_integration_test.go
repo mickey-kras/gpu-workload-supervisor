@@ -161,7 +161,9 @@ func TestRequesterQueuedDemandCancellation(t *testing.T) {
 	if err := f.rows.QueryRow(`SELECT COUNT(*) FROM registered_work`).Scan(&work); err != nil {
 		t.Fatal(err)
 	}
-	if queued != 1 || cancelled != 1 || work != 0 {
+	// Neither demand dispatched, so neither stays queued: both block the idle
+	// policy otherwise. Cancelling an already cancelled demand succeeds.
+	if queued != 0 || cancelled != 2 || work != 0 {
 		t.Fatalf("queued=%d cancelled=%d dispatched=%d", queued, cancelled, work)
 	}
 }

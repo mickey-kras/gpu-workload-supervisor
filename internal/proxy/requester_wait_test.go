@@ -44,7 +44,7 @@ func idleRequesterState(state *control.State) {
 	state.Admission, state.Phase = control.AdmissionClosed, control.PhaseStable
 }
 
-func TestRequesterDemandWaitTimeoutKeepsDemandQueued(t *testing.T) {
+func TestRequesterDemandWaitTimeoutCancelsDemand(t *testing.T) {
 	f := newContractFixture(t)
 	ctx := context.Background()
 	state := f.state
@@ -65,13 +65,13 @@ func TestRequesterDemandWaitTimeoutKeepsDemandQueued(t *testing.T) {
 	w := httptest.NewRecorder()
 	started := time.Now()
 	h.ServeHTTP(w, r)
-	if w.Code != 409 || !strings.Contains(w.Body.String(), "demand_queued") {
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "demand_timeout") {
 		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
 	if time.Since(started) < c.DemandWaitTimeout || calls.Load() < 2 || dispatched.Load() != 0 {
 		t.Fatalf("wait ended early: calls=%d dispatched=%d", calls.Load(), dispatched.Load())
 	}
-	assertDemandReservation(t, f, "queued", 0)
+	assertDemandReservation(t, f, "cancelled", 0)
 }
 
 func TestRequesterDemandFailsFastOnRefusedActivation(t *testing.T) {

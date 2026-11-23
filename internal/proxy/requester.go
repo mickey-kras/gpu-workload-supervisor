@@ -219,8 +219,15 @@ func (h *Handler) dispatchDemand(w http.ResponseWriter, r *http.Request, demands
 		writeDemandError(w, err)
 		return
 	}
-	state, ok := h.awaitDemandWorkload(w, r, state)
-	if !ok {
+	state, status, code := h.awaitDemandWorkload(r, state)
+	if code != "" {
+		// A demand that will not be dispatched must not stay queued: queued
+		// demand blocks the idle policy. A retry needs a new request ID.
+		if err := demands.CancelDemand(context.WithoutCancel(r.Context()), demand); err != nil {
+			writeDemandError(w, err)
+			return
+		}
+		writeError(w, status, code)
 		return
 	}
 	claim, err := demands.ReserveDemand(r.Context(), demand)
@@ -249,39 +256,35 @@ func (h *Handler) dispatchDemand(w http.ResponseWriter, r *http.Request, demands
 // switch while the current workload has open work, so the wait never cuts off
 // work in flight. A concurrent request sees the running transition and waits.
 // A timeout or a gone client keeps the demand queued.
-func (h *Handler) awaitDemandWorkload(w http.ResponseWriter, r *http.Request, state control.State) (control.State, bool) {
+func (h *Handler) awaitDemandWorkload(r *http.Request, state control.State) (control.State, int, string) {
 	ctx, cancel := context.WithTimeout(r.Context(), h.demandWait)
 	defer cancel()
 	for {
 		if state.Owner != control.OwnerSupervisor || state.Health != control.HealthHealthy {
-			writeError(w, http.StatusConflict, "demand_rejected")
-			return state, false
+			return state, http.StatusConflict, "demand_rejected"
 		}
 		if state.Phase == control.PhaseStable && state.ActiveWorkload == h.workload && state.Admission == control.AdmissionOpen {
-			return state, true
+			return state, 0, ""
 		}
 		activated := false
 		if state.Phase == control.PhaseStable && state.ActiveWorkload != h.workload {
 			// The loop reads the committed state again, so the fence is not used.
 			_, err := h.activateDemand(ctx, h.workload, state, h.catalogRevision)
 			if err != nil && ctx.Err() == nil && !errors.Is(err, ErrActivationRetry) {
-				writeError(w, http.StatusConflict, "demand_rejected")
-				return state, false
+				return state, http.StatusConflict, "demand_rejected"
 			}
 			activated = err == nil
 		}
 		if !activated {
 			select {
 			case <-ctx.Done():
-				writeError(w, http.StatusConflict, "demand_queued")
-				return state, false
+				return state, http.StatusConflict, "demand_timeout"
 			case <-time.After(h.demandPoll):
 			}
 		}
 		next, err := h.store.State(r.Context())
 		if err != nil {
-			writeError(w, http.StatusServiceUnavailable, "state_unavailable")
-			return state, false
+			return state, http.StatusServiceUnavailable, "state_unavailable"
 		}
 		state = next
 	}

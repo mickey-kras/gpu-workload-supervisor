@@ -202,7 +202,7 @@ func TestRequesterAmbiguousAdmissionCannotRequeueOrReplay(t *testing.T) {
 	}
 }
 
-func TestRequesterCancelledActivationRequeuesDurably(t *testing.T) {
+func TestRequesterCancelledActivationCancelsDemand(t *testing.T) {
 	f := newContractFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -231,5 +231,5 @@ func TestRequesterCancelledActivationRequeuesDurably(t *testing.T) {
 	if w.Code != 409 {
 		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
-	assertDemandReservation(t, f, "queued", 0)
+	assertDemandReservation(t, f, "cancelled", 0)
 }
