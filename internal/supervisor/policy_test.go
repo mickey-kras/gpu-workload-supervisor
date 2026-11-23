@@ -14,8 +14,9 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
-// idleRuntime counts the cold release checks, so a test can tell a cold
-// stop from a normal unload.
+// idleRuntime counts the cold release checks. An idle stop must use the
+// normal release check, like an operator switch to Idle: a media-unload
+// workload keeps its service running after an unload.
 type idleRuntime struct {
 	*fakeRuntime
 	coldChecks int
@@ -142,7 +143,7 @@ func tickController(t *testing.T, s *store.Store, r Runtime, now func() time.Tim
 	return controller
 }
 
-func TestIdleTickColdStopsAfterTimeout(t *testing.T) {
+func TestIdleTickStopsAfterTimeout(t *testing.T) {
 	for _, tick := range []string{"idle tick", "policy tick"} {
 		t.Run(tick, func(t *testing.T) {
 			f := newIdleFixture(t, testCatalog(), control.WorkloadText, 5)
@@ -167,8 +168,8 @@ func TestIdleTickColdStopsAfterTimeout(t *testing.T) {
 			if !strings.Contains(strings.Join(f.r.calls, ","), "stop "+string(control.WorkloadText)) {
 				t.Fatalf("workload never stopped: %v", f.r.calls)
 			}
-			if f.r.coldChecks == 0 {
-				t.Fatal("idle stop did not use the cold release check")
+			if f.r.coldChecks != 0 {
+				t.Fatal("idle stop used the cold release check, which a media-unload workload cannot pass")
 			}
 			if stops := f.idleStops(t); len(stops) != 1 || stops[0] != "committed" {
 				t.Fatalf("journaled idle stops = %v", stops)

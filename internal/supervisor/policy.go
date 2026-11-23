@@ -13,7 +13,7 @@ import (
 const inactivityPolicyInitiator = "inactivity-policy"
 
 // IdleTick runs the inactivity policy once. With the policy on, it
-// cold-stops the active workload to Idle when no activity happened for the
+// stops the active workload to Idle when no activity happened for the
 // timeout. It acts only on a healthy, stable, supervisor-owned workload with
 // open admission, and never on a trainer. A state that does not qualify is a
 // clean no-op, as is a stop that activity preempts. The store checks every
@@ -69,7 +69,7 @@ func (c *Controller) IdleTick(ctx context.Context) error {
 		return err
 	}
 	_, err = c.executeTransition(ctx, transition, state, current, control.WorkloadIdle, transitionOptions{
-		sourceOwner: control.OwnerSupervisor, targetOwner: control.OwnerSupervisor, coldStop: true,
+		sourceOwner: control.OwnerSupervisor, targetOwner: control.OwnerSupervisor,
 	})
 	return err
 }

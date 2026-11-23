@@ -781,7 +781,7 @@ Use [typed activation](#demand-activation) for preconditions, readiness checks, 
 
 ### Idle transition
 
-With the policy on, the [policy tick](#inactivity-policy-tick) stops the active workload to Idle after the timeout. The deadline is the last activity plus the timeout. The stop is a cold stop: it stops each unit and checks the release of the GPU. The journal names the transition `inactivity-policy`.
+With the policy on, the [policy tick](#inactivity-policy-tick) stops the active workload to Idle after the timeout. The deadline is the last activity plus the timeout. The stop uses the same release checks as a switch to Idle. The journal names the transition `inactivity-policy`.
 
 The tick acts only on a healthy, stable, supervisor-owned workload with open admission. It never stops a trainer. One writer transaction checks these conditions again and starts the stop. In that transaction, these conditions also stop the transition:
 
