@@ -149,6 +149,7 @@ func limitedController(t *testing.T, catalog control.Catalog) (*Controller, *lim
 	}
 	r := &limitedRuntime{fakeRuntime: fakeRuntime{active: control.WorkloadText, mediaReady: true}, statePath: statePath}
 	c := testController(t, s, r)
+	allowCheckedModels(t, c, s)
 	n := 0
 	c.id = func() (string, error) { n++; return fmt.Sprintf("11111111-1111-4111-8111-%012d", n), nil }
 	return c, r, s

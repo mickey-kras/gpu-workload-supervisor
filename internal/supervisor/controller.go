@@ -105,6 +105,8 @@ type Controller struct {
 	config  Config
 	now     func() time.Time
 	id      func() (string, error)
+	// modelFilesUnchanged reads the model directory for the launch gate.
+	modelFilesUnchanged func(modelcheck.Record) error
 }
 
 func New(stateStore *store.Store, runtime Runtime, config Config) (*Controller, error) {
@@ -127,7 +129,8 @@ func newController(stateStore storeGateway, runtime Runtime, config Config, now 
 		return nil, err
 	}
 	config.Catalog = &snapshot
-	return &Controller{store: stateStore, runtime: runtime, config: config, now: now, id: id}, nil
+	return &Controller{store: stateStore, runtime: runtime, config: config, now: now, id: id,
+		modelFilesUnchanged: modelcheck.Record.FilesUnchanged}, nil
 }
 
 func (c *Controller) Reconcile(ctx context.Context) (control.State, error) {

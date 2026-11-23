@@ -35,6 +35,7 @@ const reasons = {
     'files-changed': 'The model files changed after the last check.',
     'files-unavailable': 'Setup cannot read the model files.',
     'files-unidentified': 'Setup cannot identify the model files of this workload.',
+    'adopted-launch': 'Setup does not manage this vLLM service, so it cannot check its model files. Set it up as a supervisor-managed launch to start it.',
     'model-changed': 'The model changed in this selection. It has not been checked.',
 };
 // A recheck can change only these reasons, so only they keep the button.

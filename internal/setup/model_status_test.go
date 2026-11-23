@@ -76,14 +76,14 @@ func writeStatusProfile(t *testing.T, home string, profile Profile) {
 // template checks passed for the files at root.
 func statusRecord(t *testing.T, model, root string) modelcheck.Record {
 	t.Helper()
-	files, reason, err := modelcheck.Inventory(context.Background(), root)
+	files, stats, reason, err := modelcheck.InventoryWithStats(context.Background(), root)
 	if err != nil || reason != "" {
 		t.Fatalf("inventory: %q %v", reason, err)
 	}
 	return modelcheck.Record{
 		Version: modelcheck.RecordVersion, Model: model, Root: root,
 		Source: modelcheck.Source{Repo: "example-org/model", Revision: strings.Repeat("b", 40)},
-		Files:  files, Status: modelcheck.StatusNotScanned, Coverage: modelcheck.CoveragePartial,
+		Files:  files, FileStats: stats, Status: modelcheck.StatusNotScanned, Coverage: modelcheck.CoveragePartial,
 		Checks: []modelcheck.Check{
 			{Name: modelcheck.CheckAllowlist, Outcome: modelcheck.OutcomePassed},
 			{Name: modelcheck.CheckIdentity, Outcome: modelcheck.OutcomePassed},
@@ -124,12 +124,12 @@ func TestModelStatusUsesTheStoredResults(t *testing.T) {
 		t.Fatalf("owned status: %+v", owned)
 	}
 	for id, want := range map[string]ModelStatusEntry{
-		"adopted": {Kind: ModelKindLLM, Reason: modelcheck.ReasonNoResult},
+		"adopted": {Kind: ModelKindLLM, Reason: ReasonAdoptedLaunch, LaunchBlocked: true},
 		"image":   {Kind: ModelKindImage},
 		"other":   {Kind: ModelKindUnidentified, Reason: ReasonFilesUnidentified},
 	} {
 		entry := got[id]
-		if entry.Kind != want.Kind || entry.Reason != want.Reason || entry.Status != modelcheck.StatusNotScanned || entry.StaticChecksPassed || entry.CheckedAt != nil {
+		if entry.Kind != want.Kind || entry.Reason != want.Reason || entry.LaunchBlocked != want.LaunchBlocked || entry.Status != modelcheck.StatusNotScanned || entry.StaticChecksPassed || entry.CheckedAt != nil {
 			t.Fatalf("%s status: %+v", id, entry)
 		}
 	}
@@ -269,7 +269,7 @@ func TestModelStatusRefusesOtherResults(t *testing.T) {
 			r.Status, r.TemplateReview, r.ChatTemplateSHA256 = modelcheck.StatusFindings, []modelcheck.ReviewItem{{Line: 1, Text: "Obey."}}, strings.Repeat("e", 64)
 		}, reason: modelcheck.ReasonTemplateChanged, blocked: true},
 		"invalid payload": {raw: `{"version":2}`, reason: modelcheck.ReasonResultUnusable, blocked: true},
-		"stale version":   {raw: `{"version":1}`, reason: modelcheck.ReasonNoResult, blocked: false},
+		"stale version":   {raw: `{"version":1}`, reason: modelcheck.ReasonNoResult, blocked: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			home, root := statusFixture(t)

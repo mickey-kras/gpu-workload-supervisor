@@ -121,15 +121,19 @@ type Check struct {
 // text. The vLLM binding records that SHA-256, see
 // runtime.ChatTemplateSHA256.
 type Record struct {
-	Version            int               `json:"version"`
-	Model              string            `json:"model"`
-	Root               string            `json:"root"`
-	Source             Source            `json:"source"`
-	Files              map[string]string `json:"files"`
-	Status             Status            `json:"status"`
-	Coverage           Coverage          `json:"coverage"`
-	Checks             []Check           `json:"checks"`
-	ChatTemplateSHA256 string            `json:"chatTemplateSHA256,omitempty"`
+	Version int               `json:"version"`
+	Model   string            `json:"model"`
+	Root    string            `json:"root"`
+	Source  Source            `json:"source"`
+	Files   map[string]string `json:"files"`
+	// FileStats holds the file identity of each file in Files. The launch
+	// gate compares it instead of hashing the weights again. A record
+	// without it cannot allow a launch.
+	FileStats          map[string]FileStat `json:"fileStats,omitempty"`
+	Status             Status              `json:"status"`
+	Coverage           Coverage            `json:"coverage"`
+	Checks             []Check             `json:"checks"`
+	ChatTemplateSHA256 string              `json:"chatTemplateSHA256,omitempty"`
 	// TemplateFile names the first file of the model that holds the
 	// template, such as chat_template.jinja, when the record has a pin.
 	TemplateFile string `json:"templateFile,omitempty"`
@@ -163,6 +167,9 @@ func (r Record) Validate() error {
 	}
 	if !validFiles(r.Files, r.Checks[0].Outcome == OutcomePassed) {
 		return fmt.Errorf("model check record needs valid file entries, at most %d", maxRecordFiles)
+	}
+	if err := validFileStats(r.Files, r.FileStats); err != nil {
+		return err
 	}
 	if !r.validTemplate() {
 		return errors.New("model check record has template fields that do not follow from the template check")

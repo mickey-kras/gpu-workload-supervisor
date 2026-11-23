@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -20,9 +21,10 @@ var gatePin = strings.Repeat("c", 64)
 func gateRecord() modelcheck.Record {
 	return modelcheck.Record{
 		Version: modelcheck.RecordVersion, Model: "speech", Root: "/models/speech",
-		Source: modelcheck.Source{Repo: "example-org/speech", Revision: strings.Repeat("a", 40)},
-		Files:  map[string]string{"model.safetensors": strings.Repeat("b", 64)},
-		Status: modelcheck.StatusNotScanned, Coverage: modelcheck.CoveragePartial,
+		Source:    modelcheck.Source{Repo: "example-org/speech", Revision: strings.Repeat("a", 40)},
+		Files:     map[string]string{"model.safetensors": strings.Repeat("b", 64)},
+		FileStats: map[string]modelcheck.FileStat{"model.safetensors": {Size: 1, Inode: 1}},
+		Status:    modelcheck.StatusNotScanned, Coverage: modelcheck.CoveragePartial,
 		Checks: []modelcheck.Check{
 			{Name: modelcheck.CheckAllowlist, Outcome: modelcheck.OutcomePassed},
 			{Name: modelcheck.CheckIdentity, Outcome: modelcheck.OutcomePassed},
@@ -70,17 +72,20 @@ func TestModelCheckGate(t *testing.T) {
 	for name, tc := range map[string]struct {
 		record   *modelcheck.Record
 		template string
+		files    error
 		refused  string
 	}{
-		"no stored result launches":    {nil, gatePin, ""},
-		"passing result launches":      {&passing, gatePin, ""},
-		"failed result refuses":        {&failed, gatePin, modelcheck.ReasonIdentityMismatch},
-		"changed template SHA refuses": {&passing, strings.Repeat("d", 64), "chat template changed"},
-		"launch without a pin refuses": {&passing, "", "pins no chat template"},
+		"adopted launch refuses":       {nil, gatePin, nil, "adopted vLLM service"},
+		"passing result launches":      {&passing, gatePin, nil, ""},
+		"failed result refuses":        {&failed, gatePin, nil, modelcheck.ReasonIdentityMismatch},
+		"changed template SHA refuses": {&passing, strings.Repeat("d", 64), nil, "chat template changed"},
+		"launch without a pin refuses": {&passing, "", nil, "pins no chat template"},
+		"changed model files refuse":   {&passing, gatePin, fmt.Errorf("%w: files changed", modelcheck.ErrLaunchRefused), "files changed"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			c, s, r := gateController(t, tc.template)
+			c.modelFilesUnchanged = func(modelcheck.Record) error { return tc.files }
 			if tc.record != nil {
 				if err := s.PutModelCheck(ctx, *tc.record); err != nil {
 					t.Fatal(err)
@@ -146,5 +151,99 @@ func TestModelCheckGateRefusesActivation(t *testing.T) {
 	r.calls = nil
 	if _, err := c.ActivateWorkload(ctx, "speech", e); !errors.Is(err, modelcheck.ErrLaunchRefused) || slices.Contains(r.calls, "start speech") {
 		t.Fatalf("activation = %v, calls %v; want a refusal before any start", err, r.calls)
+	}
+}
+
+// Taking control of a running workload starts nothing, so a result that
+// refuses launches must not block the ownership transfer.
+func TestModelCheckGateSkipsPreservingTakeover(t *testing.T) {
+	ctx := context.Background()
+	c, s, r := gateController(t, gatePin)
+	c.modelFilesUnchanged = func(modelcheck.Record) error { return nil }
+	if err := s.PutModelCheck(ctx, gateRecord()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Switch(ctx, "speech", "test"); err != nil {
+		t.Fatal(err)
+	}
+	failed := gateRecord()
+	failed.Status, failed.ChatTemplateSHA256, failed.TemplateFile = modelcheck.StatusFindings, "", ""
+	failed.Checks[1] = modelcheck.Check{Name: modelcheck.CheckIdentity, Outcome: modelcheck.OutcomeFailed, Reason: modelcheck.ReasonIdentityMismatch}
+	failed.Checks[2].Outcome = modelcheck.OutcomeNotRun
+	if err := s.PutModelCheck(ctx, failed); err != nil {
+		t.Fatal(err)
+	}
+	state, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.calls = nil
+	e := control.OperatorPrecondition{Incarnation: state.LeaseFence.Incarnation, Version: state.Version, Owner: state.Owner, ConfigurationRevision: c.config.Catalog.Revision}
+	next, err := c.OperatorTransition(ctx, "take-control", "", e)
+	if err != nil || next.Owner != control.OwnerUser || next.ActiveWorkload != "speech" || slices.Contains(r.calls, "start speech") {
+		t.Fatalf("take-control = %+v, calls %v: %v", next, r.calls, err)
+	}
+}
+
+// A switch to the workload that already runs starts nothing, so it does not
+// need a result that allows a launch.
+func TestModelCheckGateSkipsSwitchToRunningWorkload(t *testing.T) {
+	ctx := context.Background()
+	c, s, r := gateController(t, gatePin)
+	c.modelFilesUnchanged = func(modelcheck.Record) error { return nil }
+	if err := s.PutModelCheck(ctx, gateRecord()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Switch(ctx, "speech", "test"); err != nil {
+		t.Fatal(err)
+	}
+	c.modelFilesUnchanged = func(modelcheck.Record) error {
+		return fmt.Errorf("%w: files changed", modelcheck.ErrLaunchRefused)
+	}
+	r.calls = nil
+	state, err := c.Switch(ctx, "speech", "test")
+	if err != nil || state.ActiveWorkload != "speech" || slices.Contains(r.calls, "start speech") {
+		t.Fatalf("same-workload switch = %+v, calls %v: %v", state, r.calls, err)
+	}
+}
+
+// A user-owned source stops every user runtime, so a switch to the running
+// user workload restarts it. The gate must refuse it before any stop.
+func TestModelCheckGateRefusesUserRestartBeforeStop(t *testing.T) {
+	ctx := context.Background()
+	c, s, r := gateController(t, gatePin)
+	state, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Owner, state.ActiveWorkload, state.DesiredWorkload = control.OwnerUser, "speech", "speech"
+	if state, err = s.UpdateState(ctx, state.Version, state); err != nil {
+		t.Fatal(err)
+	}
+	r.calls = nil
+	if _, err := c.SwitchUser(ctx, "speech", "test"); !errors.Is(err, modelcheck.ErrLaunchRefused) {
+		t.Fatalf("user restart without a result = %v", err)
+	}
+	after, err := s.State(ctx)
+	if err != nil || after != state || len(r.calls) != 0 {
+		t.Fatalf("a refused restart had effects: %+v %v %v", after, err, r.calls)
+	}
+}
+
+// A managed launch without a result can be checked in setup, so its refusal
+// says to run the checks.
+func TestModelCheckGateRefusesManagedLaunchWithoutResult(t *testing.T) {
+	c, r, s := limitedController(t, limitedCatalog())
+	c.modelFilesUnchanged = modelcheck.Record.FilesUnchanged
+	if _, err := c.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteModelCheck(context.Background(), "vision"); err != nil {
+		t.Fatal(err)
+	}
+	r.calls = nil
+	_, err := c.Switch(context.Background(), "vision", "test")
+	if !errors.Is(err, modelcheck.ErrLaunchRefused) || !strings.Contains(err.Error(), "run the model checks in setup") || slices.Contains(r.calls, "start vision") {
+		t.Fatalf("managed launch without a result = %v, calls %v", err, r.calls)
 	}
 }

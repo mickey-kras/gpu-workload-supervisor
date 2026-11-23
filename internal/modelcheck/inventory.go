@@ -38,6 +38,20 @@ const toolMetadata = ".cache"
 // error means that the inventory could not complete. A canceled ctx stops
 // it, also inside one large file.
 func Inventory(ctx context.Context, root string) (map[string]string, string, error) {
+	return inventory(ctx, root, nil)
+}
+
+// InventoryWithStats is Inventory that also gives the identity of each file
+// that it hashed, for the launch gate.
+func InventoryWithStats(ctx context.Context, root string) (map[string]string, map[string]FileStat, string, error) {
+	stats := map[string]FileStat{}
+	files, reason, err := inventory(ctx, root, stats)
+	return files, stats, reason, err
+}
+
+// inventory also records the identity of each file in stats when stats is
+// not nil.
+func inventory(ctx context.Context, root string, stats map[string]FileStat) (map[string]string, string, error) {
 	if !cleanAbsolute(root) {
 		return nil, "", errors.New("model root must be a clean absolute path")
 	}
@@ -56,7 +70,7 @@ func Inventory(ctx context.Context, root string) (map[string]string, string, err
 		if err := ctx.Err(); err != nil {
 			return nil, "", err
 		}
-		reason, err := addEntry(ctx, root, entry, files)
+		reason, err := addEntry(ctx, root, entry, files, stats)
 		if err != nil || reason != "" {
 			return files, reason, err
 		}
@@ -68,7 +82,7 @@ func Inventory(ctx context.Context, root string) (map[string]string, string, err
 	return files, reason, err
 }
 
-func addEntry(ctx context.Context, root string, entry os.DirEntry, files map[string]string) (string, error) {
+func addEntry(ctx context.Context, root string, entry os.DirEntry, files map[string]string, stats map[string]FileStat) (string, error) {
 	name := entry.Name()
 	switch {
 	case entry.IsDir() && name == toolMetadata:
@@ -78,7 +92,7 @@ func addEntry(ctx context.Context, root string, entry os.DirEntry, files map[str
 	case !entry.Type().IsRegular():
 		return ReasonLinkOrNonRegular, nil
 	}
-	digest, err := FileDigest(ctx, filepath.Join(root, name))
+	digest, stat, err := digestFile(ctx, filepath.Join(root, name))
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return "", ctxErr
 	}
@@ -86,6 +100,9 @@ func addEntry(ctx context.Context, root string, entry os.DirEntry, files map[str
 		return "", errUnreadable
 	}
 	files[name] = digest
+	if stats != nil {
+		stats[name] = stat
+	}
 	return "", nil
 }
 

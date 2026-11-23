@@ -17,13 +17,15 @@ func TestNamedModelsUseFullReleaseLifecycleWithinRuntime(t *testing.T) {
 			cat := c.config.Catalog.Catalog.Clone()
 			for _, i := range []int{0, 2} {
 				p := &cat.Profiles[i]
-				p.NativeModel = &control.NativeModel{Runtime: family, Instance: "local", Endpoint: "http://localhost:9000", Model: string(p.ID), LaunchFile: "/models/" + string(p.ID) + ".service", LaunchSHA256: strings.Repeat("a", 64)}
+				p.NativeModel = &control.NativeModel{Runtime: family, Instance: "local", Endpoint: "http://localhost:9000", Model: string(p.ID), LaunchFile: "/models/" + string(p.ID) + ".service", LaunchSHA256: strings.Repeat("a", 64),
+					ChatTemplate: "/models/" + string(p.ID) + "/chat_template.jinja", ChatTemplateSHA256: gatePin, EnvironmentFile: "/home/u/vllm.env"}
 			}
 			snap, err := s.ReplaceCatalog(ctx, c.config.Catalog.Revision, cat)
 			if err != nil {
 				t.Fatal(err)
 			}
 			c.config.Catalog = &snap
+			allowCheckedModels(t, c, s)
 			if _, err = c.Switch(ctx, "text", "test"); err != nil {
 				t.Fatal(err)
 			}
