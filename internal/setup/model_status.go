@@ -62,7 +62,6 @@ type ModelStatusEntry struct {
 	Status             modelcheck.Status   `json:"status"`
 	Reason             string              `json:"reason,omitempty"`
 	StaticChecksPassed bool                `json:"staticChecksPassed"`
-	ReviewPending      bool                `json:"reviewPending"`
 	Rechecked          bool                `json:"rechecked"`
 	Coverage           modelcheck.Coverage `json:"coverage,omitempty"`
 	Checker            string              `json:"checker,omitempty"`
@@ -70,9 +69,6 @@ type ModelStatusEntry struct {
 	Checks             []modelcheck.Check  `json:"checks,omitempty"`
 	Identity           string              `json:"identity,omitempty"`
 	TemplateSHA256     string              `json:"templateSHA256,omitempty"`
-	// Source is the hub repository and revision of the stored result. The
-	// desktop offers it for the next run.
-	Source *modelcheck.Source `json:"source,omitempty"`
 	// CheckAvailable marks an LLM workload with a model directory, which
 	// gpu-setup model-check can check.
 	CheckAvailable bool `json:"checkAvailable"`
@@ -80,9 +76,6 @@ type ModelStatusEntry struct {
 	// stored result, a result that cannot be read, or a result that the gate
 	// refuses.
 	LaunchBlocked bool `json:"launchBlocked"`
-	// NotStored marks the entry of a run whose hub listing failed. It
-	// describes that run. The earlier stored result stays.
-	NotStored bool `json:"notStored,omitempty"`
 }
 
 // ModelIdentity gives the SHA-256 of the text "path:" and the model
@@ -208,15 +201,14 @@ func baseEntry(p control.WorkloadProfile) (entry ModelStatusEntry, root, pin str
 }
 
 // describeRecord adds the fields of a result to entry, after its status
-// and reason are set. A pending review and the static checks count only
-// for a result that applies.
+// and reason are set. The static checks count only for a result that
+// applies.
 func describeRecord(entry *ModelStatusEntry, record modelcheck.Record, root, pin string) {
 	if entry.Reason == "" {
-		_, entry.ReviewPending = record.PendingReview()
 		entry.StaticChecksPassed = record.StaticChecksPassed()
 	}
-	checkedAt, source := record.CheckedAt, record.Source
-	entry.Coverage, entry.Checker, entry.CheckedAt, entry.Checks, entry.Source = record.Coverage, record.Checker, &checkedAt, record.Checks, &source
+	checkedAt := record.CheckedAt
+	entry.Coverage, entry.Checker, entry.CheckedAt, entry.Checks = record.Coverage, record.Checker, &checkedAt, record.Checks
 	entry.LaunchBlocked = record.AllowLaunch(root, pin) != nil
 }
 

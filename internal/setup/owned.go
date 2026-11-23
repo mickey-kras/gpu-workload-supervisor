@@ -59,15 +59,15 @@ func managerCgroup(ctx context.Context, runCommand func(context.Context, string,
 // ownedTemplateError tells what to do when the managed launch cannot use
 // the chat template file of the model folder. A missing model folder is
 // not a missing template, so it gets its own message. A model without the
-// upstream file is not supported: its template is only in a JSON file, so
-// use an existing launch with --chat-template. Do not add the file by hand.
+// file has its template only in a JSON file, so it needs an existing launch
+// with --chat-template.
 func ownedTemplateError(template string, err error) error {
 	folder := filepath.Dir(template)
 	if info, statErr := os.Stat(folder); statErr != nil || !info.IsDir() {
 		return fmt.Errorf("the model folder %s does not exist or is not a folder: %w", folder, err)
 	}
 	if _, statErr := os.Lstat(template); errors.Is(statErr, fs.ErrNotExist) {
-		return fmt.Errorf("the managed launch needs the upstream %s in the model folder: %w. Do not add it by hand. For a model without it, use an existing launch with --chat-template, see docs/MODEL-CHECKS.md#result", ownedChatTemplateName, err)
+		return fmt.Errorf("the managed launch needs %s in the model folder: %w. For a model without it, use an existing launch with --chat-template, see docs/MODEL-CHECKS.md#result", ownedChatTemplateName, err)
 	}
 	return fmt.Errorf("the managed launch cannot use %s in the model folder: %w", ownedChatTemplateName, err)
 }

@@ -6,8 +6,8 @@ import {launch} from './harness.mjs';
 const identity = name => createHash('sha256').update(name).digest('hex');
 
 const workload = 'chat';
-const checks = [{name: 'file-allowlist', outcome: 'passed'}, {name: 'upstream-identity', outcome: 'passed'}, {name: 'chat-template', outcome: 'passed'}, {name: 'behavioral-scan', outcome: 'not_run'}];
-const stored = {workload, label: 'Chat', kind: 'llm', status: 'not_scanned', staticChecksPassed: true, reviewPending: false, rechecked: false,
+const checks = [{name: 'file-allowlist', outcome: 'passed'}, {name: 'chat-template', outcome: 'passed'}, {name: 'behavioral-scan', outcome: 'not_run'}];
+const stored = {workload, label: 'Chat', kind: 'llm', status: 'not_scanned', staticChecksPassed: true, rechecked: false,
     coverage: 'partial', checker: '1', checkedAt: '2026-11-01T00:00:00Z', checks, identity: identity('path:/models/chat')};
 // accepted is the accepted managed vLLM workload that the status entries
 // describe.
@@ -44,7 +44,6 @@ test('each stored status shows an icon and a text, never a safe model', async ()
         [{staticChecksPassed: false, reason: 'checker-changed'}, 'Not scanned', 'The stored result is from another checker version.', 'action-unavailable-symbolic'],
         [{staticChecksPassed: false, reason: 'template-changed'}, 'Not scanned', 'The chat template of the launch is not the checked template.', 'action-unavailable-symbolic'],
         [{staticChecksPassed: false, reason: 'adopted-launch'}, 'Not scanned', 'Setup does not manage this vLLM service, so it cannot check its model files. Set it up as a supervisor-managed launch to start it.', 'action-unavailable-symbolic'],
-        [{status: 'findings', staticChecksPassed: false, reviewPending: true}, 'Findings detected', 'A chat template review is pending.', 'dialog-warning-symbolic'],
         [{status: 'safe', staticChecksPassed: false, reason: 'other-directory'}, 'Not scanned', 'The stored result is for another model folder.', 'action-unavailable-symbolic'],
         [{kind: 'image', staticChecksPassed: false}, 'No backdoor scan available for image models', null, 'dialog-information-symbolic'],
         [{kind: 'unidentified', staticChecksPassed: false, reason: 'files-unidentified'}, 'Model files not identified', 'Setup cannot identify the model files of this workload.', 'dialog-warning-symbolic'],
@@ -81,12 +80,12 @@ test('scan details show the revisions, coverage, date and the defensive note on 
     assert.equal(ui.visible(details), true);
     assert.equal(toggle.accessibleStates.expanded, 1);
     assert.equal(details.label, ['Checker revision: 1', 'Scanner revision: not available', 'Coverage: partial', 'Checked: 2026-11-01 00:00 UTC',
-        'File allowlist: passed', 'Upstream identity: passed', 'Chat template: passed', 'Behavioral scan: not run',
+        'File allowlist: passed', 'Chat template: passed', 'Behavioral scan: not run',
         'These checks are a defensive layer, not complete backdoor detection.'].join('\n'));
     await ui.click('Scan details');
     assert.equal(ui.visible(details), false);
-    const missing = await openSettings({checker: '', coverage: '', checkedAt: undefined, checks: [{name: 'custom', outcome: 'odd'}, {name: 'chat-template', outcome: 'error'}, {name: 'upstream-identity', outcome: 'failed'}, {name: 'file-allowlist', outcome: 'unsupported'}]});
-    assert.match(missing.widgets.find(widget => widget.label?.startsWith('Checker revision')).label, /^Checker revision: not available\nScanner revision: not available\nCoverage: none\nChecked: never\ncustom: odd\nChat template: failed to run\nUpstream identity: failed\nFile allowlist: not available for this model\n/);
+    const missing = await openSettings({checker: '', coverage: '', checkedAt: undefined, checks: [{name: 'custom', outcome: 'odd'}, {name: 'chat-template', outcome: 'error'}, {name: 'file-allowlist', outcome: 'unsupported'}]});
+    assert.match(missing.widgets.find(widget => widget.label?.startsWith('Checker revision')).label, /^Checker revision: not available\nScanner revision: not available\nCoverage: none\nChecked: never\ncustom: odd\nChat template: failed to run\nFile allowlist: not available for this model\n/);
     assert.equal(missing.visible(missing.by('Check files again')), false, 'no stored digests to check against');
     const stale = await openSettings({staticChecksPassed: false, reason: 'checker-changed'});
     assert.match(stale.widgets.find(widget => widget.label?.startsWith('Checker revision')).label, /Checked: 2026-11-01 00:00 UTC\nLast stored result\. It does not apply now:\nFile allowlist: passed/);
@@ -185,7 +184,7 @@ test('the review summary shows the status of each workload', async () => {
     };
     const passed = {...stored, workload: 'vllm-existing', identity: identity('model:existing'), templateSHA256: 'older-pin'};
     // A result with findings never has a passed template check: the template
-    // check runs after the file and identity checks passed.
+    // check runs after the file check passed.
     const findings = {...passed, status: 'findings', staticChecksPassed: false, checks: checks.map(check => check.name === 'chat-template' ? {...check, outcome: 'failed'} : check)};
     for (const [app, label, accept, models, title, detail, pin] of [
         ['comfyui', 'ComfyUI', false, [], 'No backdoor scan available for image models', null],
