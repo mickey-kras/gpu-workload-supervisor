@@ -9,7 +9,7 @@
       "relation": "references",
       "source": "docs_training",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L143",
+      "source_location": "L145",
       "target": "internal_llmtraining_loader_keys",
       "weight": 1.0
     },
@@ -6705,7 +6705,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_configurecatalog",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L355",
+      "source_location": "L361",
       "target": "cmd_gpu_mode_main_decodecatalogfile",
       "weight": 1.0
     },
@@ -6717,7 +6717,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_configurecatalog",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L363",
+      "source_location": "L369",
       "target": "cmd_gpu_mode_main_ownedprofilesverbatim",
       "weight": 1.0
     },
@@ -6729,7 +6729,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_executeruntimecommand",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L423",
+      "source_location": "L433",
       "target": "cmd_gpu_mode_main_executecommand",
       "weight": 1.0
     },
@@ -6741,7 +6741,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_executewithstate",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L157",
+      "source_location": "L163",
       "target": "cmd_gpu_mode_main_acquireproxylifetimelock",
       "weight": 1.0
     },
@@ -6753,7 +6753,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_executewithstate",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L182",
+      "source_location": "L188",
       "target": "cmd_gpu_mode_main_restorestate",
       "weight": 1.0
     },
@@ -6765,7 +6765,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_executewithstate",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L188",
+      "source_location": "L194",
       "target": "cmd_gpu_mode_main_showsettings",
       "weight": 1.0
     },
@@ -6777,7 +6777,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_executewithstate",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L195",
+      "source_location": "L201",
       "target": "cmd_gpu_mode_main_configurecatalog",
       "weight": 1.0
     },
@@ -6789,7 +6789,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_executewithstate",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L197",
+      "source_location": "L203",
       "target": "cmd_gpu_mode_main_pincatalog",
       "weight": 1.0
     },
@@ -6801,7 +6801,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_executewithstate",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L206",
+      "source_location": "L212",
       "target": "cmd_gpu_mode_main_supervisorconfig",
       "weight": 1.0
     },
@@ -6813,7 +6813,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_executewithstate",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L210",
+      "source_location": "L216",
       "target": "cmd_gpu_mode_main_executeruntimecommand",
       "weight": 1.0
     },
@@ -6825,7 +6825,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_main",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L35",
+      "source_location": "L36",
       "target": "cmd_gpu_mode_main_run",
       "weight": 1.0
     },
@@ -6837,7 +6837,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_run",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L42",
+      "source_location": "L43",
       "target": "cmd_gpu_mode_main_runwithruntimefactory",
       "weight": 1.0
     },
@@ -6849,7 +6849,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_runwithruntimefactory",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L122",
+      "source_location": "L128",
       "target": "cmd_gpu_mode_main_decodecatalogfile",
       "weight": 1.0
     },
@@ -6861,7 +6861,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_runwithruntimefactory",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L129",
+      "source_location": "L135",
       "target": "cmd_gpu_mode_main_executewithstate",
       "weight": 1.0
     },
@@ -6873,7 +6873,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_runwithruntimefactory",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L83",
+      "source_location": "L86",
       "target": "cmd_gpu_mode_main_validatecatalogflags",
       "weight": 1.0
     },
@@ -6885,7 +6885,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_runwithruntimefactory",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L86",
+      "source_location": "L89",
       "target": "cmd_gpu_mode_main_validatecommandflags",
       "weight": 1.0
     },
@@ -6981,7 +6981,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_validatecommandflags",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L243",
+      "source_location": "L249",
       "target": "cmd_gpu_mode_main_validatetarget",
       "weight": 1.0
     },
@@ -10929,7 +10929,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_executeworker",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L258",
+      "source_location": "L259",
       "target": "internal_llmtraining_run_executionenvironment",
       "weight": 1.0
     },
@@ -10941,7 +10941,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_executionrecipe",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L149",
+      "source_location": "L150",
       "target": "internal_llmtraining_run_privateexecutiondirectory",
       "weight": 1.0
     },
@@ -10953,7 +10953,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_executionrecipe",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L155",
+      "source_location": "L156",
       "target": "internal_llmtraining_run_trustedruntime",
       "weight": 1.0
     },
@@ -10965,7 +10965,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_privateexecutiondirectory",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L196",
+      "source_location": "L197",
       "target": "internal_llmtraining_run_trustedexecutionancestors",
       "weight": 1.0
     },
@@ -10977,7 +10977,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_replaceevidence",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L320",
+      "source_location": "L324",
       "target": "internal_llmtraining_run_publishprivatefile",
       "weight": 1.0
     },
@@ -10989,7 +10989,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_runjob",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L35",
+      "source_location": "L36",
       "target": "internal_llmtraining_run_hostrunsteps",
       "weight": 1.0
     },
@@ -11145,7 +11145,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_trustedexecutionancestors",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L208",
+      "source_location": "L209",
       "target": "internal_llmtraining_run_trustedexecutioncomponent",
       "weight": 1.0
     },
@@ -11157,7 +11157,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_trustedruntime",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L162",
+      "source_location": "L163",
       "target": "internal_llmtraining_run_trustedexecutionancestors",
       "weight": 1.0
     },
@@ -11169,7 +11169,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_trustedruntime",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L179",
+      "source_location": "L180",
       "target": "internal_llmtraining_run_trustedexecutioncomponent",
       "weight": 1.0
     },
@@ -11181,7 +11181,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_unchangedexecutioninputs",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L286",
+      "source_location": "L290",
       "target": "internal_llmtraining_run_privateexecutiondirectory",
       "weight": 1.0
     },
@@ -33487,6 +33487,90 @@
       "confidence_score": 1.0,
       "context": "call",
       "relation": "calls",
+      "source": "internal_supervisor_training_stop_test_teststoptrainingescalatesaftergrace",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L64",
+      "target": "internal_supervisor_training_stop_test_trainingstopcontract",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "call",
+      "relation": "calls",
+      "source": "internal_supervisor_training_stop_test_teststoptrainingkeepsjobuntilreleaseisproven",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L114",
+      "target": "internal_supervisor_training_stop_test_trainingstopcontract",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "call",
+      "relation": "calls",
+      "source": "internal_supervisor_training_stop_test_teststoptrainingkeepsjobwhensignalfails",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L79",
+      "target": "internal_supervisor_training_stop_test_trainingstopcontract",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "call",
+      "relation": "calls",
+      "source": "internal_supervisor_training_stop_test_teststoptrainingkeepsrecordedoutcome",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L136",
+      "target": "internal_supervisor_training_stop_test_trainingstopcontract",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "call",
+      "relation": "calls",
+      "source": "internal_supervisor_training_stop_test_teststoptrainingracingcompletionstillverifiesrelease",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L105",
+      "target": "internal_supervisor_training_stop_test_trainingstopcontract",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "call",
+      "relation": "calls",
+      "source": "internal_supervisor_training_stop_test_teststoptrainingrejectsinvalidrequests",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L91",
+      "target": "internal_supervisor_training_stop_test_trainingstopcontract",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "call",
+      "relation": "calls",
+      "source": "internal_supervisor_training_stop_test_teststoptrainingwaitsforcheckpointexit",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L47",
+      "target": "internal_supervisor_training_stop_test_trainingstopcontract",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "call",
+      "relation": "calls",
       "source": "internal_vllmkey_listener_test_testchecklistenerrejectsbadinput",
       "source_file": "internal/vllmkey/listener_test.go",
       "source_location": "L72",
@@ -33633,7 +33717,7 @@
       "relation": "calls",
       "source": "llmtraining_execution_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L111",
+      "source_location": "L112",
       "target": "internal_llmtraining_run_executeworker",
       "weight": 1.0
     },
@@ -33789,7 +33873,7 @@
       "relation": "calls",
       "source": "llmtraining_runsteps_runjob",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L53",
+      "source_location": "L54",
       "target": "internal_llmtraining_run_privateexecutiondirectory",
       "weight": 1.0
     },
@@ -33801,7 +33885,7 @@
       "relation": "calls",
       "source": "llmtraining_runsteps_runjob",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L68",
+      "source_location": "L69",
       "target": "internal_llmtraining_run_executionrecipe",
       "weight": 1.0
     },
@@ -33813,7 +33897,7 @@
       "relation": "calls",
       "source": "llmtraining_runsteps_runjob",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L88",
+      "source_location": "L89",
       "target": "internal_llmtraining_run_replaceevidence",
       "weight": 1.0
     },
@@ -43858,7 +43942,7 @@
       "source": "gpu_mode_modeexecution",
       "source_file": "cmd/gpu-mode/main.go",
       "source_location": "L52",
-      "target": "gpu_mode_profilepin",
+      "target": "go_type_time_duration",
       "weight": 1.0
     },
     {
@@ -43869,8 +43953,8 @@
       "relation": "references",
       "source": "gpu_mode_modeexecution",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L53",
-      "target": "go_type_time_duration",
+      "source_location": "L54",
+      "target": "gpu_mode_profilepin",
       "weight": 1.0
     },
     {
@@ -45393,7 +45477,7 @@
       "relation": "references",
       "source": "llmtraining_execution",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L101",
+      "source_location": "L102",
       "target": "llmtraining_jobenvelope",
       "weight": 1.0
     },
@@ -45405,7 +45489,7 @@
       "relation": "references",
       "source": "llmtraining_execution",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L102",
+      "source_location": "L103",
       "target": "llmtraining_recipe",
       "weight": 1.0
     },
@@ -45417,7 +45501,7 @@
       "relation": "references",
       "source": "llmtraining_execution",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L103",
+      "source_location": "L104",
       "target": "llmtraining_peakrecorder",
       "weight": 1.0
     },
@@ -45429,7 +45513,7 @@
       "relation": "references",
       "source": "llmtraining_execution",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L104",
+      "source_location": "L105",
       "target": "llmtraining_runsteps",
       "weight": 1.0
     },
@@ -45633,7 +45717,7 @@
       "relation": "references",
       "source": "llmtraining_runsteps",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L40",
+      "source_location": "L41",
       "target": "llmtraining_recipe",
       "weight": 1.0
     },
@@ -45645,7 +45729,7 @@
       "relation": "references",
       "source": "llmtraining_runsteps",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L41",
+      "source_location": "L42",
       "target": "llmtraining_jobenvelope",
       "weight": 1.0
     },
@@ -45657,7 +45741,7 @@
       "relation": "references",
       "source": "llmtraining_runsteps",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L42",
+      "source_location": "L43",
       "target": "llmtraining_peaksettings",
       "weight": 1.0
     },
@@ -48791,6 +48875,18 @@
       "source_file": "internal/supervisor/training_contract_test.go",
       "source_location": "L319",
       "target": "go_type_time_time",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "field",
+      "relation": "references",
+      "source": "supervisor_trainingstop",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L232",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_state",
       "weight": 1.0
     },
     {
@@ -56029,6 +56125,18 @@
       "source": "cmd_gpu_mode_training",
       "source_file": "cmd/gpu-mode/training.go",
       "source_location": "L10",
+      "target": "go_pkg_time",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
+      "source": "cmd_gpu_mode_training",
+      "source_file": "cmd/gpu-mode/training.go",
+      "source_location": "L12",
       "target": "go_pkg_github_com_mickey_kras_gpu_workload_supervisor_internal_control",
       "weight": 1.0
     },
@@ -56040,7 +56148,7 @@
       "relation": "imports_from",
       "source": "cmd_gpu_mode_training",
       "source_file": "cmd/gpu-mode/training.go",
-      "source_location": "L11",
+      "source_location": "L13",
       "target": "go_pkg_github_com_mickey_kras_gpu_workload_supervisor_internal_supervisor",
       "weight": 1.0
     },
@@ -56089,7 +56197,7 @@
       "source": "cmd_gpu_mode_training",
       "source_file": "cmd/gpu-mode/training.go",
       "source_location": "L7",
-      "target": "go_pkg_os",
+      "target": "go_pkg_flag",
       "weight": 1.0
     },
     {
@@ -56101,6 +56209,18 @@
       "source": "cmd_gpu_mode_training",
       "source_file": "cmd/gpu-mode/training.go",
       "source_location": "L8",
+      "target": "go_pkg_os",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
+      "source": "cmd_gpu_mode_training",
+      "source_file": "cmd/gpu-mode/training.go",
+      "source_location": "L9",
       "target": "go_pkg_strings",
       "weight": 1.0
     },
@@ -56474,6 +56594,42 @@
       "source_file": "cmd/gpu-mode/training_restored_test.go",
       "source_location": "L9",
       "target": "go_pkg_testing",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
+      "source": "cmd_gpu_mode_training_stop_test",
+      "source_file": "cmd/gpu-mode/training_stop_test.go",
+      "source_location": "L4",
+      "target": "go_pkg_flag",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
+      "source": "cmd_gpu_mode_training_stop_test",
+      "source_file": "cmd/gpu-mode/training_stop_test.go",
+      "source_location": "L5",
+      "target": "go_pkg_testing",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
+      "source": "cmd_gpu_mode_training_stop_test",
+      "source_file": "cmd/gpu-mode/training_stop_test.go",
+      "source_location": "L6",
+      "target": "go_pkg_time",
       "weight": 1.0
     },
     {
@@ -63600,8 +63756,8 @@
       "relation": "imports_from",
       "source": "internal_llmtraining_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L16",
-      "target": "go_pkg_github_com_mickey_kras_gpu_workload_supervisor_internal_control",
+      "source_location": "L15",
+      "target": "go_pkg_syscall",
       "weight": 1.0
     },
     {
@@ -63613,7 +63769,7 @@
       "source": "internal_llmtraining_run",
       "source_file": "internal/llmtraining/run.go",
       "source_location": "L17",
-      "target": "go_pkg_github_com_mickey_kras_gpu_workload_supervisor_internal_strictjson",
+      "target": "go_pkg_github_com_mickey_kras_gpu_workload_supervisor_internal_control",
       "weight": 1.0
     },
     {
@@ -63625,6 +63781,18 @@
       "source": "internal_llmtraining_run",
       "source_file": "internal/llmtraining/run.go",
       "source_location": "L18",
+      "target": "go_pkg_github_com_mickey_kras_gpu_workload_supervisor_internal_strictjson",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
+      "source": "internal_llmtraining_run",
+      "source_file": "internal/llmtraining/run.go",
+      "source_location": "L19",
       "target": "go_pkg_golang_org_x_sys_unix",
       "weight": 1.0
     },
@@ -82486,6 +82654,66 @@
       "confidence_score": 1.0,
       "context": "import",
       "relation": "imports_from",
+      "source": "internal_runtime_training_stop_test",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L4",
+      "target": "go_pkg_context",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
+      "source": "internal_runtime_training_stop_test",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L5",
+      "target": "go_pkg_errors",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
+      "source": "internal_runtime_training_stop_test",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L6",
+      "target": "go_pkg_slices",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
+      "source": "internal_runtime_training_stop_test",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L7",
+      "target": "go_pkg_strings",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
+      "source": "internal_runtime_training_stop_test",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L8",
+      "target": "go_pkg_testing",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
       "source": "internal_runtime_transport_test",
       "source_file": "internal/runtime/transport_test.go",
       "source_location": "L10",
@@ -100524,6 +100752,18 @@
       "relation": "imports_from",
       "source": "internal_supervisor_training",
       "source_file": "internal/supervisor/training.go",
+      "source_location": "L10",
+      "target": "go_pkg_github_com_mickey_kras_gpu_workload_supervisor_internal_store",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
+      "source": "internal_supervisor_training",
+      "source_file": "internal/supervisor/training.go",
       "source_location": "L4",
       "target": "go_pkg_context",
       "weight": 1.0
@@ -100573,7 +100813,7 @@
       "source": "internal_supervisor_training",
       "source_file": "internal/supervisor/training.go",
       "source_location": "L9",
-      "target": "go_pkg_github_com_mickey_kras_gpu_workload_supervisor_internal_store",
+      "target": "go_pkg_github_com_mickey_kras_gpu_workload_supervisor_internal_runtime",
       "weight": 1.0
     },
     {
@@ -100706,6 +100946,90 @@
       "source_file": "internal/supervisor/training_contract_test.go",
       "source_location": "L9",
       "target": "go_pkg_strings",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
+      "source": "internal_supervisor_training_stop_test",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L10",
+      "target": "go_pkg_github_com_mickey_kras_gpu_workload_supervisor_internal_control",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
+      "source": "internal_supervisor_training_stop_test",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L11",
+      "target": "go_pkg_github_com_mickey_kras_gpu_workload_supervisor_internal_runtime",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
+      "source": "internal_supervisor_training_stop_test",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L4",
+      "target": "go_pkg_context",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
+      "source": "internal_supervisor_training_stop_test",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L5",
+      "target": "go_pkg_errors",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
+      "source": "internal_supervisor_training_stop_test",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L6",
+      "target": "go_pkg_slices",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
+      "source": "internal_supervisor_training_stop_test",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L7",
+      "target": "go_pkg_testing",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "import",
+      "relation": "imports_from",
+      "source": "internal_supervisor_training_stop_test",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L8",
+      "target": "go_pkg_time",
       "weight": 1.0
     },
     {
@@ -102168,7 +102492,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_configurecatalog",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L354",
+      "source_location": "L360",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -102180,7 +102504,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_configurecatalog",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L354",
+      "source_location": "L360",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_store_store",
       "weight": 1.0
     },
@@ -102192,7 +102516,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_configurecatalog",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L354",
+      "source_location": "L360",
       "target": "gpu_mode_modeexecution",
       "weight": 1.0
     },
@@ -102204,7 +102528,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_executecommand",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L269",
+      "source_location": "L275",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -102216,7 +102540,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_executecommand",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L269",
+      "source_location": "L275",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workload",
       "weight": 1.0
     },
@@ -102228,7 +102552,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_executecommand",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L269",
+      "source_location": "L275",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_supervisor_controller",
       "weight": 1.0
     },
@@ -102240,7 +102564,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_executeruntimecommand",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L411",
+      "source_location": "L417",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -102252,7 +102576,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_executeruntimecommand",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L411",
+      "source_location": "L417",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_supervisor_controller",
       "weight": 1.0
     },
@@ -102264,7 +102588,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_executeruntimecommand",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L411",
+      "source_location": "L417",
       "target": "gpu_mode_modeexecution",
       "weight": 1.0
     },
@@ -102276,7 +102600,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_executewithstate",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L149",
+      "source_location": "L155",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_runtime_systemdconfig",
       "weight": 1.0
     },
@@ -102288,7 +102612,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_executewithstate",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L149",
+      "source_location": "L155",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_supervisor_runtime",
       "weight": 1.0
     },
@@ -102300,7 +102624,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_executewithstate",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L149",
+      "source_location": "L155",
       "target": "go_type_time_time",
       "weight": 1.0
     },
@@ -102312,7 +102636,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_executewithstate",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L149",
+      "source_location": "L155",
       "target": "gpu_mode_modeexecution",
       "weight": 1.0
     },
@@ -102324,7 +102648,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_ownedprofilesverbatim",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L378",
+      "source_location": "L384",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_catalog",
       "weight": 1.0
     },
@@ -102336,7 +102660,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_pincatalog",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L404",
+      "source_location": "L410",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_catalogsnapshot",
       "weight": 1.0
     },
@@ -102348,7 +102672,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_restorestate",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L323",
+      "source_location": "L329",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -102360,7 +102684,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_restorestate",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L323",
+      "source_location": "L329",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_store_store",
       "weight": 1.0
     },
@@ -102372,7 +102696,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_runwithruntimefactory",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L56",
+      "source_location": "L58",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_runtime_systemdconfig",
       "weight": 1.0
     },
@@ -102384,7 +102708,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_runwithruntimefactory",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L56",
+      "source_location": "L58",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_supervisor_runtime",
       "weight": 1.0
     },
@@ -102396,7 +102720,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_showsettings",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L309",
+      "source_location": "L315",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -102408,7 +102732,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_showsettings",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L309",
+      "source_location": "L315",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_store_store",
       "weight": 1.0
     },
@@ -102420,7 +102744,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_supervisorconfig",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L213",
+      "source_location": "L219",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_catalogsnapshot",
       "weight": 1.0
     },
@@ -102432,7 +102756,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_supervisorconfig",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L213",
+      "source_location": "L219",
       "target": "gpu_mode_modeexecution",
       "weight": 1.0
     },
@@ -102624,7 +102948,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_validatecatalogflags",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L135",
+      "source_location": "L141",
       "target": "go_type_flag_flagset",
       "weight": 1.0
     },
@@ -102636,7 +102960,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_validatecommandflags",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L223",
+      "source_location": "L229",
       "target": "go_type_flag_flagset",
       "weight": 1.0
     },
@@ -103032,7 +103356,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_training_executetraining",
       "source_file": "cmd/gpu-mode/training.go",
-      "source_location": "L14",
+      "source_location": "L16",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -103044,7 +103368,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_training_executetraining",
       "source_file": "cmd/gpu-mode/training.go",
-      "source_location": "L14",
+      "source_location": "L16",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workload",
       "weight": 1.0
     },
@@ -103056,7 +103380,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_training_executetraining",
       "source_file": "cmd/gpu-mode/training.go",
-      "source_location": "L14",
+      "source_location": "L16",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_supervisor_controller",
       "weight": 1.0
     },
@@ -103154,6 +103478,42 @@
       "source_file": "cmd/gpu-mode/training_restored_test.go",
       "source_location": "L37",
       "target": "go_type_testing_t",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "cmd_gpu_mode_training_stop_test_teststopgraceflag",
+      "source_file": "cmd/gpu-mode/training_stop_test.go",
+      "source_location": "L9",
+      "target": "go_type_testing_t",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "cmd_gpu_mode_training_validatestopgrace",
+      "source_file": "cmd/gpu-mode/training.go",
+      "source_location": "L67",
+      "target": "go_type_flag_flagset",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "cmd_gpu_mode_training_validatestopgrace",
+      "source_file": "cmd/gpu-mode/training.go",
+      "source_location": "L67",
+      "target": "go_type_time_duration",
       "weight": 1.0
     },
     {
@@ -108106,6 +108466,18 @@
       "confidence_score": 1.0,
       "context": "parameter_type",
       "relation": "references",
+      "source": "internal_llmtraining_peaks_test_testrunjobforwardsstoptoworker",
+      "source_file": "internal/llmtraining/peaks_test.go",
+      "source_location": "L655",
+      "target": "go_type_testing_t",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
       "source": "internal_llmtraining_peaks_test_testrunjobkeepstrainpeakswhenreloadfails",
       "source_file": "internal/llmtraining/peaks_test.go",
       "source_location": "L227",
@@ -108732,7 +109104,7 @@
       "relation": "references",
       "source": "internal_llmtraining_run_executeworker",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L253",
+      "source_location": "L254",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -108744,7 +109116,7 @@
       "relation": "references",
       "source": "internal_llmtraining_run_executeworker",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L253",
+      "source_location": "L254",
       "target": "llmtraining_peakrecorder",
       "weight": 1.0
     },
@@ -108756,7 +109128,7 @@
       "relation": "references",
       "source": "internal_llmtraining_run_executeworker",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L253",
+      "source_location": "L254",
       "target": "llmtraining_recipe",
       "weight": 1.0
     },
@@ -108768,7 +109140,7 @@
       "relation": "references",
       "source": "internal_llmtraining_run_executionrecipe",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L130",
+      "source_location": "L131",
       "target": "llmtraining_jobenvelope",
       "weight": 1.0
     },
@@ -108780,7 +109152,7 @@
       "relation": "references",
       "source": "internal_llmtraining_run_prepareexecution",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L226",
+      "source_location": "L227",
       "target": "llmtraining_recipe",
       "weight": 1.0
     },
@@ -108792,7 +109164,7 @@
       "relation": "references",
       "source": "internal_llmtraining_run_replaceevidence",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L308",
+      "source_location": "L312",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingterminal",
       "weight": 1.0
     },
@@ -108804,7 +109176,7 @@
       "relation": "references",
       "source": "internal_llmtraining_run_runjob",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L34",
+      "source_location": "L35",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -109020,7 +109392,7 @@
       "relation": "references",
       "source": "internal_llmtraining_run_trustedexecutioncomponent",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L217",
+      "source_location": "L218",
       "target": "go_type_golang_org_x_sys_unix_stat_t",
       "weight": 1.0
     },
@@ -109032,7 +109404,7 @@
       "relation": "references",
       "source": "internal_llmtraining_run_trustedruntime",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L161",
+      "source_location": "L162",
       "target": "llmtraining_inventory",
       "weight": 1.0
     },
@@ -109044,7 +109416,7 @@
       "relation": "references",
       "source": "internal_llmtraining_run_unchangedexecutioninputs",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L284",
+      "source_location": "L288",
       "target": "llmtraining_jobenvelope",
       "weight": 1.0
     },
@@ -109056,7 +109428,7 @@
       "relation": "references",
       "source": "internal_llmtraining_run_unchangedexecutioninputs",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L284",
+      "source_location": "L288",
       "target": "llmtraining_recipe",
       "weight": 1.0
     },
@@ -123733,6 +124105,42 @@
       "source": "internal_runtime_training_runtime_contract_test_writetrainercontractevidence",
       "source_file": "internal/runtime/training_runtime_contract_test.go",
       "source_location": "L55",
+      "target": "go_type_testing_t",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "internal_runtime_training_stop_test_testsignaltrainingisfencedbyinvocation",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L11",
+      "target": "go_type_testing_t",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "internal_runtime_training_stop_test_testtrainingexitedreadstrainerstate",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L35",
+      "target": "go_type_testing_t",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "internal_runtime_training_stop_test_testtrainingexitedwaitsfortrainerchildren",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L59",
       "target": "go_type_testing_t",
       "weight": 1.0
     },
@@ -139726,6 +140134,102 @@
       "confidence_score": 1.0,
       "context": "parameter_type",
       "relation": "references",
+      "source": "internal_supervisor_training_stop_test_teststoptrainingescalatesaftergrace",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L63",
+      "target": "go_type_testing_t",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "internal_supervisor_training_stop_test_teststoptrainingkeepsjobuntilreleaseisproven",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L113",
+      "target": "go_type_testing_t",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "internal_supervisor_training_stop_test_teststoptrainingkeepsjobwhensignalfails",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L78",
+      "target": "go_type_testing_t",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "internal_supervisor_training_stop_test_teststoptrainingkeepsrecordedoutcome",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L135",
+      "target": "go_type_testing_t",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "internal_supervisor_training_stop_test_teststoptrainingracingcompletionstillverifiesrelease",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L102",
+      "target": "go_type_testing_t",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "internal_supervisor_training_stop_test_teststoptrainingrejectsinvalidrequests",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L90",
+      "target": "go_type_testing_t",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "internal_supervisor_training_stop_test_teststoptrainingwaitsforcheckpointexit",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L46",
+      "target": "go_type_testing_t",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "internal_supervisor_training_stop_test_trainingstopcontract",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L36",
+      "target": "go_type_testing_t",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
       "source": "internal_supervisor_training_systemd_integration_test_testsystemdtrainingretainsinvocationuntilexplicitstop",
       "source_file": "internal/supervisor/training_systemd_integration_test.go",
       "source_location": "L22",
@@ -140112,7 +140616,7 @@
       "relation": "references",
       "source": "llmtraining_execution_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L107",
+      "source_location": "L108",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -140160,7 +140664,7 @@
       "relation": "references",
       "source": "llmtraining_runsteps_runjob",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L49",
+      "source_location": "L50",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -145954,6 +146458,42 @@
       "confidence_score": 1.0,
       "context": "parameter_type",
       "relation": "references",
+      "source": "runtime_systemdmanager_signaltraining",
+      "source_file": "internal/runtime/training.go",
+      "source_location": "L366",
+      "target": "go_type_context_context",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "runtime_systemdmanager_signaltraining",
+      "source_file": "internal/runtime/training.go",
+      "source_location": "L366",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "runtime_systemdmanager_signaltraining",
+      "source_file": "internal/runtime/training.go",
+      "source_location": "L366",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workloadprofile",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
       "source": "runtime_systemdmanager_sleep",
       "source_file": "internal/runtime/vllm_sleep.go",
       "source_location": "L25",
@@ -146269,6 +146809,42 @@
       "source": "runtime_systemdmanager_trainerproperties",
       "source_file": "internal/runtime/training.go",
       "source_location": "L39",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workloadprofile",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "runtime_systemdmanager_trainingexited",
+      "source_file": "internal/runtime/training.go",
+      "source_location": "L385",
+      "target": "go_type_context_context",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "runtime_systemdmanager_trainingexited",
+      "source_file": "internal/runtime/training.go",
+      "source_location": "L385",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "runtime_systemdmanager_trainingexited",
+      "source_file": "internal/runtime/training.go",
+      "source_location": "L385",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workloadprofile",
       "weight": 1.0
     },
@@ -152388,7 +152964,7 @@
       "relation": "references",
       "source": "supervisor_controller_aborttrainingpreparation",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L202",
+      "source_location": "L203",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -152400,7 +152976,7 @@
       "relation": "references",
       "source": "supervisor_controller_aborttrainingpreparation",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L202",
+      "source_location": "L203",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
       "weight": 1.0
     },
@@ -152472,7 +153048,7 @@
       "relation": "references",
       "source": "supervisor_controller_activetraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L86",
+      "source_location": "L87",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -152952,7 +153528,7 @@
       "relation": "references",
       "source": "supervisor_controller_finishtraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L162",
+      "source_location": "L163",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -152964,7 +153540,7 @@
       "relation": "references",
       "source": "supervisor_controller_finishtraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L162",
+      "source_location": "L163",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
       "weight": 1.0
     },
@@ -152976,7 +153552,7 @@
       "relation": "references",
       "source": "supervisor_controller_finishtraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L162",
+      "source_location": "L163",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workloadprofile",
       "weight": 1.0
     },
@@ -153516,7 +154092,7 @@
       "relation": "references",
       "source": "supervisor_controller_reconciletraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L107",
+      "source_location": "L108",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -153552,7 +154128,7 @@
       "relation": "references",
       "source": "supervisor_controller_recordtrainingmemorypeak",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L184",
+      "source_location": "L185",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -153564,7 +154140,7 @@
       "relation": "references",
       "source": "supervisor_controller_recordtrainingmemorypeak",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L184",
+      "source_location": "L185",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
       "weight": 1.0
     },
@@ -153576,7 +154152,7 @@
       "relation": "references",
       "source": "supervisor_controller_recordtrainingmemorypeak",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L184",
+      "source_location": "L185",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workloadprofile",
       "weight": 1.0
     },
@@ -153600,7 +154176,7 @@
       "relation": "references",
       "source": "supervisor_controller_recovertraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L144",
+      "source_location": "L145",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -153612,7 +154188,7 @@
       "relation": "references",
       "source": "supervisor_controller_recovertrainingpreparation",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L209",
+      "source_location": "L210",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -154128,7 +154704,7 @@
       "relation": "references",
       "source": "supervisor_controller_starttraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L37",
+      "source_location": "L38",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -154140,7 +154716,7 @@
       "relation": "references",
       "source": "supervisor_controller_starttraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L37",
+      "source_location": "L38",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workload",
       "weight": 1.0
     },
@@ -154354,6 +154930,30 @@
       "confidence_score": 1.0,
       "context": "parameter_type",
       "relation": "references",
+      "source": "supervisor_controller_stoptraining",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L241",
+      "target": "go_type_context_context",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_controller_stoptraining",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L241",
+      "target": "go_type_time_duration",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
       "source": "supervisor_controller_switch",
       "source_file": "internal/supervisor/transitions.go",
       "source_location": "L15",
@@ -154404,7 +155004,7 @@
       "relation": "references",
       "source": "supervisor_controller_trainingoutcome",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L119",
+      "source_location": "L120",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -154416,7 +155016,7 @@
       "relation": "references",
       "source": "supervisor_controller_trainingoutcome",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L119",
+      "source_location": "L120",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
       "weight": 1.0
     },
@@ -154428,7 +155028,7 @@
       "relation": "references",
       "source": "supervisor_controller_trainingoutcome",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L119",
+      "source_location": "L120",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workloadprofile",
       "weight": 1.0
     },
@@ -154440,7 +155040,7 @@
       "relation": "references",
       "source": "supervisor_controller_trainingstatus",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L31",
+      "source_location": "L32",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -158040,7 +158640,7 @@
       "relation": "references",
       "source": "supervisor_trainingruntime_releasetraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L27",
+      "source_location": "L28",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -158052,91 +158652,91 @@
       "relation": "references",
       "source": "supervisor_trainingruntime_releasetraining",
       "source_file": "internal/supervisor/training.go",
+      "source_location": "L28",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workloadprofile",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingruntime_starttraining",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L26",
+      "target": "go_type_context_context",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingruntime_starttraining",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L26",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingruntime_starttraining",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L26",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workloadprofile",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingruntime_trainingmemorypeak",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L29",
+      "target": "go_type_context_context",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingruntime_trainingmemorypeak",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L29",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingruntime_trainingmemorypeak",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L29",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workloadprofile",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingruntime_trainingterminal",
+      "source_file": "internal/supervisor/training.go",
       "source_location": "L27",
-      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workloadprofile",
-      "weight": 1.0
-    },
-    {
-      "_origin": "ast",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "context": "parameter_type",
-      "relation": "references",
-      "source": "supervisor_trainingruntime_starttraining",
-      "source_file": "internal/supervisor/training.go",
-      "source_location": "L25",
-      "target": "go_type_context_context",
-      "weight": 1.0
-    },
-    {
-      "_origin": "ast",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "context": "parameter_type",
-      "relation": "references",
-      "source": "supervisor_trainingruntime_starttraining",
-      "source_file": "internal/supervisor/training.go",
-      "source_location": "L25",
-      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
-      "weight": 1.0
-    },
-    {
-      "_origin": "ast",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "context": "parameter_type",
-      "relation": "references",
-      "source": "supervisor_trainingruntime_starttraining",
-      "source_file": "internal/supervisor/training.go",
-      "source_location": "L25",
-      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workloadprofile",
-      "weight": 1.0
-    },
-    {
-      "_origin": "ast",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "context": "parameter_type",
-      "relation": "references",
-      "source": "supervisor_trainingruntime_trainingmemorypeak",
-      "source_file": "internal/supervisor/training.go",
-      "source_location": "L28",
-      "target": "go_type_context_context",
-      "weight": 1.0
-    },
-    {
-      "_origin": "ast",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "context": "parameter_type",
-      "relation": "references",
-      "source": "supervisor_trainingruntime_trainingmemorypeak",
-      "source_file": "internal/supervisor/training.go",
-      "source_location": "L28",
-      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
-      "weight": 1.0
-    },
-    {
-      "_origin": "ast",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "context": "parameter_type",
-      "relation": "references",
-      "source": "supervisor_trainingruntime_trainingmemorypeak",
-      "source_file": "internal/supervisor/training.go",
-      "source_location": "L28",
-      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workloadprofile",
-      "weight": 1.0
-    },
-    {
-      "_origin": "ast",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "context": "parameter_type",
-      "relation": "references",
-      "source": "supervisor_trainingruntime_trainingterminal",
-      "source_file": "internal/supervisor/training.go",
-      "source_location": "L26",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -158148,7 +158748,7 @@
       "relation": "references",
       "source": "supervisor_trainingruntime_trainingterminal",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L26",
+      "source_location": "L27",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
       "weight": 1.0
     },
@@ -158160,7 +158760,7 @@
       "relation": "references",
       "source": "supervisor_trainingruntime_trainingterminal",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L26",
+      "source_location": "L27",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workloadprofile",
       "weight": 1.0
     },
@@ -158182,9 +158782,9 @@
       "confidence_score": 1.0,
       "context": "parameter_type",
       "relation": "references",
-      "source": "supervisor_trainingstore_aborttrainingpreparation",
+      "source": "supervisor_trainingstopper_signaltraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L17",
+      "source_location": "L224",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -158194,9 +158794,9 @@
       "confidence_score": 1.0,
       "context": "parameter_type",
       "relation": "references",
-      "source": "supervisor_trainingstore_aborttrainingpreparation",
+      "source": "supervisor_trainingstopper_signaltraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L17",
+      "source_location": "L224",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
       "weight": 1.0
     },
@@ -158206,9 +158806,21 @@
       "confidence_score": 1.0,
       "context": "parameter_type",
       "relation": "references",
-      "source": "supervisor_trainingstore_claimtraining",
+      "source": "supervisor_trainingstopper_signaltraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L15",
+      "source_location": "L224",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workloadprofile",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingstopper_trainingexited",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L225",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -158218,33 +158830,9 @@
       "confidence_score": 1.0,
       "context": "parameter_type",
       "relation": "references",
-      "source": "supervisor_trainingstore_claimtraining",
+      "source": "supervisor_trainingstopper_trainingexited",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L15",
-      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workload",
-      "weight": 1.0
-    },
-    {
-      "_origin": "ast",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "context": "parameter_type",
-      "relation": "references",
-      "source": "supervisor_trainingstore_finishtraining",
-      "source_file": "internal/supervisor/training.go",
-      "source_location": "L21",
-      "target": "go_type_context_context",
-      "weight": 1.0
-    },
-    {
-      "_origin": "ast",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "context": "parameter_type",
-      "relation": "references",
-      "source": "supervisor_trainingstore_finishtraining",
-      "source_file": "internal/supervisor/training.go",
-      "source_location": "L21",
+      "source_location": "L225",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
       "weight": 1.0
     },
@@ -158254,9 +158842,21 @@
       "confidence_score": 1.0,
       "context": "parameter_type",
       "relation": "references",
-      "source": "supervisor_trainingstore_preflighttraining",
+      "source": "supervisor_trainingstopper_trainingexited",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L13",
+      "source_location": "L225",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workloadprofile",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingstopruntime_signaltraining",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L23",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -158266,10 +158866,10 @@
       "confidence_score": 1.0,
       "context": "parameter_type",
       "relation": "references",
-      "source": "supervisor_trainingstore_preflighttraining",
-      "source_file": "internal/supervisor/training.go",
-      "source_location": "L13",
-      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workload",
+      "source": "supervisor_trainingstopruntime_signaltraining",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L23",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
       "weight": 1.0
     },
     {
@@ -158278,7 +158878,55 @@
       "confidence_score": 1.0,
       "context": "parameter_type",
       "relation": "references",
-      "source": "supervisor_trainingstore_recordtraininglaunch",
+      "source": "supervisor_trainingstopruntime_signaltraining",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L23",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workloadprofile",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingstopruntime_trainingexited",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L28",
+      "target": "go_type_context_context",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingstopruntime_trainingexited",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L28",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingstopruntime_trainingexited",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L28",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workloadprofile",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingstore_aborttrainingpreparation",
       "source_file": "internal/supervisor/training.go",
       "source_location": "L18",
       "target": "go_type_context_context",
@@ -158290,7 +158938,7 @@
       "confidence_score": 1.0,
       "context": "parameter_type",
       "relation": "references",
-      "source": "supervisor_trainingstore_recordtraininglaunch",
+      "source": "supervisor_trainingstore_aborttrainingpreparation",
       "source_file": "internal/supervisor/training.go",
       "source_location": "L18",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
@@ -158302,7 +158950,127 @@
       "confidence_score": 1.0,
       "context": "parameter_type",
       "relation": "references",
+      "source": "supervisor_trainingstore_claimtraining",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L16",
+      "target": "go_type_context_context",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingstore_claimtraining",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L16",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workload",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingstore_finishtraining",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L22",
+      "target": "go_type_context_context",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingstore_finishtraining",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L22",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingstore_preflighttraining",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L14",
+      "target": "go_type_context_context",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingstore_preflighttraining",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L14",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workload",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingstore_recordtraininglaunch",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L19",
+      "target": "go_type_context_context",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingstore_recordtraininglaunch",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L19",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
       "source": "supervisor_trainingstore_recordtrainingmemorypeak",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L21",
+      "target": "go_type_context_context",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingstore_recordtrainingmemorypeak",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L21",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "parameter_type",
+      "relation": "references",
+      "source": "supervisor_trainingstore_recordtrainingterminal",
       "source_file": "internal/supervisor/training.go",
       "source_location": "L20",
       "target": "go_type_context_context",
@@ -158314,7 +159082,7 @@
       "confidence_score": 1.0,
       "context": "parameter_type",
       "relation": "references",
-      "source": "supervisor_trainingstore_recordtrainingmemorypeak",
+      "source": "supervisor_trainingstore_recordtrainingterminal",
       "source_file": "internal/supervisor/training.go",
       "source_location": "L20",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
@@ -158328,31 +159096,7 @@
       "relation": "references",
       "source": "supervisor_trainingstore_recordtrainingterminal",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L19",
-      "target": "go_type_context_context",
-      "weight": 1.0
-    },
-    {
-      "_origin": "ast",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "context": "parameter_type",
-      "relation": "references",
-      "source": "supervisor_trainingstore_recordtrainingterminal",
-      "source_file": "internal/supervisor/training.go",
-      "source_location": "L19",
-      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
-      "weight": 1.0
-    },
-    {
-      "_origin": "ast",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "context": "parameter_type",
-      "relation": "references",
-      "source": "supervisor_trainingstore_recordtrainingterminal",
-      "source_file": "internal/supervisor/training.go",
-      "source_location": "L19",
+      "source_location": "L20",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingterminal",
       "weight": 1.0
     },
@@ -158364,7 +159108,7 @@
       "relation": "references",
       "source": "supervisor_trainingstore_reservetraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L16",
+      "source_location": "L17",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -158376,7 +159120,7 @@
       "relation": "references",
       "source": "supervisor_trainingstore_reservetraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L16",
+      "source_location": "L17",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
       "weight": 1.0
     },
@@ -158388,7 +159132,7 @@
       "relation": "references",
       "source": "supervisor_trainingstore_trainingjob",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L14",
+      "source_location": "L15",
       "target": "go_type_context_context",
       "weight": 1.0
     },
@@ -158556,7 +159300,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_acquireproxylifetimelock",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L246",
+      "source_location": "L252",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_lock_file",
       "weight": 1.0
     },
@@ -158568,7 +159312,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_decodecatalogfile",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L345",
+      "source_location": "L351",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_catalog",
       "weight": 1.0
     },
@@ -158580,7 +159324,7 @@
       "relation": "references",
       "source": "cmd_gpu_mode_main_supervisorconfig",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L213",
+      "source_location": "L219",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_supervisor_config",
       "weight": 1.0
     },
@@ -159492,7 +160236,7 @@
       "relation": "references",
       "source": "internal_llmtraining_run_executeworker",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L253",
+      "source_location": "L254",
       "target": "llmtraining_workerreceipt",
       "weight": 1.0
     },
@@ -159504,7 +160248,7 @@
       "relation": "references",
       "source": "internal_llmtraining_run_executionrecipe",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L130",
+      "source_location": "L131",
       "target": "llmtraining_recipe",
       "weight": 1.0
     },
@@ -159516,7 +160260,7 @@
       "relation": "references",
       "source": "internal_llmtraining_run_hostrunsteps",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L45",
+      "source_location": "L46",
       "target": "llmtraining_runsteps",
       "weight": 1.0
     },
@@ -163954,6 +164698,42 @@
       "confidence_score": 1.0,
       "context": "return_type",
       "relation": "references",
+      "source": "internal_supervisor_training_stop_test_trainingstopcontract",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L36",
+      "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "return_type",
+      "relation": "references",
+      "source": "internal_supervisor_training_stop_test_trainingstopcontract",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L36",
+      "target": "internal_supervisor_controller_go_supervisor_controller",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "return_type",
+      "relation": "references",
+      "source": "internal_supervisor_training_stop_test_trainingstopcontract",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L36",
+      "target": "supervisor_trainingstopruntime",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "return_type",
+      "relation": "references",
       "source": "internal_supervisor_verification_observedworkload",
       "source_file": "internal/supervisor/verification.go",
       "source_location": "L20",
@@ -166440,7 +167220,7 @@
       "relation": "references",
       "source": "supervisor_controller_activetraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L86",
+      "source_location": "L87",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
       "weight": 1.0
     },
@@ -166452,7 +167232,7 @@
       "relation": "references",
       "source": "supervisor_controller_activetraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L86",
+      "source_location": "L87",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_workloadprofile",
       "weight": 1.0
     },
@@ -166464,7 +167244,7 @@
       "relation": "references",
       "source": "supervisor_controller_finishtraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L162",
+      "source_location": "L163",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_state",
       "weight": 1.0
     },
@@ -166584,7 +167364,7 @@
       "relation": "references",
       "source": "supervisor_controller_reconciletraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L107",
+      "source_location": "L108",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_state",
       "weight": 1.0
     },
@@ -166608,7 +167388,7 @@
       "relation": "references",
       "source": "supervisor_controller_recovertraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L144",
+      "source_location": "L145",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_state",
       "weight": 1.0
     },
@@ -166620,7 +167400,7 @@
       "relation": "references",
       "source": "supervisor_controller_recovertrainingpreparation",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L209",
+      "source_location": "L210",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_state",
       "weight": 1.0
     },
@@ -166704,7 +167484,7 @@
       "relation": "references",
       "source": "supervisor_controller_starttraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L37",
+      "source_location": "L38",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
       "weight": 1.0
     },
@@ -166718,6 +167498,18 @@
       "source_file": "internal/supervisor/status.go",
       "source_location": "L16",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_state",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "return_type",
+      "relation": "references",
+      "source": "supervisor_controller_stoptraining",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L241",
+      "target": "supervisor_trainingstop",
       "weight": 1.0
     },
     {
@@ -166752,7 +167544,7 @@
       "relation": "references",
       "source": "supervisor_controller_trainingstatus",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L31",
+      "source_location": "L32",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
       "weight": 1.0
     },
@@ -167508,7 +168300,7 @@
       "relation": "references",
       "source": "supervisor_trainingruntime_trainingterminal",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L26",
+      "source_location": "L27",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingterminal",
       "weight": 1.0
     },
@@ -167532,7 +168324,7 @@
       "relation": "references",
       "source": "supervisor_trainingstore_aborttrainingpreparation",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L17",
+      "source_location": "L18",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_state",
       "weight": 1.0
     },
@@ -167544,7 +168336,7 @@
       "relation": "references",
       "source": "supervisor_trainingstore_claimtraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L15",
+      "source_location": "L16",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
       "weight": 1.0
     },
@@ -167556,7 +168348,7 @@
       "relation": "references",
       "source": "supervisor_trainingstore_finishtraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L21",
+      "source_location": "L22",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_state",
       "weight": 1.0
     },
@@ -167568,7 +168360,7 @@
       "relation": "references",
       "source": "supervisor_trainingstore_trainingjob",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L14",
+      "source_location": "L15",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_control_trainingjob",
       "weight": 1.0
     },
@@ -171989,7 +172781,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_main",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L135",
+      "source_location": "L141",
       "target": "cmd_gpu_mode_main_validatecatalogflags",
       "weight": 1.0
     },
@@ -172000,7 +172792,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_main",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L149",
+      "source_location": "L155",
       "target": "cmd_gpu_mode_main_executewithstate",
       "weight": 1.0
     },
@@ -172011,7 +172803,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_main",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L213",
+      "source_location": "L219",
       "target": "cmd_gpu_mode_main_supervisorconfig",
       "weight": 1.0
     },
@@ -172022,7 +172814,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_main",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L223",
+      "source_location": "L229",
       "target": "cmd_gpu_mode_main_validatecommandflags",
       "weight": 1.0
     },
@@ -172033,7 +172825,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_main",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L246",
+      "source_location": "L252",
       "target": "cmd_gpu_mode_main_acquireproxylifetimelock",
       "weight": 1.0
     },
@@ -172044,7 +172836,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_main",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L269",
+      "source_location": "L275",
       "target": "cmd_gpu_mode_main_executecommand",
       "weight": 1.0
     },
@@ -172055,7 +172847,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_main",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L309",
+      "source_location": "L315",
       "target": "cmd_gpu_mode_main_showsettings",
       "weight": 1.0
     },
@@ -172066,7 +172858,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_main",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L323",
+      "source_location": "L329",
       "target": "cmd_gpu_mode_main_restorestate",
       "weight": 1.0
     },
@@ -172077,7 +172869,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_main",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L331",
+      "source_location": "L337",
       "target": "cmd_gpu_mode_main_validatetarget",
       "weight": 1.0
     },
@@ -172088,7 +172880,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_main",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L34",
+      "source_location": "L35",
       "target": "cmd_gpu_mode_main_main",
       "weight": 1.0
     },
@@ -172099,7 +172891,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_main",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L345",
+      "source_location": "L351",
       "target": "cmd_gpu_mode_main_decodecatalogfile",
       "weight": 1.0
     },
@@ -172110,7 +172902,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_main",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L354",
+      "source_location": "L360",
       "target": "cmd_gpu_mode_main_configurecatalog",
       "weight": 1.0
     },
@@ -172121,7 +172913,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_main",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L378",
+      "source_location": "L384",
       "target": "cmd_gpu_mode_main_ownedprofilesverbatim",
       "weight": 1.0
     },
@@ -172132,7 +172924,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_main",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L404",
+      "source_location": "L410",
       "target": "cmd_gpu_mode_main_pincatalog",
       "weight": 1.0
     },
@@ -172143,18 +172935,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_main",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L41",
-      "target": "cmd_gpu_mode_main_run",
-      "weight": 1.0
-    },
-    {
-      "_origin": "ast",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "relation": "contains",
-      "source": "cmd_gpu_mode_main",
-      "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L411",
+      "source_location": "L417",
       "target": "cmd_gpu_mode_main_executeruntimecommand",
       "weight": 1.0
     },
@@ -172165,7 +172946,18 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_main",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L47",
+      "source_location": "L42",
+      "target": "cmd_gpu_mode_main_run",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "cmd_gpu_mode_main",
+      "source_file": "cmd/gpu-mode/main.go",
+      "source_location": "L48",
       "target": "gpu_mode_modeexecution",
       "weight": 1.0
     },
@@ -172176,7 +172968,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_main",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L56",
+      "source_location": "L58",
       "target": "cmd_gpu_mode_main_runwithruntimefactory",
       "weight": 1.0
     },
@@ -172704,7 +173496,7 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_training",
       "source_file": "cmd/gpu-mode/training.go",
-      "source_location": "L14",
+      "source_location": "L16",
       "target": "cmd_gpu_mode_training_executetraining",
       "weight": 1.0
     },
@@ -172715,8 +173507,19 @@
       "relation": "contains",
       "source": "cmd_gpu_mode_training",
       "source_file": "cmd/gpu-mode/training.go",
-      "source_location": "L43",
+      "source_location": "L45",
       "target": "cmd_gpu_mode_training_validatetrainingflags",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "cmd_gpu_mode_training",
+      "source_file": "cmd/gpu-mode/training.go",
+      "source_location": "L67",
+      "target": "cmd_gpu_mode_training_validatestopgrace",
       "weight": 1.0
     },
     {
@@ -172915,6 +173718,17 @@
       "source_file": "cmd/gpu-mode/training_restored_test.go",
       "source_location": "L95",
       "target": "cmd_gpu_mode_training_restored_test_testrecoverallrestoredreportsanunreadablestate",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "cmd_gpu_mode_training_stop_test",
+      "source_file": "cmd/gpu-mode/training_stop_test.go",
+      "source_location": "L9",
+      "target": "cmd_gpu_mode_training_stop_test_teststopgraceflag",
       "weight": 1.0
     },
     {
@@ -176026,7 +176840,7 @@
       "relation": "contains",
       "source": "docs_training_environment_and_backend_decision",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L236",
+      "source_location": "L238",
       "target": "docs_training_runtime_check",
       "weight": 1.0
     },
@@ -176037,7 +176851,7 @@
       "relation": "contains",
       "source": "docs_training_experimental_llm_training_runner",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L419",
+      "source_location": "L421",
       "target": "docs_training_resource_peaks",
       "weight": 1.0
     },
@@ -176070,7 +176884,7 @@
       "relation": "contains",
       "source": "docs_training_finite_training_jobs",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L78",
+      "source_location": "L80",
       "target": "docs_training_memory_peak",
       "weight": 1.0
     },
@@ -176081,7 +176895,7 @@
       "relation": "contains",
       "source": "docs_training_llm_training_candidate_preparation",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L118",
+      "source_location": "L120",
       "target": "docs_training_recipe_version_1",
       "weight": 1.0
     },
@@ -176092,7 +176906,7 @@
       "relation": "contains",
       "source": "docs_training_llm_training_candidate_preparation",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L149",
+      "source_location": "L151",
       "target": "docs_training_resource_estimates",
       "weight": 1.0
     },
@@ -176103,7 +176917,7 @@
       "relation": "contains",
       "source": "docs_training_llm_training_candidate_preparation",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L159",
+      "source_location": "L161",
       "target": "docs_training_candidate_configuration",
       "weight": 1.0
     },
@@ -176114,7 +176928,7 @@
       "relation": "contains",
       "source": "docs_training_llm_training_candidate_preparation",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L171",
+      "source_location": "L173",
       "target": "docs_training_qualification_still_required",
       "weight": 1.0
     },
@@ -176125,7 +176939,7 @@
       "relation": "contains",
       "source": "docs_training_llm_training_candidate_preparation",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L175",
+      "source_location": "L177",
       "target": "docs_training_inspected_upstream_api",
       "weight": 1.0
     },
@@ -176136,7 +176950,7 @@
       "relation": "contains",
       "source": "docs_training_llm_training_qualification",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L189",
+      "source_location": "L191",
       "target": "docs_training_environment_and_backend_decision",
       "weight": 1.0
     },
@@ -176147,7 +176961,7 @@
       "relation": "contains",
       "source": "docs_training_llm_training_qualification",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L286",
+      "source_location": "L288",
       "target": "docs_training_immutable_asset_candidates",
       "weight": 1.0
     },
@@ -176158,7 +176972,7 @@
       "relation": "contains",
       "source": "docs_training_llm_training_qualification",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L309",
+      "source_location": "L311",
       "target": "docs_training_materialize_and_inspect",
       "weight": 1.0
     },
@@ -176169,7 +176983,7 @@
       "relation": "contains",
       "source": "docs_training_llm_training_qualification",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L334",
+      "source_location": "L336",
       "target": "docs_training_private_host_inputs_and_evidence",
       "weight": 1.0
     },
@@ -176191,7 +177005,7 @@
       "relation": "contains",
       "source": "docs_training_training",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L185",
+      "source_location": "L187",
       "target": "docs_training_llm_training_qualification",
       "weight": 1.0
     },
@@ -176202,7 +177016,7 @@
       "relation": "contains",
       "source": "docs_training_training",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L393",
+      "source_location": "L395",
       "target": "docs_training_experimental_llm_training_runner",
       "weight": 1.0
     },
@@ -176213,7 +177027,7 @@
       "relation": "contains",
       "source": "docs_training_training",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L448",
+      "source_location": "L450",
       "target": "docs_training_llm_artifact_import_preparation",
       "weight": 1.0
     },
@@ -176224,7 +177038,7 @@
       "relation": "contains",
       "source": "docs_training_training",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L470",
+      "source_location": "L472",
       "target": "docs_training_trainer_binding_inspection",
       "weight": 1.0
     },
@@ -176235,7 +177049,7 @@
       "relation": "contains",
       "source": "docs_training_training",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L96",
+      "source_location": "L98",
       "target": "docs_training_llm_training_candidate_preparation",
       "weight": 1.0
     },
@@ -179766,6 +180580,17 @@
       "relation": "contains",
       "source": "internal_llmtraining_peaks_test",
       "source_file": "internal/llmtraining/peaks_test.go",
+      "source_location": "L655",
+      "target": "internal_llmtraining_peaks_test_testrunjobforwardsstoptoworker",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "internal_llmtraining_peaks_test",
+      "source_file": "internal/llmtraining/peaks_test.go",
       "source_location": "L79",
       "target": "internal_llmtraining_peaks_test_testworkerprogresscontract",
       "weight": 1.0
@@ -180481,7 +181306,18 @@
       "relation": "contains",
       "source": "internal_llmtraining_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L130",
+      "source_location": "L100",
+      "target": "llmtraining_execution",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "internal_llmtraining_run",
+      "source_file": "internal/llmtraining/run.go",
+      "source_location": "L131",
       "target": "internal_llmtraining_run_executionrecipe",
       "weight": 1.0
     },
@@ -180492,7 +181328,7 @@
       "relation": "contains",
       "source": "internal_llmtraining_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L161",
+      "source_location": "L162",
       "target": "internal_llmtraining_run_trustedruntime",
       "weight": 1.0
     },
@@ -180503,7 +181339,7 @@
       "relation": "contains",
       "source": "internal_llmtraining_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L192",
+      "source_location": "L193",
       "target": "internal_llmtraining_run_privateexecutiondirectory",
       "weight": 1.0
     },
@@ -180514,7 +181350,7 @@
       "relation": "contains",
       "source": "internal_llmtraining_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L199",
+      "source_location": "L200",
       "target": "internal_llmtraining_run_trustedexecutionancestors",
       "weight": 1.0
     },
@@ -180525,7 +181361,7 @@
       "relation": "contains",
       "source": "internal_llmtraining_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L217",
+      "source_location": "L218",
       "target": "internal_llmtraining_run_trustedexecutioncomponent",
       "weight": 1.0
     },
@@ -180536,7 +181372,7 @@
       "relation": "contains",
       "source": "internal_llmtraining_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L226",
+      "source_location": "L227",
       "target": "internal_llmtraining_run_prepareexecution",
       "weight": 1.0
     },
@@ -180547,18 +181383,7 @@
       "relation": "contains",
       "source": "internal_llmtraining_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L24",
-      "target": "llmtraining_workerreceipt",
-      "weight": 1.0
-    },
-    {
-      "_origin": "ast",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "relation": "contains",
-      "source": "internal_llmtraining_run",
-      "source_file": "internal/llmtraining/run.go",
-      "source_location": "L242",
+      "source_location": "L243",
       "target": "internal_llmtraining_run_executionenvironment",
       "weight": 1.0
     },
@@ -180569,7 +181394,18 @@
       "relation": "contains",
       "source": "internal_llmtraining_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L253",
+      "source_location": "L25",
+      "target": "llmtraining_workerreceipt",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "internal_llmtraining_run",
+      "source_file": "internal/llmtraining/run.go",
+      "source_location": "L254",
       "target": "internal_llmtraining_run_executeworker",
       "weight": 1.0
     },
@@ -180580,7 +181416,7 @@
       "relation": "contains",
       "source": "internal_llmtraining_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L284",
+      "source_location": "L288",
       "target": "internal_llmtraining_run_unchangedexecutioninputs",
       "weight": 1.0
     },
@@ -180591,7 +181427,7 @@
       "relation": "contains",
       "source": "internal_llmtraining_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L308",
+      "source_location": "L312",
       "target": "internal_llmtraining_run_replaceevidence",
       "weight": 1.0
     },
@@ -180602,7 +181438,7 @@
       "relation": "contains",
       "source": "internal_llmtraining_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L325",
+      "source_location": "L329",
       "target": "internal_llmtraining_run_publishprivatefile",
       "weight": 1.0
     },
@@ -180613,7 +181449,7 @@
       "relation": "contains",
       "source": "internal_llmtraining_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L34",
+      "source_location": "L35",
       "target": "internal_llmtraining_run_runjob",
       "weight": 1.0
     },
@@ -180624,7 +181460,7 @@
       "relation": "contains",
       "source": "internal_llmtraining_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L39",
+      "source_location": "L40",
       "target": "llmtraining_runsteps",
       "weight": 1.0
     },
@@ -180635,19 +181471,8 @@
       "relation": "contains",
       "source": "internal_llmtraining_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L45",
+      "source_location": "L46",
       "target": "internal_llmtraining_run_hostrunsteps",
-      "weight": 1.0
-    },
-    {
-      "_origin": "ast",
-      "confidence": "EXTRACTED",
-      "confidence_score": 1.0,
-      "relation": "contains",
-      "source": "internal_llmtraining_run",
-      "source_file": "internal/llmtraining/run.go",
-      "source_location": "L99",
-      "target": "llmtraining_execution",
       "weight": 1.0
     },
     {
@@ -198640,6 +199465,39 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "relation": "contains",
+      "source": "internal_runtime_training_stop_test",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L11",
+      "target": "internal_runtime_training_stop_test_testsignaltrainingisfencedbyinvocation",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "internal_runtime_training_stop_test",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L35",
+      "target": "internal_runtime_training_stop_test_testtrainingexitedreadstrainerstate",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "internal_runtime_training_stop_test",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L59",
+      "target": "internal_runtime_training_stop_test_testtrainingexitedwaitsfortrainerchildren",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
       "source": "internal_runtime_transport_test",
       "source_file": "internal/runtime/transport_test.go",
       "source_location": "L15",
@@ -213668,7 +214526,7 @@
       "relation": "contains",
       "source": "internal_supervisor_training",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L12",
+      "source_location": "L13",
       "target": "supervisor_trainingstore",
       "weight": 1.0
     },
@@ -213679,7 +214537,29 @@
       "relation": "contains",
       "source": "internal_supervisor_training",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L24",
+      "source_location": "L223",
+      "target": "supervisor_trainingstopper",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "internal_supervisor_training",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L231",
+      "target": "supervisor_trainingstop",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "internal_supervisor_training",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L25",
       "target": "supervisor_trainingruntime",
       "weight": 1.0
     },
@@ -214077,6 +214957,105 @@
       "source_file": "internal/supervisor/training_contract_test.go",
       "source_location": "L954",
       "target": "internal_supervisor_training_contract_test_testtrainingcontractrecoverpreparationdoesnotstopinference",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "internal_supervisor_training_stop_test",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L102",
+      "target": "internal_supervisor_training_stop_test_teststoptrainingracingcompletionstillverifiesrelease",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "internal_supervisor_training_stop_test",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L113",
+      "target": "internal_supervisor_training_stop_test_teststoptrainingkeepsjobuntilreleaseisproven",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "internal_supervisor_training_stop_test",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L135",
+      "target": "internal_supervisor_training_stop_test_teststoptrainingkeepsrecordedoutcome",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "internal_supervisor_training_stop_test",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L14",
+      "target": "supervisor_trainingstopruntime",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "internal_supervisor_training_stop_test",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L36",
+      "target": "internal_supervisor_training_stop_test_trainingstopcontract",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "internal_supervisor_training_stop_test",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L46",
+      "target": "internal_supervisor_training_stop_test_teststoptrainingwaitsforcheckpointexit",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "internal_supervisor_training_stop_test",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L63",
+      "target": "internal_supervisor_training_stop_test_teststoptrainingescalatesaftergrace",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "internal_supervisor_training_stop_test",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L78",
+      "target": "internal_supervisor_training_stop_test_teststoptrainingkeepsjobwhensignalfails",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "contains",
+      "source": "internal_supervisor_training_stop_test",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L90",
+      "target": "internal_supervisor_training_stop_test_teststoptrainingrejectsinvalidrequests",
       "weight": 1.0
     },
     {
@@ -218081,6 +219060,17 @@
       "source_file": "internal/supervisor/training_contract_test.go",
       "source_location": "L669",
       "target": "go_type_github_com_mickey_kras_gpu_workload_supervisor_internal_store_store",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "embeds",
+      "source": "supervisor_trainingstopruntime",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L15",
+      "target": "supervisor_trainingcontractruntime",
       "weight": 1.0
     },
     {
@@ -223018,6 +224008,28 @@
       "relation": "method",
       "source": "internal_runtime_training_go_runtime_systemdmanager",
       "source_file": "internal/runtime/training.go",
+      "source_location": "L366",
+      "target": "runtime_systemdmanager_signaltraining",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "method",
+      "source": "internal_runtime_training_go_runtime_systemdmanager",
+      "source_file": "internal/runtime/training.go",
+      "source_location": "L385",
+      "target": "runtime_systemdmanager_trainingexited",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "method",
+      "source": "internal_runtime_training_go_runtime_systemdmanager",
+      "source_file": "internal/runtime/training.go",
       "source_location": "L39",
       "target": "runtime_systemdmanager_trainerproperties",
       "weight": 1.0
@@ -225625,7 +226637,7 @@
       "relation": "method",
       "source": "llmtraining_execution",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L107",
+      "source_location": "L108",
       "target": "llmtraining_execution_run",
       "weight": 1.0
     },
@@ -225790,7 +226802,7 @@
       "relation": "method",
       "source": "llmtraining_runsteps",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L49",
+      "source_location": "L50",
       "target": "llmtraining_runsteps_runjob",
       "weight": 1.0
     },
@@ -232918,7 +233930,7 @@
       "relation": "method",
       "source": "supervisor_trainingruntime",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L25",
+      "source_location": "L26",
       "target": "supervisor_trainingruntime_starttraining",
       "weight": 1.0
     },
@@ -232929,7 +233941,7 @@
       "relation": "method",
       "source": "supervisor_trainingruntime",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L26",
+      "source_location": "L27",
       "target": "supervisor_trainingruntime_trainingterminal",
       "weight": 1.0
     },
@@ -232940,7 +233952,7 @@
       "relation": "method",
       "source": "supervisor_trainingruntime",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L27",
+      "source_location": "L28",
       "target": "supervisor_trainingruntime_releasetraining",
       "weight": 1.0
     },
@@ -232951,7 +233963,7 @@
       "relation": "method",
       "source": "supervisor_trainingruntime",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L28",
+      "source_location": "L29",
       "target": "supervisor_trainingruntime_trainingmemorypeak",
       "weight": 1.0
     },
@@ -232971,10 +233983,43 @@
       "confidence": "EXTRACTED",
       "confidence_score": 1.0,
       "relation": "method",
-      "source": "supervisor_trainingstore",
+      "source": "supervisor_trainingstopper",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L13",
-      "target": "supervisor_trainingstore_preflighttraining",
+      "source_location": "L224",
+      "target": "supervisor_trainingstopper_signaltraining",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "method",
+      "source": "supervisor_trainingstopper",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L225",
+      "target": "supervisor_trainingstopper_trainingexited",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "method",
+      "source": "supervisor_trainingstopruntime",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L23",
+      "target": "supervisor_trainingstopruntime_signaltraining",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "method",
+      "source": "supervisor_trainingstopruntime",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L28",
+      "target": "supervisor_trainingstopruntime_trainingexited",
       "weight": 1.0
     },
     {
@@ -232985,7 +234030,7 @@
       "source": "supervisor_trainingstore",
       "source_file": "internal/supervisor/training.go",
       "source_location": "L14",
-      "target": "supervisor_trainingstore_trainingjob",
+      "target": "supervisor_trainingstore_preflighttraining",
       "weight": 1.0
     },
     {
@@ -232996,7 +234041,7 @@
       "source": "supervisor_trainingstore",
       "source_file": "internal/supervisor/training.go",
       "source_location": "L15",
-      "target": "supervisor_trainingstore_claimtraining",
+      "target": "supervisor_trainingstore_trainingjob",
       "weight": 1.0
     },
     {
@@ -233007,7 +234052,7 @@
       "source": "supervisor_trainingstore",
       "source_file": "internal/supervisor/training.go",
       "source_location": "L16",
-      "target": "supervisor_trainingstore_reservetraining",
+      "target": "supervisor_trainingstore_claimtraining",
       "weight": 1.0
     },
     {
@@ -233018,7 +234063,7 @@
       "source": "supervisor_trainingstore",
       "source_file": "internal/supervisor/training.go",
       "source_location": "L17",
-      "target": "supervisor_trainingstore_aborttrainingpreparation",
+      "target": "supervisor_trainingstore_reservetraining",
       "weight": 1.0
     },
     {
@@ -233029,7 +234074,7 @@
       "source": "supervisor_trainingstore",
       "source_file": "internal/supervisor/training.go",
       "source_location": "L18",
-      "target": "supervisor_trainingstore_recordtraininglaunch",
+      "target": "supervisor_trainingstore_aborttrainingpreparation",
       "weight": 1.0
     },
     {
@@ -233040,7 +234085,7 @@
       "source": "supervisor_trainingstore",
       "source_file": "internal/supervisor/training.go",
       "source_location": "L19",
-      "target": "supervisor_trainingstore_recordtrainingterminal",
+      "target": "supervisor_trainingstore_recordtraininglaunch",
       "weight": 1.0
     },
     {
@@ -233051,7 +234096,7 @@
       "source": "supervisor_trainingstore",
       "source_file": "internal/supervisor/training.go",
       "source_location": "L20",
-      "target": "supervisor_trainingstore_recordtrainingmemorypeak",
+      "target": "supervisor_trainingstore_recordtrainingterminal",
       "weight": 1.0
     },
     {
@@ -233062,6 +234107,17 @@
       "source": "supervisor_trainingstore",
       "source_file": "internal/supervisor/training.go",
       "source_location": "L21",
+      "target": "supervisor_trainingstore_recordtrainingmemorypeak",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "relation": "method",
+      "source": "supervisor_trainingstore",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L22",
       "target": "supervisor_trainingstore_finishtraining",
       "weight": 1.0
     },
@@ -235679,7 +236735,7 @@
       "relation": "references",
       "source": "docs_training",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L143",
+      "source_location": "L145",
       "target": "docs_model_checks",
       "weight": 1.0
     },
@@ -235690,7 +236746,7 @@
       "relation": "references",
       "source": "docs_training",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L94",
+      "source_location": "L96",
       "target": "docs_operations",
       "weight": 1.0
     },
@@ -236835,6 +237891,54 @@
       "source_file": "internal/supervisor/vllm_sleep_test.go",
       "source_location": "L13",
       "target": "supervisor_hibernatingfakeruntime_wake",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.75,
+      "context": "call",
+      "relation": "dispatches_to",
+      "source": "supervisor_trainingstopper_signaltraining",
+      "source_file": "internal/runtime/training.go",
+      "source_location": "L31",
+      "target": "runtime_systemdmanager_signaltraining",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.75,
+      "context": "call",
+      "relation": "dispatches_to",
+      "source": "supervisor_trainingstopper_signaltraining",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L14",
+      "target": "supervisor_trainingstopruntime_signaltraining",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.75,
+      "context": "call",
+      "relation": "dispatches_to",
+      "source": "supervisor_trainingstopper_trainingexited",
+      "source_file": "internal/runtime/training.go",
+      "source_location": "L31",
+      "target": "runtime_systemdmanager_trainingexited",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.75,
+      "context": "call",
+      "relation": "dispatches_to",
+      "source": "supervisor_trainingstopper_trainingexited",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L14",
+      "target": "supervisor_trainingstopruntime_trainingexited",
       "weight": 1.0
     },
     {
@@ -238909,7 +240013,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_executeruntimecommand",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L419",
+      "source_location": "L425",
       "target": "cmd_gpu_mode_training_restored_recoverallrestored",
       "weight": 1.0
     },
@@ -238921,7 +240025,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_executeruntimecommand",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L421",
+      "source_location": "L431",
       "target": "cmd_gpu_mode_training_executetraining",
       "weight": 1.0
     },
@@ -238933,7 +240037,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_executewithstate",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L170",
+      "source_location": "L176",
       "target": "cmd_gpu_mode_limit_reserve_limitreservefor",
       "weight": 1.0
     },
@@ -238945,7 +240049,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_executewithstate",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L185",
+      "source_location": "L191",
       "target": "cmd_gpu_mode_audit_pruneaudit",
       "weight": 1.0
     },
@@ -238957,7 +240061,31 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_runwithruntimefactory",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L114",
+      "source_location": "L102",
+      "target": "cmd_gpu_mode_profile_flags_applyprofiledefaults",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "context": "call",
+      "relation": "calls",
+      "source": "cmd_gpu_mode_main_runwithruntimefactory",
+      "source_file": "cmd/gpu-mode/main.go",
+      "source_location": "L105",
+      "target": "cmd_gpu_mode_audit_validateauditflags",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "context": "call",
+      "relation": "calls",
+      "source": "cmd_gpu_mode_main_runwithruntimefactory",
+      "source_file": "cmd/gpu-mode/main.go",
+      "source_location": "L120",
       "target": "cmd_gpu_mode_profile_flags_pinprofile",
       "weight": 1.0
     },
@@ -238969,7 +240097,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_runwithruntimefactory",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L117",
+      "source_location": "L123",
       "target": "cmd_gpu_mode_doctor_rundoctor",
       "weight": 1.0
     },
@@ -238981,7 +240109,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_runwithruntimefactory",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L121",
+      "source_location": "L127",
       "target": "cmd_gpu_mode_limit_reserve_limitreservefor",
       "weight": 1.0
     },
@@ -238993,7 +240121,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_runwithruntimefactory",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L127",
+      "source_location": "L133",
       "target": "cmd_gpu_mode_verify_host_verifyhost",
       "weight": 1.0
     },
@@ -239005,7 +240133,7 @@
       "relation": "calls",
       "source": "cmd_gpu_mode_main_runwithruntimefactory",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L90",
+      "source_location": "L93",
       "target": "cmd_gpu_mode_training_validatetrainingflags",
       "weight": 1.0
     },
@@ -239018,19 +240146,7 @@
       "source": "cmd_gpu_mode_main_runwithruntimefactory",
       "source_file": "cmd/gpu-mode/main.go",
       "source_location": "L96",
-      "target": "cmd_gpu_mode_profile_flags_applyprofiledefaults",
-      "weight": 1.0
-    },
-    {
-      "_origin": "ast",
-      "confidence": "INFERRED",
-      "confidence_score": 0.85,
-      "context": "call",
-      "relation": "calls",
-      "source": "cmd_gpu_mode_main_runwithruntimefactory",
-      "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L99",
-      "target": "cmd_gpu_mode_audit_validateauditflags",
+      "target": "cmd_gpu_mode_training_validatestopgrace",
       "weight": 1.0
     },
     {
@@ -239679,6 +240795,30 @@
       "source_file": "cmd/gpu-mode/training_restored_test.go",
       "source_location": "L42",
       "target": "cmd_gpu_mode_training_contract_test_capturetrainingcommand",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "context": "call",
+      "relation": "calls",
+      "source": "cmd_gpu_mode_training_stop_test_teststopgraceflag",
+      "source_file": "cmd/gpu-mode/training_stop_test.go",
+      "source_location": "L26",
+      "target": "cmd_gpu_mode_training_validatestopgrace",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "context": "call",
+      "relation": "calls",
+      "source": "cmd_gpu_mode_training_stop_test_teststopgraceflag",
+      "source_file": "cmd/gpu-mode/training_stop_test.go",
+      "source_location": "L30",
+      "target": "cmd_gpu_mode_training_validatetrainingflags",
       "weight": 1.0
     },
     {
@@ -244403,6 +245543,30 @@
       "confidence_score": 0.85,
       "context": "call",
       "relation": "calls",
+      "source": "internal_llmtraining_peaks_test_testrunjobforwardsstoptoworker",
+      "source_file": "internal/llmtraining/peaks_test.go",
+      "source_location": "L658",
+      "target": "internal_llmtraining_run_test_executionfixture",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "context": "call",
+      "relation": "calls",
+      "source": "internal_llmtraining_peaks_test_testrunjobforwardsstoptoworker",
+      "source_file": "internal/llmtraining/peaks_test.go",
+      "source_location": "L661",
+      "target": "internal_llmtraining_run_hostrunsteps",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "context": "call",
+      "relation": "calls",
       "source": "internal_llmtraining_peaks_test_testrunjobkeepstrainpeakswhenreloadfails",
       "source_file": "internal/llmtraining/peaks_test.go",
       "source_location": "L229",
@@ -245473,7 +246637,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_executeworker",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L260",
+      "source_location": "L264",
       "target": "llmtraining_peakrecorder_startphase",
       "weight": 1.0
     },
@@ -245485,7 +246649,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_executeworker",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L261",
+      "source_location": "L265",
       "target": "llmtraining_peakrecorder_watch",
       "weight": 1.0
     },
@@ -245497,7 +246661,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_executeworker",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L266",
+      "source_location": "L270",
       "target": "llmtraining_peakrecorder_finishworker",
       "weight": 1.0
     },
@@ -245509,7 +246673,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_executeworker",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L270",
+      "source_location": "L274",
       "target": "internal_llmtraining_job_readjobinput",
       "weight": 1.0
     },
@@ -245521,7 +246685,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_executeworker",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L278",
+      "source_location": "L282",
       "target": "internal_llmtraining_recipe_matchingobjectkeys",
       "weight": 1.0
     },
@@ -245533,7 +246697,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_executionrecipe",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L131",
+      "source_location": "L132",
       "target": "internal_llmtraining_job_compilejobrecipe",
       "weight": 1.0
     },
@@ -245545,7 +246709,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_executionrecipe",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L134",
+      "source_location": "L135",
       "target": "internal_llmtraining_job_readjobinput",
       "weight": 1.0
     },
@@ -245557,7 +246721,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_executionrecipe",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L142",
+      "source_location": "L143",
       "target": "internal_llmtraining_recipe_readrecipe",
       "weight": 1.0
     },
@@ -245569,7 +246733,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_hostrunsteps",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L46",
+      "source_location": "L47",
       "target": "internal_llmtraining_peaks_hostpeaksettings",
       "weight": 1.0
     },
@@ -245581,7 +246745,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_prepareexecution",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L235",
+      "source_location": "L236",
       "target": "internal_llmtraining_compile_compileconfig",
       "weight": 1.0
     },
@@ -245593,7 +246757,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_privateexecutiondirectory",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L193",
+      "source_location": "L194",
       "target": "internal_llmtraining_job_privatejobdirectory",
       "weight": 1.0
     },
@@ -245605,7 +246769,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_replaceevidence",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L310",
+      "source_location": "L314",
       "target": "internal_llmtraining_job_readjobinput",
       "weight": 1.0
     },
@@ -245929,7 +247093,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_trustedexecutionancestors",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L200",
+      "source_location": "L201",
       "target": "internal_llmtraining_recipe_absolute",
       "weight": 1.0
     },
@@ -245941,7 +247105,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_trustedruntime",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L171",
+      "source_location": "L172",
       "target": "internal_llmtraining_inspect_boundeddirectoryentries",
       "weight": 1.0
     },
@@ -245953,7 +247117,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_unchangedexecutioninputs",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L290",
+      "source_location": "L294",
       "target": "internal_llmtraining_job_readlaunchenvelope",
       "weight": 1.0
     },
@@ -245965,7 +247129,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_unchangedexecutioninputs",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L294",
+      "source_location": "L298",
       "target": "internal_llmtraining_inspect_matchfile",
       "weight": 1.0
     },
@@ -245977,7 +247141,7 @@
       "relation": "calls",
       "source": "internal_llmtraining_run_unchangedexecutioninputs",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L302",
+      "source_location": "L306",
       "target": "internal_llmtraining_inspect_inspectdatasets",
       "weight": 1.0
     },
@@ -265023,6 +266187,54 @@
       "source_file": "internal/runtime/training_runtime_contract_test.go",
       "source_location": "L33",
       "target": "internal_runtime_training_trainerunit",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "context": "call",
+      "relation": "calls",
+      "source": "internal_runtime_training_stop_test_testsignaltrainingisfencedbyinvocation",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L12",
+      "target": "internal_runtime_training_runtime_contract_test_trainercontractfixture",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "context": "call",
+      "relation": "calls",
+      "source": "internal_runtime_training_stop_test_testtrainingexitedreadstrainerstate",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L36",
+      "target": "internal_runtime_training_runtime_contract_test_trainercontractfixture",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "context": "call",
+      "relation": "calls",
+      "source": "internal_runtime_training_stop_test_testtrainingexitedwaitsfortrainerchildren",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L60",
+      "target": "internal_runtime_training_runtime_contract_test_trainercontractfixture",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "context": "call",
+      "relation": "calls",
+      "source": "internal_runtime_training_stop_test_testtrainingexitedwaitsfortrainerchildren",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L61",
+      "target": "internal_runtime_release_test_writeevents",
       "weight": 1.0
     },
     {
@@ -285971,6 +287183,66 @@
       "confidence_score": 0.85,
       "context": "call",
       "relation": "calls",
+      "source": "internal_supervisor_training_stop_test_teststoptrainingkeepsjobuntilreleaseisproven",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L125",
+      "target": "internal_supervisor_controller_test_testcontroller",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "context": "call",
+      "relation": "calls",
+      "source": "internal_supervisor_training_stop_test_teststoptrainingracingcompletionstillverifiesrelease",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L110",
+      "target": "internal_supervisor_controller_test_assertcalls",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "context": "call",
+      "relation": "calls",
+      "source": "internal_supervisor_training_stop_test_teststoptrainingwaitsforcheckpointexit",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L59",
+      "target": "internal_supervisor_controller_test_assertcalls",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "context": "call",
+      "relation": "calls",
+      "source": "internal_supervisor_training_stop_test_trainingstopcontract",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L38",
+      "target": "internal_supervisor_training_contract_test_trainingcontrollercontract",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "context": "call",
+      "relation": "calls",
+      "source": "internal_supervisor_training_stop_test_trainingstopcontract",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L40",
+      "target": "internal_supervisor_controller_test_testcontroller",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "context": "call",
+      "relation": "calls",
       "source": "internal_supervisor_training_systemd_integration_test_testsystemdtrainingretainsinvocationuntilexplicitstop",
       "source_file": "internal/supervisor/training_systemd_integration_test.go",
       "source_location": "L33",
@@ -286297,7 +287569,7 @@
       "relation": "calls",
       "source": "llmtraining_execution_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L115",
+      "source_location": "L116",
       "target": "internal_llmtraining_artifact_artifactfiles",
       "weight": 1.0
     },
@@ -286309,7 +287581,7 @@
       "relation": "calls",
       "source": "llmtraining_execution_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L122",
+      "source_location": "L123",
       "target": "llmtraining_peakrecorder_startphase",
       "weight": 1.0
     },
@@ -286321,7 +287593,7 @@
       "relation": "calls",
       "source": "llmtraining_execution_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L123",
+      "source_location": "L124",
       "target": "llmtraining_peakrecorder_finalsample",
       "weight": 1.0
     },
@@ -286333,7 +287605,7 @@
       "relation": "calls",
       "source": "llmtraining_execution_run",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L127",
+      "source_location": "L128",
       "target": "internal_llmtraining_artifact_publishprovenance",
       "weight": 1.0
     },
@@ -286477,7 +287749,7 @@
       "relation": "calls",
       "source": "llmtraining_runsteps_runjob",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L50",
+      "source_location": "L51",
       "target": "internal_llmtraining_recipe_absolute",
       "weight": 1.0
     },
@@ -286489,7 +287761,7 @@
       "relation": "calls",
       "source": "llmtraining_runsteps_runjob",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L60",
+      "source_location": "L61",
       "target": "internal_llmtraining_job_readlaunchenvelope",
       "weight": 1.0
     },
@@ -286501,7 +287773,7 @@
       "relation": "calls",
       "source": "llmtraining_runsteps_runjob",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L81",
+      "source_location": "L82",
       "target": "internal_llmtraining_peaks_newpeakrecorder",
       "weight": 1.0
     },
@@ -286513,7 +287785,7 @@
       "relation": "calls",
       "source": "llmtraining_runsteps_runjob",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L83",
+      "source_location": "L84",
       "target": "llmtraining_execution_run",
       "weight": 1.0
     },
@@ -294049,7 +295321,7 @@
       "relation": "calls",
       "source": "supervisor_controller_finishtraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L164",
+      "source_location": "L165",
       "target": "supervisor_controller_runaction",
       "weight": 1.0
     },
@@ -294061,7 +295333,7 @@
       "relation": "calls",
       "source": "supervisor_controller_finishtraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L167",
+      "source_location": "L168",
       "target": "supervisor_controller_polluntil",
       "weight": 1.0
     },
@@ -294421,7 +295693,7 @@
       "relation": "calls",
       "source": "supervisor_controller_starttraining",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L50",
+      "source_location": "L51",
       "target": "supervisor_controller_runaction",
       "weight": 1.0
     },
@@ -294519,6 +295791,30 @@
       "source_file": "internal/supervisor/catalog.go",
       "source_location": "L350",
       "target": "supervisor_controller_runaction",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "context": "call",
+      "relation": "calls",
+      "source": "supervisor_controller_stoptraining",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L263",
+      "target": "supervisor_controller_runaction",
+      "weight": 1.0
+    },
+    {
+      "_origin": "ast",
+      "confidence": "INFERRED",
+      "confidence_score": 0.85,
+      "context": "call",
+      "relation": "calls",
+      "source": "supervisor_controller_stoptraining",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L270",
+      "target": "supervisor_controller_polluntil",
       "weight": 1.0
     },
     {
@@ -295699,10 +296995,10 @@
     }
   ],
   "graph": {
-    "content_sha256": "18b8ee75d5e413cb207d5aee7a8b81bd21df0a869aee2bd73a4d9e62281e97b1",
+    "content_sha256": "59ba83d3735a9644698ccca91a28dd4814988b3dcb6ebdab46d5e90fafe25eb7",
     "graphify_version": "0.9.105",
     "scope": "Application code, tests and authored Markdown documentation",
-    "source_sha256": "c7b7202d74395515c31b8c8b0808e6d7bf914a0793d86a96040eb3f225a8b789",
+    "source_sha256": "2fb7f7e82d9fefde68e1e8b50273e57f80adbb4b84281bbed394ef37183badd4",
     "tool_sha256": "165bc875ce63148e53e539714174b83612e5c2efccd74ef793f03cc39175b4f0"
   },
   "hyperedges": [],
@@ -296153,7 +297449,7 @@
       "label": "modeExecution",
       "norm_label": "modeexecution",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L47"
+      "source_location": "L48"
     },
     {
       "_callable": true,
@@ -298033,7 +299329,7 @@
       "label": "execution",
       "norm_label": "execution",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L99"
+      "source_location": "L100"
     },
     {
       "_callable": true,
@@ -298213,7 +299509,7 @@
       "label": "runSteps",
       "norm_label": "runsteps",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L39"
+      "source_location": "L40"
     },
     {
       "_callable": true,
@@ -298297,7 +299593,7 @@
       "label": "workerReceipt",
       "norm_label": "workerreceipt",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L24"
+      "source_location": "L25"
     },
     {
       "_callable": true,
@@ -302193,7 +303489,7 @@
       },
       "norm_label": "trainingruntime",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L24"
+      "source_location": "L25"
     },
     {
       "_callable": true,
@@ -302213,6 +303509,46 @@
       "_origin": "ast",
       "community": null,
       "file_type": "code",
+      "id": "supervisor_trainingstop",
+      "label": "TrainingStop",
+      "norm_label": "trainingstop",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L231"
+    },
+    {
+      "_callable": true,
+      "_callable_class": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "supervisor_trainingstopper",
+      "label": "trainingStopper",
+      "metadata": {
+        "kind": "interface",
+        "language": "go"
+      },
+      "norm_label": "trainingstopper",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L223"
+    },
+    {
+      "_callable": true,
+      "_callable_class": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "supervisor_trainingstopruntime",
+      "label": "trainingStopRuntime",
+      "norm_label": "trainingstopruntime",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L14"
+    },
+    {
+      "_callable": true,
+      "_callable_class": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
       "id": "supervisor_trainingstore",
       "label": "trainingStore",
       "metadata": {
@@ -302221,7 +303557,7 @@
       },
       "norm_label": "trainingstore",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L12"
+      "source_location": "L13"
     },
     {
       "_callable": true,
@@ -307602,7 +308938,7 @@
       "label": "acquireProxyLifetimeLock()",
       "norm_label": "acquireproxylifetimelock()",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L246"
+      "source_location": "L252"
     },
     {
       "_callable": true,
@@ -307613,7 +308949,7 @@
       "label": "configureCatalog()",
       "norm_label": "configurecatalog()",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L354"
+      "source_location": "L360"
     },
     {
       "_callable": true,
@@ -307624,7 +308960,7 @@
       "label": "decodeCatalogFile()",
       "norm_label": "decodecatalogfile()",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L345"
+      "source_location": "L351"
     },
     {
       "_callable": true,
@@ -307635,7 +308971,7 @@
       "label": "executeCommand()",
       "norm_label": "executecommand()",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L269"
+      "source_location": "L275"
     },
     {
       "_callable": true,
@@ -307646,7 +308982,7 @@
       "label": "executeRuntimeCommand()",
       "norm_label": "executeruntimecommand()",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L411"
+      "source_location": "L417"
     },
     {
       "_callable": true,
@@ -307657,7 +308993,7 @@
       "label": "executeWithState()",
       "norm_label": "executewithstate()",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L149"
+      "source_location": "L155"
     },
     {
       "_callable": true,
@@ -307668,7 +309004,7 @@
       "label": "main()",
       "norm_label": "main()",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L34"
+      "source_location": "L35"
     },
     {
       "_callable": true,
@@ -307679,7 +309015,7 @@
       "label": "ownedProfilesVerbatim()",
       "norm_label": "ownedprofilesverbatim()",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L378"
+      "source_location": "L384"
     },
     {
       "_callable": true,
@@ -307690,7 +309026,7 @@
       "label": "pinCatalog()",
       "norm_label": "pincatalog()",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L404"
+      "source_location": "L410"
     },
     {
       "_callable": true,
@@ -307701,7 +309037,7 @@
       "label": "restoreState()",
       "norm_label": "restorestate()",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L323"
+      "source_location": "L329"
     },
     {
       "_callable": true,
@@ -307712,7 +309048,7 @@
       "label": "run()",
       "norm_label": "run()",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L41"
+      "source_location": "L42"
     },
     {
       "_callable": true,
@@ -307723,7 +309059,7 @@
       "label": "runWithRuntimeFactory()",
       "norm_label": "runwithruntimefactory()",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L56"
+      "source_location": "L58"
     },
     {
       "_callable": true,
@@ -307734,7 +309070,7 @@
       "label": "showSettings()",
       "norm_label": "showsettings()",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L309"
+      "source_location": "L315"
     },
     {
       "_callable": true,
@@ -307745,7 +309081,7 @@
       "label": "supervisorConfig()",
       "norm_label": "supervisorconfig()",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L213"
+      "source_location": "L219"
     },
     {
       "_callable": true,
@@ -307921,7 +309257,7 @@
       "label": "validateCatalogFlags()",
       "norm_label": "validatecatalogflags()",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L135"
+      "source_location": "L141"
     },
     {
       "_callable": true,
@@ -307932,7 +309268,7 @@
       "label": "validateCommandFlags()",
       "norm_label": "validatecommandflags()",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L223"
+      "source_location": "L229"
     },
     {
       "_callable": true,
@@ -307943,7 +309279,7 @@
       "label": "validateTarget()",
       "norm_label": "validatetarget()",
       "source_file": "cmd/gpu-mode/main.go",
-      "source_location": "L331"
+      "source_location": "L337"
     },
     {
       "_callable": true,
@@ -308350,7 +309686,7 @@
       "label": "executeTraining()",
       "norm_label": "executetraining()",
       "source_file": "cmd/gpu-mode/training.go",
-      "source_location": "L14"
+      "source_location": "L16"
     },
     {
       "_callable": true,
@@ -308434,11 +309770,33 @@
       "_origin": "ast",
       "community": null,
       "file_type": "code",
+      "id": "cmd_gpu_mode_training_stop_test_teststopgraceflag",
+      "label": "TestStopGraceFlag()",
+      "norm_label": "teststopgraceflag()",
+      "source_file": "cmd/gpu-mode/training_stop_test.go",
+      "source_location": "L9"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "cmd_gpu_mode_training_validatestopgrace",
+      "label": "validateStopGrace()",
+      "norm_label": "validatestopgrace()",
+      "source_file": "cmd/gpu-mode/training.go",
+      "source_location": "L67"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
       "id": "cmd_gpu_mode_training_validatetrainingflags",
       "label": "validateTrainingFlags()",
       "norm_label": "validatetrainingflags()",
       "source_file": "cmd/gpu-mode/training.go",
-      "source_location": "L43"
+      "source_location": "L45"
     },
     {
       "_callable": true,
@@ -313802,6 +315160,17 @@
       "_origin": "ast",
       "community": null,
       "file_type": "code",
+      "id": "internal_llmtraining_peaks_test_testrunjobforwardsstoptoworker",
+      "label": "TestRunJobForwardsStopToWorker()",
+      "norm_label": "testrunjobforwardsstoptoworker()",
+      "source_file": "internal/llmtraining/peaks_test.go",
+      "source_location": "L655"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
       "id": "internal_llmtraining_peaks_test_testrunjobkeepstrainpeakswhenreloadfails",
       "label": "TestRunJobKeepsTrainPeaksWhenReloadFails()",
       "norm_label": "testrunjobkeepstrainpeakswhenreloadfails()",
@@ -314565,7 +315934,7 @@
       "label": "executeWorker()",
       "norm_label": "executeworker()",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L253"
+      "source_location": "L254"
     },
     {
       "_callable": true,
@@ -314576,7 +315945,7 @@
       "label": "executionEnvironment()",
       "norm_label": "executionenvironment()",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L242"
+      "source_location": "L243"
     },
     {
       "_callable": true,
@@ -314587,7 +315956,7 @@
       "label": "executionRecipe()",
       "norm_label": "executionrecipe()",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L130"
+      "source_location": "L131"
     },
     {
       "_callable": true,
@@ -314598,7 +315967,7 @@
       "label": "hostRunSteps()",
       "norm_label": "hostrunsteps()",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L45"
+      "source_location": "L46"
     },
     {
       "_callable": true,
@@ -314609,7 +315978,7 @@
       "label": "prepareExecution()",
       "norm_label": "prepareexecution()",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L226"
+      "source_location": "L227"
     },
     {
       "_callable": true,
@@ -314620,7 +315989,7 @@
       "label": "privateExecutionDirectory()",
       "norm_label": "privateexecutiondirectory()",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L192"
+      "source_location": "L193"
     },
     {
       "_callable": true,
@@ -314631,7 +316000,7 @@
       "label": "publishPrivateFile()",
       "norm_label": "publishprivatefile()",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L325"
+      "source_location": "L329"
     },
     {
       "_callable": true,
@@ -314642,7 +316011,7 @@
       "label": "replaceEvidence()",
       "norm_label": "replaceevidence()",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L308"
+      "source_location": "L312"
     },
     {
       "_callable": true,
@@ -314653,7 +316022,7 @@
       "label": "RunJob()",
       "norm_label": "runjob()",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L34"
+      "source_location": "L35"
     },
     {
       "_callable": true,
@@ -314829,7 +316198,7 @@
       "label": "trustedExecutionAncestors()",
       "norm_label": "trustedexecutionancestors()",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L199"
+      "source_location": "L200"
     },
     {
       "_callable": true,
@@ -314840,7 +316209,7 @@
       "label": "trustedExecutionComponent()",
       "norm_label": "trustedexecutioncomponent()",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L217"
+      "source_location": "L218"
     },
     {
       "_callable": true,
@@ -314851,7 +316220,7 @@
       "label": "trustedRuntime()",
       "norm_label": "trustedruntime()",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L161"
+      "source_location": "L162"
     },
     {
       "_callable": true,
@@ -314862,7 +316231,7 @@
       "label": "unchangedExecutionInputs()",
       "norm_label": "unchangedexecutioninputs()",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L284"
+      "source_location": "L288"
     },
     {
       "_callable": true,
@@ -330346,6 +331715,39 @@
       "_origin": "ast",
       "community": null,
       "file_type": "code",
+      "id": "internal_runtime_training_stop_test_testsignaltrainingisfencedbyinvocation",
+      "label": "TestSignalTrainingIsFencedByInvocation()",
+      "norm_label": "testsignaltrainingisfencedbyinvocation()",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L11"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "internal_runtime_training_stop_test_testtrainingexitedreadstrainerstate",
+      "label": "TestTrainingExitedReadsTrainerState()",
+      "norm_label": "testtrainingexitedreadstrainerstate()",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L35"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "internal_runtime_training_stop_test_testtrainingexitedwaitsfortrainerchildren",
+      "label": "TestTrainingExitedWaitsForTrainerChildren()",
+      "norm_label": "testtrainingexitedwaitsfortrainerchildren()",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L59"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
       "id": "internal_runtime_training_systemdmemorypeak",
       "label": "systemdMemoryPeak()",
       "norm_label": "systemdmemorypeak()",
@@ -344085,6 +345487,94 @@
       "_origin": "ast",
       "community": null,
       "file_type": "code",
+      "id": "internal_supervisor_training_stop_test_teststoptrainingescalatesaftergrace",
+      "label": "TestStopTrainingEscalatesAfterGrace()",
+      "norm_label": "teststoptrainingescalatesaftergrace()",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L63"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "internal_supervisor_training_stop_test_teststoptrainingkeepsjobuntilreleaseisproven",
+      "label": "TestStopTrainingKeepsJobUntilReleaseIsProven()",
+      "norm_label": "teststoptrainingkeepsjobuntilreleaseisproven()",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L113"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "internal_supervisor_training_stop_test_teststoptrainingkeepsjobwhensignalfails",
+      "label": "TestStopTrainingKeepsJobWhenSignalFails()",
+      "norm_label": "teststoptrainingkeepsjobwhensignalfails()",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L78"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "internal_supervisor_training_stop_test_teststoptrainingkeepsrecordedoutcome",
+      "label": "TestStopTrainingKeepsRecordedOutcome()",
+      "norm_label": "teststoptrainingkeepsrecordedoutcome()",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L135"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "internal_supervisor_training_stop_test_teststoptrainingracingcompletionstillverifiesrelease",
+      "label": "TestStopTrainingRacingCompletionStillVerifiesRelease()",
+      "norm_label": "teststoptrainingracingcompletionstillverifiesrelease()",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L102"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "internal_supervisor_training_stop_test_teststoptrainingrejectsinvalidrequests",
+      "label": "TestStopTrainingRejectsInvalidRequests()",
+      "norm_label": "teststoptrainingrejectsinvalidrequests()",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L90"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "internal_supervisor_training_stop_test_teststoptrainingwaitsforcheckpointexit",
+      "label": "TestStopTrainingWaitsForCheckpointExit()",
+      "norm_label": "teststoptrainingwaitsforcheckpointexit()",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L46"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "internal_supervisor_training_stop_test_trainingstopcontract",
+      "label": "trainingStopContract()",
+      "norm_label": "trainingstopcontract()",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L36"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
       "id": "internal_supervisor_training_systemd_integration_test_testsystemdtrainingretainsinvocationuntilexplicitstop",
       "label": "TestSystemdTrainingRetainsInvocationUntilExplicitStop()",
       "norm_label": "testsystemdtrainingretainsinvocationuntilexplicitstop()",
@@ -344474,7 +345964,7 @@
       "label": ".run()",
       "norm_label": ".run()",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L107"
+      "source_location": "L108"
     },
     {
       "_callable": true,
@@ -344639,7 +346129,7 @@
       "label": ".runJob()",
       "norm_label": ".runjob()",
       "source_file": "internal/llmtraining/run.go",
-      "source_location": "L49"
+      "source_location": "L50"
     },
     {
       "_callable": true,
@@ -350091,6 +351581,17 @@
       "_origin": "ast",
       "community": null,
       "file_type": "code",
+      "id": "runtime_systemdmanager_signaltraining",
+      "label": ".SignalTraining()",
+      "norm_label": ".signaltraining()",
+      "source_file": "internal/runtime/training.go",
+      "source_location": "L366"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
       "id": "runtime_systemdmanager_sleep",
       "label": ".Sleep()",
       "norm_label": ".sleep()",
@@ -350272,6 +351773,17 @@
       "norm_label": ".trainerproperties()",
       "source_file": "internal/runtime/training.go",
       "source_location": "L39"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "runtime_systemdmanager_trainingexited",
+      "label": ".TrainingExited()",
+      "norm_label": ".trainingexited()",
+      "source_file": "internal/runtime/training.go",
+      "source_location": "L385"
     },
     {
       "_callable": true,
@@ -353637,7 +355149,7 @@
       "label": ".abortTrainingPreparation()",
       "norm_label": ".aborttrainingpreparation()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L202"
+      "source_location": "L203"
     },
     {
       "_callable": true,
@@ -353670,7 +355182,7 @@
       "label": ".activeTraining()",
       "norm_label": ".activetraining()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L86"
+      "source_location": "L87"
     },
     {
       "_callable": true,
@@ -353890,7 +355402,7 @@
       "label": ".finishTraining()",
       "norm_label": ".finishtraining()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L162"
+      "source_location": "L163"
     },
     {
       "_callable": true,
@@ -354165,7 +355677,7 @@
       "label": ".ReconcileTraining()",
       "norm_label": ".reconciletraining()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L107"
+      "source_location": "L108"
     },
     {
       "_callable": true,
@@ -354187,7 +355699,7 @@
       "label": ".recordTrainingMemoryPeak()",
       "norm_label": ".recordtrainingmemorypeak()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L184"
+      "source_location": "L185"
     },
     {
       "_callable": true,
@@ -354209,7 +355721,7 @@
       "label": ".RecoverTraining()",
       "norm_label": ".recovertraining()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L144"
+      "source_location": "L145"
     },
     {
       "_callable": true,
@@ -354220,7 +355732,7 @@
       "label": ".recoverTrainingPreparation()",
       "norm_label": ".recovertrainingpreparation()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L209"
+      "source_location": "L210"
     },
     {
       "_callable": true,
@@ -354440,7 +355952,7 @@
       "label": ".StartTraining()",
       "norm_label": ".starttraining()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L37"
+      "source_location": "L38"
     },
     {
       "_callable": true,
@@ -354524,6 +356036,17 @@
       "_origin": "ast",
       "community": null,
       "file_type": "code",
+      "id": "supervisor_controller_stoptraining",
+      "label": ".StopTraining()",
+      "norm_label": ".stoptraining()",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L241"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
       "id": "supervisor_controller_switch",
       "label": ".Switch()",
       "norm_label": ".switch()",
@@ -354550,7 +356073,7 @@
       "label": ".trainingOutcome()",
       "norm_label": ".trainingoutcome()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L119"
+      "source_location": "L120"
     },
     {
       "_callable": true,
@@ -354561,7 +356084,7 @@
       "label": ".TrainingStatus()",
       "norm_label": ".trainingstatus()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L31"
+      "source_location": "L32"
     },
     {
       "_callable": true,
@@ -356025,6 +357548,28 @@
       "norm_label": ".state()",
       "source_file": "internal/supervisor/training_contract_test.go",
       "source_location": "L671"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "supervisor_trainingstopruntime_signaltraining",
+      "label": ".SignalTraining()",
+      "norm_label": ".signaltraining()",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L23"
+    },
+    {
+      "_callable": true,
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "supervisor_trainingstopruntime_trainingexited",
+      "label": ".TrainingExited()",
+      "norm_label": ".trainingexited()",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L28"
     },
     {
       "_callable": true,
@@ -360138,6 +361683,7 @@
           "finalizeTimeout": "time.Duration",
           "pollInterval": "time.Duration",
           "profile": "profilePin",
+          "stopGrace": "time.Duration",
           "verifyTimeout": "time.Duration"
         }
       },
@@ -361874,6 +363420,21 @@
     },
     {
       "_go_fields": {
+        "supervisor_trainingstop": {
+          "State": "github.com/mickey-kras/gpu-workload-supervisor/internal/control.State"
+        }
+      },
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "internal_supervisor_training",
+      "label": "supervisor/training.go",
+      "norm_label": "supervisor/training.go",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L1"
+    },
+    {
+      "_go_fields": {
         "supervisor_transitionoptions": {
           "operator": "github.com/mickey-kras/gpu-workload-supervisor/internal/control.OperatorPrecondition",
           "sourceOwner": "github.com/mickey-kras/gpu-workload-supervisor/internal/control.Owner",
@@ -363487,6 +365048,16 @@
       "label": "training_restored_test.go",
       "norm_label": "training_restored_test.go",
       "source_file": "cmd/gpu-mode/training_restored_test.go",
+      "source_location": "L1"
+    },
+    {
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "cmd_gpu_mode_training_stop_test",
+      "label": "gpu-mode/training_stop_test.go",
+      "norm_label": "gpu-mode/training_stop_test.go",
+      "source_file": "cmd/gpu-mode/training_stop_test.go",
       "source_location": "L1"
     },
     {
@@ -367403,6 +368974,16 @@
       "_origin": "ast",
       "community": null,
       "file_type": "code",
+      "id": "internal_runtime_training_stop_test",
+      "label": "runtime/training_stop_test.go",
+      "norm_label": "runtime/training_stop_test.go",
+      "source_file": "internal/runtime/training_stop_test.go",
+      "source_location": "L1"
+    },
+    {
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
       "id": "internal_runtime_transport_test",
       "label": "runtime/transport_test.go",
       "norm_label": "runtime/transport_test.go",
@@ -369643,21 +371224,21 @@
       "_origin": "ast",
       "community": null,
       "file_type": "code",
-      "id": "internal_supervisor_training",
-      "label": "supervisor/training.go",
-      "norm_label": "supervisor/training.go",
-      "source_file": "internal/supervisor/training.go",
-      "source_location": "L1"
-    },
-    {
-      "_origin": "ast",
-      "community": null,
-      "file_type": "code",
       "id": "internal_supervisor_training_contract_test_go_fakeruntime",
       "label": "fakeRuntime",
       "norm_label": "fakeruntime",
       "source_file": "",
       "source_location": ""
+    },
+    {
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "internal_supervisor_training_stop_test",
+      "label": "supervisor/training_stop_test.go",
+      "norm_label": "supervisor/training_stop_test.go",
+      "source_file": "internal/supervisor/training_stop_test.go",
+      "source_location": "L1"
     },
     {
       "_origin": "ast",
@@ -370527,7 +372108,7 @@
       "label": ".ReleaseTraining()",
       "norm_label": ".releasetraining()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L27"
+      "source_location": "L28"
     },
     {
       "_origin": "ast",
@@ -370537,7 +372118,7 @@
       "label": ".StartTraining()",
       "norm_label": ".starttraining()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L25"
+      "source_location": "L26"
     },
     {
       "_origin": "ast",
@@ -370547,7 +372128,7 @@
       "label": ".TrainingMemoryPeak()",
       "norm_label": ".trainingmemorypeak()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L28"
+      "source_location": "L29"
     },
     {
       "_origin": "ast",
@@ -370557,7 +372138,27 @@
       "label": ".TrainingTerminal()",
       "norm_label": ".trainingterminal()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L26"
+      "source_location": "L27"
+    },
+    {
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "supervisor_trainingstopper_signaltraining",
+      "label": ".SignalTraining()",
+      "norm_label": ".signaltraining()",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L224"
+    },
+    {
+      "_origin": "ast",
+      "community": null,
+      "file_type": "code",
+      "id": "supervisor_trainingstopper_trainingexited",
+      "label": ".TrainingExited()",
+      "norm_label": ".trainingexited()",
+      "source_file": "internal/supervisor/training.go",
+      "source_location": "L225"
     },
     {
       "_origin": "ast",
@@ -370567,7 +372168,7 @@
       "label": ".AbortTrainingPreparation()",
       "norm_label": ".aborttrainingpreparation()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L17"
+      "source_location": "L18"
     },
     {
       "_origin": "ast",
@@ -370577,7 +372178,7 @@
       "label": ".ClaimTraining()",
       "norm_label": ".claimtraining()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L15"
+      "source_location": "L16"
     },
     {
       "_origin": "ast",
@@ -370587,7 +372188,7 @@
       "label": ".FinishTraining()",
       "norm_label": ".finishtraining()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L21"
+      "source_location": "L22"
     },
     {
       "_origin": "ast",
@@ -370597,7 +372198,7 @@
       "label": ".PreflightTraining()",
       "norm_label": ".preflighttraining()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L13"
+      "source_location": "L14"
     },
     {
       "_origin": "ast",
@@ -370607,7 +372208,7 @@
       "label": ".RecordTrainingLaunch()",
       "norm_label": ".recordtraininglaunch()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L18"
+      "source_location": "L19"
     },
     {
       "_origin": "ast",
@@ -370617,7 +372218,7 @@
       "label": ".RecordTrainingMemoryPeak()",
       "norm_label": ".recordtrainingmemorypeak()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L20"
+      "source_location": "L21"
     },
     {
       "_origin": "ast",
@@ -370627,7 +372228,7 @@
       "label": ".RecordTrainingTerminal()",
       "norm_label": ".recordtrainingterminal()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L19"
+      "source_location": "L20"
     },
     {
       "_origin": "ast",
@@ -370637,7 +372238,7 @@
       "label": ".ReserveTraining()",
       "norm_label": ".reservetraining()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L16"
+      "source_location": "L17"
     },
     {
       "_origin": "ast",
@@ -370647,7 +372248,7 @@
       "label": ".TrainingJob()",
       "norm_label": ".trainingjob()",
       "source_file": "internal/supervisor/training.go",
-      "source_location": "L14"
+      "source_location": "L15"
     },
     {
       "_origin": "ast",
@@ -372903,7 +374504,7 @@
       "node_kind": "heading",
       "norm_label": "candidate configuration",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L159"
+      "source_location": "L161"
     },
     {
       "_origin": "ast",
@@ -372925,7 +374526,7 @@
       "node_kind": "heading",
       "norm_label": "environment and backend decision",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L189"
+      "source_location": "L191"
     },
     {
       "_origin": "ast",
@@ -372936,7 +374537,7 @@
       "node_kind": "heading",
       "norm_label": "experimental llm training runner",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L393"
+      "source_location": "L395"
     },
     {
       "_origin": "ast",
@@ -372958,7 +374559,7 @@
       "node_kind": "heading",
       "norm_label": "immutable asset candidates",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L286"
+      "source_location": "L288"
     },
     {
       "_origin": "ast",
@@ -372969,7 +374570,7 @@
       "node_kind": "heading",
       "norm_label": "inspected upstream api",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L175"
+      "source_location": "L177"
     },
     {
       "_origin": "ast",
@@ -372980,7 +374581,7 @@
       "node_kind": "heading",
       "norm_label": "llm artifact import preparation",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L448"
+      "source_location": "L450"
     },
     {
       "_origin": "ast",
@@ -372991,7 +374592,7 @@
       "node_kind": "heading",
       "norm_label": "llm training candidate preparation",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L96"
+      "source_location": "L98"
     },
     {
       "_origin": "ast",
@@ -373002,7 +374603,7 @@
       "node_kind": "heading",
       "norm_label": "llm training qualification",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L185"
+      "source_location": "L187"
     },
     {
       "_origin": "ast",
@@ -373013,7 +374614,7 @@
       "node_kind": "heading",
       "norm_label": "materialize and inspect",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L309"
+      "source_location": "L311"
     },
     {
       "_origin": "ast",
@@ -373024,7 +374625,7 @@
       "node_kind": "heading",
       "norm_label": "memory peak",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L78"
+      "source_location": "L80"
     },
     {
       "_origin": "ast",
@@ -373035,7 +374636,7 @@
       "node_kind": "heading",
       "norm_label": "private host inputs and evidence",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L334"
+      "source_location": "L336"
     },
     {
       "_origin": "ast",
@@ -373046,7 +374647,7 @@
       "node_kind": "heading",
       "norm_label": "qualification still required",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L171"
+      "source_location": "L173"
     },
     {
       "_origin": "ast",
@@ -373057,7 +374658,7 @@
       "node_kind": "heading",
       "norm_label": "recipe version 1",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L118"
+      "source_location": "L120"
     },
     {
       "_origin": "ast",
@@ -373068,7 +374669,7 @@
       "node_kind": "heading",
       "norm_label": "resource estimates",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L149"
+      "source_location": "L151"
     },
     {
       "_origin": "ast",
@@ -373079,7 +374680,7 @@
       "node_kind": "heading",
       "norm_label": "resource peaks",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L419"
+      "source_location": "L421"
     },
     {
       "_origin": "ast",
@@ -373090,7 +374691,7 @@
       "node_kind": "heading",
       "norm_label": "runtime check",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L236"
+      "source_location": "L238"
     },
     {
       "_origin": "ast",
@@ -373101,7 +374702,7 @@
       "node_kind": "heading",
       "norm_label": "trainer binding inspection",
       "source_file": "docs/TRAINING.md",
-      "source_location": "L470"
+      "source_location": "L472"
     },
     {
       "_origin": "ast",
