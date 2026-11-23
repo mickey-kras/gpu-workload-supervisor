@@ -31,6 +31,10 @@ const messages = {
     gpu_check_failed: 'GPU check failed — see menu',
     not_permitted: 'Not your process — not closed',
 };
+// The idle policy is global. Switching it on picks 60 minutes; the submenu
+// offers this fixed list only.
+const IDLE_TIMEOUTS = [15, 30, 60, 120, 240];
+const IDLE_DEFAULT = 60;
 const processName = (p) => p.name || 'unknown program';
 function processRow(p) {
     const memory = p.usedMiB === null ? 'unknown memory' : `${p.usedMiB} MiB`;
@@ -70,10 +74,32 @@ export default class GPUControl extends Extension {
         this._gpuActions = [];
         this._toggle.menu.addMenuItem(this._gpu);
         this._toggle.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._idle = new PopupMenu.PopupSwitchMenuItem(
+            'Auto-idle after inactivity',
+            false,
+        );
+        this._idle.connect('toggled', (item, on) => {
+            // Shell 50 also emits toggled when _renderIdle sets the saved
+            // state. Only a change from the saved policy is a user request.
+            const saved = (this._model.settings?.policy.timeoutMinutes ?? 0) !== 0;
+            if (on !== saved) this.setIdle(on ? IDLE_DEFAULT : 0);
+        });
+        this._toggle.menu.addMenuItem(this._idle);
+        this._idleTimeout = new PopupMenu.PopupSubMenuMenuItem('Idle timeout');
+        this._idleItems = IDLE_TIMEOUTS.map((minutes) => ({
+            minutes,
+            item: this._idleTimeout.menu.addAction(`${minutes} minutes`, () =>
+                this.setIdle(minutes),
+            ),
+        }));
+        this._toggle.menu.addMenuItem(this._idleTimeout);
+        this._toggle.menu.connect('open-state-changed', (menu, open) => {
+            if (open && this._alive) this._reload();
+        });
         this._details = new PopupMenu.PopupSubMenuMenuItem('Details');
         this._toggle.menu.addMenuItem(this._details);
         this._refresh = this._toggle.menu.addAction('Refresh', () =>
-            this._call('status'),
+            this._reload(),
         );
         this._setup = this._toggle.menu.addAction('Manage workloads…', () => {
             Gio.DesktopAppInfo.new(
@@ -143,6 +169,17 @@ export default class GPUControl extends Extension {
             },
         );
     }
+    setIdle(timeoutMinutes) {
+        const d = this._model.idleIntent(timeoutMinutes, now());
+        if (d) this._call(d.action, d);
+        // A refused click puts the switch back to the committed policy.
+        else this._render();
+    }
+    // Read status, then the idle policy settings.
+    _reload() {
+        this._model.settingsStale = true;
+        this._call('status');
+    }
     retry() {
         const d = this._model.retryIntent(now());
         if (d) this._call(d.action, d);
@@ -166,6 +203,8 @@ export default class GPUControl extends Extension {
         }
         if (!this._alive || this._model !== m) return;
         this._render();
+        if (action === 'status' && !m.error && m.settingsStale)
+            return this._call('get-settings');
         this._timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, m.delay, () => {
             this._timer = 0;
             this._call('status');
@@ -184,7 +223,25 @@ export default class GPUControl extends Extension {
         this._refresh.setSensitive(!v.pending);
         this._renderWorkloads(m, s);
         this._renderGPU(m, v.blocked);
+        this._renderIdle(m);
         this._renderDetails(v, s);
+    }
+    _renderIdle(m) {
+        const minutes = m.settings?.policy.timeoutMinutes ?? 0;
+        this._idle.setToggleState(minutes !== 0);
+        this._idle.setSensitive(
+            !!m.idleIntent(minutes ? 0 : IDLE_DEFAULT, now()),
+        );
+        this._idleTimeout.visible = minutes !== 0;
+        this._idleTimeout.label.text = `Idle timeout: ${minutes} minutes`;
+        for (const { minutes: value, item } of this._idleItems) {
+            item.setOrnament(
+                value === minutes
+                    ? PopupMenu.Ornament.DOT
+                    : PopupMenu.Ornament.NONE,
+            );
+            item.setSensitive(!!m.idleIntent(value, now()));
+        }
     }
     _gpuHeader(blocked) {
         const label = this._label(blocked.target);
