@@ -296,8 +296,9 @@ func ModelCheck(ctx context.Context, home string, request ModelCheckRequest, cli
 			kept := errors.Is(err, store.ErrNoModelCheck) || (err == nil && stored.Root == record.Root && maps.Equal(stored.Files, record.Files))
 			if kept {
 				entry := recordEntry(fresh, record)
-				// The launch block is the block of the state that stays.
-				entry.NotStored, entry.LaunchBlocked = true, err == nil && stored.AllowLaunch(fresh.root, fresh.pin) != nil
+				// The launch block is the block of the state that stays. Without
+				// a stored result, the gate refuses the launch.
+				entry.NotStored, entry.LaunchBlocked = true, err != nil || stored.AllowLaunch(fresh.root, fresh.pin) != nil
 				return entry, nil
 			}
 		}

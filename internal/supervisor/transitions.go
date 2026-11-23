@@ -77,7 +77,7 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 			return current, err
 		}
 	}
-	if err := c.refuseModelCheck(ctx, target, options.verifyOnly || options.preserve); err != nil {
+	if err := c.refuseModelCheck(ctx, target, !startsTarget(current, target, options)); err != nil {
 		return current, err
 	}
 	preflight := c.preflight
@@ -224,6 +224,11 @@ func (c *Controller) loadTransition(ctx context.Context, transitionID string, st
 	}
 	state = loading
 	if target != control.WorkloadIdle && active != target {
+		// The early gate trusts the stored active workload. Check again when
+		// the observed workload differs, so no unchecked model starts.
+		if err := c.refuseModelCheck(ctx, target, false); err != nil {
+			return state, err
+		}
 		err = c.effect(ctx, transitionID, state.Phase, "start "+string(target), func(actionCtx context.Context) error {
 			return c.wakeOrStart(actionCtx, target)
 		})

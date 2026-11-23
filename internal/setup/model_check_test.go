@@ -526,7 +526,8 @@ func TestModelCheckStoresAHubFailureForChangedFiles(t *testing.T) {
 	}
 	fresh, _, hub := runFixture(t, "run-first", "{{ messages }}")
 	hub.status = http.StatusServiceUnavailable
-	if entry := runCheck(t, fresh, "run-first", hub); !entry.NotStored || entry.LaunchBlocked {
+	// Nothing is stored, so the launch gate refuses the workload.
+	if entry := runCheck(t, fresh, "run-first", hub); !entry.NotStored || !entry.LaunchBlocked {
 		t.Fatalf("a first run with a hub failure: %+v", entry)
 	}
 	if _, err := storedResult(t, fresh, "run-first"); !errors.Is(err, store.ErrNoModelCheck) {

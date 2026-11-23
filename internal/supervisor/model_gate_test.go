@@ -184,3 +184,25 @@ func TestModelCheckGateSkipsPreservingTakeover(t *testing.T) {
 		t.Fatalf("take-control = %+v, calls %v: %v", next, r.calls, err)
 	}
 }
+
+// A switch to the workload that already runs starts nothing, so it does not
+// need a result that allows a launch.
+func TestModelCheckGateSkipsSwitchToRunningWorkload(t *testing.T) {
+	ctx := context.Background()
+	c, s, r := gateController(t, gatePin)
+	c.modelFilesUnchanged = func(modelcheck.Record) error { return nil }
+	if err := s.PutModelCheck(ctx, gateRecord()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Switch(ctx, "speech", "test"); err != nil {
+		t.Fatal(err)
+	}
+	c.modelFilesUnchanged = func(modelcheck.Record) error {
+		return fmt.Errorf("%w: files changed", modelcheck.ErrLaunchRefused)
+	}
+	r.calls = nil
+	state, err := c.Switch(ctx, "speech", "test")
+	if err != nil || state.ActiveWorkload != "speech" || slices.Contains(r.calls, "start speech") {
+		t.Fatalf("same-workload switch = %+v, calls %v: %v", state, r.calls, err)
+	}
+}

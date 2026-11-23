@@ -13,9 +13,10 @@ import (
 
 // refuseModelCheck is the model check gate of a new launch. Switch,
 // ownership changes and activation run it before any effect, so a refused
-// launch changes nothing. A verify-only recovery and an ownership transfer
-// that preserves the running workload start nothing, so they skip
-// the gate. A workload that is already running keeps running.
+// launch changes nothing. A transition that starts nothing skips the gate:
+// a verify-only recovery, an ownership transfer that preserves the running
+// workload, and a switch to the workload that already runs. The start step
+// checks again before it starts a target.
 //
 // The stored result of a vLLM workload is keyed by the workload ID. A
 // stored result must allow the launch: the file, identity and template
@@ -23,9 +24,9 @@ import (
 // see modelcheck.Record.AllowLaunch. A result that cannot be read refuses
 // the launch, and so does a workload without a stored result: the operator
 // runs the checks in setup (gpu-setup model-check) before the first launch.
-func (c *Controller) refuseModelCheck(ctx context.Context, target control.Workload, verifyOnly bool) error {
+func (c *Controller) refuseModelCheck(ctx context.Context, target control.Workload, startsNothing bool) error {
 	p, ok := c.config.Catalog.Catalog.Profile(target)
-	if verifyOnly || !ok || p.NativeModel == nil {
+	if startsNothing || !ok || p.NativeModel == nil {
 		return nil
 	}
 	record, err := c.store.ModelCheck(ctx, string(p.ID))
