@@ -81,7 +81,7 @@ type storeGateway interface {
 	ResolveUnfinishedWork(context.Context, uint64, string) (int64, error)
 	Settings(context.Context) (control.PolicyState, error)
 	StartIdleTransition(context.Context, store.Transition) (control.State, error)
-	CheckActivationPrecondition(context.Context, control.OperatorPrecondition) error
+	CheckActivationPrecondition(context.Context, control.OperatorPrecondition, control.Workload) error
 	StartActivationTransition(context.Context, control.OperatorPrecondition, store.Transition) (control.State, error)
 }
 

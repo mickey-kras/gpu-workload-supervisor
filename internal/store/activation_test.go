@@ -60,7 +60,7 @@ func activationTransition(t *testing.T, s *Store, id string) Transition {
 func TestStartActivationTransitionFromIdleStartsDrain(t *testing.T) {
 	s, e := activationFixture(t)
 	ctx := context.Background()
-	if err := s.CheckActivationPrecondition(ctx, e); err != nil {
+	if err := s.CheckActivationPrecondition(ctx, e, control.WorkloadText); err != nil {
 		t.Fatal(err)
 	}
 	started, err := s.StartActivationTransition(ctx, e, activationTransition(t, s, "activate-1"))
@@ -72,13 +72,57 @@ func TestStartActivationTransitionFromIdleStartsDrain(t *testing.T) {
 	}
 }
 
-func TestActivationDeferredWhileWorkloadActive(t *testing.T) {
+func TestActivationSwitchesFromStableWorkloadWithoutWork(t *testing.T) {
 	s, _ := policyFixture(t) // stable, open, active text workload
 	ctx := context.Background()
 	state, _ := s.State(ctx)
 	snap, _ := s.Catalog(ctx)
 	e := control.OperatorPrecondition{Incarnation: state.LeaseFence.Incarnation, Version: state.Version, Owner: control.OwnerSupervisor, ConfigurationRevision: snap.Revision}
-	if err := s.CheckActivationPrecondition(ctx, e); !errors.Is(err, ErrNotIdle) {
+	if err := s.CheckActivationPrecondition(ctx, e, control.WorkloadMedia); err != nil {
+		t.Fatalf("precondition: %v", err)
+	}
+	tr := activationTransition(t, s, "switch")
+	tr.Target.DesiredWorkload, tr.Target.ActiveWorkload = control.WorkloadMedia, control.WorkloadMedia
+	started, err := s.StartActivationTransition(ctx, e, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Phase != control.PhaseDraining || started.DesiredWorkload != control.WorkloadMedia || started.Admission != control.AdmissionClosed {
+		t.Fatalf("switch start = %+v", started)
+	}
+}
+
+func TestActivationSwitchDeferredWhileWorkOpen(t *testing.T) {
+	s, _ := policyFixture(t)
+	ctx := context.Background()
+	running, _ := s.State(ctx)
+	if err := s.AdmitWork(ctx, "req", "job", control.WorkloadText, running.LeaseFence); err != nil {
+		t.Fatal(err)
+	}
+	state, _ := s.State(ctx)
+	snap, _ := s.Catalog(ctx)
+	e := control.OperatorPrecondition{Incarnation: state.LeaseFence.Incarnation, Version: state.Version, Owner: control.OwnerSupervisor, ConfigurationRevision: snap.Revision}
+	if err := s.CheckActivationPrecondition(ctx, e, control.WorkloadMedia); !errors.Is(err, ErrUnresolvedWork) {
+		t.Fatalf("precondition: %v", err)
+	}
+	tr := activationTransition(t, s, "switch")
+	tr.Target.DesiredWorkload, tr.Target.ActiveWorkload = control.WorkloadMedia, control.WorkloadMedia
+	if _, err := s.StartActivationTransition(ctx, e, tr); !errors.Is(err, ErrUnresolvedWork) {
+		t.Fatalf("start: %v", err)
+	}
+	after, _ := s.State(ctx)
+	if after.Version != state.Version || after.Admission != control.AdmissionOpen {
+		t.Fatal("deferred switch changed state")
+	}
+}
+
+func TestActivationDeferredWhileTargetActive(t *testing.T) {
+	s, _ := policyFixture(t) // stable, open, active text workload
+	ctx := context.Background()
+	state, _ := s.State(ctx)
+	snap, _ := s.Catalog(ctx)
+	e := control.OperatorPrecondition{Incarnation: state.LeaseFence.Incarnation, Version: state.Version, Owner: control.OwnerSupervisor, ConfigurationRevision: snap.Revision}
+	if err := s.CheckActivationPrecondition(ctx, e, control.WorkloadText); !errors.Is(err, ErrNotIdle) {
 		t.Fatalf("precondition: %v", err)
 	}
 	if _, err := s.StartActivationTransition(ctx, e, activationTransition(t, s, "a")); !errors.Is(err, ErrNotIdle) {
@@ -128,7 +172,7 @@ func TestActivationDeferredWithUnfinishedWork(t *testing.T) {
 	}
 	e.Incarnation = committed.LeaseFence.Incarnation
 	e.Version = committed.Version
-	if err := s.CheckActivationPrecondition(ctx, e); !errors.Is(err, ErrUnresolvedWork) {
+	if err := s.CheckActivationPrecondition(ctx, e, control.WorkloadText); !errors.Is(err, ErrUnresolvedWork) {
 		t.Fatalf("precondition: %v", err)
 	}
 	if _, err := s.StartActivationTransition(ctx, e, activationTransition(t, s, "a")); !errors.Is(err, ErrUnresolvedWork) {

@@ -15,10 +15,13 @@ var (
 	ErrUnresolvedWork = store.ErrUnresolvedWork
 )
 
-// ActivateWorkload is the policy-driven workload-start path: it requires an
-// idle, admission-closed, supervisor-owned state with no unfinished admitted
-// work, all revalidated inside the store writer transaction. The committed
-// fence rotation authorizes exactly one execution generation.
+// ActivateWorkload is the policy-driven workload-start path. It starts from
+// an idle, admission-closed state, or switches from another stable workload
+// with open admission. Either source must be supervisor-owned with no
+// unfinished admitted work. The store writer transaction checks all of this
+// again. A switch never leaves a trainer: only its own terminal path ends
+// it. The committed fence rotation authorizes exactly one execution
+// generation.
 func (c *Controller) ActivateWorkload(ctx context.Context, target control.Workload, e control.OperatorPrecondition) (control.State, error) {
 	if e.Owner != control.OwnerSupervisor {
 		return control.State{}, store.ErrWrongOwner
@@ -39,7 +42,12 @@ func (c *Controller) ActivateWorkload(ctx context.Context, target control.Worklo
 	if err != nil {
 		return control.State{}, err
 	}
-	if err := c.store.CheckActivationPrecondition(ctx, e); err != nil {
+	// The writer transaction requires e.Version, so this check of current
+	// holds for the state that the transaction checks.
+	if p, ok := c.config.Catalog.Catalog.Profile(current.ActiveWorkload); ok && p.Trainer != nil {
+		return current, ErrNotIdle
+	}
+	if err := c.store.CheckActivationPrecondition(ctx, e, target); err != nil {
 		return current, err
 	}
 	if err := c.refuseModelCheck(ctx, target, false); err != nil {

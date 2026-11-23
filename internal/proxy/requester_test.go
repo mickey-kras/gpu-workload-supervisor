@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
@@ -24,8 +25,9 @@ func requesterConfig() Config {
 	c.ReadOnlyRoutes, c.PassthroughRoutes = nil, nil
 	c.RequesterPolicy = &RequesterPolicy{Requesters: []Requester{{ID: "automation", Credential: requesterCredential, Workflows: []Workflow{{ID: "approved", Method: "POST", Path: "/execute", BodySHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(`{}`)))}}}}}
 	c.ActivateDemand = func(context.Context, control.Workload, control.State, string) (control.Fence, error) {
-		return control.Fence{}, errors.New("deferred")
+		return control.Fence{}, errors.New("refused")
 	}
+	c.DemandWaitTimeout = 100 * time.Millisecond
 	return c
 }
 
@@ -98,10 +100,14 @@ func (s *requesterStore) State(ctx context.Context) (control.State, error) {
 	return s.fakeStore.State(ctx)
 }
 func (s *requesterStore) QueueDemand(context.Context, store.Demand) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.queued++
 	return s.queueErr
 }
 func (s *requesterStore) ReserveDemand(context.Context, store.Demand) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.reserved++
 	return "claim", s.reserveErr
 }
@@ -126,11 +132,13 @@ func TestRequesterDemandDispatchAndDeferral(t *testing.T) {
 		{"capacity", func(s *requesterStore, _ *Config) { s.queueErr = store.ErrDemandCapacity }, 503, 1, 0, 0},
 		{"queue unavailable", func(s *requesterStore, _ *Config) { s.queueErr = errors.New("db") }, 503, 1, 0, 0},
 		{"reserved", func(s *requesterStore, _ *Config) { s.reserveErr = store.ErrDemandConflict }, 409, 1, 1, 0},
-		{"activation deferred", func(s *requesterStore, _ *Config) { s.state.ActiveWorkload = control.WorkloadIdle }, 409, 1, 1, 1},
-		{"requeue unavailable", func(s *requesterStore, _ *Config) {
+		{"activation refused", func(s *requesterStore, _ *Config) { s.state.ActiveWorkload = control.WorkloadIdle }, 409, 1, 0, 0},
+		{"activation deferred", func(s *requesterStore, c *Config) {
 			s.state.ActiveWorkload = control.WorkloadIdle
-			s.requeueErr = errors.New("db")
-		}, 503, 1, 1, 1},
+			c.ActivateDemand = func(context.Context, control.Workload, control.State, string) (control.Fence, error) {
+				return control.Fence{}, ErrActivationRetry
+			}
+		}, 409, 1, 0, 0},
 		{"cold activation", func(s *requesterStore, c *Config) {
 			s.state.ActiveWorkload = control.WorkloadIdle
 			c.ActivateDemand = func(context.Context, control.Workload, control.State, string) (control.Fence, error) {

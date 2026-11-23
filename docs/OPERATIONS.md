@@ -616,8 +616,9 @@ Enablement commits like Off, and the [policy tick](#inactivity-policy-tick) appl
 
 `activate-workload` takes fresh complete `expected`, a configured non-idle target and no settings. Writer-transaction requirements:
 
-- `owner=supervisor`, `phase=stable`, `health=healthy`.
-- `admission=closed`, `active/desired=idle`, no unfinished admitted work.
+- `owner=supervisor`, `phase=stable`, `health=healthy`, no unfinished admitted work.
+- From Idle: `admission=closed`, `active/desired=idle`.
+- As a switch: another workload with `admission=open` and equal active and desired workloads. A trainer never qualifies.
 
 ```json
 {"protocolVersion":1,"requestId":"r5","action":"activate-workload","expected":{"incarnation":"opaque","version":"42","owner":"supervisor","configurationRevision":"opaque"},"target":"text"}
@@ -629,17 +630,19 @@ Enablement commits like Off, and the [policy tick](#inactivity-policy-tick) appl
 
 Success rotates and returns `leaseFence` for exactly one execution generation after readiness and admission verification. Lifetime is mutation-class. Activation preserves mutual exclusion and never interrupts or preempts active work.
 
+A switch closes admission in the same transaction that checks for open work. Any open work defers the switch. The switch then uses the unload and release checks of a usual switch.
+
 | Condition | Response |
 | --- | --- |
 | Running transition | `busy` |
 | User ownership | `wrong_owner` |
 | Recovery latch | `recovery_required` |
 | Stale precondition | `stale_state` |
-| Readable precondition, startup blocked by active workload or unfinished work | `deferred` with observed status and committed fence. No latch |
+| Readable precondition, startup blocked by a trainer, the active target or unfinished work | `deferred` with observed status and committed fence. No latch |
 
 After lost responses, fetch fresh status and retry its `expected`. Old preconditions return `stale_state`. A fresh deferred retry recovers the committed generation.
 
-Active work waits with orchestration through busy or deferred responses. Orchestration keeps queued jobs and payloads until activation. Adapters use the fresh fence. Stale registrations fail. There is no remote control facade or implicit activation.
+Active work waits with orchestration through busy or deferred responses. Orchestration keeps queued jobs and payloads until activation. Adapters use the fresh fence. Stale registrations fail. Only [requester ingress](#requests-and-cancellation) activates a workload for a request. There is no remote control facade.
 
 ### Inactivity policy tick
 
@@ -708,7 +711,7 @@ The project has no browser automation, dashboard or browser client. No transport
 
 ## Optional requester ingress
 
-Opt-in requester authentication authorizes exact workflows before demand and activation. Auto-idle stays Off. Packaged enablement requires deployment proof against direct runtime bypass. Credentials and loopback alone prove no isolation.
+Opt-in requester authentication authorizes exact workflows before demand and activation. A request wakes its workload and waits for it. Packaged enablement requires deployment proof against direct runtime bypass. Credentials and loopback alone prove no isolation.
 
 ### Configuration
 
@@ -747,7 +750,15 @@ Send approved bodies to execution routes with:
 
 Gateway supplies current fence. Before demand, reject unauthorized or mismatched bodies, duplicate identity headers, queries, encoded bodies and trailers. Store no bodies or credentials. Durable evidence contains requester and workflow IDs and body digest.
 
-Healthy Supervisor Idle activates through the typed operator, waits readiness and admits using its resulting fence. Another active workload or transition returns HTTP 409 `demand_queued` and retains demand, without interrupting work or forcing Idle. Callers keep payloads and explicitly retry. No replay worker.
+A request is a wake signal for the proxy workload. The proxy queues the demand first. Then it asks the [typed operator](#demand-activation) to start the workload from Idle or to switch to it. The proxy reads the state again each second. It waits until the workload is stable with open admission. Then it reserves the demand and admits it with the current fence.
+
+The supervisor defers a switch until the admitted work of the current workload finishes. The proxy then waits and tries again, thus a switch never interrupts work. A switch never stops a trainer. A request during a running transition, for example an idle stop, waits for its end. Concurrent requests start one activation. The other requests see the running transition and wait.
+
+`-demand-wait-timeout` limits the wait. The default is 5 minutes, which covers a cold load of a large model. A timeout or a closed client connection returns HTTP 409 `demand_queued` and keeps the queued demand. Callers keep payloads and explicitly retry. No replay worker.
+
+A refused activation returns HTTP 409 `demand_rejected` immediately. Examples are `gpu_in_use`, `wrong_owner`, `recovery_required` and `incompatible_configuration`. User ownership or a health change during the wait also returns `demand_rejected`. The demand stays queued.
+
+Only requester ingress wakes a workload. Standard execution with caller fence headers never activates a workload. Each waiting request holds one `-max-inflight` slot.
 
 Cancel queued demand with **DELETE to the same execution path**, same credential, workflow and request ID and approved body. Success 204. Cancellation does not stop reserved or admitted work. Cancel deferred requests before deleting credentials or workflow policy.
 

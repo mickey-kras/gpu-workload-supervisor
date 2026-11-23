@@ -72,7 +72,8 @@ func run() error {
 	ingressMode := flags.String("ingress-mode", workloadproxy.IngressTrusted, "local ingress trust mode: trusted (same-user clients only) or adapter")
 	executionCredentialFile := flags.String("execution-credential-file", "", "private absolute credential file for adapter execution ingress")
 	completionCredentialFile := flags.String("completion-credential-file", "", "private absolute credential file for trusted terminal adapter callbacks")
-	requesterPolicyFile := flags.String("requester-policy-file", "", "private optional requester/workflow policy file; auto-idle remains unavailable")
+	requesterPolicyFile := flags.String("requester-policy-file", "", "private optional requester/workflow policy file; a requester request wakes or switches to this workload and waits for it")
+	demandWaitTimeout := flags.Duration("demand-wait-timeout", workloadproxy.DefaultDemandWaitTimeout, "positive limit for a requester request to wait for its workload to become ready")
 	comfyUIContract := flags.String("comfyui-contract", "", "explicit deployment-qualified ComfyUI source contract; requires adapter ingress")
 	readHeaderTimeout := flags.Duration("read-header-timeout", 10*time.Second, "HTTP header read timeout")
 	responseHeaderTimeout := flags.Duration("upstream-response-header-timeout", httptransport.DefaultResponseHeaderTimeout, "positive upstream response header wait after request upload; excludes response body")
@@ -100,6 +101,9 @@ func run() error {
 	}
 	if *responseHeaderTimeout <= 0 {
 		return errors.New("upstream-response-header-timeout must be positive")
+	}
+	if *demandWaitTimeout <= 0 {
+		return errors.New("demand-wait-timeout must be positive")
 	}
 	if *maxInflight <= 0 || *maxCompletionInflight <= 0 || *bodyReadTimeout <= 0 || *bodyIdleTimeout <= 0 {
 		return errors.New("max-inflight, max-completion-inflight, body-read-timeout and body-idle-timeout must be positive")
@@ -131,6 +135,7 @@ func run() error {
 		CompletionPath: *completionPath, RequestIDHeader: *requestIDHeader,
 		JobIDHeader: *jobIDHeader, FenceIDHeader: *fenceIDHeader,
 		FenceEpochHeader: *fenceEpochHeader, ResponseHeaderTimeout: *responseHeaderTimeout,
+		DemandWaitTimeout: *demandWaitTimeout,
 	}
 	if err := configureIngress(&proxyConfig, *ingressMode, *executionCredentialFile, *completionCredentialFile); err != nil {
 		return err

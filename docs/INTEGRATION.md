@@ -387,6 +387,7 @@ Private upstream and health transports connect directly, ignoring `HTTP_PROXY`, 
 | `-body-read-timeout` | 2 minutes from the first read of a request body to its end. Positive |
 | `-body-idle-timeout` | 30 seconds for each wait for more request body bytes. Positive |
 | `-max-inflight` | 128 ordinary requests. Positive |
+| `-demand-wait-timeout` | 5 minutes for a requester request to wait for its workload. Positive |
 | `-max-completion-inflight` | 16 separate completion POST slots. Positive |
 | Dial and TLS handshake | 30 seconds / 10 seconds |
 | `-upstream-response-header-timeout` | Positive. 10 minutes after complete upload. Set the timeout above model-load and non-streaming time, for example `20m` |
