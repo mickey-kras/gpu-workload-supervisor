@@ -29,7 +29,6 @@ func (c *Controller) refuseModelCheck(ctx context.Context, target control.Worklo
 	}
 	record, err := c.store.ModelCheck(ctx, string(p.ID))
 	if errors.Is(err, store.ErrNoModelCheck) && p.NativeModel.Owned == nil {
-		// Setup has no model directory to check for an adopted launch.
 		return gpuruntime.UnitError(p, fmt.Errorf("%w: setup cannot check the model files of an adopted vLLM service; set it up as a supervisor-managed launch", modelcheck.ErrLaunchRefused))
 	}
 	if errors.Is(err, store.ErrNoModelCheck) {
