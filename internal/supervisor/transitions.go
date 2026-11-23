@@ -77,7 +77,7 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 			return current, err
 		}
 	}
-	if err := c.refuseModelCheck(ctx, target, options.verifyOnly); err != nil {
+	if err := c.refuseModelCheck(ctx, target, options.verifyOnly || options.preserve); err != nil {
 		return current, err
 	}
 	preflight := c.preflight

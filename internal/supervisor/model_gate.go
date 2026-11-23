@@ -13,7 +13,8 @@ import (
 
 // refuseModelCheck is the model check gate of a new launch. Switch,
 // ownership changes and activation run it before any effect, so a refused
-// launch changes nothing. A verify-only recovery starts nothing, so it skips
+// launch changes nothing. A verify-only recovery and an ownership transfer
+// that preserves the running workload start nothing, so they skip
 // the gate. A workload that is already running keeps running.
 //
 // The stored result of a vLLM workload is keyed by the workload ID. A

@@ -153,3 +153,34 @@ func TestModelCheckGateRefusesActivation(t *testing.T) {
 		t.Fatalf("activation = %v, calls %v; want a refusal before any start", err, r.calls)
 	}
 }
+
+// Taking control of a running workload starts nothing, so a result that
+// refuses launches must not block the ownership transfer.
+func TestModelCheckGateSkipsPreservingTakeover(t *testing.T) {
+	ctx := context.Background()
+	c, s, r := gateController(t, gatePin)
+	c.modelFilesUnchanged = func(modelcheck.Record) error { return nil }
+	if err := s.PutModelCheck(ctx, gateRecord()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Switch(ctx, "speech", "test"); err != nil {
+		t.Fatal(err)
+	}
+	failed := gateRecord()
+	failed.Status, failed.ChatTemplateSHA256, failed.TemplateFile = modelcheck.StatusFindings, "", ""
+	failed.Checks[1] = modelcheck.Check{Name: modelcheck.CheckIdentity, Outcome: modelcheck.OutcomeFailed, Reason: modelcheck.ReasonIdentityMismatch}
+	failed.Checks[2].Outcome = modelcheck.OutcomeNotRun
+	if err := s.PutModelCheck(ctx, failed); err != nil {
+		t.Fatal(err)
+	}
+	state, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.calls = nil
+	e := control.OperatorPrecondition{Incarnation: state.LeaseFence.Incarnation, Version: state.Version, Owner: state.Owner, ConfigurationRevision: c.config.Catalog.Revision}
+	next, err := c.OperatorTransition(ctx, "take-control", "", e)
+	if err != nil || next.Owner != control.OwnerUser || next.ActiveWorkload != "speech" || slices.Contains(r.calls, "start speech") {
+		t.Fatalf("take-control = %+v, calls %v: %v", next, r.calls, err)
+	}
+}
