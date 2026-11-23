@@ -56,9 +56,9 @@ The journal records side-effect intent and observation.
 | `gpu-mode` | Transitions |
 | `gpu-workload-proxy` | Admission and completion |
 | `gpu-operator` | Embedded supervisor transitions |
-| `gpu-setup` | Accepted catalog |
+| `gpu-setup` | Accepted catalog and model checks |
 
-The `model_checks` table holds [model check](MODEL-CHECKS.md) results. No executable writes it yet.
+The `model_checks` table holds [model check](MODEL-CHECKS.md) results. `gpu-setup model-check` writes it.
 
 Database schema v19 adds the `limit_stops` table. The [limit stop](RESOURCE-LIMITS.md#limit-stop) of the policy tick writes it. Older binaries reject this schema. See [rollback](OPERATIONS.md#make-a-backup-restore-and-roll-back-state).
 

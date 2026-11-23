@@ -765,7 +765,9 @@ Only requester ingress wakes a workload. Standard execution with caller fence he
 
 Cancel queued demand with **DELETE to the same execution path**, same credential, workflow and request ID and approved body. Success 204. Cancellation does not stop reserved or admitted work. Cancel deferred requests before deleting credentials or workflow policy.
 
-Reserved or admitted duplicates return `demand_conflict`, never replay. Crash, disconnect or ambiguous dispatch remains unresolved. Operator recovery must quiesce proxies, prove stopped runtimes and rotate fences. No timer expires unfinished demand. Restore atomically retires reservations and claims with the old lease. Queued intent permits explicit retry or cancellation.
+Reserved or admitted duplicates return `demand_conflict`, never replay. Crash, disconnect or ambiguous dispatch remains unresolved. Operator recovery must quiesce proxies, prove stopped runtimes and rotate fences. No timer expires unfinished demand. Restore atomically retires reservations and claims with the old lease.
+
+The proxy cancels the demand of each request that it rejects before dispatch. A retry needs a new request ID.
 
 Completed-work retention also removes old canceled or terminal demand. Maximum queued+reserved=4096. Retained=65536. Capacity rejects new work.
 

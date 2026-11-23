@@ -53,8 +53,8 @@ func TestDemandIdentityAdmissionAndCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RequeueDemand(ctx, d.RequestID, claim); !errors.Is(err, ErrDemandConflict) {
-		t.Fatalf("admitted requeue: %v", err)
+	if err := s.ReleaseDemand(ctx, d.RequestID, claim); !errors.Is(err, ErrDemandConflict) {
+		t.Fatalf("admitted release: %v", err)
 	}
 	if err := s.QueueDemand(ctx, d); !errors.Is(err, ErrDemandConflict) {
 		t.Fatalf("replay: %v", err)
@@ -189,7 +189,7 @@ func TestDemandConcurrentTimeoutArrival(t *testing.T) {
 	}
 }
 
-func TestDemandRequeueCancelRetention(t *testing.T) {
+func TestDemandReleaseCancelRetention(t *testing.T) {
 	ctx := context.Background()
 	s, now := policyFixture(t)
 	d := testDemand()
@@ -200,7 +200,7 @@ func TestDemandRequeueCancelRetention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RequeueDemand(ctx, d.RequestID, claim); err != nil {
+	if err := s.ReleaseDemand(ctx, d.RequestID, claim); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.CancelDemand(ctx, d); err != nil {
@@ -254,8 +254,12 @@ func TestDemandAdmissionRollbackAndOwnerCheck(t *testing.T) {
 	if _, err := s.AdmitWorkToken(WithDemandClaim(ctx, claim), d.RequestID, "", d.Workload, state.LeaseFence); err == nil {
 		t.Fatal("registration unexpectedly succeeded")
 	}
-	if err := s.RequeueDemand(ctx, d.RequestID, claim); err != nil {
+	if err := s.ReleaseDemand(ctx, d.RequestID, claim); err != nil {
 		t.Fatalf("reservation did not roll back: %v", err)
+	}
+	d.RequestID = "demand-2"
+	if err := s.QueueDemand(ctx, d); err != nil {
+		t.Fatal(err)
 	}
 	claim, err = s.ReserveDemand(ctx, d)
 	if err != nil {
@@ -407,21 +411,18 @@ func TestDemandComfyUIAdmissionIsAtomic(t *testing.T) {
 	if _, err := s.AdmitComfyUIWork(WithDemandClaim(ctx, claim), attempt, ""); err == nil {
 		t.Fatal("metadata failure admitted demand")
 	}
-	if err := s.RequeueDemand(ctx, d.RequestID, claim); err != nil {
-		t.Fatalf("partial demand admission: %v", err)
+	var status, storedClaim string
+	if err := s.db.QueryRow(`SELECT status,claim FROM broker_demands WHERE request_id=?`, d.RequestID).Scan(&status, &storedClaim); err != nil || status != "reserved" || storedClaim != claim {
+		t.Fatalf("partial demand admission: %s %v", status, err)
 	}
 	if _, err := s.db.Exec(`DROP TRIGGER reject_demand_attempt`); err != nil {
-		t.Fatal(err)
-	}
-	claim, err = s.ReserveDemand(ctx, d)
-	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AdmitComfyUIWork(WithDemandClaim(ctx, claim), attempt, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RequeueDemand(ctx, d.RequestID, claim); !errors.Is(err, ErrDemandConflict) {
-		t.Fatalf("admitted demand requeued: %v", err)
+	if err := s.ReleaseDemand(ctx, d.RequestID, claim); !errors.Is(err, ErrDemandConflict) {
+		t.Fatalf("admitted demand released: %v", err)
 	}
 }
 

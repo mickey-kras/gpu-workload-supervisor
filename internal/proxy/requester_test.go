@@ -89,8 +89,8 @@ func (badRequesterBody) Close() error             { return nil }
 
 type requesterStore struct {
 	fakeStore
-	queued, reserved, requeued                 int
-	queueErr, reserveErr, requeueErr, stateErr error
+	queued, reserved, released                 int
+	queueErr, reserveErr, releaseErr, stateErr error
 }
 
 func (s *requesterStore) State(ctx context.Context) (control.State, error) {
@@ -111,16 +111,16 @@ func (s *requesterStore) ReserveDemand(context.Context, store.Demand) (string, e
 	s.reserved++
 	return "claim", s.reserveErr
 }
-func (s *requesterStore) RequeueDemand(context.Context, string, string) error {
-	s.requeued++
-	return s.requeueErr
+func (s *requesterStore) ReleaseDemand(context.Context, string, string) error {
+	s.released++
+	return s.releaseErr
 }
 
 func TestRequesterDemandDispatchAndDeferral(t *testing.T) {
 	for _, tc := range []struct {
 		name                               string
 		change                             func(*requesterStore, *Config)
-		status, queued, reserved, requeued int
+		status, queued, reserved, released int
 	}{
 		{"running", func(*requesterStore, *Config) {}, 202, 1, 1, 0},
 		{"user", func(s *requesterStore, _ *Config) { s.state.Owner = control.OwnerUser }, 409, 0, 0, 0},
@@ -167,8 +167,8 @@ func TestRequesterDemandDispatchAndDeferral(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, requesterRequest())
-			if w.Code != tc.status || s.queued != tc.queued || s.reserved != tc.reserved || s.requeued != tc.requeued {
-				t.Fatalf("response %d q/r/r %d/%d/%d: %s", w.Code, s.queued, s.reserved, s.requeued, w.Body.String())
+			if w.Code != tc.status || s.queued != tc.queued || s.reserved != tc.reserved || s.released != tc.released {
+				t.Fatalf("response %d q/r/r %d/%d/%d: %s", w.Code, s.queued, s.reserved, s.released, w.Body.String())
 			}
 			if tc.status != 202 && calls != 0 {
 				t.Fatal("rejected demand reached runtime")

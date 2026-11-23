@@ -116,14 +116,16 @@ func (s *Store) ReserveDemand(ctx context.Context, d Demand) (string, error) {
 	return claim, nil
 }
 
-// RequeueDemand is safe only when the caller knows no dispatch was attempted.
-// Admission changes the state atomically, preventing a stale release afterward.
-func (s *Store) RequeueDemand(ctx context.Context, requestID, claim string) error {
+// ReleaseDemand cancels a reserved demand that was never dispatched, so it
+// cannot block the idle policy. It is safe only when the caller knows no
+// dispatch was attempted. Admission changes the state atomically, so a stale
+// claim cannot release admitted work.
+func (s *Store) ReleaseDemand(ctx context.Context, requestID, claim string) error {
 	if claim == "" {
 		return ErrDemandConflict
 	}
 	return s.withTx(ctx, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, `UPDATE broker_demands SET status='queued',claim=NULL,updated_at=? WHERE request_id=? AND status='reserved' AND claim=?`, formatTime(s.now()), requestID, claim)
+		result, err := tx.ExecContext(ctx, `UPDATE broker_demands SET status='cancelled',claim=NULL,updated_at=? WHERE request_id=? AND status='reserved' AND claim=?`, formatTime(s.now()), requestID, claim)
 		if err != nil {
 			return err
 		}
