@@ -16,25 +16,22 @@ import (
 
 var gatePin = strings.Repeat("c", 64)
 
-// gateRecord is a stored model check result for speech whose file,
-// identity and template checks passed with the template gatePin.
+// gateRecord is a stored model check result for speech whose file and
+// template checks passed with the template gatePin.
 func gateRecord() modelcheck.Record {
 	return modelcheck.Record{
 		Version: modelcheck.RecordVersion, Model: "speech", Root: "/models/speech",
-		Source:    modelcheck.Source{Repo: "example-org/speech", Revision: strings.Repeat("a", 40)},
 		Files:     map[string]string{"model.safetensors": strings.Repeat("b", 64)},
 		FileStats: map[string]modelcheck.FileStat{"model.safetensors": {Size: 1, Inode: 1}},
 		Status:    modelcheck.StatusNotScanned, Coverage: modelcheck.CoveragePartial,
 		Checks: []modelcheck.Check{
 			{Name: modelcheck.CheckAllowlist, Outcome: modelcheck.OutcomePassed},
-			{Name: modelcheck.CheckIdentity, Outcome: modelcheck.OutcomePassed},
 			{Name: modelcheck.CheckTemplate, Outcome: modelcheck.OutcomePassed},
 			{Name: modelcheck.CheckBehavior, Outcome: modelcheck.OutcomeNotRun},
 		},
 		ChatTemplateSHA256: gatePin, TemplateFile: "chat_template.jinja", Checker: "test-1",
-		Configuration: modelcheck.Configuration{Hub: modelcheck.DefaultHub, MaxJSONFileBytes: 1, MaxGitBlobBytes: 1, MaxModelFiles: 1,
-			Template: modelcheck.TemplateLimits{MaxBytes: 1, MaxDepth: 1, MaxTagTokens: 1, MaxReviewItems: 1, MaxReviewBytes: 1}},
-		CheckedAt: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC),
+		Configuration: modelcheck.Configuration{MaxJSONFileBytes: 1, MaxModelFiles: 1, Template: modelcheck.TemplateLimits{MaxBytes: 1}},
+		CheckedAt:     time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC),
 	}
 }
 
@@ -67,8 +64,7 @@ func TestModelCheckGate(t *testing.T) {
 	passing := gateRecord()
 	failed := gateRecord()
 	failed.Status, failed.Coverage, failed.ChatTemplateSHA256, failed.TemplateFile = modelcheck.StatusFindings, modelcheck.CoveragePartial, "", ""
-	failed.Checks[1] = modelcheck.Check{Name: modelcheck.CheckIdentity, Outcome: modelcheck.OutcomeFailed, Reason: modelcheck.ReasonIdentityMismatch}
-	failed.Checks[2].Outcome = modelcheck.OutcomeNotRun
+	failed.Checks[1] = modelcheck.Check{Name: modelcheck.CheckTemplate, Outcome: modelcheck.OutcomeFailed, Reason: modelcheck.ReasonTemplateConflict}
 	for name, tc := range map[string]struct {
 		record   *modelcheck.Record
 		template string
@@ -77,7 +73,7 @@ func TestModelCheckGate(t *testing.T) {
 	}{
 		"adopted launch refuses":       {nil, gatePin, nil, "adopted vLLM service"},
 		"passing result launches":      {&passing, gatePin, nil, ""},
-		"failed result refuses":        {&failed, gatePin, nil, modelcheck.ReasonIdentityMismatch},
+		"failed result refuses":        {&failed, gatePin, nil, modelcheck.ReasonTemplateConflict},
 		"changed template SHA refuses": {&passing, strings.Repeat("d", 64), nil, "chat template changed"},
 		"launch without a pin refuses": {&passing, "", nil, "pins no chat template"},
 		"changed model files refuse":   {&passing, gatePin, fmt.Errorf("%w: files changed", modelcheck.ErrLaunchRefused), "files changed"},
@@ -168,8 +164,7 @@ func TestModelCheckGateSkipsPreservingTakeover(t *testing.T) {
 	}
 	failed := gateRecord()
 	failed.Status, failed.ChatTemplateSHA256, failed.TemplateFile = modelcheck.StatusFindings, "", ""
-	failed.Checks[1] = modelcheck.Check{Name: modelcheck.CheckIdentity, Outcome: modelcheck.OutcomeFailed, Reason: modelcheck.ReasonIdentityMismatch}
-	failed.Checks[2].Outcome = modelcheck.OutcomeNotRun
+	failed.Checks[1] = modelcheck.Check{Name: modelcheck.CheckTemplate, Outcome: modelcheck.OutcomeFailed, Reason: modelcheck.ReasonTemplateConflict}
 	if err := s.PutModelCheck(ctx, failed); err != nil {
 		t.Fatal(err)
 	}

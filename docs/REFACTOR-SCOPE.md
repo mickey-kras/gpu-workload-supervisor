@@ -14,7 +14,7 @@ An accepted trainer binding pins the executable path and SHA-256 digest for reco
 Retire the executables after the generic finite-job replacement provides a migration for these bindings.
 See [issue 451](https://github.com/mickey-kras/gpu-workload-supervisor/issues/451).
 
-Existing template validation, template approval, resource limits, and setup cleanup stay supported.
+Existing template validation, resource limits, and setup cleanup stay supported.
 Their replacements must preserve the accepted configuration and desktop actions.
 Removing their implementations alone would break those contracts.
 

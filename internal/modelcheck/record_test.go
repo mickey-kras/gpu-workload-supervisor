@@ -11,7 +11,7 @@ import (
 func validRecord(t *testing.T) (Record, []byte) {
 	t.Helper()
 	files := modelFiles()
-	record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+	record := run(t, testChecker(), writeModel(t, files))
 	raw, err := MarshalRecord(record)
 	if err != nil {
 		t.Fatal(err)
@@ -34,25 +34,21 @@ func TestRecordRoundTripsStrictly(t *testing.T) {
 		"null field":           strings.Replace(text, `"checker":"test-1"`, `"checker":null`, 1),
 		"trailing value":       text + "{}",
 		"not UTF-8":            strings.Replace(text, `"test-1"`, "\"test-\xff\"", 1),
-		"other version":        strings.Replace(text, `"version":2`, `"version":0`, 1),
+		"other version":        strings.Replace(text, `"version":3`, `"version":0`, 1),
 		"status not derived":   strings.Replace(text, `"status":"not_scanned"`, `"status":"passed"`, 1),
 		"unknown outcome":      strings.Replace(text, `"outcome":"not_run"`, `"outcome":"skipped"`, 1),
-		"checks out of order":  strings.Replace(text, `"name":"file-allowlist"`, `"name":"upstream-identity"`, 1),
+		"checks out of order":  strings.Replace(text, `"name":"file-allowlist"`, `"name":"chat-template"`, 1),
 		"local time":           strings.Replace(text, `09:00:00Z`, `09:00:00+01:00`, 1),
 		"invalid digest":       strings.Replace(text, record.Files["config.json"], "zz", 1),
-		"floating revision":    strings.Replace(text, record.Source.Revision, "main", 1),
 		"relative root":        strings.Replace(text, `"root":"/`, `"root":"`, 1),
 		"differently spelled":  strings.Replace(text, `"checker":`, `"Checker":`, 1),
 		"coverage not derived": strings.Replace(text, `"coverage":"partial"`, `"coverage":"complete"`, 1),
 		"other configuration":  strings.Replace(text, `"maxModelFiles":4096`, `"maxModelFiles":0`, 1),
-		"plain HTTP hub":       strings.Replace(text, `"hub":"https://`, `"hub":"http://`, 1),
+		"template review":      strings.Replace(text, "{", `{"templateReview":[],`, 1),
+		"source":               strings.Replace(text, "{", `{"source":{"repo":"a/b","revision":"`+strings.Repeat("a", 40)+`"},`, 1),
 		"reason with content":  strings.Replace(text, `"outcome":"not_run"`, `"outcome":"not_run","reason":"/private/path"`, 1),
 		"no template limits":   regexp.MustCompile(`"template":\{[^}]*\}`).ReplaceAllString(text, `"template":{}`),
 		"zero maxBytes":        zeroLimit(text, "maxBytes"),
-		"zero maxDepth":        zeroLimit(text, "maxDepth"),
-		"zero maxTagTokens":    zeroLimit(text, "maxTagTokens"),
-		"zero maxReviewItems":  zeroLimit(text, "maxReviewItems"),
-		"zero maxReviewBytes":  zeroLimit(text, "maxReviewBytes"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := ReadRecord([]byte(content)); err == nil {
@@ -72,11 +68,11 @@ func TestStatusFollowsTheFirstCheckThatDidNotPass(t *testing.T) {
 		outcomes []Outcome
 		want     Status
 	}{
-		{[]Outcome{OutcomePassed, OutcomePassed, OutcomePassed, OutcomePassed}, StatusPassed},
-		{[]Outcome{OutcomePassed, OutcomePassed, OutcomePassed, OutcomeFailed}, StatusFindings},
-		{[]Outcome{OutcomePassed, OutcomeError, OutcomeNotRun, OutcomeNotRun}, StatusError},
-		{[]Outcome{OutcomePassed, OutcomePassed, OutcomePassed, OutcomeUnsupported}, StatusUnsupported},
-		{[]Outcome{OutcomePassed, OutcomePassed, OutcomeNotRun, OutcomeNotRun}, StatusNotScanned},
+		{[]Outcome{OutcomePassed, OutcomePassed, OutcomePassed}, StatusPassed},
+		{[]Outcome{OutcomePassed, OutcomePassed, OutcomeFailed}, StatusFindings},
+		{[]Outcome{OutcomePassed, OutcomeError, OutcomeNotRun}, StatusError},
+		{[]Outcome{OutcomePassed, OutcomePassed, OutcomeUnsupported}, StatusUnsupported},
+		{[]Outcome{OutcomePassed, OutcomeNotRun, OutcomeNotRun}, StatusNotScanned},
 	} {
 		checks := make([]Check, len(tc.outcomes))
 		for i, outcome := range tc.outcomes {
@@ -95,7 +91,7 @@ func TestMarshalRecordRefusesInvalidRecords(t *testing.T) {
 		"nested escape": func(r *Record) { r.Files["../x"] = r.Files["config.json"] },
 		"bad model":     func(r *Record) { r.Model = "-bad" },
 		"bad checker":   func(r *Record) { r.Checker = "" },
-		"missing check": func(r *Record) { r.Checks = r.Checks[:3] },
+		"missing check": func(r *Record) { r.Checks = r.Checks[:2] },
 		"zero time":     func(r *Record) { r.CheckedAt = time.Time{} },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -115,16 +111,16 @@ func TestMarshalRecordRefusesInvalidRecords(t *testing.T) {
 
 func TestOtherRecordVersionsAreStale(t *testing.T) {
 	_, raw := validRecord(t)
-	for _, version := range []string{`"version":1`, `"version":3`} {
-		other := strings.Replace(string(raw), `"version":2`, version, 1)
+	for _, version := range []string{`"version":2`, `"version":4`} {
+		other := strings.Replace(string(raw), `"version":3`, version, 1)
 		if _, err := ReadRecord([]byte(other)); !errors.Is(err, ErrStaleRecord) {
 			t.Fatal("another record version must read as stale", version, err)
 		}
 	}
-	// A record of version 1 has no template limits. It reads as stale, not
-	// as invalid.
-	old := `{"version":1,"configuration":{"hub":"https://huggingface.co","maxJSONFileBytes":1,"maxGitBlobBytes":1,"maxModelFiles":1}}`
+	// A record of version 2 has a source, a hub and a template review. It
+	// reads as stale, not as invalid.
+	old := `{"version":2,"source":{"repo":"a/b","revision":"` + strings.Repeat("a", 40) + `"},"templateReview":[{"line":1,"text":"x"}],"configuration":{"hub":"https://huggingface.co","maxJSONFileBytes":1,"maxGitBlobBytes":1,"maxModelFiles":1}}`
 	if _, err := ReadRecord([]byte(old)); !errors.Is(err, ErrStaleRecord) {
-		t.Fatal("a version 1 record must read as stale", err)
+		t.Fatal("a version 2 record must read as stale", err)
 	}
 }
