@@ -424,3 +424,20 @@ func TestDemandComfyUIAdmissionIsAtomic(t *testing.T) {
 		t.Fatalf("admitted demand requeued: %v", err)
 	}
 }
+
+func TestCancelDemandIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	s, _ := policyFixture(t)
+	d := testDemand()
+	if err := s.QueueDemand(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := s.CancelDemand(ctx, d); err != nil {
+			t.Fatalf("cancel: %v", err)
+		}
+	}
+	if err := s.QueueDemand(ctx, d); !errors.Is(err, ErrDemandConflict) {
+		t.Fatalf("cancelled demand queued again: %v", err)
+	}
+}

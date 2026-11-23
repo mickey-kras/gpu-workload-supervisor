@@ -189,6 +189,19 @@ func (h *Handler) executeRequester(w http.ResponseWriter, r *http.Request) {
 	h.dispatchDemand(w, r, demands, demand)
 }
 
+// DefaultDemandWaitTimeout bounds the wait of a requester request for its
+// workload. Five minutes covers a cold load of a large model on a slow disk.
+// A client that waits longer can send the same request again.
+const DefaultDemandWaitTimeout = 5 * time.Minute
+
+// demandPollInterval is how often a waiting request reads the state again.
+const demandPollInterval = time.Second
+
+// ErrActivationRetry marks an activation outcome that a waiting request
+// retries: the activation was deferred, busy or built from a stale state.
+// Any other activation error ends the wait at once.
+var ErrActivationRetry = errors.New("demand activation must be retried")
+
 func (h *Handler) dispatchDemand(w http.ResponseWriter, r *http.Request, demands demandStore, demand store.Demand) {
 	if !h.checkNativeCatalog(w, r) || !h.checkNativeRequest(w, r) {
 		return
@@ -206,17 +219,26 @@ func (h *Handler) dispatchDemand(w http.ResponseWriter, r *http.Request, demands
 		writeDemandError(w, err)
 		return
 	}
-	if state.Phase != control.PhaseStable || state.ActiveWorkload != h.workload && state.ActiveWorkload != control.WorkloadIdle {
-		writeError(w, http.StatusConflict, "demand_queued")
+	state, status, code := h.awaitDemandWorkload(r, state)
+	if code != "" {
+		// A demand that will not be dispatched must not stay queued: queued
+		// demand blocks the idle policy. A retry needs a new request ID.
+		if err := demands.CancelDemand(context.WithoutCancel(r.Context()), demand); err != nil {
+			writeDemandError(w, err)
+			return
+		}
+		writeError(w, status, code)
 		return
 	}
-	claim, fence, ok := h.reserveDemand(w, r, demands, demand, state)
-	if !ok {
+	claim, err := demands.ReserveDemand(r.Context(), demand)
+	if err != nil {
+		writeDemandError(w, err)
 		return
 	}
+	fence := state.LeaseFence
 
-	// The reservation is durable before activation/dispatch. Admission consumes
-	// its claim atomically with the registered work. An ambiguous failure stays
+	// The reservation is durable before dispatch. Admission consumes its
+	// claim atomically with the registered work. An ambiguous failure stays
 	// unresolved; neither client disconnect nor process restart permits replay.
 	r = r.WithContext(context.WithValue(store.WithDemandClaim(r.Context(), claim), demandReservationKey{}, demandReservation{requestID: demand.RequestID, claim: claim}))
 	r.Header.Set(h.fenceIDHeader, fence.Incarnation)
@@ -228,24 +250,73 @@ func (h *Handler) dispatchDemand(w http.ResponseWriter, r *http.Request, demands
 	h.executeRegistered(w, r, demand.RequestID, fence)
 }
 
-func (h *Handler) reserveDemand(w http.ResponseWriter, r *http.Request, demands demandStore, demand store.Demand, state control.State) (string, control.Fence, bool) {
-	claim, err := demands.ReserveDemand(r.Context(), demand)
-	if err != nil {
-		writeDemandError(w, err)
-		return "", control.Fence{}, false
-	}
-	fence := state.LeaseFence
-	if state.ActiveWorkload == control.WorkloadIdle {
-		fence, err = h.activateDemand(r.Context(), h.workload, state, h.catalogRevision)
-		if err != nil {
-			if !requeueUnadmittedDemand(w, r, demands, demand.RequestID, claim) {
-				return "", control.Fence{}, false
-			}
-			writeError(w, http.StatusConflict, "demand_queued")
-			return "", control.Fence{}, false
+// awaitDemandWorkload treats the queued demand as a wake signal. It asks the
+// supervisor to activate the workload of h, or to switch to it, and waits
+// until that workload is stable with open admission. The supervisor defers a
+// switch while the current workload has open work, so the wait never cuts off
+// work in flight. A concurrent request sees the running transition and waits.
+// The caller cancels a demand that the wait does not dispatch.
+func (h *Handler) awaitDemandWorkload(r *http.Request, state control.State) (control.State, int, string) {
+	ctx, cancel := context.WithTimeout(r.Context(), h.demandWait)
+	defer cancel()
+	for {
+		if status, code, done := h.demandSettled(ctx, state); done {
+			return state, status, code
 		}
+		activated, rejected := h.tryActivateDemand(ctx, state)
+		if rejected {
+			return state, http.StatusConflict, "demand_rejected"
+		}
+		if !activated && !sleepFor(ctx, h.demandPoll) {
+			return state, http.StatusConflict, "demand_timeout"
+		}
+		next, err := h.store.State(r.Context())
+		if err != nil {
+			return state, http.StatusServiceUnavailable, "state_unavailable"
+		}
+		state = next
 	}
-	return claim, fence, true
+}
+
+// demandSettled reports whether the wait ends at state. A zero status with
+// done means the workload of h is ready.
+func (h *Handler) demandSettled(ctx context.Context, state control.State) (int, string, bool) {
+	switch {
+	case state.Owner != control.OwnerSupervisor || state.Health != control.HealthHealthy:
+		return http.StatusConflict, "demand_rejected", true
+	case ctx.Err() != nil:
+		// A synchronous activation can outlast the wait; the budget still
+		// holds, so a late success never dispatches.
+		return http.StatusConflict, "demand_timeout", true
+	case state.Phase == control.PhaseStable && state.ActiveWorkload == h.workload && state.Admission == control.AdmissionOpen:
+		return 0, "", true
+	}
+	return 0, "", false
+}
+
+// tryActivateDemand asks for the workload of h from a stable state. Only
+// Deferred, Busy and a stale state are retried; another refusal rejects
+// the demand. The loop reads the committed state again, so the fence is not
+// used.
+func (h *Handler) tryActivateDemand(ctx context.Context, state control.State) (activated, rejected bool) {
+	if state.Phase != control.PhaseStable || state.ActiveWorkload == h.workload {
+		return false, false
+	}
+	_, err := h.activateDemand(ctx, h.workload, state, h.catalogRevision)
+	if err != nil && ctx.Err() == nil && !errors.Is(err, ErrActivationRetry) {
+		return false, true
+	}
+	return err == nil, false
+}
+
+// sleepFor waits for d and reports false when ctx ends first.
+func sleepFor(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
 }
 
 func cloneRequesterPolicy(policy *RequesterPolicy) *RequesterPolicy {

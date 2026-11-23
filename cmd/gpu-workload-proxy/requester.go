@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
@@ -46,8 +47,17 @@ func activateRequester(ctx context.Context, target control.Workload, state contr
 	}
 	result := handle(operator.Request{ProtocolVersion: 1, RequestID: "gateway-activation", Action: "activate-workload", Target: target,
 		Expected: &operator.Expected{Incarnation: state.LeaseFence.Incarnation, Version: strconv.FormatUint(state.Version, 10), Owner: state.Owner, ConfigurationRevision: revision}})
-	if result.Code != operator.OK || result.LeaseFence == nil {
-		return control.Fence{}, errors.New("demand activation deferred")
+	switch result.Code {
+	case operator.OK:
+	case operator.Deferred, operator.Busy, operator.StaleState:
+		// The supervisor may start the workload later, or a newer state read
+		// may allow it now. The waiting request tries again.
+		return control.Fence{}, fmt.Errorf("%w: %s", workloadproxy.ErrActivationRetry, result.Code)
+	default:
+		return control.Fence{}, fmt.Errorf("demand activation refused: %s", result.Code)
+	}
+	if result.LeaseFence == nil {
+		return control.Fence{}, errors.New("demand activation returned no lease fence")
 	}
 	epoch, err := strconv.ParseUint(result.LeaseFence.Epoch, 10, 64)
 	if err != nil {
