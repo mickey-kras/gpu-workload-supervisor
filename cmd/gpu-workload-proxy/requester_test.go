@@ -65,11 +65,20 @@ func TestRequesterActivationUsesTypedFence(t *testing.T) {
 		name     string
 		response operator.Response
 		valid    bool
+		retry    bool
 	}{
-		{"success", operator.Response{Code: operator.OK, LeaseFence: &operator.FenceResponse{Incarnation: "fresh", Epoch: "2"}}, true},
-		{"busy", operator.Response{Code: operator.Busy}, false},
-		{"missing", operator.Response{Code: operator.OK}, false},
-		{"bad epoch", operator.Response{Code: operator.OK, LeaseFence: &operator.FenceResponse{Incarnation: "fresh", Epoch: "invalid"}}, false},
+		{"success", operator.Response{Code: operator.OK, LeaseFence: &operator.FenceResponse{Incarnation: "fresh", Epoch: "2"}}, true, false},
+		{"busy", operator.Response{Code: operator.Busy}, false, true},
+		{"deferred", operator.Response{Code: operator.Deferred}, false, true},
+		{"stale", operator.Response{Code: operator.StaleState}, false, true},
+		{"invalid", operator.Response{Code: operator.InvalidRequest}, false, false},
+		{"wrong owner", operator.Response{Code: operator.WrongOwner}, false, false},
+		{"recovery", operator.Response{Code: operator.RecoveryRequired}, false, false},
+		{"incompatible", operator.Response{Code: operator.IncompatibleConfiguration}, false, false},
+		{"gpu in use", operator.Response{Code: operator.GPUInUse}, false, false},
+		{"unavailable", operator.Response{Code: operator.Unavailable}, false, false},
+		{"missing", operator.Response{Code: operator.OK}, false, false},
+		{"bad epoch", operator.Response{Code: operator.OK, LeaseFence: &operator.FenceResponse{Incarnation: "fresh", Epoch: "invalid"}}, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fence, err := activateRequester(context.Background(), control.WorkloadMedia, state, "revision", func(r operator.Request) operator.Response {
@@ -78,7 +87,7 @@ func TestRequesterActivationUsesTypedFence(t *testing.T) {
 				}
 				return tc.response
 			})
-			if (err == nil) != tc.valid {
+			if (err == nil) != tc.valid || errors.Is(err, workloadproxy.ErrActivationRetry) != tc.retry {
 				t.Fatalf("%+v %v", fence, err)
 			}
 		})

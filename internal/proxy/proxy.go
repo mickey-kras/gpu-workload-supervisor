@@ -71,11 +71,16 @@ type Config struct {
 	// response reads and lifecycle locks. It must be concurrency safe and return
 	// promptly. The payload contains no raw errors or request metadata.
 	ReportNativeCompletionFailure func(NativeCompletionFailure)
+	// DemandWaitTimeout bounds how long a requester request waits for its
+	// workload to become ready. Zero uses DefaultDemandWaitTimeout.
+	DemandWaitTimeout time.Duration
 }
 
 type Handler struct {
 	requesterPolicy      *RequesterPolicy
 	activateDemand       func(context.Context, control.Workload, control.State, string) (control.Fence, error)
+	demandWait           time.Duration
+	demandPoll           time.Duration
 	nativeFinishes       *nativeFinishes
 	comfyUI              *comfyUIAdapter
 	ingressMode          string
@@ -133,6 +138,12 @@ func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (
 	if config.ResponseHeaderTimeout < 0 {
 		return nil, errors.New("response header timeout must not be negative")
 	}
+	if config.DemandWaitTimeout < 0 {
+		return nil, errors.New("demand wait timeout must not be negative")
+	}
+	if config.DemandWaitTimeout == 0 {
+		config.DemandWaitTimeout = DefaultDemandWaitTimeout
+	}
 	executionRoutes, readOnlyRoutes, passthroughRoutes, completionPath, err := validateConfig(config)
 	if err != nil {
 		return nil, err
@@ -161,6 +172,7 @@ func NewWithContext(ctx context.Context, stateStore StateStore, config Config) (
 	}
 	handler := &Handler{
 		requesterPolicy: cloneRequesterPolicy(config.RequesterPolicy), activateDemand: config.ActivateDemand,
+		demandWait: config.DemandWaitTimeout, demandPoll: demandPollInterval,
 		ingressMode: config.IngressMode, executionCredential: config.ExecutionCredential, completionCredential: config.CompletionCredential,
 		store: stateStore, catalog: catalog, proxy: reverseProxy, workload: config.Workload, nativeModel: native, catalogRevision: revision,
 		executionRoutes: executionRoutes, readOnlyRoutes: readOnlyRoutes, passthroughRoutes: passthroughRoutes,

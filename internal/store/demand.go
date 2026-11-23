@@ -147,6 +147,9 @@ func (s *Store) CancelDemand(ctx context.Context, d Demand) error {
 		if err != nil {
 			return err
 		}
+		if status == "cancelled" {
+			return nil
+		}
 		if status != "queued" {
 			return ErrDemandConflict
 		}
