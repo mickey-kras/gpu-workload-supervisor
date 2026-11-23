@@ -18,6 +18,7 @@ class Menu {
         return item;
     }
     removeAll() { this.items = []; }
+    connect(signal, callback) { this.opened = callback; }
     setHeader() {}
     close() { this.closed = true; }
 }
@@ -30,6 +31,12 @@ class Indicator extends Item {
 }
 class SubMenu extends Item {
     menu = new Menu();
+}
+class Switch extends Item {
+    constructor(text, state) { super(text); this.state = state; }
+    setToggleState(value) { this.state = value; }
+    connect(signal, callback) { this.toggled = callback; }
+    toggle() { this.state = !this.state; this.toggled(this, this.state); }
 }
 class Dialog extends Item {
     contentLayout = { add_child() {} };
@@ -48,6 +55,9 @@ function status(owner = 'supervisor', activeWorkload = 'render') {
         workloads: [{ id: 'idle', label: 'Idle' }, { id: 'render', label: 'Rendering' }],
         capabilities: { takeControl: owner === 'supervisor', returnControl: owner === 'user', userSwitch: owner === 'user' },
     };
+}
+function settings(timeoutMinutes = 0, settingsRevision = 's1') {
+    return { code: 'ok', settings: { policy: { timeoutMinutes }, settingsRevision } };
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 async function shell() {
@@ -92,7 +102,7 @@ async function shell() {
         },
         'resource:///org/gnome/shell/ui/popupMenu.js': {
             PopupMenuSection: Menu, PopupSeparatorMenuItem: Item,
-            PopupSubMenuMenuItem: SubMenu, PopupMenuItem: Item,
+            PopupSubMenuMenuItem: SubMenu, PopupMenuItem: Item, PopupSwitchMenuItem: Switch,
             Ornament: { DOT: 'dot', NONE: 'none' },
         },
         'resource:///org/gnome/shell/ui/quickSettings.js': { QuickMenuToggle: Toggle, SystemIndicator: Indicator },
@@ -121,6 +131,7 @@ test('extension renders committed ownership, catalog actions, freshness and setu
     assert.equal(e._setup.visible, false);
     const requests = [];
     e._transport.call = async request => {
+        if (request.action === 'get-settings') return settings();
         requests.push(request);
         return { code: 'ok', status: status('user', request.target ?? 'render') };
     };
@@ -224,6 +235,7 @@ test('a refused start shows GPU in use with Close for own processes and Retry', 
     const requests = [];
     const replies = [];
     e._transport.call = async request => {
+        if (request.action === 'get-settings') return settings();
         requests.push(request);
         const active = request.action === 'user-switch' ? request.target : 'render';
         return replies.shift() ?? { code: 'ok', status: status('user', active) };
@@ -320,5 +332,127 @@ test('a close prompt confirmed after the refusal is gone sends nothing', async (
     prompt.buttons[1].action();
     await settle();
     assert.equal(requests.at(-1).action, 'user-switch');
+    e.disable();
+});
+
+test('auto-idle reads the global policy, enables at 60 minutes, changes and disables it', async () => {
+    const { extension: e } = await shell();
+    const requests = [];
+    let policy = 0;
+    let revision = 1;
+    e._transport.call = async request => {
+        requests.push(request);
+        if (request.action === 'get-settings') return settings(policy, `s${revision}`);
+        if (request.action === 'set-idle-policy') {
+            policy = request.settings.timeoutMinutes;
+            return settings(policy, `s${++revision}`);
+        }
+        return { code: 'ok', status: status() };
+    };
+    assert.equal(e._idle.state, false);
+    assert.equal(e._idle.sensitive, false, 'no switch before settings are read');
+    await e._call('status');
+    assert.deepEqual(requests.map(r => r.action), ['status', 'get-settings']);
+    assert.equal(e._idle.label.text, 'Auto-idle after inactivity');
+    assert.equal(e._idle.state, false, 'Off by default');
+    assert.equal(e._idle.sensitive, true);
+    assert.equal(e._idleTimeout.visible, false);
+    assert.deepEqual(e._idleTimeout.menu.items.map(i => i.label.text),
+        ['15 minutes', '30 minutes', '60 minutes', '120 minutes', '240 minutes']);
+
+    const decision = e._model.idleIntent(60, 0);
+    assert.equal(e._model.begin('set-idle-policy', 0, null), null);
+    assert.equal(e._model.begin('set-idle-policy', 0, { ...decision, settingsRevision: 'old' }), null,
+        'a decision from older settings sends nothing');
+    e._idle.toggle();
+    await settle();
+    assert.equal(JSON.stringify(requests.at(-1)), JSON.stringify({
+        protocolVersion: 1,
+        requestId: requests.at(-1).requestId,
+        action: 'set-idle-policy',
+        expected: { incarnation: 'a', version: '1', owner: 'supervisor', configurationRevision: 'c1' },
+        settings: { timeoutMinutes: 60, settingsRevision: 's1' },
+    }));
+    assert.equal(e._idle.state, true);
+    assert.equal(e._idleTimeout.visible, true);
+    assert.equal(e._idleTimeout.label.text, 'Idle timeout: 60 minutes');
+    const items = e._idleTimeout.menu.items;
+    assert.deepEqual(items.map(i => i.ornament), ['none', 'none', 'dot', 'none', 'none']);
+    assert.equal(items[2].sensitive, false, 'the current timeout is a no-op');
+
+    items[4].action();
+    await settle();
+    assert.equal(JSON.stringify(requests.at(-1).settings), JSON.stringify({ timeoutMinutes: 240, settingsRevision: 's2' }));
+    assert.equal(e._idleTimeout.label.text, 'Idle timeout: 240 minutes');
+
+    e._idle.toggle();
+    await settle();
+    assert.equal(JSON.stringify(requests.at(-1).settings), JSON.stringify({ timeoutMinutes: 0, settingsRevision: 's3' }));
+    assert.equal(e._idle.state, false);
+    assert.equal(e._idleTimeout.visible, false);
+
+    // A click without a fresh decision sends nothing and keeps the switch.
+    const sent = requests.length;
+    e._model.pending = {};
+    e._idle.toggle();
+    assert.equal(requests.length, sent);
+    assert.equal(e._idle.state, false);
+    e._model.pending = null;
+
+    // Opening the menu reads status and the settings again.
+    e._toggle.menu.opened(e._toggle.menu, false);
+    assert.equal(requests.length, sent);
+    e._toggle.menu.opened(e._toggle.menu, true);
+    await settle();
+    assert.deepEqual(requests.slice(sent).map(r => r.action), ['status', 'get-settings']);
+    const menu = e._toggle.menu;
+    e.disable();
+    menu.opened(menu, true);
+    assert.equal(requests.length, sent + 2, 'no read after disable');
+});
+
+test('a refused auto-idle write shows the error, then refreshes status and settings', async () => {
+    const { extension: e, timers } = await shell();
+    const requests = [];
+    const replies = [];
+    e._transport.call = async request => {
+        requests.push(request);
+        if (request.action === 'get-settings') return settings(0, `s${requests.length}`);
+        if (request.action === 'set-idle-policy') return replies.shift();
+        return { code: 'ok', status: status() };
+    };
+    await e._call('status');
+    replies.push({ code: 'stale_state' });
+    e._idle.toggle();
+    await settle();
+    assert.equal(requests.at(-1).settings.timeoutMinutes, 60);
+    assert.equal(e._toggle.subtitle, 'Status is stale — refresh required');
+    assert.equal(e._idle.state, false, 'the switch shows the committed policy');
+    assert.equal(e._idle.sensitive, false, 'retry waits for a refresh');
+    const sent = requests.length;
+    timers.get(e._timer).callback();
+    await settle();
+    assert.deepEqual(requests.slice(sent).map(r => r.action), ['status', 'get-settings']);
+    assert.equal(e._idle.sensitive, true);
+    replies.push({ code: 'busy' });
+    e._idle.toggle();
+    await settle();
+    assert.equal(requests.at(-1).settings.settingsRevision, `s${sent + 2}`);
+    assert.equal(e._toggle.subtitle, 'GPU control is busy');
+    e.disable();
+});
+
+test('an operator without the idle policy keeps status and disables the control', async () => {
+    const { extension: e } = await shell();
+    e._transport.call = async request => (request.action === 'get-settings'
+        ? { code: 'invalid_request' }
+        : { code: 'ok', status: status() });
+    await e._call('status');
+    assert.equal(e._toggle.subtitle, 'Supervisor · Rendering');
+    assert.equal(e._model.settings, null);
+    assert.equal(e._idle.sensitive, false);
+    assert.equal(e._idleTimeout.visible, false);
+    e.setIdle(60);
+    assert.equal(e._model.pending, null);
     e.disable();
 });
