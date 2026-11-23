@@ -24,7 +24,7 @@ type idleRuntime struct {
 
 func (r *idleRuntime) ReleasedForSetup(ctx context.Context, target control.Workload) error {
 	r.coldChecks++
-	return r.fakeRuntime.ReleasedFor(ctx, target)
+	return r.ReleasedFor(ctx, target)
 }
 
 type idleFixture struct {
