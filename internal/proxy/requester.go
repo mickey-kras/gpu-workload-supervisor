@@ -255,43 +255,67 @@ func (h *Handler) dispatchDemand(w http.ResponseWriter, r *http.Request, demands
 // until that workload is stable with open admission. The supervisor defers a
 // switch while the current workload has open work, so the wait never cuts off
 // work in flight. A concurrent request sees the running transition and waits.
-// A timeout or a gone client keeps the demand queued.
+// The caller cancels a demand that the wait does not dispatch.
 func (h *Handler) awaitDemandWorkload(r *http.Request, state control.State) (control.State, int, string) {
 	ctx, cancel := context.WithTimeout(r.Context(), h.demandWait)
 	defer cancel()
 	for {
-		if state.Owner != control.OwnerSupervisor || state.Health != control.HealthHealthy {
+		if status, code, done := h.demandSettled(ctx, state); done {
+			return state, status, code
+		}
+		activated, rejected := h.tryActivateDemand(ctx, state)
+		if rejected {
 			return state, http.StatusConflict, "demand_rejected"
 		}
-		// A synchronous activation can outlast the wait; the budget still
-		// holds, so a late success never dispatches.
-		if ctx.Err() != nil {
+		if !activated && !sleepFor(ctx, h.demandPoll) {
 			return state, http.StatusConflict, "demand_timeout"
-		}
-		if state.Phase == control.PhaseStable && state.ActiveWorkload == h.workload && state.Admission == control.AdmissionOpen {
-			return state, 0, ""
-		}
-		activated := false
-		if state.Phase == control.PhaseStable && state.ActiveWorkload != h.workload {
-			// The loop reads the committed state again, so the fence is not used.
-			_, err := h.activateDemand(ctx, h.workload, state, h.catalogRevision)
-			if err != nil && ctx.Err() == nil && !errors.Is(err, ErrActivationRetry) {
-				return state, http.StatusConflict, "demand_rejected"
-			}
-			activated = err == nil
-		}
-		if !activated {
-			select {
-			case <-ctx.Done():
-				return state, http.StatusConflict, "demand_timeout"
-			case <-time.After(h.demandPoll):
-			}
 		}
 		next, err := h.store.State(r.Context())
 		if err != nil {
 			return state, http.StatusServiceUnavailable, "state_unavailable"
 		}
 		state = next
+	}
+}
+
+// demandSettled reports whether the wait ends at state. A zero status with
+// done means the workload of h is ready.
+func (h *Handler) demandSettled(ctx context.Context, state control.State) (int, string, bool) {
+	switch {
+	case state.Owner != control.OwnerSupervisor || state.Health != control.HealthHealthy:
+		return http.StatusConflict, "demand_rejected", true
+	case ctx.Err() != nil:
+		// A synchronous activation can outlast the wait; the budget still
+		// holds, so a late success never dispatches.
+		return http.StatusConflict, "demand_timeout", true
+	case state.Phase == control.PhaseStable && state.ActiveWorkload == h.workload && state.Admission == control.AdmissionOpen:
+		return 0, "", true
+	}
+	return 0, "", false
+}
+
+// tryActivateDemand asks for the workload of h from a stable state. Only
+// Deferred, Busy and a stale state are retried; another refusal rejects
+// the demand. The loop reads the committed state again, so the fence is not
+// used.
+func (h *Handler) tryActivateDemand(ctx context.Context, state control.State) (activated, rejected bool) {
+	if state.Phase != control.PhaseStable || state.ActiveWorkload == h.workload {
+		return false, false
+	}
+	_, err := h.activateDemand(ctx, h.workload, state, h.catalogRevision)
+	if err != nil && ctx.Err() == nil && !errors.Is(err, ErrActivationRetry) {
+		return false, true
+	}
+	return err == nil, false
+}
+
+// sleepFor waits for d and reports false when ctx ends first.
+func sleepFor(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
 	}
 }
 
