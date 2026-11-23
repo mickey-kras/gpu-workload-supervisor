@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
@@ -257,6 +258,9 @@ func executeWorker(ctx context.Context, r Recipe, work, gpuUUID, phase string, p
 	cmd := exec.CommandContext(ctx, filepath.Join(r.Runtime.Inventory.Root, r.Runtime.Entrypoint), "-I", "-S", "-B", filepath.Join(work, "worker.py"), phase, filepath.Join(work, "config.json"), path, progress)
 	cmd.Env = executionEnvironment(work, r.Runtime.Inventory.Root, gpuUUID)
 	cmd.Dir = work
+	// A stop forwards SIGTERM so the worker can save its checkpoint. The
+	// supervisor sends SIGKILL to the whole unit after its stop grace.
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	peaks.startPhase(phase)
 	stop := peaks.watch()
 	// Child output may contain private examples, paths or third-party tracebacks.

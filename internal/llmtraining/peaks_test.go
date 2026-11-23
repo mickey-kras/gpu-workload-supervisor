@@ -649,3 +649,19 @@ func TestCgroupMemoryPeakReadsTheRunnerCgroup(t *testing.T) {
 		t.Fatalf("peaks file has no cgroup peak: %s %v", raw, err)
 	}
 }
+
+// A stop must reach the worker as SIGTERM, so that it can save a
+// checkpoint. The supervisor, not the runner, sends SIGKILL after its grace.
+func TestRunJobForwardsStopToWorker(t *testing.T) {
+	t.Parallel()
+	marker := filepath.Join(t.TempDir(), "saved")
+	_, _, jobPath := executionFixture(t, "#!/bin/sh\ntrap 'printf saved > \""+marker+"\"; exit 0' TERM\nsleep 30 &\nwait\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(300*time.Millisecond, cancel)
+	if err := hostRunSteps().runJob(ctx, jobPath, executionInvocation, executionGPU); err == nil {
+		t.Fatal("a stopped job completed")
+	}
+	if raw, err := os.ReadFile(marker); err != nil || string(raw) != "saved" {
+		t.Fatalf("worker did not handle SIGTERM before exit: %q %v", raw, err)
+	}
+}

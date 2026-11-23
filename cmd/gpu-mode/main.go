@@ -28,6 +28,7 @@ const (
 	showSettingsCommand   = "show-settings"
 	idlePolicyTickCommand = "idle-policy-tick"
 	trainingStartCommand  = "training-start"
+	trainingStopCommand   = "training-stop"
 	localCLIInitiator     = "local-cli"
 )
 
@@ -48,6 +49,7 @@ type modeExecution struct {
 	catalogPath, catalogRevision                                                              string
 	statePath, resolveReason, target, trainingJob                                             string
 	auditBatch                                                                                int
+	stopGrace                                                                                 time.Duration
 	allRestored                                                                               bool
 	profile                                                                                   profilePin
 	actionTimeout, drainTimeout, verifyTimeout, cleanupTimeout, finalizeTimeout, pollInterval time.Duration
@@ -77,6 +79,7 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (supervisor
 	trainingJob := flags.String("training-job", "", "finite training job ID")
 	resolveReason := flags.String("resolve-reason", "", "required audit reason for resolve-work")
 	allRestored := flags.Bool("all-restored", false, "training-recover: recover every unfinished training job of restored state")
+	stopGrace := flags.Duration("stop-grace", 2*time.Minute, "training-stop: time the trainer gets to save its checkpoint and exit before SIGKILL")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
@@ -88,6 +91,9 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (supervisor
 	}
 	command := flags.Arg(0)
 	if err := validateTrainingFlags(command, *trainingJob, *allRestored); err != nil {
+		return err
+	}
+	if err := validateStopGrace(flags, command, *stopGrace); err != nil {
 		return err
 	}
 	// Defaults from the activated profile apply before any flag value is read.
@@ -108,7 +114,7 @@ func runWithRuntimeFactory(newRuntime func(gpuruntime.SystemdConfig) (supervisor
 	options := modeExecution{
 		catalogPath: *catalogPath, catalogRevision: *catalogRevision,
 		statePath: *statePath, trainingJob: *trainingJob, resolveReason: *resolveReason, target: *target,
-		auditBatch: *auditBatch, allRestored: *allRestored, actionTimeout: *actionTimeout, drainTimeout: *drainTimeout,
+		auditBatch: *auditBatch, allRestored: *allRestored, stopGrace: *stopGrace, actionTimeout: *actionTimeout, drainTimeout: *drainTimeout,
 		verifyTimeout: *verifyTimeout, cleanupTimeout: *cleanupTimeout,
 		finalizeTimeout: *finalizeTimeout, pollInterval: *pollInterval,
 		profile: pinProfile(*statePath, snapshot),
@@ -417,6 +423,10 @@ func executeRuntimeCommand(ctx context.Context, controller *supervisor.Controlle
 	if strings.HasPrefix(command, "training-") {
 		if options.allRestored {
 			return recoverAllRestored(ctx, controller, options.statePath)
+		}
+		if command == trainingStopCommand {
+			stop, err := controller.StopTraining(ctx, options.trainingJob, options.stopGrace)
+			return errors.Join(err, json.NewEncoder(os.Stdout).Encode(stop))
 		}
 		return executeTraining(ctx, controller, command, options.trainingJob, control.Workload(options.target))
 	}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
 )
 
@@ -216,4 +217,65 @@ func (c *Controller) recoverTrainingPreparation(ctx context.Context, id string) 
 	}
 	state, err := c.store.AbortTrainingPreparation(ctx, job)
 	return state, true, err
+}
+
+// trainingStopper sends the stop signals of a checkpoint-and-stop request.
+type trainingStopper interface {
+	SignalTraining(context.Context, control.WorkloadProfile, control.TrainingJob, string) error
+	TrainingExited(context.Context, control.WorkloadProfile, control.TrainingJob) error
+}
+
+// TrainingStop is the result of StopTraining. Escalated tells that the
+// trainer did not exit within the grace window and received SIGKILL, so its
+// checkpoint may be incomplete.
+type TrainingStop struct {
+	State     control.State `json:"state"`
+	Escalated bool          `json:"escalated"`
+}
+
+// StopTraining asks the trainer to save its own checkpoint and exit. It sends
+// SIGTERM to the trainer unit, waits up to grace for the process to exit, and
+// sends SIGKILL only after the grace window. The job then ends as cancelled
+// after the same cgroup and GPU release checks as recovery. The supervisor
+// never reads or validates the checkpoint; a resume is a new job.
+func (c *Controller) StopTraining(ctx context.Context, id string, grace time.Duration) (TrainingStop, error) {
+	if grace <= 0 {
+		return TrainingStop{}, errors.New("training stop grace must be positive")
+	}
+	stopper, ok := c.runtime.(trainingStopper)
+	if !ok {
+		return TrainingStop{}, errors.New("runtime cannot signal a trainer")
+	}
+	p, job, err := c.activeTraining(ctx, id)
+	if err != nil {
+		return TrainingStop{}, err
+	}
+	if job.InvocationID == "" {
+		return TrainingStop{}, errors.New("trainer has no launch evidence; use training-recover")
+	}
+	// A durable terminal outcome means the trainer already exited; only its
+	// cleanup failed. Keep that outcome, as recovery does, and send nothing.
+	if job.TerminalOutcome != "" {
+		state, err := c.finishTraining(ctx, p, job, job.TerminalOutcome)
+		return TrainingStop{State: state}, err
+	}
+	signal := func(name string) error {
+		return c.runAction(ctx, func(actionCtx context.Context) error { return stopper.SignalTraining(actionCtx, p, job, name) })
+	}
+	if err := signal(gpuruntime.TrainingStopSignal); err != nil {
+		return TrainingStop{}, err
+	}
+	exited := func(probeCtx context.Context) error { return stopper.TrainingExited(probeCtx, p, job) }
+	var result TrainingStop
+	if err := c.pollUntil(ctx, c.now().Add(grace), exited); err != nil {
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
+		result.Escalated = true
+		if err := signal(gpuruntime.TrainingKillSignal); err != nil {
+			return result, err
+		}
+	}
+	result.State, err = c.finishTraining(ctx, p, job, "cancelled")
+	return result, err
 }
