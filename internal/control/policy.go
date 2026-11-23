@@ -6,8 +6,8 @@ import (
 )
 
 // IdlePolicy configures inactivity idling. TimeoutMinutes 0 means Off; an
-// enabled policy is bounded to reject typos. No inactivity evaluator ships,
-// so the store rejects every enabled policy.
+// enabled policy is bounded to reject typos. The policy tick cold-stops the
+// active workload to Idle once no activity happened for TimeoutMinutes.
 type IdlePolicy struct {
 	TimeoutMinutes int `json:"timeoutMinutes"`
 }
@@ -49,9 +49,10 @@ func (e SettingsPrecondition) OperatorPrecondition() OperatorPrecondition {
 }
 
 // PolicyState is the read model for the operator settings surface. The
-// settings revision is an opaque concurrency token rotated on every write;
-// no production path arms the deadline fields. They stay for databases of
-// older releases, and every write path clears them.
+// settings revision is an opaque concurrency token rotated on every write.
+// The policy tick computes its deadline from LastActivityAt and never arms
+// the deadline fields. They stay for databases of older releases, and every
+// write path clears them.
 type PolicyState struct {
 	Policy           IdlePolicy
 	SettingsRevision string

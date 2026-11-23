@@ -26,7 +26,7 @@ type Backend interface {
 // settings actions never observe or drive the runtime.
 type PolicyStore interface {
 	Settings(context.Context) (control.PolicyState, error)
-	SetIdlePolicy(context.Context, control.SettingsPrecondition, control.IdlePolicy, bool) (control.PolicyState, error)
+	SetIdlePolicy(context.Context, control.SettingsPrecondition, control.IdlePolicy) (control.PolicyState, error)
 }
 type Session struct {
 	Backend   Backend
@@ -35,10 +35,6 @@ type Session struct {
 	Close     func() error
 	// PolicyStore is nil only in tests; settings actions then fail closed.
 	PolicyStore PolicyStore
-	// IdlePolicyConfigurable is false: no inactivity evaluator ships. It
-	// gates set-idle-policy enable writes and is never advertised on the
-	// version-1 status shape.
-	IdlePolicyConfigurable bool
 }
 
 // Service opens state only after nonblocking gate acquisition. Its operation
@@ -186,8 +182,7 @@ func (s Session) getSettings(ctx context.Context) (*SettingsResponse, Code) {
 	return settingsResponse(settings), OK
 }
 
-// setIdlePolicy commits only through the typed store surface; enabling is
-// rejected fail-closed because no inactivity evaluator ships.
+// setIdlePolicy commits only through the typed store surface.
 func (s Session) setIdlePolicy(ctx context.Context, req Request) (*SettingsResponse, Code) {
 	if s.PolicyStore == nil {
 		return nil, Unavailable
@@ -198,9 +193,6 @@ func (s Session) setIdlePolicy(ctx context.Context, req Request) (*SettingsRespo
 	if req.Expected.ConfigurationRevision != s.Revision {
 		return nil, StaleState
 	}
-	if req.Settings.TimeoutMinutes != control.IdlePolicyOff && !s.IdlePolicyConfigurable {
-		return nil, errorCode(store.ErrEvidenceUnavailable)
-	}
 	e := req.Expected
 	version, _ := strconv.ParseUint(e.Version, 10, 64)
 	precondition := control.SettingsPrecondition{
@@ -208,7 +200,7 @@ func (s Session) setIdlePolicy(ctx context.Context, req Request) (*SettingsRespo
 		ConfigurationRevision: e.ConfigurationRevision,
 		SettingsRevision:      req.Settings.SettingsRevision,
 	}
-	settings, err := s.PolicyStore.SetIdlePolicy(ctx, precondition, control.IdlePolicy{TimeoutMinutes: req.Settings.TimeoutMinutes}, s.IdlePolicyConfigurable)
+	settings, err := s.PolicyStore.SetIdlePolicy(ctx, precondition, control.IdlePolicy{TimeoutMinutes: req.Settings.TimeoutMinutes})
 	if err != nil {
 		return nil, errorCode(err)
 	}
@@ -289,8 +281,6 @@ func errorCode(err error) Code {
 		return StaleState
 	case errors.Is(err, store.ErrInvalidIdleTimeout) || errors.Is(err, supervisor.ErrInvalidTarget) || errors.Is(err, supervisor.ErrTrainerTarget):
 		return InvalidRequest
-	case errors.Is(err, store.ErrEvidenceUnavailable):
-		return Unavailable
 	case errors.Is(err, store.ErrNotIdle) || errors.Is(err, store.ErrUnresolvedWork):
 		return Deferred
 	case errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, store.ErrTransitionRunning) || errors.Is(err, supervisor.ErrTransitionRunning):

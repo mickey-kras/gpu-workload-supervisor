@@ -93,7 +93,7 @@ func TestSetIdlePolicyCommitsAndRotatesRevisionWithoutTouchingControlState(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	committed, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 60}, true)
+	committed, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 60})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestSetIdlePolicyRejectsOutOfBoundsTimeout(t *testing.T) {
 			s := settingsStore(t)
 			ctx := context.Background()
 			e, seedRevision := stableSettingsFixture(t, s)
-			if _, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: timeout}, true); !errors.Is(err, ErrInvalidIdleTimeout) {
+			if _, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: timeout}); !errors.Is(err, ErrInvalidIdleTimeout) {
 				t.Fatalf("timeout %d: %v", timeout, err)
 			}
 			settings, err := s.Settings(ctx)
@@ -191,7 +191,7 @@ func TestSetIdlePolicyRejectsStalePreconditionsWithoutEffects(t *testing.T) {
 				}
 				want = ErrTransitionRunning
 			}
-			if _, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 30}, true); !errors.Is(err, want) {
+			if _, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 30}); !errors.Is(err, want) {
 				t.Fatalf("%v want %v", err, want)
 			}
 			settings, err := s.Settings(ctx)
@@ -213,7 +213,7 @@ func TestSetIdlePolicyClearsArmedDeadlineAndAttestation(t *testing.T) {
 	if _, err := s.db.ExecContext(ctx, `UPDATE idle_policy_state SET armed_deadline = ?, attestation_at = ? WHERE singleton = 1`, armed, armed); err != nil {
 		t.Fatal(err)
 	}
-	committed, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 15}, true)
+	committed, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 15})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestSetIdlePolicyConcurrentWritersHaveSingleWinner(t *testing.T) {
 		wg.Add(1)
 		go func(timeout int) {
 			defer wg.Done()
-			_, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: timeout}, true)
+			_, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: timeout})
 			codes <- err
 		}(30 + i)
 	}
@@ -264,7 +264,7 @@ func TestSetIdlePolicyToOffDisarmsDeadline(t *testing.T) {
 	s := settingsStore(t)
 	ctx := context.Background()
 	e, _ := stableSettingsFixture(t, s)
-	enabled, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 45}, true)
+	enabled, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 45})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestSetIdlePolicyToOffDisarmsDeadline(t *testing.T) {
 	}
 	e.Version = mustState(t, s).Version
 	e.SettingsRevision = enabled.SettingsRevision
-	disabled, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 0}, true)
+	disabled, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,28 +300,29 @@ func TestSettingsFailClosedOnClosedStore(t *testing.T) {
 	if _, err := s.Settings(context.Background()); err == nil {
 		t.Fatal("closed store served settings")
 	}
-	if _, err := s.SetIdlePolicy(context.Background(), control.SettingsPrecondition{}, control.IdlePolicy{}, true); err == nil {
+	if _, err := s.SetIdlePolicy(context.Background(), control.SettingsPrecondition{}, control.IdlePolicy{}); err == nil {
 		t.Fatal("closed store accepted a settings write")
 	}
 }
 
-func TestSetIdlePolicyRejectsEnableWithoutEvidenceProvider(t *testing.T) {
+func TestSetIdlePolicyEnablesAndDisables(t *testing.T) {
 	s := settingsStore(t)
 	ctx := context.Background()
 	e, seedRevision := stableSettingsFixture(t, s)
-	if _, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 60}, false); !errors.Is(err, ErrEvidenceUnavailable) {
-		t.Fatalf("enable without evidence provider: %v", err)
-	}
-	settings, err := s.Settings(ctx)
+	enabled, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 60})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("enable: %v", err)
 	}
-	if settings.Policy.TimeoutMinutes != 0 || settings.SettingsRevision != seedRevision {
-		t.Fatalf("rejected enable changed settings: %#v", settings)
+	if enabled.Policy.TimeoutMinutes != 60 || enabled.SettingsRevision == seedRevision {
+		t.Fatalf("enable did not commit: %#v", enabled)
 	}
-	// Disabling stays permitted without a provider.
-	if _, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 0}, false); err != nil {
-		t.Fatalf("disable without evidence provider: %v", err)
+	e.SettingsRevision = enabled.SettingsRevision
+	disabled, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 0})
+	if err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if disabled.Policy.TimeoutMinutes != 0 {
+		t.Fatalf("disable did not commit: %#v", disabled)
 	}
 }
 
@@ -347,7 +348,7 @@ func TestSetIdlePolicyDuringLiveTransitionReportsBusy(t *testing.T) {
 		t.Fatalf("live transition phase = %q", started.Phase)
 	}
 	e.Version = started.Version
-	if _, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 30}, true); !errors.Is(err, ErrTransitionRunning) {
+	if _, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 30}); !errors.Is(err, ErrTransitionRunning) {
 		t.Fatalf("set during live transition: %v, want ErrTransitionRunning", err)
 	}
 	settings, err := s.Settings(ctx)
@@ -356,5 +357,22 @@ func TestSetIdlePolicyDuringLiveTransitionReportsBusy(t *testing.T) {
 	}
 	if settings.Policy.TimeoutMinutes != 0 {
 		t.Fatalf("busy write changed policy: %#v", settings.Policy)
+	}
+}
+
+// Enabling the policy after a quiet period must not stop the workload at the
+// next tick: the settings write restarts the idle clock.
+func TestSetIdlePolicyRestartsIdleClock(t *testing.T) {
+	s := settingsStore(t)
+	ctx := context.Background()
+	e, _ := stableSettingsFixture(t, s)
+	later := s.now().Add(3 * time.Hour)
+	s.now = func() time.Time { return later }
+	enabled, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled.LastActivityAt == nil || !enabled.LastActivityAt.Equal(later) {
+		t.Fatalf("enable did not restart the idle clock: %#v", enabled.LastActivityAt)
 	}
 }

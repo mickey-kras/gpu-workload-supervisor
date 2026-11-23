@@ -71,7 +71,7 @@ func enablePolicy(t *testing.T, s *Store) string {
 		Incarnation: state.LeaseFence.Incarnation, Version: state.Version, Owner: state.Owner,
 		ConfigurationRevision: snap.Revision, SettingsRevision: settings.SettingsRevision,
 	}
-	committed, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 5}, true)
+	committed, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,6 +125,218 @@ func armedFixture(t *testing.T) (*Store, *time.Time, time.Time) {
 	deadline := policyEpoch.Add(5 * time.Minute)
 	armForTest(t, s, deadline, policyEpoch.Add(4*time.Minute))
 	return s, now, deadline
+}
+
+// idleFixture enables the 5-minute policy on the seeded activity time and
+// returns the idle deadline; the returned clock is still before it.
+func idleFixture(t *testing.T) (*Store, *time.Time, time.Time) {
+	t.Helper()
+	s, now := policyFixture(t)
+	enablePolicy(t, s)
+	return s, now, policyEpoch.Add(5 * time.Minute)
+}
+
+// resetActivity moves last activity back to the seeded time, so a guard
+// other than the deadline is the one under test.
+func resetActivity(t *testing.T, s *Store) {
+	t.Helper()
+	if _, err := s.db.ExecContext(context.Background(), `UPDATE idle_policy_state SET last_activity_at = ? WHERE singleton = 1`, formatTime(policyEpoch)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStartIdleTransitionFiresAfterTimeout(t *testing.T) {
+	s, now, deadline := idleFixture(t)
+	ctx := context.Background()
+	tr := idleDrain(t, s, "idle-1")
+	*now = deadline // exactly at the deadline: elapsed
+	started, err := s.StartIdleTransition(ctx, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Phase != control.PhaseDraining || started.Admission != control.AdmissionClosed || started.DesiredWorkload != control.WorkloadIdle {
+		t.Fatalf("idle transition start = %+v", started)
+	}
+	if running, err := s.InProgressTransition(ctx); err != nil || running != tr.ID {
+		t.Fatalf("running transition = %q %v", running, err)
+	}
+}
+
+func TestStartIdleTransitionPreemptsOnAnyMismatch(t *testing.T) {
+	for _, mode := range []string{"not elapsed", "activity before deadline", "pending work", "queued demand", "reserved demand",
+		"policy off", "active idle", "degraded health", "user owner", "stale version", "running transition"} {
+		t.Run(mode, func(t *testing.T) {
+			s, now, deadline := idleFixture(t)
+			ctx := context.Background()
+			*now = deadline // elapsed by default
+			tr := idleDrain(t, s, "idle-1")
+			switch mode {
+			case "not elapsed":
+				*now = deadline.Add(-time.Second)
+			case "activity before deadline":
+				*now = deadline.Add(-time.Minute)
+				state, _ := s.State(ctx)
+				if err := s.AdmitWork(ctx, "req", "job", control.WorkloadText, state.LeaseFence); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.FinishWorkFenced(ctx, "req", control.WorkloadText, state.LeaseFence, WorkCompleted); err != nil {
+					t.Fatal(err)
+				}
+				*now = deadline
+			case "pending work":
+				state, _ := s.State(ctx)
+				if err := s.AdmitWork(ctx, "req", "job", control.WorkloadText, state.LeaseFence); err != nil {
+					t.Fatal(err)
+				}
+				resetActivity(t, s)
+			case "queued demand":
+				if err := s.QueueDemand(ctx, testDemand()); err != nil {
+					t.Fatal(err)
+				}
+				resetActivity(t, s)
+			case "reserved demand":
+				if err := s.QueueDemand(ctx, testDemand()); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.ReserveDemand(ctx, testDemand()); err != nil {
+					t.Fatal(err)
+				}
+				resetActivity(t, s)
+			case "policy off":
+				if _, err := s.db.ExecContext(ctx, `UPDATE operator_settings SET idle_timeout_minutes = 0 WHERE singleton = 1`); err != nil {
+					t.Fatal(err)
+				}
+			case "active idle":
+				// Read-model corruption a real path cannot produce; the idle
+				// guard must still preempt rather than drain idle into idle.
+				if _, err := s.db.ExecContext(ctx, `UPDATE control_state SET active_workload = 'idle' WHERE singleton = 1`); err != nil {
+					t.Fatal(err)
+				}
+			case "degraded health":
+				state, _ := s.State(ctx)
+				state.Health = control.HealthDegraded
+				if _, err := s.UpdateState(ctx, state.Version, state); err != nil {
+					t.Fatal(err)
+				}
+				tr = idleDrain(t, s, "idle-1")
+			case "user owner":
+				state, _ := s.State(ctx)
+				state.Owner = control.OwnerUser
+				state.Admission = control.AdmissionClosed
+				if _, err := s.UpdateState(ctx, state.Version, state); err != nil {
+					t.Fatal(err)
+				}
+				tr = idleDrain(t, s, "idle-1")
+			case "stale version":
+				state, _ := s.State(ctx)
+				if _, err := s.UpdateState(ctx, state.Version, state); err != nil {
+					t.Fatal(err)
+				}
+			case "running transition":
+				current, _ := s.State(ctx)
+				media := current
+				media.DesiredWorkload = control.WorkloadMedia
+				other := idleDrain(t, s, "other")
+				other.Target = media
+				if _, err := s.StartTransition(ctx, current.Version, other); err != nil {
+					t.Fatal(err)
+				}
+				tr = idleDrain(t, s, "idle-1")
+			}
+			before, err := s.State(ctx)
+			if err != nil {
+				t.Fatalf("%s: %v", mode, err)
+			}
+			if _, err := s.StartIdleTransition(ctx, tr); !errors.Is(err, ErrPolicyPreempted) {
+				t.Fatalf("%s: %v, want ErrPolicyPreempted", mode, err)
+			}
+			after, err := s.State(ctx)
+			if err != nil {
+				t.Fatalf("%s: %v", mode, err)
+			}
+			if after.Version != before.Version || after.Phase != before.Phase {
+				t.Fatalf("%s: preempted start changed state: %+v", mode, after)
+			}
+		})
+	}
+}
+
+// The tick keeps no state of its own: a restart past the deadline fires
+// from the durable activity time and policy alone.
+func TestIdleDeadlineFiresAfterReopen(t *testing.T) {
+	dir := t.TempDir()
+	now := policyEpoch
+	var index atomic.Int64
+	uuid := func() (string, error) {
+		return fmt.Sprintf("00000000-0000-4000-8000-%012d", index.Add(1)), nil
+	}
+	clock := func() time.Time { return now }
+	path := filepath.Join(dir, "state.db")
+	ctx := context.Background()
+	s, err := open(ctx, path, clock, uuid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ReplaceCatalog(ctx, "", control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user/text", HealthURL: "http://localhost:9000"}}}); err != nil {
+		t.Fatal(err)
+	}
+	state, _ := s.State(ctx)
+	state.Phase = control.PhaseStable
+	state.DesiredWorkload = control.WorkloadText
+	state.ActiveWorkload = control.WorkloadText
+	state.Admission = control.AdmissionOpen
+	if _, err := s.UpdateState(ctx, state.Version, state); err != nil {
+		t.Fatal(err)
+	}
+	enablePolicy(t, s)
+	if _, err := s.StartIdleTransition(ctx, idleDrain(t, s, "idle-early")); !errors.Is(err, ErrPolicyPreempted) {
+		t.Fatalf("idle before the deadline: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	now = policyEpoch.Add(6 * time.Minute)
+	reopened, err := open(ctx, path, clock, uuid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	started, err := reopened.StartIdleTransition(ctx, idleDrain(t, reopened, "idle-after-restart"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Phase != control.PhaseDraining || started.DesiredWorkload != control.WorkloadIdle {
+		t.Fatalf("restart fire = %+v", started)
+	}
+}
+
+func TestAdmitAndIdleStartAreMutuallyExclusiveInEitherOrder(t *testing.T) {
+	t.Run("admit first preempts idle", func(t *testing.T) {
+		s, now, deadline := idleFixture(t)
+		ctx := context.Background()
+		state, _ := s.State(ctx)
+		*now = deadline
+		tr := idleDrain(t, s, "idle-1")
+		if err := s.AdmitWork(ctx, "req", "job", control.WorkloadText, state.LeaseFence); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.StartIdleTransition(ctx, tr); !errors.Is(err, ErrPolicyPreempted) {
+			t.Fatalf("idle after admit: %v", err)
+		}
+	})
+	t.Run("idle first closes admission", func(t *testing.T) {
+		s, now, deadline := idleFixture(t)
+		ctx := context.Background()
+		*now = deadline
+		started, err := s.StartIdleTransition(ctx, idleDrain(t, s, "idle-1"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.AdmitWork(ctx, "req", "job", control.WorkloadText, started.LeaseFence); !errors.Is(err, ErrAdmissionClosed) {
+			t.Fatalf("admit after idle start: %v", err)
+		}
+	})
 }
 
 func TestAdmitAndFinishAdvanceLastActivity(t *testing.T) {
@@ -293,7 +505,7 @@ func TestWritePathsDisarmArmedDeadline(t *testing.T) {
 		snap, _ := s.Catalog(context.Background())
 		settings, _ := s.Settings(context.Background())
 		e := control.SettingsPrecondition{Incarnation: current.LeaseFence.Incarnation, Version: current.Version, Owner: current.Owner, ConfigurationRevision: snap.Revision, SettingsRevision: settings.SettingsRevision}
-		if _, err := s.SetIdlePolicy(context.Background(), e, control.IdlePolicy{TimeoutMinutes: 30}, true); err != nil {
+		if _, err := s.SetIdlePolicy(context.Background(), e, control.IdlePolicy{TimeoutMinutes: 30}); err != nil {
 			t.Fatal(err)
 		}
 		assertDisarmed(t, s)

@@ -1,6 +1,12 @@
-import { compareVersions, CLOSE_ACTION, GPU_CODES } from './contract.js';
+import {
+    compareVersions,
+    CLOSE_ACTION,
+    GPU_CODES,
+    SETTINGS_ACTIONS,
+} from './contract.js';
 const FRESH_MS = 30000;
 const REFUSALS = new Set([...GPU_CODES, 'not_permitted']);
+const IDLE_ACTION = 'set-idle-policy';
 export class Model {
     generation = 1;
     sequence = 0;
@@ -12,6 +18,10 @@ export class Model {
     // The last start that the GPU check refused: its target, and the
     // processes on the GPU or the failure of the check.
     blocked = null;
+    // The last idle policy that get-settings or set-idle-policy returned, or
+    // null when the operator has none to offer. Stale asks for a new read.
+    settings = null;
+    settingsStale = true;
     retire() {
         this.generation++;
         this.pending = null;
@@ -84,9 +94,27 @@ export class Model {
         if (!this.blocked) return null;
         return this.intent('user-switch', this.blocked.target, now);
     }
+    // The idle policy is global: one timeout, whatever workload is active.
+    idleIntent(timeoutMinutes, now) {
+        if (
+            !this.view(now).mutable ||
+            !this.settings ||
+            this.settings.policy.timeoutMinutes === timeoutMinutes
+        )
+            return null;
+        return {
+            action: IDLE_ACTION,
+            timeoutMinutes,
+            expected: { ...this.status.expected },
+            settingsRevision: this.settings.settingsRevision,
+        };
+    }
     begin(action, now, decision = null) {
         if (this.pending) return null;
         if (action === CLOSE_ACTION) return this._beginClose(now, decision);
+        if (action === IDLE_ACTION) return this._beginIdle(now, decision);
+        if (action === 'get-settings')
+            return this._dispatch(this._request(action), now);
         if (
             action !== 'status' &&
             (!decision ||
@@ -106,6 +134,18 @@ export class Model {
         const request = this._request(CLOSE_ACTION);
         request.target = this.blocked.target;
         request.pid = d.pid;
+        return this._dispatch(request, now);
+    }
+    _beginIdle(now, d) {
+        const fresh = this.idleIntent(d?.timeoutMinutes, now);
+        if (d?.action !== IDLE_ACTION || JSON.stringify(fresh) !== JSON.stringify(d))
+            return null;
+        const request = this._request(IDLE_ACTION);
+        request.expected = { ...d.expected };
+        request.settings = {
+            timeoutMinutes: d.timeoutMinutes,
+            settingsRevision: d.settingsRevision,
+        };
         return this._dispatch(request, now);
     }
     _request(action) {
@@ -130,6 +170,8 @@ export class Model {
     }
     accept(c, r, now) {
         if (!this.current(c)) return false;
+        if (SETTINGS_ACTIONS.includes(c.request.action))
+            return this._acceptSettings(c, r);
         this._trackGPU(c.request, r);
         if (r.code !== 'ok') {
             this.fail(c, r.code);
@@ -154,6 +196,24 @@ export class Model {
         this.delay = 5000;
         return true;
     }
+    _acceptSettings(c, r) {
+        if (r.code === 'ok') {
+            this.pending = null;
+            this.settings = r.settings;
+            this.settingsStale = false;
+            return true;
+        }
+        if (c.request.action === 'get-settings') {
+            // An older or failing operator offers no idle policy: the control
+            // stays disabled until the next read, and status is unaffected.
+            this.pending = null;
+            this.settings = null;
+            this.settingsStale = false;
+            return false;
+        }
+        this.fail(c, r.code);
+        return false;
+    }
     _trackGPU(request, r) {
         if (GPU_CODES.includes(r.code)) {
             this.blocked = {
@@ -170,6 +230,9 @@ export class Model {
     }
     fail(c, code = 'unavailable') {
         if (!this.current(c)) return;
+        // A refused or uncertain write shows its error; the next status
+        // reads the settings again.
+        if (c.request.action === IDLE_ACTION) this.settingsStale = true;
         this.pending = null;
         this.error = code;
         this.delay = Math.min(60000, this.delay * 2);

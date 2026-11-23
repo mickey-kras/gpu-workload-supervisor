@@ -38,7 +38,7 @@ func TestSettingsRejectsCorruptPersistedPolicy(t *testing.T) {
 			if _, err := s.Settings(ctx); err == nil {
 				t.Fatal("corrupt policy accepted")
 			}
-			if _, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 60}, true); err == nil {
+			if _, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 60}); err == nil {
 				t.Fatal("settings mutation accepted corrupt policy")
 			}
 			if test.name == "missing settings" {
@@ -69,7 +69,7 @@ func TestSetIdlePolicyRollsBackSettingsWhenDeadlineDisarmFails(t *testing.T) {
 		BEGIN SELECT RAISE(ABORT, 'deadline store unavailable'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 60}, true); err == nil || !strings.Contains(err.Error(), "deadline store unavailable") {
+	if _, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 60}); err == nil || !strings.Contains(err.Error(), "deadline store unavailable") {
 		t.Fatalf("settings failure = %v", err)
 	}
 	after, err := s.Settings(ctx)
@@ -79,7 +79,7 @@ func TestSetIdlePolicyRollsBackSettingsWhenDeadlineDisarmFails(t *testing.T) {
 	if _, err := s.db.ExecContext(ctx, "DROP TRIGGER reject_disarm"); err != nil {
 		t.Fatal(err)
 	}
-	updated, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 60}, true)
+	updated, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 60})
 	if err != nil || updated.Policy.TimeoutMinutes != 60 || updated.SettingsRevision == e.SettingsRevision {
 		t.Fatalf("retry failed to commit: %+v, %v", updated, err)
 	}

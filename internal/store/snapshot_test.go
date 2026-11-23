@@ -125,7 +125,7 @@ func TestSettingsSnapshotAcrossPolicyChanges(t *testing.T) {
 			e := snapshotSettingsPrecondition(t, s, before.SettingsRevision)
 			writer := snapshotWriter(t, s)
 			q := &snapshotQuerier{db: s.db, commit: func(ctx context.Context) error {
-				_, err := writer.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: change.to}, true)
+				_, err := writer.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: change.to})
 				if err != nil || change.to != 5 {
 					return err
 				}
@@ -157,7 +157,7 @@ func TestStateSnapshotAcrossPolicyChange(t *testing.T) {
 	e := snapshotSettingsPrecondition(t, s, settings.SettingsRevision)
 	writer := snapshotWriter(t, s)
 	q := &snapshotQuerier{db: s.db, commit: func(ctx context.Context) error {
-		_, err := writer.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 30}, true)
+		_, err := writer.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 30})
 		return err
 	}}
 	got, err := readState(ctx, q)

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -57,6 +58,10 @@ func TestRestoreRetiresReservedDemandAndPreservesQueuedDemand(t *testing.T) {
 	}
 	if err := restored.CancelDemand(ctx, queued); err != nil {
 		t.Fatal(err)
+	}
+	var pending int
+	if err := restored.withTx(ctx, func(tx *sql.Tx) error { var err error; pending, err = pendingIdleWorkTx(ctx, tx); return err }); err != nil || pending != 0 {
+		t.Fatalf("retired reservation blocks idle: %d %v", pending, err)
 	}
 }
 
