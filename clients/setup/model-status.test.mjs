@@ -43,6 +43,7 @@ test('each stored status shows an icon and a text, never a safe model', async ()
         [{}, 'Not scanned', 'File checks passed. Behavioral scan not available yet.', 'action-unavailable-symbolic'],
         [{staticChecksPassed: false, reason: 'checker-changed'}, 'Not scanned', 'The stored result is from another checker version.', 'action-unavailable-symbolic'],
         [{staticChecksPassed: false, reason: 'template-changed'}, 'Not scanned', 'The chat template of the launch is not the checked template.', 'action-unavailable-symbolic'],
+        [{staticChecksPassed: false, reason: 'adopted-launch'}, 'Not scanned', 'Setup does not manage this vLLM service, so it cannot check its model files. Set it up as a supervisor-managed launch to start it.', 'action-unavailable-symbolic'],
         [{status: 'findings', staticChecksPassed: false, reviewPending: true}, 'Findings detected', 'A chat template review is pending.', 'dialog-warning-symbolic'],
         [{status: 'safe', staticChecksPassed: false, reason: 'other-directory'}, 'Not scanned', 'The stored result is for another model folder.', 'action-unavailable-symbolic'],
         [{kind: 'image', staticChecksPassed: false}, 'No backdoor scan available for image models', null, 'dialog-information-symbolic'],

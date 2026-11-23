@@ -948,7 +948,9 @@ A stored result allows the launch only when all of these are true:
 
 A result that the supervisor cannot read refuses the launch, and so does a
 vLLM workload without a stored result. Run the checks in setup before the
-first launch. A result that a release before this gate stored has no file
+first launch. An adopted vLLM service names no model directory, so setup
+cannot check it and the gate refuses it. Set it up as a supervisor-managed
+launch before you upgrade. A result that a release before this gate stored has no file
 identities, so it also refuses the launch until you check the model again.
 
 The gate does not hash the model files again, because the weights can be

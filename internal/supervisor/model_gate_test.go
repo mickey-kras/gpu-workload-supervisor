@@ -75,7 +75,7 @@ func TestModelCheckGate(t *testing.T) {
 		files    error
 		refused  string
 	}{
-		"no stored result refuses":     {nil, gatePin, nil, "no model check result"},
+		"adopted launch refuses":       {nil, gatePin, nil, "adopted vLLM service"},
 		"passing result launches":      {&passing, gatePin, nil, ""},
 		"failed result refuses":        {&failed, gatePin, nil, modelcheck.ReasonIdentityMismatch},
 		"changed template SHA refuses": {&passing, strings.Repeat("d", 64), nil, "chat template changed"},
@@ -227,5 +227,23 @@ func TestModelCheckGateRefusesUserRestartBeforeStop(t *testing.T) {
 	after, err := s.State(ctx)
 	if err != nil || after != state || len(r.calls) != 0 {
 		t.Fatalf("a refused restart had effects: %+v %v %v", after, err, r.calls)
+	}
+}
+
+// A managed launch without a result can be checked in setup, so its refusal
+// says to run the checks.
+func TestModelCheckGateRefusesManagedLaunchWithoutResult(t *testing.T) {
+	c, r, s := limitedController(t, limitedCatalog())
+	c.modelFilesUnchanged = modelcheck.Record.FilesUnchanged
+	if _, err := c.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteModelCheck(context.Background(), "vision"); err != nil {
+		t.Fatal(err)
+	}
+	r.calls = nil
+	_, err := c.Switch(context.Background(), "vision", "test")
+	if !errors.Is(err, modelcheck.ErrLaunchRefused) || !strings.Contains(err.Error(), "run the model checks in setup") || slices.Contains(r.calls, "start vision") {
+		t.Fatalf("managed launch without a result = %v, calls %v", err, r.calls)
 	}
 }

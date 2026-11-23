@@ -124,12 +124,12 @@ func TestModelStatusUsesTheStoredResults(t *testing.T) {
 		t.Fatalf("owned status: %+v", owned)
 	}
 	for id, want := range map[string]ModelStatusEntry{
-		"adopted": {Kind: ModelKindLLM, Reason: modelcheck.ReasonNoResult},
+		"adopted": {Kind: ModelKindLLM, Reason: ReasonAdoptedLaunch, LaunchBlocked: true},
 		"image":   {Kind: ModelKindImage},
 		"other":   {Kind: ModelKindUnidentified, Reason: ReasonFilesUnidentified},
 	} {
 		entry := got[id]
-		if entry.Kind != want.Kind || entry.Reason != want.Reason || entry.Status != modelcheck.StatusNotScanned || entry.StaticChecksPassed || entry.CheckedAt != nil {
+		if entry.Kind != want.Kind || entry.Reason != want.Reason || entry.LaunchBlocked != want.LaunchBlocked || entry.Status != modelcheck.StatusNotScanned || entry.StaticChecksPassed || entry.CheckedAt != nil {
 			t.Fatalf("%s status: %+v", id, entry)
 		}
 	}

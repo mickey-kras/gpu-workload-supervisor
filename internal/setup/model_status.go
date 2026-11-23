@@ -38,6 +38,10 @@ const (
 // identify.
 const ReasonFilesUnidentified = "files-unidentified"
 
+// ReasonAdoptedLaunch marks an adopted vLLM launch: it names no model
+// directory, so setup cannot check it and the launch gate refuses it.
+const ReasonAdoptedLaunch = "adopted-launch"
+
 // A status request names at most the 32 workloads of a catalog. Its JSON
 // is at most MaxModelStatusRequestBytes (8 KiB).
 const (
@@ -197,6 +201,9 @@ func baseEntry(p control.WorkloadProfile) (entry ModelStatusEntry, root, pin str
 	entry.Identity, entry.TemplateSHA256 = ModelIdentity(p.NativeModel.Model, root), pin
 	// The launch gate refuses an LLM workload without a stored result.
 	entry.Reason, entry.CheckAvailable, entry.LaunchBlocked = modelcheck.ReasonNoResult, root != "", true
+	if root == "" {
+		entry.Reason = ReasonAdoptedLaunch
+	}
 	return entry, root, pin
 }
 
