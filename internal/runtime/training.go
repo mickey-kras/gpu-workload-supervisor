@@ -20,8 +20,8 @@ import (
 
 const systemctlUserFlag string = "--user"
 
-// TrainerUnit is intentionally a separate, exact launch grammar. Adapter v1
-// reads the lifecycle envelope, owns all GPU phases and writes terminal evidence.
+// TrainerUnit is the recommended trainer unit. Adapter v1 reads the lifecycle
+// envelope, owns all GPU phases and writes terminal evidence.
 func TrainerUnit(t control.TrainerBinding) string {
 	return fmt.Sprintf("[Unit]\nDescription=Supervised finite training\n[Service]\nType=exec\nRestart=no\nKillMode=control-group\nRemainAfterExit=yes\nEnvironment=CUDA_VISIBLE_DEVICES=%s\nExecStart=%s --job-file %s\n", t.GPUUUID, t.Executable, t.JobFile)
 }
@@ -94,7 +94,10 @@ func (m *SystemdManager) verifyTrainerBinding(ctx context.Context, p control.Wor
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(raw, []byte(TrainerUnit(*t))) || fmt.Sprintf("%x", sha256.Sum256(raw)) != t.LaunchSHA256 {
+	// The digest pins the reviewed unit file. The loaded properties below,
+	// not the exact text, decide which units are allowed, so harmless
+	// directives such as TimeoutStopSec or Nice may be added.
+	if fmt.Sprintf("%x", sha256.Sum256(raw)) != t.LaunchSHA256 {
 		return ErrLaunchChanged
 	}
 	v, err := m.trainerProperties(ctx, p)

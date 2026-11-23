@@ -84,6 +84,25 @@ func TestTrainerContractLoadedBinding(t *testing.T) {
 		}
 	}
 	r.outputs[command] = []byte(good)
+	// A reviewed unit with an extra harmless directive and its own digest loads.
+	original, err := os.ReadFile(p.Trainer.LaunchFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	extended := append(append([]byte(nil), original...), "TimeoutStopSec=120\n"...)
+	if err := os.WriteFile(p.Trainer.LaunchFile, extended, 0600); err != nil {
+		t.Fatal(err)
+	}
+	reviewed := *p.Trainer
+	reviewed.LaunchSHA256 = fmt.Sprintf("%x", sha256.Sum256(extended))
+	extendedProfile := p
+	extendedProfile.Trainer = &reviewed
+	if err := m.verifyTrainerBinding(context.Background(), extendedProfile); err != nil {
+		t.Fatalf("reviewed unit with an extra directive = %v", err)
+	}
+	if err := os.WriteFile(p.Trainer.LaunchFile, original, 0600); err != nil {
+		t.Fatal(err)
+	}
 	for _, path := range []string{p.Trainer.RecipeFile, p.Trainer.LaunchFile} {
 		original, err := os.ReadFile(path)
 		if err != nil {
