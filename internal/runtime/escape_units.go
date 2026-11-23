@@ -14,7 +14,7 @@ import (
 // does not count. systemctl prints the property names and values without
 // translation, so the locale does not matter.
 //
-// A failed command still gives the findings of the complete blocks of its
+// A failed command still reports findings from the complete blocks of its
 // output, and each block needs an Id. The report then says that it cannot
 // check the units, with the reason.
 func (s escapeScanner) checkSystemUnits(report *routeReport, account escapeAccount) {
@@ -45,7 +45,7 @@ func (s escapeScanner) checkSystemUnits(report *routeReport, account escapeAccou
 	report.addUnchecked(routeSystemUnits, "the loaded system units (systemctl show: "+commandFailure(err, len(output), text)+")")
 }
 
-// unitUser gives the Id and User properties of one unit block, in any
+// unitUser returns the Id and User properties of one unit block, in any
 // order. systemctl prints the properties in the order of its interface,
 // which puts User before Id.
 func unitUser(block string) (id, user string) {
@@ -59,7 +59,7 @@ func unitUser(block string) (id, user string) {
 	return id, user
 }
 
-// commandFailure gives the reason of a failed command: the output limit,
+// commandFailure returns the reason a command failed: the output limit,
 // or the first line of the error and the last line that is not a property.
 // size is the size of the whole output. text is the output without its
 // cut last line.

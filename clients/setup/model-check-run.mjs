@@ -6,11 +6,10 @@ import {blockingReason} from './model-reasons.mjs';
 
 export const launchWarning = 'A result with an error, findings or an unsupported model blocks the launch of this workload until a new check allows it.';
 
-// kept tells what stays when a run stores nothing: the last stored
+// kept describes what remains when a run stores nothing: the last stored
 // result, or no result.
 const kept = hadResult => (hadResult ? 'The last result is kept.' : 'Setup stored nothing.');
 
-// runNote gives the note of a finished run.
 function runNote(entry) {
     const parts = entry.launchBlocked ? ['Checks finished. This result blocks the launch of this workload.', blockingReason(entry)] : ['Checks finished. The result is stored.'];
     return parts.filter(Boolean).join(' ');
@@ -75,9 +74,9 @@ function blockedKey(entry) {
     return entry.reason ? 'stale' : 'result';
 }
 
-// blockedNote gives the note of a review summary line: it tells why a
+// blockedNote builds the note on a review summary line that explains why a
 // workload cannot start and links to its Model scan card. update(entry)
-// shows the text for a blocked entry, or hides the note for null.
+// shows the text for a blocked entry and hides the note for null.
 export function blockedNote(ui, workload, app, label) {
     const root = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 2, visible: false});
     const row = new Gtk.Box({orientation: Gtk.Orientation.HORIZONTAL, spacing: 8});

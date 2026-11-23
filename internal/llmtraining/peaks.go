@@ -122,7 +122,7 @@ func (p *peakRecorder) startPhase(phase string) {
 }
 
 // sampleStorage raises the storage peak from one complete walk. An incomplete
-// walk gives no value, because a partial total is not a usable capacity value.
+// walk records nothing, because a partial total is not a usable capacity value.
 func (p *peakRecorder) sampleStorage(stop <-chan struct{}) {
 	total := uint64(0)
 	remaining := p.entries

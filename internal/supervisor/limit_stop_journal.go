@@ -18,7 +18,7 @@ import (
 //
 // Once the transition starts, each step runs on a context that the caller
 // cannot cancel, bounded by its own timeout, so the transition always ends.
-// stopped tells that the stop through the system manager passed.
+// stopped reports whether the stop through the system manager succeeded.
 func (c *Controller) journaledLimitStop(ctx context.Context, state control.State, p control.WorkloadProfile, reason string) (stopped bool, err error) {
 	transitionID, err := c.id()
 	if err != nil {

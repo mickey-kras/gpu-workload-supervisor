@@ -78,9 +78,9 @@ type ModelStatusEntry struct {
 	LaunchBlocked bool `json:"launchBlocked"`
 }
 
-// ModelIdentity gives the SHA-256 of the text "path:" and the model
-// directory path of a managed launch, or of "model:" and the model ID. It
-// reads no file and holds no path in clear text.
+// ModelIdentity returns the SHA-256 of "path:" plus the model directory of a
+// managed launch, or of "model:" plus the model ID. It reads no file, and the
+// result does not expose the path in clear text.
 func ModelIdentity(model, root string) string {
 	name := "model:" + model
 	if root != "" {
@@ -114,10 +114,10 @@ func (r ModelStatusRequest) validate() error {
 	return nil
 }
 
-// ModelStatus reports the check status of each accepted workload. It
-// changes nothing: it reads the operator profile, the accepted catalog and
-// the stored results. Only the workloads in request.Recheck get their
-// model files read again; a canceled context stops that read.
+// ModelStatus reports the check status of each accepted workload. It is
+// read-only: it reads the operator profile, the accepted catalog and the
+// stored results. Only workloads in request.Recheck have their model files
+// reread; canceling ctx stops that read.
 func ModelStatus(ctx context.Context, home string, request ModelStatusRequest) (ModelStatusReport, error) {
 	report := ModelStatusReport{Version: 1, Models: []ModelStatusEntry{}}
 	if err := request.validate(); err != nil {
@@ -151,9 +151,9 @@ func ModelStatus(ctx context.Context, home string, request ModelStatusRequest) (
 	return report, nil
 }
 
-// modelStatusEntry gives the status of one workload. A stored result
-// that cannot be read leaves the workload not scanned; the launch gate
-// refuses it. Without a results table, no workload has a result.
+// modelStatusEntry returns the status of one workload. An unreadable stored
+// result leaves the workload not_scanned, and the launch gate refuses it.
+// Without a results table, no workload has a result.
 func modelStatusEntry(ctx context.Context, db *sql.DB, results bool, p control.WorkloadProfile, recheck bool) (ModelStatusEntry, error) {
 	entry, root, pin := baseEntry(p)
 	if entry.Kind != ModelKindLLM || !results {
@@ -177,8 +177,8 @@ func modelStatusEntry(ctx context.Context, db *sql.DB, results bool, p control.W
 	return entry, nil
 }
 
-// baseEntry gives the entry of a workload without a stored result, and the
-// model directory and chat template pin of its launch.
+// baseEntry returns the entry of a workload without a stored result, plus
+// the model directory and chat template pin of its launch.
 func baseEntry(p control.WorkloadProfile) (entry ModelStatusEntry, root, pin string) {
 	entry = ModelStatusEntry{Workload: string(p.ID), Label: p.Label, Kind: modelKind(p), Status: modelcheck.StatusNotScanned}
 	if entry.Kind != ModelKindLLM {

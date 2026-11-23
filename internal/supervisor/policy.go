@@ -18,7 +18,7 @@ const inactivityPolicyInitiator = "inactivity-policy"
 // open admission, and never on a trainer. A state that does not qualify is a
 // clean no-op, as is a stop that activity preempts. The store checks every
 // precondition again in the transaction that starts the stop, so the tick
-// needs no state of its own and a restart changes nothing.
+// keeps no state of its own and is safe across restarts.
 func (c *Controller) IdleTick(ctx context.Context) error {
 	settings, err := c.store.Settings(ctx)
 	if err != nil {

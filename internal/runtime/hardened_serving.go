@@ -28,7 +28,7 @@ const (
 	maxModelMetaBytes = 4 << 20
 )
 
-// ErrServingVersion tells that the running vLLM is older than the supported
+// ErrServingVersion reports that the running vLLM is older than the supported
 // minimum for the bound model.
 var ErrServingVersion = errors.New("vLLM version is below the supported minimum")
 

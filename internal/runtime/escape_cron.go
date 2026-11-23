@@ -58,13 +58,13 @@ func (s escapeScanner) checkAt(report *routeReport, account escapeAccount) {
 // checkAccessRule applies the allow and deny rule of cron and at. The rule
 // denies the account only with a readable allow file that omits the name,
 // or with no allow file and a deny file that lists the name. rootOnly
-// tells that the program lets only root in when both files are missing.
-// Both files and their parent directories need the trusted owner, no
-// group or other write, no ACL and no file capability. A file that fails
-// these checks, or that the account cannot read, gives "cannot check".
+// means the program admits only root when both files are missing. Both files
+// and their parent directories need the trusted owner, no group or other
+// write, no ACL and no file capability. A file that fails these checks, or
+// that the account cannot read, yields "cannot check".
 func (s escapeScanner) checkAccessRule(report *routeReport, route, allow, deny, name string, rootOnly bool) {
-	// A missing file gives no data, and an existing file gives non-nil
-	// data, also when it is empty.
+	// A missing file yields nil data; an existing file yields non-nil data,
+	// even when empty.
 	data, ok := s.readRoutePolicy(report, route, allow, true)
 	if !ok {
 		return
@@ -128,7 +128,7 @@ func (s escapeScanner) checkSystemCrontab(report *routeReport, name string, acco
 	}
 }
 
-// crontabUser gives the user field of a system crontab job line. A job
+// crontabUser returns the user field of a system crontab job line. A job
 // line has five time fields and then the user, or one @ schedule and then
 // the user. Comments, blank lines and variable lines have no user.
 func crontabUser(line string) (string, bool) {

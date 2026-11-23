@@ -150,7 +150,7 @@ const draftsVersionLimits = 2
 // options, with or without limits. Older binaries refuse it like version 2.
 const draftsVersionServing = 3
 
-// draftsVersion gives the lowest drafts version that drafts need.
+// draftsVersion returns the lowest drafts format version that drafts need.
 func draftsVersion(drafts []Draft) int {
 	version := 1
 	for _, d := range drafts {

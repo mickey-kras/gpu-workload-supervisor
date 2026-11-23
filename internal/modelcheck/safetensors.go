@@ -60,8 +60,8 @@ func FileDigest(ctx context.Context, path string) (string, error) {
 	return digest, err
 }
 
-// digestFile also gives the file identity. The identity must be the same
-// before and after the read, so the digest belongs to that identity.
+// digestFile also returns the file identity. The identity must not change
+// during the read, so the digest belongs to that identity.
 func digestFile(ctx context.Context, path string) (string, FileStat, error) {
 	if !cleanAbsolute(path) {
 		return "", FileStat{}, errors.New("file digest requires a clean absolute path")

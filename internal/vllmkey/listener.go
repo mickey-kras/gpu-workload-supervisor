@@ -10,8 +10,8 @@ import (
 	"strings"
 )
 
-// ErrForeignListener tells that a process of another user can receive the
-// connection to the vLLM port. The key is not sent to it.
+// ErrForeignListener reports that another user's process can receive the
+// connection to the vLLM port. The key is not sent.
 var ErrForeignListener = errors.New("the vLLM port is not held only by the desktop user")
 
 // tcpListenState is the LISTEN state in /proc/net/tcp.

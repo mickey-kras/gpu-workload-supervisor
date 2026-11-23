@@ -162,7 +162,7 @@ func requesterHeader(name string) bool {
 type demandStore interface {
 	QueueDemand(context.Context, store.Demand) error
 	ReserveDemand(context.Context, store.Demand) (string, error)
-	RequeueDemand(context.Context, string, string) error
+	ReleaseDemand(context.Context, string, string) error
 	CancelDemand(context.Context, store.Demand) error
 }
 
@@ -232,7 +232,7 @@ func (h *Handler) dispatchDemand(w http.ResponseWriter, r *http.Request, demands
 	}
 	claim, err := demands.ReserveDemand(r.Context(), demand)
 	if err != nil {
-		writeDemandError(w, err)
+		writeDemandError(w, cancelUnreservedDemand(r.Context(), demands, demand, err))
 		return
 	}
 	fence := state.LeaseFence
@@ -248,6 +248,19 @@ func (h *Handler) dispatchDemand(w http.ResponseWriter, r *http.Request, demands
 		return
 	}
 	h.executeRegistered(w, r, demand.RequestID, fence)
+}
+
+// cancelUnreservedDemand cancels a queued demand that reserveErr left
+// undispatched and returns the error to report. A conflict means another
+// request owns the demand, so it stays unchanged.
+func cancelUnreservedDemand(ctx context.Context, demands demandStore, demand store.Demand, reserveErr error) error {
+	if errors.Is(reserveErr, store.ErrDemandConflict) {
+		return reserveErr
+	}
+	if err := demands.CancelDemand(context.WithoutCancel(ctx), demand); err != nil {
+		return err
+	}
+	return reserveErr
 }
 
 // awaitDemandWorkload treats the queued demand as a wake signal. It asks the
@@ -272,6 +285,9 @@ func (h *Handler) awaitDemandWorkload(r *http.Request, state control.State) (con
 		}
 		next, err := h.store.State(r.Context())
 		if err != nil {
+			if ctx.Err() != nil {
+				return state, http.StatusConflict, "demand_timeout"
+			}
 			return state, http.StatusServiceUnavailable, "state_unavailable"
 		}
 		state = next
@@ -370,21 +386,23 @@ func requesterSecrets(policy *RequesterPolicy) []string {
 type demandReservationKey struct{}
 type demandReservation struct{ requestID, claim string }
 
-// releaseUnadmittedDemand runs only on rejection paths before dispatch. The
-// store's atomic claim check preserves admitted work even after an ambiguous
-// admission commit error. Cleanup failures remain visible and fail closed.
+// releaseUnadmittedDemand runs only on rejection paths before dispatch. It
+// cancels the demand, so a rejected request never blocks the idle policy; a
+// retry needs a new request ID. The store's atomic claim check preserves
+// admitted work even after an ambiguous admission commit error. Cleanup
+// failures remain visible and fail closed.
 func (h *Handler) releaseUnadmittedDemand(w http.ResponseWriter, r *http.Request) bool {
 	reservation, ok := r.Context().Value(demandReservationKey{}).(demandReservation)
 	if !ok {
 		return true
 	}
-	return requeueUnadmittedDemand(w, r, h.store.(demandStore), reservation.requestID, reservation.claim)
+	return cancelUnadmittedDemand(w, r, h.store.(demandStore), reservation.requestID, reservation.claim)
 }
 
-func requeueUnadmittedDemand(w http.ResponseWriter, r *http.Request, demands demandStore, requestID, claim string) bool {
+func cancelUnadmittedDemand(w http.ResponseWriter, r *http.Request, demands demandStore, requestID, claim string) bool {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 3*time.Second)
 	defer cancel()
-	if err := demands.RequeueDemand(ctx, requestID, claim); err != nil {
+	if err := demands.ReleaseDemand(ctx, requestID, claim); err != nil {
 		writeDemandError(w, err)
 		return false
 	}

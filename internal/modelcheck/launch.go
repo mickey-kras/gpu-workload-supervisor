@@ -14,16 +14,13 @@ var ErrLaunchRefused = errors.New("the model check refuses this launch")
 // behavioral scan is not available yet, so it can stay not run.
 var launchChecks = checkOrder[:len(checkOrder)-1]
 
-// AllowLaunch tells whether the stored result r allows a launch of its
-// model. root is the model directory of the launch, or empty when the
-// launch does not state it. templateSHA256 is the SHA-256 of the
-// --chat-template file that the launch binding pins.
+// AllowLaunch returns nil when r is a current passing check for the model in
+// root and the launch pins the template that the check passed.
 //
-// The file allowlist and the chat template check must pass. The pinned
-// template must be the template that the check passed, so a template that
-// changed after the check refuses the launch. AllowLaunch does not hash the model files again. It compares the
-// file identity of each checked file and refuses a missing, extra, written
-// or replaced file.
+// root is the launch's model directory, or empty when the launch does not
+// name one; templateSHA256 is the digest of the pinned --chat-template file.
+// AllowLaunch does not rehash the model files: it compares the stored file
+// identities and rejects any missing, extra, rewritten or replaced file.
 func (r Record) AllowLaunch(root, templateSHA256 string) error {
 	if err := r.AllowLaunchRecord(root, templateSHA256); err != nil {
 		return err

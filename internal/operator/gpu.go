@@ -33,8 +33,7 @@ func gpuErrorCode(err error) Code {
 	}
 }
 
-// gpuCheck gives the gpuCheck object of a GPU code, or nil for any other
-// code.
+// gpuCheck returns the GPUCheck for a GPU code, or nil for any other code.
 func gpuCheck(code Code, err error) *GPUCheck {
 	switch code {
 	case GPUInUse:

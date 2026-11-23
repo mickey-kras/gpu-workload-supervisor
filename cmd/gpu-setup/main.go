@@ -234,12 +234,12 @@ const (
 	modelCheckTimeout = 60 * time.Minute
 )
 
-// actionContext gives the context of an action, with its timeout. A
-// recheck reads every model file again, which takes longer. A status read
-// without a recheck gets actionTimeout, see modelStatusContext. An
-// interrupt or a stop signal cancels a model check, which then stores
-// nothing. A killed run stores nothing too: the store writes the result in
-// one transaction.
+// actionContext returns the context for an action, with its timeout. A
+// recheck rereads every model file and gets a longer timeout; a status read
+// without a recheck gets actionTimeout (see modelStatusContext). An interrupt
+// or stop signal cancels a model check, which then stores nothing. A killed
+// run stores nothing either, because the store writes the result in one
+// transaction.
 func actionContext(action string) (context.Context, context.CancelFunc) {
 	switch action {
 	case cmdModelStatus:

@@ -153,10 +153,10 @@ func checkJSON(ctx context.Context, file string, digests map[string]string) (str
 	return scanJSON(filepath.Base(file), raw, digests), nil
 }
 
-// readBound reads one file within limit and checks its digest. A larger
-// file gives the reason tooLarge. checkJSON and the chat template check
-// read files with it. scanTemplate checks the size of a template from a
-// JSON file.
+// readBound reads one file within limit and checks its digest; a larger
+// file returns the reason tooLarge. checkJSON and the chat template check
+// read files through it. scanTemplate checks the size of a template taken
+// from a JSON file.
 func readBound(ctx context.Context, file, digest string, limit int64, tooLarge string) ([]byte, string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, "", err

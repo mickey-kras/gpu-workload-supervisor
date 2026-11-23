@@ -56,7 +56,7 @@ func assertDemandReservation(t *testing.T, f *contractFixture, status string, wo
 	}
 }
 
-func TestRequesterNativeCapacityRequeuesBeforeRetry(t *testing.T) {
+func TestRequesterNativeCapacityCancelsDemand(t *testing.T) {
 	f := newContractFixture(t)
 	var calls atomic.Int32
 	runtime := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { calls.Add(1); w.WriteHeader(202) }))
@@ -74,21 +74,30 @@ func TestRequesterNativeCapacityRequeuesBeforeRetry(t *testing.T) {
 	if status, body := demandHTTPStatus(t, server, http.MethodPost, "/execute"); status != 503 {
 		t.Fatalf("%d %s", status, body)
 	}
-	assertDemandReservation(t, f, "queued", 0)
-	if calls.Load() != 0 {
-		t.Fatal("capacity rejection dispatched work")
-	}
+	assertDemandReservation(t, f, "cancelled", 0)
 	occupied.release()
-	if status, body := demandHTTPStatus(t, server, http.MethodPost, "/execute"); status != 202 {
+	// A retry needs a new request ID.
+	if status, body := demandHTTPStatus(t, server, http.MethodPost, "/execute"); status != 409 {
 		t.Fatalf("retry %d %s", status, body)
 	}
-	assertDemandReservation(t, f, "admitted", 1)
-	if calls.Load() != 1 {
-		t.Fatal("retry did not dispatch exactly once")
+	if calls.Load() != 0 {
+		t.Fatal("rejected demand dispatched work")
 	}
-	if status, _ := demandHTTPStatus(t, server, http.MethodPost, "/execute"); status != 409 {
-		t.Fatal("admitted work replayed")
+}
+
+type failedReserveStore struct{ *store.Store }
+
+func (s failedReserveStore) ReserveDemand(context.Context, store.Demand) (string, error) {
+	return "", context.Canceled
+}
+
+func TestRequesterReserveFailureCancelsDemand(t *testing.T) {
+	f := newContractFixture(t)
+	_, server := reservationHTTP(t, failedReserveStore{f.store}, requesterConfig())
+	if status, body := demandHTTPStatus(t, server, http.MethodPost, "/execute"); status != 503 {
+		t.Fatalf("%d %s", status, body)
 	}
+	assertDemandReservation(t, f, "cancelled", 0)
 }
 
 type reservationRaceStore struct {
@@ -109,7 +118,7 @@ func (s *reservationRaceStore) ReserveDemand(ctx context.Context, d store.Demand
 	return claim, nil
 }
 
-func TestRequesterAdmissionRaceRequeuesAndCancels(t *testing.T) {
+func TestRequesterAdmissionRaceCancelsDemand(t *testing.T) {
 	for _, race := range []string{"closed admission", "stale fence"} {
 		t.Run(race, func(t *testing.T) {
 			f := newContractFixture(t)
@@ -135,7 +144,7 @@ func TestRequesterAdmissionRaceRequeuesAndCancels(t *testing.T) {
 			if status, body := demandHTTPStatus(t, server, http.MethodPost, "/execute"); status != expected {
 				t.Fatalf("%d %s", status, body)
 			}
-			assertDemandReservation(t, f, "queued", 0)
+			assertDemandReservation(t, f, "cancelled", 0)
 			if status, body := demandHTTPStatus(t, server, http.MethodDelete, "/execute"); status != 204 {
 				t.Fatalf("cancel %d %s", status, body)
 			}
@@ -144,7 +153,7 @@ func TestRequesterAdmissionRaceRequeuesAndCancels(t *testing.T) {
 	}
 }
 
-func TestRequesterInvalidComfyBodyRequeuesAndCancels(t *testing.T) {
+func TestRequesterInvalidComfyBodyCancelsDemand(t *testing.T) {
 	f := newContractFixture(t)
 	c := requesterConfig()
 	c.ComfyUIContract = ComfyUIContract
@@ -154,22 +163,22 @@ func TestRequesterInvalidComfyBodyRequeuesAndCancels(t *testing.T) {
 	if status, body := demandHTTPStatus(t, server, http.MethodPost, "/prompt"); status != 400 {
 		t.Fatalf("%d %s", status, body)
 	}
-	assertDemandReservation(t, f, "queued", 0)
+	assertDemandReservation(t, f, "cancelled", 0)
 	if status, body := demandHTTPStatus(t, server, http.MethodDelete, "/prompt"); status != 204 {
 		t.Fatalf("cancel %d %s", status, body)
 	}
 	assertDemandReservation(t, f, "cancelled", 0)
 }
 
-type failedRequeueStore struct{ *store.Store }
+type failedReleaseStore struct{ *store.Store }
 
-func (s failedRequeueStore) RequeueDemand(context.Context, string, string) error {
+func (s failedReleaseStore) ReleaseDemand(context.Context, string, string) error {
 	return errors.New("storage unavailable")
 }
 
-func TestRequesterRequeueFailurePreservesReservation(t *testing.T) {
+func TestRequesterReleaseFailurePreservesReservation(t *testing.T) {
 	f := newContractFixture(t)
-	h, server := reservationHTTP(t, failedRequeueStore{f.store}, requesterConfig())
+	h, server := reservationHTTP(t, failedReleaseStore{f.store}, requesterConfig())
 	h.nativeFinishes = newNativeFinishes(1, nil)
 	occupied := h.nativeFinishes.reserve()
 	defer occupied.release()
@@ -188,7 +197,7 @@ func (s ambiguousAdmissionStore) AdmitWorkTokenAtCatalog(ctx context.Context, id
 	return "", errors.New("commit reply lost")
 }
 
-func TestRequesterAmbiguousAdmissionCannotRequeueOrReplay(t *testing.T) {
+func TestRequesterAmbiguousAdmissionCannotReleaseOrReplay(t *testing.T) {
 	f := newContractFixture(t)
 	_, server := reservationHTTP(t, ambiguousAdmissionStore{f.store}, requesterConfig())
 	if status, _ := demandHTTPStatus(t, server, http.MethodPost, "/execute"); status != 409 {

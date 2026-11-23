@@ -194,7 +194,7 @@ func (h limitHost) checkUnitDropIns(unit string, values map[string][]string, own
 	return nil
 }
 
-// dropInPaths gives the listed drop-ins of systemctl show output.
+// dropInPaths returns the drop-in paths listed in systemctl show output.
 func dropInPaths(values map[string][]string) []string {
 	var paths []string
 	for _, value := range values["DropInPaths"] {

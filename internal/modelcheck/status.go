@@ -19,15 +19,16 @@ const (
 	ReasonFilesUnavailable = "files-unavailable"
 )
 
-// StoredStatus gives the status of a stored record for the model files at
-// root, without reading the files. It uses the stored digests: a record for
-// another model, another root, another checker version or another
-// configuration is not scanned, with its reason. An empty root accepts the
-// root of the record, for a launch that names no model directory.
-// pin is the chat template SHA-256 of the launch. As in the launch gate, a
-// record whose template check passed applies only to a launch that pins the
-// same SHA-256. A launch without a pin pins no template. Other records, for
-// example findings, keep their status.
+// StoredStatus returns the status of r for the model files at root using
+// only the stored digests; it does not read the files. A record for another
+// model, root, checker version or configuration is not_scanned with a
+// reason. An empty root accepts the record's root, for a launch that names
+// no model directory.
+//
+// pin is the launch's chat template SHA-256. As in the launch gate, a record
+// whose template check passed applies only to a launch with the same pin (an
+// unpinned launch pins no template). Other records, such as findings, keep
+// their status.
 func StoredStatus(r Record, model, root, pin string) (Status, string) {
 	switch {
 	case r.Model != model:
@@ -42,11 +43,11 @@ func StoredStatus(r Record, model, root, pin string) (Status, string) {
 	return r.Status, ""
 }
 
-// RecheckStatus reads the files of the record root again, and gives their
-// status. Files that differ from the stored digests are not scanned. Files
-// that cannot be read, for example a missing directory, are not scanned
-// with ReasonFilesUnavailable. A canceled read gives the context error,
-// and no status.
+// RecheckStatus rereads the files under the record root and returns their
+// status. Files that differ from the stored digests are not_scanned; files
+// that cannot be read, such as a missing directory, are not_scanned with
+// ReasonFilesUnavailable. A canceled read returns the context error and no
+// status.
 func RecheckStatus(ctx context.Context, r Record, model, root, pin string) (Status, string, error) {
 	status, reason := StoredStatus(r, model, root, pin)
 	if reason != "" {

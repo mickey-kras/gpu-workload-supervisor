@@ -21,8 +21,8 @@ var ErrModelIdentity = errors.New("native model identity mismatch")
 var checkKeyListener = vllmkey.CheckListener
 var ErrLaunchChanged = errors.New("native launch binding changed")
 
-// ErrAPIKeyRejected tells that vLLM did not accept the key from the key file
-// of the binding: the running vLLM uses another key.
+// ErrAPIKeyRejected reports that vLLM rejected the key from the binding's
+// key file because the running vLLM uses another key.
 var ErrAPIKeyRejected = errors.New("vLLM rejected the API key from the key file; restart the workload, or run setup again if the key file changed")
 
 // InspectQualifiedNativeLaunch checks the supported launch subset before

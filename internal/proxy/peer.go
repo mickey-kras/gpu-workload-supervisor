@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// ErrForeignPeer tells that a loopback TCP peer belongs to another user.
+// ErrForeignPeer reports that a loopback TCP peer belongs to another user.
 var ErrForeignPeer = errors.New("the loopback peer is not owned by the proxy user")
 
 // Test hooks.

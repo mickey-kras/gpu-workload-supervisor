@@ -56,7 +56,7 @@ func managerCgroup(ctx context.Context, runCommand func(context.Context, string,
 	return cgroup, nil
 }
 
-// ownedTemplateError tells what to do when the managed launch cannot use
+// ownedTemplateError explains what to do when the managed launch cannot use
 // the chat template file of the model folder. A missing model folder is
 // not a missing template, so it gets its own message. A model without the
 // file has its template only in a JSON file, so it needs an existing launch

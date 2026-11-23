@@ -120,8 +120,8 @@ func (b Backend) discoverEscapeRoutes(parent context.Context, result *Discovery)
 	if err == nil {
 		systemctl = resolved
 	} else {
-		// The scan runs only systemctl, so this runner refuses each command
-		// and gives the cause of the trust check.
+		// The scan runs only systemctl, so this runner refuses every command
+		// with the trust check failure as the cause.
 		cause := fmt.Errorf("%w: %s is not a trusted executable: %s", gpuruntime.ErrCommandNotRun, systemctl, trustFailure(systemctl, err))
 		run = func(context.Context, string, ...string) ([]byte, error) {
 			return nil, cause
@@ -130,8 +130,8 @@ func (b Backend) discoverEscapeRoutes(parent context.Context, result *Discovery)
 	result.EscapeRoutes = b.escapeRoutes(ctx, run, systemctl)
 }
 
-// trustFailure gives the reason of a failed trust check of path, without
-// the launch class and the repeated path.
+// trustFailure returns the reason a trust check of path failed, without the
+// launch class prefix and the repeated path.
 func trustFailure(path string, err error) string {
 	reason := strings.TrimPrefix(err.Error(), gpuruntime.ErrLaunchUnsupported.Error()+": ")
 	for strings.HasPrefix(reason, path+": ") {

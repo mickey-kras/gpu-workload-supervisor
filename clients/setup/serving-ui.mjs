@@ -13,7 +13,7 @@ import {wrappedCheckButton} from './presentation.mjs';
 export const servingDefaults = Object.freeze({gpuMemoryPercent: 90});
 
 // parseUtilization reads the exact two-digit fraction that vLLM reads, such
-// as 0.90, and gives the whole percentage it stores. The rendered value is
+// as 0.90, and returns the whole percentage it stores. The rendered value is
 // exact and a vLLM update cannot change it.
 export function parseUtilization(text) {
     const match = /^0\.(\d{2})$/.exec(text.trim());
@@ -33,7 +33,7 @@ export const servingFields = [
     {key: 'maxNumBatchedTokens', title: 'Chunked prefill budget (tokens)', ...count, range: '256 to 65536', min: 256, max: 65536},
 ];
 
-// readField gives the stored value of one field. An unedited field keeps
+// readField returns the value of one field. An unedited field keeps
 // its stored value, so a value that the form cannot show exactly is never
 // changed by a save.
 function readField(field, row, stored) {
@@ -46,8 +46,8 @@ function readField(field, row, stored) {
     return {value};
 }
 
-// checkServing gives the first plain problem of a serving options object,
-// or null. It mirrors control.ServingOptions.Validate; the backend checks
+// checkServing returns the first plain-language problem with serving
+// options, or null. It mirrors control.ServingOptions.Validate; the backend checks
 // again before it renders or applies a launch.
 export function checkServing(serving) {
     if (serving.gpuMemoryPercent !== undefined && (serving.gpuMemoryPercent < 50 || serving.gpuMemoryPercent > 95))
@@ -160,8 +160,8 @@ export class ServingOptionsForm {
         this.toggled(false);
         this.state = formState(this.value(true));
     }
-    // value gives the form value. With quiet, it does not show or hide the
-    // error text.
+    // value returns the form value. With quiet, it leaves the error text
+    // visibility alone.
     value(quiet = false) {
         if (!quiet) this.error.visible = false;
         if (!this.enable.active) return this.initial ? null : undefined;
@@ -227,8 +227,8 @@ export function checkFormServing(form, input) {
     if (serving && !input.binding?.owned) throw new PlainLimitError(adoptWithServingText);
 }
 
-// servingSummary gives the one-line plain summary of the serving options of
-// a profile, or null when it has none. The finish page shows it under the
+// servingSummary returns a one-line plain summary of a profile's serving
+// options, or null when it has none. The finish page shows it under the
 // workload card.
 export function servingSummary(profile) {
     const serving = profile.nativeModel?.owned?.serving;
@@ -240,7 +240,7 @@ export function servingSummary(profile) {
     return parts.join(' · ');
 }
 
-// servingSummaries gives one plain line per profile that pins the vLLM KV
+// servingSummaries returns one plain line per profile that pins the vLLM KV
 // cache and batching defaults. The finish page lists them under the
 // previewed changes.
 export function servingSummaries(profiles) {

@@ -32,7 +32,7 @@ func statOf(f *os.File) (FileStat, error) {
 	}, nil
 }
 
-// errFilesChanged tells that the model files differ from the checked files.
+// errFilesChanged reports that the model files differ from the checked files.
 var errFilesChanged = errors.New("the model files changed after the check; check the model again")
 
 // filesUnchanged confirms, without reading file contents, that root holds

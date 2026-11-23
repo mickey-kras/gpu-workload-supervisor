@@ -49,8 +49,8 @@ var daemonSockets = []string{
 // /etc/passwd, /etc/group and this process. The name stays empty when the
 // scan cannot find it: the cron and at checks and the member lists of
 // /etc/group need it, so the report then says that it cannot check them.
-// /etc/group still gives the group names, and the process groups still
-// give group IDs.
+// /etc/group still supplies the group names, and the process groups still
+// supply group IDs.
 func (s escapeScanner) lookupAccount(report *routeReport) escapeAccount {
 	account := escapeAccount{uid: s.host.uid, gids: map[uint32]bool{}, groups: map[string]uint32{}}
 	gids, err := s.probe.processGroups()
@@ -60,8 +60,7 @@ func (s escapeScanner) lookupAccount(report *routeReport) escapeAccount {
 	for _, gid := range gids {
 		account.gids[gid] = true
 	}
-	// One entry gives the reason and the routes that the scan then cannot
-	// check.
+	// One entry records the reason and the routes the scan then cannot check.
 	passwd, err := s.readPolicy("/etc/passwd", false)
 	reason := fmt.Sprintf("/etc/passwd has no entry for uid %d", s.host.uid)
 	if err != nil {

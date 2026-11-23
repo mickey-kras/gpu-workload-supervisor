@@ -34,8 +34,8 @@ var (
 	ErrModelNotLLM        = errors.New("model checks apply only to LLM workloads")
 	ErrModelNoDirectory   = errors.New("the workload names no model folder, so setup cannot check its files")
 	ErrResultNotCurrent   = errors.New("the stored result does not apply to the accepted workload; run the checks again")
-	// ErrStateBusy tells that another setup change held the state lock
-	// until the time limit of the action. Nothing was stored.
+	// ErrStateBusy reports that another setup change held the state lock
+	// until the action timed out. Nothing was stored.
 	ErrStateBusy = errors.New("setup was busy with another change until the time limit, so nothing was stored; try again")
 )
 
@@ -59,7 +59,7 @@ type checkTarget struct {
 	root, pin          string
 }
 
-// sameLaunch tells whether two targets name the same state, release, model
+// sameLaunch reports whether two targets name the same state, release, model
 // directory and chat template pin.
 func (t checkTarget) sameLaunch(other checkTarget) bool {
 	return t.statePath == other.statePath && t.release == other.release && t.root == other.root && t.pin == other.pin
@@ -111,11 +111,11 @@ func loadWriteTarget(ctx context.Context, home, workload string) (checkTarget, e
 const gatePoll = time.Second
 
 // acquireGate waits for the state gate until the action context ends, so a
-// finished run waits as long as its time limit allows. The time limit of
-// the action during the wait means that another change held the gate:
-// it gives ErrStateBusy. A cancel gives modelcheck.ErrCheckCanceled. A
-// context that ended before the wait gives the stop of the run, see
-// modelcheck.Stopped. Other errors pass through.
+// finished run waits as long as its timeout allows. A timeout during the
+// wait means another change held the gate and returns ErrStateBusy; a cancel
+// returns modelcheck.ErrCheckCanceled. A context that ended before the wait
+// returns the run's stop error (see modelcheck.Stopped). Other errors pass
+// through.
 func acquireGate(ctx context.Context, statePath string) (*lock.File, error) {
 	if err := modelcheck.Stopped(ctx); err != nil {
 		return nil, err
@@ -203,7 +203,7 @@ func storedEntry(ctx context.Context, st *store.Store, target checkTarget) (Mode
 	return recordEntry(target, record), nil
 }
 
-// recordEntry gives the status entry of a result for the target.
+// recordEntry returns the status entry of record for target.
 func recordEntry(target checkTarget, record modelcheck.Record) ModelStatusEntry {
 	entry, _, _ := baseEntry(target.profile)
 	entry.Status, entry.Reason = modelcheck.StoredStatus(record, string(target.profile.ID), target.root, target.pin)

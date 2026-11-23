@@ -39,7 +39,7 @@ func TestRestoreRetiresReservedDemandAndPreservesQueuedDemand(t *testing.T) {
 	if err := restored.QueueDemand(ctx, reserved); !errors.Is(err, ErrDemandConflict) {
 		t.Fatalf("restored reservation replay: %v", err)
 	}
-	if err := restored.RequeueDemand(ctx, reserved.RequestID, claim); !errors.Is(err, ErrDemandConflict) {
+	if err := restored.ReleaseDemand(ctx, reserved.RequestID, claim); !errors.Is(err, ErrDemandConflict) {
 		t.Fatalf("retired claim restored: %v", err)
 	}
 	if err := restored.QueueDemand(ctx, queued); err != nil {
@@ -90,7 +90,7 @@ func TestRestoreAuditFailureKeepsReservedDemand(t *testing.T) {
 	if err != nil || after != before {
 		t.Fatalf("failed restore changed state: %v", err)
 	}
-	if err := s.RequeueDemand(ctx, d.RequestID, claim); err != nil {
+	if err := s.ReleaseDemand(ctx, d.RequestID, claim); err != nil {
 		t.Fatalf("failed restore retired reservation: %v", err)
 	}
 }

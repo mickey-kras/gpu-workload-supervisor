@@ -304,14 +304,13 @@ func (c *Controller) stopFailedTarget(ctx context.Context, transitionID string, 
 // running. Checks after an effect keep their usual error codes.
 var ErrLimitedTarget = errors.New("target refused before any change")
 
-// remedyFromStore gives the state that the next steps of a refusal start
-// from. The current workload keeps running. Setup removes limits only from
-// a healthy, stable Idle, so the next steps depend on the state and its
-// owner. A latched state needs recovery first. A state that cannot be read
-// counts as latched, and its running workload is unknown. For a kept
-// workload with limits, it records the unit: recover-user runs the limit
-// checks of that unit, so the steps for a latched user-owned state stop
-// that unit first.
+// remedyFromStore returns the state that a refusal's next steps start from;
+// the current workload keeps running. Setup removes limits only from a
+// healthy, stable Idle, so the steps depend on the state and its owner, and
+// a latched state needs recovery first. An unreadable state counts as
+// latched with an unknown running workload. For a kept workload with
+// limits it records the unit: recover-user runs that unit's limit checks, so
+// the steps for a latched user-owned state stop that unit first.
 func (c *Controller) remedyFromStore(ctx context.Context) remedyState {
 	state, err := c.store.State(ctx)
 	if err != nil {

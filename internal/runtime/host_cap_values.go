@@ -69,8 +69,8 @@ func (r LimitReserve) checkHostMemory(want HostCapValues, limits []control.Resou
 	return nil
 }
 
-// fillCap gives value, or unit plus reserve when value is unset. A set value
-// must leave the reserve above the largest unit limit.
+// fillCap returns value, or the largest unit limit plus reserve when value
+// is unset. A set value must leave the reserve above the largest unit limit.
 func fillCap(field, unit string, value, largestUnit, reserve, upper uint64) (uint64, error) {
 	need := largestUnit + reserve
 	if value == 0 && need > upper {
@@ -96,7 +96,6 @@ func unfillable(field, unit string, upper uint64) error {
 		ErrLimitReserve, field, upper, unit, field)
 }
 
-// largest gives the largest value of the limits.
 func largest(limits []control.ResourceLimits, value func(control.ResourceLimits) uint64) uint64 {
 	var top uint64
 	for _, l := range limits {
@@ -105,9 +104,9 @@ func largest(limits []control.ResourceLimits, value func(control.ResourceLimits)
 	return top
 }
 
-// ioDevice gives the one device of the units that cap I/O. The slice caps
-// one device: the runtime refuses a slice cap on a device that a unit does
-// not cap.
+// ioDevice returns the single device that the I/O-capping units share. The
+// slice caps one device, and the runtime refuses a slice cap on a device
+// that no unit caps.
 func ioDevice(limits []control.ResourceLimits) (string, error) {
 	var devices []string
 	for _, l := range limits {
@@ -149,8 +148,8 @@ func (r LimitReserve) fillHostIO(want *HostCapValues, limits []control.ResourceL
 	return nil
 }
 
-// fillIOCap gives value, or the smallest cap whose share after the reserve
-// holds the largest unit cap.
+// fillIOCap returns value, or when unset the smallest cap whose share after
+// the reserve covers the largest unit cap.
 func (r LimitReserve) fillIOCap(limit ioLimit, value, top uint64) (uint64, error) {
 	// A filled cap stays under hostUpper: the I/O reserve is at most 50
 	// percent, and hostUpper is twice the largest unit cap.

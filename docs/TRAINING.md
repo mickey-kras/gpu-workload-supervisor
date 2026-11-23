@@ -74,7 +74,7 @@ gpu-mode -training-job unique-job-id -stop-grace 2m training-stop
 | Active job | Routine switches, auto-idle, catalog replacement and generic recovery cannot discard admission. Status redacts the token. |
 | Reconcile | Read evidence without starting training. Durably bind the validated terminal outcome before cleanup. Retry failed cleanup or finalization without losing it. Keep admission pending until verified release. |
 | Recover | Missing, stale or ambiguous evidence leaves the job pending. After launch or controller crashes, `training-recover` explicitly stops the configured trainer and verifies release. Preserve any durable verified outcome. Otherwise record `interrupted`. Never retry launch. |
-| Stop | `training-stop` sends SIGTERM to every trainer process, so the trainer can save its own checkpoint. After `-stop-grace` (default 2 minutes) without exit, it sends SIGKILL and reports `"escalated": true`. Then it verifies cgroup and GPU release and records `cancelled`. The supervisor does not read or check the checkpoint. To resume, start a new job with the trainer's own resume options. |
+| Stop | `training-stop` sends SIGTERM to every trainer process, so the trainer can save its own checkpoint. After `-stop-grace` (default 2 minutes) without exit, it sends SIGKILL and reports `"escalated": true`. Then it verifies cgroup and GPU release and records `cancelled`. If the trainer writes a valid `completed` receipt before it exits in the grace period, the stop records `completed`. The supervisor does not read or check the checkpoint. To resume, start a new job with the trainer's own resume options. |
 | Retry | Failed stop or release keeps the job pending. Retry recovery. Use a new ID only after the prior job becomes terminal. Resume integrations need a new job and fence. |
 
 ### Memory peak
@@ -195,6 +195,8 @@ Keep host identities, paths, datasets, generated text and raw evidence private. 
 The worker rejects excluded distributions. Axolotl source and installed dependency metadata stay unchanged. No fork.
 
 Hash lock: Linux x86_64, CPython 3.12.14. This is a dependency candidate, not environment approval. Source hashes do not pin wheels: record wheel hashes and build tools and test a private wheelhouse offline. Never install into inference environments.
+
+`training/axolotl/.python-version` sets CPython 3.12.14 for Dependabot. Without it, Dependabot uses its newest Python, where only Torch 2.15.0 has wheels. That version is outside the range `torch<2.15.0` of Axolotl, so the update fails.
 
 For a dedicated environment, use an absolute `PYTHON` path and install the lock before unchanged Axolotl source:
 

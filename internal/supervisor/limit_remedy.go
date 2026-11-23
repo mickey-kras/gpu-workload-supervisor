@@ -59,10 +59,10 @@ func limitRemedy(rejected error, from remedyState) error {
 	return fmt.Errorf("%w%s%s", rejected, separator, strings.Join(parts, "; "))
 }
 
-// idleStep gives the switch to Idle after the recovery steps, or empty
-// when the state is Idle then. Recovery often ends in Idle: it keeps only
-// a retained unit. So after recovery, or with an unknown workload, the
-// step is conditional.
+// idleStep returns the switch-to-Idle step that follows recovery, or "" when
+// the state is already Idle by then. Recovery often ends in Idle because it
+// keeps only a retained unit, so after recovery or with an unknown workload
+// the step is conditional.
 func (s remedyState) idleStep() string {
 	kept := s.keptAfterRecovery()
 	if kept == control.WorkloadIdle {
@@ -102,8 +102,8 @@ func (s remedyState) stopsKeptUnit() bool {
 	return s.latched && s.user && s.keptUnit != ""
 }
 
-// recoverySteps gives the recovery of a latched state for its owner.
-// recover-user needs the workload that runs.
+// recoverySteps returns the recovery steps for a latched state, by owner.
+// recover-user needs the running workload.
 func (s remedyState) recoverySteps() []string {
 	switch {
 	case !s.latched:

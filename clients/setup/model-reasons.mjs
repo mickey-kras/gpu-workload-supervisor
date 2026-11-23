@@ -37,14 +37,14 @@ const failureCauses = [
     ['stopped at its time limit', 'The action stopped at its time limit.'],
 ];
 
-// failureCause gives the cause of a failed gpu-setup action, or ''.
+// failureCause returns the cause of a failed gpu-setup action, or ''.
 export const failureCause = error => failureCauses.find(([part]) => error?.message?.includes(part))?.[1] ?? '';
 
-// reasonText gives the text of a reason code, or the code itself.
+// reasonText returns the text for a reason code, or a fallback naming the code.
 export const reasonText = reason => reasonTexts[reason] ?? `Reason code: ${reason}`;
 
-// blockingReason gives the text of the first check that did not pass and
-// has a reason, or ''.
+// blockingReason returns the reason text of the first check that did not
+// pass and has a reason, or ''.
 export function blockingReason(entry) {
     const check = entry?.checks?.find(item => item.reason && item.outcome !== 'passed');
     return check ? reasonText(check.reason) : '';

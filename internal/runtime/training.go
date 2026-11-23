@@ -406,7 +406,7 @@ func (m *SystemdManager) SignalTraining(ctx context.Context, p control.WorkloadP
 	return err
 }
 
-// TrainingExited tells whether every process of the job's trainer has ended.
+// TrainingExited reports whether every process of the job's trainer has ended.
 // A main process can exit while a child still saves the checkpoint, so the
 // recursive unit cgroup must be empty too. It is not release evidence:
 // ReleaseTraining still checks the unit state and the GPU.

@@ -590,13 +590,13 @@ func (work activationWork) unrunnableBindingPlan() unitPlan {
 	return plan
 }
 
-// hasUnrunnableBinding reports an accepted catalog with a binding that
-// cannot run now: a retired binding, an owned vLLM binding whose key file is
-// missing, or a vLLM binding whose chat template is changed, missing or
-// unreadable. The accepted runtime is then observed without native bindings,
-// so the binding cannot block the apply that removes it or writes it again.
-// Apply creates a missing key file before it writes the unit, and the
-// candidate runtime is verified after the writes.
+// hasUnrunnableBinding reports whether c has a binding that cannot run now:
+// a retired binding, an owned vLLM binding with a missing key file, or a vLLM
+// binding whose chat template changed or is missing or unreadable. The
+// accepted runtime is then observed without native bindings, so such a
+// binding cannot block the apply that removes or rewrites it. Apply creates a
+// missing key file before writing the unit, and the candidate runtime is
+// verified after the writes.
 func hasUnrunnableBinding(c control.Catalog) bool {
 	for _, p := range c.Profiles {
 		if p.RetiredBinding() || ownedKeyMissing(p) || chatTemplateChanged(p) {
@@ -606,8 +606,8 @@ func hasUnrunnableBinding(c control.Catalog) bool {
 	return false
 }
 
-// chatTemplateChanged reports a vLLM binding whose pinned chat template is
-// missing, unreadable or has another digest. The apply that replaces the
+// chatTemplateChanged reports whether p is a vLLM binding whose pinned chat
+// template is missing, unreadable or has another digest. The apply that replaces the
 // binding pins the current template, and the candidate runtime validates it.
 func chatTemplateChanged(p control.WorkloadProfile) bool {
 	if p.NativeModel == nil || p.NativeModel.Runtime != "vllm" || !p.NativeModel.Hardened() {
