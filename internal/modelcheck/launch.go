@@ -23,9 +23,27 @@ var launchChecks = checkOrder[:len(checkOrder)-1]
 // must pass, with an operator approval where the template asks for one.
 // The pinned template must be the template that the check passed, so a
 // template that changed after the check or its approval refuses the
-// launch. AllowLaunch does not hash the model files again; the next check
-// run catches other file changes.
+// launch. AllowLaunch does not hash the model files again. It compares the
+// file identity of each checked file and refuses a missing, extra, written
+// or replaced file.
 func (r Record) AllowLaunch(root, templateSHA256 string) error {
+	if err := r.AllowLaunchRecord(root, templateSHA256); err != nil {
+		return err
+	}
+	return r.FilesUnchanged()
+}
+
+// FilesUnchanged compares the model directory with the file fingerprint of
+// r: no file is missing, extra, written or replaced since the check.
+func (r Record) FilesUnchanged() error {
+	if err := filesUnchanged(r.Root, r.FileStats); err != nil {
+		return fmt.Errorf("%w: %w", ErrLaunchRefused, err)
+	}
+	return nil
+}
+
+// AllowLaunchRecord is AllowLaunch without the read of the model directory.
+func (r Record) AllowLaunchRecord(root, templateSHA256 string) error {
 	if err := r.Validate(); err != nil {
 		return fmt.Errorf("%w: the stored result is not valid", ErrLaunchRefused)
 	}
@@ -42,6 +60,8 @@ func (r Record) AllowLaunch(root, templateSHA256 string) error {
 		return fmt.Errorf("%w: the launch pins no chat template", ErrLaunchRefused)
 	case templateSHA256 != r.ChatTemplateSHA256:
 		return fmt.Errorf("%w: the chat template changed after the model check; check the model again", ErrLaunchRefused)
+	case len(r.FileStats) == 0:
+		return fmt.Errorf("%w: the result has no file fingerprint; check the model again", ErrLaunchRefused)
 	}
 	return nil
 }

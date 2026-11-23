@@ -43,7 +43,7 @@ func (c Checker) Run(ctx context.Context, r Request) (Record, error) {
 	if !modelPattern.MatchString(r.Model) || !cleanAbsolute(r.Root) || !r.Source.Valid() {
 		return Record{}, errors.New("model check needs a model ID, a clean absolute root and a pinned source")
 	}
-	files, reason, err := Inventory(ctx, r.Root)
+	files, stats, reason, err := InventoryWithStats(ctx, r.Root)
 	if err := Stopped(ctx); err != nil {
 		return Record{}, err
 	}
@@ -51,7 +51,7 @@ func (c Checker) Run(ctx context.Context, r Request) (Record, error) {
 		return Record{}, fmt.Errorf("model files cannot be inventoried: %w", err)
 	}
 	record := Record{
-		Version: RecordVersion, Model: r.Model, Root: r.Root, Source: r.Source, Files: files,
+		Version: RecordVersion, Model: r.Model, Root: r.Root, Source: r.Source, Files: files, FileStats: stats,
 		Checker: c.Version, Configuration: currentConfiguration(c.Hub), CheckedAt: c.now(),
 	}
 	allow := outcome(CheckAllowlist, reason, err)

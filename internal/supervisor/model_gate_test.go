@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -20,9 +21,10 @@ var gatePin = strings.Repeat("c", 64)
 func gateRecord() modelcheck.Record {
 	return modelcheck.Record{
 		Version: modelcheck.RecordVersion, Model: "speech", Root: "/models/speech",
-		Source: modelcheck.Source{Repo: "example-org/speech", Revision: strings.Repeat("a", 40)},
-		Files:  map[string]string{"model.safetensors": strings.Repeat("b", 64)},
-		Status: modelcheck.StatusNotScanned, Coverage: modelcheck.CoveragePartial,
+		Source:    modelcheck.Source{Repo: "example-org/speech", Revision: strings.Repeat("a", 40)},
+		Files:     map[string]string{"model.safetensors": strings.Repeat("b", 64)},
+		FileStats: map[string]modelcheck.FileStat{"model.safetensors": {Size: 1, Inode: 1}},
+		Status:    modelcheck.StatusNotScanned, Coverage: modelcheck.CoveragePartial,
 		Checks: []modelcheck.Check{
 			{Name: modelcheck.CheckAllowlist, Outcome: modelcheck.OutcomePassed},
 			{Name: modelcheck.CheckIdentity, Outcome: modelcheck.OutcomePassed},
@@ -70,17 +72,20 @@ func TestModelCheckGate(t *testing.T) {
 	for name, tc := range map[string]struct {
 		record   *modelcheck.Record
 		template string
+		files    error
 		refused  string
 	}{
-		"no stored result launches":    {nil, gatePin, ""},
-		"passing result launches":      {&passing, gatePin, ""},
-		"failed result refuses":        {&failed, gatePin, modelcheck.ReasonIdentityMismatch},
-		"changed template SHA refuses": {&passing, strings.Repeat("d", 64), "chat template changed"},
-		"launch without a pin refuses": {&passing, "", "pins no chat template"},
+		"no stored result refuses":     {nil, gatePin, nil, "no model check result"},
+		"passing result launches":      {&passing, gatePin, nil, ""},
+		"failed result refuses":        {&failed, gatePin, nil, modelcheck.ReasonIdentityMismatch},
+		"changed template SHA refuses": {&passing, strings.Repeat("d", 64), nil, "chat template changed"},
+		"launch without a pin refuses": {&passing, "", nil, "pins no chat template"},
+		"changed model files refuse":   {&passing, gatePin, fmt.Errorf("%w: files changed", modelcheck.ErrLaunchRefused), "files changed"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			c, s, r := gateController(t, tc.template)
+			c.modelFilesUnchanged = func(modelcheck.Record) error { return tc.files }
 			if tc.record != nil {
 				if err := s.PutModelCheck(ctx, *tc.record); err != nil {
 					t.Fatal(err)

@@ -72,8 +72,9 @@ type ModelStatusEntry struct {
 	// CheckAvailable marks an LLM workload with a model directory, which
 	// gpu-setup model-check can check.
 	CheckAvailable bool `json:"checkAvailable"`
-	// LaunchBlocked marks a stored result that the launch gate refuses,
-	// or a stored result that cannot be read.
+	// LaunchBlocked marks an LLM workload that the launch gate refuses: no
+	// stored result, a result that cannot be read, or a result that the gate
+	// refuses.
 	LaunchBlocked bool `json:"launchBlocked"`
 	// NotStored marks the entry of a run whose hub listing failed. It
 	// describes that run. The earlier stored result stays.
@@ -194,7 +195,8 @@ func baseEntry(p control.WorkloadProfile) (entry ModelStatusEntry, root, pin str
 	}
 	pin = p.NativeModel.ChatTemplateSHA256
 	entry.Identity, entry.TemplateSHA256 = ModelIdentity(p.NativeModel.Model, root), pin
-	entry.Reason, entry.CheckAvailable = modelcheck.ReasonNoResult, root != ""
+	// The launch gate refuses an LLM workload without a stored result.
+	entry.Reason, entry.CheckAvailable, entry.LaunchBlocked = modelcheck.ReasonNoResult, root != "", true
 	return entry, root, pin
 }
 

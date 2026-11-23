@@ -56,34 +56,42 @@ func ContextReader(ctx context.Context, r io.Reader) io.Reader {
 
 // FileDigest computes the SHA-256 hex digest of a regular file without following symlinks.
 func FileDigest(ctx context.Context, path string) (string, error) {
+	digest, _, err := digestFile(ctx, path)
+	return digest, err
+}
+
+// digestFile also gives the file identity. The identity must be the same
+// before and after the read, so the digest belongs to that identity.
+func digestFile(ctx context.Context, path string) (string, FileStat, error) {
 	if !cleanAbsolute(path) {
-		return "", errors.New("file digest requires a clean absolute path")
+		return "", FileStat{}, errors.New("file digest requires a clean absolute path")
 	}
 	if err := noParentLinks(path); err != nil {
-		return "", err
+		return "", FileStat{}, err
 	}
 	f, err := openRegular(path)
 	if err != nil {
-		return "", err
+		return "", FileStat{}, err
 	}
 	defer f.Close()
 	const maxFileBytes int64 = 1 << 40
-	info, err := f.Stat()
+	before, err := statOf(f)
 	if err != nil {
-		return "", err
+		return "", FileStat{}, err
 	}
-	if info.Size() > maxFileBytes {
-		return "", errors.New("model file exceeds its size limit")
+	if before.Size > maxFileBytes {
+		return "", FileStat{}, errors.New("model file exceeds its size limit")
 	}
 	h := sha256.New()
 	n, err := io.Copy(h, ContextReader(ctx, io.LimitReader(f, maxFileBytes+1)))
 	if err != nil {
-		return "", err
+		return "", FileStat{}, err
 	}
-	if n > maxFileBytes || n != info.Size() {
-		return "", errors.New("model file changed or exceeds its size limit")
+	after, err := statOf(f)
+	if err != nil || n != before.Size || after != before {
+		return "", FileStat{}, errors.New("model file changed or exceeds its size limit")
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return hex.EncodeToString(h.Sum(nil)), before, nil
 }
 
 func verifyShardIndex(ctx context.Context, root string, files map[string]string, name string, limit int64) error {

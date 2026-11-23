@@ -942,16 +942,25 @@ A stored result allows the launch only when all of these are true:
 - The binding pins a chat template, and its SHA-256 is the
   [template SHA-256](#result) of the result. A template that changed after
   the check or its approval refuses the launch.
+- The model directory holds exactly the checked files. Each file has the
+  file identity of the check: size, device, inode, modification time and
+  change time.
 
-A result that the supervisor cannot read refuses the launch. The gate does
-not hash the model files again, because the weights can be large. The next
-check run finds other file changes.
+A result that the supervisor cannot read refuses the launch, and so does a
+vLLM workload without a stored result. Run the checks in setup before the
+first launch. A result that a release before this gate stored has no file
+identities, so it also refuses the launch until you check the model again.
 
-Design decision: a workload without a stored result still launches. Setup
-writes a result only when the operator runs the checks. Thus a gate that
-needs a result would refuse each vLLM launch that has no result yet.
-Enforcement comes later
-([#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583)).
+The gate does not hash the model files again, because the weights can be
+large. The check records each file identity with its digest, from the same
+open file before and after the read. A write, a replacement, an added,
+removed or linked file changes the identity or the file list. No user
+process can set the change time back. Thus the gate refuses changed files
+without reading them.
+
+Image models (ComfyUI) have no gate yet.
+[#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583)
+tracks the file allowlist and file identity gate for them.
 
 The gate applies only to new launches. A workload that runs during an
 upgrade keeps running. A recovery that only checks the state starts
