@@ -263,6 +263,11 @@ func (h *Handler) awaitDemandWorkload(r *http.Request, state control.State) (con
 		if state.Owner != control.OwnerSupervisor || state.Health != control.HealthHealthy {
 			return state, http.StatusConflict, "demand_rejected"
 		}
+		// A synchronous activation can outlast the wait; the budget still
+		// holds, so a late success never dispatches.
+		if ctx.Err() != nil {
+			return state, http.StatusConflict, "demand_timeout"
+		}
 		if state.Phase == control.PhaseStable && state.ActiveWorkload == h.workload && state.Admission == control.AdmissionOpen {
 			return state, 0, ""
 		}

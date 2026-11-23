@@ -194,3 +194,22 @@ func TestRequesterDemandWakesAfterIdleTransition(t *testing.T) {
 		t.Fatalf("%d calls=%d dispatched=%d %s", w.Code, calls.Load(), dispatched.Load(), w.Body.String())
 	}
 }
+
+func TestRequesterSlowActivationKeepsTheWaitBudget(t *testing.T) {
+	s := &requesterStore{fakeStore: fakeStore{state: admittedState(control.OwnerSupervisor)}}
+	idleRequesterState(&s.state)
+	c := requesterConfig()
+	c.DemandWaitTimeout = 20 * time.Millisecond
+	c.ActivateDemand = func(context.Context, control.Workload, control.State, string) (control.Fence, error) {
+		// The operator runs activation on its own context, past the wait.
+		time.Sleep(60 * time.Millisecond)
+		setRequesterState(s, func(state *control.State) { *state = admittedState(control.OwnerSupervisor) })
+		return control.Fence{}, nil
+	}
+	h, dispatched := waitHandler(t, s, c)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, requesterRequest())
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "demand_timeout") || s.reserved != 0 || dispatched.Load() != 0 {
+		t.Fatalf("late activation dispatched: %d reserved=%d dispatched=%d %s", w.Code, s.reserved, dispatched.Load(), w.Body.String())
+	}
+}
