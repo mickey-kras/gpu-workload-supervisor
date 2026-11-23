@@ -14,9 +14,6 @@ var (
 	ErrSettingsConflict = errors.New("operator settings revision conflict")
 	// ErrInvalidIdleTimeout rejects an out-of-bounds idle timeout.
 	ErrInvalidIdleTimeout = errors.New("idle timeout must be 0 (off) or between 5 and 1440 minutes")
-	// ErrEvidenceUnavailable rejects enabling the idle policy: no inactivity
-	// evaluator ships. It never latches.
-	ErrEvidenceUnavailable = errors.New("qualified idle evidence provider is unavailable")
 )
 
 // Settings reads the committed idle policy and its durable bookkeeping.
@@ -30,14 +27,9 @@ func (s *Store) Settings(ctx context.Context) (control.PolicyState, error) {
 // interrupt an unstable state or a running transition. Every write rotates
 // the opaque settings revision and clears an armed deadline that a database
 // of an older release can hold.
-func (s *Store) SetIdlePolicy(ctx context.Context, e control.SettingsPrecondition, p control.IdlePolicy, evidenceAvailable bool) (control.PolicyState, error) {
+func (s *Store) SetIdlePolicy(ctx context.Context, e control.SettingsPrecondition, p control.IdlePolicy) (control.PolicyState, error) {
 	if err := p.Validate(); err != nil {
 		return control.PolicyState{}, errors.Join(ErrInvalidIdleTimeout, err)
-	}
-	// Enabling is gated on the caller; the store defends the invariant so no
-	// caller can bypass it.
-	if p.TimeoutMinutes != control.IdlePolicyOff && !evidenceAvailable {
-		return control.PolicyState{}, ErrEvidenceUnavailable
 	}
 	revision, err := s.uuid()
 	if err != nil {
@@ -87,7 +79,9 @@ func (s *Store) setIdlePolicy(ctx context.Context, tx *sql.Tx, e control.Setting
 			WHERE singleton = 1`, revision, p.TimeoutMinutes, now); err != nil {
 		return control.PolicyState{}, err
 	}
-	if err := s.disarmIdleDeadline(ctx, tx); err != nil {
+	// A settings change restarts the idle clock, so enabling the policy
+	// never stops a workload that was simply quiet before.
+	if err := s.touchActivity(ctx, tx); err != nil {
 		return control.PolicyState{}, err
 	}
 	return readPolicyState(ctx, tx)

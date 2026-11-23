@@ -415,10 +415,11 @@ func pinCatalog(snapshot control.CatalogSnapshot) (*control.CatalogSnapshot, err
 }
 
 func executeRuntimeCommand(ctx context.Context, controller *supervisor.Controller, command string, options modeExecution) error {
-	// The oneshot policy tick runs the limit stop. While the state is
-	// latched, it can stop a running unit whose limits fail.
+	// The oneshot policy tick runs the limit stop and then the inactivity
+	// policy. While the state is latched, the limit stop can stop a running
+	// unit whose limits fail.
 	if command == idlePolicyTickCommand {
-		return controller.LimitTick(ctx, os.Stderr)
+		return controller.TickWithLimits(ctx, os.Stderr)
 	}
 	if strings.HasPrefix(command, "training-") {
 		if options.allRestored {
