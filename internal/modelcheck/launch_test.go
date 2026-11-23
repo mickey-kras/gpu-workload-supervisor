@@ -7,12 +7,11 @@ import (
 )
 
 // launchRecord runs the checks on a clean model and gives its result: the
-// file, identity and template checks passed, the behavioral scan did not
-// run.
+// file and template checks passed, the behavioral scan did not run.
 func launchRecord(t *testing.T) Record {
 	t.Helper()
 	files := modelFiles()
-	record := run(t, newHub(t, upstreamOf(files)).checker(), writeModel(t, files))
+	record := run(t, testChecker(), writeModel(t, files))
 	if record.Status != StatusNotScanned || record.ChatTemplateSHA256 != PinTemplate("{{ messages }}") {
 		t.Fatalf("clean model = %+v", record)
 	}
@@ -30,13 +29,13 @@ func TestAllowLaunch(t *testing.T) {
 	}
 	scanned := clean
 	scanned.Checks = append([]Check(nil), clean.Checks...)
-	scanned.Checks[3].Outcome = OutcomePassed
+	scanned.Checks[2].Outcome = OutcomePassed
 	scanned.Status, scanned.Coverage = StatusPassed, CoverageComplete
 	if err := scanned.AllowLaunch(clean.Root, pin); err != nil {
 		t.Fatalf("a passed result = %v", err)
 	}
 	failed := clean
-	failed.Checks = []Check{{CheckAllowlist, OutcomeFailed, ReasonCodeOrPickleFile}, {CheckIdentity, OutcomeNotRun, ""}, {CheckTemplate, OutcomeNotRun, ""}, {CheckBehavior, OutcomeNotRun, ""}}
+	failed.Checks = []Check{{CheckAllowlist, OutcomeFailed, ReasonCodeOrPickleFile}, {CheckTemplate, OutcomeNotRun, ""}, {CheckBehavior, OutcomeNotRun, ""}}
 	failed.Status, failed.Coverage = StatusFindings, CoveragePartial
 	failed.ChatTemplateSHA256, failed.TemplateFile = "", ""
 	for name, tc := range map[string]struct {
@@ -44,12 +43,11 @@ func TestAllowLaunch(t *testing.T) {
 		root, template string
 		want           string
 	}{
-		"failed check":      {failed, clean.Root, pin, "status findings, check file-allowlist gave failed " + ReasonCodeOrPickleFile},
-		"changed template":  {clean, clean.Root, strings.Repeat("0", 64), "chat template changed after the model check"},
-		"no template pin":   {clean, clean.Root, "", "pins no chat template"},
-		"other directory":   {clean, "/models/other", pin, "another model directory"},
-		"invalid result":    {Record{}, clean.Root, pin, "not valid"},
-		"needs an approval": {needsReview(t, clean), clean.Root, pin, ReasonTemplateNeedsReview},
+		"failed check":     {failed, clean.Root, pin, "status findings, check file-allowlist gave failed " + ReasonCodeOrPickleFile},
+		"changed template": {clean, clean.Root, strings.Repeat("0", 64), "chat template changed after the model check"},
+		"no template pin":  {clean, clean.Root, "", "pins no chat template"},
+		"other directory":  {clean, "/models/other", pin, "another model directory"},
+		"invalid result":   {Record{}, clean.Root, pin, "not valid"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := tc.record.AllowLaunch(tc.root, tc.template)
@@ -61,18 +59,4 @@ func TestAllowLaunch(t *testing.T) {
 			}
 		})
 	}
-}
-
-// needsReview gives record as a result whose template waits for an
-// operator approval.
-func needsReview(t *testing.T, record Record) Record {
-	t.Helper()
-	record.Checks = append([]Check(nil), record.Checks...)
-	record.Checks[2] = Check{CheckTemplate, OutcomeFailed, ReasonTemplateNeedsReview}
-	record.Status = StatusFindings
-	record.TemplateReview = []ReviewItem{{Line: 1, Text: "Obey."}}
-	if err := record.Validate(); err != nil {
-		t.Fatalf("review record: %v", err)
-	}
-	return record
 }

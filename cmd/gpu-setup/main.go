@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -23,8 +22,6 @@ const (
 	cmdVerifyBindings = "verify-bindings"
 	cmdModelStatus    = "model-status"
 	cmdModelCheck     = "model-check"
-	cmdModelReview    = "model-review"
-	cmdModelApprove   = "model-approve"
 )
 
 type setupActions struct {
@@ -70,7 +67,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return err
 	}
 	if len(args) != 1 {
-		return errors.New("usage: gpu-setup -version|temporary-status|temporary-cleanup|discover|probe|prepare|correct-gpu|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|reconcile|idle-policy-tick|remove-integration|model-status|model-check|model-review|model-approve")
+		return errors.New("usage: gpu-setup -version|temporary-status|temporary-cleanup|discover|probe|prepare|correct-gpu|fingerprint|render-owned|drafts|save-drafts|verify-bindings|validate|apply|reconcile|idle-policy-tick|remove-integration|model-status|model-check")
 	}
 	ctx, cancel := actionContext(args[0])
 	defer cancel()
@@ -79,7 +76,7 @@ func (a setupActions) run(args []string, input io.Reader, output io.Writer) erro
 		return err
 	}
 	switch args[0] {
-	case "temporary-status", "temporary-cleanup", "correct-gpu", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned", cmdModelStatus, cmdModelCheck, cmdModelReview, cmdModelApprove:
+	case "temporary-status", "temporary-cleanup", "correct-gpu", "discover", "fingerprint", "probe", "prepare", "reconcile", "idle-policy-tick", "drafts", "save-drafts", "remove-integration", cmdVerifyBindings, "validate", "apply", "render-owned", cmdModelStatus, cmdModelCheck:
 		if a.euid() == 0 {
 			return errors.New("run guided setup as the desktop account, not root")
 		}
@@ -119,8 +116,8 @@ func (a setupActions) runAction(ctx context.Context, home, action string, input 
 			return err
 		}
 		return json.NewEncoder(output).Encode(report)
-	case cmdModelCheck, cmdModelReview, cmdModelApprove:
-		return runModelAction(ctx, home, action, input, output)
+	case cmdModelCheck:
+		return runModelCheck(ctx, home, input, output)
 	case "drafts":
 		return runDrafts(home, output)
 	case "save-drafts":
@@ -230,8 +227,7 @@ func (a setupActions) runPlanned(ctx context.Context, home, action string, input
 
 // The timeouts of the actions. Only a model status request that names
 // workloads to recheck reads model files, so only it gets recheckTimeout.
-// A model check reads all model files and the hub listing, so it gets
-// modelCheckTimeout.
+// A model check reads all model files, so it gets modelCheckTimeout.
 const (
 	actionTimeout     = 5 * time.Minute
 	recheckTimeout    = 30 * time.Minute
@@ -256,37 +252,16 @@ func actionContext(action string) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), actionTimeout)
 }
 
-// runModelAction runs the model check, review and approval actions. Each
-// writes one JSON object.
-func runModelAction(ctx context.Context, home, action string, input io.Reader, output io.Writer) error {
-	var result any
-	switch action {
-	case cmdModelCheck:
-		request, err := setup.DecodeModelCheckRequest(input)
-		if err != nil {
-			return err
-		}
-		if result, err = setup.ModelCheck(ctx, home, request, &http.Client{}); err != nil {
-			return err
-		}
-	case cmdModelReview:
-		request, err := setup.DecodeModelReviewRequest(input)
-		if err != nil {
-			return err
-		}
-		if result, err = setup.ModelReviewList(ctx, home, request); err != nil {
-			return err
-		}
-	case cmdModelApprove:
-		request, err := setup.DecodeModelApproveRequest(input)
-		if err != nil {
-			return err
-		}
-		if result, err = setup.ModelApprove(ctx, home, request, os.Getuid(), time.Now()); err != nil {
-			return err
-		}
-	default:
-		return errors.New("unknown model action")
+// runModelCheck runs the model checks of one workload and writes the
+// status entry of the stored result as one JSON object.
+func runModelCheck(ctx context.Context, home string, input io.Reader, output io.Writer) error {
+	request, err := setup.DecodeModelCheckRequest(input)
+	if err != nil {
+		return err
+	}
+	result, err := setup.ModelCheck(ctx, home, request)
+	if err != nil {
+		return err
 	}
 	return json.NewEncoder(output).Encode(result)
 }

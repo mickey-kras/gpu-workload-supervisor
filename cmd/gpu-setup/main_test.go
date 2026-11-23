@@ -222,7 +222,7 @@ func TestRootRejectedForAllSetupActions(t *testing.T) {
 
 func TestAllDesktopCommandsRejectRootBeforeReadingInputOrWritingOutput(t *testing.T) {
 	for _, command := range []string{
-		"correct-gpu", "discover", "probe", "prepare", "fingerprint", "render-owned", "drafts", "save-drafts", "verify-bindings", "validate", "apply", "reconcile", "idle-policy-tick", "remove-integration", "model-status", "model-check", "model-review", "model-approve",
+		"correct-gpu", "discover", "probe", "prepare", "fingerprint", "render-owned", "drafts", "save-drafts", "verify-bindings", "validate", "apply", "reconcile", "idle-policy-tick", "remove-integration", "model-status", "model-check",
 	} {
 		t.Run(command, func(t *testing.T) {
 			a := systemActions()
@@ -317,31 +317,26 @@ func TestModelCheckActionsRefuseInvalidRequests(t *testing.T) {
 	home := t.TempDir()
 	actions.home = func() (string, error) { return home, nil }
 	actions.euid = func() int { return 1000 }
-	revision := strings.Repeat("a", 40)
-	for action, tc := range map[string]struct{ raw, want string }{
-		"model-check":   {`{"version":1,"workload":"chat","source":{"repo":"org/model","revision":"` + revision + `"},"extra":1}`, "unknown field"},
-		"model-review":  {`{"version":1,"workload":"chat"}` + strings.Repeat(" ", 4096), "json exceeds"},
-		"model-approve": {`{"version":1,"workload":"chat","chatTemplateSHA256":"x","reviewSHA256":"y"}`, setup.ErrModelCheckRequest.Error()},
+	for name, tc := range map[string]struct{ raw, want string }{
+		"unknown field": {`{"version":1,"workload":"chat","extra":1}`, "unknown field"},
+		"source":        {`{"version":1,"workload":"chat","source":{"repo":"org/model","revision":"` + strings.Repeat("a", 40) + `"}}`, "unknown field"},
+		"too large":     {`{"version":1,"workload":"chat"}` + strings.Repeat(" ", 4096), "json exceeds"},
+		"version":       {`{"version":2,"workload":"chat"}`, setup.ErrModelCheckRequest.Error()},
 	} {
 		var output bytes.Buffer
-		if err := actions.run([]string{action}, strings.NewReader(tc.raw), &output); err == nil || !strings.Contains(err.Error(), tc.want) || output.Len() != 0 {
-			t.Fatalf("%s: %v %q", action, err, output.String())
+		if err := actions.run([]string{"model-check"}, strings.NewReader(tc.raw), &output); err == nil || !strings.Contains(err.Error(), tc.want) || output.Len() != 0 {
+			t.Fatalf("%s: %v %q", name, err, output.String())
 		}
 	}
-	if err := runModelAction(context.Background(), home, "model-other", strings.NewReader("{}"), &bytes.Buffer{}); err == nil {
-		t.Fatal("an unknown model action ran")
+	for _, action := range []string{"model-review", "model-approve"} {
+		if err := actions.run([]string{action}, strings.NewReader(`{"version":1,"workload":"chat"}`), &bytes.Buffer{}); err == nil {
+			t.Fatalf("the removed action %s ran", action)
+		}
 	}
 	// A valid request for setup without a profile names no workload.
-	valid := map[string]string{
-		"model-check":   `{"version":1,"workload":"chat","source":{"repo":"org/model","revision":"` + revision + `"}}`,
-		"model-review":  `{"version":1,"workload":"chat"}`,
-		"model-approve": `{"version":1,"workload":"chat","chatTemplateSHA256":"` + strings.Repeat("a", 64) + `","reviewSHA256":"` + strings.Repeat("b", 64) + `"}`,
-	}
-	for action, raw := range valid {
-		var output bytes.Buffer
-		if err := actions.run([]string{action}, strings.NewReader(raw), &output); !errors.Is(err, setup.ErrModelNotConfigured) || output.Len() != 0 {
-			t.Fatalf("%s: %v %q", action, err, output.String())
-		}
+	var output bytes.Buffer
+	if err := actions.run([]string{"model-check"}, strings.NewReader(`{"version":1,"workload":"chat"}`), &output); !errors.Is(err, setup.ErrModelNotConfigured) || output.Len() != 0 {
+		t.Fatalf("model-check: %v %q", err, output.String())
 	}
 	files, err := os.ReadDir(home)
 	if err != nil || len(files) != 0 {
@@ -351,7 +346,7 @@ func TestModelCheckActionsRefuseInvalidRequests(t *testing.T) {
 
 // A model check gets the longest timeout, and a stop signal cancels it.
 func TestModelCheckContext(t *testing.T) {
-	for action, want := range map[string]time.Duration{"model-check": modelCheckTimeout, "model-status": recheckTimeout, "model-review": actionTimeout} {
+	for action, want := range map[string]time.Duration{"model-check": modelCheckTimeout, "model-status": recheckTimeout, "model-other": actionTimeout} {
 		ctx, cancel := actionContext(action)
 		deadline, ok := ctx.Deadline()
 		if left := time.Until(deadline); !ok || left > want || left < want-time.Minute {

@@ -98,23 +98,20 @@ function stateCandidate(state) {
     return result;
 }
 let statusReply = null;
-const scanEntry = {workload: 'chat', label: 'vLLM', kind: 'llm', identity: GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, 'model:example-small', -1), status: 'not_scanned', staticChecksPassed: true, reviewPending: false, rechecked: false, coverage: 'partial', checker: '1', checkedAt: '2026-11-01T09:30:00Z',
-    checks: [{name: 'file-allowlist', outcome: 'passed'}, {name: 'upstream-identity', outcome: 'passed'}, {name: 'chat-template', outcome: 'passed'}, {name: 'behavioral-scan', outcome: 'not_run'}]};
+const scanEntry = {workload: 'chat', label: 'vLLM', kind: 'llm', identity: GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, 'model:example-small', -1), status: 'not_scanned', staticChecksPassed: true, rechecked: false, coverage: 'partial', checker: '1', checkedAt: '2026-11-01T09:30:00Z',
+    checks: [{name: 'file-allowlist', outcome: 'passed'}, {name: 'chat-template', outcome: 'passed'}, {name: 'behavioral-scan', outcome: 'not_run'}]};
 // scanProfile is the accepted workload of the scan state; its saved draft
 // keeps the accepted model.
 const scanProfile = {id: 'chat', label: 'vLLM', adapter: 'systemd', unit: candidate.unit, cgroup: candidate.cgroup, healthURL: candidate.binding.healthURL, bootPolicy: 'stop-to-idle',
     nativeModel: {runtime: 'vllm', instance: 'local', model: 'example-small', endpoint: candidate.endpoint, launchFile: candidate.binding.launchFile, launchSHA256: 'fixture-sha'}};
-// The run state has a managed workload in a Hugging Face cache folder whose
-// template review is pending. The blocked state is the scan state with a
-// stored result that blocks the launch.
-const runRevision = '0123456789abcdef0123456789abcdef01234567';
-const runPath = `/example/hf/models--example-org--example-small/snapshots/${runRevision}`;
+// The run state has a managed workload whose model folder has a code file.
+// The blocked state is the scan state with a stored result that blocks the
+// launch.
+const runPath = '/example/models/example-small';
 const runProfile = {...scanProfile, nativeModel: {...scanProfile.nativeModel, instance: 'owned', model: runPath, owned: {port: 8000, modelPath: runPath}}};
-const runChecks = [scanEntry.checks[0], scanEntry.checks[1], {name: 'chat-template', outcome: 'failed', reason: 'chat-template-needs-review'}, scanEntry.checks[3]];
+const runChecks = [{name: 'file-allowlist', outcome: 'failed', reason: 'code-or-pickle-file'}, {name: 'chat-template', outcome: 'not_run'}, scanEntry.checks[2]];
 const runEntry = {...scanEntry, identity: GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, `path:${runPath}`, -1), status: 'findings', staticChecksPassed: false,
-    reviewPending: true, checkAvailable: true, launchBlocked: true, checks: runChecks};
-const runReview = {version: 1, workload: 'chat', pending: true, templateFile: 'chat_template.jinja', chatTemplateSHA256: 'a'.repeat(64), reviewSHA256: 'b'.repeat(64),
-    items: [{line: 1, text: 'Answer in English.'}, {line: 4, text: 'You are a helpful assistant.'}]};
+    checkAvailable: true, launchBlocked: true, checks: runChecks};
 const scanModes = ['scan', 'blocked'];
 const statusModels = () => ({scan: [scanEntry], blocked: [{...scanEntry, status: 'findings', staticChecksPassed: false, launchBlocked: true, checks: runChecks}], run: [runEntry]})[mode] ?? [];
 // A recheck or a run waits for statusReply or for its cancellation, which
@@ -151,8 +148,6 @@ async function command(argv, input, cancellable = null) {
     if (action === 'drafts') return JSON.stringify({revision: 'fixture', drafts: scanModes.includes(mode) ? [{id: 'chat', label: 'vLLM', app: 'vllm', model: 'example-small', binding: {...candidate.binding, instance: 'local', model: 'example-small'}}] : []});
     if (action === 'model-status') return await modelStatus(input, cancellable);
     if (action === 'model-check') return await deferredReply(entry => entry, cancellable);
-    if (action === 'model-review') return JSON.stringify(runReview);
-    if (action === 'model-approve') return JSON.stringify({...runEntry, status: 'not_scanned', staticChecksPassed: true, reviewPending: false, launchBlocked: false, checks: scanEntry.checks});
     if (action === 'prepare') {
         const {draft} = JSON.parse(input);
         const installation = draft.app === 'comfyui' ? comfy : candidate;
@@ -373,34 +368,19 @@ app.connect('activate', () => {
             geometry.push({screen: ui.heading.label, text: label, x: bounds.get_x(), y: bounds.get_y(), width: bounds.get_width(), height: bounds.get_height(), wrapped: true});
         }
         const mappedLabel = (ui, label) => widgets(ui.window).some(widget => widget instanceof Gtk.Label && widget.get_mapped() && widget.label === label);
-        async function typeInto(ui, row, text) {
-            await tabTo(ui, row); run(['xdotool', 'key', 'ctrl+a']); run(['xdotool', 'type', '--clearmodifiers', text]);
-            await waitFor(() => row.text === text, 'the typed source reaches the field');
-        }
-        // modelRun captures the source fields, a run, its cancel, a run whose
-        // hub listing failed, the template review and the summary note.
+        // modelRun captures a run, its cancel, a finished run and the
+        // summary note.
         async function modelRun() {
             let ui = await open('run');
             await activate(ui, ui.applicationCards.get('vllm').gear, 'vLLM');
-            const entry = title => widgets(ui.window).find(widget => widget instanceof Adw.EntryRow && widget.title === title && widget.get_mapped());
-            const repo = entry('Repository (owner/name)'), revision = entry('Revision (40-character commit ID)');
-            assert(repo?.text === 'example-org/example-small' && revision?.text === runRevision, 'the source of the cache folder fills the fields');
-            const warning = 'A result with an error, findings, an unsupported model or a pending template review blocks the launch of this workload until a new check allows it.';
+            const warning = 'A result with an error, findings or an unsupported model blocks the launch of this workload until a new check allows it.';
             wrapping(ui, warning);
             await tabTo(ui, named(ui, 'Run checks'));
-            await settingsTree(ui, 'settings-model-run', 'Run checks', [{name: 'Model scan', role: 'heading'}, {name: 'Findings detected'}, {name: warning}, button('Run checks'), button('Review chat template')], ['Cancel check', 'Safe model']);
+            await settingsTree(ui, 'settings-model-run', 'Run checks', [{name: 'Model scan', role: 'heading'}, {name: 'Findings detected'}, {name: warning}, button('Run checks')], ['Cancel check', 'Safe model']);
             await capture(ui, 'settings-model-run');
-            await typeInto(ui, revision, 'main');
-            const hint = 'Enter the full commit ID: 40 lowercase hex characters. A branch or tag name is not a pin.';
-            // GTK handles the typed keys after xdotool returns.
-            await waitFor(() => mappedLabel(ui, hint) && revision.has_css_class('error'), 'a branch name is marked as not valid');
-            await settingsTree(ui, 'settings-model-run-invalid', 'Revision (40-character commit ID)', [button('Run checks', false), {name: hint}]);
-            await capture(ui, 'settings-model-run-invalid');
-            await typeInto(ui, revision, runRevision);
-            await waitFor(() => revision.text === runRevision && !mappedLabel(ui, hint) && named(ui, 'Run checks').is_sensitive(), 'a pinned revision allows the run');
-            await tabTo(ui, named(ui, 'Run checks')); run(['xdotool', 'key', 'space']);
+            run(['xdotool', 'key', 'space']);
             await waitFor(() => statusReply, 'Run checks starts one run');
-            assert(JSON.stringify(commandRecords.at(-1)) === JSON.stringify({action: 'model-check', input: {version: 1, workload: 'chat', source: {repo: 'example-org/example-small', revision: runRevision}}}), 'the run names the workload and the source');
+            assert(JSON.stringify(commandRecords.at(-1)) === JSON.stringify({action: 'model-check', input: {version: 1, workload: 'chat'}}), 'the run names the workload');
             await waitFor(() => ownsFocus(ui, named(ui, 'Cancel check')), 'focus moves to Cancel check');
             await settingsTree(ui, 'settings-model-run-running', 'Cancel check', [button('Cancel check')], ['Run checks', 'Check files again'], ['Running checks']);
             await capture(ui, 'settings-model-run-running');
@@ -411,22 +391,11 @@ app.connect('activate', () => {
             await capture(ui, 'settings-model-run-canceled');
             run(['xdotool', 'key', 'space']);
             await waitFor(() => statusReply, 'a second run starts');
-            statusReply({...runEntry, status: 'error', notStored: true, reviewPending: false, checks: [runChecks[0], {name: 'upstream-identity', outcome: 'error', reason: 'upstream-unreachable'}, {name: 'chat-template', outcome: 'not_run'}, runChecks[3]]});
-            const failure = 'This run failed. Setup could not reach Hugging Face. The last stored result is kept.';
-            await waitFor(() => mappedLabel(ui, failure) && named(ui, 'Run checks').is_sensitive(), 'the failed run shows its failure');
-            await settingsTree(ui, 'settings-model-run-hub-failed', 'Run checks', [{name: 'Findings detected'}, {name: failure}], ['Scan failed']);
-            await capture(ui, 'settings-model-run-hub-failed');
-            await tabTo(ui, named(ui, 'Review chat template')); run(['xdotool', 'key', 'space']);
-            await waitFor(() => mappedLabel(ui, 'Line 1: "Answer in English."'), 'the review list shows each literal');
-            wrapping(ui, 'Line 4: "You are a helpful assistant."');
-            await settingsTree(ui, 'settings-model-review', 'Review chat template', [button('Approve template'), {name: 'Line 1: "Answer in English."'}], [], ['Template SHA-256']);
-            await capture(ui, 'settings-model-review');
-            await tabTo(ui, named(ui, 'Approve template')); run(['xdotool', 'key', 'space']);
-            await waitFor(() => mappedLabel(ui, 'Template approved for this template SHA-256.'), 'the approval is stored');
-            assert(JSON.stringify(commandRecords.at(-1).input) === JSON.stringify({version: 1, workload: 'chat', chatTemplateSHA256: runReview.chatTemplateSHA256, reviewSHA256: runReview.reviewSHA256}), 'the approval names the SHA-256 values that the operator read');
-            await waitFor(() => ownsFocus(ui, named(ui, 'Scan details')), 'focus moves to Scan details');
-            await settingsTree(ui, 'settings-model-review-approved', 'Scan details', [{name: 'Not scanned'}, {name: 'File checks passed. Behavioral scan not available yet.'}], ['Approve template', 'Review chat template']);
-            await capture(ui, 'settings-model-review-approved');
+            statusReply(runEntry);
+            const finished = 'Checks finished. This result blocks the launch of this workload. The model folder has a code or pickle file.';
+            await waitFor(() => mappedLabel(ui, finished) && named(ui, 'Run checks').is_sensitive(), 'the finished run shows its result');
+            await settingsTree(ui, 'settings-model-run-finished', 'Run checks', [{name: 'Findings detected'}, {name: finished}], ['Scan failed']);
+            await capture(ui, 'settings-model-run-finished');
             await closeAndVerify(ui, 'model-run');
 
             ui = await open('blocked');
