@@ -684,6 +684,10 @@ Lost response means uncertain outcome: fetch fresh status before deciding. SIGKI
 | User selection | Immediate. Active workload is a no-op. Menus use configured labels |
 | GPU in use | A refused start shows the target, then each process with name, PID, user and GPU memory, and **Retry**. A failed check shows its failure, never a free GPU |
 | Close it | Only for a `closable` process. Confirms, then requests SIGTERM and shows the check again |
+| Auto-idle after inactivity | One global [idle policy](#operator-settings), not a setting per workload. Off by default. Switching it on sets 60 minutes |
+| Idle timeout | Shows only with the policy on. Offers 15, 30, 60, 120 or 240 minutes. No free-text entry |
+| Idle policy reads | Opening the menu or **Refresh** reads status, then `get-settings`. A write sends fresh `expected` and `settingsRevision` |
+| Idle policy errors | A refused write shows its error. The next status reads the settings again, then you can retry. An operator without settings disables the control |
 | Details | Owner, requested and active workloads, phase, health, admission, freshness |
 | Pending, stale, error or recovery | Disable mutations. No extension recovery control |
 | Calls | One outstanding. Status backs off 5–60 seconds, never overlaps mutation |
@@ -699,6 +703,7 @@ Run `npm test --prefix clients/gnome` for contract, model and mock lifecycle tes
 - Keyboard and visual access to the toggle, menu and Details.
 - Cancel and confirm both ownership dialogs.
 - Third-workload selection, active no-op and repeated pending clicks.
+- Auto-idle on, a different timeout and off. Check each policy with `gpu-mode show-settings`.
 - A start refused by another program on the GPU: **Close it** for a process of the desktop account, no Close for other accounts, and **Retry**.
 - Stale and faulted observations.
 - Disable/re-enable and Shell restart during admitted work.
@@ -817,7 +822,7 @@ Activity: admissions and verified terminal completion. Exclude UI and health pol
 
 ### Settings
 
-The [settings protocol](#operator-settings) persists timeout minutes or Off with revision checks. The proposed 60-minute enabled default needs host measurement first. Restart derives deadlines from durable last activity, never process-local timers.
+The [settings protocol](#operator-settings) persists timeout minutes or Off with revision checks. The stored default is Off. The desktop switch selects 60 minutes when you turn the policy on. Restart derives deadlines from durable last activity, never process-local timers.
 
 <a id="status-surface-work-item"></a>
 
