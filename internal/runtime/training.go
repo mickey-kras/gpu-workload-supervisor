@@ -26,6 +26,32 @@ func TrainerUnit(t control.TrainerBinding) string {
 	return fmt.Sprintf("[Unit]\nDescription=Supervised finite training\n[Service]\nType=exec\nRestart=no\nKillMode=control-group\nRemainAfterExit=yes\nEnvironment=CUDA_VISIBLE_DEVICES=%s\nExecStart=%s --job-file %s\n", t.GPUUUID, t.Executable, t.JobFile)
 }
 
+// trainerDirectives are the unit directives a trainer unit may use. Others,
+// such as EnvironmentFile, ExecCondition or RootDirectory, could change the
+// command, its environment or its GPU, so they are refused.
+var trainerDirectives = map[string]bool{
+	"Description": true, "Documentation": true, "Type": true, "Restart": true, "KillMode": true,
+	"RemainAfterExit": true, "Environment": true, "ExecStart": true, "TimeoutStartSec": true,
+	"TimeoutStopSec": true, "Nice": true,
+}
+
+func trainerDirectivesAllowed(raw []byte) bool {
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "" || line[0] == '#' || line[0] == ';' || line == "[Unit]" || line == "[Service]":
+			continue
+		case strings.HasSuffix(line, "\\"):
+			return false
+		}
+		key, _, ok := strings.Cut(line, "=")
+		if !ok || !trainerDirectives[strings.TrimSpace(key)] {
+			return false
+		}
+	}
+	return true
+}
+
 // InspectTrainer verifies a configured launch without reading lifecycle
 // credentials, starting a process or establishing runtime/GPU qualification.
 func (m *SystemdManager) InspectTrainer(ctx context.Context, id control.Workload) error {
@@ -94,10 +120,9 @@ func (m *SystemdManager) verifyTrainerBinding(ctx context.Context, p control.Wor
 	if err != nil {
 		return err
 	}
-	// The digest pins the reviewed unit file. The loaded properties below,
-	// not the exact text, decide which units are allowed, so harmless
-	// directives such as TimeoutStopSec or Nice may be added.
-	if fmt.Sprintf("%x", sha256.Sum256(raw)) != t.LaunchSHA256 {
+	// The digest pins the reviewed unit file. The directive allowlist and
+	// the loaded properties below decide which units are allowed.
+	if fmt.Sprintf("%x", sha256.Sum256(raw)) != t.LaunchSHA256 || !trainerDirectivesAllowed(raw) {
 		return ErrLaunchChanged
 	}
 	v, err := m.trainerProperties(ctx, p)

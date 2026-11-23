@@ -33,7 +33,7 @@ Use `adapter: "systemd"`, `bootPolicy: "stop-to-idle"` and measured nonzero `req
 
 Use distinct absolute literal paths without shell expansion. The validator resolves symlinks and checks ownership of the adapter and ancestors (root or user). It rejects world write and permits group write only for your groups. Lifecycle outputs cannot overlap trainer bindings. Create the trusted job directory first. Pause external service management while the supervisor job remains unfinished.
 
-Start from this unit source and substitute the bound values. You can add other directives, such as `TimeoutStopSec`. The validator checks the loaded type, restart, kill mode, `RemainAfterExit`, command and environment, and rejects drop-ins and start or stop hooks. Record the SHA-256 of the final file:
+Start from this unit source and substitute the bound values. You can also add `Documentation`, `TimeoutStartSec`, `TimeoutStopSec` and `Nice`. The validator refuses other directives. It checks the loaded type, restart, kill mode, `RemainAfterExit`, command and environment, and rejects drop-ins and start or stop hooks. Record the SHA-256 of the final file:
 
 ```ini
 [Unit]

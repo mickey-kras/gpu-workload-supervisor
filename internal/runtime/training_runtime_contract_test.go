@@ -100,6 +100,19 @@ func TestTrainerContractLoadedBinding(t *testing.T) {
 	if err := m.verifyTrainerBinding(context.Background(), extendedProfile); err != nil {
 		t.Fatalf("reviewed unit with an extra directive = %v", err)
 	}
+	// Directives that can change the command, environment or GPU are refused
+	// even with a matching digest.
+	for _, directive := range []string{"EnvironmentFile=/tmp/gpu.env", "UnsetEnvironment=CUDA_VISIBLE_DEVICES", "PassEnvironment=CUDA_VISIBLE_DEVICES",
+		"ExecCondition=/usr/bin/false", "RootDirectory=/srv/other", "BindPaths=/tmp:/opt", "[Install]", "Nice=5 \\"} {
+		risky := append(append([]byte(nil), original...), directive+"\n"...)
+		if err := os.WriteFile(p.Trainer.LaunchFile, risky, 0600); err != nil {
+			t.Fatal(err)
+		}
+		reviewed.LaunchSHA256 = fmt.Sprintf("%x", sha256.Sum256(risky))
+		if err := m.verifyTrainerBinding(context.Background(), extendedProfile); err == nil {
+			t.Fatalf("unit with %s accepted", directive)
+		}
+	}
 	if err := os.WriteFile(p.Trainer.LaunchFile, original, 0600); err != nil {
 		t.Fatal(err)
 	}
