@@ -960,9 +960,9 @@ removed or linked file changes the identity or the file list. No user
 process can set the change time back. Thus the gate refuses changed files
 without reading them.
 
-Image models (ComfyUI) have no gate yet.
-[#583](https://github.com/mickey-kras/gpu-workload-supervisor/issues/583)
-tracks the file allowlist and file identity gate for them.
+Image models (ComfyUI) have no gate. ComfyUI selects models while it runs,
+and custom nodes run code, so a launch check of its model files gives no
+real protection. To isolate ComfyUI, sandbox its unit.
 
 The gate applies only to new launches. A workload that runs during an
 upgrade keeps running. A recovery that only checks the state starts
