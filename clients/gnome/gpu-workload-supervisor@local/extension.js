@@ -78,9 +78,12 @@ export default class GPUControl extends Extension {
             'Auto-idle after inactivity',
             false,
         );
-        this._idle.connect('toggled', (item, on) =>
-            this.setIdle(on ? IDLE_DEFAULT : 0),
-        );
+        this._idle.connect('toggled', (item, on) => {
+            // Shell 50 also emits toggled when _renderIdle sets the saved
+            // state. Only a change from the saved policy is a user request.
+            const saved = (this._model.settings?.policy.timeoutMinutes ?? 0) !== 0;
+            if (on !== saved) this.setIdle(on ? IDLE_DEFAULT : 0);
+        });
         this._toggle.menu.addMenuItem(this._idle);
         this._idleTimeout = new PopupMenu.PopupSubMenuMenuItem('Idle timeout');
         this._idleItems = IDLE_TIMEOUTS.map((minutes) => ({

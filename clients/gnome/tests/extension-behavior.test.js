@@ -34,7 +34,12 @@ class SubMenu extends Item {
 }
 class Switch extends Item {
     constructor(text, state) { super(text); this.state = state; }
-    setToggleState(value) { this.state = value; }
+    // Like Shell 50, a state change emits toggled even when code sets it.
+    setToggleState(value) {
+        if (this.state === value) return;
+        this.state = value;
+        this.toggled?.(this, value);
+    }
     connect(signal, callback) { this.toggled = callback; }
     toggle() { this.state = !this.state; this.toggled(this, this.state); }
 }
@@ -454,5 +459,20 @@ test('an operator without the idle policy keeps status and disables the control'
     assert.equal(e._idleTimeout.visible, false);
     e.setIdle(60);
     assert.equal(e._model.pending, null);
+    e.disable();
+});
+
+test('rendering a saved non-default timeout does not overwrite it', async () => {
+    const { extension: e } = await shell();
+    const requests = [];
+    e._transport.call = async request => {
+        requests.push(request);
+        return request.action === 'get-settings' ? settings(240) : { code: 'ok', status: status() };
+    };
+    await e._call('status');
+    assert.equal(e._idle.state, true);
+    assert.equal(e._idleTimeout.label.text, 'Idle timeout: 240 minutes');
+    assert.deepEqual(requests.map(r => r.action), ['status', 'get-settings']);
+    assert.equal(e._model.pending, null, 'rendering sent no set-idle-policy');
     e.disable();
 });
