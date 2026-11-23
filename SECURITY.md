@@ -38,6 +38,12 @@ Processes with that UID can replace state between validation and the SQLite open
 File checks do not isolate mutually untrusted processes that share a UID.
 Use separate service identities.
 
+CI uses pinned GitHub Actions, Go vulnerability analysis, dependency review,
+Gitleaks, Semgrep, Trivy, CodeQL, Aislop, and main-only SonarQube. Dependabot
+ecosystems and update rules are in [dependabot.yml](.github/dependabot.yml).
+Auto-merge requirements are in the [workflow](.github/workflows/dependabot-auto-merge.yml)
+and its [eligibility checks](.github/scripts/dependabot-auto-merge.cjs).
+
 ## Agents and tool executors
 
 Do not trust an agent, its tools or the documents that it reads. The supervisor alone controls workload lifecycle, configuration and model files. Text from a model, a tool or a document cannot start, stop or change a workload.
@@ -57,12 +63,6 @@ The boundary uses Unix identities, not a network sandbox:
 - Supervisor-managed vLLM units mount the model files read-only.
 
 Run each agent and tool executor as a different UID. Do not add that UID to the service UID group. Do not mount the state directory, the key files, the user systemd directory or the model directory into its container. Do not run tools as the service UID: file checks do not isolate processes that share a UID.
-
-CI uses pinned GitHub Actions, Go vulnerability analysis, dependency review,
-Gitleaks, Semgrep, Trivy, CodeQL, Aislop, and main-only SonarQube. Dependabot
-ecosystems and update rules are in [dependabot.yml](.github/dependabot.yml).
-Auto-merge requirements are in the [workflow](.github/workflows/dependabot-auto-merge.yml)
-and its [eligibility checks](.github/scripts/dependabot-auto-merge.cjs).
 
 ## Dependency licenses
 
