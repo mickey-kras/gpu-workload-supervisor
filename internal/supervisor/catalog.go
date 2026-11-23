@@ -50,7 +50,7 @@ func (c *Controller) unloadCatalog(ctx context.Context, id string, phase control
 		if p.ID == target {
 			continue
 		}
-		if err = c.effectWithOutcome(ctx, id, phase, "stop "+string(p.ID), func(ctx context.Context) (string, error) { return c.stopOrSleep(ctx, p.ID) }); err != nil {
+		if err = c.effectWithOutcome(ctx, id, phase, "stop "+string(p.ID), func(ctx context.Context) (string, error) { return "ok", c.runtime.Stop(ctx, p.ID) }); err != nil {
 			return active, err
 		}
 	}
@@ -84,27 +84,13 @@ func (c *Controller) waitColdReleasedFor(ctx context.Context, target control.Wor
 	})
 }
 
-func (c *Controller) stopOrSleep(ctx context.Context, id control.Workload) (string, error) {
-	if h, ok := c.runtime.(HibernatableRuntime); ok {
-		return h.Sleep(ctx, id)
-	}
-	return "ok", c.runtime.Stop(ctx, id)
-}
-
-func (c *Controller) wakeOrStart(ctx context.Context, id control.Workload) error {
-	if h, ok := c.runtime.(HibernatableRuntime); ok {
-		return h.Wake(ctx, id)
-	}
-	return c.runtime.Start(ctx, id)
-}
-
 func (c *Controller) rollbackCatalog(ctx context.Context, id string, previous control.State) error {
 	_, err := c.unloadCatalog(ctx, id, control.PhaseReconciling, previous, control.WorkloadIdle)
 	if err != nil {
 		return err
 	}
 	if previous.ActiveWorkload != control.WorkloadIdle && previous.ActiveWorkload != control.WorkloadUnknown {
-		if err = c.effect(ctx, id, control.PhaseReconciling, "rollback start "+string(previous.ActiveWorkload), func(ctx context.Context) error { return c.wakeOrStart(ctx, previous.ActiveWorkload) }); err != nil {
+		if err = c.effect(ctx, id, control.PhaseReconciling, "rollback start "+string(previous.ActiveWorkload), func(ctx context.Context) error { return c.runtime.Start(ctx, previous.ActiveWorkload) }); err != nil {
 			return err
 		}
 	}

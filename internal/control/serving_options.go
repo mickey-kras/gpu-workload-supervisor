@@ -32,7 +32,6 @@ const (
 	FlagEnableChunkedPrefill = "--enable-chunked-prefill"
 	FlagMaxNumSeqs           = "--max-num-seqs"
 	FlagMaxNumBatchedTokens  = "--max-num-batched-tokens"
-	FlagEnableSleepMode      = "--enable-sleep-mode"
 )
 
 // Bounds and defaults of the serving options. GPU memory utilization is a
@@ -74,9 +73,6 @@ type ServingOptions struct {
 	// DisablePrefixCaching renders --no-enable-prefix-caching. It is for
 	// diagnosis only.
 	DisablePrefixCaching bool `json:"disablePrefixCaching,omitempty"`
-	// SleepMode renders --enable-sleep-mode so the supervisor can hibernate
-	// vLLM weights to host RAM and discard KV cache instead of stopping the unit.
-	SleepMode bool `json:"sleepMode,omitempty"`
 }
 
 // UnmarshalJSON decodes the serving options strictly in every decoder and
@@ -175,9 +171,6 @@ func (s ServingOptions) Args() []string {
 	}
 	if s.MaxNumBatchedTokens != 0 {
 		args = append(args, FlagMaxNumBatchedTokens, strconv.FormatUint(uint64(s.MaxNumBatchedTokens), 10))
-	}
-	if s.SleepMode {
-		args = append(args, FlagEnableSleepMode)
 	}
 	return args
 }

@@ -2,10 +2,18 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
@@ -28,7 +36,7 @@ func (r *sandboxDriftRunner) Run(ctx context.Context, name string, args ...strin
 
 func TestOwnedSandboxReadback(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "/run/user/1000")
-	m, r := newSleepTestManager(t, "http://127.0.0.1:9111")
+	m, r := newOwnedFixture(t, "http://127.0.0.1:9111", true)
 	p := m.config.Catalog.Profiles[0]
 	ctx := context.Background()
 	if err := m.verifyNativeBinding(ctx, p); err != nil {
@@ -84,7 +92,7 @@ func TestOwnedSandboxReadback(t *testing.T) {
 }
 
 func TestOwnedSandboxLegacyBindingCanStop(t *testing.T) {
-	m, r := newOwnedSleepFixture(t, "http://127.0.0.1:9111", false)
+	m, r := newOwnedFixture(t, "http://127.0.0.1:9111", false)
 	p := m.config.Catalog.Profiles[0]
 	ctx := context.Background()
 	if err := m.Preflight(ctx); !errors.Is(err, ErrLaunchUnsupported) {
@@ -103,21 +111,104 @@ func TestOwnedSandboxLegacyBindingCanStop(t *testing.T) {
 		t.Fatal("legacy unit started")
 	}
 	writeEvents(t, m.cgroups.root, strings.TrimPrefix(p.Cgroup, "/"), "populated 0\n")
-	if _, err := m.Sleep(ctx, p.ID); err != nil {
+	if err := m.Stop(ctx, p.ID); err != nil {
 		t.Fatalf("legacy binding stop = %v", err)
 	}
 	if err := m.Healthy(ctx, control.WorkloadIdle); err != nil {
 		t.Fatalf("release after verified cold stop = %v", err)
 	}
 	// Recovery that retains another workload proves this stopped profile released.
-	if err := m.checkReleasedProfile(ctx, p, control.Workload("other"), nil, false); err != nil {
+	if err := m.checkReleasedProfile(ctx, p, control.Workload("other"), nil); err != nil {
 		t.Fatalf("release for another target after verified cold stop = %v", err)
 	}
-	if err := m.checkReleasedProfile(ctx, p, p.ID, nil, false); !errors.Is(err, ErrLaunchUnsupported) {
+	if err := m.checkReleasedProfile(ctx, p, p.ID, nil); !errors.Is(err, ErrLaunchUnsupported) {
 		t.Fatalf("legacy binding passed as release target: %v", err)
 	}
 	p.NativeModel.LaunchSHA256 = strings.Repeat("f", 64)
 	if err := m.PreflightForStop(ctx); !errors.Is(err, ErrOwnedRender) {
 		t.Fatalf("shutdown preflight accepted changed fingerprint: %v", err)
 	}
+}
+
+const ownedGPU = "GPU-11111111-2222-3333-4444-555555555555"
+
+// A stop updates the independent systemd observation.
+type stoppingRunner struct {
+	*fakeRunner
+	unitShow string
+}
+
+func (r *stoppingRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if slices.Contains(args, "stop") {
+		r.mu.Lock()
+		r.outputs[r.unitShow] = []byte("LoadState=loaded\nActiveState=inactive\nSubState=dead\nControlGroup=\n")
+		r.mu.Unlock()
+	}
+	return r.fakeRunner.Run(ctx, name, args...)
+}
+
+func newOwnedFixture(t *testing.T, endpoint string, sandbox bool) (*SystemdManager, *fakeRunner) {
+	t.Helper()
+	dir := t.TempDir()
+	key := filepath.Join(dir, "vllm.env")
+	tpl := filepath.Join(dir, "chat_template.jinja")
+	executable := filepath.Join(dir, "vllm")
+	for path, content := range map[string]string{key: "VLLM_API_KEY=secret-test-token-12345678901234567890\n", tpl: "{{ messages }}", executable: "#!/bin/false\n"} {
+		if err := os.WriteFile(path, []byte(content), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(key, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.ParseUint(u.Port(), 10, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := control.WorkloadProfile{ID: "text", Label: "Text", Adapter: "systemd", Unit: "gws-owned-text.service", Cgroup: "/user.test/app.slice/gws-owned-text.service", HealthURL: endpoint + "/health",
+		NativeModel: &control.NativeModel{Runtime: "vllm", Instance: "local", Endpoint: endpoint, Model: dir, GPUUUID: ownedGPU, LaunchFile: filepath.Join(dir, "gws-owned-text.service"), ChatTemplate: tpl, ChatTemplateSHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("{{ messages }}"))), EnvironmentFile: key,
+			Owned: &control.OwnedLaunch{ArtifactSandbox: sandbox, Executable: executable, ModelPath: dir, Port: uint16(port), Serving: control.ServingOptions{Version: 1}}}}
+	raw, err := RenderOwnedUnit(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.NativeModel.LaunchSHA256 = fmt.Sprintf("%x", sha256.Sum256(raw))
+	if err := os.WriteFile(p.NativeModel.LaunchFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{outputs: map[string][]byte{}, errs: map[string]error{}}
+	show := "/usr/bin/true --user show --property=LoadState --property=ActiveState --property=SubState --property=ControlGroup -- " + p.Unit
+	runner.outputs[show] = []byte("LoadState=loaded\nActiveState=active\nSubState=running\nControlGroup=" + p.Cgroup + "\n")
+	runner.outputs[rootShowCommand] = []byte("LoadState=loaded\nActiveState=active\nSubState=active\nControlGroup=/user.test\n")
+	runner.outputs["/usr/bin/true --query-gpu=uuid --format=csv,noheader -i "+ownedGPU] = []byte(ownedGPU + "\n")
+	runner.outputs["/usr/bin/true --query-gpu=memory.free,memory.total --format=csv,noheader,nounits -i "+ownedGPU] = []byte("32768, 32768\n")
+	catalog := control.Catalog{Profiles: []control.WorkloadProfile{p}}
+	catalog.Version = control.LowestCatalogVersion(catalog)
+	m := &SystemdManager{config: SystemdConfig{OwnedUnitDir: dir, Catalog: &catalog, GPUUUID: ownedGPU, SystemctlPath: "/usr/bin/true", NvidiaSMIPath: "/usr/bin/true", HealthTimeout: time.Second},
+		runner: &stoppingRunner{fakeRunner: runner, unitShow: show}, client: &http.Client{Timeout: time.Second}, cgroups: cgroupFS{root: t.TempDir(), verify: func(int) error { return nil }}, gpuHost: defaultGPUProcessHost(), nativeExecutableValidator: func(string) error { return nil }}
+	launch, err := readVerifiedNativeLaunch(*p.NativeModel, m.nativeExecutableValidator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	props := "FragmentPath=" + p.NativeModel.LaunchFile + "\nDropInPaths=\nNeedDaemonReload=no\nExecStartPre=\nExecStart={ path=" + executable + " ; argv[]=" + launch.execStart + " ; ignore_errors=no ; }\nEnvironmentFiles=" + key + " (ignore_errors=no)\n"
+	var environment []string
+	for k, v := range launch.environmentValues {
+		environment = append(environment, k+"="+v)
+	}
+	props += "Environment=" + strings.Join(environment, " ") + "\n"
+	for k, v := range launch.loadedProperties {
+		props += k + "=" + v + "\n"
+	}
+	bindingCall := strings.Join(append([]string{"/usr/bin/true"}, nativeBindingShowArguments(p.Unit, launch)...), " ")
+	runner.outputs[bindingCall] = []byte(props)
+	writeEvents(t, m.cgroups.root, "user.test", "populated 1\n")
+	writeEvents(t, m.cgroups.root, strings.TrimPrefix(p.Cgroup, "/"), "populated 1\n")
+	old := checkKeyListener
+	checkKeyListener = func(string) error { return nil }
+	t.Cleanup(func() { checkKeyListener = old })
+	return m, runner
 }
