@@ -462,8 +462,8 @@ func (b Backend) Reconcile(ctx context.Context, home string) error {
 	return errors.Join(reconcileErr, pruneErr)
 }
 
-// PolicyTick runs the limit stop once against the persisted operator
-// profile. It is the profile-aware oneshot behind the idle user timer: an
+// PolicyTick runs the limit stop and the inactivity policy once against the
+// persisted operator profile. It is the profile-aware oneshot behind the idle user timer: an
 // unreadable operator.json fails loudly rather than silently falling back to
 // default paths.
 func PolicyTick(ctx context.Context, home string) error {
@@ -476,8 +476,9 @@ func (b Backend) PolicyTick(ctx context.Context, home string) error {
 		return err
 	}
 	defer cleanup()
-	// The limit stop can stop a unit whose limits fail.
-	return controller.LimitTick(ctx, os.Stderr)
+	// The limit stop can stop a unit whose limits fail. The inactivity
+	// policy can cold-stop an inactive workload to Idle.
+	return controller.TickWithLimits(ctx, os.Stderr)
 }
 
 // activatedController loads the persisted operator.json profile, validates

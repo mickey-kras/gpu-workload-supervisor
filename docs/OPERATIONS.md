@@ -610,7 +610,7 @@ Read the service journal for the cause and the limit outcome. Run `resolve-work`
 
 `set-idle-policy` combines fresh status's complete `expected` with settings revision from fresh **get-settings**, never status. Its writer transaction revalidates both revisions plus incarnation, version and owner, rotates settings revision and clears armed deadlines. It never interrupts unstable state or transitions. Success returns only updated settings.
 
-No inactivity evaluator ships, so enablement returns `unavailable`. Stale settings → `stale_state`, running transition → `busy`, invalid timeout → `invalid_request`. Both actions use status lifetimes. Older peers' strict `invalid_request` means idle policy unavailable.
+Enablement commits like Off, and the [policy tick](#inactivity-policy-tick) applies it. Stale settings → `stale_state`, running transition → `busy`, invalid timeout → `invalid_request`. Both actions use status lifetimes. Older peers' strict `invalid_request` means idle policy unavailable. Older peers also return `unavailable` for enablement.
 
 ### Demand activation
 
@@ -645,13 +645,13 @@ Active work waits with orchestration through busy or deferred responses. Orchest
 
 Every 60 seconds, user `gpu-workload-supervisor-idle.timer` runs oneshot `gpu-setup idle-policy-tick` through `gpu-workload-supervisor-idle.service`. The service requires `ConditionPathExists=%h/.config/gpu-workload-supervisor/operator.json`. Guided setup enables timer and reconciliation links. Remove-integration removes both.
 
-The tick reads the persisted profile's runtime and state path and committed settings and state. Unreadable profiles fail without fallback paths. Then the tick runs the [limit stop](RESOURCE-LIMITS.md#limit-stop).
+The tick reads the persisted profile's runtime and state path and committed settings and state. Unreadable profiles fail without fallback paths. Then the tick runs the [limit stop](RESOURCE-LIMITS.md#limit-stop) and the [idle transition](#idle-transition).
 
-`gpu-mode -state <path> idle-policy-tick` runs the same tick, the limit stop included. On a latched state, it can stop a unit. Give it the `-nvidia-smi` and `-systemctl` paths of the profile.
+`gpu-mode -state <path> idle-policy-tick` runs the same tick, the limit stop and the idle transition included. On a latched state, it can stop a unit. Give it the `-nvidia-smi` and `-systemctl` paths of the profile.
 
 Also give it the `-gpu-index` and `-capacity-headroom-mib` values of the profile. The release check reads them. To match `gpu-setup`, give it `-drain-timeout 2m -verify-timeout 1m -action-timeout 1m -cleanup-timeout 1m`. Without `-nvidia-smi`, the release check after a stop always fails.
 
-The tick has no inactivity evaluator. It never drains a workload to Idle and never arms a deadline. The timer and the command keep their names, so installed units keep working after an upgrade.
+A limit stop error ends the tick before the idle transition. An idle transition that does not apply ends the tick with exit 0. The tick keeps no state of its own and never arms a deadline.
 
 ### Lifetimes and limits
 
@@ -757,21 +757,21 @@ Completed-work retention also removes old canceled or terminal demand. Maximum q
 
 ### Durable evidence
 
-SQLite transactions cover queue, reservation and registration. Admission consumes claims atomically with native or ComfyUI registration. Queued or reserved demand invalidates idle deadlines and participates in atomic idle checks. Admitted work needs trusted terminal evidence or verified recovery. Native streaming and ComfyUI reconciliation contracts remain.
+SQLite transactions cover queue, reservation and registration. Admission consumes claims atomically with native or ComfyUI registration. Queued or reserved demand blocks the idle transition in the same transaction. Admitted work needs trusted terminal evidence or verified recovery. Native streaming and ComfyUI reconciliation contracts remain.
 
-Evidence excludes external bypass jobs. No inactivity evaluator ships: enablement remains unavailable. Qualify runtime isolation plus terminal and model lifecycle separately. Fixtures cannot prove this.
+The idle check sees only work that the supervisor admits. A job that bypasses the proxy is not activity, and the idle transition can stop its workload.
 
 ## Demand activation and inactivity idle plan
 
-[#144](https://github.com/mickey-kras/gpu-workload-supervisor/issues/144) implements durable policy and settings, demand activation and a 60-second timer. Policy defaults Off. No inactivity evaluator ships: enablement returns `unavailable`. Keep Off for initial desktop deployment.
+[#144](https://github.com/mickey-kras/gpu-workload-supervisor/issues/144) implements durable policy and settings, demand activation, a 60-second timer and the idle transition. Policy defaults Off.
 
 ### Placement
 
 One backend loop beside the transition controller uses durable evidence and existing typed operations. The loop never runs in clients or GNOME Shell. It adds no lifecycle engine, authority or runtime-specific logic. Disabling the UI or locking the session does not affect behavior.
 
-### Required before enablement
+### Before enablement
 
-Build an inactivity evaluator in the policy tick. Qualify an orchestration evidence source, queued, reserved, running and unresolved evidence, runtime-bypass prevention and native terminal and model lifecycle on the deployment host. Contracts are not adapters. Fixture coverage does not qualify the host. Production isolation for requester ingress remains unqualified. Integrate desktop settings and deadlines only with backend capability and fresh evidence.
+Send all GPU work through the supervisor proxy, because the idle check cannot see other work. Production isolation for requester ingress remains unqualified.
 
 <a id="activation-ingress"></a>
 
@@ -781,19 +781,26 @@ Use [typed activation](#demand-activation) for preconditions, readiness checks, 
 
 ### Idle transition
 
-No idle transition ships. A future evaluator in the [policy tick](#inactivity-policy-tick) must make a fenced inactivity decision. It must abort on intervening admission.
+With the policy on, the [policy tick](#inactivity-policy-tick) stops the active workload to Idle after the timeout. The deadline is the last activity plus the timeout. The stop is a cold stop: it stops each unit and checks the release of the GPU. The journal names the transition `inactivity-policy`.
 
-### Evidence input contract
+The tick acts only on a healthy, stable, supervisor-owned workload with open admission. It never stops a trainer. One writer transaction checks these conditions again and starts the stop. In that transaction, these conditions also stop the transition:
 
-Use only orchestration attestation: job-identity sets for queued, reserved, running and unresolved work. Unresolved maps to `PendingWork` retaining completion authority. Use `ResolveUnfinishedWork` only for verified operator recovery, never policy cleanup.
+- A running transition.
+- Admitted work that did not finish.
+- Queued or reserved demand.
+- A deadline that did not elapse.
 
-Read fresh evidence at each evaluation. A fence must validate the evidence generation and exclude queue and reservation changes through the transaction. Old, unreachable, uncertain, partial or missing evidence forbids Idle. Timer source: `packaging/gpu-workload-supervisor-idle.timer`.
+When an admission or demand commits first, the tick cancels the stop and exits 0. A request after the start meets closed admission. Activation starts the workload again.
+
+### Idle inputs
+
+The idle transition reads only the durable state database. Unresolved admissions count as open work and block Idle. Use `ResolveUnfinishedWork` only for verified operator recovery, never policy cleanup. Timer source: `packaging/gpu-workload-supervisor-idle.timer`.
 
 <a id="ownership-transfer-while-pending-idle-is-armed"></a>
 
 ### Ownership transfer with an armed idle deadline
 
-Take-control and return-control cancel and disarm deadlines. Recompute only from fresh post-transfer activity. User ownership exits policy. Never idle User work.
+User ownership exits policy, and the tick never idles User work. A return to the supervisor commits a non-idle workload, which records activity. The deadline starts again from that commit.
 
 ### Activity definition
 
@@ -807,7 +814,7 @@ The [settings protocol](#operator-settings) persists timeout minutes or Off with
 
 ### Status interface
 
-`control.State` holds policy and deadline read fields. `get-settings` returns committed settings, ordinary `status` does not. Desktop presentation remains follow-up. Show only backend-verified pending deadlines. No savings estimate or live countdown. Any countdown only renders that deadline locally.
+`control.State` holds policy and deadline read fields. The tick never arms the deadline field, so it stays empty. `get-settings` returns committed settings, ordinary `status` does not. Desktop presentation remains follow-up. No savings estimate or live countdown.
 
 ### Boundaries
 
@@ -817,6 +824,6 @@ Never reclaim User ownership or automatically recover latches. Latches block pol
 
 Test exact-timeout requests, cold and busy activation, mixed workloads, streaming and async completion, and long jobs.
 
-Also test disconnects, ambiguous completion, adapter outages, stale attestations, pending-deadline restarts, armed ownership transfers, rejected requests and latches.
+Also test disconnects, ambiguous completion, adapter outages, restarts past the deadline, ownership transfers, rejected requests and latches.
 
 Record the host loaded-unused and idle power and activation latency privately before savings claims or enabled defaults.

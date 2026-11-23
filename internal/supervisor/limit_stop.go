@@ -49,6 +49,17 @@ type limitStopRuntime interface {
 	LimitStopReleased(context.Context, control.Workload) error
 }
 
+// TickWithLimits is the policy tick of gpu-mode and of gpu-setup. It runs
+// the limit stop and then the inactivity policy. A limit stop error skips
+// the inactivity policy and is the result. An inactivity policy that does
+// not apply never fails the tick.
+func (c *Controller) TickWithLimits(ctx context.Context, log io.Writer) error {
+	if err := c.LimitTick(ctx, log); err != nil {
+		return err
+	}
+	return c.IdleTick(ctx)
+}
+
 // LimitTick runs EnforceLimits for the policy tick of gpu-mode and of
 // gpu-setup. A deferred stop goes to log and is not an error, so the tick exits zero and retries. An overdue
 // deferral, a stop or a failed stop returns its cause: the tick exits
