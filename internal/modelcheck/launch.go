@@ -19,11 +19,9 @@ var launchChecks = checkOrder[:len(checkOrder)-1]
 // launch does not state it. templateSHA256 is the SHA-256 of the
 // --chat-template file that the launch binding pins.
 //
-// The file allowlist, the upstream identity and the chat template check
-// must pass, with an operator approval where the template asks for one.
-// The pinned template must be the template that the check passed, so a
-// template that changed after the check or its approval refuses the
-// launch. AllowLaunch does not hash the model files again. It compares the
+// The file allowlist and the chat template check must pass. The pinned
+// template must be the template that the check passed, so a template that
+// changed after the check refuses the launch. AllowLaunch does not hash the model files again. It compares the
 // file identity of each checked file and refuses a missing, extra, written
 // or replaced file.
 func (r Record) AllowLaunch(root, templateSHA256 string) error {

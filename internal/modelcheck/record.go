@@ -9,17 +9,17 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"strings"
+	"slices"
 	"time"
 	"unicode/utf8"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
 )
 
-// RecordVersion is the only result format. Version 2 adds the chat template
-// pin, the template review list, its approval and the template limits. A
-// result of another version reads as stale.
-const RecordVersion = 2
+// RecordVersion is the only result format. Version 3 drops the upstream
+// identity check, the source and the template review. A result of another
+// version reads as stale.
+const RecordVersion = 3
 
 // MaxRecordBytes bounds one stored result. maxRecordFiles bounds its file
 // entries; it is above MaxModelFiles, so a later limit change stays readable.
@@ -64,46 +64,35 @@ const (
 
 // Configuration is the effective configuration of the checks.
 type Configuration struct {
-	Hub              string         `json:"hub"`
 	MaxJSONFileBytes int64          `json:"maxJSONFileBytes"`
-	MaxGitBlobBytes  int64          `json:"maxGitBlobBytes"`
 	MaxModelFiles    int            `json:"maxModelFiles"`
 	Template         TemplateLimits `json:"template"`
 }
 
 // TemplateLimits are the limits of the chat template check.
 type TemplateLimits struct {
-	MaxBytes     int `json:"maxBytes"`
-	MaxDepth     int `json:"maxDepth"`
-	MaxTagTokens int `json:"maxTagTokens"`
-	// MaxReviewItems bounds the items of the review list, the literals
-	// that need review. MaxReviewBytes bounds the review list as JSON.
-	MaxReviewItems int `json:"maxReviewItems"`
-	MaxReviewBytes int `json:"maxReviewBytes"`
+	MaxBytes int `json:"maxBytes"`
 }
 
-// currentConfiguration is the configuration that this checker applies.
-func currentConfiguration(hub string) Configuration {
-	return Configuration{Hub: hub, MaxJSONFileBytes: MaxJSONFileBytes, MaxGitBlobBytes: MaxGitBlobBytes, MaxModelFiles: MaxModelFiles,
-		Template: TemplateLimits{MaxBytes: MaxTemplateBytes, MaxDepth: maxTemplateDepth, MaxTagTokens: maxTagTokens, MaxReviewItems: maxReviewItems, MaxReviewBytes: maxReviewBytes}}
+// CurrentConfiguration is the configuration that this checker applies.
+func CurrentConfiguration() Configuration {
+	return Configuration{MaxJSONFileBytes: MaxJSONFileBytes, MaxModelFiles: MaxModelFiles, Template: TemplateLimits{MaxBytes: MaxTemplateBytes}}
 }
 
 // valid checks the structure only. Current compares the values, so a
 // result from another configuration reads as not scanned, not as invalid.
 func (c Configuration) valid() bool {
-	return strings.HasPrefix(c.Hub, "https://") && len(c.Hub) <= 256 && c.MaxJSONFileBytes > 0 && c.MaxGitBlobBytes > 0 && c.MaxModelFiles > 0 &&
-		c.Template.MaxBytes > 0 && c.Template.MaxDepth > 0 && c.Template.MaxTagTokens > 0 && c.Template.MaxReviewItems > 0 && c.Template.MaxReviewBytes > 0
+	return c.MaxJSONFileBytes > 0 && c.MaxModelFiles > 0 && c.Template.MaxBytes > 0
 }
 
 // Check names, in the order that they run. Each must pass.
 const (
 	CheckAllowlist = "file-allowlist"
-	CheckIdentity  = "upstream-identity"
 	CheckTemplate  = "chat-template"
 	CheckBehavior  = "behavioral-scan"
 )
 
-var checkOrder = []string{CheckAllowlist, CheckIdentity, CheckTemplate, CheckBehavior}
+var checkOrder = []string{CheckAllowlist, CheckTemplate, CheckBehavior}
 
 // Check is one check result. Reason is a fixed code; it never holds a path
 // or file content.
@@ -114,17 +103,15 @@ type Check struct {
 }
 
 // Record is one stored model check result. Files binds the result to the
-// SHA-256 of every model file. A record for other files, another root or
-// another source does not apply. ChatTemplateSHA256 is the SHA-256 of the
-// chat template text, as UTF-8 bytes, that passed the structural template
-// check. It equals the SHA-256 of a --chat-template file with the same
+// SHA-256 of every model file. A record for other files or another root
+// does not apply. ChatTemplateSHA256 is the SHA-256 of the chat template
+// text, as UTF-8 bytes, that passed the template check. It equals the SHA-256 of a --chat-template file with the same
 // text. The vLLM binding records that SHA-256, see
 // runtime.ChatTemplateSHA256.
 type Record struct {
 	Version int               `json:"version"`
 	Model   string            `json:"model"`
 	Root    string            `json:"root"`
-	Source  Source            `json:"source"`
 	Files   map[string]string `json:"files"`
 	// FileStats holds the file identity of each file in Files. The launch
 	// gate compares it instead of hashing the weights again. A record
@@ -136,27 +123,23 @@ type Record struct {
 	ChatTemplateSHA256 string              `json:"chatTemplateSHA256,omitempty"`
 	// TemplateFile names the first file of the model that holds the
 	// template, such as chat_template.jinja, when the record has a pin.
-	TemplateFile string `json:"templateFile,omitempty"`
-	// TemplateReview lists the literals of the template that an operator
-	// must read. It is the only field that holds template text. Keep it
-	// out of logs.
-	TemplateReview   []ReviewItem      `json:"templateReview,omitempty"`
-	TemplateApproval *TemplateApproval `json:"templateApproval,omitempty"`
-	Checker          string            `json:"checker"`
-	Configuration    Configuration     `json:"configuration"`
-	CheckedAt        time.Time         `json:"checkedAt"`
+	TemplateFile  string        `json:"templateFile,omitempty"`
+	Checker       string        `json:"checker"`
+	Configuration Configuration `json:"configuration"`
+	CheckedAt     time.Time     `json:"checkedAt"`
 }
 
 var (
 	modelPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 	checkerPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]{0,127}$`)
 	reasonPattern  = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
+	sha256Pattern  = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	validOutcomes  = map[Outcome]bool{OutcomePassed: true, OutcomeFailed: true, OutcomeError: true, OutcomeUnsupported: true, OutcomeNotRun: true}
 )
 
 // Validate needs a complete record whose status follows from its checks.
 func (r Record) Validate() error {
-	if r.Version != RecordVersion || !modelPattern.MatchString(r.Model) || !cleanAbsolute(r.Root) || !r.Source.Valid() || !checkerPattern.MatchString(r.Checker) {
+	if r.Version != RecordVersion || !modelPattern.MatchString(r.Model) || !cleanAbsolute(r.Root) || !checkerPattern.MatchString(r.Checker) {
 		return errors.New("model check record has an invalid identity")
 	}
 	if r.CheckedAt.IsZero() || r.CheckedAt.Location() != time.UTC {
@@ -210,6 +193,19 @@ func validChecks(checks []Check) bool {
 		}
 	}
 	return true
+}
+
+// templateIndex is the position of the template check in checkOrder.
+var templateIndex = slices.Index(checkOrder, CheckTemplate)
+
+// validTemplate needs a pin and the name of a template file exactly when
+// the template check passed. A passed check has no reason.
+func (r Record) validTemplate() bool {
+	check := r.Checks[templateIndex]
+	if check.Outcome == OutcomePassed {
+		return check.Reason == "" && sha256Pattern.MatchString(r.ChatTemplateSHA256) && slices.Contains(templateFiles, r.TemplateFile)
+	}
+	return r.ChatTemplateSHA256 == "" && r.TemplateFile == ""
 }
 
 // statusOf gives the status of the first check that did not pass. A check
@@ -277,13 +273,12 @@ func ReadRecord(raw []byte) (Record, error) {
 
 // Current gives the status that applies to the model files on disk now. It
 // takes a fresh inventory of root. An inventory error, an inventory problem
-// that the record does not hold, or a record for other digests, another root, another source, another
-// checker version or another configuration, such as another hub, leaves the
-// model not scanned: results never carry over to changed or other models,
-// and a new checker checks again.
-func Current(ctx context.Context, r *Record, model, root string, source Source, checker Checker) Status {
-	if r == nil || r.Model != model || r.Root != root || r.Source != source || r.Checker != checker.Version ||
-		r.Configuration != currentConfiguration(checker.Hub) {
+// that the record does not hold, or a record for other digests, another
+// root, another checker version or another configuration leaves the model
+// not scanned: results never carry over to changed or other models, and a
+// new checker checks again.
+func Current(ctx context.Context, r *Record, model, root string, checker Checker) Status {
+	if r == nil || r.Model != model || r.Root != root || r.Checker != checker.Version || r.Configuration != CurrentConfiguration() {
 		return StatusNotScanned
 	}
 	if match, err := filesMatch(ctx, *r, root); err != nil || !match {

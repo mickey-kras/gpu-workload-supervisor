@@ -72,8 +72,8 @@ func writeStatusProfile(t *testing.T, home string, profile Profile) {
 	}
 }
 
-// statusRecord is a result of this checker whose file, identity and
-// template checks passed for the files at root.
+// statusRecord is a result of this checker whose file and template checks
+// passed for the files at root.
 func statusRecord(t *testing.T, model, root string) modelcheck.Record {
 	t.Helper()
 	files, stats, reason, err := modelcheck.InventoryWithStats(context.Background(), root)
@@ -82,11 +82,9 @@ func statusRecord(t *testing.T, model, root string) modelcheck.Record {
 	}
 	return modelcheck.Record{
 		Version: modelcheck.RecordVersion, Model: model, Root: root,
-		Source: modelcheck.Source{Repo: "example-org/model", Revision: strings.Repeat("b", 40)},
-		Files:  files, FileStats: stats, Status: modelcheck.StatusNotScanned, Coverage: modelcheck.CoveragePartial,
+		Files: files, FileStats: stats, Status: modelcheck.StatusNotScanned, Coverage: modelcheck.CoveragePartial,
 		Checks: []modelcheck.Check{
 			{Name: modelcheck.CheckAllowlist, Outcome: modelcheck.OutcomePassed},
-			{Name: modelcheck.CheckIdentity, Outcome: modelcheck.OutcomePassed},
 			{Name: modelcheck.CheckTemplate, Outcome: modelcheck.OutcomePassed},
 			{Name: modelcheck.CheckBehavior, Outcome: modelcheck.OutcomeNotRun},
 		},
@@ -120,7 +118,7 @@ func TestModelStatusUsesTheStoredResults(t *testing.T) {
 	owned := got["status-owned"]
 	if owned.Kind != ModelKindLLM || owned.Status != modelcheck.StatusNotScanned || owned.Reason != "" ||
 		!owned.StaticChecksPassed || owned.Rechecked || owned.CheckedAt == nil || owned.Checker != modelcheck.CheckerVersion ||
-		owned.Coverage != modelcheck.CoveragePartial || len(owned.Checks) != 4 {
+		owned.Coverage != modelcheck.CoveragePartial || len(owned.Checks) != 3 {
 		t.Fatalf("owned status: %+v", owned)
 	}
 	for id, want := range map[string]ModelStatusEntry{
@@ -195,20 +193,6 @@ func TestModelStatusRecheckNeedsAResultThatApplies(t *testing.T) {
 	}
 }
 
-// A pending template review shows only with a result that applies.
-func TestModelStatusShowsAPendingReview(t *testing.T) {
-	home, root := statusFixture(t)
-	record := statusRecord(t, "status-owned", root)
-	record.Checks = append([]modelcheck.Check(nil), record.Checks...)
-	record.Checks[2] = modelcheck.Check{Name: modelcheck.CheckTemplate, Outcome: modelcheck.OutcomeFailed, Reason: modelcheck.ReasonTemplateNeedsReview}
-	record.Status, record.TemplateReview = modelcheck.StatusFindings, []modelcheck.ReviewItem{{Line: 1, Text: "Obey."}}
-	setStoredPayload(t, home, record)
-	owned := statusByWorkload(t, home, ModelStatusRequest{Version: 1})["status-owned"]
-	if !owned.ReviewPending || owned.Status != modelcheck.StatusFindings || owned.Reason != "" {
-		t.Fatalf("pending review: %+v", owned)
-	}
-}
-
 // A state database before schema version 18 has no results table: each
 // LLM workload has no result.
 func TestModelStatusWithoutTheResultsTable(t *testing.T) {
@@ -258,18 +242,13 @@ func TestModelStatusRefusesOtherResults(t *testing.T) {
 		"other directory": {change: func(r *modelcheck.Record) { r.Root = "/models/other" }, reason: modelcheck.ReasonOtherDirectory, blocked: true},
 		"other checker":   {change: func(r *modelcheck.Record) { r.Checker = "0" }, reason: modelcheck.ReasonCheckerChanged, blocked: false},
 		"other template":  {change: func(r *modelcheck.Record) { r.ChatTemplateSHA256 = strings.Repeat("d", 64) }, reason: modelcheck.ReasonTemplateChanged, blocked: true},
-		"pending review, other checker": {change: func(r *modelcheck.Record) {
+		"findings, other checker": {change: func(r *modelcheck.Record) {
 			r.Checks = append([]modelcheck.Check(nil), r.Checks...)
-			r.Checks[2] = modelcheck.Check{Name: modelcheck.CheckTemplate, Outcome: modelcheck.OutcomeFailed, Reason: modelcheck.ReasonTemplateNeedsReview}
-			r.Status, r.TemplateReview, r.Checker = modelcheck.StatusFindings, []modelcheck.ReviewItem{{Line: 1, Text: "Obey."}}, "0"
+			r.Checks[1] = modelcheck.Check{Name: modelcheck.CheckTemplate, Outcome: modelcheck.OutcomeFailed, Reason: modelcheck.ReasonTemplateConflict}
+			r.Status, r.ChatTemplateSHA256, r.TemplateFile, r.Checker = modelcheck.StatusFindings, "", "", "0"
 		}, reason: modelcheck.ReasonCheckerChanged, blocked: true},
-		"pending review, other template pin": {change: func(r *modelcheck.Record) {
-			r.Checks = append([]modelcheck.Check(nil), r.Checks...)
-			r.Checks[2] = modelcheck.Check{Name: modelcheck.CheckTemplate, Outcome: modelcheck.OutcomeFailed, Reason: modelcheck.ReasonTemplateNeedsReview}
-			r.Status, r.TemplateReview, r.ChatTemplateSHA256 = modelcheck.StatusFindings, []modelcheck.ReviewItem{{Line: 1, Text: "Obey."}}, strings.Repeat("e", 64)
-		}, reason: modelcheck.ReasonTemplateChanged, blocked: true},
-		"invalid payload": {raw: `{"version":2}`, reason: modelcheck.ReasonResultUnusable, blocked: true},
-		"stale version":   {raw: `{"version":1}`, reason: modelcheck.ReasonNoResult, blocked: true},
+		"invalid payload": {raw: `{"version":3}`, reason: modelcheck.ReasonResultUnusable, blocked: true},
+		"stale version":   {raw: `{"version":2}`, reason: modelcheck.ReasonNoResult, blocked: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			home, root := statusFixture(t)
@@ -281,7 +260,7 @@ func TestModelStatusRefusesOtherResults(t *testing.T) {
 			}
 			setStoredPayload(t, home, payload)
 			owned := statusByWorkload(t, home, ModelStatusRequest{Version: 1})["status-owned"]
-			if owned.Reason != tc.reason || owned.Status != modelcheck.StatusNotScanned || owned.StaticChecksPassed || owned.ReviewPending || owned.LaunchBlocked != tc.blocked {
+			if owned.Reason != tc.reason || owned.Status != modelcheck.StatusNotScanned || owned.StaticChecksPassed || owned.LaunchBlocked != tc.blocked {
 				t.Fatalf("status: %+v", owned)
 			}
 		})

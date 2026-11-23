@@ -10,13 +10,13 @@ import (
 )
 
 // statusRecord checks a model on disk and gives its record as this
-// checker version with the default hub would store it.
+// checker version would store it.
 func statusRecord(t *testing.T) (Record, string) {
 	t.Helper()
 	files := modelFiles()
 	root := writeModel(t, files)
-	record := run(t, newHub(t, upstreamOf(files)).checker(), root)
-	record.Checker, record.Configuration = CheckerVersion, currentConfiguration(DefaultHub)
+	record := run(t, testChecker(), root)
+	record.Checker = CheckerVersion
 	return record, root
 }
 
@@ -34,19 +34,16 @@ func TestStoredStatusUsesTheStoredDigests(t *testing.T) {
 		status           Status
 		reason           string
 	}{
-		"same":              {nil, "example", root, pin, StatusNotScanned, ""},
-		"no root":           {nil, "example", "", pin, StatusNotScanned, ""},
-		"other model":       {nil, "other", root, pin, StatusNotScanned, ReasonNoResult},
-		"other root":        {nil, "example", filepath.Join(root, "x"), pin, StatusNotScanned, ReasonOtherDirectory},
-		"other checker":     {func(r *Record) { r.Checker = "0" }, "example", root, pin, StatusNotScanned, ReasonCheckerChanged},
-		"other hub":         {func(r *Record) { r.Configuration = currentConfiguration("https://hub.example") }, "example", root, pin, StatusNotScanned, ReasonCheckerChanged},
-		"other template":    {nil, "example", root, strings.Repeat("d", 64), StatusNotScanned, ReasonTemplateChanged},
-		"no template pin":   {nil, "example", root, "", StatusNotScanned, ReasonTemplateChanged},
-		"stored findings":   {func(r *Record) { r.Status = StatusFindings }, "example", root, pin, StatusFindings, ""},
-		"findings, no pin":  {func(r *Record) { r.Status, r.ChatTemplateSHA256 = StatusFindings, "" }, "example", root, "", StatusFindings, ""},
-		"review, other pin": {func(r *Record) { *r = needsReview(t, *r) }, "example", root, strings.Repeat("d", 64), StatusNotScanned, ReasonTemplateChanged},
-		"review, no pin":    {func(r *Record) { *r = needsReview(t, *r) }, "example", root, "", StatusNotScanned, ReasonTemplateChanged},
-		"review, same pin":  {func(r *Record) { *r = needsReview(t, *r) }, "example", root, pin, StatusFindings, ""},
+		"same":             {nil, "example", root, pin, StatusNotScanned, ""},
+		"no root":          {nil, "example", "", pin, StatusNotScanned, ""},
+		"other model":      {nil, "other", root, pin, StatusNotScanned, ReasonNoResult},
+		"other root":       {nil, "example", filepath.Join(root, "x"), pin, StatusNotScanned, ReasonOtherDirectory},
+		"other checker":    {func(r *Record) { r.Checker = "0" }, "example", root, pin, StatusNotScanned, ReasonCheckerChanged},
+		"other limits":     {func(r *Record) { r.Configuration.Template.MaxBytes = 1 }, "example", root, pin, StatusNotScanned, ReasonCheckerChanged},
+		"other template":   {nil, "example", root, strings.Repeat("d", 64), StatusNotScanned, ReasonTemplateChanged},
+		"no template pin":  {nil, "example", root, "", StatusNotScanned, ReasonTemplateChanged},
+		"stored findings":  {func(r *Record) { r.Status = StatusFindings }, "example", root, pin, StatusFindings, ""},
+		"findings, no pin": {func(r *Record) { r.Status, r.ChatTemplateSHA256 = StatusFindings, "" }, "example", root, "", StatusFindings, ""},
 	} {
 		r := record
 		if tc.edit != nil {
@@ -98,39 +95,5 @@ func TestRecheckStatusFindsChangedFiles(t *testing.T) {
 	}
 	if status, reason, err := RecheckStatus(ctx, record, "example", root, pin); err != nil || status != StatusNotScanned || reason != ReasonFilesUnavailable {
 		t.Fatalf("recheck of a missing directory = %s, %q, %v", status, reason, err)
-	}
-}
-
-// Only an identity check error with an upstream reason is a hub failure.
-// A mismatch is a finding, and an unusable token is not a hub failure.
-func TestHubFailedNeedsAnUpstreamError(t *testing.T) {
-	record := func(outcome Outcome, reason string) Record {
-		return Record{Checks: []Check{
-			{Name: CheckAllowlist, Outcome: OutcomePassed},
-			{Name: CheckIdentity, Outcome: outcome, Reason: reason},
-		}}
-	}
-	for _, reason := range []string{ReasonUpstreamUnreachable, ReasonUpstreamNotFound, ReasonUpstreamDenied, ReasonUpstreamInvalid, ReasonUpstreamMoved, ReasonHistoryTooLong} {
-		if !record(OutcomeError, reason).HubFailed() {
-			t.Errorf("%s is a hub failure", reason)
-		}
-	}
-	for name, r := range map[string]Record{
-		"mismatch":     record(OutcomeFailed, ReasonIdentityMismatch),
-		"not upstream": record(OutcomeFailed, ReasonNotUpstream),
-		"token":        record(OutcomeError, ReasonTokenUnusable),
-		"unreadable":   record(OutcomeError, ReasonUnreadable),
-		"passed":       record(OutcomePassed, ""),
-		"no check":     {Checks: []Check{{Name: CheckAllowlist, Outcome: OutcomeError, Reason: ReasonUpstreamUnreachable}}},
-	} {
-		if r.HubFailed() {
-			t.Errorf("%s is not a hub failure", name)
-		}
-	}
-}
-
-func TestSourceValid(t *testing.T) {
-	if !testSource.Valid() || (Source{Repo: "model", Revision: testSource.Revision}).Valid() || (Source{Repo: testSource.Repo, Revision: "main"}).Valid() {
-		t.Error("source validation")
 	}
 }
