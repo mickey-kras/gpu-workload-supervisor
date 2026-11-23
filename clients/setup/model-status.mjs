@@ -8,7 +8,6 @@ import GLib from 'gi://GLib';
 import Pango from 'gi://Pango';
 import {roundedCard} from './presentation.mjs';
 import {CheckRunner, blockedNote} from './model-check-run.mjs';
-import {TemplateReview} from './model-review.mjs';
 import {blockingReason, failureCause, reasonText} from './model-reasons.mjs';
 import {mergeReport, readReport} from './model-report.mjs';
 
@@ -45,8 +44,8 @@ const notes = {
     'files-changed': 'The model files changed after the last check. The stored result no longer applies.',
     'files-unavailable': 'Setup cannot read the model files. The stored result does not apply.',
 };
-const actionNames = {'model-check': 'check', 'model-approve': 'approval'};
-const checkNames = {'file-allowlist': 'File allowlist', 'upstream-identity': 'Upstream identity', 'chat-template': 'Chat template', 'behavioral-scan': 'Behavioral scan'};
+const actionNames = {'model-check': 'check'};
+const checkNames = {'file-allowlist': 'File allowlist', 'chat-template': 'Chat template', 'behavioral-scan': 'Behavioral scan'};
 const outcomes = {passed: 'passed', failed: 'failed', error: 'failed to run', not_run: 'not run', unsupported: 'not available for this model'};
 export const defensiveNote = 'These checks are a defensive layer, not complete backdoor detection.';
 
@@ -61,7 +60,6 @@ export function modelStatusText(entry, app, state = 'loaded') {
     if (key !== 'image') detail = entry ? reasons[entry.reason] ?? '' : reasons['no-result'];
     if (key === 'not_scanned' && entry?.staticChecksPassed) detail = 'File checks passed. Behavioral scan not available yet.';
     if (['findings', 'error', 'unsupported'].includes(key) && !entry?.reason) detail = blockingReason(entry);
-    if (entry?.reviewPending) detail = [detail, 'A chat template review is pending.'].filter(Boolean).join(' ');
     return {icon, title, detail};
 }
 
@@ -101,7 +99,7 @@ function modelIdentity(model, path) {
 const profileLaunch = profile => ({identity: modelIdentity(profile?.nativeModel?.model, profile?.nativeModel?.owned?.modelPath), path: profile?.nativeModel?.owned?.modelPath, pin: profile?.nativeModel?.chatTemplateSHA256 ?? ''});
 // As in StoredStatus, the template rule needs the complete list of checks.
 // ReadRecord accepts only complete lists, so this guard only mirrors it.
-const templatePassed = entry => entry.checks?.length === 4 && entry.checks.find(check => check.name === 'chat-template')?.outcome === 'passed';
+const templatePassed = entry => entry.checks?.length === 3 && entry.checks.find(check => check.name === 'chat-template')?.outcome === 'passed';
 
 // logFailure writes the error of gpu-setup to the application log. The
 // card shows fixed text only.
@@ -209,11 +207,10 @@ class StatusView {
         this.recheck = new Gtk.Button({label: 'Check files again'}); this.recheck.connect('clicked', () => this.check()); actions.append(this.recheck);
         this.cancel = new Gtk.Button({label: 'Cancel check', visible: false}); this.cancel.connect('clicked', () => this.cancellable?.cancel()); actions.append(this.cancel);
         this.root.append(actions);
-        this.review = new TemplateReview(this); this.root.append(this.review.root);
     }
 
     // stop ends each gpu-setup process of this view.
-    stop() { this.cancellable?.cancel(); this.reading?.cancel(); this.review?.reading?.cancel(); }
+    stop() { this.cancellable?.cancel(); this.reading?.cancel(); }
 
     // entry gives the entry of this workload, with the rules of
     // StoredStatus. An LLM workload whose model path or model ID differs
@@ -232,7 +229,7 @@ class StatusView {
         // result for a launch of another model folder.
         if (!entry.identity || proposed.identity !== entry.identity) return notScanned('model-changed', Boolean(entry.checkedAt && proposed.path));
         // The launch gate refuses a passed template check for another pin.
-        if ('pin' in proposed && !entry.reason && (templatePassed(entry) || entry.reviewPending) && proposed.pin !== (entry.templateSHA256 ?? '')) return notScanned('template-changed', true);
+        if ('pin' in proposed && !entry.reason && templatePassed(entry) && proposed.pin !== (entry.templateSHA256 ?? '')) return notScanned('template-changed', true);
         return entry;
     }
 
@@ -247,7 +244,7 @@ class StatusView {
         if (this.noted && !this.cancellable && entry !== this.noted.entry) { this.setNote(''); this.noted = null; this.failedAction = null; }
         this.details.label = modelStatusDetails(entry, this.failedAction ?? status.error);
         this.recheck.visible = Boolean(entry?.kind === 'llm' && entry.checkedAt && recheckable.has(entry.reason ?? '')) && !this.cancellable;
-        this.runner.update(entry, status.state, this.proposed()?.path); this.review.update(entry);
+        this.runner.update(entry, status.state);
     }
 
     setNote(label) { this.note.label = label; this.note.visible = Boolean(label); }
@@ -270,9 +267,9 @@ class StatusView {
     // A failed or canceled check of files keeps the last result. A failed
     // or canceled action that writes reads the stored status again, see
     // reload: the action can stop after its write.
-    async operate({start, failed, action = 'model-status', canceled = 'Check canceled. The last result is kept.', cancelLabel = 'Cancel check', focus}, work) {
+    async operate({start, failed, action = 'model-status', canceled = 'Check canceled. The last result is kept.', focus}, work) {
         const before = this.entry(this.ui.modelStatus ?? {entries: new Map()});
-        this.cancellable = new Gio.Cancellable(); this.cancel.label = cancelLabel; this.cancel.visible = true; this.failedAction = null; this.noted = null; this.setNote(start); this.update();
+        this.cancellable = new Gio.Cancellable(); this.cancel.visible = true; this.failedAction = null; this.noted = null; this.setNote(start); this.update();
         this.cancel.grab_focus();
         let outcome = 'done';
         let focused = null;
@@ -305,9 +302,8 @@ class StatusView {
 
     // reload reads the status again after a failed or canceled action that
     // writes. When the stored result differs from the result before the
-    // action, the note says so; else it keeps the note of the action. It
-    // reads the review list again when it is open. A failed read keeps the
-    // status that the card shows.
+    // action, the note says so; else it keeps the note of the action. A
+    // failed read keeps the status that the card shows.
     async reload(before) {
         let note = this.note.label;
         const failedAction = this.failedAction;
@@ -323,10 +319,9 @@ class StatusView {
         if (this.ui.closed || reading.is_cancelled()) return;
         this.noted = {entry: this.entry(this.ui.modelStatus)}; this.setNote(note); this.failedAction = failedAction;
         refreshModelStatus(this.ui);
-        if (this.review.body.visible) await this.review.load();
     }
 }
 
 // changed tells whether two entries describe different stored results.
-const resultKey = entry => JSON.stringify([entry?.checkedAt, entry?.status, entry?.reason, entry?.reviewPending, entry?.checks]);
+const resultKey = entry => JSON.stringify([entry?.checkedAt, entry?.status, entry?.reason, entry?.checks]);
 const changed = (before, after) => resultKey(before) !== resultKey(after);

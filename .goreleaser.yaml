@@ -108,8 +108,6 @@ nfpms:
         dst: /usr/share/gpu-workload-supervisor/model-status.mjs
       - src: clients/setup/model-check-run.mjs
         dst: /usr/share/gpu-workload-supervisor/model-check-run.mjs
-      - src: clients/setup/model-review.mjs
-        dst: /usr/share/gpu-workload-supervisor/model-review.mjs
       - src: clients/setup/model-reasons.mjs
         dst: /usr/share/gpu-workload-supervisor/model-reasons.mjs
       - src: clients/setup/model-report.mjs
