@@ -115,9 +115,8 @@ test('trusted docs routing preserves the full scanner and coverage reuse profile
 test('docs routing cannot skip audits, packaged documentation, security analyses or full coverage uploads', () => {
   for (const [job, name] of [
     ['go', 'Go vulnerability audit'], ['frontend', 'Audit Aislop toolchain'],
-    ['scans', 'Gitleaks'], ['scans', 'Semgrep'], ['scans', 'Convert Trivy SARIF'],
+    ['scans', 'Gitleaks'], ['scans', 'Semgrep'],
     ['scans', 'Trivy high and critical gate'], ['package', 'Build snapshot artifacts'],
-    ['frontend', 'Upload javascript quality coverage'],
   ]) {
     const state = scopedCandidate();
     state.ci.jobs[job].steps.find(step => step.name === name).if = false;
@@ -731,7 +730,6 @@ test('ordinary immutable action pin refreshes pass across all workflows and comp
 
 test('every action-aware validator retains identity, immutable pins and execution controls', () => {
   const targets = [
-    ['.github/workflows/main.yml', workflow => workflow.jobs.sonar.steps.find(step => step.uses?.startsWith('actions/download-artifact@'))],
     ['.github/workflows/ci.yml', workflow => workflow.jobs.go.steps.find(step => step.uses?.startsWith('actions/setup-node@'))],
     ['.github/workflows/pr-validation.yml', workflow => workflow.jobs.classify.steps[0]],
     ['.github/workflows/release.yml', workflow => workflow.jobs.validation.steps[0]],

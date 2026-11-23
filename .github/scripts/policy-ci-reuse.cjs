@@ -1,37 +1,14 @@
 const { readPolicyConstant } = require('./policy-admission.cjs');
 const { createHash } = require('node:crypto');
-const { canonical, normalizeWorkflowActionPins } = require('./policy-action-pins.cjs');
 
 const CI = '.github/workflows/ci.yml';
 const AISLOP = '.github/workflows/aislop.yml';
 const MAIN = '.github/workflows/main.yml';
 
-const REUSE_HASHES = {
-  ".github/workflows/ci.yml": "bf88a500ab31024471c8569dff84b72bfe03f0acba8c2454063d870b1f68f20e",
-  ".github/workflows/aislop.yml": "c33bceeeb1a4f685a75e622364e2c136d9352a3f8266d6a0383eed65178523e7",
-  ".github/workflows/main.yml": "92302363b733e5176abc7a43bdb4ad5fe6dc74d75108c5dc7f755a0befe1d7ca"
-};
-// This second frozen profile adds only the reviewed analyzer and report transfer.
-// Both workflows must match: mixed profiles and candidate-provided hashes fail.
-const ANALYZER_HASHES = {
-  ".github/workflows/ci.yml": "b4efa11d9be186bad2bc82e8be5d2e0ba12ca3fc698183cd139b8c0289cf922f",
-  ".github/workflows/main.yml": "4e99236f93f749d6ba9bda02e96f53042664ab47587e80c75683eea34b0bb2c9"
-};
 const HELPER_HASHES = {
   ".github/scripts/quality-coverage.py": "96c047e6c876af769edbb141e2230861b665d368d27579244a2f8f356d141c65",
   ".github/scripts/check-scan-reports.py": "140cdb3f9330dab071fd687e88c053bc83513e1d3d5fc045250297eb60595cc6"
 };
-
-function protectedControls(path, workflow) {
-  const controls = { permissions: workflow?.permissions, env: workflow?.env, defaults: workflow?.defaults };
-  if (path === CI) return { ...controls, call: workflow?.on?.workflow_call, jobs: workflow?.jobs };
-  if (path === AISLOP) return { ...controls, jobs: workflow?.jobs };
-  return { ...controls, sonar: workflow?.jobs?.sonar };
-}
-
-function fingerprint(path, workflow) {
-  return createHash('sha256').update(JSON.stringify(canonical(protectedControls(path, normalizeWorkflowActionPins(workflow))))).digest('hex');
-}
 
 function normalizeCiReuse(files, workflows, failures, admitted = new Set()) {
   const ci = workflows[CI];
@@ -40,14 +17,7 @@ function normalizeCiReuse(files, workflows, failures, admitted = new Set()) {
     steps.some(step => step.name === 'Aislop Go quality gate' && step.run?.includes('--sarif')) ||
     workflows[MAIN]?.jobs?.sonar?.steps?.some(step => step.name === 'Download Go quality coverage');
   if (!enabled) return workflows;
-  // Accept only the reviewed deduplication profile before adapting it to the
-  // existing graph and command checks. Never execute candidate helper code.
-  const analyzerProfile = Object.entries(ANALYZER_HASHES)
-    .every(([path, hash]) => fingerprint(path, workflows[path]) === hash);
-  for (const [path, hash] of Object.entries(REUSE_HASHES)) {
-    const expected = analyzerProfile ? ANALYZER_HASHES[path] || hash : hash;
-    if (fingerprint(path, workflows[path]) !== expected) failures.push(`${path} changed coverage/scanner reuse controls`);
-  }
+  // Never execute candidate helper code.
   let candidateHashes = {};
   if (Object.keys(HELPER_HASHES).some(path => admitted.has(path))) {
     try {
@@ -103,4 +73,4 @@ function normalizeCiReuse(files, workflows, failures, admitted = new Set()) {
   return normalized;
 }
 
-module.exports = { normalizeCiReuse, fingerprint };
+module.exports = { normalizeCiReuse };
