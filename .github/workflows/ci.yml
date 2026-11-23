@@ -103,8 +103,12 @@ jobs:
         run: |
           set -euo pipefail
           qualification_uid="$(id -u)"
+          # Ubuntu restricts unprivileged user namespaces. Load the packaged
+          # profile before the user manager starts, as on a deployed host.
+          sudo install -m 0644 packaging/apparmor/gpu-workload-supervisor-systemd-user /etc/apparmor.d/
+          sudo apparmor_parser --replace /etc/apparmor.d/gpu-workload-supervisor-systemd-user
           sudo loginctl enable-linger "$(id -un)"
-          sudo systemctl start "user@${qualification_uid}.service"
+          sudo systemctl restart "user@${qualification_uid}.service"
           export XDG_RUNTIME_DIR="/run/user/${qualification_uid}"
           export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
           systemctl --user show --property=ControlGroup --value -- -.slice

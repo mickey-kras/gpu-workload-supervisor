@@ -36,7 +36,7 @@ const STEP_JOBS = {
 // Exact qualification scripts from the serial workflow, independent of job location.
 const QUALIFICATION_HASHES = {
   "Upstream connection reuse benchmark": "6808b159e8f5d4dc67d8c185465991576af0828fbb700afec5fb692be7c1a537",
-  "Real systemd lifecycle qualification": "76047c17f4116b5fad96e44d34f0a6658088ee9ad94fd929a0a212de33235f0b",
+  "Real systemd lifecycle qualification": "2e8c96278b2f2175fdb0ccf07c737e4e2e01d351cc3213eae2d5cbe4a36458b9",
   "GNOME contract and lifecycle fixtures": "35f213c47512e87a1cd96a924553af5e58bee6469b62577603fc4e690ac828e4",
   "Verify snapshot archives": "dc85b7993f5a54f6bc9968ba01571380a5e23b352cbb300ec742cf0a2bc2641b",
   "Verify snapshot desktop packages": "98636ccdb17ca619a41234031db347e078cf7fd5d3017e32929e088227016442",

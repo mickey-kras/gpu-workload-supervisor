@@ -107,7 +107,7 @@ func TestCheckServingOptionsRunsBoundedHelp(t *testing.T) {
 	profile, _ := servingFixtureProfile(t, home, control.ServingOptions{Version: 1, MaxNumSeqs: 8})
 	second := profile
 	second.ID = "second"
-	catalog := control.Catalog{Version: 6, Profiles: []control.WorkloadProfile{profile, second}}
+	catalog := control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile, second}}
 	var runs []string
 	backend.runCommand = servingCommand(home, servingHelpFixture, nil, &runs)
 	if err := backend.checkServingOptions(context.Background(), catalog); err != nil {
@@ -134,7 +134,7 @@ func TestCheckServingOptionsRunsBoundedHelp(t *testing.T) {
 	// Launches without serving options run no help.
 	plain, _ := ownedFixtureProfile(t, home, "plain", 9200)
 	runs = nil
-	if err := backend.checkServingOptions(context.Background(), control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{plain}}); err != nil || len(runs) != 0 {
+	if err := backend.checkServingOptions(context.Background(), control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{plain}}); err != nil || len(runs) != 0 {
 		t.Fatalf("plain launch = %v, runs %q", err, runs)
 	}
 	backend.runCommand = nil
@@ -169,13 +169,13 @@ func TestApplyServingOptionsRollbackAndHelpRefusal(t *testing.T) {
 	backend.runCommand = servingCommand(home, servingHelpFixture, nil, &runs)
 	ctx := context.Background()
 	plain, raw := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{plain}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{plain}}
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	unitPath := filepath.Join(ownedUnitDirectory(home), plain.Unit)
 	served, servedRaw := servingFixtureProfile(t, home, control.ServingOptions{Version: 1, MaxNumSeqs: 4})
-	r.Catalog = control.Catalog{Version: 6, Profiles: []control.WorkloadProfile{served}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{served}}
 	r.ExpectedRevision = currentRevision(t, r)
 	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{err: errors.New("busy")}, nil }
 	if err := backend.Apply(ctx, home, r); err == nil {

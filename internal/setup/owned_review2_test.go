@@ -23,13 +23,13 @@ func TestApplyRollsBackOwnedWritesOnFailedPrecheck(t *testing.T) {
 	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	// Update the owned profile; make the workload non-quiescent.
 	updated, _ := ownedFixtureProfile(t, home, "vision", 9101)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{updated}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{updated}}
 	r.ExpectedRevision = currentRevision(t, r)
 	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{err: errors.New("busy")}, nil }
 	if err := backend.Apply(ctx, home, r); err == nil {
@@ -44,7 +44,7 @@ func TestApplyRollsBackOwnedWritesOnFailedPrecheck(t *testing.T) {
 		t.Fatal("pending journal left behind after rollback")
 	}
 	// The committed catalog still applies without a collision.
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	r.ExpectedRevision = currentRevision(t, r)
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatalf("committed request rejected after rollback: %v", err)
@@ -102,7 +102,7 @@ func TestPlanOwnedUnitsPreservesAdoptedReference(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, profile.Unit), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	accepted := control.CatalogSnapshot{Revision: "r1", Catalog: control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}}
+	accepted := control.CatalogSnapshot{Revision: "r1", Catalog: control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}}
 	adopted := profile
 	nativeCopy := *profile.NativeModel
 	nativeCopy.Owned = nil
@@ -128,7 +128,7 @@ func TestPlanPreviewReportsOwnedUnitChanges(t *testing.T) {
 	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	preview, err := backend.Plan(home, r)
 	if err != nil {
 		t.Fatal(err)
@@ -338,7 +338,7 @@ func TestPlanOwnedUnitsDeletesWhenAdoptedReferenceDrifts(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, profile.Unit), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	accepted := control.CatalogSnapshot{Revision: "r1", Catalog: control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}}
+	accepted := control.CatalogSnapshot{Revision: "r1", Catalog: control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}}
 	adopted := profile
 	nativeCopy := *profile.NativeModel
 	nativeCopy.Owned = nil
@@ -480,7 +480,7 @@ func TestSuccessfulApplyRetiresActivationRecord(t *testing.T) {
 	backend, home, r := fixture(t)
 	backend.runCommand = fakeOwnedCommandFor(home)
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if err := backend.Apply(context.Background(), home, r); err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +541,7 @@ func TestPlanPreviewMatchesPlanSemantics(t *testing.T) {
 	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
@@ -601,7 +601,7 @@ func TestPlanPreviewFailsOnUnrenderableOwnedProfile(t *testing.T) {
 	backend, home, r := fixture(t)
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
 	profile.NativeModel.LaunchSHA256 = "0000000000000000000000000000000000000000000000000000000000000000"
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if _, err := backend.Plan(home, r); err == nil {
 		t.Fatal("unrenderable owned profile previewed")
 	}
@@ -626,7 +626,7 @@ func TestApplyRollsBackWhenReloadFails(t *testing.T) {
 	backend, home, r := fixture(t)
 	backend.runCommand = failReloadCommand
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if err := backend.Apply(context.Background(), home, r); err == nil {
 		t.Fatal("failed reload applied")
 	}
@@ -648,7 +648,7 @@ func TestApplyRollsBackPartialWriteOnCollision(t *testing.T) {
 	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	code, codeRaw := ownedFixtureProfile(t, home, "code", 9102)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{code}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{code}}
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
@@ -665,7 +665,7 @@ func TestApplyRollsBackPartialWriteOnCollision(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, vision.Unit), []byte("foreign"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{updated, vision}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{updated, vision}}
 	r.ExpectedRevision = currentRevision(t, r)
 	if err := backend.Apply(ctx, home, r); !errors.Is(err, ErrOwnedUnitCollision) {
 		t.Fatalf("collision not surfaced: %v", err)
@@ -729,7 +729,7 @@ func TestResumeRestoresOverwrittenPendingWrite(t *testing.T) {
 	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
@@ -789,7 +789,7 @@ func TestPlanPreviewKeepsStateDatabaseReadOnly(t *testing.T) {
 	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
@@ -979,7 +979,7 @@ func TestProvenReplaceErrorPaths(t *testing.T) {
 func TestPlanPreviewFailsOnUnreadableUnitFile(t *testing.T) {
 	backend, home, r := fixture(t)
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	dir := ownedUnitDirectory(home)
 	if err := os.MkdirAll(filepath.Join(dir, profile.Unit), 0700); err != nil {
 		t.Fatal(err)
@@ -1043,7 +1043,7 @@ func TestRollbackFailureRetainsPendingJournal(t *testing.T) {
 	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
@@ -1057,7 +1057,7 @@ func TestRollbackFailureRetainsPendingJournal(t *testing.T) {
 	}
 	defer func() { ownedAtomicWrite = restore }()
 	updated, updatedRaw := ownedFixtureProfile(t, home, "vision", 9101)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{updated}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{updated}}
 	r.ExpectedRevision = currentRevision(t, r)
 	backend.makeRuntime = func(got Request) (supervisor.Runtime, error) {
 		if got.Catalog.Profiles[0].NativeModel.LaunchSHA256 == updated.NativeModel.LaunchSHA256 {
@@ -1075,7 +1075,7 @@ func TestRollbackFailureRetainsPendingJournal(t *testing.T) {
 		t.Fatal("journal dropped while rollback failed")
 	}
 	// Recovery replays: the committed render is restored and the journal retired.
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	r.ExpectedRevision = currentRevision(t, r)
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
@@ -1096,7 +1096,7 @@ func TestResumeReloadsWhenPendingRecoveryMatchesDisk(t *testing.T) {
 	backend.runCommand = recordingOwnedCommand(&verified, home)
 	ctx := context.Background()
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
@@ -1211,7 +1211,7 @@ func TestApplyDeletesDroppedAdoptedOwnedBinding(t *testing.T) {
 	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
@@ -1247,7 +1247,7 @@ func TestApplyRefusesDriftedAdoptedOwnedBinding(t *testing.T) {
 	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
@@ -1278,7 +1278,7 @@ func TestResumeKeepsAdoptedBindingDuringPendingRecovery(t *testing.T) {
 	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
@@ -1328,7 +1328,7 @@ func TestPlanPreviewListsDroppedAdoptedOwnedBindingRemoval(t *testing.T) {
 	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
@@ -1368,7 +1368,7 @@ func TestResumeIgnoresStaleActivationRecordWithoutFence(t *testing.T) {
 	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
@@ -1428,7 +1428,7 @@ func TestApplyRejectsShadowedOwnedUnitBinding(t *testing.T) {
 			backend, home, r := fixture(t)
 			backend.runCommand = dropInCommand(home, dropIn)
 			profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-			r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+			r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 			err := backend.Apply(context.Background(), home, r)
 			if !errors.Is(err, gpuruntime.ErrLaunchChanged) {
 				t.Fatalf("shadowed binding committed: %v", err)
@@ -1452,13 +1452,13 @@ func TestResumeRestoresAcceptedRenderingBeforeReplay(t *testing.T) {
 	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
 	updated, updatedRaw := ownedFixtureProfile(t, home, "vision", 9101)
 	r2 := r
-	r2.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{updated}}
+	r2.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{updated}}
 	r2.ExpectedRevision = currentRevision(t, r)
 	// Crash window: v2 written, maintenance entered, catalog never committed.
 	if err := os.WriteFile(filepath.Join(ownedUnitDirectory(home), profile.Unit), updatedRaw, 0600); err != nil {
@@ -1507,7 +1507,7 @@ func TestResumeFinishesCommittedDeleteBeforeReAdd(t *testing.T) {
 	backend.runCommand = fakeOwnedCommandFor(home)
 	ctx := context.Background()
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
 	}
@@ -1556,7 +1556,7 @@ func TestAtomicWriteLandedErrorIsRolledBack(t *testing.T) {
 		backend, home, r := fixture(t)
 		backend.runCommand = fakeOwnedCommandFor(home)
 		profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-		r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+		r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 		restore := ownedAtomicWrite
 		ownedAtomicWrite = func(path string, data []byte) error {
 			// The rename lands, then the parent-dir sync reports failure.
@@ -1583,12 +1583,12 @@ func TestAtomicWriteLandedErrorIsRolledBack(t *testing.T) {
 		backend.runCommand = fakeOwnedCommandFor(home)
 		ctx := context.Background()
 		profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
-		r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+		r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 		if err := backend.Apply(ctx, home, r); err != nil {
 			t.Fatal(err)
 		}
 		updated, updatedRaw := ownedFixtureProfile(t, home, "vision", 9101)
-		r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{updated}}
+		r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{updated}}
 		r.ExpectedRevision = currentRevision(t, r)
 		restore := ownedAtomicWrite
 		failed := false
@@ -1624,7 +1624,7 @@ func TestUndetectableWriteRetainsJournal(t *testing.T) {
 	backend, home, r := fixture(t)
 	backend.runCommand = fakeOwnedCommandFor(home)
 	profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	restore := ownedAtomicWrite
 	ownedAtomicWrite = func(path string, _ []byte) error {
 		// Landing state undetectable: world-readable file rejects privateRead.
@@ -1668,7 +1668,7 @@ func TestRollbackSkipsUntouchedUnitsAndPrunesJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{code, vision}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{code, vision}}
 	// Foreign content occupies the second unit; the manager is down.
 	dir := ownedUnitDirectory(home)
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -1714,7 +1714,7 @@ func TestPlanPreviewRejectsOwnedUnitCollision(t *testing.T) {
 		backend, home, r := fixture(t)
 		backend.runCommand = fakeOwnedCommandFor(home)
 		profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-		r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+		r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 		dir := ownedUnitDirectory(home)
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			t.Fatal(err)
@@ -1731,7 +1731,7 @@ func TestPlanPreviewRejectsOwnedUnitCollision(t *testing.T) {
 		backend, home, r := fixture(t)
 		backend.runCommand = fakeOwnedCommandFor(home)
 		profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-		r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+		r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 		if err := backend.Apply(context.Background(), home, r); err != nil {
 			t.Fatal(err)
 		}
@@ -1740,7 +1740,7 @@ func TestPlanPreviewRejectsOwnedUnitCollision(t *testing.T) {
 		if err := os.WriteFile(path, []byte("hand edited"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{updated}}
+		r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{updated}}
 		if _, err := backend.Plan(home, r); !errors.Is(err, ErrOwnedUnitCollision) {
 			t.Fatalf("drifted unit previewed as writable: %v", err)
 		}
@@ -1780,7 +1780,7 @@ func TestRollbackRemovalRejectsConcurrentDisplacement(t *testing.T) {
 	backend, home, r := fixture(t)
 	backend.runCommand = fakeOwnedCommandFor(home)
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	backend.makeRuntime = func(Request) (supervisor.Runtime, error) { return idleRuntime{err: errors.New("busy")}, nil }
 	path := filepath.Join(ownedUnitDirectory(home), profile.Unit)
 	restore := ownedStat

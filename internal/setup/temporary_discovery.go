@@ -120,7 +120,7 @@ func (b Backend) finishTemporaryCleanup(ctx context.Context, p Profile, state *s
 	if err != nil {
 		return err
 	}
-	manager, err := b.makeRuntime(Request{Profile: p, Catalog: removalObservationCatalog(snapshot.Catalog)})
+	manager, err := b.makeRuntime(Request{Profile: p, Catalog: removalObservationCatalog(snapshot.Catalog), observation: true})
 	if err != nil {
 		return err
 	}

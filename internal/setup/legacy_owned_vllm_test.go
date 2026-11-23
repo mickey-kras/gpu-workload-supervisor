@@ -32,7 +32,7 @@ func legacyOwnedVLLM(t *testing.T) (Backend, string, Request, control.WorkloadPr
 	t.Helper()
 	b, home, request := fixture(t)
 	b.runCommand = fakeOwnedCommandFor(home)
-	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	profile, _ := preSandboxOwnedFixtureProfile(t, home, "vision", 9100)
 	profile.NativeModel.ChatTemplate, profile.NativeModel.ChatTemplateSHA256, profile.NativeModel.EnvironmentFile = "", "", ""
 	raw, err := gpuruntime.RenderOwnedUnit(profile)
 	if err != nil {
@@ -60,7 +60,7 @@ func TestLegacyOwnedVLLMBindingCanBeSetUpAgain(t *testing.T) {
 		t.Fatal("legacy binding kept for execution")
 	}
 	replacement, raw := ownedFixtureProfile(t, home, "vision", 9100)
-	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{replacement}}
+	request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{replacement}}
 	if err := b.Apply(t.Context(), home, request); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestOwnedKeyFileIsCreatedOnApplyAndRemovedWithWorkload(t *testing.T) {
 	b, home, request := fixture(t)
 	b.runCommand = fakeOwnedCommandFor(home)
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	key := profile.NativeModel.EnvironmentFile
 	plan := unitPlan{Writes: map[string][]byte{}, keys: map[string]string{}, createdKeys: map[string]bool{}}
 	if err := b.planOwnedUnitWrites(request, home, plan); err != nil {
@@ -249,7 +249,7 @@ func acceptedOwnedWithoutKey(t *testing.T) (Backend, string, Request, control.Wo
 	b, home, request := fixture(t)
 	b.runCommand = fakeOwnedCommandFor(home)
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if err := b.Apply(t.Context(), home, request); err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestFailedApplyRemovesOnlyTheKeyFilesItCreated(t *testing.T) {
 	kept, _ := ownedFixtureProfile(t, home, "kept", 9100)
 	created, _ := ownedFixtureProfile(t, home, "created", 9101)
 	created.NativeModel.Instance = "second"
-	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{kept}}
+	request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{kept}}
 	if err := b.Apply(t.Context(), home, request); err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +316,7 @@ func TestFailedApplyRemovesOnlyTheKeyFilesItCreated(t *testing.T) {
 	}
 	keptKey, _ := os.ReadFile(kept.NativeModel.EnvironmentFile)
 	request.ExpectedRevision = snapshot.Revision
-	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{kept, created}}
+	request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{kept, created}}
 	request.Catalog.Profiles[0].NativeModel.Owned.Conflicts = request.Catalog.OwnedConflictUnits(request.Catalog.Profiles[0])
 	request.Catalog.Profiles[1].NativeModel.Owned.Conflicts = request.Catalog.OwnedConflictUnits(request.Catalog.Profiles[1])
 	for i := range request.Catalog.Profiles {
@@ -373,7 +373,7 @@ func acceptedOwnedWithChangedTemplate(t *testing.T, id string) (Backend, string,
 		t.Fatal(err)
 	}
 	profile, _ := ownedFixtureProfile(t, home, id, 9100)
-	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if err := b.Apply(t.Context(), home, request); err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestChangedChatTemplateBindingCanBeReplaced(t *testing.T) {
 	if replacement.NativeModel.ChatTemplateSHA256 == stale.NativeModel.ChatTemplateSHA256 {
 		t.Fatal("replacement did not pin the new template")
 	}
-	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{replacement}}
+	request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{replacement}}
 	if err := b.Apply(t.Context(), home, request); err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +448,7 @@ func TestNewOwnedVLLMWorkloadPassesPreviewThenApplyCreatesTheKey(t *testing.T) {
 	b, home, request := fixture(t)
 	b.runCommand = fakeOwnedCommandFor(home)
 	profile, _ := ownedFixtureProfile(t, home, "fresh", 9100)
-	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	present := true
 	b.makeRuntime = func(Request) (supervisor.Runtime, error) {
 		return previewRuntime{key: profile.NativeModel.EnvironmentFile, present: &present}, nil

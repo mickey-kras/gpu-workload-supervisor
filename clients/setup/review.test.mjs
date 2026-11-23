@@ -41,6 +41,7 @@ test('serving options need catalog version 6', () => {
     const limited = {nativeModel: {owned: {port: 8000, limits: {version: 1, memoryMaxMiB: 4096}}}};
     assert.equal(lowestCatalogVersion([serving]), 6);
     assert.equal(lowestCatalogVersion([limited, serving]), 6);
+    assert.equal(lowestCatalogVersion([serving, {nativeModel: {owned: {artifactSandbox: true}}}]), 7);
     for (const options of [{}, null, {version: 0}])
         assert.equal(lowestCatalogVersion([{nativeModel: {owned: {port: 8000, serving: options}}}]), 2, JSON.stringify(options));
 });

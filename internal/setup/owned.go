@@ -90,13 +90,14 @@ func OwnedProfile(d Draft, managerCgroup, home string) (control.WorkloadProfile,
 		return control.WorkloadProfile{}, nil, errors.New("owned drafts require an instance")
 	}
 	owned := control.OwnedLaunch{
-		Executable:  d.Binding.Owned.Executable,
-		ModelPath:   d.Binding.Owned.ModelPath,
-		Port:        d.Binding.Owned.Port,
-		MaxModelLen: d.Binding.Owned.MaxModelLen,
-		Alias:       d.Binding.Owned.Alias,
-		Limits:      d.Binding.Owned.Limits,
-		Serving:     d.Binding.Owned.Serving,
+		Executable:      d.Binding.Owned.Executable,
+		ModelPath:       d.Binding.Owned.ModelPath,
+		Port:            d.Binding.Owned.Port,
+		MaxModelLen:     d.Binding.Owned.MaxModelLen,
+		Alias:           d.Binding.Owned.Alias,
+		Limits:          d.Binding.Owned.Limits,
+		Serving:         d.Binding.Owned.Serving,
+		ArtifactSandbox: true,
 	}
 	model := ownedProfileModel(owned)
 	id := control.Workload(d.ID)
@@ -162,42 +163,60 @@ func ownedProfileModel(owned control.OwnedLaunch) string {
 // incoming spec/fingerprint. Accepted catalogs/files remain untouched until the
 // existing owned-unit transaction applies the reviewed writes.
 func prepareOwnedBackstops(request Request) (Request, error) {
+	if err := verifyOwnedBackstopRequest(request); err != nil {
+		return request, err
+	}
+	return deriveOwnedBackstops(request)
+}
+
+func verifyOwnedBackstopRequest(request Request) error {
 	// Normalization must not turn an unknown version into a known one.
 	if !control.SupportedCatalogVersion(request.Catalog.Version) {
-		return request, control.ErrUnsupportedCatalogVersion
+		return control.ErrUnsupportedCatalogVersion
 	}
-	request.Catalog = request.Catalog.Clone()
-	// Every writer uses the lowest version the content needs, so removing the
-	// last limits returns the exact earlier bytes. A resumed activation keeps
-	// its recorded request, which selectRecordedActivation chooses.
-	request.Catalog.Version = control.LowestCatalogVersion(request.Catalog)
 	for _, p := range request.Catalog.Profiles {
-		if p.NativeModel != nil && p.NativeModel.Owned != nil {
-			if _, err := ownedRenderChecked(p); err != nil {
-				return request, err
-			}
+		if p.NativeModel == nil || p.NativeModel.Owned == nil {
+			continue
+		}
+		if _, err := ownedRenderChecked(p); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+func deriveOwnedBackstops(request Request) (Request, error) {
+	request.Catalog = request.Catalog.Clone()
 	for i := range request.Catalog.Profiles {
 		p := &request.Catalog.Profiles[i]
 		if p.NativeModel == nil || p.NativeModel.Owned == nil {
 			continue
 		}
 		p.NativeModel.Owned.Conflicts = request.Catalog.OwnedConflictUnits(*p)
+		p.NativeModel.Owned.ArtifactSandbox = p.NativeModel.Owned.ArtifactSandbox || p.NativeModel.Hardened()
 		raw, err := gpuruntime.RenderOwnedUnit(*p)
 		if err != nil {
 			return request, err
 		}
 		p.NativeModel.LaunchSHA256 = digest(raw)
 	}
+	// A resumed activation can keep its recorded request, which
+	// selectRecordedActivation chooses after the candidate is rendered.
+	request.Catalog.Version = control.LowestCatalogVersion(request.Catalog)
 	return request, nil
 }
 
 // Preserve recorded activation renders during recovery.
 func prepareOwnedBackstopsForActivation(home string, request Request) (Request, error) {
-	candidate, err := prepareOwnedBackstops(request)
-	if err != nil {
+	if err := verifyOwnedBackstopRequest(request); err != nil {
 		return request, err
+	}
+	// A historical activation can prove its original rendering even when
+	// a fresh sandboxed candidate cannot be rendered.
+	candidate, candidateErr := deriveOwnedBackstops(request)
+	retries := []Request{request}
+	if candidateErr == nil {
+		retries = append(retries, candidate)
 	}
 	root := filepath.Join(home, ".config/gpu-workload-supervisor")
 	marker, err := deployment.Read(request.Profile.StatePath)
@@ -209,16 +228,19 @@ func prepareOwnedBackstopsForActivation(home string, request Request) (Request, 
 		if err != nil {
 			return request, err
 		}
-		return selectRecordedActivation(saved, request, candidate)
+		return selectRecordedActivation(saved, retries)
 	}
 	journal, present, err := readOwnedUnitJournal(root)
 	if err != nil {
 		return request, err
 	}
 	if present && journal.StatePath == request.Profile.StatePath {
-		return prepareOwnedBackstopsForJournal(home, root, journal, request, candidate)
+		retry, matched, err := prepareOwnedBackstopsForJournal(home, root, journal, retries)
+		if err != nil || matched {
+			return retry, err
+		}
 	}
-	return candidate, nil
+	return candidate, candidateErr
 }
 
 func prepareValidatedOwnedBackstopsForActivation(home string, request Request) (Request, error) {
@@ -230,48 +252,45 @@ func prepareValidatedOwnedBackstopsForActivation(home string, request Request) (
 }
 
 // Without a maintenance fence, unit proofs precede the saved request check.
-func prepareOwnedBackstopsForJournal(home, root string, journal unitJournal, request, candidate Request) (Request, error) {
-	for _, retry := range []Request{request, candidate} {
+func prepareOwnedBackstopsForJournal(home, root string, journal unitJournal, retries []Request) (Request, bool, error) {
+	for _, retry := range retries {
 		matches, err := pendingOwnedRetryUnits(home, journal, retry)
-		if err != nil {
-			return request, err
-		}
-		if matches {
-			return retry, nil
+		if err != nil || matches {
+			return retry, matches, err
 		}
 	}
 	saved, err := privateRead(filepath.Join(root, "activation.json"))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return request, err
+	if errors.Is(err, os.ErrNotExist) {
+		return Request{}, false, nil
 	}
 	if err != nil {
-		return candidate, nil
+		return Request{}, false, err
 	}
-	matched, err := selectRecordedActivation(saved, request, candidate)
-	if err == nil {
-		return matched, nil
+	return matchingRecordedActivation(saved, retries)
+}
+
+func selectRecordedActivation(saved []byte, retries []Request) (Request, error) {
+	request, matched, err := matchingRecordedActivation(saved, retries)
+	if err == nil && !matched {
+		return Request{}, errors.New("interrupted activation must resume its original request")
 	}
-	var progress activation
-	if decodeErr := json.Unmarshal(saved, &progress); decodeErr != nil {
-		return request, decodeErr
-	}
-	return candidate, nil
+	return request, err
 }
 
 // Both forms must pass the existing serialized-request equality contract.
-func selectRecordedActivation(saved []byte, request, candidate Request) (Request, error) {
+func matchingRecordedActivation(saved []byte, retries []Request) (Request, bool, error) {
 	var progress activation
 	if err := json.Unmarshal(saved, &progress); err != nil {
-		return request, err
+		return Request{}, false, err
 	}
 	recorded, _ := json.Marshal(progress.Request)
-	for _, retry := range []Request{request, candidate} {
+	for _, retry := range retries {
 		encoded, _ := json.Marshal(retry)
 		if digest(recorded) == digest(encoded) {
-			return retry, nil
+			return retry, true, nil
 		}
 	}
-	return request, errors.New("interrupted activation must resume its original request")
+	return Request{}, false, nil
 }
 
 // Pruned journals omit units whose writes never landed.

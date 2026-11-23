@@ -17,14 +17,15 @@ import (
 
 func TestPreparedCatalogUsesLowestVersion(t *testing.T) {
 	home := t.TempDir()
-	profile, legacyUnit := ownedFixtureProfile(t, home, "vision", 9100)
+	_, sandboxedUnit := ownedFixtureProfile(t, home, "vision", 9100)
+	profile, _ := preSandboxOwnedFixtureProfile(t, home, "vision", 9100)
 	request := ownedFixtureRequest(t, home, profile)
-	request.Catalog.Version = 4
+	request.Catalog.Version = control.CatalogVersionTrainer
 	prepared, err := prepareOwnedBackstops(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prepared.Catalog.Version != 2 || request.Catalog.Version != 4 {
+	if prepared.Catalog.Version != control.CatalogVersionArtifactSandbox || request.Catalog.Version != control.CatalogVersionTrainer {
 		t.Fatalf("prepared version = %d, request version = %d", prepared.Catalog.Version, request.Catalog.Version)
 	}
 	original, err := json.Marshal(prepared.Catalog)
@@ -40,13 +41,13 @@ func TestPreparedCatalogUsesLowestVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if limited.Catalog.Version != control.CatalogVersionLimits || limited.Catalog.Profiles[0].NativeModel.LaunchSHA256 == profile.NativeModel.LaunchSHA256 {
-		t.Fatalf("limits did not raise the version or the fingerprint: %+v", limited.Catalog.Profiles[0].NativeModel)
+	if limited.Catalog.Version != control.CatalogVersionArtifactSandbox || limited.Catalog.Profiles[0].NativeModel.LaunchSHA256 == prepared.Catalog.Profiles[0].NativeModel.LaunchSHA256 {
+		t.Fatalf("limits did not update the fingerprint in sandboxed catalog: %+v", limited.Catalog.Profiles[0].NativeModel)
 	}
 	// The write gate accepts limits. Preview and apply run the host
 	// checks of the runtime.
 	if err := Validate(limited); err != nil {
-		t.Fatalf("v5 request with limits = %v", err)
+		t.Fatalf("sandboxed request with limits = %v", err)
 	}
 
 	restored := limited
@@ -62,11 +63,11 @@ func TestPreparedCatalogUsesLowestVersion(t *testing.T) {
 		t.Fatalf("rollback bytes differ:\n%s\n%s", original, again)
 	}
 	unit, err := gpuruntime.RenderOwnedUnit(restored.Catalog.Profiles[0])
-	if err != nil || !bytes.Equal(unit, legacyUnit) {
+	if err != nil || !bytes.Equal(unit, sandboxedUnit) {
 		t.Fatalf("rollback unit bytes differ: %v", err)
 	}
 	// The request that removes the limits passes, so setup can recover a
-	// catalog with limits that a later release wrote.
+	// catalog with limits.
 	if err := Validate(restored); err != nil {
 		t.Fatalf("request without limits rejected: %v", err)
 	}
@@ -76,7 +77,7 @@ func TestPreparedCatalogUsesLowestVersion(t *testing.T) {
 // without them refuses limits, and a failed check refuses the apply.
 func TestSetupChecksLimitsBeforeUnitWrites(t *testing.T) {
 	backend, home, _ := fixture(t)
-	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
+	profile, _ := preSandboxOwnedFixtureProfile(t, home, "vision", 9100)
 	request := ownedFixtureRequest(t, home, profile)
 	request.Catalog.Version = control.CatalogVersionLimits
 	request.Catalog.Profiles[0].NativeModel.Owned.Limits = control.ResourceLimits{Version: 1, TasksMax: 4096}
@@ -124,8 +125,7 @@ func refingerprint(t *testing.T, p *control.WorkloadProfile) {
 	p.NativeModel.LaunchSHA256 = digest(raw)
 }
 
-// acceptLimitedCatalog stands in for a later release: it commits limits on
-// the applied owned profile and writes the unit with the limits block.
+// acceptLimitedCatalog installs an earlier limited unit and its v5 catalog.
 func acceptLimitedCatalog(t *testing.T, home string, r Request) control.WorkloadProfile {
 	t.Helper()
 	ctx := context.Background()
@@ -137,6 +137,7 @@ func acceptLimitedCatalog(t *testing.T, home string, r Request) control.Workload
 	}
 	limited := snap.Catalog.Clone()
 	limited.Version = control.CatalogVersionLimits
+	limited.Profiles[0].NativeModel.Owned.ArtifactSandbox = false
 	limited.Profiles[0].NativeModel.Owned.Limits = control.ResourceLimits{Version: 1, TasksMax: 4096}
 	refingerprint(t, &limited.Profiles[0])
 	raw, err := gpuruntime.RenderOwnedUnit(limited.Profiles[0])
@@ -163,13 +164,13 @@ func acceptedRevision(t *testing.T, r Request) control.CatalogSnapshot {
 	return snap
 }
 
-func TestSetupRemovesLimitsThatALaterReleaseWrote(t *testing.T) {
+func TestSetupRemovesLimitsFromAnEarlierCatalog(t *testing.T) {
 	for name, keep := range map[string]bool{"remove the workload": false, "keep it without limits": true} {
 		t.Run(name, func(t *testing.T) {
 			backend, home, r := fixture(t)
 			backend.runCommand = fakeOwnedCommandFor(home)
 			profile, plainUnit := ownedFixtureProfile(t, home, "vision", 9100)
-			r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+			r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 			ctx := context.Background()
 			if err := backend.Apply(ctx, home, r); err != nil {
 				t.Fatal(err)
@@ -178,15 +179,15 @@ func TestSetupRemovesLimitsThatALaterReleaseWrote(t *testing.T) {
 			r.ExpectedRevision = acceptedRevision(t, r).Revision
 			// Keeping the limits needs the host checks, which the fixture
 			// runtime cannot run, so the apply is refused before writes.
-			r.Catalog = control.Catalog{Version: 5, Profiles: []control.WorkloadProfile{limited}}
+			r.Catalog = control.Catalog{Version: control.CatalogVersionLimits, Profiles: []control.WorkloadProfile{limited}}
 			if err := backend.Apply(ctx, home, r); !errors.Is(err, gpuruntime.ErrLimitUnchecked) {
 				t.Fatalf("apply that keeps limits = %v", err)
 			}
 			want := 1
 			r.Catalog = control.Catalog{Version: 1, Profiles: []control.WorkloadProfile{{ID: "text", Label: "Text", Adapter: "systemd", Unit: "text.service", Cgroup: "/user.slice/text", HealthURL: "http://127.0.0.1:8000/health"}}}
 			if keep {
-				want = 2
-				r.Catalog = control.Catalog{Version: 5, Profiles: []control.WorkloadProfile{profile}}
+				want = control.CatalogVersionArtifactSandbox
+				r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 			}
 			if _, err := backend.Plan(home, r); err != nil {
 				t.Fatalf("preview that removes limits: %v", err)
@@ -211,7 +212,7 @@ func TestSetupRemovesLimitsThatALaterReleaseWrote(t *testing.T) {
 
 func TestTrainerInspectionIgnoresAnUnrelatedLimitedProfile(t *testing.T) {
 	b, request := trainerInspectionRequest(t)
-	limited, _ := ownedFixtureProfile(t, t.TempDir(), "vision", 9100)
+	limited, _ := preSandboxOwnedFixtureProfile(t, t.TempDir(), "vision", 9100)
 	limited.NativeModel.Owned.Limits = control.ResourceLimits{Version: 1, TasksMax: 4096}
 	refingerprint(t, &limited)
 	request.Catalog.Version = control.CatalogVersionLimits
@@ -235,7 +236,7 @@ func TestSetupRejectsUnsupportedVersionBeforeNormalizing(t *testing.T) {
 		return nil, nil
 	}
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-	for _, version := range []int{0, 3, 7, -1} {
+	for _, version := range []int{0, 3, 8, -1} {
 		request := ownedFixtureRequest(t, home, profile)
 		request.Catalog.Version = version
 		raw, err := json.Marshal(request)
@@ -261,7 +262,7 @@ func TestSetupRejectsUnsupportedVersionBeforeNormalizing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	omitted := strings.Replace(string(raw), `"catalog":{"version":2,`, `"catalog":{`, 1)
+	omitted := strings.Replace(string(raw), `"catalog":{"version":7,`, `"catalog":{`, 1)
 	if omitted == string(raw) {
 		t.Fatal("fixture has no catalog version key")
 	}
@@ -277,7 +278,7 @@ func TestSetupRemovesLimitsAfterRecovery(t *testing.T) {
 	backend, home, r := fixture(t)
 	backend.runCommand = fakeOwnedCommandFor(home)
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	ctx := context.Background()
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
@@ -298,7 +299,7 @@ func TestSetupRemovesLimitsAfterRecovery(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	r.Catalog = control.Catalog{Version: 5, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	setState(control.HealthError, control.PhaseReconciling)
 	latchedErr := backend.Apply(ctx, home, r)
 	if latchedErr == nil || !strings.Contains(latchedErr.Error(), "requires explicitly quiesced healthy Idle") || !acceptedRevision(t, r).Catalog.HasLimits() {
@@ -321,7 +322,7 @@ func TestSetupRemovesLimitsFromUserOwnedIdle(t *testing.T) {
 	backend, home, r := fixture(t)
 	backend.runCommand = fakeOwnedCommandFor(home)
 	profile, _ := ownedFixtureProfile(t, home, "vision", 9100)
-	r.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	ctx := context.Background()
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatal(err)
@@ -341,7 +342,7 @@ func TestSetupRemovesLimitsFromUserOwnedIdle(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	r.Catalog = control.Catalog{Version: 5, Profiles: []control.WorkloadProfile{profile}}
+	r.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 	if err := backend.Apply(ctx, home, r); err != nil {
 		t.Fatalf("apply that removes limits from a user-owned Idle = %v", err)
 	}

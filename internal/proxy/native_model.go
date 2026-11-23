@@ -23,7 +23,7 @@ func nativePolicy(ctx context.Context, catalog CatalogStore, config Config) (*co
 	if err != nil {
 		return nil, "", err
 	}
-	if snapshot.Revision != "" && !supportedCatalogVersion(snapshot.Catalog.Version) {
+	if snapshot.Revision != "" && !control.SupportedCatalogVersion(snapshot.Catalog.Version) {
 		return nil, "", errors.New("unsupported catalog version")
 	}
 	p, ok := snapshot.Catalog.Profile(config.Workload)
@@ -58,13 +58,6 @@ func checkNativeUpstream(n control.NativeModel, config Config) error {
 		return errors.New("native model requires matching upstream and no passthrough routes")
 	}
 	return nil
-}
-
-// supportedCatalogVersion is the proxy-side belt-and-braces guard: the proxy
-// reads the catalog without Validate, so it refuses versions it does not
-// understand rather than misinterpreting them.
-func supportedCatalogVersion(v int) bool {
-	return v == control.CatalogVersionLegacy || v == control.CatalogVersionOwned || v == control.CatalogVersionTrainer || v == control.CatalogVersionLimits || v == control.CatalogVersionServing
 }
 
 func nativeExecutionRoute(r Route) bool {

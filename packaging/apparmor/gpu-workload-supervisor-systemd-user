@@ -1,0 +1,12 @@
+# Lets the systemd user manager create the user namespace of the artifact
+# sandbox (PrivateUsers=yes) on hosts that restrict unprivileged user
+# namespaces, such as Ubuntu 23.10 and later. It grants nothing else.
+abi <abi/4.0>,
+
+include <tunables/global>
+
+profile gpu-workload-supervisor-systemd-user /usr/lib/systemd/systemd flags=(unconfined) {
+  userns,
+
+  include if exists <local/gpu-workload-supervisor-systemd-user>
+}

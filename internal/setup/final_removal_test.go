@@ -184,7 +184,7 @@ func TestFinalOwnedRemovalUsesContentProofs(t *testing.T) {
 			backend, home, request := fixture(t)
 			backend.runCommand = fakeOwnedCommandFor(home)
 			profile, raw := ownedFixtureProfile(t, home, "vision", 9100)
-			request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{profile}}
+			request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{profile}}
 			ctx := context.Background()
 			if err := backend.Apply(ctx, home, request); err != nil {
 				t.Fatal(err)

@@ -135,6 +135,8 @@ nfpms:
         dst: /usr/lib/systemd/user/gpu-workload-supervisor-idle.service
       - src: packaging/gpu-workload-supervisor-idle.timer
         dst: /usr/lib/systemd/user/gpu-workload-supervisor-idle.timer
+      - src: packaging/apparmor/gpu-workload-supervisor-systemd-user
+        dst: /usr/share/gpu-workload-supervisor/apparmor/gpu-workload-supervisor-systemd-user
       - src: LICENSE
         dst: /usr/share/doc/gpu-workload-supervisor/copyright
       - src: THIRD_PARTY_NOTICES/
@@ -148,6 +150,7 @@ archives:
       - LICENSE
       - README.md
       - THIRD_PARTY_NOTICES/**/*
+      - packaging/apparmor/gpu-workload-supervisor-systemd-user
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:

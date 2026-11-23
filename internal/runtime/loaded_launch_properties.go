@@ -5,6 +5,8 @@ import (
 	"strings"
 )
 
+var loadedLaunchPropertyNames = [...]string{"WorkingDirectory", "Wants", "KillSignal", "NoNewPrivileges", "PrivateTmp", "ProtectHome", "Type", "ProtectSystem", "PrivateUsers", "MountFlags", "ReadOnlyPaths", "ReadWritePaths", "BindReadOnlyPaths", "RuntimeDirectory", "RuntimeDirectoryMode"}
+
 // qualifiedLoadedProperty describes the canonical systemctl show evidence for
 // explicitly configured directives that affect paths, dependencies or isolation.
 func qualifiedLoadedProperty(key, value string) (string, bool) {
@@ -30,7 +32,7 @@ func qualifiedLoadedProperty(key, value string) (string, bool) {
 // CheckLoadedLaunchProperties requires effective loaded metadata to agree with
 // inspected source. Values and host paths are deliberately excluded from errors.
 func CheckLoadedLaunchProperties(observed, expected map[string]string) error {
-	for _, key := range []string{"WorkingDirectory", "Wants", "KillSignal", "NoNewPrivileges", "PrivateTmp", "ProtectHome", "ProtectSystem"} {
+	for _, key := range loadedLaunchPropertyNames {
 		want, required := expected[key]
 		if !required {
 			continue

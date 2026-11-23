@@ -58,7 +58,6 @@ func limitedRequest(t *testing.T, home string) (Request, control.WorkloadProfile
 	profile.NativeModel.Owned = &owned
 	refingerprint(t, &profile)
 	request := ownedFixtureRequest(t, home, profile)
-	request.Catalog.Version = control.CatalogVersionLimits
 	request.ConfirmQuiesced = true
 	return request, plain
 }
@@ -77,18 +76,18 @@ func TestApplyWritesUnitLimits(t *testing.T) {
 	}
 	accepted := acceptedRevision(t, request)
 	unit, err := os.ReadFile(filepath.Join(ownedUnitDirectory(home), plain.Unit))
-	if err != nil || accepted.Catalog.Version != control.CatalogVersionLimits || !accepted.Catalog.HasLimits() ||
+	if err != nil || accepted.Catalog.Version != control.CatalogVersionArtifactSandbox || !accepted.Catalog.HasLimits() ||
 		!bytes.Contains(unit, []byte("MemoryMax=8192M\n")) || len(checked) == 0 || checked[0] != "vision" {
 		t.Fatalf("applied catalog version %d, limits %v, checked %v: %v", accepted.Catalog.Version, accepted.Catalog.HasLimits(), checked, err)
 	}
-	request.Catalog = control.Catalog{Version: control.CatalogVersionLimits, Profiles: []control.WorkloadProfile{plain}}
+	request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{plain}}
 	request.ExpectedRevision = accepted.Revision
 	if err := backend.Apply(ctx, home, request); err != nil {
 		t.Fatalf("apply that removes the limits: %v", err)
 	}
 	_, plainUnit := ownedFixtureProfile(t, home, "vision", 9100)
 	unit, err = os.ReadFile(filepath.Join(ownedUnitDirectory(home), plain.Unit))
-	if accepted := acceptedRevision(t, request).Catalog; accepted.Version != 2 || accepted.HasLimits() || err != nil || !bytes.Equal(unit, plainUnit) {
+	if accepted := acceptedRevision(t, request).Catalog; accepted.Version != control.CatalogVersionArtifactSandbox || accepted.HasLimits() || err != nil || !bytes.Equal(unit, plainUnit) {
 		t.Fatalf("catalog after removal: version %d, limits %v: %v", accepted.Version, accepted.HasLimits(), err)
 	}
 }
@@ -113,7 +112,7 @@ func TestPreviewReportsTheHostCapStep(t *testing.T) {
 		t.Fatalf("preview with a failed step = %v", err)
 	}
 	request.HostCap = nil
-	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{plain}}
+	request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{plain}}
 	if preview, err := backend.Plan(home, request); err != nil || preview.HostCap == nil || preview.HostCap.Status != gpuruntime.HostCapNotNeeded {
 		t.Fatalf("preview without limits = %+v, %v", preview.HostCap, err)
 	}
@@ -133,7 +132,7 @@ func TestValidateHostCapValues(t *testing.T) {
 		t.Fatalf("host cap with a large stored reserve = %v", err)
 	}
 	request.Profile.LimitReserve = nil
-	request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{plain}}
+	request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{plain}}
 	if err := Validate(request); !errors.Is(err, errHostCapWithoutLimits) {
 		t.Fatalf("host cap without limits = %v", err)
 	}

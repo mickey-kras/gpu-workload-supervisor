@@ -21,8 +21,8 @@ func TestLegacyOwnedPrunedJournalAfterActualAbort(t *testing.T) {
 			ctx := context.Background()
 			backend, home, request := fixture(t)
 			backend.runCommand = fakeOwnedCommandFor(home)
-			a, rawA := ownedFixtureProfile(t, home, "a", 9100)
-			z, rawZ := ownedFixtureProfile(t, home, "z", 9200)
+			a, rawA := preSandboxOwnedFixtureProfile(t, home, "a", 9100)
+			z, rawZ := preSandboxOwnedFixtureProfile(t, home, "z", 9200)
 			z.NativeModel.Instance = "z"
 			prior := control.CatalogSnapshot{}
 			oldRawA := rawA
@@ -51,9 +51,9 @@ func TestLegacyOwnedPrunedJournalAfterActualAbort(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				a, rawA = ownedFixtureProfile(t, home, "a", 9300)
+				a, rawA = preSandboxOwnedFixtureProfile(t, home, "a", 9300)
 				if scenario == "incremental-edits-both" {
-					z, rawZ = ownedFixtureProfile(t, home, "z", 9400)
+					z, rawZ = preSandboxOwnedFixtureProfile(t, home, "z", 9400)
 					z.NativeModel.Instance = "z"
 				}
 				request.ExpectedRevision = prior.Revision
@@ -167,11 +167,11 @@ func TestDerivedOwnedOriginalRequestAfterActualPrecommitFailure(t *testing.T) {
 			a, _ := ownedFixtureProfile(t, home, "a", 9100)
 			z, _ := ownedFixtureProfile(t, home, "z", 9200)
 			z.NativeModel.Instance = "z"
-			request.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a, z}}
+			request.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{a, z}}
 			var priorCatalog control.Catalog
 			if scenario == "incremental-peer-add" {
 				initial := request
-				initial.Catalog = control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a}}
+				initial.Catalog = control.Catalog{Version: control.CatalogVersionArtifactSandbox, Profiles: []control.WorkloadProfile{a}}
 				if err := backend.Apply(ctx, home, initial); err != nil {
 					t.Fatal(err)
 				}
@@ -300,8 +300,8 @@ func TestLegacyOwnedPrunedJournalOmittedPeerProofGuards(t *testing.T) {
 			ctx := context.Background()
 			backend, home, request := fixture(t)
 			backend.runCommand = fakeOwnedCommandFor(home)
-			a, rawA := ownedFixtureProfile(t, home, "a", 9100)
-			z, rawZ := ownedFixtureProfile(t, home, "z", 9200)
+			a, rawA := preSandboxOwnedFixtureProfile(t, home, "a", 9100)
+			z, rawZ := preSandboxOwnedFixtureProfile(t, home, "z", 9200)
 			z.NativeModel.Instance = "z"
 			s := openStoreAt(t, request.Profile.StatePath)
 			accepted, err := s.ReplaceCatalog(ctx, "", control.Catalog{Version: 2, Profiles: []control.WorkloadProfile{a, z}})
@@ -333,11 +333,11 @@ func TestLegacyOwnedPrunedJournalOmittedPeerProofGuards(t *testing.T) {
 			foreignPath := filepath.Join(ownedUnitDirectory(home), z.Unit)
 			switch scenario {
 			case "changed-spec":
-				changed, _ := ownedFixtureProfile(t, home, "z", 9400)
+				changed, _ := preSandboxOwnedFixtureProfile(t, home, "z", 9400)
 				changed.NativeModel.Instance = "z"
 				request.Catalog.Profiles[1] = changed
 			case "new-unit", "foreign-new-file":
-				added, _ := ownedFixtureProfile(t, home, "extra", 9400)
+				added, _ := preSandboxOwnedFixtureProfile(t, home, "extra", 9400)
 				added.NativeModel.Instance = "extra"
 				request.Catalog.Profiles = append(request.Catalog.Profiles, added)
 				if scenario == "foreign-new-file" {

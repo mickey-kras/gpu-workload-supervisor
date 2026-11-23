@@ -145,7 +145,7 @@ func TestLimitsRequireCatalogVersion5(t *testing.T) {
 	if err := (Catalog{Version: 5, Profiles: []WorkloadProfile{invalid}}).Validate(); err == nil {
 		t.Fatal("v5 accepted an out-of-range limit")
 	}
-	if err := (Catalog{Version: 7, Profiles: []WorkloadProfile{p}}).Validate(); err == nil {
+	if err := (Catalog{Version: 8, Profiles: []WorkloadProfile{p}}).Validate(); err == nil {
 		t.Fatal("unknown catalog version accepted")
 	}
 }

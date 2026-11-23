@@ -177,7 +177,7 @@ func TestCheckLimitHost(t *testing.T) {
 	ctx := context.Background()
 	// The unit is not written yet, so its binding and properties are
 	// missing.
-	f.r.errs = map[string]error{f.bindingShow(): errors.New("no unit"), f.limitShow(): errors.New("no unit")}
+	f.r.errs = map[string]error{f.binding: errors.New("no unit"), f.limitShow(): errors.New("no unit")}
 	if err := f.m.CheckLimitHost(ctx, f.p.ID); err != nil {
 		t.Fatalf("host checks = %v", err)
 	}

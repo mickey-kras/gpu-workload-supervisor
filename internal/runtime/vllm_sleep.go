@@ -55,6 +55,9 @@ func (m *SystemdManager) Sleep(ctx context.Context, id control.Workload) (string
 // Wake resumes a hibernated vLLM unit from host RAM (/wake_up) when active,
 // or cold-starts the workload when the unit is stopped.
 func (m *SystemdManager) Wake(ctx context.Context, id control.Workload) error {
+	if m.config.ObservationOnly {
+		return errObservationOnly
+	}
 	p, ok := m.config.Catalog.Profile(id)
 	if !ok {
 		return errors.New("unconfigured workload")
@@ -97,7 +100,7 @@ func (m *SystemdManager) supportsSleepMode(p control.WorkloadProfile) bool {
 		return false
 	}
 	if n.Owned != nil {
-		return n.Owned.Serving.SleepMode
+		return p.HasArtifactSandbox() && n.Owned.Serving.SleepMode
 	}
 	sources, err := readLaunchSources(n.LaunchFile, n.DropIns)
 	if err != nil || fmt.Sprintf("%x", sha256.Sum256(sources[0])) != n.LaunchSHA256 {

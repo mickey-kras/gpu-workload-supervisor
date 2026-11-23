@@ -71,7 +71,7 @@ process.stdout.write(JSON.stringify(ui.calls.filter(call => ['verify-bindings', 
 		if err := Validate(candidate); err != nil {
 			t.Fatalf("UI emitted a backend-rejected catalog: %v", err)
 		}
-		if candidate.Catalog.Version != 2 {
+		if candidate.Catalog.Version != control.CatalogVersionArtifactSandbox {
 			t.Fatalf("owned catalog version = %d", candidate.Catalog.Version)
 		}
 	}

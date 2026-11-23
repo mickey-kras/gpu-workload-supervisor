@@ -35,6 +35,9 @@ type Request struct {
 	// HostCap holds the slice values of the host cap step, when a unit has
 	// limits. Setup fills the unset caps; see runtime.LimitReserve.HostCapFor.
 	HostCap *gpuruntime.HostCapValues `json:"hostCap,omitempty"`
+	// observation marks a request whose catalog had bindings stripped by
+	// setup; its runtime only proves bindings and release.
+	observation bool
 }
 type activation struct {
 	Request Request `json:"request"`
@@ -181,7 +184,9 @@ func SystemBackend() Backend {
 }
 
 func runtimeFor(request Request) (supervisor.Runtime, error) {
-	return gpuruntime.NewSystemdManager(request.Profile.SystemdConfig(&request.Catalog))
+	config := request.Profile.SystemdConfig(&request.Catalog)
+	config.ObservationOnly = request.observation
+	return gpuruntime.NewSystemdManager(config)
 }
 
 // Apply never stops workloads. A caller must explicitly bring the existing

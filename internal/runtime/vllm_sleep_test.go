@@ -40,6 +40,11 @@ func (r *sleepRunner) Run(ctx context.Context, name string, args ...string) ([]b
 
 func newSleepTestManager(t *testing.T, endpoint string) (*SystemdManager, *fakeRunner) {
 	t.Helper()
+	return newOwnedSleepFixture(t, endpoint, true)
+}
+
+func newOwnedSleepFixture(t *testing.T, endpoint string, sandbox bool) (*SystemdManager, *fakeRunner) {
+	t.Helper()
 	dir := t.TempDir()
 	key := filepath.Join(dir, "vllm.env")
 	tpl := filepath.Join(dir, "chat_template.jinja")
@@ -62,7 +67,7 @@ func newSleepTestManager(t *testing.T, endpoint string) (*SystemdManager, *fakeR
 	}
 	p := control.WorkloadProfile{ID: "text", Label: "Text", Adapter: "systemd", Unit: "gws-owned-text.service", Cgroup: "/user.test/app.slice/gws-owned-text.service", HealthURL: endpoint + "/health",
 		NativeModel: &control.NativeModel{Runtime: "vllm", Instance: "local", Endpoint: endpoint, Model: dir, GPUUUID: sleepGPU, LaunchFile: filepath.Join(dir, "gws-owned-text.service"), ChatTemplate: tpl, ChatTemplateSHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("{{ messages }}"))), EnvironmentFile: key,
-			Owned: &control.OwnedLaunch{Executable: executable, ModelPath: dir, Port: uint16(port), Serving: control.ServingOptions{Version: 1, SleepMode: true}}}}
+			Owned: &control.OwnedLaunch{ArtifactSandbox: sandbox, Executable: executable, ModelPath: dir, Port: uint16(port), Serving: control.ServingOptions{Version: 1, SleepMode: true}}}}
 	raw, err := RenderOwnedUnit(p)
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +82,9 @@ func newSleepTestManager(t *testing.T, endpoint string) (*SystemdManager, *fakeR
 	runner.outputs[rootShowCommand] = []byte("LoadState=loaded\nActiveState=active\nSubState=active\nControlGroup=/user.test\n")
 	runner.outputs["/usr/bin/true --query-gpu=uuid --format=csv,noheader -i "+sleepGPU] = []byte(sleepGPU + "\n")
 	runner.outputs["/usr/bin/true --query-gpu=memory.free,memory.total --format=csv,noheader,nounits -i "+sleepGPU] = []byte("32768, 32768\n")
-	m := &SystemdManager{config: SystemdConfig{Catalog: &control.Catalog{Version: control.CatalogVersionServing, Profiles: []control.WorkloadProfile{p}}, GPUUUID: sleepGPU, SystemctlPath: "/usr/bin/true", NvidiaSMIPath: "/usr/bin/true", HealthTimeout: time.Second},
+	catalog := control.Catalog{Profiles: []control.WorkloadProfile{p}}
+	catalog.Version = control.LowestCatalogVersion(catalog)
+	m := &SystemdManager{config: SystemdConfig{OwnedUnitDir: dir, Catalog: &catalog, GPUUUID: sleepGPU, SystemctlPath: "/usr/bin/true", NvidiaSMIPath: "/usr/bin/true", HealthTimeout: time.Second},
 		runner: &sleepRunner{fakeRunner: runner, unitShow: show}, client: &http.Client{Timeout: time.Second}, cgroups: cgroupFS{root: t.TempDir(), verify: func(int) error { return nil }}, gpuHost: defaultGPUProcessHost(), nativeExecutableValidator: func(string) error { return nil }}
 	launch, err := readVerifiedNativeLaunch(*p.NativeModel, m.nativeExecutableValidator)
 	if err != nil {
