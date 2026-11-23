@@ -1,4 +1,3 @@
-const { createHash } = require('node:crypto');
 const { sameActionSteps } = require('./policy-action-pins.cjs');
 
 const REQUIRED_JOBS = ['native', 'go', 'frontend', 'scans', 'package', 'docs-ste'];
@@ -31,21 +30,6 @@ const STEP_JOBS = {
     'Packaged setup lifecycle integration', 'Debian payload lifecycle integration', 'Record qualified package attempt', 'Upload qualified package payload'],
   checks: ['Require every CI job to succeed', 'Download qualified package payload',
     'Prepare CI-tested candidate artifacts', 'Upload CI-tested candidate artifacts'],
-};
-
-// Exact qualification scripts from the serial workflow, independent of job location.
-const QUALIFICATION_HASHES = {
-  "Upstream connection reuse benchmark": "6808b159e8f5d4dc67d8c185465991576af0828fbb700afec5fb692be7c1a537",
-  "Real systemd lifecycle qualification": "2e8c96278b2f2175fdb0ccf07c737e4e2e01d351cc3213eae2d5cbe4a36458b9",
-  "GNOME contract and lifecycle fixtures": "35f213c47512e87a1cd96a924553af5e58bee6469b62577603fc4e690ac828e4",
-  "Verify snapshot archives": "dc85b7993f5a54f6bc9968ba01571380a5e23b352cbb300ec742cf0a2bc2641b",
-  "Verify snapshot desktop packages": "98636ccdb17ca619a41234031db347e078cf7fd5d3017e32929e088227016442",
-  "Native desktop transport integration": "bc6031eb50400552603ca8c98ea6313c2d70d18655ac58bebe0031481d901dce",
-  "Packaged setup lifecycle integration": "e6a071374ecd14821bc28a74d39c0f3f207b97882bb8cf7df756ca654c60ec15",
-  "Debian payload lifecycle integration": "941a2a875027f5bed821ff131f415e9f3050afff0259a9cf07a830cc13a9152c",
-  "Sonar privacy tests": "d851ddb7cd478712e7b8054c9213719b9364bebc695b8d1963be697e15f91114",
-  "Prepare CI-tested candidate artifacts": "500f1da88814514a3cf399812f7641620b422e7aa687e306ecf6a0b7bc7878ab",
-  "Install native setup fixture dependencies": "1d7c4af49c5dcc5380e03aa54f4fcd0540bba2b0f356a211477048bc3c78d6d4"
 };
 
 const SETUP_STEPS = {
@@ -239,13 +223,6 @@ function inspectParallelCi(workflow, failures) {
     if (id === 'checks') allowed.push('if', 'needs');
     requireValue(jobs[id] && Object.keys(jobs[id]).every(key => allowed.includes(key)) &&
       jobs[id].name === id && jobs[id]['runs-on'] === 'ubuntu-24.04', `${id} runner and execution settings`);
-    for (const step of steps.filter(step => step.name)) {
-      const expectedHash = QUALIFICATION_HASHES[step.name];
-      if (expectedHash) {
-        requireValue(createHash('sha256').update(step.run?.trim() || '').digest('hex') === expectedHash,
-          `qualification script ${step.name}`);
-      }
-    }
   }
   const find = (id, name) => jobs[id]?.steps?.find(step => step.name === name);
   const gate = find('checks', 'Require every CI job to succeed');

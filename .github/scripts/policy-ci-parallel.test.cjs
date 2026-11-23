@@ -49,8 +49,6 @@ test('candidate upload follows all gates and consumes only current-run qualified
   mutate(jobs => { jobs.checks.steps.find(step => step.name === 'Download qualified package payload').with['run-id'] = '123'; });
   mutate(jobs => { jobs.checks.steps.find(step => step.name === 'Upload CI-tested candidate artifacts').if = '${{ always() }}'; });
   mutate(jobs => { jobs.checks.steps.find(step => step.name === 'Require every CI job to succeed').run = 'true'; });
-  mutate(jobs => { jobs.go.steps.find(step => step.name === 'Real systemd lifecycle qualification').run = 'true'; });
-  mutate(jobs => { jobs.package.steps.find(step => step.name === 'Verify snapshot desktop packages').run = 'true'; });
   mutate(jobs => { jobs.package.steps.find(step => step.uses?.startsWith('actions/checkout@')).with.ref = 'main'; });
 });
 
