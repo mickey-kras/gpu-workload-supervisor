@@ -36,6 +36,8 @@ func (r *trainingStopRuntime) TrainingExited(context.Context, control.WorkloadPr
 func trainingStopContract(t *testing.T, exitAfter int) (*Controller, *trainingStopRuntime, control.TrainingJob) {
 	t.Helper()
 	_, s, base, job := trainingControllerContract(t)
+	// A signalled trainer writes no receipt unless a test sets one.
+	base.terminal, base.terminalErr = control.TrainingTerminal{}, errors.New("trainer has not exited")
 	r := &trainingStopRuntime{trainingContractRuntime: base, exitAfter: exitAfter}
 	c := testController(t, s, r)
 	c.config.VerifyTimeout = 5 * time.Millisecond
@@ -57,7 +59,22 @@ func TestStopTrainingWaitsForCheckpointExit(t *testing.T) {
 		t.Fatalf("status=%s: %v", stored.Status, err)
 	}
 	assertCalls(t, r.calls, "stop trainer")
-	assertCalls(t, r.trainingCalls, "peak", "release")
+	assertCalls(t, r.trainingCalls, "terminal", "peak", "release")
+}
+
+// A trainer that completes during the grace window keeps its completed
+// receipt instead of a cancellation.
+func TestStopTrainingKeepsCompletionDuringGrace(t *testing.T) {
+	c, r, job := trainingStopContract(t, 1)
+	r.terminalErr = nil
+	r.terminal = control.TrainingTerminal{Version: 1, ID: job.ID, Token: job.Token, Fence: job.Fence, RecipeSHA256: job.RecipeSHA256, InvocationID: job.InvocationID, Outcome: "completed"}
+	if _, err := c.StopTraining(context.Background(), job.ID, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := c.store.TrainingJob(context.Background(), job.ID)
+	if err != nil || stored.Status != "completed" {
+		t.Fatalf("status=%s: %v", stored.Status, err)
+	}
 }
 
 func TestStopTrainingEscalatesAfterGrace(t *testing.T) {
@@ -107,7 +124,7 @@ func TestStopTrainingRacingCompletionStillVerifiesRelease(t *testing.T) {
 	if err != nil || stop.Escalated {
 		t.Fatalf("escalated=%v: %v", stop.Escalated, err)
 	}
-	assertCalls(t, r.trainingCalls, "peak", "release")
+	assertCalls(t, r.trainingCalls, "terminal", "peak", "release")
 }
 
 func TestStopTrainingKeepsJobUntilReleaseIsProven(t *testing.T) {

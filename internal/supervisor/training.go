@@ -276,6 +276,28 @@ func (c *Controller) StopTraining(ctx context.Context, id string, grace time.Dur
 			return result, err
 		}
 	}
-	result.State, err = c.finishTraining(ctx, p, job, "cancelled")
+	outcome := "cancelled"
+	if !result.Escalated {
+		if outcome, err = c.stopOutcome(ctx, p, job); err != nil {
+			return result, err
+		}
+	}
+	result.State, err = c.finishTraining(ctx, p, job, outcome)
 	return result, err
+}
+
+// stopOutcome keeps a completed receipt that the trainer wrote during the
+// grace window. Any other exit after the stop signal is a cancellation.
+func (c *Controller) stopOutcome(ctx context.Context, p control.WorkloadProfile, job control.TrainingJob) (string, error) {
+	actionCtx, cancel := context.WithTimeout(ctx, c.config.ActionTimeout)
+	evidence, err := c.runtime.TrainingTerminal(actionCtx, p, job)
+	cancel()
+	if err != nil || !evidence.Matches(job) || evidence.Outcome != "completed" {
+		return "cancelled", nil
+	}
+	// No cleanup effect is allowed until the receipt is durably committed.
+	if err := c.store.RecordTrainingTerminal(ctx, job, evidence); err != nil {
+		return "", err
+	}
+	return evidence.Outcome, nil
 }
