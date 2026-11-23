@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 // MaxTemplateBytes bounds the chat template text. The templates of common
@@ -104,7 +105,8 @@ func limitOf(name string) (int64, string) {
 // file holds none. chat_template.json must hold one.
 func templateText(name string, raw []byte) (string, bool, string) {
 	if strings.HasSuffix(name, ".jinja") {
-		if len(raw) == 0 {
+		// vLLM cannot decode a template that is not valid UTF-8.
+		if len(raw) == 0 || !utf8.Valid(raw) {
 			return "", false, ReasonTemplateInvalid
 		}
 		return string(raw), true, ""

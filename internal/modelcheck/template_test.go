@@ -74,6 +74,7 @@ func TestTemplateCheckResults(t *testing.T) {
 		"not a string":       {map[string]string{"chat_template.json": `{"chat_template":7}`}, OutcomeFailed, ReasonTemplateInvalid},
 		"null":               {map[string]string{"tokenizer_config.json": `{"chat_template":null}`}, OutcomeUnsupported, ReasonNoTemplate},
 		"empty":              {map[string]string{"chat_template.jinja": ""}, OutcomeFailed, ReasonTemplateInvalid},
+		"invalid UTF-8":      {map[string]string{"chat_template.jinja": "{{ messages }}\xff"}, OutcomeFailed, ReasonTemplateInvalid},
 		"no key":             {map[string]string{"chat_template.json": `{"other":"x"}`}, OutcomeFailed, ReasonTemplateInvalid},
 		"too large file":     {map[string]string{"chat_template.jinja": strings.Repeat("x", MaxTemplateBytes+1)}, OutcomeUnsupported, ReasonTemplateTooLarge},
 	} {
