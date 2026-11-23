@@ -240,7 +240,7 @@ func (c *Controller) loadTransition(ctx context.Context, transitionID string, st
 			return state, err
 		}
 		err = c.effect(ctx, transitionID, state.Phase, "start "+string(target), func(actionCtx context.Context) error {
-			return c.wakeOrStart(actionCtx, target)
+			return c.runtime.Start(actionCtx, target)
 		})
 	}
 	return state, err

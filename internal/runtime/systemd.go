@@ -67,7 +67,7 @@ type SystemdConfig struct {
 	// ObservationOnly builds a manager that only proves bindings and
 	// release. Setup strips bindings that cannot run from its observation
 	// catalogs, so such a profile may lack GPU identity; the manager then
-	// refuses to start or wake any workload.
+	// refuses to start any workload.
 	ObservationOnly bool
 }
 

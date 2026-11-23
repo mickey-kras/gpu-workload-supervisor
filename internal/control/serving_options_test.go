@@ -40,10 +40,6 @@ func TestServingOptionsRenderDefaultsExplicitly(t *testing.T) {
 	if got := full.Args(); !slices.Equal(got, want) {
 		t.Fatalf("full = %q, want %q", got, want)
 	}
-	sleeping := ServingOptions{Version: 1, SleepMode: true}.Args()
-	if !slices.Contains(sleeping, FlagEnableSleepMode) {
-		t.Fatalf("sleepMode did not render %s: %q", FlagEnableSleepMode, sleeping)
-	}
 }
 
 func TestServingOptionsBounds(t *testing.T) {
@@ -148,16 +144,12 @@ func TestGPUReservation(t *testing.T) {
 	}
 }
 
-func TestSleepingOwnedUnitsDoNotStopTheirPeersThroughConflicts(t *testing.T) {
-	p := servingProfile(ServingOptions{Version: 1, SleepMode: true})
+func TestOwnedUnitsConflictWithTheirPeers(t *testing.T) {
+	p := servingProfile(ServingOptions{Version: 1})
 	q := ownedVLLMProfile()
 	q.ID, q.Unit = "other", "gws-owned-other.service"
 	c := Catalog{Profiles: []WorkloadProfile{p, q}}
-	if c.OwnedConflictUnits(p) != "" || c.OwnedConflictUnits(q) != "" {
-		t.Fatal("systemd would stop the sleeping process and lose its RAM cache")
-	}
-	p.NativeModel.Owned.Serving.SleepMode = false
 	if c.OwnedConflictUnits(p) != q.Unit || c.OwnedConflictUnits(q) != p.Unit {
-		t.Fatal("ordinary owned units lost their conflict backstop")
+		t.Fatal("owned units lost their conflict backstop")
 	}
 }
