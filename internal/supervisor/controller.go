@@ -52,12 +52,6 @@ type Runtime interface {
 	gpuProcessRuntime
 }
 
-// HibernatableRuntime parks a runtime without ending its service.
-type HibernatableRuntime interface {
-	Sleep(context.Context, control.Workload) (string, error)
-	Wake(context.Context, control.Workload) error
-}
-
 // storeGateway is the part of *store.Store that the controller uses. Tests
 // wrap a real store to inject write failures and cancellations at chosen
 // steps.

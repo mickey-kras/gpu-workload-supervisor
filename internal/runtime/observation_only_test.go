@@ -11,9 +11,6 @@ func TestObservationOnlyRuntimeRefusesExecution(t *testing.T) {
 	if err := m.Start(context.Background(), "text"); !errors.Is(err, errObservationOnly) {
 		t.Fatalf("start = %v", err)
 	}
-	if err := m.Wake(context.Background(), "text"); !errors.Is(err, errObservationOnly) {
-		t.Fatalf("wake = %v", err)
-	}
 }
 
 type statusRunner struct{ status string }
