@@ -608,7 +608,7 @@ Read the service journal for the cause and the limit outcome. Run `resolve-work`
 
 `policy.timeoutMinutes`: 0 (Off) or 5–1440 minutes. `settingsRevision` is an opaque token rotated on every committed write.
 
-`set-idle-policy` combines fresh status's complete `expected` with settings revision from fresh **get-settings**, never status. Its writer transaction revalidates both revisions plus incarnation, version and owner, rotates settings revision and clears armed deadlines. It never interrupts unstable state or transitions. Success returns only updated settings.
+`set-idle-policy` combines fresh status's complete `expected` with settings revision from fresh **get-settings**, never status. Its writer transaction revalidates both revisions plus incarnation, version and owner, rotates settings revision and restarts the idle clock. It never interrupts unstable state or transitions. Success returns only updated settings.
 
 Enablement commits like Off, and the [policy tick](#inactivity-policy-tick) applies it. Stale settings → `stale_state`, running transition → `busy`, invalid timeout → `invalid_request`. Both actions use status lifetimes. Older peers' strict `invalid_request` means idle policy unavailable. Older peers also return `unavailable` for enablement.
 

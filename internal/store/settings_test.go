@@ -359,3 +359,20 @@ func TestSetIdlePolicyDuringLiveTransitionReportsBusy(t *testing.T) {
 		t.Fatalf("busy write changed policy: %#v", settings.Policy)
 	}
 }
+
+// Enabling the policy after a quiet period must not stop the workload at the
+// next tick: the settings write restarts the idle clock.
+func TestSetIdlePolicyRestartsIdleClock(t *testing.T) {
+	s := settingsStore(t)
+	ctx := context.Background()
+	e, _ := stableSettingsFixture(t, s)
+	later := s.now().Add(3 * time.Hour)
+	s.now = func() time.Time { return later }
+	enabled, err := s.SetIdlePolicy(ctx, e, control.IdlePolicy{TimeoutMinutes: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled.LastActivityAt == nil || !enabled.LastActivityAt.Equal(later) {
+		t.Fatalf("enable did not restart the idle clock: %#v", enabled.LastActivityAt)
+	}
+}

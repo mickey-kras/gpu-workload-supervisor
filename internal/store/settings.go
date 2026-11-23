@@ -79,7 +79,9 @@ func (s *Store) setIdlePolicy(ctx context.Context, tx *sql.Tx, e control.Setting
 			WHERE singleton = 1`, revision, p.TimeoutMinutes, now); err != nil {
 		return control.PolicyState{}, err
 	}
-	if err := s.disarmIdleDeadline(ctx, tx); err != nil {
+	// A settings change restarts the idle clock, so enabling the policy
+	// never stops a workload that was simply quiet before.
+	if err := s.touchActivity(ctx, tx); err != nil {
 		return control.PolicyState{}, err
 	}
 	return readPolicyState(ctx, tx)
