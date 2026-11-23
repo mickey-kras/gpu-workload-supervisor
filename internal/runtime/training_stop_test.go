@@ -53,3 +53,17 @@ func TestTrainingExitedReadsTrainerState(t *testing.T) {
 		t.Fatalf("missing invocation: %v", err)
 	}
 }
+
+// A trainer whose main process exited while a child still saves its
+// checkpoint has not exited: the grace window must continue.
+func TestTrainingExitedWaitsForTrainerChildren(t *testing.T) {
+	m, _, p, job, _ := trainerContractFixture(t)
+	writeEvents(t, m.cgroups.root, strings.TrimPrefix(p.Cgroup, "/"), "populated 1\n")
+	if err := m.TrainingExited(context.Background(), p, job); !errors.Is(err, errCgroupPopulated) {
+		t.Fatalf("populated trainer cgroup = %v", err)
+	}
+	writeEvents(t, m.cgroups.root, strings.TrimPrefix(p.Cgroup, "/"), "populated 0\n")
+	if err := m.TrainingExited(context.Background(), p, job); err != nil {
+		t.Fatalf("empty trainer cgroup = %v", err)
+	}
+}

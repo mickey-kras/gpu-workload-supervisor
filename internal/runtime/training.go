@@ -378,8 +378,10 @@ func (m *SystemdManager) SignalTraining(ctx context.Context, p control.WorkloadP
 	return err
 }
 
-// TrainingExited tells whether the job's trainer process has ended. It is not
-// release evidence: ReleaseTraining still checks the cgroup and the GPU.
+// TrainingExited tells whether every process of the job's trainer has ended.
+// A main process can exit while a child still saves the checkpoint, so the
+// recursive unit cgroup must be empty too. It is not release evidence:
+// ReleaseTraining still checks the unit state and the GPU.
 func (m *SystemdManager) TrainingExited(ctx context.Context, p control.WorkloadProfile, job control.TrainingJob) error {
 	v, err := m.trainerProperties(ctx, p)
 	if err != nil {
@@ -390,7 +392,7 @@ func (m *SystemdManager) TrainingExited(ctx context.Context, p control.WorkloadP
 	}
 	switch {
 	case v["ActiveState"] == "failed", v["ActiveState"] == "inactive", v["ActiveState"] == "active" && v["SubState"] == "exited":
-		return nil
+		return m.cgroups.empty(p.Cgroup)
 	}
 	return errors.New("trainer is still running")
 }
