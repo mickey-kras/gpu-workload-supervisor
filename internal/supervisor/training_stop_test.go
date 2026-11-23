@@ -129,3 +129,22 @@ func TestStopTrainingKeepsJobUntilReleaseIsProven(t *testing.T) {
 		t.Fatal("recovery relaunched the trainer")
 	}
 }
+
+// A job whose trainer exit is already recorded keeps that outcome and gets
+// no signal; only its cleanup runs again.
+func TestStopTrainingKeepsRecordedOutcome(t *testing.T) {
+	c, r, job := trainingStopContract(t, 0)
+	ctx := context.Background()
+	evidence := control.TrainingTerminal{Version: 1, ID: job.ID, Token: job.Token, Fence: job.Fence, RecipeSHA256: job.RecipeSHA256, InvocationID: job.InvocationID, Outcome: "completed"}
+	if err := c.store.RecordTrainingTerminal(ctx, job, evidence); err != nil {
+		t.Fatal(err)
+	}
+	stop, err := c.StopTraining(ctx, job.ID, time.Second)
+	if err != nil || stop.Escalated || len(r.signals) != 0 {
+		t.Fatalf("stop = %+v signals=%v: %v", stop, r.signals, err)
+	}
+	stored, err := c.store.TrainingJob(ctx, job.ID)
+	if err != nil || stored.Status != "completed" {
+		t.Fatalf("status=%s: %v", stored.Status, err)
+	}
+}

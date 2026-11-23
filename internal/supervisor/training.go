@@ -253,6 +253,12 @@ func (c *Controller) StopTraining(ctx context.Context, id string, grace time.Dur
 	if job.InvocationID == "" {
 		return TrainingStop{}, errors.New("trainer has no launch evidence; use training-recover")
 	}
+	// A durable terminal outcome means the trainer already exited; only its
+	// cleanup failed. Keep that outcome, as recovery does, and send nothing.
+	if job.TerminalOutcome != "" {
+		state, err := c.finishTraining(ctx, p, job, job.TerminalOutcome)
+		return TrainingStop{State: state}, err
+	}
 	signal := func(name string) error {
 		return c.runAction(ctx, func(actionCtx context.Context) error { return stopper.SignalTraining(actionCtx, p, job, name) })
 	}
