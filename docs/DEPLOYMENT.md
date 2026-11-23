@@ -173,6 +173,8 @@ Supervised execution needs gates with no bypass during supervisor ownership. All
 
 Same-identity processes have full trust. Strong isolation needs [separate identities](../SECURITY.md).
 
+Run agents and tool executors as a different UID. See [agents and tool executors](../SECURITY.md#agents-and-tool-executors).
+
 ## Qualify the host
 
 Run `go test -race -count=1 -timeout=10m -tags=systemd_integration -run '^TestSystemd' -v ./internal/supervisor` with real user-systemd and cgroup v2 prerequisites.
