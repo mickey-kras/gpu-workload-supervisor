@@ -64,6 +64,7 @@ gpu-mode -target trainer -training-job unique-job-id training-start
 gpu-mode -training-job unique-job-id training-status
 gpu-mode -training-job unique-job-id training-reconcile
 gpu-mode -training-job unique-job-id training-recover
+gpu-mode -training-job unique-job-id -stop-grace 2m training-stop
 ```
 
 | Operation | Admission and recovery rules |
@@ -73,6 +74,7 @@ gpu-mode -training-job unique-job-id training-recover
 | Active job | Routine switches, auto-idle, catalog replacement and generic recovery cannot discard admission. Status redacts the token. |
 | Reconcile | Read evidence without starting training. Durably bind the validated terminal outcome before cleanup. Retry failed cleanup or finalization without losing it. Keep admission pending until verified release. |
 | Recover | Missing, stale or ambiguous evidence leaves the job pending. After launch or controller crashes, `training-recover` explicitly stops the configured trainer and verifies release. Preserve any durable verified outcome. Otherwise record `interrupted`. Never retry launch. |
+| Stop | `training-stop` sends SIGTERM to every trainer process, so the trainer can save its own checkpoint. After `-stop-grace` (default 2 minutes) without exit, it sends SIGKILL and reports `"escalated": true`. Then it verifies cgroup and GPU release and records `cancelled`. The supervisor does not read or check the checkpoint. To resume, start a new job with the trainer's own resume options. |
 | Retry | Failed stop or release keeps the job pending. Retry recovery. Use a new ID only after the prior job becomes terminal. Resume integrations need a new job and fence. |
 
 ### Memory peak

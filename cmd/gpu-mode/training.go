@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
@@ -48,7 +50,7 @@ func validateTrainingFlags(command, id string, allRestored bool) error {
 		return nil
 	}
 	switch command {
-	case trainingStartCommand, "training-status", "training-reconcile", trainingRecoverCommand:
+	case trainingStartCommand, "training-status", "training-reconcile", trainingRecoverCommand, trainingStopCommand:
 		return control.ValidateRequestID(id)
 	default:
 		if strings.HasPrefix(command, "training-") {
@@ -59,4 +61,17 @@ func validateTrainingFlags(command, id string, allRestored bool) error {
 		}
 		return nil
 	}
+}
+
+// validateStopGrace accepts -stop-grace only for training-stop.
+func validateStopGrace(flags *flag.FlagSet, command string, grace time.Duration) error {
+	given := false
+	flags.Visit(func(f *flag.Flag) { given = given || f.Name == "stop-grace" })
+	if given && command != trainingStopCommand {
+		return errors.New("-stop-grace requires training-stop")
+	}
+	if grace <= 0 {
+		return errors.New("-stop-grace must be positive")
+	}
+	return nil
 }

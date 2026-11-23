@@ -353,3 +353,44 @@ func validInvocationID(id string) bool {
 	}
 	return id != strings.Repeat("0", 32)
 }
+
+// Signals that a training stop may send to the trainer unit.
+const (
+	TrainingStopSignal = "SIGTERM"
+	TrainingKillSignal = "SIGKILL"
+)
+
+// SignalTraining sends signal to every process of the job's trainer unit.
+// SIGTERM lets the trainer save its own checkpoint; SIGKILL ends it after the
+// grace window. The invocation fence keeps a signal from reaching a later run.
+func (m *SystemdManager) SignalTraining(ctx context.Context, p control.WorkloadProfile, job control.TrainingJob, signal string) error {
+	if signal != TrainingStopSignal && signal != TrainingKillSignal {
+		return fmt.Errorf("unsupported training stop signal %q", signal)
+	}
+	v, err := m.trainerProperties(ctx, p)
+	if err != nil {
+		return err
+	}
+	if job.InvocationID == "" || v["InvocationID"] != job.InvocationID {
+		return ErrLaunchChanged
+	}
+	_, err = m.runner.Run(ctx, m.config.SystemctlPath, systemctlUserFlag, "kill", "--signal="+signal, "--", p.Unit)
+	return err
+}
+
+// TrainingExited tells whether the job's trainer process has ended. It is not
+// release evidence: ReleaseTraining still checks the cgroup and the GPU.
+func (m *SystemdManager) TrainingExited(ctx context.Context, p control.WorkloadProfile, job control.TrainingJob) error {
+	v, err := m.trainerProperties(ctx, p)
+	if err != nil {
+		return err
+	}
+	if job.InvocationID == "" || v["InvocationID"] != job.InvocationID {
+		return ErrLaunchChanged
+	}
+	switch {
+	case v["ActiveState"] == "failed", v["ActiveState"] == "inactive", v["ActiveState"] == "active" && v["SubState"] == "exited":
+		return nil
+	}
+	return errors.New("trainer is still running")
+}
