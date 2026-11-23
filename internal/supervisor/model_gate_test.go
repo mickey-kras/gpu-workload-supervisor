@@ -206,3 +206,26 @@ func TestModelCheckGateSkipsSwitchToRunningWorkload(t *testing.T) {
 		t.Fatalf("same-workload switch = %+v, calls %v: %v", state, r.calls, err)
 	}
 }
+
+// A user-owned source stops every user runtime, so a switch to the running
+// user workload restarts it. The gate must refuse it before any stop.
+func TestModelCheckGateRefusesUserRestartBeforeStop(t *testing.T) {
+	ctx := context.Background()
+	c, s, r := gateController(t, gatePin)
+	state, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Owner, state.ActiveWorkload, state.DesiredWorkload = control.OwnerUser, "speech", "speech"
+	if state, err = s.UpdateState(ctx, state.Version, state); err != nil {
+		t.Fatal(err)
+	}
+	r.calls = nil
+	if _, err := c.SwitchUser(ctx, "speech", "test"); !errors.Is(err, modelcheck.ErrLaunchRefused) {
+		t.Fatalf("user restart without a result = %v", err)
+	}
+	after, err := s.State(ctx)
+	if err != nil || after != state || len(r.calls) != 0 {
+		t.Fatalf("a refused restart had effects: %+v %v %v", after, err, r.calls)
+	}
+}

@@ -77,7 +77,7 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 			return current, err
 		}
 	}
-	if err := c.refuseModelCheck(ctx, target, !startsTarget(current, target, options)); err != nil {
+	if err := c.refuseModelCheck(ctx, target, !launchesTarget(current, target, options)); err != nil {
 		return current, err
 	}
 	preflight := c.preflight
@@ -109,6 +109,16 @@ func (c *Controller) transitionConditional(ctx context.Context, target control.W
 // recovery and a takeover start nothing, and a running target is kept.
 func startsTarget(current control.State, target control.Workload, options transitionOptions) bool {
 	return !options.verifyOnly && !options.preserve && target != control.WorkloadIdle && current.ActiveWorkload != target
+}
+
+// launchesTarget reports whether the transition will start target, for the
+// model gate. A user-owned source stops every user runtime first, so it
+// restarts even a target that already runs.
+func launchesTarget(current control.State, target control.Workload, options transitionOptions) bool {
+	if options.verifyOnly || options.preserve || target == control.WorkloadIdle {
+		return false
+	}
+	return current.ActiveWorkload != target || current.Owner == control.OwnerUser
 }
 
 func (c *Controller) transitionSource(ctx context.Context, options transitionOptions) (control.State, error) {
