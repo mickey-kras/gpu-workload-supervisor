@@ -54,7 +54,7 @@ const (
 	OutcomeNotRun      Outcome = "not_run"
 )
 
-// Coverage tells whether every check ran.
+// Coverage records whether every check ran.
 type Coverage string
 
 const (
@@ -208,8 +208,8 @@ func (r Record) validTemplate() bool {
 	return r.ChatTemplateSHA256 == "" && r.TemplateFile == ""
 }
 
-// statusOf gives the status of the first check that did not pass. A check
-// that did not run after passing checks leaves the model not scanned.
+// statusOf returns the status of the first check that did not pass. A check
+// that did not run after passing checks leaves the model not_scanned.
 func statusOf(checks []Check) Status {
 	for _, check := range checks {
 		switch check.Outcome {
@@ -271,12 +271,11 @@ func ReadRecord(raw []byte) (Record, error) {
 	return record, nil
 }
 
-// Current gives the status that applies to the model files on disk now. It
-// takes a fresh inventory of root. An inventory error, an inventory problem
-// that the record does not hold, or a record for other digests, another
-// root, another checker version or another configuration leaves the model
-// not scanned: results never carry over to changed or other models, and a
-// new checker checks again.
+// Current returns the status that applies to the model files on disk now,
+// from a fresh inventory of root. An inventory error, an inventory problem
+// the record does not hold, or a record for other digests, root, checker
+// version or configuration leaves the model not_scanned: results never carry
+// over to changed or other models, and a new checker checks again.
 func Current(ctx context.Context, r *Record, model, root string, checker Checker) Status {
 	if r == nil || r.Model != model || r.Root != root || r.Checker != checker.Version || r.Configuration != CurrentConfiguration() {
 		return StatusNotScanned
@@ -287,8 +286,8 @@ func Current(ctx context.Context, r *Record, model, root string, checker Checker
 	return r.Status
 }
 
-// filesMatch takes a fresh inventory of root and reports that it equals
-// the files of r. An inventory error gives the error and no match.
+// filesMatch reports whether a fresh inventory of root equals the files of
+// r. An inventory error returns the error and no match.
 func filesMatch(ctx context.Context, r Record, root string) (bool, error) {
 	files, reason, err := Inventory(ctx, root)
 	if err != nil {

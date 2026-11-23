@@ -29,7 +29,7 @@ func profileFlagValues(p operator.Profile) map[string]string {
 	}
 }
 
-// usesRuntime tells whether a command builds the runtime and so needs the
+// usesRuntime reports whether a command builds the runtime and so needs the
 // trusted executables. The other commands use only -state.
 func usesRuntime(command string) bool {
 	switch command {
@@ -39,8 +39,8 @@ func usesRuntime(command string) bool {
 	return true
 }
 
-// applyProfileDefaults gives each runtime flag that the command line omits
-// the value of the activated operator profile. The profile applies only to
+// applyProfileDefaults sets each runtime flag that the command line omits
+// to the activated operator profile's value. The profile applies only to
 // its own state path: with -state naming another database, every flag
 // comes from the command line, as without a profile. An explicit flag that
 // disagrees with the profile fails, so that manual commands and automation

@@ -74,8 +74,8 @@ var (
 	ErrCheckTimedOut = errors.New("model check stopped at its time limit")
 )
 
-// Stopped gives the error of a run whose context ended: a time limit is
-// not a cancel. It gives nil while ctx is live.
+// Stopped returns the error for a run whose context ended, keeping a
+// timeout distinct from a cancel. It returns nil while ctx is live.
 func Stopped(ctx context.Context) error {
 	switch {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):

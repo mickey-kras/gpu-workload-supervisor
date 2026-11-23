@@ -60,7 +60,7 @@ export const limitFields = [
     {key: 'ioWeight', title: 'I/O weight', ...weight, advanced: true, io: true},
 ];
 
-// readField gives the stored value of one field. An unedited field keeps
+// readField returns the value of one field. An unedited field keeps
 // its stored value, so a value that the form cannot show exactly is never
 // changed by a save.
 function readField(field, row, stored) {
@@ -74,7 +74,7 @@ function readField(field, row, stored) {
     return {value};
 }
 
-// checkLimits gives the first plain problem of a limits object, or null.
+// checkLimits returns the first plain-language problem with limits, or null.
 export function checkLimits(limits) {
     for (const field of limitFields.filter(item => item.required)) {
         if (!limits[field.key]) return `Enter a value for ${field.title}.`;
@@ -156,8 +156,8 @@ export class UnitLimitsForm {
         this.usage.visible = Boolean(usage);
         if (usage) this.usage.label = `Host memory ceiling: ${formatGiB(usage.ceilingMiB)} GiB. In use now: ${formatGiB(usage.memoryInUseMiB)} GiB. ${formatGiB(usage.pageCacheMiB)} GiB of page cache that the kernel can free does not count.`;
     }
-    // value gives the form value. With quiet, it does not show or hide the
-    // error text.
+    // value returns the form value. With quiet, it leaves the error text
+    // visibility alone.
     value(quiet = false) {
         if (!quiet) this.error.visible = false;
         if (!this.enable.active) return this.initial ? null : undefined;
@@ -255,8 +255,8 @@ export function limitErrorText(message) {
     return null;
 }
 
-// limitSummary gives the plain summary of a setup error, or null when the
-// error is no limit error.
+// limitSummary returns a plain summary of a setup limit error, or null for
+// other errors.
 export function limitSummary(error) {
     return error instanceof PlainLimitError ? error.message : limitErrorText(error.message);
 }

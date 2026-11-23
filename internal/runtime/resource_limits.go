@@ -203,7 +203,7 @@ func (m *SystemdManager) VerifyLaunchLimits(ctx context.Context, workload contro
 // unit with limits: the binding, the host protection checks and the cgroup
 // readback. The supervisor calls it before it retains a running unit. It
 // leaves out the slice memory check, because the running unit already holds
-// its memory in the slice. It changes nothing.
+// its memory in the slice. It is read-only.
 func (m *SystemdManager) VerifyLimitProtection(ctx context.Context, workload control.Workload) error {
 	p, limited, err := m.limitedProfile(workload)
 	if err != nil || !limited {
@@ -286,8 +286,8 @@ func (m *SystemdManager) checkLimitHost(ctx context.Context, l control.ResourceL
 // requireManagerFiles checks the interface files at the user manager root
 // that the readback of the unit needs. Each host protection check runs it.
 // The readback reads memory.swap.max whenever the memory controller is in
-// use, and MemoryMax renders MemorySwapMax. Only iocost gives the io.weight
-// file, and the readback reads it also when BFQ applies the weight.
+// use, and MemoryMax renders MemorySwapMax. Only iocost provides the
+// io.weight file, and the readback reads it even when BFQ applies the weight.
 func (m *SystemdManager) requireManagerFiles(root string, l control.ResourceLimits) error {
 	var files []limitFile
 	if l.UsesMemory() {
@@ -309,7 +309,7 @@ func (m *SystemdManager) requireManagerFiles(root string, l control.ResourceLimi
 }
 
 // limitPropertyNames are the loaded properties of a unit with limits, in the
-// order of the systemctl show request. expectedLimitProperties gives them.
+// order of the systemctl show request, taken from expectedLimitProperties.
 var limitPropertyNames = func() []string {
 	var names []string
 	for _, property := range expectedLimitProperties(control.ResourceLimits{}) {
@@ -340,7 +340,7 @@ func formatSwap(l control.ResourceLimits, unset string) string {
 	return unset
 }
 
-// expectedLimitProperties gives each loaded property as systemctl show
+// expectedLimitProperties returns each loaded property as systemctl show
 // prints it, in the order of the show request. A device limit list has one
 // entry per device. An unset memory or CPU quota renders as the systemd
 // default. TasksMax has no such form, because its default comes from the
@@ -460,7 +460,7 @@ type limitFile struct {
 	optional            bool
 }
 
-// featureSteps gives the next step for a kernel feature that is off.
+// featureSteps maps a disabled kernel feature to the operator's next step.
 var featureSteps = map[string]string{
 	swapAccountingFeature: "enable swap accounting: the kernel command line must not set `cgroup.memory=noswap` (older kernels need `swapaccount=1`), then reboot",
 	"iocost":              "the kernel needs CONFIG_BLK_CGROUP_IOCOST, or remove ioWeight through setup",
@@ -490,8 +490,8 @@ func (m *SystemdManager) readLimitFile(group string, file limitFile) ([]byte, er
 	return data, nil
 }
 
-// expectedLimitFiles gives the cgroup readback of a unit with limits. It
-// reads the files that set each control in use, also when the control is
+// expectedLimitFiles returns the cgroup readback of a unit with limits. It
+// reads the files that set each control in use, even when the control is
 // unset, so a raised default also counts as drift. Other files of a
 // controller, such as cpu.idle or memory.low, are not read.
 //
@@ -587,7 +587,7 @@ func (m *SystemdManager) readbackLimits(group string, l control.ResourceLimits, 
 
 // verifyStartedLimits runs after start and at each health check, so every
 // path that reports a unit with limits healthy repeats the host protection
-// checks and the cgroup readback. It is a probe and changes nothing. A unit
+// checks and the cgroup readback. It is a read-only probe. A unit
 // that stopped by itself fails its health check the usual way. Its callers
 // run it only for a unit with limits.
 func (m *SystemdManager) verifyStartedLimits(ctx context.Context, p control.WorkloadProfile) error {

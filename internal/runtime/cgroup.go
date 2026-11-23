@@ -208,7 +208,7 @@ var errNonCanonicalPath = errors.New("the path is not canonical")
 
 // walkError is a failure of openNoFollow. path is the part of the path that
 // the walk reached, with the failed component last, or empty for the root.
-// verify tells a verify failure from an open failure.
+// verify distinguishes a verify failure from an open failure.
 type walkError struct {
 	path   string
 	verify bool

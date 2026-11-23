@@ -74,7 +74,7 @@ type jsonScan struct {
 	reason     string
 }
 
-// scanJSON gives the reason of the first problem in one JSON file, or "".
+// scanJSON returns the reason for the first problem in one JSON file, or "".
 // The redirect key rule applies outside token data, also in tokenizer.json.
 // The value rules do not apply to tokenizer.json, which the tokenizers
 // library parses as token data without file names. No rule applies to the

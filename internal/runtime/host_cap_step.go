@@ -37,14 +37,14 @@ type HostCapValues struct {
 	IOWriteIOPSMax      uint64 `json:"ioWriteIOPSMax,omitempty"`
 }
 
-// io gives the I/O caps in the fields of ResourceLimits, so the ioLimits
-// table reads them.
+// io returns the I/O caps as ResourceLimits fields, so the ioLimits table
+// can read them.
 func (v HostCapValues) io() control.ResourceLimits {
 	return control.ResourceLimits{IOReadBandwidthMax: v.IOReadBandwidthMax, IOWriteBandwidthMax: v.IOWriteBandwidthMax,
 		IOReadIOPSMax: v.IOReadIOPSMax, IOWriteIOPSMax: v.IOWriteIOPSMax}
 }
 
-// setIO sets the I/O cap of key. An unknown key changes nothing.
+// setIO sets the I/O cap for key and ignores unknown keys.
 func (v *HostCapValues) setIO(key string, value uint64) {
 	switch key {
 	case "rbps":
@@ -58,15 +58,16 @@ func (v *HostCapValues) setIO(key string, value uint64) {
 	}
 }
 
-// DropIn is one root drop-in of the host cap step. Install tells that the
-// root step must write it: the file is missing or differs from Content.
+// DropIn is one root drop-in of the host cap step. Install is set when the
+// root step must write it because the file is missing or differs from
+// Content.
 type DropIn struct {
 	Path    string `json:"path"`
 	Content string `json:"content,omitempty"`
 	Install bool   `json:"install,omitempty"`
 }
 
-// IOWeightOption gives the I/O weight provider of the device of a unit:
+// IOWeightOption is the I/O weight provider of a unit's device:
 // "bfq", "iocost", "none" when the device supports no I/O weight,
 // "invalid" when the device fails the device check, or "unknown" when
 // setup cannot check the device.
@@ -122,8 +123,8 @@ func (m *SystemdManager) CheckLimitHost(ctx context.Context, workload control.Wo
 }
 
 // HostCapStep reports the host cap step for the catalog of the runtime.
-// want are the slice values that setup requests; nil gives the status and
-// the drop-in paths only. An error means that want cannot hold the units
+// want holds the slice values that setup requests; nil returns only the
+// status and the drop-in paths. An error means want cannot hold the units
 // with their reserve.
 func (m *SystemdManager) HostCapStep(ctx context.Context, want *HostCapValues) (HostCapStep, error) {
 	step := HostCapStep{Status: HostCapNotNeeded, Reserve: m.reserve}
@@ -322,7 +323,7 @@ func (m *SystemdManager) stepVendorDropIn(ctx context.Context, unit, listed, own
 	return m.checkVendorDropIn(ctx, unit, listed, file, stat), true
 }
 
-// vendorSeverity gives the step result of a vendor drop-in result.
+// vendorSeverity maps a vendor drop-in result to a step result.
 func vendorSeverity(result string) int {
 	switch result {
 	case VendorDropInVerified:
@@ -345,7 +346,7 @@ func (m *SystemdManager) addUsage(step *HostCapStep, c hostCap) {
 	step.Usage = &HostCapUsage{MemoryInUseMiB: usage.inUse / mebibyte, PageCacheMiB: usage.reclaimable / mebibyte, CeilingMiB: c.memoryCeiling() / mebibyte}
 }
 
-// ioWeightOption gives the I/O weight provider of the device of l, "none"
+// ioWeightOption returns the I/O weight provider of l's device, "none"
 // when the device supports no I/O weight, "invalid" when the device fails
 // the device check, or "unknown" when the device cannot be checked.
 func (m *SystemdManager) ioWeightOption(l control.ResourceLimits) string {
@@ -364,8 +365,8 @@ func (m *SystemdManager) ioWeightOption(l control.ResourceLimits) string {
 	}
 }
 
-// hostCapStatus gives the status from the drop-in files and the checks. A
-// missing drop-in makes the cap absent, whatever the checks found.
+// hostCapStatus combines the drop-in file and check results into a status.
+// A missing drop-in makes the cap absent, whatever the checks found.
 func hostCapStatus(files, checks int) string {
 	switch max(files, checks) {
 	case stepAbsent:
@@ -379,7 +380,7 @@ func hostCapStatus(files, checks int) string {
 	}
 }
 
-// renderSliceCap gives the content of the slice drop-in.
+// renderSliceCap renders the slice drop-in.
 func renderSliceCap(v HostCapValues, device string) string {
 	lines := []string{"[Slice]",
 		"MemoryHigh=" + strconv.FormatUint(v.MemoryHighMiB, 10) + "M",
@@ -395,9 +396,9 @@ func renderSliceCap(v HostCapValues, device string) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-// hostCapCommands gives the root commands that install the drop-ins that
-// need it and have content, with explicit modes. Setup shows them and never
-// runs them. The delegation drop-in at delegatePath takes effect only after
+// hostCapCommands returns the root commands, with explicit modes, that
+// install each drop-in that needs installing and has content. Setup shows
+// them and never runs them. The delegation drop-in at delegatePath takes effect only after
 // a restart of the user manager, which stops the supervisor and its units.
 func hostCapCommands(dropIns []DropIn, delegatePath, manager string) []string {
 	var commands []string

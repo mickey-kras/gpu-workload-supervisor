@@ -18,23 +18,22 @@ import (
 // scan cannot check. Escape routes do not block limits. Limits protect
 // against runaway workloads, not against hostile code of the same UID.
 //
-// Unchecked marks a source that the scan cannot check, and its item then
-// starts with "cannot check". On the "more" entry, Unchecked tells that
-// some of the entries that it leaves out are such sources, and its item
-// starts with the number of entries. Count gives the number of left-out
-// entries on the "more" entry.
+// Unchecked marks a source that the scan cannot check; its item then starts
+// with "cannot check". On the "more" entry, Unchecked means some of the
+// omitted entries are such sources, the item starts with the number of
+// entries, and Count is the number of omitted entries.
 type EscapeRoute struct {
 	Route     string `json:"route"`
 	Item      string `json:"item"`
 	Unchecked bool   `json:"unchecked,omitempty"`
 	Count     int    `json:"count,omitempty"`
-	// UncheckedCount gives how many of the left-out entries of "more" are
-	// about sources that the scan cannot check.
+	// UncheckedCount is how many entries omitted by "more" are sources the
+	// scan cannot check.
 	UncheckedCount int `json:"uncheckedCount,omitempty"`
 }
 
-// maxEscapeRoutes bounds the report. A longer report ends with one
-// "more" entry that gives the number of entries left out.
+// maxEscapeRoutes bounds the report. A longer report ends with one "more"
+// entry that counts the omitted entries.
 const maxEscapeRoutes = 32
 
 // CommandFunc runs one command and returns its combined output. A runner
@@ -61,8 +60,7 @@ const (
 	routeSockets     = "sockets"
 	routePolkit      = "polkit"
 	routeSystemUnits = "system-units"
-	// routeMore gives the number and the routes of the entries that the
-	// bound leaves out.
+	// routeMore summarizes the number and routes of entries the bound omits.
 	routeMore = "more"
 	// routeIncomplete says that the context ended the scan early.
 	routeIncomplete = "incomplete"
@@ -93,7 +91,7 @@ type escapeProbe struct {
 	// verify runs on each descriptor of a walk before any trust check.
 	// Tests replace it to make one file unreadable as root.
 	verify func(fd int) error
-	// processGroups gives the group IDs of this process.
+	// processGroups returns the group IDs of this process.
 	processGroups func() ([]uint32, error)
 	// socketACL reports whether a socket path has an access ACL.
 	socketACL func(name string) (bool, error)
@@ -103,7 +101,7 @@ func defaultEscapeProbe() escapeProbe {
 	return escapeProbe{verify: func(int) error { return nil }, processGroups: processGroups, socketACL: pathHasACL}
 }
 
-// processGroups gives the primary and supplementary group IDs of this
+// processGroups returns the primary and supplementary group IDs of this
 // process.
 func processGroups() ([]uint32, error) {
 	extra, err := unix.Getgroups()
@@ -288,8 +286,8 @@ func policySource(name string, err error) string {
 	return name + " (" + err.Error() + ")"
 }
 
-// walkFailure gives the component of a failed walk and its cause: a walk
-// failure names the component that failed, not only the file.
+// walkFailure returns the path component where a walk failed and its
+// cause, so the report names that component and not only the file.
 func walkFailure(name string, err error) (string, error) {
 	var walk *walkError
 	if errors.As(err, &walk) && walk.path != "" {

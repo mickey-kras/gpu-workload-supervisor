@@ -33,7 +33,6 @@ type limitHostChecker interface {
 	HostCapStep(context.Context, *gpuruntime.HostCapValues) (gpuruntime.HostCapStep, error)
 }
 
-// limitedProfiles gives the profiles with limits.
 func limitedProfiles(catalog control.Catalog) []control.WorkloadProfile {
 	return catalog.LimitedProfiles()
 }
@@ -63,8 +62,8 @@ func validateLimits(request Request) error {
 }
 
 // refuseLimitConversion refuses limits on a unit that the accepted catalog
-// adopts, also in the apply that converts it. A conversion gives the unit
-// a new name, so the workload ID matches too.
+// adopts, including in the apply that converts it. A conversion renames the
+// unit, so the workload ID is matched as well.
 func refuseLimitConversion(accepted, requested control.Catalog) error {
 	for _, p := range limitedProfiles(requested) {
 		for _, old := range accepted.Profiles {
@@ -87,8 +86,8 @@ func acceptedCatalog(ctx context.Context, statePath string) (control.Catalog, er
 	return snapshot.Catalog, err
 }
 
-// limitChecker gives the setup checks of the runtime. A runtime without
-// them cannot accept limits.
+// limitChecker returns the runtime's setup checks. A runtime without them
+// cannot accept limits.
 func limitChecker(manager supervisor.Runtime) (limitHostChecker, error) {
 	checker, ok := manager.(limitHostChecker)
 	if !ok {
@@ -97,8 +96,8 @@ func limitChecker(manager supervisor.Runtime) (limitHostChecker, error) {
 	return checker, nil
 }
 
-// previewHostCap gives the host cap step of a preview. It refuses limits
-// on an adopted unit. A request without limits needs no root step.
+// previewHostCap returns the host cap step for a preview. It refuses limits
+// on an adopted unit; a request without limits needs no root step.
 func previewHostCap(manager supervisor.Runtime, request Request) (*gpuruntime.HostCapStep, error) {
 	if len(limitedProfiles(request.Catalog)) == 0 {
 		return notNeeded(request), nil

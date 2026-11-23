@@ -31,7 +31,7 @@ export function escapeRouteText(entry) {
     return `Programs from this account can run outside host protection through ${entry.route}: ${entry.item}. Limits protect against runaway workloads, not against such programs.`;
 }
 
-// rootStepText gives the drop-ins to install and the commands, as one text
+// rootStepText returns the drop-ins to install and the commands as one text
 // for the administrator.
 export function rootStepText(step) {
     const files = (step?.dropIns ?? []).filter(dropIn => dropIn.install && dropIn.content).map(dropIn => `# ${dropIn.path}\n${dropIn.content.trimEnd()}`);
@@ -79,8 +79,8 @@ export class HostProtection {
         });
         group.add(row); return row;
     }
-    // setDiscovery shows the step and the escape routes of a discovery. The
-    // first discovery also gives the stored reserve of the profile.
+    // setDiscovery shows the step and escape routes of a discovery. The first
+    // discovery also loads the profile's stored reserve.
     setDiscovery(discovery, initial = false) {
         if (initial) this.setReserve(discovery.request?.profile?.limitReserve);
         if (initial || discovery.hostCap) this.setStep(discovery.hostCap);
@@ -121,9 +121,9 @@ export class HostProtection {
         reserveFields.forEach((field, index) => { this.reserveRows[index].text = field.format(this.storedReserve[field.key]); this.reserveRows[index].edited = false; });
         this.syncing = false;
     }
-    // values gives the hostCap and limitReserve of the request. A reserve
-    // equal to the defaults gives no limitReserve, so the profile keeps the
-    // bytes of a profile without a stored reserve.
+    // values returns the request's hostCap and limitReserve. A reserve equal
+    // to the defaults is omitted, so the profile stays byte-identical to one
+    // without a stored reserve.
     values() {
         this.error.visible = false;
         const [high, max] = this.capRows.map(row => row.text.trim());
@@ -151,8 +151,8 @@ export class HostProtection {
     }
 }
 
-// hostRequest gives the setup request with the values of the page. Only a
-// catalog with limits gets hostCap: the backend refuses it otherwise.
+// hostRequest returns the setup request with the page's values. Only a
+// catalog with limits gets hostCap; the backend refuses it otherwise.
 export function hostRequest(request, values, limited) {
     if (values.error) throw new PlainLimitError(values.error);
     const next = {...request, profile: {...request.profile}};

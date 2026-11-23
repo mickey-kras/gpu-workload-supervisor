@@ -172,16 +172,15 @@ func (c *Controller) observeForReconciliation(ctx context.Context, recovering bo
 // returns the error, so the operator sees which unit it stopped and why.
 var ErrLimitedUnitRejected = errors.New("a running unit with resource limits failed a check")
 
-// catalogSettle tells reconcileCatalogTarget how to settle. rejected tells
-// that a unit with limits failed a definite check; settleCatalog reports
-// which. Such a unit can still run, so a rejection always takes the full
+// catalogSettle tells reconcileCatalogTarget how to settle. rejected means
+// a unit with limits failed a definite check; settleCatalog reports which. Such a unit can still run, so a rejection always takes the full
 // path, which stops every unit except the target.
 type catalogSettle struct {
 	recovering bool
 	rejected   bool
 }
 
-// final gives the settled state. After a rejection, reconciliation keeps
+// final returns the settled state. After a rejection, reconciliation keeps
 // the failure latched with error health and closed admission until
 // explicit recovery. The active workload stays the one that reconciliation
 // settled on. The state row keeps no cause: the error that reconcile

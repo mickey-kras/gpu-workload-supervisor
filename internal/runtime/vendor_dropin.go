@@ -56,7 +56,7 @@ type packageTool struct {
 }
 
 // packageToolCandidates are the supported package managers in the order of
-// the lookup. The first one that owns a file gives the result.
+// the lookup. The first one that owns a file decides the result.
 var packageToolCandidates = []packageTool{
 	{name: "dpkg", query: "/usr/bin/dpkg-query", verify: "/usr/bin/dpkg"},
 	{name: "rpm", query: "/usr/bin/rpm", verify: "/usr/bin/rpm"},
@@ -80,7 +80,7 @@ func findPackageTools() ([]packageTool, error) {
 	return tools, nil
 }
 
-// resolvePackageTool gives the trusted executables of a package manager.
+// resolvePackageTool resolves the trusted executables of a package manager.
 // present is false when one of them does not exist.
 func resolvePackageTool(tool packageTool) (packageTool, bool, error) {
 	resolved := tool
@@ -153,7 +153,7 @@ func (c *vendorCache) put(file string, stat unix.Stat_t, drop VendorDropIn) {
 	c.verified[file] = vendorCacheEntry{key: fileKey(stat), drop: drop}
 }
 
-// vendorCheck gives the package manager check of the vendor drop-ins of
+// vendorCheck returns the package manager check for the vendor drop-ins of
 // unit. own is the host cap drop-in that the fix of an unowned file names.
 func (m *SystemdManager) vendorCheck(ctx context.Context, unit, own string) vendorCheck {
 	return func(listed, file string, stat unix.Stat_t) error {
@@ -192,9 +192,9 @@ func (m *SystemdManager) checkVendorDropIn(ctx context.Context, unit, listed, fi
 	return verdict
 }
 
-// packageVerdict asks each supported package manager in turn. The first
-// one that owns the file gives the result, and a package manager that
-// cannot answer ends the lookup.
+// packageVerdict asks each supported package manager in turn. The first one
+// that owns the file decides the result, and a package manager that cannot
+// answer ends the lookup.
 func (m *SystemdManager) packageVerdict(ctx context.Context, file string) VendorDropIn {
 	if m.host.packageTools == nil {
 		return cannotCheck("", "the host has no package manager lookup")
@@ -221,7 +221,7 @@ func (m *SystemdManager) packageVerdict(ctx context.Context, file string) Vendor
 	return verdict
 }
 
-// packageNames gives the names to look up for a vendor file under
+// packageNames returns the names to look up for a vendor file under
 // /usr/lib: that name, and the /lib name when /lib is a trusted link to
 // usr/lib. A Debian package from before the merged /usr move records its
 // files under /lib.
@@ -238,7 +238,7 @@ func cannotCheck(manager, detail string) VendorDropIn {
 }
 
 // toolVerdict checks a file with one package manager. It looks up each
-// name, and the first owned name gives the packages to verify.
+// name, and the first owned name determines the packages to verify.
 func (m *SystemdManager) toolVerdict(ctx context.Context, tool packageTool, names []string) VendorDropIn {
 	for _, name := range names {
 		packages, recorded, err := m.packageOwners(ctx, tool, name)
@@ -254,9 +254,8 @@ func (m *SystemdManager) toolVerdict(ctx context.Context, tool packageTool, name
 	return VendorDropIn{Manager: tool.name, Result: VendorDropInUnowned, Detail: "no installed package owns it"}
 }
 
-// packageOwners gives the packages that own name, and the name that the
-// package database records. No packages and no error mean that no package
-// owns it.
+// packageOwners returns the packages that own name and the name the package
+// database records. No packages and no error mean no package owns it.
 func (m *SystemdManager) packageOwners(ctx context.Context, tool packageTool, name string) ([]string, string, error) {
 	if tool.name == "dpkg" {
 		return m.dpkgOwners(ctx, tool, name)
@@ -290,7 +289,7 @@ var rpmPackage = regexp.MustCompile(`^[A-Za-z0-9_+][A-Za-z0-9._+~^:-]*$`)
 
 // dpkgOwners runs dpkg-query -S for one exact name. A found name prints
 // "pkg[, pkg...]: name" and exits 0. No owner exits 1. A diversion of the
-// name gives an error: the file then can come from another package.
+// name returns an error, because the file can then come from another package.
 func (m *SystemdManager) dpkgOwners(ctx context.Context, tool packageTool, name string) ([]string, string, error) {
 	output, code, err := m.runPackageCommand(ctx, tool.query, "-S", name)
 	if err != nil {
@@ -409,7 +408,7 @@ type packageRun struct {
 
 // verifyVerdict reads the verify output of a package for name. Both
 // package managers print the rpm format and exit 1 when a file of the
-// package fails. Each line must be a file line. listed tells that a passing
+// package fails. Each line must be a file line. listed means a passing
 // file has a line too.
 func verifyVerdict(manager, command string, run packageRun, name string, listed bool) VendorDropIn {
 	err := run.err
@@ -533,7 +532,7 @@ func commandStatus(command string, code int, lines []string) error {
 	return fmt.Errorf("%s exited with status %d: %q", command, code, firstLine(lines[0]))
 }
 
-// outputLines gives the lines of command output without empty lines.
+// outputLines returns the non-empty lines of command output.
 func outputLines(output []byte) []string {
 	var lines []string
 	for _, line := range strings.Split(string(output), "\n") {

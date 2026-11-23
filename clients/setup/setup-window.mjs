@@ -405,8 +405,8 @@ class SetupWindow {
         return JSON.stringify(this.requestFor(items));
     }
 
-    // requestFor gives the request for items with the values of the Host
-    // protection page. A host cap needs at least one workload with resource
+    // requestFor returns the request for items with the Host protection
+    // page's values. A host cap needs at least one workload with resource
     // limits; serving options alone do not qualify it.
     requestFor(items) {
         const request = hostRequest(this.request, this.hostProtection.values(), items.some(hasLimits));

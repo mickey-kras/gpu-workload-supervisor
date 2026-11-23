@@ -32,17 +32,17 @@ const (
 // check never binds it. Anything else in .cache is rejected.
 const toolMetadata = ".cache"
 
-// Inventory gives the SHA-256 of each model file at the top level of root,
-// as the supervisor calculates it. A reason that is not empty is a problem
-// with the files: the digests then stop at the problem, in name order. An
-// error means that the inventory could not complete. A canceled ctx stops
-// it, also inside one large file.
+// Inventory returns the SHA-256 of each top-level model file in root, as the
+// supervisor computes it. A non-empty reason describes a problem with the
+// files; the digests then stop at that file, in name order. An error means
+// the inventory could not complete. Canceling ctx stops it, even partway
+// through a large file.
 func Inventory(ctx context.Context, root string) (map[string]string, string, error) {
 	return inventory(ctx, root, nil)
 }
 
-// InventoryWithStats is Inventory that also gives the identity of each file
-// that it hashed, for the launch gate.
+// InventoryWithStats is like Inventory but also returns the identity of each
+// hashed file, for the launch gate.
 func InventoryWithStats(ctx context.Context, root string) (map[string]string, map[string]FileStat, string, error) {
 	stats := map[string]FileStat{}
 	files, reason, err := inventory(ctx, root, stats)

@@ -24,7 +24,7 @@ const maxFileBytes = 512
 const keyFileErrorFormat = "%w: %s: %w"
 
 var (
-	// ErrInvalid tells that the key file is missing, unsafe or malformed.
+	// ErrInvalid reports that the key file is missing, unsafe or malformed.
 	// Messages never contain the key.
 	ErrInvalid = errors.New("vLLM API key file is not usable")
 	token      = regexp.MustCompile(`^[A-Za-z0-9_-]{32,256}$`)

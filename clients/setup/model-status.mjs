@@ -49,7 +49,7 @@ const checkNames = {'file-allowlist': 'File allowlist', 'chat-template': 'Chat t
 const outcomes = {passed: 'passed', failed: 'failed', error: 'failed to run', not_run: 'not run', unsupported: 'not available for this model'};
 export const defensiveNote = 'These checks are a defensive layer, not complete backdoor detection.';
 
-// modelStatusText gives the icon, the title and the second line of an
+// modelStatusText returns the icon, the title and the second line of an
 // entry. A workload without an entry is not scanned, unless its application
 // runs image models. An unknown status reads as not scanned.
 export function modelStatusText(entry, app, state = 'loaded') {
@@ -89,9 +89,9 @@ function checkDate(at) {
     return at ? at.slice(0, 16).replace('T', ' ') + ' UTC' : 'never';
 }
 
-// modelIdentity gives the SHA-256 that gpu-setup gives as the identity of
-// the model files of a launch: of the model directory of a managed launch,
-// else of the model ID. Setup compares it, and never shows it.
+// modelIdentity returns the SHA-256 that gpu-setup uses as the identity of a
+// launch's model files: of the model directory for a managed launch,
+// otherwise of the model ID. Setup compares it and never shows it.
 function modelIdentity(model, path) {
     return GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, path ? `path:${path}` : `model:${model ?? ''}`, -1);
 }
@@ -169,7 +169,7 @@ export function showModelStatus(ui, editor) {
     ui.modelStatusViews.get(editor).update();
 }
 
-// modelStatusLine gives the status line of a review summary card. Each
+// modelStatusLine builds the status line of a review summary card. Each
 // workload has one summary line to update.
 export function modelStatusLine(ui, profile, app) {
     ui.modelStatusViews ??= new Map();
@@ -212,7 +212,7 @@ class StatusView {
     // stop ends each gpu-setup process of this view.
     stop() { this.cancellable?.cancel(); this.reading?.cancel(); }
 
-    // entry gives the entry of this workload, with the rules of
+    // entry returns this workload's entry, following the rules of
     // StoredStatus. An LLM workload whose model path or model ID differs
     // from the launch that gpu-setup read is not scanned. This also covers an
     // interrupted setup, whose pending launch is not the accepted launch. A
@@ -239,8 +239,8 @@ class StatusView {
         const {icon, title, detail} = modelStatusText(entry, this.app, status.state);
         this.icon.icon_name = icon; this.title.label = title; this.detail.label = detail; this.detail.visible = Boolean(detail);
         if (!this.details) { this.blocked.update(status.state === 'loaded' && entry?.launchBlocked === true ? entry : null); return; }
-        // A note describes the entry of the last check. It goes when the
-        // card shows another entry, for example after a model change.
+        // Clear the last-check note when the card switches to another entry,
+        // for example after a model change.
         if (this.noted && !this.cancellable && entry !== this.noted.entry) { this.setNote(''); this.noted = null; this.failedAction = null; }
         this.details.label = modelStatusDetails(entry, this.failedAction ?? status.error);
         this.recheck.visible = Boolean(entry?.kind === 'llm' && entry.checkedAt && recheckable.has(entry.reason ?? '')) && !this.cancellable;
@@ -322,6 +322,6 @@ class StatusView {
     }
 }
 
-// changed tells whether two entries describe different stored results.
+// changed reports whether two entries describe different stored results.
 const resultKey = entry => JSON.stringify([entry?.checkedAt, entry?.status, entry?.reason, entry?.checks]);
 const changed = (before, after) => resultKey(before) !== resultKey(after);

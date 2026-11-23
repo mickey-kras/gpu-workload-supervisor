@@ -38,8 +38,6 @@ SHA-256 of each file. It applies the digest and shard index rules in
 - No part of the path to the model directory can be a link. If the path has a
   link, or the supervisor cannot read the model directory, it stores no result.
   The model stays `not_scanned`.
-- A file that the supervisor cannot read gives `error` with the reason
-  `unreadable`.
 - A symbolic link or a file that is not a regular file is a finding.
 - A subdirectory is a finding. The only exception is the `.cache` directory of
   the download tool, see below.
@@ -117,9 +115,10 @@ configuration key:
 
 At the top level of a JSON file, each file path key must be `null` or the
 name of a loaded file in the model directory. The name cannot have `/` or a
-backslash. Else the reason is `file-path-redirect`. These keys include `tokenizer_file`, `vocab_file`,
-`merges_file`, `source_spm` and the other file names of the tokenizer classes
-in transformers.
+backslash. Other values give `file-path-redirect`.
+These keys include `tokenizer_file`, `vocab_file`, `merges_file`,
+`source_spm` and the other file names of the tokenizer classes in
+transformers.
 
 See `internal/modelcheck/safetensors.go` for the key lists. The check
 also applies one rule to all other string values at any depth. A value fails
@@ -159,8 +158,7 @@ A model without `.safetensors` weights or without `config.json` is
 ### Chat template
 
 The check starts only after the file allowlist passed. It reads each file
-again and compares its SHA-256 with the inventory. A file that changed gives
-`error` with the reason `files-changed`.
+again and compares its SHA-256 with the inventory.
 
 These files can hold the template:
 
@@ -171,8 +169,8 @@ These files can hold the template:
   `chat_template`, when it has a value.
 
 Each file that holds a template must hold the same text. The value must be one
-string. A list of named templates makes the model `unsupported`, because the
-supervisor pins one template. A model without a template is `unsupported`.
+string, because the supervisor pins one template. The [rules](#rules) give
+the reasons.
 
 The check does not read the structure of the template. vLLM runs the
 template in the sandboxed Jinja environment of transformers. The sandbox
@@ -241,15 +239,17 @@ result without a positive version is not valid. Thus a result of version 2
 reads as `not_scanned` until you check the model again.
 
 The supervisor calculates the status again from a new inventory of the files
-on disk. An inventory problem that the result does not hold, such as a new
-link, gives `not_scanned`. If a file
-digest, the directory, the checker version or the configuration differs
-from the result, the status is `not_scanned`.
-Thus a new checker version checks each model again.
+on disk. The status is `not_scanned` when one of these differs from the
+result:
 
-A canceled check stores no result. The last stored result stays. A model without a stored result stays `not_scanned`. If
-a signal kills the process of a check, the check also stores nothing: setup
-writes a result in one database transaction.
+- The inventory problems, for example a new link.
+- A file digest.
+- The directory.
+- The checker version. Thus a new checker version checks each model again.
+- The configuration.
+
+A check that does not finish stores no result, and the last stored result
+stays. See [Running checks](#running-checks).
 
 No signatures or keys protect the results. The deployment trusts processes
 with the service UID (see [SECURITY.md](../SECURITY.md)). A process with that
@@ -297,8 +297,7 @@ applies again, with these rules:
 A result whose chat template check passed applies only to a launch that
 pins the same template SHA-256. If the SHA-256 is different, setup shows
 `not_scanned` with "The chat template of the launch is not the checked
-template." The [launch gate](#launch-gate) also refuses that launch. A
-launch without a pin pins no template. Other results with findings or an
+template." A launch without a pin pins no template. Other results with findings or an
 error keep their status.
 
 The review summary compares the pin of the launch. The settings card adds
@@ -318,9 +317,9 @@ The status uses the stored digests. It does not hash the model files each
 time that setup opens, because the weights can be large.
 
 The button `Check files again` calculates the digests of one workload again
-and compares them with the result. Files that changed give `not_scanned`.
-Files that setup cannot read, for example a missing folder, also give
-`not_scanned`. The operator can cancel this check. A canceled or failed
+and compares them with the result. Files that changed, or that setup cannot
+read, for example a missing folder, give `not_scanned`. The operator can
+cancel this check. A canceled or failed
 check keeps the last status. Setup does not store the result of this
 check.
 
@@ -329,9 +328,7 @@ Setup writes the error of a failed action to its log.
 The review summary also shows a note when the stored result of a workload
 blocks its launch. The note has a link to the Model scan card of the
 workload. A result blocks the launch when the [launch gate](#launch-gate)
-refuses it. A result that setup cannot read also blocks the launch. The
-gate also refuses a launch that pins another chat template than the checked
-template, and a launch of another model folder.
+refuses it.
 
 The note tells the operator what to do:
 
@@ -342,11 +339,10 @@ The note tells the operator what to do:
 - For an accepted launch that pins another chat template than the checked
   template, it asks you to run setup again for the workload. You must also
   run the checks again.
-- Else, it asks you to run the checks again.
+- For other causes, it asks you to run the checks again.
 
 The card and "Scan details" show the cause of a result in plain words, for
-each reason code. The text holds no path. For an unknown reason code, they
-show the code.
+each reason code. For an unknown reason code, they show the code.
 
 ## Running checks
 
@@ -364,15 +360,18 @@ A cache folder of Hugging Face holds links to its files, and links are a
 finding of the [file allowlist](#file-allowlist). For a model in the cache,
 download a copy with `hf download --local-dir` and select that folder.
 
-These rules apply to the result of a run:
+A run has a time limit of 60 minutes. These rules apply to the result of a
+run:
 
-- Each finished run replaces the stored result. This includes findings and
-  errors.
-- A canceled run stores nothing. The last stored result stays. A run that
-  reaches its time limit also stores nothing. Its error says that it stopped
-  at the time limit.
-- If a run stops after setup stored its result, the card reads the stored
-  status again and says so.
+| Cause | Stored result |
+| --- | --- |
+| The run finishes | The result replaces the stored result. This includes findings and errors |
+| The operator cancels the run, or an interrupt or a stop signal cancels it | Nothing. The last stored result stays |
+| The run reaches its time limit | Nothing. The error says that the run stopped at the time limit |
+| A signal kills the process of the run | Nothing. Setup writes a result in one database transaction |
+| The state lock stays busy until the time limit | Nothing. The card shows the cause "Setup was busy with another change" |
+| The model directory or the chat template pin changed during the run | Nothing. The action fails: run the checks again |
+| The run stops after setup stored its result | The card reads the stored status again and says so |
 
 You can run the checks while the workload runs. The checks only read the
 model files.
@@ -380,15 +379,10 @@ model files.
 Setup writes the result as the other setup steps write the state. It needs
 an activated setup, and it refuses a write during maintenance or for
 another installed release. It holds the state lock only for the write.
-Before the write, it reads the accepted workload again. If the model
-directory or the chat template pin changed during the run, setup stores
-nothing and the action fails: run the checks again.
+Before the write, it reads the accepted workload again.
 
 Another setup change or a workload switch can hold the state lock. Then a
-finished run waits for the lock until its time limit of 60 minutes. If the
-lock stays busy until then, the action fails and stores nothing. The card
-shows the cause "Setup was busy with another change". A cancel during this
-wait also stores nothing.
+finished run waits for the lock until its time limit.
 
 When an action fails, the card names the cause, for example a busy setup or
 maintenance. When setup had no stored result before the run, the card says
@@ -407,8 +401,7 @@ account. Give the request on standard input, for example
 `{"version":1,"workload":"chat"}`. The action writes one status entry
 object, in the form of an entry of the `gpu-setup model-status` report.
 
-The request is strict JSON of at most 4 KiB. A run stops after 60 minutes.
-An interrupt or a stop signal cancels the run.
+The request is strict JSON of at most 4 KiB.
 
 ## Launch gate
 
@@ -436,8 +429,9 @@ A result that the supervisor cannot read refuses the launch, and so does a
 vLLM workload without a stored result. Run the checks in setup before the
 first launch. An adopted vLLM service names no model directory, so setup
 cannot check it and the gate refuses it. Set it up as a supervisor-managed
-launch before you upgrade. A result that a release before this gate stored has no file
-identities, so it also refuses the launch until you check the model again.
+launch before you upgrade. A result that a release before this gate stored
+has no file identities, so it also refuses the launch until you check the
+model again.
 
 The gate does not hash the model files again, because the weights can be
 large. The check records each file identity with its digest, from the same
@@ -452,5 +446,5 @@ real protection. To isolate ComfyUI, sandbox its unit.
 
 The gate applies only to new launches. A workload that runs during an
 upgrade keeps running. A recovery that only checks the state starts
-nothing, so it skips the gate. A rollback start of the previous workload after a failed
-catalog change also skips it.
+nothing, so it skips the gate. A rollback start of the previous workload
+after a failed catalog change also skips it.

@@ -51,17 +51,16 @@ func checkTemplate(ctx context.Context, root string, digests map[string]string) 
 	return templateResult{pin: PinTemplate(text), file: file}, "", nil
 }
 
-// PinTemplate gives the SHA-256 of the template text as UTF-8 bytes. A
-// file with the same text has the same SHA-256.
+// PinTemplate returns the SHA-256 of the template text as UTF-8 bytes, so
+// any file with the same text has the same pin.
 func PinTemplate(text string) string {
 	sum := sha256.Sum256([]byte(text))
 	return hex.EncodeToString(sum[:])
 }
 
-// chatTemplate reads the one chat template of the model and gives the
-// name of the first file that holds it. Each file that holds a template
-// must hold the same text. The bytes that it reads must still match the
-// inventory digests.
+// chatTemplate reads the model's chat template and returns the name of the
+// first file that contains it. Every file with a template must contain the
+// same text, and the bytes read must still match the inventory digests.
 func chatTemplate(ctx context.Context, root string, digests map[string]string) (string, string, string, error) {
 	var texts, names []string
 	for _, name := range templateFiles {
@@ -92,8 +91,8 @@ func chatTemplate(ctx context.Context, root string, digests map[string]string) (
 	return texts[0], names[0], "", nil
 }
 
-// limitOf gives the read limit of a template or tokenizer file, and the
-// reason of a larger file.
+// limitOf returns the read limit for a template or tokenizer file and the
+// reason reported for a larger file.
 func limitOf(name string) (int64, string) {
 	if strings.HasSuffix(name, ".jinja") {
 		return MaxTemplateBytes, ReasonTemplateTooLarge
@@ -101,8 +100,8 @@ func limitOf(name string) (int64, string) {
 	return MaxJSONFileBytes, ReasonJSONTooLarge
 }
 
-// templateText gives the template of one file and true, or false when the
-// file holds none. chat_template.json must hold one.
+// templateText returns the template in one file and true, or false when the
+// file has none. chat_template.json must have one.
 func templateText(name string, raw []byte) (string, bool, string) {
 	if strings.HasSuffix(name, ".jinja") {
 		// vLLM cannot decode a template that is not valid UTF-8.

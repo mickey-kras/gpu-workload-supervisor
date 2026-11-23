@@ -10,9 +10,9 @@ import (
 	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
 )
 
-// The classes of a limit outcome. Each class is a distinct result. Only the
-// kill class tells that a process ended because of a limit. No class is
-// completion evidence or release evidence.
+// Limit outcome classes. Each class is a distinct result. Only the kill
+// class means a process ended because of a limit. No class is completion or
+// release evidence.
 const (
 	LimitOutcomeKill         = "kill"
 	LimitOutcomeAllocation   = "allocation-failure"
@@ -22,7 +22,7 @@ const (
 )
 
 // LimitOutcome is the diagnostic outcome of the limits of one unit. Class
-// is one of the LimitOutcome constants. Detail gives the counters and the
+// is one of the LimitOutcome constants. Detail holds the counters and the
 // systemd result that the class comes from. The supervisor writes both as
 // text only. A throttle never proves completion, and a kill never proves
 // release.
@@ -31,7 +31,7 @@ type LimitOutcome struct {
 	Detail string
 }
 
-// String gives the class and the detail as one line.
+// String returns the class and the detail on one line.
 func (o LimitOutcome) String() string {
 	if o.Detail == "" {
 		return o.Class
@@ -49,7 +49,7 @@ type limitCounters struct {
 	unread                                                []string
 }
 
-// class gives the most severe class of the counters. A kill comes first.
+// class returns the most severe class of the counters; a kill comes first.
 // A memory.max event of a unit that exited with a failure is an allocation
 // failure; while the unit runs, it is a throttle. The limit stop reads a
 // running unit, so it reports a memory.max event as a throttle. The I/O

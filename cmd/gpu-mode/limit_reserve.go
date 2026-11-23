@@ -19,12 +19,12 @@ var loadOperatorProfile = operator.LoadProfile
 const profileHint = "the operator profile ~/.config/gpu-workload-supervisor/operator.json, or a directory above it, " +
 	"cannot be read or is not valid; fix the owner, mode or content of that path, or run setup again"
 
-// limitReserveFor gives the limit reserve that setup stored for statePath
-// in the operator profile of this account. A missing profile, or a profile
-// of another state path, stores none, and the runtime uses the default. A
-// profile that cannot be read gives an error: the runtime then fails each
-// limit check, because the default reserve could be too small. A relative
-// statePath resolves as deployment.Check resolves it.
+// limitReserveFor returns the limit reserve that setup stored for statePath
+// in this account's operator profile. A missing profile, or one for another
+// state path, yields nil and the runtime uses the default. An unreadable
+// profile returns an error, and the runtime then fails every limit check
+// because the default reserve could be too small. A relative statePath
+// resolves as in deployment.Check.
 func limitReserveFor(statePath string, load func() (operator.Profile, error)) (*gpuruntime.LimitReserve, error) {
 	profile, err := load()
 	if errors.Is(err, os.ErrNotExist) {

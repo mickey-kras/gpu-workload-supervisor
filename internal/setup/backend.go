@@ -463,9 +463,8 @@ func (b Backend) Reconcile(ctx context.Context, home string) error {
 }
 
 // PolicyTick runs the limit stop and the inactivity policy once against the
-// persisted operator profile. It is the profile-aware oneshot behind the idle user timer: an
-// unreadable operator.json fails loudly rather than silently falling back to
-// default paths.
+// persisted operator profile. It backs the idle user timer and fails when
+// operator.json is unreadable rather than falling back to default paths.
 func PolicyTick(ctx context.Context, home string) error {
 	return SystemBackend().PolicyTick(ctx, home)
 }

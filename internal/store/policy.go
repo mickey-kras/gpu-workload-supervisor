@@ -38,7 +38,7 @@ func (s *Store) touchActivity(ctx context.Context, tx *sql.Tx) error {
 // and last activity plus the timeout has elapsed. Admission, demand and
 // finish paths write through the same single-writer store. They either
 // commit first and preempt the stop, or see the closed admission after it.
-// Any mismatch returns ErrPolicyPreempted and changes nothing.
+// Any mismatch returns ErrPolicyPreempted without writing.
 func (s *Store) StartIdleTransition(ctx context.Context, tr Transition) (control.State, error) {
 	if tr.ID == "" {
 		return control.State{}, errors.New("transition id is empty")

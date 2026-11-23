@@ -28,7 +28,7 @@ const (
 	maxReserveIOPercent  = 50
 )
 
-// EffectiveReserve gives the stored reserve, or DefaultLimitReserve when
+// EffectiveReserve returns the stored reserve, or DefaultLimitReserve when
 // none is stored.
 func EffectiveReserve(stored *LimitReserve) LimitReserve {
 	if stored != nil {
@@ -121,7 +121,7 @@ func (r reserveLimit) unset(key string) error {
 	})
 }
 
-// refuse gives suggest the allowed value when the schema accepts it, and
+// refuse passes the allowed value to suggest when the schema accepts it, and
 // asks for a larger slice cap otherwise.
 func (r reserveLimit) refuse(suggest func(allowed uint64) error) error {
 	if allowed := r.allowed(); allowed >= r.minimum {
@@ -137,8 +137,8 @@ func (r reserveLimit) allowed() uint64 {
 }
 
 // neededCap is the smallest slice cap that leaves the minimum after the
-// reserve, in the unit of the field. A fixed reserve gives the minimum plus
-// the reserve. An I/O reserve is a share of the cap, so its rows set need.
+// reserve, in the unit of the field. For a fixed reserve it is the minimum
+// plus the reserve. An I/O reserve is a share of the cap, so its rows set need.
 func (r reserveLimit) neededCap() uint64 {
 	if r.need != 0 {
 		return r.need

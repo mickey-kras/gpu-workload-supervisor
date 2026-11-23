@@ -28,7 +28,7 @@ func requiredControllers(l control.ResourceLimits) []string {
 }
 
 // requireControllers reads cgroup.controllers of group and names the first
-// required controller that is absent. remedy gives the next step for that
+// required controller that is absent. remedy returns the next step for that
 // controller.
 func (m *SystemdManager) requireControllers(group string, l control.ResourceLimits, remedy func(controller string) string) error {
 	data, err := m.cgroups.read(group, "cgroup.controllers")

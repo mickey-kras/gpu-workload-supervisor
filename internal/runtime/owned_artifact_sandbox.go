@@ -131,7 +131,7 @@ func sandboxContains(parent, path string) bool {
 	return parent == path || strings.HasPrefix(path, strings.TrimSuffix(parent, "/")+"/")
 }
 
-// ErrSandboxNamespace tells that systemd could not create the namespaces of
+// ErrSandboxNamespace reports that systemd could not create the namespaces of
 // the artifact sandbox, usually because the host restricts unprivileged user
 // namespaces.
 var ErrSandboxNamespace = errors.New("the host does not let the systemd user manager create the artifact sandbox namespaces; install /usr/share/gpu-workload-supervisor/apparmor/gpu-workload-supervisor-systemd-user in /etc/apparmor.d, load it with `sudo apparmor_parser --replace`, then restart the user manager")

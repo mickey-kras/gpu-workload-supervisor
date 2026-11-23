@@ -42,8 +42,8 @@ var (
 // limitStopInitiator names the journaled transition of a limit stop.
 const limitStopInitiator = "resource-limit-stop"
 
-// limitStopRuntime gives the outcome of the limits of a unit before its
-// stop, and the release check after it.
+// limitStopRuntime reports a unit's limit outcome before the limit stop and
+// runs the release check after it.
 type limitStopRuntime interface {
 	LimitOutcome(context.Context, control.Workload) gpuruntime.LimitOutcome
 	LimitStopReleased(context.Context, control.Workload) error
