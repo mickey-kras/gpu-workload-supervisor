@@ -196,6 +196,8 @@ The worker rejects excluded distributions. Axolotl source and installed dependen
 
 Hash lock: Linux x86_64, CPython 3.12.14. This is a dependency candidate, not environment approval. Source hashes do not pin wheels: record wheel hashes and build tools and test a private wheelhouse offline. Never install into inference environments.
 
+`training/axolotl/.python-version` sets CPython 3.12.14 for Dependabot. Without it, Dependabot uses its newest Python, where only Torch 2.15.0 has wheels. That version is outside the range `torch<2.15.0` of Axolotl, so the update fails.
+
 For a dedicated environment, use an absolute `PYTHON` path and install the lock before unchanged Axolotl source:
 
 ```sh
