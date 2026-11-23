@@ -6,12 +6,11 @@ import (
 
 type WorkloadObservation struct {
 	Active    bool
-	Sleeping  bool
 	Exclusive bool
 }
 
 // Running reports whether the unit still owns a live workload process.
-func (o WorkloadObservation) Running() bool { return o.Active || o.Sleeping }
+func (o WorkloadObservation) Running() bool { return o.Active }
 
 type Snapshot struct {
 	Workloads map[control.Workload]WorkloadObservation

@@ -312,7 +312,6 @@ type serverFlags struct {
 	// gpuMemoryPercent is an explicit --gpu-memory-utilization in percent;
 	// 0 when the launch does not set it.
 	gpuMemoryPercent uint32
-	sleepMode        bool
 }
 
 func parseServerCommand(args []string, runtimeName string) (serverFlags, error) {
@@ -326,9 +325,6 @@ func parseServerCommand(args []string, runtimeName string) (serverFlags, error) 
 
 func (f *serverFlags) applySwitchFlag(key string) bool {
 	switch key {
-	case control.FlagEnableSleepMode:
-		f.sleepMode = true
-		return true
 	case control.FlagEnablePrefixCaching, control.FlagNoPrefixCaching, control.FlagEnableChunkedPrefill:
 		return true
 	}
@@ -366,7 +362,7 @@ func diagnosticServerFlag(key string) string {
 	switch key {
 	case "--host", "--port", flagServedModelName, flagMaxModelLen, flagLoadFormat, flagChatTemplate,
 		control.FlagGPUMemoryUtilization, control.FlagKVCacheDType, control.FlagEnablePrefixCaching, control.FlagNoPrefixCaching,
-		control.FlagPrefixCachingHash, control.FlagEnableChunkedPrefill, control.FlagMaxNumSeqs, control.FlagMaxNumBatchedTokens, control.FlagEnableSleepMode:
+		control.FlagPrefixCachingHash, control.FlagEnableChunkedPrefill, control.FlagMaxNumSeqs, control.FlagMaxNumBatchedTokens:
 		return key
 	}
 	return "(unqualified option)"

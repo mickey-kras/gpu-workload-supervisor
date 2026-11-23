@@ -153,15 +153,3 @@ func TestReconcileStopsRetainedUnitThatFailsReadiness(t *testing.T) {
 		}
 	}
 }
-
-func TestSleepingUnitRemainsSubjectToLimits(t *testing.T) {
-	c, r, _ := limitedController(t, limitedCatalog())
-	r.protectionErr = gpuruntime.ErrLimitDrift
-	snapshot := gpuruntime.Snapshot{Workloads: map[control.Workload]gpuruntime.WorkloadObservation{
-		"vision": {Sleeping: true},
-	}}
-	failure := c.firstLimitFailure(context.Background(), snapshot)
-	if failure.profile.ID != "vision" || !errors.Is(failure.err, gpuruntime.ErrLimitDrift) {
-		t.Fatalf("sleeping unit limit failure = %+v", failure)
-	}
-}
