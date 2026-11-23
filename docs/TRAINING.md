@@ -33,7 +33,7 @@ Use `adapter: "systemd"`, `bootPolicy: "stop-to-idle"` and measured nonzero `req
 
 Use distinct absolute literal paths without shell expansion. The validator resolves symlinks and checks ownership of the adapter and ancestors (root or user). It rejects world write and permits group write only for your groups. Lifecycle outputs cannot overlap trainer bindings. Create the trusted job directory first. Pause external service management while the supervisor job remains unfinished.
 
-Substitute bound values in this exact unit source, including its final newline. The validator rejects more directives and drop-ins:
+Start from this unit source and substitute the bound values. You can also add `Documentation`, `TimeoutStartSec`, `TimeoutStopSec` and `Nice`. The validator refuses other directives. It checks the loaded type, restart, kill mode, `RemainAfterExit`, command and environment, and rejects drop-ins and start or stop hooks. Record the SHA-256 of the final file:
 
 ```ini
 [Unit]
@@ -473,7 +473,7 @@ Only named files enter plans. Revalidate before copying or loading: snapshots ar
 
 `gpu-setup discover` adds separate `trainers` results for explicit catalog or pending-activation profiles without changing application discovery. Empty means no explicit bindings, not no training software.
 
-Each result identifies workload and unit, `bindingStatus` and `qualificationStatus: "unqualified"`. `verified` means executable, recipe, exact unit source, loaded command and environment and physical GPU checks passed. It approves neither Python environment, measured capacity, kernels nor launch. Failures remain visible with generic guidance, without subprocess output or credentials.
+Each result identifies workload and unit, `bindingStatus` and `qualificationStatus: "unqualified"`. `verified` means executable, recipe, unit source digest, loaded command and environment and physical GPU checks passed. It approves neither Python environment, measured capacity, kernels nor launch. Failures remain visible with generic guidance, without subprocess output or credentials.
 
 Validate requests before selected-binding observation. Never apply. Use the complete catalog v4 or v5 trainer profile, including measured `requiredMiB`, UUID, unit, executable and recipe paths and digests and private lifecycle paths. Infer nothing from service names or envelopes. Inspection only observes files and loaded units: no trainer or preparation execution, service changes, installations, lifecycle writes, catalog changes or preset enablement. Repeat all launch checks at training start.
 
