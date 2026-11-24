@@ -3,7 +3,7 @@
 [Documentation](README.md) | [Architecture](INTEGRATION.md#state-and-responsibility)
 
 The supervisor will check each LLM before use
-([#585](https://github.com/mickey-kras/gpu-workload-supervisor/issues/585)).
+([#585](https://github.com/mickey-kras/llm-workload-supervisor/issues/585)).
 Only a model with the status `passed` is clean. These checks are a defensive
 layer. They do not prove that a model is safe. A clean result does not mean
 that a modified model behaves like its original.

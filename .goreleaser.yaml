@@ -70,7 +70,7 @@ nfpms:
     formats: [deb]
     bindir: /usr/bin
     maintainer: gpu-workload-supervisor maintainers <noreply@github.com>
-    homepage: https://github.com/mickey-kras/gpu-workload-supervisor
+    homepage: https://github.com/mickey-kras/llm-workload-supervisor
     description: Local GPU workload controls and guided GNOME Shell 50 setup
     license: MIT
     dependencies:

@@ -32,7 +32,7 @@ Linux with user systemd and cgroup v2.
 
 ## Install
 
-Get a release archive or .deb from [Releases](https://github.com/mickey-kras/gpu-workload-supervisor/releases),
+Get a release archive or .deb from [Releases](https://github.com/mickey-kras/llm-workload-supervisor/releases),
 or build with `go build -o bin/ ./cmd/...`.
 
 Setup detects and adopts supported systemd user services without rewriting their
