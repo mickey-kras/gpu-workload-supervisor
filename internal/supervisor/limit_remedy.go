@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 // remedyState is the state that the next steps of a limit rejection start

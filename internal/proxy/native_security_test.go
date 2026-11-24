@@ -3,7 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 	"net/http"
 	"net/http/httptest"
 	"net/url"

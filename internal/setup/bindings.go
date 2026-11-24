@@ -5,7 +5,7 @@ import (
 	"errors"
 	"os"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 // VerifyBindings reads service, launch-file and cgroup evidence without starting

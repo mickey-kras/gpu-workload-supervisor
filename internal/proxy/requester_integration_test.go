@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/store"
 )
 
 func requesterIntegrationServer(t *testing.T, f *contractFixture, upstream string) *httptest.Server {

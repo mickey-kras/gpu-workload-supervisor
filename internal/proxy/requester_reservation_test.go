@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/store"
 )
 
 func reservationHTTP(t *testing.T, s StateStore, config Config) (*Handler, *httptest.Server) {

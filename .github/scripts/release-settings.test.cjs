@@ -36,7 +36,7 @@ function fixture() {
       getRepoRuleset: async ({ ruleset_id }) => ({ data: rules.find(rule => rule.id === ruleset_id) }),
     } },
   };
-  return { rules, review, github, context: { repo: { owner: 'mickey-kras', repo: 'gpu-workload-supervisor' } } };
+  return { rules, review, github, context: { repo: { owner: 'mickey-kras', repo: 'llm-workload-supervisor' } } };
 }
 
 test('accepts the five reviewed active release rules and immutable releases', async () => {

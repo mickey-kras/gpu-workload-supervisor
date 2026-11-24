@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/deployment"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/lock"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/supervisor"
 )
 
 func acceptanceWrite(t *testing.T, path string, data []byte) {

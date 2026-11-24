@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/strictjson"
 )
 
 // Native bindings observe upstream responses for runtime-specific terminal

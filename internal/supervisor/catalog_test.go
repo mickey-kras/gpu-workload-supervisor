@@ -3,9 +3,9 @@ package supervisor
 import (
 	"context"
 	"errors"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	gpuruntime "github.com/mickey-kras/llm-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/store"
 	"testing"
 )
 

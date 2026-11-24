@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	workloadproxy "github.com/mickey-kras/gpu-workload-supervisor/internal/proxy"
+	workloadproxy "github.com/mickey-kras/llm-workload-supervisor/internal/proxy"
 )
 
 // Deliberately nonrandom fixtures: valid wire format, not production secrets.

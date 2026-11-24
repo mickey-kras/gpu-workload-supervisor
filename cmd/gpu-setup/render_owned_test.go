@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/setup"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/setup"
 )
 
 func TestRenderOwnedGoldenOutput(t *testing.T) {

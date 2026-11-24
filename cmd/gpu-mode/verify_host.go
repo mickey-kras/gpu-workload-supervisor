@@ -8,8 +8,8 @@ import (
 	"syscall"
 	"time"
 
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
+	gpuruntime "github.com/mickey-kras/llm-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/supervisor"
 )
 
 // verifyHost deliberately runs before acquiring locks or opening SQLite.

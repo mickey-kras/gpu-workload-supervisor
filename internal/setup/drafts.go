@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/lock"
 )
 
 // Drafts record user choices only. They never enter the executable catalog.

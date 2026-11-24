@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	workloadproxy "github.com/mickey-kras/gpu-workload-supervisor/internal/proxy"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/vllmkey"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	workloadproxy "github.com/mickey-kras/llm-workload-supervisor/internal/proxy"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/store"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/vllmkey"
 )
 
 type shutdownNativeStore struct {

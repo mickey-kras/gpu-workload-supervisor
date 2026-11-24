@@ -11,7 +11,7 @@ const { createHash } = require('node:crypto');
 const SHA = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
 const VERSION = '0.1.0';
-const FULL_NAME = 'mickey-kras/gpu-workload-supervisor';
+const FULL_NAME = 'mickey-kras/llm-workload-supervisor';
 const NOW = Date.parse('2026-10-14T12:00:00Z');
 const time = delta => new Date(NOW + delta).toISOString();
 // The runtime gate reads the digest manifest from the dispatched commit via the API.
@@ -91,7 +91,7 @@ function fixture() {
     return structuredClone(state.jobs);
   } };
   return { state, github, version: VERSION, context: { eventName: 'workflow_dispatch',
-    ref: 'refs/heads/main', sha: SHA, repo: { owner: 'mickey-kras', repo: 'gpu-workload-supervisor' } },
+    ref: 'refs/heads/main', sha: SHA, repo: { owner: 'mickey-kras', repo: 'llm-workload-supervisor' } },
   core: { info: value => state.logs.push(value) }, now: () => state.clock,
   sleep: async ms => { state.sleeps.push(ms); state.clock += ms; } };
 }

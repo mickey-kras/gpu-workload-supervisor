@@ -14,7 +14,7 @@ test "${#commands[@]}" -gt 0
 for arch in amd64 arm64; do
   GOOS=linux GOARCH="$arch" CGO_ENABLED=0 "$notice_tools/go-licenses" save \
     "${commands[@]}" \
-    --ignore github.com/mickey-kras/gpu-workload-supervisor \
+    --ignore github.com/mickey-kras/llm-workload-supervisor \
     --save_path="THIRD_PARTY_NOTICES/linux_$arch"
 done
 # go-licenses excludes the standard library; shipped Go runtime code needs its notice.

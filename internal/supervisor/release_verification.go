@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 func (c *Controller) waitReleasedFor(ctx context.Context, target control.Workload, deadline time.Time) error {

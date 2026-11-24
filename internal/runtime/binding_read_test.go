@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 // A failed read in the binding check proves no change, so it is not

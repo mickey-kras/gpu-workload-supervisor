@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 // ErrPolicyPreempted reports that the idle transition no longer applies:

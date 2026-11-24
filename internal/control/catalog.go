@@ -16,7 +16,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/strictjson"
 )
 
 const AdapterMediaUnload = "media-unload"

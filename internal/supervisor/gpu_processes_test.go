@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	gpuruntime "github.com/mickey-kras/llm-workload-supervisor/internal/runtime"
 )
 
 var errGPUBusy = &gpuruntime.GPUInUseError{Device: "0", Processes: []gpuruntime.GPUProcess{{PID: 7, Name: "game", UID: 1000, User: "alice", Closable: true}}}

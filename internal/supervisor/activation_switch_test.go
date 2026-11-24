@@ -8,8 +8,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/store"
 )
 
 func activationExpected(t *testing.T, s *store.Store, state control.State) control.OperatorPrecondition {

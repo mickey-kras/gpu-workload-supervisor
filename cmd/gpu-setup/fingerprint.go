@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/setup"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/setup"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/strictjson"
 )
 
 // fingerprint qualifies an explicit launch file without executing or modifying it.

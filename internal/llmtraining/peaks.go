@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/strictjson"
 )
 
 // peakSettings are the tunable values and the filesystem calls of a

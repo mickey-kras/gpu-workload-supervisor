@@ -7,7 +7,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 const MaxPendingDemands = 4096

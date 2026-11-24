@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 // A v18 database upgrades to v19 and keeps its rows. The new limit_stops

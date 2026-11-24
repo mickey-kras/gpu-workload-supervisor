@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/vllmkey"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/vllmkey"
 )
 
 var proxyTestKey = strings.Repeat("p", 43)

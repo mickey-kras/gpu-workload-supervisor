@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/vllmkey"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	gpuruntime "github.com/mickey-kras/llm-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/store"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/supervisor"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/vllmkey"
 )
 
 // strictVLLMRuntime models the runtime qualification: a vLLM binding without

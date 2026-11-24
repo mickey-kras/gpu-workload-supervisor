@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 func probeServer(t *testing.T, responses map[string]string) *httptest.Server {

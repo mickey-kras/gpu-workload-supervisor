@@ -4,8 +4,8 @@ package operator
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/strictjson"
 	"io"
 	"strconv"
 	"time"

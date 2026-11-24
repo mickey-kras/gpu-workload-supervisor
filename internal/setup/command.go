@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"time"
 
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	gpuruntime "github.com/mickey-kras/llm-workload-supervisor/internal/runtime"
 )
 
 // commandOutputLimit is the output bound of the CommandFunc contract.

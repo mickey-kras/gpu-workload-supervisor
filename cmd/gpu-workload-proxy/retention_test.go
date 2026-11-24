@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/store"
 )
 
 type retentionPrunerFunc func(context.Context, time.Time, int) (int64, error)

@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/operator"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/operator"
+	gpuruntime "github.com/mickey-kras/llm-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/store"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/supervisor"
 )
 
 type failingPreflightRuntime struct{ stoppedRecoveryRuntime }

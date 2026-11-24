@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { run, validateContext } = require('./pr-branch-updater.cjs');
 
 const OWNER = 'mickey-kras';
-const REPO = 'gpu-workload-supervisor';
+const REPO = 'llm-workload-supervisor';
 const HEAD = 'a'.repeat(40);
 const MAIN = 'b'.repeat(40);
 const NEW_HEAD = 'c'.repeat(40);

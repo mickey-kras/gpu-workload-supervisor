@@ -3,7 +3,7 @@ package setup
 import (
 	"context"
 	"fmt"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	gpuruntime "github.com/mickey-kras/llm-workload-supervisor/internal/runtime"
 	"strings"
 	"testing"
 )

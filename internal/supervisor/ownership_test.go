@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/lock"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/store"
 )
 
 func ownershipState(t *testing.T, stateStore *store.Store, owner control.Owner, workload control.Workload) control.State {

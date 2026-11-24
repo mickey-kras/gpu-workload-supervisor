@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 func (s *Store) RegisterWork(ctx context.Context, requestID, jobID string, workload control.Workload, fence control.Fence) error {

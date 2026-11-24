@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/modelcheck"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/modelcheck"
 )
 
 // schemaV18 keeps one model check result for each model. The supervisor

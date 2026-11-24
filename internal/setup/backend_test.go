@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/store"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/supervisor"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/deployment"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/lock"
+	gpuruntime "github.com/mickey-kras/llm-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/store"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/supervisor"
 )
 
 type idleRuntime struct{ err error }

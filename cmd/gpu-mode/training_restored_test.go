@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/lock"
 )
 
 type restoredRecoveryLine struct {

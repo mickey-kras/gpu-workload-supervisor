@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/operator"
-	workloadproxy "github.com/mickey-kras/gpu-workload-supervisor/internal/proxy"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/strictjson"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/deployment"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/operator"
+	workloadproxy "github.com/mickey-kras/llm-workload-supervisor/internal/proxy"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/strictjson"
 )
 
 func configureRequester(config *workloadproxy.Config, path, statePath string, loadProfile func() (operator.Profile, error)) error {

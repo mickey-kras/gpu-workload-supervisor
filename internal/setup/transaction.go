@@ -14,7 +14,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/deployment"
 )
 
 type Transaction struct {

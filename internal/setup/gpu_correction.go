@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/deployment"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/lock"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/deployment"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/lock"
+	gpuruntime "github.com/mickey-kras/llm-workload-supervisor/internal/runtime"
 )
 
 const gpuCorrectionName = "zz-gpu-workload-supervisor.conf"

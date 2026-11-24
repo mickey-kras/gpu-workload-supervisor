@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/operator"
-	gpuruntime "github.com/mickey-kras/gpu-workload-supervisor/internal/runtime"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/operator"
+	gpuruntime "github.com/mickey-kras/llm-workload-supervisor/internal/runtime"
 )
 
 // loadOperatorProfile reads the operator profile of this account. Tests

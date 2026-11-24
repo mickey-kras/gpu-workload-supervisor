@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/vllmkey"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/vllmkey"
 )
 
 func hardenedQualification(t *testing.T, lines, args string, n control.NativeModel) error {

@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/mickey-kras/gpu-workload-supervisor/internal/control"
+	"github.com/mickey-kras/llm-workload-supervisor/internal/control"
 )
 
 // Parse coverage for the verbatim adoption path: directives, drop-in resets,
